@@ -520,6 +520,9 @@ impl Writer {
         );
         let mut sweep_replies = Vec::new();
         let mut flushes = Vec::new();
+        // The batch's last policy, for a batch that rolls back before it reaches it: the host's
+        // change was saved and answered, and an unchanged repeat would not send it again.
+        let mut last_policy = None;
         for command in batch {
             match command {
                 Command::Event(event) => work.push(Work::Event(event)),
@@ -532,7 +535,10 @@ impl Writer {
                     work.push(Work::Screenshot { op, shot });
                     answers.push((op, shot));
                 }
-                Command::Policy(policy) => work.push(Work::Policy(policy)),
+                Command::Policy(policy) => {
+                    last_policy = Some(policy);
+                    work.push(Work::Policy(policy));
+                }
             }
         }
         let mut published = Vec::new();
@@ -595,6 +601,10 @@ impl Writer {
             }
             Err(error) => {
                 tracing::error!(%error, "trace batch failed; its records are lost");
+                // Its records are gone, but what the host asked to record from now on holds.
+                if let Some(policy) = last_policy {
+                    self.set_policy(policy);
+                }
                 drop(planned);
                 for reply in sweep_replies {
                     let _ = reply.send(Err(TraceError::BatchLost(error.to_string())));
@@ -958,8 +968,9 @@ mod tests {
     use super::{TraceRecordEvent, TraceSink, WriterConfig, spawn_writer};
     use crate::{
         Delivery, Effect, EpochMillis, OperationEnded, OperationId, OperationKind,
-        OperationStarted, Outcome, RedactionLimits, Redactor, RetentionPolicy, RunEnded, RunId,
-        RunStarted, RunStatus, Shot, ShotRead, TraceError, TraceStore, screenshot_queue,
+        OperationStarted, Outcome, RecordPolicy, RedactionLimits, Redactor, RetentionPolicy,
+        RunEnded, RunId, RunStarted, RunStatus, Shot, ShotRead, TraceError, TraceStore,
+        screenshot_queue,
     };
     use browseros_core::TabId;
     use std::time::Duration;
@@ -976,6 +987,67 @@ mod tests {
             None,
         );
         (dir, store, sink)
+    }
+
+    /// The host's policy reaches the writer in its queue, beside records. A batch that rolls back
+    /// before it reaches the policy loses its records, never the policy: the change was saved and
+    /// answered, so nothing would send it again.
+    #[tokio::test]
+    async fn a_policy_in_a_batch_that_rolls_back_still_applies()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (_dir, store, sink) = writer().await;
+        crate::storage::test_faults::reject_test_operation(store.db(), true).await?;
+        // On this test's one thread the writer reads both before it runs: one batch.
+        sink.op_started(OperationStarted {
+            site: None,
+            id: OperationId::new(RunId::new(), 1),
+            parent: None,
+            name: "test.fail".into(),
+            kind: OperationKind::Builtin,
+            effect: Effect::Read,
+            tab: None,
+            args: serde_json::Value::Null,
+            at: EpochMillis::from_millis(1),
+        });
+        sink.record_policy(RecordPolicy {
+            value_bytes: 262_144,
+            ..RecordPolicy::default()
+        });
+        let lost = sink.flush().await;
+        assert!(matches!(lost, Err(TraceError::BatchLost(_))), "{lost:?}");
+        crate::storage::test_faults::reject_test_operation(store.db(), false).await?;
+
+        let run = RunId::new();
+        let id = OperationId::new(run, 1);
+        sink.op_started(OperationStarted {
+            site: None,
+            id,
+            parent: None,
+            name: "page.evaluate".into(),
+            kind: OperationKind::Builtin,
+            effect: Effect::Read,
+            tab: None,
+            args: serde_json::Value::Null,
+            at: EpochMillis::from_millis(2),
+        });
+        sink.op_ended(OperationEnded {
+            id,
+            outcome: Outcome::Ok,
+            delivery: Delivery::Done,
+            sent_at: None,
+            result: Some(serde_json::Value::String("x".repeat(10_000))),
+            error: None,
+            page_after: None,
+            main_world: false,
+            at: EpochMillis::from_millis(3),
+        });
+        sink.flush().await?;
+        let row = store.operation(id).await?.ok_or("operation not found")?;
+        assert!(
+            !row.result_truncated,
+            "the rolled-back batch's policy holds: the result is kept whole"
+        );
+        Ok(())
     }
 
     /// The invariant behind "swept with its runs": no tab link outlives its run, or `run_tabs`

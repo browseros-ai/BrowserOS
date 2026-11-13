@@ -39,35 +39,59 @@ export async function applyViewerSettings(
   const sleep =
     seams.sleep ??
     ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)))
-  const deadline = Date.now() + (seams.waitMs ?? SETTINGS_WAIT_MS)
+  const waitMs = seams.waitMs ?? SETTINGS_WAIT_MS
+  const deadline = Date.now() + waitMs
   for (;;) {
-    const response = await send('/v1/settings', {
-      method: 'PUT',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(VIEWER_SETTINGS),
-    })
-    if (response.status === 404) return 'unsupported'
-    if (response.ok) {
-      const state = (await response.json()) as {
-        settings?: { trace?: { valueBytes?: number } }
-      }
-      if (state.settings?.trace?.valueBytes !== TRACE_VALUE_BYTES) {
+    // The whole wait is bounded, a request that never answers included: each attempt, its
+    // answer's body too, gets what is left of it.
+    const signal = AbortSignal.timeout(Math.max(deadline - Date.now(), 1))
+    const answer = await attempt(send, signal).catch((error: unknown) => {
+      if (signal.aborted) {
         throw new Error(
-          `neo-viewer: Neo answered /v1/settings without trace.valueBytes ${TRACE_VALUE_BYTES}`,
+          `neo-viewer: Neo's host API did not answer the viewer's settings within ${waitMs} ms`,
         )
       }
-      return 'applied'
-    }
-    // 502 and 503: the host API is not serving yet (Neo starts it once the browser links).
-    const waiting = response.status === 502 || response.status === 503
-    if (!waiting || Date.now() >= deadline) {
-      const problem = (await response.json().catch(() => ({}))) as {
-        message?: string
-      }
+      throw error
+    })
+    if (answer !== 'not serving') return answer
+    if (Date.now() >= deadline) {
       throw new Error(
-        `neo-viewer: Neo refused the viewer's settings (${response.status}): ${problem.message ?? 'no message'}`,
+        `neo-viewer: Neo's host API was not serving within ${waitMs} ms, so the viewer's settings were not set`,
       )
     }
     await sleep(SETTINGS_RETRY_MS)
   }
+}
+
+/** One `PUT`: its outcome, or `not serving` while the host API cannot answer yet. */
+async function attempt(
+  send: typeof hostFetch,
+  signal: AbortSignal,
+): Promise<'applied' | 'unsupported' | 'not serving'> {
+  const response = await send('/v1/settings', {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(VIEWER_SETTINGS),
+    signal,
+  })
+  if (response.status === 404) return 'unsupported'
+  // 502 and 503: the host API is not serving yet (Neo starts it once the browser links).
+  if (response.status === 502 || response.status === 503) return 'not serving'
+  if (!response.ok) {
+    const problem = (await response.json().catch(() => ({}))) as {
+      message?: string
+    }
+    throw new Error(
+      `neo-viewer: Neo refused the viewer's settings (${response.status}): ${problem.message ?? 'no message'}`,
+    )
+  }
+  const state = (await response.json()) as {
+    settings?: { trace?: { valueBytes?: number } }
+  }
+  if (state.settings?.trace?.valueBytes !== TRACE_VALUE_BYTES) {
+    throw new Error(
+      `neo-viewer: Neo answered /v1/settings without trace.valueBytes ${TRACE_VALUE_BYTES}`,
+    )
+  }
+  return 'applied'
 }

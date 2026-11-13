@@ -86,5 +86,17 @@ test('a refusal fails the start with Neo’s message, and so does a host API tha
   ])
   await expect(
     applyViewerSettings({ fetch: silent.send, sleep: noSleep, waitMs: 0 }),
-  ).rejects.toThrow('nothing answers')
+  ).rejects.toThrow('was not serving')
+})
+
+test('a host API that takes the request and never answers cannot hold the start past the wait', async () => {
+  const hung: typeof hostFetch = (_path, init = {}) =>
+    new Promise<Response>((_resolve, reject) => {
+      init.signal?.addEventListener('abort', () => reject(init.signal?.reason))
+    })
+  const started = Date.now()
+  await expect(
+    applyViewerSettings({ fetch: hung, sleep: noSleep, waitMs: 50 }),
+  ).rejects.toThrow('did not answer')
+  expect(Date.now() - started).toBeLessThan(5000)
 })
