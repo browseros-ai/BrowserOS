@@ -33,11 +33,9 @@ mod live_browser;
 )]
 mod private_host;
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use browseros_core::input::geometry;
-use browseros_core::{BrowserView, FrameId};
 
 use fixture_server::FixtureServer;
 use live_browser::{LiveBrowser, TestPage, TestResult};
@@ -159,48 +157,16 @@ async fn main_rule_blocks(
         .get("node")
         .and_then(Value::as_i64)
         .ok_or_else(|| format!("no node in {handle}"))?;
-    let root = live
-        .browser
-        .pages
-        .get_session(page.id.clone())
-        .await?
-        .session;
     let session = if own_frame {
-        // A cross-site frame is its own target, and the page's frame tree does not list it; the
-        // page's DOM still names its frame on the <iframe> element.
-        let document = root
-            .send_value("DOM.getDocument", json!({ "depth": -1 }))
-            .await?;
-        let child = iframe_frame_id(&document).ok_or("the page has no <iframe> with a frame")?;
-        BrowserView::unbound(Arc::clone(&live.browser), None)
-            .frame_session(page.id.clone(), FrameId(child))
-            .await?
+        private_host::frame_session(live, page).await?
     } else {
-        root
+        private_host::root_session(live, page).await?
     };
     geometry::scroll_into_view(&session, node).await;
     let point = geometry::get_element_center(&session, node).await?;
     Ok(geometry::click_blocker_at_point(&session, node, point)
         .await?
         .is_some())
-}
-
-/// The `frameId` of the first `<iframe>` in a `DOM.getDocument` tree.
-fn iframe_frame_id(node: &Value) -> Option<String> {
-    if node.get("nodeName").and_then(Value::as_str) == Some("IFRAME")
-        && let Some(frame) = node.get("frameId").and_then(Value::as_str)
-    {
-        return Some(frame.to_owned());
-    }
-    let children = node.get("children").and_then(Value::as_array);
-    let document = node.get("contentDocument").into_iter();
-    let root = node.get("root").into_iter();
-    children
-        .into_iter()
-        .flatten()
-        .chain(document)
-        .chain(root)
-        .find_map(iframe_frame_id)
 }
 
 /// One of zuzu's pages and what main's rule says about its boxes: (role, name, covered).

@@ -14,6 +14,8 @@
     reason = "shared with suites that serve scripts and the nested-frame fixture"
 )]
 mod fixture_server;
+#[path = "support/input_recording.rs"]
+mod input_recording;
 #[path = "support/live_browser.rs"]
 #[expect(
     dead_code,
@@ -23,9 +25,12 @@ mod live_browser;
 #[path = "support/private_host.rs"]
 mod private_host;
 
+use std::sync::Arc;
 use std::time::Duration;
 
+use browseros_core::ProtocolSession;
 use fixture_server::FixtureServer;
+use input_recording::{InputCall, InputRecording};
 use live_browser::{LiveBrowser, TestPage, TestResult};
 use neo_playwright::{
     BoxSpec, Entry, EntryOutcome, EntryRequest, Expect, PrivateField, PrivateText,
@@ -53,6 +58,8 @@ static ONE_AT_A_TIME: Semaphore = Semaphore::const_new(1);
 struct Bench {
     server: FixtureServer,
     live: LiveBrowser,
+    /// Every `Input.*` call on the live browser's connection, with its session (ruling R24).
+    recording: Arc<InputRecording>,
     page_origin: String,
     other_origin: String,
     _turn: SemaphorePermit<'static>,
@@ -69,11 +76,13 @@ impl Bench {
     async fn start() -> TestResult<Self> {
         let turn = ONE_AT_A_TIME.acquire().await?;
         let server = FixtureServer::start(private_host::pages()).await?;
-        let live = LiveBrowser::connect().await?;
+        let recording = InputRecording::over(LiveBrowser::cdp_client().await?);
+        let live = LiveBrowser::connect_on(Arc::clone(&recording) as _).await?;
         let (page_origin, other_origin) = private_host::origins(&server);
         Ok(Self {
             server,
             live,
+            recording,
             page_origin,
             other_origin,
             _turn: turn,
@@ -1138,6 +1147,250 @@ async fn tests_that_a_box_that_will_not_empty_is_refused_before_any_character() 
             "{place:?} number"
         );
         bench.close(opened).await?;
+    }
+    Ok(())
+}
+
+/// The id of `session`, as the recording keeps it.
+fn session_id(session: &ProtocolSession) -> Option<String> {
+    session.session_id().map(|id| id.as_str().to_owned())
+}
+
+/// Ruling R24, which connection carried the keys: every `Input.*` call of an entry into a box in
+/// a cross-site frame goes out on that frame's own session (its R40 Shift press included), none
+/// on the tab's root session; into a box of the page itself, every one on the root session. On
+/// a tab in front and behind, by one insertion and by keys.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_an_entry_sends_on_its_boxs_own_session() -> TestResult {
+    let bench = Bench::start().await?;
+    let other = &bench.other_origin;
+    let origin = &bench.page_origin;
+    for place in PLACES {
+        for keys in [false, true] {
+            let opened = bench
+                .open(
+                    "/private/xframe.html?src=card-field.html%3Ffield%3Dnumber",
+                    place,
+                )
+                .await?;
+            let number = bench.r#ref(&opened, "textbox", "Card number").await?;
+            let env = bench.host(&opened);
+            let field = Field::new(&number, other).spaced();
+            let field = if keys { field.keys() } else { field };
+            bench.recording.take();
+            let entry = bench.enter(&env, &opened, vec![field.with(CARD)?]).await;
+            let calls = bench.recording.take();
+            assert_eq!(
+                entry.outcome,
+                EntryOutcome::Entered,
+                "{place:?} keys={keys}: {entry:?}"
+            );
+            let root = session_id(&private_host::root_session(&bench.live, &opened.page).await?);
+            let frame = session_id(&private_host::frame_session(&bench.live, &opened.page).await?);
+            assert_ne!(root, frame, "the card frame is its own target");
+            assert_sent_on(
+                &calls,
+                frame.as_ref(),
+                keys,
+                &format!("{place:?} keys={keys} frame"),
+            );
+            assert!(
+                calls
+                    .iter()
+                    .any(|call| call.named_key.as_deref() == Some("Shift")),
+                "{place:?} keys={keys}: R40's Shift press: {calls:?}"
+            );
+            bench.close(opened).await?;
+
+            let opened = bench
+                .open("/private/covered-login.html?mode=none", place)
+                .await?;
+            let email = bench.r#ref(&opened, "textbox", "Email").await?;
+            let env = bench.host(&opened);
+            let field = Field::new(&email, origin);
+            let field = if keys { field.keys() } else { field };
+            bench.recording.take();
+            let entry = bench.enter(&env, &opened, vec![field.with(EMAIL)?]).await;
+            let calls = bench.recording.take();
+            assert_eq!(
+                entry.outcome,
+                EntryOutcome::Entered,
+                "{place:?} keys={keys}: {entry:?}"
+            );
+            let root = session_id(&private_host::root_session(&bench.live, &opened.page).await?);
+            assert_sent_on(
+                &calls,
+                root.as_ref(),
+                keys,
+                &format!("{place:?} keys={keys} page"),
+            );
+            bench.close(opened).await?;
+        }
+    }
+    Ok(())
+}
+
+/// Every call in `calls` went out on `session`, and the text did: one `Input.insertText`, or
+/// key events and no insertion.
+fn assert_sent_on(calls: &[InputCall], session: Option<&String>, keys: bool, case: &str) {
+    assert!(
+        calls.iter().all(|call| call.session.as_ref() == session),
+        "{case}: every Input call on {session:?}: {calls:?}"
+    );
+    let inserted = calls
+        .iter()
+        .filter(|call| call.method == "Input.insertText")
+        .count();
+    let pressed = calls
+        .iter()
+        .filter(|call| call.method == "Input.dispatchKeyEvent")
+        .count();
+    if keys {
+        assert_eq!(inserted, 0, "{case}: {calls:?}");
+        assert!(pressed > 2, "{case}: {calls:?}");
+    } else {
+        assert_eq!(inserted, 1, "{case}: {calls:?}");
+    }
+}
+
+/// The value the stray-box rows type: its third character is the only one a page's keydown
+/// handler sends into the neighbour.
+const STRAY: &str = "CANARY-stray-31";
+
+/// The node a snapshot answer prints for the box named `name`, as JSON: the first object in the
+/// tree with a string field equal to `name`.
+fn printed_node(tree: &Value, name: &str) -> Option<String> {
+    match tree {
+        Value::Object(fields) => {
+            if fields.values().any(|field| field.as_str() == Some(name)) {
+                return Some(tree.to_string());
+            }
+            fields.values().find_map(|field| printed_node(field, name))
+        }
+        Value::Array(items) => items.iter().find_map(|item| printed_node(item, name)),
+        _ => None,
+    }
+}
+
+/// Ruling R26, the stray box's mark: an entry the page sends into a neighbouring text box that
+/// then holds the focus marks that box too, so every read Neo makes of it answers bullets, the
+/// snapshot under the spec harness's conformance switch included (R44); the page's own world
+/// still holds what it got. (a) keys: the box's keydown handler focuses the neighbour at the
+/// third key, which lands there: `focus_lost`. (b) one insertion: the box's input handler moves
+/// the value into the neighbour and focuses it: `value_not_taken`. (c) the same move with the
+/// focus on a button marks nothing: the neighbour reads as the page holds it. On a tab in front
+/// and behind.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_box_the_page_sends_the_value_into_is_marked_when_it_holds_the_focus()
+-> TestResult {
+    let bench = Bench::start().await?;
+    let third = STRAY
+        .chars()
+        .nth(2)
+        .map(String::from)
+        .ok_or("three characters")?;
+    for place in PLACES {
+        for (mode, keys, stop, neighbour_holds, masked) in [
+            ("keys", true, "focus_lost", third.as_str(), true),
+            ("insert", false, "value_not_taken", STRAY, true),
+            ("button", false, "value_not_taken", STRAY, false),
+        ] {
+            let case = format!("{place:?} {mode}");
+            let opened = bench
+                .open(&format!("/private/stray.html?mode={mode}"), place)
+                .await?;
+            let code_box = bench.r#ref(&opened, "textbox", "Code").await?;
+            let other = bench.r#ref(&opened, "textbox", "Other").await?;
+            let env = bench.host(&opened);
+            let field = Field::new(&code_box, &bench.page_origin);
+            let field = if keys { field.keys() } else { field };
+            let entry = bench.enter(&env, &opened, vec![field.with(STRAY)?]).await;
+            assert_eq!(entry.outcome, EntryOutcome::Uncertain, "{case}: {entry:?}");
+            assert_eq!(code(&entry), Some(stop), "{case}");
+            assert_eq!(
+                bench.value(&opened, &other).await?,
+                neighbour_holds,
+                "{case}: the page's own world holds what the neighbour got"
+            );
+
+            let page = opened.page.brand();
+            let read = bench
+                .live
+                .invoke(
+                    "locator.inputValue",
+                    input_value(&ref_target(&page, &other)),
+                )
+                .await??;
+            let bullets = "•".repeat(neighbour_holds.chars().count());
+            let expected = if masked {
+                bullets.as_str()
+            } else {
+                neighbour_holds
+            };
+            assert_eq!(read, json!(expected), "{case}: inputValue of the neighbour");
+            for conformance in [false, true] {
+                let tree = bench
+                    .live
+                    .invoke("page.ariaSnapshot", page_snapshot(&page, conformance))
+                    .await??;
+                let node = printed_node(&tree, "Other").ok_or("the snapshot prints Other")?;
+                assert_eq!(
+                    node.contains(neighbour_holds),
+                    !masked,
+                    "{case}: the neighbour (conformance {conformance}): {node}"
+                );
+                assert_eq!(
+                    node.contains(&bullets),
+                    masked,
+                    "{case}: the neighbour (conformance {conformance}): {node}"
+                );
+            }
+            bench.close(opened).await?;
+        }
+    }
+    Ok(())
+}
+
+/// Ruling R51 with R24's recording: only a box with no size that holds text gets a key that
+/// empties it, one `Delete` on the text's session before the first character. An empty box
+/// with no size and a full box with a size get none. On a tab in front and behind, by keys.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_only_a_box_with_no_size_that_holds_text_gets_a_delete() -> TestResult {
+    let bench = Bench::start().await?;
+    for place in PLACES {
+        for (mode, deletes) in [("host", 1), ("empty", 0), ("sized", 0)] {
+            let case = format!("{place:?} {mode}");
+            let opened = bench
+                .open(&format!("/private/stale.html?mode={mode}"), place)
+                .await?;
+            let code_box = bench.mint(&opened, "#code").await?;
+            let env = bench.host(&opened);
+            let field = Field::new(&code_box, &bench.page_origin)
+                .keys()
+                .with("246813")?;
+            bench.recording.take();
+            let entry = bench.enter(&env, &opened, vec![field]).await;
+            let calls = bench.recording.take();
+            assert_eq!(entry.outcome, EntryOutcome::Entered, "{case}: {entry:?}");
+            assert_eq!(bench.value(&opened, &code_box).await?, "246813", "{case}");
+            let pressed = |key: &str| {
+                calls
+                    .iter()
+                    .filter(|call| {
+                        call.named_key.as_deref() == Some(key)
+                            && call.kind.as_deref() != Some("keyUp")
+                    })
+                    .count()
+            };
+            assert_eq!(pressed("Delete"), deletes, "{case}: {calls:?}");
+            assert_eq!(pressed("Backspace"), 0, "{case}: {calls:?}");
+            let root = session_id(&private_host::root_session(&bench.live, &opened.page).await?);
+            assert_sent_on(&calls, root.as_ref(), true, &case);
+            bench.close(opened).await?;
+        }
     }
     Ok(())
 }

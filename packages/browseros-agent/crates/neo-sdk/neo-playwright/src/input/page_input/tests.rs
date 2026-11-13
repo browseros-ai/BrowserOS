@@ -85,6 +85,58 @@ async fn tests_that_a_burst_stopped_part_way_releases_what_it_pressed_before_the
     Ok(())
 }
 
+/// Ruling R24: the private entry types into a box in a cross-site frame on that frame's own
+/// session. A burst there that stops after a key-down owes its key-up on that session: on the
+/// tab's root session it would hand a key-up, and the key in it, to the page around the frame.
+#[tokio::test(start_paused = true)]
+async fn tests_that_a_key_owed_by_a_burst_on_a_frames_session_is_let_go_on_that_session()
+-> Result<(), Box<dyn Error>> {
+    let recording = Arc::new(Recording::default());
+    let root = recording.session("tab");
+    let frame = recording.session("frame");
+    let tab = Arc::new(Mutex::new(TabInput::new(Platform::Linux)));
+    let env = TestEnv::new();
+    let op = Op::from_name("locator.click").ok_or("locator.click is an op")?;
+    let header = CallHeader {
+        api: None,
+        timeout_ms: Some(100),
+    };
+    let scope = OpScope::new(&env, op, header);
+    let sent = scope.send_effect()?;
+
+    let mut input = PageInput::hold(Arc::clone(&tab), root.clone(), 1.0).await;
+    let mut planned = input.plan();
+    let steps = planned.keyboard.type_text("7", Duration::from_secs(1));
+    let stopped = input
+        .send_planned_on(&sent, &scope, planned, steps, &frame)
+        .await;
+    assert!(
+        matches!(stopped, Err(BurstFailure::Expired)),
+        "the op's 100 ms ran out inside the key's 1 s delay"
+    );
+    drop(input);
+    // The next holder on the root session flushes what the stopped burst owes first.
+    let _next = PageInput::hold(tab, root, 1.0).await;
+
+    let sent: Vec<String> = recording
+        .sent_on()
+        .into_iter()
+        .map(|(method, params, session)| {
+            let kind = params["type"].as_str().unwrap_or("");
+            format!("{method} {kind} on {}", session.unwrap_or_default())
+        })
+        .collect();
+    assert_eq!(
+        sent,
+        [
+            "Input.dispatchKeyEvent keyDown on frame",
+            "Input.dispatchKeyEvent keyUp on frame",
+        ],
+        "the key-up goes out on the frame's session, never on the root session"
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn tests_that_a_finished_burst_owes_nothing() -> Result<(), Box<dyn Error>> {
     let recording = Arc::new(Recording::default());

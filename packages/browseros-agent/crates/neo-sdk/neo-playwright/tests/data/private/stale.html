@@ -4,6 +4,7 @@
      saw the box empty in between.
      ?mode=host     one box, maxlength 6, holding 111111, with no size and opacity 0
      ?mode=sized    the same full box with a size
+     ?mode=empty    the host's box with no size, holding nothing
      ?mode=digits1  six one-digit boxes (maxlength 1, no size), the third holding an old digit;
                     Backspace empties a box and focuses the one before, as the first host's do
      ?mode=digits6  the same, every box holding an old digit
@@ -24,10 +25,11 @@ const box = (attrs) => {
   f.appendChild(b);
   return b;
 };
-if (mode === 'host' || mode === 'sized') {
-  const b = box({ id: 'code', maxLength: 6, value: '111111', inputMode: 'numeric', autocomplete: 'one-time-code' });
+if (mode === 'host' || mode === 'sized' || mode === 'empty') {
+  const old = mode === 'empty' ? '' : '111111';
+  const b = box({ id: 'code', maxLength: 6, value: old, inputMode: 'numeric', autocomplete: 'one-time-code' });
   b.setAttribute('aria-label', 'Verification code');
-  if (mode === 'host') b.style.cssText = hidden;
+  if (mode !== 'sized') b.style.cssText = hidden;
 }
 if (mode === 'digits1' || mode === 'digits6') {
   const digits = [];
