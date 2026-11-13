@@ -231,21 +231,29 @@ export class EventHub {
   observeWorkers(page: Page): void {
     if (this.workerPages.has(page)) return
     this.workerPages.add(page)
-    this.listen(page, 'workerstate', true)
+    this.listen(INTERNAL_SITE, page, 'workerstate', true)
   }
 
   /** Closed pages release only their internal bookkeeping interest; user listeners keep
    * Node's normal emitter semantics and their existing lifecycle handling. */
   forgetWorkers(page: Page): void {
-    if (this.workerPages.delete(page)) this.listen(page, 'workerstate', false)
+    if (this.workerPages.delete(page))
+      this.listen(INTERNAL_SITE, page, 'workerstate', false)
   }
 
   /**
    * A page or the context gained its first listener for `event`, or lost its last one. The
    * stamp is taken now, synchronously, so Rust delivers only what happened after the script
    * attached the listener; the op itself is not awaited, as `page.on` returns at once.
+   * The emitter captures the site on that same stack. Each queued change owns its site,
+   * since context setup and chooser leases can outlive the script call that queued it.
    */
-  listen(page: Page | null, event: EventName, on: boolean): void {
+  listen(
+    site: CallSite,
+    page: Page | null,
+    event: EventName,
+    on: boolean,
+  ): void {
     const since = Date.now()
     this.listening += on ? 1 : -1
     if (page && event === 'framenavigated') {
@@ -257,7 +265,7 @@ export class EventHub {
       else this.contextSince.delete(event)
       const previous = this.contextChanges.get(event) ?? Promise.resolve()
       const changed = previous.then(() =>
-        this.sendListen(null, event, on, since),
+        this.sendListen(site, null, event, on, since),
       )
       this.contextChanges.set(event, changed)
     } else if (event === 'filechooser') {
@@ -266,11 +274,11 @@ export class EventHub {
       else this.chooserListeners.delete(page)
       const previous = this.chooserChanges.get(page) ?? Promise.resolve()
       const changed = previous.then(() =>
-        this.sendListen(page, event, on, since, lease),
+        this.sendListen(site, page, event, on, since, lease),
       )
       this.chooserChanges.set(page, changed)
       trackChooserSetup(changed)
-    } else void this.sendListen(page, event, on, since)
+    } else void this.sendListen(site, page, event, on, since)
     this.settleNavigationPublications()
     if (on && !this.pumping) {
       this.pumping = true
@@ -520,13 +528,13 @@ export class EventHub {
   }
 
   private async sendListen(
+    site: CallSite,
     page: Page | null,
     event: EventName,
     on: boolean,
     since: number,
     lease?: ChooserLease,
   ): Promise<void> {
-    const site = INTERNAL_SITE
     const api = `${page === null ? 'browserContext' : 'page'}.${on ? 'on' : 'off'}`
     try {
       if (on && lease) await lease.ready

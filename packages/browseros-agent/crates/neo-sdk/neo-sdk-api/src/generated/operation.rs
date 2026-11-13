@@ -84,6 +84,9 @@ pub struct Operation {
     /// True when the operation ran script in the page's main world, the page's own JavaScript world, rather than Neo's isolated world. Present once the operation has ended, so an operation still running, one whose end Neo never recorded, or one recorded before this field has none.
     #[serde(rename = "mainWorld", skip_serializing_if = "Option::is_none")]
     pub main_world: Option<bool>,
+    /// True for Neo-owned subscription work, derived from the shared subscription-name rule and the absence of a script call site. Explicit script listeners carry a site and are false. Historical listeners without recorded sites are indistinguishable from Neo-owned work and are true. This field appears on every operation read and event.
+    #[serde(rename = "internal")]
+    pub internal: bool,
 }
 
 impl Operation {
@@ -95,6 +98,7 @@ impl Operation {
         effect: String,
         started_at: i64,
         has_screenshot: bool,
+        internal: bool,
     ) -> Operation {
         Operation {
             id,
@@ -122,6 +126,7 @@ impl Operation {
             has_screenshot,
             screenshot: None,
             main_world: None,
+            internal,
         }
     }
 }

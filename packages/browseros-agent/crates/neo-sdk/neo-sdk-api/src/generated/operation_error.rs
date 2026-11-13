@@ -22,6 +22,7 @@ pub struct OperationError {
     /// The host's own code when `code` is `host_error`, e.g. `needs_owner`.
     #[serde(rename = "hostCode", skip_serializing_if = "Option::is_none")]
     pub host_code: Option<String>,
+    /// Free-text error details. Empty with fields=summary; full reads retain the stored message.
     #[serde(rename = "message")]
     pub message: String,
     /// True only when delivery is `not_sent` or the operation is a read.

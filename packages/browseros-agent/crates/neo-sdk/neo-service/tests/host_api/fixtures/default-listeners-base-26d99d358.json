@@ -1,0 +1,287 @@
+{
+  "baseCommit": "26d99d3586caa95bf2126bc6cbf34396401b676f",
+  "run": {
+    "code": "page.on('dialog', () => {});\ncontext.on('pageload', () => {});\nreturn await page.title();",
+    "complete": true,
+    "effects": "none",
+    "endedAt": 1700000000200,
+    "hostData": {
+      "fixture": "default-listeners"
+    },
+    "id": "0193f3c2-0000-7000-8000-000000000354",
+    "operationCount": 5,
+    "operations": [
+      {
+        "args": {
+          "enabled": true,
+          "event": "workerstate"
+        },
+        "delivery": "done",
+        "durationMs": 100,
+        "effect": "read",
+        "endedAt": 1700000000101,
+        "hasScreenshot": false,
+        "id": "0193f3c2-0000-7000-8000-000000000354.1",
+        "kind": "builtin",
+        "mainWorld": false,
+        "name": "events.listen",
+        "outcome": "ok",
+        "page": {
+          "tabId": 3,
+          "title": "Compatibility",
+          "url": "https://compat.test/"
+        },
+        "result": null,
+        "runId": "0193f3c2-0000-7000-8000-000000000354",
+        "sentAt": 1700000000002,
+        "startedAt": 1700000000001,
+        "tabId": 3
+      },
+      {
+        "args": {
+          "call": {
+            "api": "page.on"
+          },
+          "enabled": true,
+          "event": "dialog"
+        },
+        "delivery": "done",
+        "durationMs": 100,
+        "effect": "read",
+        "endedAt": 1700000000102,
+        "hasScreenshot": false,
+        "id": "0193f3c2-0000-7000-8000-000000000354.2",
+        "kind": "builtin",
+        "mainWorld": false,
+        "name": "events.listen",
+        "outcome": "ok",
+        "page": {
+          "tabId": 3,
+          "title": "Compatibility",
+          "url": "https://compat.test/"
+        },
+        "result": null,
+        "runId": "0193f3c2-0000-7000-8000-000000000354",
+        "sentAt": 1700000000003,
+        "startedAt": 1700000000002,
+        "tabId": 3
+      },
+      {
+        "args": {
+          "call": {
+            "api": "browserContext.on"
+          },
+          "enabled": true,
+          "event": "pageload"
+        },
+        "delivery": "done",
+        "durationMs": 100,
+        "effect": "read",
+        "endedAt": 1700000000103,
+        "hasScreenshot": false,
+        "id": "0193f3c2-0000-7000-8000-000000000354.3",
+        "kind": "builtin",
+        "mainWorld": false,
+        "name": "events.listen",
+        "outcome": "ok",
+        "result": null,
+        "runId": "0193f3c2-0000-7000-8000-000000000354",
+        "sentAt": 1700000000004,
+        "startedAt": 1700000000003
+      },
+      {
+        "args": {
+          "page": 3
+        },
+        "delivery": "done",
+        "durationMs": 100,
+        "effect": "read",
+        "endedAt": 1700000000104,
+        "hasScreenshot": false,
+        "id": "0193f3c2-0000-7000-8000-000000000354.4",
+        "kind": "builtin",
+        "mainWorld": false,
+        "name": "page.title",
+        "outcome": "ok",
+        "page": {
+          "tabId": 3,
+          "title": "Compatibility",
+          "url": "https://compat.test/"
+        },
+        "result": "Compatibility",
+        "runId": "0193f3c2-0000-7000-8000-000000000354",
+        "sentAt": 1700000000005,
+        "site": {
+          "column": 14,
+          "line": 3
+        },
+        "startedAt": 1700000000004,
+        "tabId": 3
+      },
+      {
+        "args": {},
+        "delivery": "done",
+        "durationMs": 100,
+        "effect": "read",
+        "endedAt": 1700000000105,
+        "hasScreenshot": false,
+        "id": "0193f3c2-0000-7000-8000-000000000354.5",
+        "kind": "builtin",
+        "mainWorld": false,
+        "name": "events.next",
+        "outcome": "ok",
+        "result": null,
+        "runId": "0193f3c2-0000-7000-8000-000000000354",
+        "sentAt": 1700000000006,
+        "startedAt": 1700000000005
+      }
+    ],
+    "result": "Compatibility",
+    "startedAt": 1700000000000,
+    "status": "ok",
+    "tabs": [3],
+    "taskId": "listener-compatibility"
+  },
+  "trace": {
+    "operations": [
+      {
+        "args": {
+          "enabled": true,
+          "event": "workerstate"
+        },
+        "delivery": "done",
+        "durationMs": 100,
+        "effect": "read",
+        "endedAt": 1700000000101,
+        "hasScreenshot": false,
+        "id": "0193f3c2-0000-7000-8000-000000000354.1",
+        "kind": "builtin",
+        "mainWorld": false,
+        "name": "events.listen",
+        "outcome": "ok",
+        "page": {
+          "tabId": 3,
+          "title": "Compatibility",
+          "url": "https://compat.test/"
+        },
+        "result": null,
+        "runId": "0193f3c2-0000-7000-8000-000000000354",
+        "sentAt": 1700000000002,
+        "startedAt": 1700000000001,
+        "tabId": 3
+      },
+      {
+        "args": {
+          "call": {
+            "api": "page.on"
+          },
+          "enabled": true,
+          "event": "dialog"
+        },
+        "delivery": "done",
+        "durationMs": 100,
+        "effect": "read",
+        "endedAt": 1700000000102,
+        "hasScreenshot": false,
+        "id": "0193f3c2-0000-7000-8000-000000000354.2",
+        "kind": "builtin",
+        "mainWorld": false,
+        "name": "events.listen",
+        "outcome": "ok",
+        "page": {
+          "tabId": 3,
+          "title": "Compatibility",
+          "url": "https://compat.test/"
+        },
+        "result": null,
+        "runId": "0193f3c2-0000-7000-8000-000000000354",
+        "sentAt": 1700000000003,
+        "startedAt": 1700000000002,
+        "tabId": 3
+      },
+      {
+        "args": {
+          "call": {
+            "api": "browserContext.on"
+          },
+          "enabled": true,
+          "event": "pageload"
+        },
+        "delivery": "done",
+        "durationMs": 100,
+        "effect": "read",
+        "endedAt": 1700000000103,
+        "hasScreenshot": false,
+        "id": "0193f3c2-0000-7000-8000-000000000354.3",
+        "kind": "builtin",
+        "mainWorld": false,
+        "name": "events.listen",
+        "outcome": "ok",
+        "result": null,
+        "runId": "0193f3c2-0000-7000-8000-000000000354",
+        "sentAt": 1700000000004,
+        "startedAt": 1700000000003
+      },
+      {
+        "args": {
+          "page": 3
+        },
+        "delivery": "done",
+        "durationMs": 100,
+        "effect": "read",
+        "endedAt": 1700000000104,
+        "hasScreenshot": false,
+        "id": "0193f3c2-0000-7000-8000-000000000354.4",
+        "kind": "builtin",
+        "mainWorld": false,
+        "name": "page.title",
+        "outcome": "ok",
+        "page": {
+          "tabId": 3,
+          "title": "Compatibility",
+          "url": "https://compat.test/"
+        },
+        "result": "Compatibility",
+        "runId": "0193f3c2-0000-7000-8000-000000000354",
+        "sentAt": 1700000000005,
+        "site": {
+          "column": 14,
+          "line": 3
+        },
+        "startedAt": 1700000000004,
+        "tabId": 3
+      },
+      {
+        "args": {},
+        "delivery": "done",
+        "durationMs": 100,
+        "effect": "read",
+        "endedAt": 1700000000105,
+        "hasScreenshot": false,
+        "id": "0193f3c2-0000-7000-8000-000000000354.5",
+        "kind": "builtin",
+        "mainWorld": false,
+        "name": "events.next",
+        "outcome": "ok",
+        "result": null,
+        "runId": "0193f3c2-0000-7000-8000-000000000354",
+        "sentAt": 1700000000006,
+        "startedAt": 1700000000005
+      }
+    ],
+    "runs": [
+      {
+        "complete": true,
+        "effects": "none",
+        "endedAt": 1700000000200,
+        "id": "0193f3c2-0000-7000-8000-000000000354",
+        "operationCount": 5,
+        "startedAt": 1700000000000,
+        "status": "ok",
+        "tabs": [3],
+        "taskId": "listener-compatibility"
+      }
+    ],
+    "truncated": false
+  }
+}

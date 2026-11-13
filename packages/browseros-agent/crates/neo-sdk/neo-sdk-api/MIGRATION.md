@@ -1,5 +1,45 @@
 # Migrating from hosted `/v1` (claw-server) to the claw-sdk API
 
+## Trace summaries for an audit timeline
+
+One request returns a page of runs with their operations, newest runs first and each run's
+operations in start order:
+
+```http
+GET /v1/runs?taskId=checkout&limit=20&fields=summary&internal=false
+```
+
+Each `items[]` entry keeps its run metadata and adds `operations`. Follow `nextCursor` to read
+older runs. An entry for a running run has its current operations, with no `outcome` until an
+operation ends. `operationCount`, `complete`, and other execution facts describe the stored run,
+including operations the view omits. Screenshot bytes stay at
+`GET /v1/operations/{operationId}/screenshot`; `hasScreenshot` identifies available images.
+
+`fields=summary` also works on `GET /v1/runs/{runId}` and `GET /v1/trace`. It omits arguments,
+results, their truncation flags, call-log notes, host error codes, inline images, and the run's
+source code, `codeWithheld`, host data, and downloads. Error owner and code remain; the required
+error `message` is an empty string. Page URL, title, and tab identity remain exactly as recorded.
+The paged audit view also omits operation `site` and `delivery`; detail and trace summaries keep
+that structural metadata, including unknown-write identities on the run detail.
+
+`internal=false` independently excludes Neo's own subscriptions before the trace tail limit.
+Every operation read and operation event now carries `internal`, derived from the one shared
+subscription-name rule used by screenshots and touched-tab following, plus an absent script
+call site. Explicit script listeners such as `page.on` carry their site and stay in the view.
+Historical listener rows without sites cannot distinguish script listeners from Neo's own work.
+
+Default answers have two additive compatibility changes. Every operation row gains `internal`.
+Newly recorded explicit `page.on` and `context.on` listener changes also gain their script `site`,
+which the old prelude omitted. These sites appear in default run detail, single-operation reads,
+trace tails, and operation events, even without either new query option. Neo's own listeners and
+event pump keep no site. Existing stored rows are not rewritten, and their other fields retain
+their values and presence. Explicit defaults are `fields=full&internal=true`. Summary ignores
+screenshot-inlining options and leaves `hasScreenshot` intact.
+
+This is a read view. Values remain stored in `trace.db`, and full reads, downloads, blobs, and
+screenshot endpoints retain their existing access. URL and title can themselves contain values;
+the host applies its own redaction to these audit fields.
+
 ## Source layout and package names
 
 The SDK's source packages now live together under `crates/neo-sdk/`, relative to

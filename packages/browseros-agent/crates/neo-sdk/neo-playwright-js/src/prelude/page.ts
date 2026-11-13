@@ -1097,8 +1097,9 @@ export class Page extends EventEmitter {
     event: string | symbol,
     listening: boolean,
   ): void {
+    const site = captureSite()
     if (isReported(event, 'page'))
-      this._context._events.listen(this, event, listening)
+      this._context._events.listen(site, this, event, listening)
   }
 
   // ---- internals ------------------------------------------------------------------------

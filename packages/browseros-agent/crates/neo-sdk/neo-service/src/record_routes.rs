@@ -16,7 +16,7 @@
 //! run's reply, unlike its rows, so these reads need no `wait`: a file not kept is a 404.
 
 use crate::api_error::ApiError;
-use crate::query::Inline;
+use crate::query::{Fields, Inline};
 use crate::service::ServiceState;
 use crate::wire::Inlined;
 use crate::{query, wire};
@@ -45,8 +45,32 @@ pub(crate) async fn list_runs(
     RawQuery(raw): RawQuery,
 ) -> Result<Json<api::RunList>, ApiError> {
     let query = query::runs(raw.as_deref())?;
+    let view = query::view(raw.as_deref())?;
     let page = service.store.runs(query).await?;
-    Ok(Json(wire::run_list(&page)))
+    if view.fields == Fields::Full {
+        return Ok(Json(wire::run_list(&page)));
+    }
+    // One metadata query replaces per-run detail reads without loading the payloads the host
+    // discards. Keep the captured page and cursor if a run ends or retention removes it mid-read.
+    let ids = page.items.iter().map(|run| run.id).collect::<Vec<_>>();
+    let operations = service
+        .store
+        .summary_operations(&ids, view.operations)
+        .await?;
+    let items = page
+        .items
+        .iter()
+        .map(|summary| {
+            wire::audit_run(
+                summary,
+                operations.get(&summary.id).map_or(&[], Vec::as_slice),
+            )
+        })
+        .collect();
+    Ok(Json(api::RunList {
+        items,
+        next_cursor: page.next_cursor,
+    }))
 }
 
 pub(crate) async fn get_run(
@@ -55,12 +79,18 @@ pub(crate) async fn get_run(
     RawQuery(raw): RawQuery,
 ) -> Result<Json<api::Run>, ApiError> {
     let id = query::run_id(&id)?;
-    let (wait, inline) = query::run(raw.as_deref())?;
-    let run = read_run(&service, id, wait)
+    let read = query::run(raw.as_deref())?;
+    let mut run = read_run(&service, id, read.wait)
         .await?
         .ok_or_else(|| ApiError::not_found("no run has this id"))?;
+    run.operations.retain(|op| read.operations.includes(op));
+    let inline = if read.fields == Fields::Full {
+        read.inline
+    } else {
+        Inline::None
+    };
     let inlined = inline_screenshots(&service.store, &run.operations, inline).await?;
-    Ok(Json(wire::run(&run, &inlined)))
+    Ok(Json(wire::run(&run, &inlined, read.fields)))
 }
 
 pub(crate) async fn get_operation(
@@ -194,10 +224,15 @@ pub(crate) async fn get_trace(
     State(service): State<Arc<ServiceState>>,
     RawQuery(raw): RawQuery,
 ) -> Result<Json<api::TraceTail>, ApiError> {
-    let (query, inline) = query::trace(raw.as_deref())?;
-    let tail = service.store.trace_tail(query).await?;
+    let read = query::trace(raw.as_deref())?;
+    let tail = service.store.trace_tail(read.query).await?;
+    let inline = if read.fields == Fields::Full {
+        read.inline
+    } else {
+        Inline::None
+    };
     let inlined = inline_screenshots(&service.store, &tail.operations, inline).await?;
-    Ok(Json(wire::trace_tail(&tail, &inlined)))
+    Ok(Json(wire::trace_tail(&tail, &inlined, read.fields)))
 }
 
 /// Reads the screenshots `inline` asks for, base64, from `ops` in order. `Last(n)` keeps the

@@ -62,6 +62,35 @@ pub struct OperationRow {
     pub main_world: Option<bool>,
 }
 
+impl OperationRow {
+    /// Whether Neo owns this subscription rather than an explicit script listener.
+    /// Subscription names are shared with tab ownership and run-end screenshots; the script
+    /// site distinguishes public listener calls from the prelude's background maintenance.
+    /// Historical listener rows without a recorded site are indistinguishable from Neo's work.
+    #[must_use]
+    pub fn is_internal(&self) -> bool {
+        crate::is_subscription(&self.name) && self.site.is_none()
+    }
+}
+
+/// Which operations a host read includes, without changing what the trace records.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum OperationFilter {
+    /// Every stored operation.
+    #[default]
+    All,
+    /// Omit subscriptions without a recorded script site. Historical listeners may lack sites.
+    Script,
+}
+
+impl OperationFilter {
+    /// Whether a stored row belongs in this view.
+    #[must_use]
+    pub fn includes(self, operation: &OperationRow) -> bool {
+        self == Self::All || !operation.is_internal()
+    }
+}
+
 /// What became of an operation's screenshot, as its row records it. An operation with none (no
 /// job, or the job was dropped) has no state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -226,4 +255,6 @@ pub struct TailQuery {
     pub tab: Option<TabId>,
     /// How many of the latest operations to keep, 1 to 1000 (100 when zero).
     pub tail: u32,
+    /// Filter before limiting, so the tail counts operations visible in the requested view.
+    pub operations: OperationFilter,
 }

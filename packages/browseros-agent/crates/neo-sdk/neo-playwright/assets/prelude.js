@@ -10103,13 +10103,13 @@ ${changes}`;
       if (this.workerPages.has(page))
         return;
       this.workerPages.add(page);
-      this.listen(page, "workerstate", true);
+      this.listen(INTERNAL_SITE, page, "workerstate", true);
     }
     forgetWorkers(page) {
       if (this.workerPages.delete(page))
-        this.listen(page, "workerstate", false);
+        this.listen(INTERNAL_SITE, page, "workerstate", false);
     }
-    listen(page, event, on) {
+    listen(site, page, event, on) {
       const since = Date.now();
       this.listening += on ? 1 : -1;
       if (page && event === "framenavigated") {
@@ -10124,7 +10124,7 @@ ${changes}`;
         else
           this.contextSince.delete(event);
         const previous = this.contextChanges.get(event) ?? Promise.resolve();
-        const changed = previous.then(() => this.sendListen(null, event, on, since));
+        const changed = previous.then(() => this.sendListen(site, null, event, on, since));
         this.contextChanges.set(event, changed);
       } else if (event === "filechooser") {
         const lease = on ? this.intercept(page) : this.chooserListeners.get(page);
@@ -10133,11 +10133,11 @@ ${changes}`;
         else
           this.chooserListeners.delete(page);
         const previous = this.chooserChanges.get(page) ?? Promise.resolve();
-        const changed = previous.then(() => this.sendListen(page, event, on, since, lease));
+        const changed = previous.then(() => this.sendListen(site, page, event, on, since, lease));
         this.chooserChanges.set(page, changed);
         trackChooserSetup(changed);
       } else
-        this.sendListen(page, event, on, since);
+        this.sendListen(site, page, event, on, since);
       this.settleNavigationPublications();
       if (on && !this.pumping) {
         this.pumping = true;
@@ -10269,8 +10269,7 @@ ${changes}`;
         after = record.seq;
       }
     }
-    async sendListen(page, event, on, since, lease) {
-      const site = INTERNAL_SITE;
+    async sendListen(site, page, event, on, since, lease) {
       const api = `${page === null ? "browserContext" : "page"}.${on ? "on" : "off"}`;
       try {
         if (on && lease)
@@ -11435,8 +11434,9 @@ ${changes}`;
       checkReported("page.on", event, "page");
     }
     _listenersChanged(event, listening) {
+      const site = captureSite();
       if (isReported(event, "page"))
-        this._context._events.listen(this, event, listening);
+        this._context._events.listen(site, this, event, listening);
     }
     async _brand(api) {
       if (this._tab === null) {
@@ -11932,8 +11932,9 @@ ${changes}`;
       checkReported("browserContext.on", event, "context");
     }
     _listenersChanged(event, listening) {
+      const site = captureSite();
       if (isReported(event, "context"))
-        this._events.listen(null, event, listening);
+        this._events.listen(site, null, event, listening);
     }
     _pageFor(fact, at = null, approved = null) {
       let page = this.#byTab.get(fact.tab);

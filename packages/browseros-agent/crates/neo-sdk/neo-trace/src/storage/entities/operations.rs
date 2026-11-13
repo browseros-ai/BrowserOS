@@ -2,7 +2,7 @@
 //! only at the end, already bounded, so running rows expose identity and state only.
 
 use sea_orm::entity::prelude::*;
-use sea_orm::sea_query::SimpleExpr;
+use sea_orm::sea_query::{Alias, Func, SimpleExpr};
 
 /// An operation's stored row, keyed by its admission sequence within the run.
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
@@ -61,4 +61,18 @@ impl Related<super::runs::Entity> for Entity {
 /// A bound parameter would not imply `screenshot = 'stored'` during query planning.
 pub(crate) fn stored_shot() -> SimpleExpr {
     Expr::col((Entity, Column::Screenshot)).eq(SimpleExpr::Constant("stored".into()))
+}
+
+/// Summary reads keep error ownership and JSON booleans without materializing free text.
+/// SQLite's JSON functions preserve NULL when no error was recorded.
+pub(crate) fn summary_error() -> SimpleExpr {
+    Func::cust(Alias::new("json_set"))
+        .arg(
+            Func::cust(Alias::new("json_remove"))
+                .arg(Expr::col((Entity, Column::Error)))
+                .arg(Expr::val("$.hostCode")),
+        )
+        .arg(Expr::val("$.message"))
+        .arg(Expr::val(""))
+        .into()
 }
