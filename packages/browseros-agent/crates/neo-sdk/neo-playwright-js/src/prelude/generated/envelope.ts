@@ -58,7 +58,14 @@ pumped?: number,
  * The navigation publications whose producers have answered (`page.goto` and the
  * history ops' `publication.id`). Absent for none.
  */
-completedNavigations?: Array<number>, } | { 
+completedNavigations?: Array<number>, 
+/**
+ * Every tab's frame-tree version (`Observer::frame_versions`): a version moves when the
+ * tab's frames change, never on a read of the tree. The prelude reads a tab's tree again
+ * before the script's operation resolves once its version passes the one it read at,
+ * whichever tab the op touched. Absent before any change.
+ */
+frames?: Array<FrameVersion>, } | { 
 /**
  * The failure as the door decided it.
  */
@@ -86,7 +93,11 @@ pumped?: number,
 /**
  * As for `Ok`.
  */
-completedNavigations?: Array<number>, };
+completedNavigations?: Array<number>, 
+/**
+ * As for `Ok`.
+ */
+frames?: Array<FrameVersion>, };
 
 /**
  * The fields of the script's `NeoError`, named as the trace names them. errors.ts copies all
@@ -131,6 +142,11 @@ matcher?: unknown, };
  * Whose behavior must change to fix a failure.
  */
 export type ErrorOwner = "neo" | "script" | "website" | "host";
+
+/**
+ * One tab's frame-tree version on a reply (`Envelope::Ok` `frames`).
+ */
+export type FrameVersion = { tab: TabId, version: number, };
 
 /**
  * Freshness of a batch of page facts. Neither counter is a page identity.
@@ -221,7 +237,13 @@ pages: Array<PageFact>,
 /**
  * The host observation that read `pages`, which later replies' observations follow.
  */
-observed: Observation | null, };
+observed: Observation | null, 
+/**
+ * Every tab's frame-tree version when the run started, as every reply carries them
+ * (`Envelope::Ok` `frames`): the trees the prelude reads at the start are read at these, so
+ * the run's first reply does not take them for changes. Absent before any change.
+ */
+frames?: Array<FrameVersion>, };
 
 /**
  * A width and height, as a page's viewport size is reported. neo-server's run envelope carries

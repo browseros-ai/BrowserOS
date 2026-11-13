@@ -5,7 +5,7 @@ use serde_json::Value;
 use ts_rs::TS;
 
 use crate::browser::PageRef;
-use crate::dispatch::{Observation, PageFact};
+use crate::dispatch::{FrameVersion, Observation, PageFact};
 
 /// The run's init: the bootstrap's `__neo.run` hands it to each parameter's build
 /// (`__neo.provide`), which the prelude's bridge.ts `provide` reads. `run_script` and the hosted
@@ -20,6 +20,12 @@ pub(crate) struct RunInit<'a> {
     pages: &'a [PageFact],
     /// The host observation that read `pages`, which later replies' observations follow.
     observed: Option<&'a Observation>,
+    /// Every tab's frame-tree version when the run started, as every reply carries them
+    /// (`Envelope::Ok` `frames`): the trees the prelude reads at the start are read at these, so
+    /// the run's first reply does not take them for changes. Absent before any change.
+    #[serde(skip_serializing_if = "<[FrameVersion]>::is_empty")]
+    #[ts(optional = nullable)]
+    frames: &'a [FrameVersion],
 }
 
 impl<'a> RunInit<'a> {
@@ -29,11 +35,13 @@ impl<'a> RunInit<'a> {
         page: Option<&'a PageRef>,
         pages: &'a [PageFact],
         observed: Option<&'a Observation>,
+        frames: &'a [FrameVersion],
     ) -> Self {
         Self {
             page,
             pages,
             observed,
+            frames,
         }
     }
 

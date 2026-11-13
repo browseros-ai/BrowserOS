@@ -217,10 +217,12 @@ async fn evaluate(
         Ok(context) => context,
         Err(error) => return Evaluated::Engine(error.to_string()),
     };
+    let frames = bridge.frame_versions_of(&script.pages);
     let init = RunInit::new(
         script.page.as_ref(),
         &script.pages,
         script.observed.as_ref(),
+        &frames,
     )
     .to_json();
     let code = script.code;

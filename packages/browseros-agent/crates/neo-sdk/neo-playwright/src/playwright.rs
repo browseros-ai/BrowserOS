@@ -4,7 +4,7 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
 
-use browseros_core::{BrowserSession, TargetId};
+use browseros_core::{BrowserSession, TabId, TargetId};
 use serde_json::Value;
 use tokio::time;
 
@@ -182,6 +182,13 @@ impl Playwright {
     #[must_use]
     pub fn navigated_target(&self, target: &TargetId) -> Option<u64> {
         self.events.navigated_at(target)
+    }
+
+    /// Every tab's frame-tree version, for every reply: a run learns that a tab's frames changed
+    /// even from a reply about another tab.
+    #[must_use]
+    pub fn frame_versions(&self) -> Vec<(TabId, u64)> {
+        self.events.frame_versions()
     }
 
     /// The browser connection, for what an op does after it admitted its page: raw sessions,

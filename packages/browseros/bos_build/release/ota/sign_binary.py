@@ -18,6 +18,7 @@ from ...lib.utils import (
     log_error,
     log_success,
     IS_MACOS,
+    redact_sensitive_text,
 )
 from ...steps.sign.windows import sign_with_codesigntool
 
@@ -119,12 +120,28 @@ def _resolve_notarization_credentials(
     return env
 
 
+def _log_notarization_failure(
+    stage: str, result: subprocess.CompletedProcess[str], env: EnvConfig
+) -> None:
+    """Keep Apple's actionable diagnostics without exposing signing credentials."""
+    credentials = (
+        env.macos_notarization_apple_id,
+        env.macos_notarization_team_id,
+        env.macos_notarization_password,
+    )
+    secrets = tuple(value for value in credentials if value)
+    log_error(f"{stage} failed (exit {result.returncode})")
+    for output in (result.stdout, result.stderr):
+        if output:
+            log_error(redact_sensitive_text(output, secrets))
+
+
 def _submit_notarization(submission_path: Path, env: EnvConfig) -> bool:
     assert env.macos_notarization_apple_id is not None
     assert env.macos_notarization_team_id is not None
     assert env.macos_notarization_password is not None
 
-    subprocess.run(
+    store_result = subprocess.run(
         [
             "xcrun", "notarytool", "store-credentials", "notarytool-profile",
             "--apple-id", env.macos_notarization_apple_id,
@@ -135,6 +152,13 @@ def _submit_notarization(submission_path: Path, env: EnvConfig) -> bool:
         text=True,
         check=False,
     )
+
+    # Credential storage validates with Apple before creating the profile.
+    # Stop here on account/agreement errors: submitting anyway replaces the
+    # useful error with a missing-profile failure (or uses stale credentials).
+    if store_result.returncode != 0:
+        _log_notarization_failure("Credential storage", store_result, env)
+        return False
 
     log_info("Submitting for notarization (this may take a while)...")
     result = subprocess.run(
@@ -149,8 +173,7 @@ def _submit_notarization(submission_path: Path, env: EnvConfig) -> bool:
     )
 
     if result.returncode != 0:
-        log_error(f"Notarization failed: {result.stderr}")
-        log_error(result.stdout)
+        _log_notarization_failure("Notarization submission", result, env)
         return False
 
     if "status: Accepted" not in result.stdout:

@@ -2,8 +2,8 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Instant;
 
 use crate::browser::Seen;
@@ -24,9 +24,9 @@ use super::page_target::TargetHandle;
 use super::refusal_brand::RefusalBrand;
 use super::registry::DecodedCall;
 use super::{
-    ActedTarget, Answer, Claim, ErrorCode, LeafError, MethodSpec, Observation, Observer, OpAbort,
-    OpFailure, OperationError, PageScript, PageTarget, Policy, PolicyCheck, Registry, RunCtx,
-    TabNote, TaskKind, TaskNote, Visibility, operation_error,
+    ActedTarget, Answer, Claim, ErrorCode, FrameVersion, LeafError, MethodSpec, Observation,
+    Observer, OpAbort, OpFailure, OperationError, PageScript, PageTarget, Policy, PolicyCheck,
+    Registry, RunCtx, TabNote, TaskKind, TaskNote, Visibility, operation_error,
 };
 use crate::browser::{BrowserLink, PageRef, TabRegistry, TaskRecord};
 use crate::config::Defaults;
@@ -53,6 +53,36 @@ const NAME_CHARS: usize = 128;
 /// The spec recorded for a name with no method. `Write`, so an unknown call is never recorded
 /// as a harmless read.
 const UNKNOWN_METHOD: MethodSpec = MethodSpec::new("unknown", Effect::Write);
+
+/// What the run's init reads, for the read rules its frame versions cross.
+const START_READ: MethodSpec = MethodSpec::new("page.frames", Effect::Read);
+
+/// The tabs a run was given a page fact of: its init's listing and every reply's facts, each
+/// through the run's own view. A reply's frame versions name only these, so a run learns no
+/// tab's frame activity that its listing and facts did not first give it.
+#[derive(Default)]
+struct FactTabs(Mutex<HashSet<TabId>>);
+
+impl FactTabs {
+    /// Learns `pages`' tabs; a fact that reports its tab closed forgets it.
+    fn admit(&self, pages: &[PageFact]) {
+        let mut tabs = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        for fact in pages {
+            if fact.closed {
+                tabs.remove(&fact.tab);
+            } else {
+                tabs.insert(fact.tab);
+            }
+        }
+    }
+
+    fn has(&self, tab: TabId) -> bool {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .contains(&tab)
+    }
+}
 
 /// The one door every SDK operation walks through (skeleton D7). Built once at startup and
 /// shared by every run.
@@ -139,6 +169,8 @@ pub(crate) struct OpReply {
     pub(crate) pumped: u64,
     /// Completion facts supplied by the registered method, opaque to the door and runtime.
     pub(crate) completed_publications: Vec<u64>,
+    /// Every tab's frame-tree version the run may see ([`Dispatcher::visible_frame_versions`]).
+    pub(crate) frames: Vec<FrameVersion>,
 }
 
 /// One page as a reply reports it. Deliberately not a page brand (no `$neo`), so the
@@ -517,7 +549,8 @@ impl Dispatcher {
                 (pending, Some(admitted))
             }
             Err(refusal) => {
-                guard.finish(Ending::Refused(refusal), Vec::new(), None, None);
+                let frames = self.visible_frame_versions(run, &spec, caller, state.id());
+                guard.end_early(Ending::Refused(refusal), None, frames);
                 (pending, None)
             }
         }
@@ -538,17 +571,20 @@ impl Dispatcher {
         // A stopped run admits nothing. A replaced connection means the browser may have
         // restarted, so the run's view no longer describes it: refuse, never retarget.
         if let Some(reason) = run.stop_reason() {
-            return guard.finish(Ending::Stopped(reason), Vec::new(), None, None);
+            return guard.end_early(Ending::Stopped(reason), None, Vec::new());
         }
         if !self.browser.is_current(run.epoch()) {
-            return guard.finish(Ending::Refused(disconnected()), Vec::new(), None, None);
+            return guard.end_early(Ending::Refused(disconnected()), None, Vec::new());
         }
         let Resolved {
             target,
             default_page,
         } = match self.resolve_target(&run, target.as_ref()).await {
             Ok(resolved) => resolved,
-            Err(ending) => return guard.finish(ending, Vec::new(), None, None),
+            Err(ending) => {
+                let frames = self.visible_frame_versions(&run, &spec, caller, state.id());
+                return guard.end_early(ending, None, frames);
+            }
         };
         let page = target.as_ref().map(|target| &target.page);
         guard.started_on(page.map(|page| page.tab));
@@ -563,7 +599,8 @@ impl Dispatcher {
             lock_pass: run.lock_pass(),
         };
         if let Err(refusal) = self.check(&check) {
-            return guard.finish(Ending::Refused(refusal), Vec::new(), default_page, None);
+            let frames = self.visible_frame_versions(&run, &spec, caller, state.id());
+            return guard.end_early(Ending::Refused(refusal), default_page, frames);
         }
         let opening_task = self.opening_task(&run, &spec, caller);
         let op = OpCore {
@@ -629,16 +666,71 @@ impl Dispatcher {
             facts_ms = started.elapsed().saturating_sub(handled).as_millis(),
             "operation timing"
         );
-        guard.finish(ending, facts.pages, default_page, facts.observed);
+        run.slot::<FactTabs>().admit(&facts.pages);
+        let frames = self.visible_frame_versions(&run, &spec, caller, state.id());
+        guard.finish(ending, facts.pages, default_page, facts.observed, frames);
+    }
+
+    /// The frame versions a run's init carries (`RunInit` `frames`): of the tabs it lists,
+    /// `pages`, past the read rules as of the run's start. They become the run's known tabs
+    /// ([`FactTabs`]), so its replies name them too.
+    pub(crate) fn listed_frame_versions(
+        &self,
+        run: &RunCtx,
+        pages: &[PageFact],
+    ) -> Vec<FrameVersion> {
+        run.slot::<FactTabs>().admit(pages);
+        // Seq 0 is no op's: admission numbers a run's ops from 1.
+        let start = OperationId::new(run.id(), 0);
+        self.visible_frame_versions(run, &START_READ, Caller::Script, start)
+    }
+
+    /// Every tab's frame-tree version that the op's run may see, for its reply (`OpReply`
+    /// `frames`), behind the same boundary as its page facts: a tab the run was given a fact
+    /// of and no fact since reported closed ([`FactTabs`], so through its own view), not Neo's
+    /// own, and which no lock or policy keeps from the run's reads. The watcher drops a closed
+    /// tab's version itself. A tab the script may not read never shows even that
+    /// its frames changed. A refused op's reply carries them too, so the prelude's settle step
+    /// after it sees what changed.
+    fn visible_frame_versions(
+        &self,
+        run: &RunCtx,
+        spec: &MethodSpec,
+        caller: Caller,
+        operation: OperationId,
+    ) -> Vec<FrameVersion> {
+        let read = MethodSpec {
+            effect: Effect::Read,
+            ..*spec
+        };
+        let known = run.slot::<FactTabs>();
+        self.observer
+            .frame_versions()
+            .into_iter()
+            .filter(|version| {
+                known.has(version.tab)
+                    && !self.tabs.is_neo(version.tab)
+                    && self
+                        .check(&PolicyCheck {
+                            method: &read,
+                            caller,
+                            tab: Some(version.tab),
+                            operation,
+                            lock_pass: run.lock_pass(),
+                        })
+                        .is_ok()
+            })
+            .collect()
     }
 
     /// An op from the script's realm keeps its tab in use (the idle clock, the janitor), but
     /// only the script's own call acts on it, and only an act moves a task's built-in `page`,
     /// among that task's own tabs ([`TabRegistry::acted_on`]). A subscription (`page.on` on
-    /// every tab the run knows) names a tab without acting on it. The prelude's own reads are not
-    /// acts either: `waitForTimeout` refreshes the frames of every tab the run lists, and counting
-    /// those moved the task's next `page` to whichever tab answered last. Neo's own ops (`caller`
-    /// Neo) touch nothing here.
+    /// every tab the run knows) names a tab without using it, and so does one of the prelude's
+    /// frame reads ([`neo_trace::is_neo_read`]), which it makes of every open tab before a run's
+    /// first statement: neither keeps a tab in use. The prelude's other unsited reads are not
+    /// acts either: counting those moved the task's next `page` to whichever tab answered last.
+    /// Neo's own ops (`caller` Neo) touch nothing here.
     fn note_use(
         &self,
         run: &RunCtx,
@@ -650,7 +742,9 @@ impl Dispatcher {
         let (Caller::Script, Some(target)) = (caller, target) else {
             return;
         };
-        if neo_trace::is_subscription(spec.name) {
+        // Neo's own listeners and frame reads name a tab without using it: a run's start reads
+        // every open tab's frames, which must keep none of them from going idle.
+        if neo_trace::is_subscription(spec.name) || neo_trace::is_neo_read(spec.name, scripted) {
             return;
         }
         if scripted {
@@ -1077,6 +1171,7 @@ impl PendingReply {
                 picked_page: None,
                 pumped: 0,
                 completed_publications: Vec::new(),
+                frames: Vec::new(),
             }
         })
     }

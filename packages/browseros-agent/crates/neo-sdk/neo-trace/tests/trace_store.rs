@@ -1835,6 +1835,86 @@ async fn a_subscription_makes_no_tab_a_runs_or_a_tasks() -> Result<(), Box<dyn s
     Ok(())
 }
 
+/// Before a run's first statement the prelude reads the frame tree of every listed tab, another
+/// task's included, and again at a wait (`page.frames`, with no call site). Like a subscription,
+/// Neo's own read names a tab without acting on it: the run's tabs, each tab's tasks and the
+/// task's last tab stay its own pages. Sent with a call site, the same name counts as any of the
+/// script's operations does.
+#[tokio::test]
+async fn neos_own_frame_reads_make_no_tab_a_runs_or_a_tasks()
+-> Result<(), Box<dyn std::error::Error>> {
+    let h = harness(WriterConfig::default()).await;
+    let alpha = start_in(&h.sink, Some("alpha"), 0);
+    let beta = start_in(&h.sink, Some("beta"), 0);
+    on_tab(&h.sink, OperationId::new(beta, 1), "page.goto", 3, 10);
+    on_tab(&h.sink, OperationId::new(alpha, 1), "page.goto", 2, 20);
+    // alpha's next run reads the trees of the new tab page (1), its own page and beta's.
+    let later = start_in(&h.sink, Some("alpha"), 25);
+    for (seq, tab) in [(1, 1), (2, 2), (3, 3)] {
+        on_tab(
+            &h.sink,
+            OperationId::new(later, seq),
+            "page.frames",
+            tab,
+            30 + i64::from(seq),
+        );
+    }
+    flushed(&h).await;
+
+    let store = &h.store;
+    let tabs = |run| async move {
+        store
+            .run(run)
+            .await
+            .map(|detail| detail.map(|detail| detail.summary.tabs))
+    };
+    assert_eq!(
+        tabs(later).await?,
+        Some(Vec::new()),
+        "the reads link no tab to the run"
+    );
+    let tasks = h.store.tasks_for_tabs(&[TabId(1), TabId(3)]).await?;
+    assert_eq!(tasks.get(&TabId(1)), None, "the new tab page is no task's");
+    assert_eq!(
+        tasks.get(&TabId(3)),
+        Some(&vec![task("beta")]),
+        "beta's alone"
+    );
+    assert_eq!(
+        h.store.task_last_act(&task("alpha")).await?,
+        act(2, 20),
+        "alpha's last act is its own goto, not the read of beta's page"
+    );
+
+    scripted(
+        &h.sink,
+        OperationId::new(later, 4),
+        "page.frames",
+        TabId(3),
+        40,
+    );
+    flushed(&h).await;
+    assert_eq!(
+        h.store.task_last_act(&task("alpha")).await?,
+        act(3, 40),
+        "with a call site it is the script's"
+    );
+    Ok(())
+}
+
+/// An operation `name` on `tab` the script itself made (it carries a call site), at `millis`.
+fn scripted(sink: &TraceSink, id: OperationId, name: &str, tab: TabId, millis: i64) {
+    sink.op_started(OperationStarted {
+        site: Some(OperationSite { line: 1, column: 1 }),
+        ..started(Op {
+            tab: Some(tab),
+            at: at(millis),
+            ..simple(id, name, Effect::Read)
+        })
+    });
+    sink.op_ended(answered(id, millis, None, None));
+}
+
 /// zuzu shortens retention to get what a run typed off the disk, so a swept run's bytes must not
 /// stay readable in the file or its log once the sweep answers. Secure delete zeroes the freed
 /// cells, and the sweep then checkpoints the log, which holds the older copies under WAL.
