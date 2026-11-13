@@ -1,0 +1,282 @@
+//! The look at one box (design section 5.3), shared by the host's check call and by the entry,
+//! which looks at every box before its first character and again right before each box.
+//!
+//! ```text
+//!  ref ─ a locator `aria-ref=<ref>` ─ Resolver: jump to the ref's frame document
+//!      ─ resolve { want: element } ─ pin            none, detached: element_detached
+//!      ─ look { pin, ask } in that world ─ facts and the first refusal
+//!  tab address (main frame's `describe`) ─ page_changed, after the page side's origin check
+//! ```
+//!
+//! The look never logs a resolution or a preview: a preview prints every attribute, `value`
+//! included, so a page that mirrors what is typed into an attribute would put it in the call log.
+
+use std::time::Duration;
+
+use browseros_core::TabId;
+use serde_json::{Value, json};
+use tokio::time::Instant;
+
+use crate::op_scope::OpScope;
+use crate::page::OpPage;
+use crate::private_entry::{
+    BoxAsk, BoxFacts, EntryCode, LookField, LookRefusal, LookRefused, Looked,
+};
+use crate::probe::{ParsedSelector, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget, Want};
+use crate::resolve::{self, Resolved, Resolver};
+use crate::target::{AriaRefJump, LocatorTarget, Strictness};
+use crate::world::{Pin, Place};
+use crate::{ErrorCode, PlaywrightError};
+
+/// A box the look found: where it lives, its pin there, its facts, and the first check it
+/// fails now (`None` when it passed every one).
+pub(crate) struct LookedBox {
+    /// The box's frame world, its parents and their visibility.
+    #[expect(dead_code, reason = "the entry (pull request 2) types in this world")]
+    pub(crate) site: Resolved,
+    /// The box, pinned in that world for the entry's next calls.
+    #[expect(dead_code, reason = "the entry (pull request 2) focuses this pin")]
+    pub(crate) pin: Pin,
+    pub(crate) facts: BoxFacts,
+    pub(crate) refusal: Option<EntryCode>,
+}
+
+/// What a box looks like now, or why it could not be looked at: its ref names no text input, or
+/// the tab, the connection or the deadline failed. Only the first is about the box.
+pub(crate) enum Look {
+    Found(Box<LookedBox>),
+    /// The ref names nothing (`element_detached`) or no text input (`not_an_input`): no facts.
+    Unfound(EntryCode),
+}
+
+/// Whether the tab is at the address the host named (design section 5.3, step 3). Read once per
+/// look or entry, from the main frame's own document: one look is one moment of the page.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TabAddress {
+    /// The host named no address.
+    Unnamed,
+    /// The tab is at the host's address.
+    Same,
+    /// The tab is elsewhere: every box answers `page_changed`.
+    Changed,
+}
+
+impl TabAddress {
+    /// Reads the tab's address when the host named one, and compares it with `wanted`.
+    pub(crate) async fn read(
+        page: &OpPage<'_>,
+        scope: &OpScope<'_>,
+        wanted: Option<&str>,
+    ) -> Result<Self, EntryCode> {
+        let Some(wanted) = wanted else {
+            return Ok(Self::Unnamed);
+        };
+        let world = within(scope, page.world(&page.main_endpoint(), Place::Main))
+            .await?
+            .map_err(failure_code)?;
+        match within(scope, resolve::ask(&world, &ProbeRequest::Describe, None)).await? {
+            Ok(ProbeReply::Described { url, .. }) if url == wanted => Ok(Self::Same),
+            Ok(ProbeReply::Described { .. }) => Ok(Self::Changed),
+            Ok(_) => Err(EntryCode::Internal),
+            Err(failure) => Err(failure_code(failure)),
+        }
+    }
+}
+
+/// Looks at one box. `length` is the value's length in UTF-16 code units, absent for a look
+/// without a value; `address` is where the tab is against the host's address.
+pub(crate) async fn look_at(
+    page: &OpPage<'_>,
+    scope: &OpScope<'_>,
+    field: &LookField,
+    cut: bool,
+    length: Option<u32>,
+    address: TabAddress,
+) -> Result<Look, EntryCode> {
+    let Some(target) = ref_target(page.tab(), &field.box_ref) else {
+        return Ok(Look::Unfound(EntryCode::ElementDetached));
+    };
+    let resolver = Resolver::new(page, scope, &target, Strictness::Strict);
+    // A world that turns out gone under the call is forgotten and looked up once more, as
+    // every op does; a ref's own document gone answers `element_detached` at once.
+    for _ in 0..2 {
+        let Some(site) = within(scope, resolver.locate())
+            .await?
+            .map_err(|error| playwright_code(&error))?
+        else {
+            return Ok(Look::Unfound(EntryCode::ElementDetached));
+        };
+        let resolve = ProbeRequest::Resolve {
+            target: ProbeTarget::Chunk(ParsedSelector::of(target.chunks.last())),
+            strictness: Strictness::Strict,
+            want: Want::Element,
+        };
+        let pin = match within(scope, site.call(&resolve)).await? {
+            Ok(ProbeReply::Element { pin, .. }) => pin,
+            Ok(ProbeReply::None { .. } | ProbeReply::Detached) => {
+                return Ok(Look::Unfound(EntryCode::ElementDetached));
+            }
+            Ok(_) => return Err(EntryCode::Internal),
+            Err(ProbeFailure::Gone(_)) => {
+                if resolver.lost(&site).is_err() {
+                    return Ok(Look::Unfound(EntryCode::ElementDetached));
+                }
+                continue;
+            }
+            Err(failure) => return Err(failure_code(failure)),
+        };
+        let ask = BoxAsk {
+            expect: field.expect.clone(),
+            length,
+            cut,
+            keys: field.keys,
+            frame_visible: site.frame_visible(),
+        };
+        let looked = match within(scope, site.call(&ProbeRequest::Look { pin, look: ask })).await? {
+            Ok(ProbeReply::Value { value }) => decode_looked(value.into_value())?,
+            // The pin's element left its document, or the document went, since the resolve.
+            Ok(ProbeReply::Detached) | Err(ProbeFailure::Gone(_)) => {
+                return Ok(Look::Unfound(EntryCode::ElementDetached));
+            }
+            Ok(_) => return Err(EntryCode::Internal),
+            Err(failure) => return Err(failure_code(failure)),
+        };
+        return Ok(found(site, pin, looked, address));
+    }
+    Ok(Look::Unfound(EntryCode::ElementDetached))
+}
+
+/// The page side's answer, with the tab's address checked in its place: right after the
+/// box's origin (step 3).
+fn found(site: Resolved, pin: Pin, looked: Looked, address: TabAddress) -> Look {
+    let Looked { facts, refusal } = looked;
+    let Some(facts) = facts else {
+        return Look::Unfound(EntryCode::NotAnInput);
+    };
+    let refusal = match refusal {
+        Some(LookRefused {
+            code: LookRefusal::NotAnInput,
+            ..
+        }) => return Look::Unfound(EntryCode::NotAnInput),
+        Some(LookRefused {
+            code: LookRefusal::WrongOrigin,
+            ..
+        }) => Some(EntryCode::WrongOrigin),
+        _ if address == TabAddress::Changed => Some(EntryCode::PageChanged),
+        Some(refused) => Some(code_of(&refused)),
+        None => None,
+    };
+    Look::Found(Box::new(LookedBox {
+        site,
+        pin,
+        facts,
+        refusal,
+    }))
+}
+
+fn code_of(refused: &LookRefused) -> EntryCode {
+    match refused.code {
+        LookRefusal::NotAnInput => EntryCode::NotAnInput,
+        LookRefusal::WrongOrigin => EntryCode::WrongOrigin,
+        LookRefusal::WrongType => EntryCode::WrongType,
+        LookRefusal::BoxChanged => match refused.fact {
+            Some(fact) => EntryCode::BoxChanged(fact),
+            // The page side always names the fact; a reply without one is a probe bug.
+            None => EntryCode::Internal,
+        },
+        LookRefusal::BoxNotEditable => EntryCode::BoxNotEditable,
+        LookRefusal::BoxHidden => EntryCode::BoxHidden,
+        LookRefusal::BoxCovered => EntryCode::BoxCovered,
+        LookRefusal::ValueTooLong => EntryCode::ValueTooLong,
+    }
+}
+
+fn decode_looked(value: Value) -> Result<Looked, EntryCode> {
+    serde_json::from_value(value).map_err(|_unreadable| EntryCode::Internal)
+}
+
+/// The locator `getByRef(<ref>)` builds, for a ref the host names: a snapshot's `e5` or
+/// `f2e4`, or `locator.ref()`'s `n7` or `f2n7`. The crate's one ref grammar decides
+/// ([`AriaRefJump::parse`]); anything else names no element.
+pub(crate) fn ref_target(tab: TabId, box_ref: &str) -> Option<LocatorTarget> {
+    AriaRefJump::parse(box_ref)?;
+    let target = json!({
+        "page": { "$neo": "page", "tab": tab.0 },
+        "chunks": [{ "parts": [{ "name": "aria-ref", "body": box_ref, "source": box_ref }] }],
+        "display": format!("getByRef('{box_ref}')"),
+    });
+    serde_json::from_value(target).ok()
+}
+
+/// `future`, unless the look's deadline passes first (`run_timeout`).
+pub(crate) async fn within<F: Future>(
+    scope: &OpScope<'_>,
+    future: F,
+) -> Result<F::Output, EntryCode> {
+    scope
+        .within(future)
+        .await
+        .map_err(|_expired| EntryCode::RunTimeout)
+}
+
+/// A failure of the crate's own machinery, as the entry's code.
+pub(crate) fn playwright_code(error: &PlaywrightError) -> EntryCode {
+    match error.error_code() {
+        Some(ErrorCode::ElementDetached | ErrorCode::InvalidInput) => EntryCode::ElementDetached,
+        Some(ErrorCode::TargetClosed) => EntryCode::TargetClosed,
+        Some(ErrorCode::BrowserDisconnected) => EntryCode::BrowserDisconnected,
+        Some(ErrorCode::WaitTimeout) => EntryCode::RunTimeout,
+        _ => EntryCode::Internal,
+    }
+}
+
+/// A probe call that failed below the page: a lost connection or a closed frame.
+pub(crate) fn failure_code(failure: ProbeFailure) -> EntryCode {
+    match failure {
+        ProbeFailure::Gone(_) => EntryCode::TargetClosed,
+        ProbeFailure::Cdp(error) => match ErrorCode::from_core(&error) {
+            ErrorCode::TargetClosed => EntryCode::TargetClosed,
+            ErrorCode::BrowserDisconnected => EntryCode::BrowserDisconnected,
+            _ => EntryCode::Internal,
+        },
+        ProbeFailure::Broken(_) => EntryCode::Internal,
+    }
+}
+
+/// The deadline as the scope's own timeout: at least a millisecond, since a scope without a
+/// timeout would wait for ever.
+pub(crate) fn timeout_until(deadline: Instant) -> Duration {
+    deadline
+        .saturating_duration_since(Instant::now())
+        .max(Duration::from_millis(1))
+}
+
+#[cfg(test)]
+mod tests {
+    use browseros_core::TabId;
+
+    use super::ref_target;
+
+    #[test]
+    fn tests_that_only_a_printed_or_minted_ref_names_a_box() {
+        for good in ["e5", "f2e4", "n7", "f2n3", "f12n30"] {
+            assert!(ref_target(TabId(7), good).is_some(), "{good}");
+        }
+        for bad in [
+            "",
+            "e",
+            "e0",
+            "e05",
+            "f0e5",
+            "f2",
+            "fe4",
+            "x5",
+            "e5 ",
+            "#4",
+            "e-1",
+            "aria-ref=e5",
+        ] {
+            assert!(ref_target(TabId(7), bad).is_none(), "{bad}");
+        }
+    }
+}

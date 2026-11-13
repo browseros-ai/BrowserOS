@@ -27,6 +27,122 @@ browserMapped?: boolean, };
 export type BootOptions = { frameSeq: FrameSeq, epoch: string, };
 
 /**
+ * What the look checks at one box. It carries the value's length, never the value.
+ */
+export type BoxAsk = { 
+/**
+ * The facts the host approved; absent for a check call made before any approval, which
+ * checks no origin and no fact.
+ */
+expect?: BoxExpect, 
+/**
+ * The value's length in UTF-16 code units, as a box's `maxlength` counts it. Absent for
+ * the host's check call, which has no value: that look skips the length check.
+ */
+length?: number, 
+/**
+ * A value the box's `maxlength` cuts is accepted.
+ */
+cut: boolean, 
+/**
+ * The field is typed key by key, so a box with no size is reached by focus alone.
+ */
+keys: boolean, 
+/**
+ * Every `<iframe>` on the way down to the box's frame is visible: a box in a hidden frame
+ * does not show either.
+ */
+frameVisible: boolean, };
+
+/**
+ * What the host approved about a box. The look refuses the box when a fact the host sent no
+ * longer holds (`box_changed`), so the box Neo types into is the box the host approved.
+ *
+ * The look in the page reads the same shape (probe request `look`), so the facts the host
+ * approved travel to the box's isolated world unchanged.
+ */
+export type BoxExpect = { 
+/**
+ * The origin of the box's own frame, `https://pay.example`. Required: Neo never types
+ * "wherever the ref ended up".
+ */
+origin: string, 
+/**
+ * The input's `type` attribute as the DOM reports it (`password`, `text`, ...).
+ */
+type?: string, 
+/**
+ * The `autocomplete` attribute, exactly as written.
+ */
+autocomplete?: string, 
+/**
+ * The box's `maxlength`.
+ */
+maxLength?: number, 
+/**
+ * The `inputmode` attribute, exactly as written.
+ */
+inputMode?: string, 
+/**
+ * The `name` attribute.
+ */
+name?: string, 
+/**
+ * The `id` attribute.
+ */
+id?: string, };
+
+/**
+ * An approved fact that no longer holds (`box_changed` names it). The input's `type` is not
+ * one: a box of another type answers its own code, `wrong_type`.
+ */
+export type BoxFact = "autocomplete" | "maxLength" | "inputMode" | "name" | "id";
+
+/**
+ * A box's facts as the look read them in Neo's isolated world. The host approves these and
+ * sends them back as `expect`, so the look at approval and the look at typing are one rule.
+ * They describe the box, never what it holds beyond whether it is empty.
+ */
+export type BoxFacts = { 
+/**
+ * The origin of the box's own frame.
+ */
+origin: string, 
+/**
+ * The input's `type` as the DOM reports it.
+ */
+type: string, 
+/**
+ * The `autocomplete` attribute; empty when absent.
+ */
+autocomplete: string, 
+/**
+ * The `maxlength`; `None` when the box has none.
+ */
+maxLength: number | null, 
+/**
+ * The `inputmode` attribute; empty when absent.
+ */
+inputMode: string, 
+/**
+ * The `name` attribute; empty when absent.
+ */
+name: string, 
+/**
+ * The `id` attribute; empty when absent.
+ */
+id: string, 
+/**
+ * Whether the box has a size. A box with none skips the covered check: it has nothing to
+ * show or cover, and is reached by focus.
+ */
+sized: boolean, 
+/**
+ * Whether the box holds nothing now.
+ */
+empty: boolean, };
+
+/**
  * A `checkable` read's value (the generated probe `Checkable`): upstream's `elementState(el,
  * 'checked')`, which follows a label to its control.
  */
@@ -144,6 +260,24 @@ export type HitDone = "done";
 export type Located = { pin: Pin, preview: string, visible: boolean, count: number, };
 
 /**
+ * The checks the page side makes, in the order it makes them (design section 5.3, steps 2
+ * to 7). Step 1, the ref naming one element, and the tab's address of step 3 are Rust's.
+ */
+export type LookRefusal = "notAnInput" | "wrongOrigin" | "wrongType" | "boxChanged" | "boxNotEditable" | "boxHidden" | "boxCovered" | "valueTooLong";
+
+/**
+ * The first check a box fails, and for `boxChanged` the fact that differs.
+ */
+export type LookRefused = { code: LookRefusal, fact?: BoxFact, };
+
+/**
+ * The look's answer for one box (`value` payload of the `look` request): its facts whenever it
+ * is a text input, and the first check it fails. A covered box answers both. A box whose pin
+ * is gone answers the protocol's `detached` instead.
+ */
+export type Looked = { facts?: BoxFacts, refusal?: LookRefused, };
+
+/**
  * A value as the probe sent it: the page's own text. It prints as `[page text]`, so no log line carries a value the page
  * shows (STYLE P4); [`PageText::into_value`] hands it to the op's output, and [`PageText::pin`]
  * takes only the probe's pin and drops the text unread.
@@ -207,7 +341,7 @@ export type ProbeRequest = { "op": "describe" } | { "op": "resolve", target: Pro
 /**
  * Every `<iframe>` on the way down is visible (the resolver's hops).
  */
-frameVisible: boolean, scroll: ScrollPlan, position?: Point, arm?: ArmPlan, } | { "op": "verdict", token: number, } | { "op": "moves" } | { "op": "disarm" } | { "op": "frameBox", iframe: ProbeTarget, point?: Point, } | { "op": "edit", pin: Pin, edit: Edit, } | { "op": "read", target: ProbeTarget, strictness: Strictness, frameVisible: boolean, read: Read, } | { "op": "readAll", target: ProbeTarget, read: ReadAll, } | { "op": "screenshotMask", target: ProbeTarget, color: string, } | { "op": "screenshotMaskCleanup" } | { "op": "selector", target: ProbeTarget, } | { "op": "snapshot", root: ProbeTarget, mode: SnapshotMode, 
+frameVisible: boolean, scroll: ScrollPlan, position?: Point, arm?: ArmPlan, } | { "op": "verdict", token: number, } | { "op": "moves" } | { "op": "disarm" } | { "op": "frameBox", iframe: ProbeTarget, point?: Point, } | { "op": "edit", pin: Pin, edit: Edit, } | { "op": "look", pin: Pin, look: BoxAsk, } | { "op": "read", target: ProbeTarget, strictness: Strictness, frameVisible: boolean, read: Read, } | { "op": "readAll", target: ProbeTarget, read: ReadAll, } | { "op": "screenshotMask", target: ProbeTarget, color: string, } | { "op": "screenshotMaskCleanup" } | { "op": "selector", target: ProbeTarget, } | { "op": "snapshot", root: ProbeTarget, mode: SnapshotMode, 
 /**
  * Any integer, as upstream passes it: a child frame's depth can come out zero or
  * negative, and the engine reads those differently from no depth.

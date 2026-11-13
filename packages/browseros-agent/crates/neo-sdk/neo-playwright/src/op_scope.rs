@@ -52,7 +52,7 @@ use tokio::time::{self, Instant};
 use crate::call_log::CallLog;
 use crate::object_group::ObjectGroup;
 use crate::op::Op;
-use crate::op_spec::Capability;
+use crate::op_spec::{Capability, OpSpec};
 use crate::target::CallHeader;
 use crate::{ErrorCode, OpEnv, PlaywrightError, ReadPath, RunState, WritePath};
 
@@ -63,7 +63,9 @@ pub(crate) use sent::Sent;
 pub(crate) struct OpScope<'env> {
     /// The host's side of this op. Private: leaves reach `mark_sent` only via `send_effect`.
     env: &'env dyn OpEnv,
-    op: Op,
+    /// What the op is: its effect decides whether it may mark itself sent, and its
+    /// capabilities which gateways it may pass.
+    spec: OpSpec,
     /// The method the script called (`page.click`); every message starts with it.
     api: String,
     started: Instant,
@@ -99,10 +101,17 @@ pub(crate) struct Expired;
 impl<'env> OpScope<'env> {
     /// Opens the scope for `op` with the header the prelude sent. Its clock starts now.
     pub(crate) fn new(env: &'env dyn OpEnv, op: Op, call: CallHeader) -> Self {
+        Self::of_spec(env, op.spec(), call)
+    }
+
+    /// Opens a scope for an operation that is not in the script-facing op table: a host's own
+    /// call into the crate, such as the private entry (`private_entry/entry_op.rs`), which no
+    /// script may reach. It is policed exactly as a table op with the same spec.
+    pub(crate) fn of_spec(env: &'env dyn OpEnv, spec: OpSpec, call: CallHeader) -> Self {
         Self {
             env,
-            op,
-            api: call.api.unwrap_or_else(|| op.spec().name.to_owned()),
+            spec,
+            api: call.api.unwrap_or_else(|| spec.name.to_owned()),
             started: Instant::now(),
             timeout: call
                 .timeout_ms
@@ -202,7 +211,7 @@ impl<'env> OpScope<'env> {
                 .ok_or_else(|| self.fail(ErrorCode::TargetClosed, "the tab was closed"))?;
             // A write may load a document, so the run's context init scripts reach the tab
             // first (page/init_script.rs). A read loads none and adds nothing.
-            if self.op.spec().effect == Effect::Write {
+            if self.spec.effect == Effect::Write {
                 self.run_state()
                     .init_scripts
                     .add_context_scripts(self, browser, &admitted)
@@ -317,7 +326,7 @@ impl<'env> OpScope<'env> {
     /// page admitted and its element found, and a script that never went out (a refused script,
     /// a closed tab, an element that never appeared, the owner's takeover) ran nowhere.
     pub(crate) fn require(&self, capability: Capability) -> Result<(), PlaywrightError> {
-        if self.op.spec().uses(capability) {
+        if self.spec.uses(capability) {
             if capability == Capability::MainWorld {
                 self.main_world.store(true, Ordering::Relaxed);
             }
@@ -360,7 +369,7 @@ impl<'env> OpScope<'env> {
     /// tab only, as every other effect does, though its script can reach the tab's opener and
     /// popups.
     pub(crate) fn send_effect(&self) -> Result<Sent<'_>, PlaywrightError> {
-        match self.op.spec().effect {
+        match self.spec.effect {
             // `OpSpec` promises hosts that a read never marks itself sent.
             Effect::Read => Err(self.fail(
                 ErrorCode::Internal,

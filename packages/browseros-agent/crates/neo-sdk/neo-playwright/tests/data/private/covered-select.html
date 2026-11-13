@@ -1,0 +1,11 @@
+<!doctype html><meta charset=utf-8><title>Covered expiry</title>
+<style>.row { position: relative; width: 220px; height: 40px; } .row select { position: absolute; left: 0; top: 0; width: 200px; height: 30px; }
+#cover { position: absolute; left: 0; top: 0; width: 200px; height: 30px; background: rgba(200, 0, 0, 0.3); z-index: 5; }</style>
+<div class=row id=mrow><label>Expiry month <select id=month autocomplete=cc-exp-month><option value="">MM</option></select></label></div>
+<script>
+for (let m = 1; m <= 12; m++) document.getElementById('month').add(new Option(String(m).padStart(2, '0'), 'm-' + m));
+// ?mode=cover (default): an overlay on the dropdown; ?mode=none: nothing.
+if ((new URLSearchParams(location.search).get('mode') || 'cover') === 'cover') {
+  const d = document.createElement('div'); d.id = 'cover'; document.getElementById('mrow').appendChild(d);
+}
+</script>

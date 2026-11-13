@@ -19,6 +19,7 @@ import { documentText, replaceDocument } from './document'
 import { edit } from './edit'
 import { expect } from './expect'
 import { armInput, inputArrived } from './files'
+import { look } from './private-look'
 import {
   type BootOptions,
   type Described,
@@ -72,6 +73,7 @@ const HANDLERS: Handlers = {
   disarm,
   frameBox,
   edit,
+  look,
   read,
   readAll,
   selector: generatedSelector,
