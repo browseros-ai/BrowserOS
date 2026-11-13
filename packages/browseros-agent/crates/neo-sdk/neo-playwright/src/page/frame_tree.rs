@@ -265,15 +265,18 @@ pub(crate) async fn frames(
     // the prelude reads the tree again before the script's next operation resolves.
     let incomplete = frames.as_ref().is_some_and(|tree| !tree.unread.is_empty());
     match &frames {
+        // Hosts match these notes' first words (`frame tree incomplete:`, `frame tree not read:`)
+        // in the run record's `page.frames` operations, so they stay as they are.
         None => scope.log(
-            "the tab's frame tree was not read in time (it was loading or navigating): the \
+            "frame tree not read: the tab was loading or navigating past the read's time; its \
              frames stay as they were"
                 .to_owned(),
         ),
         Some(tree) => {
             for (frame, error) in &tree.unread {
                 scope.log(format!(
-                    "the out-of-process frame {frame} could not be read, so the tree lacks it: {error}"
+                    "frame tree incomplete: the out-of-process frame {frame} could not be read, \
+                     so the tree lacks it: {error}"
                 ));
             }
         }
