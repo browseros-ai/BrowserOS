@@ -133,7 +133,9 @@ function retryAfterSeconds(error: APICallError): number | undefined {
   if (!raw) return undefined
   const value = Number(raw)
   if (!Number.isFinite(value) || value <= 0) return undefined
-  return headers['retry-after-ms'] ? Math.ceil(value / 1000) : Math.ceil(value)
+  return headers['retry-after'] !== undefined
+    ? Math.ceil(value)
+    : Math.ceil(value / 1000)
 }
 
 function fromApiCallError(

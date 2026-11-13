@@ -37,6 +37,28 @@ describe('toChatError', () => {
     expect(error.retryAfterSeconds).toBe(30)
   })
 
+  it('converts Retry-After-Ms to seconds when it is the only hint', () => {
+    const error = toChatError(
+      apiCallError({
+        statusCode: 429,
+        responseHeaders: { 'retry-after-ms': '1500' },
+      }),
+    )
+
+    expect(error.retryAfterSeconds).toBe(2)
+  })
+
+  it('does not divide the seconds header when both retry hints are present', () => {
+    const error = toChatError(
+      apiCallError({
+        statusCode: 429,
+        responseHeaders: { 'retry-after': '120', 'retry-after-ms': '60000' },
+      }),
+    )
+
+    expect(error.retryAfterSeconds).toBe(120)
+  })
+
   it.each([401, 403])('classifies %i as auth failure', (statusCode) => {
     const error = toChatError(
       apiCallError({ message: 'invalid api key', statusCode }),
