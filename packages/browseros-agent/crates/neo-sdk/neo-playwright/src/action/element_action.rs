@@ -112,7 +112,9 @@ impl<'a> ElementRunner<'a> {
             // The edit can move the focus (a focus, a blur, a page handler of the event), so it
             // waits for the tab's input, as keys and a fill hold it: between a fill's select and
             // its insertText, or between a delayed type's keys, it would send the rest of the
-            // keys into another field.
+            // keys into another field. The hold also brings the tab forward, which on a
+            // background tab is what gives a focus in a cross-site frame its document's focus,
+            // as `toBeFocused()` reads it (neo-server `AgentFront`'s TODO).
             let input = input::hold(self.scope, self.page).await?;
             // The edit changes the page, so the host's policies run again right before it.
             let sent = self.scope.send_effect()?;

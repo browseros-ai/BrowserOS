@@ -1355,6 +1355,170 @@ async fn tests_that_listener_only_elements_in_same_and_cross_site_frames_are_mar
     Ok(())
 }
 
+/// The fallback markup of `FALLBACK_PAGE`'s second iframe, as the HTML parser keeps it: raw text.
+const FALLBACK_MARKUP: &str = "<p>Your browser does not support iframes.</p>";
+
+/// The page for an iframe's fallback markup (design section 13): the same cross-site card frame
+/// twice, the first iframe written empty and the second with fallback markup between its tags,
+/// as the card frames of a real donation page carry it.
+/// The frames are on `localhost`, another site, so each runs out of process with a session of
+/// its own; their address names the page's own port.
+const FALLBACK_PAGE: &str = r#"<!doctype html><html><head><title>Fallback</title></head><body>
+<main>
+<iframe id="plain"></iframe>
+<iframe id="fallback"><p>Your browser does not support iframes.</p></iframe>
+</main>
+<script>
+for (const id of ['plain', 'fallback'])
+  document.getElementById(id).src = `http://localhost:${location.port}/card.html`
+</script>
+</body></html>"#;
+
+/// The card frame: the field and the button the default text prints with refs.
+const CARD_FRAME: &str = r#"<!doctype html><html><body>
+<input aria-label="Card number"> <button>Pay</button>
+</body></html>"#;
+
+/// An iframe whose tag holds fallback markup, on a real engine: the engine reads the markup as
+/// the iframe node's `text` and Rust stitches the frame's content under the same node. Neo's
+/// formats print that frame with its refs and never the markup: `mode: 'full'` prints every ref
+/// the default text prints, in both forms, the second card field's included. Under the spec
+/// harness's conformance switch the page prints Playwright's own text: the fallback line, and
+/// no second frame.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_an_iframe_with_fallback_markup_prints_its_frame_and_the_switch_keeps_the_markup()
+-> TestResult {
+    let page = |html: &str| Page::html(html).with_header("cache-control", "no-store");
+    let server = FixtureServer::start(HashMap::from([
+        ("/fallback.html".to_owned(), page(FALLBACK_PAGE)),
+        ("/card.html".to_owned(), page(CARD_FRAME)),
+    ]))
+    .await?;
+    let url = json!(server.url("127.0.0.1", "/fallback.html"));
+    let neo_script = format!(
+        "try {{\n\
+           await page.goto({url})\n\
+           const frames = page.frames().map((frame) => frame.url())\n\
+           const json = await page.ariaSnapshotJSON({{ mode: 'ai' }})\n\
+           const full = await page.ariaSnapshot({{ mode: 'full', maxTokens: 100000 }})\n\
+           const plain = await page.ariaSnapshot()\n\
+           const text = await page.ariaSnapshot({{ text: true }})\n\
+           const interactive = await page.ariaSnapshot({{ text: false }})\n\
+           return {{ frames, json, full, plain, text, interactive }}\n\
+         }} finally {{\n\
+           await page.close()\n\
+         }}"
+    );
+    let run = Arc::new(LiveRun::connect().await?);
+    let host: Arc<dyn OpHost> = Arc::clone(&run) as Arc<dyn OpHost>;
+    let init = json!({ "page": null });
+    let neo = js_runner::run_script(&host, &init, &neo_script).await?;
+    let card = server.url("localhost", "/card.html");
+    assert_eq!(
+        neo["frames"],
+        json!([server.url("127.0.0.1", "/fallback.html"), card, card]),
+        "both card frames loaded"
+    );
+    assert_fallback_is_read_into_the_tree(&neo["json"])?;
+
+    let text = |key: &str| neo[key].as_str().unwrap_or_default().to_owned();
+    let card_fields = |printed: &str| {
+        printed
+            .lines()
+            .filter(|line| {
+                line.trim_start()
+                    .starts_with("- textbox \"Card number\" [ref=")
+            })
+            .count()
+    };
+    let full = text("full");
+    assert_eq!(
+        card_fields(&full),
+        2,
+        "mode 'full' prints both frames' card field with a ref: {full}"
+    );
+    let full_refs = printed_refs(&full);
+    for form in ["full", "plain", "text", "interactive"] {
+        let printed = text(form);
+        assert!(
+            !printed.contains("Your browser does not support iframes"),
+            "{form} prints no fallback markup: {printed}"
+        );
+        let missing: Vec<String> = printed_refs(&printed)
+            .difference(&full_refs)
+            .cloned()
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "{form} prints refs the full text lacks: {missing:?}"
+        );
+    }
+    assert_eq!(card_fields(&text("plain")), 2, "the default prints both");
+
+    let upstream: Arc<dyn OpHost> = Arc::new(Upstream(Arc::clone(&run)));
+    let switched = js_runner::run_script(
+        &upstream,
+        &init,
+        &format!(
+            "try {{\n\
+               await page.goto({url})\n\
+               return await page.ariaSnapshot({{ mode: 'ai' }})\n\
+             }} finally {{\n\
+               await page.close()\n\
+             }}"
+        ),
+    )
+    .await?;
+    let ai = switched.as_str().ok_or("Playwright's ai text")?;
+    let fallback_line = ai
+        .lines()
+        .filter(|line| line.trim_start().starts_with("- iframe [ref="))
+        .nth(1)
+        .unwrap_or_default();
+    assert!(
+        fallback_line.ends_with(&format!("]: {FALLBACK_MARKUP}")),
+        "under the switch the second iframe is Playwright's fallback line: {ai}"
+    );
+    assert_eq!(
+        card_fields(ai),
+        1,
+        "under the switch only the first frame prints, as in Playwright: {ai}"
+    );
+    Ok(())
+}
+
+/// The cause, read from the engine's stitched tree: the first iframe has no `text`, the second
+/// has the fallback markup as its `text`, and both hold their frame's content as children.
+fn assert_fallback_is_read_into_the_tree(json: &Value) -> TestResult {
+    let mut iframes = Vec::new();
+    // Depth first in document order: children go on reversed, so the first comes off first.
+    let mut pending: Vec<&Value> = json.as_array().into_iter().flatten().rev().collect();
+    while let Some(node) = pending.pop() {
+        if node["role"] == "iframe" {
+            iframes.push(node);
+        }
+        pending.extend(node["children"].as_array().into_iter().flatten().rev());
+    }
+    let [plain, fallback] = iframes.as_slice() else {
+        return Err(format!("two iframe nodes: {json}").into());
+    };
+    assert_eq!(plain.get("text"), None, "the empty iframe has no text");
+    assert_eq!(
+        fallback["text"], FALLBACK_MARKUP,
+        "the engine reads the fallback markup as the iframe's text"
+    );
+    for iframe in [plain, fallback] {
+        assert!(
+            iframe["children"]
+                .as_array()
+                .is_some_and(|children| !children.is_empty()),
+            "Rust stitches the frame under the iframe: {iframe}"
+        );
+    }
+    Ok(())
+}
+
 /// Containers clickable marking must never pass as targets, as the v1 text prints them: a
 /// `tabindex` pane of controls and pointer rows, a `tabindex` box of pointer rows, a `tabindex`
 /// list of listener-only items, a listener card holding a note and a text-only `<article>` (a section the v1

@@ -73,6 +73,15 @@ pub fn is_subscription(name: &str) -> bool {
     SUBSCRIPTIONS.contains(&name)
 }
 
+/// The tab an operation `name` on `tab` touches: its target, unless it only subscribes. The one
+/// rule for "the run touched this tab": the run record's tabs (`TraceBatch::link_tab`), its
+/// run-end screenshots (`TouchedTabs`) and a task's follower (`TraceRecordEvent::OperationStarted`
+/// `touched`) all take it, so Neo's own listeners on every known tab move none of them.
+#[must_use]
+pub(crate) fn touched_tab(name: &str, tab: Option<TabId>) -> Option<TabId> {
+    tab.filter(|_| !is_subscription(name))
+}
+
 /// The most screenshot bytes kept on disk (D5): about 7,000 JPEGs of 150 KB.
 const SCREENSHOT_CAP_BYTES: u64 = 1 << 30;
 

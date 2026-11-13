@@ -291,7 +291,7 @@ impl TraceBatch {
                 .await?;
         }
         // A subscription names a tab without acting on it, so it links no tab to the run.
-        if let Some(tab) = op.tab.filter(|_| !trace_store::is_subscription(op.name)) {
+        if let Some(tab) = trace_store::touched_tab(op.name, op.tab) {
             self.link_tab(op.id.run, tab).await?;
         }
         Ok(())
