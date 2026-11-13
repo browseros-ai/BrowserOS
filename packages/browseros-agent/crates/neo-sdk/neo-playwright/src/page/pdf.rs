@@ -193,6 +193,9 @@ pub(crate) async fn print(
         .params()
         .map_err(|message| scope.fail(ErrorCode::InvalidInput, &message))?;
     let page = input.page.tab();
+    // A printed page shows its boxes' values: refused like a screenshot of a tab that took a
+    // private fill, before and after (ruling R46).
+    pw.private_tabs().refuse_picture(page)?;
     let admitted = scope.admit(pw.browser(), page).await?;
     let session = pw
         .browser()
@@ -209,6 +212,7 @@ pub(crate) async fn print(
             ),
             _ => scope.core_error(&error),
         })?;
+    pw.private_tabs().refuse_picture(page)?;
     Ok(Bytes::from_base64(reply.data))
 }
 

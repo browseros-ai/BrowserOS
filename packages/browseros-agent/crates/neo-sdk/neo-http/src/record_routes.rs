@@ -118,10 +118,12 @@ pub(crate) async fn get_screenshot(
         )
             .into_response()),
         ShotRead::Expired => Err(ApiError::expired("retention deleted this screenshot")),
-        // Older traces recorded withheld jobs without a JPEG. They read as missing images.
-        ShotRead::None | ShotRead::Withheld => {
-            Err(ApiError::not_found("this operation has no screenshot"))
-        }
+        ShotRead::None => Err(ApiError::not_found("this operation has no screenshot")),
+        // No JPEG on purpose: the tab had taken a host's private typing (or an older writer
+        // withheld it). Still a missing image to a host, with the reason in the message.
+        ShotRead::Withheld => Err(ApiError::not_found(
+            "this operation's picture was withheld: its tab had taken a private fill",
+        )),
     }
 }
 

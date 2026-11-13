@@ -25,6 +25,7 @@ use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
 use browseros_core::{ProtocolSession, TabId};
+use neo_trace::ErrorOwner;
 use tokio::runtime::Handle;
 
 use crate::input::{self, Keyboard, PageInput};
@@ -37,7 +38,7 @@ use crate::private_entry::{
 };
 use crate::probe::{self, ProbeFailure, ProbeReply, ProbeRequest};
 use crate::world::{IsolatedWorld, Pin};
-use crate::{ErrorCode, Playwright, PlaywrightError};
+use crate::{ErrorCode, Playwright, PlaywrightError, Refusal};
 
 /// How a whole entry that did not stop ended.
 #[derive(Clone, Copy)]
@@ -612,8 +613,12 @@ impl Drop for ForgetGuard {
 }
 
 /// The tabs whose documents took a private entry, for the host's camera (design section
-/// 10.3): marked before the first character, and kept for the tab's life, because going back
-/// in history restores a text box.
+/// 10.3) and a script's own pictures (ruling R46): marked before the first character, and kept
+/// for the tab's life, because going back in history restores a text box. Kept in this process
+/// only: a Neo restart forgets them while the browser keeps the tab, so Neo pictures the tab
+/// again, a documented limit until a synced record of the tabs' targets comes (the follow-up of
+/// ruling R45). The boxes' marks live in the page's isolated world and survive a restart of the
+/// same Neo; an upgrade that changes the probe's protocol number loses them.
 #[derive(Debug, Default)]
 pub(crate) struct PrivateTabs {
     tabs: Mutex<HashSet<TabId>>,
@@ -632,5 +637,65 @@ impl PrivateTabs {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .contains(&tab)
+    }
+
+    /// A script's own picture of `tab` (`page.screenshot`, `locator.screenshot`, `page.pdf`):
+    /// refused for the tab's life once it took a private fill, asked before the capture and
+    /// again after it, as the host's camera asks, so a capture the fill's start straddles is
+    /// thrown away (ruling R46). One host-owned refusal with a fixed sentence.
+    pub(crate) fn refuse_picture(&self, tab: TabId) -> Result<(), PlaywrightError> {
+        if !self.took(tab) {
+            return Ok(());
+        }
+        Err(Refusal {
+            owner: ErrorOwner::Host,
+            code: PRIVATE_TAB.to_owned(),
+            message: PRIVATE_TAB_MESSAGE.to_owned(),
+            host_code: None,
+        }
+        .into())
+    }
+}
+
+/// The refusal of a script's picture of a tab that took a private fill (ruling R46).
+const PRIVATE_TAB: &str = "private_tab";
+
+/// The refusal's sentence, which reaches the agent's model unchanged: it says the refusal is
+/// permanent for the tab and what to read instead, because a model that reads
+/// `retryable: true` (nothing was sent, so a repeat is safe) may otherwise try again in a loop.
+const PRIVATE_TAB_MESSAGE: &str = "This tab took a private fill, so Neo takes no \
+    picture of it for the rest of the tab's life. Trying again will not succeed. Read the page \
+    with page.ariaSnapshot() instead.";
+
+#[cfg(test)]
+mod tests {
+    use browseros_core::TabId;
+    use neo_trace::ErrorOwner;
+
+    use super::{PRIVATE_TAB_MESSAGE, PrivateTabs};
+
+    #[test]
+    fn tests_that_a_picture_of_a_tab_that_took_a_fill_is_refused_for_good() {
+        let tabs = PrivateTabs::default();
+        tabs.mark(TabId(3));
+        for _repeat in 0..2 {
+            let refused = tabs.refuse_picture(TabId(3)).err();
+            assert_eq!(
+                refused
+                    .as_ref()
+                    .map(|error| (error.owner(), error.code(), error.message())),
+                Some((ErrorOwner::Host, "private_tab", PRIVATE_TAB_MESSAGE)),
+                "the same refusal every time"
+            );
+        }
+        assert!(
+            PRIVATE_TAB_MESSAGE.contains("Trying again will not succeed")
+                && PRIVATE_TAB_MESSAGE.contains("page.ariaSnapshot()"),
+            "the sentence says it is permanent and what to read instead"
+        );
+        assert!(
+            tabs.refuse_picture(TabId(4)).is_ok(),
+            "another tab is pictured"
+        );
     }
 }

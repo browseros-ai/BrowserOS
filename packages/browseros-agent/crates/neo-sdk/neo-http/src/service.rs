@@ -12,6 +12,7 @@
 use crate::event_log::{EventKind, EventLog, LogEvent};
 use crate::fill_route::{FillDoor, FillGate};
 use crate::live_tabs::LiveTabs;
+use crate::private_tabs::{PrivateTabs, TookPrivateText};
 use crate::screenshot_taker::Camera;
 use crate::settings::Settings;
 use crate::tab_keeps::TabKeeps;
@@ -96,6 +97,8 @@ pub(crate) struct ServiceState {
     pub(crate) tab_owner: TabOwner,
     /// The fill routes' door, armed by the app ([`Service::arm_fill`]).
     pub(crate) fill: FillGate,
+    /// The tabs the camera never pictures, armed by the app ([`Service::arm_private_tabs`]).
+    pub(crate) private: Arc<PrivateTabs>,
     /// Cancels the hub's shutdown token when the service is dropped, which ends every live
     /// stream and capture.
     _live_shutdown: DropGuard,
@@ -140,9 +143,11 @@ impl Service {
         let events = EventLog::start(store.clone(), sink.subscribe());
         let locks = Locks::new(store.clone(), sink.clone());
         events.follow_locks(locks.subscribe());
+        let private = Arc::new(PrivateTabs::default());
         Camera {
             browser: Arc::clone(&browser),
             viewports: Arc::clone(&viewports),
+            private: Arc::clone(&private),
         }
         .spawn(screenshots);
         let tab_inventory = ProtocolSession::root(browser.connection());
@@ -191,6 +196,7 @@ impl Service {
                 settings,
                 tab_owner,
                 fill: FillGate::default(),
+                private,
                 _live_shutdown: shutdown.drop_guard(),
             }),
         }
@@ -200,6 +206,13 @@ impl Service {
     /// [`host_service`](crate::host_service), which puts the host auth in front.
     pub fn router(&self) -> Router {
         router::router(Arc::clone(&self.state))
+    }
+
+    /// Arms the camera with which tabs took a host's private typing: it takes no picture of
+    /// such a tab for the tab's life, asked before each capture and again before its write, and
+    /// records `withheld` in the picture's place. Arm it with the fill routes.
+    pub fn arm_private_tabs(&self, took: TookPrivateText) {
+        self.state.private.arm(took);
     }
 
     /// Arms `POST /v1/tabs/{tabId}/fill` and `/fill/check` with what a fill does, which lives in

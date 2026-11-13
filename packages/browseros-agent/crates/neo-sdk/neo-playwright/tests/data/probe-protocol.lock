@@ -3,4 +3,4 @@
 # contract: bump PROTOCOL (protocol.ts) and PROBE_PROTOCOL (probe_reply.rs), rebuild with
 # scripts/build.ts, then replace the line below with the one the test prints. Never edit the
 # hash alone: a world that kept the old probe would answer the old shapes.
-34 e4aeed490f244c6d3732e50126e4002594ec648369eb3975350a70e9582a99de
+35 630cfd52e54be08a08d7365aaff4fa99bf9d717a1b4580ac9a2809d5ebc83cce

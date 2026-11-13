@@ -371,6 +371,7 @@ impl TraceBatch {
                 ShotState::Stored,
                 Some(i64::try_from(bytes_len).unwrap_or(i64::MAX)),
             ),
+            Shot::Withheld => (ShotState::Withheld, None),
             Shot::Dropped => return Ok(()),
         };
         operations::Entity::update_many()

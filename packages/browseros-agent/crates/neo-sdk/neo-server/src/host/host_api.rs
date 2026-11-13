@@ -190,9 +190,11 @@ impl HostApi {
             let service = service.clone();
             move |tab| service.tab_hold(tab)
         });
-        // Before the socket serves, so no host request reaches an unarmed fill route.
+        // Before the socket serves, so no host request reaches an unarmed fill route, and the
+        // camera knows every tab the fill types into from the fill's first character.
         if let Some(fill) = &fill {
             service.arm_fill(fill.door());
+            service.arm_private_tabs(fill.took_private_text());
         }
         // The owner's two claims, the tab and the screen, from the same moment: no implicit
         // agent move runs past a viewer or a takeover once a host can open one.

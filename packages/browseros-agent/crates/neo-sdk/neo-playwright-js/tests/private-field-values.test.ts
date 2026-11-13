@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, expect, it, spyOn } from 'bun:test'
 import { asPointerTargets } from '../src/probe/pointer-targets'
-import { withMaskedFieldValues } from '../src/probe/private-field-values'
+import { privateStep } from '../src/probe/private-entry'
+import {
+  withMarkedFieldsMasked,
+  withMaskedFieldValues,
+} from '../src/probe/private-field-values'
+import type { World } from '../src/probe/world'
 import { openProbePage, type ProbePage } from './support/probe-page'
 
 let page: ProbePage
@@ -116,6 +121,55 @@ it('masks only whole page-declared private tokens, case insensitively and across
       expect(element.value).toBe('A🔒z')
     }
   }
+})
+
+it('masks a box Neo typed a host value into, whatever the page declares (ruling R14)', async () => {
+  const typed = field(
+    'input',
+    { type: 'text', autocomplete: 'username' },
+    'A🔒z',
+  )
+  const ordinary = field('input', { type: 'text' }, 'plain')
+  page.document.body.append(typed, ordinary)
+  // The entry's focus step is what marks a box; this world reaches only what that step reads.
+  const world = {
+    pins: { live: (pin: number) => (pin === 7 ? typed : undefined) },
+    injected: { selectText: () => 'selected' },
+  } as unknown as World
+  await privateStep(world, {
+    op: 'private',
+    pin: 7,
+    step: { kind: 'focus', text: 'A🔒z', spaced: false },
+  })
+  privateStep(world, { op: 'private', pin: 7, step: { kind: 'forget' } })
+  expect(withMaskedFieldValues(() => typed.value)).toBe('••••')
+  expect(withMaskedFieldValues(() => ordinary.value)).toBe('plain')
+  expect(typed.value).toBe('A🔒z')
+})
+
+it('masks a box Neo typed into under the conformance switch, where declared fields print as upstream (ruling R44)', async () => {
+  const typed = field('input', { type: 'text' }, 'A🔒z')
+  const declared = field('input', { type: 'password' }, 'hunter2')
+  page.document.body.append(typed, declared)
+  const world = {
+    pins: { live: (pin: number) => (pin === 8 ? typed : undefined) },
+    injected: { selectText: () => 'selected' },
+  } as unknown as World
+  await privateStep(world, {
+    op: 'private',
+    pin: 8,
+    step: { kind: 'focus', text: 'A🔒z', spaced: false },
+  })
+  privateStep(world, { op: 'private', pin: 8, step: { kind: 'forget' } })
+  // The reads outside main's masking (a failed expect's snapshot) mask the mark alone.
+  expect(withMarkedFieldsMasked(() => typed.value)).toBe('••••')
+  expect(withMarkedFieldsMasked(() => declared.value)).toBe('hunter2')
+  const conformance = { declared: false }
+  expect(withMaskedFieldValues(() => typed.value, conformance)).toBe('••••')
+  expect(withMaskedFieldValues(() => declared.value, conformance)).toBe(
+    'hunter2',
+  )
+  expect(withMaskedFieldValues(() => declared.value)).toBe('•••••••')
 })
 
 it('keeps empty secrets and ordinary fields, submit labels and expiry selects unchanged', () => {

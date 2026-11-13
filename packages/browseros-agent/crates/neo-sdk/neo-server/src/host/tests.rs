@@ -153,6 +153,10 @@ impl Host {
             takeover: Arc::clone(&takeover),
             ledger: FillLedger::open(dir.path(), || Duration::from_hours(7 * 24)).await,
             shutdown: shutdown.clone(),
+            took: {
+                let entry = Arc::clone(&entry);
+                Arc::new(move |tab| entry.took(tab))
+            },
         });
         let serving = tokio::spawn(host.with_fill(fill).serve(
             Arc::clone(&link),

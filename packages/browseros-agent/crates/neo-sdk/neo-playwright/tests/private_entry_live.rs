@@ -30,7 +30,7 @@ use live_browser::{LiveBrowser, TestPage, TestResult};
 use neo_playwright::{
     BoxSpec, Entry, EntryOutcome, EntryRequest, Expect, PrivateField, PrivateText,
 };
-use neo_trace::Delivery;
+use neo_trace::{Delivery, ErrorOwner};
 use private_host::HostEnv;
 use serde_json::{Value, json};
 use tokio::sync::{Semaphore, SemaphorePermit};
@@ -924,11 +924,7 @@ async fn tests_that_a_lock_stops_the_entry() -> TestResult {
     assert_eq!(entry.outcome, EntryOutcome::Refused, "{entry:?}");
     assert_eq!(code(&entry), Some("owner_has_control"));
     let owner = entry.error.as_ref().map(|error| error.owner);
-    assert_eq!(
-        owner,
-        Some(neo_trace::ErrorOwner::Host),
-        "the policy's own owner"
-    );
+    assert_eq!(owner, Some(ErrorOwner::Host), "the policy's own owner");
     assert_eq!(entry.delivery, Delivery::NotSent);
     assert_eq!(
         entry.error.as_ref().map(|error| error.retryable),
@@ -944,11 +940,7 @@ async fn tests_that_a_lock_stops_the_entry() -> TestResult {
     assert_eq!(entry.outcome, EntryOutcome::Uncertain, "{entry:?}");
     assert_eq!(code(&entry), Some("owner_has_control"));
     let owner = entry.error.as_ref().map(|error| error.owner);
-    assert_eq!(
-        owner,
-        Some(neo_trace::ErrorOwner::Host),
-        "the policy's own owner"
-    );
+    assert_eq!(owner, Some(ErrorOwner::Host), "the policy's own owner");
     assert_eq!(entry.typed, vec![2]);
     assert_eq!(
         entry.delivery,
@@ -1046,5 +1038,371 @@ async fn tests_that_a_character_costs_a_few_browser_messages() -> TestResult {
     {
         eprintln!("cost of a character, key by key: {per_character:?} each, 16 in {took:?}");
     }
+    bench.close(opened).await
+}
+
+/// A value the entry types into a box the page does not declare private, so whatever masks it
+/// is the mark alone.
+const MARKED: &str = "CANARY-marked-4242";
+
+/// A `locator` handle on `page` for an aria ref.
+fn ref_target(page: &Value, r#ref: &str) -> Value {
+    json!({
+        "$neo": "locator", "page": page,
+        "chunks": [{ "parts": [{ "name": "aria-ref", "body": r#ref, "source": r#ref }] }],
+        "display": format!("getByRef('{ref}')"),
+    })
+}
+
+/// A `locator.inputValue` input for `target`.
+fn input_value(target: &Value) -> Value {
+    json!({
+        "call": { "api": "locator.inputValue", "timeoutMs": 5_000 },
+        "target": target, "strict": "strict",
+    })
+}
+
+/// A `page.ariaSnapshot` input in ai mode, under the spec harness's switch or not.
+fn page_snapshot(page: &Value, conformance: bool) -> Value {
+    json!({
+        "call": { "api": "page.ariaSnapshot", "timeoutMs": 10_000 },
+        "page": page, "mode": "ai", "conformance": conformance,
+    })
+}
+
+/// An `expect.<matcher>` input that polls for 300 ms, with the matcher's own `params`.
+fn expectation(target: (&str, Value), matcher: &str, params: &Value) -> Value {
+    let mut input = json!({
+        "call": { "api": format!("expect.{matcher}"), "timeoutMs": 300 },
+        "matcher": matcher, "expectation": "", "expected": "",
+    });
+    if let Some(input) = input.as_object_mut() {
+        input.insert(target.0.to_owned(), target.1);
+        if let Some(params) = params.as_object() {
+            input.extend(params.clone());
+        }
+    }
+    input
+}
+
+/// Protected fill 4/5 (design decision 6, rulings R14, R44 and R47): every read Neo itself makes
+/// of a box the entry typed a host's value into answers one bullet per character, on a tab in
+/// front and behind. The box is the Email box, which the page does not declare private, so the
+/// mark alone masks it: `inputValue()`, the snapshot with and without the spec harness's
+/// conformance switch, and every failed assertion (the received value, the received aria tree,
+/// the preview and the failure's snapshot). `toHaveValue` compares against the bullets. A box
+/// the entry never typed into reads as the page holds it, and the page's own world (`evaluate`)
+/// still holds the value, which is the page's and a documented limit.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one table: each of Neo's reads of the same marked box, on a tab in front and behind"
+)]
+async fn tests_that_neos_own_reads_answer_bullets_for_a_privately_typed_box() -> TestResult {
+    let bench = Bench::start().await?;
+    let bullets = "•".repeat(MARKED.chars().count());
+    for place in PLACES {
+        let opened = bench
+            .open("/private/covered-login.html?mode=none", place)
+            .await?;
+        let email = bench.r#ref(&opened, "textbox", "Email").await?;
+        let password = bench.r#ref(&opened, "textbox", "Password").await?;
+        let env = bench.host(&opened);
+        let fields = vec![Field::new(&email, &bench.page_origin).with(MARKED)?];
+        let entry = bench.enter(&env, &opened, fields).await;
+        assert_eq!(entry.outcome, EntryOutcome::Entered, "{place:?}: {entry:?}");
+        let page = opened.page.brand();
+        let read = |op: &'static str, input: Value| {
+            let live = &bench.live;
+            async move { live.invoke(op, input).await }
+        };
+
+        let typed = read(
+            "locator.inputValue",
+            input_value(&ref_target(&page, &email)),
+        )
+        .await??;
+        assert_eq!(typed, json!(bullets), "{place:?}: inputValue reads bullets");
+        let untouched = read(
+            "locator.inputValue",
+            input_value(&ref_target(&page, &password)),
+        )
+        .await??;
+        assert_eq!(
+            untouched,
+            json!(""),
+            "{place:?}: a box the entry never typed into reads as the page holds it"
+        );
+
+        for conformance in [false, true] {
+            // The answer is the frames' JSON tree, which the prelude renders: all of it.
+            let printed = read("page.ariaSnapshot", page_snapshot(&page, conformance))
+                .await??
+                .to_string();
+            assert!(
+                !printed.contains(MARKED) && printed.contains(&bullets),
+                "{place:?}: the snapshot (conformance {conformance}) prints bullets: {printed}"
+            );
+        }
+
+        let missing = json!({
+            "$neo": "locator", "page": page,
+            "chunks": [{ "parts": [{
+                "name": "css",
+                "body": [{ "simples": [{
+                    "selector": { "css": "#nothing-here", "functions": [] }, "combinator": "",
+                }] }],
+                "source": "#nothing-here",
+            }] }],
+            "display": "locator('#nothing-here')",
+        });
+        let on_box = || ("target", ref_target(&page, &email));
+        let not_a_button = json!({
+            "expression": "to.match.aria", "isNot": false,
+            "expectedValue": { "kind": "role", "role": "button", "name": "No such button" },
+        });
+        let failing = [
+            (
+                "expect.locator",
+                expectation(
+                    on_box(),
+                    "toHaveValue",
+                    &json!({
+                        "expression": "to.have.value", "isNot": false,
+                        "expectedText": [{ "string": "something else" }],
+                    }),
+                ),
+            ),
+            (
+                "expect.locator",
+                expectation(
+                    on_box(),
+                    "toHaveText",
+                    &json!({
+                        "expression": "to.have.text", "isNot": false,
+                        "expectedText": [{ "string": "x" }],
+                    }),
+                ),
+            ),
+            (
+                "expect.locator",
+                expectation(
+                    on_box(),
+                    "toHaveAttribute",
+                    &json!({
+                        "expression": "to.have.attribute.value", "isNot": false,
+                        "expressionArg": "data-none", "expectedText": [{ "string": "x" }],
+                    }),
+                ),
+            ),
+            (
+                "expect.locator",
+                expectation(on_box(), "toMatchAriaSnapshot", &not_a_button),
+            ),
+            (
+                "expect.page",
+                expectation(("page", page.clone()), "toMatchAriaSnapshot", &not_a_button),
+            ),
+            (
+                "expect.locator",
+                expectation(
+                    ("target", missing),
+                    "toBeVisible",
+                    &json!({
+                        "expression": "to.be.visible", "isNot": false,
+                    }),
+                ),
+            ),
+        ];
+        for (op, input) in failing {
+            let matcher = input.get("matcher").cloned().unwrap_or_default();
+            let error = match read(op, input).await? {
+                Ok(passed) => return Err(format!("{place:?}: {matcher} passed: {passed}").into()),
+                Err(error) => format!("{error:?}"),
+            };
+            assert!(
+                !error.contains(MARKED) && error.contains(&bullets),
+                "{place:?}: a failed {matcher} prints the box as bullets: {error}"
+            );
+        }
+        let as_read = read(
+            "expect.locator",
+            expectation(
+                on_box(),
+                "toHaveValue",
+                &json!({
+                    "expression": "to.have.value", "isNot": false,
+                    "expectedText": [{ "string": bullets }],
+                }),
+            ),
+        )
+        .await?;
+        assert_eq!(
+            as_read.ok(),
+            Some(Value::Null),
+            "{place:?}: toHaveValue compares against the bullets inputValue reads"
+        );
+
+        assert_eq!(
+            bench.value(&opened, &email).await?,
+            MARKED,
+            "{place:?}: the page's own world still holds it"
+        );
+        bench.close(opened).await?;
+    }
+    Ok(())
+}
+
+/// Protected fill 4/5: a box in a cross-site frame, where a payment provider draws a card field
+/// and where host fills happen, reads as bullets from `inputValue()` and in the page's stitched
+/// snapshot, on a tab in front and behind.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_privately_typed_box_in_a_cross_site_frame_reads_as_bullets() -> TestResult {
+    let bench = Bench::start().await?;
+    let bullets = "•".repeat(CARD.chars().count());
+    for place in PLACES {
+        let opened = bench
+            .open(
+                "/private/xframe.html?src=card-field.html%3Ffield%3Dnumber",
+                place,
+            )
+            .await?;
+        let number = bench.r#ref(&opened, "textbox", "Card number").await?;
+        let env = bench.host(&opened);
+        let field = Field::new(&number, &bench.other_origin)
+            .spaced()
+            .with(CARD)?;
+        let entry = bench.enter(&env, &opened, vec![field]).await;
+        assert_eq!(entry.outcome, EntryOutcome::Entered, "{place:?}: {entry:?}");
+        let page = opened.page.brand();
+        let typed = bench
+            .live
+            .invoke(
+                "locator.inputValue",
+                input_value(&ref_target(&page, &number)),
+            )
+            .await??;
+        assert_eq!(typed, json!(bullets), "{place:?}: inputValue reads bullets");
+        let printed = bench
+            .live
+            .invoke("page.ariaSnapshot", page_snapshot(&page, false))
+            .await??
+            .to_string();
+        assert!(
+            !printed.contains(CARD) && printed.contains(&bullets),
+            "{place:?}: the stitched snapshot prints the frame's box as bullets: {printed}"
+        );
+        assert_eq!(bench.value(&opened, &number).await?, CARD, "{place:?}");
+        bench.close(opened).await?;
+    }
+    Ok(())
+}
+
+/// Protected fill 4/5 (ruling R46): once a tab took a private fill, a script's own
+/// `page.screenshot()` and `locator.screenshot()` of it are refused with one host-owned error,
+/// `private_tab`, and another tab still screenshots.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_script_takes_no_picture_of_a_tab_that_took_a_private_fill() -> TestResult {
+    let bench = Bench::start().await?;
+    let opened = bench
+        .open("/private/covered-login.html?mode=none", Place::Front)
+        .await?;
+    let email = bench.r#ref(&opened, "textbox", "Email").await?;
+    let env = bench.host(&opened);
+    let fields = vec![Field::new(&email, &bench.page_origin).with(MARKED)?];
+    let entry = bench.enter(&env, &opened, fields).await;
+    assert_eq!(entry.outcome, EntryOutcome::Entered, "{entry:?}");
+    let shot = |page: &Value, target: Option<Value>| {
+        let mut input = json!({
+            "call": { "api": "page.screenshot", "timeoutMs": 10_000 }, "page": page,
+        });
+        if let (Some(input), Some(target)) = (input.as_object_mut(), target) {
+            input.insert("target".to_owned(), target);
+            input.insert("strict".to_owned(), json!("strict"));
+        }
+        input
+    };
+    let page = opened.page.brand();
+    for (what, input) in [
+        ("page.screenshot", shot(&page, None)),
+        (
+            "locator.screenshot",
+            shot(&page, Some(ref_target(&page, &email))),
+        ),
+    ] {
+        let Err(refused) = bench.live.invoke("page.screenshot", input).await? else {
+            return Err(format!("{what} pictured a tab that took a private fill").into());
+        };
+        assert_eq!(
+            (refused.owner(), refused.code()),
+            (ErrorOwner::Host, "private_tab"),
+            "{what}: {refused:?}"
+        );
+        assert_eq!(
+            refused.message(),
+            "This tab took a private fill, so Neo takes no picture of it for the rest of the \
+             tab's life. Trying again will not succeed. Read the page with page.ariaSnapshot() \
+             instead.",
+            "{what}"
+        );
+    }
+    let other = bench.open("/private/look.html", Place::Front).await?;
+    let pictured = bench
+        .live
+        .invoke("page.screenshot", shot(&other.page.brand(), None))
+        .await?;
+    assert!(
+        pictured.is_ok(),
+        "another tab still screenshots: {pictured:?}"
+    );
+    bench.close(other).await?;
+    bench.close(opened).await
+}
+
+/// Protected fill 4/5 (ruling R47): an element whose accessible name is built from a box the
+/// entry typed into (`aria-labelledby` walks into the box and takes its value) carries the box's
+/// value in its name; a failed `toHaveAccessibleName` on it answers bullets.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_name_built_from_a_privately_typed_box_reads_as_bullets() -> TestResult {
+    let bench = Bench::start().await?;
+    let bullets = "•".repeat(MARKED.chars().count());
+    let opened = bench.open("/private/labelled.html", Place::Front).await?;
+    let code = bench.r#ref(&opened, "textbox", "Code").await?;
+    let env = bench.host(&opened);
+    let fields = vec![Field::new(&code, &bench.page_origin).with(MARKED)?];
+    let entry = bench.enter(&env, &opened, fields).await;
+    assert_eq!(entry.outcome, EntryOutcome::Entered, "{entry:?}");
+    let page = opened.page.brand();
+    let button = json!({
+        "$neo": "locator", "page": page,
+        "chunks": [{ "parts": [{
+            "name": "css",
+            "body": [{ "simples": [{
+                "selector": { "css": "#go", "functions": [] }, "combinator": "",
+            }] }],
+            "source": "#go",
+        }] }],
+        "display": "locator('#go')",
+    });
+    let input = expectation(
+        ("target", button),
+        "toHaveAccessibleName",
+        &json!({
+            "expression": "to.have.accessible.name", "isNot": false,
+            "expectedText": [{ "string": "x" }],
+        }),
+    );
+    let error = match bench.live.invoke("expect.locator", input).await? {
+        Ok(passed) => return Err(format!("toHaveAccessibleName passed: {passed}").into()),
+        Err(error) => format!("{error:?}"),
+    };
+    assert!(
+        !error.contains(MARKED) && error.contains(&bullets),
+        "the name built from the box reads as bullets: {error}"
+    );
     bench.close(opened).await
 }

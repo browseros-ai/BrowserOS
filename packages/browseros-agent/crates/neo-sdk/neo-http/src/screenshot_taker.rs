@@ -15,6 +15,8 @@
 //!      past CAPTURE_TIMEOUT: aborted, then again from the lookup after CAPTURE_BACKOFF,
 //!        CAPTURE_ATTEMPTS all timed out, or CAPTURE_BUDGET spent ─────────▶ Dropped
 //!    write the JPEG at the job's path ────────────────────────────────────▶ Taken
+//!  a tab that took a host's private typing, asked before the capture and again before the
+//!    write, so a capture the fill's start straddles is thrown away ───────────▶ Withheld
 //! ```
 //!
 //! **In order, bounded per tab.** Jobs are taken in the order the writer made them, so each
@@ -42,6 +44,7 @@ use crate::limits::{
     CAPTURE_ATTEMPTS, CAPTURE_BACKOFF, CAPTURE_BUDGET, CAPTURE_TIMEOUT, MAX_WAITING_PER_TAB,
     SCREENSHOT_QUALITY,
 };
+use crate::private_tabs::PrivateTabs;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use browseros_core::screenshot::{ScreenshotCaptureOptions, ScreenshotFormat};
@@ -57,6 +60,8 @@ use tokio::time::Instant;
 pub(crate) struct Camera {
     pub(crate) browser: Arc<BrowserSession>,
     pub(crate) viewports: Arc<Viewports>,
+    /// The tabs never pictured: those that took a host's private typing (`private_tabs`).
+    pub(crate) private: Arc<PrivateTabs>,
 }
 
 impl Camera {
@@ -92,8 +97,19 @@ impl Camera {
             path,
             answer,
         } = job;
+        if self.private.withholds(tab) {
+            tracing::debug!(%op, tab = tab.0, "screenshot withheld: the tab took a private fill");
+            answer.send(Shot::Withheld);
+            return;
+        }
         let shot = match self.capture(op, tab).await {
             Err(missed) => missed.answer(op, tab),
+            // Asked again: a fill that started while the capture ran has its value in these
+            // pixels. They are dropped unwritten.
+            Ok(_straddled) if self.private.withholds(tab) => {
+                tracing::debug!(%op, tab = tab.0, "screenshot withheld: a private fill began during the capture");
+                Shot::Withheld
+            }
             Ok(jpeg) => match write_jpeg(&path, &jpeg).await {
                 Ok(()) => Shot::Taken {
                     bytes_len: u64::try_from(jpeg.len()).unwrap_or(u64::MAX),

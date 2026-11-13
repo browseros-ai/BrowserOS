@@ -169,6 +169,7 @@ pub(crate) async fn capture(
             )
             .await?;
             let page = OpPage::admit_handle(pw, scope, &input.page).await?;
+            pw.private_tabs().refuse_picture(page.tab())?;
             // A capture waits for a forced frame's presentation; brought forward, the tab has
             // one at once.
             scope.bring_forward(page.tab()).await;
@@ -212,7 +213,12 @@ pub(crate) async fn capture(
             let captured = screenshot_document::capture(&page, scope, work).await;
             preparation.restore().await;
             match captured {
-                Ok(screenshot_document::Attempt::Captured(data)) => return Ok(data),
+                Ok(screenshot_document::Attempt::Captured(data)) => {
+                    // Asked again: a private fill that began while the capture ran has its
+                    // value in these pixels, which are dropped.
+                    pw.private_tabs().refuse_picture(page.tab())?;
+                    return Ok(data);
+                }
                 Ok(screenshot_document::Attempt::Navigated) => {
                     if matches!(input.target, Some(Target::Element(_))) {
                         return Err(scope.fail(

@@ -110,6 +110,14 @@ impl PlaywrightFacade {
         &self.file_access
     }
 
+    /// Whether `tab` took a host's private typing, for the camera, which must not wait: `false`
+    /// before the facade is built, when no entry can have run.
+    pub(crate) fn took_private_text(&self, tab: TabId) -> bool {
+        self.playwright
+            .get()
+            .is_some_and(|playwright| playwright.took_private_text(tab))
+    }
+
     /// The facade, built here if the background start has not finished. An op runs only
     /// inside a run, and a run starts only once the link connected, so this does not wait on
     /// the browser.

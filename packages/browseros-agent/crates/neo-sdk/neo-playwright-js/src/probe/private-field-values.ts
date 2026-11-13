@@ -1,7 +1,11 @@
 /**
- * Masks page-declared private values during one synchronous snapshot walk in this frame's
- * isolated world. The DOM's stored values and the page world's native getters stay untouched.
+ * Masks page-declared private values, and the values Neo typed privately for a host, during one
+ * synchronous snapshot walk in this frame's isolated world. The DOM's stored values and the page
+ * world's native getters stay untouched.
  */
+
+import { anyPrivatelyTyped, privatelyTyped } from './private-entry'
+
 const PRIVATE_AUTOCOMPLETE = new Set([
   'current-password',
   'new-password',
@@ -28,13 +32,24 @@ const PRIVATE_VALUE_ATTRIBUTES = new Set([
   'aria-valuenow',
 ])
 
+/**
+ * Whether the scope in force masks what the page declares private. Under the spec harness's
+ * conformance switch it does not, so declared fields print as upstream prints them.
+ */
+let declaredMasked = true
+
 function isPrivateField(field: Element): boolean {
   return (
-    field.getAttribute('type')?.toLowerCase() === 'password' ||
-    (field.getAttribute('autocomplete') ?? '')
-      .toLowerCase()
-      .split(/\s+/)
-      .some((token) => PRIVATE_AUTOCOMPLETE.has(token))
+    // A box Neo typed a host's secret into is private whatever the page declares, in every
+    // scope: the host's private typing marks it before its first character (protected-fill
+    // rulings R14 and R44).
+    privatelyTyped(field) ||
+    (declaredMasked &&
+      (field.getAttribute('type')?.toLowerCase() === 'password' ||
+        (field.getAttribute('autocomplete') ?? '')
+          .toLowerCase()
+          .split(/\s+/)
+          .some((token) => PRIVATE_AUTOCOMPLETE.has(token))))
   )
 }
 
@@ -206,13 +221,29 @@ function restoreOverrides(installed: PropertyOverride[]): void {
 }
 
 /**
+ * `walk` with only the boxes Neo typed into masked: for the engine's reads that print a page
+ * outside main's masking (a failed `expect`'s aria snapshot) and under the spec harness's
+ * conformance switch, which no mark bypasses (ruling R44). Until this world marks a box it
+ * installs nothing, so those reads stay exactly upstream's.
+ */
+export function withMarkedFieldsMasked<T>(walk: () => T): T {
+  return anyPrivatelyTyped()
+    ? withMaskedFieldValues(walk, { declared: false })
+    : walk()
+}
+
+/**
  * Owns every field read the engine uses until `walk` returns or throws. The entire marking
  * retry stays inside this scope, so its fallback cannot create a clear-value tree. Validate
  * every patch before installing any; cleanup attempts all installed patches in reverse order.
  * The style guard shares this registry so it restores the function it found, including a
- * pointer-target wrapper when the two scopes are nested in either order.
+ * pointer-target wrapper when the two scopes are nested in either order. With `declared: false`
+ * (the spec harness's conformance switch) it masks only the boxes Neo typed into.
  */
-export function withMaskedFieldValues<T>(walk: () => T): T {
+export function withMaskedFieldValues<T>(
+  walk: () => T,
+  { declared = true }: { declared?: boolean } = {},
+): T {
   const input = HTMLInputElement.prototype
   const textarea = HTMLTextAreaElement.prototype
   const valueReads = new Set<Field>()
@@ -247,13 +278,16 @@ export function withMaskedFieldValues<T>(walk: () => T): T {
     propertyOverride(globalThis, 'getComputedStyle', maskedComputedStyle),
   ]
   const installed: PropertyOverride[] = []
+  const outer = declaredMasked
   try {
     for (const override of overrides) {
       Object.defineProperty(override.target, override.property, override.masked)
       installed.push(override)
     }
+    declaredMasked = declared
     return walk()
   } finally {
+    declaredMasked = outer
     restoreOverrides(installed)
   }
 }

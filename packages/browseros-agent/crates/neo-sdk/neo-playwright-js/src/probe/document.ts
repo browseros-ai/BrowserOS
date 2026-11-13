@@ -4,6 +4,8 @@
  * utility world. A failed `expect` that found nothing reads the body's aria snapshot here, as
  * upstream reads it from its utility world.
  */
+
+import { withMarkedFieldsMasked } from './private-field-values'
 import type {
   DocumentRequest,
   DocumentText,
@@ -18,14 +20,16 @@ export function documentText(
 ): DocumentText {
   const { injected } = world
   const { document } = injected
+  const { body } = document
   const text =
     request.part === 'title'
       ? document.title
       : request.part === 'expectSnapshot'
-        ? document.body
-          ? injected.ariaSnapshotForExpectFailure(document.body, {
-              mode: 'default',
-            })
+        ? body
+          ? // A box Neo typed a host's secret into prints bullets here too (ruling R44).
+            withMarkedFieldsMasked(() =>
+              injected.ariaSnapshotForExpectFailure(body, { mode: 'default' }),
+            )
           : ''
         : request.includeShadow
           ? // The vendored serializer recursively includes open roots, even non-serializable
