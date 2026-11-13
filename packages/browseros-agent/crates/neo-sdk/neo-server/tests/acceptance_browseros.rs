@@ -142,26 +142,23 @@ const TRACE_FIELDS: [(&str, &str, &str, &str); 8] = [
 ];
 
 fn private_trace_html() -> String {
-    let mut html = String::from("<title>Snapshot trace</title><main><h1>Checkout</h1>");
-    for (label, tag, attributes, value) in TRACE_FIELDS {
-        if tag == "textarea" {
-            html.push_str(&format!(
-                "<label>{label}<textarea {attributes}>{value}</textarea></label>"
-            ));
-        } else {
-            html.push_str(&format!(
-                "<label>{label}<input {attributes} value='{value}'></label>"
-            ));
-        }
-    }
-    html.push_str(
-        "<button aria-labelledby='self'></button><button aria-labelledby='numeric'></button>",
-    );
-    html.push_str(
-        "<label>Expiry<input autocomplete='cc-exp' value='12/30'></label>\
-        <label>Holder<input autocomplete='cc-name' value='Ada Example'></label></main>",
-    );
-    html
+    let fields = TRACE_FIELDS
+        .into_iter()
+        .map(|(label, tag, attributes, value)| {
+            let control = if tag == "textarea" {
+                format!("<textarea {attributes}>{value}</textarea>")
+            } else {
+                format!("<input {attributes} value='{value}'>")
+            };
+            format!("<label>{label}{control}</label>")
+        })
+        .collect::<String>();
+    format!(
+        "<title>Snapshot trace</title><main><h1>Checkout</h1>{fields}\
+         <button aria-labelledby='self'></button><button aria-labelledby='numeric'></button>\
+         <label>Expiry<input autocomplete='cc-exp' value='12/30'></label>\
+         <label>Holder<input autocomplete='cc-name' value='Ada Example'></label></main>"
+    )
 }
 
 fn assert_returned_snapshot_values(first: &CallToolResult) -> TestResult {

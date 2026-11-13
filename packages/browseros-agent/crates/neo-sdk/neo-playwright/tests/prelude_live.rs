@@ -1425,7 +1425,7 @@ fn private_field_node<'tree>(tree: &'tree Value, name: &str) -> Option<&'tree Va
 
 /// Every output route is collected from the same live controls, then direct reads verify that
 /// the scoped prototype guards have already been removed. These reads are deliberately not
-/// part of the snapshot canary scan: explicit inputValue() remains a clear-value API.
+/// part of the snapshot canary scan. Explicit `inputValue()` remains a clear-value API.
 const PRIVATE_SNAPSHOT_SCRIPT: &str = r"
       await page.goto(__FIXTURE_URL__)
       const cross = page.locator('#cross').contentFrame().locator('body')
@@ -1516,9 +1516,10 @@ fn assert_private_field_tree(tree: &Value, scope: &str) -> TestResult {
 }
 
 fn assert_private_snapshot_formats(opened: &Value, key: &str, scopes: &[&str]) -> TestResult {
-    assert_private_canaries_absent(&opened[key]["texts"])?;
-    assert_private_canaries_absent(&opened[key]["trees"])?;
-    let texts = opened[key]["texts"].as_object().ok_or("the text formats")?;
+    let group = opened.get(key).ok_or("the collected snapshot group")?;
+    assert_private_canaries_absent(&group["texts"])?;
+    assert_private_canaries_absent(&group["trees"])?;
+    let texts = group["texts"].as_object().ok_or("the text formats")?;
     for (format, value) in texts {
         let text = value.as_str().ok_or("a snapshot text")?;
         for scope in scopes {
@@ -1532,10 +1533,10 @@ fn assert_private_snapshot_formats(opened: &Value, key: &str, scopes: &[&str]) -
         }
     }
     assert_eq!(
-        opened[key]["reads"],
+        group["reads"],
         json!(vec![json!(["Pw🔒", "Typed", "Edit🔒"]); 7])
     );
-    for (format, tree) in opened[key]["trees"]
+    for (format, tree) in group["trees"]
         .as_array()
         .ok_or("the JSON formats")?
         .iter()
