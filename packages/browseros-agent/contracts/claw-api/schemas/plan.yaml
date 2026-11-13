@@ -308,3 +308,27 @@ PlanPortal:
       type: string
       format: uri
       description: The billing portal page to open in a new tab.
+PlanSavings:
+  type: object
+  additionalProperties: false
+  required: [totals, tasks, latest]
+  description: >-
+    What ultrafast has done on this computer, from the task history: every
+    task with an ultrafast run (a skill that ran without the agent, or a pursue
+    that read the page).
+  properties:
+    totals:
+      allOf:
+        - $ref: ./sessions.yaml#/SessionUltrafastRun
+      description: Time, pages read and tokens saved, summed across those tasks.
+    tasks:
+      type: integer
+      format: int64
+      minimum: 0
+      description: How many tasks had an ultrafast run.
+    latest:
+      type: array
+      maxItems: 3
+      description: The newest of those tasks, newest first.
+      items:
+        $ref: ./sessions.yaml#/SessionSummary

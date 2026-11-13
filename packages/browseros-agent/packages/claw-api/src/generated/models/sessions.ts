@@ -435,7 +435,7 @@ export interface SessionSummary {
      */
     tokenUsage?: SessionTokenUsage;
     /**
-     * Present only when an ultrafast skill ran to the end without the agent in this session.
+     * Present only when this session had an ultrafast run: a skill that ran to the end without the agent, or a pursue that read the page.
      * @type {SessionUltrafastRun}
      * @memberof SessionSummary
      */
@@ -475,13 +475,13 @@ export interface SessionTokenUsage {
 }
 
 /**
- * What neo did on its own while ultrafast skills ran without the agent in this session, summed across every such run.
+ * What neo did on its own in this session's ultrafast runs (skills that ran without the agent, and pursue runs that read the page), summed.
  * @export
  * @interface SessionUltrafastRun
  */
 export interface SessionUltrafastRun {
     /**
-     * Time the ultrafast skill runs took, in milliseconds.
+     * Time those runs took, in milliseconds.
      * @type {number}
      * @memberof SessionUltrafastRun
      */

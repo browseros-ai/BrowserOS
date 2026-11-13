@@ -12,6 +12,11 @@
  * Do not edit the class manually.
  */
 
+import type {
+    SessionSummary,
+    SessionUltrafastRun,
+} from './sessions.js';
+
 /**
  *
  * @export
@@ -407,6 +412,32 @@ export interface PlanRateLimitedError {
      * @memberof PlanRateLimitedError
      */
     retryAfterSeconds?: number;
+}
+
+/**
+ * What ultrafast has done on this computer, from the task history: every task with an ultrafast run (a skill that ran without the agent, or a pursue that read the page).
+ * @export
+ * @interface PlanSavings
+ */
+export interface PlanSavings {
+    /**
+     * Time, pages read and tokens saved, summed across those tasks.
+     * @type {SessionUltrafastRun}
+     * @memberof PlanSavings
+     */
+    totals: SessionUltrafastRun;
+    /**
+     * How many tasks had an ultrafast run.
+     * @type {number}
+     * @memberof PlanSavings
+     */
+    tasks: number;
+    /**
+     * The newest of those tasks, newest first.
+     * @type {Array<SessionSummary>}
+     * @memberof PlanSavings
+     */
+    latest: Array<SessionSummary>;
 }
 
 /**

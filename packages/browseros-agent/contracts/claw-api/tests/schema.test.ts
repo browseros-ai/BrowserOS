@@ -354,6 +354,7 @@ describe('plan API schema', () => {
   const routes = {
     '/api/v1/plan': ['plan', 'get', 'getPlan'],
     '/api/v1/plan/pricing': ['pricing', 'get', 'getPlanPricing'],
+    '/api/v1/plan/savings': ['savings', 'get', 'getPlanSavings'],
     '/api/v1/plan/checkout': ['checkout', 'post', 'startPlanCheckout'],
     '/api/v1/plan/checkout/{checkoutId}': [
       'checkoutStatus',
@@ -388,7 +389,7 @@ describe('plan API schema', () => {
       Record<string, { operationId?: string }>
     >
 
-    expect(Object.keys(routes)).toHaveLength(13)
+    expect(Object.keys(routes)).toHaveLength(14)
     for (const [route, [name, method, operationId]] of Object.entries(routes)) {
       expect(openapi.paths[route]).toEqual({
         $ref: `./paths/plan.yaml#/${name}`,

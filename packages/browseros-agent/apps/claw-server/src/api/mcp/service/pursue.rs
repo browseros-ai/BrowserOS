@@ -7,7 +7,7 @@ use crate::{
     api::mcp::{
         dispatch::{ToolIdentity, linked_cancel_token},
         observers::audit::{LocalToolDispatch, record_local_tool_dispatch},
-        pursue::PageDriver,
+        pursue::{PageDriver, PageReads},
     },
     ids::DispatchId,
     services::sessions::ClawTargetStore,
@@ -101,7 +101,9 @@ pub(super) fn pursue_tool() -> Tool {
             "actions": { "type": "integer" },
             "decisions": { "type": "integer" },
             "jevTokens": { "type": "integer" },
-            "writerCalls": { "type": "integer" }
+            "writerCalls": { "type": "integer" },
+            "pagesRead": { "type": "integer", "description": "Page states neo read itself, none of which went to you." },
+            "pageTokens": { "type": "integer", "description": "Estimated tokens of the page text neo read itself." }
         },
         "required": ["outcome", "said", "page", "status"]
     }) else {
@@ -333,7 +335,7 @@ impl ClawMcpService {
         if uses_up_pursue(ending, outcome.decisions) {
             started.session.mark_pursue_handed_back();
         }
-        finished(page, ending, &told, outcome.writes)
+        finished(page, ending, &told, outcome.writes, driver.reads())
     }
 }
 
@@ -389,7 +391,7 @@ fn not_started(page: u32, why: &str) -> ToolResult {
     )
 }
 
-fn finished(page: u32, ending: Ending, told: &Told, writes: u32) -> ToolResult {
+fn finished(page: u32, ending: Ending, told: &Told, writes: u32, reads: PageReads) -> ToolResult {
     let text = match ending {
         Ending::Completed => format!("{}\nRead page {page} to confirm.", told.said),
         Ending::Cancelled => told.said.clone(),
@@ -413,6 +415,8 @@ fn finished(page: u32, ending: Ending, told: &Told, writes: u32) -> ToolResult {
         "decisions": told.decisions,
         "jevTokens": told.input_tokens,
         "writerCalls": writes,
+        "pagesRead": reads.pages,
+        "pageTokens": reads.tokens,
     });
     if ending == Ending::HandedBack {
         body["continueWith"] = json!("run");

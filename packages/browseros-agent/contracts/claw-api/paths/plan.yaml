@@ -387,3 +387,19 @@ refresh:
         $ref: ../responses.yaml#/PlanNotFound
       '500':
         $ref: ../responses.yaml#/InternalError
+savings:
+  get:
+    operationId: getPlanSavings
+    summary: What ultrafast has done on this computer.
+    description: Derived from the local task history, so it works offline. Tasks recorded before ultrafast kept its numbers count nothing.
+    responses:
+      '200':
+        description: Totals and the newest ultrafast tasks.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/plan.yaml#/PlanSavings
+      '403':
+        $ref: ../responses.yaml#/PlanForbidden
+      '500':
+        $ref: ../responses.yaml#/InternalError

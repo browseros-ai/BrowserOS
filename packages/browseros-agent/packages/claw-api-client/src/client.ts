@@ -23,6 +23,7 @@ import type {
   PlanPortal,
   PlanPortalRequest,
   PlanPricing,
+  PlanSavings,
   RecordFeedbackInviteRequest,
   RecordingMetadata,
   ResolveHelpResponse,
@@ -428,6 +429,10 @@ export class ClawApiClient {
 
   async getPlanPricing(): Promise<PlanPricing> {
     return this.unwrap(await this.client.GET('/api/v1/plan/pricing'))
+  }
+
+  async getPlanSavings(): Promise<PlanSavings> {
+    return this.unwrap(await this.client.GET('/api/v1/plan/savings'))
   }
 
   async startPlanCheckout(

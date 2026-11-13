@@ -411,6 +411,35 @@ impl PlanRateLimitedError {
     }
 }
 
+/// PlanSavings : What ultrafast has done on this computer, from the task history: every task with an ultrafast run (a skill that ran without the agent, or a pursue that read the page).
+#[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PlanSavings {
+    /// Time, pages read and tokens saved, summed across those tasks.
+    #[serde(rename = "totals")]
+    pub totals: Box<models::SessionUltrafastRun>,
+    /// How many tasks had an ultrafast run.
+    #[serde(rename = "tasks")]
+    pub tasks: i64,
+    /// The newest of those tasks, newest first.
+    #[serde(rename = "latest")]
+    pub latest: Vec<models::SessionSummary>,
+}
+
+impl PlanSavings {
+    /// What ultrafast has done on this computer, from the task history: every task with an ultrafast run (a skill that ran without the agent, or a pursue that read the page).
+    pub fn new(
+        totals: models::SessionUltrafastRun,
+        tasks: i64,
+        latest: Vec<models::SessionSummary>,
+    ) -> PlanSavings {
+        PlanSavings {
+            totals: Box::new(totals),
+            tasks,
+            latest,
+        }
+    }
+}
+
 /// PlanStatus : none: this computer has no plan. active: paid and renewing. ending: cancelled, ultrafast lasts until endsAt. paymentFailed: a payment failed and ultrafast lasts until graceUntil. unpaid: still billed but past the grace period, or paused, so features is empty while the key, the portal and cancel keep working.
 /// none: this computer has no plan. active: paid and renewing. ending: cancelled, ultrafast lasts until endsAt. paymentFailed: a payment failed and ultrafast lasts until graceUntil. unpaid: still billed but past the grace period, or paused, so features is empty while the key, the portal and cancel keep working.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]

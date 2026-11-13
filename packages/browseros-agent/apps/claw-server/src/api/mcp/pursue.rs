@@ -10,6 +10,7 @@
 //! any tool was missing would have refused to start against a slightly older
 //! extension.
 
+use std::sync::atomic::{AtomicI64, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -20,7 +21,7 @@ use browseros_core::{
 use browseros_decide::drive::{ActError, Driver, Journey, Move, Performed};
 use browseros_decide::view::PageView;
 use browseros_decide::vocabulary::{How, Operation};
-use browseros_mcp::{OutputFileAccess, TargetStore, ToolDef};
+use browseros_mcp::{OutputFileAccess, TargetStore, ToolDef, token_estimate::estimate_text_tokens};
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
@@ -126,6 +127,16 @@ pub struct PageDriver {
     cancel: CancellationToken,
     /// Where the page's document events stood before the last move, for the settle after it.
     mark: Mutex<Option<DocumentMark>>,
+    pages_read: AtomicU32,
+    page_tokens: AtomicI64,
+}
+
+/// The page states neo read itself during a run, none of which went to the agent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PageReads {
+    pub pages: u32,
+    /// The audit log's token estimate for those pages' text.
+    pub tokens: i64,
 }
 
 impl PageDriver {
@@ -160,7 +171,17 @@ impl PageDriver {
             output_files,
             cancel,
             mark: Mutex::new(None),
+            pages_read: AtomicU32::new(0),
+            page_tokens: AtomicI64::new(0),
         })
+    }
+
+    /// What this run has read of the page so far.
+    pub fn reads(&self) -> PageReads {
+        PageReads {
+            pages: self.pages_read.load(Ordering::Relaxed),
+            tokens: self.page_tokens.load(Ordering::Relaxed),
+        }
     }
 
     pub fn page(&self) -> u32 {
@@ -397,6 +418,11 @@ impl Driver for PageDriver {
             })
             .await
             .map_err(|error| error.to_string())?;
+        self.pages_read.fetch_add(1, Ordering::Relaxed);
+        self.page_tokens.fetch_add(
+            i64::try_from(estimate_text_tokens(&snapshot.text)).unwrap_or(i64::MAX),
+            Ordering::Relaxed,
+        );
         let title = self
             .view
             .page(PageId(self.page))

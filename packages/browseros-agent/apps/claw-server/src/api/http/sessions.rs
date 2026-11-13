@@ -25,9 +25,9 @@ use axum::{
     http::StatusCode,
 };
 use claw_api::models::{
-    CancelSessionResponse, Dispatch, ResolveHelpRequest, ResolveHelpResponse, SessionBrowserTab,
-    SessionDetail, SessionList, SessionStatus, SessionSummary, SessionTokenUsage,
-    SessionUltrafastRun,
+    CancelSessionResponse, Dispatch, PlanSavings, ResolveHelpRequest, ResolveHelpResponse,
+    SessionBrowserTab, SessionDetail, SessionList, SessionStatus, SessionSummary,
+    SessionTokenUsage, SessionUltrafastRun,
 };
 use std::{collections::HashMap, sync::Arc};
 
@@ -162,6 +162,54 @@ pub(super) async fn get(
         })?;
     let live = state.sessions.lookup(&SessionId::new(session_id)).await;
     Ok(Json(contract_detail(task, live.as_ref()).await))
+}
+
+/// How many of the newest ultrafast tasks the savings view lists.
+const SAVINGS_LATEST: usize = 3;
+
+/// GET /api/v1/plan/savings: what ultrafast has done on this computer, from the task history.
+pub(super) async fn savings(
+    Extension(request_id): Extension<RequestId>,
+    State(state): State<AppState>,
+) -> Result<Json<PlanSavings>, CanonicalError> {
+    let sessions = state
+        .audit_log
+        .all_ultrafast_sessions()
+        .await
+        .map_err(|source| internal(&request_id, source))?;
+    let totals = sessions
+        .iter()
+        .fold(UltrafastRunStats::default(), |sum, session| {
+            UltrafastRunStats {
+                duration_ms: sum.duration_ms.saturating_add(session.stats.duration_ms),
+                pages_read: sum.pages_read.saturating_add(session.stats.pages_read),
+                tokens_saved: sum.tokens_saved.saturating_add(session.stats.tokens_saved),
+            }
+        });
+    let live = live_sessions(&state).await;
+    let mut latest = Vec::with_capacity(SAVINGS_LATEST);
+    for session in &sessions {
+        if latest.len() == SAVINGS_LATEST {
+            break;
+        }
+        let Some(task) = state
+            .audit_log
+            .get_task_summary(&session.session_id)
+            .await
+            .map_err(|source| internal(&request_id, source))?
+        else {
+            continue;
+        };
+        let mut summary = contract_summary(task, live.get(session.session_id.as_str())).await;
+        summary.ultrafast = Some(contract_ultrafast(session.stats));
+        latest.push(summary);
+    }
+    let tasks = i64::try_from(sessions.len()).unwrap_or(i64::MAX);
+    Ok(Json(PlanSavings::new(
+        *contract_ultrafast(totals),
+        tasks,
+        latest,
+    )))
 }
 
 pub(super) async fn cancel(

@@ -129,6 +129,7 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/api/v1/skills/{name}/runs", get(skills::list_runs))
         .route("/api/v1/plan", get(plan::plan))
         .route("/api/v1/plan/pricing", get(plan::pricing))
+        .route("/api/v1/plan/savings", get(sessions::savings))
         .route("/api/v1/plan/checkout", post(plan::start_checkout))
         .route("/api/v1/plan/checkout/{checkout_id}", get(plan::checkout))
         .route("/api/v1/plan/key", get(plan::key))

@@ -880,6 +880,26 @@ export interface paths {
     patch?: never
     trace?: never
   }
+  '/api/v1/plan/savings': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /**
+     * What ultrafast has done on this computer.
+     * @description Derived from the local task history, so it works offline. Tasks recorded before ultrafast kept its numbers count nothing.
+     */
+    get: operations['getPlanSavings']
+    put?: never
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
 }
 export type webhooks = Record<string, never>
 export interface components {
@@ -1080,11 +1100,11 @@ export interface components {
        */
       totalTokenEstimate: number
     }
-    /** @description What neo did on its own while ultrafast skills ran without the agent in this session, summed across every such run. */
+    /** @description What neo did on its own in this session's ultrafast runs (skills that ran without the agent, and pursue runs that read the page), summed. */
     SessionUltrafastRun: {
       /**
        * Format: int64
-       * @description Time the ultrafast skill runs took, in milliseconds.
+       * @description Time those runs took, in milliseconds.
        */
       durationMs: number
       /**
@@ -1125,7 +1145,7 @@ export interface components {
       latestScreenshotId?: number
       /** @description Estimated token consumption of this session's tool traffic, summed across all dispatches and refreshed live as they land. Present only when the session has dispatches and every one carries token-estimator v1; absent for legacy or otherwise unmeasured sessions. */
       tokenUsage?: components['schemas']['SessionTokenUsage']
-      /** @description Present only when an ultrafast skill ran to the end without the agent in this session. */
+      /** @description Present only when this session had an ultrafast run: a skill that ran to the end without the agent, or a pursue that read the page. */
       ultrafast?: components['schemas']['SessionUltrafastRun']
       /** @description Present only on summaries returned by an explicit `status=live` list query. */
       live?: components['schemas']['LiveSessionState']
@@ -1777,6 +1797,18 @@ export interface components {
        * @description The billing portal page to open in a new tab.
        */
       url: string
+    }
+    /** @description What ultrafast has done on this computer, from the task history: every task with an ultrafast run (a skill that ran without the agent, or a pursue that read the page). */
+    PlanSavings: {
+      /** @description Time, pages read and tokens saved, summed across those tasks. */
+      totals: components['schemas']['SessionUltrafastRun']
+      /**
+       * Format: int64
+       * @description How many tasks had an ultrafast run.
+       */
+      tasks: number
+      /** @description The newest of those tasks, newest first. */
+      latest: components['schemas']['SessionSummary'][]
     }
   }
   responses: {
@@ -3478,6 +3510,28 @@ export interface operations {
       }
       403: components['responses']['PlanForbidden']
       404: components['responses']['PlanNotFound']
+      500: components['responses']['InternalError']
+    }
+  }
+  getPlanSavings: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description Totals and the newest ultrafast tasks. */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['PlanSavings']
+        }
+      }
+      403: components['responses']['PlanForbidden']
       500: components['responses']['InternalError']
     }
   }

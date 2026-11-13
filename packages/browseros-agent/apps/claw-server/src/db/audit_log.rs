@@ -8,7 +8,9 @@ use crate::{
             tasks, tool_dispatches,
         },
         session_efficiency_stats::ELIGIBLE_TOKEN_ESTIMATOR_VERSION,
-        ultrafast_runs::{UltrafastRunStats, finished_without_agent, ultrafast_run_stats},
+        ultrafast_runs::{
+            UltrafastRunStats, finished_without_agent, pursue_reads, ultrafast_run_stats,
+        },
     },
     error::AppResult,
     ids::DispatchId,
@@ -27,6 +29,14 @@ use std::collections::HashMap;
 use url::Url;
 
 pub use crate::db::entities::tool_dispatches::Model as ToolDispatchRow;
+
+/// A session with an ultrafast run: its summed stats and when its last row was recorded.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UltrafastSession {
+    pub session_id: String,
+    pub stats: UltrafastRunStats,
+    pub last_run_at: i64,
+}
 
 const ARGS_JSON_MAX: usize = 4096;
 const RESULT_META_MAX: usize = 4096;
@@ -769,31 +779,64 @@ impl AuditLog {
         }))
     }
 
-    /// Ultrafast stats for each listed session that had a skill run without the agent; sessions
-    /// without one are missing from the map.
+    /// Ultrafast stats for each listed session that had an ultrafast run (a skill run without the
+    /// agent, or a pursue that read the page); sessions without one are missing from the map.
     pub async fn ultrafast_run_stats(
         &self,
         session_ids: &[String],
     ) -> AppResult<HashMap<String, UltrafastRunStats>> {
-        let mut by_session = HashMap::new();
         if session_ids.is_empty() {
-            return Ok(by_session);
+            return Ok(HashMap::new());
         }
-        let conn = self.db.connection();
-        let with_skill_runs = ToolDispatches::find()
+        let candidates = ToolDispatches::find()
             .filter(tool_dispatches::Column::SessionId.is_in(session_ids.iter().cloned()))
-            .filter(tool_dispatches::Column::ToolName.eq("run_skill"))
-            .all(conn)
+            .filter(tool_dispatches::Column::ToolName.is_in(["run_skill", "pursue"]))
+            .all(self.db.connection())
+            .await?;
+        Ok(self
+            .ultrafast_sessions(candidates)
             .await?
             .into_iter()
-            .filter(finished_without_agent)
+            .map(|session| (session.session_id, session.stats))
+            .collect())
+    }
+
+    /// Every session that ever had an ultrafast run, newest run first.
+    pub async fn all_ultrafast_sessions(&self) -> AppResult<Vec<UltrafastSession>> {
+        let candidates = ToolDispatches::find()
+            .filter(tool_dispatches::Column::ToolName.is_in(["run_skill", "pursue"]))
+            .all(self.db.connection())
+            .await?;
+        let mut sessions = self.ultrafast_sessions(candidates).await?;
+        sessions.sort_by(|a, b| {
+            b.last_run_at
+                .cmp(&a.last_run_at)
+                .then_with(|| b.session_id.cmp(&a.session_id))
+        });
+        Ok(sessions)
+    }
+
+    /// Loads the sessions whose `run_skill` or `pursue` rows show an ultrafast run and derives
+    /// each one's stats from all of its rows.
+    async fn ultrafast_sessions(
+        &self,
+        candidates: Vec<ToolDispatchRow>,
+    ) -> AppResult<Vec<UltrafastSession>> {
+        let mut sessions = Vec::new();
+        let with_runs = candidates
+            .into_iter()
+            .filter(|row| {
+                (row.tool_name == "run_skill" && finished_without_agent(row))
+                    || pursue_reads(row).is_some()
+            })
             .map(|row| row.session_id)
             .collect::<std::collections::HashSet<_>>();
-        if with_skill_runs.is_empty() {
-            return Ok(by_session);
+        if with_runs.is_empty() {
+            return Ok(sessions);
         }
+        let conn = self.db.connection();
         let rows = ToolDispatches::find()
-            .filter(tool_dispatches::Column::SessionId.is_in(with_skill_runs))
+            .filter(tool_dispatches::Column::SessionId.is_in(with_runs))
             .order_by_asc(tool_dispatches::Column::CreatedAt)
             .order_by_asc(tool_dispatches::Column::Id)
             .all(conn)
@@ -804,10 +847,15 @@ impl AuditLog {
         }
         for (session_id, dispatches) in grouped {
             if let Some(stats) = ultrafast_run_stats(&dispatches) {
-                by_session.insert(session_id, stats);
+                let last_run_at = dispatches.last().map_or(0, |row| row.created_at);
+                sessions.push(UltrafastSession {
+                    session_id,
+                    stats,
+                    last_run_at,
+                });
             }
         }
-        Ok(by_session)
+        Ok(sessions)
     }
 
     pub async fn list_session_screenshots(
@@ -1293,6 +1341,15 @@ pub fn result_meta(
         .filter(|outcome| matches!(*outcome, "completed" | "handed_back" | "cancelled"))
     {
         summary["outcome"] = json!(outcome);
+        // What neo read itself during the run, for the session's ultrafast numbers.
+        for key in ["pagesRead", "pageTokens"] {
+            if let Some(count) = structured_content
+                .get(key)
+                .and_then(serde_json::Value::as_u64)
+            {
+                summary[key] = json!(count);
+            }
+        }
     }
     let serialized = summary.to_string();
     debug_assert!(serialized.len() <= RESULT_META_MAX);
@@ -1544,6 +1601,24 @@ mod tests {
         let free_text: serde_json::Value = serde_json::from_str(&free_text)?;
         assert_eq!(handed_back["outcome"], "handed_back");
         assert!(free_text.get("outcome").is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn result_metadata_keeps_what_pursue_read() -> anyhow::Result<()> {
+        let pursued = result_meta(
+            false,
+            false,
+            &json!({ "outcome": "completed", "pagesRead": 5, "pageTokens": 18_204 }),
+            1,
+        );
+        let other_tool = result_meta(false, false, &json!({ "pagesRead": 5 }), 1);
+
+        let pursued: serde_json::Value = serde_json::from_str(&pursued)?;
+        let other_tool: serde_json::Value = serde_json::from_str(&other_tool)?;
+        assert_eq!(pursued["pagesRead"], 5);
+        assert_eq!(pursued["pageTokens"], 18_204);
+        assert!(other_tool.get("pagesRead").is_none());
         Ok(())
     }
 

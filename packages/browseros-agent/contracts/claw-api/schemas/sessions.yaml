@@ -137,14 +137,14 @@ SessionUltrafastRun:
   additionalProperties: false
   required: [durationMs, pagesRead, tokensSaved]
   description: >-
-    What neo did on its own while ultrafast skills ran without the agent in
-    this session, summed across every such run.
+    What neo did on its own in this session's ultrafast runs (skills that ran
+    without the agent, and pursue runs that read the page), summed.
   properties:
     durationMs:
       type: integer
       format: int64
       minimum: 0
-      description: Time the ultrafast skill runs took, in milliseconds.
+      description: Time those runs took, in milliseconds.
     pagesRead:
       type: integer
       format: int64
@@ -234,8 +234,8 @@ SessionSummary:
       allOf:
         - $ref: '#/SessionUltrafastRun'
       description: >-
-        Present only when an ultrafast skill ran to the end without the agent
-        in this session.
+        Present only when this session had an ultrafast run: a skill that ran
+        to the end without the agent, or a pursue that read the page.
     live:
       allOf:
         - $ref: '#/LiveSessionState'
