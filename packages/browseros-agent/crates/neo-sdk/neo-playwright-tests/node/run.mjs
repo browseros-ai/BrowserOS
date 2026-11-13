@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /** Neo: Runs the pinned corpus with Playwright's own workers, selection, progress and JSON. */
-import { execFileSync, spawn } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -10,6 +10,7 @@ import { curationArgs } from './curation.mjs'
 import { runnerOptions } from './options.mjs'
 import { materialize } from './overlay.mjs'
 import { loadScope, printScores, recordScope, scoreResults } from './scope.mjs'
+import { sourceMetadata } from './source-metadata.mjs'
 
 const argv = process.argv.slice(2)
 const options = runnerOptions(argv)
@@ -30,6 +31,7 @@ console.log(`Results: ${output}`)
 // it leaves to Playwright's live terminal reporter.
 if (process.env.NEO_NODE_RESULTS_FILE)
   fs.writeFileSync(process.env.NEO_NODE_RESULTS_FILE, output)
+const metadata = sourceMetadata(agent)
 const run = {
   mode: options.engine,
   engine: options.engine,
@@ -51,10 +53,8 @@ const run = {
   workers: options.workers,
   startedAt: new Date().toISOString(),
   endedAt: null,
-  commit: execFileSync('git', ['rev-parse', 'HEAD'], {
-    cwd: agent,
-    encoding: 'utf8',
-  }).trim(),
+  commit: metadata.revision,
+  dirty: metadata.dirty,
   sdkSources:
     options.engine === 'claw'
       ? Object.fromEntries(

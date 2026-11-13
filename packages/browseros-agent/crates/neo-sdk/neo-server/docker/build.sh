@@ -29,7 +29,29 @@ usage() { sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 here=$(cd -- "$(dirname -- "$0")" && pwd)
 agent=$(cd -- "$here/../../../.." && pwd)
-repo=$(git -C "$agent" rev-parse --show-toplevel)
+# Remote jobs carry working files and explicit source metadata, without Git history.
+# Require all three fields and select the declared source tree. An installed build
+# driver can use a frozen older worktree without modifying its scripts; the image's
+# source/binary digest checks below remain the authority for the actual input bytes.
+if [ -n "${NEO_SDK_SOURCE_ROOT+x}${NEO_SDK_SOURCE_REVISION+x}${NEO_SDK_SOURCE_DIRTY+x}" ]; then
+  : "${NEO_SDK_SOURCE_ROOT:?source metadata requires ROOT, REVISION and DIRTY}"
+  : "${NEO_SDK_SOURCE_REVISION:?source metadata requires ROOT, REVISION and DIRTY}"
+  : "${NEO_SDK_SOURCE_DIRTY:?source metadata requires ROOT, REVISION and DIRTY}"
+  repo=$(cd -- "$NEO_SDK_SOURCE_ROOT" && pwd -P)
+  agent=$(cd -- "$repo/packages/browseros-agent" && pwd -P)
+  [ "$repo/packages/browseros-agent" = "$agent" ] \
+    || { echo 'build.sh: source root must contain the actual build inputs' >&2; exit 2; }
+  here=$(cd -- "$agent/crates/neo-sdk/neo-server/docker" && pwd -P)
+  [[ "$NEO_SDK_SOURCE_REVISION" =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ ]] \
+    || { echo 'build.sh: source revision must be a full Git object id' >&2; exit 2; }
+  case "$NEO_SDK_SOURCE_DIRTY" in true | false) ;; *) echo 'build.sh: dirty must be true or false' >&2; exit 2 ;; esac
+  revision=$NEO_SDK_SOURCE_REVISION dirty=$NEO_SDK_SOURCE_DIRTY
+else
+  repo=$(git -C "$agent" rev-parse --show-toplevel)
+  revision=$(git -C "$repo" rev-parse HEAD)
+  dirty=false
+  if [ -n "$(git -C "$repo" status --porcelain -- "$agent")" ]; then dirty=true; fi
+fi
 
 platform="" tag="" capsolver="" twocaptcha=""
 while [ $# -gt 0 ]; do
@@ -56,9 +78,6 @@ esac
 
 # shellcheck source=browser.lock
 . "$here/browser.lock"
-revision=$(git -C "$repo" rev-parse HEAD)
-dirty=false
-if [ -n "$(git -C "$repo" status --porcelain -- "$agent")" ]; then dirty=true; fi
 version="$NEO_BROWSER_VERSION-${revision:0:9}"
 [ "$dirty" = false ] || version+="-dirty"
 : "${tag:=neo-sdk:$version-${platform#linux/}}"
@@ -80,6 +99,16 @@ echo "build.sh: $tag for $platform from $revision (dirty=$dirty, target $target)
 iidfile=$(mktemp)
 binary=$(mktemp)
 trap 'rm -f "$iidfile" "$binary"' EXIT
+# Older frozen worktrees use a named context for five shared supervisor files.
+# The remote manifest includes those exact inputs; current images own supervisor/.
+context_args=()
+if [ -f "$here/Dockerfile" ] && grep -q -- '--from=neo-docker' "$here/Dockerfile"; then
+  neo_docker="$repo/packages/browseros/docker/neo"
+  for file in neo-server-info.sh openbox-rc.xml entrypoint.sh healthcheck.sh neo-quit.py; do
+    [ -f "$neo_docker/$file" ] || { echo "build.sh: missing legacy supervisor input $file" >&2; exit 2; }
+  done
+  context_args+=(--build-context "neo-docker=$neo_docker")
+fi
 # ${key_args[@]+...}: bash 3.2 (macOS) treats an empty array as unset under set -u.
 docker buildx build \
   --platform "$platform" \
@@ -91,6 +120,7 @@ docker buildx build \
   --build-arg "NEO_SDK_BUILD_JOBS=${NEO_SDK_BUILD_JOBS:-}" \
   --target "$target" \
   ${key_args[@]+"${key_args[@]}"} \
+  ${context_args[@]+"${context_args[@]}"} \
   --iidfile "$iidfile" \
   --load \
   "$agent"
