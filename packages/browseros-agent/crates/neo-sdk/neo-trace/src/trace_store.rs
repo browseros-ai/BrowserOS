@@ -563,13 +563,51 @@ impl TraceStore {
         .transpose()
     }
 
-    /// The tab of the task's [last act](Self::task_last_act). claw-sdk's task page default reads
-    /// it after a restart, when its memory of the task is gone.
+    /// The task's built-in `page` as the trace can still tell it, for claw-sdk after a restart
+    /// (its memory of tasks and tab owners is gone): among the tabs the task's runs opened
+    /// ([`OPENERS`]), the one its own script last acted on, else the one it opened last. Only the
+    /// script's calls count, the operations stored with a call site: Neo's own reads (the
+    /// prelude's frame refresh after `waitForTimeout` on every tab the run knows, its listeners)
+    /// have none, and a tab the script reached through `context.pages()` without opening it,
+    /// another task's or the browser's New Tab, is never the answer. A popup is not among the
+    /// opened tabs, so a task left only with one starts on a new tab. Unlike
+    /// [`task_last_act`](Self::task_last_act), which a follow view reads to show where the task
+    /// is working, this names where its next run starts.
     ///
     /// # Errors
-    /// When the file cannot be read or the row is corrupt.
-    pub async fn task_last_tab(&self, task: &TaskId) -> Result<Option<TabId>, TraceError> {
-        Ok(self.task_last_act(task).await?.map(|act| act.tab))
+    /// When the file cannot be read.
+    pub async fn task_page_tab(&self, task: &TaskId) -> Result<Option<TabId>, TraceError> {
+        // An opener's tab arrives on its end, as the page it ended on (`tab_id`).
+        let opened = Query::select()
+            .column(operations::Column::TabId)
+            .from(operations::Entity)
+            .and_where(Expr::col(operations::Column::RunId).in_subquery(task_runs(task)))
+            .and_where(Expr::col(operations::Column::Name).is_in(OPENERS))
+            .and_where(Expr::col(operations::Column::TabId).is_not_null())
+            .to_owned();
+        let scripted_act = Condition::all()
+            .add(operations::Column::Site.is_not_null())
+            .add(operations::Column::Name.is_not_in(SUBSCRIPTIONS))
+            .add(operations::Column::TargetTabId.in_subquery(opened));
+        let open = Condition::all()
+            .add(operations::Column::Name.is_in(OPENERS))
+            .add(operations::Column::TabId.is_not_null());
+        let row = operations::Entity::find()
+            .select_only()
+            .columns([operations::Column::TargetTabId, operations::Column::TabId])
+            .filter(operations::Column::RunId.in_subquery(task_runs(task)))
+            .filter(Condition::any().add(scripted_act).add(open))
+            .order_by_desc(operations::Column::StartedAt)
+            .order_by_desc(operations::Column::RunId)
+            .order_by_desc(operations::Column::Seq)
+            .limit(1)
+            .into_tuple::<(Option<i64>, Option<i64>)>()
+            .one(&self.db)
+            .await?;
+        // A scripted act counts with its target; an opener has none and counts with its tab.
+        Ok(row
+            .and_then(|(target, opened)| target.or(opened))
+            .map(TabId))
     }
 
     /// The distinct tasks whose retained, committed runs touched each requested tab, sorted

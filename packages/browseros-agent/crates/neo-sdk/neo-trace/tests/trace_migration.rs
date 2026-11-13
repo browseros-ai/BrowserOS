@@ -446,8 +446,9 @@ async fn an_existing_v1_file_is_adopted_with_every_row() -> TestResult {
         .ok_or("missing act")?;
     assert_eq!((act.tab, act.at), (TabId(3), EpochMillis::from_millis(13)));
     assert_eq!(
-        store.task_last_tab(&TaskId::parse("task")?).await?,
-        Some(TabId(3))
+        store.task_page_tab(&TaskId::parse("task")?).await?,
+        None,
+        "a baseline trace has no call sites and no openers, so no page survives it"
     );
     assert_eq!(
         store

@@ -15,7 +15,8 @@ pub(crate) struct TaskRecord {
     pub(crate) id: TaskId,
     pub(crate) name: Option<String>,
     pub(crate) tabs: Vec<TabId>,
-    /// Last operated tab owned by this task, independent of a host's cross-task history.
+    /// The task's own tab its own script last acted on ([`TaskBook::acted`]), or the tab that
+    /// joined it last. Never another task's tab, and never moved by Neo's own operations.
     pub(crate) last_used_tab: Option<TabId>,
     /// Serializes opens and closes. A held record also pins an empty task during an open.
     pub(crate) turn: Arc<Mutex<()>>,
@@ -121,11 +122,15 @@ impl TaskBook {
         Ok(())
     }
 
-    pub(super) fn touch(&mut self, tab: TabId) {
-        if let Some(id) = self.owners.get(&tab)
-            && let Some(task) = self.tasks.iter_mut().find(|task| task.id == *id)
-        {
-            task.last_used_tab = Some(tab);
+    /// `task`'s own script acted on `tab`. Only the owner's act counts: a script that reaches
+    /// another task's tab, a task-less tab or the browser's New Tab through `context.pages()`
+    /// changes no task's page, its own included.
+    pub(super) fn acted(&mut self, tab: TabId, task: &TaskId) {
+        if self.owners.get(&tab) != Some(task) {
+            return;
+        }
+        if let Some(record) = self.tasks.iter_mut().find(|record| record.id == *task) {
+            record.last_used_tab = Some(tab);
         }
     }
 

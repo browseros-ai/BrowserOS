@@ -21,7 +21,7 @@ use tokio_util::sync::CancellationToken;
 use super::request_ledger::{Admission, LedgerLimits, RunTicket};
 use super::snapshot_tips::SnapshotTips;
 use super::{HostData, RequestLedger, RunHandle, RunMeta, RunReply, RunRequest};
-use crate::browser::{BrowserLink, NeoTab, PageRef, RunView, TabRegistry};
+use crate::browser::{BrowserLink, NeoTab, PageRef, RunView, TabRegistry, TaskPage};
 use crate::builtins;
 use crate::config::Defaults;
 use crate::dispatch::{
@@ -217,10 +217,17 @@ impl RunService {
         };
         let page = self.default_page(meta.task_id.as_ref(), &view).await;
         if let Some(page) = &page {
-            // In use from now on, so the idle-tab janitor leaves it, and the task's tab.
+            // In use from now on, so the idle-tab janitor leaves it. Starting on a tab is no act:
+            // the task's page is already this tab.
             let seen = self.tabs.seen();
             if self.browser.page(page.tab).await.is_some() {
-                self.tabs.touched(page, seen, meta.task_id.as_ref());
+                self.tabs.touched(page, seen);
+                if let Some(task) = &meta.task_id {
+                    // A tab the trace gave back after a restart joins its task again, so the
+                    // rule below holds from this run on. A tab with an owner keeps it.
+                    let _ = self.tabs.ensure_task(task);
+                    let _ = self.tabs.own(page, task);
+                }
             }
         }
         let RunMeta {
@@ -393,22 +400,36 @@ impl RunService {
         future::pending().await
     }
 
-    /// `page` at the start of a run. With a `taskId`: the task's last tab, from memory, or
-    /// after a restart from the trace (`task_last_tab`), resolved to a live page; with no
-    /// history, `None`, and the run opens a fresh tab on first use, so parallel tasks never
-    /// share one by accident. Without a `taskId`, a fresh tab opens on first use.
+    /// `page` at the start of a run. With a `taskId`, the task's own tab: one it opened or was
+    /// given (a popup of its tab, a `neo.task` pick's open), the open one its own script last
+    /// acted on, else its newest. Never another task's tab, a task-less tab or the browser's
+    /// New Tab, even one the task's script reached through `context.pages()`, and never moved by
+    /// Neo's own operations ([`TabRegistry::acted_on`]). A task with no open tab gets `None`, and
+    /// the run opens a new tab for it on first use, so parallel tasks never share one.
+    ///
+    /// Memory decides for every task it knows. Only a task it does not know (Neo restarted) asks
+    /// the trace, which keeps the same rule as far as it can see it
+    /// ([`TraceStore::task_page_tab`]): the tab of the task's own script's last act among the
+    /// tabs its runs opened, if that tab is still open and no task here owns it. Without a
+    /// `taskId`, a fresh tab opens on first use.
     async fn default_page(&self, task: Option<&TaskId>, view: &RunView) -> Option<PageRef> {
         let task = task?;
-        if let Some(page) = self.tabs.default_page(task) {
-            return Some(page);
+        match self.tabs.task_page(task) {
+            TaskPage::Tab(page) => return Some(page),
+            TaskPage::NoTab => return None,
+            TaskPage::Unknown => {}
         }
-        let tab = match self.store.task_last_tab(task).await {
+        let tab = match self.store.task_page_tab(task).await {
             Ok(tab) => tab?,
             Err(error) => {
                 tracing::warn!(%error, %task, "cannot read the task's last tab; the run opens a fresh one");
                 return None;
             }
         };
+        if self.tabs.owner(tab).is_some() {
+            // A tab number may be reused after a browser restart; a task here already owns it.
+            return None;
+        }
         match view.view.resolve_tab_ids(&[tab]).await {
             Ok(pages) => pages.get(&tab).map(|_| PageRef { tab }),
             Err(error) => {
@@ -567,7 +588,7 @@ mod observation_tests {
             let owned = rig.owner_tab("https://task.example/").await?;
             let user = rig.owner_tab("https://user.example/").await?;
             let task = rig.tabs.create_task(None)?;
-            rig.tabs.touched(&owned, rig.tabs.seen(), None);
+            rig.tabs.touched(&owned, rig.tabs.seen());
             rig.tabs.own(&owned, &task.id)?;
             let service = rig.run_service(Duration::ZERO);
             let (run, _guard) = rig.run(Duration::from_secs(30), None)?;

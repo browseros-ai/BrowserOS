@@ -149,7 +149,7 @@ mod tests {
 
     fn open(tabs: &TabRegistry, tab: i64) -> TabId {
         let tab = TabId(tab);
-        tabs.touched(&PageRef { tab }, tabs.seen(), None);
+        tabs.touched(&PageRef { tab }, tabs.seen());
         tab
     }
 

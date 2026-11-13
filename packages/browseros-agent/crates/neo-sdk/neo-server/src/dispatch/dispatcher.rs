@@ -182,6 +182,11 @@ struct Admitted {
     state: Arc<OpState>,
     spec: MethodSpec,
     caller: Caller,
+    /// Whether the script itself made the call: the bootstrap names the script line it came
+    /// from. The prelude's own work (its frame refreshes, listeners and event pulls) comes with
+    /// an explicit empty site (bootstrap.js `invoke`, call-site.ts `INTERNAL_SITE`), so it is
+    /// never the task acting on a tab.
+    scripted: bool,
     target: Option<PageTarget>,
 }
 
@@ -487,6 +492,7 @@ impl Dispatcher {
                 .map_or(StartTab::Lazy, |tab| StartTab::Named(Some(tab))),
             None => StartTab::Named(None),
         };
+        let scripted = caller == Caller::Script && site.is_some();
         let start = OpStart {
             state: Arc::clone(&state),
             name,
@@ -505,6 +511,7 @@ impl Dispatcher {
                     state,
                     spec,
                     caller,
+                    scripted,
                     target,
                 };
                 (pending, Some(admitted))
@@ -525,6 +532,7 @@ impl Dispatcher {
             state,
             spec,
             caller,
+            scripted,
             target,
         } = admitted;
         // A stopped run admits nothing. A replaced connection means the browser may have
@@ -544,12 +552,23 @@ impl Dispatcher {
         };
         let page = target.as_ref().map(|target| &target.page);
         guard.started_on(page.map(|page| page.tab));
-        // A subscription (`page.on` on every tab the run knows) names a tab without acting on
-        // it, so it never makes that tab the task's default page.
+        // Any op from the script's realm keeps its tab in use (the idle clock, the janitor), but
+        // only the script's own call acts on it, and only an act moves a task's built-in `page`,
+        // among that task's own tabs ([`TabRegistry::acted_on`]). A subscription (`page.on` on
+        // every tab the run knows) names a tab without acting on it. The prelude's own reads are
+        // not acts either: `waitForTimeout` refreshes the frames of every tab the run lists, and
+        // counting those moved the task's next `page` to whichever tab answered last.
         if let (Caller::Script, Some(target)) = (caller, &target)
             && !neo_trace::is_subscription(spec.name)
         {
-            self.tabs.touched(&target.page, target.seen, run.task_id());
+            if scripted {
+                let host = run.task_id();
+                let picked = run.current_task();
+                let tasks: Vec<&TaskId> = host.into_iter().chain(picked.as_ref()).collect();
+                self.tabs.acted_on(&target.page, target.seen, &tasks);
+            } else {
+                self.tabs.touched(&target.page, target.seen);
+            }
             self.tabs.used_in_run(target.page.tab, run.id());
         }
         // The rules see the checked tab: the handle's, once verified, or the default page's,
@@ -746,7 +765,7 @@ impl Dispatcher {
                 PageChange::Opened => {
                     let seen = self.tabs.seen();
                     if self.browser.page(page.tab).await.is_some() {
-                        self.tabs.opened_by_agent(page, seen, run.task_id());
+                        self.tabs.opened_by_agent(page, seen);
                         self.tabs.used_in_run(page.tab, run.id());
                         if let Some(task) = opening_task {
                             // The selected task can close while the browser opens this tab.

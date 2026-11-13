@@ -12,15 +12,13 @@ use tokio::time::{Duration, Instant};
 use super::task_book::TaskBook;
 use super::{PageRef, TaskError, TaskRecord};
 
-/// How many tasks' last tabs memory keeps. A task forgotten here falls back to the trace store's
-/// `task_last_tab`, so the bound costs a lookup, never a wrong tab.
-const TASKS_REMEMBERED: usize = 1024;
 /// Retained close history. Evicted history advances `forgotten`, so bounded memory never
 /// turns an old admission into proof that a tab is still open.
 const TOMBSTONES: usize = 256;
 
 /// What Neo keeps in memory per tab: who opened it, when it was last in use (its idle clock),
-/// which runs in flight used it, its feature state, and which tab each task used last.
+/// which runs in flight used it, its feature state, and which task owns it ([`TaskBook`], whose
+/// record of each task's last acted-on tab is the task's built-in `page`).
 ///
 /// One owner, one lock, never held across an await. There is one way out: core's detach hook
 /// calls [`TabRegistry::closed`], and a tab's entry and its slots leave together, so no
@@ -52,8 +50,6 @@ struct TabState {
     /// Destroyed bindings still visible in core's cache. One entry per cached tab, removed
     /// on detach or rebind. This evidence only shapes facts and never grants admission.
     gone: HashMap<TabId, TargetId>,
-    /// Each task's last tab, bounded by [`TASKS_REMEMBERED`] (the oldest is forgotten first).
-    last_by_task: HashMap<TaskId, LastTab>,
     tasks: TaskBook,
     /// Popup relationships survive an opener whose creating op has not assigned its task yet.
     popups: HashMap<TabId, TabId>,
@@ -66,11 +62,6 @@ struct TabState {
     closed_at: VecDeque<(TabId, u64)>,
     /// Newest evicted close: tickets below this cannot prove that a tab stayed open.
     forgotten: u64,
-}
-
-struct LastTab {
-    tab: TabId,
-    at: Instant,
 }
 
 struct TabEntry {
@@ -96,20 +87,32 @@ impl TabRegistry {
         Seen(self.lock().closes)
     }
 
-    /// An op targeted `page`: its idle clock restarts and it becomes the task's last tab.
-    pub(crate) fn touched(&self, page: &PageRef, seen: Seen, task: Option<&TaskId>) {
+    /// `page` is in use (an op targeted it, or a run starts on it): its idle clock restarts.
+    /// No task's page moves; that takes an act ([`TabRegistry::acted_on`]).
+    pub(crate) fn touched(&self, page: &PageRef, seen: Seen) {
+        self.acted_on(page, seen, &[]);
+    }
+
+    /// The script of a run acting for `tasks` (its host task and the task it picked, if any) ran
+    /// an op on `page`: as [`TabRegistry::touched`], and `page` becomes the built-in `page` of
+    /// whichever of `tasks` owns it. Only the script's own calls are acts. Neo's operations
+    /// (the prelude's frame refresh after `waitForTimeout`, its listeners, the event pump, the
+    /// janitor) only touch, or every wait would re-point the task at whatever tab Neo read last.
+    pub(crate) fn acted_on(&self, page: &PageRef, seen: Seen, tasks: &[&TaskId]) {
         let now = Instant::now();
         let mut state = self.lock();
         if !state.proves_open(page.tab, seen) {
             return;
         }
         state.entry(page, now).touched = now;
-        state.tasks.touch(page.tab);
-        state.remember(page.tab, task, now);
+        for task in tasks {
+            state.tasks.acted(page.tab, task);
+        }
     }
 
-    /// Neo opened `page` for an agent, so the idle-tab janitor may close it later.
-    pub(crate) fn opened_by_agent(&self, page: &PageRef, seen: Seen, task: Option<&TaskId>) {
+    /// Neo opened `page` for an agent, so the idle-tab janitor may close it later. The task that
+    /// opened it takes it with [`TabRegistry::own`].
+    pub(crate) fn opened_by_agent(&self, page: &PageRef, seen: Seen) {
         let now = Instant::now();
         let mut state = self.lock();
         if !state.proves_open(page.tab, seen) {
@@ -118,8 +121,6 @@ impl TabRegistry {
         let entry = state.entry(page, now);
         entry.origin = TabOrigin::Agent;
         entry.touched = now;
-        state.tasks.touch(page.tab);
-        state.remember(page.tab, task, now);
         // A popup whose event came before its opener was marked.
         state.inherit_agent_origin();
     }
@@ -287,12 +288,18 @@ impl TabRegistry {
         Arc::clone(slot).downcast::<T>().ok()
     }
 
-    /// The host task's last touched tab, if still open. No global default is kept.
+    /// What memory says a host task's run starts on: the task's own open tab it last acted on,
+    /// else its newest ([`TaskRecord::page_tab`]). A known task with no open tab gets a new one,
+    /// never a neighbour's. No global default is kept.
     #[must_use]
-    pub(crate) fn default_page(&self, task: &TaskId) -> Option<PageRef> {
+    pub(crate) fn task_page(&self, task: &TaskId) -> TaskPage {
         let state = self.lock();
-        let tab = state.last_by_task.get(task)?.tab;
-        state.open.contains_key(&tab).then_some(PageRef { tab })
+        let Ok(record) = state.tasks.get(task) else {
+            return TaskPage::Unknown;
+        };
+        record
+            .page_tab(|tab| state.open.contains_key(&tab))
+            .map_or(TaskPage::NoTab, |tab| TaskPage::Tab(PageRef { tab }))
     }
 
     /// Starts an agent-named task, evicting only old empty tasks at the bound.
@@ -479,24 +486,6 @@ impl TabState {
             slots: HashMap::new(),
         })
     }
-
-    fn remember(&mut self, tab: TabId, task: Option<&TaskId>, now: Instant) {
-        let Some(task) = task else {
-            return;
-        };
-        if !self.last_by_task.contains_key(task) && self.last_by_task.len() >= TASKS_REMEMBERED {
-            let oldest = self
-                .last_by_task
-                .iter()
-                .min_by_key(|(_, last)| last.at)
-                .map(|(task, _)| task.clone());
-            if let Some(oldest) = oldest {
-                self.last_by_task.remove(&oldest);
-            }
-        }
-        self.last_by_task
-            .insert(task.clone(), LastTab { tab, at: now });
-    }
 }
 
 impl TabEntry {
@@ -519,6 +508,18 @@ impl TabEntry {
     }
 }
 
+/// A host task's page as memory knows it at a run's start ([`TabRegistry::task_page`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum TaskPage {
+    /// The task's own open tab: the one it last acted on, else its newest.
+    Tab(PageRef),
+    /// Neo knows the task and none of its tabs is open: the run opens a new tab for it.
+    NoTab,
+    /// Neo does not know the task: it never ran in this process, or Neo restarted since. Only
+    /// then is the trace asked (`TraceStore::task_page_tab`).
+    Unknown,
+}
+
 /// A point in the registry's close history, valid only for a read started after it was taken.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Seen(u64);
@@ -534,7 +535,7 @@ mod tests {
     use neo_trace::{RunId, TaskId};
     use tokio::time::{Duration, Instant};
 
-    use super::{Seen, TASKS_REMEMBERED, TOMBSTONES, TabOrigin, TabRegistry};
+    use super::{Seen, TOMBSTONES, TabOrigin, TabRegistry, TaskPage};
     use crate::browser::PageRef;
 
     #[derive(Default)]
@@ -548,7 +549,7 @@ mod tests {
     fn closing_a_tab_drops_its_slots() {
         let tabs = TabRegistry::new();
         let tab = page(1, 101);
-        tabs.touched(&tab, tabs.seen(), None);
+        tabs.touched(&tab, tabs.seen());
         let held = tabs.slot::<Marker>(&tab);
         assert!(held.is_some(), "a touched tab gets a slot");
         tabs.removing(tab.tab)();
@@ -568,11 +569,11 @@ mod tests {
     fn a_late_touch_cannot_revive_a_closed_tab() {
         let tabs = TabRegistry::new();
         let tab = page(1, 101);
-        tabs.touched(&tab, tabs.seen(), None);
+        tabs.touched(&tab, tabs.seen());
         let seen = tabs.seen();
         tabs.removing(tab.tab)();
-        tabs.touched(&tab, seen, None);
-        tabs.opened_by_agent(&tab, seen, None);
+        tabs.touched(&tab, seen);
+        tabs.opened_by_agent(&tab, seen);
         assert!(
             !tabs.is_open(tab.tab),
             "the ticket predates the close, so neither writer may revive the entry"
@@ -584,55 +585,90 @@ mod tests {
     }
 
     #[test]
-    fn a_task_never_inherits_another_tasks_tab() -> Result<(), Box<dyn Error>> {
+    fn a_task_page_is_its_own_tab_its_own_script_last_acted_on() -> Result<(), Box<dyn Error>> {
         let tabs = TabRegistry::new();
         let first = TaskId::parse("task-1")?;
         let second = TaskId::parse("task-2")?;
-        let tab = page(1, 101);
-        tabs.touched(&tab, tabs.seen(), Some(&first));
+        assert_eq!(tabs.task_page(&first), TaskPage::Unknown, "never ran here");
+        tabs.ensure_task(&first)?;
+        tabs.ensure_task(&second)?;
         assert_eq!(
-            tabs.default_page(&first),
-            Some(tab.clone()),
-            "the task's own last tab"
+            tabs.task_page(&first),
+            TaskPage::NoTab,
+            "a known task, no tab yet"
         );
+        let (older, newer, theirs) = (page(1, 101), page(2, 102), page(3, 103));
+        for tab in [&older, &newer, &theirs] {
+            tabs.touched(tab, tabs.seen());
+        }
+        tabs.own(&older, &first)?;
+        tabs.own(&newer, &first)?;
+        tabs.own(&theirs, &second)?;
         assert_eq!(
-            tabs.default_page(&second),
-            None,
-            "a new task gets no one else's tab"
+            tabs.task_page(&first),
+            TaskPage::Tab(newer.clone()),
+            "the newest own tab"
         );
-        tabs.removing(tab.tab)();
+        tabs.acted_on(&older, tabs.seen(), &[&first]);
         assert_eq!(
-            tabs.default_page(&first),
-            None,
-            "a closed tab is no default"
+            tabs.task_page(&first),
+            TaskPage::Tab(older.clone()),
+            "the own tab its script last acted on"
+        );
+        tabs.touched(&newer, tabs.seen());
+        assert_eq!(
+            tabs.task_page(&first),
+            TaskPage::Tab(older.clone()),
+            "Neo's own read of another own tab moves nothing"
+        );
+        tabs.acted_on(&newer, tabs.seen(), &[&second]);
+        assert_eq!(
+            tabs.task_page(&first),
+            TaskPage::Tab(older.clone()),
+            "another task's script acting on this task's tab moves nothing"
+        );
+        tabs.removing(older.tab)();
+        assert_eq!(
+            tabs.task_page(&first),
+            TaskPage::Tab(newer.clone()),
+            "a closed tab is no page; the task's other tab is"
+        );
+        tabs.removing(newer.tab)();
+        assert_eq!(
+            tabs.task_page(&first),
+            TaskPage::NoTab,
+            "with its tabs closed the task gets a new one, never a neighbour's"
         );
         Ok(())
     }
 
     #[test]
-    fn the_oldest_task_is_forgotten_first() -> Result<(), Box<dyn Error>> {
+    fn a_script_acting_on_other_tabs_keeps_its_own_page() -> Result<(), Box<dyn Error>> {
         let tabs = TabRegistry::new();
-        let tab = page(1, 101);
-        let oldest = TaskId::parse("task-0")?;
-        tabs.touched(&tab, tabs.seen(), Some(&oldest));
-        for index in 1..=TASKS_REMEMBERED {
-            tabs.touched(
-                &tab,
-                tabs.seen(),
-                Some(&TaskId::parse(&format!("task-{index}"))?),
-            );
+        let mine = TaskId::parse("task-mine")?;
+        let theirs = TaskId::parse("task-theirs")?;
+        tabs.ensure_task(&mine)?;
+        tabs.ensure_task(&theirs)?;
+        let (own, their_tab, new_tab) = (page(1, 101), page(2, 102), page(3, 103));
+        for tab in [&own, &their_tab, &new_tab] {
+            tabs.touched(tab, tabs.seen());
         }
+        tabs.own(&own, &mine)?;
+        tabs.own(&their_tab, &theirs)?;
+        // Reached through `context.pages()`: another task's tab and the browser's New Tab.
+        tabs.acted_on(&their_tab, tabs.seen(), &[&mine]);
+        tabs.acted_on(&new_tab, tabs.seen(), &[&mine]);
         assert_eq!(
-            tabs.default_page(&oldest),
-            None,
-            "past the bound the oldest task goes"
+            tabs.task_page(&mine),
+            TaskPage::Tab(own),
+            "still its own tab"
         );
-        let newest = TaskId::parse(&format!("task-{TASKS_REMEMBERED}"))?;
         assert_eq!(
-            tabs.default_page(&newest),
-            Some(tab),
-            "the newest task stays"
+            tabs.task_page(&theirs),
+            TaskPage::Tab(their_tab),
+            "and the other task keeps its own"
         );
+        assert_eq!(tabs.owner(new_tab.tab), None, "an act never takes a tab");
         Ok(())
     }
 
@@ -641,8 +677,8 @@ mod tests {
         let tabs = TabRegistry::new();
         let agent = page(1, 101);
         let owner = page(2, 102);
-        tabs.opened_by_agent(&agent, tabs.seen(), None);
-        tabs.touched(&owner, tabs.seen(), None);
+        tabs.opened_by_agent(&agent, tabs.seen());
+        tabs.touched(&owner, tabs.seen());
         let idle = Duration::from_mins(30);
         let later = Instant::now() + idle;
         assert_eq!(
@@ -655,7 +691,7 @@ mod tests {
                 .is_empty(),
             "a tab touched just now is not idle"
         );
-        tabs.touched(&agent, tabs.seen(), None);
+        tabs.touched(&agent, tabs.seen());
         assert!(
             tabs.idle_agent_tabs(idle, later, &HashMap::new())
                 .is_empty(),
@@ -676,9 +712,9 @@ mod tests {
         let other = page(2, 102);
         let run = RunId::new();
         tabs.run_started(run, None);
-        tabs.opened_by_agent(&used, tabs.seen(), None);
+        tabs.opened_by_agent(&used, tabs.seen());
         tabs.used_in_run(used.tab, run);
-        tabs.opened_by_agent(&other, tabs.seen(), None);
+        tabs.opened_by_agent(&other, tabs.seen());
         let much_later = Instant::now() + Duration::from_mins(20);
         assert_eq!(
             tabs.idle_agent_tabs(idle, much_later, &HashMap::new()),
@@ -708,7 +744,7 @@ mod tests {
         let tabs = TabRegistry::new();
         let tab = page(1, 101);
         let run = RunId::new();
-        tabs.opened_by_agent(&tab, tabs.seen(), None);
+        tabs.opened_by_agent(&tab, tabs.seen());
         tabs.run_started(run, Some(tab.tab));
         tabs.run_ended(run);
         tabs.used_in_run(tab.tab, run);
@@ -731,7 +767,7 @@ mod tests {
         let tabs = TabRegistry::new();
         let idle = Duration::from_mins(5);
         let tab = page(1, 101);
-        tabs.opened_by_agent(&tab, tabs.seen(), None);
+        tabs.opened_by_agent(&tab, tabs.seen());
         let start = Instant::now();
         let held = HashMap::from([(tab.tab, TabHold::Now)]);
         let at_lock = start + Duration::from_mins(20);
@@ -767,7 +803,7 @@ mod tests {
         let tabs = TabRegistry::new();
         let idle = Duration::from_mins(5);
         let tab = page(1, 101);
-        tabs.opened_by_agent(&tab, tabs.seen(), None);
+        tabs.opened_by_agent(&tab, tabs.seen());
         let later = Instant::now() + idle;
         assert_eq!(
             tabs.idle_agent_tabs(idle, later, &HashMap::new()),
@@ -802,7 +838,7 @@ mod tests {
         let opener = page(1, 101);
         let popup = page(2, 102);
         let nested = page(3, 103);
-        tabs.opened_by_agent(&opener, tabs.seen(), None);
+        tabs.opened_by_agent(&opener, tabs.seen());
         tabs.popup(&popup, opener.tab, tabs.seen());
         tabs.popup(&nested, popup.tab, tabs.seen());
         let mut agent = tabs.agent_tabs();
@@ -815,13 +851,13 @@ mod tests {
 
         let early = page(4, 104);
         let early_popup = page(5, 105);
-        tabs.touched(&early, tabs.seen(), None);
+        tabs.touched(&early, tabs.seen());
         tabs.popup(&early_popup, early.tab, tabs.seen());
         assert!(
             !tabs.agent_tabs().contains(&early_popup.tab),
             "the opener is not known to be the agent's yet"
         );
-        tabs.opened_by_agent(&early, tabs.seen(), None);
+        tabs.opened_by_agent(&early, tabs.seen());
         assert!(
             tabs.agent_tabs().contains(&early_popup.tab),
             "a popup whose event came before its opener was marked follows it"
@@ -829,7 +865,7 @@ mod tests {
 
         let owners = page(6, 106);
         let owners_popup = page(7, 107);
-        tabs.touched(&owners, tabs.seen(), None);
+        tabs.touched(&owners, tabs.seen());
         tabs.popup(&owners_popup, owners.tab, tabs.seen());
         assert!(
             !tabs.agent_tabs().contains(&owners_popup.tab),
@@ -857,8 +893,8 @@ mod tests {
                 .all(|(closed, _)| *closed != tab.tab)
         );
         assert!(tabs.lock().forgotten > stale.0);
-        tabs.touched(&tab, stale, None);
-        tabs.opened_by_agent(&tab, stale, None);
+        tabs.touched(&tab, stale);
+        tabs.opened_by_agent(&tab, stale);
         assert!(!tabs.is_open(tab.tab));
         assert!(
             tabs.slot::<Marker>(&tab).is_none(),
@@ -872,9 +908,9 @@ mod tests {
         let tab = page(1, 101);
         let stale = tabs.seen();
         flood(&tabs, TOMBSTONES + 1);
-        tabs.touched(&tab, stale, None);
+        tabs.touched(&tab, stale);
         assert!(!tabs.is_open(tab.tab));
-        tabs.touched(&tab, tabs.seen(), None);
+        tabs.touched(&tab, tabs.seen());
         assert!(tabs.is_open(tab.tab));
     }
 
@@ -883,11 +919,11 @@ mod tests {
     {
         let tabs = TabRegistry::new();
         let tab = page(1, 101);
-        tabs.opened_by_agent(&tab, tabs.seen(), None);
+        tabs.opened_by_agent(&tab, tabs.seen());
         let old = tabs.slot::<Marker>(&tab).ok_or("registered slot missing")?;
         tabs.removing(tab.tab)();
         flood(&tabs, TOMBSTONES + 1);
-        tabs.touched(&tab, tabs.seen(), None);
+        tabs.touched(&tab, tabs.seen());
         let new = tabs
             .slot::<Marker>(&tab)
             .ok_or("fresh admission slot missing")?;
@@ -907,15 +943,15 @@ mod tests {
         let tab = page(1, 101);
         let seen = tabs.seen();
         tabs.removing(TabId(102))();
-        tabs.touched(&tab, seen, None);
+        tabs.touched(&tab, seen);
         assert!(tabs.is_open(tab.tab));
         tabs.removing(tab.tab)();
-        tabs.touched(&tab, tabs.seen(), None);
+        tabs.touched(&tab, tabs.seen());
         assert!(tabs.is_open(tab.tab));
         flood(&tabs, TOMBSTONES * 10);
         let boundary = Seen(tabs.lock().forgotten);
         let other = page(2, 103);
-        tabs.touched(&other, boundary, None);
+        tabs.touched(&other, boundary);
         assert!(
             tabs.is_open(other.tab),
             "the low-water boundary itself is complete history"
@@ -932,12 +968,12 @@ mod tests {
         assert!(tabs.note_gone(page.tab, target.clone(), tabs.seen()));
         assert!(!tabs.is_open(page.tab));
         assert_eq!(tabs.owner(page.tab), None);
-        tabs.touched(&page, tabs.seen(), None);
+        tabs.touched(&page, tabs.seen());
         assert!(
             tabs.is_open(page.tab),
             "gone metadata cannot refuse an admitted touch"
         );
-        tabs.opened_by_agent(&page, tabs.seen(), None);
+        tabs.opened_by_agent(&page, tabs.seen());
         assert_eq!(
             tabs.idle_agent_tabs(Duration::ZERO, Instant::now(), &HashMap::new()),
             vec![page.clone()]
