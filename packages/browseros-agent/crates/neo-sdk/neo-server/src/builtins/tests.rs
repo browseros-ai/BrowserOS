@@ -1511,6 +1511,8 @@ async fn the_janitor_closes_an_idle_tab_that_answers_no_page_command() -> Result
             harness.submit(&run, "context.newPage", json!({})).await,
         )?)?
     };
+    // Not the browser's last tab, which the janitor never closes.
+    let owners = harness.owner_tab("https://example.com/").await?;
     harness.fake.drop_connection();
     harness.fake.reconnect();
     within(async {
@@ -1529,13 +1531,15 @@ async fn the_janitor_closes_an_idle_tab_that_answers_no_page_command() -> Result
     }
     let attached = harness.fake.count("Target.attachToTarget");
 
-    let sweep = within(harness.janitor().sweep(Instant::now() + Defaults::TAB_IDLE)).await?;
+    let later = Instant::now() + harness.settings.tab_idle_close();
+    let sweep = within(harness.janitor().sweep(later)).await?;
 
     assert!(sweep.is_some(), "the sweep ran");
     assert!(
         !harness.is_open(stuck.tab).await?,
         "the idle agent tab closed"
     );
+    assert!(harness.is_open(owners.tab).await?, "never the owner's tab");
     assert_eq!(
         harness.fake.count("Target.attachToTarget"),
         attached,
