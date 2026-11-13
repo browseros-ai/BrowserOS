@@ -99,18 +99,12 @@ fn config_for(dir: &Path) -> Arc<Config> {
 
 async fn app(ultrafast: bool, gateway: Option<&FakeGateway>) -> anyhow::Result<App> {
     let dir = tempfile::tempdir()?;
-    let mut state =
-        AppState::new_with_home(config_for(dir.path()), dir.path().join("home")).await?;
-    if let Some(gateway) = gateway {
-        state.billing = Arc::new(
-            Billing::open(
-                Some(gateway.config()?),
-                dir.path().join("browserclaw"),
-                CancellationToken::new(),
-            )
-            .await,
-        );
-    }
+    let state = AppState::new_with_home_and_billing(
+        config_for(dir.path()),
+        dir.path().join("home"),
+        gateway.map(FakeGateway::config).transpose()?,
+    )
+    .await?;
     state.ultrafast.set(ultrafast);
     Ok(App {
         router: build_router(state.clone()),

@@ -107,17 +107,12 @@ fn config_for(dir: &Path) -> Arc<Config> {
 /// swap a service, with no environment variable.
 async fn computer(gateway: Option<&FakeGateway>) -> anyhow::Result<Computer> {
     let dir = tempfile::tempdir()?;
-    let mut state =
-        AppState::new_with_home(config_for(dir.path()), dir.path().join("home")).await?;
-    let config = gateway.map(FakeGateway::config).transpose()?;
-    state.billing = Arc::new(
-        Billing::open(
-            config,
-            dir.path().join("browserclaw"),
-            CancellationToken::new(),
-        )
-        .await,
-    );
+    let state = AppState::new_with_home_and_billing(
+        config_for(dir.path()),
+        dir.path().join("home"),
+        gateway.map(FakeGateway::config).transpose()?,
+    )
+    .await?;
     Ok(Computer {
         router: build_router(state.clone()),
         state,

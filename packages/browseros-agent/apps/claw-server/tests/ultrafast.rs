@@ -12,7 +12,6 @@ use claw_server::{
     },
     ids::DispatchId,
     services::{
-        billing::Billing,
         flow::{self, FlowStatus},
         skills::{CreateSkill, Publish, SkillOrigin},
     },
@@ -50,16 +49,7 @@ async fn test_app_with(ultrafast: bool) -> anyhow::Result<TestApp> {
         behavior: Default::default(),
         behavior_ignored: Vec::new(),
     });
-    let mut state = AppState::new_with_home(config, dir.path().join("home")).await?;
-    // No billing gateway, whatever this build compiles in: the switch alone decides here.
-    state.billing = Arc::new(
-        Billing::open(
-            None,
-            dir.path().join("browserclaw"),
-            tokio_util::sync::CancellationToken::new(),
-        )
-        .await,
-    );
+    let state = AppState::new_with_home(config, dir.path().join("home")).await?;
     state.ultrafast.set(ultrafast);
     Ok(TestApp {
         router: build_router(state.clone()),

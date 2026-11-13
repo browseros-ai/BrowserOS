@@ -91,12 +91,27 @@ pub use crate::services::billing::ULTRAFAST_FEATURE;
 const HELP_MAX_WAIT: std::time::Duration = std::time::Duration::from_secs(20 * 60);
 
 impl AppState {
+    /// The server's state, with the billing gateway this build compiles in.
     pub async fn new(config: Arc<Config>) -> AppResult<Self> {
         let home = resolve_user_home_with(|name| env::var_os(name))?;
-        Self::new_with_home(config, home).await
+        // A hosted server is infrastructure with no person at it to buy or paste a key.
+        let billing = (!config.mode.is_hosted())
+            .then(|| crate::services::billing::BillingConfig::for_build(config.dev_mode))
+            .flatten();
+        Self::new_with_home_and_billing(config, home, billing).await
     }
 
+    /// State under another home with no billing gateway, so a test never reaches a real one.
+    /// Tests that need a gateway pass a local one to [`Self::new_with_home_and_billing`].
     pub async fn new_with_home(config: Arc<Config>, home_dir: PathBuf) -> AppResult<Self> {
+        Self::new_with_home_and_billing(config, home_dir, None).await
+    }
+
+    pub async fn new_with_home_and_billing(
+        config: Arc<Config>,
+        home_dir: PathBuf,
+        billing_config: Option<crate::services::billing::BillingConfig>,
+    ) -> AppResult<Self> {
         tokio::fs::create_dir_all(&config.browserclaw_dir).await?;
         let store = JsonStore::new(config.browserclaw_dir.clone());
         let targets = TargetBindings::load(store.clone()).await?;
@@ -246,10 +261,6 @@ impl AppState {
             tab_activity.clone(),
         ));
         let captcha = crate::services::captcha::CaptchaService::from_env(config.mode);
-        // A hosted server is infrastructure with no person at it to buy or paste a key.
-        let billing_config = (!config.mode.is_hosted())
-            .then(|| crate::services::billing::BillingConfig::for_build(config.dev_mode))
-            .flatten();
         let billing = Arc::new(
             crate::services::billing::Billing::open(
                 billing_config,
@@ -425,6 +436,32 @@ mod tests {
         assert_eq!(DATABASE_FILENAME, "browserclaw.sqlite");
         assert!(browserclaw_dir.join(DATABASE_FILENAME).is_file());
         assert_eq!(tokio::fs::read(old_database).await?, old_contents);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_test_app_has_no_billing_gateway_in_any_build() -> anyhow::Result<()> {
+        for dev_mode in [false, true] {
+            let dir = tempdir()?;
+            let config = Arc::new(Config {
+                server_port: 9200,
+                cdp_port: 49337,
+                proxy_port: None,
+                resources_dir: dir.path().join("resources"),
+                browserclaw_dir: dir.path().join("browserclaw"),
+                session_idle: Duration::from_secs(300),
+                session_retention: Duration::from_secs(7_200),
+                session_sweep_interval: Duration::from_secs(60),
+                replay_retention_days: 7,
+                dev_mode,
+                native: Default::default(),
+                mode: Default::default(),
+                behavior: Default::default(),
+                behavior_ignored: Vec::new(),
+            });
+            let state = AppState::new_with_home(config, dir.path().join("home")).await?;
+            assert!(!state.billing.is_available(), "dev_mode {dev_mode}");
+        }
         Ok(())
     }
 
