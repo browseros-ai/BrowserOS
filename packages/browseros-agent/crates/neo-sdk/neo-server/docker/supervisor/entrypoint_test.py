@@ -160,12 +160,16 @@ class OutputDirectoryTest(unittest.TestCase):
             run_bash(
                 f"PATH={shlex.quote(directory)}:$PATH\n"
                 "NEO_HOME=/home/neo XDG_DIR=/tmp/neo-xdg CLAW_DATA=/data/browserclaw\n"
+                "PROFILE=/data/profile DOWNLOADS=/data/downloads\n"
                 "BROWSERCLAW_HOSTED_MODE=1\n"
                 f"OUTPUTS={shlex.quote(output)}\n"
                 + shell_function("spawn_as_neo")
                 + "spawn_as_neo browserclaw\nwait\n"
             )
-            self.assertIn(f"BROWSEROS_OUTPUT_DIR={output}", argv.read_text().splitlines())
+            received = argv.read_text().splitlines()
+            self.assertIn(f"BROWSEROS_OUTPUT_DIR={output}", received)
+            self.assertIn("CLAW_PROFILE_DIR=/data/profile", received)
+            self.assertIn("CLAW_DOWNLOADS_DIR=/data/downloads", received)
 
 
 @unittest.skipUnless(shutil.which("jq"), "needs jq, as the image has")
