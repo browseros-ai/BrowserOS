@@ -334,7 +334,7 @@ mod tests {
         let mut pages = missing_session
             .pages
             .lock()
-            .map_err(|_| "test cache poisoned")?;
+            .map_err(|_poisoned| "test cache poisoned")?;
         let page = pages.get_mut(&TabId(7)).ok_or("test page missing")?;
         let child = page
             .frames

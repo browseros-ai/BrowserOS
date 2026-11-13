@@ -434,10 +434,10 @@ fn with_closed_roots(request: &ProbeRequest, seeds: usize) -> Cow<'_, ProbeReque
 
 /// Bind the hint lazily to the world about to be read, after marking or a resolver retry.
 /// Keeping the read inside this closure makes conformance perform no topology work at all.
-fn with_frame_context<'request>(
-    mut request: Cow<'request, ProbeRequest>,
+fn with_frame_context(
+    mut request: Cow<'_, ProbeRequest>,
     neighbour: impl FnOnce() -> bool,
-) -> Cow<'request, ProbeRequest> {
+) -> Cow<'_, ProbeRequest> {
     if let ProbeRequest::Snapshot {
         conformance: false,
         same_process_neighbour,
