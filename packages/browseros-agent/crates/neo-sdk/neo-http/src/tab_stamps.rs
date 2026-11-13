@@ -2,7 +2,7 @@
 //!
 //! When the browser link (re)connects, the app takes a [`TabFence`], lists the open tabs, and
 //! calls [`Service::retain_tabs`](crate::Service::retain_tabs), which ends what the parts keep
-//! about every tab the listing lacks. A host may lock, fit or take over a tab that opened after
+//! about every tab the listing lacks. A host may lock, fit, keep or take over a tab that opened after
 //! the listing. Its request comes over the host socket, so the app cannot order it
 //! against its own listing. Without the fence, the reconcile would end that state as if the tab
 //! had closed.
@@ -12,7 +12,7 @@
 //!  host                   stamp 77 ─▶ lock 77                      keeps 77 as if listed
 //! ```
 //!
-//! The routes that create state keyed by a tab (a lock, a fit, a takeover's start)
+//! The routes that create state keyed by a tab (a lock, a fit, a keep, a takeover's start)
 //! stamp the tab with the next value of one counter before they act, and a fence is the
 //! counter's value when read. `retain_tabs` keeps every tab stamped after its fence as if it
 //! were open. The stamp comes before the change, so every change a reconcile can see already

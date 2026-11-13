@@ -9,15 +9,15 @@ use tokio::sync::SetOnce;
 /// Where a tab's claims are read: the host API's `Service::tab_hold` once it starts.
 type HoldSource = Arc<dyn Fn(TabId) -> Option<TabHold> + Send + Sync>;
 
-/// Whether the host holds a tab with a lock or a fit, now or until when (the settings design,
+/// Whether the host holds a tab with a lock, a fit, or a keep, now or until when (the settings design,
 /// section 2, "What inactivity means"). The janitor never closes a held tab, and restarts its
 /// idle clock when the last claim lets go: a lock keeps the agent off a tab the owner is
 /// using, and a fit is how a host shows the tab to the owner, without a lock in zuzu's
-/// handoff.
+/// handoff. A keep protects a tab waiting for approval without blocking the agent.
 ///
-/// The locks and fits belong to neo-http, which starts only once the browser link's first
-/// connect lands. Until the host API arms this, the host holds nothing, which is exact: a lock or
-/// a fit is taken only through the host API's routes, served only after arming. `default()` is
+/// The locks, fits, and keeps belong to neo-http, which starts only once the browser link's first
+/// connect lands. Until the host API arms this, the host holds nothing, which is exact: all
+/// three are taken only through the host API's routes, served only after arming. `default()` is
 /// unarmed, as it stays in the Node-hosted embedding, which has no host API.
 #[derive(Default)]
 pub(crate) struct HostHolds {

@@ -5,7 +5,7 @@
 //! app reaches them through it rather than wiring each one: the lock policy and tab cleanup read
 //! [`Service::locks`], the app's door and its `page.bringToFront()` read [`Service::front`],
 //! and the browser link's tab events go to [`Service::tab_closed`] and [`Service::retain_tabs`], which hand each event to every part
-//! that keeps state about tabs: the takeovers, the fits and the locks. A reconcile
+//! that keeps state about tabs: the takeovers, the fits, the locks and the host's keeps. A reconcile
 //! takes a [`Service::tab_fence`] before its listing, so `retain_tabs` keeps what a host changed on a
 //! tab that opened after it, through a host route (`tab_stamps`).
 
@@ -14,6 +14,7 @@ use crate::fill_route::{FillDoor, FillGate};
 use crate::live_tabs::LiveTabs;
 use crate::screenshot_taker::Camera;
 use crate::settings::Settings;
+use crate::tab_keeps::TabKeeps;
 use crate::tab_stamps::{TabFence, TabStamps};
 use crate::{router, wire};
 use axum::Router;
@@ -76,6 +77,8 @@ pub(crate) struct ServiceState {
     pub(crate) tab_inventory: ProtocolSession,
     pub(crate) locks: Arc<Locks>,
     pub(crate) fits: Arc<Fits>,
+    /// Host keeps feed idle cleanup only. Agent permissions still read `locks` alone.
+    pub(crate) keeps: TabKeeps,
     /// Neo's screen over RFB for `GET /v1/display`, in view or control mode.
     pub(crate) displays: Arc<Displays>,
     /// The v1 takeover flow over the parts above (`/v1/takeovers`, and `release=` on a display).
@@ -179,6 +182,7 @@ impl Service {
                 tab_inventory,
                 locks,
                 fits,
+                keeps: TabKeeps::default(),
                 displays,
                 takeovers,
                 front,
@@ -221,26 +225,31 @@ impl Service {
         &self.state.front
     }
 
-    /// Whether a lock or a fit holds `tab` now, or when the last of them let go of it within the
+    /// Whether a lock, fit or host keep holds `tab` now, or when the last let go within the
     /// hour. The app's idle-tab janitor never closes a held tab and restarts its idle clock
     /// from the let-go: a lock is how a host keeps the agent off, and a fit is how it shows the
-    /// tab to the owner, so the owner may be using it either way. Never waits.
+    /// tab to the owner. A keep lets the host wait for approval without restricting the agent.
+    /// Never waits.
     #[must_use]
     pub fn tab_hold(&self, tab: TabId) -> Option<TabHold> {
-        TabHold::latest_of(self.state.locks.hold(tab), self.state.fits.hold(tab))
+        TabHold::latest_of(
+            TabHold::latest_of(self.state.locks.hold(tab), self.state.fits.hold(tab)),
+            self.state.keeps.hold(tab),
+        )
     }
 
     /// The browser link saw a tab close. Its stamp is forgotten first, so the close waits out a
     /// reconcile's parts before it touches the tab's state, as a route does (`tab_stamps`). Then
     /// its takeover is released, while its lock still holds, so the release lifts the lock itself
     /// and gives back what it took; then its fit is restored (so the screen does not stay at the
-    /// owner's size), its locks end, and `tab.closed` is
-    /// published, so a host that reads it finds the tab's state already gone.
+    /// owner's size), its locks end, its keeps drop, and `tab.closed` is published, so a host
+    /// that reads it finds the tab's state already gone.
     pub async fn tab_closed(&self, tab: TabId) {
         self.state.stamps.forget(tab).await;
         self.state.takeovers.tab_closed(tab).await;
         self.state.fits.tab_closed(tab).await;
         self.state.locks.tab_closed(tab);
+        self.state.keeps.tab_closed(tab);
         self.state.events.publish(LogEvent::new(
             EventKind::TabClosed,
             None,
@@ -266,5 +275,6 @@ impl Service {
         self.state.takeovers.retain_tabs(&kept.tabs).await;
         self.state.fits.retain_tabs(&kept.tabs).await;
         self.state.locks.retain_tabs(&kept.tabs);
+        self.state.keeps.retain_tabs(&kept.tabs);
     }
 }

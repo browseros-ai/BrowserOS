@@ -54,6 +54,10 @@ process at once, all under only the capabilities listed below. The header of `ac
 same-origin download attribute, and typed Blob), and a ZIP attachment. It compares the browser file,
 the `saveAs()` copy, and the host endpoint's bytes by SHA-256. Inline PDFs open in Chromium's viewer
 without a download event.
+`tab-keep` polls the host tab listing for idle cleanup with three-minute deadlines, then checks
+that kept tabs remain open. After release it checks that tabs stay open for a fresh idle interval
+and polls for their eventual closure. These deadlines allow delayed sweeps while still failing
+when cleanup never happens.
 An image for another architecture than the Docker engine's gets the static `identity` check only, because
 booting it would be emulated. CI runs both scripts natively on amd64 and arm64
 (`.github/workflows/neo-sdk-image.yml`) on every pull request and push that changes the image's inputs,

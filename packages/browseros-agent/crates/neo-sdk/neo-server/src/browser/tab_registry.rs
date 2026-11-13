@@ -388,7 +388,7 @@ impl TabRegistry {
 
     /// The agent's tabs nobody used for `idle`, for the janitor, the longest idle first. A tab is
     /// in use while a run that used it is in flight, or while `holds` says the host holds it
-    /// with a lock or a fit; its idle clock restarts when the last of those ends. A hold is kept
+    /// with a lock, a fit, or a keep; its idle clock restarts when the last of those ends. A hold is kept
     /// in the tab's clock here, so a claim the host forgets an hour after it ended still counts.
     pub(crate) fn idle_agent_tabs(
         &self,

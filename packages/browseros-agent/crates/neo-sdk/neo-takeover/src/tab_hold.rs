@@ -1,14 +1,14 @@
-//! Whether a takeover part holds a tab, as the app's idle-tab janitor asks it.
+//! Whether a host claim holds a tab, as the app's idle-tab janitor asks it.
 
 use tokio::time::Instant;
 
-/// A lock's or a fit's claim on one tab: held now, or let go at an instant. The idle-tab
+/// A lock's, fit's, or host keep's claim on one tab: held now, or let go at an instant. The idle-tab
 /// janitor counts a tab as in use while it is held, and restarts the tab's idle clock when the
-/// last claim lets go. Ended locks and restored fits are kept an hour, so a janitor that asks
+/// last claim lets go. Ended claims are kept an hour, so a janitor that asks
 /// once a minute sees every let-go instant.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TabHold {
-    /// A held lock or an active fit is on the tab.
+    /// A lock, fit, or host keep holds the tab.
     Now,
     /// The latest claim on the tab ended at this instant, on Tokio's clock.
     Until(Instant),

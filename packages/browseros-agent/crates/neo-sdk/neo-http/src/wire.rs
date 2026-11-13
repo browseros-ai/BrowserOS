@@ -4,10 +4,11 @@
 
 use crate::api_error::ApiError;
 use crate::event_log::EventKind;
-use crate::limits::{MAX_NAVIGATE_INPUT, VIEWER_SIDE};
+use crate::limits::{KEEP_SECONDS, MAX_NAVIGATE_INPUT, VIEWER_SIDE};
 use crate::query::Fields;
 use crate::setting::{Checked, SETTINGS, Setting, SettingValue};
 use crate::settings::{SetValues, Settings};
+use crate::tab_keeps::Keep;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use browseros_core::TabId;
@@ -335,6 +336,46 @@ pub(crate) fn lock_request(body: &[u8]) -> Result<(TabId, Reads, LockTtl), ApiEr
             ))
         })?;
     Ok((TabId(tab_id), reads, ttl))
+}
+
+pub(crate) fn keep(keep: Keep) -> api::TabKeep {
+    api::TabKeep {
+        expires_at: keep.expires_at.map(EpochMillis::millis),
+    }
+}
+
+/// An optional object with a bounded integer TTL. Explicit null must not become an unlimited
+/// keep through the generated model's `Option`, so inspect presence before deserializing it.
+pub(crate) fn keep_request(body: &[u8]) -> Result<Option<Duration>, ApiError> {
+    if body.is_empty() {
+        return Ok(None);
+    }
+    let shape = r#"{"ttlSeconds"?: integer}"#;
+    let json: serde_json::Value = serde_json::from_slice(body).map_err(|_| not_the_body(shape))?;
+    let object = json.as_object().ok_or_else(|| not_the_body(shape))?;
+    if object.keys().any(|key| key != "ttlSeconds")
+        || object.get("ttlSeconds").is_some_and(|ttl| ttl.is_null())
+    {
+        return Err(not_the_body(shape));
+    }
+    let request: api::TabKeepRequest =
+        serde_json::from_value(json).map_err(|_| not_the_body(shape))?;
+    request
+        .ttl_seconds
+        .map(|seconds| {
+            u64::try_from(seconds)
+                .ok()
+                .filter(|seconds| KEEP_SECONDS.contains(seconds))
+                .map(Duration::from_secs)
+                .ok_or_else(|| {
+                    ApiError::invalid(format!(
+                        "`ttlSeconds` must be from {} to {}",
+                        KEEP_SECONDS.start(),
+                        KEEP_SECONDS.end(),
+                    ))
+                })
+        })
+        .transpose()
 }
 
 /// A fit as the contract has it. `fit` is `fitted` or `partial`, never `pending`: the fit

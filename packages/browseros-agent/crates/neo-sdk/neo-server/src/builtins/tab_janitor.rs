@@ -39,11 +39,11 @@ const SWEEP_BUDGET: Duration = Duration::from_secs(30);
 ///
 /// - a run that used it is still in flight (`TabRegistry::run_started` to `run_ended`);
 /// - a lock holds it, which is how a host keeps the agent off a tab the owner is using;
-/// - a fit is on it, which is how zuzu's handoff shows the tab to the owner, with no lock.
+/// - a fit is on it, which is how zuzu's handoff shows the tab to the owner, with no lock;
+/// - a host keep protects it while it waits, without blocking any agent operation.
 ///
 /// Its idle clock restarts when the last of them ends, so "idle" means that both the agent and
-/// the owner stopped using it. A tab waiting for an approval is used by nobody, and stays the
-/// host's to keep alive with a read. Only `TabOrigin::Agent` tabs are candidates (the agent's own
+/// the owner stopped using it, and no host keep remains. Only `TabOrigin::Agent` tabs are candidates (the agent's own
 /// and their popups), so the owner's own tabs are never closed.
 ///
 /// Neo's blank tab (`NeoTab`) keeps the browser open, so every idle agent tab may close; each

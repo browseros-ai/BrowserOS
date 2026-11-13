@@ -8,6 +8,7 @@ mod errors;
 mod events;
 mod fill;
 mod fits;
+mod keeps;
 mod listener_compatibility;
 mod live;
 mod locks;

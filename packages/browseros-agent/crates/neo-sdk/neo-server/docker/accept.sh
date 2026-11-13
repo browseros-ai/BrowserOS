@@ -40,6 +40,8 @@
 #                    on a wait, a wait loop cut by its deadline, or its script's act on another
 #                    task's tab and the New Tab; two tasks interleaved; once another task closed
 #                    the tab, a new tab of its own (accept_task_page.py)
+#   tab-keep         host keeps survive idle sweeps; DELETE and TTL restart the idle clock;
+#                    agents can fill, read, and close kept tabs, including task.close()
 #   mcp-remote       9011 is the same MCP over TLS; with NEO_MCP_REMOTE=false (the default) a
 #                    sibling container is cut off on 9010 and 9011; with true it is answered
 #   settings         PATCH /v1/settings applies and lists an unknown name, a bad value is 400 and
@@ -161,7 +163,7 @@ install_client() { # name: the probes, beside smoke.py whose MCP client they reu
   docker exec "$1" mkdir -p /opt/neo-accept
   local file
   for file in "$here/smoke.py" "$here/smoke_sdk.py" "$here/accept_client.py" "$here/accept_files.py" \
-    "$here/trace_values.py" "$here/accept_task_page.py"; do
+    "$here/trace_values.py" "$here/accept_task_page.py" "$here/accept_tab_keep.py"; do
     docker cp -q "$file" "$1:/opt/neo-accept/" || return 1
   done
 }
@@ -236,7 +238,7 @@ detail="$image_arch, browser $(fact browser), server $(fact marker) $(fact sha |
 if [ ${#problems[@]} -eq 0 ]; then result PASS identity "$detail"; else result FAIL identity "${problems[*]}"; fi
 
 if [ "$image_arch" != "$engine_arch" ]; then
-  for check in boot mcp host-api downloads pdf-downloads blobs settings files trace-values mcp-remote restart-browser stop persist kill-all captcha-keys; do
+  for check in boot mcp host-api downloads pdf-downloads blobs tab-keep settings files trace-values mcp-remote restart-browser stop persist kill-all captcha-keys; do
     result SKIP "$check" "$image_arch image on a $engine_arch engine: emulated, not evidence"
   done
   printf '\n'; printf '%s\n' "${results[@]}"
@@ -374,6 +376,15 @@ if [ "$booted" = 1 ]; then
     result FAIL task-page "$(jget "$task_page" 'd["detail"] + "; " + "; ".join(d["problems"][:3])' || printf '%s' "${task_page:0:300}")"
   fi
 
+  tab_keep=$(client "$main" "${as_host[@]}" python3 accept_tab_keep.py \
+    http://127.0.0.1:9010/mcp /run/neo/host.sock /run/neo-accept/host-token 2>&1)
+  if [ -n "$logs_dir" ]; then printf '%s\n' "$tab_keep" > "$logs_dir/tab-keep.json"; fi
+  if [ "$(jget "$tab_keep" 'd["ok"]')" = True ]; then
+    result PASS tab-keep "$(jget "$tab_keep" 'd["detail"]')"
+  else
+    result FAIL tab-keep "$(jget "$tab_keep" 'd["detail"]' || printf '%s' "${tab_keep:0:300}")"
+  fi
+
   # --- mcp-remote, loopback-only half ----------------------------------------------------------
   tls=$(docker exec "$main" curl -sk -o /dev/null -w '%{http_code}' https://127.0.0.1:9011/system/ready)
   main_ip=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$network\").IPAddress}}" "$main")
@@ -389,6 +400,8 @@ if [ "$booted" = 1 ]; then
   set_reply=$(host_send "$main" PATCH /v1/settings \
     '{"tabs":{"idleCloseSeconds":300},"trace":{"retentionSeconds":86400},"files":{"readDirs":["/etc","/data/downloads"]},"futureUnknown":true}')
   refused=$(host_send "$main" PATCH /v1/settings '{"tabs":{"idleCloseSeconds":5}}')
+  restart_keep_tab=$(jget "$(host_get "$main" /v1/tabs)" 'next(t["tabId"] for t in d["body"]["items"] if t.get("owner") == "neo")')
+  restart_keep=$(host_send "$main" PUT "/v1/tabs/$restart_keep_tab/keep" '{}')
   old_pid=$(server_pid "$main") new_pid="" read_back='{}'
   [ -n "$old_pid" ] && docker exec "$main" kill -KILL "$old_pid"
   for _ in $(seq 1 60); do
@@ -402,16 +415,18 @@ if [ "$booted" = 1 ]; then
     sleep 1
   done
   file_mode=$(docker exec "$main" stat -c '%a %U' /data/browserclaw/claw-sdk/settings.json 2>&1)
+  restart_keep_gone=$(jget "$(host_get "$main" /v1/tabs)" "any(t['tabId'] == $restart_keep_tab and 'keep' not in t for t in d['body']['items'])")
   # Compare only the keys this check set; added settings keep their defaults.
   if [ "$(jget "$set_reply" 'd["status"]')" = 200 ] && [ "$(jget "$set_reply" 'd["body"]["unknown"]')" = "['futureUnknown']" ] \
       && [ "$(jget "$refused" 'd["status"]')" = 400 ] && [ -n "$old_pid" ] && [ -n "$new_pid" ] && [ "$new_pid" != "$old_pid" ] \
       && [ "$(jget "$read_back" 'd["body"]["settings"]["tabs"]["idleCloseSeconds"]')" = 300 ] \
       && [ "$(jget "$read_back" 'd["body"]["settings"]["trace"]["retentionSeconds"]')" = 86400 ] \
       && [ "$(jget "$read_back" 'd["body"]["settings"]["files"]["readDirs"]')" = "['/etc', '/data/downloads']" ] \
+      && [ "$(jget "$restart_keep" 'd["status"]')" = 200 ] && [ "$restart_keep_gone" = True ] \
       && [ "$file_mode" = "600 neo" ]; then
-    result PASS settings "set 300 s / 1 day / files.readDirs=[/etc,/data/downloads], futureUnknown listed unknown, 5 s refused; server $old_pid killed, $new_pid relaunched, GET answers what the host set; settings.json $file_mode"
+    result PASS settings "set 300 s / 1 day / files.readDirs=[/etc,/data/downloads], futureUnknown listed unknown, 5 s refused; server $old_pid killed, $new_pid relaunched, GET answers what the host set; settings.json $file_mode; tab keep ended across restart"
   else
-    result FAIL settings "set=${set_reply:0:200}; refused=${refused:0:160}; pid $old_pid -> $new_pid; read=${read_back:0:200}; file=$file_mode"
+    result FAIL settings "set=${set_reply:0:200}; refused=${refused:0:160}; pid $old_pid -> $new_pid; read=${read_back:0:200}; file=$file_mode; keep reset=$restart_keep_gone"
   fi
   host_send "$main" PUT /v1/settings '{}' >/dev/null
 
@@ -566,7 +581,7 @@ for pid in pids:
     result FAIL captcha-keys "image's own keys listed=$main_captcha (want $want_main); host key file listed=${keyed_captcha:-not booted}"
   fi
 else
-  for check in mcp host-api downloads pdf-downloads blobs settings files trace-values mcp-remote restart-browser stop persist kill-all captcha-keys; do
+  for check in mcp host-api downloads pdf-downloads blobs tab-keep settings files trace-values mcp-remote restart-browser stop persist kill-all captcha-keys; do
     result FAIL "$check" "not run: the image did not boot"
   done
 fi

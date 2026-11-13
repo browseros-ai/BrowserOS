@@ -38,7 +38,8 @@
 //!  browser link tab events (app) ─▶ Service::tab_closed, retain_tabs
 //!       a reconcile's fence (app) ─▶ Service::tab_fence, before its listing; the routes that
 //!                                    change a tab stamp it first (tab_stamps)
-//!  idle-tab janitor (app) ─▶ Service::tab_hold: a lock or a fit on the tab, now or until when
+//!  idle-tab janitor (app) ─▶ Service::tab_hold: a lock, fit or host keep, now or until when
+//!  PUT, DELETE /v1/tabs/{id}/keep ─▶ TabKeeps, in memory; never the agent's lock policy
 //! ```
 //!
 //! The app implements no trait for this crate; it arms the fill routes with a closure
@@ -64,6 +65,7 @@ mod fill_route;
 mod fit_routes;
 mod host_auth;
 mod host_service;
+mod keep_routes;
 mod limits;
 mod live_tabs;
 mod part_routes;
@@ -76,6 +78,7 @@ mod service;
 mod setting;
 mod settings;
 mod settings_routes;
+mod tab_keeps;
 mod tab_routes;
 mod tab_stamps;
 mod takeover_routes;
