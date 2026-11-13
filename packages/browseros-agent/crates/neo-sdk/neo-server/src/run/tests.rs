@@ -1596,3 +1596,55 @@ fn after_a_restart_every_surviving_tab_of_a_task_is_its_own_again() -> Result<()
         Ok(())
     })
 }
+
+#[test]
+fn after_a_restart_a_task_never_takes_a_tab_a_task_it_named_opened() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let service = rig.run_service(GRACE);
+        let mine = run_in(&service, "task-a", OPEN_OWN_TAB)
+            .await?
+            .value
+            .clone();
+        let created = run_in(
+            &service,
+            "task-other",
+            "return (await neo.createTask('named')).id;",
+        )
+        .await?;
+        let named = created.value.as_str().ok_or("a task id")?.to_owned();
+        // No pick: the host task's script opens a tab in the task it names. The open is a
+        // child of `task.newPage` in the host task's run, and the tab is the named task's.
+        let opened = run_in(
+            &service,
+            "task-a",
+            &format!(
+                "const {{ page: theirs }} = await __neo.invoke('task.newPage', {{ task: {named:?} }});\n\
+                 await __neo.invoke('test.touch', {{ page: theirs }});\n\
+                 return {{ tab: theirs.tabId, owner: theirs.taskId }};"
+            ),
+        )
+        .await?;
+        assert_eq!(opened.status, ReplyStatus::Ok, "{opened:?}");
+        assert_eq!(
+            opened.value["owner"],
+            json!(named),
+            "the named task's tab: {opened:?}"
+        );
+        assert_eq!(
+            next_page(&service, "task-a").await?,
+            mine,
+            "and not the host task's page"
+        );
+        rig.sink.flush().await?;
+
+        let restarted = rig.restarted_service(GRACE)?;
+        assert_eq!(
+            next_page(&restarted, "task-a").await?,
+            mine,
+            "after a restart too: not {}, which the task it named opened",
+            opened.value["tab"]
+        );
+        Ok(())
+    })
+}

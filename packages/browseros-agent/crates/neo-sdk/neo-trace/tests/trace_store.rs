@@ -1231,6 +1231,28 @@ async fn a_tasks_tabs_after_a_restart_are_the_ones_it_surely_opened() {
 
     let later = start_in(&h.sink, Some("checkout"), 100);
     new_page(&h.sink, OperationId::new(later, 1), TabId(7), 100);
+    // An open that is a child operation proves no owner: `task.newPage`'s is for the task it
+    // names, which need not be this run's.
+    let parent = OperationId::new(later, 2);
+    op_started(&h.sink, simple(parent, "task.newPage", Effect::Write));
+    let child = OperationId::new(later, 3);
+    op_started(
+        &h.sink,
+        Op {
+            parent: Some(parent),
+            tab: None,
+            at: at(110),
+            ..simple(child, "context.newPage", Effect::Write)
+        },
+    );
+    let opened_page = PageState {
+        tab_id: Some(TabId(10)),
+        url: Some("about:blank".into()),
+        title: None,
+    };
+    h.sink
+        .op_ended(answered(child, 110, Some(at(111)), Some(opened_page)));
+    scripted_read(&h.sink, OperationId::new(later, 4), TabId(10), 120);
     flushed(&h).await;
     assert_eq!(
         tabs("checkout").await,
@@ -1238,7 +1260,7 @@ async fn a_tasks_tabs_after_a_restart_are_the_ones_it_surely_opened() {
             opened: vec![TabId(5), TabId(6), TabId(7)],
             page: Some(TabId(7)),
         },
-        "a tab it opened since its script last acted"
+        "a tab it opened since its script last acted, and not 10, a child's open"
     );
 }
 

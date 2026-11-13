@@ -68,7 +68,9 @@ pub(crate) const SUBSCRIPTIONS: [&str; 3] = [
 pub(crate) const OPENERS: [&str; 1] = ["context.newPage"];
 
 /// Operations that make another task the run's current one: after one, an open may be that
-/// task's, so the run no longer proves which task its opens belong to.
+/// task's, so the run no longer proves which task its opens belong to. (`task.newPage` opens for
+/// the task it names without a pick; its open is a child operation, which
+/// [`TraceStore::task_tabs`] leaves out on its own.)
 pub(crate) const TASK_PICKS: [&str; 2] = ["neo.createTask", "neo.task"];
 
 /// Whether the operation `name` only subscribes (see [`SUBSCRIPTIONS`]), so it makes no tab its
@@ -571,10 +573,13 @@ impl TraceStore {
     /// memory of tasks and tab owners is gone), and among them its built-in `page`.
     ///
     /// The trace keeps no owners, so a tab counts as the task's only where its owner is certain:
-    /// it was opened ([`OPENERS`]) in one of the task's runs that picked no task
-    /// ([`TASK_PICKS`]). There every open goes to the run's own task; after a pick an open may be
-    /// the picked task's, so those runs are left out. A popup is not an opener, so a task left
-    /// only with one starts on a new tab.
+    /// it was opened ([`OPENERS`]) at the top of one of the task's runs that picked no task
+    /// ([`TASK_PICKS`]), by the script's own `context.newPage` or Neo's open of the lazy page,
+    /// neither of which has a parent. Those go to the run's own task. After a pick an open may be
+    /// the picked task's, so those runs are left out, and an open that is a child of another
+    /// operation may be some other task's (`task.newPage` names the task it opens for), so those
+    /// are left out too. A popup is not an opener, so a task left only with one starts on a new
+    /// tab.
     ///
     /// The page is the tab among those its own script last acted on: an operation stored with a
     /// call site. Neo's own reads (the prelude's frame refresh after `waitForTimeout` on every
@@ -605,6 +610,7 @@ impl TraceStore {
                 operations::Column::Seq,
             ])
             .filter(operations::Column::RunId.in_subquery(unpicked_runs))
+            .filter(operations::Column::ParentId.is_null())
             .filter(operations::Column::Name.is_in(OPENERS))
             .filter(operations::Column::TabId.is_not_null())
             .order_by_asc(operations::Column::StartedAt)

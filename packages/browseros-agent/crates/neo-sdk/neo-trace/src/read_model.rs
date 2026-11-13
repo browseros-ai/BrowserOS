@@ -209,7 +209,8 @@ pub struct TraceTail {
 /// among them, as [`TraceStore::task_tabs`](crate::TraceStore::task_tabs) reads them.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TaskTabs {
-    /// The tabs the task opened in runs that picked no task, in the order it opened them.
+    /// The tabs the task surely opened: top-level opens in its runs that picked no task, in
+    /// the order it opened them.
     pub opened: Vec<TabId>,
     /// Among `opened`, the one its own script last acted on, or one it opened after that.
     pub page: Option<TabId>,
