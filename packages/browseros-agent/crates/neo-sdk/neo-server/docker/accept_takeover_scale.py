@@ -2,7 +2,8 @@
 """Prove logical phone sizing, physical RFB sizing, and agent capture on the packaged image.
 
 The fixture publishes its own observations because agent evaluate calls remain writes during
-a takeover. Only the host's RFB connection sends input. A separate CDP connection reads window
+a takeover. A timer also publishes while an agent tab is in the background, without animation
+frames. Only the host's RFB connection sends input. A separate CDP connection reads window
 bounds, never attaches to the page or changes the SDK's emulation session. Standard library only.
 """
 
@@ -60,7 +61,7 @@ const publish=()=>{const v=visualViewport;document.getElementById('proof').textC
     touch:{points:navigator.maxTouchPoints,ontouchstart:'ontouchstart' in window},
     identity:{userAgent:navigator.userAgent,platform:navigator.platform,mobile:navigator.userAgentData?.mobile}},
     outer:[outerWidth,outerHeight],available:[screen.availWidth,screen.availHeight,screen.availLeft,screen.availTop],
-    position:[screenX,screenY]},frameReady,eventSeq,events});requestAnimationFrame(publish)};publish();
+    position:[screenX,screenY]},frameReady,eventSeq,events});};setInterval(publish,100);publish();
 </script>"""
 FRAME = """<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">
 <style>html,body{margin:0;overflow:hidden}input{width:100vw;height:100vh;box-sizing:border-box;
@@ -492,8 +493,9 @@ def check(url, socket_path, token_file, artifacts):
     try:
         client = connect(url)
         origin = f"http://127.0.0.1:{server.server_port}/"
-        tab, _ = run(f"const p = await context.newPage(); await p.goto({json.dumps(origin)}); "
-                     f"await p.setViewportSize({json.dumps(ORIGINAL)}); await p.bringToFront(); return p.tabId;")
+        tab, _ = run("const p = await context.newPage(); return p.tabId;")
+        on_page(f"await p.setViewportSize({json.dumps(ORIGINAL)}); "
+                f"await p.goto({json.dumps(origin)}); return true;")
         target = next(item["targetId"] for item in request("GET", "/v1/tabs")["items"] if item["tabId"] == tab)
         window = Window()
         before_facts = at_size(ORIGINAL["width"], ORIGINAL["height"], 1)
