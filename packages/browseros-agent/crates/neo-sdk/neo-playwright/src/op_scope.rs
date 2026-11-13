@@ -3,6 +3,8 @@
 //! ```text
 //!  Playwright::invoke ── decode `call` ── OpScope::new ── family leaf
 //!                                            │ admit(page)    once per op, through the run's view
+//!                                            │ admit_target   instead, for an op the browser
+//!                                            │                carries out alone (close, opener)
 //!                                            │ log(line)      Playwright's call log, mirrored to the trace
 //!                                            │ sleep, within  Rust's clock against the op's own timeout
 //!                                            │ require(cap)   at a capability's gateway: declared?
@@ -37,7 +39,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::Duration;
 
-use browseros_core::pages::PageSession;
+use browseros_core::pages::{PageInfo, PageSession};
 use browseros_core::{
     BrowserSession, BrowserView, CoreError, PageId, ProtocolSession, TabId, TargetId,
 };
@@ -85,6 +87,16 @@ pub(crate) struct AdmittedPage {
     /// Core cache identity: private to this admission and never serialized.
     pub(crate) core_page: PageId,
     pub(crate) session: PageSession,
+}
+
+/// A tab admitted for an op the browser carries out on the tab itself
+/// ([`OpScope::admit_target`]): the view's checks ran, and no page session exists for it.
+#[derive(Debug)]
+pub(crate) struct AdmittedTarget {
+    /// Core cache identity: private to this admission and never serialized.
+    pub(crate) core_page: PageId,
+    /// The tab's page target as the view knew it at admission.
+    pub(crate) target_id: TargetId,
 }
 
 /// The op's own wait ended: its Playwright timeout passed, or the script aborted it through
@@ -203,15 +215,9 @@ impl<'env> OpScope<'env> {
         browser: &BrowserSession,
         tab: TabId,
     ) -> Result<Option<AdmittedPage>, PlaywrightError> {
-        let mut info = browser.pages.get_info_by_tab(tab).await;
-        if info.is_none() {
-            self.view()
-                .resolve_tab_ids(&[tab])
-                .await
-                .map_err(|error| self.core_error(&error))?;
-            info = browser.pages.get_info_by_tab(tab).await;
-        }
-        let Some(info) = info else { return Ok(None) };
+        let Some(info) = self.known_tab(browser, tab).await? else {
+            return Ok(None);
+        };
         let session = self
             .view()
             .page_session(info.page_id.clone())
@@ -232,6 +238,62 @@ impl<'env> OpScope<'env> {
             core_page: info.page_id,
             session,
         }))
+    }
+
+    /// Admits `tab` for an op the browser carries out on the tab itself, never asking its page:
+    /// closing it, naming its opener. The view decides as it does for [`OpScope::admit`]'s page
+    /// session, minus the attach: a bound view checks profile and window scope on the browser's
+    /// fresh tab facts, and an unbound one (every Neo run's) takes core's entry, as
+    /// `PageManager::get_session` does. The host learns the target as it does there. Nothing
+    /// attaches, enables a domain, repairs a viewport or adds the run's context scripts, because
+    /// each of those waits on the page's renderer: while a committed page's navigation is in
+    /// flight, Chromium answers no page command from any session until it commits or fails
+    /// (measured on BrowserOS; the class #3317 met for reads), so an attach would hold such an
+    /// op to the CDP request timeout. Unlike `admit`, nothing is kept: these ops send nothing
+    /// to the page afterwards.
+    pub(crate) async fn admit_target(
+        &self,
+        browser: &BrowserSession,
+        tab: TabId,
+    ) -> Result<AdmittedTarget, PlaywrightError> {
+        let core = |error: CoreError| self.core_error(&error);
+        let info = self
+            .known_tab(browser, tab)
+            .await?
+            .ok_or_else(|| self.fail(ErrorCode::TargetClosed, "the tab was closed"))?;
+        let bound = self
+            .view()
+            .scope()
+            .map_err(|error| core(error.into()))?
+            .is_some();
+        let info = if bound {
+            self.view().page(info.page_id).await.map_err(core)?
+        } else {
+            info
+        };
+        self.run_state().events.remember_page(&info.target_id, tab);
+        self.env.report_target(tab, &info.target_id);
+        Ok(AdmittedTarget {
+            core_page: info.page_id,
+            target_id: info.target_id,
+        })
+    }
+
+    /// Core's cached entry for a native tab, listing the browser's tabs once on a miss: a tab
+    /// opened outside this process (by the owner, or before a restart) is unknown until then.
+    async fn known_tab(
+        &self,
+        browser: &BrowserSession,
+        tab: TabId,
+    ) -> Result<Option<PageInfo>, PlaywrightError> {
+        if let Some(info) = browser.pages.get_info_by_tab(tab).await {
+            return Ok(Some(info));
+        }
+        self.view()
+            .resolve_tab_ids(&[tab])
+            .await
+            .map_err(|error| self.core_error(&error))?;
+        Ok(browser.pages.get_info_by_tab(tab).await)
     }
 
     /// The gateway check: refuses, as `neo / internal` with nothing sent, an op whose spec does

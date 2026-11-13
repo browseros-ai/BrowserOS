@@ -558,22 +558,27 @@ async fn title(
     document_op::read(pw, scope, input, DocumentPart::Title, false).await
 }
 
+/// The browser closes the tab, and the page is never asked anything
+/// ([`OpScope::admit_target`]): closing is how an agent or a host gets rid of a broken tab, so a
+/// page that answers nothing (its navigation never commits) must close too. Unlike upstream's
+/// `Target.closeTarget`, core's `Browser.closeTab` runs the page's beforeunload, so a page that
+/// asks to stay after a user gesture keeps its tab (measured on BrowserOS).
 async fn close(
     pw: &Playwright,
     scope: &OpScope<'_>,
     input: PageInput,
 ) -> Result<Nothing, PlaywrightError> {
     let page = input.page.tab();
-    let admitted = scope.admit(pw.browser(), page).await?;
+    let admitted = scope.admit_target(pw.browser(), page).await?;
     let core = |error| scope.core_error(&error);
     let _sent = scope.send_effect()?;
     // Through core, so its tab registry forgets the page and the run's view still decides.
     scope
         .view()
-        .close_page(admitted.core_page.clone())
+        .close_page(admitted.core_page)
         .await
         .map_err(core)?;
-    pw.workers_closed(admitted.session.target_id.clone()).await;
+    pw.workers_closed(admitted.target_id).await;
     scope.run_state().frames.forget(page);
     Ok(())
 }
@@ -652,13 +657,14 @@ async fn opener(
         #[serde(default)]
         opener_id: Option<String>,
     }
-    let admitted = scope.admit(pw.browser(), input.page.tab()).await?;
+    // Target facts are the browser's own, so a page that answers nothing still has an opener.
+    let admitted = scope.admit_target(pw.browser(), input.page.tab()).await?;
     let core = |error| scope.core_error(&error);
     let info: TargetInfoReply = pw
         .browser()
         .cdp(
             "Target.getTargetInfo",
-            json!({ "targetId": admitted.session.target_id.as_str() }),
+            json!({ "targetId": admitted.target_id.as_str() }),
             None,
         )
         .await
@@ -750,6 +756,102 @@ mod wire_tests {
                 _ => {}
             }
         }
+        Ok(())
+    }
+}
+
+/// `page.close` and `page.opener` on a tab whose renderer answers nothing, as while its
+/// navigation never commits: both are the browser's business, so neither sends the page a
+/// command.
+#[cfg(test)]
+mod browser_only_tests {
+    use std::error::Error;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Duration;
+
+    use serde_json::{Value, json};
+    use tokio::time;
+
+    use crate::Op;
+    use crate::test_env::EnvCall;
+    use crate::test_support::{ProbeAnswer, SCRIPTED_MAIN, ScriptedRun, ScriptedTab, TabScript};
+
+    /// Far under the CDP client's 60 s, which a page command would wait for.
+    const BROWSER_ONLY: Duration = Duration::from_secs(5);
+    /// What core's attach and a write's admission send a page's renderer.
+    const RENDERER: [&str; 4] = [
+        "Page.enable",
+        "DOM.enable",
+        "Accessibility.enable",
+        "Runtime.evaluate",
+    ];
+
+    /// A tab whose renderer outlasts the client on every command.
+    #[derive(Default)]
+    struct Stuck {
+        closed: AtomicBool,
+    }
+
+    impl TabScript for Stuck {
+        fn probe(&self, _frame: &str, _request: &Value) -> ProbeAnswer {
+            ProbeAnswer::unexpected()
+        }
+
+        fn outlasts_client(&self, method: &str) -> bool {
+            RENDERER.contains(&method)
+        }
+
+        fn cdp_reply(&self, method: &str, _params: &Value) -> Option<Value> {
+            match method {
+                "Target.getTargetInfo" => {
+                    Some(json!({ "targetInfo": { "targetId": SCRIPTED_MAIN } }))
+                }
+                "Browser.closeTab" => {
+                    self.closed.store(true, Ordering::SeqCst);
+                    Some(json!({}))
+                }
+                "Browser.getTabs" if self.closed.load(Ordering::SeqCst) => {
+                    Some(json!({ "tabs": [] }))
+                }
+                _ => None,
+            }
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_close_and_opener_send_nothing_to_a_page_that_answers_nothing()
+    -> Result<(), Box<dyn Error>> {
+        let tab = ScriptedTab::new(Stuck::default());
+        let run = ScriptedRun::over(&tab).await?;
+        let input = json!({ "call": {}, "page": run.page });
+        let invoke = |name: &'static str| {
+            let input = input.clone();
+            let run = &run;
+            async move {
+                let op = Op::from_name(name).ok_or("an op")?;
+                let answer =
+                    time::timeout(BROWSER_ONLY, run.playwright.invoke(&run.env, op, input))
+                        .await
+                        .map_err(|_elapsed| format!("{name} waited on the page"))?;
+                Ok::<Value, Box<dyn Error>>(answer?)
+            }
+        };
+
+        assert_eq!(invoke("page.opener").await?, json!({ "opener": null }));
+        invoke("page.close").await?;
+
+        for renderer in RENDERER {
+            assert_eq!(tab.sent(renderer), 0, "the page was sent {renderer}");
+        }
+        assert_eq!(
+            tab.sent("Browser.closeTab"),
+            1,
+            "the browser closed the tab"
+        );
+        assert!(
+            run.env.calls().contains(&EnvCall::MarkSent),
+            "the close was sent"
+        );
         Ok(())
     }
 }

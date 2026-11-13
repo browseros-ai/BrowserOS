@@ -579,6 +579,72 @@ async fn tests_that_the_context_lists_every_tab_and_forgets_a_closed_one() -> Te
     .await
 }
 
+/// How long the stuck tab's close and opener may take. Each is a few browser round trips; a
+/// page command would wait for the CDP request timeout, 60 s.
+const BROWSER_ONLY: Duration = Duration::from_secs(10);
+
+/// While a committed page's navigation is in flight, Chromium holds every session's page
+/// commands until it commits or fails (measured on BrowserOS: `Page.enable`, `DOM.enable`,
+/// `Runtime.evaluate` and `Page.getFrameTree`, from a new session and the old one alike), so a
+/// tab whose navigation never commits answers none. Closing it and naming its opener are the
+/// browser's business: a Neo that never attached the tab, as after its own restart or a new
+/// browser connection, does both at once, so a host can always clear such a tab through `run`.
+/// That neither sends the page a command is `page_op.rs`'s unit test: here the fresh
+/// connection's own watcher attaches to every tab in the background, other tests' too.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_tab_stuck_mid_navigation_closes_at_once() -> TestResult {
+    with_page(|run, server, page| async move {
+        let result = async {
+            goto(&run, &page, &server.url("/child.html"), "load").await?;
+            let stall = server.url("/stall.html");
+            run.eval(
+                &page,
+                &format!("setTimeout(() => {{ location.href = {stall:?}; }})"),
+            )
+            .await?;
+            stuck(&run, &page).await?;
+
+            let fresh = LiveRun::connect().await?;
+            let handle = json!({ "page": brand(&page) });
+            let opener =
+                time::timeout(BROWSER_ONLY, fresh.invoke("page.opener", handle.clone())).await;
+            let closed = time::timeout(BROWSER_ONLY, fresh.invoke("page.close", handle)).await;
+            let opener = opener.map_err(|_elapsed| "page.opener waited on the stuck tab")??;
+            assert_eq!(opener["opener"], Value::Null, "Neo opened it, no page did");
+            closed.map_err(|_elapsed| "page.close waited on the stuck tab")??;
+            let listed = listed_pages(&fresh).await?;
+            assert!(
+                !listed.iter().any(|(id, _)| *id == page),
+                "the stuck tab is gone: {listed:?}"
+            );
+            Ok(())
+        }
+        .await;
+        (run, result)
+    })
+    .await
+}
+
+/// Waits until the browser reports `page` loading, then checks that it answers no page command
+/// for a second: the state a tab is in while its navigation waits on a server that never answers.
+async fn stuck(run: &LiveRun, page: &TestPage) -> TestResult {
+    for _ in 0..50 {
+        let info = run
+            .browser()
+            .cdp("Browser.getTabInfo", json!({ "tabId": page.tab.0 }), None)
+            .await?;
+        if info.pointer("/tab/isLoading") == Some(&json!(true)) {
+            break;
+        }
+        time::sleep(Duration::from_millis(100)).await;
+    }
+    match time::timeout(Duration::from_secs(1), run.eval(page, "1")).await {
+        Ok(answer) => Err(format!("the tab still answers page commands: {answer:?}").into()),
+        Err(_) => Ok(()),
+    }
+}
+
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_a_popup_names_its_opener() -> TestResult {
