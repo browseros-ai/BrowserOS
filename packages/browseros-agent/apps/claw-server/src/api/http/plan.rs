@@ -27,7 +27,22 @@ use claw_api::models::{
     PriceInterval, PricedPlan, RenamePlanComputerRequest, StartPlanCheckoutRequest,
 };
 
-type PlanResult<T> = Result<Json<T>, Response>;
+type PlanResult<T> = Result<Json<T>, PlanFailure>;
+
+/// A plan route's error response, boxed so every handler's `Result` stays small.
+pub(super) struct PlanFailure(Box<Response>);
+
+impl From<Response> for PlanFailure {
+    fn from(response: Response) -> Self {
+        Self(Box::new(response))
+    }
+}
+
+impl IntoResponse for PlanFailure {
+    fn into_response(self) -> Response {
+        *self.0
+    }
+}
 
 /// GET /api/v1/plan
 pub(super) async fn plan(State(state): State<AppState>) -> Json<Plan> {
@@ -52,7 +67,7 @@ pub(super) async fn start_checkout(
     Extension(request_id): Extension<RequestId>,
     State(state): State<AppState>,
     payload: Result<Json<StartPlanCheckoutRequest>, JsonRejection>,
-) -> Result<(StatusCode, Json<PlanCheckout>), Response> {
+) -> Result<(StatusCode, Json<PlanCheckout>), PlanFailure> {
     let Json(payload) = body(&request_id, payload, "expected a plan and a billing period")
         .map_err(IntoResponse::into_response)?;
     let interval = payload.interval.to_string();
