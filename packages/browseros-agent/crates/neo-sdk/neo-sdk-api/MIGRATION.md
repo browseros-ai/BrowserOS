@@ -68,46 +68,6 @@ This is a read view. Values remain stored in `trace.db`, and full reads, downloa
 screenshot endpoints retain their existing access. URL and title can themselves contain values;
 the host applies its own redaction to these audit fields.
 
-## Frame trees Neo could not read whole
-
-A script's `page.frames()` lists a tab's whole frame tree, cross-site frames included, from Neo's
-own `page.frames` reads: before the script's first statement, and before each operation settles
-for a tab whose frames changed. A read that could not get the whole tree ends with
-`framesIncomplete: true`: an out-of-process frame's subtree would not read, or no tree came back
-at all. A read that answered the whole tree ends with `false`. After a short read the script's
-`frames()` lists the frames that were read, and the tab is read again before the script's next
-operation settles.
-
-Read the mark per operation. `true` says that one read was short; a later `page.frames` operation
-of the same tab may have read it whole. `false` on a `page.frames` operation that failed (refused,
-timed out) says nothing about the tree: it answered none, and the script kept the frames it had.
-
-To find a run whose script was handed a short tree, read it and look for a `page.frames`
-operation with `framesIncomplete: true`:
-
-```http
-GET /v1/runs/{runId}?fields=summary
-```
-
-These reads are Neo's own (`internal: true`), so `internal=false` leaves them out; keep the
-default. `fields=summary` keeps the field. Operations recorded before it, and those whose end Neo
-never recorded, have none. The server also logs each such read at warn, `a tab's frame tree is
-not whole`, with the tab and the frame's error.
-
-**Rolling back to an image without this field.** The field comes with trace schema 5. An older
-image (schema 4 or below, every image before this field) cannot read that `trace.db`, but it
-still starts. It renames the file `trace.db.broken-<ms>` beside it, starts an empty store, and
-logs an error, `the trace store does not open; starting a fresh one`. So after a rollback:
-
-- the older image lists none of the runs recorded before it;
-- a `requestId` sent before the rollback runs again instead of returning its stored reply.
-
-Only `trace.db` moves (its `-wal` and `-shm` files are removed, so writes not yet copied into the
-file are lost with them); `settings.json` beside it stays. Moving forward again, the newer image
-upgrades the older image's store. The runs from before the rollback then stay only in the
-`.broken` file, which Neo never reads or deletes. Proven on a schema-4 image: it started healthy
-on a schema-5 store, moved it aside and answered `GET /v1/runs` with no runs.
-
 ## Source layout and package names
 
 The SDK's source packages now live together under `crates/neo-sdk/`, relative to
