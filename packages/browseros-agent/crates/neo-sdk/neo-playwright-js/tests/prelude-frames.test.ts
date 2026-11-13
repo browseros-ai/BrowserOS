@@ -592,6 +592,46 @@ it("tests that a load-state wait's whole tree stays applied when the settle read
   expect(count).toEqual(4)
 })
 
+// A wait's read of a tab the script never acted on (marked for a read because its start read
+// failed, or because the script read its frames) is bounded as a start read is: a tab whose
+// attach stalls, one another run is navigating say, must not hold the script's timer.
+it('tests that a wait reads a tab the script never acted on within the start read bound', async () => {
+  let reads1009 = 0
+  const runtime = loadPrelude({
+    seed: OBSERVER,
+    answer: (call) => {
+      if (call.name !== 'page.frames') return null
+      if (tabOf(call) !== 1009 || reads1009++ > 0) return TREE
+      return {
+        err: {
+          code: 'timeout',
+          owner: 'host',
+          delivery: 'unknown',
+          retryable: true,
+          operationId: 'run.2',
+          timeout: true,
+          message: 'page.frames: Timeout 1000ms exceeded',
+        },
+      }
+    },
+  })
+  await runtime.run('await page.title(); await page.waitForTimeout(1)')
+  const waits = runtime.calls
+    .filter(
+      (call) =>
+        call.name === 'page.frames' &&
+        Reflect.get(Object(call.input.call), 'api') === 'page.waitForTimeout',
+    )
+    .map((call) => [
+      tabOf(call),
+      Reflect.get(Object(call.input.call), 'timeoutMs'),
+    ])
+  expect(waits).toEqual([
+    [1007, 0],
+    [1009, 1_000],
+  ])
+})
+
 it('tests that a rejected operation also leaves every changed tree read before the script catches it', async () => {
   let reads = 0
   const runtime = loadPrelude({

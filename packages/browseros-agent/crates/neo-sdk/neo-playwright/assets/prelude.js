@@ -12123,7 +12123,7 @@ ${changes}`;
     }
     async _refreshWorkingFrames(api) {
       const working = this._knownPages().filter((page) => (page._working || page._framesWatched) && page._tab !== null && page._navigationsInFlight === 0);
-      await Promise.all(working.map((page) => page._refreshFrames(api).catch(() => {
+      await Promise.all(working.map((page) => page._refreshFrames(api, page._working ? 0 : LISTED_FRAMES_TIMEOUT_MS).catch(() => {
         return;
       })));
     }

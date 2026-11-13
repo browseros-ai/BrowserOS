@@ -313,11 +313,13 @@ export class BrowserContext extends EventEmitter {
 
   /**
    * One `page.frames` read per open page that has a tab and that the script acted on
-   * (`Page._working`) or whose frames it read (`Page._framesWatched`), in parallel, each failure
-   * swallowed, as `waitForTimeout` ends (FR-1). A page with no tab yet is skipped, so a wait
-   * never opens the run's lazy tab, and a refused read leaves that page's tree as it was. So is
-   * a page with a navigation op in flight, which Chromium would not answer until that
-   * navigation ends (`Page._navigationsInFlight`).
+   * (`Page._working`) or whose frames it read or could not read whole (`Page._framesWatched`),
+   * in parallel, each failure swallowed, as `waitForTimeout` ends (FR-1). A page with no tab yet
+   * is skipped, so a wait never opens the run's lazy tab, and a refused read leaves that page's
+   * tree as it was. So is a page with a navigation op in flight, which Chromium would not answer
+   * until that navigation ends (`Page._navigationsInFlight`). A page the script never acted on is
+   * read within `LISTED_FRAMES_TIMEOUT_MS`, as at the start and in a settle step: its tab's
+   * attach can stall (another run navigating it), and the script's timer must not wait on it.
    */
   async _refreshWorkingFrames(api: string): Promise<void> {
     const working = this._knownPages().filter(
@@ -327,7 +329,11 @@ export class BrowserContext extends EventEmitter {
         page._navigationsInFlight === 0,
     )
     await Promise.all(
-      working.map((page) => page._refreshFrames(api).catch(() => undefined)),
+      working.map((page) =>
+        page
+          ._refreshFrames(api, page._working ? 0 : LISTED_FRAMES_TIMEOUT_MS)
+          .catch(() => undefined),
+      ),
     )
   }
 
