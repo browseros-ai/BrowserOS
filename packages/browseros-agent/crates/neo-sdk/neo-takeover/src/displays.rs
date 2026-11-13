@@ -118,8 +118,9 @@ impl DisplayBinding {
     }
 
     /// Whether Xvnc read all of the owner's input: `None` while no display bound to this one has
-    /// ended, then `true` only if every one that ended saw Xvnc close the connection it had
-    /// half-closed. A display still forwarding makes it `false`, since its last input is unproven.
+    /// ended, then `true` only if every one that ended forwarded each message whole and saw Xvnc
+    /// close the connection it had half-closed. A display still forwarding makes it `false`, since
+    /// its last input is unproven.
     #[must_use]
     pub fn input_drained(&self) -> Option<bool> {
         let drained = *self.drained.lock().unwrap_or_else(PoisonError::into_inner);
@@ -394,6 +395,10 @@ impl Closing {
 struct Proxy {
     mode: DisplayMode,
     framer: ClientFramer,
+    /// A message's write to Xvnc began and has not finished. A release cancels forwarding at
+    /// once, so it can cut a message in two: Xvnc then reads a truncated message before Neo's
+    /// end of stream, and its close proves nothing about the owner's input.
+    writing: bool,
 }
 
 impl Proxy {
@@ -401,6 +406,7 @@ impl Proxy {
         Self {
             mode,
             framer: ClientFramer::default(),
+            writing: false,
         }
     }
 
@@ -433,7 +439,10 @@ impl Proxy {
             // Xvnc ended the connection, or refused a write, before Neo was done: nothing shows
             // it read the last input.
             (DisplayMode::Control, DisplayEnd::ScreenClosed) => Some(false),
-            (DisplayMode::Control, _) => Some(drain(from_server, to_server).await),
+            (DisplayMode::Control, _) => {
+                let closed = drain(from_server, to_server).await;
+                Some(closed && !self.writing)
+            }
         };
         Ended { end, drained }
     }
@@ -469,10 +478,12 @@ impl Proxy {
                 Verdict::Drop => continue,
                 Verdict::Pass => {}
             }
+            self.writing = true;
             to_server
                 .write_all(&bytes)
                 .await
                 .map_err(|_| DisplayEnd::ScreenClosed)?;
+            self.writing = false;
         }
         Ok(())
     }

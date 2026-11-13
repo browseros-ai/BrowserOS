@@ -816,6 +816,51 @@ async fn a_binding_reports_whether_its_displays_input_was_drained() -> TestResul
     Ok(())
 }
 
+/// A release that cuts a message in two while Xvnc is not reading reports the input undrained:
+/// Xvnc then reads a truncated message before Neo's end of stream, so its close proves nothing.
+#[tokio::test]
+async fn a_release_that_cuts_a_message_in_two_reports_the_input_undrained() -> TestResult {
+    /// More than a local socket buffers, so a write of them blocks while Xvnc does not read.
+    const PASTES: usize = 32;
+    let h = harness().await?;
+    h.xvnc.hold_reads();
+    let binding = DisplayBinding::new();
+    let control = h.control(Some(binding.clone())).await?;
+    control.send(HANDSHAKE);
+    h.received(0, 3).await?;
+    let text = vec![b'x'; 512 * 1024];
+    let mut paste = vec![6, 0, 0, 0];
+    paste.extend_from_slice(&u32::try_from(text.len())?.to_be_bytes());
+    paste.extend_from_slice(&text);
+    for _ in 0..PASTES {
+        control.send(&paste);
+    }
+    // Long enough for the display to fill the socket and block in a write.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let closing = tokio::spawn({
+        let binding = binding.clone();
+        async move { binding.close().await }
+    });
+    // The release has cut the write; then Xvnc reads what reached it and Neo's end of stream.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    h.xvnc.resume_reads();
+    timeout(WITHIN, closing).await??;
+    assert_eq!(control.ended().await?, DisplayEnd::Released);
+    let pastes = h
+        .xvnc
+        .received(0)
+        .iter()
+        .filter(|message| message.first() == Some(&6))
+        .count();
+    assert!(
+        pastes < PASTES,
+        "the release cut the writes short: {pastes}"
+    );
+    assert_eq!(binding.input_drained(), Some(false));
+    Ok(())
+}
+
 /// Control forwards both key encodings, clipboard messages and pointer input unchanged.
 #[tokio::test]
 async fn a_control_display_forwards_keys_pastes_and_pointer_input() -> TestResult {

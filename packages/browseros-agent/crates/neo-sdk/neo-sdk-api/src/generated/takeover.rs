@@ -29,7 +29,7 @@ pub struct Takeover {
     /// The control display to open for the owner; it closes at release.
     #[serde(rename = "display")]
     pub display: String,
-    /// Set by the release. `true` when every control display bound to the takeover ended with Neo's screen closing the connection Neo had half-closed, within 2 s: the screen read all of the owner's input before the release went on. `false` when one did not (the screen kept the connection open, closed it first, or a display was still forwarding when the release's budget ran out). Absent while the takeover is active, and when no control display was bound to it.
+    /// Set by the release. `true` when every control display bound to the takeover ended with each input message it forwarded whole and Neo's screen closing the connection Neo had half-closed, within 2 s: the screen read all of that input before the release went on, and none arrives later. Input a release cuts off before Neo forwarded it is dropped, never delivered late. `false` when one did not (the screen kept the connection open or closed it first, the release cut a message in two, or a display was still forwarding when the release's budget ran out). Absent while the takeover is active, and when no control display was bound to it.
     #[serde(rename = "inputDrained", skip_serializing_if = "Option::is_none")]
     pub input_drained: Option<bool>,
     #[serde(rename = "createdAt")]
