@@ -11,13 +11,20 @@ name: "Neo SDK image"
 #              boots natively); when publishing, pushes exactly the image it accepted
 #   publish    when publishing: one multi-arch tag from the two accepted images
 #
-# Build and test only, never publish: a pull request or a push that changes the image's inputs
-# (the Rust workspace build.sh sends, this file). A push to main never publishes.
-# Publishes, to ghcr.io/browseros-ai/neo-sdk only, never to a name or tag production uses:
-#   - a manual run with publish=true and confirm=neo-sdk:
-#       gh workflow run neo-sdk-image.yml --ref <branch> -f publish=true -f confirm=neo-sdk
-#     tags :<version> (build.sh's: <browser>-<9-char commit>), plus :<version>-amd64/-arm64;
-#   - a pushed tag neo-sdk-v<X>: the same, plus :<X>.
+# Build and test only, never publish, and keyless: a pull request or a push that changes the
+# image's inputs (the Rust workspace build.sh sends, this file). A push to main never publishes.
+# Publishes, to ghcr.io/browseros-ai/neo-sdk only, never to a name or tag production uses, only
+# from a manual run on a protected branch (main):
+#   gh workflow run neo-sdk-image.yml --ref main -f publish=true -f confirm=neo-sdk
+# tags :<version> (build.sh's: <browser>-<9-char commit>), plus :<version>-amd64/-arm64.
+#
+# A published image carries both CAPTCHA provider keys, as production's image does: the image job
+# of a publishing run, and only of such a run, enters the environment neo-captcha, which holds
+# CAPSOLVER_API_KEY and TWOCAPTCHA_API_KEY and admits protected branches only. So preflight
+# refuses publish=true on any other ref, a publishing run fails before the build when either
+# key is empty and before the push when the image does not carry both, and there is no tag path
+# (an environment that admits protected branches only admits no tag). Keys are extractable by
+# anyone who pulls the image; the README says how a host uses its own or turns solving off.
 on:
   pull_request:
     # The image's inputs: the Rust workspace build.sh sends (its context), and this file.
@@ -39,8 +46,6 @@ on:
       - "!packages/browseros-agent/crates/neo-sdk/neo-captcha/testbed/**"
       - packages/browseros-agent/apps/claw-server/**
       - .github/workflows/neo-sdk-image.yml
-    # GitHub does not apply path filters to tags: any neo-sdk-v* tag runs, and publishes.
-    tags: ["neo-sdk-v*"]
   workflow_dispatch:
     inputs:
       publish:
@@ -61,8 +66,10 @@ defaults:
   run:
     shell: bash
 
+# A publishing run (dispatched on main) has a group of its own: sharing main's group, the next
+# push to main would replace it while it waited for a runner.
 concurrency:
-  group: neo-sdk-image-${{ github.ref }}
+  group: ${{ github.event_name == 'workflow_dispatch' && inputs.publish && 'neo-sdk-image-publish' || format('neo-sdk-image-{0}', github.ref) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -81,6 +88,10 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
           REF: ${{ github.ref }}
+          REF_TYPE: ${{ github.ref_type }}
+          # True for a branch under branch protection or a ruleset, as main is: the refs the
+          # neo-captcha environment ("protected branches only") admits.
+          REF_PROTECTED: ${{ github.ref_protected }}
           PUBLISH: ${{ inputs.publish }}
           CONFIRM: ${{ inputs.confirm }}
         run: |
@@ -91,8 +102,10 @@ jobs:
               echo "::error::publish=true needs confirm=neo-sdk; nothing was built"
               exit 1
             fi
-            publish=true
-          elif [ "$EVENT" = push ] && [[ "$REF" == refs/tags/neo-sdk-v* ]]; then
+            if [ "$REF_TYPE" != branch ] || [ "$REF_PROTECTED" != true ]; then
+              echo "::error::publish=true runs only on a protected branch such as main: a published image carries the CAPTCHA keys, and their environment neo-captcha admits no other ref ($REF). Run: gh workflow run neo-sdk-image.yml --ref main -f publish=true -f confirm=neo-sdk. Nothing was built."
+              exit 1
+            fi
             publish=true
           fi
           echo "publish=$publish" >> "$GITHUB_OUTPUT"
@@ -124,6 +137,9 @@ jobs:
     # The scripts' tests too: an image is pushed only when every check of this run passed.
     needs: [preflight, scripts]
     runs-on: ${{ matrix.runner }}
+    # The CAPTCHA keys' environment, named only by a publishing run: every other run names none,
+    # since the environment admits protected branches only and would stop a pull request's job.
+    environment: ${{ needs.preflight.outputs.publish == 'true' && 'neo-captcha' || '' }}
     timeout-minutes: 75
     permissions:
       contents: read
@@ -178,16 +194,42 @@ jobs:
             exit 1
           fi
 
+      # A publishing run's keys, as files for build.sh, from the environment's secrets. Never
+      # printed; written under a 077 umask to a folder of their own, outside $RUNNER_TEMP/neo-sdk,
+      # which is uploaded as an artifact; removed by the last step whatever happens. Either key
+      # empty fails the run here, before anything is built.
+      - name: Prepare the CAPTCHA keys
+        id: keys
+        if: needs.preflight.outputs.publish == 'true'
+        env:
+          CAPSOLVER_API_KEY: ${{ secrets.CAPSOLVER_API_KEY }}
+          TWOCAPTCHA_API_KEY: ${{ secrets.TWOCAPTCHA_API_KEY }}
+        run: |
+          set -euo pipefail
+          umask 077
+          if [ -z "$CAPSOLVER_API_KEY" ] || [ -z "$TWOCAPTCHA_API_KEY" ]; then
+            echo "::error::a published image carries both CAPTCHA keys, and the environment neo-captcha gave this run an empty CAPSOLVER_API_KEY or TWOCAPTCHA_API_KEY. Nothing was built."
+            exit 1
+          fi
+          keys="$RUNNER_TEMP/neo-sdk-keys"
+          mkdir -p "$keys"
+          printf '%s' "$CAPSOLVER_API_KEY" > "$keys/capsolver"
+          printf '%s' "$TWOCAPTCHA_API_KEY" > "$keys/twocaptcha"
+          echo "args=--capsolver-key-file $keys/capsolver --twocaptcha-key-file $keys/twocaptcha" >> "$GITHUB_OUTPUT"
+
       # build.sh names the image after the checked-out commit and tags it only once its server is
       # proven to be this commit's; logs go outside the checkout so they cannot mark it dirty.
+      # A publishing run's build bakes the keys (build.sh's neo-sdk-keyed target); any other is keyless.
       - name: Build the image
         id: build
         env:
           ARCH: ${{ matrix.arch }}
+          KEY_ARGS: ${{ steps.keys.outputs.args }}
         run: |
           mkdir -p "$RUNNER_TEMP/neo-sdk"
+          read -ra key_args <<<"${KEY_ARGS:-}"
           packages/browseros-agent/crates/neo-sdk/neo-server/docker/build.sh --platform "linux/$ARCH" \
-            2>&1 | tee "$RUNNER_TEMP/neo-sdk/build.log"
+            ${key_args[@]+"${key_args[@]}"} 2>&1 | tee "$RUNNER_TEMP/neo-sdk/build.log"
           tag=$(sed -n 's/^TAG=//p' "$RUNNER_TEMP/neo-sdk/build.log" | tail -1)
           [ -n "$tag" ]
           docker run --rm --network none --entrypoint cat "$tag" /usr/share/neo-sdk/provenance.json \
@@ -213,6 +255,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       # The image accept.sh just passed, by id: nothing is rebuilt between the test and the push.
+      # A published image carries both keys, or nothing is pushed.
       - name: Push the accepted image
         if: needs.preflight.outputs.publish == 'true'
         env:
@@ -221,6 +264,10 @@ jobs:
           ARCH: ${{ matrix.arch }}
         run: |
           set -euo pipefail
+          if ! jq -e '.captchaKeys == ["capsolver", "2captcha"]' "$RUNNER_TEMP/neo-sdk/provenance.json" >/dev/null; then
+            echo "::error::the image does not carry both CAPTCHA keys (provenance.json captchaKeys); nothing was pushed"
+            exit 1
+          fi
           docker tag "$TAG" "$IMAGE:$VERSION-$ARCH"
           docker push "$IMAGE:$VERSION-$ARCH"
 
@@ -246,6 +293,10 @@ jobs:
           path: ${{ runner.temp }}/neo-sdk
           if-no-files-found: warn
 
+      - name: Remove the CAPTCHA key files
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/neo-sdk-keys"
+
   publish:
     name: Neo SDK image / publish
     needs: [preflight, image]
@@ -264,11 +315,8 @@ jobs:
       - name: Tag both architectures as one image
         env:
           VERSION: ${{ needs.image.outputs.version }}
-          REF: ${{ github.ref }}
         run: |
           set -euo pipefail
           [ -n "$VERSION" ]
-          tags=(-t "$IMAGE:$VERSION")
-          if [[ "$REF" == refs/tags/neo-sdk-v* ]]; then tags+=(-t "$IMAGE:${REF#refs/tags/neo-sdk-v}"); fi
-          docker buildx imagetools create "${tags[@]}" "$IMAGE:$VERSION-amd64" "$IMAGE:$VERSION-arm64"
+          docker buildx imagetools create -t "$IMAGE:$VERSION" "$IMAGE:$VERSION-amd64" "$IMAGE:$VERSION-arm64"
           docker buildx imagetools inspect "$IMAGE:$VERSION"

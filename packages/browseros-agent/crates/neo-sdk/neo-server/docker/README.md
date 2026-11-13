@@ -66,13 +66,18 @@ with the supervisor's and the scripts' own tests; the accept logs and `provenanc
 ## Publish
 
 Only `neo-sdk-image.yml` publishes this image, and only to `ghcr.io/browseros-ai/neo-sdk`, never to
-production's `ghcr.io/browseros-ai/neo`. A pull request or a push (to `main` too) builds and tests only.
-It publishes the two images `accept.sh` passed, unchanged, when asked:
+production's `ghcr.io/browseros-ai/neo`. A pull request or a push (to `main` too) builds and tests only,
+keyless. It publishes the two images `accept.sh` passed, unchanged, when asked from `main`:
 
 ```sh
-gh workflow run neo-sdk-image.yml --ref <branch> -f publish=true -f confirm=neo-sdk   # :<version>
-git tag neo-sdk-v0.1.0 && git push origin neo-sdk-v0.1.0                              # :<version> and :0.1.0
+gh workflow run neo-sdk-image.yml --ref main -f publish=true -f confirm=neo-sdk   # :<version>
 ```
+
+A published image carries both CAPTCHA provider keys ([CAPTCHA keys](#captcha-keys)). They come from
+the environment `neo-captcha`, which admits protected branches only, so the run refuses `publish=true`
+on any other ref before it builds anything, and a tag does not publish. It also fails before the build
+when either key is empty, and before the push when the image does not carry both. A publishing run has
+a concurrency group of its own, so a push to `main` neither cancels it nor replaces it while it waits.
 
 `<version>` is `build.sh`'s, `<browser>-<9-char commit>`; each architecture is also at `:<version>-amd64`
 and `:<version>-arm64`.
@@ -94,7 +99,7 @@ viewer and a trace UI over the host API, and `dev.sh run` to send scripts. `smok
 | `CLAW_HOST_SOCKET` | `/run/neo/host.sock` | Moves the socket. Keep it off a Docker Desktop file share, which cannot hold a socket. |
 | `CLAW_HOST_TCP` | unset | Development only: also serves the host API on this TCP address, token only. |
 | `NEO_MCP_REMOTE` | `false` | `false`: the browser's MCP ports refuse every peer but loopback. `true` is needed to publish 9010, and admits every peer that can route to the container. |
-| `BROWSEROS_CAPSOLVER_API_KEY_FILE`, `BROWSEROS_2CAPTCHA_API_KEY_FILE` | `/home/neo/.config/browseros/captcha/capsolver-api-key`, `…/2captcha-api-key` | CAPTCHA provider keys, read if the files exist. The image ships none ([CAPTCHA keys](#captcha-keys)). |
+| `BROWSEROS_CAPSOLVER_API_KEY_FILE`, `BROWSEROS_2CAPTCHA_API_KEY_FILE` | `/home/neo/.config/browseros/captcha/capsolver-api-key`, `…/2captcha-api-key` | CAPTCHA provider keys, read if the files exist. The published image carries both; a local or pull request build none ([CAPTCHA keys](#captcha-keys)). |
 | `NEO_SCREEN`, `NEO_SANDBOX`, `NEO_SOFTWARE_GRAPHICS`, `NEO_DISABLE_BROWSEROS_EXTENSIONS`, `NEO_ARGS`, `NEO_DOWNLOAD_DIR`, `TZ` | as the Neo image | The same meaning as in [the Neo image's README](../../../../../browseros/docker/neo/README.md). The browser always runs with `--disable-back-forward-cache`, as Playwright launches Chromium; `NEO_ARGS` adds to it. |
 | `NEO_CLEAR_SESSIONS` | `false` | `true`: before every start of the browser, the entrypoint removes the profile's saved sessions, `/data/profile/Default/Sessions`, where values typed into pages rest ([Saved sessions](#saved-sessions)). |
 | `BROWSERCLAW_HOSTED_MODE` | `1` | Must stay `1`. It also starts the browser with `--disable-browseros-metrics` ([Product analytics](#product-analytics)). |
@@ -239,8 +244,26 @@ switch does not touch them, and they stay on for now.
 
 ## CAPTCHA keys
 
-The image is keyless. `neo.solveCaptcha` is offered to scripts once a key file is readable by Neo's uid
-when Neo starts; without one, the method is unlisted. A host provides a key in one of two ways:
+The published image carries a CapSolver and a 2Captcha key, as production's Neo image does, at the
+default paths above (mode 0400, Neo's uid; under other `PUID`/`PGID` the entrypoint re-owns them with
+Neo's home). **They are extractable by anyone who pulls the image.** With them, `neo.solveCaptcha`
+detects the page's CAPTCHA, tries its free paths first, and then has a paid provider solve it
+(CapSolver, then 2Captcha), at most `BROWSEROS_CAPTCHA_PAID_TASK_LIMIT` paid tasks (100) per server
+start. No file door a script has reads or overwrites a key file, even with `/` listed.
+
+`neo.solveCaptcha` is offered to scripts once a key file is readable by Neo's uid when Neo starts;
+without one, the method is unlisted and the server logs `neo.solveCaptcha is off`. Each variable says,
+per provider:
+
+- **unset**: the image's own key (none in a local or pull request build);
+- **empty** (`-e BROWSEROS_CAPSOLVER_API_KEY_FILE=`): that provider is off, whatever the image carries;
+  both empty turn solving off;
+- **a path**: the host's own key file, in place of the image's.
+
+When you point a provider at another server (`BROWSEROS_CAPSOLVER_API_URL`, `BROWSEROS_2CAPTCHA_API_URL`),
+pass your own key file or an empty variable for it too: otherwise the image's key goes to that server.
+
+A host provides its own key in one of two ways:
 
 - **Write it as a file** at the default path before starting the entrypoint, as root:
   `install -D -m 0400 -o <PUID> -g <PGID> <key> /home/neo/.config/browseros/captcha/capsolver-api-key`.
@@ -249,15 +272,15 @@ when Neo starts; without one, the method is unlisted. A host provides a key in o
   Not inside `/home/neo`: the entrypoint gives that whole tree to Neo's uid at every start, and a
   read-only mount there stops the container.
 
-To bake keys into an image instead, as the Neo image does, pass them to `build.sh`:
+To bake keys into an image of your own, as the published one does, pass them to `build.sh`:
 
 ```sh
 build.sh --capsolver-key-file ./capsolver.key --twocaptcha-key-file ./2captcha.key
 ```
 
-They become 0400 files owned by neo in the `neo-sdk-keyed` target, and the image gets the label
-`com.browseros.neo-sdk.captcha-keys=baked`. Anyone who has that image can read them, so never push it to a
-public registry. That stage is rebuilt without its cache every time, so a rotated key never survives in a
+They become 0400 files owned by neo in the `neo-sdk-keyed` target, `provenance.json` names them in
+`captchaKeys` (provider names only), and the image gets the label `com.browseros.neo-sdk.captcha-keys=baked`.
+Anyone who has that image can read them. That stage is rebuilt without its cache every time, so a rotated key never survives in a
 cached layer, and a keyless build never mounts a key at all.
 
 ## Use it from a host
