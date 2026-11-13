@@ -408,7 +408,9 @@ async fn burst(
 }
 
 /// The tab's input lock, within the op's timeout, with the tab brought forward first: a mouse
-/// move or wheel is acked at the tab's next frame.
+/// move or wheel is acked at the tab's next frame, and a cross-site frame's document takes the
+/// focus only once its tab has the page focus this gives (focus emulation reaches only the main
+/// frame's process).
 pub(crate) async fn hold(
     scope: &OpScope<'_>,
     page: &OpPage<'_>,

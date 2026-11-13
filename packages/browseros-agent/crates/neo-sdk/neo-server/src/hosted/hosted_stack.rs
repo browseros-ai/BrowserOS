@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use browseros_core::NativeCapabilities;
 use neo_captcha::CaptchaSolver;
+use neo_service::Settings;
 use neo_trace::{Redactor, TraceSink, WriterConfig};
 use tokio::time;
 use tokio_util::sync::CancellationToken;
@@ -14,7 +15,7 @@ use crate::browser::{BrowserLink, TabRegistry};
 use crate::builtins::{self, BuiltinDeps, CaptchaClaims, PlaywrightFacade, TabJanitor};
 use crate::config::{Defaults, HostedMode};
 use crate::dispatch::{Dispatcher, Observer, RegistryBuilder};
-use crate::host::{AgentFront, TakeoverLock};
+use crate::host::{AgentFront, HostHolds, TakeoverLock};
 use crate::run::{RunService, RunServiceParts};
 
 /// The sidecar's dependency graph, with no HTTP, MCP, host socket or screenshot camera.
@@ -70,6 +71,8 @@ impl HostedStack {
         )
         .map_err(HostedError::from_error)?;
         let takeover = Arc::new(TakeoverLock::default());
+        // No host API here, so nothing sets anything: the defaults, and no locks or fits.
+        let settings = Settings::defaults();
         let dispatcher = Arc::new(Dispatcher::new(
             methods.build(),
             builtins::door_rules(&takeover, &claims),
@@ -93,9 +96,11 @@ impl HostedStack {
                 Arc::clone(&dispatcher),
                 Arc::clone(&browser),
                 Arc::clone(&tabs),
-                takeover,
+                Arc::new(HostHolds::default()),
+                settings.clone(),
             ),
             trace.clone(),
+            settings,
             shutdown.clone(),
         ));
         time::timeout(Duration::from_secs(30), async {

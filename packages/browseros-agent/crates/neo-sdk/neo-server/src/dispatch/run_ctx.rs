@@ -23,7 +23,7 @@ use super::run_tasks::RunTasks;
 use super::{
     CallSite, Dispatcher, ErrorCode, Lifetime, MethodSpec, OperationError, TaskKind, TaskNote,
 };
-use crate::browser::{PageRef, RunView, TaskRecord};
+use crate::browser::{PageRef, RunView, TabRegistry, TaskRecord};
 
 /// One `run` call as the door sees it: its identity, the browser view it captured, its budget,
 /// why it stopped, the ops it started, what they changed, and the state features keep per run.
@@ -126,11 +126,13 @@ pub(crate) struct OpLine {
 
 /// Ends the run's record exactly once: [`RunGuard::finish`] on the normal path, `Drop` when
 /// the run's task unwound. On drop it also stops the run and aborts its op tasks, which settle
-/// themselves through their own guards.
+/// themselves through their own guards. Either way the tabs the run used stop being in use
+/// for the idle-tab janitor (`TabRegistry::run_ended`).
 #[must_use]
 pub(crate) struct RunGuard {
     run: Option<Arc<RunCtx>>,
     trace: TraceSink,
+    tabs: Arc<TabRegistry>,
 }
 
 enum DefaultPage {
@@ -190,6 +192,10 @@ impl RunCtx {
             let _ = door.tabs().ensure_task(task);
         }
         let tasks = Mutex::new(RunTasks::new(task_id.clone()));
+        // In use from the start: the janitor must not close the task's tab between the run's
+        // start and its first op.
+        door.tabs()
+            .run_started(id, default_page.as_ref().map(|page| page.tab));
         trace.run_started(RunStarted {
             id,
             code,
@@ -217,6 +223,7 @@ impl RunCtx {
         let guard = RunGuard {
             run: Some(Arc::clone(&run)),
             trace: trace.clone(),
+            tabs: Arc::clone(door.tabs()),
         };
         (run, guard)
     }
@@ -492,6 +499,7 @@ impl RunGuard {
     pub(crate) fn finish(mut self, end: RunEnd) {
         if let Some(run) = self.run.take() {
             run.end_slots();
+            self.tabs.run_ended(run.id);
             self.trace.run_ended(RunEnded {
                 id: run.id,
                 status: end.status,
@@ -512,6 +520,7 @@ impl Drop for RunGuard {
         run.stop(StopReason::Crashed);
         drop(run.close_ops());
         run.end_slots();
+        self.tabs.run_ended(run.id);
         // Ops still in flight may have sent something, so the run is not called retryable.
         let error = StopReason::Crashed.error().record(false, None);
         self.trace.run_ended(RunEnded {

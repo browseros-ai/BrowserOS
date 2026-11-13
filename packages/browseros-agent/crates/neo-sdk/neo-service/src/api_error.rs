@@ -17,6 +17,7 @@ use std::borrow::Cow;
 pub(crate) enum ErrorCode {
     InvalidRequest,
     Unauthorized,
+    Forbidden,
     NotFound,
     TabNotFound,
     Expired,
@@ -34,6 +35,7 @@ impl ErrorCode {
         match self {
             Self::InvalidRequest => "invalid_request",
             Self::Unauthorized => "unauthorized",
+            Self::Forbidden => "forbidden",
             Self::NotFound => "not_found",
             Self::TabNotFound => "tab_not_found",
             Self::Expired => "expired",
@@ -71,6 +73,11 @@ impl ApiError {
     /// 400 `invalid_request`.
     pub(crate) fn invalid(message: impl Into<Cow<'static, str>>) -> Self {
         Self::new(StatusCode::BAD_REQUEST, ErrorCode::InvalidRequest, message)
+    }
+
+    /// 403 `forbidden`: a request this route never serves, whatever its token.
+    pub(crate) fn forbidden(message: impl Into<Cow<'static, str>>) -> Self {
+        Self::new(StatusCode::FORBIDDEN, ErrorCode::Forbidden, message)
     }
 
     /// 404 `not_found`.

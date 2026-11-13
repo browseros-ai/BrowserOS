@@ -92,8 +92,9 @@ def run(url: str, task_id: str, request_id: str) -> dict:
     return {"tools": tools, **call_run(client, CODE, meta)}
 
 
-def host_raw(socket_path: str, token_file: str, path: str):
-    """GET `path` over the host socket: (status, lower-cased headers, body), or the connect error."""
+def host_raw(socket_path: str, token_file: str, path: str, method: str = "GET", body: bytes = b""):
+    """`method` `path` over the host socket, with a JSON `body` when one is given: (status,
+    lower-cased headers, body), or the connect error."""
     token = "" if token_file == "-" else open(token_file).read().strip()
     connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     connection.settimeout(20)
@@ -102,7 +103,10 @@ def host_raw(socket_path: str, token_file: str, path: str):
     except OSError as error:
         return {"connect": error.__class__.__name__, "errno": error.errno}
     auth = f"Authorization: Bearer {token}\r\n" if token else ""
-    connection.sendall(f"GET {path} HTTP/1.1\r\nHost: neo\r\n{auth}Connection: close\r\n\r\n".encode())
+    content = f"Content-Type: application/json\r\nContent-Length: {len(body)}\r\n" if body else ""
+    connection.sendall(
+        f"{method} {path} HTTP/1.1\r\nHost: neo\r\n{auth}{content}Connection: close\r\n\r\n".encode() + body
+    )
     reply = b""
     while chunk := connection.recv(65536):
         reply += chunk
@@ -119,8 +123,8 @@ def host_raw(socket_path: str, token_file: str, path: str):
     return status, headers, body
 
 
-def host(socket_path: str, token_file: str, path: str) -> dict:
-    raw = host_raw(socket_path, token_file, path)
+def host(socket_path: str, token_file: str, path: str, method: str = "GET", body: str = "") -> dict:
+    raw = host_raw(socket_path, token_file, path, method, body.encode())
     if isinstance(raw, dict):
         return raw
     status, _, body = raw
@@ -531,6 +535,9 @@ def main() -> None:
         out = blobs(*args)
     elif command == "host":
         out = host(args[0], args[1], urllib.parse.quote(args[2], safe="/?=&"))
+    elif command == "host-send":
+        # socket, token file, method, path, JSON body
+        out = host(args[0], args[1], urllib.parse.quote(args[3], safe="/?=&"), args[2], args[4])
     elif command == "describe":
         out = describe(args[0])
     elif command == "listeners":

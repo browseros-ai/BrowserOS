@@ -2,7 +2,6 @@
 
 use std::sync::Arc;
 
-use browseros_core::TabId;
 use neo_takeover::{LockTarget, Locks};
 use tokio::sync::SetOnce;
 
@@ -11,7 +10,7 @@ use crate::dispatch::{ErrorCode, OperationError, Policy, PolicyCheck};
 /// The takeover lock rule (design D7 rule 4, decision 19). The door asks it about every op, at
 /// admission and again in each `OpCtx::recheck` before a write is sent; a held lock on the op's
 /// tab refuses it with `host / owner_has_control`, which the door reports `not_sent`. The
-/// janitor asks [`TakeoverLock::is_locked`] and never closes a tab the owner holds.
+/// idle-tab janitor reads the same locks, with the fits, through `HostHolds`.
 ///
 /// The locks belong to neo-service, which starts only once the browser link's first
 /// connect lands (its camera screenshots on the agent's own session). Until the host API arms
@@ -30,9 +29,10 @@ impl TakeoverLock {
         let _ = self.locks.set(locks);
     }
 
-    /// Whether the owner holds `tab` now.
+    /// Whether the owner holds `tab` now, for tests that wait on a lock the door will see.
+    #[cfg(test)]
     #[must_use]
-    pub(crate) fn is_locked(&self, tab: TabId) -> bool {
+    pub(crate) fn is_locked(&self, tab: browseros_core::TabId) -> bool {
         self.locks.get().is_some_and(|locks| locks.is_locked(tab))
     }
 }

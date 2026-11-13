@@ -746,6 +746,99 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/NotFound'
+  /v1/settings:
+    get:
+      operationId: getSettings
+      summary: How this Neo is set, and the default of every setting.
+      description: |
+        `settings` holds every setting this server knows, each at its value: what the host set,
+        or the default. Its shape is a body for `PUT`, so a host can read it, change it and send
+        it back. A server older than the settings answers 404. Only the host may call these
+        routes: a request a web page sends is refused with 403, so a script in the browser Neo
+        drives cannot reach them even on the development TCP listener.
+      responses:
+        '200':
+          description: The settings.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SettingsState'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    put:
+      operationId: putSettings
+      summary: Set every setting. A setting left out goes back to its default.
+      description: |
+        Replaces everything the host set, so a host's start step always ends in the same state.
+        Every setting is optional. A name this server does not know is skipped, never refused:
+        the rest still applies, and the answer lists the skipped names in `unknown`. A known
+        setting with a value it cannot use (out of its range, the wrong type, or `null`) refuses
+        the whole call with 400 `invalid_request`, which names every setting at fault and its
+        rule; nothing is applied.
+
+        Neo saves what the host set beside its trace and loads it at every start, so a setting
+        survives a restart of the server. A change takes effect at once, with no restart: each
+        part reads the value when it acts. A run in flight follows the new values from its next
+        operation.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Settings'
+      responses:
+        '200':
+          description: The settings after the change.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SettingsState'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          description: Neo could not save the settings (`internal_error`). Nothing changed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    patch:
+      operationId: patchSettings
+      summary: Change the settings sent. A setting left out keeps its value.
+      description: |
+        `PUT`'s rules for each setting sent: an unknown name is skipped and listed in `unknown`,
+        a wrong value refuses the whole call. A setting changed this way stays changed across
+        restarts, until another call changes it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Settings'
+      responses:
+        '200':
+          description: The settings after the change.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SettingsState'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          description: Neo could not save the settings (`internal_error`). Nothing changed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 components:
   securitySchemes:
     bearer:
@@ -837,6 +930,14 @@ components:
   responses:
     BadRequest:
       description: A parameter or body is invalid (`invalid_request`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Forbidden:
+      description: >-
+        A request a web page sent (it carries `Origin` or `Sec-Fetch-Site`), which this route
+        never serves, whatever its token (`forbidden`).
       content:
         application/json:
           schema:
@@ -1514,6 +1615,59 @@ components:
           $ref: '#/components/schemas/Lock'
         takeover:
           $ref: '#/components/schemas/Takeover'
+    SettingsState:
+      type: object
+      required: [settings, defaults]
+      properties:
+        settings:
+          $ref: '#/components/schemas/Settings'
+        defaults:
+          $ref: '#/components/schemas/Settings'
+        unknown:
+          type: array
+          description: >-
+            On a `PUT` or `PATCH` answer only: the names the server skipped because it does not
+            know them, such as `tabs.idleCloseMinutes`. Empty when it knew every name.
+          items:
+            type: string
+    Settings:
+      type: object
+      description: >-
+        What a host sets on Neo. Every setting is optional and has a default, and a client
+        ignores settings it does not know. New settings are only ever added: a setting never
+        changes its name, its type or its meaning.
+      properties:
+        tabs:
+          $ref: '#/components/schemas/TabSettings'
+        trace:
+          $ref: '#/components/schemas/TraceSettings'
+    TabSettings:
+      type: object
+      properties:
+        idleCloseSeconds:
+          type: integer
+          format: int64
+          minimum: 60
+          maximum: 86400
+          default: 1800
+          description: >-
+            Neo closes a tab the agent opened, or a popup one of those opened, once nothing has
+            used it for this long. A tab is in use while a run that used it is in flight, while
+            a lock holds it and while a fit is on it; its clock restarts when the last of those
+            ends. Neo never closes the browser's last tab, and checks once a minute.
+    TraceSettings:
+      type: object
+      properties:
+        retentionSeconds:
+          type: integer
+          format: int64
+          minimum: 3600
+          maximum: 2592000
+          default: 604800
+          description: >-
+            Runs older than this are deleted with their operations, their screenshots and Neo's
+            copy of their downloads; a repeat of a deleted run's `requestId` runs again. Neo
+            sweeps every 10 minutes. A file the browser saved in the downloads folder stays.
     Error:
       type: object
       required: [code, message]
@@ -1524,6 +1678,7 @@ components:
             [
               invalid_request,
               unauthorized,
+              forbidden,
               not_found,
               expired,
               tab_not_found,

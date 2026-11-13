@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use browseros_core::{NativeCapabilities, TabId};
+use neo_service::Settings;
 use neo_trace::{Effect, OperationId, RedactionLimits, Redactor, RunId, TraceStore, WriterConfig};
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -41,9 +42,11 @@ struct Host {
     shutdown: CancellationToken,
     serving: JoinHandle<()>,
     takeover: Arc<TakeoverLock>,
+    /// The settings the bind decided on, as the app hands them to the janitor.
+    settings: Settings,
     fake: Arc<FakeCdp>,
     socket: PathBuf,
-    _dir: TempDir,
+    dir: TempDir,
 }
 
 impl Host {
@@ -90,13 +93,16 @@ impl Host {
             xvnc: CLOSED_XVNC,
             // The fake browser has no CDP port, and no test here opens a live view to dial it.
             cdp_port: 0,
+            settings_file: dir.path().join("settings.json"),
         };
         let host = HostApi::bind(&config, inputs).await?;
+        let settings = host.settings().clone();
         let takeover = Arc::new(TakeoverLock::default());
         let shutdown = CancellationToken::new();
         let serving = tokio::spawn(host.serve(
             link,
             Arc::clone(&takeover),
+            Arc::default(),
             Arc::default(),
             shutdown.clone(),
         ));
@@ -104,10 +110,19 @@ impl Host {
             shutdown,
             serving,
             takeover,
+            settings,
             fake,
             socket: config.socket,
-            _dir: dir,
+            dir,
         })
+    }
+
+    /// Stops serving, as a killed server does, and hands back the folder with its trace and
+    /// saved settings for the next start.
+    async fn stop(self) -> Result<TempDir, Box<dyn Error>> {
+        self.shutdown.cancel();
+        within(self.serving).await??;
+        Ok(self.dir)
     }
 
     /// `POST /v1/locks` on `tab` for a minute, as a host takes the tab for its owner.
@@ -278,6 +293,64 @@ async fn without_a_usable_token_there_is_no_host_socket() -> TestResult {
         host.shutdown.cancel();
         within(host.serving).await??;
     }
+    Ok(())
+}
+
+/// The browser restarts a killed server on its own, and no host notices: what the host set must
+/// come back from the file before anything reads it.
+#[tokio::test]
+async fn a_setting_survives_a_restart_and_needs_the_host_api() -> TestResult {
+    let host = Host::start(Some(TOKEN)).await?;
+    host.until_serving().await?;
+    let patch = json!({ "tabs": { "idleCloseSeconds": 300 } });
+    let set = request(
+        &host.socket,
+        "PATCH",
+        "/v1/settings",
+        Some(TOKEN),
+        Some(&patch),
+    )
+    .await?;
+    assert_eq!(
+        (
+            set.status,
+            &set.body["settings"]["tabs"]["idleCloseSeconds"]
+        ),
+        (200, &json!(300)),
+        "{set:?}"
+    );
+    assert_eq!(
+        host.settings.tab_idle_close(),
+        Duration::from_secs(300),
+        "the janitor's settings are the route's, live"
+    );
+    let dir = host.stop().await?;
+
+    let again = Host::start_on(FakeCdp::new(), dir, Some(TOKEN)).await?;
+    assert_eq!(
+        again.settings.tab_idle_close(),
+        Duration::from_secs(300),
+        "loaded at the bind, before the first run or janitor pass"
+    );
+    again.until_serving().await?;
+    let read = request(&again.socket, "GET", "/v1/settings", Some(TOKEN), None).await?;
+    assert_eq!(
+        read.body["settings"]["tabs"]["idleCloseSeconds"], 300,
+        "{read:?}"
+    );
+    let dir = again.stop().await?;
+
+    let without = Host::start_on(FakeCdp::new(), dir, None).await?;
+    assert_eq!(
+        without.settings.tab_idle_close(),
+        Duration::from_mins(30),
+        "with no host API nobody could see or change a saved value, so the defaults apply"
+    );
+    let dir = without.stop().await?;
+    assert!(
+        dir.path().join("settings.json").exists(),
+        "a start without a host API leaves the host's file alone"
+    );
     Ok(())
 }
 

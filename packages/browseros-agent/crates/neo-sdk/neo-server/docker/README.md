@@ -98,7 +98,7 @@ viewer and a trace UI over the host API, and `dev.sh run` to send scripts. `smok
 | Output | Where |
 |---|---|
 | Agent MCP (`run`), `/system/health`, `/system/ready` | `http://127.0.0.1:9010/mcp`, and the same over TLS (self-signed) on `https://127.0.0.1:9011/mcp`. No auth on either. |
-| Host API `/v1`: runs, operations and their screenshots, each run's downloads (`/v1/runs/{runId}/downloads/{index}`) and the bytes too large for its reply (`/v1/runs/{runId}/blobs/{blobId}`), the trace, events, the live view (`/v1/tabs/{tabId}/screencast`, `/video`), the VNC display, locks, fits and takeovers ([openapi.yaml](../../neo-sdk-api/openapi.yaml)) | `/run/neo/host.sock`, mode 0660, group `NEO_HOST_GID`, plus `Authorization: Bearer <token>` |
+| Host API `/v1`: runs, operations and their screenshots, each run's downloads (`/v1/runs/{runId}/downloads/{index}`) and the bytes too large for its reply (`/v1/runs/{runId}/blobs/{blobId}`), the trace, events, the live view (`/v1/tabs/{tabId}/screencast`, `/video`), the VNC display, locks, fits, takeovers and the settings (`/v1/settings`) ([openapi.yaml](../../neo-sdk-api/openapi.yaml)) | `/run/neo/host.sock`, mode 0660, group `NEO_HOST_GID`, plus `Authorization: Bearer <token>` |
 | Health | the image's `HEALTHCHECK`: the entrypoint finished and `/system/ready` answers through 9010 |
 | Provenance | `/usr/share/neo-sdk/provenance.json` (commit, the digest of the server's build sources, browser, the server's path, sha256, version and the source digest compiled into it, toolchain), `/usr/share/neo-sdk/browser.lock`, and the OCI `revision` and `version` labels |
 
@@ -151,7 +151,7 @@ them, as the Neo image's README describes.
 |---|---|---|---|
 | `/data` | neo, 0700 | the folders below | yes |
 | `/data/profile` | neo | the browser profile: cookies and logins (`--password-store=basic`) | yes |
-| `/data/browserclaw` | neo | claw-sdk's `claw-sdk/trace.db` (runs, operations, screenshots, request-id history), `claw-sdk/outputs/` (the copy of each run's downloads and its reply's blobs, which the host reads; removed with the run after 7 days) and `logs/`. An image with an older store schema moves a newer store aside (`trace.db.broken-<ms>`) and starts empty | yes |
+| `/data/browserclaw` | neo | claw-sdk's `claw-sdk/trace.db` (runs, operations, screenshots, request-id history), `claw-sdk/outputs/` (the copy of each run's downloads and its reply's blobs, which the host reads; removed with the run after `trace.retentionSeconds`, 7 days by default), `claw-sdk/settings.json` (what the host set through `/v1/settings`, loaded at every start) and `logs/`. An image with an older store schema moves a newer store aside (`trace.db.broken-<ms>`) and starts empty | yes |
 | `/data/downloads` | neo | downloads, where the browser saves them and `download.path()` points; Neo never deletes them | yes |
 | `/run/neo` | neo, group `NEO_HOST_GID`, 2750 | `host.sock` | no; set up at every start |
 
@@ -216,6 +216,12 @@ zuzu keeps calling `/usr/local/bin/neo-entrypoint` from its own supervisor, as r
 layout and the neo user. It passes `NEO_HOST_GID` and `CLAW_HOST_TOKEN_FILE` (its `env -i` filter must let
 `CLAW_*` through), adds the socket's group to mirrord, and adds 9011 to its firewall's Neo ports.
 
+How Neo behaves is set on the host API, not in a file or the environment: once Neo answers, and before
+its first run, mirrord sends `PUT /v1/settings` with everything it wants, such as
+`{"tabs":{"idleCloseSeconds":300}}`. Neo saves it under `/data` and loads it again whenever the browser
+restarts the server, so only a new container needs the call again. The settings and their ranges are in
+[the server's README](../README.md#settings).
+
 ## Run it alone, for a quick look
 
 ```sh
@@ -227,6 +233,16 @@ claude mcp add --transport http neo-sdk http://localhost:9010/mcp
 
 Without `NEO_MCP_REMOTE=true` the published port is refused, because Docker's port forwarding arrives from
 outside the container. That is the default on purpose.
+
+Settings need the host API, which needs a token. To read or change them by hand, add a token and the host
+API's TCP address (development only: TCP is checked by the token alone):
+
+```sh
+(umask 022 && openssl rand -hex 32 > neo-token)
+docker run ... -v "$PWD/neo-token:/run/neo-keys/host-token:ro" -e CLAW_HOST_TOKEN_FILE=/run/neo-keys/host-token \
+  -e CLAW_HOST_TCP=0.0.0.0:9300 -p 127.0.0.1:9300:9300 "$TAG"
+curl -H "Authorization: Bearer $(cat neo-token)" http://127.0.0.1:9300/v1/settings
+```
 
 ## Bump the browser
 

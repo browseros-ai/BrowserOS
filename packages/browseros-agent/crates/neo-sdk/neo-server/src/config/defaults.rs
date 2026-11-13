@@ -71,8 +71,6 @@ impl Defaults {
     /// so the two together stay under it.
     pub(crate) const SHUTDOWN_DRAIN: Duration = Duration::from_secs(3);
     pub(crate) const SHUTDOWN_FLUSH: Duration = Duration::from_secs(1);
-    /// An agent-opened tab no op touched for this long is closed (decision 5).
-    pub(crate) const TAB_IDLE: Duration = Duration::from_mins(30);
     /// How often housekeeping closes idle agent tabs.
     pub(crate) const HOUSEKEEPING_EVERY: Duration = Duration::from_mins(1);
     /// How often housekeeping deletes trace records past `RetentionPolicy`'s age and cap.
