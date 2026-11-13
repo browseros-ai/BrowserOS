@@ -9,6 +9,7 @@ Run these on the remote pool when you can; read
 [Remote heavy jobs](../../CLAUDE.md#remote-heavy-jobs) first.
 
 - Every SDK change: the gate, `check.sh` (`bun run remote gate`).
-- The server, its host API or its image (`neo-server`, `neo-http`, `neo-server/docker/`): also
-  `bun run remote image`.
-- Browser operations (`neo-playwright`, `neo-playwright-js`): also `bun run remote spec --ci`.
+- The image (`neo-server/docker/`), or behaviour one of its checks covers (listed at the top of
+  `neo-server/docker/accept.sh`, whichever crate holds it): also `bun run remote image`.
+- Browser operations or the corpus (`neo-playwright`, `neo-playwright-js`,
+  `neo-playwright-tests`): also `bun run remote spec --ci`.
