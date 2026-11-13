@@ -8619,10 +8619,12 @@ ${value.stack}`;
         prototypes.texts.add(textPrototype);
       }
     };
-    collect(root);
-    if (!mayHaveOtherFrame && !hasReadableOpener(root.ownerDocument))
+    const ownerDocument = root?.ownerDocument ?? document;
+    if (root)
+      collect(root);
+    if (!mayHaveOtherFrame && !hasReadableOpener(ownerDocument))
       return prototypes;
-    const roots = [root.ownerDocument];
+    const roots = [ownerDocument];
     for (const tree of roots) {
       for (const element of tree.querySelectorAll("input,textarea"))
         collect(element);

@@ -1154,3 +1154,23 @@ it('attempts every local and foreign restoration in reverse after a foreign clea
     deletion.mockRestore()
   }
 })
+
+it('keeps mark-only reads masked after the page removes its document element', async () => {
+  const typed = field('input', { type: 'text' }, 'RootlessCanary')
+  page.document.body.append(typed)
+  const world = {
+    pins: { live: (pin: number) => (pin === 91 ? typed : undefined) },
+    injected: { selectText: () => 'selected' },
+  } as unknown as World
+  await privateStep(world, {
+    op: 'private',
+    pin: 91,
+    step: { kind: 'focus', text: 'RootlessCanary', spaced: false },
+  })
+  privateStep(world, { op: 'private', pin: 91, step: { kind: 'forget' } })
+  page.document.documentElement.remove()
+  expect(page.document.documentElement).toBeNull()
+  expect(withMarkedFieldsMasked(() => 'walked')).toBe('walked')
+  expect(withMarkedFieldsMasked(() => typed.value)).toBe('••••••••••••••')
+  expect(typed.value).toBe('RootlessCanary')
+})

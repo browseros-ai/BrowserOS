@@ -21,7 +21,7 @@ const FIELD_TAGS: ReadonlySet<string> = new Set(['input', 'textarea'])
 
 /** The resolved walk root and Rust's conservative other-frame hint. */
 type FieldDiscovery = {
-  readonly root: Element
+  readonly root: Element | null
   readonly mayHaveOtherFrame: boolean
 }
 
@@ -124,10 +124,12 @@ function collectFieldPrototypes({
       prototypes.texts.add(textPrototype)
     }
   }
-  collect(root)
-  if (!mayHaveOtherFrame && !hasReadableOpener(root.ownerDocument))
-    return prototypes
-  const roots: (Document | ShadowRoot)[] = [root.ownerDocument]
+  // A page may remove its document element while Neo still holds a marked field. Its
+  // Document and local prototypes survive, so a mark-only diagnostic must still be guarded.
+  const ownerDocument = root?.ownerDocument ?? document
+  if (root) collect(root)
+  if (!mayHaveOtherFrame && !hasReadableOpener(ownerDocument)) return prototypes
+  const roots: (Document | ShadowRoot)[] = [ownerDocument]
   for (const tree of roots) {
     for (const element of tree.querySelectorAll('input,textarea'))
       collect(element)
