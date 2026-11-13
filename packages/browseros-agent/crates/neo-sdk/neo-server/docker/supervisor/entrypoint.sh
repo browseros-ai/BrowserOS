@@ -61,7 +61,9 @@ readonly HOST_SOCKET_DIR=/run/neo
 # The group allowed to connect to claw-sdk's host socket; empty means neo's own.
 : "${NEO_HOST_GID:=}"
 # Shared browser/server deployment flag (README). Hosted mode hides local-agent
-# MCP tools and enables hosted browser reporting; both processes require exact 1.
+# MCP tools, enables hosted browser reporting (the brand and GPU websites see)
+# and turns the browser's product analytics off (start_neo); both processes
+# require exact 1.
 : "${BROWSERCLAW_HOSTED_MODE:=1}"
 
 # tr rather than ${1,,}: the host-side tests run this under macOS's bash 3.2.
@@ -383,6 +385,15 @@ start_neo() {
   forget_zoom_levels
   local history_flag=""
   [ "$BACK_FORWARD_CACHE" = 1 ] || history_flag=--disable-back-forward-cache
+  # The browser's own usage metrics (BrowserOSMetricsService) post to the
+  # desktop PostHog project, and a hosted container is not someone's install.
+  # The switch stops the service before it starts, so nothing is queued or
+  # sent. A browser without the switch ignores it, as Chromium does any switch
+  # it does not know, and still sends its metrics: the image passes it now and
+  # is covered the day browser.lock pins a browser that has it. A repeat in
+  # NEO_ARGS is harmless; it only turns the same thing off.
+  local metrics_flag=""
+  [ "$BROWSERCLAW_HOSTED_MODE" = 1 ] && metrics_flag=--disable-browseros-metrics
   # Releases verify the packaged/overlaid server, so pin it for the image's
   # lifetime. Keep this outside NEO_ARGS, which Compose/callers may replace.
   # NEO_ARGS goes last so a caller's value for a repeated switch wins.
@@ -392,6 +403,7 @@ start_neo() {
     "${browseros_extension_flags[@]}" \
     "${gpu_flags[@]}" \
     ${history_flag:+"$history_flag"} \
+    ${metrics_flag:+"$metrics_flag"} \
     --user-data-dir="$PROFILE" \
     --no-first-run \
     --no-default-browser-check \

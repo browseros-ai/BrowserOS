@@ -60,7 +60,9 @@ def server_is(kind: str) -> str:
 
 
 class StartNeoTest(unittest.TestCase):
-    def launch(self, neo_args: str, kind: str = "claw-server") -> tuple[list[str], list[str]]:
+    def launch(
+        self, neo_args: str, kind: str = "claw-server", hosted_mode: str = "1"
+    ) -> tuple[list[str], list[str]]:
         """start_neo's calls in order, and the browser's argv, with the image's defaults."""
         with tempfile.TemporaryDirectory() as directory:
             calls, argv = Path(directory) / "calls", Path(directory) / "argv"
@@ -74,6 +76,7 @@ class StartNeoTest(unittest.TestCase):
                 "gpu_flags=(--ignore-gpu-blocklist --disable-gpu-compositing)\n"
                 "PROFILE=/data/profile CDP_PORT=9110 SERVER_PORT=9210\n"
                 "HIDDEN_BROWSEROS_FEATURES=NewTabPage\n"
+                f"BROWSERCLAW_HOSTED_MODE={hosted_mode}\n"
                 f"NEO_ARGS='{neo_args}'\n"
                 + shell_function("start_neo")
                 + "start_neo\nwait\n"
@@ -106,6 +109,27 @@ class StartNeoTest(unittest.TestCase):
         self.assertIn("--disable-back-forward-cache", sdk)
         self.assertNotIn("--disable-back-forward-cache", server)
         self.assertEqual(sdk[-1], "--lang=de")
+
+    def test_hosted_mode_turns_the_browsers_own_metrics_off(self):
+        # Hosted is the image's default, and this server is the one the image ships.
+        _, argv = self.launch("", kind="claw-sdk")
+
+        self.assertEqual(argv.count("--disable-browseros-metrics"), 1)
+        self.assertLess(argv.index("--disable-browseros-metrics"), argv.index("--disable-pinch"))
+
+    def test_outside_hosted_mode_the_browser_keeps_its_metrics(self):
+        for kind in ("claw-sdk", "claw-server"):
+            with self.subTest(kind=kind):
+                _, argv = self.launch("--lang=de", kind=kind, hosted_mode="0")
+
+                self.assertNotIn("--disable-browseros-metrics", argv)
+                self.assertEqual(argv[-1], "--lang=de")
+
+    def test_the_switch_repeated_through_neo_args_still_comes_last(self):
+        _, argv = self.launch("--disable-browseros-metrics --lang=de", kind="claw-sdk")
+
+        self.assertEqual(argv[-2:], ["--disable-browseros-metrics", "--lang=de"])
+        self.assertEqual(argv.count("--disable-browseros-metrics"), 2)
 
 
 class OutputDirectoryTest(unittest.TestCase):
