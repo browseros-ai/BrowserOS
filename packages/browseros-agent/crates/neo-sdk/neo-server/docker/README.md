@@ -126,7 +126,8 @@ The same goes for Neo's home, `/home/neo`, the `HOME` of the server, the browser
 reporter, Xvnc and the window manager. They read files there without being asked: the
 browser's certificate store `~/.pki/nssdb`, fontconfig's files, and the crash reporter's
 settings. A folder the host lists in `files.readDirs` inside the home stays usable, unless its
-first name below the home starts with a dot. `/home/neo/Downloads` links to
+first name below the home starts with a dot. A save into it may make it and the missing folders
+above it inside the home, and no other folder there. `/home/neo/Downloads` links to
 `/data/downloads`, and a path through it is judged by that real path. If an image runs Neo with
 `HOME=/` (a user with no passwd entry), every write outside the downloads folder and the listed
 folders is refused.
