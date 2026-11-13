@@ -255,6 +255,22 @@ impl AppRuntime {
             });
         }
 
+        if let Some(source) = state.plan_offer.clone() {
+            tasks.push(BackgroundTask {
+                name: "plan offer refresh",
+                handle: crate::services::plan_offer::spawn_refresh_loop(
+                    {
+                        let billing = state.billing.clone();
+                        move |offered| billing.set_offered(offered)
+                    },
+                    state.analytics.clone(),
+                    source,
+                    state.config.browserclaw_dir.clone(),
+                    shutdown.child_token(),
+                ),
+            });
+        }
+
         if state.billing.is_available() {
             tasks.push(BackgroundTask {
                 name: "billing licence refresh",

@@ -364,3 +364,23 @@ async fn the_plan_turns_ultrafast_on_and_an_ended_plan_locks_running_without_the
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn a_skill_shows_no_ultrafast_upsell_while_ultrafast_is_not_on_sale() -> anyhow::Result<()> {
+    let gateway = FakeGateway::start().await?;
+    let app = app(false, Some(&gateway)).await?;
+    write_skill(&app.state, "Add it to the cart.", ADD_TO_CART).await?;
+    assert_eq!(
+        app.runs().await?["locked"],
+        true,
+        "on sale, the skill shows it locked"
+    );
+
+    app.state.billing.set_offered(false);
+    let ultrafast = app.runs().await?;
+    assert!(
+        ultrafast.is_null(),
+        "off sale, no ultrafast state: {ultrafast}"
+    );
+    Ok(())
+}

@@ -43,7 +43,7 @@ impl CancelPlanRequest {
 /// Plan : This computer's plan, read from the last verified licence. Reading it never reaches the billing gateway.
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Plan {
-    /// False when this build has no billing gateway, in which case every other plan route answers 404 billing_unavailable.
+    /// False when this build has no billing gateway, in which case every other plan route answers 404 billing_unavailable. Also false while ultrafast is not on sale on this computer and it has no licence; then pricing and checkout answer 404 billing_unavailable and the other routes work as usual.
     #[serde(rename = "available")]
     pub available: bool,
     /// The plan id, such as \"ultrafast\". Null when status is none.

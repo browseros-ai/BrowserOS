@@ -1669,7 +1669,7 @@ export interface components {
     PlanStatus: 'none' | 'active' | 'ending' | 'paymentFailed' | 'unpaid'
     /** @description This computer's plan, read from the last verified licence. Reading it never reaches the billing gateway. */
     Plan: {
-      /** @description False when this build has no billing gateway, in which case every other plan route answers 404 billing_unavailable. */
+      /** @description False when this build has no billing gateway, in which case every other plan route answers 404 billing_unavailable. Also false while ultrafast is not on sale on this computer and it has no licence; then pricing and checkout answer 404 billing_unavailable and the other routes work as usual. */
       available: boolean
       /** @description The plan id, such as "ultrafast". Null when status is none. */
       plan: string | null

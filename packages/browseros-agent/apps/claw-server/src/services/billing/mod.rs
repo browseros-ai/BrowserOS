@@ -29,7 +29,15 @@ use crate::clock::now_epoch_ms;
 use client::GatewayClient;
 use licence::{APP, Licence, LicenceError, SignedLicence};
 use pricing::PricingCache;
-use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    path::PathBuf,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 use store::{BillingStore, Install};
 use tokio::sync::{Mutex, RwLock};
 use tokio_util::sync::CancellationToken;
@@ -88,6 +96,9 @@ pub enum RefreshOutcome {
 #[derive(Clone, Default)]
 pub struct Billing {
     inner: Option<Arc<Inner>>,
+    /// Whether ultrafast is on sale to a computer that has no licence yet. Open from
+    /// [`Self::open`]; only a release build's plan offer flag closes it.
+    offered: Arc<AtomicBool>,
 }
 
 struct Inner {
@@ -151,6 +162,7 @@ impl Billing {
             state.install = Some(install);
         }
         Self {
+            offered: Arc::new(AtomicBool::new(true)),
             inner: Some(Arc::new(Inner {
                 config,
                 client,
@@ -169,10 +181,48 @@ impl Billing {
         self.inner.is_some()
     }
 
+    /// Opens or closes sales to computers without a licence. A computer that already has one
+    /// keeps its plan either way.
+    pub fn set_offered(&self, offered: bool) {
+        self.offered.store(offered, Ordering::Relaxed);
+    }
+
+    /// The plan, available only while ultrafast is on sale here or this computer already has it.
     pub async fn plan(&self) -> PlanSnapshot {
         match &self.inner {
-            Some(inner) => inner.state.read().await.snapshot(now_epoch_ms()),
+            Some(inner) => {
+                let state = inner.state.read().await;
+                let mut snapshot = state.snapshot(now_epoch_ms());
+                snapshot.available = self.serves(&state);
+                snapshot
+            }
             None => PlanSnapshot::unavailable(),
+        }
+    }
+
+    /// [`Self::plan`]'s `available` for a caller that cannot wait, such as building a view.
+    #[must_use]
+    pub fn is_available_now(&self) -> bool {
+        self.inner.as_ref().is_some_and(|inner| {
+            self.offered.load(Ordering::Relaxed)
+                || inner
+                    .state
+                    .try_read()
+                    .is_ok_and(|state| state.is_customer())
+        })
+    }
+
+    fn serves(&self, state: &State) -> bool {
+        self.offered.load(Ordering::Relaxed) || state.is_customer()
+    }
+
+    /// Selling routes refuse like a build without a gateway while ultrafast is not on sale here.
+    async fn sells(&self) -> Result<&Arc<Inner>, BillingError> {
+        let inner = self.inner()?;
+        if self.serves(&*inner.state.read().await) {
+            Ok(inner)
+        } else {
+            Err(BillingError::Unavailable)
         }
     }
 
@@ -211,7 +261,7 @@ impl Billing {
     }
 
     pub async fn pricing(&self) -> Result<Pricing, BillingError> {
-        let inner = self.inner()?;
+        let inner = self.sells().await?;
         let mut cache = inner.pricing.lock().await;
         if let Some(pricing) = cache.fresh(std::time::Instant::now()) {
             return Ok(pricing.clone());
@@ -236,7 +286,7 @@ impl Billing {
         interval: &str,
         interval_count: Option<i32>,
     ) -> Result<CheckoutStarted, BillingError> {
-        let inner = self.inner()?;
+        let inner = self.sells().await?;
         if plan.trim().is_empty() || interval_count.is_some_and(|count| count < 1) {
             return Err(BillingError::refused(
                 RefusalCode::InvalidRequest,
@@ -651,6 +701,11 @@ impl Inner {
 }
 
 impl State {
+    /// A computer that has paid, or is on someone's key, keeps ultrafast whether or not it is on sale.
+    fn is_customer(&self) -> bool {
+        self.licence.is_some() || self.on_key
+    }
+
     fn snapshot(&self, now: i64) -> PlanSnapshot {
         let live = self
             .licence

@@ -1067,6 +1067,77 @@ async fn without_a_gateway_every_route_but_the_plan_is_unavailable() -> anyhow::
 }
 
 #[tokio::test]
+async fn while_ultrafast_is_not_on_sale_a_new_computer_sees_no_plan_and_cannot_buy()
+-> anyhow::Result<()> {
+    let gateway = FakeGateway::start().await?;
+    let a = computer(Some(&gateway)).await?;
+    a.state.billing.set_offered(false);
+
+    let plan = a.plan().await?;
+    assert_eq!(plan["available"], false);
+    assert_eq!(plan["status"], "none");
+    let pricing = a.call("GET", "/api/v1/plan/pricing", None).await?;
+    assert_eq!(pricing.status, StatusCode::NOT_FOUND, "{}", pricing.raw);
+    assert_eq!(pricing.body["code"], "billing_unavailable");
+    let checkout = a
+        .call(
+            "POST",
+            "/api/v1/plan/checkout",
+            Some(json!({"plan": "ultrafast", "interval": "month"})),
+        )
+        .await?;
+    assert_eq!(checkout.status, StatusCode::NOT_FOUND, "{}", checkout.raw);
+    assert_eq!(checkout.body["code"], "billing_unavailable");
+    assert!(gateway.requests().is_empty(), "nothing reaches the gateway");
+
+    a.state.billing.set_offered(true);
+    assert_eq!(a.plan().await?["available"], true);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_computer_that_already_paid_keeps_ultrafast_when_it_goes_off_sale() -> anyhow::Result<()>
+{
+    let gateway = FakeGateway::start().await?;
+    let a = computer(Some(&gateway)).await?;
+    buy(&a, &gateway).await?;
+    a.state.billing.set_offered(false);
+
+    let plan = a.plan().await?;
+    assert_eq!(plan["available"], true);
+    assert_eq!(plan["status"], "active");
+    assert!(
+        a.state
+            .billing
+            .has_feature(claw_server::app::ULTRAFAST_FEATURE)
+            .await
+    );
+    let pricing = a.call("GET", "/api/v1/plan/pricing", None).await?;
+    assert_eq!(
+        pricing.status,
+        StatusCode::OK,
+        "renewal still needs prices: {}",
+        pricing.raw
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_computer_on_someones_key_keeps_ultrafast_when_it_goes_off_sale() -> anyhow::Result<()> {
+    let gateway = FakeGateway::start().await?;
+    let a = computer(Some(&gateway)).await?;
+    let b = computer(Some(&gateway)).await?;
+    buy(&a, &gateway).await?;
+    let pasted = b.activate("neo-7k2qm-aaaaa-bbbbb-ccccc-ddddd").await?;
+    assert_eq!(pasted.status, StatusCode::OK, "{}", pasted.raw);
+    b.state.billing.set_offered(false);
+    let plan = b.plan().await?;
+    assert_eq!(plan["available"], true);
+    assert_eq!(plan["onKey"], true);
+    Ok(())
+}
+
+#[tokio::test]
 async fn a_web_page_cannot_reach_the_plan_routes() -> anyhow::Result<()> {
     let gateway = FakeGateway::start().await?;
     let a = computer(Some(&gateway)).await?;

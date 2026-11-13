@@ -78,6 +78,8 @@ pub struct AppState {
     pub billing: Arc<crate::services::billing::Billing>,
     /// The decisions worker pursue reaches the decision model and the writer through.
     pub decisions: Arc<crate::services::decisions::Decisions>,
+    /// Where a release build reads whether ultrafast is on sale; `None` sells without asking.
+    pub plan_offer: Option<crate::services::plan_offer::FlagSource>,
     pub shutdown: ShutdownHandle,
     /// How the data this server opened compares to the schema this build knows, published on
     /// `/system/info` so the app can prompt an update when the database is ahead of the server.
@@ -98,7 +100,21 @@ impl AppState {
         let billing = (!config.mode.is_hosted())
             .then(|| crate::services::billing::BillingConfig::for_build(config.dev_mode))
             .flatten();
-        Self::new_with_home_and_billing(config, home, billing).await
+        let mut state = Self::new_with_home_and_billing(config, home, billing).await?;
+        if state.billing.is_available()
+            && crate::services::plan_offer::sells_behind_flag(state.config.dev_mode)
+        {
+            // Closed until PostHog says otherwise, or the last answer this computer saved.
+            let offered =
+                crate::services::plan_offer::load_cached(&state.config.browserclaw_dir).await;
+            state.billing.set_offered(offered.unwrap_or(false));
+            state.plan_offer = crate::services::plan_offer::flag_source(
+                state.config.mode,
+                state.config.dev_mode,
+                state.analytics.remote_config_credentials(),
+            );
+        }
+        Ok(state)
     }
 
     /// State under another home with no billing gateway, so a test never reaches a real one.
@@ -311,6 +327,7 @@ impl AppState {
             extension_updates: Arc::default(),
             billing,
             decisions,
+            plan_offer: None,
             shutdown,
             migration,
         })

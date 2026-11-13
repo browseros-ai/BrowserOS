@@ -2,7 +2,8 @@
 //!
 //! Every route here is behind the extension-origin gate in `request_context`, since these can
 //! buy, cancel, reset a key and remove computers. `GET /api/v1/plan` never fails; with no
-//! billing gateway in the build every other route answers 404 `billing_unavailable`.
+//! billing gateway in the build every other route answers 404 `billing_unavailable`, and while
+//! ultrafast is not on sale to a computer without a licence, pricing and checkout do too.
 
 use super::error;
 use crate::{

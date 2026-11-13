@@ -365,7 +365,8 @@ fn skill_to_dto(view: SkillView) -> Skill {
 /// Whether skill views carry their ultrafast state: while it is on, and on a computer that can
 /// buy it, so a skill whose plan ended still shows what it would do.
 fn shows_ultrafast(state: &AppState) -> bool {
-    state.ultrafast_enabled() || (state.billing.is_available() && !state.config.mode.is_hosted())
+    state.ultrafast_enabled()
+        || (state.billing.is_available_now() && !state.config.mode.is_hosted())
 }
 
 /// Fills the detail's ultrafast state.

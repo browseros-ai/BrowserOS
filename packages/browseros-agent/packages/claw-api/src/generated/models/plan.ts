@@ -58,7 +58,7 @@ export interface CancelPlanRequest {
  */
 export interface Plan {
     /**
-     * False when this build has no billing gateway, in which case every other plan route answers 404 billing_unavailable.
+     * False when this build has no billing gateway, in which case every other plan route answers 404 billing_unavailable. Also false while ultrafast is not on sale on this computer and it has no licence; then pricing and checkout answer 404 billing_unavailable and the other routes work as usual.
      * @type {boolean}
      * @memberof Plan
      */
