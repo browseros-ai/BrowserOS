@@ -596,6 +596,7 @@ async fn is_uninstalled(world: &IsolatedWorld, object: Option<&str>) -> Result<b
 mod tests {
     use std::cell::Cell;
     use std::error::Error;
+    use std::slice;
 
     use browseros_cdp::CdpError;
     use browseros_core::CoreError;
@@ -645,7 +646,7 @@ mod tests {
         );
         assert_eq!(
             call_arguments(&request, policy, Handed::NONE)?.as_slice(),
-            std::slice::from_ref(&envelope),
+            slice::from_ref(&envelope),
             "a call on the world's global sends the envelope alone"
         );
         let rooted = Handed {

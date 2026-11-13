@@ -1556,7 +1556,7 @@ async fn preview_failure(
         .err()
         .ok_or("the preview operation must fail")?;
     Ok(PreviewFailure {
-        message: error.message,
+        message: error.message().to_owned(),
         notes: env.notes(),
     })
 }

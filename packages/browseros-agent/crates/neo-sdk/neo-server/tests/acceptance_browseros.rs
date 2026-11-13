@@ -98,7 +98,7 @@ async fn private_field_values_never_reach_stored_snapshot_results() -> TestResul
     }
 }
 
-/// The same SDK case matrix as private_failures_live, now through MCP and a real trace writer.
+/// The same SDK case matrix as `private_failures_live`, now through MCP and a real trace writer.
 /// A deliberate read and caller-supplied Expected may contain a canary; page-derived error
 /// messages, matcher facts and operation notes must already be safe before persistence.
 #[tokio::test(flavor = "multi_thread")]
@@ -196,7 +196,7 @@ async fn private_failure_trace(rig: &mut Rig) -> TestResult {
     assert_stored_failure_diagnostics(&rig.trace_path(), id.parse()?, expected_failures).await
 }
 
-/// Trace messages have a fixed text budget independent of valueBytes. Preserve and scan the
+/// Trace messages have a fixed text budget independent of `valueBytes`. Preserve and scan the
 /// complete captured failures in the run result, then require each stored message to equal
 /// their bounded projection so truncation cannot turn an unsafe diagnostic into a passing test.
 fn complete_stored_failure_messages(
