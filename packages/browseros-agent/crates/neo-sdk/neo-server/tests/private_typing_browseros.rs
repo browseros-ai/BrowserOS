@@ -74,6 +74,7 @@ async fn a_host_types_a_sign_in_privately_on_a_real_browseros() -> TestResult {
 
 async fn drive(rig: &mut Rig) -> TestResult {
     rig.until_ready().await?;
+    no_pictures_of_filled_tabs(rig).await?;
     let client = rig.client().await?;
     let form = run(&client, FORM, &json!({ "taskId": TASK })).await?;
     let form = value(&form)?;
@@ -182,7 +183,8 @@ async fn drive(rig: &mut Rig) -> TestResult {
     Ok(())
 }
 
-/// After the fill, no picture of its tab (rulings R15 and R46): a script's later click there
+/// After the fill, under the host's `fill.pictures: never` (ruling R58), no picture of its tab
+/// (rulings R15 and R46): a script's later click there
 /// records none, and its screenshot answers 404 for that reason; a script's own screenshot of
 /// the tab is refused. Both ask the entry's real mark of the tab, through the app's wiring.
 async fn no_picture_after_the_fill(rig: &Rig, client: &Client) -> TestResult {
@@ -360,6 +362,21 @@ async fn drive_drawn(rig: &mut Rig) -> TestResult {
     client.cancel().await?;
     Ok(())
 }
+/// The host wants no picture of a filled tab (ruling R58): `fill.pictures: never`, set before its
+/// first fill.
+async fn no_pictures_of_filled_tabs(rig: &Rig) -> TestResult {
+    let never = rig
+        .host(
+            "PATCH",
+            "/v1/settings",
+            Some(HOST_TOKEN),
+            Some(&json!({ "fill": { "pictures": "never" } })),
+        )
+        .await?;
+    assert_eq!(never.status, 200, "fill.pictures: never");
+    Ok(())
+}
+
 /// The value at `pointer`, or null.
 fn at<'a>(value: &'a Value, pointer: &str) -> &'a Value {
     value.pointer(pointer).unwrap_or(&Value::Null)

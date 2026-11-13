@@ -844,9 +844,11 @@ impl Drop for ForgetGuard {
     }
 }
 
-/// The tabs whose documents took a private entry, for the host's camera (design section
-/// 10.3) and a script's own pictures (ruling R46): marked before the first character, and kept
-/// for the tab's life, because going back in history restores a text box. Kept in memory; the
+/// The tabs whose documents took a private entry: marked before the first character, and kept
+/// for the tab's life, because going back in history restores a text box. Under either value of
+/// the host's `fill.pictures` (ruling R58): the mask's search for a moved box needs them (R53). A
+/// picture of such a tab is refused only while that setting is `never` ([`Self::withholds_picture`]),
+/// by the host's camera (design section 10.3) and a script's own pictures (R46). Kept in memory; the
 /// host's synced record of the tabs' targets (neo-server's `FilledTabs`, ruling R45) seeds this
 /// set when Neo starts again with the browser and its tabs kept (`keep_private_tab`), or marks
 /// every tab when the browser's tabs cannot be listed (`keep_every_tab`). The boxes' marks live
@@ -862,6 +864,10 @@ pub(crate) struct PrivateTabs {
     /// used by adopted-field discovery separate from the set, so future closed-tab pruning
     /// cannot disable the scan in the receiving tab (ruling R59).
     any_entry: AtomicBool,
+    /// The host's `fill.pictures` is `never` (ruling R58): no picture of a tab that took a
+    /// private entry. `false`, the default, pictures it like any other tab. The host sets it from
+    /// its settings and again on every change, so a picture reads it as it is asked for.
+    pictures_never: AtomicBool,
 }
 
 impl PrivateTabs {
@@ -893,12 +899,23 @@ impl PrivateTabs {
         self.every.store(true, Ordering::Release);
     }
 
+    pub(crate) fn set_pictures_never(&self, never: bool) {
+        self.pictures_never.store(never, Ordering::Release);
+    }
+
+    /// Whether a picture of `tab` is refused or withheld now: the host's `fill.pictures` is
+    /// `never` and the tab took a private entry (ruling R58). Never true under the default.
+    pub(crate) fn withholds_picture(&self, tab: TabId) -> bool {
+        self.pictures_never.load(Ordering::Acquire) && self.took(tab)
+    }
+
     /// A script's own picture of `tab` (`page.screenshot`, `locator.screenshot`, `page.pdf`):
-    /// refused for the tab's life once it took a private fill, asked before the capture and
-    /// again after it, as the host's camera asks, so a capture the fill's start straddles is
-    /// thrown away (ruling R46). One host-owned refusal with a fixed sentence.
+    /// refused while the host's `fill.pictures` is `never` once the tab took a private fill,
+    /// asked before the capture and again after it, as the host's camera asks, so a capture the
+    /// fill's start straddles is thrown away (rulings R46, R58). One host-owned refusal with a
+    /// fixed sentence.
     pub(crate) fn refuse_picture(&self, tab: TabId) -> Result<(), PlaywrightError> {
-        if !self.took(tab) {
+        if !self.withholds_picture(tab) {
             return Ok(());
         }
         Err(Refusal {
@@ -917,9 +934,9 @@ const PRIVATE_TAB: &str = "private_tab";
 /// The refusal's sentence, which reaches the agent's model unchanged: it says the refusal is
 /// permanent for the tab and what to read instead, because a model that reads
 /// `retryable: true` (nothing was sent, so a repeat is safe) may otherwise try again in a loop.
-const PRIVATE_TAB_MESSAGE: &str = "This tab took a private fill, so Neo takes no \
-    picture of it for the rest of the tab's life. Trying again will not succeed. Read the page \
-    with page.ariaSnapshot() instead.";
+const PRIVATE_TAB_MESSAGE: &str = "This tab took a private fill, and the host set Neo to take \
+    no picture of such a tab for the rest of its life. Trying again will not succeed. Read the \
+    page with page.ariaSnapshot() instead.";
 
 #[cfg(test)]
 mod tests {
@@ -976,10 +993,20 @@ mod tests {
         Ok(())
     }
 
+    /// Ruling R58: a tab that took a fill is pictured by default, and refused, every time, only
+    /// while the host's `fill.pictures` is `never`; switching back pictures it again. The set
+    /// keeps the tab under either value (the mask's search reads it). Fails with the setting left
+    /// out of `withholds_picture` (refused by default).
     #[test]
-    fn tests_that_a_picture_of_a_tab_that_took_a_fill_is_refused_for_good() {
+    fn tests_that_a_picture_of_a_tab_that_took_a_fill_is_refused_only_under_never() {
         let tabs = PrivateTabs::default();
         tabs.mark(TabId(3));
+        assert!(tabs.refuse_picture(TabId(3)).is_ok(), "pictured by default");
+        assert!(
+            tabs.took(TabId(3)) && tabs.any(),
+            "the tab is kept under either value"
+        );
+        tabs.set_pictures_never(true);
         for _repeat in 0..2 {
             let refused = tabs.refuse_picture(TabId(3)).err();
             assert_eq!(
@@ -998,6 +1025,11 @@ mod tests {
         assert!(
             tabs.refuse_picture(TabId(4)).is_ok(),
             "another tab is pictured"
+        );
+        tabs.set_pictures_never(false);
+        assert!(
+            tabs.refuse_picture(TabId(3)).is_ok(),
+            "pictured again at once"
         );
     }
 }

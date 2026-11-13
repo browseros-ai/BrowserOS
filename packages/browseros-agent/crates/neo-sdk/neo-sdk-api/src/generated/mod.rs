@@ -22,6 +22,8 @@ pub mod fill_request;
 pub use self::fill_request::FillRequest;
 pub mod fill_result;
 pub use self::fill_result::FillResult;
+pub mod fill_settings;
+pub use self::fill_settings::FillSettings;
 pub mod fit;
 pub use self::fit::Fit;
 pub mod fit_browser_bar;

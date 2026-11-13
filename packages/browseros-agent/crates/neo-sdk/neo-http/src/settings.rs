@@ -19,8 +19,9 @@
 //! aside, and the settings must not vanish with it.
 
 use crate::setting::{
-    Checked, FILE_READ_DIRS, SCREENSHOTS_OFF, SETTINGS, Setting, SettingValue, TAB_IDLE_CLOSE,
-    TRACE_RETENTION, TRACE_SCREENSHOTS, TRACE_VALUE_BYTES, TRACE_VALUES,
+    Checked, FILE_READ_DIRS, FILL_PICTURES, FILL_PICTURES_NEVER, SCREENSHOTS_OFF, SETTINGS,
+    Setting, SettingValue, TAB_IDLE_CLOSE, TRACE_RETENTION, TRACE_SCREENSHOTS, TRACE_VALUE_BYTES,
+    TRACE_VALUES,
 };
 use crate::wire;
 use neo_trace::{RecordPolicy, Screenshots, Values};
@@ -133,6 +134,18 @@ impl Settings {
     #[must_use]
     pub fn trace_retention(&self) -> Duration {
         Duration::from_secs(self.whole(&TRACE_RETENTION))
+    }
+
+    /// `fill.pictures` is `never`: no picture of a tab that took a host's private fill, by a script
+    /// or by Neo, and each fill writes its tab into the record of filled tabs first (ruling R58).
+    /// Read when a picture is asked for and when a fill starts, so a change takes effect from the
+    /// next one.
+    #[must_use]
+    pub fn fill_pictures_never(&self) -> bool {
+        matches!(
+            self.value(&FILL_PICTURES),
+            SettingValue::Choice(FILL_PICTURES_NEVER)
+        )
     }
 
     /// `trace.screenshots`, `trace.valueBytes` and `trace.values`: what the trace writer records. It gets them
@@ -425,7 +438,7 @@ mod tests {
     use std::time::Duration;
 
     #[test]
-    fn every_default_is_todays_behaviour() {
+    fn every_default_keeps_todays_behaviour_but_fill_pictures() {
         let settings = Settings::defaults(Default::default());
         assert_eq!(
             settings.trace_retention(),
@@ -441,6 +454,11 @@ mod tests {
             settings.trace_policy(),
             RecordPolicy::default(),
             "Neo's own screenshots on, and the trace's default value limits"
+        );
+        assert!(
+            !settings.fill_pictures_never(),
+            "ruling R58: a tab that took a private fill is pictured by default, the owner's \
+             decision, where before it never was"
         );
     }
     #[tokio::test]

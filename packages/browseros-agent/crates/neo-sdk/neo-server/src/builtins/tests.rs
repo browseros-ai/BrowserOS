@@ -5607,12 +5607,22 @@ async fn a_start_that_cannot_list_the_tabs_treats_every_tab_as_filled() -> Resul
             file_access,
             Some(filled),
         );
-        within(facade.get()).await?;
+        let playwright = within(facade.get()).await?;
         assert_eq!(
-            facade.took_private_text(tab),
+            playwright.took_private_text(tab),
             !listed,
-            "listed: {listed}: a tab the record does not name is withheld only when the list \
-             could not be had"
+            "listed: {listed}: a tab the record does not name counts only when the list could \
+             not be had"
+        );
+        assert!(
+            !facade.withholds_picture(tab),
+            "pictured under the default (ruling R58)"
+        );
+        facade.set_fill_pictures_never(true);
+        assert_eq!(
+            facade.withholds_picture(tab),
+            !listed,
+            "listed: {listed}: under `never`, withheld only when the list could not be had"
         );
     }
     Ok(())
