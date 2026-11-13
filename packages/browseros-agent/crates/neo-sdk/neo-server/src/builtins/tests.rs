@@ -1570,14 +1570,17 @@ async fn the_janitor_keeps_a_tab_the_browser_keeps_and_closes_it_later()
             harness.submit(&run, "context.newPage", json!({})).await,
         )?)?
     };
+    // Not the browser's last tab, which the janitor never closes.
+    let owners = harness.owner_tab("https://example.com/").await?;
     harness
         .fake
         .answer("Target.closeTarget", json!({ "success": true }));
     let janitor = harness.janitor();
+    let idle = harness.settings.tab_idle_close();
     // The close waits its 10 s for the listing, inside the sweep's 30 s budget.
     let first = time::timeout(
         Duration::from_secs(25),
-        janitor.sweep(Instant::now() + Defaults::TAB_IDLE),
+        janitor.sweep(Instant::now() + idle),
     )
     .await?
     .ok_or("the sweep ran")?;
@@ -1601,19 +1604,20 @@ async fn the_janitor_keeps_a_tab_the_browser_keeps_and_closes_it_later()
     assert!(
         harness
             .tabs
-            .idle_agent_tabs(Duration::ZERO, Instant::now() + Defaults::TAB_IDLE)
+            .idle_agent_tabs(Duration::ZERO, Instant::now() + idle, &HashMap::new())
             .contains(&kept),
         "nothing reported it closed, so it stays the janitor's"
     );
 
     harness.fake.unanswer("Target.closeTarget");
-    within(janitor.sweep(Instant::now() + Defaults::TAB_IDLE))
+    within(janitor.sweep(Instant::now() + idle))
         .await?
         .ok_or("the second sweep ran")?;
     assert!(
         !harness.is_open(kept.tab).await?,
         "the next sweep closed it"
     );
+    assert!(harness.is_open(owners.tab).await?, "never the owner's tab");
     Ok(())
 }
 
