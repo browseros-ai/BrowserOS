@@ -9,6 +9,46 @@ use neo_trace::{
     RunId, RunStarted, RunStatus, TaskId, TraceStore,
 };
 use serde_json::json;
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+
+#[tokio::test]
+async fn audit_summary_does_not_load_or_decode_unused_payload_columns() -> TestResult {
+    let h = harness().await?;
+    let run = start_run(
+        &h.sink,
+        Start {
+            task: Some("metadata-only"),
+            ..Start::default()
+        },
+    );
+    op_started(&h.sink, OperationId::new(run, 1), Op::write(3, 1));
+    end_run(&h.sink, run, None);
+    h.flushed().await?;
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(SqliteConnectOptions::new().filename(h.dir.path().join("trace.db")))
+        .await?;
+    sqlx::query("UPDATE operations SET args = 'invalid-json', result = 'invalid-json', notes = 'invalid-json' WHERE run_id = ?")
+        .bind(run.to_string()).execute(&pool).await?;
+    sqlx::query("UPDATE runs SET host_data = 'invalid-json', result = 'invalid-json' WHERE id = ?")
+        .bind(run.to_string())
+        .execute(&pool)
+        .await?;
+    pool.close().await;
+
+    let summary = h
+        .get("/v1/runs?taskId=metadata-only&fields=summary&internal=false")
+        .await?;
+    assert_eq!(summary.status, StatusCode::OK, "{}", summary.body);
+    assert_eq!(
+        summary.body["items"][0]["operations"][0]["name"],
+        "locator.click"
+    );
+    h.get(&format!("/v1/runs/{run}"))
+        .await?
+        .assert_error(StatusCode::INTERNAL_SERVER_ERROR, "internal_error");
+    Ok(())
+}
 
 #[tokio::test]
 async fn summary_omits_values_everywhere_and_keeps_audit_metadata() -> TestResult {

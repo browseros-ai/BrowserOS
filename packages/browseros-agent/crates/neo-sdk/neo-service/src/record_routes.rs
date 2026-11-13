@@ -50,14 +50,23 @@ pub(crate) async fn list_runs(
     if view.fields == Fields::Full {
         return Ok(Json(wire::run_list(&page)));
     }
-    // One host request replaces the audit's list plus per-run HTTP calls. Keep the page's
-    // captured summaries and cursor even if a run finishes while its operations are read.
-    // Retention may remove a listed run between reads; its captured summary still appears.
-    let mut items = Vec::with_capacity(page.items.len());
-    for summary in &page.items {
-        let detail = service.store.run(summary.id).await?;
-        items.push(wire::audit_run(summary, detail.as_ref(), view.operations));
-    }
+    // One metadata query replaces per-run detail reads without loading the payloads the host
+    // discards. Keep the captured page and cursor if a run ends or retention removes it mid-read.
+    let ids = page.items.iter().map(|run| run.id).collect::<Vec<_>>();
+    let operations = service
+        .store
+        .summary_operations(&ids, view.operations)
+        .await?;
+    let items = page
+        .items
+        .iter()
+        .map(|summary| {
+            wire::audit_run(
+                summary,
+                operations.get(&summary.id).map_or(&[], Vec::as_slice),
+            )
+        })
+        .collect();
     Ok(Json(api::RunList {
         items,
         next_cursor: page.next_cursor,

@@ -17,8 +17,8 @@ use neo_takeover::{
     ScreenSize, Takeover, TakeoverRequest, TakeoverState, TakeoverTtl,
 };
 use neo_trace::{
-    Delivery, Effect, EpochMillis, ErrorRecord, OperationFilter, OperationId, OperationRow, Page,
-    PageState, RunDetail, RunDownload, RunSummary, ShotState, TaskId, TraceTail,
+    Delivery, Effect, EpochMillis, ErrorRecord, OperationId, OperationRow, Page, PageState,
+    RunDetail, RunDownload, RunSummary, ShotState, TaskId, TraceTail,
 };
 use std::collections::HashMap;
 use std::time::Duration;
@@ -77,17 +77,11 @@ fn run_summary_fields(run: &RunSummary, fields: Fields) -> api::RunSummary {
 
 /// The host audit needs runs and their steps in one paged request. The regular run list keeps
 /// its existing shape; only this summary view populates the optional operations field.
-pub(crate) fn audit_run(
-    summary: &RunSummary,
-    detail: Option<&RunDetail>,
-    filter: OperationFilter,
-) -> api::RunSummary {
+pub(crate) fn audit_run(summary: &RunSummary, operations: &[OperationRow]) -> api::RunSummary {
     let mut run = run_summary_fields(summary, Fields::Summary);
     run.operations = Some(
-        detail
-            .into_iter()
-            .flat_map(|run| &run.operations)
-            .filter(|op| filter.includes(op))
+        operations
+            .iter()
             .map(|op| {
                 let mut projected = operation_fields(op, &Inlined::default(), Fields::Summary);
                 projected.site = None;

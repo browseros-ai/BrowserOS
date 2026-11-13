@@ -35,8 +35,8 @@ use sea_orm::sea_query::{Expr, ExprTrait, Func, Query, SelectStatement, SimpleEx
 use sea_orm::sqlx::ConnectOptions;
 use sea_orm::sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions, SqliteSynchronous};
 use sea_orm::{
-    ColumnTrait, Condition, DatabaseConnection, DeriveIden, EntityTrait, QueryFilter, QueryOrder,
-    QuerySelect, Select, SqlxSqliteConnector,
+    ColumnTrait, Condition, DatabaseConnection, DeriveIden, EntityTrait, Iterable, QueryFilter,
+    QueryOrder, QuerySelect, Select, SqlxSqliteConnector,
 };
 use serde_json::Value;
 
@@ -251,6 +251,53 @@ impl TraceStore {
         Ok(Some(detail))
     }
 
+    /// Operation metadata for one page of audit runs, grouped in each run's start order.
+    /// Payload columns and run detail files are never loaded. Internal rows are filtered in
+    /// SQL before materialization; error text is removed before the shared row decoder runs.
+    /// This is a projection only and does not change the stored rows.
+    ///
+    /// # Errors
+    /// When the file cannot be read or operation metadata is corrupt.
+    pub async fn summary_operations(
+        &self,
+        runs: &[RunId],
+        filter: OperationFilter,
+    ) -> Result<HashMap<RunId, Vec<OperationRow>>, TraceError> {
+        if runs.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let columns = operations::Column::iter().filter(|column| {
+            !matches!(
+                column,
+                operations::Column::Args
+                    | operations::Column::Result
+                    | operations::Column::Notes
+                    | operations::Column::Error
+            )
+        });
+        let select = operations::Entity::find()
+            .select_only()
+            .columns(columns)
+            .column_as(Expr::val(Option::<String>::None), "args")
+            .column_as(Expr::val(Option::<String>::None), "result")
+            .column_as(Expr::val(Option::<String>::None), "notes")
+            // Keep JSON booleans and error ownership intact while dropping arbitrary text.
+            .column_as(
+                Expr::cust("json_set(json_remove(error, '$.hostCode'), '$.message', '')"),
+                "error",
+            )
+            .filter(operations::Column::RunId.is_in(runs.iter().map(ToString::to_string)))
+            .order_by_asc(operations::Column::RunId)
+            .order_by_asc(operations::Column::Seq);
+        let rows = filtered_operations(select, filter).all(&self.db).await?;
+        let mut grouped: HashMap<RunId, Vec<OperationRow>> = HashMap::new();
+        for row in rows {
+            let operation = record_rows::operation_row(row)?;
+            grouped.entry(operation.id.run).or_default().push(operation);
+        }
+        Ok(grouped)
+    }
+
     /// One operation, or `None`.
     ///
     /// # Errors
@@ -446,17 +493,7 @@ impl TraceStore {
         if let Some(tab) = query.tab {
             select = select.filter(operations::Column::TargetTabId.eq(tab.0));
         }
-        if query.operations == OperationFilter::Script {
-            // Use the same subscription names as tab ownership and screenshots. A recorded
-            // script site preserves explicit page.on calls. Filter before LIMIT so background
-            // traffic cannot displace the script's steps or distort the truncation answer.
-            select = select.filter(
-                Condition::any()
-                    .add(operations::Column::Name.is_not_in(SUBSCRIPTIONS))
-                    .add(operations::Column::Site.is_not_null()),
-            );
-        }
-        let mut operations = select
+        let mut operations = filtered_operations(select, query.operations)
             .order_by_desc(operations::Column::StartedAt)
             .order_by_desc(operations::Column::RunId)
             .order_by_desc(operations::Column::Seq)
@@ -595,6 +632,22 @@ impl TraceStore {
             .map(record_rows::run_summary)
             .collect()
     }
+}
+
+/// Keep the SQL ownership predicate shared by audit reads and tail selection. Filtering before
+/// LIMIT ensures background traffic cannot displace script steps or distort truncation.
+fn filtered_operations(
+    select: Select<operations::Entity>,
+    filter: OperationFilter,
+) -> Select<operations::Entity> {
+    if filter == OperationFilter::All {
+        return select;
+    }
+    select.filter(
+        Condition::any()
+            .add(operations::Column::Name.is_not_in(SUBSCRIPTIONS))
+            .add(operations::Column::Site.is_not_null()),
+    )
 }
 
 /// One correlated statement supplies tabs to every summary, including detail and tail reads.
