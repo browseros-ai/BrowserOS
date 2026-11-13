@@ -198,9 +198,15 @@ impl Method for NewPage {
         let page = PageRef {
             tab: opened.page.tab,
         };
-        op.tabs()
-            .own(&page, &input.task)
-            .map_err(OperationError::from)?;
+        // A host may have named the task while the tab opened: then it joins no task, and the
+        // run is told the task is gone, as for a missing one.
+        if !op
+            .tabs()
+            .own_in_scope(&page, &input.task, op.run().scope())
+            .map_err(OperationError::from)?
+        {
+            return Err(OperationError::from(TaskError::NotFound(input.task)).into());
+        }
         op.report_page(&page, PageChange::Linked);
         Ok(value)
     }

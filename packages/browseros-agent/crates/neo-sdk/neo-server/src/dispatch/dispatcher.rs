@@ -374,7 +374,7 @@ impl Dispatcher {
         self: &Arc<Self>,
         run: &Arc<RunCtx>,
     ) -> Result<PageRef, OperationError> {
-        let task = run.current_task().and_then(|id| self.tabs.task(&id).ok());
+        let task = self.usable_current_task(run);
         if let Some(tab) = task
             .as_ref()
             .and_then(|task| task.page_tab(|tab| !run.closed_it(tab) && self.tabs.is_open(tab)))
@@ -392,7 +392,7 @@ impl Dispatcher {
                 let page = PageRef { tab };
                 if let Some(task) = task {
                     // A concurrent close wins ownership, but cannot fail an already-open tab.
-                    let _ = self.tabs.own(&page, &task.id);
+                    let _ = self.tabs.own_in_scope(&page, &task.id, run.scope());
                 }
                 Ok(page)
             }
@@ -782,9 +782,18 @@ impl Dispatcher {
 
     /// Capture the latest pick before a script's opener sends. Its record pins an empty task
     /// until ownership is assigned; a missing task simply leaves the tab unowned.
+    /// The run's current task (its host's, or the one it picked) while its scope may still use
+    /// it: its opens go there and its lazy page is that task's. A run with no task under task
+    /// scope that picked an agent's task loses it once a host names it.
+    fn usable_current_task(&self, run: &RunCtx) -> Option<TaskRecord> {
+        run.current_task()
+            .and_then(|id| self.tabs.task(&id).ok())
+            .filter(|task| run.scope().may_use(task))
+    }
+
     fn opening_task(&self, run: &RunCtx, spec: &MethodSpec, caller: Caller) -> Option<TaskRecord> {
         if caller == Caller::Script && spec.name == DEFAULT_PAGE_OPENER {
-            return run.current_task().and_then(|id| self.tabs.task(&id).ok());
+            return self.usable_current_task(run);
         }
         None
     }
@@ -902,7 +911,7 @@ impl Dispatcher {
                         self.tabs.used_in_run(page.tab, run.id());
                         if let Some(task) = opening_task {
                             // The selected task can close while the browser opens this tab.
-                            let _ = self.tabs.own(page, task);
+                            let _ = self.tabs.own_in_scope(page, task, run.scope());
                         }
                     }
                 }

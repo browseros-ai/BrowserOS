@@ -5898,3 +5898,59 @@ async fn a_taskless_close_asks_again_once_it_holds_the_turn() -> Result<(), Box<
     assert!(harness.tabs.task(&created).is_ok(), "and it stays open");
     Ok(())
 }
+
+/// A run with no task keeps opening in the agent's task it picked, until a host names that task:
+/// from then on its opens, its lazy page and `task.newPage` leave the host's task alone.
+#[tokio::test]
+async fn a_taskless_run_stops_opening_in_a_task_a_host_named() -> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let (taskless, _taskless_guard) = run_scoped(&harness, TabsScope::Task, None)?;
+    let created = created_in(&harness, &taskless).await?;
+    let before = page_of(&value(
+        harness
+            .submit(&taskless, "context.newPage", json!({}))
+            .await,
+    )?)?;
+    assert_eq!(
+        harness.tabs.owner(before.tab),
+        Some(created.clone()),
+        "its open joins the agent's task it picked"
+    );
+
+    harness.tabs.ensure_task(&created)?;
+    let after = page_of(&value(
+        harness
+            .submit(&taskless, "context.newPage", json!({}))
+            .await,
+    )?)?;
+    assert_eq!(harness.tabs.owner(after.tab), None, "the host's task now");
+    value(
+        harness
+            .submit(
+                &taskless,
+                "page.opener",
+                json!({ "page": { "$neo": "page", "tab": null } }),
+            )
+            .await,
+    )?;
+    assert_eq!(
+        harness.tabs.task(&created)?.tabs,
+        vec![before.tab],
+        "neither its lazy page nor a later open joined the host's task"
+    );
+    assert_eq!(
+        failure(
+            harness
+                .submit(
+                    &taskless,
+                    "task.newPage",
+                    json!({ "task": created.as_str() })
+                )
+                .await
+        )?
+        .error
+        .code(),
+        ErrorCode::TASK_NOT_FOUND
+    );
+    Ok(())
+}

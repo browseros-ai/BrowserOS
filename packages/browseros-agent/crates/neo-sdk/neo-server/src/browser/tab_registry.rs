@@ -469,15 +469,33 @@ impl TabRegistry {
         Ok(())
     }
 
-    /// Assigns a registered tab synchronously after its child opener returns. A close that
-    /// already removed its entry wins, so assignment cannot revive a closed tab.
+    /// Gives a registered tab to task `id`, as a run that may use every task opens in it
+    /// ([`TabRegistry::own_in_scope`]): tests set ownership up through here.
+    #[cfg(test)]
     pub(crate) fn own(&self, page: &PageRef, id: &TaskId) -> Result<(), TaskError> {
+        self.own_in_scope(page, id, &RunScope::Browser).map(|_| ())
+    }
+
+    /// Assigns a registered tab to task `id` after a run's open of it returns, only while the
+    /// run's `scope` may still use the task, asked under the same lock as the join. A close that
+    /// already removed the tab's entry wins, so assignment cannot revive a closed tab. A host may name an agent's task while a run
+    /// with no task opens a tab in it, and such a run never adds a tab to a host's task. False
+    /// when the task is no longer the run's to open in; the tab then joins no task.
+    pub(crate) fn own_in_scope(
+        &self,
+        page: &PageRef,
+        id: &TaskId,
+        scope: &RunScope,
+    ) -> Result<bool, TaskError> {
         let mut state = self.lock();
+        if !scope.may_use(state.tasks.get(id)?) {
+            return Ok(false);
+        }
         if state.open.contains_key(&page.tab) {
             state.tasks.attach(page.tab, id)?;
             state.inherit_popups();
         }
-        Ok(())
+        Ok(true)
     }
 
     /// After a restart, the task's own tabs as the trace proves them join it again, those still
