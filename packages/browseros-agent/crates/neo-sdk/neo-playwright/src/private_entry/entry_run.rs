@@ -84,11 +84,11 @@ struct BoxAt<'a> {
     own_frame: bool,
 }
 
-/// What a box held after a key meant to empty it.
+/// What a box held after a key meant to empty it, and where the focus was.
 #[derive(Clone, Copy)]
 struct Emptied {
     empty: bool,
-    focused: bool,
+    focus: FocusState,
 }
 
 /// One entry's running state: what it sent, and how many characters each box got.
@@ -346,8 +346,8 @@ impl<'a> EntryRun<'a> {
     /// Delete over the focus step's selection, on the session the text will use (R24), then the
     /// box must be empty and hold the focus. A page may handle one key and not the other (the
     /// first host's digit boxes move the focus back on Backspace), so Backspace is the second
-    /// try, after a fresh focus step. A box still not empty, or one that will not keep the focus,
-    /// stops the entry before any character: `box_not_cleared`, or `not_focused`.
+    /// try, after a fresh focus step. A box still not empty stops the entry before any character
+    /// with `box_not_cleared`; one whose focus cannot be held, `not_focused`.
     async fn empty_box(
         &self,
         sent: &Sent<'_>,
@@ -362,32 +362,39 @@ impl<'a> EntryRun<'a> {
             }
             self.scope.recheck().map_err(|error| self.refused(&error))?;
             self.press(sent, input, box_at.session, key).await?;
-            let mut emptied = self.empty_and_focused(box_at).await?;
-            if emptied.is_some_and(|empty| !empty.focused) {
-                // The key moved the focus: focus the box again and look once more.
+            let mut emptied = self.emptied(box_at).await?;
+            // Only a focus that went elsewhere is taken back: a fresh focus step re-arms the
+            // box's listener, which would forget a submit or an unload the key set off.
+            if matches!(
+                emptied.focus,
+                FocusState::Elsewhere | FocusState::NoDocumentFocus
+            ) {
                 self.focus_step(sent, input, box_at, text, spaced).await?;
-                emptied = self.empty_and_focused(box_at).await?;
+                emptied = self.emptied(box_at).await?;
             }
-            if emptied.is_some_and(|empty| empty.empty && empty.focused) {
-                return Ok(());
+            match emptied.focus {
+                FocusState::Held if emptied.empty => return Ok(()),
+                FocusState::Held => {}
+                // The form left (a page that submits when its box empties), or the box did:
+                // nothing of the value goes after it, as before a first key.
+                _ => return Err(self.stop(EntryCode::NotFocused)),
             }
         }
         Err(self.stop(EntryCode::BoxNotCleared))
     }
 
-    /// Whether the box holds no text and holds the focus now; `None` when it left its document.
-    async fn empty_and_focused(&self, box_at: &BoxAt<'_>) -> Result<Option<Emptied>, Stop> {
+    /// What the box holds and where the focus is, after a key meant to empty it.
+    async fn emptied(&self, box_at: &BoxAt<'_>) -> Result<Emptied, Stop> {
+        let focus = self.focused(box_at.world, box_at.pin).await?;
         let none = PrivateStep::Holds {
             text: PageSecret::empty(),
             spaced: false,
         };
-        let Some(PrivateAnswer::Holds { holds: empty }) =
-            self.step(box_at.world, box_at.pin, none).await?
-        else {
-            return Ok(None);
-        };
-        let focused = self.focused(box_at.world, box_at.pin).await? == FocusState::Held;
-        Ok(Some(Emptied { empty, focused }))
+        let empty = matches!(
+            self.step(box_at.world, box_at.pin, none).await?,
+            Some(PrivateAnswer::Holds { holds: true })
+        );
+        Ok(Emptied { empty, focus })
     }
 
     /// The whole text in one `Input.insertText`, as `fill` types.

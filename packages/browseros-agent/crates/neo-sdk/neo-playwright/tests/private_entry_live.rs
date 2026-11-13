@@ -1056,8 +1056,9 @@ async fn tests_that_one_digit_boxes_holding_old_digits_take_the_new_code() -> Te
 }
 
 /// A box with no size whose page puts its text back on every input cannot be emptied: refused
-/// before any character, `box_not_cleared`, and the box holds nothing of the value. A number box
-/// with no size and an old value, and no maxlength, is entered.
+/// before any character, `box_not_cleared`, and the box holds nothing of the value. One whose
+/// form submits as it empties is refused `not_focused`, nothing of the value typed after it. A
+/// number box with no size and an old value, and no maxlength, is entered.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_a_box_that_will_not_empty_is_refused_before_any_character() -> TestResult {
@@ -1084,6 +1085,38 @@ async fn tests_that_a_box_that_will_not_empty_is_refused_before_any_character() 
         assert!(
             !held.chars().any(|c| "246813".contains(c)),
             "{place:?}: {held:?}"
+        );
+        bench.close(opened).await?;
+
+        // A page that submits its form when the box empties (into a named frame, so the box
+        // stays): the form left with an empty box, and nothing of the value follows it.
+        let opened = bench.open("/private/stale.html?mode=submit", place).await?;
+        let code_box = bench.mint(&opened, "#code").await?;
+        let env = bench.host(&opened);
+        let field = Field::new(&code_box, &bench.page_origin)
+            .keys()
+            .with("246813")?;
+        let entry = bench.enter(&env, &opened, vec![field]).await;
+        assert_eq!(
+            entry.outcome,
+            EntryOutcome::Refused,
+            "{place:?} submit: {entry:?}"
+        );
+        assert_eq!(code(&entry), Some("not_focused"), "{place:?} submit");
+        assert_eq!(entry.typed, vec![0], "{place:?} submit");
+        let held = bench.value(&opened, &code_box).await?;
+        assert!(
+            !held.chars().any(|c| "246813".contains(c)),
+            "{place:?}: {held:?}"
+        );
+        let submitted = bench
+            .live
+            .main_world(&opened.page, "JSON.stringify(window.submitted)")
+            .await?;
+        assert_eq!(
+            submitted.as_str(),
+            Some(r#"[""]"#),
+            "{place:?}: one submit, empty"
         );
         bench.close(opened).await?;
 

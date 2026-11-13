@@ -8,7 +8,9 @@
                     Backspace empties a box and focuses the one before, as the first host's do
      ?mode=digits6  the same, every box holding an old digit
      ?mode=restore  a box with no size whose page puts its text back on every input
-     ?mode=number   a number box with no size holding 111, no maxlength -->
+     ?mode=number   a number box with no size holding 111, no maxlength
+     ?mode=submit   the host's full box, in a form that submits into a named frame on the box's
+                    input event; window.submitted records the box's value at each submit -->
 <form id=f onsubmit="return false"></form>
 <script>
 const mode = new URLSearchParams(location.search).get('mode') || 'host';
@@ -48,6 +50,23 @@ if (mode === 'restore') {
   b.setAttribute('aria-label', 'Verification code');
   b.style.cssText = hidden;
   b.addEventListener('input', () => { b.value = 'old'; });
+}
+if (mode === 'submit') {
+  window.submitted = [];
+  const sink = document.createElement('iframe');
+  sink.name = 'sink';
+  document.body.appendChild(sink);
+  const form = document.createElement('form');
+  form.action = location.pathname;
+  form.target = 'sink';
+  const b = document.createElement('input');
+  Object.assign(b, { id: 'code', name: 'code', maxLength: 6, value: '111111' });
+  b.setAttribute('aria-label', 'Verification code');
+  b.style.cssText = hidden;
+  b.addEventListener('input', () => form.requestSubmit());
+  form.addEventListener('submit', () => window.submitted.push(b.value));
+  form.appendChild(b);
+  document.body.appendChild(form);
 }
 if (mode === 'number') {
   const b = box({ id: 'code', type: 'number', value: '111' });
