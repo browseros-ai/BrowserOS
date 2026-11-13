@@ -204,8 +204,10 @@ into the boxes.
 - a host that kills every process in the container and runs the entrypoint again.
 
 The folder is removed only once no browser process runs on the profile. The entrypoint waits up to
-10 s for the last one to go; a browser still running after that keeps the folder, and the log says so.
-Nothing else in the profile is touched: cookies (a session-cookie sign-in stays signed in), saved
+10 s for the last one to go. If a browser is still running after that, or the folder cannot be removed,
+no browser starts: the container stops with the reason in its log, rather than starting a browser that
+would restore the values. Its restart policy starts it again, and that start, with every process gone,
+clears the folder. Nothing else in the profile is touched: cookies (a session-cookie sign-in stays signed in), saved
 logins, `Local State` and `Preferences` all stay. The cost is the restored tabs: the browser opens one
 New Tab, and "reopen closed tab" has nothing to reopen. It applies in hosted mode only. Unset, or
 `false`, the browser keeps its sessions as before.

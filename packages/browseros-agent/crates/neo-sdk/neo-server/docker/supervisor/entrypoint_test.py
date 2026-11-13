@@ -440,16 +440,70 @@ class ClearSessionsTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assert_only_sessions_gone(profile)
 
-    def test_a_browser_that_does_not_go_keeps_them_and_says_so(self):
+    def test_a_browser_that_does_not_go_fails_the_call_and_keeps_them(self):
         profile = self.profile()
 
         result = self.run_clear(
             profile, "1", proc=self.processes(self.browser(profile)), gone_tenths=2
         )
 
-        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.returncode, 1)
         self.assertTrue((profile / "Default/Sessions/Session_1").exists())
         self.assertIn("A browser still runs on", result.stdout)
+
+    @unittest.skipIf(os.geteuid() == 0, "root removes from a read-only folder")
+    def test_a_folder_that_cannot_be_removed_fails_the_call(self):
+        profile = self.profile()
+        (profile / "Default").chmod(0o555)
+        self.addCleanup((profile / "Default").chmod, 0o755)
+
+        result = self.run_clear(profile, "1")
+
+        self.assertEqual(result.returncode, 1)
+        self.assertTrue((profile / "Default/Sessions").exists())
+        self.assertIn("Could not remove", result.stdout)
+
+    def test_no_browser_starts_when_the_saved_sessions_could_not_go(self):
+        # The supervisor stops the container on that failure, at the first start and at a restart.
+        directory = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        spawned = directory / "spawned"
+        result = run_bash(
+            "forget_zoom_levels() { :; }\n"
+            "clear_sessions() { return 1; }\n"
+            f"spawn_as_neo() {{ touch {shlex.quote(str(spawned))}; : & }}\n"
+            "BACK_FORWARD_CACHE=0 BROWSERCLAW_HOSTED_MODE=1 sandbox_flags=(--no-sandbox)\n"
+            "browseros_extension_flags=(--disable-browseros-extensions) gpu_flags=(--disable-gpu-compositing)\n"
+            "PROFILE=/data/profile CDP_PORT=9110 SERVER_PORT=9210 HIDDEN_BROWSEROS_FEATURES=NewTabPage NEO_ARGS=\n"
+            + shell_function("start_neo")
+            + "if start_neo; then echo started; else echo refused; fi\n"
+        )
+
+        self.assertEqual(result.stdout.strip(), "refused")
+        self.assertFalse(spawned.exists())
+
+    def test_the_supervisor_stops_the_container_when_neo_cannot_start(self):
+        # The supervisor calls start_neo twice, at the first start and at each restart, and both
+        # calls stop the container when it fails.
+        after_definition = SCRIPT.split("\nstart_neo() {", 1)[1]
+        calls = [
+            line.strip()
+            for line in after_definition.splitlines()
+            if re.search(r"\bstart_neo\b", line) and not line.lstrip().startswith("#")
+        ]
+
+        self.assertEqual(
+            calls,
+            [
+                'start_neo || { log "Could not start Neo; stopping the container"; shutdown 1; }',
+                'if [ "$stopping" = 0 ] && ! start_neo; then',
+            ],
+        )
+        self.assertIn(
+            'if [ "$stopping" = 0 ] && ! start_neo; then\n'
+            '      log "Could not restart Neo; stopping the container"\n'
+            "      shutdown 1\n",
+            SCRIPT,
+        )
 
     def test_only_the_browsers_own_argument_counts_as_in_use(self):
         # claw-sdk names a file in the profile; another profile's browser shares a prefix.

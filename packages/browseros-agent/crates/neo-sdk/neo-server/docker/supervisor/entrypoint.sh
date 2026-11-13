@@ -231,26 +231,25 @@ profile_in_use() {
 # stays signed in), saved logins, Local State and Preferences stay; the restored
 # tabs are lost, and the browser opens one New Tab. Never while a browser
 # process still runs on the profile: the browser writes these files until it
-# exits and would write them back. A browser that outlives the wait keeps them,
-# and says so.
+# exits and would write them back. A browser that outlives the wait, or a
+# folder that cannot be removed, fails the call, so start_neo starts no browser
+# that would restore the values; the supervisor stops the container instead,
+# which ends every process, and the next start clears the folder.
 clear_sessions() {
   [ "$CLEAR_SESSIONS" = 1 ] || return 0
   local sessions="$PROFILE/Default/Sessions" waited=0
   [ -e "$sessions" ] || [ -L "$sessions" ] || return 0
   while profile_in_use; do
     if [ "$waited" -ge "$BROWSER_GONE_TENTHS" ]; then
-      log "A browser still runs on $PROFILE; its saved sessions stay"
-      return 0
+      log "A browser still runs on $PROFILE; its saved sessions cannot be removed"
+      return 1
     fi
     sleep 0.1
     waited=$((waited + 1))
   done
   # No trailing slash: a symlink here is removed, never followed.
-  if rm -rf -- "$sessions"; then
-    log "Removed the browser's saved sessions ($sessions)"
-  else
-    log "Could not remove $sessions"
-  fi
+  rm -rf -- "$sessions" 2>/dev/null || { log "Could not remove $sessions"; return 1; }
+  log "Removed the browser's saved sessions ($sessions)"
 }
 
 # What the display offers depends on which server this image runs. The answer
@@ -454,9 +453,11 @@ apply_minimal_ui() {
 # stops touch pinch, and openbox-rc.xml takes the zoom keys and Ctrl + mouse
 # wheel (noVNC's pinch) before they reach the browser. setViewport's zoom is
 # DevTools emulation, not browser zoom, and still works.
+# Fails, starting nothing, when the saved sessions had to go and could not
+# (clear_sessions); its callers stop the container then.
 start_neo() {
   forget_zoom_levels
-  clear_sessions
+  clear_sessions || return 1
   local history_flag=""
   [ "$BACK_FORWARD_CACHE" = 1 ] || history_flag=--disable-back-forward-cache
   # The browser's own usage metrics (BrowserOSMetricsService) post to the
@@ -523,6 +524,7 @@ configure_neo() {
 stopping=0
 neo_pid=""
 neo_signaled=0
+configure_pid=""
 
 # Quit Neo the way a user would (CDP Browser.close, see neo-quit.py) so it
 # records a clean exit and flushes cookies; Chromium's own SIGTERM handling
@@ -566,7 +568,7 @@ prepare_host_socket
 apply_policies
 apply_minimal_ui
 start_display
-start_neo
+start_neo || { log "Could not start Neo; stopping the container"; shutdown 1; }
 configure_neo &
 configure_pid=$!
 
@@ -592,7 +594,10 @@ while [ "$stopping" = 0 ]; do
     wait "$neo_pid" 2>/dev/null || true
     log "Neo exited; restarting"
     sleep 2
-    [ "$stopping" = 0 ] && start_neo
+    if [ "$stopping" = 0 ] && ! start_neo; then
+      log "Could not restart Neo; stopping the container"
+      shutdown 1
+    fi
   fi
   # Backgrounded sleep keeps the loop interruptible, so `docker stop` is
   # handled within a second instead of after the next poll.
