@@ -35,11 +35,11 @@ export function UltrafastPicture({ step }: { step: number }) {
 }
 
 /** Your agent alone takes many paid steps; with ultrafast, neo takes a few. */
-export function StepRacePicture() {
+export function StepRacePicture({ large = false }: { large?: boolean }) {
   return (
     <Picture caption="Illustration. Each dot is a step your agent pays for.">
-      <Lane icon={Bot} label="Your agent alone" dots={10} />
-      <Lane icon={Zap} label="With ultrafast" dots={4} fast />
+      <Lane icon={Bot} label="Your agent alone" dots={10} large={large} />
+      <Lane icon={Zap} label="With ultrafast" dots={4} fast large={large} />
     </Picture>
   )
 }
@@ -152,22 +152,38 @@ function Lane({
   label,
   dots,
   fast = false,
+  large = false,
 }: {
   icon: LucideIcon
   label: string
   dots: number
   fast?: boolean
+  /** Bigger dots, with the label above them, for a picture that stands alone. */
+  large?: boolean
 }) {
   return (
-    <div className="grid grid-cols-1 items-center gap-1.5 sm:grid-cols-[136px_minmax(0,1fr)] sm:gap-3">
+    <div
+      className={cn(
+        'grid grid-cols-1 items-center',
+        large
+          ? 'gap-2.5'
+          : 'gap-1.5 sm:grid-cols-[136px_minmax(0,1fr)] sm:gap-3',
+      )}
+    >
       <Label icon={Icon} label={label} fast={fast} />
-      <span className="flex min-h-[26px] flex-wrap items-center gap-1.5">
+      <span
+        className={cn(
+          'flex flex-wrap items-center',
+          large ? 'min-h-[30px] gap-2' : 'min-h-[26px] gap-1.5',
+        )}
+      >
         {Array.from({ length: dots }, (_, index) => (
           <span
             // biome-ignore lint/suspicious/noArrayIndexKey: the dots never reorder
             key={index}
             className={cn(
-              'size-3 rounded-full motion-safe:animate-uf-pop sm:size-3.5',
+              'rounded-full motion-safe:animate-uf-pop',
+              large ? 'size-3.5 sm:size-[18px]' : 'size-3 sm:size-3.5',
               fast ? 'bg-primary' : 'bg-ink-4',
             )}
             style={delay(0.25 + index * 0.3)}

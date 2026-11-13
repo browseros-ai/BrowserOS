@@ -516,24 +516,31 @@ describe('the ultrafast page', () => {
   it('tests that Free shows the monthly price, the way in with a key, and the questions', async () => {
     await mount()
 
+    expect(text()).toContain('More from your AI agents.')
     expect(text()).toContain(
-      'More from your AI agents, for $20 a month, or less if you pay yearly. Cancel whenever you like.',
+      'Illustration. Each dot is a step your agent pays for.',
     )
-    expect(text()).toContain('Fewer steps. Smaller AI bills.')
     expect(text()).toContain('Skills run in seconds')
     expect(text()).toContain('Robot checks, solved for you')
-    expect(text()).toContain('Illustration.')
+    expect(text()).not.toContain('Fewer steps. Smaller AI bills.')
     expect(text()).not.toContain('Show me')
     expect(text()).toContain('$20a month')
-    expect(text()).toContain('Renews by itself each month')
+    expect(text()).toContain('Cancel any time.')
     expect(text()).toContain('2 months free')
     expect(button('Get ultrafast')).toBeTruthy()
     expect(button('Use a licence key')).toBeTruthy()
-    expect(text()).toContain('Questions people ask')
-    expect(text()).toContain('Where’s my licence key?')
-    expect(text()).toContain('Does neo change things on sites without asking?')
+    expect(text()).toContain('Make your agents ultrafast')
+    expect(text()).toContain('Questions')
+    expect(button('Who sees my card?')).toBeTruthy()
+    expect(button('Does neo change sites without asking?')).toBeTruthy()
+    for (const question of container.querySelectorAll(
+      'button[aria-expanded]',
+    )) {
+      expect(question.getAttribute('aria-expanded')).toBe('false')
+    }
+    await click('What if I cancel?')
     expect(text()).toContain(
-      'After that, your skills still work, with your agent at normal speed.',
+      'Your skills keep working, with your agent at normal speed.',
     )
   })
 
@@ -549,7 +556,6 @@ describe('the ultrafast page', () => {
 
     expect(text()).toContain('$200a year')
     expect(text()).toContain('Works out to $16.67 a month.')
-    expect(text()).toContain('Renews by itself each year')
   })
 
   it('tests that a build without billing sends the reader home', async () => {
@@ -573,27 +579,27 @@ describe('the ultrafast page', () => {
     server.plan = async () => PRO
     await mount()
 
-    expect(text()).toContain(
-      'Thanks for supporting BrowserOS. Here’s what ultrafast adds to neo.',
-    )
     expect(text()).toContain('You’re on ultrafast')
-    expect(text()).toContain('Next paymentNov 27, 2026')
+    expect(text()).toContain('Renews Nov 27, 2026')
+    expect(button('Billing')).toBeTruthy()
     expect(text()).toContain('Computers2 of 5')
-    expect(text()).toContain('It’s in the email we sent when you paid.')
-    expect(text()).toContain('It starts NEO-7K2QM.')
     expect(text()).toContain(
-      'Can’t find the email? Reset your key and we’ll email you a new one.',
+      'It’s in the email we sent when you paid and starts NEO-7K2QM. Keep it private.',
     )
     expect(text()).toContain('Sam’s MacBook Air')
-    expect(text()).toContain(
-      'Added Oct 27, 2026, 9:41 AM · You’re using it now',
-    )
+    expect(text()).not.toContain('You’re using it now')
     expect(text()).toContain('DESKTOP-4FQ7K2L')
     expect(text()).toContain('Last used today')
     expect(text()).toContain('This computer')
     expect(button('Rename Sam’s MacBook Air')).toBeTruthy()
     expect(button('Rename DESKTOP-4FQ7K2L')).toBeTruthy()
     expect(button('Cancel ultrafast')).toBeTruthy()
+    expect(text()).toContain('What’s in ultrafast')
+    expect(text()).toContain('Fewer steps. Smaller AI bills.')
+    expect(text()).toContain(
+      'Next on Nov 27, 2026. Stripe emails you a receipt each time.',
+    )
+    expect(text()).not.toContain('Get ultrafast')
     expectNoKeyAnywhere()
   })
 
@@ -618,8 +624,8 @@ describe('the ultrafast page', () => {
   it('tests that Ending offers Keep ultrafast and keeps it', async () => {
     server.plan = async () => ({ ...PRO, status: 'ending', endsAt: PERIOD_END })
     await mount()
-    expect(text()).toContain('ultrafast ends on Nov 27, 2026')
-    expect(text()).toContain('You won’t be charged again.')
+    expect(text()).toContain('Ends Nov 27, 2026.No more charges.')
+    expect(text()).not.toContain('When am I charged?')
 
     await click('Keep ultrafast')
 
@@ -638,7 +644,7 @@ describe('the ultrafast page', () => {
       graceUntil: GRACE_UNTIL,
     })
     await mount()
-    expect(text()).toContain('Your card needs a look')
+    expect(text()).toContain('Your last payment didn’t go through.')
     expect(text()).toContain('ultrafast stays on until Dec 4, 2026.')
 
     await click('Update card')
@@ -651,10 +657,10 @@ describe('the ultrafast page', () => {
   it('tests that paused ultrafast offers the card and the billing page', async () => {
     server.plan = async () => ({ ...PRO, status: 'unpaid', features: [] })
     await mount()
-    expect(text()).toContain('ultrafast is paused')
-    expect(text()).toContain('Your last few payments didn’t go through.')
+    expect(text()).toContain('ultrafast is paused.')
+    expect(text()).toContain('Update your card to turn it back on.')
 
-    await click('Billing and receipts')
+    await click('Billing')
     expect(callsTo('openPlanPortal')[0]?.body).toEqual({ flow: 'billing' })
   })
 
@@ -683,13 +689,15 @@ describe('buying ultrafast', () => {
       interval: 'month',
     })
 
-    await click('Open the payment page again')
+    expect(text()).toContain('Nothing is charged until you subscribe.')
+    expect(text()).not.toContain('Make your agents ultrafast')
+
+    await click('Open payment page')
     expect(opened).toHaveLength(2)
 
     await click('Cancel')
-    expect(text()).toContain(
-      'No payment was made. You can try again whenever you like.',
-    )
+    expect(text()).toContain('No payment was made.')
+    expect(text()).toContain('Make your agents ultrafast')
     expect(events('pro_checkout_abandoned')).toHaveLength(1)
   })
 
@@ -730,18 +738,19 @@ describe('buying ultrafast', () => {
     await mount()
     await click('Get ultrafast')
     expect(text()).toContain('Payment received')
-    expect(text()).toContain('One moment while neo turns on ultrafast.')
+    expect(text()).toContain('ultrafast turns on here')
+    expect(text()).not.toContain('Open payment page')
   })
 
   it('tests that paying again on a key whose ultrafast ended welcomes the reader back', async () => {
     server.plan = async () => planOf({ onKey: true })
     server.checkout = async () => ({ status: 'complete', plan: PRO })
     await mount()
-    expect(text()).toContain(
-      'This computer’s licence key has no ultrafast plan right now. Get ultrafast to start it again.',
-    )
+    expect(text()).toContain('Renew and your key works again.')
+    expect(text()).toContain('Turn ultrafast back on')
+    expect(text()).not.toContain('Use a licence key')
 
-    await click('Get ultrafast')
+    await click('Renew ultrafast')
 
     expect(callsTo('startPlanCheckout')[0]?.body).toEqual({
       plan: 'ultrafast',
@@ -930,7 +939,7 @@ describe('Use a licence key', () => {
     expect(text()).toContain('Your key is now on 2 of 5 computers.')
     await click('Done')
     expect(text()).toContain('You’re on ultrafast')
-    expect(text()).toContain('It starts NEO-7K2QM.')
+    expect(text()).toContain('and starts NEO-7K2QM.')
     expectNoKeyAnywhere()
   })
 })
@@ -1027,7 +1036,7 @@ describe('the computers on the key', () => {
     expect(dialog().textContent).toContain(
       'Your old key no longer works. Paste the new one on your other computers to turn ultrafast back on there.',
     )
-    expect(text()).toContain('It starts NEO-Q3VTM.')
+    expect(text()).toContain('and starts NEO-Q3VTM.')
     expectNoKeyAnywhere()
   })
 })
@@ -1057,7 +1066,7 @@ describe('cancelling ultrafast', () => {
     expect(toasts.at(-1)?.title).toBe(
       'Thanks for telling us. ultrafast ends on Nov 27, 2026',
     )
-    expect(text()).toContain('ultrafast ends on Nov 27, 2026')
+    expect(text()).toContain('Ends Nov 27, 2026.')
     expect(events('pro_cancel_confirmed')[0]?.properties).toEqual({
       gave_feedback: true,
     })

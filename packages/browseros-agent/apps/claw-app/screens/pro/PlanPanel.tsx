@@ -4,13 +4,12 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import type { Plan, PlanKey } from '@browseros/claw-api'
+import type { Plan } from '@browseros/claw-api'
 import { useQueryClient } from '@tanstack/react-query'
-import { BadgeCheck, CalendarX, CreditCard, ExternalLink } from 'lucide-react'
+import { CalendarX, CreditCard, ExternalLink } from 'lucide-react'
 import type { ReactNode } from 'react'
-import { Button, type ButtonVariant } from '@/components/motion/button/base'
+import { Button } from '@/components/motion/button/base'
 import { StatefulButton } from '@/components/motion/button/stateful'
-import { cn } from '@/lib/utils'
 import { AnalyticsEvent, track } from '@/modules/analytics/events'
 import { usePlan, useResumePlan } from '@/modules/api/plan.hooks'
 import { toastApiError, toastSuccess } from '@/modules/toast/toast'
@@ -19,13 +18,12 @@ import type { ProPortal } from './pro.hooks'
 
 interface PlanPanelProps {
   plan: Plan
-  planKey?: PlanKey
   portal: ProPortal
   onCancel: () => void
 }
 
-/** What a computer with Pro sees, for each state the plan can be in. */
-export function PlanPanel({ plan, planKey, portal, onCancel }: PlanPanelProps) {
+/** The plan as one line, with Billing and Cancel, for each state it can be in. */
+export function PlanPanel({ plan, portal, onCancel }: PlanPanelProps) {
   const queryClient = useQueryClient()
   const resume = useResumePlan({
     onSuccess: (next) => {
@@ -40,172 +38,149 @@ export function PlanPanel({ plan, planKey, portal, onCancel }: PlanPanelProps) {
     onError: (error) => toastApiError('Couldn’t keep ultrafast', error),
   })
 
-  const billing = (variant: ButtonVariant) => (
+  const billing = (
     <Button
-      variant={variant}
+      variant="secondary"
+      size="sm"
       disabled={portal.isOpening}
       onClick={() => portal.open('billing')}
-      className="w-full font-semibold"
+      className="font-semibold"
     >
       <ExternalLink aria-hidden className="size-4" />
-      Billing and receipts
+      Billing
     </Button>
   )
   const updateCard = (
     <Button
+      size="sm"
       disabled={portal.isOpening}
       onClick={() => portal.open('updateCard')}
-      className="w-full font-semibold"
+      className="font-semibold"
     >
       Update card
     </Button>
   )
-  const quietCancel = (
-    <Button
-      variant="ghost"
-      size="sm"
-      onClick={onCancel}
-      className="self-center text-ink-3"
-    >
+  const cancel = (
+    <Button variant="ghost" size="sm" onClick={onCancel} className="text-ink-2">
       Cancel ultrafast
     </Button>
   )
-  const stale = plan.stale ? (
-    <p role="status" className="text-[13.5px] text-ink-3">
-      {PLAN_UNCHECKED}
-    </p>
-  ) : null
 
   if (plan.status === 'ending') {
-    const ends = plan.endsAt === null ? '' : formatDate(plan.endsAt)
     return (
-      <>
-        <StatusHead
-          icon={<CalendarX />}
-          warn
-          title={`ultrafast ends on ${ends}`}
-          sub="You won’t be charged again."
-        />
-        <p className="text-[14.5px] text-ink-2">
-          Changed your mind? Keep ultrafast and it renews on {ends} as usual.
-        </p>
+      <PlanRow
+        stale={plan.stale}
+        icon={<CalendarX />}
+        lead={`Ends ${plan.endsAt === null ? 'soon' : formatDate(plan.endsAt)}.`}
+        rest="No more charges."
+      >
         <StatefulButton
+          size="sm"
           state={resume.isPending ? 'loading' : 'idle'}
           loadingText="Keep ultrafast"
           disabled={resume.isPending}
           onClick={() => resume.mutate()}
-          className="w-full font-semibold"
+          className="font-semibold"
         >
           Keep ultrafast
         </StatefulButton>
-        {billing('ghost')}
-        {stale}
-      </>
+        {billing}
+      </PlanRow>
     )
   }
 
   if (plan.status === 'unpaid') {
     return (
-      <>
-        <StatusHead
-          icon={<CreditCard />}
-          warn
-          title="ultrafast is paused"
-          sub="Your last few payments didn’t go through."
-        />
-        <p className="text-[14.5px] text-ink-2">
-          ultrafast features are off for now. Update your card and ultrafast
-          turns back on once the payment goes through. Nothing you’ve saved is
-          lost.
-        </p>
+      <PlanRow
+        stale={plan.stale}
+        icon={<CreditCard />}
+        lead="ultrafast is paused."
+        rest="Update your card to turn it back on."
+      >
         {updateCard}
-        {billing('ghost')}
-        {quietCancel}
-        {stale}
-      </>
+        {billing}
+        {cancel}
+      </PlanRow>
     )
   }
 
   if (plan.status === 'paymentFailed') {
     return (
-      <>
-        <StatusHead
-          icon={<CreditCard />}
-          warn
-          title="Your card needs a look"
-          sub="Last month’s payment didn’t go through."
-        />
-        <p className="text-[14.5px] text-ink-2">
-          Stripe will try again over the next few days. ultrafast stays on until{' '}
-          {plan.graceUntil === null ? '' : formatDate(plan.graceUntil)}.
-        </p>
+      <PlanRow
+        stale={plan.stale}
+        icon={<CreditCard />}
+        lead="Your last payment didn’t go through."
+        rest={
+          plan.graceUntil === null
+            ? undefined
+            : `ultrafast stays on until ${formatDate(plan.graceUntil)}.`
+        }
+      >
         {updateCard}
-        {quietCancel}
-        {stale}
-      </>
+        {cancel}
+      </PlanRow>
     )
   }
 
   return (
-    <>
-      <StatusHead icon={<BadgeCheck />} title="You’re on ultrafast" />
-      <dl className="flex flex-col gap-2.5 rounded-xl border border-border-2 bg-card px-4 py-3.5 text-[14.5px]">
-        {plan.periodEnd !== null ? (
-          <div className="flex justify-between gap-3">
-            <dt className="text-ink-2">Next payment</dt>
-            <dd className="font-semibold text-cyanotype-ink">
-              {formatDate(plan.periodEnd)}
-            </dd>
-          </div>
-        ) : null}
-        {planKey ? (
-          <div className="flex justify-between gap-3">
-            <dt className="text-ink-2">Computers</dt>
-            <dd className="font-semibold text-cyanotype-ink tabular-nums">
-              {planKey.computers.length} of {planKey.cap}
-            </dd>
-          </div>
-        ) : null}
-      </dl>
-      {billing('secondary')}
-      {quietCancel}
-      {stale}
-    </>
+    <PlanRow
+      stale={plan.stale}
+      lead="You’re on ultrafast"
+      rest={
+        plan.periodEnd === null
+          ? undefined
+          : `Renews ${formatDate(plan.periodEnd)}`
+      }
+    >
+      {billing}
+      {cancel}
+    </PlanRow>
   )
 }
 
 // ---------------------------------------------------------------------------
 
-function StatusHead({
+function PlanRow({
   icon,
-  title,
-  sub,
-  warn = false,
+  lead,
+  rest,
+  stale,
+  children,
 }: {
-  icon: ReactNode
-  title: string
-  sub?: string
-  warn?: boolean
+  /** Set for a state that needs a look; shown in amber. */
+  icon?: ReactNode
+  lead: string
+  rest?: string
+  stale: boolean
+  children: ReactNode
 }) {
   return (
-    <div className="flex items-center gap-3">
-      <span
-        aria-hidden
-        className={cn(
-          'grid size-11 shrink-0 place-items-center rounded-full [&>svg]:size-5',
-          warn
-            ? 'bg-amber-tint text-amber-ink'
-            : 'bg-green-tint text-green-ink',
-        )}
-      >
-        {icon}
-      </span>
-      <div>
-        <div className="font-bold text-[19px] text-cyanotype-ink tracking-[-0.015em]">
-          {title}
-        </div>
-        {sub ? <p className="mt-1 text-[14.5px] text-ink-2">{sub}</p> : null}
+    <section
+      aria-label="Your plan"
+      aria-live="polite"
+      className="flex flex-col gap-2"
+    >
+      <div className="flex flex-wrap items-center justify-between gap-x-5 gap-y-3">
+        <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[15px] text-ink-2">
+          {icon ? (
+            <span aria-hidden className="text-amber-ink [&>svg]:size-4">
+              {icon}
+            </span>
+          ) : null}
+          <strong className="font-bold text-[17px] text-cyanotype-ink">
+            {lead}
+          </strong>
+          {rest ? <span>{rest}</span> : null}
+        </p>
+        <span className="flex flex-wrap items-center gap-1.5 max-sm:w-full">
+          {children}
+        </span>
       </div>
-    </div>
+      {stale ? (
+        <p role="status" className="text-[13.5px] text-ink-3">
+          {PLAN_UNCHECKED}
+        </p>
+      ) : null}
+    </section>
   )
 }
