@@ -33,7 +33,7 @@ use fixture_server::{FixtureServer, Page};
 use input_recording::{InputCall, InputRecording};
 use live_browser::{LiveBrowser, TestPage, TestResult};
 use neo_playwright::{
-    BoxSpec, Entry, EntryOutcome, EntryRequest, Expect, Op, PictureCheck, PrivateField,
+    BoxSpec, Drawing, Entry, EntryOutcome, EntryRequest, Expect, Op, PictureCheck, PrivateField,
     PrivateText, RunState,
 };
 use neo_trace::{Delivery, ErrorOwner};
@@ -268,6 +268,8 @@ fn code(entry: &Entry) -> Option<&str> {
 
 const EMAIL: &str = "ada@fixture.example";
 const PASSWORD: &str = "CANARY-covered-pw-1";
+/// A one-time code: six digits, which a code field's own drawing may show as they are typed.
+const CODE: &str = "481516";
 const CARD: &str = "4000056655665556";
 
 /// A sign-in's two boxes, typed in one insertion each and read back, on a tab in
@@ -340,6 +342,336 @@ async fn tests_that_a_covered_box_refuses_the_form_before_any_key() -> TestResul
     assert!(!env.was_sent());
     assert!(!bench.live.playwright.took_private_text(opened.page.tab));
     bench.close(opened).await
+}
+
+/// Rulings R55 and R56: a sign-in whose two boxes each sit under a sibling div that draws the
+/// field's name and takes the pointer, which is no `<label>`. With nothing set by the host, both
+/// boxes are entered and read back whole, by one insertion and key by key, on a tab in front and
+/// a tab behind, and the entry notes each as entered under its field's drawing. Fails with the
+/// drawing's branch left out of the look (`box_covered` at the first box, nothing typed).
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_boxes_under_drawn_labels_are_entered_by_default() -> TestResult {
+    let bench = Bench::start().await?;
+    for place in PLACES {
+        for keys in [false, true] {
+            let case = format!("{place:?}, keys {keys}");
+            let opened = bench.open("/private/drawn-label-login.html", place).await?;
+            let email = bench.r#ref(&opened, "textbox", "Email").await?;
+            let password = bench.r#ref(&opened, "textbox", "Password").await?;
+            let env = bench.host(&opened);
+            let origin = &bench.page_origin;
+            let field = |r#ref: &str| {
+                let field = Field::new(r#ref, origin);
+                if keys { field.keys() } else { field }
+            };
+            let fields = vec![field(&email).with(EMAIL)?, field(&password).with(PASSWORD)?];
+            let entry = bench.enter(&env, &opened, fields).await;
+            assert_eq!(entry.outcome, EntryOutcome::Entered, "{case}: {entry:?}");
+            assert_eq!(entry.typed, vec![EMAIL.len(), PASSWORD.len()], "{case}");
+            assert_eq!(
+                entry.drawings,
+                vec![Drawing::Under, Drawing::Under],
+                "{case}"
+            );
+            assert_eq!(bench.value(&opened, &email).await?, EMAIL, "{case}");
+            assert_eq!(bench.value(&opened, &password).await?, PASSWORD, "{case}");
+            bench.close(opened).await?;
+        }
+    }
+    Ok(())
+}
+
+/// Ruling R56: a code box under blank digit drawings that show each digit as it is typed. Key by
+/// key it is entered, the code stays drawn (six characters, a code's digits), and the entry notes
+/// the drawn value for the record; by one insertion a blank drawing covers the box and nothing is
+/// typed. On a tab in front and a tab behind. Fails with a blank drawing let through for one
+/// insertion too (`entered`), or with a short drawn value emptied like a long one (`value_drawn`).
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_code_under_drawn_digits_is_typed_key_by_key() -> TestResult {
+    let bench = Bench::start().await?;
+    for place in PLACES {
+        let opened = bench.open("/private/drawn-code.html", place).await?;
+        let code_box = bench.r#ref(&opened, "textbox", "Code").await?;
+        let env = bench.host(&opened);
+        let origin = &bench.page_origin;
+        let inserted = bench
+            .enter(
+                &env,
+                &opened,
+                vec![Field::new(&code_box, origin).with(CODE)?],
+            )
+            .await;
+        assert_eq!(
+            (inserted.outcome, inserted.at, code(&inserted)),
+            (EntryOutcome::Refused, Some(0), Some("box_covered")),
+            "{place:?}: one insertion under a blank drawing: {inserted:?}"
+        );
+        assert_eq!(inserted.typed, vec![0], "{place:?}");
+        let keyed = bench
+            .enter(
+                &env,
+                &opened,
+                vec![Field::new(&code_box, origin).keys().with(CODE)?],
+            )
+            .await;
+        assert_eq!(keyed.outcome, EntryOutcome::Entered, "{place:?}: {keyed:?}");
+        assert_eq!(keyed.typed, vec![CODE.len()], "{place:?}");
+        assert_eq!(
+            keyed.drawings,
+            vec![Drawing::Drawn],
+            "{place:?}: the record notes it"
+        );
+        assert_eq!(bench.value(&opened, &code_box).await?, CODE, "{place:?}");
+        bench.close(opened).await?;
+    }
+    Ok(())
+}
+
+/// Ruling R56: a card-number field under a blank drawing that shows what is typed in groups of
+/// four, separated by spaces or by dashes, typed key by key with `spaced` not set (nothing set by
+/// the host). The drawn check sets white space, dashes and slashes aside whatever `spaced` says,
+/// so the sixteen digits are seen as drawn: Neo empties the box, the drawing empties with it, and
+/// the entry answers `value_drawn`; the page no longer shows the digits. On a tab in front and a
+/// tab behind. Fails with the drawn check setting dashes and slashes aside only for a `spaced`
+/// field (`dash`: `entered`, the digits left on the page).
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_long_value_drawn_in_groups_is_emptied() -> TestResult {
+    let bench = Bench::start().await?;
+    for place in PLACES {
+        for groups in ["space", "dash"] {
+            let case = format!("{place:?}, {groups}");
+            let opened = bench
+                .open(&format!("/private/drawn-code.html?card={groups}"), place)
+                .await?;
+            let card = bench.r#ref(&opened, "textbox", "Card number").await?;
+            let env = bench.host(&opened);
+            let field = Field::new(&card, &bench.page_origin).keys();
+            let entry = bench.enter(&env, &opened, vec![field.with(CARD)?]).await;
+            assert_eq!(
+                (entry.outcome, entry.at, code(&entry)),
+                (EntryOutcome::Uncertain, Some(0), Some("value_drawn")),
+                "{case}: {entry:?}"
+            );
+            assert_eq!(bench.value(&opened, &card).await?, "", "{case}: emptied");
+            let shown = bench
+                .live
+                .main_world(
+                    &opened.page,
+                    "document.querySelector('.groups').textContent",
+                )
+                .await?;
+            assert_eq!(
+                shown,
+                json!(""),
+                "{case}: the page no longer shows the digits"
+            );
+            bench.close(opened).await?;
+        }
+    }
+    Ok(())
+}
+
+/// Ruling R56: another field's `<label for>` laid over the password box is no drawing of this
+/// field's own: the page says whose it is, and a person's click there goes to that field. Key by
+/// key, as by one insertion, the box answers `box_covered` and nothing is typed, as main's rule
+/// says. Fails with the label condition taken out of the look (`entered`).
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_another_fields_label_covers_the_box_key_by_key() -> TestResult {
+    let bench = Bench::start().await?;
+    let opened = bench
+        .open("/private/covered-login.html?mode=otherlabel", Place::Front)
+        .await?;
+    let password = bench.r#ref(&opened, "textbox", "Password").await?;
+    let env = bench.host(&opened);
+    let field = Field::new(&password, &bench.page_origin).keys();
+    let entry = bench
+        .enter(&env, &opened, vec![field.with(PASSWORD)?])
+        .await;
+    assert_eq!(
+        (entry.outcome, entry.at, code(&entry)),
+        (EntryOutcome::Refused, Some(0), Some("box_covered")),
+        "{entry:?}"
+    );
+    assert_eq!(entry.typed, vec![0]);
+    assert_eq!(bench.value(&opened, &password).await?, "");
+    bench.close(opened).await
+}
+
+/// Rulings R55 and R56: a drawing an earlier look kept does not carry over. A box under a
+/// drawing that shows its name and what it holds takes a long value by one insertion: the drawn
+/// check empties it (`value_drawn`). The page then takes the box's size away, so the next look
+/// reaches it by focus and never hit-tests it: typed key by key it is entered, under no drawing.
+/// Fails with the look's clearing of the kept wrapper taken out (the second entry reads the first
+/// look's wrapper: `value_drawn`).
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_drawing_an_earlier_look_kept_does_not_carry_over() -> TestResult {
+    let bench = Bench::start().await?;
+    let opened = bench
+        .open("/private/drawn-label-shapes.html", Place::Front)
+        .await?;
+    let nickname = bench.r#ref(&opened, "textbox", "Nickname").await?;
+    let env = bench.host(&opened);
+    let origin = &bench.page_origin;
+    let first = bench
+        .enter(
+            &env,
+            &opened,
+            vec![Field::new(&nickname, origin).with(EMAIL)?],
+        )
+        .await;
+    assert_eq!(code(&first), Some("value_drawn"), "{first:?}");
+    page_does(&bench, &opened, "shrink()").await?;
+    let second = bench
+        .enter(
+            &env,
+            &opened,
+            vec![Field::new(&nickname, origin).keys().with(EMAIL)?],
+        )
+        .await;
+    assert_eq!(second.outcome, EntryOutcome::Entered, "{second:?}");
+    assert_eq!(second.drawings, vec![Drawing::None]);
+    bench.close(opened).await
+}
+
+/// Rulings R55 and R56, after the typing: a drawing that carries the box's name and also draws
+/// what the box holds, a long value (nineteen characters), as typed or in capitals through
+/// `text-transform` (`upper`). The look lets the box through, and the read-back finds the value
+/// drawn outside the box where it was not before the first character: Neo empties the box again
+/// and the entry answers `value_drawn`, with what was sent in `typed`. The box is empty, and the
+/// value is in no answer and no note the host received. By one insertion and key by key, on a
+/// tab in front and a tab behind. The page no longer shows the value afterwards, as the answer
+/// says. Fails with the read-back's drawn answer ignored (`entered`, the box still full), or with
+/// the box not emptied again (`value_still_drawn`: the box, and so the drawing, still hold it),
+/// or with the drawn check minding case (`upper`: `entered`, the value left in the page's text).
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_drawn_value_empties_the_box_and_answers_value_drawn() -> TestResult {
+    let bench = Bench::start().await?;
+    for place in PLACES {
+        for (mirror, keys) in [("1", false), ("1", true), ("upper", false), ("upper", true)] {
+            let case = format!("{place:?}, {mirror}, keys {keys}");
+            let opened = bench
+                .open(
+                    &format!("/private/drawn-label-login.html?mirror={mirror}"),
+                    place,
+                )
+                .await?;
+            let email = bench.r#ref(&opened, "textbox", "Email").await?;
+            let env = bench.host(&opened);
+            let field = Field::new(&email, &bench.page_origin);
+            let field = if keys { field.keys() } else { field };
+            let entry = bench.enter(&env, &opened, vec![field.with(EMAIL)?]).await;
+            assert_eq!(
+                (entry.at, code(&entry)),
+                (Some(0), Some("value_drawn")),
+                "{case}: {entry:?}"
+            );
+            assert_eq!(entry.typed, vec![EMAIL.len()], "{case}");
+            assert_eq!(
+                bench.value(&opened, &email).await?,
+                "",
+                "{case}: emptied again"
+            );
+            assert_eq!(
+                drawing(&bench, &opened).await?,
+                "Email",
+                "{case}: the page no longer shows the value"
+            );
+            let answered = format!("{entry:?}");
+            assert!(
+                !answered.contains(EMAIL),
+                "{case}: the answer holds the value: {answered}"
+            );
+            for note in env.notes() {
+                assert!(
+                    !note.contains(EMAIL),
+                    "{case}: a note holds the value: {note}"
+                );
+            }
+            bench.close(opened).await?;
+        }
+    }
+    Ok(())
+}
+
+/// What the login fixture's first drawing shows now, as the page's own world reads it.
+async fn drawing(bench: &Bench, opened: &Opened) -> TestResult<String> {
+    let text = bench
+        .live
+        .main_world(&opened.page, "document.querySelector('.float').textContent")
+        .await?;
+    Ok(text.as_str().unwrap_or_default().to_owned())
+}
+
+/// Rulings R55 and R56, a page that still draws a long value after Neo emptied the box: a drawing
+/// that keeps
+/// what was typed when the box empties (`sticky`, by one insertion and key by key), and a field
+/// that moves each character out of the box into its own drawing (`moves`, which leaves the box
+/// empty at the read-back, by one insertion). Neo cannot take text off a page, so the entry
+/// answers `uncertain`, `value_still_drawn`, whose sentence says to reload or close the page; the
+/// box is empty, the page still shows the value, and the value is in no answer and no note. On a
+/// tab in front and a tab behind. Fails with the read-back's `drawn` answered only for a box that
+/// holds the value (`moves` answers `value_not_taken`), or with no second reading of the wrapper
+/// after the emptying (`value_drawn`, which says the page no longer shows it).
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_value_the_page_still_draws_answers_value_still_drawn() -> TestResult {
+    let bench = Bench::start().await?;
+    for place in PLACES {
+        for (mirror, keys) in [("sticky", false), ("sticky", true), ("moves", false)] {
+            let case = format!("{place:?}, {mirror}, keys {keys}");
+            let opened = bench
+                .open(
+                    &format!("/private/drawn-label-login.html?mirror={mirror}"),
+                    place,
+                )
+                .await?;
+            let email = bench.r#ref(&opened, "textbox", "Email").await?;
+            let env = bench.host(&opened);
+            let field = Field::new(&email, &bench.page_origin);
+            let field = if keys { field.keys() } else { field };
+            let entry = bench.enter(&env, &opened, vec![field.with(EMAIL)?]).await;
+            assert_eq!(
+                (entry.outcome, entry.at, code(&entry)),
+                (EntryOutcome::Uncertain, Some(0), Some("value_still_drawn")),
+                "{case}: {entry:?}"
+            );
+            let message = entry.error.as_ref().map(|error| error.message.clone());
+            assert!(
+                message
+                    .as_deref()
+                    .is_some_and(|text| text.contains("Reload or close the page")),
+                "{case}: {message:?}"
+            );
+            assert_eq!(
+                bench.value(&opened, &email).await?,
+                "",
+                "{case}: the box is empty"
+            );
+            assert!(
+                drawing(&bench, &opened).await?.contains(EMAIL),
+                "{case}: the page still shows the value, as the answer says"
+            );
+            let answered = format!("{entry:?}");
+            assert!(
+                !answered.contains(EMAIL),
+                "{case}: the answer holds the value: {answered}"
+            );
+            for note in env.notes() {
+                assert!(
+                    !note.contains(EMAIL),
+                    "{case}: a note holds the value: {note}"
+                );
+            }
+            bench.close(opened).await?;
+        }
+    }
+    Ok(())
 }
 
 /// A password the box's maxlength cuts is entered when the host allows the cut, and

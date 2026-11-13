@@ -297,6 +297,12 @@ error_codes! {
     /// A box with no size still held text after Neo tried to empty it before the first
     /// character; nothing of the value was typed.
     BOX_NOT_CLEARED = "box_not_cleared";
+    /// A box entered under a cover (ruling R55): after the typing, the site drew the value
+    /// outside the box. Neo emptied the box, and the page no longer shows the value.
+    VALUE_DRAWN = "value_drawn";
+    /// As `value_drawn`, but the page still shows the value after Neo emptied the box: reload or
+    /// close the page before anything reads it.
+    VALUE_STILL_DRAWN = "value_still_drawn";
     /// The page moved before Neo saw all but the last character in the box.
     PAGE_MOVED = "page_moved";
     /// A repeat of a fill's `requestId` whose first call Neo started and never finished: Neo

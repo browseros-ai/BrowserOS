@@ -141,6 +141,18 @@ pub(crate) fn pages() -> HashMap<String, Page> {
             include_str!("../data/private/covered-select.html"),
         ),
         ("look", include_str!("../data/private/look.html")),
+        (
+            "drawn-label-login",
+            include_str!("../data/private/drawn-label-login.html"),
+        ),
+        (
+            "drawn-label-shapes",
+            include_str!("../data/private/drawn-label-shapes.html"),
+        ),
+        (
+            "drawn-code",
+            include_str!("../data/private/drawn-code.html"),
+        ),
         ("nested", include_str!("../data/private/nested.html")),
         ("moved", include_str!("../data/private/moved.html")),
         (

@@ -1,5 +1,5 @@
 {
-  "protocol": 38,
+  "protocol": 39,
   "callFunction": "function (call, root, ...nodes) { const probe = globalThis.__neoProbe; return probe ? probe.call(call, root ?? this, nodes) : { kind: \"uninstalled\" }; }",
   "replyKinds": {
     "describe": [
@@ -608,6 +608,14 @@
       "pin": 3,
       "step": {
         "kind": "markFocused"
+      }
+    },
+    {
+      "op": "private",
+      "pin": 6,
+      "step": {
+        "kind": "drawn",
+        "text": "CANARY-example"
       }
     },
     {
@@ -1247,19 +1255,19 @@
   "replies": [
     {
       "kind": "described",
-      "protocol": 38,
+      "protocol": 39,
       "seq": 0,
       "url": "https://example.com/"
     },
     {
       "kind": "described",
-      "protocol": 38,
+      "protocol": 39,
       "seq": 347,
       "url": "https://pay.example/frame"
     },
     {
       "kind": "described",
-      "protocol": 38,
+      "protocol": 39,
       "seq": 512340,
       "url": "https://example.com/",
       "retired": 0
@@ -1539,7 +1547,18 @@
         "kind": "readBack",
         "state": "left",
         "heldAtLastInput": true,
-        "moving": false
+        "moving": false,
+        "drawing": "none"
+      }
+    },
+    {
+      "kind": "value",
+      "value": {
+        "kind": "readBack",
+        "state": "holds",
+        "heldAtLastInput": true,
+        "moving": false,
+        "drawing": "drawn"
       }
     },
     {
@@ -1553,6 +1572,13 @@
       "value": {
         "kind": "markedFocused",
         "marked": true
+      }
+    },
+    {
+      "kind": "value",
+      "value": {
+        "kind": "drawn",
+        "drawn": false
       }
     },
     {

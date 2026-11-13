@@ -159,6 +159,12 @@ export type Checkable = { checked: boolean, radio: boolean, };
 export type DocumentPart = "title" | "content" | "expectSnapshot";
 
 /**
+ * How a box's field drawing figured in its entry (rulings R55, R56): the read-back answers it,
+ * and the operation's record notes every box entered under one.
+ */
+export type Drawing = "none" | "under" | "drawn";
+
+/**
  * MIME data in the caller's insertion order, matching DataTransfer.types ordering.
  */
 export type DropEntry = { mimeType: string, value: string, };
@@ -331,12 +337,12 @@ export type Point = { x: number, y: number, };
 /**
  * The answer to one step (`value` payload of the `private` request).
  */
-export type PrivateAnswer = { "kind": "focus", focus: FocusState, } | { "kind": "holds", holds: boolean, } | { "kind": "readBack", state: BoxState, heldAtLastInput: boolean, moving: boolean, } | { "kind": "forgot" } | { "kind": "markedFocused", marked: boolean, };
+export type PrivateAnswer = { "kind": "focus", focus: FocusState, } | { "kind": "holds", holds: boolean, } | { "kind": "readBack", state: BoxState, heldAtLastInput: boolean, moving: boolean, drawing: Drawing, } | { "kind": "forgot" } | { "kind": "markedFocused", marked: boolean, } | { "kind": "drawn", drawn: boolean, };
 
 /**
  * One step of the entry on a pinned box.
  */
-export type PrivateStep = { "kind": "focus", text: PageSecret, spaced: boolean, } | { "kind": "focused" } | { "kind": "holds", text: PageSecret, spaced: boolean, } | { "kind": "readBack" } | { "kind": "forget" } | { "kind": "markFocused" };
+export type PrivateStep = { "kind": "focus", text: PageSecret, spaced: boolean, } | { "kind": "focused" } | { "kind": "holds", text: PageSecret, spaced: boolean, } | { "kind": "readBack" } | { "kind": "forget" } | { "kind": "markFocused" } | { "kind": "drawn", text: PageSecret, };
 
 /**
  * The common private call envelope. Keeping the policy outside request variants prevents a

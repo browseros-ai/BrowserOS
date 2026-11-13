@@ -47,6 +47,21 @@ impl EntryOutcome {
     }
 }
 
+/// How a box's field drawing figured in its entry (rulings R55, R56): the read-back answers it,
+/// and the operation's record notes every box entered under one.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum Drawing {
+    /// No drawing of its field covered the box.
+    #[default]
+    None,
+    /// The box was entered under its field's own drawing, which did not draw the value.
+    Under,
+    /// Entered under its field's own drawing, which now draws the typed value outside the box,
+    /// where it did not before the first character.
+    Drawn,
+}
+
 /// An approved fact that no longer holds (`box_changed` names it). The input's `type` is not
 /// one: a box of another type answers its own code, `wrong_type`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -113,6 +128,13 @@ pub enum EntryCode {
     /// A box with no size still held text after Neo tried to empty it before the first
     /// character (ruling R51). Nothing of the value was typed.
     BoxNotCleared,
+    /// A box entered under a cover (ruling R55): after the typing, the cover's wrapper drew the
+    /// value outside the box, where it did not before. Neo emptied the box, and the wrapper no
+    /// longer draws it.
+    ValueDrawn,
+    /// As [`Self::ValueDrawn`], but the wrapper still draws the value after the emptying: Neo
+    /// cannot take text off a page, so the host must reload or close it before anything reads it.
+    ValueStillDrawn,
     /// The page moved before Neo saw the value go into the box.
     PageMoved,
     /// The entry's own deadline passed.
@@ -144,6 +166,8 @@ impl EntryCode {
             Self::FocusLost => "focus_lost",
             Self::ValueNotTaken => "value_not_taken",
             Self::BoxNotCleared => "box_not_cleared",
+            Self::ValueDrawn => "value_drawn",
+            Self::ValueStillDrawn => "value_still_drawn",
             Self::PageMoved => "page_moved",
             Self::RunTimeout => "run_timeout",
             Self::TargetClosed => "target_closed",
@@ -170,6 +194,8 @@ impl EntryCode {
             | Self::FocusLost
             | Self::ValueNotTaken
             | Self::BoxNotCleared
+            | Self::ValueDrawn
+            | Self::ValueStillDrawn
             | Self::PageMoved => ErrorOwner::Website,
             Self::RunTimeout | Self::TargetClosed | Self::BrowserDisconnected | Self::Internal => {
                 ErrorOwner::Neo
@@ -194,6 +220,8 @@ impl EntryCode {
             | Self::ValueTooLong
             | Self::NotFocused
             | Self::BoxNotCleared
+            | Self::ValueDrawn
+            | Self::ValueStillDrawn
             | Self::Internal => Answer::Definite,
             Self::FocusLost
             | Self::ValueNotTaken
@@ -248,6 +276,14 @@ impl EntryCode {
                 "The box does not hold the value after the entry. The page changed what was typed."
             }
             Self::BoxNotCleared => "The box still holds text after Neo tried to empty it.",
+            Self::ValueDrawn => {
+                "The site drew the typed value outside the box. Neo emptied the box, and the page \
+                 no longer shows the value."
+            }
+            Self::ValueStillDrawn => {
+                "The site drew the typed value outside the box, and the page still shows it. \
+                 Reload or close the page before anything reads it."
+            }
             Self::PageMoved => {
                 "The page moved during the entry, before Neo saw the value go into the box."
             }
@@ -345,6 +381,9 @@ pub struct Entry {
     pub typed: Vec<usize>,
     /// Why it stopped; `None` for `entered` and `entered_page_moved`.
     pub error: Option<EntryError>,
+    /// How each box's field drawing figured in its entry, in the request's order; `None` for a
+    /// box not read back (rulings R55, R56).
+    pub drawings: Vec<Drawing>,
 }
 
 /// The door's derivation (`neo-server/src/dispatch/operation_guard.rs`): what an op marked sent
@@ -368,6 +407,7 @@ impl Entry {
             at: Some(at),
             typed: vec![0; fields],
             error: Some(error),
+            drawings: vec![Drawing::None; fields],
         }
     }
 }
@@ -426,6 +466,8 @@ mod tests {
             EntryCode::FocusLost,
             EntryCode::ValueNotTaken,
             EntryCode::BoxNotCleared,
+            EntryCode::ValueDrawn,
+            EntryCode::ValueStillDrawn,
             EntryCode::PageMoved,
             EntryCode::RunTimeout,
             EntryCode::TargetClosed,

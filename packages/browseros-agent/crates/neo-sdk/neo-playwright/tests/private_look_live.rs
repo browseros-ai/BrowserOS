@@ -177,6 +177,30 @@ struct CoveredPage {
     boxes: &'static [(&'static str, &'static str, bool)],
 }
 
+/// The covered pages whose cover is a blank drawing inside the box's row, within its rectangle
+/// grown by half, holding no control (ruling R56): one insertion still answers `box_covered`
+/// there, as main's rule does, and key by key the box passes. Measured on every page of
+/// [`COVERED`]; these are the only ones that differ. (case, box name).
+const OWN_DRAWINGS: &[(&str, &str)] = &[
+    ("an overlay on the password box", "Password"),
+    (
+        "an overlay that is a sibling of the box's ancestor",
+        "Password",
+    ),
+    (
+        "a decoration that is a child of the label's parent",
+        "Password",
+    ),
+    (
+        "the card box covered inside its cross-site frame",
+        "Card number",
+    ),
+    (
+        "a card box two same-origin frames deep, covered in the innermost frame",
+        "Card number",
+    ),
+];
+
 #[derive(Clone, Copy)]
 enum Site {
     Page,
@@ -331,6 +355,22 @@ async fn tests_that_the_look_answers_covered_cases_as_the_core_rule() -> TestRes
                     "{}: {name}: the look answered {:?}",
                     case.cases,
                     code(&answer)
+                ));
+            }
+            // Key by key, the field's own blank drawing over its box lets it through (ruling
+            // R56): the look differs from main's rule there, and only there.
+            let keyed = LookField {
+                keys: true,
+                ..field(&r#ref, Some(expecting(origin)))
+            };
+            let keyed = look_one(&live, &env, &page, keyed).await?;
+            let own_drawing = OWN_DRAWINGS.contains(&(case.cases, name));
+            let wanted = (covered && !own_drawing).then_some("box_covered");
+            if code(&keyed) != wanted {
+                failures.push(format!(
+                    "{}: {name}: key by key the look answered {:?}",
+                    case.cases,
+                    code(&keyed)
                 ));
             }
             if answer.facts.is_none() {
@@ -826,5 +866,113 @@ async fn tests_that_a_cross_site_box_answers_its_frames_origin_on_a_tab_behind()
     );
     live.close(&front).await?;
     live.close(&page).await?;
+    Ok(())
+}
+
+/// Rulings R55 and R56 at the look, as the host's check call makes it: a field's own drawing over
+/// its box, which is no `<label>`, with nothing set by the host. Main's own rule calls every box
+/// here covered. The look lets through a drawing that lies over its box, holds no control, and
+/// draws the box's accessible name, either way of typing: a sibling div or span, one whose
+/// wrapper focuses the box on a click, a span the box is named by (`aria-labelledby`), an outline
+/// fieldset's legend, a `<label>` that labels no control. A drawing that draws nothing (an SVG
+/// whose one text is a `<title>` included) only key by key: one insertion answers
+/// `box_covered`. Every other shape covers the box either way: a banner far wider than the box,
+/// other words, a drawing that holds a button, one outside the box's parent and grandparent, and
+/// a `<label>` for another field, which a person's click would send to that field.
+/// These are the pages where the look and main's rule differ (the parity test's other pages).
+///
+/// Fails, each at the boxes named: the drawing's branch left out of the look (every box the
+/// look should let through answers `box_covered`); point 5 reading `aria-label` alone
+/// (`#named-box`); a blank drawing let through for one insertion too (`#blank-box`); the
+/// rendered text read as `textContent` (`#blank-box` draws its hidden name and passes by one
+/// insertion, as does `#svg-box` its `<title>`); the label condition taken out (`#for-box`, a
+/// label for another field, passes); the rectangle grown without bound on each side (`#banner-box`); a control
+/// selector that matches nothing (`#button-box`).
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_fields_own_drawing_lets_its_box_through() -> TestResult {
+    // (page, box, let through by one insertion, let through key by key)
+    const BOXES: [(&str, &str, bool, bool); 15] = [
+        ("/private/drawn-label-login.html", "#user", true, true),
+        ("/private/drawn-label-login.html", "#pw", true, true),
+        ("/private/drawn-label-shapes.html", "#span-box", true, true),
+        ("/private/drawn-label-shapes.html", "#focus-box", true, true),
+        ("/private/drawn-label-shapes.html", "#named-box", true, true),
+        (
+            "/private/drawn-label-shapes.html",
+            "#outline-box",
+            true,
+            true,
+        ),
+        ("/private/drawn-label-shapes.html", "#label-box", true, true),
+        (
+            "/private/drawn-label-shapes.html",
+            "#shrink-box",
+            true,
+            true,
+        ),
+        (
+            "/private/drawn-label-shapes.html",
+            "#blank-box",
+            false,
+            true,
+        ),
+        ("/private/drawn-label-shapes.html", "#svg-box", false, true),
+        (
+            "/private/drawn-label-shapes.html",
+            "#banner-box",
+            false,
+            false,
+        ),
+        (
+            "/private/drawn-label-shapes.html",
+            "#other-box",
+            false,
+            false,
+        ),
+        (
+            "/private/drawn-label-shapes.html",
+            "#button-box",
+            false,
+            false,
+        ),
+        ("/private/drawn-label-shapes.html", "#far-box", false, false),
+        ("/private/drawn-label-shapes.html", "#for-box", false, false),
+    ];
+    let server = FixtureServer::start(private_host::pages()).await?;
+    let live = LiveBrowser::connect().await?;
+    let (page_origin, _other) = private_host::origins(&server);
+    let mut failures = Vec::new();
+    for path in [
+        "/private/drawn-label-login.html",
+        "/private/drawn-label-shapes.html",
+    ] {
+        let page = live.open(&server.url("127.0.0.1", path)).await?;
+        for &(_, css, inserted, keyed) in BOXES.iter().filter(|(on, ..)| *on == path) {
+            let r#ref = mint_ref(&live, &page, css).await?;
+            let env = HostEnv::new(&live);
+            if !main_rule_blocks(&live, &page, &r#ref, false).await? {
+                failures.push(format!("{css}: main's own rule does not call it covered"));
+            }
+            let plain = field(&r#ref, Some(expecting(&page_origin)));
+            for (keys, through) in [(false, inserted), (true, keyed)] {
+                let ask = LookField {
+                    keys,
+                    ..plain.clone()
+                };
+                let answer = look_one(&live, &env, &page, ask).await?;
+                let wanted = (!through).then_some("box_covered");
+                if code(&answer) != wanted {
+                    failures.push(format!(
+                        "{css}, keys {keys}: the look answered {:?}",
+                        code(&answer)
+                    ));
+                }
+            }
+            assert!(!env.was_sent(), "a look never marks itself sent");
+        }
+        live.close(&page).await?;
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
     Ok(())
 }

@@ -34,8 +34,8 @@ use crate::op_scope::{OpScope, Sent};
 use crate::page::OpPage;
 use crate::private_entry::look_op::{self, Look, LookedBox, MainNavigation, TabAddress};
 use crate::private_entry::{
-    BoxState, Entry, EntryCode, EntryError, EntryOutcome, FocusState, LookField, PageSecret,
-    PrivateAnswer, PrivateField, PrivateStep, Sending, entry,
+    BoxState, Drawing, Entry, EntryCode, EntryError, EntryOutcome, FocusState, LookField,
+    PageSecret, PrivateAnswer, PrivateField, PrivateStep, Sending, entry,
 };
 use crate::probe::{self, Control, ProbeFailure, ProbePolicy, ProbeReply, ProbeRequest};
 use crate::world::{IsolatedWorld, Pin};
@@ -56,6 +56,13 @@ enum BoxEnd {
     Entered,
     /// Neo saw the value go into the box, then the box or its document went.
     Moved,
+}
+
+/// What the read-back found: how the box ended, or that the site draws the value outside the box
+/// it holds it in (ruling R55), which `type_box` answers by emptying the box.
+enum ReadBack {
+    Ended(BoxEnd),
+    Drawn,
 }
 
 /// Why the entry stopped.
@@ -92,12 +99,19 @@ struct Emptied {
     focus: FocusState,
 }
 
+/// The longest value a field's own drawing may show and keep (ruling R56): a code's digits, which
+/// a site draws as they are typed. A longer value drawn there is a password or a card number,
+/// which Neo empties from the box.
+const DRAWN_CODE_MAX: usize = 10;
+
 /// One entry's running state: what it sent, and how many characters each box got.
 pub(crate) struct EntryRun<'a> {
     pw: &'a Playwright,
     scope: &'a OpScope<'a>,
     sending: Sending,
     typed: Vec<usize>,
+    /// How each box's field drawing figured in its entry, from its read-back (rulings R55, R56).
+    drawings: Vec<Drawing>,
     /// The main frame's navigations since admission, raced with every look and the read-back.
     navigation: Option<MainNavigation>,
 }
@@ -109,6 +123,7 @@ impl<'a> EntryRun<'a> {
             scope,
             sending: Sending::NotYet,
             typed: vec![0; fields],
+            drawings: vec![Drawing::None; fields],
             navigation: None,
         }
     }
@@ -304,7 +319,72 @@ impl<'a> EntryRun<'a> {
             // The box held the focus in the check right before the one insertion.
             true
         };
-        self.read_back(page, &world, pin, seen, guard).await
+        match self
+            .read_back(page, &world, (pin, at), seen, &text, guard)
+            .await?
+        {
+            ReadBack::Ended(end) => Ok(end),
+            ReadBack::Drawn => Err(self.drawn(page, sent, input, &box_at, &text, spaced).await),
+        }
+    }
+
+    /// The stop for a box whose site drew the value outside it (ruling R55): the box is emptied
+    /// again, then the wrapper is read once more. Neo cannot take text off a page, so a wrapper
+    /// that still draws the value answers `value_still_drawn`, which tells the host to reload or
+    /// close the page; one that no longer does, `value_drawn`. A box that cannot be emptied
+    /// answers as such a box does; one whose focus step failed (it left its document, say) keeps
+    /// that stop unless the page still draws the value.
+    async fn drawn(
+        &self,
+        page: &OpPage<'_>,
+        sent: &Sent<'_>,
+        input: &mut PageInput,
+        box_at: &BoxAt<'_>,
+        text: &PageSecret,
+        spaced: bool,
+    ) -> Stop {
+        let failed = match self
+            .empty_drawn(page, sent, input, box_at, text, spaced)
+            .await
+        {
+            Ok(()) => None,
+            Err(stop) if stop.error.code == EntryCode::BoxNotCleared.as_str() => return stop,
+            Err(stop) => Some(stop),
+        };
+        if self.still_drawn(page, box_at, text).await {
+            return self.stop(EntryCode::ValueStillDrawn);
+        }
+        failed.unwrap_or_else(|| self.stop(EntryCode::ValueDrawn))
+    }
+
+    /// Whether the wrapper that drew the value still draws it. `true` unless the page side
+    /// answers that it does not: Neo never says the page was cleared when it cannot tell.
+    async fn still_drawn(&self, page: &OpPage<'_>, box_at: &BoxAt<'_>, text: &PageSecret) -> bool {
+        let step = PrivateStep::Drawn { text: text.clone() };
+        !matches!(
+            self.step(page, box_at.world, box_at.pin, step).await,
+            Ok(Some(PrivateAnswer::Drawn { drawn: false }))
+        )
+    }
+
+    /// Empties a box entered under a cover whose site drew the value outside it (ruling R55),
+    /// as a full box with no size is emptied ([`Self::empty_box`]). The read-back forgot the
+    /// box, so a fresh focus step arms it again, and a new guard forgets the value once more
+    /// whatever happens. A box that cannot be emptied answers as such a box does there.
+    async fn empty_drawn(
+        &self,
+        page: &OpPage<'_>,
+        sent: &Sent<'_>,
+        input: &mut PageInput,
+        box_at: &BoxAt<'_>,
+        text: &PageSecret,
+        spaced: bool,
+    ) -> Result<(), Stop> {
+        let _forget = ForgetGuard::new(self.scope, box_at.world, box_at.pin);
+        self.focus_step(page, sent, input, box_at, text, spaced)
+            .await?;
+        self.empty_box(page, sent, input, box_at, text, spaced)
+            .await
     }
 
     /// The focus step (design section 5.4): marks the box, arms its listener, focuses it and
@@ -485,10 +565,14 @@ impl<'a> EntryRun<'a> {
         &mut self,
         page: &OpPage<'_>,
         world: &IsolatedWorld,
-        pin: Pin,
+        (pin, at): (Pin, usize),
         seen: bool,
+        text: &PageSecret,
         guard: ForgetGuard,
-    ) -> Result<BoxEnd, Stop> {
+    ) -> Result<ReadBack, Stop> {
+        // A drawn value of at most ten characters is a code the site draws, which stays; a
+        // longer one is a password or a card number, which the site must not show (ruling R56).
+        let long = text.char_count() > DRAWN_CODE_MAX;
         let request = private(pin, PrivateStep::ReadBack);
         let reading = look_op::within(self.scope, probe::call(self.scope, page, world, &request));
         let read = match self.navigation.as_mut() {
@@ -499,7 +583,7 @@ impl<'a> EntryRun<'a> {
         // as when it was replaced. The guard forgets the value if the page still answers.
         let Some(called) = read else {
             return if seen {
-                Ok(BoxEnd::Moved)
+                Ok(ReadBack::Ended(BoxEnd::Moved))
             } else {
                 Err(self.stop(EntryCode::PageMoved))
             };
@@ -509,19 +593,28 @@ impl<'a> EntryRun<'a> {
             guard.disarm();
         }
         match called {
-            Ok(ProbeReply::Value { value }) => match decode(value.into_value()) {
+            Ok(ProbeReply::Value { value }) => match self.noted(at, decode(value.into_value())) {
+                // The site draws a long value outside the box (rulings R55, R56), whatever the
+                // box holds now (a field may move what is typed into its own drawing and empty
+                // the box), unless its page is moving on, which the arms below answer as before.
+                // A short one is a code the site draws, and the box answers as it otherwise would.
+                Some(PrivateAnswer::ReadBack {
+                    moving: false,
+                    drawing: Drawing::Drawn,
+                    ..
+                }) if long => Ok(ReadBack::Drawn),
                 // The box holds the value, and its page already submitted or is unloading: the
                 // value went out with the form (ruling R38).
                 Some(PrivateAnswer::ReadBack {
                     state: BoxState::Holds,
                     moving: true,
                     ..
-                }) => Ok(BoxEnd::Moved),
+                }) => Ok(ReadBack::Ended(BoxEnd::Moved)),
                 Some(PrivateAnswer::ReadBack {
                     state: BoxState::Holds,
                     moving: false,
                     ..
-                }) => Ok(BoxEnd::Entered),
+                }) => Ok(ReadBack::Ended(BoxEnd::Entered)),
                 // The page side marked the text control holding the focus, if it is not the box,
                 // before it forgot the box (ruling R26).
                 Some(PrivateAnswer::ReadBack {
@@ -534,12 +627,12 @@ impl<'a> EntryRun<'a> {
                     state: BoxState::Left,
                     held_at_last_input,
                     ..
-                }) if seen && held_at_last_input => Ok(BoxEnd::Moved),
+                }) if seen && held_at_last_input => Ok(ReadBack::Ended(BoxEnd::Moved)),
                 Some(PrivateAnswer::ReadBack { .. }) => Err(self.stop(EntryCode::PageMoved)),
                 _ => Err(self.stop(EntryCode::Internal)),
             },
             // The document itself was replaced: a form that submitted.
-            Err(ProbeFailure::Gone(_)) if seen => Ok(BoxEnd::Moved),
+            Err(ProbeFailure::Gone(_)) if seen => Ok(ReadBack::Ended(BoxEnd::Moved)),
             // No document change Neo can vouch for: the box was never under entry in this
             // world, so nothing says what it held.
             Err(ProbeFailure::Gone(_)) | Ok(ProbeReply::Detached) => {
@@ -631,6 +724,16 @@ impl<'a> EntryRun<'a> {
         }
     }
 
+    /// `answer`, with a read-back's drawing kept for the record of box `at`.
+    fn noted(&mut self, at: usize, answer: Option<PrivateAnswer>) -> Option<PrivateAnswer> {
+        if let Some(PrivateAnswer::ReadBack { drawing, .. }) = &answer
+            && let Some(slot) = self.drawings.get_mut(at)
+        {
+            *slot = *drawing;
+        }
+        answer
+    }
+
     /// The answer of an entry that did not stop.
     fn ended(self, ended: Ended) -> Entry {
         let outcome = match ended {
@@ -643,13 +746,19 @@ impl<'a> EntryRun<'a> {
             at: None,
             typed: self.typed,
             error: None,
+            drawings: self.drawings,
         }
     }
 
     /// The answer of an entry that stopped at box `at`: `uncertain` when that box got
     /// characters or the page moved under it, `refused` when no box got any, else `partial`.
     fn stopped(self, at: usize, stop: Stop) -> Entry {
-        let Self { sending, typed, .. } = self;
+        let Self {
+            sending,
+            typed,
+            drawings,
+            ..
+        } = self;
         let Stop { error } = stop;
         let in_box = typed.get(at).copied().unwrap_or(0);
         let outcome = if in_box > 0 || error.code == EntryCode::PageMoved.as_str() {
@@ -665,6 +774,7 @@ impl<'a> EntryRun<'a> {
             at: Some(at),
             typed,
             error: Some(error),
+            drawings,
         }
     }
 }

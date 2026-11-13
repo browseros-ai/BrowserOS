@@ -36,6 +36,8 @@
  * (`anyPrivatelyTyped`), so a marked box moved into another frame's document is not masked in
  * that frame's tree walk there; no host fill happens under the switch.
  */
+
+import { coverWrapper, renderedText } from './private-look'
 import type {
   BoxState,
   FocusState,
@@ -70,6 +72,16 @@ let anyMarked = false
 type Watched = {
   readonly text: string
   readonly spaced: boolean
+  /**
+   * For a box its look let through under its field's own drawing (rulings R55, R56): the
+   * drawing's wrapper, whether its text already held the value before the first character, and
+   * the value it is compared with.
+   */
+  readonly cover?: {
+    readonly wrapper: Element
+    readonly drewBefore: boolean
+    readonly text: string
+  }
   heldAtLastInput: boolean
   readonly submits: Event[]
   leaving: boolean
@@ -85,6 +97,13 @@ const watched = new WeakMap<Element, Watched>()
 
 /** The boxes under entry, by pin: kept until `readBack` or `forget`, never evicted. */
 const active = new Map<Pin, Element>()
+
+/**
+ * The wrapper whose text drew the value at a box's read-back (ruling R55), by pin, until the
+ * `drawn` step asks whether it still does after Rust emptied the box. Kept apart from the box's
+ * entry, which the read-back ends and the emptying's focus step starts again.
+ */
+const drawnWrappers = new Map<Pin, Element>()
 
 /** Whether Neo typed a private value into `element` (the mask reads it, pull request 4). */
 export function privatelyTyped(element: Element): boolean {
@@ -108,6 +127,17 @@ export function privateStep(
   request: PrivateRequest,
 ): ReplyTo<'private'> | Promise<ReplyTo<'private'>> {
   const { step, pin } = request
+  // Asked after the emptying, whatever became of the box: only the wrapper is read. A pin with
+  // no wrapper kept answers that it still draws, so Neo never says the page was cleared when it
+  // cannot tell.
+  if (step.kind === 'drawn') {
+    const wrapper = drawnWrappers.get(pin)
+    drawnWrappers.delete(pin)
+    return reply({
+      kind: 'drawn',
+      drawn: wrapper ? draws(wrapper, step.text) : true,
+    })
+  }
   // After `focus`, the box is reached through `active`, connected or not: a read-back must
   // reach a box that left its document, whose listener still knows what it held at its last
   // input. Before it, the box must be in its document.
@@ -127,7 +157,7 @@ function answer(
   world: World,
   pin: Pin,
   box: Element,
-  step: PrivateStep,
+  step: Exclude<PrivateStep, { kind: 'drawn' }>,
 ): PrivateAnswer | Promise<PrivateAnswer> {
   switch (step.kind) {
     case 'focus':
@@ -219,9 +249,17 @@ function moving(entry: Watched | undefined): boolean {
 
 function listen(pin: Pin, box: Element, text: string, spaced: boolean): void {
   forget(pin, box)
+  const wrapper = coverWrapper(box)
   const entry: Watched = {
     text,
     spaced,
+    ...(wrapper && {
+      cover: {
+        wrapper,
+        drewBefore: draws(wrapper, text),
+        text,
+      },
+    }),
     heldAtLastInput: false,
     submits: [],
     leaving: false,
@@ -261,7 +299,11 @@ function forget(pin: Pin, box: Element): void {
  * The read-back: what the box holds, whether it held the whole value at its last input event,
  * and whether its page is moving on (a submit not prevented, or the document unloading): a box
  * that still holds its value on a page that already submitted went out with the form, and Rust
- * answers it as moved, never as entered (ruling R38).
+ * answers it as moved, never as entered (ruling R38). Also how the box's field drawing figured
+ * (`drawing`, rulings R55 and R56): `none` without one, `under` for a box entered under it, and
+ * `drawn` when its wrapper now draws the value outside the box, where it did not before the first
+ * character. Rust empties the box of a long drawn value and keeps a short one, a code's digits.
+ * The value is compared here and nothing of it leaves this world.
  */
 function readBack(pin: Pin, box: Element): PrivateAnswer {
   const entry = watched.get(box)
@@ -275,8 +317,29 @@ function readBack(pin: Pin, box: Element): PrivateAnswer {
   // box is forgotten, which ends this entry's reach to the box (ruling R26).
   if (state === 'other') markFocused(box)
   const leaving = moving(entry)
+  const cover = entry?.cover
+  const drawn =
+    cover !== undefined && !cover.drewBefore && draws(cover.wrapper, cover.text)
+  if (cover && drawn) drawnWrappers.set(pin, cover.wrapper)
   forget(pin, box)
-  return { kind: 'readBack', state, heldAtLastInput, moving: leaving }
+  const drawing = !cover ? 'none' : drawn ? 'drawn' : 'under'
+  return { kind: 'readBack', state, heldAtLastInput, moving: leaving, drawing }
+}
+
+/**
+ * Whether `wrapper` draws `text` as text outside its box: its rendered text, which holds no
+ * box's value, contains it once whitespace, dashes and slashes are set aside on both sides and
+ * both are lowered, whatever the field's `spaced` says: a site draws a code one digit to a cell,
+ * which its text separates by line breaks, a card number in its own groups (`4242 4242 …`), and
+ * a value through `text-transform`, which the rendered text gives as shown while the page's text
+ * holds it as typed. A false alarm would need the drawing to gain the same characters in order
+ * after the typing, which is the value. Text it held before the first character does not count
+ * (`drewBefore`). `spaced` stays the box's own read-back's (`same`).
+ */
+function draws(wrapper: Element, text: string): boolean {
+  const bare = (value: string) => value.replace(/[\s\-/]/g, '').toLowerCase()
+  const value = bare(text)
+  return value !== '' && bare(renderedText(wrapper)).includes(value)
 }
 
 function heldText(box: Element): string {

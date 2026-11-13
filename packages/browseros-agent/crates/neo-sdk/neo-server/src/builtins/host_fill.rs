@@ -25,8 +25,8 @@ use std::time::Duration;
 use browseros_core::TabId;
 use futures_util::future::BoxFuture;
 use neo_playwright::{
-    Answer, BoxFacts, BoxLook, BoxSpec, Entry, EntryError, EntryOutcome, EntryRequest, Expect,
-    FileAccess, LookField, LookRequest, OpEnv, PrivateField, PrivateText,
+    Answer, BoxFacts, BoxLook, BoxSpec, Drawing, Entry, EntryError, EntryOutcome, EntryRequest,
+    Expect, FileAccess, LookField, LookRequest, OpEnv, PrivateField, PrivateText,
 };
 use neo_sdk_api as api;
 use neo_trace::{Effect, ErrorOwner, OperationKind};
@@ -407,10 +407,19 @@ fn entry_deadline(run_deadline: Instant) -> Instant {
 /// the door derives from "sent" and that answer the delivery the entry reported (ruling R5).
 fn settle(entry: &Entry) -> Result<Value, LeafError> {
     match entry.outcome {
-        EntryOutcome::Entered | EntryOutcome::EnteredPageMoved => Ok(json!({
-            "outcome": entry.outcome.as_str(),
-            "typed": entry.typed,
-        })),
+        EntryOutcome::Entered | EntryOutcome::EnteredPageMoved => {
+            let mut result = json!({
+                "outcome": entry.outcome.as_str(),
+                "typed": entry.typed,
+            });
+            let drawings = drawing_notes(&entry.drawings);
+            if !drawings.is_empty()
+                && let Some(fields) = result.as_object_mut()
+            {
+                fields.insert("drawings".to_owned(), Value::Array(drawings));
+            }
+            Ok(result)
+        }
         EntryOutcome::Refused | EntryOutcome::Partial | EntryOutcome::Uncertain => {
             let Some(error) = entry.error.as_ref() else {
                 // Unexplained, so nothing about the page is certain.
@@ -425,6 +434,18 @@ fn settle(entry: &Entry) -> Result<Value, LeafError> {
             })
         }
     }
+}
+
+/// The record's note for each field entered under its field's own drawing (rulings R55, R56):
+/// its index, and whether the site drew the value there, a code of at most ten characters that
+/// stayed. A field with no drawing over it has no note, so a record reads as before.
+fn drawing_notes(drawings: &[Drawing]) -> Vec<Value> {
+    drawings
+        .iter()
+        .enumerate()
+        .filter(|(_, drawing)| **drawing != Drawing::None)
+        .map(|(field, drawing)| json!({ "field": field, "drawn": *drawing == Drawing::Drawn }))
+        .collect()
 }
 
 /// The entry's error as the door's. Its codes are on the door's one list; one that is not (the

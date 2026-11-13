@@ -8716,12 +8716,239 @@ ${value.stack}`;
     };
   }
 
+  // crates/neo-sdk/neo-playwright-js/src/probe/private-look.ts
+  var TEXT_TYPES = new Set([
+    "text",
+    "password",
+    "tel",
+    "email",
+    "search",
+    "url",
+    "number"
+  ]);
+  var MAXLENGTH_TYPES = new Set([
+    "text",
+    "search",
+    "url",
+    "tel",
+    "email",
+    "password"
+  ]);
+  function look(world, request) {
+    const element = world.pins.live(request.pin);
+    if (!element)
+      return { kind: "detached" };
+    return { kind: "value", value: lookAt(world, element, request.look) };
+  }
+  function lookAt(world, element, ask) {
+    coverWrappers.delete(element);
+    if (!isTextInput(element))
+      return { refusal: { code: "notAnInput" } };
+    const facts = factsOf(element);
+    const refusal = firstRefusal(world, element, facts, ask);
+    return refusal ? { facts, refusal } : { facts };
+  }
+  function firstRefusal(world, element, facts, ask) {
+    const { expect } = ask;
+    if (expect && facts.origin !== expect.origin)
+      return { code: "wrongOrigin" };
+    if (expect?.type !== undefined && expect.type !== facts.type)
+      return { code: "wrongType" };
+    const fact = expect && changedFact(facts, expect);
+    if (fact)
+      return { code: "boxChanged", fact };
+    if (element.disabled || element.readOnly || element.matches(":disabled"))
+      return { code: "boxNotEditable" };
+    if (!facts.sized) {
+      if (!ask.keys)
+        return { code: "boxHidden" };
+    } else if (!world.injected.elementState(element, "visible", ask.frameVisible).matches)
+      return { code: "boxHidden" };
+    else if (blocked(world, element, ask.keys))
+      return { code: "boxCovered" };
+    if (ask.length !== undefined && !ask.cut && facts.maxLength !== null && MAXLENGTH_TYPES.has(facts.type) && ask.length > facts.maxLength)
+      return { code: "valueTooLong" };
+    return;
+  }
+  function factsOf(input) {
+    const rect = input.getBoundingClientRect();
+    return {
+      origin: originOf(input.ownerDocument),
+      type: input.type,
+      autocomplete: input.getAttribute("autocomplete") ?? "",
+      maxLength: input.maxLength >= 0 ? input.maxLength : null,
+      inputMode: input.getAttribute("inputmode") ?? "",
+      name: input.getAttribute("name") ?? "",
+      id: input.getAttribute("id") ?? "",
+      sized: rect.width > 0 && rect.height > 0,
+      empty: input.value === ""
+    };
+  }
+  function originOf(document2) {
+    const origin = document2.defaultView ? Reflect.get(document2.defaultView, "origin") : undefined;
+    return typeof origin === "string" ? origin : document2.location.origin;
+  }
+  function changedFact(facts, expect) {
+    if (expect.autocomplete !== undefined && expect.autocomplete !== facts.autocomplete)
+      return "autocomplete";
+    if (expect.maxLength !== undefined && expect.maxLength !== facts.maxLength)
+      return "maxLength";
+    if (expect.inputMode !== undefined && expect.inputMode !== facts.inputMode)
+      return "inputMode";
+    if (expect.name !== undefined && expect.name !== facts.name)
+      return "name";
+    if (expect.id !== undefined && expect.id !== facts.id)
+      return "id";
+    return;
+  }
+  function isTextInput(element) {
+    return element.localName === "input" && element.namespaceURI === "http://www.w3.org/1999/xhtml" && TEXT_TYPES.has(String(Reflect.get(element, "type")));
+  }
+  function blockerOf(box) {
+    try {
+      scrollIntoViewIfNeeded(box);
+      const rect = box.getBoundingClientRect();
+      let document2 = box.ownerDocument;
+      let x = rect.left + rect.width / 2;
+      let y = rect.top + rect.height / 2;
+      for (let frame = document2.defaultView?.frameElement;frame; frame = document2.defaultView?.frameElement) {
+        const frameRect = frame.getBoundingClientRect();
+        x += frameRect.x + frame.clientLeft;
+        y += frameRect.y + frame.clientTop;
+        document2 = frame.ownerDocument;
+      }
+      return blockerAt(document2, box, x, y);
+    } catch {
+      return "unread";
+    }
+  }
+  var coverWrappers = new WeakMap;
+  function coverWrapper(box) {
+    return coverWrappers.get(box);
+  }
+  function blocked(world, box, keys) {
+    const blocker = blockerOf(box);
+    if (blocker === null)
+      return false;
+    if (blocker === "unread")
+      return true;
+    const wrapper = drawingOf(world, box, blocker, keys);
+    if (!wrapper)
+      return true;
+    coverWrappers.set(box, wrapper);
+    return false;
+  }
+  var CONTROLS = "input, textarea, select, button, a[href], iframe, frame, [contenteditable], [tabindex]";
+  function drawingOf(world, box, blocker, keys) {
+    if (blocker.ownerDocument !== box.ownerDocument)
+      return null;
+    const parent = box.parentElement;
+    const grand = parent?.parentElement;
+    const wrapper = parent?.contains(blocker) ? parent : grand?.contains(blocker) ? grand : null;
+    if (!wrapper)
+      return null;
+    let cover = blocker;
+    while (cover.parentElement && cover.parentElement !== wrapper && !cover.parentElement.contains(box))
+      cover = cover.parentElement;
+    if (cover.contains(box) || cover.matches(CONTROLS) || cover.querySelector(CONTROLS) || labelsAnother(cover, box))
+      return null;
+    const own = box.getBoundingClientRect();
+    const drawn = cover.getBoundingClientRect();
+    const dx = own.width / 2;
+    const dy = own.height / 2;
+    if (drawn.left < own.left - dx || drawn.right > own.right + dx || drawn.top < own.top - dy || drawn.bottom > own.bottom + dy)
+      return null;
+    const text = renderedText(cover);
+    if (fold(text) === "")
+      return keys ? wrapper : null;
+    const name = world.injected.utils.getElementAccessibleNameText(box, false);
+    return sameName(text, name) ? wrapper : null;
+  }
+  function labelsAnother(cover, box) {
+    const labels = [cover, ...cover.querySelectorAll("label")];
+    return labels.some((label) => {
+      if (label.localName !== "label")
+        return false;
+      const control = Reflect.get(label, "control");
+      return isNode(control) && control !== box;
+    });
+  }
+  function renderedText(element) {
+    const text = Reflect.get(element, "innerText");
+    return typeof text === "string" ? text : "";
+  }
+  function sameName(drawn, name) {
+    const a = fold(drawn);
+    const b = fold(name);
+    if (!a || !b)
+      return false;
+    if (a === b)
+      return true;
+    const [shorter, longer] = a.length < b.length ? [a, b] : [b, a];
+    return shorter.length >= 3 && longer.includes(shorter);
+  }
+  function fold(text) {
+    return text.replace(/\s+/g, " ").trim().toLowerCase().replace(/[\s*:]+$/, "");
+  }
+  function scrollIntoViewIfNeeded(box) {
+    const scroll = Reflect.get(box, "scrollIntoViewIfNeeded");
+    if (typeof scroll === "function")
+      Reflect.apply(scroll, box, [true]);
+    else
+      box.scrollIntoView({ block: "center", inline: "center" });
+  }
+  function blockerAt(document2, box, pointX, pointY) {
+    let currentDocument = document2;
+    let x = pointX;
+    let y = pointY;
+    let hit = currentDocument.elementFromPoint(x, y);
+    while (hit && (hit.tagName === "IFRAME" || hit.tagName === "FRAME") && hit !== box) {
+      let child = null;
+      try {
+        child = Reflect.get(hit, "contentDocument");
+      } catch {
+        child = null;
+      }
+      if (!isDocument(child))
+        break;
+      const frameRect = hit.getBoundingClientRect();
+      x -= frameRect.x + hit.clientLeft;
+      y -= frameRect.y + hit.clientTop;
+      currentDocument = child;
+      hit = currentDocument.elementFromPoint(x, y);
+    }
+    if (!hit || hit === box || reaches(hit, box) || reaches(box, hit))
+      return null;
+    const hitLabel = hit.closest("label");
+    if (hitLabel && (hitLabel.control === box || hitLabel.contains(box)))
+      return null;
+    const boxLabel = box.closest("label");
+    return boxLabel?.contains(hit) ?? false ? null : hit;
+  }
+  function up(node) {
+    const next = node.parentNode ?? Reflect.get(node, "host") ?? Reflect.get(node.getRootNode(), "host");
+    return isNode(next) ? next : null;
+  }
+  function isNode(value) {
+    return typeof value === "object" && value !== null && typeof Reflect.get(value, "nodeType") === "number";
+  }
+  function isDocument(value) {
+    return isNode(value) && value.nodeType === Node.DOCUMENT_NODE;
+  }
+  function reaches(from, to) {
+    for (let node = from;node; node = up(node))
+      if (node === to)
+        return true;
+    return false;
+  }
+
   // crates/neo-sdk/neo-playwright-js/src/probe/private-entry.ts
   var MARK = Symbol.for("neo.privatelyTyped");
   var anyMarked = false;
   var LEAVES = ["beforeunload", "pagehide"];
   var watched = new WeakMap;
   var active = new Map;
+  var drawnWrappers = new Map;
   function privatelyTyped(element) {
     return Object.hasOwn(element, MARK);
   }
@@ -8735,6 +8962,14 @@ ${value.stack}`;
   }
   function privateStep(world, request) {
     const { step, pin } = request;
+    if (step.kind === "drawn") {
+      const wrapper = drawnWrappers.get(pin);
+      drawnWrappers.delete(pin);
+      return reply({
+        kind: "drawn",
+        drawn: wrapper ? draws(wrapper, step.text) : true
+      });
+    }
     const box = active.get(pin) ?? (step.kind === "focus" ? world.pins.live(pin) : undefined);
     if (!box)
       return { kind: "detached" };
@@ -8805,9 +9040,17 @@ ${value.stack}`;
   }
   function listen(pin, box, text, spaced) {
     forget(pin, box);
+    const wrapper = coverWrapper(box);
     const entry = {
       text,
       spaced,
+      ...wrapper && {
+        cover: {
+          wrapper,
+          drewBefore: draws(wrapper, text),
+          text
+        }
+      },
       heldAtLastInput: false,
       submits: [],
       leaving: false,
@@ -8854,8 +9097,18 @@ ${value.stack}`;
     if (state === "other")
       markFocused(box);
     const leaving = moving(entry);
+    const cover = entry?.cover;
+    const drawn = cover !== undefined && !cover.drewBefore && draws(cover.wrapper, cover.text);
+    if (cover && drawn)
+      drawnWrappers.set(pin, cover.wrapper);
     forget(pin, box);
-    return { kind: "readBack", state, heldAtLastInput, moving: leaving };
+    const drawing = !cover ? "none" : drawn ? "drawn" : "under";
+    return { kind: "readBack", state, heldAtLastInput, moving: leaving, drawing };
+  }
+  function draws(wrapper, text) {
+    const bare = (value) => value.replace(/[\s\-/]/g, "").toLowerCase();
+    const value = bare(text);
+    return value !== "" && bare(renderedText(wrapper)).includes(value);
   }
   function heldText(box) {
     const value = Reflect.get(box, "value");
@@ -9200,163 +9453,6 @@ ${value.stack}`;
     };
   }
 
-  // crates/neo-sdk/neo-playwright-js/src/probe/private-look.ts
-  var TEXT_TYPES = new Set([
-    "text",
-    "password",
-    "tel",
-    "email",
-    "search",
-    "url",
-    "number"
-  ]);
-  var MAXLENGTH_TYPES = new Set([
-    "text",
-    "search",
-    "url",
-    "tel",
-    "email",
-    "password"
-  ]);
-  function look(world, request) {
-    const element = world.pins.live(request.pin);
-    if (!element)
-      return { kind: "detached" };
-    return { kind: "value", value: lookAt(world, element, request.look) };
-  }
-  function lookAt(world, element, ask) {
-    if (!isTextInput(element))
-      return { refusal: { code: "notAnInput" } };
-    const facts = factsOf(element);
-    const refusal = firstRefusal(world, element, facts, ask);
-    return refusal ? { facts, refusal } : { facts };
-  }
-  function firstRefusal(world, element, facts, ask) {
-    const { expect } = ask;
-    if (expect && facts.origin !== expect.origin)
-      return { code: "wrongOrigin" };
-    if (expect?.type !== undefined && expect.type !== facts.type)
-      return { code: "wrongType" };
-    const fact = expect && changedFact(facts, expect);
-    if (fact)
-      return { code: "boxChanged", fact };
-    if (element.disabled || element.readOnly || element.matches(":disabled"))
-      return { code: "boxNotEditable" };
-    if (!facts.sized) {
-      if (!ask.keys)
-        return { code: "boxHidden" };
-    } else if (!world.injected.elementState(element, "visible", ask.frameVisible).matches)
-      return { code: "boxHidden" };
-    else if (covered(element))
-      return { code: "boxCovered" };
-    if (ask.length !== undefined && !ask.cut && facts.maxLength !== null && MAXLENGTH_TYPES.has(facts.type) && ask.length > facts.maxLength)
-      return { code: "valueTooLong" };
-    return;
-  }
-  function factsOf(input) {
-    const rect = input.getBoundingClientRect();
-    return {
-      origin: originOf(input.ownerDocument),
-      type: input.type,
-      autocomplete: input.getAttribute("autocomplete") ?? "",
-      maxLength: input.maxLength >= 0 ? input.maxLength : null,
-      inputMode: input.getAttribute("inputmode") ?? "",
-      name: input.getAttribute("name") ?? "",
-      id: input.getAttribute("id") ?? "",
-      sized: rect.width > 0 && rect.height > 0,
-      empty: input.value === ""
-    };
-  }
-  function originOf(document2) {
-    const origin = document2.defaultView ? Reflect.get(document2.defaultView, "origin") : undefined;
-    return typeof origin === "string" ? origin : document2.location.origin;
-  }
-  function changedFact(facts, expect) {
-    if (expect.autocomplete !== undefined && expect.autocomplete !== facts.autocomplete)
-      return "autocomplete";
-    if (expect.maxLength !== undefined && expect.maxLength !== facts.maxLength)
-      return "maxLength";
-    if (expect.inputMode !== undefined && expect.inputMode !== facts.inputMode)
-      return "inputMode";
-    if (expect.name !== undefined && expect.name !== facts.name)
-      return "name";
-    if (expect.id !== undefined && expect.id !== facts.id)
-      return "id";
-    return;
-  }
-  function isTextInput(element) {
-    return element.localName === "input" && element.namespaceURI === "http://www.w3.org/1999/xhtml" && TEXT_TYPES.has(String(Reflect.get(element, "type")));
-  }
-  function covered(box) {
-    try {
-      scrollIntoViewIfNeeded(box);
-      const rect = box.getBoundingClientRect();
-      let document2 = box.ownerDocument;
-      let x = rect.left + rect.width / 2;
-      let y = rect.top + rect.height / 2;
-      for (let frame = document2.defaultView?.frameElement;frame; frame = document2.defaultView?.frameElement) {
-        const frameRect = frame.getBoundingClientRect();
-        x += frameRect.x + frame.clientLeft;
-        y += frameRect.y + frame.clientTop;
-        document2 = frame.ownerDocument;
-      }
-      return blockerAt(document2, box, x, y);
-    } catch {
-      return true;
-    }
-  }
-  function scrollIntoViewIfNeeded(box) {
-    const scroll = Reflect.get(box, "scrollIntoViewIfNeeded");
-    if (typeof scroll === "function")
-      Reflect.apply(scroll, box, [true]);
-    else
-      box.scrollIntoView({ block: "center", inline: "center" });
-  }
-  function blockerAt(document2, box, pointX, pointY) {
-    let currentDocument = document2;
-    let x = pointX;
-    let y = pointY;
-    let hit = currentDocument.elementFromPoint(x, y);
-    while (hit && (hit.tagName === "IFRAME" || hit.tagName === "FRAME") && hit !== box) {
-      let child = null;
-      try {
-        child = Reflect.get(hit, "contentDocument");
-      } catch {
-        child = null;
-      }
-      if (!isDocument(child))
-        break;
-      const frameRect = hit.getBoundingClientRect();
-      x -= frameRect.x + hit.clientLeft;
-      y -= frameRect.y + hit.clientTop;
-      currentDocument = child;
-      hit = currentDocument.elementFromPoint(x, y);
-    }
-    if (!hit || hit === box || reaches(hit, box) || reaches(box, hit))
-      return false;
-    const hitLabel = hit.closest("label");
-    if (hitLabel && (hitLabel.control === box || hitLabel.contains(box)))
-      return false;
-    const boxLabel = box.closest("label");
-    return !(boxLabel?.contains(hit) ?? false);
-  }
-  function up(node) {
-    const next = node.parentNode ?? Reflect.get(node, "host") ?? Reflect.get(node.getRootNode(), "host");
-    return isNode(next) ? next : null;
-  }
-  function isNode(value) {
-    return typeof value === "object" && value !== null && typeof Reflect.get(value, "nodeType") === "number";
-  }
-  function isDocument(value) {
-    return isNode(value) && value.nodeType === Node.DOCUMENT_NODE;
-  }
-  function reaches(from, to) {
-    for (let node = from;node; node = up(node))
-      if (node === to)
-        return true;
-    return false;
-  }
-
   // crates/neo-sdk/neo-playwright-js/src/probe/private-shown.ts
   var inputs = 0;
   var counting = false;
@@ -9409,7 +9505,7 @@ ${value.stack}`;
   }
 
   // crates/neo-sdk/neo-playwright-js/src/probe/protocol.ts
-  var PROTOCOL = 38;
+  var PROTOCOL = 39;
 
   // crates/neo-sdk/neo-playwright-js/src/probe/read.ts
   var XHTML = "http://www.w3.org/1999/xhtml";

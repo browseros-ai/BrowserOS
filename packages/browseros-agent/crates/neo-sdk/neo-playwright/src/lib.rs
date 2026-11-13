@@ -80,9 +80,9 @@ pub use playwright::Playwright;
 pub use playwright_error::{Answer, ErrorCode, PlaywrightError, TimedOut};
 pub use prelude_source::PRELUDE_JS;
 pub use private_entry::{
-    BoxFact, BoxFacts, BoxLook, BoxSpec, Entry, EntryCode, EntryError, EntryOutcome, EntryRequest,
-    Expect, LookField, LookRequest, MAX_PRIVATE_CHARS, PictureCheck, PrivateField, PrivateText,
-    PrivateTextRefused, Sending, delivery_of,
+    BoxFact, BoxFacts, BoxLook, BoxSpec, Drawing, Entry, EntryCode, EntryError, EntryOutcome,
+    EntryRequest, Expect, LookField, LookRequest, MAX_PRIVATE_CHARS, PictureCheck, PrivateField,
+    PrivateText, PrivateTextRefused, Sending, delivery_of,
 };
 pub use probe::protocol::render as render_probe_protocol;
 pub use run_state::RunState;
