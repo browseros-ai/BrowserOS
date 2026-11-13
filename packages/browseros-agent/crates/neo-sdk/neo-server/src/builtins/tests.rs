@@ -1453,14 +1453,15 @@ async fn the_janitor_never_closes_the_browsers_last_tab() -> Result<(), Box<dyn 
 }
 
 /// When the idle agent tabs are all the browser has, every one closes but the one used last.
-/// Chromium answers a close before the tab leaves its listing, so the sweep's next listing still
-/// shows the tab it just closed: that tab must not count as the one keeping the browser open,
-/// or the sweep would close the last tab too.
+/// Chromium answers a close before the tab leaves its listing, so listings right after it still
+/// show the tab it just closed; the close waits them out (it answers closed only once the
+/// browser's list drops the tab), and that tab must not count as the one keeping the browser
+/// open, or the sweep would close the last tab too.
 #[tokio::test]
 async fn the_janitor_keeps_the_tab_used_last_while_a_closed_one_is_still_listed()
 -> Result<(), Box<dyn Error>> {
     let harness = Harness::new().await?;
-    harness.fake.linger_closed_tabs();
+    harness.fake.linger_closed_tabs_for(2);
     let janitor = harness.janitor();
     let (run, guard) = harness.run()?;
     let older = page_of(&value(

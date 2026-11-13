@@ -5,7 +5,7 @@ use std::time::Duration;
 use browseros_core::{TabId, TargetId};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use tokio::time::Instant;
+use tokio::time;
 use ts_rs::TS;
 
 use crate::listed_enum::listed_enum;
@@ -590,8 +590,28 @@ async fn close(
     let page = input.page.tab();
     let admitted = scope.admit_target(pw.browser(), page).await?;
     let _sent = scope.send_effect()?;
-    let closed = close_target(scope, page, admitted).await?;
-    gone(scope, page).await?;
+    // One deadline for everything the browser does from here, its answers included: a close
+    // never waits on the browser past it, and never answers closed without the listing.
+    let limit = scope.timeout().unwrap_or(CLOSE_CONFIRMATION);
+    let work = async {
+        let closed = close_target(scope, page, admitted).await?;
+        gone(scope, page).await?;
+        Ok::<TargetId, PlaywrightError>(closed)
+    };
+    let closed = match scope.within(time::timeout(limit, Box::pin(work))).await {
+        Ok(Ok(closed)) => closed?,
+        Ok(Err(_elapsed)) => {
+            scope.log("waiting for the browser to remove the tab from its tab list".to_owned());
+            return Err(scope.fail(
+                ErrorCode::WaitTimeout,
+                &format!("Timeout {}ms exceeded.", limit.as_millis()),
+            ));
+        }
+        Err(_expired) => {
+            scope.log("waiting for the browser to remove the tab from its tab list".to_owned());
+            return Err(scope.timed_out(ErrorCode::WaitTimeout));
+        }
+    };
     pw.workers_closed(closed).await;
     scope.run_state().frames.forget(page);
     Ok(())
@@ -600,59 +620,48 @@ async fn close(
 /// Sends `Target.closeTarget` for the tab's page target, through the run's view, whose gate
 /// still decides. The target admission named can have been replaced since (Chromium swaps a
 /// tab's contents), and the browser then knows no such target: the tab's current target, from
-/// the browser's tab list, is closed instead. Without that, the miss would read as a page
-/// already gone, which the prelude takes for a successful close. Returns the target closed.
+/// the browser's tab list, is closed instead, as often as the tab keeps swapping. A miss is never
+/// returned as an error, since the prelude takes `target_closed` for a close that succeeded;
+/// the listing decides ([`gone`]). Each retry is a new attempt at the page, so the host's
+/// policies are asked again first (the owner may have taken the tab meanwhile). Returns the
+/// target closed last.
 async fn close_target(
     scope: &OpScope<'_>,
     tab: TabId,
-    target: TargetId,
+    admitted: TargetId,
 ) -> Result<TargetId, PlaywrightError> {
-    let send = |target: &TargetId| {
-        scope.view().cdp(
-            "Target.closeTarget",
-            json!({ "targetId": target.as_str() }),
-            None,
-        )
-    };
-    match send(&target).await {
-        Ok(_) => return Ok(target),
-        Err(error) if ErrorCode::from_core(&error) == ErrorCode::TargetClosed => {}
-        Err(error) => return Err(scope.core_error(&error)),
-    }
-    match listed_target(scope, tab).await? {
-        Some(current) if current != target => {
-            send(&current)
-                .await
-                .map_err(|error| scope.core_error(&error))?;
-            Ok(current)
+    let mut target = admitted;
+    loop {
+        match scope
+            .view()
+            .cdp(
+                "Target.closeTarget",
+                json!({ "targetId": target.as_str() }),
+                None,
+            )
+            .await
+        {
+            Ok(_) => return Ok(target),
+            Err(error) if ErrorCode::from_core(&error) == ErrorCode::TargetClosed => {}
+            Err(error) => return Err(scope.core_error(&error)),
         }
-        // Not listed, or listed under the very target the browser no longer knows (a tab whose
-        // close is under way): never an error here, which the prelude would read as closed.
-        // The wait for the listing decides.
-        Some(_) | None => Ok(target),
+        match listed_target(scope, tab).await? {
+            Some(current) if current != target => {
+                scope.recheck()?;
+                target = current;
+            }
+            // Not listed, or listed under the very target the browser no longer knows (a tab
+            // whose close is under way): the wait for the listing decides.
+            Some(_) | None => return Ok(target),
+        }
     }
 }
 
-/// Waits until the browser's own tab list no longer shows `tab`; see [`close`] for the limit.
+/// Waits until the browser's own tab list no longer shows `tab`. [`close`] bounds the wait and
+/// races it with the script's abort.
 async fn gone(scope: &OpScope<'_>, tab: TabId) -> Result<(), PlaywrightError> {
-    let limit = scope.timeout().unwrap_or(CLOSE_CONFIRMATION);
-    let started = Instant::now();
-    let mut logged = false;
     while listed_target(scope, tab).await?.is_some() {
-        if !logged {
-            scope.log("waiting for the browser to remove the tab from its tab list".to_owned());
-            logged = true;
-        }
-        if started.elapsed() >= limit {
-            return Err(scope.fail(
-                ErrorCode::WaitTimeout,
-                &format!("Timeout {}ms exceeded.", limit.as_millis()),
-            ));
-        }
-        scope
-            .sleep(CLOSE_POLL)
-            .await
-            .map_err(|_expired| scope.timed_out(ErrorCode::WaitTimeout))?;
+        time::sleep(CLOSE_POLL).await;
     }
     Ok(())
 }
@@ -859,15 +868,16 @@ mod wire_tests {
 #[cfg(test)]
 mod browser_only_tests {
     use std::error::Error;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::time::Duration;
 
+    use neo_trace::ErrorOwner;
     use serde_json::{Value, json};
     use tokio::time;
 
     use crate::test_env::EnvCall;
     use crate::test_support::{ProbeAnswer, SCRIPTED_MAIN, ScriptedRun, ScriptedTab, TabScript};
-    use crate::{ErrorCode, Op, PlaywrightError};
+    use crate::{ErrorCode, Op, PlaywrightError, Refusal};
 
     /// Far under the CDP client's 60 s, which a page command would wait for.
     const BROWSER_ONLY: Duration = Duration::from_secs(5);
@@ -952,28 +962,35 @@ mod browser_only_tests {
         Ok(())
     }
 
-    /// A tab whose contents Chromium swapped since admission: the browser knows the admitted
-    /// target no more, which must not pass for a page already gone. The tab's current target,
-    /// from the browser's tab list, is closed instead.
-    #[derive(Default)]
-    struct Swapped {
-        /// The browser refused the admitted target: its list shows the current one from then on.
-        refused: AtomicBool,
+    /// A tab whose contents Chromium swaps whenever a close reaches a target it already left: the
+    /// browser refuses that target ("No target with given id found"), and its tab list shows the
+    /// next of `targets` from then on. The first is the one admission names; the last closes.
+    struct Swapping {
+        targets: Vec<&'static str>,
+        refused: AtomicUsize,
         closed: AtomicBool,
     }
 
-    /// The target the tab shows after the swap.
-    const CURRENT: &str = "swapped-in";
+    impl Swapping {
+        fn through(targets: Vec<&'static str>) -> Self {
+            Self {
+                targets,
+                refused: AtomicUsize::new(0),
+                closed: AtomicBool::new(false),
+            }
+        }
+    }
 
-    impl TabScript for Swapped {
+    impl TabScript for Swapping {
         fn probe(&self, _frame: &str, _request: &Value) -> ProbeAnswer {
             ProbeAnswer::unexpected()
         }
 
         fn cdp_error(&self, method: &str, params: &Value) -> Option<&'static str> {
-            let refused = method == "Target.closeTarget" && params["targetId"] == SCRIPTED_MAIN;
+            let last = self.targets.last().copied().unwrap_or(SCRIPTED_MAIN);
+            let refused = method == "Target.closeTarget" && params["targetId"] != last;
             if refused {
-                self.refused.store(true, Ordering::SeqCst);
+                self.refused.fetch_add(1, Ordering::SeqCst);
             }
             refused.then_some("No target with given id found")
         }
@@ -987,33 +1004,113 @@ mod browser_only_tests {
                 "Browser.getTabs" if self.closed.load(Ordering::SeqCst) => {
                     Some(json!({ "tabs": [] }))
                 }
-                "Browser.getTabs" if self.refused.load(Ordering::SeqCst) => {
-                    Some(json!({ "tabs": [{ "tabId": 7, "targetId": CURRENT,
-                    "windowId": 1, "url": "https://a.test/", "title": "A", "isActive": true,
-                    "isLoading": false, "loadProgress": 1.0, "isPinned": false,
-                    "isHidden": false }] }))
+                "Browser.getTabs" => {
+                    let refused = self.refused.load(Ordering::SeqCst);
+                    let shown = self.targets.get(refused).or(self.targets.last())?;
+                    (refused > 0).then(|| {
+                        json!({ "tabs": [{ "tabId": 7, "targetId": shown, "windowId": 1,
+                            "url": "https://a.test/", "title": "A", "isActive": true,
+                            "isLoading": false, "loadProgress": 1.0, "isPinned": false,
+                            "isHidden": false }] })
+                    })
                 }
                 _ => None,
             }
         }
     }
 
+    /// Admission names the tab's old target; the close ends on the current one, however many
+    /// swaps lie between, and never reports a refused target as a closed page.
     #[tokio::test(start_paused = true)]
-    async fn tests_that_a_close_after_a_swap_closes_the_tabs_current_target()
+    async fn tests_that_a_close_after_swaps_closes_the_tabs_current_target()
     -> Result<(), Box<dyn Error>> {
-        let tab = ScriptedTab::new(Swapped::default());
-        // Core lists the tab before the swap is visible, so admission names the old target.
-        let run = ScriptedRun::over(&tab).await?;
-        let input = json!({ "call": {}, "page": run.page });
-        invoke(&run, "page.close", input).await??;
+        for targets in [
+            vec![SCRIPTED_MAIN, "second"],
+            vec![SCRIPTED_MAIN, "second", "third"],
+        ] {
+            let closes = targets.len();
+            let tab = ScriptedTab::new(Swapping::through(targets));
+            let run = ScriptedRun::over(&tab).await?;
+            let input = json!({ "call": {}, "page": run.page });
+            invoke(&run, "page.close", input).await??;
+            assert_eq!(
+                tab.sent("Target.closeTarget"),
+                closes,
+                "each target the browser no longer knew, then the current one"
+            );
+            assert!(tab.script().closed.load(Ordering::SeqCst));
+        }
+        Ok(())
+    }
+
+    /// A retry after a swap is another attempt at the page, so the host's policies are asked
+    /// again first: an owner who took the tab meanwhile keeps it.
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_a_retry_after_a_swap_asks_the_host_again() -> Result<(), Box<dyn Error>> {
+        let tab = ScriptedTab::new(Swapping::through(vec![SCRIPTED_MAIN, "second"]));
+        let ScriptedRun {
+            playwright,
+            env,
+            page,
+        } = ScriptedRun::over(&tab).await?;
+        let refusal = Refusal {
+            owner: ErrorOwner::Host,
+            code: "owner_has_control".to_owned(),
+            message: "The owner has control of this tab".to_owned(),
+            host_code: None,
+        };
+        let run = ScriptedRun {
+            playwright,
+            env: env.with_refusal_after(1, refusal),
+            page,
+        };
+        let error = invoke(&run, "page.close", json!({ "call": {}, "page": run.page }))
+            .await?
+            .err()
+            .ok_or("the owner's tab is not closed")?;
+        assert_eq!(
+            (error.owner(), error.code()),
+            (ErrorOwner::Host, "owner_has_control"),
+            "{error}"
+        );
         assert_eq!(
             tab.sent("Target.closeTarget"),
-            2,
-            "the admitted target, which the browser no longer knows, then the current one"
+            1,
+            "no retry past the refusal"
         );
+        Ok(())
+    }
+
+    /// A browser that never answers the close cannot hold it past its deadline.
+    #[derive(Default)]
+    struct Silent;
+
+    impl TabScript for Silent {
+        fn probe(&self, _frame: &str, _request: &Value) -> ProbeAnswer {
+            ProbeAnswer::unexpected()
+        }
+
+        fn outlasts_client(&self, method: &str) -> bool {
+            method == "Target.closeTarget"
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_a_close_the_browser_never_answers_fails_at_its_deadline()
+    -> Result<(), Box<dyn Error>> {
+        let tab = ScriptedTab::new(Silent);
+        let run = ScriptedRun::over(&tab).await?;
+        let input = json!({ "call": { "timeoutMs": 300 }, "page": run.page });
+        let error = invoke(&run, "page.close", input)
+            .await?
+            .err()
+            .ok_or("an unanswered close is not closed")?;
+        assert_eq!(error.error_code(), Some(ErrorCode::WaitTimeout), "{error}");
         assert!(
-            tab.script().closed.load(Ordering::SeqCst),
-            "{CURRENT} closed"
+            error
+                .message()
+                .starts_with("page.close: Timeout 300ms exceeded."),
+            "{error}"
         );
         Ok(())
     }
