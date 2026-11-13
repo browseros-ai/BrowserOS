@@ -100,6 +100,8 @@ Alternate value reads used to name controls follow the same rule: a private inpu
 
 A private control's own CSS content and its pseudo-element content are omitted too. Browsers can resolve a value attribute into generated text before the snapshot reads it, so the snapshot cannot distinguish that text from a generated label. Ordinary controls keep their generated text.
 
+Values remain unmasked in `aria-labelledby` names when a page moves a private field Neo already saw in a parent frame into a same-origin iframe.
+
 Expiry fields (`cc-exp`, `cc-exp-month`, `cc-exp-year`), holder names (`cc-name`), select options and ordinary page text stay readable. A card box with no private declaration also stays readable; the SDK does not guess from its caption or value. A delta shows a private value growing as a longer bullet line, but replacing it with a value of the same UTF-16 length produces no change. This is snapshot output masking: `locator.inputValue()` and `evaluate` can still read the original value, and explicit reads or fill arguments may contain it in a trace.
 
 `page.getByRef('e12').ariaSnapshot({ mode: 'full' })` prints everything in one section as Playwright prints its `'ai'` snapshot: every element the engine keeps, all the text, each link's `/url`, and a ref on each visible element, including the ones the default list leaves without a ref (a plain `div` you want to hover). It carries Neo's clickable marks, so it prints every ref the default list prints. It obeys `maxTokens` (8,000 by default) with the same cut line, which offers a section in `{ mode: 'full' }`. A whole page that way is several times larger than the default list, and `text`, `urls` and `delta` are ignored.
