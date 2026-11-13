@@ -551,7 +551,16 @@ export class EventHub {
           site,
           { api, timeoutMs: 0 },
           {
-            page: page === null ? null : await page._openedBrand(api),
+            // Neo's own subscription (`observeWorkers`, on every page that comes with worker
+            // facts, listed tabs included) is not the script using the page, so it leaves the
+            // page out of `waitForTimeout`'s frame refresh (FR-1, `Page._working`). A
+            // listener the script added makes its page working.
+            page:
+              page === null
+                ? null
+                : await page._openedBrand(api, {
+                    working: site !== INTERNAL_SITE,
+                  }),
             event,
             enabled: on,
             since,
@@ -570,7 +579,9 @@ export class EventHub {
     const site = INTERNAL_SITE
     const id = ++this.nextChooserLease
     const api = 'page.filechooser'
-    const target = page._openedBrand(api)
+    // Upkeep for the script's file chooser listener or wait, whose own op (`sendListen` with
+    // the script's site, or `events.wait`) is what makes the page working.
+    const target = page._openedBrand(api, { working: false })
     const ready = target.then(async (page) => {
       await send['events.interceptFileChooser'](
         site,

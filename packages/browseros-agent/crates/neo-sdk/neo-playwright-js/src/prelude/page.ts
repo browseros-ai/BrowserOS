@@ -142,7 +142,11 @@ export class Page extends EventEmitter {
   /**
    * Whether `waitForTimeout` reads this page's frame tree again (FR-1): the run's page, a page
    * the run opened or learned of after it started, and a tab the run's init listed once the
-   * script ran an op on it. A listed tab the script never touched keeps the tree it had.
+   * script ran an op on it. A listed tab the script never touched keeps the tree it had: Neo's
+   * own subscriptions on every listed tab (worker state, the file chooser's interception) brand
+   * it with `working: false` (`_brand`). Each refresh is an op on its tab, and a view that
+   * follows the run's task goes to the tab of the task's latest op, so marking every listed tab
+   * would send that view across all of them after each wait.
    */
   _working = false
   /**
@@ -1107,9 +1111,13 @@ export class Page extends EventEmitter {
   /**
    * The handle for an operation on this page. The run's unopened page carries `tab: null`,
    * which asks the door to open its default tab. Once bound, the handle carries the native
-   * tab supplied by the host's facts, results or events.
+   * tab supplied by the host's facts, results or events. An op the script calls makes the
+   * page working (FR-1, `_working`); Neo's own upkeep on a page passes `working: false`.
    */
-  async _brand(api: string): Promise<PageHandle> {
+  async _brand(
+    api: string,
+    { working = true }: { working?: boolean } = {},
+  ): Promise<PageHandle> {
     if (this._tab === null) {
       if (this._closed)
         throw clientError(
@@ -1118,18 +1126,22 @@ export class Page extends EventEmitter {
         )
       return { $neo: 'page', tab: null }
     }
-    this._working = true
+    if (working) this._working = true
     return { $neo: 'page', tab: this._tab }
   }
 
   /**
    * The handle of a page that has its tab, for the event ops, whose page the door does not
    * resolve. The run's unopened page gets its tab first from one op the door does resolve,
-   * `page.frames`, as its first op of any kind would; the reply binds it.
+   * `page.frames`, as its first op of any kind would; the reply binds it. `options` as
+   * `_brand`'s.
    */
-  async _openedBrand(api: string): Promise<PageBrand> {
+  async _openedBrand(
+    api: string,
+    options: { working?: boolean } = {},
+  ): Promise<PageBrand> {
     if (this._tab === null) await this._refreshFrames(api)
-    const brand = await this._brand(api)
+    const brand = await this._brand(api, options)
     if (brand.tab === null)
       throw new Error(`${api}: Neo opened no tab for the run's page`)
     // The generated input type has a nullable tab field; this check narrows it to the
