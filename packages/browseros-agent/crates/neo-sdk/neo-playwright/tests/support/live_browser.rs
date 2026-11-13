@@ -63,12 +63,23 @@ pub(crate) struct LiveBrowser {
 
 impl LiveBrowser {
     pub(crate) async fn connect() -> TestResult<Self> {
+        Self::connect_on(Self::cdp_client().await?).await
+    }
+
+    /// A CDP connection to the browser on `BROWSEROS_CDP_PORT` (default 9005).
+    pub(crate) async fn cdp_client() -> TestResult<Arc<dyn CdpConnection>> {
         let port = env::var("BROWSEROS_CDP_PORT")
             .ok()
             .and_then(|port| port.parse().ok())
             .unwrap_or(9005);
-        let client: Arc<dyn CdpConnection> =
-            Arc::new(CdpClient::connect(ConnectOptions::new(port)).await?);
+        Ok(Arc::new(
+            CdpClient::connect(ConnectOptions::new(port)).await?,
+        ))
+    }
+
+    /// The browser session and `Playwright` over `client`: a test that wraps the connection
+    /// (to record what goes out on it) builds them here.
+    pub(crate) async fn connect_on(client: Arc<dyn CdpConnection>) -> TestResult<Self> {
         let browser = BrowserSession::new(client, BrowserSessionHooks::default());
         let playwright = Playwright::new(Arc::clone(&browser));
         let live = Self {

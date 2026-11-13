@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
-use browseros_core::{BrowserSession, BrowserView, TabId};
+use browseros_core::{BrowserSession, BrowserView, FrameId, ProtocolSession, TabId};
 use futures_util::future::BoxFuture;
 use neo_playwright::{OpEnv, Refusal, RunState};
 use neo_trace::ErrorOwner;
@@ -158,6 +158,7 @@ pub(crate) fn pages() -> HashMap<String, Page> {
         ("swap", include_str!("../data/private/swap.html")),
         ("labelled", include_str!("../data/private/labelled.html")),
         ("stale", include_str!("../data/private/stale.html")),
+        ("stray", include_str!("../data/private/stray.html")),
     ]
     .into_iter()
     .map(|(name, body)| {
@@ -248,4 +249,52 @@ pub(crate) async fn ref_of(
         time::sleep(Duration::from_millis(100)).await;
     }
     Err(format!("no {role} named {name:?} printed within 5 s").into())
+}
+
+/// The tab's own (root) session: what every input to the page goes out on, except text for a
+/// box in a cross-site frame.
+pub(crate) async fn root_session(
+    live: &LiveBrowser,
+    page: &TestPage,
+) -> TestResult<ProtocolSession> {
+    Ok(live
+        .browser
+        .pages
+        .get_session(page.id.clone())
+        .await?
+        .session)
+}
+
+/// The session of the page's only cross-site frame, which is its own target. The page's frame
+/// tree does not list such a frame; the page's DOM still names it on the `<iframe>` element.
+pub(crate) async fn frame_session(
+    live: &LiveBrowser,
+    page: &TestPage,
+) -> TestResult<ProtocolSession> {
+    let document = root_session(live, page)
+        .await?
+        .send_value("DOM.getDocument", json!({ "depth": -1 }))
+        .await?;
+    let child = iframe_frame_id(&document).ok_or("the page has no <iframe> with a frame")?;
+    Ok(BrowserView::unbound(Arc::clone(&live.browser), None)
+        .frame_session(page.id.clone(), FrameId(child))
+        .await?)
+}
+
+/// The `frameId` of the first `<iframe>` in a `DOM.getDocument` tree.
+fn iframe_frame_id(node: &Value) -> Option<String> {
+    if node.get("nodeName").and_then(Value::as_str) == Some("IFRAME")
+        && let Some(frame) = node.get("frameId").and_then(Value::as_str)
+    {
+        return Some(frame.to_owned());
+    }
+    let children = node.get("children").and_then(Value::as_array);
+    let document = node.get("contentDocument").into_iter();
+    let root = node.get("root").into_iter();
+    children
+        .into_iter()
+        .flatten()
+        .chain(document)
+        .chain(root)
+        .find_map(iframe_frame_id)
 }

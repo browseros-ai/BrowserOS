@@ -218,12 +218,20 @@ fn offline_view() -> BrowserView {
     BrowserView::unbound(offline_session(), None)
 }
 
-/// A CDP connection that answers every call with `{}` and records each `(method, params)`, for
-/// unit tests of what the crate sends.
+/// A CDP connection that answers every call with `{}` and records each `(method, params)` with
+/// the session it went out on, for unit tests of what the crate sends.
 #[derive(Debug, Default)]
 pub(crate) struct Recording {
-    sent: Mutex<Vec<(String, Value)>>,
+    sent: Mutex<Vec<Call>>,
     targeted: TargetedEvents,
+}
+
+/// One recorded call: its method, its params, and its session (`None`: the browser's own).
+#[derive(Clone, Debug)]
+struct Call {
+    method: String,
+    params: Value,
+    session: Option<String>,
 }
 
 impl Recording {
@@ -237,6 +245,21 @@ impl Recording {
 
     /// Every call so far, in order.
     pub(crate) fn sent(&self) -> Vec<(String, Value)> {
+        self.calls()
+            .into_iter()
+            .map(|call| (call.method, call.params))
+            .collect()
+    }
+
+    /// Every call so far, in order, as `(method, params, session)`.
+    pub(crate) fn sent_on(&self) -> Vec<(String, Value, Option<String>)> {
+        self.calls()
+            .into_iter()
+            .map(|call| (call.method, call.params, call.session))
+            .collect()
+    }
+
+    fn calls(&self) -> Vec<Call> {
         self.sent
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -249,12 +272,16 @@ impl CdpConnection for Recording {
         &'a self,
         method: &'a str,
         params: Value,
-        _session: Option<&'a SessionId>,
+        session: Option<&'a SessionId>,
     ) -> BoxFuture<'a, Result<Value, CdpError>> {
         self.sent
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .push((method.to_owned(), params));
+            .push(Call {
+                method: method.to_owned(),
+                params,
+                session: session.map(|session| session.as_str().to_owned()),
+            });
         Box::pin(async { Ok(Value::Object(Map::new())) })
     }
 
