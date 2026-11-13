@@ -13,8 +13,7 @@ use neo_captcha::config::{CAPSOLVER_KEY_FILE_ENV, TWOCAPTCHA_KEY_FILE_ENV};
 use neo_service::Settings;
 use neo_trace::{
     EpochMillis, RedactionLimits, Redactor, RetentionPolicy, RunOutputs, ShotJobs, TraceError,
-    TraceSink,
-    TraceStore, WriterConfig,
+    TraceSink, TraceStore, WriterConfig,
 };
 use tokio::net::TcpListener;
 use tokio::runtime::{Builder, Runtime};
