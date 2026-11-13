@@ -70,7 +70,7 @@ pub struct Operation {
     pub delivery: Option<String>,
     #[serde(rename = "error", skip_serializing_if = "Option::is_none")]
     pub error: Option<Box<models::OperationError>>,
-    /// Its call-log lines, oldest first, e.g. `waiting for getByRole('button')`. Bounded: a long line ends in `…[+N bytes]`, and lines past the limit are counted in one last `…[+N lines]` line. They are stored with the operation's end, so the field is absent while it runs and when it noted nothing.
+    /// Absent: Neo never stores an operation's call-log lines (`waiting for getByRole('button')` and the like), on purpose, because a line can carry what a script typed or read. They reach the caller of the run only where upstream Playwright puts them: at the end of a failing operation's error message, under `Call log:`. The record keeps that message as the error's text, which `trace.values` `off` leaves out. The field stays for clients that read it.
     #[serde(rename = "notes", skip_serializing_if = "Option::is_none")]
     pub notes: Option<Vec<String>>,
     #[serde(rename = "startedAt")]
