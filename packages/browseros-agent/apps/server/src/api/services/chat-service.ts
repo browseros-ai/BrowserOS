@@ -20,6 +20,7 @@ import { AiSdkAgent } from '../../agent/ai-sdk-agent'
 import { toChatErrorText } from '../../agent/chat-error'
 import { formatUserMessage } from '../../agent/format-message'
 import {
+  closeDanglingToolCalls,
   filterValidMessages,
   sanitizeMessagesForToolset,
   stripReasoningParts,
@@ -430,7 +431,7 @@ export class ChatService {
     // reasoning so it still persists to SQLite and renders in the client history;
     // the model must not see replayed reasoning (see stripReasoningParts).
     const promptUiMessages: UIMessage[] = stripReasoningParts(
-      filterValidMessages(session.agent.messages),
+      filterValidMessages(closeDanglingToolCalls(session.agent.messages)),
     ).map((message) =>
       message.id === wrappedUserMessageId && message.role === 'user'
         ? {
@@ -470,7 +471,9 @@ export class ChatService {
                 }
               : message,
           )
-          session.agent.messages = filterValidMessages(restored)
+          session.agent.messages = filterValidMessages(
+            closeDanglingToolCalls(restored),
+          )
           updateMessages(session.agent.messages)
 
           // Only persist a turn that produced an assistant reply. A stream that

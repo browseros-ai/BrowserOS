@@ -13,8 +13,20 @@
  */
 
 import { describe, expect, it } from 'bun:test'
-import { convertToModelMessages, type ModelMessage, type UIMessage } from 'ai'
 import {
+  convertToModelMessages,
+  createAgentUIStream,
+  isToolUIPart,
+  type ModelMessage,
+  ToolLoopAgent,
+  tool,
+  type UIMessage,
+} from 'ai'
+import { MockLanguageModelV3 } from 'ai/test'
+import { z } from 'zod'
+import {
+  closeDanglingToolCalls,
+  filterValidMessages,
   hasMessageContent,
   sanitizeMessagesForToolset,
   stripReasoningParts,
@@ -254,6 +266,173 @@ describe('sanitizeMessagesForToolset', () => {
     expect(result).toHaveLength(1)
     expect(result[0].parts).toHaveLength(1)
     expect(result[0].parts[0].type).toBe('text')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// closeDanglingToolCalls
+// ---------------------------------------------------------------------------
+
+function danglingToolPart(
+  state: string,
+  extra: Record<string, unknown> = {},
+): UIMessage['parts'][number] {
+  return {
+    type: 'tool-browse',
+    toolCallId: 'call-1',
+    toolName: 'browse',
+    state,
+    input: { url: 'https://example.com' },
+    ...extra,
+  } as unknown as UIMessage['parts'][number]
+}
+
+const TERMINAL_TOOL_STATES = new Set([
+  'approval-responded',
+  'output-available',
+  'output-error',
+  'output-denied',
+])
+
+describe('closeDanglingToolCalls', () => {
+  it.each(['input-streaming', 'input-available', 'approval-requested'])(
+    'closes a %s tool part with an error result',
+    (state) => {
+      const [message] = closeDanglingToolCalls([
+        makeAssistantMessage([danglingToolPart(state)]),
+      ])
+
+      const part = message.parts[0] as { state: string; errorText?: string }
+      expect(part.state).toBe('output-error')
+      expect(part.errorText).toBeTruthy()
+    },
+  )
+
+  it('closes an approved call that never produced a result', () => {
+    const approved = danglingToolPart('approval-responded', {
+      approval: { id: 'approval-1', approved: true },
+    })
+
+    const [message] = closeDanglingToolCalls([makeAssistantMessage([approved])])
+
+    const part = message.parts[0] as {
+      state: string
+      approval?: { approved: boolean }
+    }
+    expect(part.state).toBe('output-error')
+    expect(part.approval?.approved).toBe(true)
+  })
+
+  it('leaves a denied approval untouched', () => {
+    const denied = danglingToolPart('approval-responded', {
+      approval: { id: 'approval-1', approved: false },
+    })
+
+    const [message] = closeDanglingToolCalls([makeAssistantMessage([denied])])
+
+    expect(message.parts[0]).toBe(denied)
+  })
+
+  it('returns the same message references when nothing is dangling', () => {
+    const messages: UIMessage[] = [
+      makeUserMessage('hi'),
+      makeAssistantMessage([toolPart('browse', 'c1')]),
+    ]
+
+    const result = closeDanglingToolCalls(messages)
+
+    expect(result[0]).toBe(messages[0])
+    expect(result[1]).toBe(messages[1])
+  })
+
+  // Regression: a provider stream that errors after emitting a complete tool
+  // call left the part at `input-available`; the persisted history then threw
+  // MissingToolResultsError inside the next turn's prompt conversion.
+  it('keeps the stored history convertible when a turn dies mid tool call', async () => {
+    const browse = tool({
+      description: 'browse a page',
+      inputSchema: z.object({ url: z.string() }),
+      execute: async () => 'page contents',
+    })
+
+    const dyingModel = new MockLanguageModelV3({
+      doStream: async () => ({
+        stream: new ReadableStream({
+          start(ctrl) {
+            ctrl.enqueue({
+              type: 'tool-call',
+              toolCallId: 'call_1',
+              toolName: 'browse',
+              input: '{"url":"https://example.com"}',
+              delta: '{"url":"https://example.com"}',
+            })
+            ctrl.enqueue({ type: 'error', error: new Error('upstream reset') })
+            ctrl.close()
+          },
+        }),
+      }),
+    })
+
+    let finished: UIMessage[] = []
+    const stream1 = await createAgentUIStream({
+      agent: new ToolLoopAgent({ model: dyingModel, tools: { browse } }),
+      uiMessages: [makeUserMessage('go')],
+      onError: () => 'err',
+      onFinish: ({ messages }: { messages: UIMessage[] }) => {
+        finished = messages
+      },
+    })
+    for await (const _ of stream1) {
+      // drain so onFinish runs
+    }
+
+    // The line the chat service's onFinish runs before storing history.
+    const stored = filterValidMessages(closeDanglingToolCalls(finished))
+    expect(
+      stored.every((message) =>
+        message.parts.every(
+          (part) => !isToolUIPart(part) || TERMINAL_TOOL_STATES.has(part.state),
+        ),
+      ),
+    ).toBe(true)
+    stored.push(makeUserMessage('now do something else'))
+
+    // Turn 2 must reach the model instead of throwing in prompt conversion.
+    let prompted = false
+    const healthyModel = new MockLanguageModelV3({
+      doStream: async () => {
+        prompted = true
+        return {
+          stream: new ReadableStream({
+            start(ctrl) {
+              ctrl.enqueue({ type: 'text-start', id: 't1' })
+              ctrl.enqueue({ type: 'text-delta', id: 't1', delta: 'ok' })
+              ctrl.enqueue({ type: 'text-end', id: 't1' })
+              ctrl.enqueue({
+                type: 'finish',
+                finishReason: { unified: 'stop', raw: 'stop' },
+                usage: {
+                  inputTokens: { total: 10, noCache: 10 },
+                  outputTokens: { total: 5, text: 5 },
+                },
+              })
+              ctrl.close()
+            },
+          }),
+        }
+      },
+    })
+
+    const stream2 = await createAgentUIStream({
+      agent: new ToolLoopAgent({ model: healthyModel, tools: { browse } }),
+      uiMessages: stored,
+      onError: () => 'err',
+    })
+    for await (const _ of stream2) {
+      // drain
+    }
+
+    expect(prompted).toBe(true)
   })
 })
 
