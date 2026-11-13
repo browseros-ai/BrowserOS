@@ -34,7 +34,10 @@ describe('Application.start', () => {
       loggerInfo,
       loggerWarn,
     } = await setupApplicationTest()
-    const app = new Application(config)
+    const app = new Application({
+      ...config,
+      instanceBrowserosVersion: '0.52.2.1',
+    })
 
     await app.start()
 
@@ -43,6 +46,7 @@ describe('Application.start', () => {
     expect(createHttpServer.mock.calls[0]?.[0]).toEqual(
       expect.objectContaining({
         browser: expect.any(browserModule.Browser),
+        nativeBrowserosVersion: '0.52.2.1',
       }),
     )
     expect(createHttpServer.mock.calls[0]?.[0]).not.toHaveProperty('controller')

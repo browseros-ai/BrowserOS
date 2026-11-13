@@ -81,6 +81,15 @@ export interface TabGroupInfo {
   tabIds: TabID[]
 }
 
+export interface ClosedTabGroupInfo {
+  savedGroupId: string
+  browserProfileId: BrowserProfileID
+  title: string
+  color: string
+  tabCount: number
+  shared: boolean
+}
+
 export type PermissionType =
   | 'ar'
   | 'audioCapture'
@@ -149,6 +158,15 @@ export interface Histogram {
 }
 
 // ══ Commands ══
+
+export interface GetClosedTabGroupsResult {
+  groups: ClosedTabGroupInfo[]
+}
+
+export interface DeleteClosedTabGroupParams {
+  browserProfileId: BrowserProfileID
+  savedGroupId: string
+}
 
 export interface GetProfilesResult {
   profiles: BrowserProfileInfo[]

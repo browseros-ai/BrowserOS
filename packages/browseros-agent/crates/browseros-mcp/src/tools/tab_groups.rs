@@ -1,8 +1,8 @@
 use crate::framework::{
     ToolCtx, ToolExecResult, ToolResult, error_result, parse_args, text_result,
 };
-use browseros_cdp::browser::TabGroupInfo;
-use browseros_core::{PageId, TabId};
+use browseros_cdp::browser::{ClosedTabGroupInfo, TabGroupInfo};
+use browseros_core::{NativeFeature, PageId, TabId};
 use futures_util::future::BoxFuture;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -25,11 +25,14 @@ pub const RESUME_GUIDANCE: &str = resume_guidance!();
 const DESCRIPTION: &str = concat!(
     "\
 Manage tab groups: list groups, group pages, update a group (title/color/collapsed), \
-ungroup pages, or close a group. Page ids come from the tabs tool. \
+ungroup pages, or close a group (preserving its saved record). \
+Page ids come from the tabs tool. \
 Passing an existing groupId with action=\"create\" moves those pages into that \
 group, nothing more.",
     resume_guidance!()
 );
+
+const CLOSED_GROUPS_NOTE: &str = "List with includeClosed=true to also see closed saved groups in loaded profiles. action=\"delete\" removes one closed non-shared saved group using savedGroupId and browserProfileId from that list. Deletion also syncs to other devices.";
 
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
@@ -40,6 +43,7 @@ enum TabGroupsAction {
     Update,
     Ungroup,
     Close,
+    Delete,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -61,6 +65,15 @@ enum TabGroupColor {
 struct TabGroupsArgs {
     #[serde(default)]
     action: TabGroupsAction,
+    /// Include closed saved groups from loaded profiles when listing. Defaults to false.
+    #[serde(rename = "includeClosed", default)]
+    include_closed: bool,
+    /// Saved group UUID from the closedGroups list, required for "delete".
+    #[serde(rename = "savedGroupId")]
+    saved_group_id: Option<String>,
+    /// Profile handle from the closedGroups list, required for "delete".
+    #[serde(rename = "browserProfileId")]
+    browser_profile_id: Option<String>,
     /// Page ids for action="create" or "ungroup".
     pages: Option<Vec<u32>>,
     /// Group id. Required for "update"/"close". Optional on "create" to add pages to an existing group.
@@ -91,17 +104,27 @@ struct GroupsResult {
 }
 
 #[derive(Debug, Deserialize)]
+struct ClosedGroupsResult {
+    groups: Vec<ClosedTabGroupInfo>,
+}
+
+#[derive(Debug, Deserialize)]
 struct GroupResult {
     group: TabGroupInfo,
 }
 
 pub fn definition() -> crate::framework::ToolDef {
-    super::def::<TabGroupsArgs>(
+    let mut definition = super::def::<TabGroupsArgs>(
         "tab_groups",
         DESCRIPTION,
         Some(super::open_world_annotations()),
         handler,
-    )
+    );
+    definition.feature_note = Some(crate::framework::FeatureNote {
+        feature: NativeFeature::ClosedTabGroups,
+        text: CLOSED_GROUPS_NOTE,
+    });
+    definition
 }
 
 fn handler<'a>(
@@ -111,6 +134,9 @@ fn handler<'a>(
 ) -> BoxFuture<'a, ToolExecResult<Option<ToolResult>>> {
     Box::pin(async move {
         let args: TabGroupsArgs = parse_args(raw)?;
+        if args.include_closed || matches!(args.action, TabGroupsAction::Delete) {
+            ctx.browser.require(NativeFeature::ClosedTabGroups)?;
+        }
         let result = match args.action {
             TabGroupsAction::List => {
                 let groups: GroupsResult = serde_json::from_value(
@@ -131,10 +157,28 @@ fn handler<'a>(
                         .collect::<Vec<_>>()
                         .join("\n")
                 };
-                text_result(
-                    text,
-                    Some(json!({ "groups": resolved, "count": resolved.len() })),
-                )
+                let mut text = text;
+                let mut data = json!({ "groups": resolved, "count": resolved.len() });
+                if args.include_closed {
+                    let closed: ClosedGroupsResult = serde_json::from_value(
+                        ctx.browser
+                            .cdp("Browser.getClosedTabGroups", json!({}), None)
+                            .await?,
+                    )?;
+                    for group in &closed.groups {
+                        text.push_str(&format!(
+                            "\n[saved:{}] \"{}\" ({}) [CLOSED{}] profile: {} tabs: {}",
+                            group.saved_group_id,
+                            group.title,
+                            group.color,
+                            if group.shared { ", SHARED" } else { "" },
+                            group.browser_profile_id,
+                            group.tab_count,
+                        ));
+                    }
+                    data["closedGroups"] = serde_json::to_value(closed.groups)?;
+                }
+                text_result(text, Some(data))
             }
             TabGroupsAction::Create => {
                 let Some(page_ids) = args.pages.as_deref().filter(|pages| !pages.is_empty()) else {
@@ -227,6 +271,32 @@ fn handler<'a>(
                 text_result(
                     format!("ungrouped {} page(s)", page_ids.len()),
                     Some(json!({ "pageIds": page_ids, "count": page_ids.len() })),
+                )
+            }
+            TabGroupsAction::Delete => {
+                if args.group_id.is_some() {
+                    return Ok(Some(error_result(
+                        "tab_groups delete: use savedGroupId and browserProfileId from list with includeClosed=true, not groupId.",
+                    )));
+                }
+                let (Some(saved_group_id), Some(browser_profile_id)) = (
+                    args.saved_group_id.filter(|id| !id.is_empty()),
+                    args.browser_profile_id.filter(|id| !id.is_empty()),
+                ) else {
+                    return Ok(Some(error_result(
+                        "tab_groups delete: savedGroupId and browserProfileId are required.",
+                    )));
+                };
+                ctx.browser.cdp(
+                    "Browser.deleteClosedTabGroup",
+                    json!({ "savedGroupId": saved_group_id, "browserProfileId": browser_profile_id }),
+                    None,
+                ).await?;
+                text_result(
+                    format!("deleted closed saved tab group {saved_group_id}"),
+                    Some(
+                        json!({ "savedGroupId": saved_group_id, "browserProfileId": browser_profile_id }),
+                    ),
                 )
             }
             TabGroupsAction::Close => {

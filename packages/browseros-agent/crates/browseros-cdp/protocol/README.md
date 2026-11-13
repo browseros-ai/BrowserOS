@@ -23,3 +23,30 @@ context of a loaded regular profile. Window and tab metadata preserve the legacy
 `browserContextId` field and separately expose `browserProfileId` and
 `liveBrowserContextId`. Route context-aware creation and History commands with
 the genuine live ID, never with the saved handle or legacy metadata field.
+
+## Closed saved tab groups
+
+`Browser.getTabGroups` continues to list live tab-strip groups only.
+`Browser.getClosedTabGroups` lists saved groups with no local tab-strip mapping,
+from already-loaded eligible regular profiles. Each record includes its durable
+`savedGroupId` UUID and current-process `browserProfileId`, plus title, color,
+tab count and shared status. Listing never loads another profile or opens a window.
+
+`Browser.deleteClosedTabGroup` requires both IDs from that listing. It checks the
+current native state again and refuses open, shared, transitioning or hidden
+groups. It removes only that saved record through the normal sync service, so a
+synced deletion also reaches other devices. It does not select groups by title,
+close live tabs or clear browsing history. `Browser.closeTabGroup` still closes
+the live tabs while preserving the saved group for reopening.
+
+MCP exposes these operations through `tab_groups`: `list` with
+`includeClosed: true` adds a separate `closedGroups` array, leaving the existing
+`groups` and `count` fields unchanged. `delete` takes `savedGroupId` and
+`browserProfileId`. A live `groupId` is not accepted for deletion. After a native
+restart, list again to get a fresh profile handle; the saved UUID persists.
+
+These commands require native BrowserOS 0.52.2.0 or newer. Both servers gate the
+optional listing/deletion paths on the installed browser's native version,
+separate from the independently updated server version. The Rust server also
+guards the raw commands and adds their usage guidance only when supported.
+Older or unknown native versions retain ordinary live-group operations.

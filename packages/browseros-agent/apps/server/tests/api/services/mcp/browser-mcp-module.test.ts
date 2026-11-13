@@ -69,6 +69,37 @@ function browserSession(): BrowserSession {
 }
 
 describe('BrowserMcpModule', () => {
+  it('passes the installed browser version to the tab_groups tool', async () => {
+    const calls: Array<{ method: string; params?: Record<string, unknown> }> =
+      []
+    const session = {
+      pages: { list: async () => [] },
+      cdp: async (method: string, params?: Record<string, unknown>) => {
+        calls.push({ method, params })
+        return {}
+      },
+    } as unknown as BrowserSession
+    const { browserMcp: runtime } = moduleFixture({
+      session,
+      nativeBrowserosVersion: '0.52.2',
+    })
+    const server = inspect(runtime.createMcpServer())
+
+    const result = await server._registeredTools.tab_groups.handler({
+      action: 'delete',
+      savedGroupId: 'saved-a',
+      browserProfileId: 'profile-a',
+    })
+
+    expect(result.isError).toBeFalsy()
+    expect(calls).toEqual([
+      {
+        method: 'Browser.deleteClosedTabGroup',
+        params: { savedGroupId: 'saved-a', browserProfileId: 'profile-a' },
+      },
+    ])
+  })
+
   it('treats a read-only lease as an authoritative permission ceiling', async () => {
     const { browserMcp: runtime, runs } = moduleFixture()
     const conversationId = crypto.randomUUID()
@@ -553,12 +584,17 @@ class TestConversationRuns {
 }
 
 function moduleFixture(
-  options: { session?: BrowserSession; klavis?: KlavisService } = {},
+  options: {
+    session?: BrowserSession
+    klavis?: KlavisService
+    nativeBrowserosVersion?: string
+  } = {},
 ) {
   const runs = new TestConversationRuns()
   const addCreatedPages = mock(() => {})
   const browserMcp = new BrowserMcpModule({
     version: 'test',
+    nativeBrowserosVersion: options.nativeBrowserosVersion,
     browserSession: options.session ?? browserSession(),
     conversationRuns: runs,
     klavis: options.klavis,

@@ -17,6 +17,7 @@ import type {
   CreateTabResult,
   CreateWindowParams,
   CreateWindowResult,
+  DeleteClosedTabGroupParams,
   DownloadProgressEvent,
   DownloadWillBeginEvent,
   DuplicateTabParams,
@@ -26,6 +27,7 @@ import type {
   GetActiveTabResult,
   GetActiveWindowResult,
   GetBrowserCommandLineResult,
+  GetClosedTabGroupsResult,
   GetGlobalPrivacyControlResult,
   GetHistogramParams,
   GetHistogramResult,
@@ -79,6 +81,8 @@ import type {
 export interface BrowserApi {
   // ── Commands ──
 
+  getClosedTabGroups(): Promise<GetClosedTabGroupsResult>
+  deleteClosedTabGroup(params: DeleteClosedTabGroupParams): Promise<void>
   getProfiles(): Promise<GetProfilesResult>
   loadProfile(params: LoadProfileParams): Promise<LoadProfileResult>
   getWindows(): Promise<GetWindowsResult>

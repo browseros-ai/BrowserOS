@@ -8,6 +8,15 @@ interface FakeOpts {
   // page id -> tab id (drives getInfo/resolveTabIds in both directions)
   pageTabs?: Record<number, number>
   groups?: TabGroup[]
+  closedGroups?: Array<{
+    savedGroupId: string
+    browserProfileId: string
+    title: string
+    color: string
+    tabCount: number
+    shared: boolean
+  }>
+  deleteError?: string
 }
 
 interface CdpCall {
@@ -40,6 +49,11 @@ function createSession(opts: FakeOpts = {}) {
     cdp: async (method: string, params?: Record<string, unknown>) => {
       calls.push({ method, params })
       switch (method) {
+        case 'Browser.getClosedTabGroups':
+          return { groups: opts.closedGroups ?? [] }
+        case 'Browser.deleteClosedTabGroup':
+          if (opts.deleteError) throw new Error(opts.deleteError)
+          return {}
         case 'Browser.getTabGroups':
           return { groups: opts.groups ?? [] }
         case 'Browser.createTabGroup':
@@ -302,5 +316,138 @@ describe('tab_groups tool', () => {
 
     expect(result.isError).toBe(true)
     expect(textOf(result)).toContain('Unknown page 99')
+  })
+})
+
+describe('closed saved tab groups', () => {
+  const closed = {
+    savedGroupId: 'saved-a',
+    browserProfileId: 'profile-a',
+    title: 'Work',
+    color: 'blue',
+    tabCount: 2,
+    shared: false,
+  }
+
+  it('lists closed groups separately without pretending they have live pages', async () => {
+    const { session, calls } = createSession({
+      closedGroups: [
+        closed,
+        { ...closed, savedGroupId: 'saved-b', shared: true },
+      ],
+    })
+    const result = await executeTool(
+      tab_groups,
+      { action: 'list', includeClosed: true },
+      { session, nativeBrowserosVersion: '0.52.2' },
+    )
+    expect(result.isError).toBeFalsy()
+    expect(result.structuredContent).toEqual({
+      groups: [],
+      count: 0,
+      closedGroups: [
+        closed,
+        { ...closed, savedGroupId: 'saved-b', shared: true },
+      ],
+    })
+    expect(textOf(result)).toContain('[CLOSED, SHARED]')
+    expect(calls.map((call) => call.method)).toEqual([
+      'Browser.getTabGroups',
+      'Browser.getClosedTabGroups',
+    ])
+  })
+
+  it('deletes exactly the selected saved group in its profile', async () => {
+    const { session, calls } = createSession()
+    const result = await executeTool(
+      tab_groups,
+      {
+        action: 'delete',
+        savedGroupId: closed.savedGroupId,
+        browserProfileId: closed.browserProfileId,
+      },
+      { session, nativeBrowserosVersion: '0.52.2.0' },
+    )
+    expect(result.isError).toBeFalsy()
+    expect(calls).toEqual([
+      {
+        method: 'Browser.deleteClosedTabGroup',
+        params: { savedGroupId: 'saved-a', browserProfileId: 'profile-a' },
+      },
+    ])
+  })
+
+  it('refuses incomplete or ambiguous delete requests without dispatching', async () => {
+    for (const args of [
+      { action: 'delete' },
+      { action: 'delete', savedGroupId: 'saved-a' },
+      { action: 'delete', savedGroupId: '', browserProfileId: 'profile-a' },
+      {
+        action: 'delete',
+        savedGroupId: 'saved-a',
+        browserProfileId: 'profile-a',
+        groupId: 'live-a',
+      },
+    ]) {
+      const { session, calls } = createSession()
+      const result = await executeTool(tab_groups, args, {
+        session,
+        nativeBrowserosVersion: '0.52.2',
+      })
+      expect(result.isError).toBe(true)
+      expect(calls).toEqual([])
+    }
+  })
+
+  it('refuses closed-group CDP calls for unknown, malformed, and old browsers', async () => {
+    const unavailableVersions = [
+      undefined,
+      '',
+      '   ',
+      'unknown',
+      '0.52.x.0',
+      '0.52.2.0.1',
+      '0.52.1.99',
+    ]
+    const requests = [
+      { action: 'list', includeClosed: true },
+      {
+        action: 'delete',
+        savedGroupId: 'saved-a',
+        browserProfileId: 'profile-a',
+      },
+    ]
+
+    for (const nativeBrowserosVersion of unavailableVersions) {
+      for (const args of requests) {
+        const { session, calls } = createSession()
+        const result = await executeTool(tab_groups, args, {
+          session,
+          nativeBrowserosVersion,
+        })
+
+        expect(result.isError).toBe(true)
+        expect(textOf(result)).toContain('require BrowserOS 0.52.2.0 or newer')
+        expect(calls).toEqual([])
+      }
+    }
+  })
+
+  it('reports a native refusal without claiming deletion or falling back to close', async () => {
+    const { session, calls } = createSession({
+      deleteError: 'Tab group is open',
+    })
+    const result = await executeTool(
+      tab_groups,
+      {
+        action: 'delete',
+        savedGroupId: 'saved-a',
+        browserProfileId: 'profile-a',
+      },
+      { session, nativeBrowserosVersion: '0.52.2' },
+    )
+    expect(result.isError).toBe(true)
+    expect(textOf(result)).toContain('Tab group is open')
+    expect(calls).toHaveLength(1)
   })
 })
