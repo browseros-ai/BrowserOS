@@ -22,6 +22,9 @@
 //!  tab_watch's events, in order ─▶ tab_feed ─▶ Service::tab_closed, and on a
 //!        new watch start Service::retain_tabs(a listing taken then, never a queued one, and
 //!        the fence taken before it)
+//!  the task book's changes ─▶ HolderFeed ─▶ TabHolders' writer: the tab-holders file beside
+//!        the trace, by target id; on the link's first connect it gives every task back the
+//!        saved tabs the browser still has, and runs start after that (tab_holders.rs)
 //! ```
 //!
 //! The service owns the routes, the auth, the locks and the event log; Neo binds the
@@ -37,6 +40,7 @@ mod filled_tabs;
 mod host_api;
 mod host_holds;
 mod tab_feed;
+mod tab_holders;
 mod takeover_lock;
 #[cfg(test)]
 mod tests;
@@ -47,4 +51,7 @@ pub(crate) use fill_service::{FillService, FillServiceParts};
 pub(crate) use filled_tabs::{FilledTabs, LiveTab};
 pub(crate) use host_api::{HostApi, HostInputs};
 pub(crate) use host_holds::HostHolds;
+#[cfg(test)]
+pub(crate) use tab_holders::Note;
+pub(crate) use tab_holders::{HolderFeed, TabHolders};
 pub(crate) use takeover_lock::TakeoverLock;

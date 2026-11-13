@@ -47,8 +47,8 @@ use crate::storage::record_rows::{self, RunDetailRow, RunSummaryRow};
 use crate::storage::{TraceBatch, trace_migrator};
 use crate::{
     EpochMillis, OperationFilter, OperationId, OperationRow, Page, RequestId, RunDetail, RunId,
-    RunQuery, RunSummary, ShotRead, ShotState, TailQuery, TaskAct, TaskId, TaskTabs, TraceError,
-    TraceTail, salvage,
+    RunQuery, RunSummary, ShotRead, ShotState, TailQuery, TaskAct, TaskId, TraceError, TraceTail,
+    salvage,
 };
 
 /// Operations that only subscribe to or deliver a page's events: the prelude's `page.on` and
@@ -73,12 +73,6 @@ pub(crate) const NEO_READS: [&str; 1] = ["page.frames"];
 /// Operations that open a tab, which arrives on their end (`page_after`) rather than as their
 /// target: the run opened it, so it is the run's even before the script acts on it.
 pub(crate) const OPENERS: [&str; 1] = ["context.newPage"];
-
-/// Operations that make another task the run's current one: after one, an open may be that
-/// task's, so the run no longer proves which task its opens belong to. (`task.newPage` opens for
-/// the task it names without a pick; its open is a child operation, which
-/// [`TraceStore::task_tabs`] leaves out on its own.)
-pub(crate) const TASK_PICKS: [&str; 2] = ["neo.createTask", "neo.task"];
 
 /// Whether the operation `name` only subscribes (see [`SUBSCRIPTIONS`]), so it makes no tab its
 /// run's or its task's. The door asks too, for the task's default page it keeps in memory.
@@ -591,97 +585,6 @@ impl TraceStore {
             })
         })
         .transpose()
-    }
-
-    /// The task's own tabs as the trace can still tell them, for claw-sdk after a restart (its
-    /// memory of tasks and tab owners is gone), and among them its built-in `page`.
-    ///
-    /// The trace keeps no owners, so a tab counts as the task's only where its owner is certain:
-    /// it was opened ([`OPENERS`]) at the top of one of the task's runs that picked no task
-    /// ([`TASK_PICKS`]), by the script's own `context.newPage` or Neo's open of the lazy page,
-    /// neither of which has a parent. Those go to the run's own task. After a pick an open may be
-    /// the picked task's, so those runs are left out, and an open that is a child of another
-    /// operation may be some other task's (`task.newPage` names the task it opens for), so those
-    /// are left out too. A popup is not an opener, so a task left only with one starts on a new
-    /// tab.
-    ///
-    /// The page is the tab among those its own script last acted on: an operation stored with a
-    /// call site. Neo's own reads (the prelude's frame refresh after `waitForTimeout` on every
-    /// tab the run knows, its listeners) have none, and a tab the script reached through
-    /// `context.pages()` without opening it, another task's or the browser's New Tab, is never
-    /// one. When it opened a tab after its last act, that tab. Unlike
-    /// [`task_last_act`](Self::task_last_act), which a follow view reads to show where the task
-    /// is working, this names where its next run starts.
-    ///
-    /// # Errors
-    /// When the file cannot be read.
-    pub async fn task_tabs(&self, task: &TaskId) -> Result<TaskTabs, TraceError> {
-        let picking = Query::select()
-            .column(operations::Column::RunId)
-            .from(operations::Entity)
-            .and_where(Expr::col(operations::Column::Name).is_in(TASK_PICKS))
-            .to_owned();
-        let unpicked_runs = task_runs(task)
-            .and_where(Expr::col(runs::Column::Id).not_in_subquery(picking))
-            .to_owned();
-        // An opener's tab arrives on its end, as the page it ended on (`tab_id`).
-        let opens: Vec<(i64, i64, String, i64)> = operations::Entity::find()
-            .select_only()
-            .columns([
-                operations::Column::TabId,
-                operations::Column::StartedAt,
-                operations::Column::RunId,
-                operations::Column::Seq,
-            ])
-            .filter(operations::Column::RunId.in_subquery(unpicked_runs))
-            .filter(operations::Column::ParentId.is_null())
-            .filter(operations::Column::Name.is_in(OPENERS))
-            .filter(operations::Column::TabId.is_not_null())
-            .order_by_asc(operations::Column::StartedAt)
-            .order_by_asc(operations::Column::RunId)
-            .order_by_asc(operations::Column::Seq)
-            .into_tuple()
-            .all(&self.db)
-            .await?;
-        let mut opened: Vec<TabId> = Vec::new();
-        for (tab, ..) in &opens {
-            if !opened.contains(&TabId(*tab)) {
-                opened.push(TabId(*tab));
-            }
-        }
-        let last_act: Option<(i64, i64, String, i64)> = operations::Entity::find()
-            .select_only()
-            .columns([
-                operations::Column::TargetTabId,
-                operations::Column::StartedAt,
-                operations::Column::RunId,
-                operations::Column::Seq,
-            ])
-            .filter(operations::Column::RunId.in_subquery(task_runs(task)))
-            .filter(operations::Column::Site.is_not_null())
-            .filter(operations::Column::Name.is_not_in(SUBSCRIPTIONS))
-            .filter(operations::Column::TargetTabId.is_in(opened.iter().map(|tab| tab.0)))
-            .order_by_desc(operations::Column::StartedAt)
-            .order_by_desc(operations::Column::RunId)
-            .order_by_desc(operations::Column::Seq)
-            .limit(1)
-            .into_tuple()
-            .one(&self.db)
-            .await?;
-        // The later of the last act and the last open, in the order the trace keeps operations.
-        let order = |row: &(i64, i64, String, i64)| (row.1, row.2.clone(), row.3);
-        let latest = match (last_act, opens.last().cloned()) {
-            (Some(act), Some(open)) => Some(if order(&act) >= order(&open) {
-                act
-            } else {
-                open
-            }),
-            (act, open) => act.or(open),
-        };
-        Ok(TaskTabs {
-            opened,
-            page: latest.map(|(tab, ..)| TabId(tab)),
-        })
     }
 
     /// The distinct tasks whose retained, committed runs touched each requested tab, sorted

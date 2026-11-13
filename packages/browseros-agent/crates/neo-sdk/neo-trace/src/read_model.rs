@@ -216,17 +216,6 @@ pub struct TraceTail {
     pub truncated: bool,
 }
 
-/// A task's own tabs as the trace can still tell them after a restart, and its built-in `page`
-/// among them, as [`TraceStore::task_tabs`](crate::TraceStore::task_tabs) reads them.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct TaskTabs {
-    /// The tabs the task surely opened: top-level opens in its runs that picked no task, in
-    /// the order it opened them.
-    pub opened: Vec<TabId>,
-    /// Among `opened`, the one its own script last acted on, or one it opened after that.
-    pub page: Option<TabId>,
-}
-
 /// The tab a task's latest operation acted on, and when, as
 /// [`TraceStore::task_last_act`](crate::TraceStore::task_last_act) reads it. A follow view that
 /// lost the task's live events re-reads it, and weighs `at` against the last front move it saw,

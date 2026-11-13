@@ -104,6 +104,8 @@ impl HostedStack {
             orphan_grace: Defaults::ORPHAN_GRACE,
             // The host launched its own browser and keeps its own tabs.
             blank_tab: None,
+            // Its runs start as they always did: no tab-holders file, no wait for one.
+            holders: None,
         });
         tokio::spawn(App::hosted_housekeeping(
             TabJanitor::new(

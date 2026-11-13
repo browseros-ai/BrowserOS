@@ -208,7 +208,8 @@ large. It does not create a download or accept a `path` option. For an actual do
 `tini` forwards SIGTERM to the entrypoint, which quits the browser over CDP (`neo-quit 9110`); the browser
 stops claw-sdk with SIGTERM. Then the display stops and the container exits 0, in about a second. A browser
 that exits is restarted by the entrypoint, and a server that exits is relaunched by the browser. A run in
-flight at shutdown is cut.
+flight at shutdown is cut. A relaunched server gives each task back the tabs it held while the browser
+kept them (saved in `tab-holders` beside the trace); after a browser restart, no tab holds a task.
 
 ### Saved sessions
 

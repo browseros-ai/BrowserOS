@@ -21,9 +21,7 @@ use tokio_util::sync::CancellationToken;
 use super::request_ledger::{Admission, LedgerLimits, RunTicket};
 use super::snapshot_tips::SnapshotTips;
 use super::{HostData, RequestLedger, RunHandle, RunMeta, RunReply, RunRequest};
-use crate::browser::{
-    BrowserLink, NeoTab, PageRef, RunView, Sight, TabRegistry, TabsScope, TaskPage,
-};
+use crate::browser::{BrowserLink, NeoTab, PageRef, Sight, TabRegistry, TabsScope, TaskPage};
 use crate::builtins;
 use crate::config::Defaults;
 #[cfg(feature = "hosted-run")]
@@ -31,6 +29,7 @@ use crate::dispatch::FrameVersion;
 use crate::dispatch::{
     Dispatcher, ErrorCode, OperationError, PageFact, PageFacts, RunCtx, RunStart, StopReason,
 };
+use crate::host::TabHolders;
 use crate::runtime::{Script, ScriptEnd, ScriptOutcome, run_script};
 
 /// Runs `run` calls. One per process, shared by every request. There is no concurrency limit
@@ -52,6 +51,9 @@ pub(crate) struct RunService {
     snapshot_tips: SnapshotTips,
     /// Neo's blank tab, left out of a run's initial pages; `None` in the hosted embedding.
     blank_tab: Option<Arc<NeoTab>>,
+    /// Which task held which tab before a restart of Neo's server; a run starts once the book
+    /// took them back. `None` in the hosted embedding, which keeps no file and never waits.
+    holders: Option<Arc<TabHolders>>,
     /// Makes the next run's task panic right after its start record, so tests can watch the
     /// panic boundary hold.
     #[cfg(test)]
@@ -66,7 +68,7 @@ pub(crate) struct RunServiceParts {
     pub(crate) browser: Arc<BrowserLink>,
     /// Each task's last tab, for the `page` default.
     pub(crate) tabs: Arc<TabRegistry>,
-    /// The trace store: `requestId` lookups and a task's last tab after a restart.
+    /// The trace store: `requestId` lookups.
     pub(crate) store: TraceStore,
     /// The trace writer.
     pub(crate) trace: TraceSink,
@@ -78,6 +80,9 @@ pub(crate) struct RunServiceParts {
     pub(crate) orphan_grace: Duration,
     /// Neo's blank tab (`NeoTab`), which the sidecar keeps; `None` in the hosted embedding.
     pub(crate) blank_tab: Option<Arc<NeoTab>>,
+    /// The tab-holders file the sidecar restores the task book from; `None` in the hosted
+    /// embedding.
+    pub(crate) holders: Option<Arc<TabHolders>>,
 }
 
 impl RunService {
@@ -108,6 +113,7 @@ impl RunService {
             shutdown,
             orphan_grace,
             blank_tab,
+            holders,
         } = parts;
         Arc::new(Self {
             ledger: RequestLedger::new(store.clone(), trace.clone(), LedgerLimits::default()),
@@ -121,6 +127,7 @@ impl RunService {
             orphan_grace,
             snapshot_tips: SnapshotTips::default(),
             blank_tab,
+            holders,
             #[cfg(test)]
             crash_next_run: AtomicBool::new(false),
         })
@@ -226,7 +233,13 @@ impl RunService {
             ticket.release(self.refuse_as(handle.id(), code, meta, &error));
             return;
         };
-        let page = self.default_page(meta.task_id.as_ref(), &view).await;
+        // The book must hold what it held before a restart of Neo's server before a task's page
+        // is chosen: otherwise the task's first run after it would open a fresh tab beside its
+        // own. Bounded by the restore's listing budget.
+        if let Some(holders) = &self.holders {
+            holders.ready().await;
+        }
+        let page = self.default_page(meta.task_id.as_ref());
         if let Some(page) = &page {
             // In use from now on, so the idle-tab janitor leaves it. Starting on a tab is no act:
             // the task's page is already this tab.
@@ -414,54 +427,12 @@ impl RunService {
     /// Neo's own operations ([`TabRegistry::acted_on`]). A task with no open tab gets `None`, and
     /// the run opens a new tab for it on first use, so parallel tasks never share one.
     ///
-    /// Memory decides for every task it knows. A task it does not know (Neo restarted) gets its
-    /// tabs back from the trace first ([`TraceStore::task_tabs`]): the ones it surely opened that
-    /// are still open and that no task here owns rejoin it, so its script's acts on any of them
-    /// count again, and the trace's page among them is its page. Without a `taskId`, a fresh tab
-    /// opens on first use.
-    async fn default_page(&self, task: Option<&TaskId>, view: &RunView) -> Option<PageRef> {
-        let task = task?;
-        match self.tabs.task_page(task) {
-            TaskPage::Tab(page) => return Some(page),
-            TaskPage::NoTab => return None,
-            TaskPage::Unknown => {}
-        }
-        let tabs = match self.store.task_tabs(task).await {
-            Ok(tabs) => tabs,
-            Err(error) => {
-                tracing::warn!(%error, %task, "cannot read the task's tabs; the run opens a fresh one");
-                return None;
-            }
-        };
-        if tabs.opened.is_empty() {
-            return None;
-        }
-        let live = match view.view.resolve_tab_ids(&tabs.opened).await {
-            Ok(live) => live,
-            Err(error) => {
-                tracing::debug!(%error, %task, "the task's tabs are gone; the run opens a fresh one");
-                return None;
-            }
-        };
-        let mut mine = Vec::new();
-        for tab in tabs.opened {
-            // A tab number may be reused after a browser restart; a task here may already own it.
-            // Neo may also have taken a blank one as its own tab (`NeoTab`), which no task has.
-            if !live.contains_key(&tab) || self.tabs.owner(tab).is_some() || self.tabs.is_neo(tab) {
-                continue;
-            }
-            // Registered first: only a tab with an entry can have an owner.
-            let seen = self.tabs.seen();
-            if self.browser.page(tab).await.is_some() {
-                self.tabs.touched(&PageRef { tab }, seen);
-                mine.push(tab);
-            }
-        }
-        if let Err(error) = self.tabs.restore(task, &mine, tabs.page) {
-            tracing::warn!(%error, %task, "cannot restore the task's tabs; the run opens a fresh one");
-            return None;
-        }
-        match self.tabs.task_page(task) {
+    /// Memory decides alone. After a restart of Neo's server the book already took back each
+    /// task's saved tabs that the browser still has ([`TabHolders`]), with the one that was its
+    /// page; a task it does not know has no tab. Without a `taskId`, a fresh tab opens on first
+    /// use.
+    fn default_page(&self, task: Option<&TaskId>) -> Option<PageRef> {
+        match self.tabs.task_page(task?) {
             TaskPage::Tab(page) => Some(page),
             TaskPage::NoTab | TaskPage::Unknown => None,
         }
