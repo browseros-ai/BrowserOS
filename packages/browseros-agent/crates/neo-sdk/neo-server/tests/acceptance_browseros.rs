@@ -184,12 +184,12 @@ fn closed_trace_fields(scope: &str) -> String {
 /// first AI walk; the child is served on another site so it owns a separate probe world.
 fn private_trace_pages() -> Result<HashMap<String, Page>, fmt::Error> {
     let top = format!(
-        r#"{}<script>(() => {{
+        r"{}<script>(() => {{
 const closed = document.querySelector('#closed').attachShadow({{ mode: 'closed' }});
 closed.innerHTML = {};
 closed.querySelector('#nested').attachShadow({{ mode: 'closed' }}).innerHTML = {};
 document.querySelector('#cross').src = `http://localhost:${{location.port}}/private-child.html`;
-}})();</script>"#,
+}})();</script>",
         private_trace_html()?,
         json!(format!(
             "{}<div id='nested'></div>",
