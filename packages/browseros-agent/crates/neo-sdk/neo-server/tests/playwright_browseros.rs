@@ -687,6 +687,7 @@ async fn a_locator_ref_is_node_bound_in_a_later_run_of_the_same_task() -> TestRe
 }
 
 async fn locator_ref_across_runs(rig: &Rig) -> TestResult {
+    rig.until_ready().await?;
     let client = rig.client().await?;
     let first = value_of(&client, r#"
         const task = await neo.createTask('node-bound ref');

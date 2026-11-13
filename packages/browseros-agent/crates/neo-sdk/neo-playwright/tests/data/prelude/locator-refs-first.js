@@ -7,6 +7,7 @@ for (const snapshot of [before, interactive]) {
   assert(snapshot.includes('- textbox "Verification code"'), snapshot);
   assert(!snapshot.includes('- textbox "Verification code" [ref='), snapshot);
   assert(snapshot.includes('- spinbutton "Number code"'), snapshot);
+  assert(snapshot.includes('- textbox "Message": First paragraph Second paragraph'), snapshot);
   assert(snapshot.includes('- textbox "Code"'), snapshot);
   assert(snapshot.includes('- radio "Yearly" [checked]'), snapshot);
   assert(snapshot.includes('- combobox "Quantity":\n  - option "1" [selected]\n  - option "2"'), snapshot);

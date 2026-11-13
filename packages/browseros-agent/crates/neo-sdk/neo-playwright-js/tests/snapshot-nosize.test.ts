@@ -1,3 +1,7 @@
+/**
+ * Field rendering and the locator.ref wire contract without browser layout. The live prelude
+ * and MCP tests separately prove node lifetimes, frames and continuity across task runs.
+ */
 import { expect, it } from 'bun:test'
 import { renderAriaSnapshotAsYaml } from '../../neo-playwright/third_party/playwright/packages/isomorphic/ariaSnapshotRenderer'
 import { renderSnapshotV1 } from '../src/prelude/snapshot-v1'
@@ -131,6 +135,55 @@ it('keeps native choices but preserves non-field controls without refs as page t
   ]
   expect(render(others, true)).toBe('- text: Unavailable Choice')
   expect(render(others, false)).toBe('')
+})
+
+it('keeps a named ref-less field value stored in nested paragraph children', () => {
+  const tree: Node[] = [
+    {
+      role: 'textbox',
+      name: 'Message',
+      children: [
+        { role: 'paragraph', children: ['First paragraph'] },
+        { role: 'paragraph', children: ['Second paragraph'] },
+      ],
+    },
+  ]
+  for (const text of [true, false])
+    expect(render(tree, text)).toBe(
+      '- textbox "Message": First paragraph Second paragraph',
+    )
+})
+
+it('keeps one paragraph as the field value and a nested button on its own line', () => {
+  const tree: Node[] = [
+    {
+      role: 'textbox',
+      name: 'Note',
+      children: [
+        { role: 'paragraph', children: ['Quiet note'] },
+        { role: 'button', name: 'Send', ref: 'e7' },
+      ],
+    },
+  ]
+  for (const text of [true, false])
+    expect(render(tree, text)).toBe(
+      '- textbox "Note": Quiet note\n- button "Send" [ref=e7]',
+    )
+})
+
+it('never clips a ref-less field value from children, with or without a name', () => {
+  const value = 'A long note. '.repeat(20).trim()
+  for (const name of ['Note', undefined]) {
+    const node: Node = {
+      role: 'textbox',
+      name,
+      children: [{ role: 'paragraph', children: [value] }],
+    }
+    for (const text of [true, false])
+      expect(render([node], text)).toBe(
+        `- textbox${name ? ` "${name}"` : ''}: ${value}`,
+      )
+  }
 })
 
 it('sends ref as a strict attached read and returns the string unmodified', async () => {

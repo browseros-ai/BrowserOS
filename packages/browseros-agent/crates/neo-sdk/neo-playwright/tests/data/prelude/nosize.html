@@ -1,5 +1,6 @@
 <!doctype html>
 <style>
+  /* Browser input borders and padding would otherwise give a zero-width field a layout box. */
   .nosize { position: absolute; width: 0; height: 0; padding: 0; border: 0; opacity: 0; }
   .material input { position: absolute; opacity: 0; pointer-events: none; }
   #draw { cursor: pointer; width: 200px; height: 32px; }
@@ -11,6 +12,9 @@
 <div id="digits"></div>
 <label>Code<input class="nosize" id="labelled"></label>
 <input class="nosize" type="number" aria-label="Number code">
+<div role="textbox" contenteditable="true" aria-label="Message" style="pointer-events:none">
+  <p>First paragraph</p><p>Second paragraph</p>
+</div>
 <input class="nosize" type="radio" name="plan" aria-label="Monthly">
 <input class="nosize" type="radio" name="plan" aria-label="Yearly" checked>
 <select aria-label="Quantity" style="pointer-events:none"><option selected>1</option><option>2</option></select>

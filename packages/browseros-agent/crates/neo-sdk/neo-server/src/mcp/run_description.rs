@@ -42,9 +42,9 @@ page before repeating it.";
 const REF_HINT: &str = "`page.ariaSnapshot()` lists what you can act on, with refs; \
 `page.getByRef('e5')` acts on one; `{ text: true }` adds the page's text. An element without a \
 ref is reached with a locator (`page.getByText('…')`). \
-A field printed without a ref takes no click and no `fill` (it has no size on the \
-page, or is disabled): click the element drawn for it, the line beside it, then \
-`page.keyboard.type('…')`. \
+A field printed without a ref has no size or takes no pointer: reach it by role and name, \
+`page.getByRole('textbox', { name: '…' })`; `pressSequentially('…')` types into it and fails \
+if it cannot take the focus; `fill` works only if it has a size. \
 `page.getByRef('e12').ariaSnapshot({ mode: 'full' })` prints all of one section as Playwright \
 does, with its text and a ref on each visible element, up to `maxTokens`; a whole page that way \
 is several times larger.";
@@ -170,9 +170,9 @@ mod tests {
         assert!(
             description.contains(
                 "An element without a ref is reached with a locator (`page.getByText('…')`). \
-                 A field printed without a ref takes no click and no `fill` (it has no size on the \
-                 page, or is disabled): click the element drawn for it, the line beside it, then \
-                 `page.keyboard.type('…')`. \
+                 A field printed without a ref has no size or takes no pointer: reach it by role and name, \
+                 `page.getByRole('textbox', { name: '…' })`; `pressSequentially('…')` types into it and fails \
+                 if it cannot take the focus; `fill` works only if it has a size. \
                  `page.getByRef('e12').ariaSnapshot({ mode: 'full' })` prints all of one section \
                  as Playwright does, with its text and a ref on each visible element, up to \
                  `maxTokens`; a whole page that way is several times larger."

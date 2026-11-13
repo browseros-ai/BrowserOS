@@ -7790,7 +7790,11 @@ ${value.stack}`;
       let value;
       if (node.text !== undefined && node.text !== node.name)
         value = node.text;
-      else if (!node.name) {
+      else if (fieldWithoutRef(node) && node.text === undefined) {
+        const own = ownText(node);
+        if (own !== "")
+          value = own;
+      } else if (!node.name) {
         const label = ownText(node) || (node.role === "link" && !this.urls ? node.url ?? "" : "");
         if (label !== "")
           value = text ? label : clip(label, OWN_TEXT_CLIP);
