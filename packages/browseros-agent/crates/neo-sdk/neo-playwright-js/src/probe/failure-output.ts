@@ -2,14 +2,15 @@
  * One probe request's immutable diagnostic policy. It protects page-derived output before
  * CDP hands it to Rust, while explicit reads and value comparisons retain native values.
  */
-import { anyPrivatelyTyped } from './private-entry'
+
 import type { FrameExpectParams } from '../../../neo-playwright/third_party/playwright/packages/injected/src/injectedScript'
+import { anyPrivatelyTyped } from './private-entry'
 import {
   isHtmlField,
   isPrivateField,
   PRIVATE_VALUE_ATTRIBUTES,
-  withMaskedFieldValues,
   withMarkedFieldsMasked,
+  withMaskedFieldValues,
 } from './private-field-values'
 import type { ProbePolicy } from './protocol'
 import {
@@ -165,7 +166,8 @@ export class FailureOutput {
       isPrivateField(parent, { declared: !this.policy.conformance })
     )
       return this.engine.previewNode(parent.ownerDocument.createTextNode(''))
-    if (!isPrivateField(node, { declared: !this.policy.conformance })) return this.engine.previewNode(node)
+    if (!isPrivateField(node, { declared: !this.policy.conformance }))
+      return this.engine.previewNode(node)
     // Attr.value bypasses the tree guard and preserves the original marker length even
     // while an alias is generated under it. A shallow clone also drops textarea child text;
     // cloning never changes the live DOM, stored values, or page-world getters.

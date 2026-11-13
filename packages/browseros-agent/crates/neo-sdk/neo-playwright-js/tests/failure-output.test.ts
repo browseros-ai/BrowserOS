@@ -564,3 +564,46 @@ it('conformance installs no diagnostic, value, text or style hooks and keeps nat
     observe.mockRestore()
   }
 })
+
+it('keeps a host-typed mark protected in conformance while declared fields stay native', async () => {
+  const probe = booted()
+  const field = element(probe, '#public')
+  field.setAttribute('value', 'MarkedCanary')
+  const resolved = probe.call({
+    op: 'resolve',
+    target: { chunk: parseSelector('#public') },
+    strictness: 'strict',
+    want: 'element',
+  })
+  if (
+    typeof resolved !== 'object' ||
+    resolved === null ||
+    !('pin' in resolved) ||
+    typeof resolved.pin !== 'number'
+  )
+    throw new Error('the public field was pinned for private entry')
+  const pin = resolved.pin
+  await probe.call({
+    op: 'private',
+    pin,
+    step: { kind: 'focus', text: 'MarkedCanary', spaced: false },
+  })
+  probe.call({ op: 'private', pin, step: { kind: 'forget' } })
+  const params: ExpectParams = {
+    expression: 'to.have.value',
+    expectedText: [{ string: 'wrong' }],
+    isNot: false,
+  }
+  const marked = await conformanceCall(expectRequest('#public', params))
+  expect(marked).toMatchObject({
+    kind: 'expect',
+    matches: false,
+    received: '••••••••••••',
+  })
+  expect(JSON.stringify(marked)).not.toContain('MarkedCanary')
+  expect(textProperty(marked, 'resolved')).toContain('value="<12 characters>"')
+  const declared = await conformanceCall(expectRequest('#secret', params))
+  expect(declared).toMatchObject({ received: SECRET })
+  expect(JSON.stringify(declared)).toContain('SpokenCanary')
+  expect(field.getAttribute('value')).toBe('MarkedCanary')
+})
