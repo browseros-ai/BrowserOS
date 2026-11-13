@@ -46,8 +46,9 @@ use crate::storage::entities::{operations, run_tabs, runs};
 use crate::storage::record_rows::{self, RunDetailRow, RunSummaryRow};
 use crate::storage::{TraceBatch, trace_migrator};
 use crate::{
-    EpochMillis, OperationId, OperationRow, Page, RequestId, RunDetail, RunId, RunQuery,
-    RunSummary, ShotRead, ShotState, TailQuery, TaskAct, TaskId, TraceError, TraceTail, salvage,
+    EpochMillis, OperationFilter, OperationId, OperationRow, Page, RequestId, RunDetail, RunId,
+    RunQuery, RunSummary, ShotRead, ShotState, TailQuery, TaskAct, TaskId, TraceError, TraceTail,
+    salvage,
 };
 
 /// Operations that only subscribe to or deliver a page's events: the prelude's `page.on` and
@@ -444,6 +445,16 @@ impl TraceStore {
         }
         if let Some(tab) = query.tab {
             select = select.filter(operations::Column::TargetTabId.eq(tab.0));
+        }
+        if query.operations == OperationFilter::Script {
+            // Use the same subscription names as tab ownership and screenshots. A recorded
+            // script site preserves explicit page.on calls. Filter before LIMIT so background
+            // traffic cannot displace the script's steps or distort the truncation answer.
+            select = select.filter(
+                Condition::any()
+                    .add(operations::Column::Name.is_not_in(SUBSCRIPTIONS))
+                    .add(operations::Column::Site.is_not_null()),
+            );
         }
         let mut operations = select
             .order_by_desc(operations::Column::StartedAt)

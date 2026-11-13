@@ -44,6 +44,9 @@ pub struct RunSummary {
     /// Operation events Neo dropped under disk pressure; zero or absent normally.
     #[serde(rename = "traceGaps", skip_serializing_if = "Option::is_none")]
     pub trace_gaps: Option<i64>,
+    /// Present only on GET /v1/runs?fields=summary. Operations in start order, with the summary projection and internal filter. The audit list omits site and delivery. operationCount remains the stored total, including any omitted internal operations.
+    #[serde(rename = "operations", skip_serializing_if = "Option::is_none")]
+    pub operations: Option<Vec<models::Operation>>,
 }
 
 impl RunSummary {
@@ -68,6 +71,7 @@ impl RunSummary {
             operation_count,
             complete,
             trace_gaps: None,
+            operations: None,
         }
     }
 }

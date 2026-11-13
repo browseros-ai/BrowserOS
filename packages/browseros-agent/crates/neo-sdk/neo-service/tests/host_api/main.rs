@@ -17,4 +17,5 @@ mod socket;
 mod support;
 mod tabs;
 mod takeovers;
+mod trace_views;
 mod waiting;

@@ -194,8 +194,9 @@ export class BrowserContext extends EventEmitter {
     event: string | symbol,
     listening: boolean,
   ): void {
+    const site = captureSite()
     if (isReported(event, 'context'))
-      this._events.listen(null, event, listening)
+      this._events.listen(site, null, event, listening)
   }
 
   /** The page with this tab, created on first sight and refreshed from the fact. */

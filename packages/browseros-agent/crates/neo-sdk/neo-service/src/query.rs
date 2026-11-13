@@ -14,7 +14,8 @@ use browseros_core::TabId;
 use neo_capture::Quality;
 use neo_takeover::{FitId, Follow, LockId, TakeoverId};
 use neo_trace::{
-    EpochMillis, OperationId, RequestId, RunId, RunQuery, RunStatus, TailQuery, TaskId,
+    EpochMillis, OperationFilter, OperationId, RequestId, RunId, RunQuery, RunStatus, TailQuery,
+    TaskId,
 };
 use std::borrow::Cow;
 use std::fmt::Display;
@@ -55,16 +56,57 @@ pub(crate) fn runs(raw: Option<&str>) -> Result<RunQuery, ApiError> {
 }
 
 /// Which operations' screenshots a read inlines as base64.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum Inline {
+    #[default]
     None,
     All,
     /// The latest N operations that have one.
     Last(u32),
 }
 
+/// Which stored values the wire projection may include. Storage and recording are unchanged.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum Fields {
+    #[default]
+    Full,
+    Summary,
+}
+
+/// Independent field projection and row selection, shared by the run-list audit view.
+#[derive(Default)]
+pub(crate) struct View {
+    pub fields: Fields,
+    pub operations: OperationFilter,
+}
+
+pub(crate) fn view(raw: Option<&str>) -> Result<View, ApiError> {
+    let params = Params::parse(raw);
+    Ok(View {
+        fields: params.fields()?,
+        operations: params.operations()?,
+    })
+}
+
+/// A run read's independent wait, image and operation-view policies.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct RunRead {
+    pub wait: Duration,
+    pub inline: Inline,
+    pub fields: Fields,
+    pub operations: OperationFilter,
+}
+
+/// A trace window, filtered in storage before its limit, and projected at the wire boundary.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct TraceRead {
+    pub query: TailQuery,
+    pub inline: Inline,
+    pub fields: Fields,
+}
+
 /// `GET /v1/runs/{runId}`: how long `wait` may hold the request, and `include=screenshots`.
-pub(crate) fn run(raw: Option<&str>) -> Result<(Duration, Inline), ApiError> {
+pub(crate) fn run(raw: Option<&str>) -> Result<RunRead, ApiError> {
     let params = Params::parse(raw);
     let seconds = params.number("wait", 0..=MAX_WAIT_SECONDS)?;
     let inline = match params.get("include")? {
@@ -72,16 +114,22 @@ pub(crate) fn run(raw: Option<&str>) -> Result<(Duration, Inline), ApiError> {
         Some("screenshots") => Inline::All,
         Some(_) => return Err(ApiError::invalid("`include` must be `screenshots`")),
     };
-    Ok((Duration::from_secs(seconds.unwrap_or(0)), inline))
+    Ok(RunRead {
+        wait: Duration::from_secs(seconds.unwrap_or(0)),
+        inline,
+        fields: params.fields()?,
+        operations: params.operations()?,
+    })
 }
 
 /// `GET /v1/trace`, with `screenshots=none|all|last:N`.
-pub(crate) fn trace(raw: Option<&str>) -> Result<(TailQuery, Inline), ApiError> {
+pub(crate) fn trace(raw: Option<&str>) -> Result<TraceRead, ApiError> {
     let params = Params::parse(raw);
     let query = TailQuery {
         task_id: params.task()?,
         tab: params.tab()?,
         tail: params.number("tail", 1..=MAX_TAIL)?.unwrap_or(DEFAULT_TAIL),
+        operations: params.operations()?,
     };
     let inline = match params.get("screenshots")? {
         None | Some("none") => Inline::None,
@@ -98,7 +146,11 @@ pub(crate) fn trace(raw: Option<&str>) -> Result<(TailQuery, Inline), ApiError> 
                 ))
             })?,
     };
-    Ok((query, inline))
+    Ok(TraceRead {
+        query,
+        inline,
+        fields: params.fields()?,
+    })
 }
 
 /// `GET /v1/events`.
@@ -248,6 +300,21 @@ fn cursor(text: &str) -> Result<String, ApiError> {
 struct Params<'a>(Vec<(Cow<'a, str>, Cow<'a, str>)>);
 
 impl<'a> Params<'a> {
+    fn fields(&self) -> Result<Fields, ApiError> {
+        match self.get("fields")? {
+            None | Some("full") => Ok(Fields::Full),
+            Some("summary") => Ok(Fields::Summary),
+            Some(_) => Err(ApiError::invalid("`fields` must be full or summary")),
+        }
+    }
+
+    fn operations(&self) -> Result<OperationFilter, ApiError> {
+        match self.get("internal")? {
+            None | Some("true") => Ok(OperationFilter::All),
+            Some("false") => Ok(OperationFilter::Script),
+            Some(_) => Err(ApiError::invalid("`internal` must be true or false")),
+        }
+    }
     fn parse(raw: Option<&'a str>) -> Self {
         Self(
             raw.map(|raw| url::form_urlencoded::parse(raw.as_bytes()).collect())
@@ -394,9 +461,14 @@ mod tests {
 
     #[test]
     fn wait_is_whole_seconds_up_to_a_minute() {
-        assert_eq!(run(None).ok(), Some((Duration::ZERO, Inline::None)));
         assert_eq!(
-            run(Some("wait=60&include=screenshots")).ok(),
+            run(None).map(|read| (read.wait, read.inline)).ok(),
+            Some((Duration::ZERO, Inline::None))
+        );
+        assert_eq!(
+            run(Some("wait=60&include=screenshots"))
+                .map(|read| (read.wait, read.inline))
+                .ok(),
             Some((Duration::from_secs(60), Inline::All))
         );
         for raw in [
@@ -433,25 +505,22 @@ mod tests {
 
     #[test]
     fn the_trace_tail_defaults_to_100_and_caps_at_1000() {
-        let tail = |raw| trace(raw).map(|(query, _)| query.tail).ok();
+        let tail = |raw| trace(raw).map(|read| read.query.tail).ok();
         assert_eq!(tail(None), Some(DEFAULT_TAIL));
         assert_eq!(tail(Some("tail=1000")), Some(1000));
         assert!(refused(trace(Some("tail=1001"))));
         assert!(refused(trace(Some("tail=0"))));
         let query = trace(Some("taskId=t&tab=4")).ok();
         assert_eq!(
-            query.as_ref().and_then(|(query, _)| query.tab),
+            query.as_ref().and_then(|read| read.query.tab),
             Some(TabId(4))
         );
     }
 
     #[test]
     fn trace_screenshots_are_none_all_or_the_last_1_to_50() {
-        let inline = |raw| trace(Some(raw)).map(|(_, inline)| inline).ok();
-        assert_eq!(
-            trace(None).map(|(_, inline)| inline).ok(),
-            Some(Inline::None)
-        );
+        let inline = |raw| trace(Some(raw)).map(|read| read.inline).ok();
+        assert_eq!(trace(None).map(|read| read.inline).ok(), Some(Inline::None));
         assert_eq!(inline("screenshots=none"), Some(Inline::None));
         assert_eq!(inline("screenshots=all"), Some(Inline::All));
         assert_eq!(inline("screenshots=last:4"), Some(Inline::Last(4)));

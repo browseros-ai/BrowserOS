@@ -1070,6 +1070,7 @@ async fn a_trace_tail_keeps_the_latest_matching_operations_oldest_first() {
                     task_id: task_id.map(task),
                     tab: tab.map(TabId),
                     tail,
+                    ..Default::default()
                 })
                 .await
                 .unwrap_or_else(|error| panic!("trace_tail: {error}"))
@@ -1601,6 +1602,7 @@ async fn names_read(
         task_id: Some(task(task_name)),
         tab: None,
         tail: 10,
+        ..Default::default()
     };
     let tail = h.store.trace_tail(query).await?;
     let only = |names: Vec<&str>| names.join(",");

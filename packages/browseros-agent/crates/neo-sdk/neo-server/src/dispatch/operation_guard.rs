@@ -204,11 +204,12 @@ impl OperationGuard {
         let opened = Unsent {
             id: state.id(),
             parent: state.parent_id(),
-            // A prelude poll can start synchronously under listener registration. That
-            // stack frame belongs to the registration, not to the background operation.
+            // Background pulls must not borrow the script stack that started them. The
+            // subscription prelude supplies an explicit site for public listener changes
+            // and an empty site for its own pump and bookkeeping, so preserve that ownership.
             site: match spec.lifetime {
-                Lifetime::Operation => site,
-                Lifetime::Background => None,
+                Lifetime::Background if !neo_trace::is_subscription(spec.name) => None,
+                Lifetime::Operation | Lifetime::Background => site,
             },
             name,
             effect: spec.effect,

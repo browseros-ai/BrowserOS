@@ -5,6 +5,7 @@
 use crate::api_error::ApiError;
 use crate::event_log::EventKind;
 use crate::limits::{MAX_NAVIGATE_INPUT, VIEWER_SIDE};
+use crate::query::Fields;
 use crate::setting::{Checked, SETTINGS, Setting, SettingValue};
 use crate::settings::{SetValues, Settings};
 use base64::Engine as _;
@@ -16,8 +17,8 @@ use neo_takeover::{
     ScreenSize, Takeover, TakeoverRequest, TakeoverState, TakeoverTtl,
 };
 use neo_trace::{
-    Delivery, Effect, EpochMillis, ErrorRecord, OperationId, OperationRow, Page, PageState,
-    RunDetail, RunDownload, RunSummary, ShotState, TaskId, TraceTail,
+    Delivery, Effect, EpochMillis, ErrorRecord, OperationFilter, OperationId, OperationRow, Page,
+    PageState, RunDetail, RunDownload, RunSummary, ShotState, TaskId, TraceTail,
 };
 use std::collections::HashMap;
 use std::time::Duration;
@@ -50,6 +51,10 @@ pub(crate) fn run_list(page: &Page<RunSummary>) -> api::RunList {
 }
 
 pub(crate) fn run_summary(run: &RunSummary) -> api::RunSummary {
+    run_summary_fields(run, Fields::Full)
+}
+
+fn run_summary_fields(run: &RunSummary, fields: Fields) -> api::RunSummary {
     api::RunSummary {
         id: run.id.to_string(),
         task_id: run.task_id.as_ref().map(ToString::to_string),
@@ -59,20 +64,45 @@ pub(crate) fn run_summary(run: &RunSummary) -> api::RunSummary {
         error: run
             .error
             .as_ref()
-            .map(|error| Box::new(operation_error(error))),
+            .map(|error| Box::new(operation_error(error, fields))),
         request_id: run.request_id.as_ref().map(ToString::to_string),
         started_at: run.started_at.millis(),
         ended_at: run.ended_at.map(EpochMillis::millis),
         operation_count: count(run.operation_count),
         complete: run.complete,
         trace_gaps: (run.trace_gaps > 0).then(|| count(run.trace_gaps)),
+        operations: None,
     }
 }
 
-/// One run with every operation; `unknown` lists its writes that were sent and never
+/// The host audit needs runs and their steps in one paged request. The regular run list keeps
+/// its existing shape; only this summary view populates the optional operations field.
+pub(crate) fn audit_run(
+    summary: &RunSummary,
+    detail: Option<&RunDetail>,
+    filter: OperationFilter,
+) -> api::RunSummary {
+    let mut run = run_summary_fields(summary, Fields::Summary);
+    run.operations = Some(
+        detail
+            .into_iter()
+            .flat_map(|run| &run.operations)
+            .filter(|op| filter.includes(op))
+            .map(|op| {
+                let mut projected = operation_fields(op, &Inlined::default(), Fields::Summary);
+                projected.site = None;
+                projected.delivery = None;
+                projected
+            })
+            .collect(),
+    );
+    run
+}
+
+/// One run with the selected operations; `unknown` lists its writes that were sent and never
 /// confirmed, the ones a host must check before repeating anything. `inlined` holds the
 /// screenshots `include=screenshots` asked for.
-pub(crate) fn run(run: &RunDetail, inlined: &Inlined) -> api::Run {
+pub(crate) fn run(run: &RunDetail, inlined: &Inlined, fields: Fields) -> api::Run {
     let api::RunSummary {
         id,
         task_id,
@@ -86,7 +116,8 @@ pub(crate) fn run(run: &RunDetail, inlined: &Inlined) -> api::Run {
         operation_count,
         complete,
         trace_gaps,
-    } = run_summary(&run.summary);
+        operations: _,
+    } = run_summary_fields(&run.summary, fields);
     let unknown = run
         .operations
         .iter()
@@ -109,23 +140,27 @@ pub(crate) fn run(run: &RunDetail, inlined: &Inlined) -> api::Run {
         operation_count,
         complete,
         trace_gaps,
-        host_data: run.host_data.clone(),
-        code: run.code.clone(),
+        host_data: (fields == Fields::Full)
+            .then(|| run.host_data.clone())
+            .flatten(),
+        code: (fields == Fields::Full).then(|| run.code.clone()).flatten(),
         // Expose the restart marker. Older runs with sensitive input can have absent code.
         code_withheld: run
             .code_withheld
             .as_ref()
-            .filter(|reason| reason.as_str() == "unavailable")
+            .filter(|reason| fields == Fields::Full && reason.as_str() == "unavailable")
             .cloned(),
-        result: run.result.clone().map(Some),
-        result_truncated: run.result_truncated.then_some(true),
+        result: (fields == Fields::Full)
+            .then(|| run.result.clone().map(Some))
+            .flatten(),
+        result_truncated: (fields == Fields::Full && run.result_truncated).then_some(true),
         unknown: (!unknown.is_empty()).then_some(unknown),
         operations: run
             .operations
             .iter()
-            .map(|op| operation(op, inlined))
+            .map(|op| operation_fields(op, inlined, fields))
             .collect(),
-        downloads: (!run.downloads.is_empty())
+        downloads: (fields == Fields::Full && !run.downloads.is_empty())
             .then(|| run.downloads.iter().map(run_download).collect()),
     }
 }
@@ -148,6 +183,12 @@ fn run_download(download: &RunDownload) -> api::RunDownload {
 /// One operation. `hasScreenshot` says a JPEG is stored; `screenshot` carries it only when the
 /// read inlines it.
 pub(crate) fn operation(op: &OperationRow, inlined: &Inlined) -> api::Operation {
+    operation_fields(op, inlined, Fields::Full)
+}
+
+/// Projects at the HTTP boundary, leaving the persisted record and other reads intact.
+/// Arguments, results and call logs are omitted. URL and title remain for the host's audit timeline.
+fn operation_fields(op: &OperationRow, inlined: &Inlined, fields: Fields) -> api::Operation {
     api::Operation {
         id: op.id.to_string(),
         run_id: op.id.run.to_string(),
@@ -167,17 +208,21 @@ pub(crate) fn operation(op: &OperationRow, inlined: &Inlined) -> api::Operation 
         effect: op.effect.as_str().to_string(),
         tab_id: op.tab.map(|tab| tab.0),
         page: page_ref(&op.page).map(Box::new),
-        args: op.args.clone().map(Some),
-        args_truncated: op.args_truncated.then_some(true),
-        result: op.result.clone().map(Some),
-        result_truncated: op.result_truncated.then_some(true),
+        args: (fields == Fields::Full)
+            .then(|| op.args.clone().map(Some))
+            .flatten(),
+        args_truncated: (fields == Fields::Full && op.args_truncated).then_some(true),
+        result: (fields == Fields::Full)
+            .then(|| op.result.clone().map(Some))
+            .flatten(),
+        result_truncated: (fields == Fields::Full && op.result_truncated).then_some(true),
         outcome: op.outcome.map(|outcome| outcome.as_str().to_string()),
         delivery: op.delivery.map(|delivery| delivery.as_str().to_string()),
         error: op
             .error
             .as_ref()
-            .map(|error| Box::new(operation_error(error))),
-        notes: (!op.notes.is_empty()).then(|| op.notes.clone()),
+            .map(|error| Box::new(operation_error(error, fields))),
+        notes: (fields == Fields::Full && !op.notes.is_empty()).then(|| op.notes.clone()),
         started_at: op.started_at.millis(),
         sent_at: op.sent_at.map(EpochMillis::millis),
         ended_at: op.ended_at.map(EpochMillis::millis),
@@ -185,19 +230,26 @@ pub(crate) fn operation(op: &OperationRow, inlined: &Inlined) -> api::Operation 
             .ended_at
             .map(|ended| ended.millis().saturating_sub(op.started_at.millis())),
         has_screenshot: op.screenshot == Some(ShotState::Stored),
-        screenshot: inlined.screenshot(op.id).map(Box::new),
+        screenshot: (fields == Fields::Full)
+            .then(|| inlined.screenshot(op.id).map(Box::new))
+            .flatten(),
         main_world: op.main_world,
+        internal: op.is_internal(),
     }
 }
 
 /// `GET /v1/trace`.
-pub(crate) fn trace_tail(tail: &TraceTail, inlined: &Inlined) -> api::TraceTail {
+pub(crate) fn trace_tail(tail: &TraceTail, inlined: &Inlined, fields: Fields) -> api::TraceTail {
     api::TraceTail {
-        runs: tail.runs.iter().map(run_summary).collect(),
+        runs: tail
+            .runs
+            .iter()
+            .map(|run| run_summary_fields(run, fields))
+            .collect(),
         operations: tail
             .operations
             .iter()
-            .map(|op| operation(op, inlined))
+            .map(|op| operation_fields(op, inlined, fields))
             .collect(),
         truncated: tail.truncated,
     }
@@ -672,12 +724,18 @@ fn page_ref(page: &PageState) -> Option<api::PageRef> {
     })
 }
 
-fn operation_error(error: &ErrorRecord) -> api::OperationError {
+fn operation_error(error: &ErrorRecord, fields: Fields) -> api::OperationError {
     api::OperationError {
         owner: error.owner.as_str().to_string(),
         code: error.code.clone(),
-        host_code: error.host_code.clone(),
-        message: error.message.clone(),
+        host_code: (fields == Fields::Full)
+            .then(|| error.host_code.clone())
+            .flatten(),
+        message: match fields {
+            Fields::Full => error.message.clone(),
+            // Existing generated clients require a string even when this view omits its text.
+            Fields::Summary => String::new(),
+        },
         retryable: error.retryable,
         operation_id: error.operation_id.map(|id| id.to_string()),
     }

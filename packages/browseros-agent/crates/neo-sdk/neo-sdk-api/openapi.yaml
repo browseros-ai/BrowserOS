@@ -48,6 +48,8 @@ paths:
       summary: Runs, newest first. `requestId` finds the run a host request produced.
       description: The filters combine with AND.
       parameters:
+        - $ref: '#/components/parameters/TraceFields'
+        - $ref: '#/components/parameters/InternalOperations'
         - name: requestId
           in: query
           description: The host's own id it sent with the run, if it sent one.
@@ -84,8 +86,10 @@ paths:
   /v1/runs/{runId}:
     get:
       operationId: getRun
-      summary: One run with every operation in start order.
+      summary: One run with selected operations in start order, all by default.
       parameters:
+        - $ref: '#/components/parameters/TraceFields'
+        - $ref: '#/components/parameters/InternalOperations'
         - name: runId
           in: path
           required: true
@@ -246,6 +250,8 @@ paths:
         match both. `truncated` says whether older matching operations were cut. `screenshots`
         inlines stored images: `none`, `all`, or `last:N` (N from 1 to 50).
       parameters:
+        - $ref: '#/components/parameters/TraceFields'
+        - $ref: '#/components/parameters/InternalOperations'
         - $ref: '#/components/parameters/TaskId'
         - name: tab
           in: query
@@ -867,6 +873,33 @@ components:
       type: http
       scheme: bearer
   parameters:
+    TraceFields:
+      name: fields
+      in: query
+      description: >-
+        full preserves all stored fields. summary omits operation arguments, results, truncation
+        flags, notes, error text and hostCode, and inline screenshots. Error message is the empty
+        string. It also omits run code, codeWithheld, result, resultTruncated, hostData and downloads.
+        Error owner/code, operation
+        metadata, page URL/title and tab identity remain. GET /v1/runs includes each run's operations
+        in this view, without site or delivery. This is a read view; values remain in trace.db.
+        Other endpoints and default reads still expose stored values. Summary ignores screenshot
+        inlining options and preserves hasScreenshot for separate image reads.
+      schema:
+        type: string
+        enum: [full, summary]
+        default: full
+    InternalOperations:
+      name: internal
+      in: query
+      description: >-
+        false omits Neo-owned subscriptions using the same shared name rule as run-end screenshots
+        and touched-tab following, plus the absence of a script call site. Script page.on calls
+        remain. On /v1/trace this filter applies before tail, and truncated counts older visible
+        matching operations. Run operationCount and execution facts remain the stored totals.
+      schema:
+        type: boolean
+        default: true
     OperationId:
       name: operationId
       in: path
@@ -1023,6 +1056,7 @@ components:
           description: The host's own code when `code` is `host_error`, e.g. `needs_owner`.
         message:
           type: string
+          description: Free-text error details. Empty with fields=summary; full reads retain the stored message.
         retryable:
           type: boolean
           description: True only when delivery is `not_sent` or the operation is a read.
@@ -1132,6 +1166,14 @@ components:
           type: integer
           format: int64
           description: Operation events Neo dropped under disk pressure; zero or absent normally.
+        operations:
+          type: array
+          description: >-
+            Present only on GET /v1/runs?fields=summary. Operations in start order, with the
+            summary projection and internal filter. The audit list omits site and delivery.
+            operationCount remains the stored total, including any omitted internal operations.
+          items:
+            $ref: '#/components/schemas/Operation'
     Run:
       type: object
       required: [id, status, startedAt, operationCount, complete, tabs, operations]
@@ -1267,7 +1309,7 @@ components:
           type: string
     Operation:
       type: object
-      required: [id, runId, name, kind, effect, startedAt, hasScreenshot]
+      required: [id, runId, name, kind, effect, startedAt, hasScreenshot, internal]
       properties:
         id:
           type: string
@@ -1357,6 +1399,13 @@ components:
             JavaScript world, rather than Neo's isolated world. Present once the operation has
             ended, so an operation still running, one whose end Neo never recorded, or one
             recorded before this field has none.
+        internal:
+          type: boolean
+          description: >-
+            True for Neo-owned subscription work, derived from the shared subscription-name rule
+            and the absence of a script call site. Explicit script listeners carry a site and
+            are false. Historical listeners without recorded sites are indistinguishable from
+            Neo-owned work and are true. This field appears on every operation read and event.
     OperationSite:
       type: object
       description: The call location in the agent script, with 1-based line and column numbers.

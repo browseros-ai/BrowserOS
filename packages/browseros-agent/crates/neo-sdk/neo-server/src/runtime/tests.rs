@@ -18,8 +18,8 @@ use super::install_web_globals::install_web_globals;
 use super::{LogLevel, LogLine, Script, ScriptEnd, ScriptOutcome, run_script};
 use crate::config::Defaults;
 use crate::dispatch::{
-    CallSite, Dispatcher, ErrorCode, LeafError, Method, MethodSpec, Observation, Observer, OpCtx,
-    OperationError, PageFact, PageTarget, RegistryBuilder, RunCtx, StopReason,
+    CallSite, Dispatcher, ErrorCode, LeafError, Lifetime, Method, MethodSpec, Observation,
+    Observer, OpCtx, OperationError, PageFact, PageTarget, RegistryBuilder, RunCtx, StopReason,
 };
 use crate::test_rig::{TestError, TestRig, on_neo_runtime, within};
 
@@ -2021,12 +2021,56 @@ fn awaited_playwright_calls_keep_separate_sites_in_helpers_and_concurrent_calls(
 }
 
 #[test]
-fn listener_registration_does_not_give_internal_event_work_a_site() -> Result<(), TestError> {
+fn listener_registration_keeps_its_site_while_internal_event_work_has_none() -> Result<(), TestError>
+{
+    // The normal rig has no event registration and no lazy-page opener. Register a real
+    // background method and seed a tab so this exercises the dispatcher, not refusal telemetry.
+    struct Listen;
+    impl Method for Listen {
+        type Input = Value;
+        type Output = Value;
+
+        fn spec(&self) -> MethodSpec {
+            MethodSpec {
+                lifetime: Lifetime::Background,
+                ..MethodSpec::new("events.listen", Effect::Read)
+            }
+        }
+
+        fn target(_input: &Value) -> Option<&PageTarget> {
+            None
+        }
+
+        fn call(
+            &self,
+            _op: &OpCtx<Self>,
+            _input: Value,
+        ) -> impl Future<Output = Result<Value, LeafError>> {
+            future::ready(Ok(Value::Null))
+        }
+    }
     on_neo_runtime(async {
-        let rig = TestRig::new().await?;
+        let mut rig = TestRig::new().await?;
+        let page = rig.owner_tab("https://listeners.example/").await?;
+        let mut registry = RegistryBuilder::default();
+        registry.define(Listen)?;
+        rig.dispatcher = Arc::new(Dispatcher::new(
+            registry.build(),
+            Vec::new(),
+            rig.sink.clone(),
+            Arc::clone(&rig.link),
+            Arc::clone(&rig.tabs),
+            Observer::unrecorded(),
+        ));
         let (run, _guard) = rig.run(BUDGET, None)?;
-        let code = "page.on('dialog', () => {});\nawait __neo.invoke('test.echo', {});\nreturn 1;";
-        assert_eq!(returned(run_code(&rig, &run, code).await)?, json!(1));
+        let script = Script {
+            code: "page.on('dialog', () => {});\ncontext.on('pageload', () => {});\nawait new Promise(resolve => setTimeout(resolve, 10));\nreturn 1;".into(),
+            page: Some(page), pages: Vec::new(), observed: None,
+        };
+        assert_eq!(
+            returned(run_script(&run, &rig.dispatcher, script).await)?,
+            json!(1)
+        );
         rig.sink.flush().await?;
         let detail = rig.store.run(run.id()).await?.ok_or("recorded run")?;
         let events: Vec<_> = detail
@@ -2038,7 +2082,19 @@ fn listener_registration_does_not_give_internal_event_work_a_site() -> Result<()
             !events.is_empty(),
             "registration starts the prelude's event work"
         );
-        assert!(events.iter().all(|op| op.site.is_none()));
+        let mut lines = events
+            .iter()
+            .filter(|op| op.name == "events.listen")
+            .filter_map(|op| op.site.map(|site| site.line))
+            .collect::<Vec<_>>();
+        lines.sort_unstable();
+        assert_eq!(lines, vec![1, 2]);
+        assert!(
+            events
+                .iter()
+                .filter(|op| op.name == "events.next")
+                .all(|op| op.is_internal())
+        );
         Ok(())
     })
 }
