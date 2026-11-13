@@ -85,6 +85,10 @@ pub enum Shot {
     /// No picture: too many newer jobs waited on its tab, the tab closed, or the capture failed
     /// or timed out on every attempt. Nothing was written, and the operation keeps no screenshot.
     Dropped,
+    /// No picture on purpose: the tab took a host's private typing (claw-sdk's fill), whose
+    /// values a picture would show, so the camera captured nothing or threw its capture away.
+    /// Nothing was written; the operation's row records `withheld` in the picture's place.
+    Withheld,
 }
 
 /// A job's reply. Exactly one [`Shot`] reaches the writer per answer: the one sent, or `Dropped`

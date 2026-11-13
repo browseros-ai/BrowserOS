@@ -202,6 +202,9 @@ error_codes! {
     CDP_ERROR = "cdp_error";
     /// The owner holds the tab (sdk-traces' takeover lock).
     OWNER_HAS_CONTROL = "owner_has_control";
+    /// A script's own picture (`page.screenshot`, `locator.screenshot`, `page.pdf`) of a tab
+    /// that took a host's private fill (protected-fill ruling R46).
+    PRIVATE_TAB = "private_tab";
     /// The script's code did not compile.
     SYNTAX_ERROR = "syntax_error";
     /// The script threw something other than an operation's `NeoError`.

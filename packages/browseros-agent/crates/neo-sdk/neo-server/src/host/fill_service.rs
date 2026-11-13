@@ -23,7 +23,7 @@
 
 use std::sync::Arc;
 
-use neo_http::{FillAsk, FillDoor, FillRefusal, FillReply, FillVerb};
+use neo_http::{FillAsk, FillDoor, FillRefusal, FillReply, FillVerb, TookPrivateText};
 use neo_sdk_api as api;
 use neo_takeover::NamedLock;
 use neo_trace::{ErrorOwner, RunId, RunStatus};
@@ -54,6 +54,8 @@ pub(crate) struct FillService {
     ledger: Arc<FillLedger>,
     /// Cancelled on SIGTERM: a fill stops as `neo / shutting_down` and records its end.
     shutdown: CancellationToken,
+    /// Which tabs the entry typed into, for the host API's camera.
+    took: TookPrivateText,
 }
 
 /// What the fill service is built from. A plain data bag.
@@ -68,6 +70,9 @@ pub(crate) struct FillServiceParts {
     pub(crate) ledger: Arc<FillLedger>,
     /// Fires on SIGTERM.
     pub(crate) shutdown: CancellationToken,
+    /// Whether a tab took a private entry: the entry's own answer
+    /// (`Playwright::took_private_text`), true for the tab's life once its first character went.
+    pub(crate) took: TookPrivateText,
 }
 
 /// The check method's value, as the service reads it back.
@@ -86,6 +91,7 @@ impl FillService {
             takeover,
             ledger,
             shutdown,
+            took,
         } = parts;
         Arc::new(Self {
             dispatcher,
@@ -93,7 +99,15 @@ impl FillService {
             takeover,
             ledger,
             shutdown,
+            took,
         })
+    }
+
+    /// What the host API arms its camera with, so a tab this service typed into is never
+    /// pictured (design section 10.3).
+    #[must_use]
+    pub(crate) fn took_private_text(&self) -> TookPrivateText {
+        Arc::clone(&self.took)
     }
 
     /// What the host API arms its fill routes with.

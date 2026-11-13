@@ -198,3 +198,57 @@ it('refuses the snapshot rather than falling back when masking cannot be install
     refuse.mockRestore()
   }
 })
+
+const MARKED_PAGE = `<html><body>
+  <h1>Code</h1>
+  <input id="code" type="text" aria-label="Code" value="CANARY-1">
+  <input id="pw" type="password" value="hunter2">
+</body></html>`
+
+/** The pin of the one element `selector` matches, as Rust's resolve hands it out. */
+function pinOf(probe: ProbePage, selector: string): number {
+  const reply = probe.call({
+    op: 'resolve',
+    target: { chunk: parseSelector(selector) },
+    strictness: 'strict',
+    want: 'element',
+  })
+  const pinned: unknown =
+    typeof reply === 'object' && reply !== null
+      ? Reflect.get(reply, 'pin')
+      : undefined
+  if (typeof pinned !== 'number')
+    throw new Error(`no pin in ${JSON.stringify(reply)}`)
+  return pinned
+}
+
+it("tests that a box the entry typed into prints bullets in the page's snapshot, with and without the conformance switch (rulings R14 and R44)", async () => {
+  page = openProbePage(MARKED_PAGE)
+  page.boot({ frameSeq: 3, epoch: 'a' })
+  showFixture(page)
+  const probe = page
+  const box = pinOf(probe, '#code')
+  // The entry's focus step marks the box before its first character (private-entry.ts).
+  await probe.call({
+    op: 'private',
+    pin: box,
+    step: { kind: 'focus', text: 'CANARY-1', spaced: false },
+  })
+  probe.call({ op: 'private', pin: box, step: { kind: 'forget' } })
+  for (const conformance of [false, true]) {
+    const printed = JSON.stringify(
+      probe.call({
+        op: 'snapshot',
+        root: 'document',
+        mode: 'ai',
+        ...(conformance ? { conformance } : {}),
+      }),
+    )
+    expect(printed).not.toContain('CANARY-1')
+    expect(printed).toContain('"text":"••••••••"')
+    // The page's own declaration is masked outside conformance and prints as upstream under it.
+    expect(printed).toContain(
+      conformance ? '"text":"hunter2"' : '"text":"•••••••"',
+    )
+  }
+})

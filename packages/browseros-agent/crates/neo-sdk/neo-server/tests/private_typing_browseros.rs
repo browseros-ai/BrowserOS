@@ -6,6 +6,8 @@
 //!  host (host.sock) ─ POST /v1/tabs/{tab}/fill/check ─ each box's facts
 //!                   ─ POST /v1/tabs/{tab}/fill ─ the values typed, read back ─ a repeat
 //!  agent ─ the page's title: a hash of what its boxes hold, never the values
+//!  agent ─ a click on the tab: no picture, its screenshot 404 "withheld"; a script's own
+//!          screenshot of the tab refused (rulings R15 and R46)
 //!  Neo stopped ─ its state folder (trace.db, -wal, -shm, the fill's record, its logs at trace
 //!               level) and its stderr scanned
 //! ```
@@ -22,7 +24,9 @@ use std::fs;
 use std::path::Path;
 use std::time::Duration;
 
-use browseros_rig::{CaptchaKey, HOST_TOKEN, Rig, TestResult, browser_or_skip, run};
+use browseros_rig::{
+    CaptchaKey, Client, HOST_TOKEN, Rig, TestResult, browser_or_skip, outcome, run,
+};
 use rmcp::model::CallToolResult;
 use serde_json::{Value, json};
 use tokio::time;
@@ -131,6 +135,8 @@ async fn drive(rig: &mut Rig) -> TestResult {
         "the boxes hold the host's values"
     );
 
+    no_picture_after_the_fill(rig, &client).await?;
+
     // The record: one protected op, the counts, no picture, no page address.
     let run_id = at(&answer, "/runId").as_str().ok_or("a runId")?;
     let record = rig
@@ -173,6 +179,87 @@ async fn drive(rig: &mut Rig) -> TestResult {
             assert!(!text.contains(canary), "{canary} is in {text}");
         }
     }
+    Ok(())
+}
+
+/// After the fill, no picture of its tab (rulings R15 and R46): a script's later click there
+/// records none, and its screenshot answers 404 for that reason; a script's own screenshot of
+/// the tab is refused. Both ask the entry's real mark of the tab, through the app's wiring.
+async fn no_picture_after_the_fill(rig: &Rig, client: &Client) -> TestResult {
+    let clicked = run(
+        client,
+        "await page.click('#user'); return true;",
+        &json!({ "taskId": TASK }),
+    )
+    .await?;
+    let click_run = at(outcome(&clicked)?, "/id")
+        .as_str()
+        .ok_or("the click's run id")?
+        .to_owned();
+    let withheld = time::timeout(Duration::from_secs(10), async {
+        loop {
+            let record: Value = rig
+                .host(
+                    "GET",
+                    &format!("/v1/runs/{click_run}?wait=10"),
+                    Some(HOST_TOKEN),
+                    None,
+                )
+                .await?
+                .json()?;
+            let click = record
+                .pointer("/operations")
+                .and_then(Value::as_array)
+                .and_then(|operations| {
+                    operations.iter().find(|operation| {
+                        at(operation, "/name")
+                            .as_str()
+                            .is_some_and(|name| name.ends_with("click"))
+                    })
+                })
+                .cloned()
+                .ok_or_else(|| format!("the click's operation: {record}"))?;
+            assert_eq!(at(&click, "/hasScreenshot"), false, "{click}");
+            let id = at(&click, "/id")
+                .as_str()
+                .ok_or("the click's id")?
+                .to_owned();
+            let shot = rig
+                .host(
+                    "GET",
+                    &format!("/v1/operations/{id}/screenshot"),
+                    Some(HOST_TOKEN),
+                    None,
+                )
+                .await?;
+            let status = shot.status;
+            let body = shot.json()?;
+            if status == 404
+                && at(&body, "/message")
+                    .as_str()
+                    .is_some_and(|message| message.contains("withheld"))
+            {
+                return Ok::<_, Box<dyn Error>>(());
+            }
+            time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await;
+    withheld.map_err(|_late| "the click's picture was not withheld within 10 s")??;
+    let shot = run(
+        client,
+        "try { await page.screenshot(); return 'pictured'; } catch (error) { return String(error.message); }",
+        &json!({ "taskId": TASK }),
+    )
+    .await?;
+    assert!(
+        value(&shot)?
+            .as_str()
+            .is_some_and(|message| message.contains("took a private fill")
+                && message.contains("Trying again will not succeed")),
+        "a script's own screenshot of the tab is refused: {shot:?}"
+    );
+
     Ok(())
 }
 

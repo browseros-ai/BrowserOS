@@ -79,6 +79,8 @@ pub(super) struct ScriptedEntry {
     calls: AtomicUsize,
     /// The values' lengths each entry was handed, in call order: what typed.
     entered: Mutex<Vec<Vec<usize>>>,
+    /// The tabs an entry marked sent on, for the camera: never cleared, as the real entry's.
+    took: Mutex<Vec<TabId>>,
     looks: AtomicUsize,
     holding: Notify,
     release: Notify,
@@ -87,6 +89,16 @@ pub(super) struct ScriptedEntry {
 impl ScriptedEntry {
     pub(super) fn script(&self, script: Script) {
         *self.script.lock().unwrap_or_else(PoisonError::into_inner) = script;
+    }
+
+    /// Marks the op sent, as the real entry does once every look passed, and remembers the tab
+    /// as the real entry's `took_private_text` does, for the tab's life.
+    fn sent(&self, env: &dyn OpEnv, tab: TabId) {
+        env.mark_sent();
+        self.took
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(tab);
     }
 
     /// Records what one entry typed into its boxes.
@@ -100,6 +112,14 @@ impl ScriptedEntry {
     /// How many times the entry ran: zero when the door refused every fill before it.
     pub(super) fn calls(&self) -> usize {
         self.calls.load(Ordering::SeqCst)
+    }
+
+    /// Whether an entry went past "sent" on `tab`: the real entry's `took_private_text`.
+    pub(super) fn took(&self, tab: TabId) -> bool {
+        self.took
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .contains(&tab)
     }
 
     /// The lengths of the values each entry was handed: one row per call that typed.
@@ -148,7 +168,7 @@ impl PrivateEntry for ScriptedEntry {
                     if let Some(refused) = before_keys(0) {
                         return refused;
                     }
-                    env.mark_sent();
+                    self.sent(env, request.tab);
                     self.typed(&lengths);
                     Entry {
                         outcome: if matches!(script, Script::Enter) {
@@ -166,7 +186,7 @@ impl PrivateEntry for ScriptedEntry {
                     if let Some(refused) = before_keys(0) {
                         return refused;
                     }
-                    env.mark_sent();
+                    self.sent(env, request.tab);
                     let typed: Vec<usize> = lengths
                         .iter()
                         .enumerate()
@@ -190,7 +210,7 @@ impl PrivateEntry for ScriptedEntry {
                     if let Some(refused) = before_keys(0) {
                         return refused;
                     }
-                    env.mark_sent();
+                    self.sent(env, request.tab);
                     self.holding.notify_one();
                     self.release.notified().await;
                     // Before the first field's focus and keys: a lock taken meanwhile stops it.
@@ -564,7 +584,7 @@ async fn the_value_is_in_no_answer_record_file_or_log_on_any_path() -> TestResul
     // first would never reach this capture, and the scan below would pass while Neo logged a
     // value. Registering one rebuilds every known callsite against the real list, and with two
     // registered that shortcut is off for later callsites too (tracing-core 0.1.36,
-    // `Rebuilder::JustOne`; measured in claw-sdk/protected-fill/reviews/tracing-shortcut).
+    // `Rebuilder::JustOne`).
     let _second = Dispatch::new(NoSubscriber::default());
     let (host, tab) = ready().await?;
     let events = EventTap::open(&host.socket).await?;
@@ -1462,5 +1482,59 @@ async fn the_check_passes_its_hosts_own_lock_as_the_fill_does() -> TestResult {
         "owner_has_control"
     );
     assert_eq!(host.entry.calls(), 0, "a check never types");
+    Ok(())
+}
+
+/// Design section 10.3 (rulings R15 and R28): once a fill typed into a tab, the camera takes no
+/// picture of it for the tab's life and records `withheld` in the picture's place. A write on
+/// another tab still gets a job (the fake browser cannot capture, so its job answers `Dropped`),
+/// which the withheld answer is told apart from.
+#[tokio::test]
+async fn a_tab_that_took_a_fill_is_never_pictured_again() -> TestResult {
+    let (host, tab) = ready().await?;
+    let other = host.fake.open_tab("https://other.example/", "Other");
+    let answer = fill(&host, tab, &canary_body(&json!({}))).await?;
+    assert_eq!(answer.body["outcome"], "entered", "{answer:?}");
+    let mut operations = Vec::new();
+    for on in [tab, other] {
+        let (run, written) = script_call(
+            &host,
+            "await page.click('#pay')",
+            "test.plainFill",
+            json!({ "page": { "$neo": "page", "tab": on.0 }, "value": "not secret" }),
+        )
+        .await?;
+        assert!(written.is_ok(), "{written:?}");
+        operations.push(format!("{run}.1"));
+    }
+    host.sink.flush().await?;
+    let screenshot = |operation: &str| {
+        let path = format!("/v1/operations/{operation}/screenshot");
+        let socket = host.socket.clone();
+        async move { request(&socket, "GET", &path, Some(TOKEN), None).await }
+    };
+    within(async {
+        loop {
+            let withheld = screenshot(&operations[0]).await;
+            if withheld.is_ok_and(|reply| {
+                reply.body["message"]
+                    .as_str()
+                    .is_some_and(|message| message.contains("withheld"))
+            }) {
+                return;
+            }
+            time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .map_err(|_unseen| "the filled tab's later write records a withheld picture")?;
+    let dropped = screenshot(&operations[1]).await?;
+    assert_eq!(dropped.status, 404, "{dropped:?}");
+    assert!(
+        dropped.body["message"]
+            .as_str()
+            .is_some_and(|message| !message.contains("withheld")),
+        "another tab is not withheld: {dropped:?}"
+    );
     Ok(())
 }

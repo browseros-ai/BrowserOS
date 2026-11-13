@@ -4,6 +4,7 @@
  * and its message; a poll only reports what it saw, and never waits.
  */
 import type { FrameExpectParams } from '../../../neo-playwright/third_party/playwright/packages/injected/src/injectedScript'
+import { withMarkedFieldsMasked } from './private-field-values'
 import type { ExpectPoll, ExpectRequest, ReplyTo } from './protocol'
 import { type Found, queryAll, resolveTarget } from './resolve'
 import {
@@ -43,7 +44,10 @@ export async function expect(
   ) {
     const elements = queryAll(world, request.target, root)
     const count = `${elements.length} element${elements.length === 1 ? '' : 's'}`
-    return poll(checks.every(elements, params), count)
+    return poll(
+      withMarkedFieldsMasked(() => checks.every(elements, params)),
+      count,
+    )
   }
   // A page matcher's element is the document's root (upstream's `:root`), except an aria
   // template's.
@@ -53,17 +57,28 @@ export async function expect(
       : resolveTarget(world, request.target, request.strictness, root)
   if (found.kind !== 'one') return found
   const { element } = found
-  const resolved = world.injected.previewNode(element)
-  const check = await checks.single(element, params, request.frameVisible)
+  // Every read Neo makes of a box it typed a host's secret into answers bullets: the preview,
+  // the received value or aria tree, and the failure's snapshot (ruling R47). The mask is
+  // synchronous: the check's promise is made inside it, and upstream's expectSingleElement reads
+  // the element before its first await (the only await is `to.be.in.viewport`'s, which reads
+  // geometry). So `toHaveValue` compares against bullets, as `inputValue()` reads.
+  const resolved = withMarkedFieldsMasked(() =>
+    world.injected.previewNode(element),
+  )
+  const check = await withMarkedFieldsMasked(() =>
+    checks.single(element, params, request.frameVisible),
+  )
   const reply = poll(check, resolved)
   // Upstream's InjectedScript.expect snapshots only a poll that fails the matcher, so a passing
   // poll costs no aria tree.
   if (check.matches === params.isNot) {
-    const ariaSnapshot = expectFailureSnapshot(
-      world.injected,
-      element,
-      params,
-      request.frameVisible,
+    const ariaSnapshot = withMarkedFieldsMasked(() =>
+      expectFailureSnapshot(
+        world.injected,
+        element,
+        params,
+        request.frameVisible,
+      ),
     )
     if (ariaSnapshot !== undefined) reply.ariaSnapshot = ariaSnapshot
   }

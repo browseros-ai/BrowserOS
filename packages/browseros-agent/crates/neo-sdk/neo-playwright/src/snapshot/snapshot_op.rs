@@ -117,8 +117,9 @@ fn route<'a, R: Route<'a>>(op: SnapshotOp, r: R) -> R::Out {
             ),
             (
                 "conformance",
-                "the prelude's captured spec-harness switch bypasses normal field-value masking \
-                 in every frame; no public snapshot option can set it",
+                "the prelude's captured spec-harness switch bypasses the masking of page-declared \
+                 private fields in every frame, never of a box Neo typed a host's secret into; no \
+                 public snapshot option can set it",
             ),
         ])
         .result(

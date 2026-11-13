@@ -8,6 +8,7 @@
  * `ref` read records node identity in the document-owned map after that same strict resolution.
  */
 import { parentElementOrShadowHost } from '../../../neo-playwright/third_party/playwright/packages/injected/src/domUtils'
+import { privatelyTyped } from './private-entry'
 import type {
   Checkable,
   FileInput,
@@ -125,7 +126,11 @@ function inputValue(world: World, element: Element): string {
     throw world.injected.createStacklessError(
       'Node is not an <input>, <textarea> or <select> element',
     )
-  return (control as HTMLInputElement).value
+  const value = (control as HTMLInputElement).value
+  // A box Neo typed a host's secret into answers one bullet per character, as the snapshot
+  // prints it, so a script reading the box back does not read the secret (protected-fill design,
+  // decision 6). A script's own `evaluate` still reads the page; that is the page's world.
+  return privatelyTyped(control) ? '•'.repeat(value.length) : value
 }
 
 /**

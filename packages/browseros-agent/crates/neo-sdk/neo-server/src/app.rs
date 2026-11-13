@@ -46,15 +46,18 @@ async fn private_typing(
     dispatcher: &Arc<Dispatcher>,
     browser: &Arc<BrowserLink>,
     takeover: &Arc<TakeoverLock>,
+    playwright: &Arc<PlaywrightFacade>,
     shutdown: &CancellationToken,
 ) -> Arc<FillService> {
     let retention = settings.clone();
+    let entry = Arc::clone(playwright);
     FillService::new(FillServiceParts {
         dispatcher: Arc::clone(dispatcher),
         browser: Arc::clone(browser),
         takeover: Arc::clone(takeover),
         ledger: FillLedger::open(trace_dir, move || retention.trace_retention()).await,
         shutdown: shutdown.clone(),
+        took: Arc::new(move |tab| entry.took_private_text(tab)),
     })
 }
 
@@ -261,6 +264,7 @@ impl App {
             &dispatcher,
             &browser,
             &takeover,
+            &playwright,
             &shutdown,
         )
         .await;

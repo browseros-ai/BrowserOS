@@ -27,6 +27,7 @@
 //!                                       janitor and retention sweep read it on every pass
 //!
 //!  trace writer ─ ShotJobs ─▶ camera (screenshot_taker) ─ agent's BrowserSession ─▶ JPEG file
+//!                              (never of a tab the app's private typing marked: private_tabs)
 //!       ▲                                  │
 //!       └──────── ShotAnswer ◀─────────────┘
 //!
@@ -67,6 +68,7 @@ mod host_service;
 mod limits;
 mod live_tabs;
 mod part_routes;
+mod private_tabs;
 mod query;
 mod record_routes;
 mod response_id;
@@ -84,6 +86,7 @@ mod wire;
 pub use fill_route::{FillAsk, FillDoor, FillRefusal, FillReply, FillVerb};
 pub use host_auth::{HostAuth, HostToken, PeerRule, TokenError};
 pub use host_service::{PeerInfo, host_router, host_service};
+pub use private_tabs::TookPrivateText;
 pub use service::{Service, ServiceInputs, TabOwner};
 pub use settings::{Settings, SettingsDefaults};
 pub use tab_stamps::TabFence;

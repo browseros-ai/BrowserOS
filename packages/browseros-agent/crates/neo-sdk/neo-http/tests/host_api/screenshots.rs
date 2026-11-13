@@ -415,3 +415,68 @@ async fn a_closed_tab_is_dropped_and_an_operation_without_a_screenshot_is_a_404(
     }
     Ok(())
 }
+
+/// A tab that took a host's private typing is never pictured (protected-fill design, section
+/// 10.3): the camera asks before a capture and records `withheld`, writing nothing, while another
+/// tab's write is pictured as usual.
+#[tokio::test]
+async fn a_tab_that_took_a_private_fill_is_withheld() -> TestResult {
+    let h = harness_with_camera().await?;
+    h.browser.open_tab(3);
+    h.browser.open_tab(4);
+    h.service
+        .arm_private_tabs(std::sync::Arc::new(|tab| tab == browseros_core::TabId(3)));
+    let (run, op) = write_run(&h, 3);
+    let body = complete(&h, run).await?;
+    assert_eq!(body["operations"][0]["hasScreenshot"], false, "{body}");
+    let withheld = h.get(&format!("/v1/operations/{op}/screenshot")).await?;
+    withheld.assert_error(StatusCode::NOT_FOUND, "not_found");
+    assert!(
+        withheld.body["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("withheld")),
+        "{}",
+        withheld.body
+    );
+    assert!(!file_of(&h, op).exists(), "nothing written");
+    assert_eq!(
+        h.browser.captures(),
+        0,
+        "the camera asked before the capture, so none started"
+    );
+    let (other_run, other) = write_run(&h, 4);
+    complete(&h, other_run).await?;
+    assert!(
+        served(&h, other).await?.is_some(),
+        "another tab is pictured"
+    );
+    Ok(())
+}
+
+/// A capture already running when a fill starts on its tab carries the value in its pixels: the
+/// camera asks again after the capture, and throws it away unwritten.
+#[tokio::test]
+async fn a_capture_a_private_fill_straddles_is_thrown_away() -> TestResult {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let h = harness_with_camera().await?;
+    h.browser.open_tab(3);
+    let filled = Arc::new(AtomicBool::new(false));
+    let took = Arc::clone(&filled);
+    h.service
+        .arm_private_tabs(Arc::new(move |_tab| took.load(Ordering::SeqCst)));
+    h.browser.hold_captures();
+    let (run, op) = write_run(&h, 3);
+    h.browser.captures_started(1).await?;
+    // The fill's first character goes while the capture is out.
+    filled.store(true, Ordering::SeqCst);
+    h.browser.release_captures();
+    let body = complete(&h, run).await?;
+    assert_eq!(body["operations"][0]["hasScreenshot"], false, "{body}");
+    assert!(
+        !file_of(&h, op).exists(),
+        "the straddling capture was not written"
+    );
+    assert!(served(&h, op).await?.is_none());
+    Ok(())
+}

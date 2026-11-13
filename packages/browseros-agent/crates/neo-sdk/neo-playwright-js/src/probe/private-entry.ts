@@ -42,6 +42,13 @@ import type { World } from './world'
 const marked = new WeakSet<Element>()
 
 /**
+ * Whether this world ever marked a box. Until it has, a snapshot under the spec harness's
+ * conformance switch installs no mask at all (snapshot.ts); once it has, that snapshot masks the
+ * marked boxes, which no switch bypasses (ruling R44).
+ */
+let anyMarked = false
+
+/**
  * A box under entry: the value it should hold, whether its last input event saw it, and what
  * says its page may be moving on since the focus step: the submit events seen (judged once
  * their dispatch is over, when a page's handler may have prevented them) and whether the
@@ -69,6 +76,16 @@ const active = new Map<Pin, Element>()
 /** Whether Neo typed a private value into `element` (the mask reads it, pull request 4). */
 export function privatelyTyped(element: Element): boolean {
   return marked.has(element)
+}
+
+/** Whether this world marked any box yet (`anyMarked`). */
+export function anyPrivatelyTyped(): boolean {
+  return anyMarked
+}
+
+function mark(element: Element): void {
+  marked.add(element)
+  anyMarked = true
 }
 
 export function privateStep(
@@ -125,7 +142,7 @@ function markFocused(box: Element): boolean {
   if (!holder || holder === box) return false
   const name = holder.localName
   if (name !== 'input' && name !== 'textarea') return false
-  marked.add(holder)
+  mark(holder)
   return true
 }
 
@@ -137,7 +154,7 @@ async function focus(
   spaced: boolean,
 ): Promise<PrivateAnswer> {
   // The mark comes before the first character, so a snapshot taken mid-entry is masked too.
-  marked.add(box)
+  mark(box)
   listen(pin, box, text, spaced)
   if (world.injected.selectText(box) === 'error:notconnected')
     return { kind: 'focus', focus: 'gone' }

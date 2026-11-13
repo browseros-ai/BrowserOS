@@ -99,7 +99,8 @@ impl OperationFilter {
 pub enum ShotState {
     /// A JPEG is on disk.
     Stored,
-    /// A legacy row from an older writer that withheld pixels. Read-only: new jobs never emit it.
+    /// No picture on purpose: the tab had taken a host's private typing (`Shot::Withheld`).
+    /// Older writers recorded it too, for their own reasons.
     Withheld,
     /// The disk cap deleted it.
     Expired,
@@ -130,7 +131,7 @@ impl ShotState {
 pub enum ShotRead {
     /// The JPEG.
     Jpeg(Vec<u8>),
-    /// A legacy withheld row. Kept so older screenshots remain readable.
+    /// Withheld: the tab had taken a host's private typing, or an older writer withheld it.
     Withheld,
     /// Deleted by the disk cap, or missing from the disk.
     Expired,

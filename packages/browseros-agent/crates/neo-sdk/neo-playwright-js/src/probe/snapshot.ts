@@ -15,7 +15,10 @@ import {
   type EngineReads,
   leafTargets,
 } from './pointer-targets'
-import { withMaskedFieldValues } from './private-field-values'
+import {
+  withMarkedFieldsMasked,
+  withMaskedFieldValues,
+} from './private-field-values'
 import type { ReplyTo, SnapshotIframe, SnapshotRequest } from './protocol'
 import { type Found, resolveTarget } from './resolve'
 import { openClosedRoots } from './shadow-roots'
@@ -71,8 +74,11 @@ export function snapshot(
     isVisible: (of) => injected.utils.isElementVisible(of),
   }
   const take = () => marked(targets, engine, plain)
+  // Under the spec harness's conformance switch the page's own private fields print as upstream
+  // prints them, but a box Neo typed a host's secret into stays masked: the mark has no bypass
+  // (ruling R44). Until this world marks a box, that snapshot installs nothing.
   const { result, skipped } = request.conformance
-    ? take()
+    ? withMarkedFieldsMasked(take)
     : withMaskedFieldValues(take)
   const { json, iframeRefs, iframeDepths } = result
   const iframes: SnapshotIframe[] = []
