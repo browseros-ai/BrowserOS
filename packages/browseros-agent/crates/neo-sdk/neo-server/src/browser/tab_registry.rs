@@ -335,6 +335,16 @@ impl TabRegistry {
         self.lock().tasks.owner(tab).cloned()
     }
 
+    /// The family root of task `id`, while the book has it.
+    #[must_use]
+    pub(crate) fn task_family(&self, id: &TaskId) -> Option<TaskId> {
+        self.lock()
+            .tasks
+            .get(id)
+            .ok()
+            .map(|task| task.family.clone())
+    }
+
     /// Who holds `tab` now: its task and that task's family.
     #[must_use]
     #[cfg_attr(
@@ -400,18 +410,21 @@ impl TabRegistry {
     /// any listing showed it. From now on sight follows the opener's family for it, so a bound
     /// run's popup is its own from its first moment. Only sight reads this: the popup joins a
     /// task, and becomes the agent's, only when a listing or an op registers it
-    /// ([`TabRegistry::popup`]). A note for a tab Neo already saw close is dropped.
+    /// ([`TabRegistry::popup`]). A note can come after a close core already reported: one
+    /// socket's events are ordered, so the popup's own destroy follows and the watch's confirmed
+    /// close drops the note ([`TabRegistry::forget_announced`]), and a closed opener holds
+    /// nothing for a note to follow.
     pub(crate) fn note_opener(&self, popup: TabId, opener: TabId) {
-        let mut state = self.lock();
-        if popup == opener
-            || state
-                .closed_at
-                .iter()
-                .any(|(closed, _)| *closed == popup || *closed == opener)
-        {
-            return;
+        if popup != opener {
+            self.lock().announced.note(popup, opener);
         }
-        state.announced.note(popup, opener);
+    }
+
+    /// The tab watch confirmed `tab` closed. Its announced links go now: a popup that opened and
+    /// closed between two listings never entered core's cache, so its close never reaches
+    /// [`TabRegistry::removing`].
+    pub(crate) fn forget_announced(&self, tab: TabId) {
+        self.lock().announced.forget(tab);
     }
 
     /// The tab watch follows a new socket. Announced openers go: a restarted browser numbers
@@ -691,7 +704,8 @@ impl TabEntry {
 }
 
 /// Popup → opener as the browser announced each popup, oldest first, bounded by [`ANNOUNCED`].
-/// Both sides are dropped with either tab's close, as `TabState::popups` is.
+/// A link goes when either tab closes, as `TabState::popups`' do, through core's removal or, for
+/// a popup core never cached, the watch's confirmed close; every link goes at a new socket.
 #[derive(Default)]
 struct Announced {
     openers: HashMap<TabId, TabId>,
@@ -1395,7 +1409,20 @@ mod tests {
         assert_eq!(
             tabs.sight(&family, TabId(104)),
             Sight::Foreign,
-            "a late announcement naming a closed opener is dropped"
+            "a closed opener holds nothing, so a late announcement naming it shows nothing"
+        );
+        let quick = TabId(108);
+        tabs.note_opener(quick, popup);
+        assert_eq!(
+            tabs.sight(&family, quick),
+            Sight::Shown,
+            "a popup of the family's held popup"
+        );
+        tabs.forget_announced(quick);
+        assert_eq!(
+            tabs.sight(&family, quick),
+            Sight::Foreign,
+            "the watch's confirmed close drops a popup core never cached"
         );
 
         let other = page(5, 105);
@@ -1407,6 +1434,15 @@ mod tests {
             tabs.sight(&family, TabId(106)),
             Sight::Foreign,
             "a new socket forgets every announcement: a restarted browser numbers tabs anew"
+        );
+        let reused = page(1, 101);
+        tabs.touched(&reused, tabs.seen());
+        tabs.own(&reused, &task)?;
+        tabs.note_opener(TabId(107), reused.tab);
+        assert_eq!(
+            tabs.sight(&family, TabId(107)),
+            Sight::Shown,
+            "a restarted browser's tab may reuse a closed tab's number and still be announced"
         );
         for index in 0..=ANNOUNCED {
             tabs.note_opener(TabId(1000 + i64::try_from(index)?), other.tab);

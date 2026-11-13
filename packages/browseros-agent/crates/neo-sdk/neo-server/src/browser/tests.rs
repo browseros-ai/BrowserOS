@@ -350,3 +350,39 @@ async fn a_popup_is_its_openers_family_from_its_announcement_before_any_listing(
     );
     Ok(())
 }
+
+#[tokio::test(start_paused = true)]
+async fn a_popup_that_opened_and_closed_between_two_listings_leaves_no_announcement()
+-> Result<(), Box<dyn Error>> {
+    let fake = FakeCdp::new();
+    let opener_tab = fake.open_tab("https://example.com/", "Example");
+    let tabs = Arc::new(TabRegistry::new());
+    let link = start(&fake, &tabs);
+    let mut events = link.tab_events();
+    assert!(matches!(
+        next_event(&mut events).await?,
+        TabEvent::Watching(_)
+    ));
+    let opener = page_for(&link, opener_tab).await?;
+    let task = TaskId::parse("host-s")?;
+    tabs.ensure_task(&task)?;
+    tabs.touched(&opener, tabs.seen());
+    tabs.own(&opener, &task)?;
+
+    // One burst: no listing between the popup's announcement and its close, so core never
+    // caches it and its close never reaches the registry's removal.
+    fake.hold_events();
+    let popup = fake.open_popup(opener_tab, "https://example.net/");
+    assert!(fake.close_tab(popup), "the fake had the popup");
+    fake.release_events();
+    assert!(matches!(
+        next_event(&mut events).await?,
+        TabEvent::Closed { tab, .. } if tab == popup
+    ));
+    assert_eq!(
+        tabs.sight(&RunScope::Family(task), popup),
+        Sight::Foreign,
+        "the watch's confirmed close dropped the announcement"
+    );
+    Ok(())
+}

@@ -87,17 +87,10 @@ impl Method for CreateTask {
         }
         // A task counts as its creating run's own: it joins the family of the run's host task,
         // whatever the tab scope, so turning task scope on later still shows the run's task
-        // what its runs created. A run with no host task makes a family root, even after it
-        // picked another task.
-        let tabs = op.tabs();
-        let created = match op.run().task_id() {
-            Some(host) => {
-                let family = tabs
-                    .task(host)
-                    .map_or_else(|_| host.clone(), |record| record.family);
-                tabs.create_task_in(name, &family)
-            }
-            None => tabs.create_task(name),
+        // what its runs created. A run with no host task makes a family root.
+        let created = match op.run().family() {
+            Some(family) => op.tabs().create_task_in(name, family),
+            None => op.tabs().create_task(name),
         };
         future::ready(
             created

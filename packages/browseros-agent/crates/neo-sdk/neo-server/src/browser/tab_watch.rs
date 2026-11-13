@@ -377,6 +377,7 @@ impl Watch {
         let open: BTreeSet<TabId> = pages.iter().map(|page| page.tab_id).collect();
         for tab in mem::take(&mut self.closing) {
             if !open.contains(&tab) {
+                self.tabs.forget_announced(tab);
                 self.send(TabEvent::Closed {
                     epoch: current.epoch,
                     tab,
