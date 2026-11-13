@@ -5,6 +5,7 @@ accept.sh owns the containers and root-written fixtures. This probe reads the fi
 runs real MCP input, inspects persisted traces, and restarts only its recorded server process.
 """
 
+from contextlib import closing
 import json
 import os
 from pathlib import Path
@@ -113,20 +114,20 @@ class Proof:
         self.check('first script filled and read its input',
                    result.get('meta', {}).get('status') == 'ok' and
                    (result.get('value') or {}).get('value') is True, run=run)
-        # The database proves tokenless recording behavior too. Wait for the writer's real
-        # completion marker rather than assuming the MCP response already reached disk.
+        # Each reader closes before the next observation or server restart. SQLite's own
+        # context manager does not close it; a surviving reader can pin the previous WAL.
         deadline = time.monotonic() + 15
-        with sqlite3.connect(f'file:{STATE}/trace.db?mode=ro', uri=True) as database:
-            row = None
-            while time.monotonic() < deadline:
-                row = database.execute('SELECT "values", code, complete FROM runs WHERE id=?', (run,)).fetchone()
+        row, shots = None, []
+        while time.monotonic() < deadline:
+            with closing(sqlite3.connect(f'file:{STATE}/trace.db?mode=ro', uri=True)) as database:
+                row = database.execute('SELECT "values", code IS NULL, complete FROM runs WHERE id=?', (run,)).fetchone()
                 if row and row[2]:
+                    shots = database.execute('SELECT screenshot FROM operations WHERE run_id=?', (run,)).fetchall()
                     break
-                time.sleep(0.1)
-            self.check('persisted run policy is off and script text is absent',
-                       row is not None and row == ('off', None, 1))
-            shots = database.execute('SELECT screenshot FROM operations WHERE run_id=?', (run,)).fetchall()
-            self.check('no operation stored a screenshot', bool(shots) and all(row[0] != 'stored' for row in shots))
+            time.sleep(0.1)
+        self.check('persisted run policy is off and script text is absent',
+                   row == ('off', 1, 1), run=run, observed=row)
+        self.check('no operation stored a screenshot', bool(shots) and all(row[0] != 'stored' for row in shots))
         if authenticated:
             reply = host(SOCKET, str(TOKEN), f'/v1/runs/{run}?wait=10')
             self.check('host record reports values off', reply.get('status') == 200 and
