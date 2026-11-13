@@ -95,13 +95,29 @@ From the launch JSON it reads `ports.server` (default 9200), `ports.cdp` (defaul
 Neo binds two listeners:
 
 - The agent listener is `127.0.0.1:<ports.server>`, with no auth. Chromium's proxy forwards to it. It serves `/mcp`, plus `GET /system/health` and `GET /system/ready` for Chromium's supervisor. `/mcp` refuses any request that carries `Origin` or `Sec-Fetch-Site`, so a web page in the driven browser cannot call `run`.
-- The host listener is a Unix socket with mode 0660, plus TCP when `CLAW_HOST_TCP` is set. It serves neo-service's `/v1` routes (runs, operations, screenshots, events, locks, tabs, and fits) behind the service's bearer and peer-uid checks. The service starts when the browser link first connects.
+- The host listener is a Unix socket with mode 0660, plus TCP when `CLAW_HOST_TCP` is set. It serves neo-service's `/v1` routes (runs, operations, screenshots, events, locks, tabs, fits, and settings) behind the service's bearer and peer-uid checks. The service starts when the browser link first connects.
 
 State lives under `$BROWSERCLAW_DIR`:
 
 - `claw-sdk/trace.db` is the SQLite trace store. Supported older files are upgraded in place. If it does not open (including an unknown newer migration or the earliest session-era schema), Neo moves it aside to `trace.db.broken-<millis>` and starts a fresh one. Rolling back across a newer migration loses the live trace and request-id history.
 - `logs/claw-sdk.log.<date>` is the daily log. The same lines go to stderr. `logs/claw-sdk-panics.log` gets each panic, written synchronously.
+- `claw-sdk/settings.json` is what the host set through `/v1/settings` (below), mode 0600.
 - `host.sock` is the host socket, unless `CLAW_HOST_SOCKET` moves it.
+
+### Settings
+
+A host sets how Neo behaves through the host API: `GET`, `PUT` and `PATCH /v1/settings`, described in [openapi.yaml](../neo-sdk-api/openapi.yaml). There is no config file and no environment value for them, so a script or the model, which never reach the host listener, cannot change them.
+
+| Setting | Default | Range | What it changes |
+|---|---|---|---|
+| `tabs.idleCloseSeconds` | 1800 | 60 to 86400 | The janitor closes the agent's tabs, and popups they opened, once nobody used them for this long. A tab is in use while a run that used it is in flight, a lock holds it, or a fit is on it; its clock restarts when the last of those ends. It never closes the browser's last tab, counting every tab the browser lists. The check runs once a minute. |
+| `trace.retentionSeconds` | 604800 | 3600 to 2592000 | Runs older than this are deleted with their operations, screenshots and Neo's copy of their downloads, and a repeat of their `requestId` runs again. The sweep runs every 10 minutes. A file the browser saved stays. |
+
+Every setting is optional, and its default is what Neo did before the setting existed. `PUT` sets every setting, and one left out goes back to its default; `PATCH` changes only the settings it names. A name Neo does not know is skipped, never refused, and the answer lists it in `unknown`, so a host and a server of different versions still work together. A known setting with a value outside its rule refuses the whole call with 400 `invalid_request`, which names every setting at fault and its rule; nothing is applied. A change takes effect at once, with no restart: each part reads its setting when it acts.
+
+Neo saves what the host set in `claw-sdk/settings.json` before it switches a change on, and loads that file at every start, before the first run, so a setting survives the restarts the browser gives the server on its own. At start, a setting the file names that this build does not know, or a value it cannot use, falls back to its default with a warning; Neo never fails to start over the file. Without a host API (no usable `CLAW_HOST_TOKEN_FILE`) nothing could change or read the settings, so every setting is at its default and the file is left alone.
+
+Adding a setting is one row in `neo-service/src/setting.rs`, its key in the `Settings` schema of `openapi.yaml`, a row in the table above, and a reader where Neo uses it. A test in `setting.rs` keeps the three lists equal.
 
 `setInputFiles` uploads any file Neo's process can read, as Playwright does; the caller sandboxes the filesystem. A relative path is made absolute against Neo's working directory. A call's payloads total under 10 MiB, and a directory upload needs its tab in front.
 
@@ -126,7 +142,7 @@ To keep tabs across runs, call `const task = await neo.createTask(name)` and ret
 
 Any script may use any tab or task. `context.pages()` lists every tab; each page has `tabId` and `taskId` (`null` without a task). Recover a lost id with `context.pages().find(p => p.url().includes('ycombinator'))?.taskId`. An unknown id throws `task_not_found`, whose hint points to `context.pages()` and `page.taskId`. See [agent.d.ts](../agent.d.ts) for the declarations and the four-run walkthrough.
 
-Tasks live in memory, at most 4096. Empty tasks remain until closed or evicted for space. A Neo restart forgets tasks while tabs stay; `context.pages()` still finds those tabs, now without task ownership. Host tasks retain their trace fallback. The janitor closes agent-opened tabs idle for 30 minutes.
+Tasks live in memory, at most 4096. Empty tasks remain until closed or evicted for space. A Neo restart forgets tasks while tabs stay; `context.pages()` still finds those tabs, now without task ownership. Host tasks retain their trace fallback. The janitor closes the agent's tabs once nobody used them for `tabs.idleCloseSeconds` (30 minutes by default; see Settings), but never the browser's last tab: closing it quits the browser, and Neo's server with it, and the browser restarts both a few seconds later with a new browser id. A script's `page.close()` on the last tab does the same.
 
 The result carries `_meta["com.browseros.neo/run"]` as `{ id, status, effects, error?, unknown, tasks }`. `id` is the run's id in the trace. `status` is `ok`, `error`, `cancelled`, or `timeout`, and `isError` is set unless it is `ok`. `effects` is `none`, `done`, or `unknown`. `unknown` lists the writes that were sent and never confirmed. `structuredContent` is unchanged.
 

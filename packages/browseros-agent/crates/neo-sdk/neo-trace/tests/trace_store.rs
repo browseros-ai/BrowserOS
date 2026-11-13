@@ -1726,3 +1726,41 @@ async fn a_subscription_makes_no_tab_a_runs_or_a_tasks() -> Result<(), Box<dyn s
     assert_eq!(h.store.task_last_act(&task("alpha")).await?, act(2, 20));
     Ok(())
 }
+
+/// zuzu shortens retention to get what a run typed off the disk, so a swept run's bytes must not
+/// stay readable in the file or its log once the sweep answers. Secure delete zeroes the freed
+/// cells, and the sweep then checkpoints the log, which holds the older copies under WAL.
+#[tokio::test]
+async fn a_swept_run_leaves_no_readable_bytes_in_the_file()
+-> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let h = harness(WriterConfig::default()).await;
+    let secret = "swept-reply-7Hc2xQ";
+    let run = start_in(&h.sink, None, 0);
+    h.sink.run_ended(RunEnded {
+        id: run,
+        status: RunStatus::Ok,
+        error: None,
+        result: Some(json!({ "typed": secret })),
+        replay: None,
+        at: at(20),
+    });
+    flushed(&h).await;
+    assert!(
+        store_files(&h)?.iter().any(|file| holds(file, secret)),
+        "the finished run is on disk before the sweep"
+    );
+
+    let eight_days = 8 * 24 * 60 * 60 * 1000;
+    let swept = h
+        .sink
+        .sweep(RetentionPolicy::default(), at(eight_days))
+        .await?;
+    assert_eq!(swept.runs, 1, "{swept:?}");
+    for file in store_files(&h)? {
+        assert!(
+            !holds(&file, secret),
+            "a swept run's reply is zeroed in the file and gone from the log once the sweep answers"
+        );
+    }
+    Ok(())
+}

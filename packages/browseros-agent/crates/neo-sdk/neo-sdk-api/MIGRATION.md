@@ -76,7 +76,7 @@ An unknown id throws `task_not_found`, whose hint points to `context.pages()` an
 
 Tasks live in memory, at most 4096. A Neo restart forgets them while tabs stay; the tabs
 remain reachable through `context.pages()` without task ownership. Host tasks retain their
-trace fallback. The janitor closes agent-opened tabs idle for 30 minutes.
+trace fallback. The janitor closes agent-opened tabs nobody used for `tabs.idleCloseSeconds` (30 minutes unless the host sets it; see Settings below).
 
 Hosts get touched tasks in `_meta["com.browseros.neo/run"].tasks`, always present (`[]` when
 empty). Each entry has `id`, `name`, `kind`, and `tabs: { tabId, url }[]`. Tasks appear once,
@@ -102,6 +102,24 @@ Task metadata adds no reply text; the agent must return `task.id` to keep it.
 | `GET /v1/events?session=` | `GET /v1/events?taskId=&tab=` | `session.*` events are gone. `tab.closed` is new, and run and operation events carry `taskId` and `tabId`. Resume with `Last-Event-ID`; `stream.reset` means events were missed, so re-read the state endpoints |
 | — (Xvnc on 127.0.0.1:5900, no auth) | `GET /v1/display?mode=view\|control&followTab={tabId}` or `&followTask={taskId}` | RFB over WebSocket. `view` drops input; `followTab` or `followTask` (not both) replaces zuzu's `follow`/`toFront`; `control` forwards input |
 | — (zuzu's handoff: `frontPage`, `fitOwnerView`, `giveBack`, `steerOwnerTab`) | `POST /v1/takeovers {tabId, viewer?, reads?, ttlSeconds?}` when the owner opens the link, `POST /v1/takeovers/{id}/release` when they are done | The flow composes small parts a host can also use alone: `POST /v1/locks {tabId, reads?, ttlSeconds}`, `POST /v1/tabs/{tabId}/fit` (+ `GET /v1/fits/{id}`, `…/navigate`, `…/restore`), and `/v1/display`. Neo locks the agent out of the tab (`host / owner_has_control`) and fits the page to the owner's screen. `reads: block` is the default; send `allow` to let the agent keep reading the tab. To pause a whole task, stop sending its runs |
+
+## Settings
+
+The hosted server read its behaviour from `neo.toml` (`tabs.grouping`, `tabs.close_after_minutes`,
+`run.wall_timeout_seconds`, `scripts.isolated_world`). claw-sdk reads no file. A host sets it through
+`GET`, `PUT` and `PATCH /v1/settings` instead, at the start step that runs before its first run:
+
+| `neo.toml` | claw-sdk | Notes |
+|---|---|---|
+| `tabs.close_after_minutes = 5` | `PUT /v1/settings {"tabs":{"idleCloseSeconds":300}}` | Counts from the tab's last use, not from a session's end: a run in flight that used the tab, a lock or a fit on it all count as use. A popup an agent's tab opened is closed with it. The browser's last tab is never closed |
+| `run.wall_timeout_seconds = 120` | each `run` call's `timeout` (`120000`) | Per call, not a setting |
+| `tabs.grouping`, `scripts.isolated_world` | — | No tab groups; Neo's own page scripts always run in the isolated world |
+| — | `trace.retentionSeconds` | How long the trace keeps a run, 7 days by default and at least an hour |
+
+A name Neo does not know is skipped and listed in the answer's `unknown`, never refused, so a host can send
+its whole list to any server version. A value out of range is refused with 400, naming the setting, and
+nothing applies. Neo saves what the host set and loads it at every start: a restart of the server alone
+keeps it, and a new container needs the call again. A server from before the settings answers 404.
 
 ## Downloads
 

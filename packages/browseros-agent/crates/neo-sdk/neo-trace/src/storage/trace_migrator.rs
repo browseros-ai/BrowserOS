@@ -5,6 +5,8 @@
 //! migration must bump USER_VERSION_FENCE in the same change: older Neo then replaces the file
 //! instead of reading forward, losing live trace/request history. That rollback tradeoff is
 //! deliberate; this build never reads forward or lowers the fence.
+//!
+//! The file's other pragmas live here too: the log checkpoint that follows a retention sweep.
 
 use sea_orm::{ConnectionTrait, DatabaseConnection, DbBackend, DbErr, Statement, TransactionTrait};
 use sea_orm_migration::prelude::{MigrationTrait, MigratorTrait, async_trait};
@@ -28,6 +30,28 @@ impl MigratorTrait for TraceMigrator {
             Box::new(m0002_operation_site::Migration),
             Box::new(m0003_operation_main_world::Migration),
         ]
+    }
+}
+
+/// Copies every committed page into `trace.db` and empties its write-ahead log. Secure delete
+/// (set on every connection in `TraceStore::open`) zeroes what a retention sweep freed, but under
+/// WAL the zeroed pages go to the log first, and older copies of the deleted rows stay in the file
+/// and the log until a checkpoint overwrites them; this is that checkpoint, so a swept run leaves
+/// no readable bytes behind. Best effort: it waits up to the busy timeout for readers on an older
+/// snapshot, and what it cannot finish waits for the next sweep that deletes something.
+pub(crate) async fn truncate_log(db: &DatabaseConnection) {
+    let checkpoint = db
+        .query_one(Statement::from_string(
+            DbBackend::Sqlite,
+            "PRAGMA wal_checkpoint(TRUNCATE)",
+        ))
+        .await;
+    match checkpoint {
+        Ok(Some(row)) if row.try_get::<i64>("", "busy").is_ok_and(|busy| busy == 0) => {}
+        Ok(_) => tracing::debug!("a reader held the trace log; it is emptied after a later sweep"),
+        Err(error) => {
+            tracing::warn!(%error, "the trace log could not be checkpointed after a sweep")
+        }
     }
 }
 

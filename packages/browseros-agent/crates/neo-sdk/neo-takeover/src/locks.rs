@@ -35,7 +35,7 @@
 use crate::limits::{
     KEEP_ENDED_LOCK, LOCK_CHANGES, MAX_LOCK_TTL, MIN_LOCK_TTL, SETTLE_BUDGET, SETTLE_POLL,
 };
-use crate::{LockId, PartError, TakeoverId, lock_decision};
+use crate::{LockId, PartError, TabHold, TakeoverId, lock_decision};
 use browseros_core::TabId;
 use neo_trace::{Effect, EpochMillis, TraceSink, TraceStore};
 use std::collections::{BTreeMap, VecDeque};
@@ -389,6 +389,25 @@ impl Locks {
     #[must_use]
     pub fn is_locked(&self, tab: TabId) -> bool {
         self.table().held.values().any(|held| held.lock.tab == tab)
+    }
+
+    /// Whether a lock holds `tab` now, or when the last lock on it ended: the idle-tab janitor
+    /// keeps a held tab and restarts its idle clock from that end. The end is when the lock left
+    /// the held locks, which for an expired lock is no earlier than its `expires_at`. `None`
+    /// when no lock named the tab within the last hour (`limits::KEEP_ENDED_LOCK`).
+    #[must_use]
+    pub fn hold(&self, tab: TabId) -> Option<TabHold> {
+        let table = self.table();
+        if table.held.values().any(|held| held.lock.tab == tab) {
+            return Some(TabHold::Now);
+        }
+        table
+            .ended
+            .iter()
+            .filter(|(_, lock)| lock.tab == tab)
+            .map(|(ended, _)| *ended)
+            .max()
+            .map(TabHold::Until)
     }
 
     /// Ends every lock on a tab that closed (`LockEnd::TabClosed`).

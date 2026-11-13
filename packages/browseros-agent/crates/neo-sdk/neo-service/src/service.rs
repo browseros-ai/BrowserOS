@@ -12,13 +12,14 @@
 use crate::event_log::{EventKind, EventLog, LogEvent};
 use crate::live_tabs::LiveTabs;
 use crate::screenshot_taker::Camera;
+use crate::settings::Settings;
 use crate::tab_stamps::{TabFence, TabStamps};
 use crate::{router, wire};
 use axum::Router;
 use browseros_core::viewport::Viewports;
 use browseros_core::{BrowserSession, ProtocolSession, TabId};
 use neo_capture::{CaptureHub, CaptureTransport, CdpPortTransport};
-use neo_takeover::{BrowserTabs, Displays, Fits, Front, Locks, Takeovers, Xvnc};
+use neo_takeover::{BrowserTabs, Displays, Fits, Front, Locks, TabHold, Takeovers, Xvnc};
 use neo_trace::{EpochMillis, ShotJobs, TraceSink, TraceStore};
 use std::sync::Arc;
 use tokio_util::sync::{CancellationToken, DropGuard};
@@ -45,6 +46,9 @@ pub struct ServiceInputs {
     /// the agent's connection: frames are large and frequent, and there they would queue the
     /// agent's commands and its keepalive behind them.
     pub cdp_port: u16,
+    /// The host's settings, which `/v1/settings` reads and changes. The app made them before
+    /// anything that reads them started, and hands clones to those readers itself.
+    pub settings: Settings,
 }
 
 /// The host API, started. Cheap to clone.
@@ -75,6 +79,8 @@ pub(crate) struct ServiceState {
     pub(crate) live: Arc<CaptureHub>,
     /// The tabs each route changed, stamped before the change, against a reconcile's fence.
     pub(crate) stamps: Arc<TabStamps>,
+    /// What the host set (`/v1/settings`).
+    pub(crate) settings: Settings,
     /// Cancels the hub's shutdown token when the service is dropped, which ends every live
     /// stream and capture.
     _live_shutdown: DropGuard,
@@ -113,6 +119,7 @@ impl Service {
             screenshots,
             xvnc,
             cdp_port: _,
+            settings,
         } = inputs;
         let events = EventLog::start(store.clone(), sink.subscribe());
         let locks = Locks::new(store.clone(), sink.clone());
@@ -164,6 +171,7 @@ impl Service {
                 front,
                 live,
                 stamps,
+                settings,
                 _live_shutdown: shutdown.drop_guard(),
             }),
         }
@@ -189,6 +197,15 @@ impl Service {
     #[must_use]
     pub fn front(&self) -> &Front {
         &self.state.front
+    }
+
+    /// Whether a lock or a fit holds `tab` now, or when the last of them let go of it within the
+    /// hour. The app's idle-tab janitor never closes a held tab and restarts its idle clock
+    /// from the let-go: a lock is how a host keeps the agent off, and a fit is how it shows the
+    /// tab to the owner, so the owner may be using it either way. Never waits.
+    #[must_use]
+    pub fn tab_hold(&self, tab: TabId) -> Option<TabHold> {
+        TabHold::latest_of(self.state.locks.hold(tab), self.state.fits.hold(tab))
     }
 
     /// The browser link saw a tab close. Its stamp is forgotten first, so the close waits out a

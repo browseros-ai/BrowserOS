@@ -1,6 +1,7 @@
 //! Every fixed number the host API runs with. The query and body bounds are the contract's
 //! (`crates/neo-sdk/neo-sdk-api/openapi.yaml`); change them there first.
 
+use std::ops::RangeInclusive;
 use std::time::Duration;
 
 /// Events the log keeps for `Last-Event-ID` resume. A client further behind gets
@@ -56,7 +57,7 @@ pub(crate) const MAX_TAIL: u32 = 1000;
 pub(crate) const MIN_TOKEN_BYTES: usize = 32;
 
 /// A viewer's `width` and `height` bounds (`ViewerSize`): the sides a viewport can take.
-pub(crate) const VIEWER_SIDE: std::ops::RangeInclusive<u16> = 100..=4096;
+pub(crate) const VIEWER_SIDE: RangeInclusive<u16> = 100..=4096;
 
 /// The most characters the owner's typed address may have (`NavigateRequest.input`).
 pub(crate) const MAX_NAVIGATE_INPUT: usize = 2000;
@@ -69,3 +70,13 @@ pub(crate) const DISPLAY_MESSAGE_MAX: usize = 2 << 20;
 /// How long a display's close frame may take to leave. A viewer that stopped reading would
 /// otherwise hold the display's task open.
 pub(crate) const CLOSE_FRAME_WAIT: Duration = Duration::from_secs(5);
+
+/// `tabs.idleCloseSeconds`, in seconds. No shorter than a minute, because the janitor checks once
+/// a minute (`HOUSEKEEPING_EVERY` in the app); no longer than a day, so agent tabs cannot pile up
+/// without end.
+pub(crate) const IDLE_CLOSE_SECONDS: RangeInclusive<u64> = 60..=86_400;
+
+/// `trace.retentionSeconds`, in seconds. No shorter than an hour: a finished run must still
+/// answer a repeat of its `requestId` for 10 minutes, and a run can last 15. No longer than 30
+/// days, which protects the disk.
+pub(crate) const RETENTION_SECONDS: RangeInclusive<u64> = 3_600..=2_592_000;
