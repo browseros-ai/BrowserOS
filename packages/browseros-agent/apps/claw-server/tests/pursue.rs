@@ -92,6 +92,7 @@ async fn test_app(setup: Setup) -> anyhow::Result<TestApp> {
     state.decisions = Arc::new(Decisions::new(
         setup.worker.then(|| worker.url()).transpose()?,
     ));
+    state.sync_ultrafast_with_plan().await;
     Ok(TestApp {
         router: build_router(state.clone()),
         state,
@@ -350,10 +351,65 @@ async fn once_pursue_has_handed_a_task_back_it_does_not_take_it_again() -> anyho
 }
 
 #[tokio::test]
+async fn naming_a_new_task_offers_pursue_again() -> anyhow::Result<()> {
+    let app = test_app(ULTRAFAST_DESKTOP).await?;
+    let session = connect(&app).await?;
+    let (status, _, body) = post(
+        &app.router,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 4,
+            "method": "tools/call",
+            "params": { "name": "name_session", "arguments": { "name": "cart errand" } }
+        }),
+        Some(&session),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{body:?}");
+    app.state
+        .sessions
+        .lookup(&SessionId::new(session.clone()))
+        .await
+        .ok_or_else(|| anyhow::anyhow!("no session"))?
+        .mark_pursue_handed_back();
+    let locked = call_pursue(&app, &session).await?;
+    assert_eq!(
+        locked["result"]["structuredContent"]["status"],
+        "already_handed_back"
+    );
+
+    let (status, _, body) = post(
+        &app.router,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 5,
+            "method": "tools/call",
+            "params": { "name": "name_session", "arguments": { "name": "flight search" } }
+        }),
+        Some(&session),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{body:?}");
+    let fresh = call_pursue(&app, &session).await?;
+    assert_ne!(
+        fresh["result"]["structuredContent"]["status"], "already_handed_back",
+        "{fresh:?}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn agents_are_taught_pursue_only_when_it_is_offered() -> anyhow::Result<()> {
     let offered = test_app(ULTRAFAST_DESKTOP).await?;
     let (_, instructions) = connect_reading_instructions(&offered).await?;
-    assert!(instructions.contains("try pursue first"), "{instructions}");
+    assert!(
+        instructions.contains("Start each task that does something on a site with pursue"),
+        "{instructions}"
+    );
+    assert!(
+        !instructions.contains("Reach for run first"),
+        "{instructions}"
+    );
 
     let lapsed = test_app(Setup {
         ultrafast: false,
@@ -362,5 +418,6 @@ async fn agents_are_taught_pursue_only_when_it_is_offered() -> anyhow::Result<()
     .await?;
     let (_, instructions) = connect_reading_instructions(&lapsed).await?;
     assert!(!instructions.contains("pursue"));
+    assert!(instructions.contains("Reach for run first"));
     Ok(())
 }

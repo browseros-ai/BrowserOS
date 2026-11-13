@@ -212,6 +212,7 @@ impl ClawMcpService {
         // Tools whose native feature the connected browser lacks are not offered. The list is
         // fixed for the process (the identity is), and execute_tool refuses cached callers.
         let native = self.native();
+        let pursue_offered = self.pursue_offered();
         let mut tools = self
             .catalog
             .iter()
@@ -221,6 +222,13 @@ impl ClawMcpService {
                     tool.to_mcp_tool(native),
                     self.state.config.behavior.run_policy,
                 )
+            })
+            .map(|tool| {
+                if pursue_offered {
+                    pursue::with_pursue_first(tool)
+                } else {
+                    tool
+                }
             })
             .map(&decorate)
             .collect::<Vec<_>>();
@@ -232,7 +240,7 @@ impl ClawMcpService {
         if self.ultrafast() {
             local.push(ultrafast::run_skill_tool());
         }
-        if self.pursue_offered() {
+        if pursue_offered {
             local.push(pursue::pursue_tool());
         }
         if self.state.captcha.is_some() {
@@ -3965,6 +3973,48 @@ mod tests {
         assert_eq!(offered(&service), (false, false, Some(false)));
         call.state.ultrafast.set(true);
         assert_eq!(offered(&service), (true, true, Some(true)));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn pursue_and_its_place_before_run_follow_the_ultrafast_switch() -> anyhow::Result<()> {
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let mut state = call.state.clone();
+        state.decisions = Arc::new(crate::services::decisions::Decisions::new(Some(
+            "http://127.0.0.1:9/".parse()?,
+        )));
+        let service = ClawMcpService::new(state.clone());
+        let offered = |service: &ClawMcpService| {
+            let tools = service.listed_tools(false);
+            let run_names_pursue = tools
+                .iter()
+                .find(|tool| tool.name == "run")
+                .and_then(|tool| tool.description.as_deref())
+                .is_some_and(|description| description.contains("call pursue first"));
+            let instructions = service.get_info().instructions.unwrap_or_default();
+            (
+                tools.iter().any(|tool| tool.name == PURSUE_TOOL_NAME),
+                service.get_tool(PURSUE_TOOL_NAME).is_some(),
+                run_names_pursue,
+                instructions.contains("Start each task that does something on a site with pursue"),
+                instructions.contains("Reach for run first"),
+            )
+        };
+
+        assert_eq!(offered(&service), (false, false, false, false, true));
+        state.ultrafast.set(true);
+        assert_eq!(offered(&service), (true, true, true, true, false));
+        state.ultrafast.set(false);
+        assert_eq!(offered(&service), (false, false, false, false, true));
+
+        state.decisions = Arc::new(crate::services::decisions::Decisions::new(None));
+        state.ultrafast.set(true);
+        let without_worker = ClawMcpService::new(state);
+        assert_eq!(
+            offered(&without_worker),
+            (false, false, false, false, true),
+            "no decisions worker, no pursue"
+        );
         Ok(())
     }
 

@@ -28,17 +28,16 @@ use tracing::warn;
 
 pub(in crate::api::mcp) const PURSUE_TOOL_NAME: &str = "pursue";
 
-/// The plan feature that offers pursue.
-const ULTRAFAST_FEATURE: &str = "claw.ultrafast";
-
 const DEFAULT_MAX_STEPS: u64 = 12;
 const MAX_STEPS: u64 = 40;
 const MAX_SECONDS: u64 = 120;
 
 const PURSUE_DESCRIPTION: &str = "\
-Hand neo a whole errand on one page and let it do the steps itself, for multi-step work like \
-filling a form, narrowing search results or adding something to a cart. State the outcome, not \
-a step: \"add Sensodyne Fresh Mint 150g to the cart\", not \"click the search box\". Put text you \
+Start here for any task that does something on a site: filling a form, searching and narrowing \
+results, adding to a cart, working through a checkout or sign-up step. Open or find the page, then \
+give neo that page and the whole outcome, not a single step: \"add Sensodyne Fresh Mint 150g to \
+the cart\", not \"click the search box\". neo decides each step and does it. For reading or \
+collecting data, use run instead. Put text you \
 already know in `values`, named by what it is; neo writes anything else it needs, but never \
 passwords, card numbers, IDs or one-time codes. It will not invent a url: list the pages it may \
 go to in `destinations`.
@@ -118,6 +117,20 @@ pub(super) fn pursue_tool() -> Tool {
         )
 }
 
+/// Put in front of run's description while pursue is listed, so the order holds even for an
+/// agent that connected before ultrafast came on and still has the old instructions.
+const RUN_AFTER_PURSUE: &str = "With pursue listed, call pursue first for tasks that act on a page, and use run to finish what pursue hands back. Go straight to run for reading or collecting data and for work across many pages.\n\n";
+
+/// run's listing while pursue is offered: the same tool, with pursue named first.
+pub(super) fn with_pursue_first(mut tool: Tool) -> Tool {
+    if tool.name != "run" {
+        return tool;
+    }
+    let description = tool.description.as_deref().unwrap_or_default();
+    tool.description = Some(format!("{RUN_AFTER_PURSUE}{description}").into());
+    tool
+}
+
 /// How a run ends, as the caller acts on it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Ending {
@@ -145,12 +158,11 @@ impl Ending {
 }
 
 impl ClawMcpService {
-    /// Whether pursue is listed: a desktop server whose plan has ultrafast and which has a
-    /// decisions worker to reach. A call checks the plan again before anything is asked.
+    /// Whether pursue is listed: ultrafast is on, so it comes and goes with the same switch that
+    /// tells agents their tool list changed, and there is a decisions worker to reach. A call
+    /// checks the plan again before anything is asked.
     pub(super) fn pursue_offered(&self) -> bool {
-        !self.mode().is_hosted()
-            && self.state.decisions.url().is_some()
-            && self.state.billing.has_feature_now(ULTRAFAST_FEATURE)
+        self.ultrafast() && self.state.decisions.url().is_some()
     }
 
     pub(super) async fn call_pursue(
@@ -216,7 +228,13 @@ impl ClawMcpService {
         else {
             return ToolResult::error("pursue needs a goal");
         };
-        if self.mode().is_hosted() || !self.state.billing.has_feature(ULTRAFAST_FEATURE).await {
+        if self.mode().is_hosted()
+            || !self
+                .state
+                .billing
+                .has_feature(crate::app::ULTRAFAST_FEATURE)
+                .await
+        {
             return not_started(page, "fast browsing is not on this plan");
         }
         let Some(oracle) = self
@@ -328,7 +346,7 @@ pub(super) fn uses_up_pursue(ending: Ending, decisions: u32) -> bool {
 /// A call after this task's pursue handed back: run carries the task from here.
 fn already_handed_back(page: u32) -> ToolResult {
     let said = format!(
-        "neo already handed this task back, so it will not take it again. Carry on with run on page {page}."
+        "neo already handed this task back, so it will not take it again. Carry on with run on page {page}. pursue is offered again once you start a new task with name_session."
     );
     ToolResult::text(
         said.clone(),
@@ -375,22 +393,13 @@ fn finished(page: u32, ending: Ending, told: &Told, writes: u32) -> ToolResult {
     let text = match ending {
         Ending::Completed => format!("{}\nRead page {page} to confirm.", told.said),
         Ending::Cancelled => told.said.clone(),
-        Ending::HandedBack => {
-            let mut text = format!(
-                "neo got partway and is handing this back to you. {}",
-                told.said
-            );
-            if !told.story.is_empty() {
-                text.push_str(&format!(" Done so far: {}.", told.story.join("; ")));
-            }
-            if let Some(next) = &told.try_next {
-                text.push_str(&format!(" Still to do: {next}"));
-            }
-            text.push_str(&format!(
-                " Carry on with run on page {page}; there is no need to repeat what is done."
-            ));
-            text
-        }
+        Ending::HandedBack => hand_back_text(
+            page,
+            &told.url,
+            &told.said,
+            &told.story,
+            told.try_next.as_deref(),
+        ),
     };
     let mut body = json!({
         "outcome": ending.as_str(),
@@ -409,6 +418,34 @@ fn finished(page: u32, ending: Ending, told: &Told, writes: u32) -> ToolResult {
         body["continueWith"] = json!("run");
     }
     ToolResult::text(text, Some(body))
+}
+
+/// What a hand back tells the agent: what neo did, what is left, and the one next step, so
+/// run picks the task up where pursue stopped instead of starting it again.
+fn hand_back_text(
+    page: u32,
+    url: &str,
+    said: &str,
+    story: &[String],
+    remaining: Option<&str>,
+) -> String {
+    let mut text = format!("neo did part of this and is handing it back to you. {said}");
+    if !story.is_empty() {
+        text.push_str(&format!(" Done so far: {}.", story.join("; ")));
+    }
+    match remaining.map(str::trim).filter(|next| !next.is_empty()) {
+        Some(next) => text.push_str(&format!(" Still to do: {next}")),
+        None => text.push_str(" neo could not tell what is left, so read the page first."),
+    }
+    let place = if url.is_empty() {
+        format!("page {page}")
+    } else {
+        format!("page {page} ({url})")
+    };
+    text.push_str(&format!(
+        "\nNext: finish this in one run script on {place}. Do not repeat the steps above, and do not call pursue again for this task."
+    ));
+    text
 }
 
 /// Destinations the caller authored, which is the only way this run may move.
@@ -481,6 +518,66 @@ mod tests {
         assert_eq!(body["outcome"], "handed_back");
         assert_eq!(body["continueWith"], "run");
         assert_eq!(body["decisions"], 0);
+    }
+
+    #[test]
+    fn a_hand_back_names_the_place_and_one_next_step() {
+        let story = vec![
+            "searched for Sensodyne".to_string(),
+            "opened the 150g pack".to_string(),
+        ];
+        let text = hand_back_text(
+            7,
+            "https://shop.test/p/150g",
+            "It needs a delivery pincode.",
+            &story,
+            Some("enter a pincode and add it to the cart."),
+        );
+        assert!(
+            text.contains("Done so far: searched for Sensodyne; opened the 150g pack."),
+            "{text}"
+        );
+        assert!(text.contains("Still to do: enter a pincode"), "{text}");
+        assert!(
+            text.contains(
+                "Next: finish this in one run script on page 7 (https://shop.test/p/150g)."
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains("do not call pursue again for this task"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn a_hand_back_with_nothing_left_known_says_to_read_the_page() {
+        let text = hand_back_text(2, "", "It stopped.", &[], None);
+        assert!(text.contains("read the page first"), "{text}");
+        assert!(text.contains("one run script on page 2."), "{text}");
+        assert!(!text.contains("Done so far"), "{text}");
+    }
+
+    #[test]
+    fn run_names_pursue_first_and_other_tools_are_untouched() {
+        let schema = Arc::new(serde_json::Map::new());
+        let run = with_pursue_first(Tool::new("run", "Run a script.", schema.clone()));
+        let description = run.description.as_deref().unwrap_or_default();
+        assert!(
+            description.starts_with("With pursue listed, call pursue first"),
+            "{description}"
+        );
+        assert!(description.ends_with("Run a script."), "{description}");
+        let act = with_pursue_first(Tool::new("act", "Act on a ref.", schema));
+        assert_eq!(act.description.as_deref(), Some("Act on a ref."));
+    }
+
+    #[test]
+    fn pursue_describes_itself_as_the_first_step() {
+        let tool = pursue_tool();
+        let description = tool.description.as_deref().unwrap_or_default();
+        assert!(description.starts_with("Start here for any task that does something on a site"));
+        assert!(description.contains("For reading or collecting data, use run instead."));
     }
 
     #[test]
