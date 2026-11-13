@@ -641,7 +641,7 @@ fn a_new_task_gets_a_fresh_tab_and_a_known_task_keeps_its_tab_across_a_restart()
         let rig = TestRig::new().await?;
         let owner = rig.owner_tab("https://owner.example/").await?;
         // Two ops: the first one on a fresh page opens it, so only later ones record its tab
-        // when they start, and the trace's `task_page_tab` reads the start records.
+        // when they start, and the trace's `task_tabs` reads the start records.
         let touch = "await __neo.invoke('test.touch', { page });\nreturn (await __neo.invoke('test.touch', { page })).tab;";
         let first = rig
             .run_service(GRACE)

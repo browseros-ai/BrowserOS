@@ -5,7 +5,7 @@
 //!    RequestLedger::admit ─ Join (wait) │ Replay │ Duplicate │ Unavailable ─▶ that reply
 //!     └ Fresh(ticket) ─▶ tokio::spawn(execute), the panic boundary
 //!        view ─ page default (the task's own tab: TaskBook, or after a restart the trace's
-//!          task_page_tab) ─ RunCtx::start
+//!          task_tabs) ─ RunCtx::start
 //!        every open tab (the init's `pages`) ─ run_script
 //!          ‖ deadline, shutdown, orphaned (no waiter for the grace) ─▶ RunCtx::stop
 //!        teardown: stop(ScriptReturned), drain ops, abort stragglers

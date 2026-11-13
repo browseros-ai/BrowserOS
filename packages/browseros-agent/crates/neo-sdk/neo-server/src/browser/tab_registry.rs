@@ -540,7 +540,7 @@ pub(crate) enum TaskPage {
     /// Neo knows the task and none of its tabs is open: the run opens a new tab for it.
     NoTab,
     /// Neo does not know the task: it never ran in this process, or Neo restarted since. Only
-    /// then is the trace asked (`TraceStore::task_page_tab`).
+    /// then is the trace asked (`TraceStore::task_tabs`).
     Unknown,
 }
 
