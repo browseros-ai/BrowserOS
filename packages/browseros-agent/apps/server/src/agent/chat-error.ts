@@ -200,6 +200,17 @@ function fromApiCallError(
     }
   }
 
+  // A 4xx the switch did not claim can still be a known failure shape: most
+  // providers report context overflow as a 400, not a 413.
+  const matched = fromMessage(error.message, ctx)
+  if (matched) {
+    return {
+      ...matched,
+      statusCode: base.statusCode,
+      details: base.details ?? matched.details,
+    }
+  }
+
   return {
     ...base,
     code: 'unknown',
@@ -230,7 +241,9 @@ function fromMessage(message: string, ctx: ChatErrorContext): ChatError | null {
     lower.includes('context length') ||
     lower.includes('context_length_exceeded') ||
     lower.includes('too many tokens') ||
-    lower.includes('maximum context')
+    lower.includes('maximum context') ||
+    lower.includes('prompt is too long') ||
+    /tokens?\s*>\s*\d+\s*maximum/.test(lower)
   ) {
     return {
       code: 'context_length',
