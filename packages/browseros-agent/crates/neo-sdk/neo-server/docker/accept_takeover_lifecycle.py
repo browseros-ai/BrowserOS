@@ -109,9 +109,12 @@ class Probe:
     def on_page(self, code):
         return self.run(f"const p = context.pages().find(p => p.tabId === {json.dumps(self.tab)});\n" + code)
 
-    def facts(self):
+    def facts(self, refresh=False):
+        if not refresh:
+            return self.on_page("const text = await p.locator('#proof').textContent(); return text ? JSON.parse(text) : null;")
         # A timer sample can predate the native-window read during restart. Refresh only the
-        # fixture's observations synchronously; never reapply a viewport to make them match.
+        # fixture's observations after give-back. Evaluation is effectful and must not run
+        # under the owner's lock; active observations use the read-only locator path above.
         return self.on_page("return await p.evaluate(() => {window.dispatchEvent(new Event('neo-proof-refresh')); "
                             "const text = document.getElementById('proof').textContent; return text ? JSON.parse(text) : null;});")
 
@@ -135,8 +138,8 @@ class Probe:
         finally:
             display.close()
 
-    def observe(self, label):
-        value = {"metrics": self.facts()["metrics"], "window": self.window.bounds(self.target),
+    def observe(self, label, refresh=False):
+        value = {"metrics": self.facts(refresh=refresh)["metrics"], "window": self.window.bounds(self.target),
                  "tabId": self.tab, "targetId": self.target, "processes": self.processes(),
                  "display": self.display(), "monotonic": time.monotonic(), "wallTime": time.time()}
         if self.takeover:
@@ -192,7 +195,7 @@ class Probe:
         original = self.evidence["original"]
         # Read the changed viewport before checking restoration. No setViewportSize is allowed
         # after setup. A base image can therefore expose lost emulation instead of being fixed.
-        self.observe("afterInitial")
+        self.observe("afterInitial", refresh=True)
         until(lambda: self.window.bounds(self.target), lambda value: value == original["window"],
               "native window was not restored")
         expected_display = [original["display"][side] for side in ("width", "height")]
@@ -202,7 +205,7 @@ class Probe:
             expected = original["metrics"]
             until(self.facts, lambda value: value and all(value["metrics"][key] == expected[key]
                   for key in ("logical", "available", "position")), "original logical viewport was not restored")
-        after = self.observe("after")
+        after = self.observe("after", refresh=True)
         assert [after["display"][side] for side in ("width", "height")] == [original["display"][side] for side in ("width", "height")], after
         assert after["window"] == original["window"], after
         assert after["processes"]["browser"] == original["processes"]["browser"], after
