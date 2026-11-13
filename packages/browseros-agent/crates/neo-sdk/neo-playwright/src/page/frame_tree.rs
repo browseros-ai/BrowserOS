@@ -458,7 +458,9 @@ async fn oopif_tree_retried(
     for pause in OOPIF_TRIES {
         // The first try waits for nothing. A zero sleep still yields to the timer (about a
         // millisecond), and a page's cross-site frames are read one after another, so a page
-        // with a hundred of them would pay it on every read, and so after every operation.
+        // with a hundred of them would pay it on every read, and so after every operation. A
+        // first try that comes before the frame's session attached is caught by `oopif_tree`'s
+        // root check, never taken as the frame's tree.
         if !pause.is_zero() {
             time::sleep(pause).await;
         }
@@ -491,6 +493,17 @@ async fn oopif_tree(
     // is too late for a simultaneous same-renderer navigation (which has no swap to replay).
     target.session.send_value("Page.enable", json!({})).await?;
     let tree = frame_tree(&target.session).await?;
+    // While the frame's own session is still attaching (its attach event has not landed, so
+    // core's on-demand attach finds it in flight), core answers the parent's session instead,
+    // whose tree is the parent's. Taken as the frame's, it would list the parent's frames again
+    // and leave this frame and its children out, with no error: a short tree, read as whole,
+    // that the camera too would take for every frame. It is a failed try, read again after a
+    // pause (`OOPIF_TRIES`). An OOPIF's target id is its frame id.
+    if tree.frame_tree.frame.id != frame {
+        return Err(CoreError::Message(format!(
+            "frame {frame}'s own session is not attached yet"
+        )));
+    }
     Ok(HostedTree {
         tree,
         session: target.session,
