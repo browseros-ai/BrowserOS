@@ -132,8 +132,9 @@ impl Playwright {
         self.watcher.synchronize(None, fence).await
     }
 
-    /// The host stopped keeping `target`'s tab for itself (`OpEnv::is_reserved_tab` reads false
-    /// for it from now on): the owner browsed in it, at `url`. Scripts hear of it as of a tab
+    /// The host stopped keeping `target`'s tab for itself (`OpEnv::hides_tab` reads false
+    /// for it from now on, unless the run's own scope hides it): the owner browsed in it, at
+    /// `url`. Scripts hear of it as of a tab
     /// the owner just opened, a context's `page` event, after every event received until now.
     /// Whether the watcher answered within 2 s.
     pub async fn hand_back(&self, target: TargetId, url: String) -> bool {

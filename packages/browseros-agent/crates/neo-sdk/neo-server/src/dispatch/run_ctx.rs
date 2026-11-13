@@ -19,6 +19,7 @@ use tokio::task::JoinSet;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
+use super::opens_in_flight::{OpenInFlight, OpensInFlight};
 use super::operation_guard::Settlement;
 use super::run_tasks::RunTasks;
 use super::{
@@ -58,6 +59,8 @@ pub(crate) struct RunCtx {
     tasks: Mutex<RunTasks>,
     /// The host lock this run's ops pass ([`RunCtx::pass_lock`]). Write-once.
     lock_pass: OnceLock<LockId>,
+    /// A bound run's opens whose tab the browser has not named yet ([`RunCtx::opening`]).
+    opens: OpensInFlight,
 }
 
 /// Why a run stopped. Each reason decides who owns the ops it cut short.
@@ -247,6 +250,7 @@ impl RunCtx {
             slots: Mutex::default(),
             tasks,
             lock_pass: OnceLock::new(),
+            opens: OpensInFlight::default(),
         });
         let guard = RunGuard {
             run: Some(Arc::clone(&run)),
@@ -316,6 +320,27 @@ impl RunCtx {
         if self.scope.is_bound() {
             self.lock_ledger().opened_by_run.insert(tab);
         }
+    }
+
+    /// The run's op `op` starts an open. Until the browser names its tab ([`RunCtx::named`]) or
+    /// the op ends, the run's other ops wait before they judge a tab they do not know
+    /// ([`RunCtx::others_opened`]). `None` for a run that is not bound: it sees every tab, so
+    /// nothing waits.
+    pub(crate) fn opening(&self, op: OperationId) -> Option<OpenInFlight<'_>> {
+        self.scope.is_bound().then(|| self.opens.begin(op))
+    }
+
+    /// `op`'s open named `tab`, as soon as the browser did: the run's own from now on
+    /// ([`RunCtx::opened`]), and no longer an open its other ops wait for.
+    pub(crate) fn named(&self, op: OperationId, tab: TabId) {
+        self.opened(tab);
+        self.opens.named(op);
+    }
+
+    /// Resolves once no op of this run but `op` has an open in flight: a tab that op is opening
+    /// is then the run's own, or not the run's at all.
+    pub(crate) async fn others_opened(&self, op: OperationId) {
+        self.opens.others_named(op).await;
     }
 
     /// Sets the task used by subsequent opens and the unresolved built-in page.

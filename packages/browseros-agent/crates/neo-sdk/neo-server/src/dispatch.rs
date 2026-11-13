@@ -31,6 +31,7 @@ mod method;
 mod observation;
 mod op_abort;
 mod op_ctx;
+mod opens_in_flight;
 mod operation_error;
 mod operation_guard;
 mod page_target;

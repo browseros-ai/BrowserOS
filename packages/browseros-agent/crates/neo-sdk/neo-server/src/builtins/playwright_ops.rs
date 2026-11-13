@@ -260,6 +260,13 @@ impl Method for PlaywrightOp {
             )));
         }
         let input = input.resolved(page);
+        // A bound run's other ops wait for this open before they judge a tab they do not know,
+        // until the engine names its tab (`OpEnv::opened_tab`) or this op ends.
+        let _open = if self.pages == PageEffect::Opens {
+            op.run().opening(op.id())
+        } else {
+            None
+        };
         let playwright = self.facade.get().await;
         let env = OpCtxEnv::new(
             op,
@@ -737,16 +744,31 @@ impl<M> OpEnv for OpCtxEnv<'_, M> {
     /// run, and for a run bound to its task, any tab outside its family. A family tab that closed
     /// stays visible, so the run learns it closed. For a run that is not bound this is Neo's
     /// blank tab alone, as before task scope.
-    fn is_reserved_tab(&self, tab: TabId) -> bool {
+    fn hides_tab(&self, tab: TabId) -> bool {
         matches!(self.op.run().sight(tab), Sight::Reserved | Sight::Foreign)
     }
 
-    fn reserved_tabs_settled<'b>(&'b self, listed: &'b [(TabId, &'b str)]) -> BoxFuture<'b, ()> {
+    /// Neo's blank tab marked (and one the owner browsed in handed back), then, for a bound run,
+    /// every other open of the run named: a tab it is opening is then its own, not hidden. The
+    /// opens end as their tabs are named or their ops end, the run's deadline included.
+    fn tabs_settled<'b>(&'b self, listed: &'b [(TabId, &'b str)]) -> BoxFuture<'b, ()> {
         Box::pin(async move {
             if let Some(blank_tab) = &self.blank_tab {
                 blank_tab.settle(listed).await;
             }
+            self.op.run().others_opened(self.op.id()).await;
         })
+    }
+
+    /// The run's own from the moment the browser names it, while `newPage` still readies it.
+    fn opened_tab(&self, tab: TabId) {
+        self.op.run().named(self.op.id(), tab);
+    }
+
+    /// Noted again as the engine judges the popup: the tab watch notes it at the browser's
+    /// announcement, which may reach Neo after the event the engine reads.
+    fn popup_opened(&self, popup: TabId, opener: TabId) {
+        self.op.tabs().note_opener(popup, opener);
     }
 
     fn view(&self) -> &BrowserView {

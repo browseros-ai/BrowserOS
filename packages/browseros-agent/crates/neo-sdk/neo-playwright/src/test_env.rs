@@ -1,8 +1,9 @@
 //! The host side of an op for unit tests: an [`OpEnv`] that records what the crate asked of
 //! it, over a browser view whose CDP connection is never there.
 
+use std::collections::HashSet;
 use std::future;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use browseros_cdp::{CdpError, CdpEvent, TargetedEvents};
 use browseros_core::{
@@ -42,6 +43,10 @@ pub(crate) struct TestEnv {
     /// Each tab an op asked to bring forward (`OpEnv::bring_forward`), in order. Apart from
     /// `calls`, which tests compare whole.
     forwarded: Mutex<Vec<TabId>>,
+    /// The tabs [`OpEnv::hides_tab`] answers true for ([`TestEnv::hide`]).
+    hidden: Mutex<HashSet<TabId>>,
+    /// Each tab an op said it opened (`OpEnv::opened_tab`), in order. Apart from `calls` too.
+    opened: Mutex<Vec<TabId>>,
 }
 
 impl TestEnv {
@@ -60,6 +65,8 @@ impl TestEnv {
             passing_rechecks: 0,
             calls: Mutex::default(),
             forwarded: Mutex::default(),
+            hidden: Mutex::default(),
+            opened: Mutex::default(),
         }
     }
 
@@ -98,6 +105,17 @@ impl TestEnv {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
+    }
+
+    /// From now on the host hides `tab` from the run, as neo-server hides another task's tab
+    /// from a run bound to its own.
+    pub(crate) fn hide(&self, tab: TabId) {
+        lock(&self.hidden).insert(tab);
+    }
+
+    /// Each tab an op said it opened, in order.
+    pub(crate) fn opened(&self) -> Vec<TabId> {
+        lock(&self.opened).clone()
     }
 
     /// Each tab an op asked the host to bring forward, in order.
@@ -169,6 +187,18 @@ impl OpEnv for TestEnv {
             .push(tab);
         Box::pin(future::ready(()))
     }
+
+    fn hides_tab(&self, tab: TabId) -> bool {
+        lock(&self.hidden).contains(&tab)
+    }
+
+    fn opened_tab(&self, tab: TabId) {
+        lock(&self.opened).push(tab);
+    }
+}
+
+fn lock<T>(value: &Mutex<T>) -> MutexGuard<'_, T> {
+    value.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// A CDP connection that refuses every call and never delivers an event.

@@ -4,6 +4,7 @@
 //! click, a script) on the page's own CDP session, as a user or the page itself would. The
 //! connection passes through a [`Tap`], so a test can step in at one CDP command of an op.
 
+use std::collections::HashSet;
 use std::error::Error;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -212,6 +213,11 @@ struct LiveEnv {
     policy: Policy,
     /// What `recheck` refuses with, as a takeover would, until a test allows it again.
     refusal: Mutex<Option<Refusal>>,
+    /// The tabs this run may see once a test bound it ([`LiveRun::bind`]), as neo-server hides
+    /// every tab outside a task's family from a run bound to that task: the tabs the test bound
+    /// it to, the tabs its ops open, and the popups of those. `None`: every tab, as a run with
+    /// no task sees.
+    family: Mutex<Option<HashSet<TabId>>>,
 }
 
 impl LiveEnv {
@@ -247,6 +253,26 @@ impl OpEnv for LiveEnv {
 
     fn note(&self, line: String) {
         self.record(EnvCall::Note(line));
+    }
+
+    fn hides_tab(&self, tab: TabId) -> bool {
+        lock(&self.family)
+            .as_ref()
+            .is_some_and(|family| !family.contains(&tab))
+    }
+
+    fn opened_tab(&self, tab: TabId) {
+        if let Some(family) = lock(&self.family).as_mut() {
+            family.insert(tab);
+        }
+    }
+
+    fn popup_opened(&self, popup: TabId, opener: TabId) {
+        if let Some(family) = lock(&self.family).as_mut()
+            && family.contains(&opener)
+        {
+            family.insert(popup);
+        }
     }
 }
 
@@ -309,6 +335,7 @@ impl LiveRun {
             calls: Mutex::default(),
             policy,
             refusal: Mutex::default(),
+            family: Mutex::default(),
         };
         Ok(Self {
             browser,
@@ -448,6 +475,12 @@ impl LiveRun {
     /// left to the grace and the reap.
     pub(crate) fn next_run(&mut self) {
         self.env.run_state = Arc::default();
+    }
+
+    /// From now on the run sees only `tabs`, the tabs its own ops open, and their popups, as a
+    /// run neo-server binds to its task sees only that task's family.
+    pub(crate) fn bind(&self, tabs: &[TabId]) {
+        *lock(&self.env.family) = Some(tabs.iter().copied().collect());
     }
 
     /// A new background tab, from `context.newPage`.

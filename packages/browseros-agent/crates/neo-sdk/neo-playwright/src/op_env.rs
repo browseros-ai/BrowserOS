@@ -35,25 +35,39 @@ pub trait OpEnv: Send + Sync {
     /// `RunCtx::slot::<RunState>()`) and drops it with the run.
     fn run_state(&self) -> &Arc<RunState>;
 
-    /// Whether `tab` is one the host keeps for itself, which scripts never see or reach: neo-server's
-    /// blank tab, which keeps the browser alive when every other tab closes. The crate leaves it
-    /// out of `context.pages()`, out of page and popup events, and out of the tabs a context
-    /// listener attaches to; the host's own door refuses any op that names it. The default keeps
-    /// no tab.
-    fn is_reserved_tab(&self, _tab: TabId) -> bool {
+    /// Whether `tab` is one this run may not see or reach. neo-server hides its own blank tab,
+    /// which keeps the browser alive when every other tab closes, from every run, and, from a
+    /// run bound to a task, every tab outside that task's family. The crate leaves such a tab out
+    /// of `context.pages()`, out of page and popup events, out of `page.opener()` and out of the
+    /// tabs a context listener attaches to; the host's own door refuses any op that names it. The
+    /// default hides no tab.
+    fn hides_tab(&self, _tab: TabId) -> bool {
         false
     }
 
-    /// Resolves once the host is not in the middle of opening, adopting or handing back a
-    /// reserved tab. The browser lists a tab, and announces it, a moment before the host can
-    /// mark it, so a listing or a page event is checked against [`OpEnv::is_reserved_tab`]
-    /// only after this: a reserved tab in it is then always marked. `listed` is the fresh
-    /// listing a script is about to be shown, each tab with its address (empty for an event):
-    /// a host that keeps a tab only while it is blank hands back one that now shows a page
-    /// first, so the script sees it. The default waits for nothing.
-    fn reserved_tabs_settled<'a>(&'a self, _listed: &'a [(TabId, &'a str)]) -> BoxFuture<'a, ()> {
+    /// Resolves once the host's answer for a tab in a listing or an event is settled. The browser
+    /// lists a tab, and announces it, a moment before the host can tell whose it is: neo-server
+    /// marks its blank tab only once it opened or adopted it, and a bound run's own new tab is
+    /// its own only once [`OpEnv::opened_tab`] named it. So a listing or a page event is checked
+    /// against [`OpEnv::hides_tab`] only after this. `listed` is the fresh listing a script is
+    /// about to be shown, each tab with its address (empty for an event): a host that keeps a tab
+    /// only while it is blank hands back one that now shows a page first, so the script sees it.
+    /// A host that waits for the run's other opens never waits for this op's own. The default
+    /// waits for nothing.
+    fn tabs_settled<'a>(&'a self, _listed: &'a [(TabId, &'a str)]) -> BoxFuture<'a, ()> {
         Box::pin(future::ready(()))
     }
+
+    /// This op opened `tab` (`context.newPage`), and the browser just named it: before the tab
+    /// is readied, and before any listing or event can show it to the run's other ops. A host
+    /// that hides tabs from a run counts it as the run's own from here. The default ignores it.
+    fn opened_tab(&self, _tab: TabId) {}
+
+    /// The browser announced `popup` as opened by `opener`. The crate says so just before it
+    /// judges a popup or a new page that has an opener, so a host that lets a popup follow its
+    /// opener (neo-server: a bound run sees a popup of its family's tab) knows the link before
+    /// it answers [`OpEnv::hides_tab`] for the popup. The default ignores it.
+    fn popup_opened(&self, _popup: TabId, _opener: TabId) {}
 
     /// Whether this browser runs in hosted mode. Hosted BrowserOS suppresses console and
     /// page-error events by design (`events/event_op.rs`, `lease_runtime`), so listeners for
