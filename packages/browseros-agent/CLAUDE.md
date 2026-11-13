@@ -15,20 +15,19 @@ bun run test
 
 ## Live browser tests
 
-For a test that expects an existing CDP browser, use:
+For standalone live tests that expect `BROWSEROS_CDP_PORT`, run from `packages/browseros-agent`:
 
 ```sh
-bun run test:browser -- <your existing test command>
+bun run test:browser -- <existing test command>
 ```
 
-It supplies `BROWSEROS_CDP_PORT` and owns browser startup, private state, and cleanup. Keep
-the existing Cargo command and flags. Do not launch the installed app directly or share a
-running browser across independent test commands. Logs and `result.json` stay at the
-artifact path printed to stderr; `NEO_E2E_BROWSER` selects another browser build.
+Use one invocation per independent run; it supplies the port and owns the private Neo and
+cleanup. Preserve your test command and flags.
 
-`test:neo-spec` and full MCP fixtures already own their browsers; use their existing
-launchers without nesting `test:browser`. Interactive app work uses `dev:claw:watch`.
-The launcher itself runs on Node 22+; agents invoke its Bun package alias.
+Keep `test:neo-spec` and full MCP fixtures on their existing launchers. Use `dev:claw:watch`
+for interactive app work.
+
+For browser overrides or cleanup failures, read [the live-test guide](CONTRIBUTING.md#run-live-browser-tests).
 
 ## Universal rules
 
