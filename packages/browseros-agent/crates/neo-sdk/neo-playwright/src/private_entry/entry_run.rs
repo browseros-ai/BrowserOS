@@ -75,6 +75,22 @@ impl Stopped {
     }
 }
 
+/// Where one box is typed: its frame's world, its pin there, the session its keys go out on,
+/// and whether that is a cross-site frame's own session.
+struct BoxAt<'a> {
+    world: &'a IsolatedWorld,
+    pin: Pin,
+    session: &'a ProtocolSession,
+    own_frame: bool,
+}
+
+/// What a box held after a key meant to empty it, and where the focus was.
+#[derive(Clone, Copy)]
+struct Emptied {
+    empty: bool,
+    focus: FocusState,
+}
+
 /// One entry's running state: what it sent, and how many characters each box got.
 pub(crate) struct EntryRun<'a> {
     pw: &'a Playwright,
@@ -260,29 +276,21 @@ impl<'a> EntryRun<'a> {
         let spaced = field.spec.spaced;
         let guard = ForgetGuard::new(&world, pin);
 
-        let focus = PrivateStep::Focus {
-            text: text.clone(),
-            spaced,
+        let box_at = BoxAt {
+            world: &world,
+            pin,
+            session: &session,
+            own_frame,
         };
-        // A Shift press types nothing and has no default action; its arrival gives the frame's
-        // document the focus and runs the site's focus handlers. A box in a cross-site frame always
-        // gets one, even when the first check passed (ruling R40): on a tab in front the frame's
-        // document can hold the focus at that check while the top page's theft is still on its
-        // way, and only input arriving in the frame lets it land before the text does (measured:
-        // 60 of 60 entries refused with nothing typed with the press, 9 of 10 sent without it).
-        match self.step(&world, pin, focus).await? {
-            Some(PrivateAnswer::Focus {
-                focus: FocusState::Held,
-            }) if !own_frame => {}
-            Some(PrivateAnswer::Focus {
-                focus: FocusState::Held | FocusState::NoDocumentFocus,
-            }) => {
-                self.press(sent, input, &session, "Shift").await?;
-                if self.focused(&world, pin).await? != FocusState::Held {
-                    return Err(self.stop(EntryCode::NotFocused));
-                }
-            }
-            _ => return Err(self.stop(EntryCode::NotFocused)),
+        self.focus_step(sent, input, &box_at, &text, spaced).await?;
+        // A box with no size that already holds text is emptied by a key before the first
+        // character (ruling R51): the browser does not count a selection in such a box against
+        // its maxlength, so with a full box the first key empties it and its own character is
+        // dropped (measured: 246813 left 46813). A sized box and an empty one need no key: the
+        // focus step's selection is replaced by the first character, and a page that submits on
+        // its first input event must never see an empty box (B11v).
+        if !looked.facts.sized && !looked.facts.empty {
+            self.empty_box(sent, input, &box_at, &text, spaced).await?;
         }
 
         let seen = if field.spec.keys {
@@ -294,6 +302,99 @@ impl<'a> EntryRun<'a> {
             true
         };
         self.read_back(&world, pin, seen, guard).await
+    }
+
+    /// The focus step (design section 5.4): marks the box, arms its listener, focuses it and
+    /// selects what it holds; then the focus must be the box's. A Shift press types nothing and
+    /// has no default action; its arrival gives the frame's document the focus and runs the
+    /// site's focus handlers. A box in a cross-site frame always gets one, even when the first
+    /// check passed (ruling R40): on a tab in front the frame's document can hold the focus at
+    /// that check while the top page's theft is still on its way, and only input arriving in the
+    /// frame lets it land before the text does (measured: 60 of 60 entries refused with nothing
+    /// typed with the press, 9 of 10 sent without it).
+    async fn focus_step(
+        &self,
+        sent: &Sent<'_>,
+        input: &mut PageInput,
+        box_at: &BoxAt<'_>,
+        text: &PageSecret,
+        spaced: bool,
+    ) -> Result<(), Stop> {
+        let focus = PrivateStep::Focus {
+            text: text.clone(),
+            spaced,
+        };
+        match self.step(box_at.world, box_at.pin, focus).await? {
+            Some(PrivateAnswer::Focus {
+                focus: FocusState::Held,
+            }) if !box_at.own_frame => Ok(()),
+            Some(PrivateAnswer::Focus {
+                focus: FocusState::Held | FocusState::NoDocumentFocus,
+            }) => {
+                self.press(sent, input, box_at.session, "Shift").await?;
+                if self.focused(box_at.world, box_at.pin).await? == FocusState::Held {
+                    Ok(())
+                } else {
+                    Err(self.stop(EntryCode::NotFocused))
+                }
+            }
+            _ => Err(self.stop(EntryCode::NotFocused)),
+        }
+    }
+
+    /// Empties a box with no size that holds text, before its first character (ruling R51):
+    /// Delete over the focus step's selection, on the session the text will use (R24), then the
+    /// box must be empty and hold the focus. A page may handle one key and not the other (the
+    /// first host's digit boxes move the focus back on Backspace), so Backspace is the second
+    /// try, after a fresh focus step. A box still not empty stops the entry before any character
+    /// with `box_not_cleared`; one whose focus cannot be held, `not_focused`.
+    async fn empty_box(
+        &self,
+        sent: &Sent<'_>,
+        input: &mut PageInput,
+        box_at: &BoxAt<'_>,
+        text: &PageSecret,
+        spaced: bool,
+    ) -> Result<(), Stop> {
+        for key in ["Delete", "Backspace"] {
+            if key == "Backspace" {
+                self.focus_step(sent, input, box_at, text, spaced).await?;
+            }
+            self.scope.recheck().map_err(|error| self.refused(&error))?;
+            self.press(sent, input, box_at.session, key).await?;
+            let mut emptied = self.emptied(box_at).await?;
+            // Only a focus that went elsewhere is taken back: a fresh focus step re-arms the
+            // box's listener, which would forget a submit or an unload the key set off.
+            if matches!(
+                emptied.focus,
+                FocusState::Elsewhere | FocusState::NoDocumentFocus
+            ) {
+                self.focus_step(sent, input, box_at, text, spaced).await?;
+                emptied = self.emptied(box_at).await?;
+            }
+            match emptied.focus {
+                FocusState::Held if emptied.empty => return Ok(()),
+                FocusState::Held => {}
+                // The form left (a page that submits when its box empties), or the box did:
+                // nothing of the value goes after it, as before a first key.
+                _ => return Err(self.stop(EntryCode::NotFocused)),
+            }
+        }
+        Err(self.stop(EntryCode::BoxNotCleared))
+    }
+
+    /// What the box holds and where the focus is, after a key meant to empty it.
+    async fn emptied(&self, box_at: &BoxAt<'_>) -> Result<Emptied, Stop> {
+        let focus = self.focused(box_at.world, box_at.pin).await?;
+        let none = PrivateStep::Holds {
+            text: PageSecret::empty(),
+            spaced: false,
+        };
+        let empty = matches!(
+            self.step(box_at.world, box_at.pin, none).await?,
+            Some(PrivateAnswer::Holds { holds: true })
+        );
+        Ok(Emptied { empty, focus })
     }
 
     /// The whole text in one `Input.insertText`, as `fill` types.

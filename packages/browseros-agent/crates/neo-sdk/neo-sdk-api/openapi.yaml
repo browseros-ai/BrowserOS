@@ -2073,7 +2073,9 @@ components:
             `lock_released` (the named lock was released after the call was admitted),
             `element_detached`, `not_an_input`, `wrong_origin`, `wrong_type`, `box_changed`,
             `page_changed`, `box_not_editable`, `box_hidden`, `box_covered`, `value_too_long`,
-            `not_focused`, `focus_lost`, `value_not_taken`, `page_moved`, `run_timeout`,
+            `not_focused`, `focus_lost`, `value_not_taken`, `box_not_cleared` (a box with no
+            size still held text after Neo tried to empty it; nothing was typed), `page_moved`,
+            `run_timeout`,
             `target_closed`, `browser_disconnected`, `shutting_down`, `internal_error` (a
             failure inside Neo, the fill's own task included: look at the page before trying
             again), and `fill_interrupted` (a repeat of a fill Neo restarted in the middle of).

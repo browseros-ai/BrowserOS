@@ -141,6 +141,39 @@ impl Bench {
         self.live.playwright.enter_privately(env, request).await
     }
 
+    /// `page.locator(css).ref()`: the node-bound ref a host's check script mints for a box the
+    /// snapshot prints no ref for, such as one with no size (`n<k>`).
+    async fn mint(&self, opened: &Opened, css: &str) -> TestResult<String> {
+        let part = json!({
+            "name": "css",
+            "body": [{ "simples": [{ "selector": { "css": css, "functions": [] }, "combinator": "" }] }],
+            "source": css,
+        });
+        let target = json!({
+            "$neo": "locator", "page": opened.page.brand(),
+            "chunks": [{ "parts": [part] }],
+            "display": format!("locator('{css}')"),
+        });
+        let input = json!({
+            "call": { "api": "locator.ref", "timeoutMs": 5_000 },
+            "target": target, "strict": "strict",
+        });
+        let minted = self.live.invoke("locator.ref", input).await??;
+        Ok(minted
+            .as_str()
+            .ok_or("locator.ref answers a string")?
+            .to_owned())
+    }
+
+    /// The box values the page saw at its input events (stale.html's `window.seen`).
+    async fn seen(&self, opened: &Opened) -> TestResult<Vec<String>> {
+        let seen = self
+            .live
+            .main_world(&opened.page, "JSON.stringify(window.seen)")
+            .await?;
+        Ok(serde_json::from_str(seen.as_str().unwrap_or("[]"))?)
+    }
+
     /// What the box `r#ref` holds now, read in its document's main world.
     async fn value(&self, opened: &Opened, r#ref: &str) -> TestResult<String> {
         let target = json!({
@@ -900,6 +933,209 @@ async fn tests_that_a_box_with_no_size_is_entered_key_by_key() -> TestResult {
             bench.value(&opened, &box_ref).await?,
             "246813",
             "{place:?} 6b"
+        );
+        bench.close(opened).await?;
+    }
+    Ok(())
+}
+
+/// Ruling R51, the first host's shape: a code box with no size (opacity 0) whose maxlength-6 is
+/// full of an old value. The browser does not count the focus step's selection in such a box,
+/// so without a key that empties it first the first new key empties it and is dropped
+/// (246813 left 46813). Entered, the box holding the new code.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_full_box_with_no_size_takes_the_whole_new_code() -> TestResult {
+    let bench = Bench::start().await?;
+    for place in PLACES {
+        let opened = bench.open("/private/stale.html?mode=host", place).await?;
+        let code_box = bench.mint(&opened, "#code").await?;
+        let env = bench.host(&opened);
+        let field = Field::new(&code_box, &bench.page_origin)
+            .keys()
+            .with("246813")?;
+        let entry = bench.enter(&env, &opened, vec![field]).await;
+        assert_eq!(
+            entry.outcome,
+            EntryOutcome::Entered,
+            "{place:?} R51: {entry:?}"
+        );
+        assert_eq!(entry.typed, vec![6], "{place:?}");
+        assert_eq!(
+            bench.value(&opened, &code_box).await?,
+            "246813",
+            "{place:?}"
+        );
+        bench.close(opened).await?;
+    }
+    Ok(())
+}
+
+/// The same full box with a size needs no key first: the selection is replaced by the first
+/// character, by keys and by one insertion, and the page never sees it empty in between (a page
+/// that submits on its first input event, B11v). One insertion is exactly one input event.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_full_box_with_a_size_is_replaced_without_emptying() -> TestResult {
+    let bench = Bench::start().await?;
+    for place in PLACES {
+        for keys in [true, false] {
+            let opened = bench.open("/private/stale.html?mode=sized", place).await?;
+            let code_box = bench.mint(&opened, "#code").await?;
+            let env = bench.host(&opened);
+            let field = Field::new(&code_box, &bench.page_origin);
+            let field = if keys { field.keys() } else { field };
+            let entry = bench
+                .enter(&env, &opened, vec![field.with("246813")?])
+                .await;
+            assert_eq!(
+                entry.outcome,
+                EntryOutcome::Entered,
+                "{place:?} keys={keys}: {entry:?}"
+            );
+            assert_eq!(bench.value(&opened, &code_box).await?, "246813");
+            let seen = bench.seen(&opened).await?;
+            assert!(
+                !seen.iter().any(String::is_empty),
+                "{place:?} keys={keys}: {seen:?}"
+            );
+            if !keys {
+                assert_eq!(
+                    seen,
+                    vec!["246813".to_owned()],
+                    "{place:?}: one input event"
+                );
+            }
+            bench.close(opened).await?;
+        }
+    }
+    Ok(())
+}
+
+/// Six one-digit boxes with no size, built as the first host builds them (Backspace empties a
+/// box and focuses the one before): one of them, then all of them, holding an old digit.
+/// Entered, each box its digit.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_one_digit_boxes_holding_old_digits_take_the_new_code() -> TestResult {
+    let bench = Bench::start().await?;
+    for place in PLACES {
+        for mode in ["digits1", "digits6"] {
+            let opened = bench
+                .open(&format!("/private/stale.html?mode={mode}"), place)
+                .await?;
+            let mut boxes = Vec::new();
+            let mut fields = Vec::new();
+            for (at, digit) in "246813".chars().enumerate() {
+                let r#ref = bench.mint(&opened, &format!("#d{}", at + 1)).await?;
+                fields.push(
+                    Field::new(&r#ref, &bench.page_origin)
+                        .keys()
+                        .with(&digit.to_string())?,
+                );
+                boxes.push(r#ref);
+            }
+            let env = bench.host(&opened);
+            let entry = bench.enter(&env, &opened, fields).await;
+            assert_eq!(
+                entry.outcome,
+                EntryOutcome::Entered,
+                "{place:?} {mode}: {entry:?}"
+            );
+            for (r#ref, digit) in boxes.iter().zip("246813".chars()) {
+                assert_eq!(
+                    bench.value(&opened, r#ref).await?,
+                    digit.to_string(),
+                    "{place:?} {mode}"
+                );
+            }
+            bench.close(opened).await?;
+        }
+    }
+    Ok(())
+}
+
+/// A box with no size whose page puts its text back on every input cannot be emptied: refused
+/// before any character, `box_not_cleared`, and the box holds nothing of the value. One whose
+/// form submits as it empties is refused `not_focused`, nothing of the value typed after it. A
+/// number box with no size and an old value, and no maxlength, is entered.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_box_that_will_not_empty_is_refused_before_any_character() -> TestResult {
+    let bench = Bench::start().await?;
+    for place in PLACES {
+        let opened = bench
+            .open("/private/stale.html?mode=restore", place)
+            .await?;
+        let code_box = bench.mint(&opened, "#code").await?;
+        let env = bench.host(&opened);
+        let field = Field::new(&code_box, &bench.page_origin)
+            .keys()
+            .with("246813")?;
+        let entry = bench.enter(&env, &opened, vec![field]).await;
+        assert_eq!(entry.outcome, EntryOutcome::Refused, "{place:?}: {entry:?}");
+        assert_eq!(code(&entry), Some("box_not_cleared"), "{place:?}");
+        assert_eq!(entry.typed, vec![0], "{place:?}");
+        assert_eq!(
+            entry.delivery,
+            Delivery::Done,
+            "{place:?}: the keys went out"
+        );
+        let held = bench.value(&opened, &code_box).await?;
+        assert!(
+            !held.chars().any(|c| "246813".contains(c)),
+            "{place:?}: {held:?}"
+        );
+        bench.close(opened).await?;
+
+        // A page that submits its form when the box empties (into a named frame, so the box
+        // stays): the form left with an empty box, and nothing of the value follows it.
+        let opened = bench.open("/private/stale.html?mode=submit", place).await?;
+        let code_box = bench.mint(&opened, "#code").await?;
+        let env = bench.host(&opened);
+        let field = Field::new(&code_box, &bench.page_origin)
+            .keys()
+            .with("246813")?;
+        let entry = bench.enter(&env, &opened, vec![field]).await;
+        assert_eq!(
+            entry.outcome,
+            EntryOutcome::Refused,
+            "{place:?} submit: {entry:?}"
+        );
+        assert_eq!(code(&entry), Some("not_focused"), "{place:?} submit");
+        assert_eq!(entry.typed, vec![0], "{place:?} submit");
+        let held = bench.value(&opened, &code_box).await?;
+        assert!(
+            !held.chars().any(|c| "246813".contains(c)),
+            "{place:?}: {held:?}"
+        );
+        let submitted = bench
+            .live
+            .main_world(&opened.page, "JSON.stringify(window.submitted)")
+            .await?;
+        assert_eq!(
+            submitted.as_str(),
+            Some(r#"[""]"#),
+            "{place:?}: one submit, empty"
+        );
+        bench.close(opened).await?;
+
+        let opened = bench.open("/private/stale.html?mode=number", place).await?;
+        let code_box = bench.mint(&opened, "#code").await?;
+        let env = bench.host(&opened);
+        let field = Field::new(&code_box, &bench.page_origin)
+            .keys()
+            .with("246813")?;
+        let entry = bench.enter(&env, &opened, vec![field]).await;
+        assert_eq!(
+            entry.outcome,
+            EntryOutcome::Entered,
+            "{place:?} number: {entry:?}"
+        );
+        assert_eq!(
+            bench.value(&opened, &code_box).await?,
+            "246813",
+            "{place:?} number"
         );
         bench.close(opened).await?;
     }

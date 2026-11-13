@@ -33,6 +33,11 @@ impl PageSecret {
         Self(text)
     }
 
+    /// No text: what a box holds once it is empty.
+    pub(crate) fn empty() -> Self {
+        Self(String::new())
+    }
+
     /// The same text without its last character: what a box typed key by key holds right
     /// before its last key.
     pub(crate) fn all_but_last(&self) -> Self {

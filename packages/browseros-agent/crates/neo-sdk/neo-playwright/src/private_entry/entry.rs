@@ -110,6 +110,9 @@ pub enum EntryCode {
     FocusLost,
     /// The box holds something else at the read-back.
     ValueNotTaken,
+    /// A box with no size still held text after Neo tried to empty it before the first
+    /// character (ruling R51). Nothing of the value was typed.
+    BoxNotCleared,
     /// The page moved before Neo saw the value go into the box.
     PageMoved,
     /// The entry's own deadline passed.
@@ -140,6 +143,7 @@ impl EntryCode {
             Self::NotFocused => "not_focused",
             Self::FocusLost => "focus_lost",
             Self::ValueNotTaken => "value_not_taken",
+            Self::BoxNotCleared => "box_not_cleared",
             Self::PageMoved => "page_moved",
             Self::RunTimeout => "run_timeout",
             Self::TargetClosed => "target_closed",
@@ -165,6 +169,7 @@ impl EntryCode {
             | Self::NotFocused
             | Self::FocusLost
             | Self::ValueNotTaken
+            | Self::BoxNotCleared
             | Self::PageMoved => ErrorOwner::Website,
             Self::RunTimeout | Self::TargetClosed | Self::BrowserDisconnected | Self::Internal => {
                 ErrorOwner::Neo
@@ -188,6 +193,7 @@ impl EntryCode {
             | Self::BoxCovered
             | Self::ValueTooLong
             | Self::NotFocused
+            | Self::BoxNotCleared
             | Self::Internal => Answer::Definite,
             Self::FocusLost
             | Self::ValueNotTaken
@@ -241,6 +247,7 @@ impl EntryCode {
             Self::ValueNotTaken => {
                 "The box does not hold the value after the entry. The page changed what was typed."
             }
+            Self::BoxNotCleared => "The box still holds text after Neo tried to empty it.",
             Self::PageMoved => {
                 "The page moved during the entry, before Neo saw the value go into the box."
             }
@@ -418,6 +425,7 @@ mod tests {
             EntryCode::NotFocused,
             EntryCode::FocusLost,
             EntryCode::ValueNotTaken,
+            EntryCode::BoxNotCleared,
             EntryCode::PageMoved,
             EntryCode::RunTimeout,
             EntryCode::TargetClosed,
