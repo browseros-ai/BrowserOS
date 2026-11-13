@@ -5954,3 +5954,40 @@ async fn a_taskless_run_stops_opening_in_a_task_a_host_named() -> Result<(), Box
     );
     Ok(())
 }
+
+/// `task.newPage` asks again once its tab opened: a host that names the task while the tab opens
+/// leaves the new tab in no task, and the run with no task hears the task is gone.
+#[tokio::test]
+async fn a_taskless_task_new_page_asks_again_after_its_open() -> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let (taskless, _taskless_guard) = run_scoped(&harness, TabsScope::Task, None)?;
+    let created = created_in(&harness, &taskless).await?;
+    let opens = harness.fake.count("Browser.createTab");
+    harness.fake.hold_next("Browser.createTab");
+    let opening = harness.dispatcher.submit(
+        &taskless,
+        Call::script(
+            "task.newPage".to_owned(),
+            json!({ "task": created.as_str() }),
+            None,
+        ),
+    );
+    within(async {
+        while harness.fake.count("Browser.createTab") == opens {
+            time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await?;
+    harness.tabs.ensure_task(&created)?;
+    harness.fake.release_held();
+    assert_eq!(
+        failure(opening.wait().await)?.error.code(),
+        ErrorCode::TASK_NOT_FOUND,
+        "a host named the task while the tab opened"
+    );
+    assert!(
+        harness.tabs.task(&created)?.tabs.is_empty(),
+        "the host's task gained no tab"
+    );
+    Ok(())
+}
