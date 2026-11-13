@@ -423,14 +423,16 @@ paths:
         takeover is `404 not_found`, and one whose takeover's release has begun is
         `409 takeover_released`.
 
-        A control display ends only once Neo's screen has read the input it forwarded. When the
-        client sends its close frame, or the display's takeover is released, Neo stops
-        forwarding, half-closes its connection to the screen and waits up to 2 s for the screen
-        to close it. The screen reads a connection in order and closes it at its end, so its
-        close shows it read every input message before; a takeover's `inputDrained` says whether
-        that held. A client's close frame is answered only after every whole RFB message in the
-        binary frames before it was handled (forwarded to the screen, or dropped in `view`), and
-        for a control display after that wait.
+        When a control display ends, by the client's close frame or its takeover's release, Neo
+        stops forwarding, half-closes its connection to the screen and waits up to 2 s for the
+        screen to close it. The screen reads a connection in order and closes it at its end of
+        stream, so that close shows the screen read every input message the display forwarded.
+        The guarantee that the owner's input landed before the display ended holds only when the
+        takeover's release answers `inputDrained: true`. A `false` after the bounded 2 s wait is
+        intentional: Neo does not wait longer, and for that release the guarantee does not hold.
+        A client's close frame is answered only after every whole RFB message in the binary
+        frames before it was handled (forwarded to the screen, or dropped in `view`), and for a
+        control display after that wait.
 
         A display ends with a WebSocket close frame that says why:
         - `4002` released: the display's takeover was released;
@@ -732,8 +734,11 @@ paths:
       description: |
         The flow closes the takeover's display, restores the fit, and releases the lock
         last. Closing a control display waits up to 2 s for Neo's screen to read the owner's last
-        input (`/v1/display`), and the answer's `inputDrained` says whether it did, so a host can
-        read what the owner typed with no key landing after it. The steps share a 10 s budget. A step that fails does not stop the rest,
+        input (`/v1/display`). Only an answer with `inputDrained: true` guarantees that every key
+        the display forwarded was read before the release went on, so that a host can read what
+        the owner typed with no key landing after it. A `false` after that bounded wait is
+        intentional and means the guarantee does not hold for this release. The steps share a
+        10 s budget. A step that fails does not stop the rest,
         and once the budget is spent the lock is released while a step still running finishes.
         A second release answers as the first did. Neo releases a takeover itself 10 s before
         `expiresAt` (`expired`), so the steps run while the agent is still locked out, and when
@@ -1541,14 +1546,16 @@ components:
         inputDrained:
           type: boolean
           description: >-
-            Set by the release. `true` when every control display bound to the takeover ended
-            with each input message it forwarded whole and Neo's screen closing the connection
-            Neo had half-closed, within 2 s: the screen read all of that input before the release
-            went on, and none arrives later. Input a release cuts off before Neo forwarded it is
-            dropped, never delivered late. `false` when one did not (the screen kept the
-            connection open or closed it first, the release cut a message in two, or a display
-            was still forwarding when the release's budget ran out). Absent while the takeover is
-            active, and when no control display was bound to it.
+            Set by the release. The owner's input is guaranteed to have landed only when this is
+            `true`: every control display bound to the takeover ended with each input message it
+            forwarded whole and Neo's screen closing the connection Neo had half-closed, within
+            2 s, so the screen read all of that input before the release went on, and none
+            arrives later. Input a release cuts off before Neo forwarded it is dropped, never
+            delivered late. `false` is intentional after the bounded 2 s wait and means the
+            guarantee does not hold for this release: the screen kept the connection open or
+            closed it first, the release cut a message in two, or a display was still forwarding
+            when the release's budget ran out. Absent while the takeover is active, and when no
+            control display was bound to it.
         createdAt:
           type: integer
           format: int64
