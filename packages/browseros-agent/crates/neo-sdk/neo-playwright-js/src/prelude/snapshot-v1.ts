@@ -455,11 +455,11 @@ class Printer {
     let value: string | undefined
     // A text field that differs from the name: how a textbox shows its value.
     if (node.text !== undefined && node.text !== node.name) value = node.text
-    else if (fieldWithoutRef(node) && node.text === undefined) {
-      // Contenteditable values can be paragraph children instead of a `text` field. Keep
-      // that value on the field's line before the child walk suppresses repeated text.
+    else if (FIELD.has(node.role) && node.text === undefined) {
+      // Dropdown and editor values can be children instead of a `text` field. Keep that
+      // value on the field's line before the child walk suppresses repeated text.
       const own = ownText(node)
-      if (own !== '') value = own
+      if (own !== '' && own !== node.name) value = own
     } else if (!node.name) {
       // A link with no words of its own still says where it goes, unless its `/url` line does.
       const label =
