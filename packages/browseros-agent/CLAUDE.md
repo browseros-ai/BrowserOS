@@ -35,6 +35,38 @@ directly, not under `test:browser`. Use `bun run dev:claw:watch` for interactive
 
 For browser overrides or run artifacts, read [the live-test guide](CONTRIBUTING.md#run-live-browser-tests).
 
+## Remote heavy jobs
+
+Heavy jobs can run on a shared Linux pool instead of this machine. With a client profile from
+the pool's administrator, run them from `packages/browseros-agent` in place of the local command:
+
+```sh
+bun run remote gate            # crates/neo-sdk/check.sh
+bun run remote image           # build the SDK image (amd64), then run accept.sh on it
+bun run remote spec --ci       # bun run test:neo-spec; suite names and flags pass through
+bun run remote run -- <cmd>    # any other command
+bun run remote queue           # jobs running and waiting
+```
+
+It uploads `packages/browseros-agent` as the working tree has it, uncommitted and untracked files
+included; Git metadata, ignored files, `.env*`, key and credential files, and agent state stay
+behind. Everything else goes verbatim: take out any token written inline in a file first, and
+send only code you trust, since the machines are shared.
+
+The command streams the job's log, exits with the job's own status, and keeps `run.log`,
+`result.json` and artifacts in the directory it prints. A line starting `remote:` is the client
+failing, not your change. When it means no client setup or an unreachable pool, run the step
+locally and say so in your report: retrying does not help.
+
+- Each worktree may hold two jobs, running plus waiting; a third is refused. Wait for one to end.
+- A busy pool queues the job (gates first, then images, then the rest); let it wait. Stop a job
+  whose result you no longer need: that frees its slot.
+- Run `detector` and macOS-only work locally: the pool is Linux, and the detector does not yet
+  complete there.
+
+For client setup, `viewer-image`, `recover`, and what the machines retain, read
+[the remote-builds guide](tools/remote-builds/README.md).
+
 ## Conventions
 
 - Use Bun for TypeScript: `bun <file>`, `bun test`, `bun install`, `bun run <script>`. Bun loads
