@@ -103,12 +103,12 @@ State lives under `$BROWSERCLAW_DIR`:
 
 - `claw-sdk/trace.db` is the SQLite trace store. Supported older files are upgraded in place. If it does not open (including an unknown newer migration or the earliest session-era schema), Neo moves it aside to `trace.db.broken-<millis>` and starts a fresh one. Rolling back across a newer migration loses the live trace and request-id history: the older image still starts, logs `the trace store does not open; starting a fresh one`, lists none of the runs from before the rollback, and runs a `requestId` sent before it again instead of replaying it. Only `trace.db` moves (its `-wal` and `-shm` files are removed, with any writes not yet copied into it); `settings.json` stays. Moving forward again upgrades the older image's store, and the earlier runs stay only in the `.broken` file, which Neo never reads or deletes. Schema 5 (`m0005`, the operations' `framesIncomplete`) was proven this way on a schema-4 image.
 - `logs/claw-sdk.log.<date>` is the daily log. The same lines go to stderr. `logs/claw-sdk-panics.log` gets each panic, written synchronously.
-- `claw-sdk/settings.json` is what the host set through `/v1/settings` (below), mode 0600.
+- `claw-sdk/settings.json` is a host's startup settings or changes through `/v1/settings` (below), mode 0600.
 - `host.sock` is the host socket, unless `CLAW_HOST_SOCKET` moves it.
 
 ### Settings
 
-A host sets how Neo behaves through the host API: `GET`, `PUT` and `PATCH /v1/settings`, described in [openapi.yaml](../neo-sdk-api/openapi.yaml). There is no config file and no environment value for them, so a script or the model, which never reach the host listener, cannot change them.
+A host reads settings through `GET /v1/settings` and changes them through `PUT` or `PATCH`, described in [openapi.yaml](../neo-sdk-api/openapi.yaml), or writes `$BROWSERCLAW_DIR/claw-sdk/settings.json` before startup. The file holds one `PUT /v1/settings` body with no envelope, such as `{"tabs":{"idleCloseSeconds":300},"trace":{"values":"off","screenshots":"off","retentionSeconds":3600}}`. Every setting is optional. A script cannot write this file or reach the host listener.
 
 | Setting | Default | Range | What it changes |
 |---|---|---|---|
@@ -130,7 +130,11 @@ host raises `CLAW_LOG`, so a host that needs off keeps the default `info,rmcp=wa
 
 Every setting is optional. Trace and tab defaults preserve the existing behavior; `files.readDirs` defaults to the browser downloads folder. `PUT` sets every setting, and one left out goes back to its default; `PATCH` changes only the settings it names. A name Neo does not know is skipped, never refused, and the answer lists it in `unknown`, so a host and a server of different versions still work together. A name of an open list Neo does not have yet, such as a later `trace.screenshots` mode, is skipped the same way, and the answer names its setting in `unknownValues`, never the value. A known setting with a value outside its rule refuses the whole call with 400 `invalid_request`, which names every setting at fault and its rule; nothing is applied. A change takes effect at once, with no restart: each part reads its setting when it acts.
 
-Neo saves what the host set in `claw-sdk/settings.json` before it switches a change on, and loads that file at every start, before the first run, so a setting survives the restarts the browser gives the server on its own. At start, a setting the file names that this build does not know, or a value it cannot use, falls back to its default with a warning; Neo never fails to start over the file. Without a host API (no usable `CLAW_HOST_TOKEN_FILE`) nothing could change or read the settings, so every setting is at its default and the file is left alone.
+Write the whole file under another name in the same folder and rename, or write while Neo is stopped. After startup Neo owns the file. Change a running server through the API, which saves before switching values on. Neo loads the saved file at every server start, before the first run, with or without a usable `CLAW_HOST_TOKEN_FILE`.
+
+A missing file means normal defaults. An unreadable file or input that is not a JSON object uses defaults except that `trace.values` and `trace.screenshots` are off. An invalid known value for either switch uses off, and an invalid `trace` group turns both off. Other invalid values keep their normal defaults, including retention, so a bad file never shortens existing history. Unknown names are skipped. Neo logs each case without quoting invalid values and always starts. Recording-off fallbacks appear in `GET` and stay in the next API save.
+
+In the [SDK image](docker/README.md#use-it-from-a-host), the saved path is `/data/browserclaw/claw-sdk/settings.json`. Its entrypoint takes the state folder and file for Neo's configured user, with mode 0600 for the file. A regular `/etc/neo/settings.json`, mounted read-only or copied into a derived image, atomically replaces the saved file at every entrypoint start. API changes survive server and browser restarts; the next entrypoint start restores the fixed file's settings. A failed copy is logged and leaves the saved file in use. Without a fixed file, saved changes persist across container starts.
 
 Adding a setting is one row in `neo-http/src/setting.rs`, its key in the `Settings` schema of `openapi.yaml`, a row in the table above, and a reader where Neo uses it. A test in `setting.rs` keeps the three lists equal.
 

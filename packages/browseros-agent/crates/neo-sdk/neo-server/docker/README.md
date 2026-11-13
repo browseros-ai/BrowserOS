@@ -190,7 +190,7 @@ them, as the Neo image's README describes.
 |---|---|---|---|
 | `/data` | neo, 0700 | the folders below | yes |
 | `/data/profile` | neo | the browser profile: cookies and logins (`--password-store=basic`) | yes |
-| `/data/browserclaw` | neo | claw-sdk's `claw-sdk/trace.db` (runs, operations, screenshots, request-id history), `claw-sdk/outputs/` (the copy of each run's downloads and its reply's blobs, which the host reads; downloads removed with the run after `trace.retentionSeconds`, 7 days by default; blobs written under `trace.values: "off"` removed after ten minutes), `claw-sdk/settings.json` (what the host set through `/v1/settings`, loaded at every start) and `logs/`. An image with an older store schema moves a newer store aside (`trace.db.broken-<ms>`) and starts empty | yes |
+| `/data/browserclaw` | neo | claw-sdk's `claw-sdk/trace.db` (runs, operations, screenshots, request-id history), `claw-sdk/outputs/` (the copy of each run's downloads and its reply's blobs, which the host reads; downloads removed with the run after `trace.retentionSeconds`, 7 days by default; blobs written under `trace.values: "off"` removed after ten minutes), `claw-sdk/settings.json` (a host's startup settings or changes through `/v1/settings`, loaded at every server start) and `logs/`. An image with an older store schema moves a newer store aside (`trace.db.broken-<ms>`) and starts empty | yes |
 | `/data/downloads` | neo | downloads, where the browser saves them and `download.path()` points; Neo never deletes them | yes |
 | `/run/neo` | neo, group `NEO_HOST_GID`, 2750 | `host.sock` | no; set up at every start |
 
@@ -290,6 +290,7 @@ cached layer, and a keyless build never mounts a key at all.
 crates/neo-sdk/neo-server/docker/build.sh --platform linux/amd64
 # in the host's Dockerfile
 FROM neo-sdk:0.52.1.2-<commit>-amd64
+COPY settings.json /etc/neo/settings.json
 ```
 
 Call `/usr/local/bin/neo-entrypoint` from the host's supervisor as root, with the `/data`
@@ -297,11 +298,34 @@ layout and neo user described above. Pass `NEO_HOST_GID` and `CLAW_HOST_TOKEN_FI
 `CLAW_*` through any `env -i` filter, add the socket's group to the host's supervisor,
 and include 9011 in the firewall rules for Neo's ports.
 
-Set Neo's behavior through the host API before the first run. Send `PUT /v1/settings`
-with the host's full settings, such as `{"tabs":{"idleCloseSeconds":300}}`. Neo saves them
-under `/data` and loads them when the server or container restarts. Send the full settings
-at each host startup to replace older settings and manual patches. The settings and their
-ranges are in [the server's README](../README.md#settings).
+A host can write `/data/browserclaw/claw-sdk/settings.json` before the entrypoint starts.
+The file holds one `PUT /v1/settings` body with no envelope. Every setting is optional.
+
+```json
+{"tabs":{"idleCloseSeconds":300},"trace":{"values":"off","screenshots":"off","retentionSeconds":3600}}
+```
+
+Write under another name in the same folder and rename, or write while Neo is stopped.
+At entrypoint startup Neo takes ownership of the state folder and saved file, setting the
+file to mode 0600. This also works for a host that runs Neo under another PUID and PGID,
+and for a state folder that is a symlink into another volume. The root link stays in place
+and an existing folder keeps its mode. Inside the state root, the entrypoint never writes
+through a symlink; a saved-file symlink is replaced by the fixed file's atomic rename.
+
+A derived image uses `COPY settings.json /etc/neo/settings.json` as above. A host can instead
+mount that fixed file read-only. At every entrypoint start, it atomically replaces the saved
+file with the fixed file's bytes. A copy failure or nonregular fixed path is logged and startup
+continues with the saved file. The image ships no settings file.
+
+Neo reads the saved file before its first run, even without a usable host token.
+No file means normal defaults. An unreadable or malformed file uses defaults with
+`trace.values` and `trace.screenshots` off. Invalid values for either recording switch use
+off; an invalid `trace` group turns both off. Invalid retention keeps its default, and unknown
+names are skipped with a warning. The settings and ranges are in [the server's README](../README.md#settings).
+
+After startup, Neo owns the file. Use `PUT` or `PATCH /v1/settings` for running changes.
+API changes survive a server or browser restart. When the entrypoint starts again, a fixed
+file replaces those changes. Without a fixed file, the saved changes remain.
 
 Neo keeps one blank tab of its own open at all times (`owner: "neo"` in `GET /v1/tabs`), so closing
 every other tab never ends the browser. A host does not need a keeper tab of its own.
@@ -416,7 +440,7 @@ claude mcp add --transport http neo-sdk http://localhost:9010/mcp
 Without `NEO_MCP_REMOTE=true` the published port is refused, because Docker's port forwarding arrives from
 outside the container. That is the default on purpose.
 
-Settings need the host API, which needs a token. To read or change them by hand, add a token and the host
+Startup settings can come from the file above without a token. To read or change them while Neo runs, add a token and the host
 API's TCP address (development only: TCP is checked by the token alone):
 
 ```sh

@@ -8,7 +8,7 @@ use axum::http::{Method, StatusCode};
 use browseros_core::TabId;
 use neo_http::Settings;
 use neo_takeover::TabHold;
-use neo_trace::{RecordPolicy, Screenshots};
+use neo_trace::{RecordPolicy, Screenshots, Values};
 use serde_json::{Value, json};
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
@@ -205,6 +205,10 @@ async fn a_wrong_value_is_refused_by_name_and_nothing_is_applied_or_saved() -> T
             r#"{"trace":{"screenshots":null}}"#,
             "`trace.screenshots` must be one of perOperation, off",
         ),
+        (
+            r#"{"trace":{"values":false}}"#,
+            "`trace.values` must be one of on, off",
+        ),
         (r#"{"tabs":300}"#, "`tabs` must be an object of settings"),
         ("[1]", "the body must be JSON"),
         ("not json", "the body must be JSON"),
@@ -359,18 +363,21 @@ async fn a_saved_file_loads_key_by_key_and_never_stops_a_start() -> TestResult {
         Duration::from_mins(30),
         "no file is every default"
     );
+    assert_eq!(missing.trace_policy(), RecordPolicy::default());
 
-    std::fs::write(&file, "{ this is not json")?;
+    std::fs::write(&file, r#"{"trace":"#)?;
     let corrupt = Settings::load(file.clone(), Default::default()).await;
     assert_eq!(
         corrupt.trace_retention(),
         Duration::from_hours(168),
-        "a file that does not parse is every default"
+        "bad recording input must not shorten retention"
     );
+    assert_eq!(corrupt.trace_policy(), recording_off());
 
     std::fs::write(&file, "[1, 2]")?;
     let not_an_object = Settings::load(file.clone(), Default::default()).await;
     assert_eq!(not_an_object.tab_idle_close(), Duration::from_mins(30));
+    assert_eq!(not_an_object.trace_policy(), recording_off());
 
     // A newer build's setting, a value this build refuses, and one good value.
     std::fs::write(
@@ -383,7 +390,14 @@ async fn a_saved_file_loads_key_by_key_and_never_stops_a_start() -> TestResult {
         Duration::from_mins(30),
         "a value out of range falls back to its default"
     );
-    assert_eq!(mixed.trace_policy(), RecordPolicy::default());
+    assert_eq!(
+        mixed.trace_policy(),
+        RecordPolicy {
+            screenshots: Screenshots::Off,
+            ..RecordPolicy::default()
+        },
+        "an unknown saved recording mode is off; an omitted switch keeps its default"
+    );
     assert_eq!(
         mixed.trace_retention(),
         Duration::from_secs(7200),
@@ -393,12 +407,79 @@ async fn a_saved_file_loads_key_by_key_and_never_stops_a_start() -> TestResult {
     std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o000))?;
     let unreadable = Settings::load(file.clone(), Default::default()).await;
     std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600))?;
-    // Root reads any file; then the good value applies, which is also no failure.
+    // Root can read mode 000; the directory case below covers read failure on every uid.
     assert!(
         [Duration::from_secs(7200), Duration::from_hours(168)]
             .contains(&unreadable.trace_retention()),
-        "a file that cannot be read starts on the defaults"
+        "an unreadable file never prevents startup or shortens retention"
     );
+    if unreadable.trace_retention() == Duration::from_hours(168) {
+        assert_eq!(unreadable.trace_policy(), recording_off());
+    }
+    std::fs::remove_file(&file)?;
+    std::fs::create_dir(&file)?;
+    let directory = Settings::load(file, Default::default()).await;
+    assert_eq!(directory.trace_policy(), recording_off());
+    assert_eq!(directory.trace_retention(), Duration::from_hours(168));
+    assert_eq!(directory.tab_idle_close(), Duration::from_mins(30));
+    Ok(())
+}
+
+fn recording_off() -> RecordPolicy {
+    RecordPolicy {
+        values: Values::Off,
+        screenshots: Screenshots::Off,
+        ..RecordPolicy::default()
+    }
+}
+
+#[tokio::test]
+async fn bad_saved_recording_switches_are_off_and_good_siblings_still_apply() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let file = dir.path().join("settings.json");
+    for (body, expected, retention) in [
+        (
+            r#"{"trace":{"values":false,"screenshots":"perOperation","retentionSeconds":7200}}"#,
+            RecordPolicy {
+                values: Values::Off,
+                ..RecordPolicy::default()
+            },
+            7200,
+        ),
+        (
+            r#"{"trace":{"screenshots":"blurred","values":"on"}}"#,
+            RecordPolicy {
+                screenshots: Screenshots::Off,
+                ..RecordPolicy::default()
+            },
+            604_800,
+        ),
+        (r#"{"trace":"x"}"#, recording_off(), 604_800),
+        (
+            r#"{"trace":{"values":false,"screenshots":"blurred","retentionSeconds":5},"tabs":"x"}"#,
+            recording_off(),
+            604_800,
+        ),
+    ] {
+        std::fs::write(&file, body)?;
+        let loaded = Settings::load(file.clone(), Default::default()).await;
+        assert_eq!(loaded.trace_policy(), expected, "{body}");
+        assert_eq!(
+            loaded.trace_retention(),
+            Duration::from_secs(retention),
+            "{body}"
+        );
+        assert_eq!(loaded.tab_idle_close(), Duration::from_mins(30), "{body}");
+    }
+    for body in ["{}", r#"{"trace":{"vaules":"off"},"futureGroup":false}"#] {
+        std::fs::write(&file, body)?;
+        let loaded = Settings::load(file.clone(), Default::default()).await;
+        assert_eq!(
+            loaded.trace_policy(),
+            RecordPolicy::default(),
+            "unknown names are skipped: {body}"
+        );
+    }
     Ok(())
 }
 
