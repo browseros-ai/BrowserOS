@@ -11,7 +11,7 @@ use std::time::Duration;
 use browseros_core::TabId;
 use neo_trace::{
     BlobId, Delivery, EpochMillis, ErrorOwner, OperationId, Outcome, RequestId, RunEnded, RunId,
-    RunQuery, RunStarted, RunStatus, RunSummary, TaskId, WriterConfig,
+    RunQuery, RunStarted, RunStatus, RunSummary, RunTabsScope, TaskId, WriterConfig,
 };
 use serde_json::{Value, json};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
@@ -23,7 +23,7 @@ use super::run_reply::{ReplyDelivery, ReplyEffects, ReplyStatus};
 use super::{
     ReplyError, RequestLedger, RunHandle, RunMeta, RunReply, RunRequest, RunService, RunTimeout,
 };
-use crate::browser::TaskPage;
+use crate::browser::{TabsScope, TaskPage};
 use crate::config::Defaults;
 use crate::dispatch::{ErrorCode, OperationError, TEXT_CHARS, TaskKind};
 use crate::test_rig::{TestError, TestRig, on_neo_runtime, within};
@@ -130,7 +130,9 @@ const SHORT_WINDOW: Duration = Duration::from_millis(200);
 /// Admits one call of `request` on `ledger` alone, as the run service would.
 async fn admit(ledger: &Arc<RequestLedger>, request: &str) -> Result<Admission, TestError> {
     let handle = RunHandle::new(RunId::new(), Duration::ZERO);
-    Ok(ledger.admit(&meta(Some(request), None)?, &handle).await)
+    Ok(ledger
+        .admit(&meta(Some(request), None)?, &handle, TabsScope::Task)
+        .await)
 }
 
 /// Admits `request` as a new run and ends it the way the run service does: start and end
@@ -142,7 +144,10 @@ async fn run_once(
 ) -> Result<Arc<RunReply>, TestError> {
     let handle = RunHandle::new(RunId::new(), Duration::ZERO);
     let request_id = RequestId::parse(request)?;
-    let Admission::Fresh(ticket) = ledger.admit(&meta(Some(request), None)?, &handle).await else {
+    let Admission::Fresh(ticket) = ledger
+        .admit(&meta(Some(request), None)?, &handle, TabsScope::Task)
+        .await
+    else {
         return Err(format!("{request} is new, so it runs").into());
     };
     rig.sink.run_started(RunStarted {
@@ -151,6 +156,7 @@ async fn run_once(
         request_id: Some(request_id.clone()),
         task_id: None,
         host_data: None,
+        tabs_scope: RunTabsScope::Browser,
         at: EpochMillis::now(),
     });
     let reply = Arc::new(RunReply {
@@ -165,6 +171,7 @@ async fn run_once(
         unknown: Vec::new(),
         not_awaited: Vec::new(),
         tips: Vec::new(),
+        tabs_scope: RunTabsScope::Browser,
     });
     let end = reply.trace_end(Some(&request_id));
     rig.sink.run_ended(RunEnded {
@@ -294,6 +301,11 @@ fn after_the_replay_window_a_repeat_is_a_duplicate_naming_the_first_run() -> Res
 fn replay_is_scoped_by_task_when_the_call_has_one() -> Result<(), TestError> {
     on_neo_runtime(async {
         let rig = TestRig::new().await?;
+        // The browser tab scope, as before task scope: a request without a task may repeat a run
+        // of any task (`under_task_scope_a_request_without_a_task_repeats_only_a_run_without_one`).
+        rig.settings
+            .patch(br#"{"tabs":{"scope":"browser"}}"#)
+            .await?;
         let service = rig.run_service(GRACE);
         let code = "return Math.random();";
         let first = service
@@ -567,7 +579,9 @@ fn a_repeat_that_races_the_first_runs_commit_joins_it() -> Result<(), TestError>
         let repeat = tokio::spawn(async move { admit(&racing, "race-1").await });
         held.await?;
         let handle = RunHandle::new(RunId::new(), Duration::ZERO);
-        let Admission::Fresh(ticket) = ledger.admit(&meta(Some("race-1"), None)?, &handle).await
+        let Admission::Fresh(ticket) = ledger
+            .admit(&meta(Some("race-1"), None)?, &handle, TabsScope::Task)
+            .await
         else {
             return Err("the first call to reach the ledger's claim runs".into());
         };
@@ -577,6 +591,7 @@ fn a_repeat_that_races_the_first_runs_commit_joins_it() -> Result<(), TestError>
             request_id: Some(RequestId::parse("race-1")?),
             task_id: None,
             host_data: None,
+            tabs_scope: RunTabsScope::Browser,
             at: EpochMillis::now(),
         });
         rig.sink.flush().await?;
@@ -1032,6 +1047,11 @@ fn failed_scripts_keep_created_and_fetched_tasks_in_first_touch_order() -> Resul
 fn host_defaults_keep_their_own_tab_and_only_report_explicit_fetches() -> Result<(), TestError> {
     on_neo_runtime(async {
         let rig = TestRig::new().await?;
+        // The browser tab scope: a run without a task fetches a host's task, and a host task's
+        // run reaches the user's tab (`under_task_scope_a_host_task_keeps_to_its_own_tabs`).
+        rig.settings
+            .patch(br#"{"tabs":{"scope":"browser"}}"#)
+            .await?;
         let service = rig.run_service(GRACE);
         let first = service
             .run(request(
@@ -1607,9 +1627,11 @@ fn after_a_restart_a_task_never_takes_a_tab_a_task_it_named_opened() -> Result<(
             .await?
             .value
             .clone();
+        // Created in the host task's own runs, so the task is in its family and, under task
+        // scope, its runs may open in it.
         let created = run_in(
             &service,
-            "task-other",
+            "task-a",
             "return (await neo.createTask('named')).id;",
         )
         .await?;
@@ -1723,6 +1745,36 @@ fn after_a_restart_a_tasks_popups_and_the_tasks_it_created_keep_their_tabs() -> 
     })
 }
 
+/// Under the `task` tab scope, the default, a request without a task never repeats a run that
+/// was bound to a task: it replays only a run without one. Each reply says which tabs its run saw.
+#[test]
+fn under_task_scope_a_request_without_a_task_repeats_only_a_run_without_one()
+-> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let service = rig.run_service(GRACE);
+        let code = "return Math.random();";
+        let tasked = service
+            .run(request(code, meta(Some("call-9"), Some("task-a"))?)?)
+            .await;
+        assert_eq!(tasked.tabs_scope, RunTabsScope::Task, "bound to its task");
+        let untasked = service
+            .run(request(code, meta(Some("call-9"), None)?)?)
+            .await;
+        assert_ne!(
+            untasked.id, tasked.id,
+            "it never replays the reply of a run bound to a task"
+        );
+        assert_eq!(untasked.tabs_scope, RunTabsScope::Browser, "not bound");
+        let again = service
+            .run(request(code, meta(Some("call-9"), None)?)?)
+            .await;
+        assert_eq!(again.id, untasked.id, "it repeats the run without a task");
+        assert_eq!(runs_of(&rig, "call-9").await?.len(), 2);
+        Ok(())
+    })
+}
+
 #[test]
 fn a_run_after_a_restart_starts_once_its_task_has_its_tabs_back() -> Result<(), TestError> {
     on_neo_runtime(async {
@@ -1745,6 +1797,59 @@ fn a_run_after_a_restart_starts_once_its_task_has_its_tabs_back() -> Result<(), 
         restore.begin();
         let page = within(Duration::from_secs(10), waiting).await???;
         assert_eq!(page, mine, "its own tab, not a fresh one");
+        Ok(())
+    })
+}
+
+/// Under the `task` tab scope, the default, a host task's run keeps to its own tabs: the user's
+/// tab is refused with `page_not_in_task`, and never taken. A run without a task cannot fetch
+/// the host's task: it answers as a missing one. A refused call says the tabs it would have seen.
+#[test]
+fn under_task_scope_a_host_task_keeps_to_its_own_tabs() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let service = rig.run_service(GRACE);
+        let first = service
+            .run(request(
+                "return (await __neo.invoke('test.touch', { page })).tab;",
+                meta(None, Some("host-task"))?,
+            )?)
+            .await;
+        assert_eq!(first.status, ReplyStatus::Ok, "{first:?}");
+        assert_eq!(first.tabs_scope, RunTabsScope::Task);
+        let fetched = service
+            .run(request(
+                "return await __neo.invoke('neo.task', { id: 'host-task' });",
+                meta(None, None)?,
+            )?)
+            .await;
+        assert_eq!(
+            fetched.error.as_ref().map(|error| error.code.as_str()),
+            Some("task_not_found"),
+            "a run without a task never takes over a host's task: {fetched:?}"
+        );
+        assert_eq!(fetched.tabs_scope, RunTabsScope::Browser);
+        let other = rig.owner_tab("https://other.example/").await?;
+        let touched = service.run(request(
+            &format!("return await __neo.invoke('test.touch', {{ page: {{ '$neo': 'page', tab: {} }} }});", other.tab.0),
+            meta(None, Some("host-task"))?,
+        )?).await;
+        assert_eq!(
+            touched.error.as_ref().map(|error| error.code.as_str()),
+            Some("page_not_in_task"),
+            "{touched:?}"
+        );
+        assert_eq!(rig.tabs.owner(other.tab), None, "never taken");
+        let refused = service.refuse(
+            String::new(),
+            meta(None, Some("host-task"))?,
+            &OperationError::host(ErrorCode::INVALID_META, "refused for the test"),
+        );
+        assert_eq!(
+            refused.tabs_scope,
+            RunTabsScope::Task,
+            "a refused call says what its run would have seen"
+        );
         Ok(())
     })
 }

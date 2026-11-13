@@ -79,6 +79,7 @@ fn run_meta(reply: &RunReply) -> Value {
         .collect();
     meta.insert("unknown".to_owned(), Value::Array(unknown));
     meta.insert("tasks".to_owned(), json!(reply.tasks));
+    meta.insert("tabsScope".to_owned(), json!(reply.tabs_scope));
     Value::Object(meta)
 }
 

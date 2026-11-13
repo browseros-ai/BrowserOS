@@ -213,7 +213,8 @@ async fn expected_current_columns(path: &Path) -> TestResult {
         ALTER TABLE "runs" ADD COLUMN "values" varchar;
         ALTER TABLE "operations" ADD COLUMN "values" varchar;
         ALTER TABLE "operations" ADD COLUMN "frames_incomplete" integer;
-        PRAGMA user_version = 5"#,
+        ALTER TABLE "runs" ADD COLUMN "tabs_scope" varchar;
+        PRAGMA user_version = 6"#,
     )
     .execute(&mut conn)
     .await?;
@@ -340,8 +341,8 @@ async fn a_fresh_file_has_exactly_the_current_schema() -> TestResult {
     expected_current_columns(&old).await?;
     assert_eq!(shape(&path).await?, shape(&old).await?);
     let dump = logical_dump(&path).await?;
-    assert_eq!(dump.version, 5);
-    assert_eq!(dump.rows.get("seaql_migrations").map(Vec::len), Some(5));
+    assert_eq!(dump.version, 6);
+    assert_eq!(dump.rows.get("seaql_migrations").map(Vec::len), Some(6));
     assert_eq!(
         dump.rows["seaql_migrations"][0][0],
         "'m0001_trace_baseline'"
@@ -559,8 +560,8 @@ async fn a_session_era_file_is_refused_untouched() -> TestResult {
 async fn a_newer_user_version_is_refused_untouched() -> TestResult {
     let (_dir, path) = fixture("s5", true).await?;
     let mut conn = connection(&path).await?;
-    // One past this build's fence (`USER_VERSION_FENCE`, 5 since `m0005`).
-    sqlx::raw_sql("PRAGMA user_version = 6")
+    // One past this build's fence (`USER_VERSION_FENCE`, 6 since `m0006`).
+    sqlx::raw_sql("PRAGMA user_version = 7")
         .execute(&mut conn)
         .await?;
     conn.close().await?;
@@ -905,7 +906,7 @@ async fn a_site_era_file_gains_main_world_without_losing_its_operations() -> Tes
     let (_expected_dir, expected) = fixture("s5", false).await?;
     expected_current_columns(&expected).await?;
     assert_eq!(shape(&path).await?, shape(&expected).await?);
-    assert_eq!(logical_dump(&path).await?.version, 5);
+    assert_eq!(logical_dump(&path).await?.version, 6);
     let old = OperationId::new(A.parse()?, 1);
     assert_eq!(
         store
@@ -994,7 +995,7 @@ async fn a_values_era_file_gains_frames_incomplete_without_losing_its_operations
     expected_current_columns(&expected).await?;
     assert_eq!(shape(&path).await?, shape(&expected).await?);
     let after = logical_dump(&path).await?;
-    assert_eq!(after.version, 5);
+    assert_eq!(after.version, 6);
     assert_eq!(
         after.rows.get("operations").map(Vec::len),
         before.rows.get("operations").map(Vec::len),
@@ -1049,5 +1050,43 @@ async fn a_values_era_file_gains_frames_incomplete_without_losing_its_operations
     assert_eq!(old_after.frames_incomplete, None);
     assert_eq!(old_after.main_world, old_row.main_world);
     assert_eq!(old_after.notes, old_row.notes);
+    Ok(())
+}
+
+/// A file from the build before `m0006` gains `runs.tabs_scope`, keeps every run, and its old
+/// runs read with no scope: they all saw every tab.
+#[tokio::test]
+async fn a_frames_era_file_gains_tabs_scope_without_losing_its_runs() -> TestResult {
+    let (_dir, path) = fixture("s5", true).await?;
+    let mut conn = connection(&path).await?;
+    sqlx::raw_sql(
+        r#"ALTER TABLE "operations" ADD COLUMN "site" text;
+        ALTER TABLE "operations" ADD COLUMN "main_world" integer;
+        ALTER TABLE "runs" ADD COLUMN "values" varchar;
+        ALTER TABLE "operations" ADD COLUMN "values" varchar;
+        ALTER TABLE "operations" ADD COLUMN "frames_incomplete" integer;
+        PRAGMA user_version = 5;
+        CREATE TABLE seaql_migrations (version TEXT PRIMARY KEY, applied_at BIGINT NOT NULL);
+        INSERT INTO seaql_migrations VALUES ('m0001_trace_baseline', 1), ('m0002_operation_site', 1),
+          ('m0003_operation_main_world', 1), ('m0004_trace_values', 1),
+          ('m0005_operation_frames_incomplete', 1)"#,
+    )
+    .execute(&mut conn)
+    .await?;
+    conn.close().await?;
+    let before = logical_dump(&path).await?;
+    let store = TraceStore::open(&path).await?;
+    let (_expected_dir, expected) = fixture("s5", false).await?;
+    expected_current_columns(&expected).await?;
+    assert_eq!(shape(&path).await?, shape(&expected).await?);
+    let after = logical_dump(&path).await?;
+    assert_eq!(after.version, 6);
+    assert_eq!(
+        after.rows.get("runs").map(Vec::len),
+        before.rows.get("runs").map(Vec::len),
+        "every stored run stays"
+    );
+    let old = store.run_summary(A.parse()?).await?.ok_or("old run")?;
+    assert_eq!(old.tabs_scope, None, "a run from before the field has none");
     Ok(())
 }

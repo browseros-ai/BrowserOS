@@ -467,6 +467,29 @@ impl TraceStore {
         if let Some(task) = task {
             select = select.filter(runs::Column::TaskId.eq(task.as_str()));
         }
+        self.earliest(select).await
+    }
+
+    /// [`TraceStore::run_by_request`] for a request that carries no task under the `task` tab
+    /// scope: the earliest run started with `request` and no task. Such a request never repeats
+    /// a run that was bound to a task's tabs, so it can never replay that run's reply.
+    ///
+    /// # Errors
+    /// When the file cannot be read or the row is corrupt.
+    pub async fn run_by_untasked_request(
+        &self,
+        request: &RequestId,
+    ) -> Result<Option<RunSummary>, TraceError> {
+        let select = summary_select()
+            .filter(runs::Column::RequestId.eq(request.as_str()))
+            .filter(runs::Column::TaskId.is_null());
+        self.earliest(select).await
+    }
+
+    async fn earliest(
+        &self,
+        select: Select<runs::Entity>,
+    ) -> Result<Option<RunSummary>, TraceError> {
         select
             .order_by_asc(runs::Column::StartedAt)
             .order_by_asc(runs::Column::Id)
@@ -693,6 +716,7 @@ fn summary_select() -> Select<runs::Entity> {
             runs::Column::TraceGaps,
             runs::Column::Complete,
             runs::Column::Values,
+            runs::Column::TabsScope,
         ])
         .column_as(SimpleExpr::SubQuery(None, Box::new(tabs)), "tabs")
 }

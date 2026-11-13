@@ -56,6 +56,7 @@ impl HostedRun {
         browser: &BrowserLink,
         shutdown: CancellationToken,
         timeout: Duration,
+        tabs_scope: TabsScope,
     ) -> Result<Self, HostedError> {
         let view = browser.view().ok_or_else(|| {
             HostedError("the browser is not connected; retry once it reconnects".to_owned())
@@ -74,7 +75,7 @@ impl HostedRun {
                 view,
                 deadline,
                 default_page: None,
-                tabs_scope: TabsScope::Browser,
+                tabs_scope,
             },
         );
         let bridge = Arc::new(Bridge::new(Arc::clone(&context), Arc::clone(dispatcher)));

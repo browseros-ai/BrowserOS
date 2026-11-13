@@ -11,8 +11,8 @@ use neo_takeover::{
 };
 use neo_trace::{
     Delivery, Effect, EpochMillis, OperationEnded, OperationId, OperationKind, OperationStarted,
-    Outcome, RedactionLimits, Redactor, RunId, RunStarted, TraceSink, TraceStore, WriterConfig,
-    spawn_writer,
+    Outcome, RedactionLimits, Redactor, RunId, RunStarted, RunTabsScope, TraceSink, TraceStore,
+    WriterConfig, spawn_writer,
 };
 use std::sync::Arc;
 use std::time::Duration;
@@ -63,6 +63,7 @@ fn write_in_flight(sink: &TraceSink, tab: i64) -> OperationId {
         request_id: None,
         task_id: None,
         host_data: None,
+        tabs_scope: RunTabsScope::Browser,
         at: EpochMillis::now(),
     });
     let op = OperationId::new(run, 1);

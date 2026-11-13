@@ -7,7 +7,7 @@ use axum::http::StatusCode;
 use browseros_core::TabId;
 use neo_trace::{
     Delivery, Effect, OperationEnded, OperationId, OperationKind, OperationSite, OperationStarted,
-    Outcome, PageState, RunEnded, RunId, RunStarted, RunStatus, TaskId,
+    Outcome, PageState, RunEnded, RunId, RunStarted, RunStatus, RunTabsScope, TaskId,
 };
 use serde_json::{Value, json};
 
@@ -22,6 +22,7 @@ async fn record_listeners(h: &Harness) -> Result<RunId, crate::support::BoxError
         request_id: None,
         task_id: Some(TaskId::parse("listener-compatibility")?),
         host_data: Some(json!({"fixture": "default-listeners"})),
+        tabs_scope: RunTabsScope::Browser,
         at: at(0),
     });
     let calls = [
@@ -136,6 +137,10 @@ async fn default_listener_response_changes_only_internal_and_explicit_listener_s
             op.insert("site".into(), json!({"line": index, "column": 1}));
         }
     }
+    // A later additive field: every run records which tabs it saw.
+    let fields = expected.as_object_mut().ok_or("baseline run")?;
+    assert!(!fields.contains_key("tabsScope"));
+    fields.insert("tabsScope".into(), json!("browser"));
     let reply = h.get(&format!("/v1/runs/{run}")).await?;
     assert_eq!(reply.status, StatusCode::OK);
     assert_eq!(
@@ -153,6 +158,14 @@ async fn default_listener_response_changes_only_internal_and_explicit_listener_s
     }
     let mut expected_tail = baseline["trace"].clone();
     expected_tail["operations"] = expected["operations"].clone();
+    for run in expected_tail["runs"]
+        .as_array_mut()
+        .ok_or("baseline trace runs")?
+    {
+        let fields = run.as_object_mut().ok_or("baseline trace run")?;
+        assert!(!fields.contains_key("tabsScope"));
+        fields.insert("tabsScope".into(), json!("browser"));
+    }
     let tail = h.get("/v1/trace?taskId=listener-compatibility").await?;
     assert_eq!(tail.status, StatusCode::OK);
     assert_eq!(tail.body, expected_tail);

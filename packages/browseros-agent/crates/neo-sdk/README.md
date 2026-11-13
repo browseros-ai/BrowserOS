@@ -16,8 +16,9 @@ and start later scripts with `await neo.task(id)`. The latest task pick wins: bu
 Popups join their opener's task. `task.pages()` lists its tabs oldest first;
 `task.page(tabId)` picks one. Finish with `await task.close()` to close its tabs and end it.
 
-Any script may use any tab or task. `context.pages()` lists every tab with `tabId` and
-`taskId` (`null` without a task). Recover a lost id with
+`context.pages()` lists the tabs a run may use, with `tabId` and `taskId` (`null` without a
+task): every tab for a run without a task, and only its task's tabs for a run that carries one
+under `tabs.scope: "task"`, the default ([task scope](neo-server/README.md#task-scope)). Recover a lost id with
 `context.pages().find(p => p.url().includes('ycombinator'))?.taskId`.
 An unknown id throws `task_not_found`, whose hint points to `context.pages()` and `page.taskId`.
 The reply is exactly what the script returned, plus console lines and existing notes.

@@ -90,6 +90,6 @@ pub use fill_route::{FillAsk, FillDoor, FillRefusal, FillReply, FillVerb};
 pub use host_auth::{HostAuth, HostToken, PeerRule, TokenError};
 pub use host_service::{PeerInfo, host_router, host_service};
 pub use private_tabs::{ChecksPicture, PictureVerdict, TookPrivateText};
-pub use service::{Service, ServiceInputs, TabOwner};
-pub use settings::{Settings, SettingsDefaults};
+pub use service::{Service, ServiceInputs, TabOwner, TabTask};
+pub use settings::{Settings, SettingsDefaults, TabsScope};
 pub use tab_stamps::TabFence;

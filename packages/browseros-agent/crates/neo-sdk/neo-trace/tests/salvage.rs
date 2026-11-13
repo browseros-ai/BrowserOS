@@ -9,8 +9,8 @@ use browseros_core::TabId;
 use neo_trace::{
     Delivery, Effect, EpochMillis, IdError, Loss, OperationEnded, OperationId, OperationKind,
     OperationStarted, Outcome, Recovery, RedactionLimits, Redactor, RequestId, RunEffects,
-    RunEnded, RunId, RunStarted, RunStatus, Salvage, TaskId, TraceError, TraceSink, TraceStore,
-    WriterConfig,
+    RunEnded, RunId, RunStarted, RunStatus, RunTabsScope, Salvage, TaskId, TraceError, TraceSink,
+    TraceStore, WriterConfig,
 };
 use sea_orm::sqlx;
 use sea_orm::sqlx::sqlite::{SqliteConnectOptions, SqliteConnection};
@@ -84,6 +84,7 @@ fn start(
         request_id: request_id.map(request).transpose()?,
         task_id: task_id.map(task).transpose()?,
         host_data: None,
+        tabs_scope: RunTabsScope::Browser,
         at: at(millis),
     });
     Ok(run)

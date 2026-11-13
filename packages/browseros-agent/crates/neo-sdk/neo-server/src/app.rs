@@ -345,6 +345,7 @@ impl App {
             front,
             Arc::clone(&holds),
             Some(blank_tab),
+            Arc::clone(&tabs),
             shutdown.clone(),
         ));
         tokio::spawn(housekeeping(

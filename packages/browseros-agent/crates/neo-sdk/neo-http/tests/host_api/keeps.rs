@@ -312,6 +312,7 @@ async fn a_new_service_does_not_restore_keeps_onto_the_same_browser() -> TestRes
             cdp_port: 0,
             settings: h.settings.clone(),
             tab_owner: Arc::new(|_| None),
+            tab_task: Arc::new(|_| None),
         },
         Arc::new(ScriptedTransport(Arc::clone(&h.capture))),
     );

@@ -12,7 +12,8 @@ use browseros_core::TabId;
 use neo_http::Settings;
 use neo_playwright::RunState;
 use neo_trace::{
-    EpochMillis, RunEnded, RunId, RunOutputs, RunStarted, TaskId, TraceSink, TraceStore, Values,
+    EpochMillis, RunEnded, RunId, RunOutputs, RunStarted, RunTabsScope, TaskId, TraceSink,
+    TraceStore, Values,
 };
 use tokio::task::JoinSet;
 use tokio::time::{self, Instant};
@@ -21,7 +22,9 @@ use tokio_util::sync::CancellationToken;
 use super::request_ledger::{Admission, LedgerLimits, RunTicket};
 use super::snapshot_tips::SnapshotTips;
 use super::{HostData, RequestLedger, RunHandle, RunMeta, RunReply, RunRequest};
-use crate::browser::{BrowserLink, NeoTab, PageRef, Sight, TabRegistry, TabsScope, TaskPage};
+use crate::browser::{
+    BrowserLink, NeoTab, PageRef, RunScope, Sight, TabRegistry, TabsScope, TaskPage,
+};
 use crate::builtins;
 use crate::config::Defaults;
 #[cfg(feature = "hosted-run")]
@@ -145,21 +148,26 @@ impl RunService {
         };
         let handle = RunHandle::new(RunId::new(), grace);
         let waiter = handle.waiter();
-        match self.ledger.admit(&request.meta, &handle).await {
+        // Read once, here: the same setting decides what this call may repeat and, if it runs,
+        // which tabs it sees. A change answered later applies to the next call, never this one.
+        let setting = self.settings.tabs_scope();
+        let would_be = RunScope::would_be(setting, request.meta.task_id.as_ref());
+        handle.set_tabs_scope(would_be);
+        match self.ledger.admit(&request.meta, &handle, setting).await {
             Admission::Fresh(ticket) => {
                 // No await between the claim and the spawn, so a caller that leaves now still
                 // leaves a run that publishes through its ticket.
-                tokio::spawn(Arc::clone(self).execute(request, handle, ticket));
+                tokio::spawn(Arc::clone(self).execute(request, handle, ticket, setting));
                 waiter.reply().await
             }
             Admission::Join(first) => first.reply().await,
             Admission::Replay(reply) => reply,
             Admission::Duplicate(first) => {
-                let reply = RunReply::duplicate(handle.id(), first);
+                let reply = RunReply::duplicate(handle.id(), first).with_tabs_scope(would_be);
                 self.record_refused(request.code, request.meta, reply)
             }
             Admission::Unavailable(error) => {
-                self.refuse_as(handle.id(), request.code, request.meta, &error)
+                self.refuse_as(handle.id(), request.code, request.meta, &error, would_be)
             }
         }
     }
@@ -171,18 +179,24 @@ impl RunService {
         meta: RunMeta,
         error: &OperationError,
     ) -> Arc<RunReply> {
-        self.refuse_as(RunId::new(), code, meta, error)
+        let would_be = RunScope::would_be(self.settings.tabs_scope(), meta.task_id.as_ref());
+        self.refuse_as(RunId::new(), code, meta, error, would_be)
     }
 
-    /// Refuses a call as run `id`, recorded.
+    /// Refuses a call as run `id`, recorded, saying the tabs it would have seen (`scope`).
     fn refuse_as(
         &self,
         id: RunId,
         code: String,
         meta: RunMeta,
         error: &OperationError,
+        scope: RunTabsScope,
     ) -> Arc<RunReply> {
-        self.record_refused(code, meta, RunReply::refused(id, error))
+        self.record_refused(
+            code,
+            meta,
+            RunReply::refused(id, error).with_tabs_scope(scope),
+        )
     }
 
     /// Records a refused call as a run that ended at once, so the reply's `id` resolves in the
@@ -197,6 +211,7 @@ impl RunService {
             request_id: None,
             task_id: meta.task_id,
             host_data: meta.host_data.map(HostData::into_value),
+            tabs_scope: reply.tabs_scope,
             at: EpochMillis::now(),
         });
         let end = reply.trace_end(None);
@@ -219,6 +234,7 @@ impl RunService {
         request: RunRequest,
         handle: Arc<RunHandle>,
         ticket: RunTicket,
+        setting: TabsScope,
     ) {
         let RunRequest {
             code,
@@ -230,7 +246,8 @@ impl RunService {
                 ErrorCode::BROWSER_UNAVAILABLE,
                 "the browser is not connected yet; retry in a few seconds",
             );
-            ticket.release(self.refuse_as(handle.id(), code, meta, &error));
+            let would_be = RunScope::would_be(setting, meta.task_id.as_ref());
+            ticket.release(self.refuse_as(handle.id(), code, meta, &error, would_be));
             return;
         };
         // The book must hold what it held before a restart of Neo's server before a task's page
@@ -264,7 +281,7 @@ impl RunService {
                 view,
                 deadline: Instant::now() + timeout.get(),
                 default_page: page.clone(),
-                tabs_scope: TabsScope::Browser,
+                tabs_scope: setting,
             },
         );
         #[cfg(test)]

@@ -2,17 +2,16 @@
 //! scans catch values that a read model might hide after they have already reached disk.
 
 use std::error::Error;
-use std::fs;
-use std::io;
 use std::path::PathBuf;
+use std::{fs, io};
 
 use browseros_core::TabId;
 use neo_trace::{
     Delivery, Effect, EpochMillis, ErrorOwner, ErrorRecord, OperationEnded, OperationId,
     OperationKind, OperationRow, OperationSite, OperationStarted, Outcome, PageState, RecordPolicy,
     RedactionLimits, Redactor, RequestId, RunDetail, RunEffects, RunEnded, RunId, RunQuery,
-    RunStarted, RunStatus, TailQuery, TaskId, TraceSink, TraceStore, Values, WriterConfig,
-    spawn_writer,
+    RunStarted, RunStatus, RunTabsScope, TailQuery, TaskId, TraceSink, TraceStore, Values,
+    WriterConfig, spawn_writer,
 };
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -95,6 +94,7 @@ fn start_run(
         request_id: Some(RequestId::parse(request)?),
         task_id: Some(TaskId::parse(TASK)?),
         host_data,
+        tabs_scope: RunTabsScope::Browser,
         at: at(0),
     });
     Ok(id)

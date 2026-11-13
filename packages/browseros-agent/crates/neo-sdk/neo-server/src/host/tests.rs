@@ -11,7 +11,7 @@ use browseros_core::{NativeCapabilities, TabId};
 use neo_http::{ChecksPicture, Settings, SettingsDefaults, TookPrivateText};
 use neo_trace::{
     Effect, EpochMillis, OperationId, RedactionLimits, Redactor, RunEnded, RunId, RunStarted,
-    RunStatus, Screenshots, TraceStore, Values, WriterConfig,
+    RunStatus, RunTabsScope, Screenshots, TraceStore, Values, WriterConfig,
 };
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -198,6 +198,7 @@ impl Host {
             Arc::default(),
             Arc::default(),
             Some(Arc::clone(&blank_tab)),
+            Arc::clone(&tabs),
             shutdown.clone(),
         ));
         Ok(Self {
@@ -475,6 +476,7 @@ async fn saved_recording_settings_reach_the_writer_without_a_usable_token() -> T
             request_id: None,
             task_id: None,
             host_data: None,
+            tabs_scope: RunTabsScope::Browser,
             at: EpochMillis::now(),
         });
         host.sink.run_ended(RunEnded {

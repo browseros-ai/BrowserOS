@@ -6,8 +6,8 @@ use browseros_core::TabId;
 use neo_trace::{
     Delivery, Effect, EpochMillis, ErrorOwner, ErrorRecord, OperationEnded, OperationId,
     OperationKind, OperationStarted, Outcome, PageState, RedactionLimits, Redactor,
-    RetentionPolicy, RunEnded, RunId, RunStarted, RunStatus, Shot, ShotJob, ShotJobs, ShotRead,
-    ShotState, TraceRecordEvent, TraceSink, TraceStore, WriterConfig, screenshot_queue,
+    RetentionPolicy, RunEnded, RunId, RunStarted, RunStatus, RunTabsScope, Shot, ShotJob, ShotJobs,
+    ShotRead, ShotState, TraceRecordEvent, TraceSink, TraceStore, WriterConfig, screenshot_queue,
     spawn_writer,
 };
 use std::path::{Path, PathBuf};
@@ -54,6 +54,7 @@ fn start_run(sink: &TraceSink, millis: i64) -> RunId {
         request_id: None,
         task_id: None,
         host_data: None,
+        tabs_scope: RunTabsScope::Browser,
         at: at(millis),
     });
     run

@@ -2,6 +2,7 @@
 //! falls behind: a run's end is what turns its open operations into a verdict.
 
 use crate::{EpochMillis, ErrorRecord, RequestId, RunId, TaskId};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// How a run ended.
@@ -82,6 +83,37 @@ impl RunEffects {
     }
 }
 
+/// Which tabs a run saw, from the tab scope setting and its task as it started. The default is
+/// `Browser`, what every run saw before Neo kept this, so a reply stored by an older Neo reads so.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RunTabsScope {
+    /// Bound to its task's tabs: the run carried a task under the `task` tab scope.
+    Task,
+    /// Every tab: the run carried no task, or the tab scope was `browser`.
+    #[default]
+    Browser,
+}
+
+impl RunTabsScope {
+    /// The stored and wire name.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Task => "task",
+            Self::Browser => "browser",
+        }
+    }
+
+    /// Reads a stored or wire name.
+    #[must_use]
+    pub fn parse(name: &str) -> Option<Self> {
+        [Self::Task, Self::Browser]
+            .into_iter()
+            .find(|scope| scope.as_str() == name)
+    }
+}
+
 /// A run was admitted.
 #[derive(Clone, Debug)]
 pub struct RunStarted {
@@ -98,6 +130,8 @@ pub struct RunStarted {
     pub task_id: Option<TaskId>,
     /// The host's own data for the run (`_meta["com.browseros.neo/run"].hostData`). Optional.
     pub host_data: Option<Value>,
+    /// Which tabs it saw. A refused run records what it would have seen.
+    pub tabs_scope: RunTabsScope,
     /// When it was admitted.
     pub at: EpochMillis,
 }

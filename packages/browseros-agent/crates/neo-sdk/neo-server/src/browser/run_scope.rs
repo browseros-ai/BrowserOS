@@ -12,25 +12,12 @@
 //!  task     S (family root R)    Family(R)   R's family's tabs       R's family's tasks
 //! ```
 
-use neo_trace::TaskId;
+use neo_trace::{RunTabsScope, TaskId};
 
 use super::{TaskOrigin, TaskRecord};
 
-/// The tab scope setting as a run reads it, once, at its start.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "every run reads `Browser` until the setting reaches runs; tests force `Task`"
-    )
-)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum TabsScope {
-    /// No run is bound, whatever task it carries: every tab, as before task scope.
-    Browser,
-    /// A run that carries a task is bound to its task's family.
-    Task,
-}
+/// The tab scope setting as a run reads it, once, at its start (`Settings::tabs_scope`).
+pub(crate) use neo_http::TabsScope;
 
 /// What a run may reach, fixed at its start ([`RunScope::decide`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -55,6 +42,27 @@ impl RunScope {
             (TabsScope::Browser, _) => Self::Browser,
             (TabsScope::Task, None) => Self::Taskless,
             (TabsScope::Task, Some(root)) => Self::Family(root.clone()),
+        }
+    }
+
+    /// What the run's reply and its trace record say of its tabs: `task` only for a bound run.
+    /// A run with no task under task scope sees every tab, so it says `browser`.
+    #[must_use]
+    pub(crate) fn record(&self) -> RunTabsScope {
+        if self.is_bound() {
+            RunTabsScope::Task
+        } else {
+            RunTabsScope::Browser
+        }
+    }
+
+    /// What a call refused before it became a run would have seen: bound when the setting is
+    /// `task` and the call carries a task.
+    #[must_use]
+    pub(crate) fn would_be(setting: TabsScope, task: Option<&TaskId>) -> RunTabsScope {
+        match (setting, task) {
+            (TabsScope::Task, Some(_)) => RunTabsScope::Task,
+            (TabsScope::Task, None) | (TabsScope::Browser, _) => RunTabsScope::Browser,
         }
     }
 

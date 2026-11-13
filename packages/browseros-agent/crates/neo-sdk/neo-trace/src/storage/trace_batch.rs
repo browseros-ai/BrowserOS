@@ -18,8 +18,8 @@ use crate::run_outputs::RunOutputs;
 use crate::screenshot_files::ShotFiles;
 use crate::{
     Delivery, Effect, EpochMillis, ErrorRecord, OperationId, OperationKind, OperationSite, Outcome,
-    PageState, RequestId, RetentionPolicy, RunEffects, RunId, RunStatus, Shot, ShotState, Swept,
-    TaskId, TraceError, trace_store,
+    PageState, RequestId, RetentionPolicy, RunEffects, RunId, RunStatus, RunTabsScope, Shot,
+    ShotState, Swept, TaskId, TraceError, trace_store,
 };
 
 /// A run's start row, containing only identity and state. Code and host data arrive with the
@@ -29,6 +29,8 @@ pub(crate) struct RunStartRow<'a> {
     pub(crate) task: Option<&'a TaskId>,
     pub(crate) at: EpochMillis,
     pub(crate) request_id: Option<&'a RequestId>,
+    /// `None` for a run whose start the writer never saw.
+    pub(crate) tabs_scope: Option<RunTabsScope>,
 }
 
 /// What a run's end stores of its code.
@@ -154,6 +156,7 @@ impl TraceBatch {
             started_at: Set(run.at.millis()),
             status: Set("running".to_owned()),
             request_id: Set(run.request_id.map(ToString::to_string)),
+            tabs_scope: Set(run.tabs_scope.map(|scope| scope.as_str().to_owned())),
             ..Default::default()
         })
         .on_conflict(OnConflict::column(runs::Column::Id).do_nothing().to_owned())
