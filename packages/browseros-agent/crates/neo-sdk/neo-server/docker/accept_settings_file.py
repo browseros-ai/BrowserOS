@@ -31,7 +31,7 @@ def browser_identity():
     matches = []
     for path in Path('/proc').glob('[0-9]*/cmdline'):
         try:
-            if b'--remote-debugging-port=9110' in path.read_bytes().split(b'\0'):
+            if b'--browseros-cdp-port=9110' in path.read_bytes().split(b'\0'):
                 started = (path.parent / 'stat').read_text().rsplit(')', 1)[1].split()[19]
                 matches.append((int(path.parent.name), started))
         except (OSError, ValueError, IndexError):
