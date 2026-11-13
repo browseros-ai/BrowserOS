@@ -15,12 +15,7 @@
  * `mode: 'full'` differs from Playwright's text in one thing: an iframe's fallback markup does
  * not print, so its frame's content does (snapshot-v1.ts `shownText`).
  */
-import {
-  CHARS_PER_TOKEN,
-  cap,
-  type Printed,
-  partialHead,
-} from './snapshot-cap'
+import { CHARS_PER_TOKEN, cap, type Printed, partialHead } from './snapshot-cap'
 import { KEPT, SECTION, sectionLabel, shownText } from './snapshot-v1'
 import {
   type AriaNodeJSON,
