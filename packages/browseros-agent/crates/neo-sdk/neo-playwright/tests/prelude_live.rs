@@ -2860,9 +2860,10 @@ async fn tests_that_marking_never_removes_a_ref_the_v1_text_prints() -> TestResu
 }
 
 /// `tabindex` wrappers, each in a navigation of its own so its lines read alone (design.md
-/// section 4, "A hidden control does not make a container"). The first four hold a control the
-/// engine does not draw (`display: none`, a drop zone's hidden file input, a zero-size checkbox,
-/// a hidden `nav`), so the wrapper is the only thing to click. The last three hold one it does
+/// section 4, "A hidden control does not make a container"). The first four hold no drawn
+/// control (`display: none`, a drop zone's hidden file input, a zero-size checkbox, a hidden
+/// `nav`), so the wrapper is the only thing to click. Section 16.3 still prints the zero-size
+/// checkbox's state on a bare field line. The last three hold a control the engine does
 /// draw: a button, a 1-pixel screen-reader checkbox, and an `aria-hidden` button, which ai mode
 /// prints with its ref.
 const HIDDEN_CONTROLS_PAGE: &str = r##"<!doctype html><html><head><title>Hidden controls</title></head><body>
@@ -2878,8 +2879,9 @@ const HIDDEN_CONTROLS_PAGE: &str = r##"<!doctype html><html><head><title>Hidden 
 </body></html>"##;
 
 /// Marking's guard counts only what the engine draws: a wrapper whose only control is not drawn
-/// goes from a text line to a marked line, and a wrapper around a drawn control, a 1-pixel
-/// checkbox or a drawn `aria-hidden` button stays exactly as unmarked. No ref is lost either way.
+/// gains a marked line, retaining a zero-size field's bare line (section 16.3). A wrapper around
+/// a drawn control, a 1-pixel checkbox or a drawn `aria-hidden` button stays exactly as unmarked.
+/// No ref is lost either way.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_a_control_the_engine_does_not_draw_does_not_make_a_container() -> TestResult {
@@ -2892,7 +2894,6 @@ async fn tests_that_a_control_the_engine_does_not_draw_does_not_make_a_container
     for (name, text) in [
         ("display none", "Open menu"),
         ("drop zone", "Drop files here"),
-        ("zero size", "Notifications"),
         ("hidden nav", "Hidden section"),
     ] {
         assert_eq!(
@@ -2906,6 +2907,19 @@ async fn tests_that_a_control_the_engine_does_not_draw_does_not_make_a_container
             "{name}, marked: {marked}"
         );
     }
+    assert_eq!(
+        block(&unmarked, "zero size"),
+        ["- checkbox", "- text: Notifications"],
+        "the zero-size field keeps its state without a ref: {unmarked}"
+    );
+    assert_eq!(
+        block(&marked, "zero size"),
+        [
+            "- generic [ref] [cursor=pointer]: Notifications",
+            "- checkbox"
+        ],
+        "the wrapper is clickable while the field still has no ref: {marked}"
+    );
     for name in ["drawn control", "screen reader", "aria hidden"] {
         let lines = block(&marked, name);
         assert!(
