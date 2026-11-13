@@ -249,6 +249,21 @@ def check_reads(socket_path, token_file, case, events):
     require(tail.get("operations"), "off trace tail lost its operations")
     for record in tail["runs"] + tail["operations"]:
         check_stripped(record, "trace tail")
+    audit_query = urllib.parse.urlencode({"taskId": case["task"], "fields": "summary"})
+    audit = api(socket_path, token_file, "/v1/runs?" + audit_query)
+    require({row["id"] for row in audit["items"]} == {case["run"], case["failed_run"]}, "off audit lost or duplicated a run")
+    summaries = [audit]
+    for record in audit["items"]:
+        check_stripped(record, "audit run")
+        for op in record.get("operations", []):
+            check_stripped(op, "audit operation")
+    for path in (f"/v1/runs/{case['run']}?fields=summary", "/v1/trace?" + query + "&fields=summary"):
+        summary = api(socket_path, token_file, path)
+        summaries.append(summary)
+        for record in summary.get("runs", [summary] if "id" in summary else []):
+            check_stripped(record, "summary run")
+        for op in summary["operations"]:
+            check_stripped(op, "summary operation")
     ended_ops = [event["operation"] for event in events if event.get("type") == "operation.ended"]
     require(ended_ops, "off event stream had no operation.ended records")
     for op in ended_ops:
@@ -256,7 +271,7 @@ def check_reads(socket_path, token_file, case, events):
     for event in events:
         if event.get("type") == "run.ended":
             check_stripped(event["run"], "run.ended event")
-    encoded = json.dumps([records, details, listed, tail, events]).encode()
+    encoded = json.dumps([records, details, listed, tail, summaries, events]).encode()
     for kind, canary in case["markers"].items():
         require(canary.encode() not in encoded, f"off HTTP or events exposed the {kind} canary")
 

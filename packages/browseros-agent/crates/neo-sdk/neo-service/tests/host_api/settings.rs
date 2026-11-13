@@ -709,10 +709,21 @@ async fn values_off_reaches_records_and_events_without_payloads() -> TestResult 
     assert_eq!(list.body["items"][0]["values"], "off");
     let tail = h.get("/v1/trace").await?;
     assert_eq!(tail.body["operations"][0]["values"], "off");
+    let audit = h.get("/v1/runs?fields=summary").await?;
+    assert_eq!(audit.body["items"][0]["values"], "off");
+    assert_eq!(audit.body["items"][0]["operations"][0]["values"], "off");
+    let summary = h.get(&format!("/v1/runs/{run}?fields=summary")).await?;
+    assert_eq!(summary.body["values"], "off");
+    assert_eq!(summary.body["operations"][0]["values"], "off");
+    let summary_tail = h.get("/v1/trace?fields=summary").await?;
+    assert_eq!(summary_tail.body["operations"][0]["values"], "off");
     let all = json!([
         record.body,
         list.body,
         tail.body,
+        audit.body,
+        summary.body,
+        summary_tail.body,
         events.iter().map(|event| &event.data).collect::<Vec<_>>()
     ])
     .to_string();
