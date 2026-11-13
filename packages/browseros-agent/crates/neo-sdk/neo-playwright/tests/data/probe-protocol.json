@@ -977,6 +977,12 @@
     },
     {
       "op": "snapshot",
+      "root": "document",
+      "mode": "ai",
+      "sameProcessNeighbour": false
+    },
+    {
+      "op": "snapshot",
       "root": {
         "chunk": {
           "parts": [

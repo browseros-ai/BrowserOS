@@ -58,6 +58,8 @@ pub(crate) mod worker_table;
 
 pub(crate) use event_hub::EventHub;
 pub(crate) use event_op::EventOp;
+#[cfg(test)]
+pub(crate) use frame_lifecycle::FrameLifecycle;
 pub(crate) use navigation_event::NavigationEvent;
 pub(crate) use page_event::PageEvent;
 pub(crate) use run_downloads::RunDownloads;

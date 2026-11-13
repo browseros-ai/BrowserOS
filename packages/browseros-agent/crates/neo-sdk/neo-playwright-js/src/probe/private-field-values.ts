@@ -16,7 +16,21 @@ const PRIVATE_AUTOCOMPLETE = new Set([
 
 type Field = HTMLInputElement | HTMLTextAreaElement
 
+const HTML_NAMESPACE = 'http://www.w3.org/1999/xhtml'
 const FIELD_TAGS: ReadonlySet<string> = new Set(['input', 'textarea'])
+
+/** The resolved walk root and Rust's conservative same-renderer parent/child hint. */
+type FieldDiscovery = {
+  readonly root: Element
+  readonly sameProcessNeighbour: boolean
+}
+
+/** Actual wrapper prototypes for this walk only. A textarea and its Text can come from different realms. */
+type FieldPrototypes = {
+  readonly inputs: Set<object>
+  readonly textareas: Set<object>
+  readonly texts: Set<object>
+}
 
 /** One reversible own-property shadow, including an inherited property's original absence. */
 type PropertyOverride = {
@@ -37,6 +51,91 @@ const PRIVATE_VALUE_ATTRIBUTES = new Set([
  * conformance switch it does not, so declared fields print as upstream prints them.
  */
 let declaredMasked = true
+function isHtmlField(element: Element): element is Field {
+  return (
+    FIELD_TAGS.has(element.localName) && element.namespaceURI === HTML_NAMESPACE
+  )
+}
+
+function isHtmlTextarea(node: Node | null): node is HTMLTextAreaElement {
+  return (
+    node?.nodeType === 1 &&
+    'localName' in node &&
+    node.localName === 'textarea' &&
+    'namespaceURI' in node &&
+    node.namespaceURI === HTML_NAMESPACE
+  )
+}
+
+/** SOP document access also recognizes inherited about:blank origins without comparing URL strings. */
+function hasReadableOpener(document: Document): boolean {
+  try {
+    const view = document.defaultView
+    if (!view) return true
+    const opener: unknown = view.opener
+    if (opener === null || opener === undefined) return false
+    if (typeof opener !== 'object' && typeof opener !== 'function') return true
+    Reflect.get(opener, 'document')
+    return true
+  } catch (error: unknown) {
+    // A denied opener is not a source realm. Other failures cannot establish its absence.
+    return !(
+      typeof error === 'object' &&
+      error !== null &&
+      'name' in error &&
+      error.name === 'SecurityError'
+    )
+  }
+}
+
+/**
+ * Whole-document discovery covers ARIA names and ownership outside a scoped walk root. Query
+ * each exposed shadow root through the same getter the engine uses, without entering frames.
+ * The hint avoids a document scan on ordinary single-frame snapshots. That skip can miss a
+ * retained source prototype after its frame disappears and no neighbour or opener remains.
+ * Local guards and an actual field root always apply.
+ */
+function collectFieldPrototypes({
+  root,
+  sameProcessNeighbour,
+}: FieldDiscovery): FieldPrototypes {
+  const prototypes: FieldPrototypes = {
+    inputs: new Set([HTMLInputElement.prototype]),
+    textareas: new Set([HTMLTextAreaElement.prototype]),
+    texts: new Set([Text.prototype]),
+  }
+  const collect = (element: Element) => {
+    if (!isHtmlField(element)) return
+    const prototype: object | null = Object.getPrototypeOf(element)
+    if (!prototype)
+      throw new TypeError('snapshot field prototype is unavailable')
+    if (element.localName === 'input') {
+      prototypes.inputs.add(prototype)
+      return
+    }
+    prototypes.textareas.add(prototype)
+    for (const child of element.childNodes) {
+      if (child.nodeType !== 3) continue
+      const textPrototype: object | null = Object.getPrototypeOf(child)
+      if (!textPrototype)
+        throw new TypeError('snapshot textarea Text prototype is unavailable')
+      prototypes.texts.add(textPrototype)
+    }
+  }
+  collect(root)
+  if (!sameProcessNeighbour && !hasReadableOpener(root.ownerDocument))
+    return prototypes
+  const roots: (Document | ShadowRoot)[] = [root.ownerDocument]
+  for (const tree of roots) {
+    for (const element of tree.querySelectorAll('input,textarea'))
+      collect(element)
+    for (const host of tree.querySelectorAll('*')) {
+      const shadow = host.shadowRoot
+      if (shadow) roots.push(shadow)
+    }
+  }
+  return prototypes
+}
 
 function isPrivateField(field: Element): boolean {
   return (
@@ -151,9 +250,8 @@ function emptyTextareaText(
 }
 
 function parentTextarea(node: Node): HTMLTextAreaElement | null {
-  return node.parentElement instanceof HTMLTextAreaElement
-    ? node.parentElement
-    : null
+  const parent = node.parentElement
+  return isHtmlTextarea(parent) ? parent : null
 }
 
 /**
@@ -174,9 +272,9 @@ function maskedComputedStyle(
         element,
         pseudo,
       ])
-      // Every element reaches this hot path. Test its tag before reading privacy attributes,
-      // so ordinary elements retain the native object after one set membership check.
-      if (!FIELD_TAGS.has(element.localName)) return style
+      // Every element reaches this hot path. Reject other tags and namespaces before reading
+      // privacy attributes, so ordinary elements retain the native style object.
+      if (!isHtmlField(element)) return style
       if (!isPrivateField(element)) return style
       return new Proxy(style, {
         get(target, key) {
@@ -228,7 +326,11 @@ function restoreOverrides(installed: PropertyOverride[]): void {
  */
 export function withMarkedFieldsMasked<T>(walk: () => T): T {
   return anyPrivatelyTyped()
-    ? withMaskedFieldValues(walk, { declared: false })
+    ? withMaskedFieldValues(
+        { root: document.documentElement, sameProcessNeighbour: true },
+        walk,
+        { declared: false },
+      )
     : walk()
 }
 
@@ -241,39 +343,56 @@ export function withMarkedFieldsMasked<T>(walk: () => T): T {
  * (the spec harness's conformance switch) it masks only the boxes Neo typed into.
  */
 export function withMaskedFieldValues<T>(
+  discovery: FieldDiscovery,
   walk: () => T,
   { declared = true }: { declared?: boolean } = {},
 ): T {
-  const input = HTMLInputElement.prototype
-  const textarea = HTMLTextAreaElement.prototype
+  const prototypes = collectFieldPrototypes(discovery)
+  const inputs = Array.from(prototypes.inputs)
+  const textareas = Array.from(prototypes.textareas)
+  const texts = Array.from(prototypes.texts)
   const valueReads = new Set<Field>()
   const overrides = [
-    propertyOverride(input, 'value', (descriptor) =>
-      maskedValue(descriptor, valueReads),
-    ),
-    propertyOverride(textarea, 'value', (descriptor) =>
-      maskedValue(descriptor, valueReads),
-    ),
-    propertyOverride(input, 'defaultValue', (descriptor) =>
-      maskedValue(descriptor, valueReads),
-    ),
-    // Element.getAttribute is a hot path for every node. Shadow only the two control types.
-    propertyOverride(input, 'getAttribute', maskedAttributes),
-    propertyOverride(textarea, 'getAttribute', maskedAttributes),
-    ...['nodeValue', 'textContent', 'data', 'wholeText'].map((property) =>
-      propertyOverride(Text.prototype, property, (descriptor) =>
-        emptyTextareaText(descriptor, parentTextarea, valueReads),
+    ...inputs.map((input) =>
+      propertyOverride(input, 'value', (descriptor) =>
+        maskedValue(descriptor, valueReads),
       ),
     ),
-    ...['textContent', 'innerText', 'innerHTML', 'defaultValue'].map(
-      (property) =>
-        propertyOverride(textarea, property, (descriptor) =>
-          emptyTextareaText(
-            descriptor,
-            (node) => (node instanceof HTMLTextAreaElement ? node : null),
-            valueReads,
-          ),
+    ...textareas.map((textarea) =>
+      propertyOverride(textarea, 'value', (descriptor) =>
+        maskedValue(descriptor, valueReads),
+      ),
+    ),
+    ...inputs.map((input) =>
+      propertyOverride(input, 'defaultValue', (descriptor) =>
+        maskedValue(descriptor, valueReads),
+      ),
+    ),
+    // Element.getAttribute is a hot path for every node. Shadow only the two control types.
+    ...inputs.map((input) =>
+      propertyOverride(input, 'getAttribute', maskedAttributes),
+    ),
+    ...textareas.map((textarea) =>
+      propertyOverride(textarea, 'getAttribute', maskedAttributes),
+    ),
+    ...texts.flatMap((text) =>
+      ['nodeValue', 'textContent', 'data', 'wholeText'].map((property) =>
+        propertyOverride(text, property, (descriptor) =>
+          emptyTextareaText(descriptor, parentTextarea, valueReads),
         ),
+      ),
+    ),
+    ...textareas.flatMap((textarea) =>
+      ['textContent', 'innerText', 'innerHTML', 'defaultValue'].map(
+        (property) =>
+          propertyOverride(textarea, property, (descriptor) =>
+            emptyTextareaText(
+              descriptor,
+              (node) => (isHtmlTextarea(node) ? node : null),
+              valueReads,
+            ),
+          ),
+      ),
     ),
     propertyOverride(globalThis, 'getComputedStyle', maskedComputedStyle),
   ]

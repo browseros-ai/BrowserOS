@@ -302,6 +302,7 @@ async fn page_snapshot(
         boxes: input.boxes,
         closed_roots: 0,
         conformance: input.conformance,
+        same_process_neighbour: true,
     };
     let backoff = Backoff::outer(scope.timeout());
     for attempt in 0.. {
@@ -374,7 +375,7 @@ async fn locator_snapshot(
         };
         // Marked, the element is pinned first: its frame's targets are read in the world it
         // landed in, then the snapshot is taken there with them. Unmarked, one call does both.
-        let request = |last, _frame_visible| {
+        let request = |last, _frame_visible, world: &IsolatedWorld| {
             let root = ProbeTarget::Chunk(last);
             if marked {
                 ProbeRequest::Resolve {
@@ -383,10 +384,13 @@ async fn locator_snapshot(
                     want: Want::Element,
                 }
             } else {
-                snapshotter.request(root, input.depth)
+                with_frame_context(Cow::Owned(snapshotter.request(root, input.depth)), || {
+                    page.same_process_neighbour(scope, world)
+                })
+                .into_owned()
             }
         };
-        let Ok(attempt) = scope.within(resolver.attempt_at(request)).await else {
+        let Ok(attempt) = scope.within(resolver.attempt_at_world(request)).await else {
             return Err(scope.timed_out(ErrorCode::NoMatch));
         };
         let Some(Landed { reply, world, path }) = attempt? else {
@@ -424,6 +428,31 @@ fn with_closed_roots(request: &ProbeRequest, seeds: usize) -> Cow<'_, ProbeReque
         && let ProbeRequest::Snapshot { closed_roots, .. } = request.to_mut()
     {
         *closed_roots = u32::try_from(seeds).unwrap_or(u32::MAX);
+    }
+    request
+}
+
+/// Bind the hint lazily to the world about to be read, after marking or a resolver retry.
+/// Keeping the read inside this closure makes conformance perform no topology work at all.
+fn with_frame_context<'request>(
+    mut request: Cow<'request, ProbeRequest>,
+    neighbour: impl FnOnce() -> bool,
+) -> Cow<'request, ProbeRequest> {
+    if let ProbeRequest::Snapshot {
+        conformance: false,
+        same_process_neighbour,
+        ..
+    } = request.as_ref()
+    {
+        let neighbour = neighbour();
+        if neighbour != *same_process_neighbour
+            && let ProbeRequest::Snapshot {
+                same_process_neighbour,
+                ..
+            } = request.to_mut()
+        {
+            *same_process_neighbour = neighbour;
+        }
     }
     request
 }
@@ -576,6 +605,7 @@ impl Snapshotter<'_> {
             boxes: self.boxes,
             closed_roots: 0,
             conformance: self.conformance,
+            same_process_neighbour: true,
         }
     }
 
@@ -627,6 +657,9 @@ impl Snapshotter<'_> {
             None => Feed::default(),
         };
         let request = with_closed_roots(request, feed.seeds.len());
+        let request = with_frame_context(request, || {
+            self.page.same_process_neighbour(self.scope, world)
+        });
         let nodes = [feed.seeds, feed.targets].concat();
         let started = Instant::now();
         if main {
@@ -872,13 +905,46 @@ fn child_depth(depth: Option<i64>, iframe_depth: u32) -> Option<i64> {
 
 #[cfg(test)]
 mod tests {
+    use std::borrow::Cow;
+    use std::cell::Cell;
     use std::error::Error;
 
     use serde_json::json;
 
-    use super::{LocatorInput, PageInput, Unread, child_depth};
+    use super::{LocatorInput, PageInput, Unread, child_depth, with_frame_context};
     use crate::ErrorCode;
-    use crate::probe::SnapshotMode;
+    use crate::probe::{ProbeRequest, SnapshotMode};
+
+    #[test]
+    fn conformance_skips_even_the_lazy_frame_metadata_read() -> Result<(), Box<dyn Error>> {
+        let mut request: ProbeRequest = serde_json::from_value(json!({
+            "op": "snapshot", "root": "document", "mode": "ai", "conformance": true,
+        }))?;
+        let read = Cell::new(false);
+        let contextual = with_frame_context(Cow::Borrowed(&request), || {
+            read.set(true);
+            false
+        });
+        assert!(!read.get());
+        assert!(matches!(contextual, Cow::Borrowed(_)));
+        let ProbeRequest::Snapshot { conformance, .. } = &mut request else {
+            return Err("expected snapshot".into());
+        };
+        *conformance = false;
+        let contextual = with_frame_context(Cow::Borrowed(&request), || {
+            read.set(true);
+            false
+        });
+        assert!(read.get());
+        assert!(matches!(
+            contextual.as_ref(),
+            ProbeRequest::Snapshot {
+                same_process_neighbour: false,
+                ..
+            }
+        ));
+        Ok(())
+    }
 
     #[test]
     fn tests_that_a_child_frame_s_depth_follows_upstream_s_arithmetic() {
@@ -944,6 +1010,7 @@ mod tests {
         for bad in [
             json!({ "page": { "$neo": "page", "tab": 1007 }, "mode": "codegen" }),
             json!({ "page": { "$neo": "page", "tab": 1007 }, "mode": "ai", "depth": 1.5 }),
+            json!({ "page": { "$neo": "page", "tab": 1007 }, "mode": "ai", "sameProcessNeighbour": false }),
         ] {
             assert!(
                 serde_json::from_value::<PageInput>(bad.clone()).is_err(),

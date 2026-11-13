@@ -30,7 +30,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 use std::{env, fs, mem};
 
-use browseros_core::TabId;
+use browseros_core::{ProtocolSession, TabId};
 use fixture_server::{FixtureServer, Page};
 use futures_util::future::BoxFuture;
 use js_runner::OpHost;
@@ -1704,6 +1704,566 @@ async fn tests_that_private_field_values_are_masked_in_every_snapshot_format() -
     let upstream: Arc<dyn OpHost> = Arc::new(Upstream(Arc::clone(&run)));
     let unmasked = js_runner::run_script(&upstream, &init, PRIVATE_CONFORMANCE_SCRIPT).await?;
     assert_conformance_private_fields_are_clear(&unmasked)
+}
+
+/// Each page has one same-origin child. Keeping shadow children separate from light-DOM
+/// children makes their zero `window.length` a real discovery case rather than a spare route.
+const ADOPTED_FIELD_CASES: &str = include_str!("data/adopted-private-fields/cases.json");
+
+/// The page retains its source frame and closed-root reference, as an application that moves
+/// controls would. `srcdoc` inherits the parent's origin even though its URL says about:srcdoc.
+/// References live outside the moved controls, so a button-scoped walk must guard the document.
+const ADOPTED_FIELD_PAGE: &str = include_str!("data/adopted-private-fields/page.html");
+
+/// Warm both native worlds before adoption. Otherwise Chromium may first wrap a field in its
+/// destination world and accidentally turn this into an ordinary same-realm masking test.
+/// Explicit reads are kept apart from snapshots because those APIs intentionally return clear values.
+const ADOPTED_FIELD_SNAPSHOT_SCRIPT: &str =
+    include_str!("data/adopted-private-fields/snapshots.js");
+
+/// The next run reads the committed page baseline before changing only a private value's
+/// length. The source child remains connected until both delta rendering and clear reads finish.
+const ADOPTED_FIELD_DELTA_SCRIPT: &str = include_str!("data/adopted-private-fields/delta.js");
+
+fn adopted_field_values(name: &str) -> [String; 4] {
+    [
+        format!("AdoptedPrivate-{name}-password-value🔒"),
+        format!("AdoptedPrivate-{name}-textarea-value🔒"),
+        format!("AdoptedPublic-{name}-input-value"),
+        format!("AdoptedPublic-{name}-textarea-value"),
+    ]
+}
+
+fn assert_adopted_canaries_absent(snapshot: &Value) -> TestResult {
+    let encoded = serde_json::to_string(snapshot)?;
+    assert!(
+        !encoded.contains("AdoptedPrivate-"),
+        "snapshot exposes an adopted secret: {encoded}"
+    );
+    Ok(())
+}
+
+/// Mixed owner content stays in JSON children. Find the owner by its own static text and
+/// the control it owns, so another button or an unrelated visible field cannot satisfy it.
+fn adopted_owner_node<'tree>(tree: &'tree Value, label: &str, field: &str) -> Option<&'tree Value> {
+    match tree {
+        Value::Array(nodes) => nodes
+            .iter()
+            .find_map(|node| adopted_owner_node(node, label, field)),
+        Value::Object(node) => {
+            let own_label = node.get("name").and_then(Value::as_str) == Some(label)
+                || node.get("text").and_then(Value::as_str) == Some(label)
+                || node
+                    .get("children")
+                    .and_then(Value::as_array)
+                    .is_some_and(|children| {
+                        children.iter().any(|child| {
+                            child.as_str() == Some(label)
+                                || (child.get("role").and_then(Value::as_str) == Some("text")
+                                    && child.get("text").and_then(Value::as_str) == Some(label))
+                        })
+                    });
+            if node.get("role").and_then(Value::as_str) == Some("button")
+                && own_label
+                && private_field_node(tree, field).is_some()
+            {
+                Some(tree)
+            } else {
+                node.values()
+                    .find_map(|value| adopted_owner_node(value, label, field))
+            }
+        }
+        _ => None,
+    }
+}
+
+/// External labels read masked values. Ownership instead keeps the owner's static content
+/// and the moved field's bare native line. Public twins preserve values in labels and keep
+/// the public textarea's default content when its own adopted line is walked.
+fn assert_adopted_snapshot(snapshot: &Value, name: &str, scope: &str) -> TestResult {
+    assert_adopted_canaries_absent(snapshot)?;
+    let values = adopted_field_values(name);
+    let password = "•".repeat(values[0].encode_utf16().count());
+    let textarea = "•".repeat(values[1].encode_utf16().count());
+    for (group, prefix, value) in [
+        ("passwordLabel", "Password label", password.as_str()),
+        ("textareaLabel", "Textarea label", textarea.as_str()),
+        ("public", "Public input label", values[2].as_str()),
+        ("public", "Public textarea label", values[3].as_str()),
+    ] {
+        if scope != "page" && scope != "destination" && scope != group {
+            continue;
+        }
+        let label = format!("{prefix} {value}");
+        if let Some(text) = snapshot.as_str() {
+            assert!(text.contains(&format!("button \"{label}\"")), "{text}");
+        } else {
+            let node = private_field_node(snapshot, &label)
+                .ok_or_else(|| format!("missing button {label} in {snapshot}"))?;
+            assert_eq!(node["role"], "button", "{node}");
+        }
+    }
+    for (group, owner, field) in [
+        ("passwordOwner", "Owned password", "Moved password"),
+        ("textareaOwner", "Owned textarea", "Moved textarea"),
+        ("public", "Owned public input", "Public moved input"),
+        ("public", "Owned public textarea", "Public moved textarea"),
+    ] {
+        if scope != "page" && scope != "destination" && scope != group {
+            continue;
+        }
+        let public_content = (field == "Public moved textarea")
+            .then(|| format!("AdoptedPublic-{name}-textarea-content"));
+        if let Some(text) = snapshot.as_str() {
+            assert!(
+                text.contains(owner),
+                "missing owner content {owner} in {text}"
+            );
+            let text = without_refs(text).replace(" [ref]", "");
+            let line = text
+                .lines()
+                .find(|line| line.contains(&format!("\"{field}\"")))
+                .ok_or_else(|| format!("missing owned field {field} in {text}"))?;
+            if let Some(content) = public_content {
+                assert!(
+                    line.ends_with(&format!(": {content}"))
+                        || line.ends_with(&format!(": \"{content}\"")),
+                    "{line}"
+                );
+            } else {
+                assert!(
+                    line.ends_with(&format!("\"{field}\"")),
+                    "moved field is bare: {line}"
+                );
+            }
+        } else {
+            let owner_node = adopted_owner_node(snapshot, owner, field)
+                .ok_or_else(|| format!("missing owner {owner} with field {field} in {snapshot}"))?;
+            let node =
+                private_field_node(owner_node, field).ok_or("the owner includes its field")?;
+            assert_eq!(
+                node["role"],
+                if field.ends_with("textarea") {
+                    "searchbox"
+                } else {
+                    "textbox"
+                }
+            );
+            if let Some(content) = public_content {
+                assert_eq!(node["text"], content, "{node}");
+            } else {
+                assert!(node.get("text").is_none(), "moved field is bare: {node}");
+            }
+        }
+    }
+    Ok(())
+}
+
+fn assert_adopted_reads(reads: &Value, name: &str, grown: bool) -> TestResult {
+    let mut values = adopted_field_values(name);
+    if grown {
+        values[0].push('!');
+    }
+    for read in reads.as_array().ok_or("the reads after the walks")? {
+        assert_eq!(read["direct"], json!(&values[..2]));
+        assert_eq!(read["main"]["values"], json!(values));
+        assert_eq!(
+            read["main"]["defaults"],
+            json!([
+                format!("AdoptedPrivate-{name}-password-attribute"),
+                format!("AdoptedPrivate-{name}-textarea-content"),
+            ])
+        );
+        assert_eq!(
+            read["main"]["attributes"],
+            json!([
+                format!("AdoptedPrivate-{name}-password-attribute"),
+                format!("AdoptedPrivate-{name}-textarea-attribute"),
+            ])
+        );
+        assert_eq!(
+            read["main"]["content"],
+            format!("AdoptedPrivate-{name}-textarea-content")
+        );
+        assert_eq!(read["main"]["childPresent"], true);
+        if name.starts_with("closed-") {
+            assert_eq!(read["main"]["closedOpaque"], true);
+        }
+    }
+    Ok(())
+}
+
+fn assert_adopted_delta(changed: &Value, name: &str) -> TestResult {
+    assert_adopted_canaries_absent(&changed["delta"])?;
+    let delta = changed["delta"]
+        .as_str()
+        .ok_or("the changed value's delta")?;
+    assert!(delta.starts_with("# changes since"), "{name}: {delta}");
+    let old = "•".repeat(adopted_field_values(name)[0].encode_utf16().count());
+    for mask in [&old, &format!("{old}•")] {
+        assert!(
+            delta.contains(&format!("Password label {mask}\"")),
+            "{name}: {delta}"
+        );
+    }
+    assert_eq!(changed["reads"].as_array().map(Vec::len), Some(1));
+    assert_adopted_reads(&changed["reads"], name, true)
+}
+
+/// Returned formats prove the document guard reaches external references, while the raw
+/// instance facts keep this a moved-wrapper case and preserve closed-root page semantics.
+fn assert_adopted_returned_snapshots(
+    opened: &Value,
+    root: &str,
+    destination: &str,
+    name: &str,
+) -> TestResult {
+    assert_eq!(opened["initial"].as_array().map(Vec::len), Some(2));
+    assert_adopted_canaries_absent(&opened["initial"])?;
+    assert_adopted_snapshot(&opened["baseline"], name, "page")?;
+    assert_eq!(
+        opened["snapshots"].as_object().map(serde_json::Map::len),
+        Some(6)
+    );
+    assert_eq!(opened["reads"].as_array().map(Vec::len), Some(6));
+    assert_eq!(opened["facts"]["childPresent"], true, "{name}");
+    assert_eq!(opened["facts"]["childURL"], "about:srcdoc", "{name}");
+    assert_eq!(
+        opened["facts"]["frameCount"],
+        if root == "document" { 1 } else { 0 },
+        "{name}"
+    );
+    assert_eq!(
+        opened["facts"]["sourcePrototypes"],
+        json!([true, true]),
+        "{name}"
+    );
+    assert_eq!(
+        opened["facts"]["destinationInstances"],
+        json!([false, false]),
+        "{name}"
+    );
+    for (scope, group) in opened["snapshots"]
+        .as_object()
+        .ok_or("the snapshot scopes")?
+    {
+        for format in ["texts", "trees"] {
+            assert_eq!(
+                group[format].as_object().map(serde_json::Map::len),
+                Some(if format == "texts" { 6 } else { 2 })
+            );
+            for (mode, snapshot) in group[format].as_object().ok_or("the snapshot formats")? {
+                assert_adopted_canaries_absent(snapshot)?;
+                if scope == "page" && destination == "child" && mode == "default" {
+                    continue;
+                }
+                assert_adopted_snapshot(snapshot, name, scope)?;
+            }
+        }
+    }
+    assert_adopted_reads(&opened["reads"], name, false)?;
+    Ok(())
+}
+
+/// Test-only access to the already-installed native world. The public snapshot still drives
+/// the walk; CDP only installs an independent observer and reads its evidence afterward.
+async fn snapshot_world_eval(
+    session: &ProtocolSession,
+    context: i64,
+    expression: &str,
+) -> TestResult<Value> {
+    let reply: Value = session
+        .send(
+            "Runtime.evaluate",
+            json!({
+                "contextId": context, "expression": expression, "returnByValue": true,
+            }),
+        )
+        .await?;
+    if reply.get("exceptionDetails").is_some() {
+        return Err(format!("snapshot witness threw: {reply}").into());
+    }
+    Ok(reply
+        .pointer("/result/value")
+        .cloned()
+        .unwrap_or(Value::Null))
+}
+
+async fn snapshot_native_world(session: &ProtocolSession, frame: &Value) -> TestResult<i64> {
+    let reply: Value = session
+        .send(
+            "Page.createIsolatedWorld",
+            json!({
+                "frameId": frame, "worldName": "browseros-engine",
+            }),
+        )
+        .await?;
+    reply["executionContextId"]
+        .as_i64()
+        .ok_or_else(|| "the native snapshot world exists".into())
+}
+
+/// Pin the source Text wrapper before the move, too. A value-only warmup would leave its
+/// first child free to acquire a destination-local wrapper and miss foreign Text prototypes.
+const ADOPTED_SOURCE_WITNESS: &str = r"(() => {
+  const input = document.getElementById('private-password');
+  const textarea = document.getElementById('private-textarea');
+  globalThis.__adoptedSourceWitness = [input, textarea, textarea.firstChild];
+  return true;
+})()";
+
+/// This sits underneath the production CSS wrapper. Its first style read during the real
+/// walk observes native getters while the privacy guard is installed, without a debug hook.
+const ADOPTED_STYLE_WITNESS: &str = r"(() => {
+  const state = { original: globalThis.getComputedStyle, during: null };
+  globalThis.__adoptedStyleWitness = state;
+  globalThis.getComputedStyle = function(...args) {
+    const input = document.getElementById('private-password');
+    const textarea = document.getElementById('private-textarea');
+    if (!state.during && input && textarea) {
+      const text = textarea.firstChild;
+      state.during = {
+        values: [input.value, textarea.value],
+        text: [text.nodeValue, text.textContent, text.data, text.wholeText],
+        textarea: [textarea.textContent, textarea.innerText, textarea.innerHTML, textarea.defaultValue],
+        publicValues: ['public-input', 'public-textarea'].map(id => document.getElementById(id).value),
+      };
+    }
+    return Reflect.apply(state.original, this, args);
+  };
+  return true;
+})()";
+
+const ADOPTED_STYLE_WITNESS_RESULT: &str = r"(() => {
+  const state = globalThis.__adoptedStyleWitness;
+  globalThis.getComputedStyle = state.original;
+  delete globalThis.__adoptedStyleWitness;
+  return state.during;
+})()";
+
+const ADOPTED_SOURCE_WITNESS_RESULT: &str = r"(() => {
+  const [input, textarea, text] = globalThis.__adoptedSourceWitness;
+  delete globalThis.__adoptedSourceWitness;
+  return { values: [input.value, textarea.value], text: [text.nodeValue, text.textContent, text.data, text.wholeText] };
+})()";
+
+fn assert_adopted_native_witness(during: &Value, after: &Value, name: &str) -> TestResult {
+    let values = adopted_field_values(name);
+    assert_adopted_canaries_absent(during)?;
+    assert_eq!(
+        during["values"],
+        json!([
+            "•".repeat(values[0].encode_utf16().count()),
+            "•".repeat(values[1].encode_utf16().count()),
+        ]),
+        "the getters are masked inside the native walk: {during}"
+    );
+    assert_eq!(during["text"], json!(["", "", "", ""]));
+    assert_eq!(during["textarea"], json!(["", "", "", ""]));
+    assert_eq!(during["publicValues"], json!(&values[2..]));
+    assert_eq!(after["values"], json!(&values[..2]));
+    assert_eq!(
+        after["text"],
+        json!(vec![format!("AdoptedPrivate-{name}-textarea-content"); 4])
+    );
+    Ok(())
+}
+
+/// Native wrappers survive a document move in both directions. The output checks do not
+/// substitute a prototype or relax `instanceof`, and persistence is exercised by a later run.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_adopted_private_fields_are_masked_in_every_snapshot_format() -> TestResult {
+    let _alone = ALONE.acquire().await?;
+    let server = FixtureServer::start(HashMap::from([(
+        "/adopted.html".to_owned(),
+        Page::html(ADOPTED_FIELD_PAGE),
+    )]))
+    .await?;
+    let run = Arc::new(LiveRun::connect().await?);
+    let host: Arc<dyn OpHost> = Arc::clone(&run) as Arc<dyn OpHost>;
+    for (root, destination) in serde_json::from_str::<Vec<(&str, &str)>>(ADOPTED_FIELD_CASES)? {
+        let name = format!("{root}-{destination}");
+        let url = server.url(
+            "127.0.0.1",
+            &format!("/adopted.html?root={root}&destination={destination}"),
+        );
+        let script = format!("const p = page;\n{ADOPTED_FIELD_SNAPSHOT_SCRIPT}")
+            .replace("__FIXTURE_URL__", &json!(url).to_string())
+            .replace("__DESTINATION__", &json!(destination).to_string())
+            .replace("__CASE_NAME__", &json!(name).to_string());
+        let (prepare, collect) = script
+            .split_once("const facts = await p.evaluate(() => window.adoption.adopt());")
+            .ok_or("the fixture has an adoption boundary")?;
+        let prepared = js_runner::run_script(
+            &host,
+            &json!({ "page": null }),
+            &format!("{prepare}\nreturn {{ page: p, initial }};"),
+        )
+        .await?;
+        let page = live_run::test_page(&prepared["page"])?;
+        let session = run
+            .browser()
+            .pages
+            .get_session(run.core_page(&page).await?)
+            .await?
+            .session;
+        let tree: Value = session.send("Page.getFrameTree", json!({})).await?;
+        assert_eq!(
+            tree.pointer("/frameTree/childFrames")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(1)
+        );
+        let main = snapshot_native_world(&session, &tree["frameTree"]["frame"]["id"]).await?;
+        let child = snapshot_native_world(
+            &session,
+            &tree["frameTree"]["childFrames"][0]["frame"]["id"],
+        )
+        .await?;
+        let (source_world, destination_world) = if destination == "child" {
+            (main, child)
+        } else {
+            (child, main)
+        };
+        snapshot_world_eval(&session, source_world, ADOPTED_SOURCE_WITNESS).await?;
+        snapshot_world_eval(&session, destination_world, ADOPTED_STYLE_WITNESS).await?;
+        let init = json!({ "page": prepared["page"] });
+        let collected = js_runner::run_script(&host, &init, &format!(
+            "const p = page; const initial = {initial};\n\
+             const child = p.locator('#frame-host').locator('#adoption-child').contentFrame().locator('body');\n\
+             const facts = await p.evaluate(() => window.adoption.adopt());\n{collect}",
+            initial = prepared["initial"],
+        )).await;
+        // Remove the test observer even when the public snapshot fails, then surface its
+        // error. Production's own restoration is checked through the retained source wrapper.
+        let during =
+            snapshot_world_eval(&session, destination_world, ADOPTED_STYLE_WITNESS_RESULT).await;
+        let after =
+            snapshot_world_eval(&session, source_world, ADOPTED_SOURCE_WITNESS_RESULT).await;
+        let opened = collected?;
+        assert_adopted_native_witness(&during?, &after?, &name)?;
+        run.end_run(Some(&opened));
+        assert_adopted_returned_snapshots(&opened, root, destination, &name)?;
+        let init = json!({ "page": opened["page"] });
+        let changed = js_runner::run_script(
+            &host,
+            &init,
+            &ADOPTED_FIELD_DELTA_SCRIPT.replace("__DESTINATION__", &json!(destination).to_string()),
+        )
+        .await?;
+        assert_adopted_delta(&changed, &name)?;
+        run.end_run(Some(&changed));
+    }
+    Ok(())
+}
+
+/// Count the native document-wide field query, independently of its implementation's hint.
+/// Large single-frame pages and pages with only a cross-site child must keep scoped reads
+/// free of that search. Ordinary public controls prove the snapshots still read the page.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_pages_without_a_same_process_neighbour_skip_the_adopted_field_search()
+-> TestResult {
+    let _alone = ALONE.acquire().await?;
+    let fields = "<main><button id='snapshot-target'>Public scope</button><input aria-label='Public value' value='Readable public value'></main>";
+    let large = format!(
+        "<!doctype html><html><body>{fields}{}</body></html>",
+        "<div></div>".repeat(100_000)
+    );
+    let cross = large.replace(
+        "</body>",
+        r#"<iframe id="cross"></iframe><script>
+      document.getElementById('cross').src = `http://localhost:${location.port}/query-child.html`;
+      </script></body>"#,
+    );
+    let server = FixtureServer::start(HashMap::from([
+        ("/query-single.html".to_owned(), Page::html(&large)),
+        ("/query-cross.html".to_owned(), Page::html(&cross)),
+        (
+            "/query-child.html".to_owned(),
+            Page::html("<p id='ready'>Cross child ready</p>"),
+        ),
+    ]))
+    .await?;
+    let run = Arc::new(LiveRun::connect().await?);
+    let host: Arc<dyn OpHost> = Arc::clone(&run) as Arc<dyn OpHost>;
+    for (path, wait) in [
+        ("/query-single.html", ""),
+        (
+            "/query-cross.html",
+            "await page.locator('#cross').contentFrame().locator('#ready').waitFor();",
+        ),
+    ] {
+        let prepared = js_runner::run_script(
+            &host,
+            &json!({ "page": null }),
+            &format!(
+                "await page.goto({url}); {wait}\nawait page.ariaSnapshot(); return {{ page }};",
+                url = json!(server.url("127.0.0.1", path)),
+            ),
+        )
+        .await?;
+        let page = live_run::test_page(&prepared["page"])?;
+        let session = run
+            .browser()
+            .pages
+            .get_session(run.core_page(&page).await?)
+            .await?
+            .session;
+        let tree: Value = session.send("Page.getFrameTree", json!({})).await?;
+        let world = snapshot_native_world(&session, &tree["frameTree"]["frame"]["id"]).await?;
+        snapshot_world_eval(
+            &session,
+            world,
+            r"(() => {
+          const state = { original: document.querySelectorAll, queries: [] };
+          globalThis.__adoptedQueryWitness = state;
+          document.querySelectorAll = function(selector) {
+            if (String(selector).replace(/\s/g, '').toLowerCase() === 'input,textarea')
+              state.queries.push(selector);
+            return Reflect.apply(state.original, this, [selector]);
+          };
+          return true;
+        })()",
+        )
+        .await?;
+        let init = json!({ "page": prepared["page"] });
+        let snapshots = js_runner::run_script(&host, &init,
+            "return { whole: await page.ariaSnapshot(), scoped: await page.locator('#snapshot-target').ariaSnapshot() };").await;
+        let queries = snapshot_world_eval(
+            &session,
+            world,
+            r"(() => {
+          const state = globalThis.__adoptedQueryWitness;
+          document.querySelectorAll = state.original;
+          delete globalThis.__adoptedQueryWitness;
+          return state.queries;
+        })()",
+        )
+        .await;
+        js_runner::run_script(&host, &init, "await page.close();").await?;
+        let snapshots = snapshots?;
+        assert!(
+            snapshots["whole"]
+                .as_str()
+                .is_some_and(|text| text.contains("Readable public value")),
+            "{path}: {snapshots}"
+        );
+        assert!(
+            snapshots["scoped"]
+                .as_str()
+                .is_some_and(|text| text.contains("Public scope")),
+            "{path}: {snapshots}"
+        );
+        assert_eq!(
+            queries?,
+            json!([]),
+            "{path}: neither snapshot may search the whole document for moved fields"
+        );
+        run.end_run(None);
+    }
+    Ok(())
 }
 
 /// The live browser as the spec harness hosts it: the same ops, with the conformance switch set

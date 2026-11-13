@@ -147,6 +147,12 @@ impl Playwright {
         self.progress.applied_through() >= fence.0
     }
 
+    /// Read-only topology checks must also reject a stopped watcher; its completed waiters
+    /// otherwise look like current observation. This never synchronizes or enables domains.
+    pub(crate) fn events_live_through(&self, fence: EventFence) -> bool {
+        self.progress.live_through(fence.0)
+    }
+
     /// A handle on the event watcher for what outlives an op (`events::log_lease`).
     pub(crate) fn watcher(&self) -> WatcherHandle {
         self.watcher.handle()

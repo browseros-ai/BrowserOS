@@ -190,6 +190,11 @@ pub(crate) enum ProbeRequest {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         #[ts(optional, as = "Option<bool>")]
         conformance: bool,
+        /// A trusted cached parent or child shares this frame's renderer endpoint, or Rust
+        /// cannot prove otherwise. Only explicit false permits skipping the adopted-field scan.
+        #[serde(default = "default_true", skip_serializing_if = "is_true")]
+        #[ts(optional, as = "Option<bool>")]
+        same_process_neighbour: bool,
     },
     /// One poll of one retrying matcher; Rust's loop owns the timing, `.not` and the failure.
     Expect {
@@ -567,6 +572,19 @@ fn is_zero(count: &u32) -> bool {
     *count == 0
 }
 
+fn default_true() -> bool {
+    true
+}
+
+/// Omission is conservative; false must remain explicit on the wire.
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde's skip_serializing_if passes the field by reference"
+)]
+fn is_true(value: &bool) -> bool {
+    *value
+}
+
 #[cfg(test)]
 mod tests {
     use std::error::Error;
@@ -576,6 +594,38 @@ mod tests {
     use super::{Edit, FillValue, ParsedSelector, ProbeRequest, SelectOption};
 
     const PROTOCOL: &str = include_str!("../../tests/data/probe-protocol.json");
+
+    #[test]
+    fn snapshot_neighbour_defaults_true_and_false_stays_explicit() -> Result<(), Box<dyn Error>> {
+        let omitted = json!({"op": "snapshot", "root": "document", "mode": "ai"});
+        let mut request: ProbeRequest = serde_json::from_value(omitted.clone())?;
+        assert!(matches!(
+            &request,
+            ProbeRequest::Snapshot {
+                same_process_neighbour: true,
+                ..
+            }
+        ));
+        assert_eq!(serde_json::to_value(&request)?, omitted);
+        let ProbeRequest::Snapshot {
+            same_process_neighbour,
+            ..
+        } = &mut request
+        else {
+            return Err("expected snapshot".into());
+        };
+        *same_process_neighbour = false;
+        let written = serde_json::to_value(&request)?;
+        assert_eq!(written["sameProcessNeighbour"], false);
+        assert!(matches!(
+            serde_json::from_value::<ProbeRequest>(written)?,
+            ProbeRequest::Snapshot {
+                same_process_neighbour: false,
+                ..
+            }
+        ));
+        Ok(())
+    }
 
     /// An option names any of its attributes, all of which must match (SO-008), and one the
     /// probe does not know is refused.

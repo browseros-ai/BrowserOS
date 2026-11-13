@@ -215,6 +215,14 @@ impl FrameWorlds {
         self
     }
 
+    /// A negative topology hint needs uninterrupted lifecycle history, not an inventory of
+    /// installed worlds. No binding is also unknown; reading this never consumes the seq log.
+    pub(crate) fn lifecycle_has_gaps(&self) -> bool {
+        self.attach_log
+            .as_ref()
+            .is_none_or(|binding| binding.log.has_gaps())
+    }
+
     /// The world of `endpoint`'s frame, installing it on first use: the engine and boot
     /// (`IsolatedWorld::install`). A child's parent link is
     /// recorded on every call, so a later ref jump into the frame finds its parents.
@@ -532,6 +540,22 @@ mod tests {
     use crate::world::{FrameAttachLog, FrameEvent, FrameSeq, Installed, IsolatedWorld};
 
     type TestResult = Result<(), Box<dyn Error>>;
+
+    #[test]
+    fn topology_negatives_require_an_attach_log_that_has_never_lost_broadcast_events() {
+        assert!(FrameWorlds::new(FrameSeq(0)).lifecycle_has_gaps());
+        let log = Arc::new(FrameAttachLog::default());
+        let tab = TargetId("tab".to_owned());
+        let worlds = FrameWorlds::new(FrameSeq(0)).with_attach_log(Arc::clone(&log), tab.clone());
+        assert!(!worlds.lifecycle_has_gaps());
+        log.lost_events();
+        assert!(worlds.lifecycle_has_gaps());
+        log.take(&tab);
+        assert!(
+            worlds.lifecycle_has_gaps(),
+            "consuming the seq log cannot erase a gap"
+        );
+    }
 
     fn session(id: &str) -> ProtocolSession {
         ProtocolSession::for_session(

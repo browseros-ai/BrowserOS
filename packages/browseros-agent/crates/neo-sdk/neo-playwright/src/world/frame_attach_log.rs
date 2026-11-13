@@ -12,10 +12,12 @@
 //!  FrameWorlds::world, before it picks a seq ── take(tab) ───┘  replayed in order
 //! ```
 //!
-//! The log only orders seqs; it is never needed for one. A frame whose attach the watcher did
-//! not see (a tab opened before it started, a nested frame in a session without the Page domain,
+//! The per-tab queues only order seqs; they are never needed to assign one. A frame whose
+//! attach the watcher did not see (a tab opened before it started, a nested frame without Page,
 //! an install that ran ahead of the watcher) takes the next seq when its world installs, as it
 //! would without the log.
+//! The lifetime gap counter also prevents snapshot topology from proving absence after lost
+//! observations; it does not create or retain a second frame inventory.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -87,6 +89,12 @@ impl FrameAttachLog {
     /// The watcher lost events: any tab may have committed documents nobody logged.
     pub(crate) fn lost_events(&self) {
         self.gaps.fetch_add(1, Ordering::AcqRel);
+    }
+
+    /// Whether any broadcast history was lost. Unlike a tab's consumed queue, this fact lasts
+    /// for the instance's lifetime, so a read-only cache cannot mistake missing events for calm.
+    pub(crate) fn has_gaps(&self) -> bool {
+        self.gaps.load(Ordering::Acquire) != 0
     }
 
     /// Drops `tab`'s queue: the tab closed.
