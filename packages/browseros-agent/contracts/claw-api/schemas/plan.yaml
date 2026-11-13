@@ -314,21 +314,26 @@ PlanSavings:
   required: [totals, tasks, latest]
   description: >-
     What ultrafast has done on this computer, from the task history: every
-    task with an ultrafast run (a skill that ran without the agent, or a pursue
-    that read the page).
+    task where ultrafast did work (a skill that ran without the agent, or a
+    pursue that finished or handed back).
   properties:
     totals:
       allOf:
         - $ref: ./sessions.yaml#/SessionUltrafastRun
-      description: Time, pages read and tokens saved, summed across those tasks.
+      description: >-
+        Time, pages read and tokens saved, summed across those tasks. Time
+        includes every pursue; pages and tokens count only where neo counted
+        them, so pursue runs from before that add time alone.
     tasks:
       type: integer
       format: int64
       minimum: 0
-      description: How many tasks had an ultrafast run.
+      description: How many tasks ultrafast did work in.
     latest:
       type: array
       maxItems: 3
-      description: The newest of those tasks, newest first.
+      description: >-
+        The newest of those tasks, newest first, each with what neo measured
+        (`ultrafast`) and what it did with pursue (`pursue`) where recorded.
       items:
         $ref: ./sessions.yaml#/SessionSummary

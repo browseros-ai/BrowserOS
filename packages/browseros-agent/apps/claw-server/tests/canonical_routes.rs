@@ -2596,3 +2596,240 @@ async fn plan_routes_answer_in_the_contract_without_a_billing_gateway() -> anyho
     assert_eq!(error.code, "forbidden");
     Ok(())
 }
+
+fn neo_step(session_id: &str, created_at: i64, args: Value) -> RecordToolDispatchInput {
+    in_session(
+        session_id,
+        RecordToolDispatchInput {
+            args_json: bounded_args_json(&args),
+            ..ultrafast_dispatch(
+                "act",
+                created_at,
+                200,
+                &json!({ "kind": "x" }),
+                DispatchId::new(),
+                None,
+                10,
+            )
+        },
+    )
+}
+
+#[tokio::test]
+async fn sessions_say_what_neo_did_with_pursue_even_before_pages_were_counted() -> anyhow::Result<()>
+{
+    let app = test_app().await?;
+    let handed_back = json!({ "outcome": "handed_back" });
+    let finished = json!({ "outcome": "completed" });
+    for row in [
+        in_session(
+            "flights",
+            ultrafast_dispatch(
+                "pursue",
+                1_000,
+                5_662,
+                &handed_back,
+                DispatchId::new(),
+                None,
+                273,
+            ),
+        ),
+        neo_step(
+            "flights",
+            2_000,
+            json!({ "kind": "focus", "page": 9, "ref": "e12" }),
+        ),
+        neo_step(
+            "flights",
+            2_200,
+            json!({ "kind": "click", "page": 9, "ref": "e12" }),
+        ),
+        neo_step(
+            "flights",
+            2_600,
+            json!({ "kind": "click", "page": 9, "ref": "e81" }),
+        ),
+        neo_step(
+            "flights",
+            4_000,
+            json!({ "kind": "fill", "page": 9, "ref": "e17", "value": "Singapore" }),
+        ),
+        neo_step(
+            "flights",
+            9_000,
+            json!({ "kind": "click", "page": 9, "ref": "e40" }),
+        ),
+        in_session(
+            "colgate",
+            ultrafast_dispatch(
+                "pursue",
+                20_000,
+                7_317,
+                &finished,
+                DispatchId::new(),
+                None,
+                82,
+            ),
+        ),
+        neo_step(
+            "colgate",
+            21_000,
+            json!({ "kind": "fill", "page": 3, "ref": "e57", "value": "colgate toothpaste" }),
+        ),
+        neo_step(
+            "colgate",
+            22_000,
+            json!({ "kind": "press", "page": 3, "ref": "e57", "key": "Enter" }),
+        ),
+    ] {
+        app.state.audit_log.record_tool_dispatch(row).await?;
+    }
+    seed_dispatch(&app, "ordinary-session").await?;
+
+    let flights = json!({
+        "outcome": "handed_back",
+        "durationMs": 5_662,
+        "steps": [
+            { "action": "click" },
+            { "action": "click" },
+            { "action": "type", "text": "Singapore" },
+        ],
+    });
+    let colgate = json!({
+        "outcome": "completed",
+        "durationMs": 7_317,
+        "steps": [
+            { "action": "type", "text": "colgate toothpaste" },
+            { "action": "press", "text": "Enter" },
+        ],
+    });
+    let detail = get_json(&app, "/api/v1/sessions/flights").await?;
+    assert_eq!(detail["session"]["pursue"], flights);
+    assert!(detail["session"].get("ultrafast").is_none());
+    let list = get_json(&app, "/api/v1/sessions").await?;
+    let items = list["items"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("items missing"))?;
+    let pursue_of = |session: &str| {
+        items
+            .iter()
+            .find(|item| item["sessionId"] == session)
+            .and_then(|item| item.get("pursue").cloned())
+    };
+    assert_eq!(pursue_of("flights"), Some(flights));
+    assert_eq!(pursue_of("colgate"), Some(colgate));
+    assert_eq!(pursue_of("ordinary-session"), None);
+    Ok(())
+}
+
+#[tokio::test]
+async fn savings_count_every_pursue_run_and_add_pages_only_where_neo_counted_them()
+-> anyhow::Result<()> {
+    let app = test_app().await?;
+    let done = json!({ "status": "done", "output": {}, "steps": 3, "durationMs": 15_000 });
+    let script = DispatchId::new();
+    let counted = json!({ "outcome": "completed", "pagesRead": 4, "pageTokens": 10_000 });
+    let before_counts = json!({ "outcome": "handed_back" });
+    for row in [
+        ultrafast_dispatch(
+            "run_skill",
+            1_000,
+            15_354,
+            &done,
+            DispatchId::new(),
+            None,
+            1_701,
+        ),
+        ultrafast_dispatch(
+            "run",
+            1_002,
+            15_349,
+            &json!({ "ok": true, "value": {}, "logs": [] }),
+            script.clone(),
+            None,
+            1_861,
+        ),
+        ultrafast_dispatch(
+            "read",
+            3_000,
+            10,
+            &json!({}),
+            DispatchId::new(),
+            Some(script),
+            6_778,
+        ),
+        in_session(
+            "counted-pursue",
+            ultrafast_dispatch(
+                "pursue",
+                40_000,
+                6_000,
+                &counted,
+                DispatchId::new(),
+                None,
+                100,
+            ),
+        ),
+        in_session(
+            "older-pursue",
+            ultrafast_dispatch(
+                "pursue",
+                60_000,
+                5_662,
+                &before_counts,
+                DispatchId::new(),
+                None,
+                273,
+            ),
+        ),
+        neo_step(
+            "older-pursue",
+            61_000,
+            json!({ "kind": "click", "page": 9, "ref": "e12" }),
+        ),
+        neo_step(
+            "older-pursue",
+            62_000,
+            json!({ "kind": "click", "page": 9, "ref": "e81" }),
+        ),
+        neo_step(
+            "older-pursue",
+            63_000,
+            json!({ "kind": "fill", "page": 9, "ref": "e17", "value": "Singapore" }),
+        ),
+    ] {
+        app.state.audit_log.record_tool_dispatch(row).await?;
+    }
+    seed_dispatch(&app, "ordinary-session").await?;
+
+    let savings = get_json(&app, "/api/v1/plan/savings").await?;
+    assert_eq!(
+        savings["totals"],
+        json!({ "durationMs": 27_016, "pagesRead": 5, "tokensSaved": 16_778 })
+    );
+    assert_eq!(savings["tasks"], 3);
+    let latest = savings["latest"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("latest missing"))?;
+    let order = latest
+        .iter()
+        .map(|item| item["sessionId"].as_str().unwrap_or_default())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        order,
+        ["older-pursue", "counted-pursue", "ultrafast-session"]
+    );
+    assert!(latest[0].get("ultrafast").is_none());
+    assert_eq!(latest[0]["pursue"]["outcome"], "handed_back");
+    assert_eq!(
+        latest[0]["pursue"]["steps"].as_array().map(Vec::len),
+        Some(3)
+    );
+    assert_eq!(
+        latest[1]["ultrafast"],
+        json!({ "durationMs": 6_000, "pagesRead": 4, "tokensSaved": 10_000 })
+    );
+    assert_eq!(latest[1]["pursue"]["outcome"], "completed");
+    assert!(latest[2].get("pursue").is_none());
+    Ok(())
+}

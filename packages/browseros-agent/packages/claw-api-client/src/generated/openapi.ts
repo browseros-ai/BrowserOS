@@ -1118,6 +1118,43 @@ export interface components {
        */
       tokensSaved: number
     }
+    /** @description One thing neo did on the page during pursue. */
+    SessionPursueStep: {
+      /**
+       * @description The kind of step, as recorded.
+       * @enum {string}
+       */
+      action:
+        | 'click'
+        | 'type'
+        | 'press'
+        | 'check'
+        | 'uncheck'
+        | 'select'
+        | 'scroll'
+        | 'drag'
+        | 'dialog'
+        | 'open'
+        | 'back'
+        | 'reload'
+      /** @description What the step carried when it was recorded: the text typed, the key pressed, the option chosen, or the site opened. Absent when nothing was recorded or the value was redacted. */
+      text?: string
+    }
+    /** @description What neo did with pursue in this session, derived from the steps it recorded while pursue ran. */
+    SessionPursueRun: {
+      /**
+       * @description How the session's last pursue ended: neo finished the goal, or handed the page back to the agent.
+       * @enum {string}
+       */
+      outcome: 'completed' | 'handed_back'
+      /**
+       * Format: int64
+       * @description Time the session's pursue calls took, in milliseconds.
+       */
+      durationMs: number
+      /** @description The steps neo took on the page, in order. */
+      steps: components['schemas']['SessionPursueStep'][]
+    }
     SessionSummary: {
       sessionId: string
       profileId?: string
@@ -1147,6 +1184,8 @@ export interface components {
       tokenUsage?: components['schemas']['SessionTokenUsage']
       /** @description Present only when this session had an ultrafast run: a skill that ran to the end without the agent, or a pursue that read the page. */
       ultrafast?: components['schemas']['SessionUltrafastRun']
+      /** @description Present only when this session had a pursue call that finished its goal or handed the page back. */
+      pursue?: components['schemas']['SessionPursueRun']
       /** @description Present only on summaries returned by an explicit `status=live` list query. */
       live?: components['schemas']['LiveSessionState']
     }
@@ -1798,16 +1837,16 @@ export interface components {
        */
       url: string
     }
-    /** @description What ultrafast has done on this computer, from the task history: every task with an ultrafast run (a skill that ran without the agent, or a pursue that read the page). */
+    /** @description What ultrafast has done on this computer, from the task history: every task where ultrafast did work (a skill that ran without the agent, or a pursue that finished or handed back). */
     PlanSavings: {
-      /** @description Time, pages read and tokens saved, summed across those tasks. */
+      /** @description Time, pages read and tokens saved, summed across those tasks. Time includes every pursue; pages and tokens count only where neo counted them, so pursue runs from before that add time alone. */
       totals: components['schemas']['SessionUltrafastRun']
       /**
        * Format: int64
-       * @description How many tasks had an ultrafast run.
+       * @description How many tasks ultrafast did work in.
        */
       tasks: number
-      /** @description The newest of those tasks, newest first. */
+      /** @description The newest of those tasks, newest first, each with what neo measured (`ultrafast`) and what it did with pursue (`pursue`) where recorded. */
       latest: components['schemas']['SessionSummary'][]
     }
   }

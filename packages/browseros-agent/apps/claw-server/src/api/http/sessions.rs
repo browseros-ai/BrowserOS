@@ -7,6 +7,7 @@ use crate::{
     AppState,
     db::{
         audit_log::{ListTasksQuery, TaskDetail, TaskStatus, TaskSummary, ToolDispatchRow},
+        pursue_runs::{PursueOutcome, PursueRun, PursueStepKind, pursue_run},
         ultrafast_runs::{UltrafastRunStats, ultrafast_run_stats},
     },
     error::{CanonicalError, RequestId},
@@ -26,8 +27,8 @@ use axum::{
 };
 use claw_api::models::{
     CancelSessionResponse, Dispatch, PlanSavings, ResolveHelpRequest, ResolveHelpResponse,
-    SessionBrowserTab, SessionDetail, SessionList, SessionStatus, SessionSummary,
-    SessionTokenUsage, SessionUltrafastRun,
+    SessionBrowserTab, SessionDetail, SessionList, SessionPursueRun, SessionPursueStep,
+    SessionStatus, SessionSummary, SessionTokenUsage, SessionUltrafastRun,
 };
 use std::{collections::HashMap, sync::Arc};
 
@@ -118,6 +119,11 @@ pub(super) async fn list(
         .ultrafast_run_stats(&session_ids)
         .await
         .map_err(|source| internal(&request_id, source))?;
+    let mut pursue = state
+        .audit_log
+        .pursue_runs(&session_ids)
+        .await
+        .map_err(|source| internal(&request_id, source))?;
     // profile_id lives on the live session's agent, and a done filter
     // must reconcile persisted-live rows. Both apply after pagination,
     // so a filtered page may come back short rather than backfilled.
@@ -125,8 +131,10 @@ pub(super) async fn list(
     for task in result.tasks {
         let session = live.get(task.session_id.as_str());
         let stats = ultrafast.get(task.session_id.as_str()).copied();
+        let pursued = pursue.remove(task.session_id.as_str());
         let mut summary = contract_summary(task, session).await;
         summary.ultrafast = stats.map(contract_ultrafast);
+        summary.pursue = pursued.map(contract_pursue);
         if response_status_filter
             .is_none_or(|status| summary.status == contract_status(status, true))
             && query
@@ -181,9 +189,9 @@ pub(super) async fn savings(
         .iter()
         .fold(UltrafastRunStats::default(), |sum, session| {
             UltrafastRunStats {
-                duration_ms: sum.duration_ms.saturating_add(session.stats.duration_ms),
-                pages_read: sum.pages_read.saturating_add(session.stats.pages_read),
-                tokens_saved: sum.tokens_saved.saturating_add(session.stats.tokens_saved),
+                duration_ms: sum.duration_ms.saturating_add(session.totals.duration_ms),
+                pages_read: sum.pages_read.saturating_add(session.totals.pages_read),
+                tokens_saved: sum.tokens_saved.saturating_add(session.totals.tokens_saved),
             }
         });
     let live = live_sessions(&state).await;
@@ -201,7 +209,8 @@ pub(super) async fn savings(
             continue;
         };
         let mut summary = contract_summary(task, live.get(session.session_id.as_str())).await;
-        summary.ultrafast = Some(contract_ultrafast(session.stats));
+        summary.ultrafast = session.measured.map(contract_ultrafast);
+        summary.pursue = session.pursue.clone().map(contract_pursue);
         latest.push(summary);
     }
     let tasks = i64::try_from(sessions.len()).unwrap_or(i64::MAX);
@@ -290,6 +299,7 @@ async fn contract_detail(task: TaskDetail, live: Option<&Arc<Session>>) -> Sessi
         .and_then(|session| session.agent().profile_id())
         .map(|profile_id| profile_id.as_str().to_string());
     let ultrafast = ultrafast_run_stats(&task.dispatches).map(contract_ultrafast);
+    let pursue = pursue_run(&task.dispatches).map(contract_pursue);
     let dispatches = task
         .dispatches
         .into_iter()
@@ -297,6 +307,7 @@ async fn contract_detail(task: TaskDetail, live: Option<&Arc<Session>>) -> Sessi
         .collect();
     let mut summary = contract_summary(task.summary, live).await;
     summary.ultrafast = ultrafast;
+    summary.pursue = pursue;
     SessionDetail::new(summary, dispatches)
 }
 
@@ -382,6 +393,40 @@ fn contract_ultrafast(stats: UltrafastRunStats) -> Box<SessionUltrafastRun> {
         stats.duration_ms.max(0),
         stats.pages_read.max(0),
         js_safe_token_estimate(stats.tokens_saved),
+    ))
+}
+
+fn contract_pursue(run: PursueRun) -> Box<SessionPursueRun> {
+    use claw_api::models::{SessionPursueRunOutcome as Outcome, SessionPursueStepAction as Action};
+    let outcome = match run.outcome {
+        PursueOutcome::Completed => Outcome::Completed,
+        PursueOutcome::HandedBack => Outcome::HandedBack,
+    };
+    let steps = run
+        .steps
+        .into_iter()
+        .map(|step| SessionPursueStep {
+            action: match step.kind {
+                PursueStepKind::Click => Action::Click,
+                PursueStepKind::Type => Action::Type,
+                PursueStepKind::Press => Action::Press,
+                PursueStepKind::Check => Action::Check,
+                PursueStepKind::Uncheck => Action::Uncheck,
+                PursueStepKind::Select => Action::Select,
+                PursueStepKind::Scroll => Action::Scroll,
+                PursueStepKind::Drag => Action::Drag,
+                PursueStepKind::Dialog => Action::Dialog,
+                PursueStepKind::Open => Action::Open,
+                PursueStepKind::Back => Action::Back,
+                PursueStepKind::Reload => Action::Reload,
+            },
+            text: step.text,
+        })
+        .collect();
+    Box::new(SessionPursueRun::new(
+        outcome,
+        run.duration_ms.max(0),
+        steps,
     ))
 }
 

@@ -269,6 +269,82 @@ export interface SessionList {
 }
 
 /**
+ * What neo did with pursue in this session, derived from the steps it recorded while pursue ran.
+ * @export
+ * @interface SessionPursueRun
+ */
+export interface SessionPursueRun {
+    /**
+     * How the session's last pursue ended: neo finished the goal, or handed the page back to the agent.
+     * @type {SessionPursueRunOutcomeEnum}
+     * @memberof SessionPursueRun
+     */
+    outcome: SessionPursueRunOutcomeEnum;
+    /**
+     * Time the session's pursue calls took, in milliseconds.
+     * @type {number}
+     * @memberof SessionPursueRun
+     */
+    durationMs: number;
+    /**
+     * The steps neo took on the page, in order.
+     * @type {Array<SessionPursueStep>}
+     * @memberof SessionPursueRun
+     */
+    steps: Array<SessionPursueStep>;
+}
+
+
+/**
+ * @export
+ */
+export const SessionPursueRunOutcomeEnum = {
+    Completed: 'completed',
+    HandedBack: 'handed_back'
+} as const;
+export type SessionPursueRunOutcomeEnum = typeof SessionPursueRunOutcomeEnum[keyof typeof SessionPursueRunOutcomeEnum];
+
+/**
+ * One thing neo did on the page during pursue.
+ * @export
+ * @interface SessionPursueStep
+ */
+export interface SessionPursueStep {
+    /**
+     * The kind of step, as recorded.
+     * @type {SessionPursueStepActionEnum}
+     * @memberof SessionPursueStep
+     */
+    action: SessionPursueStepActionEnum;
+    /**
+     * What the step carried when it was recorded: the text typed, the key pressed, the option chosen, or the site opened. Absent when nothing was recorded or the value was redacted.
+     * @type {string}
+     * @memberof SessionPursueStep
+     */
+    text?: string;
+}
+
+
+/**
+ * @export
+ */
+export const SessionPursueStepActionEnum = {
+    Click: 'click',
+    Type: 'type',
+    Press: 'press',
+    Check: 'check',
+    Uncheck: 'uncheck',
+    Select: 'select',
+    Scroll: 'scroll',
+    Drag: 'drag',
+    Dialog: 'dialog',
+    Open: 'open',
+    Back: 'back',
+    Reload: 'reload'
+} as const;
+export type SessionPursueStepActionEnum = typeof SessionPursueStepActionEnum[keyof typeof SessionPursueStepActionEnum];
+
+/**
  *
  * @export
  * @interface SessionScreenshot
@@ -440,6 +516,12 @@ export interface SessionSummary {
      * @memberof SessionSummary
      */
     ultrafast?: SessionUltrafastRun;
+    /**
+     * Present only when this session had a pursue call that finished its goal or handed the page back.
+     * @type {SessionPursueRun}
+     * @memberof SessionSummary
+     */
+    pursue?: SessionPursueRun;
     /**
      * Present only on summaries returned by an explicit `status=live` list query.
      * @type {LiveSessionState}

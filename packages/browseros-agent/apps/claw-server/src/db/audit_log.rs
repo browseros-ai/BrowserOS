@@ -7,6 +7,7 @@ use crate::{
             prelude::{AgentSessionEnds, AgentSessionStarts, Tasks, ToolDispatches},
             tasks, tool_dispatches,
         },
+        pursue_runs::{PursueRun, pursue_outcome, pursue_run},
         session_efficiency_stats::ELIGIBLE_TOKEN_ESTIMATOR_VERSION,
         ultrafast_runs::{
             UltrafastRunStats, finished_without_agent, pursue_reads, ultrafast_run_stats,
@@ -30,11 +31,15 @@ use url::Url;
 
 pub use crate::db::entities::tool_dispatches::Model as ToolDispatchRow;
 
-/// A session with an ultrafast run: its summed stats and when its last row was recorded.
+/// A session where ultrafast did work: what it counts toward the savings totals, what neo
+/// measured, what it did with pursue, and when its last row was recorded.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UltrafastSession {
     pub session_id: String,
-    pub stats: UltrafastRunStats,
+    /// The measured stats plus the time of pursue calls recorded before pages were counted.
+    pub totals: UltrafastRunStats,
+    pub measured: Option<UltrafastRunStats>,
+    pub pursue: Option<PursueRun>,
     pub last_run_at: i64,
 }
 
@@ -797,11 +802,51 @@ impl AuditLog {
             .ultrafast_sessions(candidates)
             .await?
             .into_iter()
-            .map(|session| (session.session_id, session.stats))
+            .filter_map(|session| session.measured.map(|stats| (session.session_id, stats)))
             .collect())
     }
 
-    /// Every session that ever had an ultrafast run, newest run first.
+    /// What neo did with pursue in each listed session that had a pursue call finish or hand
+    /// back; sessions without one are missing from the map.
+    pub async fn pursue_runs(
+        &self,
+        session_ids: &[String],
+    ) -> AppResult<HashMap<String, PursueRun>> {
+        if session_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let conn = self.db.connection();
+        let with_pursue = ToolDispatches::find()
+            .filter(tool_dispatches::Column::SessionId.is_in(session_ids.iter().cloned()))
+            .filter(tool_dispatches::Column::ToolName.eq("pursue"))
+            .all(conn)
+            .await?
+            .into_iter()
+            .filter(|row| pursue_outcome(row).is_some())
+            .map(|row| row.session_id)
+            .collect::<std::collections::HashSet<_>>();
+        if with_pursue.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let rows = ToolDispatches::find()
+            .filter(tool_dispatches::Column::SessionId.is_in(with_pursue))
+            .filter(tool_dispatches::Column::ToolName.is_in(["pursue", "act", "navigate"]))
+            .order_by_asc(tool_dispatches::Column::CreatedAt)
+            .order_by_asc(tool_dispatches::Column::Id)
+            .all(conn)
+            .await?;
+        let mut grouped: HashMap<String, Vec<ToolDispatchRow>> = HashMap::new();
+        for row in rows {
+            grouped.entry(row.session_id.clone()).or_default().push(row);
+        }
+        Ok(grouped
+            .into_iter()
+            .filter_map(|(session_id, rows)| pursue_run(&rows).map(|run| (session_id, run)))
+            .collect())
+    }
+
+    /// Every session where ultrafast did work (a skill that ran without the agent, or a pursue
+    /// that finished or handed back), newest run first.
     pub async fn all_ultrafast_sessions(&self) -> AppResult<Vec<UltrafastSession>> {
         let candidates = ToolDispatches::find()
             .filter(tool_dispatches::Column::ToolName.is_in(["run_skill", "pursue"]))
@@ -816,8 +861,8 @@ impl AuditLog {
         Ok(sessions)
     }
 
-    /// Loads the sessions whose `run_skill` or `pursue` rows show an ultrafast run and derives
-    /// each one's stats from all of its rows.
+    /// Loads the sessions whose `run_skill` or `pursue` rows show ultrafast did work and derives
+    /// each one's stats and pursue steps from all of its rows.
     async fn ultrafast_sessions(
         &self,
         candidates: Vec<ToolDispatchRow>,
@@ -828,6 +873,7 @@ impl AuditLog {
             .filter(|row| {
                 (row.tool_name == "run_skill" && finished_without_agent(row))
                     || pursue_reads(row).is_some()
+                    || pursue_outcome(row).is_some()
             })
             .map(|row| row.session_id)
             .collect::<std::collections::HashSet<_>>();
@@ -846,14 +892,27 @@ impl AuditLog {
             grouped.entry(row.session_id.clone()).or_default().push(row);
         }
         for (session_id, dispatches) in grouped {
-            if let Some(stats) = ultrafast_run_stats(&dispatches) {
-                let last_run_at = dispatches.last().map_or(0, |row| row.created_at);
-                sessions.push(UltrafastSession {
-                    session_id,
-                    stats,
-                    last_run_at,
-                });
+            let measured = ultrafast_run_stats(&dispatches);
+            let pursue = pursue_run(&dispatches);
+            if measured.is_none() && pursue.is_none() {
+                continue;
             }
+            // Pursue calls from before pages were counted still add the time neo worked.
+            let unmeasured_ms = dispatches
+                .iter()
+                .filter(|row| pursue_outcome(row).is_some() && pursue_reads(row).is_none())
+                .map(|row| row.duration_ms.unwrap_or(0).max(0))
+                .fold(0_i64, i64::saturating_add);
+            let mut totals = measured.unwrap_or_default();
+            totals.duration_ms = totals.duration_ms.saturating_add(unmeasured_ms);
+            let last_run_at = dispatches.last().map_or(0, |row| row.created_at);
+            sessions.push(UltrafastSession {
+                session_id,
+                totals,
+                measured,
+                pursue,
+                last_run_at,
+            });
         }
         Ok(sessions)
     }

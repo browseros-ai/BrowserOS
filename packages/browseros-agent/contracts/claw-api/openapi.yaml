@@ -204,6 +204,10 @@ components:
       $ref: ./schemas/sessions.yaml#/SessionTokenUsage
     SessionUltrafastRun:
       $ref: ./schemas/sessions.yaml#/SessionUltrafastRun
+    SessionPursueStep:
+      $ref: ./schemas/sessions.yaml#/SessionPursueStep
+    SessionPursueRun:
+      $ref: ./schemas/sessions.yaml#/SessionPursueRun
     SessionSummary:
       $ref: ./schemas/sessions.yaml#/SessionSummary
     SessionList:
