@@ -1,6 +1,7 @@
 //! Filesystem authorization at the host boundary. The library owns path semantics; the app
 //! supplies live read roots and fixed locations that scripts must never read or overwrite.
 
+use std::collections::VecDeque;
 use std::error::Error;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
@@ -123,7 +124,11 @@ impl FileAccess {
     /// errors. A missing root itself never grants access.
     pub async fn read(&self, path: &Path) -> Result<ReadPath, FileAccessError> {
         let roots = (self.roots)();
-        let resolved = resolve(path).await?;
+        let resolved = resolve(path, ResolveMode::Candidate).await?;
+        let target = resolved
+            .target
+            .as_deref()
+            .ok_or(FileAccessError::Unresolvable)?;
         let directory = match fs::metadata(path).await {
             Ok(metadata) => metadata.is_dir(),
             Err(error)
@@ -136,13 +141,13 @@ impl FileAccess {
             }
             Err(_error) => return Err(FileAccessError::Unresolvable),
         };
-        self.check_own(&resolved, directory).await?;
+        let own = self.protected_paths().await;
+        check_own(target, directory, &own)?;
         for root in roots {
             let Ok(root) = fs::canonicalize(root).await else {
                 continue;
             };
-            if fs::metadata(&root).await.is_ok_and(|meta| meta.is_dir())
-                && resolved.starts_with(root)
+            if fs::metadata(&root).await.is_ok_and(|meta| meta.is_dir()) && target.starts_with(root)
             {
                 return Ok(ReadPath {
                     original: path.to_owned(),
@@ -156,35 +161,117 @@ impl FileAccess {
     /// Authorizes a destination, including missing tails and final symlinks. Writes outside
     /// Neo's own locations remain unrestricted; read roots are not a write allowlist.
     pub async fn write(&self, path: &Path) -> Result<WritePath, FileAccessError> {
-        self.check_own(&resolve(path).await?, false).await?;
+        let resolved = resolve(path, ResolveMode::Candidate).await?;
+        let target = resolved
+            .target
+            .as_deref()
+            .ok_or(FileAccessError::Unresolvable)?;
+        let own = self.protected_paths().await;
+        check_own(target, false, &own)?;
+        // mkdir walks the original spelling too. A missing component before `..` may be
+        // created even though it disappears from the final target, so authorize those writes
+        // separately. Existing protected parents can still be traversed without changing them.
+        for parent in &resolved.prospective_parents {
+            check_own(parent, false, &own)?;
+        }
         Ok(WritePath::unchecked(path))
     }
 
-    async fn check_own(&self, candidate: &Path, directory: bool) -> Result<(), FileAccessError> {
+    async fn protected_paths(&self) -> Vec<ProtectedPath> {
+        let mut paths = Vec::new();
         for own in &self.own {
-            let (path, tree) = match own {
-                ProtectedPath::Directory(path) => (path, true),
-                ProtectedPath::File(path) => (path, false),
+            let configured = match own {
+                ProtectedPath::Directory(path) | ProtectedPath::File(path) => path,
             };
-            let own = resolve(path).await?;
-            // Chromium receives a whole directory upload and cannot omit ordinary protected
-            // descendants. Refuse its ancestors too, even with the root directory allowed.
-            if (tree && candidate.starts_with(&own))
-                || candidate == own
-                || (directory && own.starts_with(candidate))
-            {
-                return Err(FileAccessError::OwnFiles);
+            // An unusable credential must not disable unrelated file operations. Protection
+            // resolution follows dangling links to their future target and retains every known
+            // alias even if a cycle or unreadable link leaves no resolvable final target.
+            let resolved = resolve(configured, ResolveMode::Protected)
+                .await
+                .unwrap_or_else(|_error| Resolution {
+                    target: None,
+                    prospective_parents: Vec::new(),
+                    aliases: vec![configured.clone()],
+                });
+            for path in resolved.aliases.into_iter().chain(resolved.target) {
+                paths.push(match own {
+                    ProtectedPath::Directory(_) => ProtectedPath::Directory(path),
+                    ProtectedPath::File(_) => ProtectedPath::File(path),
+                });
             }
         }
-        Ok(())
+        paths
     }
 }
 
-/// Walks components in OS order instead of normalizing `..` ahead of symlinks. Missing
-/// components remain in the tail, but after `missing/..` each next component is probed again.
-/// Otherwise an existing symlink reached after that transition could bypass the own-files
-/// guard. Dangling links are refused rather than treated as an ordinary missing tail.
-async fn resolve(path: &Path) -> Result<PathBuf, FileAccessError> {
+fn check_own(
+    candidate: &Path,
+    directory: bool,
+    own: &[ProtectedPath],
+) -> Result<(), FileAccessError> {
+    for own in own {
+        let (path, tree) = match own {
+            ProtectedPath::Directory(path) => (path, true),
+            ProtectedPath::File(path) => (path, false),
+        };
+        // Chromium receives a whole directory upload and cannot omit ordinary protected
+        // descendants. Writes check containment/equality only, including prospective parents.
+        if (tree && candidate.starts_with(path))
+            || candidate == path
+            || (directory && path.starts_with(candidate))
+        {
+            return Err(FileAccessError::OwnFiles);
+        }
+    }
+    Ok(())
+}
+
+/// Candidate IO fails closed on unusable links. Configured protections instead follow link
+/// contents through missing tails, since an absent token/key may be created after startup.
+#[derive(Clone, Copy)]
+enum ResolveMode {
+    Candidate,
+    Protected,
+}
+
+/// One component walk records both the final target and transient mkdir effects. The latter
+/// survive `..` cancellation. A protected path also retains configured and intermediate alias
+/// names; its target is absent only when an unusable link prevents complete resolution.
+struct Resolution {
+    target: Option<PathBuf>,
+    prospective_parents: Vec<PathBuf>,
+    aliases: Vec<PathBuf>,
+}
+
+impl Resolution {
+    fn incomplete(
+        mut self,
+        mode: ResolveMode,
+        prefix: &Path,
+        pending: &VecDeque<PathBuf>,
+    ) -> Result<Self, FileAccessError> {
+        match mode {
+            ResolveMode::Candidate => Err(FileAccessError::Unresolvable),
+            ResolveMode::Protected => {
+                self.aliases.push(with_tail(prefix, pending));
+                Ok(self)
+            }
+        }
+    }
+}
+
+fn with_tail(prefix: &Path, pending: &VecDeque<PathBuf>) -> PathBuf {
+    let mut path = prefix.to_owned();
+    for part in pending {
+        path.push(part);
+    }
+    path
+}
+
+/// Walks in OS order instead of normalizing `..` ahead of symlinks. Missing components are
+/// recorded before they can be cancelled, and each later component is probed again. This
+/// catches an existing symlink reached after `missing/..` and protects mkdir's transient tail.
+async fn resolve(path: &Path, mode: ResolveMode) -> Result<Resolution, FileAccessError> {
     let absolute = if path.is_absolute() {
         path.to_owned()
     } else {
@@ -192,34 +279,69 @@ async fn resolve(path: &Path) -> Result<PathBuf, FileAccessError> {
             .map_err(|_error| FileAccessError::Unresolvable)?
             .join(path)
     };
+    let mut resolution = Resolution {
+        target: None,
+        prospective_parents: Vec::new(),
+        aliases: vec![absolute.clone()],
+    };
+    let mut pending: VecDeque<_> = absolute
+        .components()
+        .map(|part| PathBuf::from(part.as_os_str()))
+        .collect();
     let mut resolved = PathBuf::new();
-    for component in absolute.components() {
-        match component {
-            Component::Prefix(prefix) => resolved.push(prefix.as_os_str()),
-            Component::RootDir => resolved.push(component.as_os_str()),
-            Component::CurDir => {}
-            Component::ParentDir => {
+    let mut links = 0;
+    while let Some(part) = pending.pop_front() {
+        match part.components().next() {
+            Some(Component::Prefix(prefix)) => resolved.push(prefix.as_os_str()),
+            Some(Component::RootDir) => resolved.push(part.as_os_str()),
+            Some(Component::CurDir) | None => {}
+            Some(Component::ParentDir) => {
                 resolved.pop();
             }
-            Component::Normal(name) => {
+            Some(Component::Normal(name)) => {
                 resolved.push(name);
                 match fs::symlink_metadata(&resolved).await {
+                    Ok(metadata)
+                        if metadata.file_type().is_symlink()
+                            && matches!(mode, ResolveMode::Protected) =>
+                    {
+                        resolution.aliases.push(with_tail(&resolved, &pending));
+                        links += 1;
+                        if links > 40 {
+                            return resolution.incomplete(mode, &resolved, &pending);
+                        }
+                        let target = match fs::read_link(&resolved).await {
+                            Ok(target) => target,
+                            Err(_error) => return resolution.incomplete(mode, &resolved, &pending),
+                        };
+                        resolved.pop();
+                        for part in target.components().rev() {
+                            pending.push_front(PathBuf::from(part.as_os_str()));
+                        }
+                    }
                     Ok(_) => {
-                        resolved = fs::canonicalize(&resolved)
-                            .await
-                            .map_err(|_error| FileAccessError::Unresolvable)?;
+                        resolved = match fs::canonicalize(&resolved).await {
+                            Ok(target) => target,
+                            Err(_error) => return resolution.incomplete(mode, &resolved, &pending),
+                        };
                     }
                     Err(error)
                         if matches!(
                             error.kind(),
                             io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
-                        ) => {}
-                    Err(_error) => return Err(FileAccessError::Unresolvable),
+                        ) =>
+                    {
+                        if !pending.is_empty() {
+                            resolution.prospective_parents.push(resolved.clone());
+                        }
+                    }
+                    Err(_error) => return resolution.incomplete(mode, &resolved, &pending),
                 }
             }
         }
     }
-    Ok(resolved)
+    resolution.target = Some(resolved);
+    Ok(resolution)
 }
 
 #[cfg(test)]
@@ -392,6 +514,103 @@ mod tests {
         }
         assert!(!dir.path().join("missing").exists());
         assert!(!dir.path().join("not-created").exists());
+        Ok(())
+    }
+    #[tokio::test]
+    async fn transient_parents_are_checked_without_restricting_other_writes()
+    -> Result<(), Box<dyn Error>> {
+        let dir = tempfile::tempdir()?;
+        let state = dir.path().join("data/browserclaw/claw-sdk");
+        let future_key = dir.path().join("keys/token");
+        fs::create_dir_all(state.join("existing")).await?;
+        let policy = FileAccess::new(
+            || vec!["/".into()],
+            vec![
+                ProtectedPath::Directory(state.clone()),
+                ProtectedPath::File(future_key.clone()),
+            ],
+        );
+        let escaped = state.join("settings.json.tmp/../../../../tmp/proof.png");
+        assert_eq!(
+            policy.write(&escaped).await.err(),
+            Some(FileAccessError::OwnFiles)
+        );
+        let key_escape = future_key.join("../../public.png");
+        assert_eq!(
+            policy.write(&key_escape).await.err(),
+            Some(FileAccessError::OwnFiles)
+        );
+        let ordinary = dir.path().join("ordinary/new/../../public.png");
+        assert_eq!(policy.write(&ordinary).await?.original(), ordinary);
+        let existing_parent = state.join("existing/../../../../public.png");
+        assert!(
+            policy.write(&existing_parent).await.is_ok(),
+            "traversal through existing parents makes no protected directory"
+        );
+        assert!(
+            policy
+                .write(&dir.path().join("keys/ordinary.png"))
+                .await
+                .is_ok(),
+            "creating an ancestor of a future exact key is allowed"
+        );
+        assert!(!state.join("settings.json.tmp").exists());
+        assert!(!future_key.exists());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn dangling_configured_credentials_protect_their_names_and_future_targets()
+    -> Result<(), Box<dyn Error>> {
+        let dir = tempfile::tempdir()?;
+        let allowed = dir.path().join("downloads");
+        let keys = dir.path().join("keys");
+        fs::create_dir(&allowed).await?;
+        fs::create_dir(&keys).await?;
+        let file = allowed.join("ordinary.txt");
+        fs::write(&file, "ordinary").await?;
+        let token = keys.join("token-link");
+        let key = keys.join("key-link");
+        let future_token = dir.path().join("future-token/value");
+        let future_key = dir.path().join("future-key/value");
+        symlink(&future_token, &token)?;
+        symlink("../future-key/value", &key)?;
+        let cycle = keys.join("cycle");
+        symlink(&cycle, &cycle)?;
+        let root = allowed.clone();
+        let policy = FileAccess::new(
+            move || vec![root.clone()],
+            vec![
+                ProtectedPath::File(token.clone()),
+                ProtectedPath::File(key.clone()),
+                ProtectedPath::File(cycle.clone()),
+            ],
+        );
+        assert!(
+            policy.read(&file).await.is_ok(),
+            "an unusable configured credential does not disable an ordinary download read"
+        );
+        assert!(policy.write(&dir.path().join("ordinary.png")).await.is_ok());
+        for alias in [&token, &key, &cycle] {
+            assert!(policy.read(alias).await.is_err());
+            assert!(policy.write(alias).await.is_err());
+        }
+        for target in [&future_token, &future_key] {
+            assert_eq!(
+                policy.read(target).await.err(),
+                Some(FileAccessError::OwnFiles)
+            );
+            assert_eq!(
+                policy.write(target).await.err(),
+                Some(FileAccessError::OwnFiles)
+            );
+        }
+        let all = FileAccess::new(|| vec!["/".into()], vec![ProtectedPath::File(token)]);
+        assert_eq!(
+            all.read(&keys).await.err(),
+            Some(FileAccessError::OwnFiles),
+            "a directory containing the configured alias is protected too"
+        );
         Ok(())
     }
 }

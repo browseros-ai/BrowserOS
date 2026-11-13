@@ -296,6 +296,26 @@ def protected_writes(proof, places, outside, origin, snapshots):
                     (raw == STATEMENT if name == 'download.saveAs' else raw.startswith(b'\x89PNG\r\n\x1a\n')),
                     run=got['meta'].get('id'))
 
+        # Parent creation follows the original spelling, even when its final target escapes
+        # through '..'. Protect intermediate directories as well as the eventual file.
+        temporary_settings = state / 'settings.json.tmp'
+        existed = temporary_settings.exists()
+        escaped_file = outside / ('parent-escape-' + name.replace('.', '-') + '.png')
+        escape = (str(temporary_settings) + '/' + '../' * (len(temporary_settings.parts) - 1)
+                  + str(escaped_file).lstrip('/'))
+        proof.check(name + ' settings temporary path starts absent', not existed)
+        proof.denied(name + ' refuses protected intermediate mkdir',
+                     operation.replace('PATH', json.dumps(escape)), escape, own=True, prepare=prepare)
+        proof.check(name + ' creates no settings temporary directory', not temporary_settings.exists())
+        if not existed and temporary_settings.is_dir():
+            temporary_settings.rmdir()
+
+    # Exercise a real save rather than a no-op update, then restore exactly the prior list.
+    proof.patch(['/', '/tmp'])
+    proof.patch(['/'])
+    proof.check('settings remain writable after intermediate-directory refusals',
+                (state / 'settings.json').read_bytes() == snapshots[state / 'settings.json'])
+
     pdf = outside / 'pdf-path.pdf'
     got = proof.run(PREPARE + f'await page.pdf({{path:{json.dumps(str(pdf))}}}); return true;')
     error = got['meta'].get('error') or {}
@@ -401,8 +421,22 @@ def policy(proof, places):
                          ('profile', places['profile'] / 'Local State'),
                          ('token', places['token'])]
             protected.extend(profile_fixtures)
-            proof.check('configured CAPTCHA file is included', bool(places['captcha']))
-            protected.extend((f'captcha-{index}', path) for index, path in enumerate(places['captcha']))
+            existing_keys = [path for path in places['captcha'] if path.is_file()]
+            proof.check('configured CAPTCHA file is included', bool(existing_keys))
+            protected.extend((f'captcha-{index}', path) for index, path in enumerate(existing_keys))
+            for index, path in enumerate(places['captcha']):
+                if path.is_symlink() and not path.exists():
+                    target = Path(os.path.realpath(path))
+                    proof.denied(f'dangling credential alias remains protected #{index}',
+                                 upload(path), path, own=True)
+                    proof.denied(f'missing credential target remains protected #{index}',
+                                 upload(target), target, own=True)
+                    proof.denied(f'dangling credential target cannot be created #{index}',
+                                 f'await page.screenshot({{path:{json.dumps(str(target))}}})',
+                                 target, own=True)
+                    proof.check(f'dangling credential target stays absent #{index}', not target.exists())
+                    proof.allowed(f'dangling credential permits unrelated allowed read #{index}',
+                                  upload_matches(inside / 'readable.txt', 'readable.txt'))
             for name, path in protected:
                 proof.check(name + ' fixture exists', path.is_file())
                 for kind, candidate in [('direct', path),

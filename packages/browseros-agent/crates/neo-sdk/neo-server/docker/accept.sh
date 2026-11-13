@@ -475,8 +475,10 @@ for pid in pids:
     -v "$secrets:/run/neo-accept:ro" \
     -e CLAW_HOST_TOKEN_FILE=/run/neo-accept/host-token -e NEO_HOST_GID=$host_gid \
     -v "$secrets/capsolver-api-key:/run/neo-keys/capsolver-api-key:ro" \
-    -e BROWSEROS_CAPSOLVER_API_KEY_FILE=/run/neo-keys/capsolver-api-key "$image" >/dev/null
+    -e BROWSEROS_CAPSOLVER_API_KEY_FILE=/run/neo-keys/capsolver-api-key \
+    -e BROWSEROS_2CAPTCHA_API_KEY_FILE=/tmp/neo-accept-missing-key "$image" >/dev/null
   if wait_healthy "$keyed" 90 >/dev/null && install_client "$keyed"; then
+    docker exec "$keyed" ln -s /tmp/neo-accept-future-key /tmp/neo-accept-missing-key
     keyed_captcha=$(lists_captcha "$keyed")
     # Root owns fixtures and compares saved bytes; the socket still requires its host group.
     filed=$(docker exec --user "0:$host_gid" -w /opt/neo-accept "$keyed" python3 accept_files.py \

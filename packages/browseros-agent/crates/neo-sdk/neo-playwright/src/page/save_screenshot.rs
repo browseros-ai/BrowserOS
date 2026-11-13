@@ -221,6 +221,7 @@ mod tests {
         for target in [
             state.join("settings.json"),
             state.join("new/nested/image.png"),
+            state.join("settings.json.tmp/../../outside.png"),
             dir.path().join("missing/../into-state/new/image.png"),
         ] {
             let scope = OpScope::new(&env, op, CallHeader::default());
@@ -243,6 +244,8 @@ mod tests {
         );
         assert_eq!(fs::read(state.join("settings.json")).await?, b"unchanged");
         assert!(!state.join("new").exists());
+        assert!(!state.join("settings.json.tmp").exists());
+        assert!(!dir.path().join("outside.png").exists());
         assert!(!dir.path().join("missing").exists());
         Ok(())
     }
