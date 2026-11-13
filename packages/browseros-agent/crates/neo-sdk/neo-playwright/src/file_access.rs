@@ -157,7 +157,7 @@ impl FileAccess {
             Err(_error) => return Err(FileAccessError::Unresolvable),
         };
         let own = self.protected_paths(&roots).await;
-        check_own(target, directory, &own)?;
+        check_own(target, Checked::Read { directory }, &own)?;
         for root in roots {
             let Ok(root) = fs::canonicalize(root).await else {
                 continue;
@@ -175,6 +175,12 @@ impl FileAccess {
 
     /// Authorizes a destination, including missing tails and final symlinks. Writes outside
     /// Neo's own locations remain unrestricted; read roots are not a write allowlist.
+    ///
+    /// The check judges path names, and the save then makes its folders and writes by path name.
+    /// It protects against a script, whose only writes are regular files and the folders their
+    /// saves make, and assumes that only Neo and the host create links under a listed folder or
+    /// the home: it does not cover a hostile process in the container that plants a link between
+    /// this check and the write.
     pub async fn write(&self, path: &Path) -> Result<WritePath, FileAccessError> {
         let resolved = resolve(path, ResolveMode::Candidate).await?;
         let target = resolved
@@ -182,12 +188,12 @@ impl FileAccess {
             .as_deref()
             .ok_or(FileAccessError::Unresolvable)?;
         let own = self.protected_paths(&(self.roots)()).await;
-        check_own(target, false, &own)?;
+        check_own(target, Checked::Write, &own)?;
         // mkdir walks the original spelling too. A missing component before `..` may be
         // created even though it disappears from the final target, so authorize those writes
         // separately. Existing protected parents can still be traversed without changing them.
         for parent in &resolved.prospective_parents {
-            check_own(parent, false, &own)?;
+            check_own(parent, Checked::MadeParent, &own)?;
         }
         Ok(WritePath::unchecked(path))
     }
@@ -265,22 +271,44 @@ fn opens_home(home: &Path, folder: &Path) -> bool {
         })
 }
 
+/// What a checked path is for: the home rule lifts differently for each.
+#[derive(Clone, Copy)]
+enum Checked {
+    /// A read; `directory` when it is a folder, whose whole tree an upload hands the browser.
+    Read { directory: bool },
+    /// The path a write lands on.
+    Write,
+    /// A missing folder a write makes on its way (`Resolution::prospective_parents`).
+    MadeParent,
+}
+
 fn check_own(
     candidate: &Path,
-    directory: bool,
+    checked: Checked,
     own: &[ProtectedPath],
 ) -> Result<(), FileAccessError> {
+    let directory = matches!(checked, Checked::Read { directory: true });
     for own in own {
         let (path, tree, open) = match own {
             ProtectedPath::Directory(path) => (path, true, &[][..]),
             ProtectedPath::File(path) => (path, false, &[][..]),
             ProtectedPath::Home { path, open } => (path, true, open.as_slice()),
         };
+        // Inside an open folder the home rule is lifted. A folder a write must make on its way
+        // to one is too (the file-access design's rule for a nested downloads or listed
+        // folder): a missing parent strictly inside the home that is an ancestor of an open
+        // folder. Only the home has open folders, and a file never takes this way, so Neo's
+        // other places stay refused and nothing else can be written beside that path.
+        let lifted = open.iter().any(|folder| {
+            candidate.starts_with(folder)
+                || (matches!(checked, Checked::MadeParent)
+                    && candidate != path
+                    && candidate.starts_with(path)
+                    && folder.starts_with(candidate))
+        });
         // Chromium receives a whole directory upload and cannot omit ordinary protected
         // descendants. Writes check containment/equality only, including prospective parents.
-        let tree_hit = tree
-            && candidate.starts_with(path)
-            && !open.iter().any(|folder| candidate.starts_with(folder));
+        let tree_hit = tree && candidate.starts_with(path) && !lifted;
         if tree_hit || candidate == path || (directory && path.starts_with(candidate)) {
             return Err(FileAccessError::OwnFiles);
         }
@@ -790,6 +818,58 @@ mod tests {
         assert!(policy.read(&home.join("Downloads/saved.csv")).await.is_ok());
         assert!(!home.join(".pki").exists() && !home.join(".config").exists());
         assert!(!outside.join("missing").exists() && !home.join("shared/deep").exists());
+        Ok(())
+    }
+
+    /// An open folder two or more levels below the home, whose parents are not made yet, takes
+    /// its first save: a missing parent inside the home may be made when it is an ancestor of an
+    /// open folder (the file-access design's rule), and no other. A file there never may, and
+    /// Neo's other places stay refused below such a parent.
+    #[tokio::test]
+    async fn a_missing_parent_of_an_open_folder_may_be_made_and_no_other()
+    -> Result<(), Box<dyn Error>> {
+        let fixture = HomeFixture::new().await?;
+        let home = fixture.home.clone();
+        let listed = home.join("listed/deep/in");
+        let policy = FileAccess::new(
+            move || vec![listed.clone()],
+            vec![
+                ProtectedPath::Directory(home.join("work/state")),
+                ProtectedPath::Home {
+                    path: home.clone(),
+                    open: vec![home.join("work/downloads")],
+                },
+            ],
+        );
+        for path in [
+            "work/downloads/shot.png",
+            "work/downloads/new/shot.png",
+            "listed/deep/in/saved.csv",
+        ] {
+            assert!(policy.write(&home.join(path)).await.is_ok(), "{path}");
+        }
+        for path in [
+            // A file beside the open folder's path, or below a missing folder off it.
+            "work/notes.txt",
+            "work/other/shot.png",
+            "listed/deep/shot.png",
+            "listed/side/in/shot.png",
+            // A spelling that lands in the open folder but makes a folder off its path.
+            "work/other/../downloads/shot.png",
+            // Neo's own place below a missing parent stays Neo's.
+            "work/state/shot.png",
+            "work/downloads/../../.bashrc",
+        ] {
+            assert_eq!(
+                policy.write(&home.join(path)).await.err(),
+                Some(FileAccessError::OwnFiles),
+                "{path}"
+            );
+        }
+        assert!(
+            !home.join("work").exists() && !home.join("listed").exists(),
+            "a check makes nothing"
+        );
         Ok(())
     }
 
