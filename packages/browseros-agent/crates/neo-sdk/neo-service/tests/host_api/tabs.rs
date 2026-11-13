@@ -159,3 +159,30 @@ async fn a_failed_association_query_is_a_generic_500_not_an_empty_task_list() ->
     assert_eq!(reply.body["message"], "internal error");
     Ok(())
 }
+
+/// Neo's blank tab keeps the browser open when every other tab closes. The host sees it, marked
+/// `owner: neo`; every other tab has no `owner`.
+#[tokio::test]
+async fn the_tab_neo_keeps_for_itself_is_listed_with_its_owner() -> TestResult {
+    let h = harness().await?;
+    for tab in [3, 4] {
+        h.browser.open_tab(tab);
+    }
+    *h.neo_tab.lock().map_err(|_| "poisoned")? = Some(4);
+    let reply = h.get("/v1/tabs").await?;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+    let items = reply.body["items"].as_array().ok_or("items")?;
+    let owner_of = |tab: i64| {
+        items
+            .iter()
+            .find(|item| item["tabId"] == tab)
+            .map(|item| item.get("owner").cloned())
+    };
+    assert_eq!(owner_of(4), Some(Some(json!("neo"))), "Neo's tab, marked");
+    assert_eq!(
+        owner_of(3),
+        Some(None),
+        "every other tab has no owner field"
+    );
+    Ok(())
+}

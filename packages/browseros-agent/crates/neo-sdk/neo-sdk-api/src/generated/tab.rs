@@ -26,6 +26,9 @@ pub struct Tab {
     /// Distinct sorted task ids from retained committed runs that touched this tab.
     #[serde(rename = "taskIds")]
     pub task_ids: Vec<String>,
+    /// Present on a tab Neo keeps for itself. `neo`: Neo's one blank tab, which keeps the browser open when every other tab closes. No script sees or reaches it, no task takes it, and Neo opens another if it closes; a lock, a fit, a takeover or a display treats it as any tab. Once it shows a page (the owner browsed in it, or a fit navigated it), Neo opens a new blank tab and the old one becomes an ordinary tab without this field. Absent on every other tab.
+    #[serde(rename = "owner", skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
 }
 
 impl Tab {
@@ -42,6 +45,7 @@ impl Tab {
             url,
             title,
             task_ids,
+            owner: None,
         }
     }
 }

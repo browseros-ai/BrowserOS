@@ -49,7 +49,14 @@ pub struct ServiceInputs {
     /// The host's settings, which `/v1/settings` reads and changes. The app made them before
     /// anything that reads them started, and hands clones to those readers itself.
     pub settings: Settings,
+    /// Which of the browser's tabs Neo keeps for itself, for `GET /v1/tabs`'s `owner`: `neo` for
+    /// the app's blank tab, `None` for every other tab.
+    pub tab_owner: TabOwner,
 }
+
+/// Names the tab Neo keeps for itself (`Some("neo")` for its blank tab), or `None`. Asked once per
+/// tab of each `GET /v1/tabs`; it must not wait.
+pub type TabOwner = Arc<dyn Fn(TabId) -> Option<&'static str> + Send + Sync>;
 
 /// The host API, started. Cheap to clone.
 #[derive(Clone)]
@@ -81,6 +88,8 @@ pub(crate) struct ServiceState {
     pub(crate) stamps: Arc<TabStamps>,
     /// What the host set (`/v1/settings`).
     pub(crate) settings: Settings,
+    /// Which tab Neo keeps for itself (`ServiceInputs::tab_owner`).
+    pub(crate) tab_owner: TabOwner,
     /// Cancels the hub's shutdown token when the service is dropped, which ends every live
     /// stream and capture.
     _live_shutdown: DropGuard,
@@ -120,6 +129,7 @@ impl Service {
             xvnc,
             cdp_port: _,
             settings,
+            tab_owner,
         } = inputs;
         let events = EventLog::start(store.clone(), sink.subscribe());
         let locks = Locks::new(store.clone(), sink.clone());
@@ -172,6 +182,7 @@ impl Service {
                 live,
                 stamps,
                 settings,
+                tab_owner,
                 _live_shutdown: shutdown.drop_guard(),
             }),
         }

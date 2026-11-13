@@ -24,7 +24,7 @@ use neo_trace::{
     TraceSink, TraceStore, WriterConfig, screenshot_queue, spawn_writer,
 };
 use serde_json::Value;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 use tower::ServiceExt;
 
@@ -70,6 +70,9 @@ pub(crate) struct Harness {
     pub(crate) service: Service,
     /// The settings the service serves, as the app hands them to the parts that read them.
     pub(crate) settings: Settings,
+    /// The tab the app keeps for itself (its blank tab), as `ServiceInputs::tab_owner` reports
+    /// it; `None` until a test sets one.
+    pub(crate) neo_tab: Arc<Mutex<Option<i64>>>,
     /// The routes behind the host auth, as a host reaches them.
     pub(crate) router: Router,
     /// `Service::router()` alone, for tests that serve it themselves.
@@ -162,6 +165,7 @@ async fn start(
         camera.then_some(queue),
     );
     let settings = Settings::load(dir.path().join("settings.json"), Default::default()).await;
+    let neo_tab: Arc<Mutex<Option<i64>>> = Arc::default();
     let browser = ScriptedBrowser::new();
     browser.set_window(window);
     let xvnc = FakeXvnc::start(screen).await?;
@@ -177,6 +181,13 @@ async fn start(
             // Never dialed: the live views capture over the transport below.
             cdp_port: 0,
             settings: settings.clone(),
+            tab_owner: {
+                let neo_tab = Arc::clone(&neo_tab);
+                Arc::new(move |tab: TabId| {
+                    let held = *neo_tab.lock().unwrap_or_else(PoisonError::into_inner);
+                    (held == Some(tab.0)).then_some("neo")
+                })
+            },
         },
         capture_transport.unwrap_or_else(|| Arc::new(ScriptedTransport(Arc::clone(&capture)))),
     );
@@ -198,6 +209,7 @@ async fn start(
         routes: service.router(),
         service,
         settings,
+        neo_tab,
     })
 }
 

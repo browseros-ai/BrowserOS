@@ -12,8 +12,8 @@ use neo_captcha::CaptchaSolver;
 use neo_captcha::config::{CAPSOLVER_KEY_FILE_ENV, TWOCAPTCHA_KEY_FILE_ENV};
 use neo_service::Settings;
 use neo_trace::{
-    EpochMillis, RedactionLimits, Redactor, RetentionPolicy, RunOutputs, TraceError, TraceSink,
-    TraceStore, WriterConfig,
+    EpochMillis, RedactionLimits, Redactor, RetentionPolicy, RunOutputs, ShotJobs, TraceError,
+    TraceSink, TraceStore, WriterConfig,
 };
 use tokio::net::TcpListener;
 use tokio::runtime::{Builder, Runtime};
@@ -23,7 +23,7 @@ use tokio::{fs, signal, time};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
-use crate::browser::{BrowserLink, TabRegistry};
+use crate::browser::{BrowserLink, NeoTab, TabRegistry};
 use crate::builtins::{self, BuiltinDeps, CaptchaClaims, PlaywrightFacade, TabJanitor};
 use crate::config::{AppConfig, Defaults, HostedMode};
 use crate::dispatch::{Dispatcher, Observer, RegistryBuilder};
@@ -160,17 +160,7 @@ impl App {
         log_startup(&config, address);
 
         let store = open_trace(&config.env.trace_dir()).await?;
-        // The default limits until the host's `trace.valueBytes` reaches the writer, which
-        // happens below, as soon as the settings are loaded and before any run.
-        let redactor = Redactor::new(RedactionLimits::default());
-        let writer = WriterConfig {
-            replay_window: Defaults::REPLAY_WINDOW,
-            ..WriterConfig::default()
-        };
-        // The writer decides which ops get a screenshot; neo-service's camera takes them
-        // once the browser links.
-        let (shots, screenshots) = neo_trace::screenshot_queue();
-        let trace = neo_trace::spawn_writer(&store, redactor, writer, Some(shots));
+        let (trace, screenshots) = start_trace(&store);
         let host = HostApi::bind(
             &config.env.host_api,
             HostInputs {
@@ -218,9 +208,10 @@ impl App {
             trace.clone(),
             Arc::clone(&browser),
             Arc::clone(&tabs),
-            Observer::new(playwright),
+            Observer::new(Arc::clone(&playwright) as _),
         ));
         let shutdown = CancellationToken::new();
+        let blank_tab = keep_blank_tab(&browser, &tabs, &store, &playwright, &shutdown);
         let runs = RunService::new(RunServiceParts {
             dispatcher: Arc::clone(&dispatcher),
             browser: Arc::clone(&browser),
@@ -230,6 +221,7 @@ impl App {
             settings: settings.clone(),
             shutdown: shutdown.clone(),
             orphan_grace: Defaults::ORPHAN_GRACE,
+            blank_tab: Some(Arc::clone(&blank_tab)),
         });
         let mcp = McpServer::new(runs, dispatcher.registry());
         // Armed by the host API with its locks and fits, for the janitor.
@@ -239,6 +231,7 @@ impl App {
             takeover,
             front,
             Arc::clone(&holds),
+            Some(blank_tab),
             shutdown.clone(),
         ));
         tokio::spawn(housekeeping(
@@ -312,6 +305,37 @@ impl fmt::Debug for App {
             .field("agent", &self.agent)
             .finish_non_exhaustive()
     }
+}
+
+/// The trace writer over `store`, and the camera's end of its screenshot queue. The writer
+/// starts at the default limits until the host's `trace.valueBytes` reaches it, which `start_on`
+/// does as soon as the settings are loaded and before any run. It decides which ops get a
+/// screenshot; neo-service's camera takes them once the browser links.
+fn start_trace(store: &TraceStore) -> (TraceSink, ShotJobs) {
+    let redactor = Redactor::new(RedactionLimits::default());
+    let writer = WriterConfig {
+        replay_window: Defaults::REPLAY_WINDOW,
+        ..WriterConfig::default()
+    };
+    let (shots, screenshots) = neo_trace::screenshot_queue();
+    let trace = neo_trace::spawn_writer(store, redactor, writer, Some(shots));
+    (trace, screenshots)
+}
+
+/// Neo's blank tab (`NeoTab`), kept open for the process's life: every close first makes sure of
+/// it (`PlaywrightFacade::keep`), and a task follows the link's watch starts and its closes. The
+/// sidecar's alone: the Node-hosted embedding's host launched its own browser.
+fn keep_blank_tab(
+    browser: &Arc<BrowserLink>,
+    tabs: &Arc<TabRegistry>,
+    store: &TraceStore,
+    playwright: &Arc<PlaywrightFacade>,
+    shutdown: &CancellationToken,
+) -> Arc<NeoTab> {
+    let blank_tab = NeoTab::new(Arc::clone(browser), Arc::clone(tabs), store.clone());
+    playwright.keep(Arc::clone(&blank_tab));
+    tokio::spawn(Arc::clone(&blank_tab).follow(shutdown.clone()));
+    blank_tab
 }
 
 /// Tells the trace writer what to record (`trace.screenshots`, `trace.valueBytes`, `trace.values`) now and after

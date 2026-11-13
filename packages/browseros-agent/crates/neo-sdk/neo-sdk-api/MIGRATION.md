@@ -170,7 +170,7 @@ The hosted server read its behaviour from `neo.toml` (`tabs.grouping`, `tabs.clo
 
 | `neo.toml` | claw-sdk | Notes |
 |---|---|---|
-| `tabs.close_after_minutes = 5` | `PUT /v1/settings {"tabs":{"idleCloseSeconds":300}}` | Counts from the tab's last use, not from a session's end: a run in flight that used the tab, a lock or a fit on it all count as use. A popup an agent's tab opened is closed with it. The browser's last tab is never closed |
+| `tabs.close_after_minutes = 5` | `PUT /v1/settings {"tabs":{"idleCloseSeconds":300}}` | Counts from the tab's last use, not from a session's end: a run in flight that used the tab, a lock or a fit on it all count as use. A popup an agent's tab opened is closed with it. Neo's own blank tab keeps the browser open |
 | `run.wall_timeout_seconds = 120` | each `run` call's `timeout` (`120000`) | Per call, not a setting |
 | `tabs.grouping`, `scripts.isolated_world` | — | No tab groups; Neo's own page scripts always run in the isolated world |
 | — | `trace.retentionSeconds` | How long the trace keeps a run, 7 days by default and at least an hour |
@@ -184,6 +184,25 @@ nothing applies. Neo saves what the host set under `/data` and loads it at every
 server alone and a new container on the same `/data` alike. Send the `PUT` at every start of the host
 anyway, so the saved set is what the host wants now and not what an older host or a hand `PATCH` left. A
 server from before the settings answers 404.
+
+## Neo's blank tab
+
+Closing the browser's last tab quits the browser and Neo's server with it. Neo keeps one blank tab of
+its own open at all times, so a host's tab reset no longer needs a keeper tab of its own: close every
+tab the agent left, and Neo's tab keeps the browser alive.
+
+- `GET /v1/tabs` lists it with `owner: "neo"`; every other tab has no `owner`. Locks, fits, takeovers and
+  display follow treat it as any tab.
+- It is the one exception to `context.pages()` listing every tab: no script sees it, no task takes it,
+  and an op that names its tab fails `script / invalid_input` with nothing sent.
+- Every close Neo makes opens it first if it is missing. If Neo cannot open it and the browser lists
+  no other tab, `page.close()` fails `neo / cdp_error` with nothing sent, rather than quit the browser.
+- After a browser restart Neo adopts a blank tab no task owns (the launch tab, or its own restored
+  tab) before opening another. If the owner closes it, Neo opens another.
+- Neo keeps it only while it is blank. Once the owner browses in it, or `POST /v1/fits/{id}/navigate`
+  moves it, Neo opens a new blank tab and hands the old one back as an ordinary owner's tab: it loses
+  `owner`, scripts list it (at once when they list tabs, else within 30 seconds), a context's `page`
+  listeners hear of it as a new page, and the janitor never closes it.
 
 ## Downloads
 

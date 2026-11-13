@@ -14,6 +14,8 @@
 //!  tab_watch ── per epoch: Target.setDiscoverTargets, then each page target's tab, a listing
 //!               after every burst of target events, and a TabEvent for each tab that opened
 //!               or closed, in order; the listing fires core's detach hook promptly
+//!  NeoTab ── Neo's one blank tab (TabOrigin::Neo), kept open on every watch start and after
+//!            each close of it, so no other close ends the browser (the sidecar only)
 //! ```
 //!
 //! Views are unbound. On BrowserOS 0.51.1.3 and later a bound capture costs 4 to 6 CDP round
@@ -23,6 +25,7 @@
 //! its run, and the run cannot cross a connection epoch.
 
 mod browser_link;
+mod neo_tab;
 mod page_ref;
 mod tab_registry;
 mod tab_watch;
@@ -31,6 +34,9 @@ mod task_book;
 mod tests;
 
 pub(crate) use browser_link::{BrowserLink, LinkStatus, RunView};
+#[cfg(test)]
+pub(crate) use neo_tab::Adopt;
+pub(crate) use neo_tab::NeoTab;
 pub(crate) use page_ref::PageRef;
 pub(crate) use tab_registry::{Seen, TabRegistry};
 pub(crate) use tab_watch::{TabEvent, TabListing, Watched};

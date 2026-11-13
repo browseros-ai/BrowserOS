@@ -44,6 +44,14 @@ return {{ title: await page.title(), heading: await page.locator('#h').textConte
          value: await page.getByLabel('Name').inputValue() }};
 """
 
+# Every tab a script can see, closed one by one. Neo's own blank tab, which no script sees, keeps
+# the browser open, and the server the browser runs.
+CLOSE_ALL = """\
+const pages = context.pages();
+for (const each of pages) await each.close();
+return { closed: pages.length };
+"""
+
 
 def connect(url: str):
     # Imported here so `probe` runs from stdin in a container that has only this file.
@@ -90,6 +98,10 @@ def run(url: str, task_id: str, request_id: str) -> dict:
     tools = [tool["name"] for tool in client.tools()]
     meta = {"requestId": request_id, "taskId": task_id, "hostData": {"check": "accept"}}
     return {"tools": tools, **call_run(client, CODE, meta)}
+
+
+def close_all(url: str) -> dict:
+    return call_run(connect(url), CLOSE_ALL, {"hostData": {"check": "accept"}})
 
 
 def host_raw(socket_path: str, token_file: str, path: str, method: str = "GET", body: bytes = b""):
@@ -577,6 +589,8 @@ def main() -> None:
     elif command == "host-send":
         # socket, token file, method, path, JSON body
         out = host(args[0], args[1], urllib.parse.quote(args[3], safe="/?=&"), args[2], args[4])
+    elif command == "close-all":
+        out = close_all(args[0])
     elif command == "describe":
         out = describe(args[0])
     elif command == "listeners":

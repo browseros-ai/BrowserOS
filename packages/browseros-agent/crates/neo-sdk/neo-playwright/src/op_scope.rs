@@ -158,6 +158,23 @@ impl<'env> OpScope<'env> {
         self.env.run_state()
     }
 
+    /// Whether `tab` is the host's own, which scripts never see (`OpEnv::is_reserved_tab`). Ask
+    /// after [`OpScope::reserved_tabs_settled`] for any tab a listing or an event named.
+    pub(crate) fn is_reserved_tab(&self, tab: TabId) -> bool {
+        self.env.is_reserved_tab(tab)
+    }
+
+    /// Waits until a reserved tab the host is opening is marked, and one in `listed` (a fresh
+    /// listing a script is about to be shown; empty for an event) that shows a page is handed
+    /// back (`OpEnv::reserved_tabs_settled`).
+    pub(crate) async fn reserved_tabs_settled(&self, listed: &[PageInfo]) {
+        let listed: Vec<(TabId, &str)> = listed
+            .iter()
+            .map(|page| (page.tab_id, page.url.as_str()))
+            .collect();
+        self.env.reserved_tabs_settled(&listed).await;
+    }
+
     /// The browser's startup mode, supplied by the host for this operation.
     pub(crate) fn hosted_mode(&self) -> bool {
         self.env.hosted_mode()
