@@ -181,8 +181,9 @@ impl FakeXvnc {
             .unwrap_or(false)
     }
 
-    /// Stops reading what clients send after their handshake, as a busy Xvnc does: the bytes
-    /// wait on each socket, in order, until [`FakeXvnc::resume_reads`].
+    /// Stops reading what clients send after their handshake, as a busy Xvnc does, from the next
+    /// message on (also on a connection already waiting for one): the bytes wait on each socket,
+    /// in order, until [`FakeXvnc::resume_reads`].
     pub fn hold_reads(&self) {
         self.shared.reads_held.send_replace(true);
     }
@@ -393,8 +394,10 @@ async fn converse(shared: &Shared, socket: &mut TcpStream, connection: usize) ->
                 socket.write_all(&shared.update(None)).await?;
                 continue;
             }
-            resumed = reads_held.changed(), if !reading => {
-                if resumed.is_err() {
+            // A hold or a resume takes effect at once, also while a read waits for its next byte:
+            // `read_u8` consumes nothing until a byte is there, so cancelling it loses none.
+            changed = reads_held.changed() => {
+                if changed.is_err() {
                     return Ok(());
                 }
                 continue;

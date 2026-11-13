@@ -123,12 +123,13 @@ impl DisplayBinding {
     /// its last input is unproven.
     #[must_use]
     pub fn input_drained(&self) -> Option<bool> {
-        let drained = *self.drained.lock().unwrap_or_else(PoisonError::into_inner);
-        if self.live.is_empty() {
-            drained
-        } else {
-            Some(false)
+        // The tracker first: a display records its outcome before it leaves the tracker, so once
+        // the tracker is empty every display that ended has recorded. Read the other way round, a
+        // display ending between the two reads would be missed.
+        if !self.live.is_empty() {
+            return Some(false);
         }
+        *self.drained.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// One bound display ended, drained or not.
