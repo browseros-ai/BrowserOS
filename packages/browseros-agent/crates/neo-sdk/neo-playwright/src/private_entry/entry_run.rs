@@ -21,6 +21,7 @@
 //! `at` got some; the delivery is the door's derivation (`entry.rs`).
 
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
@@ -735,14 +736,18 @@ impl Drop for ForgetGuard {
 
 /// The tabs whose documents took a private entry, for the host's camera (design section
 /// 10.3) and a script's own pictures (ruling R46): marked before the first character, and kept
-/// for the tab's life, because going back in history restores a text box. Kept in this process
-/// only: a Neo restart forgets them while the browser keeps the tab, so Neo pictures the tab
-/// again, a documented limit until a synced record of the tabs' targets comes (the follow-up of
-/// ruling R45). The boxes' marks live in the page's isolated world and survive a restart of the
-/// same Neo; an upgrade that changes the probe's protocol number loses them.
+/// for the tab's life, because going back in history restores a text box. Kept in memory; the
+/// host's synced record of the tabs' targets (neo-server's `FilledTabs`, ruling R45) seeds this
+/// set when Neo starts again with the browser and its tabs kept (`keep_private_tab`), or marks
+/// every tab when the browser's tabs cannot be listed (`keep_every_tab`). The boxes' marks live
+/// in the page's isolated world and survive a restart of the same Neo; an upgrade that changes
+/// the probe's protocol number loses them, while the tab stays withheld by the record.
 #[derive(Debug, Default)]
 pub(crate) struct PrivateTabs {
     tabs: Mutex<HashSet<TabId>>,
+    /// Every tab counts, for this instance's life: the host's record could not be read back
+    /// (`Playwright::keep_every_tab`).
+    every: AtomicBool,
 }
 
 impl PrivateTabs {
@@ -754,10 +759,16 @@ impl PrivateTabs {
     }
 
     pub(crate) fn took(&self, tab: TabId) -> bool {
-        self.tabs
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .contains(&tab)
+        self.every.load(Ordering::Acquire)
+            || self
+                .tabs
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .contains(&tab)
+    }
+
+    pub(crate) fn mark_every(&self) {
+        self.every.store(true, Ordering::Release);
     }
 
     /// A script's own picture of `tab` (`page.screenshot`, `locator.screenshot`, `page.pdf`):

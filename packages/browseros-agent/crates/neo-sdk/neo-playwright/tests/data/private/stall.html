@@ -1,0 +1,16 @@
+<!doctype html><meta charset=utf-8><title>Stall</title>
+<!-- A frame that stops answering. Its first message names a URL that answers nothing for a few
+     seconds; the frame asks it with a synchronous request, which blocks its renderer outside any
+     script, where Chromium cannot interrupt it to answer a devtools command (a busy script loop
+     does not stall it: devtools interrupts the script and answers). Later messages are ignored. -->
+<input aria-label="Plain">
+<script>
+let stalled = false;
+addEventListener('message', (event) => {
+  if (stalled) return;
+  stalled = true;
+  const request = new XMLHttpRequest();
+  request.open('GET', String(event.data), false);
+  try { request.send(); } catch {}
+});
+</script>

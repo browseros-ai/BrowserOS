@@ -61,7 +61,8 @@ fn with_frame_context(conformance: bool, hint: impl FnOnce() -> bool) -> ProbePo
 }
 
 /// The only requests allowed after an operation's scope has ended. A token-specific verdict
-/// stops its own interceptor during navigation; it cannot stop a later operation's arm.
+/// stops its own interceptor during navigation; it cannot stop a later operation's arm. The one
+/// other request sent without an op is the camera's [`picture_question`].
 pub(crate) enum Control {
     Disarm,
     Verdict { token: u32 },
@@ -70,7 +71,8 @@ pub(crate) enum Control {
 }
 
 /// Best-effort detached cleanup has no general request overload. Its captured policy cannot
-/// authorize a fresh read or action once the operation's admission and deadline are gone.
+/// authorize a fresh read or action once the operation's admission and deadline are gone. The
+/// camera's [`picture_question`] is the other sender outside an op, fixed to one request.
 pub(crate) async fn cleanup(
     policy: ProbePolicy,
     world: &IsolatedWorld,
@@ -86,6 +88,25 @@ pub(crate) async fn cleanup(
         Control::ScreenshotMaskCleanup => ProbeRequest::ScreenshotMaskCleanup,
     };
     send(world, &request, policy, Handed::NONE, Gesture::None).await
+}
+
+/// Neo's camera's one question, asked outside any op (protected-fill ruling R45): only
+/// `privateShown`, which changes nothing and reads no value out of the page. It installs no
+/// mask and reads neither policy field; the policy is only the envelope every call carries, so
+/// it sends a fixed one. With [`cleanup`], the second sender that runs without an op.
+pub(crate) async fn picture_question(world: &IsolatedWorld) -> Result<ProbeReply, ProbeFailure> {
+    let policy = ProbePolicy {
+        conformance: false,
+        may_have_other_frame: true,
+    };
+    send(
+        world,
+        &ProbeRequest::PrivateShown,
+        policy,
+        Handed::NONE,
+        Gesture::None,
+    )
+    .await
 }
 
 /// Why a probe call or an install produced no reply.

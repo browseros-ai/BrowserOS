@@ -157,6 +157,20 @@ pub(crate) fn pages() -> HashMap<String, Page> {
         ("rewrite", include_str!("../data/private/rewrite.html")),
         ("swap", include_str!("../data/private/swap.html")),
         ("labelled", include_str!("../data/private/labelled.html")),
+        (
+            "closed-card",
+            include_str!("../data/private/closed-card.html"),
+        ),
+        (
+            "ten-frames",
+            include_str!("../data/private/ten-frames.html"),
+        ),
+        (
+            "checkout-ads",
+            include_str!("../data/private/checkout-ads.html"),
+        ),
+        ("ad", include_str!("../data/private/ad.html")),
+        ("stall", include_str!("../data/private/stall.html")),
         ("stale", include_str!("../data/private/stale.html")),
         ("stray", include_str!("../data/private/stray.html")),
     ]

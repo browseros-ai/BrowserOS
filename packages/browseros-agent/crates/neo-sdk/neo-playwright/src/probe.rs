@@ -25,7 +25,7 @@ pub(crate) use probe_call::call_for_tests;
 
 pub(crate) use probe_call::{
     Control, NAVIGATED_OR_CLOSED, ProbeFailure, Ran, call, call_on, call_with_gesture,
-    call_with_nodes, cleanup, pinned_nodes, pinned_object, reply_of,
+    call_with_nodes, cleanup, picture_question, pinned_nodes, pinned_object, reply_of,
 };
 pub(crate) use probe_reply::{
     ErrorClass, Hit, PROBE_PROTOCOL, PageText, Point, ProbeReply, Rect, Resolution, SnapshotIframe,

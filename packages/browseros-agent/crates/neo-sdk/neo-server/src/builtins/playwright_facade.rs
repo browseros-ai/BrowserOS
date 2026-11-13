@@ -1,16 +1,19 @@
 //! The process's one neo-playwright facade.
 
 use std::sync::{Arc, Weak};
+use std::time::Duration;
 
 use browseros_core::{TabId, TargetId};
 
 use futures_util::future::BoxFuture;
-use neo_playwright::{EventFence, FileAccess, Playwright};
+use neo_http::PictureVerdict;
+use neo_playwright::{EventFence, FileAccess, PictureCheck, Playwright};
 use tokio::sync::{OnceCell, SetOnce};
+use tokio::time;
 
 use crate::browser::{BrowserLink, NeoTab};
 use crate::dispatch::{EventLog, WorkerFact};
-use crate::host::AgentFront;
+use crate::host::{AgentFront, FilledTabs, LiveTab};
 
 /// neo-playwright's `Playwright` for this process. The crate wants one per browser
 /// connection, and Neo has exactly one: the link's session, which exists from the first
@@ -33,6 +36,10 @@ pub(crate) struct PlaywrightFacade {
     /// Neo's blank tab, made sure of before every close; unset in the Node-hosted embedding,
     /// whose host launched the browser itself.
     blank_tab: SetOnce<Arc<NeoTab>>,
+    /// The tabs that took a host's private fill before a restart, read back into the entry's own
+    /// set when the facade is built, so no op runs before it holds them (ruling R45). `None` in
+    /// the embedding, which serves no host API and so no fill.
+    filled: Option<Arc<FilledTabs>>,
 }
 
 impl PlaywrightFacade {
@@ -42,6 +49,7 @@ impl PlaywrightFacade {
         hosted: bool,
         front: Arc<AgentFront>,
         file_access: Arc<FileAccess>,
+        filled: Option<Arc<FilledTabs>>,
     ) -> Arc<Self> {
         let facade = Arc::new(Self {
             link,
@@ -50,6 +58,7 @@ impl PlaywrightFacade {
             file_access,
             playwright: OnceCell::new(),
             blank_tab: SetOnce::new(),
+            filled,
         });
         // Waits for a first connect that may never come; nothing waits on this task.
         let early = Arc::clone(&facade);
@@ -118,15 +127,68 @@ impl PlaywrightFacade {
             .is_some_and(|playwright| playwright.took_private_text(tab))
     }
 
+    /// What `tab` shows now, for the camera (ruling R45): whether any frame holds a box masking
+    /// treats as private, not empty and painted in clear. Private before the facade is built
+    /// and whenever a frame cannot be read, so a picture is never stored on a guess.
+    pub(crate) async fn picture_verdict(&self, tab: TabId) -> PictureVerdict {
+        let Some(playwright) = self.playwright.get() else {
+            return PictureVerdict::Private;
+        };
+        match playwright.picture_check(tab).await {
+            PictureCheck::Clear { reading } => PictureVerdict::Clear { reading },
+            PictureCheck::Private | PictureCheck::Unknown => PictureVerdict::Private,
+        }
+    }
+
     /// The facade, built here if the background start has not finished. An op runs only
     /// inside a run, and a run starts only once the link connected, so this does not wait on
     /// the browser.
     pub(crate) async fn get(&self) -> &Arc<Playwright> {
         self.playwright
-            .get_or_init(|| async { Playwright::new(self.link.linked().await) })
+            .get_or_init(|| async {
+                let playwright = Playwright::new(self.link.linked().await);
+                if let Some(filled) = &self.filled {
+                    remember_filled(filled, &self.link, &playwright).await;
+                }
+                playwright
+            })
             .await
     }
 }
+
+/// The tabs the record names that the browser still has, marked in the entry's own set before
+/// the facade serves its first op: Neo's camera and a script's screenshot then refuse them as
+/// before the restart. The browser's own tab list is read unfiltered, so a tab on an extension
+/// page is not dropped. A listing that keeps failing fails closed.
+async fn remember_filled(filled: &FilledTabs, link: &BrowserLink, playwright: &Playwright) {
+    if filled.is_empty() {
+        return;
+    }
+    for _attempt in 0..LISTING_ATTEMPTS {
+        if let Some(tabs) = link.every_tab().await {
+            let live: Vec<LiveTab> = tabs
+                .into_iter()
+                .map(|(target, tab)| LiveTab { target, tab })
+                .collect();
+            for tab in filled.live(&live).await {
+                playwright.keep_private_tab(tab);
+            }
+            return;
+        }
+        time::sleep(LISTING_RETRY).await;
+    }
+    // Fail closed: which of the browser's tabs the record names cannot be told, so every tab is
+    // treated as having taken a fill for this process's life.
+    tracing::error!(
+        "cannot list the browser's tabs at start; every tab is treated as having taken a private fill"
+    );
+    playwright.keep_every_tab();
+}
+
+/// How often the start asks the browser for its tabs before it fails closed, and how long it
+/// waits between asks.
+const LISTING_ATTEMPTS: u32 = 3;
+const LISTING_RETRY: Duration = Duration::from_millis(500);
 
 impl EventLog for PlaywrightFacade {
     fn fence(&self) -> EventFence {

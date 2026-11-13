@@ -42,7 +42,7 @@ use crate::dispatch::{
     PageTarget, PendingReply, Policy, PolicyCheck, RegistryBuilder, RegistryError, RunCtx, RunEnd,
     RunGuard, RunStart, StopReason, Visibility,
 };
-use crate::host::{HostHolds, TakeoverLock};
+use crate::host::{FilledTabs, HostHolds, TakeoverLock};
 use crate::runtime::{Script, ScriptOutcome, run_script};
 use crate::test_rig::{TestError, on_neo_runtime};
 use crate::test_support::FakeCdp;
@@ -136,7 +136,7 @@ impl Harness {
         let live = settings.clone();
         let file_access = Arc::new(FileAccess::new(move || live.read_dirs(), Vec::new()));
         let playwright =
-            PlaywrightFacade::start(Arc::clone(&link), hosted, Arc::default(), file_access);
+            PlaywrightFacade::start(Arc::clone(&link), hosted, Arc::default(), file_access, None);
         let mut registry = RegistryBuilder::default();
         let deps = BuiltinDeps {
             solver,
@@ -5455,5 +5455,54 @@ async fn an_open_outlives_a_caller_that_stops_waiting() -> Result<(), Box<dyn Er
         1,
         "never a second tab"
     );
+    Ok(())
+}
+
+/// Ruling R45, the start's fail-closed side: a record that names a tab, and a browser whose tab
+/// list cannot be had at start, so which tabs the record names cannot be told. Every tab is
+/// then treated as having taken a fill, so Neo's camera and a script's screenshot refuse them.
+/// The control: the same start with the list answered marks no tab the record does not name.
+#[tokio::test]
+async fn a_start_that_cannot_list_the_tabs_treats_every_tab_as_filled() -> Result<(), Box<dyn Error>>
+{
+    for listed in [true, false] {
+        let fake = FakeCdp::new();
+        let tab = fake.open_tab("https://shop.test/", "Shop");
+        let connect = Arc::clone(&fake);
+        let link = BrowserLink::start_with(
+            NativeCapabilities::default(),
+            Arc::new(TabRegistry::new()),
+            move || future::ready(connect.connect()),
+        );
+        within(async {
+            while !link.is_ready() {
+                time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await?;
+        if !listed {
+            // A reply without its tab list: the start cannot tell which tabs the record names.
+            fake.answer("Browser.getTabs", json!({}));
+        }
+        let dir = tempfile::tempdir()?;
+        // The record names a tab the browser no longer has.
+        fs::write(dir.path().join("filled-tabs"), "\nGONE-TARGET\n")?;
+        let filled = FilledTabs::open(dir.path()).await;
+        let file_access = Arc::new(FileAccess::new(Vec::new, Vec::new()));
+        let facade = PlaywrightFacade::start(
+            Arc::clone(&link),
+            false,
+            Arc::default(),
+            file_access,
+            Some(filled),
+        );
+        within(facade.get()).await?;
+        assert_eq!(
+            facade.took_private_text(tab),
+            !listed,
+            "listed: {listed}: a tab the record does not name is withheld only when the list \
+             could not be had"
+        );
+    }
     Ok(())
 }

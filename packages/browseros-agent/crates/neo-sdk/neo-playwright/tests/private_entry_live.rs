@@ -29,18 +29,20 @@ use std::iter;
 use std::sync::Arc;
 use std::time::Duration;
 
-use browseros_core::ProtocolSession;
+use browseros_core::{ProtocolSession, TabId};
 use fixture_server::FixtureServer;
 use input_recording::{InputCall, InputRecording};
 use live_browser::{LiveBrowser, TestPage, TestResult};
 use neo_playwright::{
-    BoxSpec, Entry, EntryOutcome, EntryRequest, Expect, Op, PrivateField, PrivateText,
+    BoxSpec, Entry, EntryOutcome, EntryRequest, Expect, Op, PictureCheck, PrivateField, PrivateText,
 };
 use neo_trace::{Delivery, ErrorOwner};
 use private_host::HostEnv;
 use serde_json::{Value, json};
-use tokio::sync::{Semaphore, SemaphorePermit};
-use tokio::time::Instant;
+use tokio::io::AsyncReadExt;
+use tokio::net::TcpListener;
+use tokio::sync::{Semaphore, SemaphorePermit, oneshot};
+use tokio::time::{self, Instant};
 
 /// A tab in front of the window, or behind another tab.
 #[derive(Clone, Copy, Debug)]
@@ -2105,5 +2107,449 @@ async fn tests_that_a_name_built_from_a_privately_typed_box_reads_as_bullets() -
         !error.contains(MARKED) && error.contains(&bullets),
         "the name built from the box reads as bullets: {error}"
     );
+    bench.close(opened).await
+}
+
+/// Ruling R45: a card box the page declares, in a cross-site frame, filled by a script: Neo's
+/// reading of the tab is private while it holds the number, and clear once the script empties
+/// it. The reading walks every frame, the cross-site one on its own session.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_card_number_a_script_typed_in_a_cross_site_frame_keeps_pictures_off()
+-> TestResult {
+    let bench = Bench::start().await?;
+    let opened = bench
+        .open(
+            "/private/xframe.html?src=card-field.html%3Ffield%3Dnumber",
+            Place::Front,
+        )
+        .await?;
+    let number = bench.r#ref(&opened, "textbox", "Card number").await?;
+    let page = opened.page.brand();
+    let fill = |value: &str| {
+        json!({
+            "call": { "api": "locator.fill", "timeoutMs": 5_000 },
+            "target": ref_target(&page, &number), "strict": "strict", "value": value,
+        })
+    };
+    let playwright = &bench.live.playwright;
+    assert!(
+        matches!(
+            playwright.picture_check(opened.page.tab).await,
+            PictureCheck::Clear { .. }
+        ),
+        "an empty card box reads clear"
+    );
+    bench.live.invoke("locator.fill", fill(CARD)).await??;
+    assert_eq!(
+        playwright.picture_check(opened.page.tab).await,
+        PictureCheck::Private,
+        "a card number in a cross-site frame, painted in clear"
+    );
+    bench.live.invoke("locator.fill", fill("")).await??;
+    assert!(
+        matches!(
+            playwright.picture_check(opened.page.tab).await,
+            PictureCheck::Clear { .. }
+        ),
+        "emptied, the page reads clear again"
+    );
+    bench.close(opened).await
+}
+
+/// Ruling R45: the input count reaches the reading. A script types a card number and empties
+/// it again between two looks, in the page's own document and in a cross-site frame: both looks
+/// read clear, and they differ, so a picture taken between them is dropped.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_value_typed_and_emptied_between_two_looks_changes_the_reading() -> TestResult
+{
+    let bench = Bench::start().await?;
+    for path in [
+        "/private/card-field.html?field=number",
+        "/private/xframe.html?src=card-field.html%3Ffield%3Dnumber",
+    ] {
+        let opened = bench.open(path, Place::Front).await?;
+        let number = bench.r#ref(&opened, "textbox", "Card number").await?;
+        let page = opened.page.brand();
+        let fill = |value: &str| {
+            json!({
+                "call": { "api": "locator.fill", "timeoutMs": 5_000 },
+                "target": ref_target(&page, &number), "strict": "strict", "value": value,
+            })
+        };
+        let playwright = &bench.live.playwright;
+        let before = playwright.picture_check(opened.page.tab).await;
+        bench.live.invoke("locator.fill", fill(CARD)).await??;
+        bench.live.invoke("locator.fill", fill("")).await??;
+        let after = playwright.picture_check(opened.page.tab).await;
+        assert!(
+            matches!(
+                (&before, &after),
+                (PictureCheck::Clear { reading: a }, PictureCheck::Clear { reading: b }) if a != b
+            ),
+            "{path}: both looks clear and different: {before:?} then {after:?}"
+        );
+        bench.close(opened).await?;
+    }
+    Ok(())
+}
+
+/// Ruling R45's named limit: until a snapshot of the document has walked a closed shadow root,
+/// Neo does not know the boxes inside it, and a picture taken then can show what one holds,
+/// whoever typed it (here the page's own script; the keyboard would do the same). A marked
+/// snapshot that walks the root closes it for that document.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_box_in_a_closed_root_is_known_once_a_snapshot_walked_it() -> TestResult {
+    let bench = Bench::start().await?;
+    let opened = bench
+        .open("/private/closed-card.html", Place::Front)
+        .await?;
+    let typed = bench
+        .live
+        .main_world(&opened.page, "fillCard('4242424242424242')")
+        .await?;
+    assert_eq!(typed, json!(16));
+    let playwright = &bench.live.playwright;
+    assert!(
+        matches!(
+            playwright.picture_check(opened.page.tab).await,
+            PictureCheck::Clear { .. }
+        ),
+        "the limit: no snapshot walked the closed root yet"
+    );
+    // A marked snapshot: clickable marking reads the DOM capture and hands the closed root's
+    // seeds to the document's world.
+    bench
+        .live
+        .invoke(
+            "page.ariaSnapshot",
+            json!({
+                "call": { "api": "page.ariaSnapshot", "timeoutMs": 10_000 },
+                "page": opened.page.brand(), "mode": "ai", "clickable": true,
+            }),
+        )
+        .await??;
+    assert_eq!(
+        playwright.picture_check(opened.page.tab).await,
+        PictureCheck::Private,
+        "after a marked snapshot walked the root, its box is known"
+    );
+    bench.close(opened).await
+}
+
+/// Ruling R45's cost: one reading of a tab of ten card frames, every other one cross-site, the
+/// first time (each frame's world installed) and the second; and one DOM capture of an ordinary
+/// page, what a closed-root walk in the reading would add. Printed, not bounded.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_what_one_reading_of_ten_frames_costs() -> TestResult {
+    let bench = Bench::start().await?;
+    let opened = bench
+        .open("/private/ten-frames.html?nodes=2500", Place::Front)
+        .await?;
+    // Every frame loaded, asked of the page itself, so no snapshot installs a frame's world
+    // before the first reading is timed.
+    for _ in 0..100 {
+        let loaded = bench
+            .live
+            .main_world(
+                &opened.page,
+                "document.querySelectorAll('iframe[data-loaded]').length",
+            )
+            .await?;
+        if loaded == json!(10) {
+            break;
+        }
+        time::sleep(Duration::from_millis(50)).await;
+    }
+    let playwright = &bench.live.playwright;
+    let first = Instant::now();
+    let reading = playwright.picture_check(opened.page.tab).await;
+    let first = first.elapsed();
+    let second = Instant::now();
+    let again = playwright.picture_check(opened.page.tab).await;
+    let second = second.elapsed();
+    assert!(matches!(reading, PictureCheck::Clear { .. }), "{reading:?}");
+    assert_eq!(reading, again, "nothing changed between the two readings");
+    let session = bench
+        .live
+        .browser
+        .pages
+        .get_session(opened.page.id.clone())
+        .await?;
+    let captured = Instant::now();
+    session
+        .session
+        .send_value(
+            "DOMSnapshot.captureSnapshot",
+            json!({ "computedStyles": [] }),
+        )
+        .await?;
+    let captured = captured.elapsed();
+    #[expect(
+        clippy::print_stderr,
+        reason = "the measured cost goes to the test output for the pull request"
+    )]
+    {
+        eprintln!(
+            "one reading of 10 frames: first {first:?}, second {second:?}; a DOM capture of the \
+             page (2500 elements and its frames' documents): {captured:?}"
+        );
+    }
+    bench.close(opened).await
+}
+
+/// Ruling R45 (found by the design's author): a child frame that moves to another document with
+/// no op touching it leaves the camera a stale world. The reading drops it and installs afresh,
+/// so the frame is listed again on its new document. Without that it would answer `Gone` at
+/// every reading and, under R54, be left out for good: a payment frame Neo no longer sees.
+/// The same-site frame is the strict case: it lives on the page's own session, which never
+/// changes, so its stale world is always met. A cross-site frame may get a new session when it
+/// moves (the browser's choice, varying by run) and then a fresh world under a new key.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_child_frame_that_moved_on_is_read_afresh() -> TestResult {
+    let bench = Bench::start().await?;
+    let playwright = &bench.live.playwright;
+    // The card frame is the one document holding a private box (a card number, then a security
+    // code), so a reading lists it alone: its frame, then its document and input count.
+    let entries = |check: &PictureCheck| match check {
+        PictureCheck::Clear { reading } => reading
+            .split(';')
+            .filter(|entry| !entry.is_empty())
+            .filter_map(|entry| entry.split_once('='))
+            .map(|(frame, rest)| (frame.to_owned(), rest.to_owned()))
+            .collect::<Vec<_>>(),
+        PictureCheck::Private | PictureCheck::Unknown => Vec::new(),
+    };
+    for path in [
+        "/private/xframe.html?same=1&src=card-field.html%3Ffield%3Dnumber",
+        "/private/xframe.html?src=card-field.html%3Ffield%3Dnumber",
+    ] {
+        let opened = bench.open(path, Place::Front).await?;
+        let first = playwright.picture_check(opened.page.tab).await;
+        let before = entries(&first);
+        assert_eq!(
+            before.len(),
+            1,
+            "{path}: the card frame is listed: {first:?}"
+        );
+        // The page moves the frame to another document with no op, and says once it loaded.
+        bench
+            .live
+            .main_world(
+                &opened.page,
+                "(document.getElementById('x').onload = () => { window.moved = true; }, \
+                  document.getElementById('x').src = \
+                  document.getElementById('x').src.replace('number', 'cvc'), 1)",
+            )
+            .await?;
+        let mut moved = false;
+        for _ in 0..250 {
+            moved = bench
+                .live
+                .main_world(&opened.page, "window.moved === true")
+                .await?
+                == json!(true);
+            if moved {
+                break;
+            }
+            time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(moved, "{path}: the frame's new document never loaded");
+        // Its new document has loaded: the next readings list it again, on that document.
+        let mut last = PictureCheck::Unknown;
+        for _ in 0..50 {
+            last = playwright.picture_check(opened.page.tab).await;
+            let after = entries(&last);
+            if after.len() == 1 && after != before {
+                break;
+            }
+            time::sleep(Duration::from_millis(200)).await;
+        }
+        let after = entries(&last);
+        assert!(
+            after.len() == 1
+                && before.first().map(|entry| &entry.0) == after.first().map(|entry| &entry.0)
+                && before != after,
+            "{path}: the moved frame is read afresh, on its new document: {first:?} then {last:?}"
+        );
+        bench.close(opened).await?;
+    }
+    Ok(())
+}
+
+/// What Neo's camera does with a picture, from two readings about a capture's time apart.
+#[derive(Debug, PartialEq, Eq)]
+enum Fate {
+    Kept,
+    Withheld,
+    Dropped,
+}
+
+async fn fate(bench: &Bench, tab: TabId) -> Fate {
+    let first = bench.live.playwright.picture_check(tab).await;
+    time::sleep(Duration::from_millis(150)).await;
+    let then = bench.live.playwright.picture_check(tab).await;
+    match (first, then) {
+        (PictureCheck::Clear { reading: a }, PictureCheck::Clear { reading: b }) if a == b => {
+            Fate::Kept
+        }
+        (PictureCheck::Clear { .. }, PictureCheck::Clear { .. }) => Fate::Dropped,
+        _ => Fate::Withheld,
+    }
+}
+
+/// Ruling R54's own case: the first card ever typed on a checkout page, and the payment frame
+/// removed, between the two looks. The frame holds an empty card box at the first look, so it is
+/// listed by that alone (no input counted yet); gone at the second, it is not. The readings
+/// differ and the picture is dropped. Ads churn beside it all along.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_the_first_card_typed_as_its_frame_leaves_drops_the_picture() -> TestResult {
+    let bench = Bench::start().await?;
+    let opened = bench
+        .open("/private/checkout-ads.html", Place::Front)
+        .await?;
+    let number = bench.r#ref(&opened, "textbox", "Card number").await?;
+    let page = opened.page.brand();
+    let playwright = &bench.live.playwright;
+    let first = playwright.picture_check(opened.page.tab).await;
+    bench
+        .live
+        .invoke(
+            "locator.fill",
+            json!({
+                "call": { "api": "locator.fill", "timeoutMs": 5_000 },
+                "target": ref_target(&page, &number), "strict": "strict", "value": CARD,
+            }),
+        )
+        .await??;
+    bench.live.main_world(&opened.page, "leave()").await?;
+    let then = playwright.picture_check(opened.page.tab).await;
+    assert!(
+        matches!(
+            (&first, &then),
+            (PictureCheck::Clear { reading: a }, PictureCheck::Clear { reading: b }) if a != b
+        ),
+        "the first card typed and the payment frame removed between the looks: dropped. \
+         {first:?} then {then:?}"
+    );
+    bench.close(opened).await
+}
+
+/// Ruling R54 (the design's author's checkout): a card box in a cross-site payment frame beside
+/// two ad frames that move to a new document every 120 ms. Ads hold no private box, so their
+/// churn never enters a reading: with the box empty every picture is kept. With the number
+/// shown, every one is withheld; emptied, kept again. A payment frame removed between the two
+/// looks after the number was typed drops the picture; once it is gone, pictures are kept.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_ad_churn_keeps_pictures_and_a_payment_frame_does_not() -> TestResult {
+    let bench = Bench::start().await?;
+    let opened = bench
+        .open("/private/checkout-ads.html", Place::Front)
+        .await?;
+    let number = bench.r#ref(&opened, "textbox", "Card number").await?;
+    let tab = opened.page.tab;
+    let page = opened.page.brand();
+    let fill = |value: &str| {
+        json!({
+            "call": { "api": "locator.fill", "timeoutMs": 5_000 },
+            "target": ref_target(&page, &number), "strict": "strict", "value": value,
+        })
+    };
+    for round in 0..10 {
+        assert_eq!(
+            fate(&bench, tab).await,
+            Fate::Kept,
+            "box empty, ads churning #{round}"
+        );
+    }
+    bench.live.invoke("locator.fill", fill(CARD)).await??;
+    for round in 0..5 {
+        assert_eq!(
+            fate(&bench, tab).await,
+            Fate::Withheld,
+            "the number shows #{round}"
+        );
+    }
+    bench.live.invoke("locator.fill", fill("")).await??;
+    for round in 0..5 {
+        assert_eq!(fate(&bench, tab).await, Fate::Kept, "emptied #{round}");
+    }
+    let first = bench.live.playwright.picture_check(tab).await;
+    bench.live.invoke("locator.fill", fill(CARD)).await??;
+    bench.live.main_world(&opened.page, "leave()").await?;
+    let then = bench.live.playwright.picture_check(tab).await;
+    assert!(
+        matches!(
+            (&first, &then),
+            (PictureCheck::Clear { reading: a }, PictureCheck::Clear { reading: b }) if a != b
+        ),
+        "the number typed and the payment frame removed between the looks: dropped. \
+         {first:?} then {then:?}"
+    );
+    for round in 0..5 {
+        assert_eq!(
+            fate(&bench, tab).await,
+            Fate::Kept,
+            "the frame gone #{round}"
+        );
+    }
+    bench.close(opened).await
+}
+
+/// Ruling R54: a frame that does not answer in time still withholds; it is never left out as a
+/// frame that has gone would be. The cross-site frame asks a connection this test holds open
+/// with a synchronous request, which blocks its renderer for five seconds outside any script.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_frame_that_does_not_answer_withholds() -> TestResult {
+    let hold = TcpListener::bind("127.0.0.1:0").await?;
+    let url = format!("http://127.0.0.1:{}/hold", hold.local_addr()?.port());
+    let (arrived, mut held) = oneshot::channel();
+    let holding = tokio::spawn(async move {
+        if let Ok((mut stream, _)) = hold.accept().await {
+            let mut request = [0_u8; 1024];
+            let _read = stream.read(&mut request).await;
+            let _told = arrived.send(());
+            time::sleep(Duration::from_secs(5)).await;
+        }
+    });
+    let bench = Bench::start().await?;
+    let opened = bench
+        .open("/private/xframe.html?src=stall.html", Place::Front)
+        .await?;
+    let playwright = &bench.live.playwright;
+    let first = playwright.picture_check(opened.page.tab).await;
+    assert!(matches!(first, PictureCheck::Clear { .. }), "{first:?}");
+    // Told again until the frame's document has loaded; once the held connection has its
+    // request, the frame's renderer is blocked in it.
+    let tell = format!(
+        "(document.getElementById('x').contentWindow.postMessage({}, '*'), 1)",
+        json!(url)
+    );
+    let mut blocked = false;
+    for _ in 0..250 {
+        bench.live.main_world(&opened.page, &tell).await?;
+        if time::timeout(Duration::from_millis(20), &mut held)
+            .await
+            .is_ok()
+        {
+            blocked = true;
+            break;
+        }
+    }
+    assert!(blocked, "the frame never asked the held connection");
+    assert_eq!(
+        playwright.picture_check(opened.page.tab).await,
+        PictureCheck::Unknown,
+        "a frame that cannot answer in time withholds the picture"
+    );
+    // The connection closes and the frame runs again before the tab closes.
+    holding.await?;
     bench.close(opened).await
 }

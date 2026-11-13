@@ -195,6 +195,7 @@ impl HostApi {
         if let Some(fill) = &fill {
             service.arm_fill(fill.door());
             service.arm_private_tabs(fill.took_private_text());
+            service.arm_picture_check(fill.checks_picture());
         }
         // The owner's two claims, the tab and the screen, from the same moment: no implicit
         // agent move runs past a viewer or a takeover once a host can open one.

@@ -9357,8 +9357,59 @@ ${value.stack}`;
     return false;
   }
 
+  // crates/neo-sdk/neo-playwright-js/src/probe/private-shown.ts
+  var inputs = 0;
+  var counting = false;
+  function privateShown(world) {
+    const { document: document2 } = world.injected;
+    const view = document2.defaultView;
+    if (!counting) {
+      counting = true;
+      document2.addEventListener("input", (event) => {
+        const target = event.composedPath()[0];
+        if (target instanceof Element && paintedInClear(target, view))
+          inputs += 1;
+      }, true);
+    }
+    const { shown, boxes } = look2(document2, view);
+    return { kind: "value", value: { shown, inputs, boxes } };
+  }
+  function look2(document2, view) {
+    const roots = [document2];
+    let boxes = false;
+    for (const root of roots) {
+      for (const field of root.querySelectorAll("input, textarea")) {
+        if (!isPrivateField(field, { declared: true }))
+          continue;
+        boxes = true;
+        if (paintedInClear(field, view))
+          return { shown: true, boxes };
+      }
+      for (const host of root.querySelectorAll("*")) {
+        const shadow = host.shadowRoot;
+        if (shadow)
+          roots.push(shadow);
+      }
+    }
+    return { shown: false, boxes };
+  }
+  function paintedInClear(field, view) {
+    if (!isPrivateField(field, { declared: true }))
+      return false;
+    const value = Reflect.get(field, "value");
+    if (typeof value !== "string" || value === "")
+      return false;
+    const security = view?.getComputedStyle(field).getPropertyValue("-webkit-text-security");
+    if (security && security !== "none")
+      return false;
+    const visible = Reflect.get(field, "checkVisibility");
+    return typeof visible !== "function" || Reflect.apply(visible, field, [
+      { visibilityProperty: true, opacityProperty: true }
+    ]) === true;
+  }
+
   // crates/neo-sdk/neo-playwright-js/src/probe/protocol.ts
-  var PROTOCOL = 37;
+  var PROTOCOL = 38;
 
   // crates/neo-sdk/neo-playwright-js/src/probe/read.ts
   var XHTML = "http://www.w3.org/1999/xhtml";
@@ -10109,6 +10160,7 @@ ${value.stack}`;
     edit,
     look,
     private: privateStep,
+    privateShown,
     read,
     readAll,
     selector: generatedSelector,

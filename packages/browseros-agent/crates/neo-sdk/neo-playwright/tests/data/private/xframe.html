@@ -4,9 +4,11 @@
 <iframe id=x style="width:420px;height:260px;border:1px solid #888"></iframe>
 <script>
 // ?src=<path>: that page of the fixture site in a cross-site frame (the fixture server's other name).
+// ?same=1 (Neo's addition): on this page's own site instead, so the frame shares its session.
 // ?steal=1: the page takes the focus back into its own search box whenever the frame takes it.
 const q = new URLSearchParams(location.search);
-document.getElementById('x').src = location.protocol + '//' + (location.hostname === 'localhost' ? '127.0.0.1' : 'localhost') + ':' + location.port + '/private/' + (q.get('src') || 'covered-login.html?mode=none');
+const site = q.get('same') ? location.origin : location.protocol + '//' + (location.hostname === 'localhost' ? '127.0.0.1' : 'localhost') + ':' + location.port;
+document.getElementById('x').src = site + '/private/' + (q.get('src') || 'covered-login.html?mode=none');
 if (q.get('steal')) window.addEventListener('blur', () => setTimeout(() => document.getElementById('topbox').focus(), 0));
 // ?stealafter=1 (Neo's addition): the page takes the focus into its own box when the frame says
 // its box holds a few characters (card-field.html ?tell=N).

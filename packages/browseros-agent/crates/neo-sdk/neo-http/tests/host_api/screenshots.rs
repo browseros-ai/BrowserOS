@@ -486,3 +486,87 @@ async fn a_capture_a_private_fill_straddles_is_thrown_away() -> TestResult {
     assert!(served(&h, op).await?.is_none());
     Ok(())
 }
+
+/// Ruling R45: the app reads what a tab shows before a capture. A frame showing a private box's
+/// value withholds the picture with no capture started; a tab reading clear is pictured.
+#[tokio::test]
+async fn a_tab_showing_a_private_value_is_withheld_before_any_capture() -> TestResult {
+    use std::sync::Arc;
+    let h = harness_with_camera().await?;
+    h.browser.open_tab(3);
+    h.browser.open_tab(4);
+    h.service.arm_picture_check(Arc::new(|tab| {
+        Box::pin(async move {
+            if tab == browseros_core::TabId(3) {
+                neo_http::PictureVerdict::Private
+            } else {
+                neo_http::PictureVerdict::Clear {
+                    reading: "doc".to_owned(),
+                }
+            }
+        })
+    }));
+    let (run, op) = write_run(&h, 3);
+    let body = complete(&h, run).await?;
+    assert_eq!(body["operations"][0]["hasScreenshot"], false, "{body}");
+    assert!(!file_of(&h, op).exists(), "nothing written");
+    assert_eq!(h.browser.captures(), 0, "no capture started");
+    let (other_run, other) = write_run(&h, 4);
+    complete(&h, other_run).await?;
+    assert!(
+        served(&h, other).await?.is_some(),
+        "a clear tab is pictured"
+    );
+    Ok(())
+}
+
+/// Ruling R45: read again after the capture. A private value that showed while the capture ran
+/// throws the pixels away; a page that moved to another document meanwhile drops the capture,
+/// which neither reading covered.
+#[tokio::test]
+async fn a_capture_is_kept_only_if_both_readings_are_clear_on_one_document() -> TestResult {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    for (second, what) in [
+        (
+            neo_http::PictureVerdict::Private,
+            "a value shown during the capture",
+        ),
+        (
+            neo_http::PictureVerdict::Clear {
+                reading: "another document".to_owned(),
+            },
+            "a document change during the capture",
+        ),
+    ] {
+        let h = harness_with_camera().await?;
+        h.browser.open_tab(3);
+        let asked = Arc::new(AtomicUsize::new(0));
+        let count = Arc::clone(&asked);
+        h.service.arm_picture_check(Arc::new(move |_tab| {
+            let first = count.fetch_add(1, Ordering::SeqCst) == 0;
+            let answer = if first {
+                neo_http::PictureVerdict::Clear {
+                    reading: "doc".to_owned(),
+                }
+            } else {
+                second.clone()
+            };
+            Box::pin(async move { answer })
+        }));
+        let (run, op) = write_run(&h, 3);
+        let body = complete(&h, run).await?;
+        assert_eq!(
+            body["operations"][0]["hasScreenshot"], false,
+            "{what}: {body}"
+        );
+        assert!(!file_of(&h, op).exists(), "{what}: nothing written");
+        assert_eq!(h.browser.captures(), 1, "{what}: one capture, thrown away");
+        assert_eq!(
+            asked.load(Ordering::SeqCst),
+            2,
+            "{what}: read before and after"
+        );
+    }
+    Ok(())
+}
