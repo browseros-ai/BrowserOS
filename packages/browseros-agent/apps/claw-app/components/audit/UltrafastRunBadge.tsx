@@ -10,8 +10,9 @@ import {
   AnimatedBadge,
   type AnimatedBadgeSize,
 } from '@/components/motion/animated-badge'
+import { cn } from '@/lib/utils'
 
-/** A chip saying what ultrafast did in a task, in the words the caller gives it. */
+/** A pill saying what ultrafast did in a task, in the words the caller gives it. */
 export function UltrafastRunBadge({
   children,
   size = 'sm',
@@ -28,7 +29,8 @@ export function UltrafastRunBadge({
       icon={
         <Zap aria-hidden className={size === 'md' ? 'size-3.5' : 'size-3'} />
       }
-      className={className}
+      // w-fit stops column layouts from stretching the pill across the card.
+      className={cn('w-fit rounded-full', className)}
     >
       {children}
     </AnimatedBadge>
