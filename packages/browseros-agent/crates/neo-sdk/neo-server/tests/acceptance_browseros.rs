@@ -185,8 +185,14 @@ fn private_trace_html() -> Result<String, fmt::Error> {
         "\
          <button aria-labelledby='self'></button><button aria-labelledby='numeric'></button>\
          <label>Expiry<input autocomplete='cc-exp' value='12/30'></label>\
-         <label>Holder<input autocomplete='cc-name' value='Ada Example'></label></main>",
+         <label>Holder<input autocomplete='cc-name' value='Ada Example'></label>",
     );
+    // Diff context must stay smaller than half the whole output. A small page legitimately
+    // falls back to a whole snapshot even when only one value changes.
+    for index in 0..20 {
+        write!(html, "<button>Stable action {index}</button>")?;
+    }
+    html.push_str("</main>");
     Ok(html)
 }
 
@@ -347,9 +353,14 @@ async fn snapshot_trace(rig: &mut Rig) -> TestResult {
         .and_then(|value| value.get("value"))
         .and_then(Value::as_str)
         .ok_or_else(|| format!("the second run returns its delta: {changed:?}"))?;
+    let baseline = first
+        .structured_content
+        .as_ref()
+        .and_then(|value| value.pointer("/value/baseline"))
+        .and_then(Value::as_str);
     assert!(
         delta.starts_with("# changes since"),
-        "a stored baseline is read: {delta}"
+        "a stored baseline is read: {delta}\nprevious: {baseline:?}"
     );
     assert!(delta.contains(&"•".repeat("Trace-Password-Canary!".len())));
     client.cancel().await?;

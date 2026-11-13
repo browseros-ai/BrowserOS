@@ -1513,6 +1513,8 @@ fn assert_private_canaries_absent(value: &Value) -> TestResult {
 }
 
 fn assert_public_canaries_present(text: &str, scope: &str) {
+    let own_css = format!("PublicCanary{scope}-css-self");
+    assert!(text.contains(&own_css), "missing {own_css}: {text}");
     for kind in ["input", "textarea"] {
         let visible = format!("PublicCanary{scope}-{kind}-value");
         assert!(text.contains(&visible), "missing {visible}: {text}");

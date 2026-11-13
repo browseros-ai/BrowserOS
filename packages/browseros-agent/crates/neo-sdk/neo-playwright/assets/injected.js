@@ -9252,6 +9252,163 @@ ${value.stack}`;
     });
   }
 
+  // crates/neo-sdk/neo-playwright-js/src/probe/private-field-values.ts
+  var PRIVATE_AUTOCOMPLETE = new Set([
+    "current-password",
+    "new-password",
+    "one-time-code",
+    "cc-number",
+    "cc-csc"
+  ]);
+  var FIELD_TAGS = new Set(["input", "textarea"]);
+  var PRIVATE_VALUE_ATTRIBUTES = new Set([
+    "value",
+    "aria-valuetext",
+    "aria-valuenow"
+  ]);
+  function isPrivateField(field) {
+    return field.getAttribute("type")?.toLowerCase() === "password" || (field.getAttribute("autocomplete") ?? "").toLowerCase().split(/\s+/).some((token) => PRIVATE_AUTOCOMPLETE.has(token));
+  }
+  function maskedValue(descriptor, valueReads) {
+    if (typeof descriptor.get !== "function")
+      throw new TypeError("snapshot field value accessor is unavailable");
+    const get = descriptor.get;
+    return {
+      ...descriptor,
+      get() {
+        const alreadyReading = valueReads.has(this);
+        valueReads.add(this);
+        let value;
+        try {
+          value = get.call(this);
+        } finally {
+          if (!alreadyReading)
+            valueReads.delete(this);
+        }
+        if (typeof value !== "string")
+          throw new TypeError("snapshot field value accessor did not return text");
+        return isPrivateField(this) ? "•".repeat(value.length) : value;
+      }
+    };
+  }
+  function propertyOverride(target, property, mask) {
+    const original = Object.getOwnPropertyDescriptor(target, property);
+    if (original?.configurable === false || !original && !Object.isExtensible(target))
+      throw new TypeError(`snapshot field ${property} cannot be overridden`);
+    let owner = target;
+    while (owner) {
+      const descriptor = Object.getOwnPropertyDescriptor(owner, property);
+      if (descriptor) {
+        return {
+          target,
+          property,
+          original,
+          masked: { ...mask(descriptor), configurable: true }
+        };
+      }
+      owner = Object.getPrototypeOf(owner);
+    }
+    throw new TypeError(`snapshot field ${property} is unavailable`);
+  }
+  function maskedAttributes(descriptor) {
+    if (typeof descriptor.value !== "function")
+      throw new TypeError("snapshot field getAttribute method is unavailable");
+    const getAttribute = descriptor.value;
+    return {
+      ...descriptor,
+      value(name) {
+        const value = getAttribute.call(this, name);
+        return typeof value === "string" && typeof name === "string" && PRIVATE_VALUE_ATTRIBUTES.has(name.toLowerCase()) && isPrivateField(this) ? "•".repeat(value.length) : value;
+      }
+    };
+  }
+  function emptyTextareaText(descriptor, textareaOf, valueReads) {
+    if (typeof descriptor.get !== "function")
+      throw new TypeError("snapshot textarea text accessor is unavailable");
+    const get = descriptor.get;
+    return {
+      ...descriptor,
+      get() {
+        const textarea = textareaOf(this);
+        return textarea && !valueReads.has(textarea) && isPrivateField(textarea) ? "" : get.call(this);
+      }
+    };
+  }
+  function parentTextarea(node) {
+    return node.parentElement instanceof HTMLTextAreaElement ? node.parentElement : null;
+  }
+  function maskedComputedStyle(descriptor) {
+    if (typeof descriptor.value !== "function")
+      throw new TypeError("snapshot getComputedStyle method is unavailable");
+    const read = descriptor.value;
+    return {
+      ...descriptor,
+      value(element, pseudo) {
+        const style = Reflect.apply(read, this, [
+          element,
+          pseudo
+        ]);
+        if (!FIELD_TAGS.has(element.localName))
+          return style;
+        if (!isPrivateField(element))
+          return style;
+        return new Proxy(style, {
+          get(target, key) {
+            if (key === "content")
+              return "none";
+            if (key === "getPropertyValue")
+              return (property) => property === "content" ? "none" : target.getPropertyValue(property);
+            const value = Reflect.get(target, key);
+            return typeof value === "function" ? value.bind(target) : value;
+          }
+        });
+      }
+    };
+  }
+  function restoreOverrides(installed) {
+    const failures = [];
+    for (const override of installed.reverse()) {
+      try {
+        if (override.original) {
+          Object.defineProperty(override.target, override.property, override.original);
+        } else if (!Reflect.deleteProperty(override.target, override.property)) {
+          throw new TypeError(`snapshot field ${override.property} could not be removed`);
+        }
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (failures.length)
+      throw new TypeError("snapshot field overrides could not be restored", {
+        cause: new AggregateError(failures)
+      });
+  }
+  function withMaskedFieldValues(walk) {
+    const input = HTMLInputElement.prototype;
+    const textarea = HTMLTextAreaElement.prototype;
+    const valueReads = new Set;
+    const overrides = [
+      propertyOverride(input, "value", (descriptor) => maskedValue(descriptor, valueReads)),
+      propertyOverride(textarea, "value", (descriptor) => maskedValue(descriptor, valueReads)),
+      propertyOverride(input, "defaultValue", (descriptor) => maskedValue(descriptor, valueReads)),
+      propertyOverride(input, "getAttribute", maskedAttributes),
+      propertyOverride(textarea, "getAttribute", maskedAttributes),
+      ...["nodeValue", "textContent", "data", "wholeText"].map((property) => propertyOverride(Text.prototype, property, (descriptor) => emptyTextareaText(descriptor, parentTextarea, valueReads))),
+      ...["textContent", "innerText", "innerHTML", "defaultValue"].map((property) => propertyOverride(textarea, property, (descriptor) => emptyTextareaText(descriptor, (node) => node instanceof HTMLTextAreaElement ? node : null, valueReads))),
+      propertyOverride(globalThis, "getComputedStyle", maskedComputedStyle)
+    ];
+    const installed = [];
+    try {
+      for (const override of overrides) {
+        Object.defineProperty(override.target, override.property, override.masked);
+        installed.push(override);
+      }
+      return walk();
+    } finally {
+      restoreOverrides(installed);
+    }
+  }
+
   // crates/neo-sdk/neo-playwright-js/src/probe/snapshot.ts
   var FRAME_ROOT = parseSelector("body,frameset");
   function frameRoot(world) {
@@ -9277,7 +9434,8 @@ ${value.stack}`;
       roleOf: (of) => injected.utils.getAriaRole(of),
       isVisible: (of) => injected.utils.isElementVisible(of)
     };
-    const { result, skipped } = marked(targets, engine, plain);
+    const take = () => marked(targets, engine, plain);
+    const { result, skipped } = request.conformance ? take() : withMaskedFieldValues(take);
     const { json, iframeRefs, iframeDepths } = result;
     const iframes = [];
     if (request.mode === "ai") {
