@@ -177,6 +177,13 @@ export const REQUEST_EXAMPLES: { [O in Op]: AtLeastOne<RequestOf<O>> } = {
       target: GO_BUTTON,
       strictness: 'strict',
       frameVisible: true,
+      read: { kind: 'ref' },
+    },
+    {
+      op: 'read',
+      target: GO_BUTTON,
+      strictness: 'strict',
+      frameVisible: true,
       read: { kind: 'attribute', name: 'aria-label' },
     },
     {

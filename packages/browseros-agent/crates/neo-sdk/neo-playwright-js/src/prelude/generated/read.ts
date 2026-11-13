@@ -35,6 +35,7 @@ export type ReadInputs = {
   'locator.innerHTML': ReadElementInput
   'locator.getAttribute': ReadAttributeInput
   'locator.inputValue': ReadElementInput
+  'locator.ref': ReadElementInput
   'locator.isEnabled': ReadElementInput
   'locator.isDisabled': ReadElementInput
   'locator.isEditable': ReadElementInput
@@ -58,6 +59,7 @@ export type ReadOutputs = {
   'locator.innerHTML': string
   'locator.getAttribute': string | null
   'locator.inputValue': string
+  'locator.ref': string
   'locator.isEnabled': boolean
   'locator.isDisabled': boolean
   'locator.isEditable': boolean
@@ -116,6 +118,12 @@ export const READ_SEND = {
     input: ReadElementInput,
     signal?: SignalLike,
   ): Promise<string> => invoke('locator.inputValue', site, call, input, signal),
+  'locator.ref': (
+    site: CallSite,
+    call: CallHeader,
+    input: ReadElementInput,
+    signal?: SignalLike,
+  ): Promise<string> => invoke('locator.ref', site, call, input, signal),
   'locator.isEnabled': (
     site: CallSite,
     call: CallHeader,
@@ -219,6 +227,7 @@ type _locator_getAttribute_result = Assert<VoidIsNull<'locator.getAttribute', pw
 // locator.inputValue: ElementHandle.inputValue
 type _locator_inputValue = Assert<UpstreamCheck<'locator.inputValue', ReadElementInput, pw.ElementHandleInputValueParams, never, never, never>>
 type _locator_inputValue_result = Assert<VoidIsNull<'locator.inputValue', pw.ElementHandleInputValueResult, string>>
+// locator.ref: Neo only: Neo's node-bound identity for a host's later run on the same tab
 // locator.isEnabled: ElementHandle.isEnabled
 type _locator_isEnabled = Assert<UpstreamCheck<'locator.isEnabled', ReadElementInput, pw.ElementHandleIsEnabledParams, never, never, never>>
 type _locator_isEnabled_result = Assert<VoidIsNull<'locator.isEnabled', pw.ElementHandleIsEnabledResult, boolean>>

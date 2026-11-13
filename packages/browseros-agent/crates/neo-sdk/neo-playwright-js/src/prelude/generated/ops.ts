@@ -119,6 +119,11 @@ export const OPS = {
     target: 'target',
     lifetime: 'operation',
   },
+  'locator.ref': {
+    effect: 'read',
+    target: 'target',
+    lifetime: 'operation',
+  },
   'locator.isEnabled': {
     effect: 'read',
     target: 'target',

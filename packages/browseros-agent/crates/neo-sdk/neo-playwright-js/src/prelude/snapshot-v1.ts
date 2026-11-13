@@ -13,6 +13,7 @@
  *   section      main, navigation, form, iframe, ...  its line with its ref, content indented
  *   heading                                           its line, no ref
  *   actionable   a ref, and an interactive role or a pointer cursor     one line with its ref
+ *   field        a value or checked state, even without a ref          one line with its state
  *   text         `- text:` lines, in the text form only; none that holds only separators
  *   other        no line; its content moves up to the level it sits in
  *
@@ -56,6 +57,21 @@ const INTERACTIVE = new Set<string>([
   'switch',
   'tab',
   'treeitem',
+])
+
+/** Fields keep their state visible even when the engine gives them no pointer target. */
+const FIELD = new Set<string>([
+  'textbox',
+  'searchbox',
+  'spinbutton',
+  'slider',
+  'combobox',
+  'listbox',
+  'checkbox',
+  'radio',
+  'switch',
+  'menuitemcheckbox',
+  'menuitemradio',
 ])
 
 /**
@@ -316,7 +332,8 @@ class Printer {
     else if (KEPT.has(child.role)) this.kept(child, level)
     else if (SECTION.has(child.role)) this.section(child, level, text)
     else if (child.role === 'heading') this.heading(child, level)
-    else if (actionable(child)) this.actionable(child, level, text)
+    else if (actionable(child) || fieldWithoutRef(child))
+      this.control(child, level, text)
     else {
       if (child.role === 'img') {
         if (child.name && text)
@@ -432,11 +449,16 @@ class Printer {
     this.content(node, level, false)
   }
 
-  private actionable(node: AriaNodeJSON, level: number, text: boolean): void {
+  private control(node: AriaNodeJSON, level: number, text: boolean): void {
     let value: string | undefined
     // A text field that differs from the name: how a textbox shows its value.
     if (node.text !== undefined && node.text !== node.name) value = node.text
-    else if (!node.name) {
+    else if (fieldWithoutRef(node) && node.text === undefined) {
+      // Contenteditable values can be paragraph children instead of a `text` field. Keep
+      // that value on the field's line before the child walk suppresses repeated text.
+      const own = ownText(node)
+      if (own !== '') value = own
+    } else if (!node.name) {
       // A link with no words of its own still says where it goes, unless its `/url` line does.
       const label =
         ownText(node) ||
@@ -534,6 +556,10 @@ function actionable(node: AriaNodeJSON): boolean {
   )
 }
 
+function fieldWithoutRef(node: AriaNodeJSON): boolean {
+  return node.ref === undefined && FIELD.has(node.role)
+}
+
 /**
  * Playwright's node for one line: no children, the ref only where the agent can act on it or
  * scope to it, `[cursor=pointer]` only where it is what says a non-control is clickable, and
@@ -593,7 +619,12 @@ function separatorsOnly(line: Line): boolean {
  * before this is asked.
  */
 function nameAsContent(node: AriaNodeJSON): string | undefined {
-  if (!node.name || node.text !== undefined || node.role === 'heading')
+  if (
+    !node.name ||
+    node.text !== undefined ||
+    node.role === 'heading' ||
+    fieldWithoutRef(node)
+  )
     return undefined
   return saysNothing(node.children) ? node.name : undefined
 }
@@ -620,9 +651,10 @@ function saysNothing(children: AriaNodeJSON['children']): boolean {
 }
 
 /**
- * Every text piece under `node` that is not inside a nested actionable node, space-joined. The
- * name of a node under which nothing prints text counts as a piece (an image's alt text, a
- * cell's text). An iframe's fallback markup is no piece (`shownText`); its frame's text is.
+ * Every text piece under `node` outside a nested actionable node or ref-less field, space-joined.
+ * Those controls print their own lines, so their names and values cannot label their drawing
+ * too. Other content-only names count as pieces (an image's alt text, a cell's text).
+ * `shownText` skips an iframe's fallback markup while keeping its frame's text.
  */
 function ownText(node: AriaNodeJSON): string {
   const pieces: string[] = []
@@ -639,7 +671,8 @@ function ownText(node: AriaNodeJSON): string {
     for (let index = children.length - 1; index >= 0; index--) {
       const child = children[index]
       if (typeof child === 'string' || child.role === 'text') stack.push(child)
-      else if (!actionable(child)) stack.push(nameAsContent(child) ?? child)
+      else if (!actionable(child) && !fieldWithoutRef(child))
+        stack.push(nameAsContent(child) ?? child)
     }
   }
   return pieces.filter((piece) => piece !== '').join(' ')

@@ -21,6 +21,7 @@ const api: Api = JSON.parse(
 
 /** Neo's task ownership metadata; neither getter is part of Playwright. */
 const NEO_PROPERTIES: Record<string, string[]> = { Page: ['tabId', 'taskId'] }
+const NEO_METHODS: Record<string, string[]> = { Locator: ['ref'] }
 
 const ELEMENT = {
   $neo: 'element',
@@ -79,7 +80,10 @@ describe('the classes', () => {
       const instance = (await instances())[className]
       if (!instance) throw new Error(`no ${className} instance`)
       expect(members(instance)).toEqual({
-        methods: [...(golden as Members).methods].sort(),
+        methods: [
+          ...(golden as Members).methods,
+          ...(NEO_METHODS[className] ?? []),
+        ].sort(),
         properties: [
           ...(golden as Members).properties,
           ...(NEO_PROPERTIES[className] ?? []),

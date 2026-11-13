@@ -4,8 +4,8 @@
  * The built-in engine reads only the latest snapshot (`_lastAriaSnapshotForQuery`, which
  * every snapshot replaces, default-mode and scoped ones included) and ignores the query
  * root. Neo's engine:
- * - keeps ref -> element for every ref an ai-mode snapshot printed in this document, so a
- *   ref from an earlier snapshot still names its element after a later or scoped one;
+ * - keeps ref -> element for snapshots and explicit `locator.ref()` reads, so an earlier
+ *   ref still names its element after a later or scoped snapshot;
  * - holds elements weakly, so a removed element is collected and its ref fails;
  * - answers only inside the query root, so `filter({ has: page.getByRef('e7') })` keeps
  *   the one row that holds e7 instead of every row;
@@ -26,6 +26,9 @@ export type ScopeUtils = Pick<InjectedScript['utils'], 'isInsideScope'>
 
 export class RefMap {
   private readonly byRef = new Map<string, WeakRef<Element>>()
+  private printedByElement = new WeakMap<Element, string>()
+  private mintedByElement = new WeakMap<Element, string>()
+  private nextMinted = 1
   private frameKeys = new WeakMap<Element, string>()
   private nextFrameKey = 1
   private unresolved: string[] = []
@@ -66,10 +69,31 @@ export class RefMap {
    * snapshot, because `forget` finds the expandos to delete through this map.
    */
   remember(refs: Map<string, { element: Element }>): void {
-    for (const [ref, { element }] of refs)
+    for (const [ref, { element }] of refs) {
       this.byRef.set(ref, new WeakRef(element))
+      // The engine may mint a new ref after a role or name change. Prefer that current ref,
+      // while retaining every earlier alias for callers that already checked the node.
+      this.printedByElement.set(element, ref)
+    }
     for (const [ref, weak] of this.byRef)
       if (!weak.deref()) this.byRef.delete(ref)
+  }
+
+  /**
+   * Pins identity for a host's later run without adding a target to the snapshot. Minted
+   * refs share the document's weak map but never set Playwright's `_ariaRef` expando, so a
+   * later snapshot still decides independently whether the element gets an engine ref.
+   */
+  forElement(element: Element, seq: number): string {
+    const printed = this.printedByElement.get(element)
+    if (printed !== undefined && this.byRef.get(printed)?.deref() === element)
+      return printed
+    const known = this.mintedByElement.get(element)
+    if (known !== undefined) return known
+    const ref = `${seq === 0 ? '' : `f${seq}`}n${this.nextMinted++}`
+    this.mintedByElement.set(element, ref)
+    this.byRef.set(ref, new WeakRef(element))
+    return ref
   }
 
   /**
@@ -97,6 +121,8 @@ export class RefMap {
       if (element) Reflect.deleteProperty(element, '_ariaRef')
     }
     this.byRef.clear()
+    this.printedByElement = new WeakMap()
+    this.mintedByElement = new WeakMap()
     this.frameKeys = new WeakMap()
   }
 }

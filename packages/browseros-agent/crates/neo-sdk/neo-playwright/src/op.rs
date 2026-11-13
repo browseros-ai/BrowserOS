@@ -335,6 +335,7 @@ mod tests {
             ("locator.elementHandle", &[], true),
             ("locator.elementHandles", &[], true),
             ("locator.normalize", &[], true),
+            ("locator.ref", &[], true),
             ("page.ariaSnapshot", &[], true),
             ("locator.ariaSnapshot", &[], true),
             ("page.snapshotBaseline", &[], true),

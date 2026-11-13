@@ -231,7 +231,7 @@ export type QueryState = "visible" | "hidden" | "enabled" | "disabled" | "editab
 /**
  * What a `read` reads from its element.
  */
-export type Read = { "kind": "textContent" } | { "kind": "innerText" } | { "kind": "innerHtml" } | { "kind": "inputValue" } | { "kind": "boundingBox" } | { "kind": "attribute", name: string, } | { "kind": "state", state: QueryState, } | { "kind": "frameOrigin" } | { "kind": "located" } | { "kind": "checkable" } | { "kind": "fileInput", multiple: boolean, directory: boolean, };
+export type Read = { "kind": "textContent" } | { "kind": "innerText" } | { "kind": "innerHtml" } | { "kind": "inputValue" } | { "kind": "ref" } | { "kind": "boundingBox" } | { "kind": "attribute", name: string, } | { "kind": "state", state: QueryState, } | { "kind": "frameOrigin" } | { "kind": "located" } | { "kind": "checkable" } | { "kind": "fileInput", multiple: boolean, directory: boolean, };
 
 /**
  * What a `readAll` reads from every match.

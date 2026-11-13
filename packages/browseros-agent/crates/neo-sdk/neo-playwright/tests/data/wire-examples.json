@@ -147,6 +147,7 @@
     "locator.pressSequentially": [
       "delay"
     ],
+    "locator.ref": [],
     "locator.scrollIntoViewIfNeeded": [],
     "locator.selectOption": [
       "elements",
@@ -2361,6 +2362,35 @@
         "strict": "strict",
         "text": "ab",
         "delay": 1
+      }
+    ],
+    "locator.ref": [
+      {
+        "call": {
+          "api": "locator.ref",
+          "timeoutMs": 30000
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "strict": "strict"
       }
     ],
     "locator.scrollIntoViewIfNeeded": [
