@@ -15,7 +15,9 @@
 //!
 //! macOS draws background tabs and passes. Both halves must be fast for this to pass on Linux:
 //! a browser patch that only lifts the throttle leaves captures slow. When it passes, take the
-//! mark off, and `AgentFront`'s activation, kept only for this, goes with it.
+//! mark off. `AgentFront`'s activation is not kept for this alone: a background tab's cross-site
+//! frames also take focus only from it (neo-server `tests/cross_site_focus_browseros.rs`), and
+//! its TODO lists everything that must hold before it goes.
 //!
 //! Needs BrowserOS with CDP on `BROWSEROS_CDP_PORT` (default 9005):
 //! `cargo test -p neo-playwright --test background_tab_live -- --ignored`.
