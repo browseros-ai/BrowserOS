@@ -259,9 +259,9 @@ pub(crate) enum WindowPopup {
 #[derive(Debug, Default)]
 pub(crate) struct Tabs {
     listed: Option<Vec<(TargetId, PageHandle)>>,
-    /// The host's own tabs that listing named (`OpEnv::is_reserved_tab`): never handed out, and
-    /// never waited for as a tab not listed yet. A lookup of one lists again first.
-    reserved: Vec<TargetId>,
+    /// The host's own tabs that listing named (`OpEnv::is_reserved_tab`), with their tab ids:
+    /// never handed out, and never waited for as a tab not listed yet.
+    reserved: Vec<(TargetId, TabId)>,
 }
 
 impl Tabs {
@@ -290,7 +290,7 @@ impl Tabs {
             if let Some(page) = self.known(scope, target).await? {
                 return Ok(Some(page));
             }
-            if self.reserved.contains(target) {
+            if self.reserved.iter().any(|(held, _)| held == target) {
                 return Ok(None);
             }
             if let Some(tab) = closed() {
@@ -312,9 +312,13 @@ impl Tabs {
         target: &TargetId,
     ) -> Result<Option<PageHandle>, PlaywrightError> {
         // A wait keeps its tabs for its whole life: a tab the host held at the last listing may
-        // have been handed back since (`Playwright::hand_back`), so it is listed again.
-        if self.reserved.contains(target) {
-            self.listed = None;
+        // have been handed back since (`Playwright::hand_back`). Asked again, and listed again
+        // if so.
+        if let Some(&(_, tab)) = self.reserved.iter().find(|(held, _)| held == target) {
+            scope.reserved_tabs_settled(&[]).await;
+            if !scope.is_reserved_tab(tab) {
+                self.listed = None;
+            }
         }
         if self.listed.is_none() {
             let listing = scope
@@ -329,7 +333,10 @@ impl Tabs {
                 .pages
                 .into_iter()
                 .partition(|page| scope.is_reserved_tab(page.tab_id));
-            self.reserved = reserved.into_iter().map(|page| page.target_id).collect();
+            self.reserved = reserved
+                .into_iter()
+                .map(|page| (page.target_id, page.tab_id))
+                .collect();
             self.listed = Some(
                 pages
                     .into_iter()

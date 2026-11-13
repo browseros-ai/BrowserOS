@@ -5255,6 +5255,7 @@ async fn a_handed_back_tab_reaches_a_waiting_script_as_a_new_page() -> Result<()
     .await?;
     // A watch start adopts it.
     assert_eq!(within(blank.ensure(Adopt::Allowed)).await?, Some(launch));
+    let listings = harness.fake.count("Browser.getTabs");
     let wait = json!({
         "call": { "api": "browserContext.waitForEvent", "timeoutMs": 10000 },
         "page": null,
@@ -5264,6 +5265,14 @@ async fn a_handed_back_tab_reaches_a_waiting_script_as_a_new_page() -> Result<()
     let pending = harness
         .dispatcher
         .submit(&run, Call::script("events.wait".to_owned(), wait, None));
+    // The wait reads the tab's own open first, while the tab is Neo's: it lists the tabs, finds
+    // it reserved, and goes on waiting. Only then does the owner browse in it.
+    within(async {
+        while harness.fake.count("Browser.getTabs") == listings {
+            time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await?;
     assert!(
         harness
             .fake
