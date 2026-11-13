@@ -5,8 +5,14 @@
 //! an edit, a matcher four frames deep, and BrowserOS's own takeover bar kept out of selectors
 //! and snapshots.
 //!
-//! Needs a throwaway BrowserOS with CDP on `BROWSEROS_CDP_PORT` (default 9005), for example
-//! `bun run test:browser -- cargo test -p neo-playwright --test expect_live -- --ignored`.
+//! Run from `packages/browseros-agent` through the private-browser launcher. This suite includes
+//! the actual takeover extension, which the default launcher disables; its test-only override
+//! enables bundled extensions while keeping the browser headless and its home/profile isolated:
+//! ```sh
+//! NEO_E2E_BROWSER=crates/neo-sdk/neo-playwright/tests/support/neo-with-takeover.sh \
+//!   bun run test:browser -- cargo test -p neo-playwright --test expect_live -- --ignored
+//! ```
+//! `NEO_TAKEOVER_BROWSER` can select another browser binary behind that override.
 //! Every test opens its own tab and closes it.
 
 #[path = "support/fixture_server.rs"]
@@ -599,8 +605,13 @@ async fn tests_that_every_matcher_passes_and_fails_as_scripts_write_it() -> Test
 /// text, and neither snapshot lists it, while the page's own content is all there. Playwright's
 /// default text prints a `document` node as such; the v1 text (`mode: 'ai'`) would print the
 /// bar's button, which is actionable, if the engine read the bar.
+///
+/// Needs the bundled claw takeover extension, not a headed browser. Run the whole suite with
+/// `NEO_E2E_BROWSER=crates/neo-sdk/neo-playwright/tests/support/neo-with-takeover.sh
+/// bun run test:browser -- cargo test -p neo-playwright --test expect_live -- --ignored`
+/// from `packages/browseros-agent`; absence of the real bar remains a failed prerequisite.
 #[tokio::test]
-#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+#[ignore = "needs the bundled takeover extension; use the documented test:browser override"]
 async fn tests_that_browseros_own_ui_stays_out_of_selectors_and_snapshots() -> TestResult {
     let server = FixtureServer::start(pages()).await?;
     let url = server.url("127.0.0.1", "/expect/page.html");
@@ -813,6 +824,7 @@ async fn tests_that_a_timeout_reads_as_playwrights_with_its_call_log() -> TestRe
     .await
 }
 
+/// Declared passwords compare their real value; only the received diagnostic is summarized.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_a_typed_password_is_compared_as_the_page_holds_it() -> TestResult {
@@ -860,8 +872,12 @@ async fn tests_that_a_typed_password_is_compared_as_the_page_holds_it() -> TestR
             // The one-shot poll records Received without a retry log. A loaded renderer can
             // use the whole deadline on that poll, so repeated-poll lines are not guaranteed.
             assert!(
-                message.contains("Expected: \"hunter3\"\nReceived: \"hunter2\"\n"),
-                "the field's value is what was received: {message}"
+                message.contains("Expected: \"hunter3\"\nReceived: \"<7 characters>\"\n"),
+                "the real value fails the comparison without appearing in Received: {message}"
+            );
+            assert!(
+                !message.contains("hunter2"),
+                "the failure holds no received value: {message}"
             );
             let not = on_locator(
                 &password,
@@ -874,7 +890,7 @@ async fn tests_that_a_typed_password_is_compared_as_the_page_holds_it() -> TestR
             assert!(
                 error
                     .message()
-                    .contains("Expected: not \"hunter2\"\nReceived: \"hunter2\"\n"),
+                    .contains("Expected: not \"hunter2\"\nReceived: \"<7 characters>\"\n"),
                 "{error}"
             );
             Ok(())
@@ -944,6 +960,7 @@ fn value_attribute_params(expected: &Value) -> Value {
             "expectedText": [expected], "isNot": false })
 }
 
+/// Attribute comparisons keep the markup value after an edit, while reports hide that value.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_a_password_value_attribute_is_compared_as_markup_once_the_field_is_edited()
@@ -984,9 +1001,13 @@ async fn tests_that_a_password_value_attribute_is_compared_as_markup_once_the_fi
             assert_eq!(error.error_code(), Some(ErrorCode::AssertionFailed));
             let message = error.message();
             assert!(
-                message.contains("Expected: \"edited-secret\"\nReceived: \"initial-secret\"\n"),
-                "the typed value is not the attribute, which is received as the markup holds it: \
+                message.contains("Expected: \"edited-secret\"\nReceived: \"<14 characters>\"\n"),
+                "the typed value is not the attribute; the markup's value is summarized: \
                  {message}"
+            );
+            assert!(
+                !message.contains("initial-secret"),
+                "neither Received nor the preview holds the markup's value: {message}"
             );
             let pattern = on_locator(
                 &prefilled,
