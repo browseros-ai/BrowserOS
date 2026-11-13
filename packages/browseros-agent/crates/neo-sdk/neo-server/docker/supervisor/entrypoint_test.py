@@ -59,6 +59,21 @@ def server_is(kind: str) -> str:
     return identified_by(f"echo {kind}")
 
 
+def start_neo_spawning(spawn: str) -> str:
+    """Bash that defines start_neo with the image's launch inputs and zoom step stubbed, its
+    spawn_as_neo running `spawn` and then leaving a pid, as the real spawn does. PROFILE and
+    BROWSERCLAW_HOSTED_MODE come from the caller."""
+    return (
+        "forget_zoom_levels() { :; }\n"
+        f"spawn_as_neo() {{\n{spawn}\n  : &\n}}\n"
+        "BACK_FORWARD_CACHE=0 sandbox_flags=(--no-sandbox)\n"
+        "browseros_extension_flags=(--disable-browseros-extensions)\n"
+        "gpu_flags=(--disable-gpu-compositing)\n"
+        "CDP_PORT=9110 SERVER_PORT=9210 HIDDEN_BROWSEROS_FEATURES=NewTabPage NEO_ARGS=\n"
+        + shell_function("start_neo")
+    )
+
+
 class StartNeoTest(unittest.TestCase):
     def launch(
         self, neo_args: str, kind: str = "claw-server", hosted_mode: str = "1"
@@ -302,6 +317,21 @@ class ClearSessionsTest(unittest.TestCase):
             (proc / str(pid) / "cmdline").write_bytes(b"\0".join(a.encode() for a in argv) + b"\0")
         return proc
 
+    def setting(self, value: str | None, hosted_mode: str) -> str:
+        """Bash that reads NEO_CLEAR_SESSIONS into CLEAR_SESSIONS as the entrypoint does."""
+        default = re.search(r'^: "\$\{NEO_CLEAR_SESSIONS:=false\}"$', SCRIPT, re.MULTILINE)
+        parse = re.search(
+            r"^CLEAR_SESSIONS=0\n.*?^readonly CLEAR_SESSIONS\n", SCRIPT, re.MULTILINE | re.DOTALL
+        )
+        assert default and parse, "entrypoint.sh no longer reads NEO_CLEAR_SESSIONS here"
+        given = "" if value is None else f"NEO_CLEAR_SESSIONS={shlex.quote(value)}\n"
+        return (
+            "log() { printf '[neo] %s\\n' \"$*\"; }\n"
+            'die() { log "$*" >&2; exit 1; }\n'
+            + shell_function("is_true")
+            + f"BROWSERCLAW_HOSTED_MODE={hosted_mode}\n{given}{default.group(0)}\n{parse.group(0)}"
+        )
+
     def run_clear(
         self,
         profile: Path,
@@ -311,22 +341,10 @@ class ClearSessionsTest(unittest.TestCase):
         gone_tenths: int = 20,
         then: str = "clear_sessions\n",
     ) -> subprocess.CompletedProcess:
-        default = re.search(r'^: "\$\{NEO_CLEAR_SESSIONS:=false\}"$', SCRIPT, re.MULTILINE)
-        parse = re.search(
-            r"^CLEAR_SESSIONS=0\n.*?^readonly CLEAR_SESSIONS\n", SCRIPT, re.MULTILINE | re.DOTALL
-        )
-        assert default and parse, "entrypoint.sh no longer reads NEO_CLEAR_SESSIONS here"
-        given = "" if value is None else f"NEO_CLEAR_SESSIONS={shlex.quote(value)}\n"
-        if proc is None:
-            proc = self.processes()
+        """`then` after the setting, profile_in_use and clear_sessions, on `proc` as /proc."""
+        proc = proc or self.processes()
         return run_bash(
-            "log() { printf '[neo] %s\\n' \"$*\"; }\n"
-            'die() { log "$*" >&2; exit 1; }\n'
-            + shell_function("is_true")
-            + f"BROWSERCLAW_HOSTED_MODE={hosted_mode}\n"
-            + given
-            + default.group(0) + "\n"
-            + parse.group(0)
+            self.setting(value, hosted_mode)
             + f"PROFILE={shlex.quote(str(profile))} PROC_DIR={shlex.quote(str(proc))}\n"
             + f"BROWSER_GONE_TENTHS={gone_tenths}\n"
             + shell_function("profile_in_use")
@@ -401,31 +419,18 @@ class ClearSessionsTest(unittest.TestCase):
         # The first start and a restart after the browser exited both go through start_neo; each
         # browser writes its own Session_ file while it runs.
         profile = self.profile()
-        seen = profile.parent / "seen"
-        result = self.run_clear(
-            profile,
-            "1",
-            then=(
-                "forget_zoom_levels() { :; }\n"
-                # What is in Sessions as the browser starts, then the file this browser saves; a
-                # background job leaves start_neo a pid, as the real spawn does.
-                "spawn_as_neo() {\n"
-                f"  {{ ls {shlex.quote(str(profile))}/Default/Sessions 2>/dev/null || true; }}"
-                f" | tr '\\n' ' ' >> {shlex.quote(str(seen))}; echo >> {shlex.quote(str(seen))}\n"
-                f"  mkdir -p {shlex.quote(str(profile))}/Default/Sessions\n"
-                f"  echo 4111111111111111 > {shlex.quote(str(profile))}/Default/Sessions/Session_2\n"
-                "  : &\n"
-                "}\n"
-                "BACK_FORWARD_CACHE=0 sandbox_flags=(--no-sandbox)\n"
-                "browseros_extension_flags=(--disable-browseros-extensions) gpu_flags=(--disable-gpu-compositing)\n"
-                "CDP_PORT=9110 SERVER_PORT=9210 HIDDEN_BROWSEROS_FEATURES=NewTabPage NEO_ARGS=\n"
-                + shell_function("start_neo")
-                + "start_neo\nstart_neo\n"
-            ),
+        sessions, seen = shlex.quote(f"{profile}/Default/Sessions"), shlex.quote(f"{profile.parent}/seen")
+        # Each browser notes what is in Sessions as it starts, then saves a file of its own.
+        browser = (
+            f"  {{ ls {sessions} 2>/dev/null || true; }} | tr '\\n' ' ' >> {seen}; echo >> {seen}\n"
+            f"  mkdir -p {sessions}; echo 4111111111111111 > {sessions}/Session_2"
         )
+        result = self.run_clear(profile, "1", then=start_neo_spawning(browser) + "start_neo\nstart_neo\n")
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(seen.read_text().splitlines(), ["", ""], "each browser started without them")
+        self.assertEqual(
+            (profile.parent / "seen").read_text().splitlines(), ["", ""], "each started without them"
+        )
         self.assertEqual(result.stdout.count("Removed the browser's saved sessions"), 2)
 
     def test_it_waits_for_the_last_browser_process_to_go(self):
@@ -468,13 +473,8 @@ class ClearSessionsTest(unittest.TestCase):
         directory = Path(self.enterContext(tempfile.TemporaryDirectory()))
         spawned = directory / "spawned"
         result = run_bash(
-            "forget_zoom_levels() { :; }\n"
-            "clear_sessions() { return 1; }\n"
-            f"spawn_as_neo() {{ touch {shlex.quote(str(spawned))}; : & }}\n"
-            "BACK_FORWARD_CACHE=0 BROWSERCLAW_HOSTED_MODE=1 sandbox_flags=(--no-sandbox)\n"
-            "browseros_extension_flags=(--disable-browseros-extensions) gpu_flags=(--disable-gpu-compositing)\n"
-            "PROFILE=/data/profile CDP_PORT=9110 SERVER_PORT=9210 HIDDEN_BROWSEROS_FEATURES=NewTabPage NEO_ARGS=\n"
-            + shell_function("start_neo")
+            "clear_sessions() { return 1; }\nBROWSERCLAW_HOSTED_MODE=1 PROFILE=/data/profile\n"
+            + start_neo_spawning(f"  touch {shlex.quote(str(spawned))}")
             + "if start_neo; then echo started; else echo refused; fi\n"
         )
 
