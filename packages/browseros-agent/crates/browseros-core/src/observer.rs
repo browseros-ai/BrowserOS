@@ -23,7 +23,7 @@ use acquisition::{AcquiredFrame, CaptureTrace, SnapshotStage, log_frame_error, t
 // Desktop's clickable rules, also read by hosted Neo's aria snapshot (neo-playwright), which
 // marks the same hits without running a script in the page. Desktop's own path is unchanged.
 pub use acquisition::SnapshotBudget;
-pub use clickable::{ClickableDocument, DomSnapshots, find_clickables};
+pub use clickable::{ClickableDocument, DomSnapshots, find_clickables, find_closed_shadow_seeds};
 
 const MAX_FRAME_DEPTH: usize = 5;
 const MAX_STABLE_CAPTURE_ATTEMPTS: usize = 3;
