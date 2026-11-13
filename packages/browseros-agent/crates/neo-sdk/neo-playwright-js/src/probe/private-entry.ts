@@ -26,6 +26,15 @@
  * bound, and an entry must always reach its box to read it back and to forget the value. Nothing
  * here writes to the page's markup (ruling R22): the mark and the listener live in Neo's isolated
  * world.
+ *
+ * The mark is kept on the box itself (ruling R53): a non-enumerable property on the box's
+ * wrapper in this isolated world, under a registered symbol. A frame's copy of this probe is a
+ * module of its own, so a set held here would not follow a box the page moves into another
+ * same-origin frame; the wrapper does, and the other frame's probe reads the same property
+ * there. The page's own world holds a wrapper of its own and never sees it. A named limit: under
+ * the spec harness's conformance switch a world masks only once it marked a box itself
+ * (`anyPrivatelyTyped`), so a marked box moved into another frame's document is not masked in
+ * that frame's tree walk there; no host fill happens under the switch.
  */
 import type {
   BoxState,
@@ -38,8 +47,12 @@ import type {
 } from './protocol'
 import type { World } from './world'
 
-/** Boxes Neo typed a private value into, in this document (design section 10.4). */
-const marked = new WeakSet<Element>()
+/**
+ * The key of the mark on a box Neo typed a private value into (design section 10.4). Registered
+ * (`Symbol.for`), so every frame's probe in this renderer names the same key: a symbol made with
+ * `Symbol()` would be one per frame's module and miss a box marked in another frame.
+ */
+const MARK = Symbol.for('neo.privatelyTyped')
 
 /**
  * Whether this world ever marked a box. Until it has, a snapshot under the spec harness's
@@ -75,7 +88,7 @@ const active = new Map<Pin, Element>()
 
 /** Whether Neo typed a private value into `element` (the mask reads it, pull request 4). */
 export function privatelyTyped(element: Element): boolean {
-  return marked.has(element)
+  return Object.hasOwn(element, MARK)
 }
 
 /** Whether this world marked any box yet (`anyMarked`). */
@@ -84,7 +97,9 @@ export function anyPrivatelyTyped(): boolean {
 }
 
 function mark(element: Element): void {
-  marked.add(element)
+  // Neither enumerable, writable nor configurable: no walk lists it, and nothing unmarks a box.
+  if (!Object.hasOwn(element, MARK))
+    Object.defineProperty(element, MARK, { value: true })
   anyMarked = true
 }
 

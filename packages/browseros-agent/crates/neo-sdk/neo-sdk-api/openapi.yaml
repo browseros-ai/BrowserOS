@@ -558,10 +558,11 @@ paths:
           step with what is typed, as many frameworks do, shows the typed value there, so a
           failed assertion or action on that box prints it. A page that does not write the
           attribute shows none. Later masking work closes this.
-        - The mark is kept in the box's own frame. A box the page moves into another frame of
-          the same origin is not known as marked there: its snapshot line prints no text, while
-          `inputValue()` and assertions on it there read the value. A mark that travels with the
-          box closes this later.
+        - The mark travels with the box: a box the page moves into another frame of the same
+          origin is still marked there. `inputValue()` reads the bullets, a name built from it
+          prints them, and its own snapshot line prints no text. An assertion on such a moved box
+          (`toHaveValue`) still compares against what it holds there, though its message prints
+          `<N characters>`; later masking work closes this.
         - A script's own code in the page (`evaluate`) reads what the page holds.
       parameters:
         - $ref: '#/components/parameters/TabId'
@@ -1274,8 +1275,9 @@ components:
       description: >-
         Neo could not start the takeover (`internal_error`), the display is unavailable
         (`display_unavailable`), Neo could not reach the browser (`browser_unavailable`), or it
-        cannot write a fill's request record, so it cannot promise one typing
-        (`trace_unavailable`).
+        cannot write one of a fill's records (`trace_unavailable`): the request record a
+        `requestId` names, so it cannot promise one typing, or, for any fill with a `requestId`
+        or not, its record of the tabs that took a fill. Nothing was typed.
       content:
         application/json:
           schema:

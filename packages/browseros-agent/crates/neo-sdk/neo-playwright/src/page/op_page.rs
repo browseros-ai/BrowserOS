@@ -119,7 +119,15 @@ impl<'op> OpPage<'op> {
     /// against the run's existing admitted tree. A cache only proves absence with live,
     /// gap-free observation while checking it; uncertainty enables the scan rather than
     /// fetching topology or changing frame storage.
+    ///
+    /// A tab that took a private entry always answers true (ruling R53). A marked box keeps the
+    /// prototype of the frame it was created in; once the page moved it into this document and
+    /// removed that frame, the tree proves one frame, and only the document-wide scan still
+    /// finds that prototype to guard it.
     pub(crate) fn may_have_other_frame(&self, scope: &OpScope<'_>, world: &IsolatedWorld) -> bool {
+        if self.pw.took_private_text(self.tab()) {
+            return true;
+        }
         let fence = self.pw.event_fence();
         if self.frames().lifecycle_has_gaps() || !self.pw.events_live_through(fence) {
             return true;

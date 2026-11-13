@@ -1594,6 +1594,11 @@ async fn a_fill_records_its_tab_before_typing_and_a_record_that_cannot_be_writte
     let refused = fill(&other, other_tab, &canary_body(&json!({}))).await?;
     assert_eq!(refused.status, 503, "{refused:?}");
     assert_eq!(refused.body["code"], "trace_unavailable", "{refused:?}");
+    assert_eq!(
+        refused.body["message"],
+        "Neo cannot write its record of the tabs that took a fill, so it types nothing",
+        "its own sentence, not the request record's: this fill names no requestId"
+    );
     assert_eq!(other.entry.calls(), 0, "nothing typed");
     Ok(())
 }

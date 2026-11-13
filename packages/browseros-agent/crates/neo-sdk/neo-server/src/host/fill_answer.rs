@@ -33,6 +33,9 @@ pub(crate) enum Refused {
     BrowserUnavailable,
     /// 503: the fill's request record cannot be written, so Neo cannot promise one typing.
     RecordUnavailable,
+    /// 503: the record of the tabs that took a fill cannot be written (ruling R45), so a Neo
+    /// restart could picture this tab again: any fill is refused, with a `requestId` or not.
+    FilledTabsUnavailable,
     /// 500: a failure inside Neo, with its cause for the log.
     Internal(String),
 }
@@ -53,6 +56,10 @@ impl From<Refused> for FillRefusal {
             Refused::RecordUnavailable => Self::TraceUnavailable(
                 "Neo cannot write the fill's request record, so it cannot promise this \
                  requestId types once; nothing was typed"
+                    .to_owned(),
+            ),
+            Refused::FilledTabsUnavailable => Self::TraceUnavailable(
+                "Neo cannot write its record of the tabs that took a fill, so it types nothing"
                     .to_owned(),
             ),
             Refused::Internal(cause) => Self::Internal(cause),
