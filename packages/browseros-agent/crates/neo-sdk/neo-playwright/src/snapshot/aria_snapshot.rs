@@ -139,6 +139,11 @@ pub(crate) struct PartialFrame {
 /// A whole page's snapshot also carries `document`, the tab's document generation read before
 /// the tree, which the prelude hands back with the rendered text so the delta baseline is only
 /// ever stored for the document it was read from (`snapshot_baselines.rs`).
+///
+/// `closedRoots` is there only when clickable marking found elements inside closed shadow roots
+/// that it could not hand a probe, so some closed roots may be unread; the prelude prints
+/// `# partial: closed shadow roots not all read (<sent> of <found>)` at the top of the v1 text
+/// and of `mode: 'full'`.
 #[derive(Debug, PartialEq, Serialize, TS)]
 pub(crate) struct SnapshotResult {
     // The probe and the renderer already share upstream's recursive node format, pinned by
@@ -155,6 +160,17 @@ pub(crate) struct SnapshotResult {
     #[serde(rename = "snapshotCall", skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub(crate) snapshot_call: Option<u32>,
+    /// Seeds of closed shadow roots, at least one per root, when not every one found was sent.
+    #[serde(rename = "closedRoots", skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub(crate) closed_roots: Option<ClosedRoots>,
+}
+
+/// How many of the seeds clickable marking found inside closed shadow roots reached a probe.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, TS)]
+pub(crate) struct ClosedRoots {
+    pub(crate) sent: u32,
+    pub(crate) found: u32,
 }
 
 /// The page's snapshot from the root frame's tree: every read child stitched in and the name
@@ -170,6 +186,7 @@ pub(crate) fn stitch(root: FrameSnapshot) -> SnapshotResult {
         partial,
         document: None,
         snapshot_call: None,
+        closed_roots: None,
     }
 }
 

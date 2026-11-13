@@ -7,7 +7,8 @@
 //! `Playwright::invoke` in phases (goto, snapshots, reads, a click, a frame read, a
 //! `worker.evaluate`, then a console listener) and prints the detector counts and the
 //! `Runtime.enable` and `Log.enable` commands Neo sent after each phase, so a detection can be
-//! traced to the phase, and session kind, that caused it. Until the script asks for console
+//! traced to the phase, and session kind, that caused it. The top document also holds a closed
+//! shadow root that Neo's snapshots read inside, and watches it. Until the script asks for console
 //! events, no session (page, OOPIF or worker) may get `Runtime.enable` or `Log.enable`, and no
 //! place may detect anything.
 //!
@@ -85,12 +86,22 @@ function detector(report, withDom) {
 /// The top document on `127.0.0.1`; its iframe loads from `localhost` on the same port, another
 /// site, so Chromium gives it its own process and Neo its own session. `#menu` has only a click
 /// listener, so each v1 snapshot's clickable marking resolves it and asks the probe its ref.
+/// `#closed` hosts a closed shadow root, which each v1 snapshot opens to Neo's engine; the page
+/// watches that root for any change and keeps asking its own host for it (`__closedSeen`).
 fn top_html() -> String {
     format!(
         r#"<!doctype html><title>detector</title>
 <p id="text">Resume</p><button id="save">Save</button><div id="menu">Menu</div>
+<div id="closed"></div>
 <iframe id="child" title="child"></iframe>
 <script>
+const closedHost = document.getElementById('closed');
+const closedRoot = closedHost.attachShadow({{ mode: 'closed' }});
+closedRoot.innerHTML = '<button>Closed save</button>';
+window.__closedSeen = {{ mutations: 0, hostGaveRoot: false }};
+new MutationObserver((records) => {{ window.__closedSeen.mutations += records.length; }})
+  .observe(closedRoot, {{ subtree: true, childList: true, attributes: true, characterData: true }});
+setInterval(() => {{ if (closedHost.shadowRoot !== null) window.__closedSeen.hostGaveRoot = true; }}, 100);
 document.getElementById('child').src = `http://localhost:${{location.port}}/child.html`;
 {DETECTOR}
 window.__det = detector(() => {{}}, true);
@@ -123,7 +134,7 @@ async fn detections(run: &LiveRun, page: &TestPage) -> TestResult<Value> {
     run.eval(
         page,
         "({ main: JSON.parse(JSON.stringify(window.__det)), frame: window.__frameDet, \
-         worker: window.__workerDet })",
+         worker: window.__workerDet, closed: window.__closedSeen })",
     )
     .await
 }
@@ -189,9 +200,11 @@ fn phases(top_url: &str) -> [(&'static str, String); 8] {
         ("idle", "return true;".to_owned()),
         (
             "snapshots",
-            "let marked = 0; for (let i = 0; i < 5; i++) \
-             if ((await page.ariaSnapshot({ mode: 'ai' })).includes('[cursor=pointer]: Menu')) \
-             marked++; return marked;"
+            "let marked = 0, closed = 0; for (let i = 0; i < 5; i++) { \
+             const text = await page.ariaSnapshot({ mode: 'ai' }); \
+             if (text.includes('[cursor=pointer]: Menu')) marked++; \
+             if (text.includes('- button \"Closed save\" [ref=')) closed++; } \
+             return { marked, closed };"
                 .to_owned(),
         ),
         (
@@ -265,10 +278,18 @@ fn judge(report: &[Value]) -> TestResult {
         .and_then(|line| line.pointer("/result/Ok"));
     assert_eq!(
         snapshots,
-        Some(&json!(5)),
-        "every snapshot marked the listener-only menu, so clickable marking's whole CDP path \
-         ran in the phase: {report:?}"
+        Some(&json!({ "marked": 5, "closed": 5 })),
+        "every snapshot marked the listener-only menu and printed the closed root's button, so \
+         clickable marking's whole CDP path, its closed-root seeds included, ran in the phase: \
+         {report:?}"
     );
+    for line in report {
+        assert_eq!(
+            line.pointer("/detections/closed"),
+            Some(&json!({ "mutations": 0, "hostGaveRoot": false })),
+            "the page saw no change in its closed root and its host never gave it out: {line}"
+        );
+    }
     for line in &quiet {
         assert_eq!(
             line.get("runtimeEnables"),

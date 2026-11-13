@@ -27,6 +27,7 @@ import {
   CHARS_PER_TOKEN,
   cap,
   type Printed,
+  partialHead,
   type Section,
 } from './snapshot-cap'
 import type { AriaNodeJSON } from './vendored'
@@ -212,15 +213,16 @@ function renderForm(
   walked: Printed[] | null,
 ): string {
   const limit = form.maxTokens * CHARS_PER_TOKEN
+  const partial = partialHead(result)
   if (form.text === 'never')
-    return cap(null, walk(result, form.urls, false), limit)
+    return cap([], partial, walk(result, form.urls, false), limit)
   const textForm = walked ?? walk(result, form.urls, true)
-  if (form.text !== 'leftOut') return cap(null, textForm, limit)
+  if (form.text !== 'leftOut') return cap([], partial, textForm, limit)
   const interactiveForm = walk(result, form.urls, false)
   const left = joinedLength(textForm) - joinedLength(interactiveForm)
   const about = aboutTokens(left)
   const notice = `# text left out: about ${about} tokens. Pass { text: true } to include it.`
-  return cap(notice, interactiveForm, limit)
+  return cap([notice], partial, interactiveForm, limit)
 }
 
 /** One form: the tree walked with page text on or off, then partial frames with no iframe line. */

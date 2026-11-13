@@ -7468,11 +7468,17 @@ ${value.stack}`;
   function aboutTokens(chars) {
     return Math.max(100, Math.round(chars / CHARS_PER_TOKEN / 100) * 100);
   }
-  function cap(notice, lines, limit, call = "ariaSnapshot()") {
-    const head = notice === null ? [] : [notice];
-    const whole = [...head, ...lines.map((line) => line.text)].join(`
+  function partialHead(result) {
+    const roots = result.closedRoots;
+    return roots ? [
+      `# partial: closed shadow roots not all read (${roots.sent} of ${roots.found})`
+    ] : [];
+  }
+  function cap(head, pinned, lines, limit, call = "ariaSnapshot()") {
+    const whole = [...head, ...pinned, ...lines.map((line) => line.text)].join(`
 `);
-    if (whole.length <= limit)
+    const measured = whole.length - pinned.reduce((sum, line) => sum + line.length + 1, 0);
+    if (measured <= limit)
       return whole;
     let used = -1;
     let taken = 0;
@@ -7513,11 +7519,17 @@ ${value.stack}`;
     }
     if (more === 0)
       return whole;
-    const size = `the whole snapshot is about ${aboutTokens(whole.length)} tokens`;
+    const size = `the whole snapshot is about ${aboutTokens(measured)} tokens`;
     const open = openSection(lines, cut, limit);
     const offer = open ? `page.getByRef('${open.ref}').${call} shows all of the ${open.label} section. Or pass a larger maxTokens.` : later ? `page.getByRef('${later.ref}').${call} shows the ${later.label} section, which is not shown above. Or pass a larger maxTokens.` : "Pass a larger maxTokens.";
     const cutLine = `# cut: ${more} more lines (${withRefs} with refs); ${size}. ${offer}`;
-    return [...top, ...linesBefore(lines, cut), cutLine, ...blocks].join(`
+    return [
+      ...top,
+      ...pinned,
+      ...linesBefore(lines, cut),
+      cutLine,
+      ...blocks
+    ].join(`
 `);
   }
   function linesBefore(lines, cut) {
@@ -7627,16 +7639,17 @@ ${value.stack}`;
   }
   function renderForm(result, form, walked) {
     const limit = form.maxTokens * CHARS_PER_TOKEN;
+    const partial = partialHead(result);
     if (form.text === "never")
-      return cap(null, walk(result, form.urls, false), limit);
+      return cap([], partial, walk(result, form.urls, false), limit);
     const textForm = walked ?? walk(result, form.urls, true);
     if (form.text !== "leftOut")
-      return cap(null, textForm, limit);
+      return cap([], partial, textForm, limit);
     const interactiveForm = walk(result, form.urls, false);
     const left = joinedLength(textForm) - joinedLength(interactiveForm);
     const about = aboutTokens(left);
     const notice = `# text left out: about ${about} tokens. Pass { text: true } to include it.`;
-    return cap(notice, interactiveForm, limit);
+    return cap([notice], partial, interactiveForm, limit);
   }
   function walk(result, urls, text) {
     const partials = new Map;
@@ -8017,7 +8030,7 @@ ${value.stack}`;
 `);
   }
   function renderFullSnapshot(result, maxTokens) {
-    return cap(null, printed(yamlLines(result, false)), maxTokens * CHARS_PER_TOKEN, FULL_CALL);
+    return cap([], partialHead(result), printed(yamlLines(result, false)), maxTokens * CHARS_PER_TOKEN, FULL_CALL);
   }
   function printed(lines) {
     const ends = lines.map(() => lines.length);

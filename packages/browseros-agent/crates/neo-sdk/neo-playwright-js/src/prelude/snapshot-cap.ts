@@ -9,6 +9,8 @@
  * end of the document, and a cut must never hide one.
  */
 
+import type { SnapshotResult } from './wire'
+
 /** One rendered line of a form, indented, with what the cap needs to know about it. */
 export type Printed = {
   text: string
@@ -44,20 +46,41 @@ export function aboutTokens(chars: number): number {
 }
 
 /**
- * `notice` and `lines` within `limit` characters. The notice counts toward the limit; the cut
- * line and the kept blocks printed after it do not. `call` is the snapshot call the cut line
- * offers on a section's ref, in the caller's own mode, so following the offer gives that
+ * The comment lines a v1 or full-mode text opens with, before the tree, for what the tree may
+ * lack: some closed shadow roots, when clickable marking found more of their seeds than it
+ * could hand a probe (Rust's `closedRoots`). `cap` prints them whatever its limit, as it prints
+ * the cut line: no `maxTokens` may hide that the tree itself is short.
+ */
+export function partialHead(result: SnapshotResult): string[] {
+  const roots = result.closedRoots
+  return roots
+    ? [
+        `# partial: closed shadow roots not all read (${roots.sent} of ${roots.found})`,
+      ]
+    : []
+}
+
+/**
+ * `head`, then `pinned`, then `lines`, within `limit` characters. The head lines (the notice)
+ * count toward the limit; the pinned lines (`partialHead`), the cut line and the kept blocks
+ * printed after it do not, and are printed whatever the limit. `call` is the snapshot call the
+ * cut line offers on a section's ref, in the caller's own mode, so following the offer gives that
  * section in the same format as the text that was cut.
  */
 export function cap(
-  notice: string | null,
+  head: readonly string[],
+  pinned: readonly string[],
   lines: readonly Printed[],
   limit: number,
   call = 'ariaSnapshot()',
 ): string {
-  const head = notice === null ? [] : [notice]
-  const whole = [...head, ...lines.map((line) => line.text)].join('\n')
-  if (whole.length <= limit) return whole
+  const whole = [...head, ...pinned, ...lines.map((line) => line.text)].join(
+    '\n',
+  )
+  // What the limit measures: the whole text without the pinned lines and their newlines.
+  const measured =
+    whole.length - pinned.reduce((sum, line) => sum + line.length + 1, 0)
+  if (measured <= limit) return whole
   // Whole lines from the top while they fit; `used` counts the newline before each but the first.
   let used = -1
   let taken = 0
@@ -101,7 +124,7 @@ export function cap(
   // Every line past the limit sits in a kept block, which prints whole anyway: nothing is cut,
   // so the text stays as it was, each block in its place.
   if (more === 0) return whole
-  const size = `the whole snapshot is about ${aboutTokens(whole.length)} tokens`
+  const size = `the whole snapshot is about ${aboutTokens(measured)} tokens`
   const open = openSection(lines, cut, limit)
   const offer = open
     ? `page.getByRef('${open.ref}').${call} shows all of the ${open.label} section. Or pass a larger maxTokens.`
@@ -109,7 +132,13 @@ export function cap(
       ? `page.getByRef('${later.ref}').${call} shows the ${later.label} section, which is not shown above. Or pass a larger maxTokens.`
       : 'Pass a larger maxTokens.'
   const cutLine = `# cut: ${more} more lines (${withRefs} with refs); ${size}. ${offer}`
-  return [...top, ...linesBefore(lines, cut), cutLine, ...blocks].join('\n')
+  return [
+    ...top,
+    ...pinned,
+    ...linesBefore(lines, cut),
+    cutLine,
+    ...blocks,
+  ].join('\n')
 }
 
 function linesBefore(lines: readonly Printed[], cut: number): string[] {

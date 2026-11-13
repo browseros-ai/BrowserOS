@@ -16,6 +16,7 @@ import type { SnapshotBaselineInput } from './types/SnapshotBaselineInput'
 import type { SnapshotPendingInput } from './types/SnapshotPendingInput'
 import type { SnapshotResult } from './types/SnapshotResult'
 
+export type { ClosedRoots } from './types/ClosedRoots'
 export type { LocatorSnapshotInput } from './types/LocatorSnapshotInput'
 export type { PageSnapshotInput } from './types/PageSnapshotInput'
 export type { PartialFrame } from './types/PartialFrame'

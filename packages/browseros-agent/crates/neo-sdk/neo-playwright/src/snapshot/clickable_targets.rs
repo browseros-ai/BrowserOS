@@ -1,7 +1,8 @@
 //! Clickable marking for hosted Neo's aria snapshot: elements Chromium reports clickable without
 //! a pointer cursor (a `div` with only a click listener, a `tabindex` card, an image tile) keep
 //! their refs in the prelude's condensed format, which prints refs only on what the agent can act
-//! on.
+//! on. The same read opens closed shadow roots to Neo's engine (a Cloudflare Turnstile widget
+//! sits in one), which no script can enter from the host.
 //!
 //! ```text
 //!  each frame the snapshot reads, BEFORE its snapshot call: its isolated world, and where its
@@ -10,10 +11,14 @@
 //!    ├─ browseros-core find_clickables: one DOMSnapshot.captureSnapshot { computedStyles:
 //!    │    [cursor] } per CDP session (DomSnapshots), desktop Neo's rules over the document
 //!    ├─ the hits that are not pointer-cursor hits (the engine already treats those as targets)
+//!    ├─ browseros-core find_closed_shadow_seeds over the same capture: elements inside closed
+//!    │    roots, at least one per root, the outermost first, at most SEED_CAP of them
 //!    └─ DOM.resolveNode { backendNodeId, executionContextId: that frame's isolated world }
-//!  then that frame's `snapshot` probe call carries the resolved nodes after its root: for that
-//!  one call the engine reads them as `cursor: pointer` (probe/pointer-targets.ts), so its own ai
-//!  rules print, keep and fold them as they do the page's own pointer-cursor elements.
+//!  then that frame's `snapshot` probe call carries the resolved seeds, then the targets, after
+//!  its root. The probe takes each seed's root (`getRootNode()`) and from then on its world's
+//!  engine enters that root as an open one (probe/shadow-roots.ts); for that one call the engine
+//!  reads the targets as `cursor: pointer` (probe/pointer-targets.ts), so its own ai rules print,
+//!  keep and fold them as they do the page's own pointer-cursor elements.
 //! ```
 //!
 //! Nothing runs in, or is written to, the page's own world: the capture is Chromium's, and the
@@ -59,13 +64,48 @@ const RESOLVES_IN_FLIGHT: usize = 8;
 /// The engine already treats those as click targets itself, so only the other hits are passed.
 const POINTER_REASON: &str = "cursor:pointer";
 
+/// Seeds of closed shadow roots resolved per frame at most. Core gives one per root whose host is
+/// not inside a closed root, first, then one per element inside a closed root that could host
+/// another (a root nested in a closed root cannot be told from an ordinary element there), so a
+/// page of many closed components needs one seed each. A cut is not silent: the snapshot's text
+/// says how many were sent of how many found (`SeedCount`), and the op's call log names the frame.
+/// Set from the cost of one seed against [`MARK_BUDGET`]: resolved eight at a time, a seed costs
+/// about 50 µs (measured 2026-11-12 on pages of closed cards: 100 seeds add 6 ms to marking, 999
+/// add 52 ms), so 1000 take about a twentieth of the frame's second, and a few times that on a
+/// loaded machine, beside a capture that took up to 950 ms on the largest page measured.
+const SEED_CAP: usize = 1000;
+
 /// One snapshot attempt's marking: the DOM captures its frames share, one per CDP session,
-/// core's bound on their reads in flight, and the sessions whose read ran out of time.
+/// core's bound on their reads in flight, the sessions whose read ran out of time, and the
+/// closed-root seeds of every frame it read.
 pub(super) struct Marking {
     snapshots: DomSnapshots,
     budget: SnapshotBudget,
     /// By session id (`None` for the browser's own session), never locked across an await.
     timed_out: Mutex<HashSet<Option<String>>>,
+    /// Never locked across an await.
+    seeds: Mutex<SeedCount>,
+}
+
+/// Closed-root seeds over every frame of one snapshot attempt: found in the frames' captures, and
+/// sent to their probes. A frame counts its seeds as found once its capture is read, and as sent
+/// only once each is resolved into its world, so a frame whose read failed or ran out of time
+/// after that, a seed removed from the page since the capture, or seeds the cap cut leave `sent`
+/// short: some closed roots may be unread, and the snapshot's text says so.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct SeedCount {
+    pub(super) found: usize,
+    pub(super) sent: usize,
+}
+
+/// What one frame's read hands its snapshot call, as remote objects of that frame's world in the
+/// op's object group: the call carries the seeds first, then the targets.
+#[derive(Default)]
+pub(super) struct Feed {
+    /// Nodes inside closed shadow roots, at least one per root the cap kept.
+    pub(super) seeds: Vec<String>,
+    /// Elements Chromium reports clickable without a pointer cursor.
+    pub(super) targets: Vec<String>,
 }
 
 /// Why a frame was snapshotted without its targets, as the call log words it.
@@ -122,21 +162,33 @@ impl Marking {
             snapshots: DomSnapshots::default(),
             budget: SnapshotBudget::new(),
             timed_out: Mutex::default(),
+            seeds: Mutex::default(),
         }
     }
 
-    /// The elements of `world`'s frame to pass to its snapshot call, as remote objects of that
-    /// world in the op's object group. `parent` is the world of the frame that holds its iframe,
-    /// `None` for the main frame; `frame_deadline` is when a child frame's own budget ends.
-    /// Empty when the frame has none; `None` when it could not be read, which is noted, with
-    /// the time it took, on the op's call log.
-    pub(super) async fn targets(
+    /// The attempt's seeds when some were found that never reached a probe; `None` when every
+    /// one did, or none was found.
+    pub(super) fn unsent_seeds(&self) -> Option<SeedCount> {
+        let count = *self.seeds.lock().unwrap_or_else(PoisonError::into_inner);
+        (count.sent < count.found).then_some(count)
+    }
+
+    fn count_seeds(&self, change: impl FnOnce(&mut SeedCount)) {
+        change(&mut self.seeds.lock().unwrap_or_else(PoisonError::into_inner));
+    }
+
+    /// What `world`'s frame passes to its snapshot call. `parent` is the world of the frame that
+    /// holds its iframe, `None` for the main frame; `frame_deadline` is when a child frame's own
+    /// budget ends. Empty when the frame has nothing to pass; `None` when it could not be read,
+    /// which is noted, with the time it took, on the op's call log. One read, one budget: a
+    /// frame that misses it passes neither its targets nor its seeds.
+    pub(super) async fn feed(
         &self,
         scope: &OpScope<'_>,
         world: &IsolatedWorld,
         parent: Option<&IsolatedWorld>,
         frame_deadline: Option<Instant>,
-    ) -> Option<Vec<String>> {
+    ) -> Option<Feed> {
         let session = world.session_id().map(|id| id.0.clone());
         let timed_out = || {
             self.timed_out
@@ -158,7 +210,7 @@ impl Marking {
             read
         };
         match read {
-            Ok(targets) => Some(targets),
+            Ok(feed) => Some(feed),
             Err(skipped) => {
                 scope.log(format!(
                     "  clickable marking skipped a frame ({}) after {} ms",
@@ -175,24 +227,62 @@ impl Marking {
         scope: &OpScope<'_>,
         world: &IsolatedWorld,
         parent: Option<&IsolatedWorld>,
-    ) -> Result<Vec<String>, Skipped> {
+    ) -> Result<Feed, Skipped> {
         let document = capture_document(world, parent).await;
-        let hits =
-            observer::find_clickables(&self.snapshots, world.session(), document, &self.budget)
+        let session = world.session();
+        let hits = observer::find_clickables(&self.snapshots, session, document, &self.budget)
+            .await
+            .map_err(Skipped::Read)?;
+        // The capture is cached for the attempt, so this reads the same one again.
+        let mut seeds =
+            observer::find_closed_shadow_seeds(&self.snapshots, session, document, &self.budget)
                 .await
                 .map_err(Skipped::Read)?;
-        let nodes = hits
+        self.count_seeds(|count| count.found += seeds.len());
+        if seeds.len() > SEED_CAP {
+            scope.log(format!(
+                "  closed shadow roots: a frame has {} seeds, the first {SEED_CAP} sent",
+                seeds.len()
+            ));
+            seeds.truncate(SEED_CAP);
+        }
+        let targets = hits
             .into_iter()
             .filter(|(_, reasons)| !reasons.iter().any(|reason| reason == POINTER_REASON))
-            .map(|(node, _)| node);
-        let resolved: Vec<Option<String>> = stream::iter(nodes)
-            .map(|node| resolve(scope, world, node))
+            .map(|(node, _)| (Fed::Target, node));
+        let nodes = seeds
+            .into_iter()
+            .map(|node| (Fed::Seed, node))
+            .chain(targets);
+        let resolved: Vec<(Fed, Option<String>)> = stream::iter(nodes)
+            .map(|(fed, node)| async move {
+                resolve(scope, world, node)
+                    .await
+                    .map(|object| (fed, object))
+            })
             .buffer_unordered(RESOLVES_IN_FLIGHT)
             .try_collect()
             .await?;
-        // A node that left its document since the capture resolved to nothing and is skipped.
-        Ok(resolved.into_iter().flatten().collect())
+        let mut feed = Feed::default();
+        // A node that left its document since the capture resolved to nothing and is skipped. A
+        // seed that did is not sent: its root may still hold the rest of what it held.
+        for (fed, object) in resolved {
+            let Some(object) = object else { continue };
+            match fed {
+                Fed::Seed => feed.seeds.push(object),
+                Fed::Target => feed.targets.push(object),
+            }
+        }
+        self.count_seeds(|count| count.sent += feed.seeds.len());
+        Ok(feed)
     }
+}
+
+/// Which list of the [`Feed`] a resolved node goes to.
+#[derive(Clone, Copy)]
+enum Fed {
+    Seed,
+    Target,
 }
 
 /// `read`'s answer, unless `deadline` passes first; then `Skipped::Timeout`, and `read` is

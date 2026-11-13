@@ -15,7 +15,6 @@
 import { isInvalidSelectorError } from '../../../neo-playwright/third_party/playwright/packages/isomorphic/selectorParser'
 import { act, disarm, frameBox, listenForMoves, moves, verdict } from './act'
 import { RefMap } from './aria-ref'
-import { hideBrowserOSUi } from './browseros-ui'
 import { documentText, replaceDocument } from './document'
 import { edit } from './edit'
 import { expect } from './expect'
@@ -36,6 +35,7 @@ import {
 import { read, readAll } from './read'
 import { generatedSelector, pinned, resolve } from './resolve'
 import { screenshotMask, screenshotMaskCleanup } from './screenshot'
+import { installShadowRoots } from './shadow-roots'
 import { snapshot } from './snapshot'
 import { matchUrl } from './url'
 import { webStorage } from './web-storage'
@@ -131,7 +131,7 @@ function createProbe() {
       pins.clear()
       refs.forget()
       listenForMoves()
-      hideBrowserOSUi()
+      installShadowRoots()
       const injected = createEngine(frameSeq)
       injected.onGlobalListenersRemoved.add(listenForMoves)
       refs.install(engineTable(injected), injected.utils)
