@@ -282,7 +282,8 @@ impl<'a> EntryRun<'a> {
             session: &session,
             own_frame,
         };
-        self.focus_step(page, sent, input, &box_at, &text, spaced).await?;
+        self.focus_step(page, sent, input, &box_at, &text, spaced)
+            .await?;
         // A box with no size that already holds text is emptied by a key before the first
         // character (ruling R51): the browser does not count a selection in such a box against
         // its maxlength, so with a full box the first key empties it and its own character is
@@ -290,7 +291,8 @@ impl<'a> EntryRun<'a> {
         // focus step's selection is replaced by the first character, and a page that submits on
         // its first input event must never see an empty box (B11v).
         if !looked.facts.sized && !looked.facts.empty {
-            self.empty_box(page, sent, input, &box_at, &text, spaced).await?;
+            self.empty_box(page, sent, input, &box_at, &text, spaced)
+                .await?;
         }
 
         let seen = if field.spec.keys {
@@ -360,7 +362,8 @@ impl<'a> EntryRun<'a> {
     ) -> Result<(), Stop> {
         for key in ["Delete", "Backspace"] {
             if key == "Backspace" {
-                self.focus_step(page, sent, input, box_at, text, spaced).await?;
+                self.focus_step(page, sent, input, box_at, text, spaced)
+                    .await?;
             }
             self.scope.recheck().map_err(|error| self.refused(&error))?;
             self.press(sent, input, box_at.session, key).await?;
@@ -371,7 +374,8 @@ impl<'a> EntryRun<'a> {
                 emptied.focus,
                 FocusState::Elsewhere | FocusState::NoDocumentFocus
             ) {
-                self.focus_step(page, sent, input, box_at, text, spaced).await?;
+                self.focus_step(page, sent, input, box_at, text, spaced)
+                    .await?;
                 emptied = self.emptied(page, box_at).await?;
             }
             match emptied.focus {
