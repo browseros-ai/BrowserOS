@@ -893,7 +893,10 @@ for pid in pids:
     result FAIL captcha-keys "${captcha_problems[*]}"
   fi
 else
-  for check in mcp host-api downloads pdf-downloads blobs frames tab-keep takeover-scale settings settings-file settings-file-ids settings-file-link files trace-values mcp-remote restart-browser stop persist kill-all captcha-keys; do
+  for check in settings-file settings-file-ids settings-file-link; do
+    report_settings_file "$check" '{"ok":false,"checks":[{"name":"startup cases ran","ok":false}],"problems":["not run: the image did not boot"],"detail":"not run: the image did not boot; no startup-case volumes were created","before":null,"afterPatch":null}'
+  done
+  for check in mcp host-api downloads pdf-downloads blobs frames tab-keep takeover-scale settings files trace-values mcp-remote restart-browser stop persist kill-all captcha-keys; do
     result FAIL "$check" "not run: the image did not boot"
   done
 fi
