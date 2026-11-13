@@ -9,6 +9,8 @@ one JSON object on stdout; accept.sh decides PASS or FAIL from it.
   downloads <mcp-url> <socket> <token-file>
                                          a click that downloads, `path()` and `saveAs()`, the
                                          bytes over the host socket, then the same path uploaded
+  pdf-downloads <mcp-url> <socket> <token-file>
+                                         PDF viewer and download cases, with a ZIP control
   blobs <mcp-url> <socket> <token-file>  a full-page PNG and a PDF too large to return inline,
                                          read back as blobs; large text still refused
   describe <mcp-url>                     the `run` tool's description, which lists neo.* methods
@@ -21,6 +23,7 @@ Standard library only.
 
 import hashlib
 import http.server
+import io
 import json
 import os
 import socket
@@ -28,6 +31,7 @@ import ssl
 import sys
 import threading
 import urllib.parse
+import zipfile
 
 RUN_META = "com.browseros.neo/run"
 TITLE = "neo-sdk-accept"
@@ -224,6 +228,174 @@ def downloads(url: str, socket_path: str, token_file: str) -> dict:
     }
 
 
+def pdf_fixture() -> bytes:
+    """A deterministic one-page PDF with real cross-reference offsets, so the viewer can open it."""
+    objects = [b"<< /Type /Catalog /Pages 2 0 R >>", b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+               b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R >>",
+               b"<< /Length 0 >>\nstream\nendstream"]
+    body, offsets = b"%PDF-1.4\n", [0]
+    for index, obj in enumerate(objects, 1):
+        offsets.append(len(body))
+        body += f"{index} 0 obj\n".encode() + obj + b"\nendobj\n"
+    xref = len(body)
+    body += b"xref\n0 5\n0000000000 65535 f \n"
+    body += b"".join(f"{offset:010} 00000 n \n".encode() for offset in offsets[1:])
+    return body + f"trailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode()
+
+
+PDF = pdf_fixture()
+ZIP_BUFFER = io.BytesIO()
+with zipfile.ZipFile(ZIP_BUFFER, "w") as archive:
+    archive.writestr(zipfile.ZipInfo("control.txt", (2026, 1, 1, 0, 0, 0)), b"complete ZIP bytes\n")
+# Keep the host's original PDF-prefix payload separate from the four valid PDF scenarios.
+PDF_CASES = (
+    ("report.pdf", b"%PDF-1.4\n" + b"complete PDF bytes\n" * 100000, "host"),
+    ("pdf-attachment.pdf", PDF, "attachment"),
+    ("pdf-inline.pdf", PDF, "inline"),
+    ("pdf-link.pdf", PDF, "download"),
+    ("pdf-blob.pdf", PDF, "blob"),
+    ("zip-attachment.zip", ZIP_BUFFER.getvalue(), "attachment"),
+)
+
+
+class PdfFilesPage(FilesPage):
+    """The six local fixtures share an origin, including the download-attribute and Blob cases."""
+
+    def do_GET(self):
+        if self.path == "/":
+            body = b'<!doctype html><title>File proof</title><h1>File proof</h1><a href="/file" download>download</a>'
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        fixture = PDF_CASES[0] if self.path == "/file" else next(
+            (case for case in PDF_CASES if self.path == "/" + case[0]), None)
+        if fixture is None:
+            return super().do_GET()
+        name, body, mode = fixture
+        self.send_response(200)
+        self.send_header("Content-Type", "application/zip" if name.endswith(".zip") else "application/pdf")
+        self.send_header("Content-Disposition", f'{"attachment" if mode in ("host", "attachment") else "inline"}; filename="{name}"')
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+# Plain Playwright calls and explicit args let the same body run against upstream Chromium.
+PDF_DOWNLOAD_CODE = """\
+const p = await context.newPage();
+const facts = {};
+const observe = async (promise) => {
+  let timer;
+  try {
+    return await Promise.race([
+      promise.then(value => ({ value: value === undefined ? null : value }), error => ({ error: String(error) })),
+      new Promise(resolve => { timer = setTimeout(() => resolve({ error: 'observation timeout' }), 8000); })
+    ]);
+  } finally { clearTimeout(timer); }
+};
+try {
+  await p.goto(args.origin + '/', { timeout: 12000 });
+  // Register before dispatch. A navigation that becomes a download may reject independently.
+  const waiting = p.waitForEvent('download', { timeout: 15000 })
+    .then(download => ({ download }), error => ({ error: String(error) }));
+  try {
+    if (args.mode === 'host') {
+      await p.getByRole('link', { name: 'download', exact: true }).click({ timeout: 12000 });
+    } else if (args.mode === 'download' || args.mode === 'blob') {
+      await p.evaluate(async ({ url, mode, name }) => {
+        const a = document.createElement('a');
+        a.download = name;
+        a.href = mode === 'blob'
+          ? URL.createObjectURL(new Blob([await (await fetch(url)).arrayBuffer()], { type: 'application/pdf' }))
+          : url;
+        document.body.append(a);
+        a.click();
+      }, args);
+    } else {
+      await p.goto(args.url, { waitUntil: 'load', timeout: 12000 });
+    }
+  } catch (error) { facts.triggerError = String(error); }
+  const event = args.mode === 'inline'
+    ? await Promise.race([waiting, new Promise(resolve => setTimeout(() => resolve({ error: 'no event after load' }), 2000))])
+    : await waiting;
+  facts.event = event.download ? { name: event.download.suggestedFilename(), url: event.download.url() } : event;
+  if (args.mode === 'inline') {
+    // Chromium's PDF embed is hidden from document queries. Its generated document
+    // references the viewer's extension stylesheet even when no download exists.
+    facts.viewer = await p.evaluate(() => ({ contentType: document.contentType,
+      stylesheet: [...document.querySelectorAll('link[rel="stylesheet"]')].some(link =>
+        link.href.startsWith('chrome-extension://') && link.href.endsWith('/pdf_embedder.css')) }));
+  } else if (event.download) {
+    // These methods have no timeout option. Observe each independently so a stuck artifact
+    // still returns evidence. Ending the run cancels operations left behind by the races.
+    [facts.path, facts.saveAs, facts.failure] = await Promise.all([
+      observe(event.download.path()), observe(event.download.saveAs(args.saved)), observe(event.download.failure())
+    ]);
+  }
+} catch (error) { facts.error = String(error); }
+finally { facts.close = await observe(p.close()); }
+return facts;
+"""
+
+
+def pdf_downloads(url: str, socket_path: str, token_file: str) -> dict:
+    """Verify browser files and host-import bytes. The collector needs root to read neo's /data."""
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), PdfFilesPage)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    origin = f"http://127.0.0.1:{server.server_address[1]}"
+    problems, cases = [], []
+    try:
+        client = connect(url)
+        for name, body, mode in PDF_CASES:
+            saved = f"/tmp/neo-accept-{os.getpid()}-{name}"
+            args = {"origin": origin, "url": origin + "/" + name, "mode": mode, "name": name, "saved": saved}
+            before = set(os.listdir("/data/downloads"))
+            evidence = {"case": name}
+            cases.append(evidence)
+            try:
+                got = call_run(client, f"const args = {json.dumps(args)};\n" + PDF_DOWNLOAD_CODE,
+                               {"taskId": "accept-pdf-downloads"})
+                value = (got["value"] or {}).get("value") or {}
+                run_id = got["meta"].get("id", "")
+                record = host(socket_path, token_file, f"/v1/runs/{run_id}?wait=10")
+                listed = (record.get("body") or {}).get("downloads") or []
+                evidence.update(run=run_id, result=got, downloads=listed)
+                assert got["meta"].get("status") == "ok" and not value.get("error"), str(got)
+                assert record.get("status") == 200, str(record)
+                if mode == "inline":
+                    assert not value.get("triggerError"), str(value)
+                    assert value.get("event") == {"error": "no event after load"} and not listed, str(value)
+                    assert value.get("viewer") == {"contentType": "application/pdf", "stylesheet": True}, str(value)
+                else:
+                    path = (value.get("path") or {}).get("value") or ""
+                    assert path.startswith("/data/downloads/"), str(value)
+                    assert value.get("failure") == {"value": None} and "value" in value.get("saveAs", {}), str(value)
+                    assert value.get("event", {}).get("name") == name, str(value)
+                    want = hashlib.sha256(body).hexdigest()
+                    evidence["sha256"] = {"expected": want}
+                    for label, filename in (("original", path), ("saved", saved)):
+                        with open(filename, "rb") as file:
+                            evidence["sha256"][label] = hashlib.sha256(file.read()).hexdigest()
+                        assert evidence["sha256"][label] == want, filename
+                    assert len(listed) == 1 and (listed[0].get("state"), listed[0].get("size"), listed[0].get("path")) == ("completed", len(body), path), str(listed)
+                    raw = host_raw(socket_path, token_file, f"/v1/runs/{run_id}/downloads/0")
+                    assert isinstance(raw, tuple) and raw[0] == 200 and hashlib.sha256(raw[2]).hexdigest() == want, str(raw)[:200]
+                    evidence["sha256"]["host"] = hashlib.sha256(raw[2]).hexdigest()
+                assert not value.get("close", {}).get("error"), str(value)
+            except Exception as error:
+                problems.append(f"{name}: {error}; files={sorted(set(os.listdir('/data/downloads')) - before)}")
+            finally:
+                evidence["files"] = sorted(set(os.listdir("/data/downloads")) - before)
+    finally:
+        server.shutdown()
+        server.server_close()
+    return {"ok": not problems, "problems": problems, "cases": cases,
+            "detail": "six PDF/ZIP cases: viewer retained; original, saveAs and host bytes match SHA-256"}
+
+
 def dechunk(body: bytes) -> bytes:
     out = b""
     while body:
@@ -353,6 +525,8 @@ def main() -> None:
         out = run(*args)
     elif command == "downloads":
         out = downloads(*args)
+    elif command == "pdf-downloads":
+        out = pdf_downloads(*args)
     elif command == "blobs":
         out = blobs(*args)
     elif command == "host":

@@ -50,6 +50,10 @@ crates/neo-sdk/neo-server/docker/accept.sh "$TAG"
 It boots the image in throwaway containers on a private `--internal` network, drives a real page through
 `run`, and checks the host contract below, the stop, persistence, a browser restart and a kill of every
 process at once, all under only the capabilities listed below. The header of `accept.sh` lists each check.
+`pdf-downloads` checks the host's exact PDF attachment, four valid PDF cases (attachment, inline viewer,
+same-origin download attribute, and typed Blob), and a ZIP attachment. It compares the browser file,
+the `saveAs()` copy, and the host endpoint's bytes by SHA-256. Inline PDFs open in Chromium's viewer
+without a download event.
 An image for another architecture than the Docker engine's gets the static `identity` check only, because
 booting it would be emulated. CI runs both scripts natively on amd64 and arm64
 (`.github/workflows/neo-sdk-image.yml`) on every pull request and push that changes the image's inputs,
@@ -153,6 +157,12 @@ them, as the Neo image's README describes.
 
 A `requestId` sent with a run is answered from `trace.db` for 10 minutes after the run ends, across
 restarts, so a host can retry a call whose reply it lost without running it twice.
+
+To save a PDF shown inline, request the original URL's bytes in its signed-in page with
+`page.evaluate()` and `fetch()` where same-origin or CORS permits. For a generated PDF, `page.pdf()`
+returns bytes. Returning those bytes from `run` yields an inline result or a host-readable blob when
+large. It does not create a download or accept a `path` option. For an actual download, await
+`download.path()` before importing its host endpoint.
 
 ### Stop and restart
 
