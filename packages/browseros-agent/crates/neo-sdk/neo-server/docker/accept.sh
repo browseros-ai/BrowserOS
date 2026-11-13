@@ -33,6 +33,9 @@
 #   blobs            a 1.5 MB+ full-page PNG and a PDF returned from `run` come back as
 #                    {"$neo":"blob"} markers and read back whole at /v1/runs/{id}/blobs/{id};
 #                    small bytes stay inline; 300 KiB of text is still result_too_large
+#   blank-tab        GET /v1/tabs marks one tab owner "neo"; a script closes every tab it sees
+#                    (context.pages()); only Neo's tab is left, the server is the same process,
+#                    and the next run passes
 #   mcp-remote       9011 is the same MCP over TLS; with NEO_MCP_REMOTE=false (the default) a
 #                    sibling container is cut off on 9010 and 9011; with true it is answered
 #   settings         PATCH /v1/settings applies and lists an unknown name, a bad value is 400 and
@@ -325,6 +328,31 @@ if [ "$booted" = 1 ]; then
     result PASS blobs "$(jget "$blobbed" 'd["detail"]')"
   else
     result FAIL blobs "$(jget "$blobbed" '"; ".join(d["problems"])' || printf '%s' "${blobbed:0:300}")"
+  fi
+
+  # --- blank-tab -----------------------------------------------------------------------------
+  # Neo keeps one blank tab of its own: a script that closes every tab it can see leaves the
+  # browser and the server running, Neo's tab still listed, and the next run works.
+  neo_tabs() { jget "$1" '" ".join(str(i["tabId"]) for i in d["body"]["items"] if i.get("owner") == "neo")'; }
+  all_tabs() { jget "$1" '" ".join(str(i["tabId"]) for i in d["body"]["items"])'; }
+  blank_pid=$(server_pid "$main")
+  tabs_before=$(host_get "$main" /v1/tabs)
+  neo_before=$(neo_tabs "$tabs_before")
+  closed=$(client "$main" "${as_host[@]}" python3 accept_client.py close-all http://127.0.0.1:9010/mcp 2>&1)
+  tabs_after=""
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    tabs_after=$(host_get "$main" /v1/tabs)
+    [ "$(all_tabs "$tabs_after")" = "$neo_before" ] && break
+    sleep 0.5
+  done
+  blank_run=$(run_call "$main" "blank-$run_id" "blank-req-$run_id" 2>&1)
+  if [ -n "$neo_before" ] && [ "${neo_before// /}" = "$neo_before" ] \
+      && [ "$(jget "$closed" 'd["meta"]["status"]')" = ok ] \
+      && [ "$(all_tabs "$tabs_after")" = "$neo_before" ] && [ "$(neo_tabs "$tabs_after")" = "$neo_before" ] \
+      && run_ok "$blank_run" && [ -n "$blank_pid" ] && [ "$(server_pid "$main")" = "$blank_pid" ]; then
+    result PASS blank-tab "one tab of Neo's ($neo_before); a script closed the $(jget "$closed" 'd["value"]["value"]["closed"]') it saw; only Neo's left, server $blank_pid alive, the next run passed"
+  else
+    result FAIL blank-tab "neo before=[$neo_before] closed=${closed:0:200} after=[$(all_tabs "$tabs_after")] neo after=[$(neo_tabs "$tabs_after")] pid $blank_pid->$(server_pid "$main") run=${blank_run:0:200}"
   fi
 
   # --- mcp-remote, loopback-only half ----------------------------------------------------------
