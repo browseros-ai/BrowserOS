@@ -649,7 +649,6 @@ impl<'a> PointerRunner<'a> {
                             located.world().clone(),
                             token,
                             Arc::clone(self.page.state().input()),
-                            root.clone(),
                             scale,
                         ));
                     }

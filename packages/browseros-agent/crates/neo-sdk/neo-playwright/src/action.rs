@@ -69,7 +69,7 @@ mod key_action;
 mod pointer_action;
 mod pointer_quads;
 mod protocol_scroll;
-mod requested_navigations;
+pub(crate) mod requested_navigations;
 mod subject;
 
 pub(crate) use action_op::ActionOp;

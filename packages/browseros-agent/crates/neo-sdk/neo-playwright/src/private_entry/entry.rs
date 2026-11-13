@@ -278,10 +278,6 @@ pub struct EntryError {
     /// The host's own code, when a host policy refused with `host_error`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub host_code: Option<String>,
-    /// Whether Neo knows what happened once the entry was sent, for the host's door: it derives
-    /// `done` from a definite error and `unknown` from an ambiguous one. Not on the wire.
-    #[serde(skip)]
-    pub answer: Answer,
 }
 
 impl EntryError {
@@ -294,7 +290,6 @@ impl EntryError {
             message: code.message().to_owned(),
             retryable: sending == Sending::NotYet,
             host_code: None,
-            answer: code.answer(),
         }
     }
 
@@ -308,7 +303,22 @@ impl EntryError {
             message: refusal.message,
             retryable: sending == Sending::NotYet,
             host_code: refusal.host_code,
-            answer: Answer::Definite,
+        }
+    }
+
+    /// Whether Neo knows what happened once the entry was sent, for the host's door: it derives
+    /// `done` from a definite error and `unknown` from an ambiguous one. Derived from `code`, so
+    /// the two cannot disagree; a host policy's own code is a refusal Neo saw end, definite.
+    #[must_use]
+    pub fn answer(&self) -> Answer {
+        match self.code.as_str() {
+            "focus_lost"
+            | "value_not_taken"
+            | "page_moved"
+            | "run_timeout"
+            | "target_closed"
+            | "browser_disconnected" => Answer::Ambiguous,
+            _ => Answer::Definite,
         }
     }
 }
@@ -334,7 +344,7 @@ pub struct Entry {
 /// and its error's answer make of its delivery.
 #[must_use]
 pub fn delivery_of(sending: Sending, error: Option<&EntryError>) -> Delivery {
-    match (sending, error.map(|error| error.answer)) {
+    match (sending, error.map(EntryError::answer)) {
         (Sending::NotYet, _) => Delivery::NotSent,
         (Sending::Sent, None | Some(Answer::Definite)) => Delivery::Done,
         (Sending::Sent, Some(Answer::Ambiguous)) => Delivery::Unknown,
@@ -380,7 +390,7 @@ mod tests {
     #[test]
     fn tests_that_the_delivery_is_the_doors() {
         let focus = EntryError::of(EntryCode::NotFocused, Sending::Sent);
-        assert_eq!(focus.answer, Answer::Definite);
+        assert_eq!(focus.answer(), Answer::Definite);
         assert_eq!(delivery_of(Sending::Sent, Some(&focus)), Delivery::Done);
         let lost = EntryError::of(EntryCode::FocusLost, Sending::Sent);
         assert_eq!(delivery_of(Sending::Sent, Some(&lost)), Delivery::Unknown);
@@ -390,6 +400,37 @@ mod tests {
             Delivery::NotSent
         );
         assert_eq!(delivery_of(Sending::Sent, None), Delivery::Done);
+    }
+
+    #[test]
+    fn tests_that_an_errors_answer_is_its_codes() {
+        let codes = [
+            EntryCode::ElementDetached,
+            EntryCode::NotAnInput,
+            EntryCode::WrongOrigin,
+            EntryCode::WrongType,
+            EntryCode::BoxChanged(super::BoxFact::Name),
+            EntryCode::PageChanged,
+            EntryCode::BoxNotEditable,
+            EntryCode::BoxHidden,
+            EntryCode::BoxCovered,
+            EntryCode::ValueTooLong,
+            EntryCode::NotFocused,
+            EntryCode::FocusLost,
+            EntryCode::ValueNotTaken,
+            EntryCode::PageMoved,
+            EntryCode::RunTimeout,
+            EntryCode::TargetClosed,
+            EntryCode::BrowserDisconnected,
+            EntryCode::Internal,
+        ];
+        for code in codes {
+            assert_eq!(
+                EntryError::of(code, Sending::Sent).answer(),
+                code.answer(),
+                "{code:?}"
+            );
+        }
     }
 
     #[test]

@@ -19,6 +19,7 @@ use crate::op::{Op, OpKind};
 use crate::op_input::OpInput;
 use crate::op_scope::OpScope;
 use crate::page::{MediaSessions, PageRegistry, context_op, page_op};
+use crate::private_entry::PrivateTabs;
 use crate::read::read_op;
 use crate::snapshot::{SnapshotBaselines, snapshot_op};
 use crate::world::{Epoch, FrameAttachLog};
@@ -52,6 +53,8 @@ pub struct Playwright {
     /// `ariaSnapshot({ delta: true })`. It outlives runs on purpose; the watcher drops a tab's
     /// when its document changes.
     snapshot_baselines: Arc<SnapshotBaselines>,
+    /// The tabs a private entry typed into, for the host's camera.
+    private_tabs: PrivateTabs,
 }
 
 // A hand-written `Debug`: the session is not worth printing.
@@ -93,6 +96,7 @@ impl Playwright {
             pages,
             media,
             snapshot_baselines,
+            private_tabs: PrivateTabs::default(),
         })
     }
 
@@ -188,6 +192,11 @@ impl Playwright {
     /// Session replay for preferences owned by a tab, independent of any one run.
     pub(crate) fn media(&self) -> &MediaSessions {
         &self.media
+    }
+
+    /// The tabs a private entry typed into.
+    pub(crate) fn private_tabs(&self) -> &PrivateTabs {
+        &self.private_tabs
     }
 
     /// Every tab the instance acted on.
