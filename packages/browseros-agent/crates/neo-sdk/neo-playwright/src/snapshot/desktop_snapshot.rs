@@ -56,6 +56,11 @@ pub(super) struct DesktopInput {
     #[serde(default)]
     #[ts(optional, as = "Option<bool>")]
     brief: bool,
+    /// Leave only the refs out: the text alone, as a default format on this engine would hand
+    /// the script, so a run shows whether that text fits the script's heap.
+    #[serde(default, rename = "noRefs")]
+    #[ts(optional, as = "Option<bool>")]
+    no_refs: bool,
 }
 crate::wire::options!(DesktopInput);
 
@@ -177,7 +182,7 @@ pub(super) async fn desktop_snapshot(
     let bind_ms = bind_started.elapsed().as_secs_f64() * 1000.0;
     let text_units = result.text.encode_utf16().count();
     let ref_count = refs.len();
-    if input.brief {
+    if input.brief || input.no_refs {
         refs.clear();
     }
     Ok(DesktopSnapshot {
