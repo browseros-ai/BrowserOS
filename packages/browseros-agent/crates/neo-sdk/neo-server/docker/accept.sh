@@ -707,9 +707,13 @@ for pid in pids:
   # The whole log first: under pipefail a reader that stops early (head) can kill `docker logs`.
   main_log=$(docker logs "$main" 2>&1)
   started_line=$(grep -F 'neo.solveCaptcha is ' <<<"$main_log" | sed -n 1p)
+  # The providers to look for by name: none for an image built before captchaKeys, which says
+  # only that it is keyed (its label); the on/off checks still hold for it.
+  providers=""
+  [ "$captcha_keys" = unrecorded ] || providers=${captcha_keys//,/ }
   if [ "$want_main" = True ]; then
     grep -qF 'neo.solveCaptcha is on' <<<"$started_line" || captcha_problems+=("server did not log solving on")
-    for name in ${captcha_keys//,/ }; do
+    for name in $providers; do
       flag=$([ "$name" = 2captcha ] && echo twocaptcha || echo "$name")
       grep -qE "\b$flag=true\b" <<<"$started_line" || captcha_problems+=("server did not read the $name key")
     done
@@ -736,7 +740,7 @@ for pid in pids:
     fi
     remove "$own"
     [ "$own_captcha" = True ] || captcha_problems+=("under PUID/PGID 2345 listed=${own_captcha:-not booted}")
-    for name in ${captcha_keys//,/ }; do
+    for name in $providers; do
       flag=$([ "$name" = 2captcha ] && echo twocaptcha || echo "$name")
       grep -qE "\b$flag=true\b" <<<"${own_line:-}" || captcha_problems+=("under PUID/PGID 2345 the server did not read the $name key")
     done
@@ -753,7 +757,7 @@ for pid in pids:
   fi
   if [ ${#captcha_problems[@]} -eq 0 ]; then
     detail="listed: image's own keys $main_captcha, a host's read-only key file $keyed_captcha"
-    [ "$want_main" != True ] || detail+="; server read ${captcha_keys//,/ and }, under PUID/PGID 2345 too; every script file door refused on own keys; empty variables turn it off"
+    [ "$want_main" != True ] || detail+="; server read ${providers:-its keys}, under PUID/PGID 2345 too; every script file door refused on own keys; empty variables turn it off"
     result PASS captcha-keys "$detail"
   else
     result FAIL captcha-keys "${captcha_problems[*]}"

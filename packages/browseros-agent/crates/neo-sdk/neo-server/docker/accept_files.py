@@ -641,10 +641,14 @@ def image_keys(proof, places):
     of a key is read, hashed or kept: only its size, time and mode are compared. The host's
     settings are restored."""
     settings = proof.api('GET').get('body', {}).get('settings', {})
+    # The keys the image says it carries (provenance.json captchaKeys): a one-provider image
+    # leaves the other provider's default path empty, so the count comes from the image.
+    recorded = json.loads(Path('/usr/share/neo-sdk/provenance.json').read_text()).get('captchaKeys')
     try:
         proof.patch(['/'])
         keys = [path for path in places['captcha'] if path.is_file()]
-        proof.check('the image holds its configured CAPTCHA key files', len(keys) == len(places['captcha']) > 0)
+        expected = len(recorded) if isinstance(recorded, list) else len(keys)
+        proof.check('the image holds the CAPTCHA key files it records', len(keys) == expected > 0)
         for index, path in enumerate(keys):
             before = path.stat()
             spelled = json.dumps(str(path))
