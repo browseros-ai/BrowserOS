@@ -7803,9 +7803,9 @@ ${value.stack}`;
       let value;
       if (node.text !== undefined && node.text !== node.name)
         value = node.text;
-      else if (fieldWithoutRef(node) && node.text === undefined) {
+      else if (FIELD.has(node.role) && node.text === undefined) {
         const own = ownText(node);
-        if (own !== "")
+        if (own !== "" && own !== node.name)
           value = own;
       } else if (!node.name) {
         const label = ownText(node) || (node.role === "link" && !this.urls ? node.url ?? "" : "");
