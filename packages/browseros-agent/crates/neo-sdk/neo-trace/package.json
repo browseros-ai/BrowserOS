@@ -1,0 +1,9 @@
+{
+  "name": "@browseros/neo-trace-rust",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "lint:rust": "cargo fmt --package neo-trace -- --check && cargo clippy --package neo-trace --all-targets --locked -- -D warnings",
+    "test:rust": "cargo test --package neo-trace --locked"
+  }
+}

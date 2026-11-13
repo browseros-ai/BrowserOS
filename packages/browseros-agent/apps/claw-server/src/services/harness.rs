@@ -137,7 +137,7 @@ pub struct ConnectionState {
     pub message: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct IntegrityScanOutcome {
     pub verified: usize,
     pub drifted: usize,
@@ -168,6 +168,9 @@ pub struct FirstRunConnectOutcome {
     pub seeded_existing: bool,
 }
 
+/// Owns shared agent MCP configs and skill links. Dev instances are read-only guests:
+/// background maintenance does nothing and explicit connection changes are refused,
+/// because the installed app owns the same files even when Claw state is isolated.
 #[derive(Clone)]
 pub struct HarnessService {
     manager: McpManager,
@@ -177,6 +180,7 @@ pub struct HarnessService {
     managed_skill: Option<ManagedSkill>,
     mutex: Arc<Mutex<()>>,
     analytics: Arc<dyn AnalyticsSink>,
+    read_only: bool,
 }
 
 #[derive(Clone)]
@@ -263,6 +267,7 @@ impl HarnessService {
             managed_skill,
             mutex: Arc::new(Mutex::new(())),
             analytics,
+            read_only: false,
         }
     }
 
@@ -288,11 +293,33 @@ impl HarnessService {
         Ok(true)
     }
 
+    /// Set before sharing the service so HTTP, background tasks and skill publishing all
+    /// inherit the same ownership policy, including after a supervisor restarts the server.
+    #[must_use]
+    pub fn with_read_only(mut self, read_only: bool) -> Self {
+        self.read_only = read_only;
+        self
+    }
+
+    fn require_config_writes(&self) -> AppResult<()> {
+        if self.read_only {
+            return Err(AppError::forbidden(
+                "Agent configuration changes are disabled in development mode.",
+            ));
+        }
+        Ok(())
+    }
+
     /// Reconcile a user-authored skill into every connected agent, returning
     /// the agents it was linked into. Serialized with all other skill and
     /// MCP-link mutations through the shared lock so the shared skills.json
     /// manifest stays consistent.
     pub async fn install_skill(&self, spec: SkillSpec) -> AppResult<BTreeSet<AgentId>> {
+        // Local skill authoring remains usable in dev; publishing into shared agent
+        // directories belongs to the installed app, so there are no linked consumers.
+        if self.read_only {
+            return Ok(BTreeSet::new());
+        }
         let _guard = self.mutex.lock().await;
         let manager = self.manager.clone();
         let workspace_dir = self.workspace_dir.clone();
@@ -314,6 +341,9 @@ impl HarnessService {
 
     /// Remove a skill from every agent directory it was linked into. Idempotent.
     pub async fn uninstall_skill(&self, name: &str) -> AppResult<()> {
+        if self.read_only {
+            return Ok(());
+        }
         let _guard = self.mutex.lock().await;
         let spec = SkillSpec::new(name, String::new()).map_err(manager_app_error)?;
         let reconciler = SkillReconciler::new(self.skill_workspace_dir.clone());
@@ -330,6 +360,9 @@ impl HarnessService {
     /// The agents currently linked to BrowserOS neo over MCP, i.e. the set a
     /// newly authored skill links into by default.
     pub async fn connected_agents(&self) -> AppResult<BTreeSet<AgentId>> {
+        if self.read_only {
+            return Ok(BTreeSet::new());
+        }
         let _guard = self.mutex.lock().await;
         let manager = self.manager.clone();
         let workspace_dir = self.workspace_dir.clone();
@@ -346,6 +379,7 @@ impl HarnessService {
         harness: Harness,
         mcp_url: &str,
     ) -> AppResult<ConnectionState> {
+        self.require_config_writes()?;
         let guard = self.mutex.clone().lock_owned().await;
         let agent = harness.agent_id();
         let spec = spec_for(agent, mcp_url).map_err(manager_app_error)?;
@@ -432,6 +466,7 @@ impl HarnessService {
     }
 
     pub async fn disconnect_browseros(&self, harness: Harness) -> AppResult<ConnectionState> {
+        self.require_config_writes()?;
         let guard = self.mutex.clone().lock_owned().await;
         let agent = harness.agent_id();
         let manager = self.manager.clone();
@@ -572,6 +607,9 @@ impl HarnessService {
     }
 
     pub async fn first_run_connect(&self, mcp_url: &str) -> AppResult<FirstRunConnectOutcome> {
+        if self.read_only {
+            return Ok(FirstRunConnectOutcome::default());
+        }
         let connections = self.list_browseros_connections().await?;
         let already_linked = connections.iter().filter(|state| state.installed).count();
         let Some(targets) = first_run_connect_targets(&connections) else {
@@ -595,6 +633,9 @@ impl HarnessService {
     }
 
     pub async fn run_integrity_scan(&self) -> AppResult<IntegrityScanOutcome> {
+        if self.read_only {
+            return Ok(IntegrityScanOutcome::default());
+        }
         let _guard = self.mutex.lock().await;
         let manager = self.manager.clone();
         let workspace_dir = self.workspace_dir.clone();
@@ -604,6 +645,9 @@ impl HarnessService {
     }
 
     pub async fn run_skill_reconciliation(&self) -> AppResult<SkillReconcileOutcome> {
+        if self.read_only {
+            return Ok(SkillReconcileOutcome::default());
+        }
         let guard = self.mutex.clone().lock_owned().await;
         let Some(managed_skill) = self.managed_skill.clone() else {
             return Ok(SkillReconcileOutcome::default());
@@ -624,6 +668,9 @@ impl HarnessService {
         &self,
         target_mcp_url: &str,
     ) -> AppResult<IdentityMigrationOutcome> {
+        if self.read_only {
+            return Ok(IdentityMigrationOutcome::default());
+        }
         let _guard = self.mutex.lock().await;
         let manager = self.manager.clone();
         let workspace_dir = self.workspace_dir.clone();
@@ -639,6 +686,9 @@ impl HarnessService {
         &self,
         target_mcp_url: &str,
     ) -> AppResult<UrlMigrationOutcome> {
+        if self.read_only {
+            return Ok(UrlMigrationOutcome::default());
+        }
         let _guard = self.mutex.lock().await;
         let manager = self.manager.clone();
         let workspace_dir = self.workspace_dir.clone();

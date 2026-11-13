@@ -1,0 +1,12 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>scaled</title></head>
+<body style="margin: 0">
+  <iframe id="same" title="same" src="/scaled/child.html" style="position: absolute; left: 20px; top: 30px; width: 100px; height: 60px; border: 2px solid; padding: 3px; transform-origin: 0 0; transform: translate(10px, 5px) scale(2)"></iframe>
+  <iframe id="cross" title="cross" style="position: absolute; left: 20px; top: 300px; width: 100px; height: 60px; border: 0; transform-origin: 0 0; transform: scale(1.5)"></iframe>
+  <iframe title="rotated" src="/scaled/child.html" style="position: absolute; left: 400px; top: 30px; width: 100px; height: 60px; transform: rotate(10deg)"></iframe>
+  <iframe title="skewed" src="/scaled/child.html" style="position: absolute; left: 400px; top: 200px; width: 100px; height: 60px; transform: skewX(10deg)"></iframe>
+  <div style="position: absolute; left: 400px; top: 400px; rotate: 5deg"><iframe title="inside-rotated" src="/scaled/child.html" style="width: 100px; height: 60px"></iframe></div>
+  <script>document.getElementById('cross').src = `http://localhost:${location.port}/scaled/child.html`</script>
+</body>
+</html>

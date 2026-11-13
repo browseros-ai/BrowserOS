@@ -48,10 +48,31 @@ const INTERACTIVE_ROLES: &[&str] = &[
     "treeitem",
 ];
 const ELEMENT_NODE: i64 = 1;
+/// The tags DOM lets host a shadow root besides custom elements ("valid shadow host name").
+const SHADOW_HOST_TAGS: &[&str] = &[
+    "article",
+    "aside",
+    "blockquote",
+    "body",
+    "div",
+    "footer",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "header",
+    "main",
+    "nav",
+    "p",
+    "section",
+    "span",
+];
 
 /// Which document of a session's capture belongs to the frame being acquired.
 #[derive(Clone, Copy, Debug)]
-pub(super) enum ClickableDocument {
+pub enum ClickableDocument {
     /// The session's own root document: the top frame or an out-of-process iframe.
     SessionDefault,
     /// A same-process child frame, named by its document node's backend id.
@@ -67,7 +88,7 @@ pub(super) enum ClickableDocument {
 /// whole process's DOM once per frame. A failed capture is remembered too: retrying per frame
 /// would multiply the cost of a page that cannot be captured, and each of its frames reports it.
 #[derive(Clone, Default)]
-pub(super) struct DomSnapshots {
+pub struct DomSnapshots {
     captures: Arc<Mutex<HashMap<Option<String>, CaptureCell>>>,
 }
 
@@ -108,7 +129,7 @@ impl DomSnapshots {
 
 /// Clickable non-semantic elements of one frame's document, keyed by backend node id, each with
 /// the signals that made it one (`cursor:pointer`, `clickable`, `tabindex`).
-pub(super) async fn find_clickables(
+pub async fn find_clickables(
     snapshots: &DomSnapshots,
     session: &ProtocolSession,
     document: ClickableDocument,
@@ -118,7 +139,33 @@ pub(super) async fn find_clickables(
         return Err(FrameReadReason::NotFound);
     }
     let capture = snapshots.capture(session, budget).await?;
-    let selected = match document {
+    let selected = select_document(&capture, document).ok_or(FrameReadReason::NotFound)?;
+    Ok(clickables(selected, &capture.strings))
+}
+
+/// Elements of one frame's document that sit inside a closed shadow root, by backend node id: at
+/// least one for every closed root that holds an element, the outermost roots' first. Read from
+/// the same per-session capture as [`find_clickables`], so a caller that asks for both makes one
+/// `DOMSnapshot.captureSnapshot`. A closed root answers `null` to every script from its host and
+/// is reachable only from inside, so hosted Neo resolves these into its own isolated world to
+/// read the roots there; desktop Neo never calls it.
+pub async fn find_closed_shadow_seeds(
+    snapshots: &DomSnapshots,
+    session: &ProtocolSession,
+    document: ClickableDocument,
+    budget: &SnapshotBudget,
+) -> Result<Vec<i64>, FrameReadReason> {
+    if let ClickableDocument::Unavailable = document {
+        return Err(FrameReadReason::NotFound);
+    }
+    let capture = snapshots.capture(session, budget).await?;
+    let selected = select_document(&capture, document).ok_or(FrameReadReason::NotFound)?;
+    Ok(closed_shadow_seeds(selected, &capture.strings))
+}
+
+/// The frame's document within its session's capture.
+fn select_document(capture: &Capture, document: ClickableDocument) -> Option<&Document> {
+    match document {
         // Blink serializes the session's root frame first.
         ClickableDocument::SessionDefault => capture.documents.first(),
         ClickableDocument::BackendNode(id) => capture
@@ -126,9 +173,7 @@ pub(super) async fn find_clickables(
             .iter()
             .find(|document| document.nodes.backend_node_id.first() == Some(&id)),
         ClickableDocument::Unavailable => None,
-    };
-    let selected = selected.ok_or(FrameReadReason::NotFound)?;
-    Ok(clickables(selected, &capture.strings))
+    }
 }
 
 /// The rules over one captured document. A hit is an element that
@@ -233,6 +278,64 @@ fn clickables(document: &Document, strings: &[String]) -> HashMap<i64, Vec<Strin
             Some((view.backend_id(i)?, signals.reasons()))
         })
         .collect()
+}
+
+/// The rule over one captured document. Chromium walks the flat tree, lists no node for a shadow
+/// root and marks every node inside one with that root's type, so a host's flat children are its
+/// root's top level, and a closed root directly inside a closed root reads as a parent and child
+/// that are both `closed`, like any two elements of one root. So: for every flat parent that is
+/// not a `slot` and has an element child marked `closed`, its first such child is a seed. Every
+/// closed root that holds an element is the root of its host's flat children, so each gets a seed
+/// at least; many parents inside one root give one each, and the caller reads each seed's root
+/// once. A slot's flat children are its assigned nodes, from the tree its host sits in, which
+/// that host's own children already reach. A parent marked `closed` whose tag cannot host a shadow
+/// root (a list, a row, a button: DOM allows only custom elements and [`SHADOW_HOST_TAGS`]) holds
+/// only children of its own root, so it gives none. Pseudo-elements and text nodes are never
+/// seeds.
+///
+/// The seeds whose parent is not itself marked `closed` come first, in document order: each is
+/// the top of a closed root in the document or in an open root, the outermost roots, so a caller
+/// that keeps only the first few keeps those. A document with no node marked `closed` costs one
+/// pass over the shadow column.
+fn closed_shadow_seeds(document: &Document, strings: &[String]) -> Vec<i64> {
+    let shadow = &document.nodes.shadow_root_type;
+    let closed_value = |value: &i64| {
+        usize::try_from(*value)
+            .ok()
+            .and_then(|index| strings.get(index))
+            .is_some_and(|kind| kind == "closed")
+    };
+    if !shadow.value.iter().any(closed_value) {
+        return Vec::new();
+    }
+    let view = View::new(document, strings);
+    let closed = |i: usize| view.shadow_root_type(i) == Some("closed");
+    let mut seeded = vec![false; view.len()];
+    let (mut outermost, mut nested) = (Vec::new(), Vec::new());
+    for i in 0..view.len() {
+        if !view.is_element(i) || view.is_pseudo(i) || !closed(i) {
+            continue;
+        }
+        let Some(parent) = view.parent(i).filter(|&parent| parent < i) else {
+            continue;
+        };
+        let name = view.name(parent);
+        let can_host = || name.contains('-') || SHADOW_HOST_TAGS.contains(&name.as_str());
+        if seeded[parent] || name == "slot" || (closed(parent) && !can_host()) {
+            continue;
+        }
+        let Some(seed) = view.backend_id(i) else {
+            continue;
+        };
+        seeded[parent] = true;
+        if closed(parent) {
+            nested.push(seed);
+        } else {
+            outermost.push(seed);
+        }
+    }
+    outermost.extend(nested);
+    outermost
 }
 
 #[derive(Clone, Copy, Debug)]

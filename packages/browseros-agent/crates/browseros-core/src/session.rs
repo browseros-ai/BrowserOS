@@ -1,5 +1,5 @@
 use crate::{
-    CoreError, NativeCapabilities, PageId, SessionId, TargetId,
+    CoreError, NativeCapabilities, PageId, SessionId, TabId, TargetId,
     connection::CdpConnection,
     frames::FrameRegistry,
     input::Input,
@@ -108,16 +108,17 @@ impl BrowserSession {
         let detach_hook = {
             let page_signals = page_signals.clone();
             let user_hook = hooks.page_manager.on_page_detached.clone();
-            Arc::new(move |page_id: PageId| {
+            Arc::new(move |page_id: PageId, tab: TabId, target: TargetId| {
                 page_signals.forget_page(&page_id);
                 if let Some(user_hook) = &user_hook {
-                    user_hook(page_id);
+                    user_hook(page_id, tab, target);
                 }
             })
         };
         let page_hooks = PageManagerHooks {
             on_session_attached: Some(frame_hook),
             on_page_detached: Some(detach_hook),
+            on_page_removed: hooks.page_manager.on_page_removed.clone(),
         };
         let pages = Arc::new(
             PageManager::new(connection.clone(), page_hooks)
@@ -141,7 +142,11 @@ impl BrowserSession {
         self.native
     }
 
-    pub(crate) fn frames(&self) -> &Arc<FrameRegistry> {
+    /// The registry of every attached page's frame endpoints. Libraries that drive frames
+    /// themselves, such as neo-playwright's frame hops, resolve sessions here, so OOPIF
+    /// attachment and its fixes stay in one table.
+    #[must_use]
+    pub fn frames(&self) -> &Arc<FrameRegistry> {
         &self.frames
     }
 
@@ -282,6 +287,33 @@ impl BrowserSession {
 
     pub fn cdp_events(&self) -> broadcast::Receiver<CdpEvent> {
         self.connection.events()
+    }
+
+    /// See [`crate::connection::CdpConnection::events_broadcast`].
+    #[must_use]
+    pub fn cdp_events_broadcast(&self) -> u64 {
+        self.connection.events_broadcast()
+    }
+
+    /// See [`crate::connection::CdpConnection::events_counted`].
+    #[must_use]
+    pub fn cdp_events_counted(&self) -> (broadcast::Receiver<CdpEvent>, u64) {
+        self.connection.events_counted()
+    }
+
+    /// See [`crate::connection::CdpConnection::events_targeted_counted`].
+    #[must_use]
+    pub fn cdp_events_targeted_counted(
+        &self,
+        method: &str,
+    ) -> (mpsc::UnboundedReceiver<CdpEvent>, u64) {
+        self.connection.events_targeted_counted(method)
+    }
+
+    /// See [`crate::connection::CdpConnection::events_targeted_delivered`].
+    #[must_use]
+    pub fn cdp_events_targeted_delivered(&self, method: &str) -> u64 {
+        self.connection.events_targeted_delivered(method)
     }
 
     /// See [`crate::connection::CdpConnection::events_targeted`].
@@ -457,6 +489,22 @@ impl CdpConnection for EvictingConnection {
 
     fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
         self.inner.events_targeted(method)
+    }
+
+    fn events_broadcast(&self) -> u64 {
+        self.inner.events_broadcast()
+    }
+
+    fn events_counted(&self) -> (broadcast::Receiver<CdpEvent>, u64) {
+        self.inner.events_counted()
+    }
+
+    fn events_targeted_counted(&self, method: &str) -> (mpsc::UnboundedReceiver<CdpEvent>, u64) {
+        self.inner.events_targeted_counted(method)
+    }
+
+    fn events_targeted_delivered(&self, method: &str) -> u64 {
+        self.inner.events_targeted_delivered(method)
     }
 
     fn is_connected(&self) -> bool {

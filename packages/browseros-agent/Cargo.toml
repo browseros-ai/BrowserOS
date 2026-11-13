@@ -1,5 +1,19 @@
 [workspace]
-members = ["crates/*", "apps/claw-server"]
+# The grouping folder is not a package. Cargo excludes it from crates/*, but keeps these
+# literal members; add a member here whenever a new Neo crate joins the SDK.
+members = [
+    "crates/*",
+    "apps/claw-server",
+    "crates/neo-sdk/neo-server",
+    "crates/neo-sdk/neo-captcha",
+    "crates/neo-sdk/neo-screencast",
+    "crates/neo-sdk/neo-playwright",
+    "crates/neo-sdk/neo-sdk-api",
+    "crates/neo-sdk/neo-http",
+    "crates/neo-sdk/neo-takeover",
+    "crates/neo-sdk/neo-trace",
+]
+exclude = ["crates/neo-sdk"]
 resolver = "3"
 
 [workspace.package]
@@ -11,10 +25,17 @@ repository = "https://github.com/browseros-ai/BrowserOS"
 [workspace.dependencies]
 harness-integrations = { path = "crates/harness-integrations" }
 browseros-cdp = { path = "crates/browseros-cdp" }
+neo-captcha = { path = "crates/neo-sdk/neo-captcha" }
+neo-screencast = { path = "crates/neo-sdk/neo-screencast" }
 browseros-core = { path = "crates/browseros-core" }
 browseros-decide = { path = "crates/browseros-decide" }
 browseros-mcp = { path = "crates/browseros-mcp" }
+neo-http = { path = "crates/neo-sdk/neo-http" }
+neo-takeover = { path = "crates/neo-sdk/neo-takeover" }
+neo-playwright = { path = "crates/neo-sdk/neo-playwright" }
+neo-trace = { path = "crates/neo-sdk/neo-trace" }
 claw-api = { path = "crates/claw-api" }
+neo-sdk-api = { path = "crates/neo-sdk/neo-sdk-api" }
 hosted-api = { path = "crates/hosted-api" }
 
 tokio = { version = "1.52", features = ["rt-multi-thread", "macros", "net", "io-util", "time", "sync", "signal", "process", "fs"] }
@@ -33,6 +54,10 @@ jsonc-parser = { version = "0.33", features = ["cst", "serde_json"] }
 toml_edit = "0.22"
 rmcp = { version = "3.2", features = ["server", "transport-io", "transport-streamable-http-server"] }
 schemars = "1.0"
+# Prints neo-playwright's op input and result types as the prelude's TypeScript
+# (tests/wire_generated.rs). Pinned exactly: a major version changes the `TS` trait (v12 put a
+# `&Config` on every method), and the committed generated files are its text.
+ts-rs = "=12.0.1"
 axum = "0.8"
 http = "1"
 tower = { version = "0.5", features = ["util"] }
@@ -59,6 +84,7 @@ base64 = "0.22"
 ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
 bytes = "1"
 imagesize = "0.15"
+png = "0.18.1"
 tokio-util = { version = "0.7", features = ["rt"] }
 regex = "1"
 rand = "0.9"
@@ -71,6 +97,8 @@ sea-orm-migration = { version = "1.1", default-features = false, features = ["sq
 ulid = "1.2"
 time = { version = "0.3", features = ["formatting", "parsing"] }
 tempfile = "3.14"
+percent-encoding = "2.3"
+sqlx = { version = "0.8", default-features = false, features = ["sqlite", "runtime-tokio"] }
 toml = "0.8"
 
 [workspace.lints.rust]
@@ -84,13 +112,19 @@ print_stderr = "warn"
 dbg_macro = "warn"
 
 [profile.dev]
-# Dependencies are never stepped into, so their DWARF is pure disk cost: a strip
-# probe put debug info at 81% of the largest dependency rlib. Workspace crates
-# keep line tables so panics and backtraces still resolve to file and line.
-debug = "line-tables-only"
-
-[profile.dev.package."*"]
+# Every checkout and worktree builds into its own target/, so whatever a build
+# leaves behind is multiplied by the number of worktrees on a machine. Both
+# settings below trade a little convenience for that disk.
+#
+# No debug info for any crate. Line tables for the workspace crates alone kept
+# about 0.5 GB per target/ (the object files that hold them cannot be deleted
+# after linking). A panic still reports its own file and line; backtrace frames
+# keep their function names and lose line numbers.
 debug = false
+# Incremental state is never pruned: it grew a 4 GB target/ to tens of GB. With
+# it off the directory stays flat, and a rebuild after an edit takes about 25 s
+# instead of 8 s. CARGO_INCREMENTAL=1 turns it back on for one shell.
+incremental = false
 
 [profile.release]
 lto = "thin"

@@ -1,0 +1,146 @@
+[package]
+name = "neo-server"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Hosted BrowserOS Neo's sidecar: one MCP tool, run, with every SDK operation behind one dispatcher"
+
+# Neo server's lint table is mirrored by neo-playwright; style_boundaries checks their parity.
+#
+# Cargo forbids `[lints] workspace = true` plus extra lints in one crate, so the workspace's
+# lints are restated first. `tests/style_boundaries.rs` fails if a workspace lint is missing here
+# or if crates/neo-sdk/neo-playwright's table drifts from this one, so "keep in sync" is checked.
+#
+# Levels: additions are "warn"; check.sh and CI run clippy with `-D warnings`, so a warning
+# fails the gate while editing stays unblocked. The workspace's "deny" entries stay "deny".
+# Every name exists on rustc/clippy 1.96 and 1.98 (local stable and the CI pin).
+# Evidence for each choice: sdk-style/spikes/lint-counts*.txt and design.md.
+
+[lints.rust]
+# Workspace, restated.
+unsafe_code = "deny"                    # no unsafe in a server that parses untrusted input
+# Documentation (Google: document public APIs; owner: docs at seams).
+missing_docs = "warn"                   # every exported item says its job in the system
+unreachable_pub = "warn"                # `pub` means exported; internal items say `pub(crate)`
+missing_debug_implementations = "warn"  # exported types are loggable; secret types write a redacting Debug
+# Imports (Google: one module per `use`, types unqualified).
+unused_qualifications = "warn"          # no `a::B` when `B` is already in scope
+# Idioms.
+rust_2018_idioms = { level = "warn", priority = -1 }  # `Formatter<'_>`: borrows visible in types
+
+[lints.clippy]
+# Workspace, restated.
+unwrap_used = "deny"                    # a server must not panic on input
+expect_used = "deny"                    # stricter than Google's "prefer expect", on purpose
+print_stdout = "warn"                   # logs go through tracing; main's --version is the one expect
+print_stderr = "warn"
+dbg_macro = "warn"
+
+# Pedantic, on as a group (decisions.md 1). New pedantic lints on a toolchain bump show up
+# as warnings and get a deliberate decision.
+pedantic = { level = "warn", priority = -1 }
+missing_errors_doc = "allow"            # `# Errors` would restate the error type, which carries owner + code
+similar_names = "allow"                 # flags pairs like `req`/`res`; noise, no Google rule behind it
+
+# Restriction lints, each tied to a rule. The group is never enabled whole.
+# No panics on input (workspace rule, extended). Tests are exempt via clippy.toml.
+panic = "warn"                          # return an OperationError; panics are for broken invariants only
+todo = "warn"                           # unfinished code does not ship
+unimplemented = "warn"                  # unsupported methods fail with method_unavailable, not a panic
+unreachable = "warn"                    # prove it with types or return an error
+indexing_slicing = "warn"               # `v[i]` panics; use `.get()`, patterns, or a typed struct
+string_slice = "warn"                   # `&s[..n]` panics inside a UTF-8 char; cutting page text is common here
+exit = "warn"                           # only `main` decides exit codes (Chromium reads 0/1/2)
+# Error ownership: keep the cause.
+map_err_ignore = "warn"                 # `.map_err(|_| ..)` drops the source that says who failed
+# Suppressions are rare and explained.
+allow_attributes = "warn"               # `#[expect]` fails once the lint stops firing; `#[allow]` rots
+allow_attributes_without_reason = "warn"  # every exception says why
+# Google: imports and qualification.
+absolute_paths = "warn"                 # `std::mem::take(..)` -> `use std::mem; mem::take(..)` (max 2 segments, clippy.toml)
+# Google: borrows over deep copies.
+clone_on_ref_ptr = "warn"               # `Arc::clone(&x)` for refcounts, so every `.clone()` is a deep copy to justify
+# Google: format!/write! over `+`.
+string_add = "warn"
+# Google: docs use capitalization and punctuation.
+doc_paragraphs_missing_punctuation = "warn"
+# Layout (Google: leaf modules named after their item): `dispatch.rs` + `dispatch/`, never `mod.rs`.
+mod_module_files = "warn"
+# Types: either a plain data bag (all fields pub) or an encapsulated type (none pub).
+partial_pub_fields = "warn"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "browseros-claw-sdk"
+path = "src/main.rs"
+
+[features]
+# The real SDK door hosted by another JavaScript engine; no listeners or QuickJS realm.
+hosted-run = []
+# `neo_server::test_support`: the fake browser behind core's CDP seam. The dev-dependency on this
+# crate below turns it on for every test build, unit and integration; release builds never have
+# it.
+test-support = []
+
+[dependencies]
+# DOM URL parsing and form encoding for the agent realm; already in the workspace graph.
+url.workspace = true
+axum.workspace = true
+# A result too large to send inline keeps its bytes as blobs: the bootstrap's base64, decoded.
+base64.workspace = true
+# neo.solveCaptcha: detection and the paid providers, one solver per process.
+neo-captcha.workspace = true
+browseros-cdp.workspace = true
+# `ts-rs`: the tab id and viewport size in the run envelope print as TypeScript.
+browseros-core = { workspace = true, features = ["ts-rs"] }
+# The Playwright API agent scripts call: its op table and the facade that runs each op.
+neo-playwright.workspace = true
+# The host API's wire types: the private typing routes answer with them (host/fill_service.rs).
+neo-sdk-api.workspace = true
+# The host API: its routes, auth and event log, and the takeover locks the door asks.
+neo-http.workspace = true
+neo-takeover.workspace = true
+# `ts-rs`: an error's owner, delivery and operation id in the run envelope print as TypeScript.
+neo-trace = { workspace = true, features = ["ts-rs"] }
+clap.workspace = true
+futures-util.workspace = true
+# Stateless streamable HTTP for the one `run` tool; the server features only.
+rmcp.workspace = true
+# The workspace pin: two rquickjs-sys copies would clash on QuickJS's C symbols at link time.
+rquickjs.workspace = true
+# The `run` tool's input schema, derived from the type its arguments decode into.
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_path_to_error.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tower.workspace = true
+tracing.workspace = true
+tracing-appender.workspace = true
+tracing-subscriber.workspace = true
+# The run envelope's types (runtime/bridge.rs, runtime/run_init.rs and the facts they carry)
+# derive `TS`; tests/envelope_generated.rs prints them as the prelude's
+# `generated/envelope.ts`. Outside that test the impls are never called. Default features only.
+ts-rs.workspace = true
+
+[dev-dependencies]
+neo-server = { path = ".", features = ["test-support"] }
+# A real trace store in a temp dir, read back by the dispatcher's tests.
+tempfile.workspace = true
+# Breaks the trace store under a run service, to test that an unreadable store refuses a
+# requestId. Already in the graph through neo-trace.
+sqlx.workspace = true
+# MCP clients for tests/mcp_run.rs, on the legacy protocol and on 2026-07-28. Plain HTTP to
+# 127.0.0.1, so no TLS features.
+rmcp = { workspace = true, features = ["client", "transport-streamable-http-client-reqwest"] }
+# Paused time for the connect loop's backoff and tab_watch's epoch check.
+tokio = { workspace = true, features = ["test-util"] }
+# Only for tests/style_boundaries.rs, which parses src/ and the lint tables.
+syn = { version = "2", features = ["full", "visit"] }
+toml.workspace = true

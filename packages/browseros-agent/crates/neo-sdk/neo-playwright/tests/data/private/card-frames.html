@@ -1,0 +1,10 @@
+<!doctype html><meta charset=utf-8><title>Checkout</title>
+<style>iframe { display: block; width: 300px; height: 36px; border: 1px solid #888; margin: 6px 0; }</style>
+<h1>Pay</h1>
+<form id=pay><iframe id=number title="Secure card number input frame"></iframe><iframe id=expiry title="Secure expiration date input frame"></iframe><iframe id=cvc title="Secure CVC input frame"></iframe><button type=button>Pay</button></form>
+<script>
+// A card form shaped as a payment provider's: number, expiry and security code each in its own
+// cross-site frame (the fixture server's other name). ?swap=number passes swap=1 to that field.
+const q = new URLSearchParams(location.search);
+for (const k of ['number', 'expiry', 'cvc']) document.getElementById(k).src = location.protocol + '//' + (location.hostname === 'localhost' ? '127.0.0.1' : 'localhost') + ':' + location.port + '/private/card-field.html?field=' + k + (q.get('swap') === k ? '&swap=1' : '');
+</script>

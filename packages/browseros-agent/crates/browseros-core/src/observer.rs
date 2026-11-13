@@ -19,9 +19,11 @@ use tokio::sync::Mutex;
 mod acquisition;
 mod click;
 mod clickable;
-use acquisition::{
-    AcquiredFrame, CaptureTrace, SnapshotBudget, SnapshotStage, log_frame_error, trace_stage,
-};
+use acquisition::{AcquiredFrame, CaptureTrace, SnapshotStage, log_frame_error, trace_stage};
+// Desktop's clickable rules, also read by hosted Neo's aria snapshot (neo-playwright), which
+// marks the same hits without running a script in the page. Desktop's own path is unchanged.
+pub use acquisition::SnapshotBudget;
+pub use clickable::{ClickableDocument, DomSnapshots, find_clickables, find_closed_shadow_seeds};
 
 const MAX_FRAME_DEPTH: usize = 5;
 const MAX_STABLE_CAPTURE_ATTEMPTS: usize = 3;
@@ -254,7 +256,7 @@ impl Observer {
     }
 
     /// Resolves a ref, rerun once on a fresh page session under the same rule as
-    /// [`Self::capture`]. Acting and the audit layer's sensitive-field check both start here, so
+    /// [`Self::capture`]. Acting and desktop's audit checks both start here, so
     /// a ref that failed on a dead session would fail the act or, worse, let a password fill
     /// through unredacted once the act itself re-attached.
     pub async fn resolve_ref(&self, ref_id: &Ref) -> Result<ResolvedElement, CoreError> {
@@ -404,8 +406,9 @@ impl Observer {
                 if let Some(access) = &self.access {
                     access.fresh().await?;
                 }
+                let text = assembled.lines.join("\n");
                 return Ok(CaptureResult {
-                    text: assembled.lines.join("\n"),
+                    text,
                     refs,
                     url: after.url.clone(),
                     scope: ref_scope_from(&after),
@@ -934,7 +937,7 @@ mod tests {
             SnapshotOptions, refs::MintRef,
         },
     };
-    use browseros_cdp::{CdpError, CdpEvent};
+    use browseros_cdp::{CdpError, CdpEvent, TargetedEvents};
     use futures_util::future::BoxFuture;
     use serde_json::{Value, json};
     use std::{
@@ -944,12 +947,13 @@ mod tests {
             atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering},
         },
     };
-    use tokio::sync::{Notify, Semaphore, broadcast};
+    use tokio::sync::{Notify, Semaphore, broadcast, mpsc};
 
     struct MockConnection {
         live: HashSet<i64>,
         ax_tree: Vec<AxNode>,
         releases: Mutex<Vec<String>>,
+        targeted: TargetedEvents,
     }
 
     impl CdpConnection for MockConnection {
@@ -1003,6 +1007,10 @@ mod tests {
             rx
         }
 
+        fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+            self.targeted.subscribe(method)
+        }
+
         fn is_connected(&self) -> bool {
             true
         }
@@ -1039,6 +1047,7 @@ mod tests {
             live: HashSet::from([10]),
             ax_tree: Vec::new(),
             releases: Mutex::new(Vec::new()),
+            targeted: TargetedEvents::default(),
         });
         let session = ProtocolSession::root(connection.clone());
         let mut refs = crate::snapshot::RefMap::new();
@@ -1079,6 +1088,7 @@ mod tests {
             live: HashSet::from([20, 21]),
             ax_tree,
             releases: Mutex::new(Vec::new()),
+            targeted: TargetedEvents::default(),
         });
         let session = ProtocolSession::root(connection);
         let mut refs = crate::snapshot::RefMap::new();
@@ -1112,6 +1122,7 @@ mod tests {
             live: HashSet::new(),
             ax_tree: Vec::new(),
             releases: Mutex::new(Vec::new()),
+            targeted: TargetedEvents::default(),
         });
         let session = ProtocolSession::root(connection);
         let mut refs = crate::snapshot::RefMap::new();
@@ -1148,6 +1159,7 @@ mod tests {
 
     struct HarnessConnection {
         state: Mutex<HarnessState>,
+        targeted: TargetedEvents,
     }
 
     impl CdpConnection for HarnessConnection {
@@ -1236,6 +1248,10 @@ mod tests {
             rx
         }
 
+        fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+            self.targeted.subscribe(method)
+        }
+
         fn is_connected(&self) -> bool {
             true
         }
@@ -1258,6 +1274,7 @@ mod tests {
         cycle_first_child: AtomicBool,
         root_ax_reads: AtomicUsize,
         main_loader: Mutex<String>,
+        targeted: TargetedEvents,
     }
 
     impl SiblingConnection {
@@ -1276,6 +1293,7 @@ mod tests {
                 cycle_first_child: AtomicBool::new(false),
                 root_ax_reads: AtomicUsize::new(0),
                 main_loader: Mutex::new("main-loader".to_string()),
+                targeted: TargetedEvents::default(),
             }
         }
 
@@ -1469,6 +1487,10 @@ mod tests {
             rx
         }
 
+        fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+            self.targeted.subscribe(method)
+        }
+
         fn is_connected(&self) -> bool {
             true
         }
@@ -1500,6 +1522,7 @@ mod tests {
         max_child_requested: AtomicUsize,
         /// The nesting depth whose frame fails its accessibility read; 0 fails none.
         fail_depth: AtomicUsize,
+        targeted: TargetedEvents,
     }
 
     impl CdpConnection for DepthConnection {
@@ -1589,6 +1612,10 @@ mod tests {
             rx
         }
 
+        fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+            self.targeted.subscribe(method)
+        }
+
         fn is_connected(&self) -> bool {
             true
         }
@@ -1603,6 +1630,7 @@ mod tests {
     ) -> Result<(Arc<HarnessConnection>, Arc<super::Observer>), CoreError> {
         let connection = Arc::new(HarnessConnection {
             state: Mutex::new(state),
+            targeted: TargetedEvents::default(),
         });
         let session = BrowserSession::new(connection.clone(), BrowserSessionHooks::default());
         let pages = session.pages.list().await?;
@@ -2070,6 +2098,7 @@ mod tests {
         let connection = Arc::new(DepthConnection {
             max_child_requested: AtomicUsize::new(0),
             fail_depth: AtomicUsize::new(0),
+            targeted: TargetedEvents::default(),
         });
         let observer = depth_observer(connection.clone()).await?;
 
@@ -2089,6 +2118,7 @@ mod tests {
         let connection = Arc::new(DepthConnection {
             max_child_requested: AtomicUsize::new(0),
             fail_depth: AtomicUsize::new(2),
+            targeted: TargetedEvents::default(),
         });
         let observer = depth_observer(connection.clone()).await?;
 

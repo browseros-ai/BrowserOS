@@ -108,6 +108,13 @@ export const SUITES: Record<string, SuiteConfig> = {
     needs_browser: false,
     needs_rust: false,
   },
+  'browseros-playwright-js': {
+    suite: 'browseros-playwright-js',
+    command: '(cd crates/neo-sdk/neo-playwright-js && bun run test)',
+    junit_path: 'test-results/browseros-playwright-js.xml',
+    needs_browser: false,
+    needs_rust: false,
+  },
   build: {
     suite: 'build',
     command: 'bun run ./scripts/run-bun-test.ts ./scripts/build',
@@ -137,6 +144,16 @@ export const SUITES: Record<string, SuiteConfig> = {
     needs_browser: false,
     needs_rust: true,
   },
+  // The workspace quality suite already applies claw-sdk's [lints] table and
+  // clippy.toml. Only check.sh adds Google's rustfmt options and the forbidden
+  // dependency graph check, so it runs as its own suite.
+  'claw-sdk-quality': {
+    suite: 'claw-sdk-quality',
+    command: 'crates/neo-sdk/check.sh',
+    junit_path: 'test-results/claw-sdk-quality.xml',
+    needs_browser: false,
+    needs_rust: true,
+  },
   'claw-mcp': {
     suite: 'claw-mcp',
     command: 'bun run test:claw-mcp-contract',
@@ -146,7 +163,8 @@ export const SUITES: Record<string, SuiteConfig> = {
   },
   captcha: {
     suite: 'captcha',
-    command: 'bun run ./scripts/run-bun-test.ts ./tools/captcha-testbed',
+    command:
+      'bun run ./scripts/run-bun-test.ts ./crates/neo-sdk/neo-captcha/testbed',
     junit_path: 'test-results/captcha.xml',
     needs_browser: false,
     needs_rust: false,
@@ -169,9 +187,11 @@ const PACKAGE_SUITES: Record<string, string[]> = {
   '@browseros/claw-onboard': ['claw-onboard'],
   '@browseros/app-onboard': ['app-onboard'],
   '@browseros/agent-cursor': ['agent-cursor', 'build'],
+  '@browseros/neo-playwright-js': ['browseros-playwright-js'],
   // The build suite exercises scripts/build, which uses build-server-tools, so
   // an affected build-server-tools (or a scripts/ change, handled below) runs it.
   '@browseros/build-server-tools': ['build'],
+  '@browseros/neo-server': ['claw-sdk-quality'],
 }
 
 /**
@@ -186,7 +206,12 @@ export interface AffectedPackage {
 }
 
 function isRustPackage(path: string): boolean {
-  return path.startsWith('crates/') || path === 'apps/claw-server'
+  // Colocating the JS sibling under crates/ must keep its existing JavaScript-only suites.
+  return (
+    (path.startsWith('crates/') &&
+      path !== 'crates/neo-sdk/neo-playwright-js') ||
+    path === 'apps/claw-server'
+  )
 }
 
 const AGENT = 'packages/browseros-agent/'
@@ -235,6 +260,19 @@ export function computeAffectedSuites(
     keys.add('agent-cursor')
     keys.add('build')
   }
+  // The crate's assets and probe-protocol.json are built from the vendored sources in the
+  // Rust crate, which is not a dependency of the build package, so a change to any of them
+  // must rerun the freshness test.
+  if (
+    changedFiles.some(
+      (f) =>
+        f.startsWith(`${AGENT}crates/neo-sdk/neo-playwright/assets/`) ||
+        f.startsWith(`${AGENT}crates/neo-sdk/neo-playwright/third_party/`) ||
+        f ===
+          `${AGENT}crates/neo-sdk/neo-playwright/tests/data/probe-protocol.json`,
+    )
+  )
+    keys.add('browseros-playwright-js')
   if (
     changedFiles.some(
       (f) =>
@@ -265,7 +303,11 @@ export function computeAffectedSuites(
   ) {
     keys.add('claw-mcp')
   }
-  if (changedFiles.some((f) => f.startsWith(`${AGENT}tools/captcha-testbed/`)))
+  if (
+    changedFiles.some((f) =>
+      f.startsWith(`${AGENT}crates/neo-sdk/neo-captcha/testbed/`),
+    )
+  )
     keys.add('captcha')
   // claw-server's tests check that every key the shipped behaviour file
   // documents applies on this server.

@@ -83,6 +83,17 @@ describe('computeAffectedSuites', () => {
     ).toEqual(['agent-cursor', 'build'])
   })
 
+  it('tests that a vendored Playwright or engine asset change selects the engine freshness suite', () => {
+    for (const changed of [
+      'packages/browseros-agent/crates/neo-sdk/neo-playwright/assets/injected.js',
+      'packages/browseros-agent/crates/neo-sdk/neo-playwright/assets/prelude.js',
+      'packages/browseros-agent/crates/neo-sdk/neo-playwright/tests/data/probe-protocol.json',
+      'packages/browseros-agent/crates/neo-sdk/neo-playwright/third_party/playwright/packages/injected/src/injectedScript.ts',
+    ]) {
+      expect(suiteNames([], [changed])).toEqual(['browseros-playwright-js'])
+    }
+  })
+
   it('maps any affected Rust crate to all three Rust suites', () => {
     expect(
       suiteNames([
@@ -95,6 +106,17 @@ describe('computeAffectedSuites', () => {
     expect(
       suiteNames([pkg('@browseros/claw-server', 'apps/claw-server')]),
     ).toEqual(['claw-server', 'claw-server-quality', 'claw-mcp'])
+  })
+
+  it('runs the Rust suites and its own check script for a claw-sdk change', () => {
+    expect(
+      suiteNames([pkg('@browseros/neo-server', 'crates/neo-sdk/neo-server')]),
+    ).toEqual([
+      'claw-server',
+      'claw-server-quality',
+      'claw-sdk-quality',
+      'claw-mcp',
+    ])
   })
 
   it('adds the build suite when scripts change', () => {
@@ -162,11 +184,14 @@ describe('computeAffectedSuites', () => {
   it('tests that CAPTCHA test bed changes select their unit suite without a browser or Rust', () => {
     const suites = computeAffectedSuites(
       [],
-      ['packages/browseros-agent/tools/captcha-testbed/e2e/runner.ts'],
+      [
+        'packages/browseros-agent/crates/neo-sdk/neo-captcha/testbed/e2e/runner.ts',
+      ],
     )
     expect(suites.map((suite) => suite.suite)).toEqual(['captcha'])
     expect(suites[0]).toMatchObject({
-      command: 'bun run ./scripts/run-bun-test.ts ./tools/captcha-testbed',
+      command:
+        'bun run ./scripts/run-bun-test.ts ./crates/neo-sdk/neo-captcha/testbed',
       junit_path: 'test-results/captcha.xml',
       needs_browser: false,
       needs_rust: false,
@@ -210,7 +235,9 @@ describe('computeAffectedSuites', () => {
       pkg('@browseros/app-onboard', 'apps/app-onboard'),
       pkg('@browseros/build-server-tools', 'packages/build-server-tools'),
       pkg('@browseros/claw-server', 'apps/claw-server'),
+      pkg('@browseros/neo-server', 'crates/neo-sdk/neo-server'),
       pkg('@browseros/agent-cursor', 'packages/agent-cursor'),
+      pkg('@browseros/neo-playwright-js', 'crates/neo-sdk/neo-playwright-js'),
     ]
     expect(new Set(suiteNames(allPackages))).toEqual(
       new Set(

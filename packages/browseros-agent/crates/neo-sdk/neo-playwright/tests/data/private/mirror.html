@@ -1,0 +1,6 @@
+<!doctype html><meta charset=utf-8><title>Mirror</title>
+<!-- A page that copies what is typed into the box's own `value`, `name` and `id` attributes on
+     every input, so an element preview (which prints attributes) or a box's facts (which carry
+     `name` and `id`) would show it: the entry's notes and answer must hold none. -->
+<input id=pw type=password autocomplete=current-password aria-label="Password"
+       oninput="this.setAttribute('value', this.value); this.name = this.value; this.id = this.value">

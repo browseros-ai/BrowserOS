@@ -110,22 +110,26 @@ const _: ToolEffect = apply;
 mod tests {
     use super::*;
     use crate::db::session_tabs::SessionTabSnapshot;
-    use browseros_cdp::{CdpError, CdpEvent, SessionId};
+    use browseros_cdp::{CdpError, CdpEvent, SessionId, TargetedEvents};
     use browseros_core::{BrowserSession, BrowserSessionHooks, CdpConnection};
     use browseros_mcp::ToolResult;
     use futures_util::future::BoxFuture;
     use serde_json::{Value, json};
     use std::sync::Arc;
-    use tokio::sync::broadcast;
+    use tokio::sync::{broadcast, mpsc};
 
     struct PageListConnection {
         events: broadcast::Sender<CdpEvent>,
+        targeted: TargetedEvents,
     }
 
     impl PageListConnection {
         fn new() -> Arc<Self> {
             let (events, _) = broadcast::channel(1);
-            Arc::new(Self { events })
+            Arc::new(Self {
+                events,
+                targeted: TargetedEvents::default(),
+            })
         }
     }
 
@@ -208,6 +212,10 @@ mod tests {
 
         fn events(&self) -> broadcast::Receiver<CdpEvent> {
             self.events.subscribe()
+        }
+
+        fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+            self.targeted.subscribe(method)
         }
 
         fn is_connected(&self) -> bool {

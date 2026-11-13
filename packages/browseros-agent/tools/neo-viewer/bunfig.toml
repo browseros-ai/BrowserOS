@@ -1,0 +1,3 @@
+[test]
+# The real-image test (tests/real-image.test.ts) waits out Neo's 5 s SSE keep-alive.
+timeout = 60000

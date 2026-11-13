@@ -20,12 +20,13 @@ The wire types are generated on both sides. [`packages/claw-api`](packages/claw-
 | Tool | Why | Install |
 |---|---|---|
 | **Bun** | The package manager and runtime. Version pinned in `package.json` | `curl -fsSL https://bun.sh/install \| bash` |
+| **Node 22+** | Live browser tests and the Playwright corpus | [Node.js](https://nodejs.org/) |
 | **Go** | The dev supervisor is a Go program compiled on every run | `brew install go` |
 | **Rust** | `claw-server` is built and run with cargo | `brew install rustup && rustup-init` |
 | **BrowserOS neo** | The supervisor launches the installed app | [Download](https://cdn.browseros.com/download/BrowserOS_neo.dmg) |
 | **Docker** | Only if you change the API contract. `codegen:claw-api` runs the generator in a pinned container | [Docker Desktop](https://www.docker.com/products/docker-desktop/) |
 
-The dev loop is macOS only today. The supervisor resolves the browser through a hard-coded `/Applications/...` path, so Linux and Windows contributors can install dependencies and run the checks, but cannot launch the browser yet.
+The interactive dev supervisor is macOS only today. The live-test launcher below supports macOS and Linux; Windows contributors can install dependencies and run checks without launching it.
 
 ## Setup
 
@@ -38,6 +39,37 @@ cp .env.development.example .env.development
 Everything in `.env.development` is optional for a first run. It holds analytics keys, Sentry DSNs, and port overrides, none of which you need to get the dev loop working. Copy it and move on.
 
 `bun run dev:setup` does the same install with a frozen lockfile, which is what CI does.
+
+## Run live browser tests
+
+When a test expects `BROWSEROS_CDP_PORT`, run its existing command through:
+
+```sh
+bun run test:browser -- cargo test -p neo-playwright --test evaluate_values_live -- --ignored
+```
+
+This starts a fresh headless Neo, waits for CDP, supplies the port, runs the command, and
+cleans up before returning its exit status. It preserves your command's arguments, working
+directory, home, and Cargo settings. Use an explicit shell for a sequence of commands:
+
+```sh
+bun run test:browser -- sh -c 'cargo test -p neo-playwright --test pages_live -- --ignored && cargo test -p neo-playwright --test evaluate_values_live -- --ignored'
+```
+
+Each invocation owns its browser, temporary profile, and browser home. The packaged server,
+updater, and extensions are disabled, so tests do not reconcile your MCP configuration or
+shared skills. Cancellation and launcher death trigger cleanup of the browser and command
+process groups. Logs and `result.json` remain at the artifact path printed to stderr. A test
+failure keeps its original exit code; launcher failures use 125, and interrupts use 130/143.
+
+The default browser is `/Applications/BrowserOS neo.app/Contents/MacOS/BrowserOS neo` on macOS
+and `browserclaw` on Linux. Set `NEO_E2E_BROWSER=/absolute/path/to/browser` for a different
+build. The helper selects its own unused port; do not start a browser or set a port first.
+
+Use this for standalone browser/CDP tests. `bun run test:neo-spec` and the full MCP fixtures
+already own their browsers and should use their existing launchers. Full app development
+uses the watch command below. Tests should not share a running browser across agents:
+closing tabs or clearing cookies/cache in one suite can affect another.
 
 ## Run it
 
@@ -56,6 +88,42 @@ apps/claw-server         cargo run -p claw-server
 A file watcher also tracks `apps/claw-server/src`, its `Cargo.toml`, and its test fixtures, and restarts the Rust server whenever they change. The first cargo build takes a while; later ones are incremental.
 
 Stop everything with `bun run dev:stop`.
+
+Claw dev and dogfood modes leave the installed app's agent MCP configurations and shared
+skills alone, including in a release build. Connection settings remain readable, but
+Connect and Disconnect are disabled in dev. Locally authored skills stay in the dev
+instance without being published into agent directories.
+
+### SDK server
+
+```bash
+BROWSERCLAW_USE_SDK=1 bun run dev:claw:watch:new
+```
+
+This starts the dev browser and runs `neo-server` (`browseros-claw-sdk`) as its
+backend. The first Cargo build can take a few minutes. Changes to SDK Rust
+sources or embedded JavaScript assets restart the server. After editing the
+Playwright engine's TypeScript, run `bun run --filter @browseros/neo-playwright-js build`
+to update the watched assets.
+
+Wait for `neo-server ready: MCP at http://127.0.0.1:<port>/mcp`. Connect an MCP
+client to that URL to use the single `run` tool. To check it against the running
+browser, replace `<port>` with the logged server port:
+
+```bash
+python3 crates/neo-sdk/neo-server/docker/smoke_sdk.py --mcp-port <port>
+```
+
+The Claw UI still launches the browser. Its server-backed screens require
+claw-server's API, so use the MCP client to drive the browser in SDK mode.
+The SDK server logs that hosted mode is off because local popups open as
+separate windows. Unstamped browser builds report an unknown native version.
+Set `CLAW_NATIVE_BROWSEROS_VERSION` to your build's version to test features
+that require a specific browser version.
+
+Press Ctrl+C to stop the watch. Leave the flag unset for normal Claw
+development, or use it with `bun run dev:claw:watch` to keep the checkout's dev
+profile.
 
 ### `:new` versus plain
 

@@ -1,0 +1,4173 @@
+{
+  "about": "Every op input the prelude sends, recorded by crates/neo-sdk/neo-playwright-js/scripts/wire-examples.ts. Do not edit: run bun run build in crates/neo-sdk/neo-playwright-js.",
+  "optionalKeys": {
+    "bindingCall.resolve": [],
+    "context.addInitScript": [
+      "path",
+      "source"
+    ],
+    "context.exposeBinding": [
+      "noGlobal"
+    ],
+    "context.newPage": [],
+    "context.pages": [],
+    "dialog.accept": [
+      "promptText"
+    ],
+    "dialog.dismiss": [],
+    "disposable.dispose": [],
+    "download.path": [],
+    "download.saveAs": [],
+    "events.interceptFileChooser": [],
+    "events.listen": [
+      "retiredTab",
+      "since"
+    ],
+    "events.next": [],
+    "events.wait": [
+      "after"
+    ],
+    "expect.locator": [
+      "expectedNumber",
+      "expectedText",
+      "expectedValue",
+      "expressionArg",
+      "pseudo",
+      "templateError",
+      "useInnerText"
+    ],
+    "expect.page": [
+      "expectedNumber",
+      "expectedText",
+      "expectedValue",
+      "expressionArg",
+      "pseudo",
+      "templateError",
+      "useInnerText"
+    ],
+    "keyboard.down": [],
+    "keyboard.insertText": [],
+    "keyboard.press": [
+      "delay"
+    ],
+    "keyboard.type": [
+      "delay"
+    ],
+    "keyboard.up": [],
+    "locator.allInnerTexts": [],
+    "locator.allTextContents": [],
+    "locator.ariaSnapshot": [
+      "boxes",
+      "clickable",
+      "depth"
+    ],
+    "locator.blur": [],
+    "locator.boundingBox": [],
+    "locator.check": [
+      "force",
+      "position",
+      "scroll",
+      "trial"
+    ],
+    "locator.click": [
+      "button",
+      "clickCount",
+      "delay",
+      "force",
+      "modifiers",
+      "noWaitAfter",
+      "position",
+      "scroll",
+      "steps",
+      "trial"
+    ],
+    "locator.count": [],
+    "locator.dblclick": [
+      "button",
+      "delay",
+      "force",
+      "modifiers",
+      "position",
+      "scroll",
+      "steps",
+      "trial"
+    ],
+    "locator.dispatchEvent": [],
+    "locator.dragTo": [
+      "force",
+      "scroll",
+      "sourcePosition",
+      "steps",
+      "targetPosition",
+      "trial"
+    ],
+    "locator.drop": [
+      "data",
+      "files",
+      "position"
+    ],
+    "locator.elementHandle": [],
+    "locator.elementHandles": [],
+    "locator.evaluate": [
+      "arg",
+      "isFunction",
+      "refused"
+    ],
+    "locator.evaluateAll": [
+      "arg",
+      "isFunction",
+      "refused"
+    ],
+    "locator.fill": [
+      "force"
+    ],
+    "locator.focus": [],
+    "locator.getAttribute": [],
+    "locator.hover": [
+      "force",
+      "modifiers",
+      "position",
+      "scroll",
+      "trial"
+    ],
+    "locator.innerHTML": [],
+    "locator.innerText": [],
+    "locator.inputValue": [],
+    "locator.isChecked": [],
+    "locator.isDisabled": [],
+    "locator.isEditable": [],
+    "locator.isEnabled": [],
+    "locator.isHidden": [],
+    "locator.isVisible": [],
+    "locator.normalize": [],
+    "locator.press": [
+      "delay",
+      "noWaitAfter"
+    ],
+    "locator.pressSequentially": [
+      "delay"
+    ],
+    "locator.ref": [],
+    "locator.scrollIntoViewIfNeeded": [],
+    "locator.selectOption": [
+      "elements",
+      "force",
+      "options"
+    ],
+    "locator.selectText": [
+      "force"
+    ],
+    "locator.setInputFiles": [],
+    "locator.textContent": [],
+    "locator.uncheck": [
+      "force",
+      "position",
+      "scroll",
+      "trial"
+    ],
+    "locator.waitFor": [
+      "omitReturnValue",
+      "state"
+    ],
+    "locator.waitForFunction": [
+      "arg",
+      "isFunction",
+      "refused"
+    ],
+    "mouse.click": [
+      "button",
+      "clickCount",
+      "delay"
+    ],
+    "mouse.down": [
+      "button",
+      "clickCount"
+    ],
+    "mouse.move": [
+      "steps"
+    ],
+    "mouse.up": [
+      "button",
+      "clickCount"
+    ],
+    "mouse.wheel": [],
+    "page.addInitScript": [
+      "path",
+      "source"
+    ],
+    "page.addLocatorHandler": [
+      "noWaitAfter"
+    ],
+    "page.addScriptTag": [
+      "content",
+      "path",
+      "type",
+      "url"
+    ],
+    "page.addStyleTag": [
+      "content",
+      "path",
+      "url"
+    ],
+    "page.ariaSnapshot": [
+      "boxes",
+      "clickable",
+      "depth"
+    ],
+    "page.close": [],
+    "page.content": [
+      "includeShadow"
+    ],
+    "page.emulateMedia": [
+      "colorScheme",
+      "contrast",
+      "forcedColors",
+      "media",
+      "reducedMotion"
+    ],
+    "page.evalOnSelector": [
+      "arg",
+      "isFunction",
+      "refused"
+    ],
+    "page.evaluate": [
+      "arg",
+      "isFunction",
+      "refused"
+    ],
+    "page.exposeBinding": [
+      "noGlobal"
+    ],
+    "page.frames": [],
+    "page.goBack": [
+      "publication"
+    ],
+    "page.goForward": [
+      "publication"
+    ],
+    "page.goto": [
+      "publication",
+      "referer"
+    ],
+    "page.locatorHandlerTriggered": [],
+    "page.opener": [],
+    "page.pdf": [
+      "displayHeaderFooter",
+      "footerTemplate",
+      "format",
+      "headerTemplate",
+      "height",
+      "landscape",
+      "margin",
+      "outline",
+      "pageRanges",
+      "preferCSSPageSize",
+      "printBackground",
+      "scale",
+      "tagged",
+      "width"
+    ],
+    "page.reload": [
+      "publication"
+    ],
+    "page.removeLocatorHandler": [],
+    "page.requestGC": [],
+    "page.resolveLocatorHandler": [
+      "remove"
+    ],
+    "page.runBeforeUnload": [],
+    "page.saveScreenshot": [],
+    "page.screenshot": [
+      "animations",
+      "caret",
+      "clip",
+      "fullPage",
+      "mask",
+      "maskColor",
+      "omitBackground",
+      "quality",
+      "scale",
+      "style",
+      "type"
+    ],
+    "page.setContent": [],
+    "page.setViewportSize": [],
+    "page.snapshotBaseline": [
+      "document",
+      "snapshotCall"
+    ],
+    "page.snapshotPending": [
+      "document",
+      "returned",
+      "snapshotCall"
+    ],
+    "page.title": [],
+    "page.waitForFunction": [
+      "arg",
+      "isFunction",
+      "pollingInterval",
+      "refused"
+    ],
+    "page.waitForLoadState": [],
+    "page.waitForNavigation": [
+      "url"
+    ],
+    "page.waitForURL": [],
+    "webStorage.clear": [],
+    "webStorage.getItem": [],
+    "webStorage.items": [],
+    "webStorage.removeItem": [],
+    "webStorage.setItem": [],
+    "worker.evaluate": [
+      "arg",
+      "isFunction",
+      "refused"
+    ]
+  },
+  "ops": {
+    "bindingCall.resolve": [
+      {
+        "call": {
+          "api": "bindingCall.resolve",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "context": 3,
+        "arg": "{\"o\":[{\"k\":\"name\",\"v\":\"add\"},{\"k\":\"seq\",\"v\":1},{\"k\":\"result\",\"v\":3}],\"id\":1}"
+      }
+    ],
+    "context.addInitScript": [
+      {
+        "call": {
+          "api": "browserContext.addInitScript",
+          "timeoutMs": 0
+        },
+        "source": "window.b = 1"
+      },
+      {
+        "call": {
+          "api": "browserContext.addInitScript",
+          "timeoutMs": 0
+        },
+        "path": "Cargo.toml"
+      },
+      {
+        "call": {
+          "api": "browserContext.addInitScript",
+          "timeoutMs": 0
+        },
+        "source": "(({ cb }) => cb(1))(globalThis['__playwright__binding__controller__'].parseInitScriptArg({\"o\":[{\"k\":\"cb\",\"v\":{\"fn\":\"__pw_fn_80808080808080808080808080808080\"}}],\"id\":1}))"
+      }
+    ],
+    "context.exposeBinding": [
+      {
+        "call": {
+          "api": "browserContext.exposeFunction",
+          "timeoutMs": 0
+        },
+        "name": "c"
+      },
+      {
+        "call": {
+          "api": "browserContext.addInitScript",
+          "timeoutMs": 0
+        },
+        "name": "__pw_fn_80808080808080808080808080808080",
+        "noGlobal": true
+      }
+    ],
+    "context.newPage": [
+      {
+        "call": {
+          "api": "browserContext.newPage",
+          "timeoutMs": 0
+        }
+      }
+    ],
+    "dialog.accept": [
+      {
+        "call": {
+          "api": "dialog.accept",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "dialog": 4,
+        "promptText": "sample"
+      }
+    ],
+    "dialog.dismiss": [
+      {
+        "call": {
+          "api": "dialog.dismiss",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "dialog": 4
+      }
+    ],
+    "disposable.dispose": [
+      {
+        "call": {
+          "api": "disposable.dispose",
+          "timeoutMs": 0
+        },
+        "id": 1
+      }
+    ],
+    "download.path": [
+      {
+        "call": {
+          "api": "download.path",
+          "timeoutMs": 0
+        },
+        "download": "guid-5"
+      }
+    ],
+    "download.saveAs": [
+      {
+        "call": {
+          "api": "download.saveAs",
+          "timeoutMs": 0
+        },
+        "download": "guid-5",
+        "path": "/out/f.csv"
+      }
+    ],
+    "events.interceptFileChooser": [
+      {
+        "call": {
+          "api": "page.filechooser",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "event": "fileChooser",
+        "enabled": true,
+        "lease": 1
+      },
+      {
+        "call": {
+          "api": "page.filechooser",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "event": "fileChooser",
+        "enabled": false,
+        "lease": 1
+      }
+    ],
+    "events.listen": [
+      {
+        "call": {
+          "api": "browserContext.on",
+          "timeoutMs": 0
+        },
+        "page": null,
+        "event": "page",
+        "enabled": true,
+        "since": 1700000000000
+      },
+      {
+        "call": {
+          "api": "page.on",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "event": "console",
+        "enabled": true,
+        "since": 1700000000000
+      },
+      {
+        "call": {
+          "api": "page.on",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "event": "filechooser",
+        "enabled": true,
+        "since": 1700000000000
+      },
+      {
+        "call": {
+          "api": "page.off",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "event": "filechooser",
+        "enabled": false,
+        "since": 1700000000000
+      },
+      {
+        "call": {
+          "api": "page.off",
+          "timeoutMs": 0
+        },
+        "page": null,
+        "retiredTab": 1007,
+        "event": "workerstate",
+        "enabled": false,
+        "since": 1700000000000
+      }
+    ],
+    "events.next": [
+      {
+        "call": {
+          "api": "events.next",
+          "timeoutMs": 0
+        }
+      }
+    ],
+    "events.wait": [
+      {
+        "call": {
+          "api": "page.waitForEvent",
+          "timeoutMs": 30000
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "event": "dialog",
+        "since": 1700000000000,
+        "after": 3
+      },
+      {
+        "call": {
+          "api": "page.waitForEvent",
+          "timeoutMs": 30000
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "event": "download",
+        "since": 1700000000000,
+        "after": 3
+      },
+      {
+        "call": {
+          "api": "page.waitForEvent",
+          "timeoutMs": 30000
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "event": "worker",
+        "since": 1700000000000,
+        "after": 3
+      }
+    ],
+    "expect.locator": [
+      {
+        "call": {
+          "api": "expect.toBeVisible",
+          "timeoutMs": 5000
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "expression": "to.be.visible",
+        "isNot": false,
+        "matcher": "toBeVisible",
+        "expectation": "",
+        "expected": "Expected: visible"
+      },
+      {
+        "call": {
+          "api": "expect.toHaveCount",
+          "timeoutMs": 5000
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "expression": "to.have.count",
+        "expectedNumber": 1,
+        "isNot": false,
+        "matcher": "toHaveCount",
+        "expectation": "expected",
+        "expected": "Expected: 1"
+      },
+      {
+        "call": {
+          "api": "expect.toHaveAttribute",
+          "timeoutMs": 5000
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "expression": "to.have.attribute.value",
+        "expectedText": [
+          {
+            "string": "ready"
+          }
+        ],
+        "expressionArg": "data-state",
+        "isNot": false,
+        "matcher": "toHaveAttribute",
+        "expectation": "expected",
+        "expected": "Expected: \"ready\""
+      },
+      {
+        "call": {
+          "api": "expect.toHaveCSS",
+          "timeoutMs": 5000
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "expression": "to.have.css",
+        "expectedText": [
+          {
+            "string": "red"
+          }
+        ],
+        "expressionArg": "color",
+        "pseudo": "after",
+        "isNot": false,
+        "matcher": "toHaveCSS",
+        "expectation": "expected",
+        "expected": "Expected: \"red\""
+      },
+      {
+        "call": {
+          "api": "expect.toHaveJSProperty",
+          "timeoutMs": 5000
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "expression": "to.have.property",
+        "expressionArg": "state",
+        "expectedValue": {},
+        "isNot": false,
+        "matcher": "toHaveJSProperty",
+        "expectation": "expected",
+        "expected": "Expected: {}"
+      },
+      {
+        "call": {
+          "api": "expect.toHaveText",
+          "timeoutMs": 5000
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "expression": "to.have.text",
+        "expectedText": [
+          {
+            "string": "sample",
+            "normalizeWhiteSpace": true
+          }
+        ],
+        "useInnerText": false,
+        "isNot": false,
+        "matcher": "toHaveText",
+        "expectation": "expected",
+        "expected": "Expected: \"sample\""
+      },
+      {
+        "call": {
+          "api": "expect.toMatchAriaSnapshot",
+          "timeoutMs": 5000
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "expression": "to.match.aria",
+        "isNot": false,
+        "matcher": "toMatchAriaSnapshot",
+        "expectation": "expected",
+        "expected": "Expected: \"[\"",
+        "templateError": "Flow sequence must end with a ] at line 1, column 2:\n\n[\n ^\n"
+      }
+    ],
+    "expect.page": [
+      {
+        "call": {
+          "api": "expect.toHaveTitle",
+          "timeoutMs": 5000
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "expression": "to.have.title",
+        "expectedText": [
+          {
+            "string": "x",
+            "normalizeWhiteSpace": true
+          }
+        ],
+        "isNot": false,
+        "matcher": "toHaveTitle",
+        "expectation": "expected",
+        "expected": "Expected: \"x\""
+      },
+      {
+        "call": {
+          "api": "expect.toHaveTitle",
+          "timeoutMs": 5000
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "expression": "to.have.title",
+        "expectedText": [
+          {
+            "string": "sample",
+            "normalizeWhiteSpace": true
+          }
+        ],
+        "useInnerText": false,
+        "isNot": false,
+        "matcher": "toHaveTitle",
+        "expectation": "expected",
+        "expected": "Expected: \"sample\""
+      },
+      {
+        "call": {
+          "api": "expect.toMatchAriaSnapshot",
+          "timeoutMs": 5000
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "expression": "to.match.aria",
+        "expectedValue": {
+          "kind": "role",
+          "role": "button",
+          "name": "Go"
+        },
+        "isNot": false,
+        "matcher": "toMatchAriaSnapshot",
+        "expectation": "expected",
+        "expected": "Expected: \"- button \\\"Go\\\"\""
+      },
+      {
+        "call": {
+          "api": "expect.toMatchAriaSnapshot",
+          "timeoutMs": 5000
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "expression": "to.match.aria",
+        "isNot": false,
+        "matcher": "toMatchAriaSnapshot",
+        "expectation": "expected",
+        "expected": "Expected: \"[\"",
+        "templateError": "Flow sequence must end with a ] at line 1, column 2:\n\n[\n ^\n"
+      }
+    ],
+    "keyboard.down": [
+      {
+        "call": {
+          "api": "keyboard.down",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "key": "a"
+      }
+    ],
+    "keyboard.insertText": [
+      {
+        "call": {
+          "api": "keyboard.insertText",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "text": "ab"
+      }
+    ],
+    "keyboard.press": [
+      {
+        "call": {
+          "api": "keyboard.press",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "key": "a",
+        "delay": 1
+      }
+    ],
+    "keyboard.type": [
+      {
+        "call": {
+          "api": "keyboard.type",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "text": "ab",
+        "delay": 1
+      }
+    ],
+    "keyboard.up": [
+      {
+        "call": {
+          "api": "keyboard.up",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "key": "a"
+      }
+    ],
+    "locator.allInnerTexts": [
+      {
+        "call": {
+          "api": "locator.allInnerTexts",
+          "timeoutMs": 0
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        }
+      }
+    ],
+    "locator.allTextContents": [
+      {
+        "call": {
+          "api": "locator.allTextContents",
+          "timeoutMs": 0
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        }
+      }
+    ],
+    "locator.ariaSnapshot": [
+      {
+        "call": {
+          "api": "locator.ariaSnapshot",
+          "timeoutMs": 30000
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "strict": "strict",
+        "mode": "ai",
+        "depth": 1,
+        "boxes": false,
+        "clickable": true
+      },
+      {
+        "call": {
+          "api": "locator.ariaSnapshotJSON",
+          "timeoutMs": 30000
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "strict": "strict",
+        "mode": "default",
+        "depth": 1,
+        "boxes": false
+      },
+      {
+        "call": {
+          "api": "locator.ariaSnapshotJSON",
+          "timeoutMs": 30000,
+          "conformance": true
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "css",
+                  "body": [
+                    {
+                      "simples": [
+                        {
+                          "selector": {
+                            "css": "body",
+                            "functions": []
+                          },
+                          "combinator": ""
+                        }
+                      ]
+                    }
+                  ],
+                  "source": "body"
+                }
+              ]
+            }
+          ],
+          "display": "locator('body')"
+        },
+        "strict": "strict",
+        "mode": "ai"
+      }
+    ],
+    "locator.blur": [
+      {
+        "call": {
+          "api": "locator.blur",
+          "timeoutMs": 30000
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "strict": "strict"
+      }
+    ],
+    "locator.boundingBox": [
+      {
+        "call": {
+          "api": "locator.boundingBox",
+          "timeoutMs": 30000
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "strict": "strict"
+      }
+    ],
+    "locator.check": [
+      {
+        "call": {
+          "api": "locator.check",
+          "timeoutMs": 30000
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "strict": "strict",
+        "force": false,
+        "position": {
+          "x": 1,
+          "y": 1
+        },
+        "scroll": "auto",
+        "trial": false
+      }
+    ],
+    "locator.click": [
+      {
+        "call": {
+          "api": "locator.click",
+          "timeoutMs": 30000
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "strict": "strict",
+        "button": "left",
+        "clickCount": 1,
+        "delay": 1,
+        "force": false,
+        "modifiers": [
+          "Alt"
+        ],
+        "noWaitAfter": false,
+        "position": {
+          "x": 1,
+          "y": 1
+        },
+        "scroll": "auto",
+        "steps": 1,
+        "trial": false
+      },
+      {
+        "call": {
+          "api": "elementHandle.click",
+          "timeoutMs": 30000
+        },
+        "target": {
+          "$neo": "element",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "seq": 0,
+          "node": 9,
+          "display": "<button>Go</button>"
+        },
+        "strict": "strict"
+      }
+    ],
+    "locator.count": [
+      {
+        "call": {
+          "api": "locator.count",
+          "timeoutMs": 0
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        }
+      },
+      {
+        "call": {
+          "api": "locator.count",
+          "timeoutMs": 0
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": "F1",
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "css",
+                  "body": [
+                    {
+                      "simples": [
+                        {
+                          "selector": {
+                            "css": "#card",
+                            "functions": []
+                          },
+                          "combinator": ""
+                        }
+                      ]
+                    }
+                  ],
+                  "source": "#card"
+                }
+              ]
+            }
+          ],
+          "display": "locator('#card')"
+        }
+      }
+    ],
+    "locator.dblclick": [
+      {
+        "call": {
+          "api": "locator.dblclick",
+          "timeoutMs": 30000
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "strict": "strict",
+        "button": "left",
+        "delay": 1,
+        "force": false,
+        "modifiers": [
+          "Alt"
+        ],
+        "position": {
+          "x": 1,
+          "y": 1
+        },
+        "scroll": "auto",
+        "steps": 1,
+        "trial": false
+      }
+    ],
+    "locator.dispatchEvent": [
+      {
+        "call": {
+          "api": "locator.dispatchEvent",
+          "timeoutMs": 30000
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "strict": "strict",
+        "type": "click",
+        "eventInit": {}
+      }
+    ],
+    "locator.dragTo": [
+      {
+        "call": {
+          "api": "locator.dragTo",
+          "timeoutMs": 30000
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "strict": "strict",
+        "to": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "css",
+                  "body": [
+                    {
+                      "simples": [
+                        {
+                          "selector": {
+                            "css": "#b",
+                            "functions": []
+                          },
+                          "combinator": ""
+                        }
+                      ]
+                    }
+                  ],
+                  "source": "#b"
+                }
+              ]
+            }
+          ],
+          "display": "locator('#b')"
+        },
+        "force": false,
+        "scroll": "auto",
+        "sourcePosition": {
+          "x": 1,
+          "y": 1
+        },
+        "targetPosition": {
+          "x": 1,
+          "y": 1
+        },
+        "steps": 1,
+        "trial": false
+      }
+    ],
+    "locator.drop": [
+      {
+        "call": {
+          "api": "locator.drop",
+          "timeoutMs": 30000
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "strict": "strict",
+        "files": {
+          "payloads": [
+            {
+              "name": "option.txt",
+              "mimeType": "text/plain",
+              "buffer": "YQ=="
+            }
+          ]
+        },
+        "data": [
+          {
+            "mimeType": "text/plain",
+            "value": "external"
+          }
+        ],
+        "position": {
+          "x": 1,
+          "y": 1
+        }
+      }
+    ],
+    "locator.elementHandle": [
+      {
+        "call": {
+          "api": "elementHandle.$",
+          "timeoutMs": 0
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "css",
+                  "body": [
+                    {
+                      "simples": [
+                        {
+                          "selector": {
+                            "css": "b",
+                            "functions": []
+                          },
+                          "combinator": ""
+                        }
+                      ]
+                    }
+                  ],
+                  "source": "b"
+                }
+              ]
+            }
+          ],
+          "display": "locator('b')",
+          "root": {
+            "$neo": "element",
+            "page": {
+              "$neo": "page",
+              "tab": 1007
+            },
+            "seq": 0,
+            "node": 9,
+            "display": "<button>Go</button>"
+          }
+        },
+        "strict": "firstMatch"
+      }
+    ],
+    "locator.elementHandles": [
+      {
+        "call": {
+          "api": "locator.elementHandles",
+          "timeoutMs": 0
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        }
+      },
+      {
+        "call": {
+          "api": "elementHandle.$$",
+          "timeoutMs": 0
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "css",
+                  "body": [
+                    {
+                      "simples": [
+                        {
+                          "selector": {
+                            "css": "b",
+                            "functions": []
+                          },
+                          "combinator": ""
+                        }
+                      ]
+                    }
+                  ],
+                  "source": "b"
+                }
+              ]
+            }
+          ],
+          "display": "locator('b')",
+          "root": {
+            "$neo": "element",
+            "page": {
+              "$neo": "page",
+              "tab": 1007
+            },
+            "seq": 0,
+            "node": 9,
+            "display": "<button>Go</button>"
+          }
+        }
+      }
+    ],
+    "locator.evaluate": [
+      {
+        "call": {
+          "api": "locator.evaluate",
+          "timeoutMs": 30000
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "strict": "strict",
+        "expression": "(e) => e.id",
+        "isFunction": true,
+        "arg": {
+          "value": "{\"v\":\"undefined\"}",
+          "handles": []
+        }
+      },
+      {
+        "call": {
+          "api": "locator.evaluate",
+          "timeoutMs": 30000
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "strict": "strict",
+        "expression": "function (",
+        "isFunction": true,
+        "refused": "Passed function is not well-serializable!"
+      },
+      {
+        "call": {
+          "api": "elementHandle.evaluate",
+          "timeoutMs": 0
+        },
+        "target": {
+          "$neo": "element",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "seq": 0,
+          "node": 9,
+          "display": "<button>Go</button>"
+        },
+        "strict": "strict",
+        "expression": "(e) => e.id",
+        "isFunction": true,
+        "arg": {
+          "value": "{\"v\":\"undefined\"}",
+          "handles": []
+        }
+      }
+    ],
+    "locator.evaluateAll": [
+      {
+        "call": {
+          "api": "locator.evaluateAll",
+          "timeoutMs": 0
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "expression": "(es) => es.length",
+        "isFunction": true,
+        "arg": {
+          "value": "{\"v\":\"undefined\"}",
+          "handles": []
+        }
+      },
+      {
+        "call": {
+          "api": "locator.evaluateAll",
+          "timeoutMs": 0
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "expression": "function (",
+        "isFunction": true,
+        "refused": "Passed function is not well-serializable!"
+      },
+      {
+        "call": {
+          "api": "elementHandle.$$eval",
+          "timeoutMs": 0
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "css",
+                  "body": [
+                    {
+                      "simples": [
+                        {
+                          "selector": {
+                            "css": "b",
+                            "functions": []
+                          },
+                          "combinator": ""
+                        }
+                      ]
+                    }
+                  ],
+                  "source": "b"
+                }
+              ]
+            }
+          ],
+          "display": "locator('b')",
+          "root": {
+            "$neo": "element",
+            "page": {
+              "$neo": "page",
+              "tab": 1007
+            },
+            "seq": 0,
+            "node": 9,
+            "display": "<button>Go</button>"
+          }
+        },
+        "expression": "(es) => es.length",
+        "isFunction": true,
+        "arg": {
+          "value": "{\"v\":\"undefined\"}",
+          "handles": []
+        }
+      },
+      {
+        "call": {
+          "api": "page.$$eval",
+          "timeoutMs": 0
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "css",
+                  "body": [
+                    {
+                      "simples": [
+                        {
+                          "selector": {
+                            "css": "b",
+                            "functions": []
+                          },
+                          "combinator": ""
+                        }
+                      ]
+                    }
+                  ],
+                  "source": "b"
+                }
+              ]
+            }
+          ],
+          "display": "locator('b')"
+        },
+        "expression": "(es) => es.length",
+        "isFunction": true,
+        "arg": {
+          "value": "{\"v\":\"undefined\"}",
+          "handles": []
+        }
+      }
+    ],
+    "locator.fill": [
+      {
+        "call": {
+          "api": "locator.fill",
+          "timeoutMs": 30000
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "strict": "strict",
+        "value": "x",
+        "force": false
+      }
+    ],
+    "locator.focus": [
+      {
+        "call": {
+          "api": "locator.focus",
+          "timeoutMs": 30000
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "strict": "strict"
+      }
+    ],
+    "locator.getAttribute": [
+      {
+        "call": {
+          "api": "locator.getAttribute",
+          "timeoutMs": 30000
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "strict": "strict",
+        "name": "id"
+      }
+    ],
+    "locator.hover": [
+      {
+        "call": {
+          "api": "locator.hover",
+          "timeoutMs": 30000
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "strict": "strict",
+        "force": false,
+        "modifiers": [
+          "Alt"
+        ],
+        "position": {
+          "x": 1,
+          "y": 1
+        },
+        "scroll": "auto",
+        "trial": false
+      }
+    ],
+    "locator.innerHTML": [
+      {
+        "call": {
+          "api": "locator.innerHTML",
+          "timeoutMs": 30000
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "strict": "strict"
+      }
+    ],
+    "locator.innerText": [
+      {
+        "call": {
+          "api": "locator.innerText",
+          "timeoutMs": 30000
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "strict": "strict"
+      }
+    ],
+    "locator.inputValue": [
+      {
+        "call": {
+          "api": "locator.inputValue",
+          "timeoutMs": 30000
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "strict": "strict"
+      }
+    ],
+    "locator.isChecked": [
+      {
+        "call": {
+          "api": "locator.isChecked",
+          "timeoutMs": 30000
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "strict": "strict"
+      }
+    ],
+    "locator.isDisabled": [
+      {
+        "call": {
+          "api": "locator.isDisabled",
+          "timeoutMs": 30000
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "strict": "strict"
+      }
+    ],
+    "locator.isEditable": [
+      {
+        "call": {
+          "api": "locator.isEditable",
+          "timeoutMs": 30000
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "strict": "strict"
+      }
+    ],
+    "locator.isEnabled": [
+      {
+        "call": {
+          "api": "locator.isEnabled",
+          "timeoutMs": 30000
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "strict": "strict"
+      }
+    ],
+    "locator.isHidden": [
+      {
+        "call": {
+          "api": "locator.isHidden",
+          "timeoutMs": 0
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "strict": "strict"
+      }
+    ],
+    "locator.isVisible": [
+      {
+        "call": {
+          "api": "locator.isVisible",
+          "timeoutMs": 0
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "strict": "strict"
+      }
+    ],
+    "locator.normalize": [
+      {
+        "call": {
+          "api": "locator.normalize",
+          "timeoutMs": 0
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "selector": "internal:role=button"
+      }
+    ],
+    "locator.press": [
+      {
+        "call": {
+          "api": "locator.press",
+          "timeoutMs": 30000
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "strict": "strict",
+        "key": "a",
+        "delay": 1,
+        "noWaitAfter": false
+      }
+    ],
+    "locator.pressSequentially": [
+      {
+        "call": {
+          "api": "locator.pressSequentially",
+          "timeoutMs": 30000
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "strict": "strict",
+        "text": "ab",
+        "delay": 1
+      }
+    ],
+    "locator.ref": [
+      {
+        "call": {
+          "api": "locator.ref",
+          "timeoutMs": 30000
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "strict": "strict"
+      }
+    ],
+    "locator.scrollIntoViewIfNeeded": [
+      {
+        "call": {
+          "api": "locator.scrollIntoViewIfNeeded",
+          "timeoutMs": 30000
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "strict": "strict"
+      }
+    ],
+    "locator.selectOption": [
+      {
+        "call": {
+          "api": "locator.selectOption",
+          "timeoutMs": 30000
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "strict": "strict",
+        "options": [
+          {
+            "valueOrLabel": "a"
+          }
+        ],
+        "force": false
+      },
+      {
+        "call": {
+          "api": "locator.selectOption",
+          "timeoutMs": 30000
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "strict": "strict",
+        "options": [
+          {
+            "valueOrLabel": "a"
+          }
+        ],
+        "elements": [
+          {
+            "$neo": "element",
+            "page": {
+              "$neo": "page",
+              "tab": 1007
+            },
+            "seq": 0,
+            "node": 9,
+            "display": "<button>Go</button>"
+          }
+        ],
+        "force": false
+      }
+    ],
+    "locator.selectText": [
+      {
+        "call": {
+          "api": "locator.selectText",
+          "timeoutMs": 30000
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "strict": "strict",
+        "force": false
+      }
+    ],
+    "locator.setInputFiles": [
+      {
+        "call": {
+          "api": "locator.setInputFiles",
+          "timeoutMs": 30000
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "strict": "strict",
+        "files": {
+          "paths": [
+            "."
+          ]
+        }
+      },
+      {
+        "call": {
+          "api": "locator.setInputFiles",
+          "timeoutMs": 30000
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "strict": "strict",
+        "files": {
+          "payloads": [
+            {
+              "name": "a.txt",
+              "mimeType": "text/plain",
+              "buffer": "YQ=="
+            }
+          ]
+        }
+      }
+    ],
+    "locator.textContent": [
+      {
+        "call": {
+          "api": "locator.textContent",
+          "timeoutMs": 30000
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "strict": "strict"
+      }
+    ],
+    "locator.uncheck": [
+      {
+        "call": {
+          "api": "locator.uncheck",
+          "timeoutMs": 30000
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "strict": "strict",
+        "force": false,
+        "position": {
+          "x": 1,
+          "y": 1
+        },
+        "scroll": "auto",
+        "trial": false
+      }
+    ],
+    "locator.waitFor": [
+      {
+        "call": {
+          "api": "locator.waitFor",
+          "timeoutMs": 30000
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "strict": "strict",
+        "state": "attached",
+        "omitReturnValue": true
+      },
+      {
+        "call": {
+          "api": "locator.elementHandle",
+          "timeoutMs": 30000
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "strict": "strict",
+        "state": "attached",
+        "omitReturnValue": false
+      }
+    ],
+    "locator.waitForFunction": [
+      {
+        "call": {
+          "api": "locator.waitForFunction",
+          "timeoutMs": 30000
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "strict": "strict",
+        "expression": "(e) => e.id",
+        "isFunction": true,
+        "arg": {
+          "value": "{\"v\":\"undefined\"}",
+          "handles": []
+        }
+      },
+      {
+        "call": {
+          "api": "locator.waitForFunction",
+          "timeoutMs": 30000
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "strict": "strict",
+        "expression": "function (",
+        "isFunction": true,
+        "refused": "Passed function is not well-serializable!"
+      }
+    ],
+    "mouse.click": [
+      {
+        "call": {
+          "api": "mouse.click",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "x": 1,
+        "y": 2,
+        "button": "left",
+        "clickCount": 1,
+        "delay": 1
+      }
+    ],
+    "mouse.down": [
+      {
+        "call": {
+          "api": "mouse.down",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "button": "left",
+        "clickCount": 1
+      }
+    ],
+    "mouse.move": [
+      {
+        "call": {
+          "api": "mouse.move",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "x": 1,
+        "y": 2,
+        "steps": 1
+      }
+    ],
+    "mouse.up": [
+      {
+        "call": {
+          "api": "mouse.up",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "button": "left",
+        "clickCount": 1
+      }
+    ],
+    "mouse.wheel": [
+      {
+        "call": {
+          "api": "mouse.wheel",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "deltaX": 0,
+        "deltaY": 9
+      }
+    ],
+    "page.addInitScript": [
+      {
+        "call": {
+          "api": "page.addInitScript",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "source": "((a) => { window.a = a })(1)"
+      },
+      {
+        "call": {
+          "api": "page.addInitScript",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "path": "Cargo.toml"
+      },
+      {
+        "call": {
+          "api": "page.addInitScript",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "source": "(({ cb }) => cb(1))(globalThis['__playwright__binding__controller__'].parseInitScriptArg({\"o\":[{\"k\":\"cb\",\"v\":{\"fn\":\"__pw_fn_40404040404040404040404040404040\"}}],\"id\":1}))"
+      }
+    ],
+    "page.addLocatorHandler": [
+      {
+        "call": {
+          "api": "page.addLocatorHandler",
+          "timeoutMs": 0
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:text",
+                  "body": "\"Accept cookies\"i",
+                  "source": "\"Accept cookies\"i"
+                }
+              ]
+            }
+          ],
+          "display": "getByText('Accept cookies')"
+        },
+        "noWaitAfter": true
+      },
+      {
+        "call": {
+          "api": "page.addLocatorHandler",
+          "timeoutMs": 0
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:text",
+                  "body": "\"Later\"i",
+                  "source": "\"Later\"i"
+                }
+              ]
+            }
+          ],
+          "display": "getByText('Later')"
+        }
+      }
+    ],
+    "page.addScriptTag": [
+      {
+        "call": {
+          "api": "page.addScriptTag",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "content": "sample",
+        "type": "sample"
+      },
+      {
+        "call": {
+          "api": "page.addScriptTag",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "url": "https://a.example/script.js",
+        "type": "sample"
+      },
+      {
+        "call": {
+          "api": "page.addScriptTag",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "path": "Cargo.toml",
+        "type": "sample"
+      }
+    ],
+    "page.addStyleTag": [
+      {
+        "call": {
+          "api": "frame.addStyleTag",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "frame": "F1",
+        "content": "sample"
+      },
+      {
+        "call": {
+          "api": "page.addStyleTag",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "url": "https://a.example/script.js"
+      },
+      {
+        "call": {
+          "api": "page.addStyleTag",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "path": "Cargo.toml"
+      }
+    ],
+    "page.ariaSnapshot": [
+      {
+        "call": {
+          "api": "page.ariaSnapshot",
+          "timeoutMs": 30000
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "mode": "ai",
+        "depth": 1,
+        "boxes": false,
+        "clickable": true
+      },
+      {
+        "call": {
+          "api": "page.ariaSnapshot",
+          "timeoutMs": 30000
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "mode": "ai",
+        "clickable": true
+      },
+      {
+        "call": {
+          "api": "page.ariaSnapshotJSON",
+          "timeoutMs": 30000
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "mode": "default",
+        "depth": 1,
+        "boxes": false
+      },
+      {
+        "call": {
+          "api": "page.ariaSnapshot",
+          "timeoutMs": 30000,
+          "conformance": true
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "mode": "default"
+      }
+    ],
+    "page.close": [
+      {
+        "call": {
+          "api": "page.close",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1008
+        }
+      },
+      {
+        "call": {
+          "api": "page.close",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        }
+      }
+    ],
+    "page.content": [
+      {
+        "call": {
+          "api": "page.content",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        }
+      },
+      {
+        "call": {
+          "api": "page.content",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "includeShadow": true
+      }
+    ],
+    "page.emulateMedia": [
+      {
+        "call": {
+          "api": "page.emulateMedia",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "media": "print",
+        "colorScheme": "dark",
+        "reducedMotion": "reduce",
+        "forcedColors": "active",
+        "contrast": "more"
+      }
+    ],
+    "page.evalOnSelector": [
+      {
+        "call": {
+          "api": "page.$eval",
+          "timeoutMs": 0
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "css",
+                  "body": [
+                    {
+                      "simples": [
+                        {
+                          "selector": {
+                            "css": "b",
+                            "functions": []
+                          },
+                          "combinator": ""
+                        }
+                      ]
+                    }
+                  ],
+                  "source": "b"
+                }
+              ]
+            }
+          ],
+          "display": "locator('b')"
+        },
+        "strict": "firstMatch",
+        "selector": "b",
+        "expression": "function (",
+        "isFunction": true,
+        "refused": "Passed function is not well-serializable!"
+      },
+      {
+        "call": {
+          "api": "elementHandle.$eval",
+          "timeoutMs": 0
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "css",
+                  "body": [
+                    {
+                      "simples": [
+                        {
+                          "selector": {
+                            "css": "b",
+                            "functions": []
+                          },
+                          "combinator": ""
+                        }
+                      ]
+                    }
+                  ],
+                  "source": "b"
+                }
+              ]
+            }
+          ],
+          "display": "locator('b')",
+          "root": {
+            "$neo": "element",
+            "page": {
+              "$neo": "page",
+              "tab": 1007
+            },
+            "seq": 0,
+            "node": 9,
+            "display": "<button>Go</button>"
+          }
+        },
+        "strict": "firstMatch",
+        "selector": "b",
+        "expression": "(e) => e.id",
+        "isFunction": true,
+        "arg": {
+          "value": "{\"v\":\"undefined\"}",
+          "handles": []
+        }
+      },
+      {
+        "call": {
+          "api": "page.$eval",
+          "timeoutMs": 0
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "css",
+                  "body": [
+                    {
+                      "simples": [
+                        {
+                          "selector": {
+                            "css": "b",
+                            "functions": []
+                          },
+                          "combinator": ""
+                        }
+                      ]
+                    }
+                  ],
+                  "source": "b"
+                }
+              ]
+            }
+          ],
+          "display": "locator('b')"
+        },
+        "strict": "firstMatch",
+        "selector": "b",
+        "expression": "(e) => e.id",
+        "isFunction": true,
+        "arg": {
+          "value": "{\"v\":\"undefined\"}",
+          "handles": []
+        }
+      }
+    ],
+    "page.evaluate": [
+      {
+        "call": {
+          "api": "page.evaluate",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "expression": "() => 1",
+        "isFunction": true,
+        "arg": {
+          "value": "{\"v\":\"undefined\"}",
+          "handles": []
+        }
+      },
+      {
+        "call": {
+          "api": "page.evaluate",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "expression": "function (",
+        "isFunction": true,
+        "refused": "Passed function is not well-serializable!"
+      },
+      {
+        "call": {
+          "api": "page.evaluate",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "expression": "(e, h) => h.id",
+        "isFunction": true,
+        "arg": {
+          "value": "{\"h\":0}",
+          "handles": [
+            {
+              "$neo": "element",
+              "page": {
+                "$neo": "page",
+                "tab": 1007
+              },
+              "seq": 0,
+              "node": 9,
+              "display": "<button>Go</button>"
+            }
+          ]
+        }
+      }
+    ],
+    "page.exposeBinding": [
+      {
+        "call": {
+          "api": "page.exposeFunction",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "name": "add"
+      },
+      {
+        "call": {
+          "api": "page.exposeBinding",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "name": "source"
+      },
+      {
+        "call": {
+          "api": "page.addInitScript",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "name": "__pw_fn_40404040404040404040404040404040",
+        "noGlobal": true
+      }
+    ],
+    "page.frames": [
+      {
+        "call": {
+          "api": "page.goto",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        }
+      },
+      {
+        "call": {
+          "api": "page.reload",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        }
+      },
+      {
+        "call": {
+          "api": "page.goBack",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        }
+      },
+      {
+        "call": {
+          "api": "page.goForward",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        }
+      },
+      {
+        "call": {
+          "api": "frame.goto",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        }
+      },
+      {
+        "call": {
+          "api": "frame.waitForLoadState",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        }
+      },
+      {
+        "call": {
+          "api": "page.waitForNavigation",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        }
+      },
+      {
+        "call": {
+          "api": "frame.waitForNavigation",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        }
+      },
+      {
+        "call": {
+          "api": "page.waitForURL",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        }
+      },
+      {
+        "call": {
+          "api": "page.waitForLoadState",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        }
+      },
+      {
+        "call": {
+          "api": "page.setContent",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        }
+      }
+    ],
+    "page.goBack": [
+      {
+        "call": {
+          "api": "page.goBack",
+          "timeoutMs": 30000
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "waitUntil": "load",
+        "publication": {
+          "id": 3,
+          "acknowledged": []
+        }
+      }
+    ],
+    "page.goForward": [
+      {
+        "call": {
+          "api": "page.goForward",
+          "timeoutMs": 30000
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "waitUntil": "load",
+        "publication": {
+          "id": 4,
+          "acknowledged": []
+        }
+      }
+    ],
+    "page.goto": [
+      {
+        "call": {
+          "api": "page.goto",
+          "timeoutMs": 30000
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "url": "https://a.example/",
+        "waitUntil": "load",
+        "publication": {
+          "id": 1,
+          "acknowledged": []
+        },
+        "referer": "sample"
+      },
+      {
+        "call": {
+          "api": "frame.goto",
+          "timeoutMs": 30000
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "frame": "F1",
+        "url": "https://pay.example/",
+        "waitUntil": "load",
+        "publication": {
+          "id": 5,
+          "acknowledged": []
+        }
+      }
+    ],
+    "page.locatorHandlerTriggered": [
+      {
+        "call": {
+          "api": "page.locatorHandlerTriggered",
+          "timeoutMs": 0
+        }
+      }
+    ],
+    "page.opener": [
+      {
+        "call": {
+          "api": "page.opener",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        }
+      }
+    ],
+    "page.pdf": [
+      {
+        "call": {
+          "api": "page.pdf",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "scale": 1,
+        "displayHeaderFooter": false,
+        "headerTemplate": "sample",
+        "footerTemplate": "sample",
+        "printBackground": false,
+        "landscape": false,
+        "pageRanges": "1",
+        "format": "A4",
+        "width": "10px",
+        "height": "10px",
+        "preferCSSPageSize": false,
+        "margin": {
+          "top": "1px",
+          "right": "1px",
+          "bottom": "1px",
+          "left": "1px"
+        },
+        "tagged": false,
+        "outline": false
+      }
+    ],
+    "page.reload": [
+      {
+        "call": {
+          "api": "page.reload",
+          "timeoutMs": 30000
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "waitUntil": "load",
+        "publication": {
+          "id": 2,
+          "acknowledged": []
+        }
+      }
+    ],
+    "page.removeLocatorHandler": [
+      {
+        "call": {
+          "api": "page.removeLocatorHandler",
+          "timeoutMs": 0
+        },
+        "uid": 1
+      },
+      {
+        "call": {
+          "api": "page.removeLocatorHandler",
+          "timeoutMs": 0
+        },
+        "uid": 2
+      }
+    ],
+    "page.requestGC": [
+      {
+        "call": {
+          "api": "page.requestGC",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        }
+      }
+    ],
+    "page.resolveLocatorHandler": [
+      {
+        "call": {
+          "api": "page.resolveLocatorHandler",
+          "timeoutMs": 0
+        },
+        "uid": 1,
+        "remove": true
+      }
+    ],
+    "page.runBeforeUnload": [
+      {
+        "call": {
+          "api": "page.close",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1008
+        }
+      }
+    ],
+    "page.saveScreenshot": [
+      {
+        "call": {
+          "api": "page.screenshot",
+          "timeoutMs": 0
+        },
+        "path": "/out/screenshot.png",
+        "base64": "iVBORw0KGgo="
+      }
+    ],
+    "page.screenshot": [
+      {
+        "call": {
+          "api": "page.screenshot",
+          "timeoutMs": 30000
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "type": "jpeg",
+        "quality": 1,
+        "omitBackground": false,
+        "fullPage": false,
+        "clip": {
+          "x": 1,
+          "y": 1,
+          "width": 1,
+          "height": 1
+        },
+        "animations": "allow",
+        "caret": "hide",
+        "style": "sample",
+        "scale": "css",
+        "maskColor": "#00ff00",
+        "mask": [
+          {
+            "$neo": "locator",
+            "page": {
+              "$neo": "page",
+              "tab": 1007
+            },
+            "frame": null,
+            "chunks": [
+              {
+                "parts": [
+                  {
+                    "name": "internal:role",
+                    "body": "button",
+                    "source": "button"
+                  }
+                ]
+              }
+            ],
+            "display": "getByRole('button')"
+          }
+        ]
+      },
+      {
+        "call": {
+          "api": "locator.screenshot",
+          "timeoutMs": 30000
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "strict": "strict",
+        "type": "jpeg",
+        "quality": 1,
+        "omitBackground": false,
+        "fullPage": false,
+        "clip": {
+          "x": 1,
+          "y": 1,
+          "width": 1,
+          "height": 1
+        },
+        "animations": "allow",
+        "caret": "hide",
+        "style": "sample",
+        "scale": "css",
+        "maskColor": "#00ff00",
+        "mask": [
+          {
+            "$neo": "locator",
+            "page": {
+              "$neo": "page",
+              "tab": 1007
+            },
+            "frame": null,
+            "chunks": [
+              {
+                "parts": [
+                  {
+                    "name": "internal:role",
+                    "body": "button",
+                    "source": "button"
+                  }
+                ]
+              }
+            ],
+            "display": "getByRole('button')"
+          }
+        ]
+      },
+      {
+        "call": {
+          "api": "page.screenshot",
+          "timeoutMs": 30000
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "type": "png"
+      }
+    ],
+    "page.setContent": [
+      {
+        "call": {
+          "api": "page.setContent",
+          "timeoutMs": 30000
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "html": "<p>hi</p>",
+        "waitUntil": "load"
+      }
+    ],
+    "page.setViewportSize": [
+      {
+        "call": {
+          "api": "page.setViewportSize",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "viewportSize": {
+          "width": 640,
+          "height": 480
+        }
+      }
+    ],
+    "page.snapshotBaseline": [
+      {
+        "call": {
+          "api": "page.ariaSnapshot",
+          "timeoutMs": 30000
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "document": 3,
+        "snapshotCall": 1
+      }
+    ],
+    "page.snapshotPending": [
+      {
+        "call": {
+          "api": "page.ariaSnapshot",
+          "timeoutMs": 30000
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "document": 3,
+        "snapshotCall": 1,
+        "text": "",
+        "form": {
+          "text": "kept",
+          "urls": false,
+          "maxTokens": 8000
+        },
+        "delta": false
+      },
+      {
+        "call": {
+          "api": "page.ariaSnapshot",
+          "timeoutMs": 30000
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "document": 3,
+        "snapshotCall": 1,
+        "text": "",
+        "form": {
+          "text": "kept",
+          "urls": false,
+          "maxTokens": 8000
+        },
+        "delta": true,
+        "returned": "# whole page: too much differs from your last snapshot to list as changes\n"
+      }
+    ],
+    "page.title": [
+      {
+        "call": {
+          "api": "page.title",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        }
+      }
+    ],
+    "page.waitForFunction": [
+      {
+        "call": {
+          "api": "page.waitForFunction",
+          "timeoutMs": 30000
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "expression": "() => true",
+        "isFunction": true,
+        "arg": {
+          "value": "{\"v\":\"undefined\"}",
+          "handles": []
+        },
+        "pollingInterval": 1
+      },
+      {
+        "call": {
+          "api": "page.waitForFunction",
+          "timeoutMs": 30000
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "expression": "function (",
+        "isFunction": true,
+        "refused": "Passed function is not well-serializable!"
+      }
+    ],
+    "page.waitForLoadState": [
+      {
+        "call": {
+          "api": "frame.waitForLoadState",
+          "timeoutMs": 30000
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "frame": "F1",
+        "state": "domcontentloaded"
+      },
+      {
+        "call": {
+          "api": "page.waitForLoadState",
+          "timeoutMs": 30000
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "state": "load"
+      }
+    ],
+    "page.waitForNavigation": [
+      {
+        "call": {
+          "api": "page.waitForNavigation",
+          "timeoutMs": 30000
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "since": 1700000000000,
+        "after": 0,
+        "waitUntil": "load"
+      },
+      {
+        "call": {
+          "api": "frame.waitForNavigation",
+          "timeoutMs": 30000
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "frame": "F1",
+        "since": 1700000000000,
+        "after": 0,
+        "url": {
+          "glob": "**/pay"
+        },
+        "waitUntil": "load"
+      }
+    ],
+    "page.waitForURL": [
+      {
+        "call": {
+          "api": "page.waitForURL",
+          "timeoutMs": 30000
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "url": {
+          "glob": "**/a"
+        },
+        "waitUntil": "load"
+      }
+    ],
+    "webStorage.clear": [
+      {
+        "call": {
+          "api": "webStorage.clear",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "kind": "session"
+      }
+    ],
+    "webStorage.getItem": [
+      {
+        "call": {
+          "api": "webStorage.getItem",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "kind": "local",
+        "name": "token"
+      }
+    ],
+    "webStorage.items": [
+      {
+        "call": {
+          "api": "webStorage.items",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "kind": "local"
+      }
+    ],
+    "webStorage.removeItem": [
+      {
+        "call": {
+          "api": "webStorage.removeItem",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "kind": "local",
+        "name": "token"
+      }
+    ],
+    "webStorage.setItem": [
+      {
+        "call": {
+          "api": "webStorage.setItem",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "kind": "session",
+        "name": "flag",
+        "value": "1"
+      }
+    ],
+    "worker.evaluate": [
+      {
+        "call": {
+          "api": "worker.evaluate",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "worker": "worker-1",
+        "expression": "() => 1",
+        "isFunction": true,
+        "arg": {
+          "value": "{\"v\":\"undefined\"}",
+          "handles": []
+        }
+      },
+      {
+        "call": {
+          "api": "worker.evaluate",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "worker": "worker-1",
+        "expression": "function (",
+        "isFunction": true,
+        "refused": "Passed function is not well-serializable!"
+      }
+    ]
+  }
+}

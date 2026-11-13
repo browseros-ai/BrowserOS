@@ -642,7 +642,7 @@ mod pointer_capture_tests {
         framework::{BrowserToolDefaults, BrowserToolOptions, ToolCtx},
         output_file::create_browser_output_file_access,
     };
-    use browseros_cdp::{CdpError, CdpEvent};
+    use browseros_cdp::{CdpError, CdpEvent, TargetedEvents};
     use browseros_core::{
         Browser, CdpConnection, PageId, SessionId,
         screenshot::{ScreenshotCaptureOptions, ScreenshotFormat},
@@ -650,7 +650,7 @@ mod pointer_capture_tests {
     use futures_util::future::BoxFuture;
     use serde_json::{Value, json};
     use std::sync::{Arc, Mutex};
-    use tokio::sync::broadcast;
+    use tokio::sync::{broadcast, mpsc};
     use tokio_util::sync::CancellationToken;
 
     #[derive(Clone, Copy, Debug)]
@@ -670,6 +670,7 @@ mod pointer_capture_tests {
     struct CaptureConnection {
         calls: Mutex<Vec<(String, Value)>>,
         events: broadcast::Sender<CdpEvent>,
+        targeted: TargetedEvents,
         fail_hide: bool,
         fail_capture: bool,
     }
@@ -680,6 +681,7 @@ mod pointer_capture_tests {
             Arc::new(Self {
                 calls: Mutex::new(Vec::new()),
                 events,
+                targeted: TargetedEvents::default(),
                 fail_hide,
                 fail_capture,
             })
@@ -793,6 +795,11 @@ mod pointer_capture_tests {
         fn events(&self) -> broadcast::Receiver<CdpEvent> {
             self.events.subscribe()
         }
+
+        fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+            self.targeted.subscribe(method)
+        }
+
         fn is_connected(&self) -> bool {
             true
         }

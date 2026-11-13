@@ -1,0 +1,179 @@
+name: Neo spec suite
+
+# Playwright's own spec tests (v1.64.1) against Neo on Linux: the test for every change to the
+# SDK. One job on WarpBuild's 32-vCPU runner runs `bun run test:neo-spec --ci`, the command a
+# person runs locally, which runs the whole corpus and then holds it to the committed list of
+# in-scope tests that do not pass on Linux,
+# packages/browseros-agent/crates/neo-sdk/neo-playwright-tests/node/expected/linux-x64.tsv.
+# The job fails on a regression (an expected pass that does not pass, also when rerun alone
+# twice) and on a listed test that now passes, so the list only shrinks. The crate's README,
+# "CI", says how a pull request updates the list.
+#
+# The browser is the build the SDK image pins (neo-server/docker/browser.lock), installed from
+# its .deb with the image's fonts, headless: no display, no Docker image, no server build. The
+# suite drives the browser through the claw Node add-on, which the run compiles.
+on:
+  pull_request:
+    paths:
+      - .github/workflows/neo-spec.yml
+      # Everything the claw add-on compiles (crates/neo-sdk and the browseros-cdp and
+      # browseros-core crates it links), the prelude, and the spec runner itself.
+      - packages/browseros-agent/crates/**
+      # The CAPTCHA test bed under neo-captcha is none of those.
+      - "!packages/browseros-agent/crates/neo-sdk/neo-captcha/testbed/**"
+      - packages/browseros-agent/Cargo.toml
+      - packages/browseros-agent/Cargo.lock
+      # The test:neo-spec script and the pinned Bun.
+      - packages/browseros-agent/package.json
+      - packages/browseros-agent/tools/browser-process.mjs
+      - packages/browseros-agent/tools/test-browser.mjs
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/neo-spec.yml
+      - packages/browseros-agent/crates/**
+      - "!packages/browseros-agent/crates/neo-sdk/neo-captcha/testbed/**"
+      - packages/browseros-agent/Cargo.toml
+      - packages/browseros-agent/Cargo.lock
+      - packages/browseros-agent/package.json
+      - packages/browseros-agent/tools/browser-process.mjs
+      - packages/browseros-agent/tools/test-browser.mjs
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: neo-spec-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  spec:
+    name: Neo spec / linux-x64
+    # WarpBuild runs on BrowserOS's own Azure subscription. A fork's pull request would run its
+    # code there, so only branches of this repository get this job.
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: warp-custom-browseros-ubuntu-2204-x64-32x
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: packages/browseros-agent
+    env:
+      # Each worker owns one headless browser and runs whole spec files. The suite's wall time is
+      # its longest file (page-screenshot.spec.ts: about 6 min on Linux, most of it tests that
+      # time out), and it is dispatched near the end of the corpus, so the worker count decides
+      # how soon it starts: 16 start it within the first minute, 8 would add about 2 min. Tests
+      # that time out only under this load pass when rerun alone and are reported flaky.
+      NEO_SPEC_WORKERS: "16"
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: packages/browseros-agent/package.json
+
+      - name: Set up Node
+        # The corpus is run on Node 26 (the crate's README); Playwright Test does not run on Bun.
+        uses: actions/setup-node@v6
+        with:
+          node-version: 26.13.0
+
+      - name: Set up Rust
+        # Pinned like test.yml, so the compiler and the cache key below stay stable across runs.
+        uses: dtolnay/rust-toolchain@1.98.0
+
+      - name: Cache the claw add-on's build
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-provider: warpbuild
+          prefix-key: neo-spec-v1
+          # The add-on is its own Cargo workspace with its own lockfile, which keys this cache.
+          workspaces: packages/browseros-agent/crates/neo-sdk/neo-playwright-tests/node/claw-addon -> target
+          shared-key: claw-addon
+          # A failing verdict still built the add-on; keep its dependencies for the next run.
+          cache-on-failure: true
+
+      - name: Restore the prepared Playwright source
+        id: playwright
+        uses: WarpBuilds/cache/restore@v1
+        with:
+          # test:neo-spec's cache: the pinned tag, `npm ci` and `npm run build`, stamped and
+          # verified on every run. corpus.json pins it and js/prepare.mjs builds it.
+          path: ~/.cache/browseros/neo-spec
+          key: neo-spec-playwright-${{ hashFiles('packages/browseros-agent/crates/neo-sdk/neo-playwright-tests/corpus.json', 'packages/browseros-agent/crates/neo-sdk/neo-playwright-tests/js/prepare.mjs') }}-node26
+
+      - name: Install BrowserOS neo and the SDK image's fonts
+        run: |
+          set -euo pipefail
+          . crates/neo-sdk/neo-server/docker/browser.lock
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/neo.deb" "$NEO_BROWSER_URL_AMD64"
+          echo "$NEO_BROWSER_SHA256_AMD64  $RUNNER_TEMP/neo.deb" | sha256sum -c -
+          sudo apt-get update -q
+          # The font list is the SDK image's (neo-server/docker/Dockerfile), so pages render with
+          # the glyphs a host's cell has.
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            "$RUNNER_TEMP/neo.deb" \
+            fonts-liberation fonts-noto-core fonts-noto-color-emoji fonts-wqy-zenhei fonts-ipafont-gothic
+          echo "NEO_SPEC_BROWSER_LABEL=BrowserOS neo $NEO_BROWSER_VERSION (browser.lock amd64 .deb, $(/usr/bin/browserclaw --version | tr -s ' '))" >> "$GITHUB_ENV"
+
+      # Fail before the corpus if a lifecycle change prevents Linux browser startup. Otherwise
+      # every spec fails identically and the expected-failure reruns can consume the whole job.
+      - name: Smoke private browser startup
+        run: bun run test:browser -- node -e 'if (!process.env.BROWSEROS_CDP_PORT) process.exit(1)'
+
+      - name: Prepare the Playwright source
+        if: steps.playwright.outputs.cache-hit != 'true'
+        env:
+          NEO_NODE_OUTPUT_DIR: ${{ runner.temp }}/neo-spec-list
+        # Listing prepares the source the way the first run of the command does, and needs no
+        # browser, so the cache below is saved even when the verdict fails.
+        run: bun run test:neo-spec --list > /dev/null
+
+      - name: Save the prepared Playwright source
+        if: steps.playwright.outputs.cache-hit != 'true'
+        uses: WarpBuilds/cache/save@v1
+        with:
+          path: ~/.cache/browseros/neo-spec
+          key: neo-spec-playwright-${{ hashFiles('packages/browseros-agent/crates/neo-sdk/neo-playwright-tests/corpus.json', 'packages/browseros-agent/crates/neo-sdk/neo-playwright-tests/js/prepare.mjs') }}-node26
+
+      - name: Run the spec suite
+        id: spec
+        env:
+          NEO_NODE_OUTPUT_DIR: ${{ runner.temp }}/neo-spec
+        # Sets the step output `results` to the run's results folder.
+        run: bun run test:neo-spec --ci --workers "$NEO_SPEC_WORKERS"
+
+      - name: Leave the copied Playwright tree out of the report
+        if: always() && steps.spec.outputs.results != ''
+        env:
+          RESULTS: ${{ steps.spec.outputs.results }}
+        # Each run's `upstream/` holds a 240 MB copy of the tests and links to the cached source,
+        # which upload-artifact would follow. Its test-results/ (failure screenshots and diffs)
+        # stays.
+        run: |
+          set -euo pipefail
+          find "$RESULTS" -type d -name upstream -prune -print | while read -r tree; do
+            rm -rf "$tree/tests" "$tree/packages" "$tree/node_modules"
+          done
+          du -sh "$RESULTS"
+
+      - name: Upload the report
+        if: always() && steps.spec.outputs.results != ''
+        uses: actions/upload-artifact@v7
+        with:
+          # Names match ARTIFACTS in neo-playwright-tests/node/expected.mjs.
+          name: neo-spec-report
+          path: ${{ steps.spec.outputs.results }}
+          retention-days: 14
+
+      - name: Upload the list this run supports
+        if: always() && steps.spec.outputs.results != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: neo-spec-expected
+          path: ${{ steps.spec.outputs.results }}/expected/
+          if-no-files-found: ignore
+          retention-days: 30

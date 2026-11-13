@@ -1,0 +1,11 @@
+<!doctype html><meta charset=utf-8><title>Nested</title>
+<!-- A card box two same-origin frames deep (Neo's addition to zuzu's covered pages): this page,
+     covered-cardframe.html on the same origin, and covered-card.html inside it. ?inner=cover
+     lays an overlay over the box inside the innermost frame. Main's rule follows the hit down
+     through both frames. -->
+<h1>Nested</h1>
+<iframe id=n style="width:360px;height:140px;border:0"></iframe>
+<script>
+const inner = new URLSearchParams(location.search).get('inner') || 'none';
+document.getElementById('n').src = 'covered-cardframe.html?same=1&inner=' + inner;
+</script>

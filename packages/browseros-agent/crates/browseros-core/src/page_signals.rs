@@ -1,4 +1,7 @@
-use crate::{CoreError, PageId, ProtocolSession, SessionId, connection::CdpConnection};
+use crate::{
+    CoreError, PageId, ProtocolSession, SessionId, connection::CdpConnection,
+    runtime_lease::RuntimeLeases,
+};
 use browseros_cdp::CdpEvent;
 use serde_json::{Value, json};
 use std::{
@@ -187,6 +190,9 @@ pub struct PageSignals {
     /// Bumped after every recorded document event, on any page. Waiters re-read their own
     /// page's state when it moves; scoped projections share it with the source.
     document_changes: Arc<watch::Sender<u64>>,
+    /// Who holds `Runtime` on, per session. Lives here because `harvest_console` toggles the
+    /// domain itself and must leave it on under a lease; projections share the source's.
+    runtime: Arc<RuntimeLeases>,
 }
 
 impl PageSignals {
@@ -197,6 +203,7 @@ impl PageSignals {
             state: Arc::new(Mutex::new(SignalsState::default())),
             scope: None,
             document_changes: Arc::new(watch::channel(0).0),
+            runtime: RuntimeLeases::new(),
         });
         Self::spawn_event_listener(signals.clone());
         signals
@@ -210,7 +217,15 @@ impl PageSignals {
             state: source.state.clone(),
             scope: Some(scope),
             document_changes: source.document_changes.clone(),
+            runtime: source.runtime.clone(),
         })
+    }
+
+    /// The connection's `Runtime` leases: take one to keep `Runtime` events flowing on a
+    /// session (see [`crate::runtime_lease`]).
+    #[must_use]
+    pub fn runtime_leases(&self) -> &Arc<RuntimeLeases> {
+        &self.runtime
     }
     fn allowed(&self, page: &PageId) -> bool {
         self.scope.as_ref().is_none_or(|scope| scope(page))
@@ -316,6 +331,11 @@ impl PageSignals {
         if !self.allowed(page_id) {
             return Ok(());
         }
+        // A held lease keeps reporting on, so the listener below already records the page's
+        // console live; the pair would switch it off under the lease's holder.
+        let Some(_turn) = self.runtime.unleased_turn(&session_id).await else {
+            return Ok(());
+        };
         let mut events = self.cdp.events();
         // Enable, then disable, as an ordered pair on the same session. send_value re-runs
         // page admission before each call, so issuing the two concurrently let their
@@ -865,14 +885,15 @@ fn clamp_chars(value: &str, max_chars: usize) -> String {
 mod tests {
     use super::{DocumentSince, PageSignals};
     use crate::{CdpConnection, PageId, ProtocolSession, SessionId};
-    use browseros_cdp::{CdpError, CdpEvent};
+    use browseros_cdp::{CdpError, CdpEvent, TargetedEvents};
     use futures_util::future::BoxFuture;
     use serde_json::{Value, json};
     use std::{
+        error::Error,
         sync::{Arc, Mutex},
         time::Duration,
     };
-    use tokio::sync::broadcast;
+    use tokio::sync::{broadcast, mpsc};
 
     #[derive(Debug, Clone)]
     struct SentCall {
@@ -883,6 +904,7 @@ mod tests {
 
     struct TestConnection {
         sender: broadcast::Sender<CdpEvent>,
+        targeted: TargetedEvents,
         sent: Mutex<Vec<SentCall>>,
         /// What the browser replays from its console storage when `Runtime.enable` arrives.
         stored_console: Mutex<Vec<(String, Value)>>,
@@ -893,6 +915,7 @@ mod tests {
             let (sender, _receiver) = broadcast::channel(128);
             Arc::new(Self {
                 sender,
+                targeted: TargetedEvents::default(),
                 sent: Mutex::new(Vec::new()),
                 stored_console: Mutex::new(Vec::new()),
             })
@@ -906,11 +929,14 @@ mod tests {
         }
 
         fn emit(&self, method: &str, params: Value, session_id: Option<&str>) {
-            let _ = self.sender.send(CdpEvent {
+            let event = CdpEvent {
                 method: method.to_string(),
                 params,
                 session_id: session_id.map(SessionId::from),
-            });
+            };
+            if let Some(event) = self.targeted.deliver(event) {
+                let _ = self.sender.send(event);
+            }
         }
 
         fn sent_calls(&self) -> Vec<SentCall> {
@@ -967,6 +993,10 @@ mod tests {
 
         fn events(&self) -> broadcast::Receiver<CdpEvent> {
             self.sender.subscribe()
+        }
+
+        fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+            self.targeted.subscribe(method)
         }
 
         fn is_connected(&self) -> bool {
@@ -1284,6 +1314,25 @@ mod tests {
                     .to_string()
             )
         );
+    }
+
+    #[test]
+    fn an_emitted_event_reaches_its_targeted_subscriber_and_not_the_broadcast()
+    -> Result<(), Box<dyn Error>> {
+        let connection = TestConnection::new();
+        let mut broadcast = connection.events();
+        let mut targeted = connection.events_targeted("Runtime.bindingCalled");
+        connection.emit(
+            "Runtime.bindingCalled",
+            json!({ "name": "probe" }),
+            Some("session-7"),
+        );
+        assert_eq!(targeted.try_recv()?.params["name"], "probe");
+        assert!(
+            broadcast.try_recv().is_err(),
+            "a method with a live targeted subscriber must bypass the broadcast"
+        );
+        Ok(())
     }
 
     fn console_error(text: &str, timestamp_ms: f64) -> Value {

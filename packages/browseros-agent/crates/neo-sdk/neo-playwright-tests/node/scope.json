@@ -1,0 +1,1039 @@
+{
+  "schemaVersion": 1,
+  "reasons": {
+    "network": "Owner decision: network interception, network events, request tracking and response bodies are outside Neo support.",
+    "handles": "Owner decision: evaluateHandle and JSHandle are outside Neo support.",
+    "decided-deviation": "Owner decisions and explicit Neo limits: isolated-world reads, listener-scoped history, one profile, no private test hooks/custom selectors/inspector, unnamed roles (D20), and no file: pages for scripts (2026-11-12)."
+  },
+  "entries": [
+    {
+      "file": "tests/library/page-close.spec.ts",
+      "ids": ["PA-051", "PA-054", "PA-055", "PA-056"],
+      "reason": "network"
+    },
+    {
+      "file": "tests/page/elementhandle-click.spec.ts",
+      "ids": ["EH-012", "EH-013"],
+      "reason": "handles"
+    },
+    {
+      "file": "tests/page/elementhandle-content-frame.spec.ts",
+      "ids": ["EH-019", "EH-020", "EH-021", "EH-022", "EH-023"],
+      "reason": "handles"
+    },
+    {
+      "file": "tests/page/elementhandle-convenience.spec.ts",
+      "ids": ["EH-024", "EH-032"],
+      "reason": "handles"
+    },
+    {
+      "file": "tests/page/elementhandle-owner-frame.spec.ts",
+      "ids": [
+        "EH-055",
+        "EH-056",
+        "EH-057",
+        "EH-058",
+        "EH-059",
+        "EH-060",
+        "EH-061"
+      ],
+      "reason": "handles"
+    },
+    {
+      "file": "tests/page/elementhandle-query-selector.spec.ts",
+      "ids": ["EH-069"],
+      "reason": "handles"
+    },
+    {
+      "file": "tests/page/expect-boolean.spec.ts",
+      "ids": ["EX-066", "EX-067", "EX-069"],
+      "reason": "network"
+    },
+    {
+      "file": "tests/page/frame-evaluate.spec.ts",
+      "ids": ["FR-001", "FR-006", "FR-008", "FR-009", "FR-010", "FR-013"],
+      "reason": "handles"
+    },
+    {
+      "file": "tests/page/frame-frame-element.spec.ts",
+      "ids": ["FR-014", "FR-015", "FR-016", "FR-017", "FR-018", "FR-019"],
+      "reason": "handles"
+    },
+    {
+      "file": "tests/page/frame-goto.spec.ts",
+      "ids": ["FR-023"],
+      "reason": "handles"
+    },
+    {
+      "file": "tests/page/frame-hierarchy.spec.ts",
+      "ids": ["FR-025", "FR-032", "FR-033", "FR-034"],
+      "reason": "handles"
+    },
+    {
+      "file": "tests/page/interception.spec.ts",
+      "ids": [
+        "RO-151",
+        "RO-152",
+        "RO-156",
+        "RO-157",
+        "RO-159",
+        "RO-160",
+        "RO-161",
+        "RO-162"
+      ],
+      "reason": "network"
+    },
+    {
+      "file": "tests/page/jshandle-as-element.spec.ts",
+      "ids": ["JH-001", "JH-002", "JH-003", "JH-004"],
+      "reason": "handles"
+    },
+    {
+      "file": "tests/page/jshandle-evaluate.spec.ts",
+      "ids": ["JH-005", "JH-006"],
+      "reason": "handles"
+    },
+    {
+      "file": "tests/page/jshandle-json-value.spec.ts",
+      "ids": ["JH-007", "JH-008", "JH-009"],
+      "reason": "handles"
+    },
+    {
+      "file": "tests/page/jshandle-properties.spec.ts",
+      "ids": [
+        "JH-010",
+        "JH-011",
+        "JH-012",
+        "JH-013",
+        "JH-014",
+        "JH-015",
+        "JH-016",
+        "JH-017"
+      ],
+      "reason": "handles"
+    },
+    {
+      "file": "tests/page/jshandle-to-string.spec.ts",
+      "ids": ["JH-018", "JH-019", "JH-020", "JH-021", "JH-022", "JH-023"],
+      "reason": "handles"
+    },
+    {
+      "file": "tests/page/locator-any-frame.spec.ts",
+      "ids": [
+        "LO-001",
+        "LO-002",
+        "LO-003",
+        "LO-004",
+        "LO-005",
+        "LO-006",
+        "LO-007",
+        "LO-008",
+        "LO-009",
+        "LO-010",
+        "LO-011",
+        "LO-012",
+        "LO-013",
+        "LO-014",
+        "LO-015",
+        "LO-016",
+        "LO-017",
+        "LO-018",
+        "LO-019",
+        "LO-020",
+        "LO-021",
+        "LO-022",
+        "LO-023",
+        "LO-024",
+        "LO-025",
+        "LO-026",
+        "LO-027",
+        "LO-028",
+        "LO-029",
+        "LO-030",
+        "LO-031",
+        "LO-032",
+        "LO-033",
+        "LO-034",
+        "LO-035",
+        "LO-036",
+        "LO-037",
+        "LO-038",
+        "LO-039",
+        "LO-040",
+        "LO-042",
+        "LO-043",
+        "LO-044",
+        "LO-047",
+        "LO-048",
+        "LO-049",
+        "LO-050",
+        "LO-051"
+      ],
+      "reason": "network"
+    },
+    {
+      "file": "tests/page/locator-convenience.spec.ts",
+      "ids": ["LO-057"],
+      "reason": "handles"
+    },
+    {
+      "file": "tests/page/locator-frame.spec.ts",
+      "ids": [
+        "LO-089",
+        "LO-090",
+        "LO-091",
+        "LO-093",
+        "LO-094",
+        "LO-098",
+        "LO-099",
+        "LO-100",
+        "LO-101",
+        "LO-102",
+        "LO-103",
+        "LO-104",
+        "LO-105",
+        "LO-106",
+        "LO-108",
+        "LO-109",
+        "LO-110"
+      ],
+      "reason": "network"
+    },
+    {
+      "file": "tests/page/network-post-data.spec.ts",
+      "ids": ["NE-108", "NE-109", "NE-110", "NE-111", "NE-112", "NE-113"],
+      "reason": "network"
+    },
+    {
+      "file": "tests/page/page-aria-snapshot-ai.spec.ts",
+      "ids": ["AR-089"],
+      "reason": "decided-deviation"
+    },
+    {
+      "file": "tests/page/page-click.spec.ts",
+      "ids": ["CL-002", "CL-034", "CL-069"],
+      "reason": "handles"
+    },
+    {
+      "file": "tests/page/page-dispatchevent.spec.ts",
+      "ids": ["DE-010", "DE-011", "DE-013", "DE-017"],
+      "reason": "handles"
+    },
+    {
+      "file": "tests/page/page-evaluate-callback.spec.ts",
+      "ids": [
+        "EV-117",
+        "EV-118",
+        "EV-123",
+        "EV-124",
+        "EV-125",
+        "EV-126",
+        "EV-130",
+        "EV-131"
+      ],
+      "reason": "handles"
+    },
+    {
+      "file": "tests/page/page-evaluate-handle.spec.ts",
+      "ids": [
+        "EV-101",
+        "EV-102",
+        "EV-103",
+        "EV-104",
+        "EV-105",
+        "EV-106",
+        "EV-107",
+        "EV-109",
+        "EV-111"
+      ],
+      "reason": "handles"
+    },
+    {
+      "file": "tests/page/page-evaluate.spec.ts",
+      "ids": ["EV-056", "EV-083", "EV-086", "EV-090", "EV-093", "EV-095"],
+      "reason": "handles"
+    },
+    {
+      "file": "tests/page/page-event-network.spec.ts",
+      "ids": ["NE-084", "NE-085", "NE-086", "NE-087", "NE-088", "NE-089"],
+      "reason": "network"
+    },
+    {
+      "file": "tests/page/page-event-request.spec.ts",
+      "ids": [
+        "NE-091",
+        "NE-092",
+        "NE-093",
+        "NE-094",
+        "NE-095",
+        "NE-096",
+        "NE-097",
+        "NE-098",
+        "NE-099",
+        "NE-100",
+        "NE-101",
+        "NE-102",
+        "NE-104",
+        "NE-105",
+        "NE-106",
+        "NE-107"
+      ],
+      "reason": "network"
+    },
+    {
+      "file": "tests/page/page-expose-function.spec.ts",
+      "ids": ["EF-004", "EF-020"],
+      "reason": "handles"
+    },
+    {
+      "file": "tests/page/page-filechooser.spec.ts",
+      "ids": ["FC-004"],
+      "reason": "handles"
+    },
+    {
+      "file": "tests/page/page-goto.spec.ts",
+      "ids": [
+        "NA-006",
+        "NA-008",
+        "NA-010",
+        "NA-011",
+        "NA-012",
+        "NA-013",
+        "NA-024",
+        "NA-047",
+        "NA-048",
+        "NA-054",
+        "NA-058"
+      ],
+      "reason": "network"
+    },
+    {
+      "file": "tests/page/page-history.spec.ts",
+      "ids": ["NA-077", "NA-078", "NA-083", "NA-084"],
+      "reason": "network"
+    },
+    {
+      "file": "tests/page/page-keyboard.spec.ts",
+      "ids": [
+        "KB-006",
+        "KB-007",
+        "KB-008",
+        "KB-019",
+        "KB-021",
+        "KB-023",
+        "KB-025",
+        "KB-026",
+        "KB-029",
+        "KB-034",
+        "KB-035",
+        "KB-036",
+        "KB-041",
+        "KB-042"
+      ],
+      "reason": "handles"
+    },
+    {
+      "file": "tests/page/page-network-idle.spec.ts",
+      "ids": [
+        "NE-071",
+        "NE-072",
+        "NE-073",
+        "NE-074",
+        "NE-075",
+        "NE-076",
+        "NE-077",
+        "NE-078",
+        "NE-081"
+      ],
+      "reason": "network"
+    },
+    {
+      "file": "tests/page/page-network-request.spec.ts",
+      "ids": [
+        "NE-001",
+        "NE-002",
+        "NE-003",
+        "NE-004",
+        "NE-005",
+        "NE-006",
+        "NE-007",
+        "NE-008",
+        "NE-009",
+        "NE-010",
+        "NE-011",
+        "NE-012",
+        "NE-013",
+        "NE-014",
+        "NE-015",
+        "NE-016",
+        "NE-017",
+        "NE-018",
+        "NE-019",
+        "NE-021",
+        "NE-022",
+        "NE-023",
+        "NE-024",
+        "NE-025",
+        "NE-026",
+        "NE-027",
+        "NE-028",
+        "NE-029"
+      ],
+      "reason": "network"
+    },
+    {
+      "file": "tests/page/page-network-response.spec.ts",
+      "ids": [
+        "NE-032",
+        "NE-036",
+        "NE-037",
+        "NE-038",
+        "NE-039",
+        "NE-040",
+        "NE-043",
+        "NE-044",
+        "NE-045",
+        "NE-047",
+        "NE-048",
+        "NE-049",
+        "NE-051",
+        "NE-052",
+        "NE-053",
+        "NE-054",
+        "NE-057"
+      ],
+      "reason": "network"
+    },
+    {
+      "file": "tests/page/page-network-sizes.spec.ts",
+      "ids": [
+        "NE-058",
+        "NE-059",
+        "NE-060",
+        "NE-061",
+        "NE-062",
+        "NE-063",
+        "NE-064",
+        "NE-065",
+        "NE-066",
+        "NE-067"
+      ],
+      "reason": "network"
+    },
+    {
+      "file": "tests/page/page-request-continue.spec.ts",
+      "ids": [
+        "RO-057",
+        "RO-058",
+        "RO-059",
+        "RO-060",
+        "RO-061",
+        "RO-062",
+        "RO-063",
+        "RO-064",
+        "RO-065",
+        "RO-066",
+        "RO-067",
+        "RO-068",
+        "RO-069",
+        "RO-070",
+        "RO-071",
+        "RO-072",
+        "RO-073",
+        "RO-074",
+        "RO-075",
+        "RO-076",
+        "RO-077",
+        "RO-078",
+        "RO-079",
+        "RO-080",
+        "RO-081",
+        "RO-082",
+        "RO-083",
+        "RO-084",
+        "RO-085",
+        "RO-086",
+        "RO-090",
+        "RO-091",
+        "RO-092",
+        "RO-093",
+        "RO-094",
+        "RO-095"
+      ],
+      "reason": "network"
+    },
+    {
+      "file": "tests/page/page-request-fallback.spec.ts",
+      "ids": [
+        "RO-120",
+        "RO-121",
+        "RO-122",
+        "RO-123",
+        "RO-124",
+        "RO-125",
+        "RO-126",
+        "RO-127",
+        "RO-128",
+        "RO-129",
+        "RO-130",
+        "RO-131",
+        "RO-132",
+        "RO-133"
+      ],
+      "reason": "network"
+    },
+    {
+      "file": "tests/page/page-request-fulfill.spec.ts",
+      "ids": [
+        "RO-096",
+        "RO-097",
+        "RO-098",
+        "RO-099",
+        "RO-100",
+        "RO-101",
+        "RO-102",
+        "RO-103",
+        "RO-104",
+        "RO-105",
+        "RO-106",
+        "RO-107",
+        "RO-108",
+        "RO-109",
+        "RO-110",
+        "RO-111",
+        "RO-112",
+        "RO-113",
+        "RO-114",
+        "RO-115",
+        "RO-116",
+        "RO-117",
+        "RO-118",
+        "RO-119"
+      ],
+      "reason": "network"
+    },
+    {
+      "file": "tests/page/page-request-intercept.spec.ts",
+      "ids": [
+        "RO-134",
+        "RO-136",
+        "RO-137",
+        "RO-138",
+        "RO-139",
+        "RO-140",
+        "RO-142",
+        "RO-143",
+        "RO-144",
+        "RO-145",
+        "RO-146",
+        "RO-147",
+        "RO-148"
+      ],
+      "reason": "network"
+    },
+    {
+      "file": "tests/page/page-route.spec.ts",
+      "ids": [
+        "RO-001",
+        "RO-002",
+        "RO-003",
+        "RO-004",
+        "RO-005",
+        "RO-006",
+        "RO-007",
+        "RO-009",
+        "RO-010",
+        "RO-011",
+        "RO-012",
+        "RO-013",
+        "RO-014",
+        "RO-015",
+        "RO-016",
+        "RO-017",
+        "RO-018",
+        "RO-019",
+        "RO-020",
+        "RO-021",
+        "RO-022",
+        "RO-023",
+        "RO-024",
+        "RO-025",
+        "RO-026",
+        "RO-027",
+        "RO-028",
+        "RO-029",
+        "RO-030",
+        "RO-031",
+        "RO-032",
+        "RO-034",
+        "RO-035",
+        "RO-036",
+        "RO-037",
+        "RO-039",
+        "RO-040",
+        "RO-041",
+        "RO-042",
+        "RO-043",
+        "RO-044",
+        "RO-045",
+        "RO-046",
+        "RO-047",
+        "RO-049",
+        "RO-050",
+        "RO-051",
+        "RO-052",
+        "RO-053",
+        "RO-054",
+        "RO-055",
+        "RO-056"
+      ],
+      "reason": "network"
+    },
+    {
+      "file": "tests/page/page-screenshot.spec.ts",
+      "ids": ["SS-047"],
+      "reason": "network"
+    },
+    {
+      "file": "tests/page/page-screenshot.spec.ts",
+      "ids": ["SS-044", "SS-045"],
+      "reason": "handles"
+    },
+    {
+      "file": "tests/page/page-select-option.spec.ts",
+      "ids": ["SO-006"],
+      "reason": "handles"
+    },
+    {
+      "file": "tests/page/page-set-extra-http-headers.spec.ts",
+      "ids": ["NE-114", "NE-115", "NE-116"],
+      "reason": "network"
+    },
+    {
+      "file": "tests/page/page-set-input-files.spec.ts",
+      "ids": ["IF-011", "IF-020"],
+      "reason": "handles"
+    },
+    {
+      "file": "tests/page/page-wait-for-function.spec.ts",
+      "ids": ["WA-026"],
+      "reason": "handles"
+    },
+    {
+      "file": "tests/page/page-wait-for-load-state.spec.ts",
+      "ids": ["WA-091"],
+      "reason": "network"
+    },
+    {
+      "file": "tests/page/page-wait-for-request.spec.ts",
+      "ids": ["WA-121", "WA-122", "WA-126", "WA-127", "WA-128"],
+      "reason": "network"
+    },
+    {
+      "file": "tests/page/page-wait-for-response.spec.ts",
+      "ids": ["WA-129", "WA-133", "WA-134", "WA-135", "WA-136"],
+      "reason": "network"
+    },
+    {
+      "file": "tests/page/page-wait-for-selector-1.spec.ts",
+      "ids": ["WA-030", "WA-031", "WA-035", "WA-041", "WA-042", "WA-043"],
+      "reason": "handles"
+    },
+    {
+      "file": "tests/page/page-wait-for-selector-2.spec.ts",
+      "ids": ["WA-062", "WA-067", "WA-068", "WA-075", "WA-076"],
+      "reason": "handles"
+    },
+    {
+      "file": "tests/page/queryselector.spec.ts",
+      "ids": ["QS-017"],
+      "reason": "handles"
+    },
+    {
+      "file": "tests/page/selectors-css.spec.ts",
+      "ids": ["SE-002"],
+      "reason": "handles"
+    },
+    {
+      "file": "tests/page/selectors-frame.spec.ts",
+      "ids": [
+        "SE-098",
+        "SE-099",
+        "SE-100",
+        "SE-101",
+        "SE-102",
+        "SE-107",
+        "SE-108",
+        "SE-109",
+        "SE-110",
+        "SE-111",
+        "SE-112",
+        "SE-113",
+        "SE-114",
+        "SE-115",
+        "SE-116",
+        "SE-117",
+        "SE-118",
+        "SE-119",
+        "SE-120",
+        "SE-121",
+        "SE-122",
+        "SE-123",
+        "SE-124",
+        "SE-125",
+        "SE-126",
+        "SE-127",
+        "SE-128",
+        "SE-129",
+        "SE-130"
+      ],
+      "reason": "network"
+    },
+    {
+      "file": "tests/page/workers.spec.ts",
+      "ids": ["WO-002"],
+      "reason": "handles"
+    },
+    {
+      "file": "tests/page/workers.spec.ts",
+      "ids": ["WO-016", "WO-017", "WO-022", "WO-023", "WO-025"],
+      "reason": "network"
+    },
+    {
+      "file": "tests/library/browsercontext-pages.spec.ts",
+      "ids": ["BC-054"],
+      "reason": "decided-deviation",
+      "decision": "Owner one-profile decision: browser.newContext({javaScriptEnabled:false}) is refused."
+    },
+    {
+      "file": "tests/library/browsercontext-pages.spec.ts",
+      "ids": ["BC-055"],
+      "reason": "decided-deviation",
+      "decision": "Owner one-profile decision (#3392): devices are omitted and browser.newContext({viewport,hasTouch}) is refused."
+    },
+    {
+      "file": "tests/library/browsercontext-pages.spec.ts",
+      "ids": ["BC-056"],
+      "reason": "decided-deviation",
+      "decision": "Owner one-profile decision: browser.newContext with deviceScaleFactor is refused."
+    },
+    {
+      "file": "tests/library/browsercontext-pages.spec.ts",
+      "ids": ["BC-057"],
+      "reason": "decided-deviation",
+      "decision": "Owner one-profile decision: browser.newContext with a mobile viewport is refused."
+    },
+    {
+      "file": "tests/library/browsercontext-pages.spec.ts",
+      "ids": ["BC-058"],
+      "reason": "decided-deviation",
+      "decision": "Owner one-profile decision: browser.newContext with a mobile viewport is refused."
+    },
+    {
+      "file": "tests/library/headful.spec.ts",
+      "ids": ["HE-012"],
+      "reason": "decided-deviation",
+      "decision": "Owner one-profile/background-tab decisions: browser.newPage and page.bringToFront are refused."
+    },
+    {
+      "file": "tests/page/expect-misc.spec.ts",
+      "ids": ["EX-188"],
+      "reason": "decided-deviation",
+      "decision": "Owner isolated-world decision (2026-11-11 18:15): this test reads a page-world expando that Neo matchers cannot observe."
+    },
+    {
+      "file": "tests/page/expect-misc.spec.ts",
+      "ids": ["EX-190"],
+      "reason": "decided-deviation",
+      "decision": "Owner isolated-world decision (2026-11-11 18:15): this test reads a page-world expando that Neo matchers cannot observe."
+    },
+    {
+      "file": "tests/page/expect-misc.spec.ts",
+      "ids": ["EX-192"],
+      "reason": "decided-deviation",
+      "decision": "Owner isolated-world decision (2026-11-11 18:15): this test reads a page-world expando that Neo matchers cannot observe."
+    },
+    {
+      "file": "tests/page/expect-misc.spec.ts",
+      "ids": ["EX-194"],
+      "reason": "decided-deviation",
+      "decision": "Owner isolated-world decision (2026-11-11 18:15): this test reads a page-world expando that Neo matchers cannot observe."
+    },
+    {
+      "file": "tests/page/expect-misc.spec.ts",
+      "ids": ["EX-196"],
+      "reason": "decided-deviation",
+      "decision": "Owner isolated-world decision (2026-11-11 18:15): this test reads a page-world expando that Neo matchers cannot observe."
+    },
+    {
+      "file": "tests/page/expect-misc.spec.ts",
+      "ids": ["EX-199"],
+      "reason": "decided-deviation",
+      "decision": "Owner isolated-world decision (2026-11-11 18:15): this test reads a page-world expando that Neo matchers cannot observe."
+    },
+    {
+      "file": "tests/page/expect-misc.spec.ts",
+      "ids": ["EX-200"],
+      "reason": "decided-deviation",
+      "decision": "Owner isolated-world decision (2026-11-11 18:15): this test reads a page-world expando that Neo matchers cannot observe."
+    },
+    {
+      "file": "tests/page/locator-highlight.spec.ts",
+      "ids": ["LO-114"],
+      "reason": "decided-deviation",
+      "decision": "Neo inspector limit: locator.highlight is refused because Neo has no Playwright inspector overlay."
+    },
+    {
+      "file": "tests/page/locator-query.spec.ts",
+      "ids": ["LO-182"],
+      "reason": "decided-deviation",
+      "decision": "Decided refusal (#3392): selectors.register custom engines are outside Neo support."
+    },
+    {
+      "file": "tests/page/page-click-timeout-1.spec.ts",
+      "ids": ["CL-110"],
+      "reason": "decided-deviation",
+      "decision": "Playwright internal-hook limit: __testHookBeforePointerAction cannot delay the click past its deadline."
+    },
+    {
+      "file": "tests/page/page-click-timeout-3.spec.ts",
+      "ids": ["CL-116"],
+      "reason": "decided-deviation",
+      "decision": "Playwright internal-hook limit: __testHookBeforeHitTarget cannot move the element during hit testing."
+    },
+    {
+      "file": "tests/page/page-click-timeout-4.spec.ts",
+      "ids": ["CL-121"],
+      "reason": "decided-deviation",
+      "decision": "Playwright internal-hook limit: __testHookBeforePointerAction cannot delay the first click past its deadline."
+    },
+    {
+      "file": "tests/page/page-click.spec.ts",
+      "ids": ["CL-068"],
+      "reason": "decided-deviation",
+      "decision": "Playwright internal-hook limit: __testHookBeforeStable cannot trigger the mid-click navigation."
+    },
+    {
+      "file": "tests/page/page-dispatchevent.spec.ts",
+      "ids": ["DE-009"],
+      "reason": "decided-deviation",
+      "decision": "Decided refusal (#3392): selectors.register custom engines are outside Neo support."
+    },
+    {
+      "file": "tests/page/page-event-console.spec.ts",
+      "ids": ["CM-016"],
+      "reason": "decided-deviation",
+      "decision": "Owner Runtime policy (#3147/#3480, 2026-11-11): no history outside an active listener lease; these tests read events emitted without one."
+    },
+    {
+      "file": "tests/page/page-event-console.spec.ts",
+      "ids": ["CM-017"],
+      "reason": "decided-deviation",
+      "decision": "Owner Runtime policy (#3147/#3480, 2026-11-11): no history outside an active listener lease; these tests read events emitted without one."
+    },
+    {
+      "file": "tests/page/page-event-console.spec.ts",
+      "ids": ["CM-018"],
+      "reason": "decided-deviation",
+      "decision": "Owner Runtime policy (#3147/#3480, 2026-11-11): no history outside an active listener lease; these tests read events emitted without one."
+    },
+    {
+      "file": "tests/page/page-event-console.spec.ts",
+      "ids": ["CM-019"],
+      "reason": "decided-deviation",
+      "decision": "Owner Runtime policy (#3147/#3480, 2026-11-11): no history outside an active listener lease; these tests read events emitted without one."
+    },
+    {
+      "file": "tests/page/page-event-console.spec.ts",
+      "ids": ["CM-020"],
+      "reason": "decided-deviation",
+      "decision": "Owner Runtime policy (#3147/#3480, 2026-11-11): no history outside an active listener lease; these tests read events emitted without one."
+    },
+    {
+      "file": "tests/page/page-event-pageerror.spec.ts",
+      "ids": ["ER-011"],
+      "reason": "decided-deviation",
+      "decision": "Owner Runtime policy (#3147/#3480, 2026-11-11): no history outside an active listener lease; these tests read events emitted without one."
+    },
+    {
+      "file": "tests/page/page-event-pageerror.spec.ts",
+      "ids": ["ER-012"],
+      "reason": "decided-deviation",
+      "decision": "Owner Runtime policy (#3147/#3480, 2026-11-11): no history outside an active listener lease; these tests read events emitted without one."
+    },
+    {
+      "file": "tests/page/page-goto.spec.ts",
+      "ids": ["NA-002"],
+      "reason": "decided-deviation",
+      "decision": "Owner decision (2026-11-12, zuzu design): a script cannot open file: pages, so Neo refuses this test's goto to a file: URL."
+    },
+    {
+      "file": "tests/page/page-goto.spec.ts",
+      "ids": ["NA-003"],
+      "reason": "decided-deviation",
+      "decision": "Owner decision (2026-11-12, zuzu design): a script cannot open file: pages, so Neo refuses this test's goto to a file: URL."
+    },
+    {
+      "file": "tests/page/page-goto.spec.ts",
+      "ids": ["NA-004"],
+      "reason": "decided-deviation",
+      "decision": "Owner decision (2026-11-12, zuzu design): a script cannot open file: pages, so Neo refuses this test's goto to a file: URL."
+    },
+    {
+      "file": "tests/page/page-history.spec.ts",
+      "ids": ["NA-073"],
+      "reason": "decided-deviation",
+      "decision": "Owner decision (2026-11-12, zuzu design): a script cannot open file: pages, so Neo refuses this test's goto to a file: URL."
+    },
+    {
+      "file": "tests/page/page-keyboard.spec.ts",
+      "ids": ["KB-049"],
+      "reason": "decided-deviation",
+      "decision": "Owner's standing rule that Neo must not act on an element other than the one asked for (lead, 2026-11-12, to be confirmed by the owner at #3526): pressSequentially and type fail not_focused when their target does not keep the focus. This test types into a non-focusable element while another holds the focus, where upstream sends the keys to that other element."
+    },
+    {
+      "file": "tests/page/page-network-idle.spec.ts",
+      "ids": ["NE-080"],
+      "reason": "network",
+      "decision": "Owner no-Network decision: setContent cannot observe networkIdle again, and Neo has no request tracker to compute it."
+    },
+    {
+      "file": "tests/page/page-network-idle.spec.ts",
+      "ids": ["NE-083"],
+      "reason": "network",
+      "decision": "Owner no-Network decision: setContent cannot observe networkIdle again, and Neo has no request tracker to compute it."
+    },
+    {
+      "file": "tests/page/page-network-response.spec.ts",
+      "ids": ["NE-030"],
+      "reason": "network",
+      "decision": "Owner no-Network decision: response.allHeaders returns no custom response headers."
+    },
+    {
+      "file": "tests/page/page-network-response.spec.ts",
+      "ids": ["NE-031"],
+      "reason": "network",
+      "decision": "Owner no-Network decision: response.headers cannot return captured multivalue headers."
+    },
+    {
+      "file": "tests/page/page-network-response.spec.ts",
+      "ids": ["NE-033"],
+      "reason": "network",
+      "decision": "Owner no-Network decision: content-encoding headers and response.text body reads are unavailable."
+    },
+    {
+      "file": "tests/page/page-network-response.spec.ts",
+      "ids": ["NE-034"],
+      "reason": "network",
+      "decision": "Owner no-Network decision: content-encoding headers and response.text body reads are unavailable."
+    },
+    {
+      "file": "tests/page/page-network-response.spec.ts",
+      "ids": ["NE-035"],
+      "reason": "network",
+      "decision": "Owner no-Network decision: content-encoding headers and response.text body reads are unavailable."
+    },
+    {
+      "file": "tests/page/page-network-response.spec.ts",
+      "ids": ["NE-042"],
+      "reason": "network",
+      "decision": "Owner no-Network decision: Neo synthesizes statusText and cannot observe the custom reason phrase cool!."
+    },
+    {
+      "file": "tests/page/page-network-response.spec.ts",
+      "ids": ["NE-046"],
+      "reason": "decided-deviation",
+      "decision": "Owner decision (2026-11-12, zuzu design): a script cannot open file: pages, so Neo refuses this test's goto to a file: URL."
+    },
+    {
+      "file": "tests/page/page-route.spec.ts",
+      "ids": ["RO-008"],
+      "reason": "decided-deviation",
+      "decision": "Owner profile/no-Network decisions: context.addCookies and page.route are refused."
+    },
+    {
+      "file": "tests/page/page-wait-for-request.spec.ts",
+      "ids": ["WA-123"],
+      "reason": "network",
+      "decision": "Owner no-Network decision: request event waits are refused immediately rather than timing out."
+    },
+    {
+      "file": "tests/page/page-wait-for-request.spec.ts",
+      "ids": ["WA-124"],
+      "reason": "network",
+      "decision": "Owner no-Network decision: request event waits are refused immediately rather than timing out."
+    },
+    {
+      "file": "tests/page/page-wait-for-response.spec.ts",
+      "ids": ["WA-130"],
+      "reason": "network",
+      "decision": "Owner no-Network decision: response event waits are refused immediately rather than timing out."
+    },
+    {
+      "file": "tests/page/page-wait-for-response.spec.ts",
+      "ids": ["WA-131"],
+      "reason": "network",
+      "decision": "Owner no-Network decision: waitForResponse is refused immediately rather than timing out."
+    },
+    {
+      "file": "tests/page/page-wait-for-selector-1.spec.ts",
+      "ids": ["WA-032"],
+      "reason": "handles",
+      "decision": "Decided rooted-handle refusal: elementHandle.waitForSelector is unsupported; use locator.locator instead."
+    },
+    {
+      "file": "tests/page/page-wait-for-selector-2.spec.ts",
+      "ids": ["WA-072"],
+      "reason": "decided-deviation",
+      "decision": "Playwright internal-hook limit: __testHookBeforeAdoptNode cannot trigger navigation before adoption."
+    },
+    {
+      "file": "tests/page/retarget.spec.ts",
+      "ids": ["RE-013"],
+      "reason": "decided-deviation",
+      "decision": "Owner isolated-world decision (2026-11-11 18:15): this test reads a page-world expando that Neo matchers cannot observe."
+    },
+    {
+      "file": "tests/page/selectors-register.spec.ts",
+      "ids": ["SE-154"],
+      "reason": "decided-deviation",
+      "decision": "Decided refusal (#3392): selectors.register custom engines are outside Neo support."
+    },
+    {
+      "file": "tests/page/selectors-register.spec.ts",
+      "ids": ["SE-155"],
+      "reason": "decided-deviation",
+      "decision": "Decided refusal (#3392): selectors.register custom engines are outside Neo support."
+    },
+    {
+      "file": "tests/page/selectors-register.spec.ts",
+      "ids": ["SE-156"],
+      "reason": "decided-deviation",
+      "decision": "Decided refusal (#3392): selectors.register custom engines are outside Neo support."
+    },
+    {
+      "file": "tests/page/selectors-register.spec.ts",
+      "ids": ["SE-157"],
+      "reason": "decided-deviation",
+      "decision": "Decided refusal (#3392): selectors.register custom engines are outside Neo support."
+    },
+    {
+      "file": "tests/page/selectors-register.spec.ts",
+      "ids": ["SE-158"],
+      "reason": "decided-deviation",
+      "decision": "Decided refusal (#3392): selectors.register custom engines are outside Neo support."
+    },
+    {
+      "file": "tests/page/selectors-register.spec.ts",
+      "ids": ["SE-159"],
+      "reason": "decided-deviation",
+      "decision": "Decided refusal (#3392): selectors.register custom engines are outside Neo support."
+    },
+    {
+      "file": "tests/page/workers.spec.ts",
+      "ids": ["WO-007"],
+      "reason": "handles",
+      "decision": "Owner no-JSHandle decision: worker console arguments require live getProperty access to the worker global."
+    }
+  ]
+}

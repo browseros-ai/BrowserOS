@@ -1,0 +1,6 @@
+<!doctype html><meta charset=utf-8><title>Labelled by a box</title>
+<style>input { width: 240px; height: 28px; } button { margin-top: 8px; }</style>
+<!-- A button whose accessible name is built from a text box (aria-labelledby walks into an
+     embedded control and takes its value), so the box's value is in the button's name. -->
+<label>Code <input id=code type=text></label>
+<div><button id=go aria-labelledby="pre code">Go</button> <span id=pre>Send</span></div>

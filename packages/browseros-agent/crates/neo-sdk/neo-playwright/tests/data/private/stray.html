@@ -1,0 +1,31 @@
+<!doctype html><meta charset=utf-8><title>Stray</title>
+<!-- A code box whose page sends part of what is typed into a neighbouring box (ruling R26).
+     ?mode=keys    at the third character key the box's keydown handler focuses the neighbour,
+                   so that key's character lands there
+     ?mode=insert  the box's input handler moves its value into the neighbour, empties the box
+                   and focuses the neighbour
+     ?mode=button  the same move, with the focus going to a button instead -->
+<form onsubmit="return false">
+  <input id=code aria-label="Code" autocomplete=off>
+  <input id=other aria-label="Other" autocomplete=off>
+  <button id=next type=button>Next</button>
+</form>
+<script>
+const mode = new URLSearchParams(location.search).get('mode') || 'keys';
+const code = document.getElementById('code');
+const other = document.getElementById('other');
+const next = document.getElementById('next');
+let keys = 0;
+if (mode === 'keys') {
+  code.addEventListener('keydown', (event) => {
+    if (event.key.length === 1 && ++keys === 3) other.focus();
+  });
+}
+if (mode === 'insert' || mode === 'button') {
+  code.addEventListener('input', () => {
+    other.value = code.value;
+    code.value = '';
+    (mode === 'insert' ? other : next).focus();
+  });
+}
+</script>

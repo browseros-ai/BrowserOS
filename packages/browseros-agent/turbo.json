@@ -4,7 +4,7 @@
     "bun.lock",
     "bunfig.toml",
     "tsconfig.json",
-    "biome.json",
+    "biome.jsonc",
     "Cargo.toml",
     "Cargo.lock",
     "turbo.json"

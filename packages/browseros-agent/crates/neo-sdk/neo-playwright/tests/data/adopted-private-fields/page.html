@@ -1,0 +1,80 @@
+<!doctype html>
+<!-- Shared by live and stored-result canaries. Keep exactly one source child per case. -->
+<html><head><title>Adopted fields</title></head>
+<body><main><h1>Adopted fields</h1><section id="references"></section></main><div id="frame-host"></div>
+<script>
+(() => {
+  const options = new URLSearchParams(location.search);
+  const rootKind = options.get('root');
+  const destination = options.get('destination');
+  const name = `${rootKind}-${destination}`;
+  const privatePrefix = `AdoptedPrivate-${name}`;
+  const publicPrefix = `AdoptedPublic-${name}`;
+  const fields = `<section id="adopted-fields">
+    <input id="private-password" aria-label="Moved password" type="password" value="${privatePrefix}-password-attribute">
+    <textarea id="private-textarea" aria-label="Moved textarea" role="searchbox" autocomplete="new-password" value="${privatePrefix}-textarea-attribute">${privatePrefix}-textarea-content</textarea>
+    <input id="public-input" aria-label="Public moved input" value="${publicPrefix}-input-attribute">
+    <textarea id="public-textarea" aria-label="Public moved textarea" role="searchbox">${publicPrefix}-textarea-content</textarea>
+  </section>`;
+  // The renderer falls back to a whole page when diff context exceeds half the baseline.
+  // Stable public actions in both documents keep this test about the changed private label.
+  const stablePublic = Array.from({ length: 40 }, (_, index) =>
+    `<button>Stable public action ${index + 1}</button>`).join('');
+  document.querySelector('main').insertAdjacentHTML('beforeend', stablePublic);
+  const frame = document.createElement('iframe');
+  frame.id = 'adoption-child';
+  frame.title = 'Adoption source child';
+  frame.srcdoc = `<!doctype html><html><body><main><p id="ready">Child ready</p><section id="references"></section>${stablePublic}</main>${destination === 'parent' ? fields : ''}</body></html>`;
+  if (destination === 'child') document.querySelector('main').insertAdjacentHTML('beforeend', fields);
+  const host = document.getElementById('frame-host');
+  const root = rootKind === 'document' ? host : host.attachShadow({ mode: rootKind });
+  root.append(frame);
+  const references = `<span id="password-prefix">Password label</span><span id="textarea-prefix">Textarea label</span>
+    <span id="public-input-prefix">Public input label</span><span id="public-textarea-prefix">Public textarea label</span>
+    <button id="password-label" aria-labelledby="password-prefix private-password"></button>
+    <button id="textarea-label" aria-labelledby="textarea-prefix private-textarea"></button>
+    <button id="password-owner" aria-owns="private-password">Owned password</button>
+    <button id="textarea-owner" aria-owns="private-textarea">Owned textarea</button>
+    <button aria-labelledby="public-input-prefix public-input"></button>
+    <button aria-labelledby="public-textarea-prefix public-textarea"></button>
+    <button aria-owns="public-input">Owned public input</button>
+    <button aria-owns="public-textarea">Owned public textarea</button>`;
+  window.adoption = {
+    frame, root, fields: [],
+    adopt() {
+      const source = destination === 'child' ? document : frame.contentDocument;
+      const target = destination === 'child' ? frame.contentDocument : document;
+      const sourceWindow = source.defaultView;
+      const targetWindow = target.defaultView;
+      const container = source.getElementById('adopted-fields');
+      this.fields = Array.from(container.querySelectorAll('input, textarea'));
+      target.body.append(target.adoptNode(container));
+      target.getElementById('references').innerHTML = references;
+      return {
+        childPresent: frame.isConnected,
+        childURL: frame.contentWindow.location.href,
+        frameCount: window.length,
+        closedOpaque: rootKind === 'closed' ? host.shadowRoot === null : null,
+        sourcePrototypes: [
+          Object.getPrototypeOf(this.fields[0]) === sourceWindow.HTMLInputElement.prototype,
+          Object.getPrototypeOf(this.fields[1]) === sourceWindow.HTMLTextAreaElement.prototype,
+        ],
+        destinationInstances: [
+          this.fields[0] instanceof targetWindow.HTMLInputElement,
+          this.fields[1] instanceof targetWindow.HTMLTextAreaElement,
+        ],
+      };
+    },
+    read() {
+      return {
+        values: this.fields.map(field => field.value),
+        defaults: this.fields.slice(0, 2).map(field => field.defaultValue),
+        attributes: this.fields.slice(0, 2).map(field => field.getAttribute('value')),
+        content: this.fields[1].textContent,
+        childPresent: frame.isConnected,
+        closedOpaque: rootKind === 'closed' ? host.shadowRoot === null : null,
+      };
+    },
+  };
+})();
+</script></body></html>

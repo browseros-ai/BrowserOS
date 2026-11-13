@@ -184,7 +184,8 @@ impl AppState {
                 skill,
                 analytics_sink.clone(),
             )
-            .with_ultrafast_skill(ultrafast_skill),
+            .with_ultrafast_skill(ultrafast_skill)
+            .with_read_only(config.dev_mode),
         );
         let skills = Arc::new(SkillService::new(
             SkillsRepository::new(database.clone()),

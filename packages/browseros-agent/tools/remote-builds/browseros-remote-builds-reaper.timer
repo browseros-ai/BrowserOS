@@ -1,0 +1,10 @@
+[Unit]
+Description=Check remote build deadlines after each completed cleanup sweep
+
+[Timer]
+OnBootSec=15s
+OnUnitInactiveSec=15s
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target

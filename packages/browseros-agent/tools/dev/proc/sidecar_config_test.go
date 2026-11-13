@@ -39,8 +39,8 @@ func TestWriteSidecarConfigWritesChromiumShape(t *testing.T) {
 	if flags["allow_remote_in_mcp"] != false {
 		t.Fatalf("unexpected flags: %#v", flags)
 	}
-	if _, ok := flags["devMode"]; ok {
-		t.Fatalf("devMode is written only when requested: %#v", flags)
+	if flags["devMode"] != true {
+		t.Fatalf("every dev launch must disable agent config provisioning: %#v", flags)
 	}
 	if _, ok := got["instance"].(map[string]any); !ok {
 		t.Fatalf("missing instance object: %#v", got)

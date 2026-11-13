@@ -3,7 +3,7 @@
 //! harness.
 use super::*;
 use crate::{BrowserSession, BrowserSessionHooks, CdpConnection, SessionId};
-use browseros_cdp::{CdpError, CdpEvent};
+use browseros_cdp::{CdpError, CdpEvent, TargetedEvents};
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
 use std::{
@@ -11,7 +11,7 @@ use std::{
     error::Error,
     sync::{Arc, MutexGuard},
 };
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 
 type TestResult = Result<(), Box<dyn Error>>;
@@ -70,6 +70,7 @@ struct Fake {
 struct Native {
     state: std::sync::Mutex<Fake>,
     events: broadcast::Sender<CdpEvent>,
+    targeted: TargetedEvents,
 }
 
 impl Native {
@@ -114,6 +115,7 @@ impl Native {
                 chrome_version: "155.0.8315.26".to_string(),
             }),
             events,
+            targeted: TargetedEvents::default(),
         })
     }
 
@@ -405,6 +407,10 @@ impl CdpConnection for Native {
         self.events.subscribe()
     }
 
+    fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+        self.targeted.subscribe(method)
+    }
+
     fn is_connected(&self) -> bool {
         true
     }
@@ -419,6 +425,168 @@ struct Fixture {
     session: Arc<BrowserSession>,
     viewports: Arc<Viewports>,
     view: BrowserView,
+}
+
+#[tokio::test]
+async fn an_initial_failed_resize_keeps_a_default_reset_pending_until_an_sdk_admission_repairs_it()
+-> TestResult {
+    let fixture = Fixture::new(&[(1, 10)]);
+    let page = fixture.page(1).await?;
+    let request = ViewportRequest::playwright(Size {
+        width: 800,
+        height: 600,
+    })?;
+    let change = fixture
+        .view
+        .prepare_playwright_viewport(page.clone(), request)
+        .await?;
+    fixture.native.lock().fail = Some("Emulation.setTouchEmulationEnabled");
+    fixture.native.lock().fail_clear = true;
+    assert!(change.apply().await.is_err());
+    // Wait for the bounded cleanup to finish. Its reset also fails, leaving real rejected
+    // metrics on a tab which correctly has no published Playwright configuration.
+    drop(fixture.view.hold_viewport(page.clone()).await);
+    assert!(fixture.viewports.default_pending(&page));
+    assert_eq!(fixture.view.current_viewport(&page), None);
+    assert_eq!(fixture.view.playwright_viewport(&page), None);
+    assert!(
+        fixture
+            .native
+            .lock()
+            .emulation
+            .values()
+            .any(|state| state.metrics.is_some())
+    );
+    fixture.native.lock().fail = None;
+    let session = fixture.view.page_session(page.clone()).await?;
+    assert!(
+        fixture.view.repair_viewport(&page, &session).await.is_err(),
+        "a failed retry must not claim the default reset completed"
+    );
+    assert!(fixture.viewports.default_pending(&page));
+    fixture.native.lock().fail_clear = false;
+    fixture.view.repair_viewport(&page, &session).await?;
+    assert!(!fixture.viewports.default_pending(&page));
+    assert!(
+        fixture
+            .native
+            .lock()
+            .emulation
+            .values()
+            .all(|state| state.metrics.is_none()),
+        "the next SDK page admission clears the rejected browser override"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn playwright_changes_need_no_renderer_probe_and_publish_only_after_success() -> TestResult {
+    let fixture = Fixture::new(&[(1, 10)]);
+    let page = fixture.page(1).await?;
+    let request = ViewportRequest::playwright(Size {
+        width: 50,
+        height: 5000,
+    })?;
+    fixture.native.lock().fail = Some("Runtime.evaluate");
+    fixture
+        .view
+        .prepare_playwright_viewport(page.clone(), request)
+        .await?
+        .apply()
+        .await?;
+    assert_eq!(fixture.view.current_viewport(&page), Some(request));
+    assert_eq!(fixture.view.playwright_viewport(&page), request.size());
+    fixture.viewports.invalidate(&page);
+    let session = fixture.view.page_session(page.clone()).await?;
+    fixture.view.repair_viewport(&page, &session).await?;
+    fixture
+        .view
+        .prepare_playwright_viewport(page, request)
+        .await?
+        .apply()
+        .await?;
+    assert!(
+        fixture.native.calls("Runtime.evaluate").is_empty(),
+        "a CDP resize must not depend on a live document or isolated world"
+    );
+    assert!(
+        fixture.native.calls("Browser.getVersion").is_empty(),
+        "desktop Playwright metrics and their rollback need no browser identity probe"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn failed_and_cancelled_playwright_changes_restore_the_previous_host_configuration()
+-> TestResult {
+    for cancelled in [false, true] {
+        let fixture = Fixture::new(&[(1, 10)]);
+        let page = fixture.page(1).await?;
+        let old = ViewportRequest::playwright(Size {
+            width: 640,
+            height: 480,
+        })?;
+        fixture
+            .view
+            .prepare_playwright_viewport(page.clone(), old)
+            .await?
+            .apply()
+            .await?;
+        let new = ViewportRequest::playwright(Size {
+            width: 800,
+            height: 600,
+        })?;
+        let change = fixture
+            .view
+            .prepare_playwright_viewport(page.clone(), new)
+            .await?;
+        let stopped_at = "Emulation.setTouchEmulationEnabled";
+        if cancelled {
+            fixture.native.lock().stall = Some(stopped_at);
+            let mut applying = Box::pin(change.apply());
+            assert!(
+                still_waiting(&mut applying).await,
+                "the first metrics write landed but its context reset is held"
+            );
+            fixture.native.lock().stall = None;
+            drop(applying);
+        } else {
+            fixture.native.lock().fail = Some(stopped_at);
+            assert!(
+                change.apply().await.is_err(),
+                "the resize fails after its metrics write"
+            );
+            fixture.native.lock().fail = None;
+        }
+        assert!(
+            fixture
+                .native
+                .calls("Emulation.setDeviceMetricsOverride")
+                .iter()
+                .any(|call| call.params["width"] == 800),
+            "rollback must undo a metrics write that already reached the browser"
+        );
+        assert_eq!(
+            fixture.view.current_viewport(&page),
+            Some(old),
+            "a rejected request must never become a fit's saved request"
+        );
+        assert_eq!(
+            fixture.view.playwright_viewport(&page),
+            old.size(),
+            "the next run must see the last successful size"
+        );
+        // Cleanup keeps the exclusive lock through its rollback. Sharing the viewport here
+        // waits for that cleanup, as the next capture or fit must, without a timing guess.
+        drop(fixture.view.hold_viewport(page.clone()).await);
+        let metrics = fixture.native.calls("Emulation.setDeviceMetricsOverride");
+        let restored = metrics
+            .last()
+            .ok_or("rollback sends the original metrics")?;
+        assert_eq!(restored.params["width"], 640);
+        assert_eq!(restored.params["height"], 480);
+    }
+    Ok(())
 }
 
 impl Fixture {
@@ -1065,12 +1233,34 @@ async fn tests_that_views_without_viewports_refuse_and_prepare_nothing() -> Test
 
 impl Fixture {
     fn emit(&self, method: &str, params: Value, session: &str) {
-        let _ = self.native.events.send(CdpEvent {
+        let event = CdpEvent {
             method: method.to_string(),
             params,
             session_id: Some(SessionId::from(session)),
-        });
+        };
+        if let Some(event) = self.native.targeted.deliver(event) {
+            let _ = self.native.events.send(event);
+        }
     }
+}
+
+#[tokio::test]
+async fn tests_that_an_emitted_event_reaches_its_targeted_subscriber_and_not_the_broadcast()
+-> TestResult {
+    let fixture = Fixture::new(&[(1, 10)]);
+    let mut broadcast = fixture.native.events();
+    let mut targeted = fixture.native.events_targeted("Runtime.bindingCalled");
+    fixture.emit(
+        "Runtime.bindingCalled",
+        json!({ "name": "probe" }),
+        "session-1",
+    );
+    assert_eq!(targeted.try_recv()?.params["name"], "probe");
+    assert!(
+        broadcast.try_recv().is_err(),
+        "a method with a live targeted subscriber must bypass the broadcast"
+    );
+    Ok(())
 }
 
 /// What `future` returns, if it finishes within a moment in which an unblocked call would.
@@ -1313,6 +1503,39 @@ async fn tests_that_desktop_and_default_pointer_input_is_not_scaled() -> TestRes
 }
 
 #[tokio::test]
+async fn tests_that_the_pointer_scale_is_one_without_a_viewport_override() -> TestResult {
+    let fixture = Fixture::new(&[(1, 10), (2, 10)]);
+    let zoomed = fixture.page(1).await?;
+    let natural = fixture.page(2).await?;
+    let without_modes = BrowserView::unbound(fixture.session.clone(), None);
+    assert_eq!(
+        fixture.view.pointer_scale(&zoomed),
+        1.0,
+        "a default tab is not emulated, so its input is not scaled"
+    );
+    assert_eq!(
+        without_modes.pointer_scale(&zoomed),
+        1.0,
+        "a view without viewport modes never scales input"
+    );
+
+    fixture
+        .set(&zoomed, ViewportMode::Mobile, Some(150.0))
+        .await?;
+    assert_eq!(
+        fixture.view.pointer_scale(&zoomed),
+        1.5,
+        "a 150% mobile preview takes main-frame input in its scaled space"
+    );
+    assert_eq!(
+        fixture.view.pointer_scale(&natural),
+        1.0,
+        "the zoom belongs to the tab it was set on"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn tests_that_page_scripts_cannot_fake_or_fail_the_check() -> TestResult {
     let fixture = Fixture::new(&[(1, 10)]);
     fixture.native.lock().tampered = true;
@@ -1488,6 +1711,65 @@ async fn tests_that_a_call_without_size_returns_to_the_mode_size() -> TestResult
         (report.viewport.width, report.viewport.height),
         (400.0, 906.0)
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn tests_that_current_viewport_hands_back_the_request_so_it_can_be_restored() -> TestResult {
+    let fixture = Fixture::new(&[(1, 10), (2, 10)]);
+    let page = fixture.page(1).await?;
+    let neighbour = fixture.page(2).await?;
+    assert_eq!(fixture.view.current_viewport(&page), None, "a new tab");
+
+    let agent_mode = ViewportRequest::new(ViewportMode::Mobile, Some(150.0))?.with_size(Size {
+        width: 390,
+        height: 844,
+    })?;
+    fixture
+        .view
+        .set_viewport(page.clone(), agent_mode, &CancellationToken::new())
+        .await?;
+    assert_eq!(fixture.view.current_viewport(&page), Some(agent_mode));
+    assert_eq!(fixture.view.current_viewport(&neighbour), None);
+    let agent_metrics = fixture
+        .native
+        .only("Emulation.setDeviceMetricsOverride")?
+        .params;
+
+    // A fit records the mode, replaces it, and on release sets the recorded request again.
+    let recorded = fixture
+        .view
+        .current_viewport(&page)
+        .ok_or("no recorded mode")?;
+    fixture.set(&page, ViewportMode::Default, None).await?;
+    assert_eq!(fixture.view.current_viewport(&page), None);
+    fixture.native.clear_calls();
+    fixture
+        .view
+        .set_viewport(page.clone(), recorded, &CancellationToken::new())
+        .await?;
+    assert_eq!(fixture.view.current_viewport(&page), Some(agent_mode));
+    assert_eq!(
+        fixture
+            .native
+            .only("Emulation.setDeviceMetricsOverride")?
+            .params,
+        agent_metrics,
+        "the restored tab is emulated exactly as the agent had it"
+    );
+
+    // A change cut short is still the tab's mode: its next operation finishes it.
+    fixture.native.lock().fail = Some("Emulation.setVisibleSize");
+    let desktop = ViewportRequest::new(ViewportMode::Desktop, None)?;
+    let failed = fixture
+        .view
+        .set_viewport(page.clone(), desktop, &CancellationToken::new())
+        .await;
+    assert!(failed.is_err());
+    assert_eq!(fixture.view.current_viewport(&page), Some(desktop));
+
+    let without_viewports = BrowserView::unbound(fixture.session.clone(), None);
+    assert_eq!(without_viewports.current_viewport(&page), None);
     Ok(())
 }
 

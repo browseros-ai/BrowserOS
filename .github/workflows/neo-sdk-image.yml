@@ -1,0 +1,274 @@
+name: "Neo SDK image"
+
+# The Neo SDK image (packages/browseros-agent/crates/neo-sdk/neo-server/docker): claw-sdk on the
+# neo browser, with its own supervisor. It is NOT production's image: that is the default Neo image,
+# packages/browseros/docker/neo with claw-server, released by release-docker.yml as
+# ghcr.io/browseros-ai/neo. This workflow is the only place CI builds the SDK image.
+#
+#   preflight  decides whether this run publishes (below), before anything is built
+#   scripts    the image's scripts without Docker: the supervisor's and smoke_sdk's tests, ruff
+#   image      amd64 and arm64, each on a native runner: build.sh, then accept.sh (every check
+#              boots natively); when publishing, pushes exactly the image it accepted
+#   publish    when publishing: one multi-arch tag from the two accepted images
+#
+# Build and test only, never publish: a pull request or a push that changes the image's inputs
+# (the Rust workspace build.sh sends, this file). A push to main never publishes.
+# Publishes, to ghcr.io/browseros-ai/neo-sdk only, never to a name or tag production uses:
+#   - a manual run with publish=true and confirm=neo-sdk:
+#       gh workflow run neo-sdk-image.yml --ref <branch> -f publish=true -f confirm=neo-sdk
+#     tags :<version> (build.sh's: <browser>-<9-char commit>), plus :<version>-amd64/-arm64;
+#   - a pushed tag neo-sdk-v<X>: the same, plus :<X>.
+on:
+  pull_request:
+    # The image's inputs: the Rust workspace build.sh sends (its context), and this file.
+    paths:
+      - packages/browseros-agent/Cargo.toml
+      - packages/browseros-agent/Cargo.lock
+      - packages/browseros-agent/crates/**
+      # The CAPTCHA testbed is not in the image's build context (Dockerfile.dockerignore).
+      - "!packages/browseros-agent/crates/neo-sdk/neo-captcha/testbed/**"
+      - packages/browseros-agent/apps/claw-server/**
+      - .github/workflows/neo-sdk-image.yml
+  push:
+    branches: [main, feat/claw-sdk]
+    paths:
+      - packages/browseros-agent/Cargo.toml
+      - packages/browseros-agent/Cargo.lock
+      - packages/browseros-agent/crates/**
+      # The CAPTCHA testbed is not in the image's build context (Dockerfile.dockerignore).
+      - "!packages/browseros-agent/crates/neo-sdk/neo-captcha/testbed/**"
+      - packages/browseros-agent/apps/claw-server/**
+      - .github/workflows/neo-sdk-image.yml
+    # GitHub does not apply path filters to tags: any neo-sdk-v* tag runs, and publishes.
+    tags: ["neo-sdk-v*"]
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish the accepted images to ghcr.io/browseros-ai/neo-sdk"
+        type: boolean
+        default: false
+      confirm:
+        description: "With publish: type neo-sdk to confirm"
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+# Named, not left implicit: GitHub adds -o pipefail only for an explicit `shell: bash`, and the
+# steps pipe build.sh and accept.sh into tee, which would otherwise hide a failing check.
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: neo-sdk-image-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  IMAGE: ghcr.io/browseros-ai/neo-sdk
+
+jobs:
+  preflight:
+    name: Neo SDK image / publish or not
+    runs-on: ubuntu-latest
+    permissions: {}
+    outputs:
+      publish: ${{ steps.decide.outputs.publish }}
+    steps:
+      - name: Decide
+        id: decide
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          PUBLISH: ${{ inputs.publish }}
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          set -euo pipefail
+          publish=false
+          if [ "$EVENT" = workflow_dispatch ] && [ "$PUBLISH" = true ]; then
+            if [ "$CONFIRM" != neo-sdk ]; then
+              echo "::error::publish=true needs confirm=neo-sdk; nothing was built"
+              exit 1
+            fi
+            publish=true
+          elif [ "$EVENT" = push ] && [[ "$REF" == refs/tags/neo-sdk-v* ]]; then
+            publish=true
+          fi
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+          echo "publish=$publish ($EVENT $REF)"
+
+  scripts:
+    name: Neo SDK image / scripts
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: packages/browseros-agent/crates/neo-sdk/neo-server/docker
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v8.3.2
+      - name: Supervisor tests
+        run: python3 -m unittest discover -s supervisor -p "*_test.py" -v
+      - name: Script tests
+        run: python3 -m unittest discover -s . -p "*_test.py" -v
+      - name: Ruff
+        # packages/browseros's pinned ruff, the one bos-build-tests runs on the default image's folder.
+        run: uv run --directory "$GITHUB_WORKSPACE/packages/browseros" ruff check "$PWD"
+
+  image:
+    name: Neo SDK image / ${{ matrix.arch }} build + accept
+    # The scripts' tests too: an image is pushed only when every check of this run passed.
+    needs: [preflight, scripts]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 75
+    permissions:
+      contents: read
+      # Used only by the push step, which runs only when preflight decided to publish.
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    outputs:
+      version: ${{ steps.build.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # The image's apt steps resolve Ubuntu's archive from inside a build container, through the
+      # resolver the runner hands Docker. On 2026-11-11 seven runs in a row failed there with
+      # "Could not resolve 'archive.ubuntu.com'" while the archive itself was up. This asks from
+      # inside a container first and, only when the name does not resolve, points the Docker
+      # engine at public resolvers. It changes the runner for this job, never the image.
+      #
+      # `getent hosts` exits 2 for a name that does not resolve. Any other failure is Docker's own:
+      # its output stays visible and the job stops, because changing the resolver would hide it.
+      - name: Make sure containers can resolve Ubuntu's archive
+        run: |
+          probe() {
+            local status=0
+            docker run --rm ubuntu:24.04 getent hosts archive.ubuntu.com || status=$?
+            case "$status" in
+              0 | 2) return "$status" ;;
+              *) echo "::error::the resolver probe could not run (docker exit $status); see its output above"; exit 1 ;;
+            esac
+          }
+          if probe; then
+            echo "containers resolve archive.ubuntu.com with the runner's own resolver"
+            exit 0
+          fi
+          echo "::warning::containers cannot resolve archive.ubuntu.com; pointing Docker at public resolvers"
+          config=/etc/docker/daemon.json
+          [ -s "$config" ] || echo '{}' | sudo tee "$config" >/dev/null
+          sudo jq '. + {dns: ["1.1.1.1", "8.8.8.8"]}' "$config" | sudo tee "$config.new" >/dev/null
+          sudo mv "$config.new" "$config"
+          sudo systemctl restart docker
+          for _ in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 1; done
+          if ! probe; then
+            echo "::error::containers still cannot resolve archive.ubuntu.com with public resolvers"
+            exit 1
+          fi
+
+      # build.sh names the image after the checked-out commit and tags it only once its server is
+      # proven to be this commit's; logs go outside the checkout so they cannot mark it dirty.
+      - name: Build the image
+        id: build
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/neo-sdk"
+          packages/browseros-agent/crates/neo-sdk/neo-server/docker/build.sh --platform "linux/$ARCH" \
+            2>&1 | tee "$RUNNER_TEMP/neo-sdk/build.log"
+          tag=$(sed -n 's/^TAG=//p' "$RUNNER_TEMP/neo-sdk/build.log" | tail -1)
+          [ -n "$tag" ]
+          docker run --rm --network none --entrypoint cat "$tag" /usr/share/neo-sdk/provenance.json \
+            > "$RUNNER_TEMP/neo-sdk/provenance.json"
+          version=$(jq -r .version "$RUNNER_TEMP/neo-sdk/provenance.json")
+          [ "$(jq -r .dirty "$RUNNER_TEMP/neo-sdk/provenance.json")" = false ]
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Accept the image
+        env:
+          TAG: ${{ steps.build.outputs.tag }}
+        run: |
+          packages/browseros-agent/crates/neo-sdk/neo-server/docker/accept.sh "$TAG" \
+            --logs "$RUNNER_TEMP/neo-sdk/containers" 2>&1 | tee "$RUNNER_TEMP/neo-sdk/accept.log"
+
+      - name: Log in to GitHub Container Registry
+        if: needs.preflight.outputs.publish == 'true'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # The image accept.sh just passed, by id: nothing is rebuilt between the test and the push.
+      - name: Push the accepted image
+        if: needs.preflight.outputs.publish == 'true'
+        env:
+          TAG: ${{ steps.build.outputs.tag }}
+          VERSION: ${{ steps.build.outputs.version }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          docker tag "$TAG" "$IMAGE:$VERSION-$ARCH"
+          docker push "$IMAGE:$VERSION-$ARCH"
+
+      - name: Summary
+        if: always()
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          {
+            echo "## Neo SDK image, linux/$ARCH"
+            echo '```'
+            grep -E '^(PASS|FAIL|SKIP) ' "$RUNNER_TEMP/neo-sdk/accept.log" 2>/dev/null | head -20 || true
+            echo '```'
+            echo '```json'
+            cat "$RUNNER_TEMP/neo-sdk/provenance.json" 2>/dev/null || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: neo-sdk-image-${{ matrix.arch }}
+          path: ${{ runner.temp }}/neo-sdk
+          if-no-files-found: warn
+
+  publish:
+    name: Neo SDK image / publish
+    needs: [preflight, image]
+    if: needs.preflight.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Tag both architectures as one image
+        env:
+          VERSION: ${{ needs.image.outputs.version }}
+          REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          [ -n "$VERSION" ]
+          tags=(-t "$IMAGE:$VERSION")
+          if [[ "$REF" == refs/tags/neo-sdk-v* ]]; then tags+=(-t "$IMAGE:${REF#refs/tags/neo-sdk-v}"); fi
+          docker buildx imagetools create "${tags[@]}" "$IMAGE:$VERSION-amd64" "$IMAGE:$VERSION-arm64"
+          docker buildx imagetools inspect "$IMAGE:$VERSION"

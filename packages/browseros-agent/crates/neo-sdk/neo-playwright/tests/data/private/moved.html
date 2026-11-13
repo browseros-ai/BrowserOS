@@ -1,0 +1,61 @@
+<!doctype html><meta charset=utf-8><title>Moved on</title>
+<h1>Enter the code we sent</h1>
+<form id=f method=post action=/echo>
+  <input type=hidden name=result value=Verified>
+  <input id=user name=username type=email autocomplete=username aria-label="Email" hidden>
+  <input id=code name=code autocomplete=one-time-code inputmode=numeric aria-label="Verification code">
+  <button>Verify</button>
+</form>
+<script>
+// The page moves on as the entry lands, as many code boxes and some sign-in forms do. fill.js and
+// login_fill.js type each value in one insertText (Playwright's fill), so the page sees the whole
+// value in one input event unless the box itself keeps less.
+// ?mode=post: the box submits its POST form on the sixth digit (to /echo, which shows result=Verified).
+// ?mode=fetch: the sixth digit posts by fetch and replaces the form in place: same address, box gone.
+// ?mode=short: maxlength=3, nothing submits: the box stays and keeps three of six.
+// ?mode=stay: nothing submits: the box stays and holds it all.
+// ?mode=pw: a sign-in form whose password box submits the form on input.
+// ?mode=early: maxlength=3 and the form submits on the third digit: the page moves on with half the code.
+// ?mode=focus: the form submits as the box takes focus, before any key.
+const mode = new URLSearchParams(location.search).get('mode') || 'post';
+const f = document.getElementById('f'), code = document.getElementById('code'), user = document.getElementById('user');
+if (mode === 'post') code.oninput = () => { if (code.value.length === 6) f.requestSubmit(); };
+if (mode === 'fetch') code.oninput = () => {
+  if (code.value.length !== 6) return;
+  const body = new FormData(f), p = document.createElement('p');
+  p.id = 'status'; p.textContent = 'Verifying'; f.replaceWith(p);
+  fetch('/echo', { method: 'POST', body }).then(() => { p.textContent = 'Verified'; });
+};
+if (mode === 'short') code.maxLength = 3;
+if (mode === 'pw') {
+  user.hidden = false; code.type = 'password'; code.name = 'password'; code.autocomplete = 'current-password';
+  code.setAttribute('aria-label', 'Password'); code.removeAttribute('inputmode');
+  code.oninput = () => f.requestSubmit();
+}
+if (mode === 'early') { code.maxLength = 3; code.oninput = () => { if (code.value.length === 3) f.requestSubmit(); }; }
+if (mode === 'focus') code.onfocus = () => f.requestSubmit();
+// ?mode=earlyx: maxlength=6, and the sixth character replaces the form in place: a longer code
+// (246-813) keeps 246-81 and the box is gone at once (same document), whatever the timing.
+if (mode === 'earlyx') { code.maxLength = 6; code.oninput = () => { if (code.value.length === 6) { const p = document.createElement('p'); p.id = 'status'; p.textContent = 'Verifying'; f.replaceWith(p); } }; }
+// The address changes in the same document while the box stays and keeps four of six:
+// ?mode=hash4 sets location.hash on input, ?mode=replace4 calls history.replaceState on input,
+// ?mode=push4 calls history.pushState as the box takes focus.
+if (mode === 'hash4') { code.maxLength = 4; code.oninput = () => { location.hash = 'step2'; }; }
+if (mode === 'replace4') { code.maxLength = 4; code.oninput = () => history.replaceState(null, '', location.pathname + '?mode=replace4&step=2'); }
+if (mode === 'push4') { code.maxLength = 4; code.onfocus = () => history.pushState(null, '', location.pathname + '?mode=push4&step=2'); }
+// ?mode=swap3: the third character replaces the box with a copy holding what it has (a new element in
+// the same document, not focused): the keys after it land nowhere.
+if (mode === 'swap3') code.oninput = () => { if (code.value.length === 3) { const n = code.cloneNode(); n.value = code.value; code.replaceWith(n); } };
+// ?mode=six: six one-digit boxes; the third digit replaces the form with "Verifying" (boxes gone).
+if (mode === 'six' || mode === 'sixstay' || mode === 'sixonce') {
+  code.remove();
+  for (let i = 1; i <= 6; i++) {
+    const b = document.createElement('input'); b.id = 'd' + i; b.name = 'd' + i; b.maxLength = 1; b.inputMode = 'numeric';
+    b.autocomplete = i === 1 ? 'one-time-code' : 'off'; b.setAttribute('aria-label', 'Digit ' + i); b.size = 1;
+    // ?mode=sixonce: the fourth box hands the focus back to the first the first time it takes it.
+    if (i === 4 && mode === 'sixonce') { let once = true; b.onfocus = () => { if (once) { once = false; document.getElementById('d1').focus(); } }; }
+    if (i === 3 && mode === 'six') b.oninput = () => { const p = document.createElement('p'); p.id = 'status'; p.textContent = 'Verifying'; f.replaceWith(p); };
+    f.insertBefore(b, f.querySelector('button'));
+  }
+}
+</script>

@@ -1,0 +1,2784 @@
+use std::{future::Future, time::Duration};
+
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use tokio::time::{Instant, timeout_at};
+use url::Url;
+
+use super::{
+    page::CaptchaPage,
+    types::{CaptchaKind, Challenge, ChallengeState, Detection, FrameRef, PageError, ScanOutcome},
+};
+
+/// Detection's DOM pass over one document, in the adapter's DOM world. `scope`, `vendor`,
+/// `closedRoots` and `truncated` are bound by `dom_script`.
+const DOM_SCAN: &str = r#"
+const widgets = [], roots = [], frames = [], candidates = [];
+let complete = !truncated;
+const closed = new Map(closedRoots.map(r => [r.host, r]));
+const queryRoots = root => {
+    const list = [root];
+    for (const r of list) for (const e of r.querySelectorAll('*')) {
+        const s = e.shadowRoot || closed.get(e);
+        if (s) list.push(s);
+    }
+    return list;
+};
+const scopes = queryRoots(scope);
+const all = (s, root = scope) => (root === scope ? scopes : queryRoots(root)).flatMap(r => [...r.querySelectorAll(s)]);
+const closest = (e, selector) => {
+    for (let p = e; p; p = p.parentElement || p.getRootNode().host) if (p.matches(selector)) return p;
+    return null;
+};
+const visible = (e, onScreen = false) => {
+    if (!e || !e.isConnected) return false;
+    for (let p = e; p; p = p.parentElement || p.getRootNode().host) {
+        const s = getComputedStyle(p);
+        if (s.display === 'none' || s.visibility === 'hidden' || s.visibility === 'collapse' || s.opacity === '0') return false;
+    }
+    const r = e.getBoundingClientRect();
+    return r.width > 0 && r.height > 0 && (!onScreen || (r.bottom > 0 && r.right > 0 && r.top < innerHeight && r.left < innerWidth));
+};
+const vendorHost = raw => {
+    try { return /(^|\.)(google\.com|recaptcha\.net|hcaptcha\.com|challenges\.cloudflare\.com|geetest\.com|geevisit\.com|awswaf\.com|arkoselabs\.com|arkoselabs\.cn|funcaptcha\.com)$/.test(new URL(raw).hostname); }
+    catch { return false; }
+};
+const addresses = [...new Set([
+    ...all('script[src]').map(e => e.src),
+    ...(scope === document ? performance.getEntriesByType('resource').map(e => e.name) : [])
+])].filter(vendorHost);
+const add = (e, kind, state, list = widgets) => {
+    const field = ({turnstile:'input[name="cf-turnstile-response"]', hcaptcha:'textarea[name="h-captcha-response"]',
+        geetest:'[name="geetest_validate"], [name="geetest_seccode"], [name="captcha_output"]',
+        aws_waf:'[name="aws-waf-token"], [name="captcha_voucher"]'})[kind] || 'textarea[name="g-recaptcha-response"]';
+    const response = kind === 'arkose' ? null : e && (e.matches(field) ? e : all(field, e)[0]);
+    const a = name => e?.getAttribute('data-' + name) || null;
+    const w = {kind, inferred: !e, state: response?.value.trim() ? 'passed' : state, invisible: a('size') === 'invisible', enterprise: false,
+        sitekey: a('sitekey') || a('pkey') || a('captcha-id') || a('gt') || a('api-key') || e?.getAttribute('apiKey') || null,
+        recaptchaS: a('s'), action: a('action'), cdata: a('cdata'), callback: a('callback'), frameUrls: []};
+    list.push(w);
+    if (list === widgets) roots.push(e);
+    return w;
+};
+for (const e of all('.g-recaptcha[data-sitekey], .cf-turnstile, .h-captcha')) {
+    const kind = e.matches('.cf-turnstile') ? 'turnstile' : e.matches('.h-captcha') ? 'hcaptcha' : 'recaptcha_v2';
+    if (visible(e) || (kind === 'recaptcha_v2' && e.dataset.size === 'invisible'))
+        add(e, kind, kind === 'recaptcha_v2' ? (e.dataset.size === 'invisible' ? 'widget_only' : 'unknown') : 'active');
+}
+for (const [selector, kind] of [['textarea[name="g-recaptcha-response"]', 'recaptcha_v2'], ['input[name="cf-turnstile-response"]', 'turnstile']]) {
+    for (const e of all(selector)) {
+        if (kind === 'recaptcha_v2' && e.parentElement?.querySelector('textarea[name="h-captcha-response"]')) continue;
+        if (closest(e, '.g-recaptcha, .cf-turnstile, .h-captcha')) continue;
+        // Both vendors render the response field beside the wrapper of the widget's iframe.
+        const parent = e.parentElement;
+        add(parent && all(selector, parent).length === 1 ? parent : e, kind, 'unknown');
+    }
+}
+const goku = vendor ? vendor.goku : null;
+const awsAddress = addresses.some(raw => /(^|\.)captcha\.awswaf\.com$/.test(new URL(raw).hostname));
+const awsCaptcha = goku === true || awsAddress;
+for (const [selector, kind] of [['[class*="geetest_"]', 'geetest'],
+    ['awswaf-captcha, [id*="awswaf"], [class*="awswaf"]' + (awsCaptcha ? ', #captcha-container' : ''), 'aws_waf'],
+    ['[id*="funcaptcha"], [class*="funcaptcha"], [data-pkey]', 'arkose']]) {
+    const e = all(selector).find(e => visible(e));
+    if (e) add(e, kind, 'active');
+}
+// A child document's own gokuProps is read in its page world only when this finds something.
+if (goku === null && !awsAddress && !widgets.some(w => w.kind === 'aws_waf')) {
+    const e = all('#captcha-container').find(e => visible(e));
+    if (e) add(e, 'aws_waf', 'active', candidates);
+}
+for (const f of all('iframe')) {
+    if (!vendorHost(f.src)) continue;
+    for (let p = f.parentElement || f.getRootNode().host; p; p = p.parentElement || p.getRootNode().host) {
+        const i = roots.indexOf(p);
+        if (i >= 0) { widgets[i].frameUrls.push(f.src); break; }
+    }
+}
+for (const e of all('iframe')) frames.push({url: e.src, visible: visible(e, /\/bframe(?:\?|$)/.test(e.src))});
+const anchor = all('#recaptcha-anchor')[0];
+const checked = anchor ? anchor.getAttribute('aria-checked') === 'true' : null;
+const expired = !!anchor && anchor.classList.contains('recaptcha-checkbox-expired');
+"#;
+
+/// The page's own CAPTCHA settings, read in its main world as JSON. No DOM call: elements a
+/// grecaptcha client holds are counted, never touched. A setting is passed on whole: a shortened
+/// one would reach a provider as if it were the page's.
+const VENDOR_SCAN: &str = r#"(() => { /* captcha:vendor */
+let complete = true;
+const text = v => typeof v === 'string' ? v : null;
+const raw = window.___grecaptcha_cfg?.clients || {};
+const keys = Object.keys(raw);
+if (keys.length > 64) complete = false;
+const clients = [];
+for (const key of keys.slice(0, 64)) {
+    const meta = {}, seen = new WeakSet(), queue = [[raw[key], 0]];
+    let count = 0, nodes = 0;
+    while (queue.length && count++ < 256) {
+        const [value, depth] = queue.shift();
+        if (!value || typeof value !== 'object' || seen.has(value)) continue;
+        seen.add(value);
+        if (value instanceof Element) { nodes++; continue; }
+        if (depth > 6) { complete = false; continue; }
+        for (const [k, descriptor] of Object.entries(Object.getOwnPropertyDescriptors(value))) {
+            if (!('value' in descriptor)) continue;
+            const v = descriptor.value;
+            if (['sitekey', 'action', 's', 'size', 'callback', 'promise-callback'].includes(k)) {
+                const dest = k === 's' ? 'recaptchaS' : k === 'promise-callback' ? 'callback' : k;
+                if (typeof v === 'string') meta[dest] = v;
+                if (dest === 'callback' && typeof v === 'function') meta.callback = '<inline>';
+            }
+            if (v && typeof v === 'object') queue.push([v, depth + 1]);
+        }
+    }
+    if (queue.length) complete = false;
+    clients.push({...meta, id: /^\d{1,9}$/.test(key) ? Number(key) : null, nodes});
+}
+return {complete, enterprise: !!window.grecaptcha?.enterprise, clients,
+    turnstile: typeof window.turnstile !== 'undefined', geetest: typeof window.initGeetest === 'function',
+    awsWaf: typeof window.AwsWafCaptcha !== 'undefined', arkose: typeof window.ArkoseEnforcement !== 'undefined',
+    goku: typeof window.gokuProps !== 'undefined', awsKey: text(window.gokuProps?.key) || text(window.apiKey),
+    cfChlOpt: !!window._cf_chl_opt};
+})()"#;
+
+/// One child document's AWS settings, read in its main world when its DOM scan found a
+/// `#captcha-container` that only `gokuProps` makes an AWS widget.
+const VENDOR_GATE: &str = "(() => { /* captcha:gate */ const text = v => typeof v === 'string' ? v : null; return {goku: typeof window.gokuProps !== 'undefined', awsKey: text(window.gokuProps?.key) || text(window.apiKey)}; })()";
+
+/// The top document's join of the vendor settings with its DOM, after `DOM_SCAN`.
+const JOIN_SCAN: &str = r#"
+const enterprise = !!vendor.enterprise;
+const renderUrl = all('script[src]').map(e => { try { return new URL(e.src); } catch { return null; } })
+    .find(u => u && /\/recaptcha\/(api|enterprise)\.js$/.test(u.pathname) && u.searchParams.get('render') && u.searchParams.get('render') !== 'explicit');
+const renderKey = renderUrl?.searchParams.get('render') || null;
+// reCAPTCHA names a widget's response field after the client id it returned from render().
+const widgetId = i => {
+    const r = roots[i];
+    if (!r || !widgets[i].kind.startsWith('recaptcha')) return null;
+    const field = r.matches('textarea[name="g-recaptcha-response"]') ? r : all('textarea[name="g-recaptcha-response"]', r)[0];
+    const m = field && /^g-recaptcha-response(?:-(\d+))?$/.exec(field.id);
+    return m ? Number(m[1] ?? 0) : null;
+};
+const ids = widgets.map((w, i) => widgetId(i));
+const configured = new Set();
+const unique = test => {
+    const found = widgets.flatMap((w, i) => !configured.has(i) && w.kind.startsWith('recaptcha') && test(i) ? [i] : []);
+    if (found.length > 1) complete = false;
+    return found.length === 1 ? found[0] : found.length ? null : -1;
+};
+const configs = (vendor.clients || []).map(meta => ({meta, v3: !!renderKey && (!meta.sitekey || meta.sitekey === renderKey)}));
+configs.sort((a, b) => Number(!a.meta.nodes) - Number(!b.meta.nodes));
+for (const {meta, v3} of configs) {
+    const {id} = meta;
+    let index = id == null ? -1 : unique(i => ids[i] === id);
+    if (index === -1 && meta.sitekey) index = unique(i => ids[i] == null && widgets[i].sitekey === meta.sitekey);
+    if (index === null) continue;
+    if (index === -1) {
+        if (!v3 && meta.size !== 'invisible' && meta.nodes) continue;
+        add(null, v3 ? 'recaptcha_v3' : 'recaptcha_v2', 'widget_only'); index = widgets.length - 1;
+    } else if (!visible(roots[index]) && meta.size !== 'invisible' && !v3) continue;
+    configured.add(index);
+    const w = widgets[index];
+    for (const key of ['sitekey', 'action', 'recaptchaS', 'callback']) w[key] ||= meta[key] || null;
+    w.invisible ||= meta.size === 'invisible';
+    if (w.invisible && w.state === 'unknown') w.state = 'widget_only';
+    w.enterprise = enterprise || !!renderUrl?.pathname.includes('enterprise');
+    if (v3) { w.kind = 'recaptcha_v3'; w.state = 'widget_only'; }
+}
+if (!widgets.some(w => w.kind.startsWith('recaptcha')) && (renderKey || all('.grecaptcha-badge').some(e => visible(e)))) {
+    const w = add(null, 'recaptcha_v3', 'widget_only'); w.sitekey = renderKey; w.enterprise = enterprise;
+}
+for (const w of widgets.filter(w => w.kind.startsWith('recaptcha'))) w.enterprise ||= enterprise;
+if (vendor.turnstile && !widgets.some(w => w.kind === 'turnstile')) add(null, 'turnstile', 'widget_only');
+for (const [present, kind] of [[vendor.geetest, 'geetest'], [vendor.awsWaf, 'aws_waf'], [vendor.arkose, 'arkose']])
+    if (present && !widgets.some(w => w.kind === kind)) add(null, kind, 'widget_only');
+for (const w of widgets.filter(w => w.kind === 'aws_waf')) w.sitekey ||= vendor.awsKey || null;
+// A Cloudflare wall loads the page's own challenge script. Bot management's background script
+// (/cdn-cgi/challenge-platform/scripts/precursor/) sets _cf_chl_opt on ordinary pages too.
+const challengeScript = all('script[src]').some(e => {
+    try { const u = new URL(e.src); return u.origin === location.origin && /^\/cdn-cgi\/challenge-platform\/h\/[^/]+\/orchestrate\/(chl_page|jsch|managed|captcha)\//.test(u.pathname); }
+    catch { return false; }
+});
+const wall = /^Just a moment/i.test(document.title) || all('#challenge-form').length > 0 || challengeScript
+    || location.pathname.startsWith('/cdn-cgi/challenge-platform/');
+if (wall || vendor.cfChlOpt) add(null, 'cloudflare_challenge', 'active').marker = !wall;
+"#;
+
+/// The DOM function `CaptchaPage::scan_dom` runs. `vendor` is the top document's settings;
+/// `None` scans a child document, whose settings stay unread.
+fn dom_script(vendor: Option<&Vendor>) -> String {
+    let settings = vendor
+        .and_then(|vendor| serde_json::to_string(vendor).ok())
+        .unwrap_or_else(|| "null".to_owned());
+    let join = if vendor.is_some() { JOIN_SCAN } else { "" };
+    format!(
+        "function(closedRoots, truncated) {{ /* captcha:dom */ const scope = document; const vendor = {settings}; {DOM_SCAN} {join} return {{widgets, candidates, frames, addresses, checked, expired, complete, top: window === window.top, url: location.href}}; }}"
+    )
+}
+
+#[derive(Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+struct Vendor {
+    complete: bool,
+    enterprise: bool,
+    clients: Vec<Client>,
+    turnstile: bool,
+    geetest: bool,
+    aws_waf: bool,
+    arkose: bool,
+    goku: bool,
+    aws_key: Option<String>,
+    cf_chl_opt: bool,
+}
+
+#[derive(Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+struct Client {
+    id: Option<u32>,
+    sitekey: Option<String>,
+    action: Option<String>,
+    recaptcha_s: Option<String>,
+    size: Option<String>,
+    callback: Option<String>,
+    nodes: u32,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+struct Gate {
+    goku: bool,
+    aws_key: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct Probe {
+    widgets: Vec<Widget>,
+    #[serde(default)]
+    candidates: Vec<Widget>,
+    frames: Vec<Visibility>,
+    checked: Option<bool>,
+    expired: bool,
+    complete: bool,
+    #[serde(default)]
+    addresses: Vec<String>,
+    #[serde(default)]
+    top: bool,
+    url: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct Widget {
+    #[serde(flatten)]
+    challenge: Challenge,
+    #[serde(rename = "frameUrl")]
+    frame_url: Option<String>,
+    /// Every vendor-host iframe the widget's root owns, in document order.
+    #[serde(default, rename = "frameUrls")]
+    frame_urls: Vec<String>,
+    #[serde(default)]
+    inferred: bool,
+    /// A Cloudflare challenge seen only through bot management's `_cf_chl_opt`, which ordinary
+    /// pages carry too. It stands for a challenge only when the page shows nothing else.
+    #[serde(default)]
+    marker: bool,
+}
+
+impl Widget {
+    fn new(kind: CaptchaKind) -> Self {
+        Self {
+            challenge: Challenge {
+                kind,
+                state: ChallengeState::Unknown,
+                frame: None,
+                challenge_frame: None,
+                host_frame: None,
+                sitekey: None,
+                invisible: false,
+                enterprise: false,
+                recaptcha_s: None,
+                action: None,
+                cdata: None,
+                callback: None,
+            },
+            frame_url: None,
+            frame_urls: vec![],
+            inferred: true,
+            marker: false,
+        }
+    }
+
+    /// The first owned iframe of this widget's own kind.
+    fn own_frame(&mut self) {
+        if self.frame_url.is_none() {
+            let kind = self.challenge.kind;
+            self.frame_url = self.frame_urls.iter().find_map(|raw| {
+                frame_kind(raw)
+                    .filter(|(frame, _)| matches_kind(*frame, kind))
+                    .map(|_| raw.clone())
+            });
+        }
+    }
+
+    fn merge(&mut self, mut other: Self) {
+        let state = if self.challenge.challenge_frame.is_some()
+            || other.challenge.challenge_frame.is_some()
+        {
+            ChallengeState::Active
+        } else {
+            [self.challenge.state, other.challenge.state]
+                .into_iter()
+                .max_by_key(|state| match state {
+                    ChallengeState::Passed => 3,
+                    ChallengeState::Active => 2,
+                    ChallengeState::Unknown => 1,
+                    ChallengeState::WidgetOnly => 0,
+                })
+                .unwrap_or(ChallengeState::WidgetOnly)
+        };
+        if self.inferred && !other.inferred {
+            std::mem::swap(self, &mut other);
+        }
+        let w = &mut self.challenge;
+        let extra = other.challenge;
+        w.state = state;
+        w.frame = w.frame.take().or(extra.frame);
+        w.challenge_frame = w.challenge_frame.take().or(extra.challenge_frame);
+        w.sitekey = w.sitekey.take().or(extra.sitekey);
+        w.recaptcha_s = w.recaptcha_s.take().or(extra.recaptcha_s);
+        w.action = w.action.take().or(extra.action);
+        w.cdata = w.cdata.take().or(extra.cdata);
+        w.callback = w.callback.take().or(extra.callback);
+        w.enterprise |= extra.enterprise;
+        w.invisible |= extra.invisible;
+        self.frame_url = self.frame_url.take().or(other.frame_url);
+    }
+}
+
+#[derive(Deserialize)]
+struct Visibility {
+    url: String,
+    visible: bool,
+    #[serde(skip)]
+    host_frame: Option<FrameRef>,
+}
+
+async fn bounded<T>(
+    deadline: Instant,
+    future: impl Future<Output = Result<T, PageError>>,
+) -> Result<T, PageError> {
+    timeout_at(deadline, future)
+        .await
+        .map_err(|_| PageError::Timeout)?
+}
+
+fn partial<T>(result: Result<T, PageError>, complete: &mut bool) -> Result<Option<T>, PageError> {
+    match result {
+        Ok(value) => Ok(Some(value)),
+        Err(error @ (PageError::Closed | PageError::Cancelled)) => Err(error),
+        Err(_) => {
+            *complete = false;
+            Ok(None)
+        }
+    }
+}
+
+fn decode<T: serde::de::DeserializeOwned>(value: Value) -> Result<T, PageError> {
+    serde_json::from_value(value).map_err(|_| PageError::Browser("invalid CAPTCHA scan".into()))
+}
+
+fn decode_probe(value: Value) -> Result<Probe, PageError> {
+    let mut probe: Probe = decode(value)?;
+    for widget in probe.widgets.iter_mut().chain(&mut probe.candidates) {
+        widget.own_frame();
+    }
+    Ok(probe)
+}
+
+/// A vendor frame of `frame` kind can belong to a widget of `widget` kind.
+fn matches_kind(frame: CaptchaKind, widget: CaptchaKind) -> bool {
+    frame == widget || (frame == CaptchaKind::RecaptchaV2 && widget == CaptchaKind::RecaptchaV3)
+}
+
+/// Page.getFrameTree omits the fragment that `location.href` keeps.
+fn same_document(a: &str, b: &str) -> bool {
+    a.split('#').next() == b.split('#').next()
+}
+
+pub async fn detect(page: &impl CaptchaPage, budget: Duration) -> Result<Detection, PageError> {
+    let deadline = Instant::now() + budget;
+    let mut document = bounded(deadline, page.document()).await?;
+    let mut retried = false;
+    loop {
+        let (mut widgets, complete) = scan(page, deadline).await?;
+        let mut result = Detection {
+            outcome: ScanOutcome::Unknown,
+            challenges: vec![],
+            complete,
+            document: document.clone(),
+        };
+        match bounded(deadline, page.document()).await {
+            Ok(after) if after != document => {
+                document = after;
+                if !retried && Instant::now() < deadline {
+                    retried = true;
+                    continue;
+                }
+                result.document = document;
+                result.complete = false;
+                return Ok(result);
+            }
+            other => {
+                partial(other, &mut result.complete)?;
+            }
+        }
+        result.complete &= Instant::now() < deadline;
+        result.challenges = widgets.drain(..).map(|w| w.challenge).collect();
+        result.outcome = if !result.challenges.is_empty() {
+            ScanOutcome::Detected
+        } else if result.complete {
+            ScanOutcome::None
+        } else {
+            ScanOutcome::Unknown
+        };
+        return Ok(result);
+    }
+}
+
+async fn scan(
+    page: &impl CaptchaPage,
+    deadline: Instant,
+) -> Result<(Vec<Widget>, bool), PageError> {
+    let mut complete = true;
+    let mut widgets = Vec::new();
+    let mut visibility = Vec::new();
+    let mut addresses = Vec::new();
+    let mut top_url = None;
+    let vendor = partial(
+        bounded(deadline, page.eval_main(VENDOR_SCAN))
+            .await
+            .and_then(decode::<Vendor>),
+        &mut complete,
+    )?
+    .map_or_else(Vendor::default, |vendor| {
+        complete &= vendor.complete;
+        vendor
+    });
+    if let Some(probe) = partial(
+        bounded(deadline, page.scan_dom(None, &dom_script(Some(&vendor))))
+            .await
+            .and_then(decode_probe),
+        &mut complete,
+    )? {
+        complete &= probe.complete;
+        widgets = probe.widgets;
+        visibility = probe.frames;
+        addresses.extend(probe.addresses.into_iter().map(|url| (url, None)));
+        top_url = probe.url;
+    }
+    let frames =
+        partial(bounded(deadline, page.frames()).await, &mut complete)?.unwrap_or_default();
+    let parents = partial(
+        bounded(deadline, page.frame_parent_ids()).await,
+        &mut complete,
+    )?
+    .unwrap_or_default();
+    let is_top = |frame: &FrameRef, probe: Option<&Probe>| {
+        probe.is_some_and(|p| p.top)
+            || (frames.first() == Some(frame)
+                && top_url
+                    .as_deref()
+                    .is_some_and(|url| same_document(url, &frame.url)))
+    };
+    let mut probes = Vec::with_capacity(frames.len());
+    for widget in &mut widgets {
+        let w = &mut widget.challenge;
+        if w.kind == CaptchaKind::RecaptchaV2
+            && !w.invisible
+            && w.state == ChallengeState::WidgetOnly
+        {
+            w.state = ChallengeState::Unknown;
+        }
+    }
+    let dom = dom_script(None);
+    for frame in &frames {
+        if is_top(frame, None) {
+            probes.push(None);
+            continue;
+        }
+        if Instant::now() >= deadline {
+            complete = false;
+            probes.push(None);
+            continue;
+        }
+        let mut probe = partial(
+            bounded(deadline, page.scan_dom(Some(frame), &dom))
+                .await
+                .and_then(decode_probe),
+            &mut complete,
+        )?;
+        if let Some(probe) = &probe {
+            complete &= probe.complete;
+        }
+        if let Some(probe) = probe.as_mut().filter(|p| !p.top) {
+            if !probe.candidates.is_empty()
+                && let Some(gate) = partial(
+                    bounded(deadline, page.eval_in_frame_main(frame, VENDOR_GATE))
+                        .await
+                        .and_then(decode::<Gate>),
+                    &mut complete,
+                )?
+                && gate.goku
+            {
+                for mut candidate in probe.candidates.drain(..) {
+                    let key = &mut candidate.challenge.sitekey;
+                    *key = key.take().or_else(|| gate.aws_key.clone());
+                    probe.widgets.push(candidate);
+                }
+            }
+            append_probe(
+                probe,
+                Some(frame.clone()),
+                &mut widgets,
+                &mut visibility,
+                &mut addresses,
+            );
+        }
+        probes.push(probe);
+    }
+    for (raw, host) in addresses {
+        let Some((kind, url)) = frame_kind(&raw) else {
+            continue;
+        };
+        let key = sitekey(kind, &url);
+        let mut same: Vec<_> = widgets
+            .iter_mut()
+            .filter(|w| {
+                w.challenge.host_frame == host
+                    && (w.challenge.kind == kind
+                        || (kind == CaptchaKind::RecaptchaV2
+                            && w.challenge.kind == CaptchaKind::RecaptchaV3))
+            })
+            .collect();
+        if !same.is_empty() {
+            // A script address names no widget: its key goes only where no other could.
+            if let [widget] = same
+                .iter_mut()
+                .filter(|w| w.challenge.sitekey.is_none())
+                .collect::<Vec<_>>()
+                .as_mut_slice()
+            {
+                widget.challenge.sitekey = key;
+            }
+        } else {
+            let mut widget = Widget::new(kind);
+            widget.challenge.state = ChallengeState::WidgetOnly;
+            widget.challenge.host_frame = host;
+            widget.challenge.sitekey = key;
+            widgets.push(widget);
+        }
+    }
+    // Cloudflare is challenging the page as a whole: its Turnstile is that wall's own checkbox.
+    let full_page = widgets
+        .iter()
+        .any(|w| w.challenge.kind == CaptchaKind::CloudflareChallenge && !w.marker);
+    if full_page {
+        widgets.retain(|w| w.challenge.kind != CaptchaKind::Turnstile);
+    }
+    // A widget whose iframe address names no frame here (the frame tree reports another URL than
+    // `iframe.src`) is still frameless for the fallback below.
+    let frame_urls: std::collections::HashSet<&str> = frames
+        .iter()
+        .zip(&probes)
+        .filter(|(frame, probe)| !is_top(frame, probe.as_ref()))
+        .map(|(frame, probe)| {
+            probe
+                .as_ref()
+                .and_then(|p| p.url.as_deref())
+                .unwrap_or(&frame.url)
+        })
+        .collect();
+    for (frame, probe) in frames.iter().zip(&probes) {
+        if is_top(frame, probe.as_ref()) {
+            continue;
+        }
+        // Page.getFrameTree omits URL fragments used to identify hCaptcha widgets.
+        let frame_url = probe
+            .as_ref()
+            .and_then(|p| p.url.as_deref())
+            .unwrap_or(&frame.url);
+        let Some((kind, url)) = frame_kind(frame_url) else {
+            continue;
+        };
+        if url.path().ends_with("/bframe") || (full_page && kind == CaptchaKind::Turnstile) {
+            continue;
+        }
+        let invisible = param(&url, "size").as_deref() == Some("invisible");
+        if !invisible
+            && frame
+                .rect
+                .is_some_and(|r| r.width <= 0.0 || r.height <= 0.0)
+        {
+            continue;
+        }
+        let owners: Vec<_> = visibility.iter().filter(|v| v.url == frame_url).collect();
+        // Iframes that share this address leave which of them this frame is unknown, unless
+        // every one is hidden.
+        if owners.len() > 1 && (invisible || owners.iter().any(|v| v.visible)) {
+            complete = false;
+        }
+        if !invisible && owners.iter().any(|v| !v.visible) {
+            continue;
+        }
+        let sitekey = sitekey(kind, &url);
+        let owner = match owners.as_slice() {
+            [owner] => Some(*owner),
+            _ => None,
+        };
+        let host = owner.and_then(|v| v.host_frame.clone());
+        let matches_kind = |w: &Widget| matches_kind(kind, w.challenge.kind);
+        let index = widgets
+            .iter()
+            .position(|w| {
+                matches_kind(w)
+                    && w.challenge.host_frame == host
+                    && w.challenge.frame.is_none()
+                    && w.frame_url.as_deref() == Some(frame_url)
+            })
+            .or_else(|| {
+                let compatible: Vec<_> = widgets
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, w)| {
+                        matches_kind(w)
+                            && w.challenge.host_frame == host
+                            && w.challenge.frame.is_none()
+                            && w.frame_url
+                                .as_ref()
+                                .is_none_or(|url| !frame_urls.contains(url.as_str()))
+                            && (w.challenge.sitekey.is_none() || w.challenge.sitekey == sitekey)
+                    })
+                    .map(|(index, _)| index)
+                    .collect();
+                if compatible.len() > 1 {
+                    complete = false;
+                }
+                match compatible.as_slice() {
+                    [index] => Some(*index),
+                    _ => None,
+                }
+            });
+        let index = index.unwrap_or_else(|| {
+            widgets.push(Widget::new(kind));
+            widgets.len() - 1
+        });
+        let w = &mut widgets[index].challenge;
+        w.frame = Some(frame.clone());
+        w.host_frame = host;
+        w.invisible |= invisible;
+        w.enterprise |= url.path().contains("/enterprise/");
+        w.sitekey = w.sitekey.take().or(sitekey);
+        w.action = w
+            .action
+            .take()
+            .or_else(|| param(&url, "sa"))
+            .or_else(|| param(&url, "action"));
+        w.recaptcha_s = w.recaptcha_s.take().or_else(|| param(&url, "s"));
+        w.cdata = w.cdata.take().or_else(|| param(&url, "cData"));
+        if w.kind == CaptchaKind::RecaptchaV3 {
+            w.state = ChallengeState::WidgetOnly;
+        } else if kind == CaptchaKind::RecaptchaV2 {
+            if let Some(probe) = probe {
+                w.state = if probe.expired {
+                    ChallengeState::Active
+                } else if probe.checked == Some(true) || w.state == ChallengeState::Passed {
+                    ChallengeState::Passed
+                } else if w.invisible {
+                    ChallengeState::WidgetOnly
+                } else if probe.checked == Some(false) {
+                    ChallengeState::Active
+                } else {
+                    ChallengeState::Unknown
+                };
+            }
+        } else if kind == CaptchaKind::Hcaptcha && w.state == ChallengeState::WidgetOnly {
+            w.state = ChallengeState::Unknown;
+        } else if kind == CaptchaKind::Turnstile && w.state != ChallengeState::Passed {
+            w.state = ChallengeState::Active;
+        } else if matches!(
+            kind,
+            CaptchaKind::Geetest | CaptchaKind::AwsWaf | CaptchaKind::Arkose
+        ) && w.state != ChallengeState::Passed
+        {
+            w.state = if owner.is_some_and(|v| v.visible)
+                || frame.rect.is_some_and(|r| r.width > 0.0 && r.height > 0.0)
+            {
+                ChallengeState::Active
+            } else {
+                ChallengeState::WidgetOnly
+            };
+        }
+    }
+    for frame in &frames {
+        let Some((CaptchaKind::RecaptchaV2, url)) = frame_kind(&frame.url) else {
+            continue;
+        };
+        if !url.path().ends_with("/bframe") {
+            continue;
+        }
+        let visible = visibility
+            .iter()
+            .find(|v| v.url == frame.url)
+            .map(|v| v.visible);
+        if visible.is_none() && frame.rect.is_some_and(|r| r.width > 0.0 && r.height > 0.0) {
+            complete = false;
+        }
+        if visible != Some(true)
+            || frame.rect.is_some_and(|r| {
+                r.width <= 0.0 || r.height <= 0.0 || r.x + r.width <= 0.0 || r.y + r.height <= 0.0
+            })
+        {
+            continue;
+        }
+        let sitekey = param(&url, "k");
+        if !widgets.iter().any(|w| {
+            w.challenge.kind == CaptchaKind::RecaptchaV2
+                && (sitekey.is_none() || w.challenge.sitekey == sitekey)
+        }) {
+            let mut widget = Widget::new(CaptchaKind::RecaptchaV2);
+            widget.challenge.sitekey = sitekey.clone();
+            widget.challenge.enterprise = url.path().contains("/enterprise/");
+            widgets.push(widget);
+        }
+        let mut candidates: Vec<_> = widgets
+            .iter_mut()
+            .filter(|w| {
+                w.challenge.kind == CaptchaKind::RecaptchaV2
+                    && (sitekey.is_none() || w.challenge.sitekey == sitekey)
+            })
+            .collect();
+        if let [widget] = candidates.as_mut_slice() {
+            widget.challenge.challenge_frame = Some(frame.clone());
+            widget.challenge.state = ChallengeState::Active;
+        } else {
+            complete = false;
+        }
+    }
+    let top = frames
+        .iter()
+        .zip(&probes)
+        .find(|(frame, probe)| is_top(frame, probe.as_ref()))
+        .map(|(frame, _)| frame.frame_id.as_str());
+    let mut widgets =
+        fold_vendor_widgets(widgets, &frames, &parents, top, &visibility, &mut complete);
+    // Only now are the widgets in frames and closed shadow roots known, so only here can the
+    // marker yield to a CAPTCHA the page actually shows. A provider script that is only loaded
+    // (`widget_only`) shows nothing, so the marker's challenge stands beside it.
+    if widgets
+        .iter()
+        .any(|w| !w.marker && w.challenge.state != ChallengeState::WidgetOnly)
+    {
+        widgets.retain(|w| !w.marker);
+    }
+    Ok((widgets, complete))
+}
+
+fn vendor_owner(
+    source: &FrameRef,
+    frames: &[FrameRef],
+    parents: &std::collections::HashMap<String, String>,
+    top: Option<&str>,
+    complete: &mut bool,
+) -> (Option<FrameRef>, Option<FrameRef>) {
+    let mut current = Some(source);
+    let mut outer = None;
+    let mut seen = std::collections::HashSet::new();
+    while let Some(frame) = current {
+        if Some(frame.frame_id.as_str()) == top {
+            return (None, outer);
+        }
+        if !seen.insert(frame.frame_id.as_str()) {
+            *complete = false;
+            break;
+        }
+        if frame_kind(&frame.url).is_none() {
+            return (Some(frame.clone()), outer);
+        }
+        outer = Some(frame.clone());
+        current = parents
+            .get(&frame.frame_id)
+            .and_then(|id| frames.iter().find(|f| &f.frame_id == id));
+    }
+    (None, outer)
+}
+
+fn fold_vendor_widgets(
+    widgets: Vec<Widget>,
+    frames: &[FrameRef],
+    parents: &std::collections::HashMap<String, String>,
+    top: Option<&str>,
+    visibility: &[Visibility],
+    complete: &mut bool,
+) -> Vec<Widget> {
+    let mut folded: Vec<Widget> = Vec::new();
+    let mut inferred = Vec::new();
+    for mut widget in widgets {
+        let w = &mut widget.challenge;
+        if let Some(source) = w
+            .frame
+            .as_ref()
+            .or(w.challenge_frame.as_ref())
+            .or(w.host_frame.as_ref())
+        {
+            let (host, outer) = vendor_owner(source, frames, parents, top, complete);
+            w.host_frame = host;
+            if let Some(outer) = outer {
+                if let Some((kind, _)) = frame_kind(&outer.url)
+                    && !(kind == CaptchaKind::RecaptchaV2 && w.kind == CaptchaKind::RecaptchaV3)
+                {
+                    w.kind = kind;
+                }
+                if w.state != ChallengeState::Passed
+                    && w.challenge_frame.is_none()
+                    && (outer
+                        .rect
+                        .is_some_and(|r| r.width <= 0.0 || r.height <= 0.0)
+                        || visibility.iter().any(|v| v.url == outer.url && !v.visible))
+                {
+                    w.state = ChallengeState::WidgetOnly;
+                }
+                w.frame = Some(outer);
+            }
+        }
+        if widget.inferred && w.frame.is_none() {
+            inferred.push(widget);
+            continue;
+        }
+        let existing = folded.iter_mut().find(|other| {
+            let a = &other.challenge;
+            a.kind == w.kind
+                && a.host_frame == w.host_frame
+                && w.frame.as_ref().is_some_and(|f| {
+                    a.frame.as_ref().is_some_and(|o| o.frame_id == f.frame_id)
+                        || a.challenge_frame
+                            .as_ref()
+                            .is_some_and(|o| o.frame_id == f.frame_id)
+                })
+        });
+        if let Some(existing) = existing {
+            existing.merge(widget);
+        } else {
+            folded.push(widget);
+        }
+    }
+    for widget in inferred {
+        let w = &widget.challenge;
+        let candidates: Vec<_> = folded
+            .iter_mut()
+            .filter(|other| {
+                let a = &other.challenge;
+                a.kind == w.kind
+                    && a.host_frame == w.host_frame
+                    && (a.sitekey.is_none() || w.sitekey.is_none() || a.sitekey == w.sitekey)
+            })
+            .collect();
+        if candidates.is_empty() {
+            folded.push(widget);
+        } else {
+            for candidate in candidates {
+                candidate.merge(Widget {
+                    challenge: widget.challenge.clone(),
+                    frame_url: widget.frame_url.clone(),
+                    frame_urls: vec![],
+                    inferred: true,
+                    marker: widget.marker,
+                });
+            }
+        }
+    }
+    folded
+}
+
+fn append_probe(
+    probe: &mut Probe,
+    host: Option<FrameRef>,
+    widgets: &mut Vec<Widget>,
+    visibility: &mut Vec<Visibility>,
+    addresses: &mut Vec<(String, Option<FrameRef>)>,
+) {
+    for mut widget in probe.widgets.drain(..) {
+        widget.challenge.host_frame = host.clone();
+        if let Some(existing) = widgets.iter_mut().find(|w| {
+            w.challenge.kind == widget.challenge.kind
+                && w.challenge.host_frame == host
+                && (w.inferred
+                    || widget.inferred
+                    || (w.frame_url.is_some() && w.frame_url == widget.frame_url))
+        }) {
+            existing.merge(widget);
+        } else {
+            widgets.push(widget);
+        }
+    }
+    for frame in &mut probe.frames {
+        frame.host_frame = host.clone();
+    }
+    visibility.append(&mut probe.frames);
+    addresses.extend(probe.addresses.drain(..).map(|url| (url, host.clone())));
+}
+
+fn sitekey(kind: CaptchaKind, url: &Url) -> Option<String> {
+    param(url, "k")
+        .or_else(|| param(url, "sitekey"))
+        .or_else(|| match kind {
+            CaptchaKind::Geetest => param(url, "captcha_id").or_else(|| param(url, "gt")),
+            CaptchaKind::AwsWaf => param(url, "apiKey"),
+            CaptchaKind::Arkose => url
+                .path()
+                .strip_prefix("/v2/")?
+                .strip_suffix("/api.js")
+                .filter(|s| !s.is_empty() && !s.contains('/'))
+                .map(str::to_owned),
+            _ => None,
+        })
+        .or_else(|| {
+            url.path_segments()?
+                .find(|s| s.starts_with("0x") || (s.starts_with(['1', '2', '3']) && s.len() == 24))
+                .map(str::to_owned)
+        })
+}
+
+fn param(url: &Url, key: &str) -> Option<String> {
+    url.query_pairs()
+        .find(|(k, _)| k == key)
+        .map(|(_, v)| v.into_owned())
+}
+
+fn frame_kind(raw: &str) -> Option<(CaptchaKind, Url)> {
+    let url = Url::parse(raw).ok()?;
+    let host = url.host_str()?;
+    let domain = |name: &str| {
+        host == name
+            || host
+                .strip_suffix(name)
+                .is_some_and(|prefix| prefix.ends_with('.'))
+    };
+    let kind = if (domain("google.com") || domain("recaptcha.net"))
+        && [
+            "/recaptcha/api2/anchor",
+            "/recaptcha/enterprise/anchor",
+            "/recaptcha/api2/bframe",
+            "/recaptcha/enterprise/bframe",
+        ]
+        .contains(&url.path())
+    {
+        CaptchaKind::RecaptchaV2
+    } else if host == "challenges.cloudflare.com" {
+        CaptchaKind::Turnstile
+    } else if domain("hcaptcha.com") {
+        CaptchaKind::Hcaptcha
+    } else if domain("geetest.com") || domain("geevisit.com") {
+        CaptchaKind::Geetest
+    } else if domain("awswaf.com") {
+        CaptchaKind::AwsWaf
+    } else if domain("arkoselabs.com") || domain("arkoselabs.cn") || domain("funcaptcha.com") {
+        CaptchaKind::Arkose
+    } else {
+        return None;
+    };
+    Some((kind, url))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{collections::VecDeque, sync::Mutex};
+
+    use serde_json::{Value, json};
+
+    use super::*;
+    use crate::types::{CaptchaKind, ChallengeState, DocumentId, FrameRef, Rect, ScanOutcome};
+
+    struct FakePage {
+        main: Mutex<VecDeque<Value>>,
+        frames: Vec<FrameRef>,
+        frame_result: Result<Value, PageError>,
+        documents: Mutex<VecDeque<DocumentId>>,
+        frame_delay: Duration,
+        scripts: Mutex<Vec<String>>,
+        dom_calls: Mutex<Vec<(Option<String>, String)>>,
+        vendor: Result<Value, PageError>,
+        gates: std::collections::HashMap<String, Result<Value, PageError>>,
+        gate_calls: Mutex<Vec<String>>,
+        parent_ids: std::collections::HashMap<String, String>,
+        frame_results: std::collections::HashMap<String, Value>,
+    }
+
+    fn document(loader: &str) -> DocumentId {
+        DocumentId {
+            url: "https://fixture.test/".into(),
+            loader_id: loader.into(),
+        }
+    }
+
+    fn probe(widgets: Value) -> Value {
+        json!({"widgets": widgets, "frames": [], "checked": null, "expired": false, "complete": true})
+    }
+
+    fn widget(kind: &str, state: &str) -> Value {
+        json!({"kind": kind, "state": state, "invisible": false, "enterprise": false})
+    }
+
+    fn frame(id: &str, url: &str) -> FrameRef {
+        FrameRef {
+            frame_id: id.into(),
+            url: url.into(),
+            rect: Some(Rect {
+                x: 20.0,
+                y: 30.0,
+                width: 300.0,
+                height: 78.0,
+            }),
+        }
+    }
+
+    impl FakePage {
+        fn new(widgets: Value) -> Self {
+            Self {
+                main: Mutex::new(VecDeque::from([probe(widgets)])),
+                frames: vec![],
+                frame_result: Ok(probe(json!([]))),
+                documents: Mutex::new(VecDeque::from([document("a")])),
+                frame_delay: Duration::ZERO,
+                scripts: Mutex::new(vec![]),
+                dom_calls: Mutex::new(vec![]),
+                vendor: Ok(json!({"complete": true})),
+                gates: Default::default(),
+                gate_calls: Mutex::new(vec![]),
+                parent_ids: Default::default(),
+                frame_results: Default::default(),
+            }
+        }
+
+        fn recaptcha(checked: bool) -> Self {
+            let mut page = Self::new(json!([widget("recaptcha_v2", "unknown")]));
+            page.frames.push(frame(
+                "anchor",
+                "https://www.google.com/recaptcha/api2/anchor?k=key&sa=login",
+            ));
+            page.frame_result = Ok(
+                json!({"widgets":[], "frames":[], "checked":checked, "expired":false, "complete":true}),
+            );
+            page
+        }
+    }
+
+    impl CaptchaPage for FakePage {
+        async fn eval_main(&self, expression: &str) -> Result<Value, PageError> {
+            assert!(expression.contains("captcha:vendor"));
+            self.scripts
+                .lock()
+                .map_err(|e| PageError::Browser(e.to_string()))?
+                .push(expression.into());
+            self.vendor.clone()
+        }
+
+        async fn scan_dom(
+            &self,
+            frame: Option<&FrameRef>,
+            function: &str,
+        ) -> Result<Value, PageError> {
+            assert!(function.contains("captcha:dom"));
+            self.scripts
+                .lock()
+                .map_err(|e| PageError::Browser(e.to_string()))?
+                .push(function.into());
+            self.dom_calls
+                .lock()
+                .map_err(|e| PageError::Browser(e.to_string()))?
+                .push((frame.map(|f| f.frame_id.clone()), function.into()));
+            if let Some(frame) = frame {
+                return self
+                    .frame_results
+                    .get(&frame.frame_id)
+                    .cloned()
+                    .map_or_else(|| self.frame_result.clone(), Ok);
+            }
+            let mut values = self
+                .main
+                .lock()
+                .map_err(|e| PageError::Browser(e.to_string()))?;
+            Ok(if values.len() > 1 {
+                values.pop_front()
+            } else {
+                values.front().cloned()
+            }
+            .unwrap_or(Value::Null))
+        }
+
+        async fn frames(&self) -> Result<Vec<FrameRef>, PageError> {
+            tokio::time::sleep(self.frame_delay).await;
+            Ok(self.frames.clone())
+        }
+
+        async fn frame_parent_ids(
+            &self,
+        ) -> Result<std::collections::HashMap<String, String>, PageError> {
+            Ok(self.parent_ids.clone())
+        }
+
+        async fn eval_in_frame(
+            &self,
+            _frame: &FrameRef,
+            _expression: &str,
+        ) -> Result<Value, PageError> {
+            panic!("detection scans frames through scan_dom")
+        }
+
+        async fn eval_in_frame_main(
+            &self,
+            frame: &FrameRef,
+            expression: &str,
+        ) -> Result<Value, PageError> {
+            assert!(expression.contains("captcha:gate"));
+            self.scripts
+                .lock()
+                .map_err(|e| PageError::Browser(e.to_string()))?
+                .push(expression.into());
+            self.gate_calls
+                .lock()
+                .map_err(|e| PageError::Browser(e.to_string()))?
+                .push(frame.frame_id.clone());
+            self.gates
+                .get(&frame.frame_id)
+                .cloned()
+                .unwrap_or_else(|| Err(PageError::Browser("no gate".into())))
+        }
+
+        async fn document(&self) -> Result<DocumentId, PageError> {
+            let mut values = self
+                .documents
+                .lock()
+                .map_err(|e| PageError::Browser(e.to_string()))?;
+            if values.len() > 1 {
+                values.pop_front()
+            } else {
+                values.front().cloned()
+            }
+            .ok_or(PageError::Closed)
+        }
+
+        async fn click_at(&self, _x: f64, _y: f64) -> Result<(), PageError> {
+            panic!("detection clicked")
+        }
+        async fn screenshot_clip(&self, _rect: Rect) -> Result<String, PageError> {
+            panic!("detection captured an image")
+        }
+        async fn query_rect_in_frame(
+            &self,
+            _frame: &FrameRef,
+            _selector: &str,
+        ) -> Result<Option<Rect>, PageError> {
+            panic!("detection used non-scan operations")
+        }
+    }
+
+    async fn scan(page: &FakePage) -> Result<Detection, PageError> {
+        detect(page, Duration::from_secs(2)).await
+    }
+
+    #[tokio::test]
+    async fn tests_that_closed_shadow_widgets_keep_their_host_frame() -> Result<(), PageError> {
+        for kind in ["geetest", "aws_waf", "arkose"] {
+            let mut page = FakePage::new(json!([]));
+            let host = frame("host", "https://fixture.test/child");
+            page.frames.push(host.clone());
+            page.frame_result = Ok(probe(json!([widget(kind, "active")])));
+            let result = scan(&page).await?;
+            assert!(result.complete);
+            assert_eq!(result.challenges.len(), 1);
+            assert_eq!(result.challenges[0].kind.as_str(), kind);
+            assert_eq!(result.challenges[0].state, ChallengeState::Active);
+            assert_eq!(result.challenges[0].host_frame, Some(host));
+            assert!(result.challenges[0].frame.is_none());
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_visible_child_widgets_keep_their_host_frame() -> Result<(), PageError> {
+        let mut page = FakePage::new(json!([]));
+        let host = frame("host", "https://fixture.test/child");
+        page.frames.push(host.clone());
+        page.frame_result = Ok(probe(json!([widget("geetest", "active")])));
+        let result = scan(&page).await?;
+        assert_eq!(result.challenges.len(), 1);
+        assert_eq!(result.challenges[0].state, ChallengeState::Active);
+        assert_eq!(result.challenges[0].host_frame, Some(host));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_failed_child_dom_scans_are_incomplete_or_propagate() -> Result<(), PageError>
+    {
+        for error in [
+            PageError::Timeout,
+            PageError::Closed,
+            PageError::Cancelled,
+            PageError::Browser("miss".into()),
+        ] {
+            let mut page = FakePage::new(json!([widget("geetest", "active")]));
+            page.frames
+                .push(frame("host", "https://fixture.test/child"));
+            page.frame_result = Err(error.clone());
+            match scan(&page).await {
+                Ok(result) => {
+                    assert!(!matches!(error, PageError::Closed | PageError::Cancelled));
+                    assert!(!result.complete);
+                    assert_eq!(result.challenges[0].state, ChallengeState::Active);
+                }
+                Err(found) => {
+                    assert!(matches!(error, PageError::Closed | PageError::Cancelled));
+                    assert_eq!(found, error);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_vendor_settings_reach_only_the_top_document_scan() -> Result<(), PageError>
+    {
+        let mut page = FakePage::new(json!([]));
+        page.vendor = Ok(
+            json!({"complete": true, "awsKey": "vendor-key-7f3", "clients": [
+                {"id": 0, "sitekey": "client-key", "nodes": 2}
+            ]}),
+        );
+        page.frames
+            .push(frame("host", "https://fixture.test/child"));
+        scan(&page).await?;
+        let calls = page
+            .dom_calls
+            .lock()
+            .map_err(|e| PageError::Browser(e.to_string()))?
+            .clone();
+        assert_eq!(calls.len(), 2);
+        let (top, child) = (&calls[0], &calls[1]);
+        assert_eq!(top.0, None);
+        assert!(top.1.contains("vendor-key-7f3") && top.1.contains("client-key"));
+        assert!(top.1.contains("configs"), "the top scan joins the clients");
+        assert_eq!(child.0.as_deref(), Some("host"));
+        assert!(child.1.contains("const vendor = null;"));
+        assert!(!child.1.contains("vendor-key-7f3") && !child.1.contains("configs"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_a_failed_vendor_read_still_scans_the_dom() -> Result<(), PageError> {
+        for vendor in [
+            Err(PageError::Browser("main world refused".into())),
+            Ok(json!("not settings")),
+            Ok(json!({"complete": false})),
+        ] {
+            let mut page = FakePage::new(json!([widget("turnstile", "active")]));
+            page.vendor = vendor;
+            let result = scan(&page).await?;
+            assert!(!result.complete);
+            assert_eq!(result.challenges.len(), 1);
+            assert_eq!(result.challenges[0].kind, CaptchaKind::Turnstile);
+            let calls = page
+                .dom_calls
+                .lock()
+                .map_err(|e| PageError::Browser(e.to_string()))?
+                .clone();
+            assert!(calls[0].1.contains("const vendor = {"));
+        }
+        let mut page = FakePage::new(json!([]));
+        page.vendor = Err(PageError::Closed);
+        assert_eq!(scan(&page).await.err(), Some(PageError::Closed));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_child_candidates_need_that_childs_gate() -> Result<(), PageError> {
+        let host = frame("host", "https://fixture.test/child");
+        let mut candidate = widget("aws_waf", "passed");
+        candidate["candidate"] = json!(true);
+        for (gate, found, complete) in [
+            (
+                Some(Ok(json!({"goku": true, "awsKey": "child-key"}))),
+                true,
+                true,
+            ),
+            (
+                Some(Ok(json!({"goku": false, "awsKey": "unused"}))),
+                false,
+                true,
+            ),
+            (Some(Err(PageError::Browser("gate".into()))), false, false),
+            (None, false, true),
+        ] {
+            let mut page = FakePage::new(json!([]));
+            page.frames.push(host.clone());
+            let mut child = probe(json!([]));
+            if let Some(gate) = gate {
+                child["candidates"] = json!([candidate]);
+                page.gates.insert("host".into(), gate);
+            }
+            page.frame_result = Ok(child);
+            let result = scan(&page).await?;
+            assert_eq!(result.complete, complete);
+            assert_eq!(result.challenges.len(), usize::from(found));
+            if found {
+                let gate = &result.challenges[0];
+                assert_eq!(gate.kind, CaptchaKind::AwsWaf);
+                assert_eq!(gate.state, ChallengeState::Passed);
+                assert_eq!(gate.sitekey.as_deref(), Some("child-key"));
+                assert_eq!(gate.host_frame, Some(host.clone()));
+            }
+            let gated = page
+                .gate_calls
+                .lock()
+                .map_err(|e| PageError::Browser(e.to_string()))?
+                .len();
+            assert_eq!(gated, usize::from(page.gates.contains_key("host")));
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_one_frame_is_not_guessed_between_two_frameless_widgets()
+    -> Result<(), PageError> {
+        let mut page = FakePage::recaptcha(false);
+        page.main = Mutex::new(VecDeque::from([probe(json!([
+            widget("recaptcha_v2", "unknown"),
+            widget("recaptcha_v2", "unknown")
+        ]))]));
+        let result = scan(&page).await?;
+        assert!(!result.complete);
+        assert_eq!(result.challenges.len(), 3);
+        assert_eq!(
+            result
+                .challenges
+                .iter()
+                .filter(|c| c.frame.is_some())
+                .count(),
+            1
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_a_passed_widget_keeps_a_frame_reported_under_another_url()
+    -> Result<(), PageError> {
+        let mut info = widget("turnstile", "passed");
+        info["frameUrls"] = json!([
+            "https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/g/turnstile/f/av0/rch/a1/1x00000000000000000000AA/auto/fbE/new/normal"
+        ]);
+        let mut page = FakePage::new(json!([info]));
+        page.frames.push(frame(
+            "widget",
+            "https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/g/turnstile/if/ov2/av0/rcv/a1/1x00000000000000000000AA/dark/fbE/new/normal",
+        ));
+        let result = scan(&page).await?;
+        assert!(result.complete);
+        assert_eq!(result.challenges.len(), 1, "{:?}", result.challenges);
+        assert_eq!(result.challenges[0].state, ChallengeState::Passed);
+        assert_eq!(
+            result.challenges[0]
+                .frame
+                .as_ref()
+                .map(|f| f.frame_id.as_str()),
+            Some("widget")
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_a_widget_takes_the_owned_frame_of_its_own_kind() -> Result<(), PageError> {
+        let hcaptcha = "https://newassets.hcaptcha.com/captcha/v1/hcaptcha.html#frame=checkbox";
+        let anchor = "https://www.google.com/recaptcha/api2/anchor?k=key&cb=own";
+        let mut info = widget("recaptcha_v2", "unknown");
+        info["frameUrls"] = json!([hcaptcha, anchor]);
+        let mut page = FakePage::new(json!([info, widget("recaptcha_v2", "unknown")]));
+        page.frames.push(frame("anchor", anchor));
+        page.frame_result = Ok(
+            json!({"widgets":[], "frames":[], "checked":false, "expired":false, "complete":true}),
+        );
+        let result = scan(&page).await?;
+        assert!(
+            result.complete,
+            "the owned anchor is an exact match, not a guess"
+        );
+        assert_eq!(result.challenges.len(), 2);
+        assert_eq!(
+            result.challenges[0]
+                .frame
+                .as_ref()
+                .map(|f| f.frame_id.as_str()),
+            Some("anchor")
+        );
+        assert!(result.challenges[1].frame.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_two_visibility_entries_for_one_url_are_incomplete() -> Result<(), PageError>
+    {
+        let mut page = FakePage::recaptcha(false);
+        let url = page.frames[0].url.clone();
+        let mut info = widget("recaptcha_v2", "unknown");
+        info["frameUrls"] = json!([url]);
+        let mut main = probe(json!([info]));
+        main["frames"] = json!([{"url": url, "visible": true}, {"url": url, "visible": true}]);
+        page.main = Mutex::new(VecDeque::from([main]));
+        let result = scan(&page).await?;
+        assert!(!result.complete);
+        assert_eq!(result.challenges.len(), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_a_hidden_twin_cannot_hide_a_shown_frame() -> Result<(), PageError> {
+        let url = "https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/g/turnstile/if/ov2/av0/rcv/id/1x00000000000000000000AA/light/normal";
+        // Two frames at one address. With one iframe shown, which frame is the shown one is
+        // unknown; with both hidden, neither is a widget and nothing is unknown.
+        for (shown, outcome) in [(true, ScanOutcome::Unknown), (false, ScanOutcome::None)] {
+            let mut page = FakePage::new(json!([]));
+            page.frames.extend([frame("a", url), frame("b", url)]);
+            let mut main = probe(json!([]));
+            main["frames"] =
+                json!([{"url": url, "visible": false}, {"url": url, "visible": shown}]);
+            page.main = Mutex::new(VecDeque::from([main]));
+            let result = scan(&page).await?;
+            assert_eq!(result.outcome, outcome, "second iframe shown: {shown}");
+            assert_eq!(result.complete, !shown);
+            assert!(result.challenges.is_empty(), "{:?}", result.challenges);
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_loaded_vendor_addresses_are_not_blocking() -> anyhow::Result<()> {
+        use crate::{
+            CaptchaSolver, LiveDriver,
+            config::CaptchaConfig,
+            events::CaptchaEventBus,
+            providers::ProviderChain,
+            types::{SolveReason, SolveStatus},
+        };
+        use browseros_core::PageId;
+        use tokio_util::sync::CancellationToken;
+
+        for (address, kind, key) in [
+            (
+                "https://static.geetest.com/v4/gt4.js?captcha_id=gt-key",
+                CaptchaKind::Geetest,
+                Some("gt-key"),
+            ),
+            (
+                "https://static.geevisit.com/gt.js?gt=v3-key",
+                CaptchaKind::Geetest,
+                Some("v3-key"),
+            ),
+            (
+                "https://a.token.awswaf.com/challenge.js",
+                CaptchaKind::AwsWaf,
+                None,
+            ),
+            (
+                "https://client-api.arkoselabs.com/v2/pk-key/api.js",
+                CaptchaKind::Arkose,
+                Some("pk-key"),
+            ),
+            (
+                "https://client-api.arkoselabs.cn/v2/cn-key/api.js",
+                CaptchaKind::Arkose,
+                Some("cn-key"),
+            ),
+            (
+                "https://funcaptcha.com/fc/api.js",
+                CaptchaKind::Arkose,
+                None,
+            ),
+        ] {
+            let page = FakePage::new(json!([]));
+            let mut loaded = probe(json!([]));
+            loaded["addresses"] = json!([address]);
+            *page.main.lock().map_err(|e| anyhow::anyhow!("{e}"))? = VecDeque::from([loaded]);
+            let result = scan(&page).await?;
+            assert_eq!(result.challenges.len(), 1, "{address}");
+            assert_eq!(result.challenges[0].kind, kind);
+            assert_eq!(result.challenges[0].state, ChallengeState::WidgetOnly);
+            assert_eq!(result.challenges[0].sitekey.as_deref(), key);
+            let service = CaptchaSolver {
+                providers: ProviderChain::new(&CaptchaConfig::default()),
+                reservations: Default::default(),
+                events: CaptchaEventBus::new(),
+                forced_method: None,
+            };
+            let outcome = service
+                .solve_with(
+                    &page,
+                    PageId(1),
+                    CancellationToken::new(),
+                    false,
+                    Instant::now() + Duration::from_secs(2),
+                    &LiveDriver,
+                )
+                .await
+                .map_err(|e| anyhow::anyhow!("{e:?}"))?;
+            assert_eq!(outcome.status, SolveStatus::AlreadyClear);
+            assert_eq!(outcome.reason, SolveReason::NotBlocking);
+            assert_eq!(outcome.paid_tasks, 0);
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_loaded_addresses_enrich_widgets_without_duplicates() -> Result<(), PageError>
+    {
+        let mut page = FakePage::new(json!([]));
+        let host = frame("host", "https://fixture.test/child");
+        page.frames.push(host.clone());
+        let mut loaded = probe(json!([widget("arkose", "active")]));
+        loaded["addresses"] = json!(["https://client-api.arkoselabs.com/v2/public-key/api.js"]);
+        page.frame_result = Ok(loaded);
+        let result = scan(&page).await?;
+        assert_eq!(result.challenges.len(), 1);
+        assert_eq!(result.challenges[0].state, ChallengeState::Active);
+        assert_eq!(result.challenges[0].sitekey.as_deref(), Some("public-key"));
+        assert_eq!(result.challenges[0].host_frame, Some(host));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_loaded_anchor_addresses_do_not_duplicate_v3_widgets()
+    -> Result<(), PageError> {
+        let mut page = FakePage::recaptcha(false);
+        page.frames[0].url.push_str("&size=invisible");
+        let mut badge = widget("recaptcha_v3", "widget_only");
+        badge["sitekey"] = json!("key");
+        let mut main = probe(json!([badge]));
+        main["addresses"] = json!([page.frames[0].url]);
+        page.main = Mutex::new(VecDeque::from([main]));
+        let result = scan(&page).await?;
+        assert_eq!(result.challenges.len(), 1);
+        assert_eq!(result.challenges[0].kind, CaptchaKind::RecaptchaV3);
+        assert_eq!(result.challenges[0].state, ChallengeState::WidgetOnly);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_a_visible_hcaptcha_overrides_script_only_state() -> Result<(), PageError> {
+        let mut page = FakePage::new(json!([]));
+        let mut main = probe(json!([]));
+        main["addresses"] = json!(["https://js.hcaptcha.com/1/api.js"]);
+        page.main = Mutex::new(VecDeque::from([main]));
+        page.frames.push(frame(
+            "h",
+            "https://newassets.hcaptcha.com/captcha/v1/test/hcaptcha.html#sitekey=key",
+        ));
+        let result = scan(&page).await?;
+        assert_eq!(result.challenges.len(), 1);
+        assert_eq!(result.challenges[0].kind, CaptchaKind::Hcaptcha);
+        assert_eq!(result.challenges[0].state, ChallengeState::Unknown);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_nested_vendor_findings_fold_into_the_outer_widget() -> Result<(), PageError>
+    {
+        for (kind, url) in [
+            (
+                "arkose",
+                "https://client-api.arkoselabs.com/v2/enforcement.html",
+            ),
+            ("geetest", "https://gcaptcha4.geetest.com/load"),
+            ("aws_waf", "https://a.captcha.awswaf.com/widget"),
+            (
+                "hcaptcha",
+                "https://newassets.hcaptcha.com/captcha/v1/hcaptcha.html",
+            ),
+            (
+                "recaptcha_v2",
+                "https://www.google.com/recaptcha/api2/anchor?k=key",
+            ),
+            (
+                "turnstile",
+                "https://challenges.cloudflare.com/widget?sitekey=key",
+            ),
+        ] {
+            for child_host in [false, true] {
+                let mut page = FakePage::new(json!([]));
+                let outer = frame("outer", url);
+                let inner = frame("inner", &format!("{url}#inner"));
+                let host = frame("host", "https://fixture.test/child");
+                if child_host {
+                    page.frames.push(host.clone());
+                    page.parent_ids.insert("outer".into(), "host".into());
+                }
+                page.frames.extend([outer.clone(), inner.clone()]);
+                page.parent_ids.insert("inner".into(), "outer".into());
+                for f in [&outer, &inner] {
+                    let mut p = probe(json!([widget(kind, "active")]));
+                    p["checked"] = json!(false);
+                    p["addresses"] = json!([url]);
+                    page.frame_results.insert(f.frame_id.clone(), p);
+                }
+                let result = scan(&page).await?;
+                assert_eq!(
+                    result.challenges.len(),
+                    1,
+                    "{kind}, child host {child_host}: {:?}",
+                    result.challenges
+                );
+                let challenge = &result.challenges[0];
+                assert_eq!(challenge.kind.as_str(), kind);
+                assert_eq!(challenge.state, ChallengeState::Active);
+                assert_eq!(
+                    challenge.frame.as_ref().map(|f| &f.frame_id),
+                    Some(&outer.frame_id)
+                );
+                assert_eq!(challenge.host_frame, child_host.then_some(host));
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_separate_vendor_widgets_are_not_folded_together() -> Result<(), PageError> {
+        let mut page = FakePage::new(json!([]));
+        for index in 0..2 {
+            let outer = frame(
+                &format!("outer-{index}"),
+                &format!("https://client-api.arkoselabs.com/widget/{index}"),
+            );
+            let inner = frame(
+                &format!("inner-{index}"),
+                &format!("https://client-api.arkoselabs.com/game/{index}"),
+            );
+            page.parent_ids
+                .insert(inner.frame_id.clone(), outer.frame_id.clone());
+            page.frame_results.insert(
+                inner.frame_id.clone(),
+                probe(json!([widget("arkose", "active")])),
+            );
+            page.frames.extend([outer, inner]);
+        }
+        let result = scan(&page).await?;
+        assert_eq!(result.challenges.len(), 2);
+        assert!(result.challenges.iter().all(|c| {
+            c.host_frame.is_none()
+                && c.frame
+                    .as_ref()
+                    .is_some_and(|f| f.frame_id.starts_with("outer-"))
+        }));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_a_vendor_demo_top_document_is_not_an_iframe() -> Result<(), PageError> {
+        let mut page = FakePage::new(json!([]));
+        let top = frame("top", "https://demo.arkoselabs.com/?key=test");
+        let outer = frame(
+            "outer",
+            "https://client-api.arkoselabs.com/v2/enforcement.html",
+        );
+        let inner = frame("inner", "https://client-api.arkoselabs.com/game");
+        let mut main = probe(json!([]));
+        main["url"] = json!(top.url);
+        main["addresses"] = json!(["https://client-api.arkoselabs.com/v2/key/api.js"]);
+        page.main = Mutex::new(VecDeque::from([main.clone()]));
+        main["top"] = json!(true);
+        page.frame_results.insert("top".into(), main);
+        for f in [&outer, &inner] {
+            page.frame_results.insert(
+                f.frame_id.clone(),
+                probe(json!([widget("arkose", "active")])),
+            );
+        }
+        page.parent_ids.insert("outer".into(), "top".into());
+        page.parent_ids.insert("inner".into(), "outer".into());
+        page.frames = vec![top, outer.clone(), inner];
+        let result = scan(&page).await?;
+        assert_eq!(result.challenges.len(), 1);
+        assert_eq!(result.challenges[0].frame, Some(outer));
+        assert!(result.challenges[0].host_frame.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_a_complete_blank_scan_returns_none() -> Result<(), PageError> {
+        let result = scan(&FakePage::new(json!([]))).await?;
+        assert_eq!(result.outcome, ScanOutcome::None);
+        assert!(result.complete);
+        assert!(result.challenges.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_an_unchecked_anchor_is_active() -> Result<(), PageError> {
+        let result = scan(&FakePage::recaptcha(false)).await?;
+        assert_eq!(result.outcome, ScanOutcome::Detected);
+        assert_eq!(result.challenges.len(), 1);
+        let challenge = &result.challenges[0];
+        assert_eq!(challenge.state, ChallengeState::Active);
+        assert_eq!(challenge.sitekey.as_deref(), Some("key"));
+        assert_eq!(challenge.action.as_deref(), Some("login"));
+        assert_eq!(
+            challenge.frame.as_ref().map(|f| f.frame_id.as_str()),
+            Some("anchor")
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_an_open_bframe_is_active() -> Result<(), PageError> {
+        let mut page = FakePage::recaptcha(false);
+        page.frames.push(frame(
+            "tiles",
+            "https://www.google.com/recaptcha/api2/bframe?k=key",
+        ));
+        let mut main = probe(json!([widget("recaptcha_v2", "widget_only")]));
+        main["frames"] = json!([{"url": page.frames[1].url, "visible": true}]);
+        page.main = Mutex::new(VecDeque::from([main]));
+        let result = scan(&page).await?;
+        assert_eq!(result.challenges.len(), 1);
+        assert_eq!(result.challenges[0].state, ChallengeState::Active);
+        assert_eq!(
+            result.challenges[0]
+                .challenge_frame
+                .as_ref()
+                .map(|f| f.frame_id.as_str()),
+            Some("tiles")
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_an_open_bframe_stays_active_with_a_hidden_badge() -> Result<(), PageError> {
+        let mut page = FakePage::recaptcha(false);
+        page.frames[0].url.push_str("&size=invisible");
+        let tiles = frame(
+            "tiles",
+            "https://www.google.com/recaptcha/api2/bframe?k=key",
+        );
+        let mut badge = widget("recaptcha_v2", "widget_only");
+        badge["invisible"] = json!(true);
+        let mut main = probe(json!([badge]));
+        main["frames"] = json!([
+            {"url": page.frames[0].url, "visible": false},
+            {"url": tiles.url, "visible": true}
+        ]);
+        page.main = Mutex::new(VecDeque::from([main]));
+        page.frames.push(tiles.clone());
+        let result = scan(&page).await?;
+        assert_eq!(result.challenges.len(), 1);
+        assert_eq!(result.challenges[0].state, ChallengeState::Active);
+        assert_eq!(result.challenges[0].challenge_frame, Some(tiles));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_a_hidden_test_key_bframe_is_not_open() -> Result<(), PageError> {
+        let mut page = FakePage::recaptcha(false);
+        let mut tiles = frame(
+            "hidden",
+            "https://www.google.com/recaptcha/api2/bframe?k=key",
+        );
+        tiles.rect = Some(Rect {
+            x: 1.0,
+            y: -9982.5,
+            width: 0.0,
+            height: 0.0,
+        });
+        page.frames.push(tiles);
+        let result = scan(&page).await?;
+        assert_eq!(result.challenges.len(), 1);
+        assert!(result.challenges[0].challenge_frame.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_checked_and_token_widgets_are_passed() -> Result<(), PageError> {
+        let mut page = FakePage::recaptcha(true);
+        page.main = Mutex::new(VecDeque::from([probe(json!([widget(
+            "recaptcha_v2",
+            "passed"
+        )]))]));
+        assert_eq!(
+            scan(&page).await?.challenges[0].state,
+            ChallengeState::Passed
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_expired_anchors_are_active() -> Result<(), PageError> {
+        let mut page = FakePage::recaptcha(true);
+        page.frame_result =
+            Ok(json!({"widgets":[], "frames":[], "checked":true, "expired":true, "complete":true}));
+        assert_eq!(
+            scan(&page).await?.challenges[0].state,
+            ChallengeState::Active
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_an_untriggered_invisible_widget_is_not_blocking() -> Result<(), PageError> {
+        let mut page = FakePage::recaptcha(false);
+        page.frames[0].url.push_str("&size=invisible");
+        assert_eq!(
+            scan(&page).await?.challenges[0].state,
+            ChallengeState::WidgetOnly
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_a_v3_badge_is_widget_only() -> Result<(), PageError> {
+        let result = scan(&FakePage::new(json!([widget(
+            "recaptcha_v3",
+            "widget_only"
+        )])))
+        .await?;
+        assert_eq!(result.challenges[0].kind, CaptchaKind::RecaptchaV3);
+        assert_eq!(result.challenges[0].state, ChallengeState::WidgetOnly);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_closed_shadow_turnstile_is_detected_from_frames() -> Result<(), PageError> {
+        let mut page = FakePage::new(json!([]));
+        page.frames.push(frame("cf", "https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/g/turnstile/if/ov2/av0/rcv/id/1x00000000000000000000AA/light/normal"));
+        let result = scan(&page).await?;
+        assert_eq!(result.challenges.len(), 1);
+        assert_eq!(result.challenges[0].kind, CaptchaKind::Turnstile);
+        assert_eq!(result.challenges[0].state, ChallengeState::Active);
+        assert_eq!(
+            result.challenges[0].sitekey.as_deref(),
+            Some("1x00000000000000000000AA")
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_a_closed_shadow_turnstile_token_is_passed() -> Result<(), PageError> {
+        let mut page = FakePage::new(json!([widget("turnstile", "passed")]));
+        page.frames.push(frame(
+            "cf",
+            "https://challenges.cloudflare.com/turnstile?sitekey=key",
+        ));
+        let result = scan(&page).await?;
+        assert_eq!(result.challenges.len(), 1);
+        assert_eq!(result.challenges[0].state, ChallengeState::Passed);
+        assert_eq!(
+            result.challenges[0]
+                .frame
+                .as_ref()
+                .map(|f| f.frame_id.as_str()),
+            Some("cf")
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_cloudflare_full_page_challenges_are_unsupported() -> Result<(), PageError> {
+        let result = scan(&FakePage::new(json!([widget(
+            "cloudflare_challenge",
+            "active"
+        )])))
+        .await?;
+        assert_eq!(result.challenges[0].kind, CaptchaKind::CloudflareChallenge);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_hcaptcha_frames_are_recognized() -> Result<(), PageError> {
+        let mut page = FakePage::new(json!([]));
+        page.frames.push(frame(
+            "h",
+            "https://newassets.hcaptcha.com/captcha/v1/abc/static/hcaptcha.html#sitekey=key",
+        ));
+        assert_eq!(scan(&page).await?.challenges[0].kind, CaptchaKind::Hcaptcha);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_fragment_stripped_frames_keep_widget_identity() -> Result<(), PageError> {
+        let base = "https://newassets.hcaptcha.com/captcha/v1/abc/static/hcaptcha.html";
+        let visible_url = format!("{base}#frame=checkbox&id=one&sitekey=key");
+        let hidden_url = format!("{base}#frame=challenge&id=one&sitekey=key");
+        let mut info = widget("hcaptcha", "active");
+        info["sitekey"] = json!("key");
+        info["frameUrl"] = json!(visible_url);
+        let mut main = probe(json!([info]));
+        main["frames"] = json!([
+            {"url":visible_url,"visible":true},
+            {"url":hidden_url,"visible":false}
+        ]);
+        let mut page = FakePage::new(json!([]));
+        page.main = Mutex::new(VecDeque::from([main]));
+        page.frames.push(frame("checkbox", base));
+        let mut frame_probe = probe(json!([]));
+        frame_probe["url"] = json!(visible_url);
+        page.frame_result = Ok(frame_probe);
+        let result = scan(&page).await?;
+        assert!(result.complete);
+        assert_eq!(result.challenges.len(), 1);
+        assert_eq!(result.challenges[0].state, ChallengeState::Active);
+        assert_eq!(
+            result.challenges[0]
+                .frame
+                .as_ref()
+                .map(|f| f.frame_id.as_str()),
+            Some("checkbox")
+        );
+        let mut hidden_probe = probe(json!([]));
+        hidden_probe["url"] = json!(hidden_url);
+        page.frame_result = Ok(hidden_probe);
+        page.frames[0].frame_id = "hidden".into();
+        let result = scan(&page).await?;
+        assert_eq!(result.challenges.len(), 1);
+        assert!(result.challenges[0].frame.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_other_unsupported_provider_frames_are_recognized() -> Result<(), PageError>
+    {
+        for (url, kind) in [
+            (
+                "https://client-api.arkoselabs.com/fc/widget",
+                CaptchaKind::Arkose,
+            ),
+            ("https://captcha.awswaf.com/widget", CaptchaKind::AwsWaf),
+            ("https://gcaptcha4.geetest.com/load", CaptchaKind::Geetest),
+        ] {
+            let mut page = FakePage::new(json!([]));
+            page.frames.push(frame("unsupported", url));
+            assert_eq!(scan(&page).await?.challenges[0].kind, kind);
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_frame_errors_keep_partial_findings() -> Result<(), PageError> {
+        let mut page = FakePage::recaptcha(false);
+        page.frame_result = Err(PageError::Browser("frame vanished".into()));
+        let result = scan(&page).await?;
+        assert!(!result.complete);
+        assert_eq!(result.outcome, ScanOutcome::Detected);
+        assert_eq!(result.challenges[0].state, ChallengeState::Unknown);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_an_unreadable_unrelated_frame_prevents_none() -> Result<(), PageError> {
+        let mut page = FakePage::new(json!([]));
+        page.frames
+            .push(frame("other", "https://fixture.test/child"));
+        page.frame_result = Err(PageError::Browser("unreadable".into()));
+        let result = scan(&page).await?;
+        assert!(!result.complete);
+        assert_eq!(result.outcome, ScanOutcome::Unknown);
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_the_total_scan_budget_is_bounded() -> Result<(), PageError> {
+        let mut page = FakePage::new(json!([]));
+        page.frame_delay = Duration::from_secs(10);
+        let started = tokio::time::Instant::now();
+        let result = detect(&page, Duration::from_secs(2)).await?;
+        assert!(!result.complete);
+        assert_eq!(result.outcome, ScanOutcome::Unknown);
+        assert!(started.elapsed() <= Duration::from_secs(2));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_navigation_discards_findings_and_rescans() -> Result<(), PageError> {
+        let page = FakePage::new(json!([]));
+        *page
+            .main
+            .lock()
+            .map_err(|e| PageError::Browser(e.to_string()))? = VecDeque::from([
+            probe(json!([widget("hcaptcha", "active")])),
+            probe(json!([])),
+        ]);
+        *page
+            .documents
+            .lock()
+            .map_err(|e| PageError::Browser(e.to_string()))? =
+            VecDeque::from([document("a"), document("b"), document("b")]);
+        let result = scan(&page).await?;
+        assert_eq!(result.outcome, ScanOutcome::None);
+        assert!(result.complete);
+        assert_eq!(result.document, document("b"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_repeated_navigation_is_incomplete() -> Result<(), PageError> {
+        let page = FakePage::new(json!([widget("hcaptcha", "active")]));
+        *page
+            .documents
+            .lock()
+            .map_err(|e| PageError::Browser(e.to_string()))? =
+            VecDeque::from([document("a"), document("b"), document("c")]);
+        let result = scan(&page).await?;
+        assert!(!result.complete);
+        assert_eq!(result.outcome, ScanOutcome::Unknown);
+        assert!(result.challenges.is_empty());
+        assert_eq!(result.document, document("c"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_bad_probe_json_never_reports_none() -> Result<(), PageError> {
+        let page = FakePage::new(json!([]));
+        *page
+            .main
+            .lock()
+            .map_err(|e| PageError::Browser(e.to_string()))? = VecDeque::from([Value::Null]);
+        let result = scan(&page).await?;
+        assert!(!result.complete);
+        assert_eq!(result.outcome, ScanOutcome::Unknown);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_a_v3_anchor_is_not_a_second_v2_widget() -> Result<(), PageError> {
+        let mut page = FakePage::recaptcha(false);
+        let mut badge = widget("recaptcha_v3", "widget_only");
+        badge["sitekey"] = json!("key");
+        page.main = Mutex::new(VecDeque::from([probe(json!([badge]))]));
+        page.frames[0].url.push_str("&size=invisible");
+        let result = scan(&page).await?;
+        assert_eq!(result.challenges.len(), 1);
+        assert_eq!(result.challenges[0].kind, CaptchaKind::RecaptchaV3);
+        assert_eq!(result.challenges[0].state, ChallengeState::WidgetOnly);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_separate_widgets_with_the_same_key_remain_separate() -> Result<(), PageError>
+    {
+        let mut page = FakePage::recaptcha(false);
+        page.frames.push(frame(
+            "second",
+            "https://www.google.com/recaptcha/api2/anchor?k=key&cb=second",
+        ));
+        let mut first = widget("recaptcha_v2", "passed");
+        first["sitekey"] = json!("key");
+        first["frameUrl"] = json!(page.frames[0].url);
+        let mut second = widget("recaptcha_v2", "unknown");
+        second["sitekey"] = json!("key");
+        second["frameUrl"] = json!(page.frames[1].url);
+        page.main = Mutex::new(VecDeque::from([probe(json!([first, second]))]));
+        let result = scan(&page).await?;
+        assert_eq!(result.challenges.len(), 2);
+        assert_eq!(result.challenges[0].state, ChallengeState::Passed);
+        assert_eq!(result.challenges[1].state, ChallengeState::Active);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_full_page_cloudflare_is_not_an_ordinary_turnstile() -> Result<(), PageError>
+    {
+        let mut page = FakePage::new(json!([
+            widget("cloudflare_challenge", "active"),
+            widget("turnstile", "active")
+        ]));
+        page.frames.push(frame(
+            "cf",
+            "https://challenges.cloudflare.com/turnstile?sitekey=key",
+        ));
+        let result = scan(&page).await?;
+        assert_eq!(result.challenges.len(), 1);
+        assert_eq!(result.challenges[0].kind, CaptchaKind::CloudflareChallenge);
+        Ok(())
+    }
+
+    /// What the main scan reports for a page carrying only Cloudflare bot management's
+    /// `_cf_chl_opt`, which ordinary pages such as dash.cloudflare.com/login and luma.com set.
+    fn cloudflare_marker() -> Value {
+        let mut marker = widget("cloudflare_challenge", "active");
+        marker["marker"] = json!(true);
+        marker
+    }
+
+    #[tokio::test]
+    async fn tests_that_a_turnstile_beside_cloudflares_marker_is_the_challenge()
+    -> Result<(), PageError> {
+        let mut page = FakePage::new(json!([cloudflare_marker(), widget("turnstile", "active")]));
+        page.frames.push(frame(
+            "cf",
+            "https://challenges.cloudflare.com/turnstile?sitekey=key",
+        ));
+        let result = scan(&page).await?;
+        assert_eq!(result.challenges.len(), 1, "{:?}", result.challenges);
+        assert_eq!(result.challenges[0].kind, CaptchaKind::Turnstile);
+        assert_eq!(
+            result.challenges[0]
+                .frame
+                .as_ref()
+                .map(|f| f.frame_id.as_str()),
+            Some("cf")
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_a_turnstile_frame_beside_cloudflares_marker_is_the_challenge()
+    -> Result<(), PageError> {
+        // dash.cloudflare.com/login: no .cf-turnstile element, only the widget's frame.
+        let mut page = FakePage::new(json!([cloudflare_marker()]));
+        page.frames.push(frame(
+            "cf",
+            "https://challenges.cloudflare.com/turnstile?sitekey=key",
+        ));
+        let result = scan(&page).await?;
+        assert_eq!(result.challenges.len(), 1, "{:?}", result.challenges);
+        assert_eq!(result.challenges[0].kind, CaptchaKind::Turnstile);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_a_loaded_captcha_script_does_not_outrank_cloudflares_marker()
+    -> Result<(), PageError> {
+        // dash.cloudflare.com/login loads the Turnstile SDK for an invisible widget, and a page
+        // may load reCAPTCHA v3: neither shows anything, so the marker's challenge stands.
+        for script in ["turnstile", "recaptcha_v3"] {
+            let result = scan(&FakePage::new(json!([
+                cloudflare_marker(),
+                widget(script, "widget_only")
+            ])))
+            .await?;
+            assert!(
+                result
+                    .challenges
+                    .iter()
+                    .any(|c| c.kind == CaptchaKind::CloudflareChallenge),
+                "{script}: {:?}",
+                result.challenges
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_cloudflares_marker_alone_still_reports_a_challenge() -> Result<(), PageError>
+    {
+        let result = scan(&FakePage::new(json!([cloudflare_marker()]))).await?;
+        assert_eq!(result.challenges.len(), 1);
+        assert_eq!(result.challenges[0].kind, CaptchaKind::CloudflareChallenge);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_lookalike_hosts_are_not_provider_frames() -> Result<(), PageError> {
+        let mut page = FakePage::new(json!([]));
+        page.frames.push(frame(
+            "spoof",
+            "https://evilgoogle.com/recaptcha/api2/anchor?k=key",
+        ));
+        assert_eq!(scan(&page).await?.outcome, ScanOutcome::None);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_enterprise_frame_metadata_is_retained() -> Result<(), PageError> {
+        let mut page = FakePage::recaptcha(false);
+        page.frames[0].url =
+            "https://www.recaptcha.net/recaptcha/enterprise/anchor?k=key&s=proof&sa=login".into();
+        let mut info = widget("recaptcha_v2", "unknown");
+        info["callback"] = json!("<inline>");
+        page.main = Mutex::new(VecDeque::from([probe(json!([info]))]));
+        let result = scan(&page).await?;
+        let challenge = &result.challenges[0];
+        assert!(challenge.enterprise);
+        assert_eq!(challenge.sitekey.as_deref(), Some("key"));
+        assert_eq!(challenge.recaptcha_s.as_deref(), Some("proof"));
+        assert_eq!(challenge.callback.as_deref(), Some("<inline>"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_an_exhausted_budget_never_reports_none() -> Result<(), PageError> {
+        let result = detect(&FakePage::new(json!([])), Duration::ZERO).await?;
+        assert!(!result.complete);
+        assert_eq!(result.outcome, ScanOutcome::Unknown);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_a_visible_bframe_alone_is_a_detected_challenge() -> Result<(), PageError> {
+        let mut page = FakePage::new(json!([]));
+        page.frames.push(frame(
+            "tiles",
+            "https://www.google.com/recaptcha/api2/bframe?k=key",
+        ));
+        let mut main = probe(json!([]));
+        main["frames"] = json!([{"url":page.frames[0].url,"visible":true}]);
+        page.main = Mutex::new(VecDeque::from([main]));
+        let result = scan(&page).await?;
+        assert_eq!(result.outcome, ScanOutcome::Detected);
+        assert_eq!(result.challenges.len(), 1);
+        assert_eq!(result.challenges[0].state, ChallengeState::Active);
+        assert!(result.challenges[0].challenge_frame.is_some());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_an_unreadable_normal_config_widget_is_not_widget_only()
+    -> Result<(), PageError> {
+        let mut page = FakePage::recaptcha(false);
+        page.main = Mutex::new(VecDeque::from([probe(json!([widget(
+            "recaptcha_v2",
+            "widget_only"
+        )]))]));
+        page.frame_result = Err(PageError::Browser("anchor unavailable".into()));
+        let result = scan(&page).await?;
+        assert!(!result.complete);
+        assert_eq!(result.challenges[0].state, ChallengeState::Unknown);
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore = "requires CAPTCHA_LIVE_CDP_PORT, CAPTCHA_LIVE_FIXTURE_PORT and an isolated dev browser"]
+    async fn tests_that_live_detection_tracks_test_widgets()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::sync::Arc;
+
+        use browseros_cdp::{CdpClient, ConnectOptions};
+        use browseros_core::{Browser, pages::NewPageOptions};
+
+        use super::super::page::LivePage;
+
+        let cdp_port: u16 = std::env::var("CAPTCHA_LIVE_CDP_PORT")?.parse()?;
+        let fixture_port: u16 = std::env::var("CAPTCHA_LIVE_FIXTURE_PORT")?.parse()?;
+        let output = std::path::PathBuf::from(std::env::var("CAPTCHA_LIVE_OUTPUT_DIR")?);
+        std::fs::create_dir_all(&output)?;
+        let mut results = Vec::new();
+        assert!((9000..=9999).contains(&cdp_port));
+        assert!(![9010, 9011, 9121, 9211, 9212, 9213, 9214, 9215].contains(&cdp_port));
+        let connection = Arc::new(CdpClient::connect(ConnectOptions::new(cdp_port)).await?);
+        let browser = Browser::new(connection.clone());
+        for (route, expected) in [
+            ("no-captcha.html", None),
+            (
+                "recaptcha-v2.html",
+                Some((CaptchaKind::RecaptchaV2, ChallengeState::Active)),
+            ),
+            (
+                "turnstile-interactive.html",
+                Some((CaptchaKind::Turnstile, ChallengeState::Active)),
+            ),
+            (
+                "turnstile-pass.html",
+                Some((CaptchaKind::Turnstile, ChallengeState::Passed)),
+            ),
+            (
+                "turnstile-cf-marker.html",
+                Some((CaptchaKind::Turnstile, ChallengeState::Active)),
+            ),
+            (
+                "cloudflare-wall.html",
+                Some((CaptchaKind::CloudflareChallenge, ChallengeState::Active)),
+            ),
+            (
+                "hcaptcha.html",
+                Some((CaptchaKind::Hcaptcha, ChallengeState::Active)),
+            ),
+        ] {
+            let url = format!("http://127.0.0.1:{fixture_port}/{route}");
+            let id = browser.new_page(&url, NewPageOptions::default()).await?;
+            let page = LivePage::with_dom_world(browser.view().await, id.clone(), live_dom_world());
+            let ready = format!(
+                "location.href === {} && document.readyState === 'complete' && {}",
+                serde_json::to_string(&url)?,
+                if expected.is_some() {
+                    "window.__captchaFixture?.rendered === true"
+                } else {
+                    "true"
+                }
+            );
+            tokio::time::timeout(Duration::from_secs(45), async {
+                while page.eval_main(&ready).await.ok() != Some(json!(true)) {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+            })
+            .await?;
+            let deadline = Instant::now() + Duration::from_secs(30);
+            let before = loop {
+                let result = detect(&page, Duration::from_secs(2)).await?;
+                let matches = match expected {
+                    None => result.outcome == ScanOutcome::None && result.challenges.is_empty(),
+                    Some((kind, state)) => {
+                        // A challenge page is the whole document, not a frame.
+                        result.challenges.len() == 1
+                            && result.challenges[0].kind == kind
+                            && result.challenges[0].state == state
+                            && (result.challenges[0].frame.is_some()
+                                || kind == CaptchaKind::CloudflareChallenge)
+                    }
+                };
+                if result.complete && matches {
+                    break result;
+                }
+                assert!(Instant::now() < deadline, "{route}: {result:?}");
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            };
+            results.push(json!({"fixture":route,"before":before}));
+            if route == "recaptcha-v2.html" {
+                assert!(before.challenges[0].challenge_frame.is_none());
+                let frame = before.challenges[0].frame.as_ref().ok_or("no anchor")?;
+                let rect = page
+                    .query_rect_in_frame(frame, "#recaptcha-anchor")
+                    .await?
+                    .ok_or("no checkbox")?;
+                let (x, y) = rect.center();
+                page.click_at(x, y).await?;
+                let deadline = Instant::now() + Duration::from_secs(20);
+                loop {
+                    let after = detect(&page, Duration::from_secs(2)).await?;
+                    if after.complete
+                        && after.challenges.len() == 1
+                        && after.challenges[0].state == ChallengeState::Passed
+                    {
+                        assert_eq!(before.document, after.document);
+                        results.push(json!({"fixture":route,"after":after}));
+                        break;
+                    }
+                    assert!(Instant::now() < deadline, "{route}: {after:?}");
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+            }
+            browser.close_page(id).await?;
+            std::fs::write(
+                output.join("live-adapter-results.json"),
+                serde_json::to_vec_pretty(&results)?,
+            )?;
+        }
+        connection.disconnect().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore = "requires an owned dev browser and CAPTCHA_LIVE_CASES_FILE"]
+    async fn tests_that_live_detection_matches_cases_within_budget() -> anyhow::Result<()> {
+        use super::super::page::LivePage;
+        use browseros_cdp::{CdpClient, ConnectOptions};
+        use browseros_core::{Browser, pages::NewPageOptions};
+        use std::sync::Arc;
+
+        let port: u16 = std::env::var("CAPTCHA_LIVE_CDP_PORT")?.parse()?;
+        assert!(![9010, 9011, 9121, 9211, 9212, 9213, 9214, 9215].contains(&port));
+        let cases: Vec<Value> =
+            serde_json::from_slice(&std::fs::read(std::env::var("CAPTCHA_LIVE_CASES_FILE")?)?)?;
+        let connection = Arc::new(CdpClient::connect(ConnectOptions::new(port)).await?);
+        let browser = Browser::new(connection.clone());
+        let mut results = Vec::new();
+        for case in cases {
+            let url = case["url"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("missing URL"))?;
+            let id = browser.new_page(url, NewPageOptions::default()).await?;
+            let page = LivePage::new(browser.view().await, id.clone());
+            let ready = case["ready"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("missing readiness probe"))?;
+            let deadline = Instant::now() + Duration::from_secs(30);
+            while page.eval_main(ready).await.ok() != Some(json!(true)) {
+                anyhow::ensure!(Instant::now() < deadline, "{} never ready", case["id"]);
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            for _ in 0..case["samples"].as_u64().unwrap_or(1) {
+                let start = Instant::now();
+                let result = detect(&page, Duration::from_secs(2)).await?;
+                let elapsed_ms = start.elapsed().as_millis();
+                results.push(json!({"id":case["id"],"scanMs":elapsed_ms,"detection":result}));
+                std::fs::write(
+                    std::env::var("CAPTCHA_LIVE_RESULTS_FILE")?,
+                    serde_json::to_vec_pretty(&results)?,
+                )?;
+                anyhow::ensure!(
+                    result.complete && elapsed_ms < 2000,
+                    "{} incomplete or over budget",
+                    case["id"]
+                );
+                if let Some(kind) = case["kind"].as_str() {
+                    let challenge = result
+                        .challenges
+                        .iter()
+                        .find(|c| c.kind.as_str() == kind)
+                        .ok_or_else(|| anyhow::anyhow!("{} missing {kind}", case["id"]))?;
+                    assert_eq!(
+                        serde_json::to_value(challenge.state)?,
+                        case["state"],
+                        "{}",
+                        case["id"]
+                    );
+                    assert_eq!(
+                        challenge.host_frame.is_some(),
+                        case["child"] == true,
+                        "{}",
+                        case["id"]
+                    );
+                }
+            }
+            browser.close_page(id).await?;
+        }
+        connection.disconnect().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore = "requires an owned dev browser at CAPTCHA_LIVE_CDP_PORT"]
+    async fn tests_that_live_arkose_session_tokens_remain_active() -> anyhow::Result<()> {
+        use super::super::page::LivePage;
+        use browseros_cdp::{CdpClient, ConnectOptions};
+        use browseros_core::{Browser, pages::NewPageOptions};
+        let port: u16 = std::env::var("CAPTCHA_LIVE_CDP_PORT")?.parse()?;
+        assert!(![9010, 9011, 9121, 9211, 9212, 9213, 9214, 9215].contains(&port));
+        let connection = std::sync::Arc::new(CdpClient::connect(ConnectOptions::new(port)).await?);
+        let browser = Browser::new(connection.clone());
+        let id = browser
+            .new_page("about:blank", NewPageOptions::default())
+            .await?;
+        let page = LivePage::new(browser.view().await, id.clone());
+        page.eval_main(r#"document.body.innerHTML = '<div data-pkey="test-key" style="width:300px;height:100px">FunCaptcha<input id="FunCaptcha-Token" name="fc-token" value="session-token|pk=test-key|surl=https://funcaptcha.com"></div>'; null"#).await?;
+        let result = detect(&page, Duration::from_secs(2)).await?;
+        assert!(result.complete);
+        assert_eq!(result.challenges.len(), 1);
+        assert_eq!(result.challenges[0].kind, CaptchaKind::Arkose);
+        assert_eq!(result.challenges[0].state, ChallengeState::Active);
+        browser.close_page(id).await?;
+        connection.disconnect().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_scan_snippets_do_not_assign_page_globals_or_ids() -> Result<(), PageError> {
+        let page = FakePage::recaptcha(false);
+        scan(&page).await?;
+        for script in page
+            .scripts
+            .lock()
+            .map_err(|e| PageError::Browser(e.to_string()))?
+            .iter()
+        {
+            assert!(!script.contains(".id ="));
+            assert!(!script.contains(".id="));
+            for part in script.split("window.").skip(1) {
+                let name = part
+                    .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+                    .next()
+                    .unwrap_or("");
+                let tail = part[name.len()..].trim_start();
+                assert!(!tail.starts_with('=') || tail.starts_with("=="));
+            }
+        }
+        Ok(())
+    }
+
+    /// `CAPTCHA_LIVE_DOM_WORLD=page` runs the live tests under the host's opt-out.
+    fn live_dom_world() -> crate::page::DomWorld {
+        if std::env::var("CAPTCHA_LIVE_DOM_WORLD").as_deref() == Ok("page") {
+            crate::page::DomWorld::Page
+        } else {
+            crate::page::DomWorld::Isolated
+        }
+    }
+
+    const RECAPTCHA_TEST_KEY: &str = "6LeIxAcTAAAAAJcZVRqyHh71UMIEGNQ_MXjiZKhI";
+    const TURNSTILE_PASS_KEY: &str = "1x00000000000000000000AA";
+
+    /// Serves `pages` on an ephemeral loopback port and returns their base URL on `localhost`.
+    async fn serve_live_pages(
+        pages: Vec<(&'static str, String)>,
+    ) -> anyhow::Result<(String, tokio::task::JoinHandle<()>)> {
+        use axum::{Router, response::Html, routing::get};
+
+        let mut app = Router::new();
+        for (path, html) in pages {
+            app = app.route(path, get(move || async move { Html(html) }));
+        }
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let base = format!("http://localhost:{}", listener.local_addr()?.port());
+        let task = tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        Ok((base, task))
+    }
+
+    async fn live_vendor_detection(
+        url: &str,
+        ready: &str,
+        settled: impl Fn(&Detection) -> bool,
+    ) -> anyhow::Result<(Detection, Value)> {
+        use super::super::page::LivePage;
+        use browseros_cdp::{CdpClient, ConnectOptions};
+        use browseros_core::{Browser, pages::NewPageOptions};
+
+        let port: u16 = std::env::var("CAPTCHA_LIVE_CDP_PORT")?.parse()?;
+        assert!((9000..=9999).contains(&port));
+        assert!(![9010, 9011, 9121, 9200, 9211, 9212, 9213, 9214, 9215, 9916].contains(&port));
+        let connection = std::sync::Arc::new(CdpClient::connect(ConnectOptions::new(port)).await?);
+        let browser = Browser::new(connection.clone());
+        let id = browser.new_page(url, NewPageOptions::default()).await?;
+        let page = LivePage::with_dom_world(browser.view().await, id.clone(), live_dom_world());
+        let outcome = async {
+            tokio::time::timeout(Duration::from_secs(45), async {
+                while page.eval_main(ready).await.ok() != Some(json!(true)) {
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                }
+            })
+            .await?;
+            let deadline = Instant::now() + Duration::from_secs(30);
+            loop {
+                let result = detect(&page, Duration::from_secs(2)).await?;
+                if settled(&result) || Instant::now() >= deadline {
+                    let marks = page.eval_main("window.__marks || null").await?;
+                    return anyhow::Ok((result, marks));
+                }
+                tokio::time::sleep(Duration::from_millis(250)).await;
+            }
+        }
+        .await;
+        browser.close_page(id).await?;
+        connection.disconnect().await;
+        outcome
+    }
+
+    #[tokio::test]
+    #[ignore = "requires an owned dev browser at CAPTCHA_LIVE_CDP_PORT and network access to Google"]
+    #[expect(
+        clippy::print_stderr,
+        reason = "an ignored live test shows what the vendor scripts produced"
+    )]
+    async fn tests_that_live_recaptcha_widgets_with_one_key_stay_separate() -> anyhow::Result<()> {
+        let html = format!(
+            r#"<!doctype html><title>reCAPTCHA</title><body>
+<form><div class="g-recaptcha" id="auto" data-sitekey="{RECAPTCHA_TEST_KEY}"></div>
+<div id="plain"></div><div id="callback"></div><div id="removed"></div></form>
+<script>
+window.onRc = function() {{
+  grecaptcha.render(document.getElementById('auto'));
+  grecaptcha.render(document.getElementById('plain'), {{sitekey: '{RECAPTCHA_TEST_KEY}'}});
+  grecaptcha.render(document.getElementById('callback'), {{sitekey: '{RECAPTCHA_TEST_KEY}', callback: function() {{}}}});
+  grecaptcha.render(document.getElementById('removed'), {{sitekey: '{RECAPTCHA_TEST_KEY}'}});
+  document.getElementById('removed').remove();
+  window.__marks = {{callbackAnchor: document.querySelector('#callback iframe').src}};
+}};
+</script>
+<script src="https://www.google.com/recaptcha/api.js?onload=onRc&render=explicit" async defer></script>
+</body>"#
+        );
+        let (base, server) = serve_live_pages(vec![("/recaptcha", html)]).await?;
+        let (result, marks) = live_vendor_detection(
+            &format!("{base}/recaptcha"),
+            "!!window.__marks && document.querySelectorAll('iframe[src*=\"/anchor\"]').length === 3",
+            |r| r.complete && r.challenges.len() == 3 && r.challenges.iter().all(|c| c.frame.is_some()),
+        )
+        .await?;
+        server.abort();
+        eprintln!("live recaptcha: {}", serde_json::to_string(&result)?);
+        assert!(result.complete, "{result:#?}");
+        assert_eq!(result.challenges.len(), 3, "{result:#?}");
+        let frames: std::collections::HashSet<_> = result
+            .challenges
+            .iter()
+            .filter_map(|c| c.frame.as_ref().map(|f| f.frame_id.clone()))
+            .collect();
+        assert_eq!(frames.len(), 3, "{result:#?}");
+        let callback_anchor = marks["callbackAnchor"].as_str().unwrap_or_default();
+        for challenge in &result.challenges {
+            assert_eq!(challenge.kind, CaptchaKind::RecaptchaV2);
+            assert_eq!(challenge.sitekey.as_deref(), Some(RECAPTCHA_TEST_KEY));
+            let with_callback = challenge
+                .frame
+                .as_ref()
+                .is_some_and(|f| f.url == callback_anchor);
+            assert_eq!(
+                challenge.callback.as_deref(),
+                with_callback.then_some("<inline>"),
+                "{challenge:#?}"
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore = "requires an owned dev browser at CAPTCHA_LIVE_CDP_PORT and network access to Cloudflare"]
+    #[expect(
+        clippy::print_stderr,
+        reason = "an ignored live test shows what the vendor scripts produced"
+    )]
+    async fn tests_that_live_turnstile_widgets_with_one_key_stay_separate() -> anyhow::Result<()> {
+        let html = format!(
+            r#"<!doctype html><title>Turnstile</title><body>
+<form><div id="first"></div><div id="second"></div></form>
+<script>
+window.onTs = function() {{
+  window.__marks = {{ids: [turnstile.render('#first', {{sitekey: '{TURNSTILE_PASS_KEY}'}}),
+    turnstile.render('#second', {{sitekey: '{TURNSTILE_PASS_KEY}'}})]}};
+}};
+</script>
+<script src="https://challenges.cloudflare.com/turnstile/v0/api.js?onload=onTs&render=explicit" async defer></script>
+</body>"#
+        );
+        let (base, server) = serve_live_pages(vec![("/turnstile", html)]).await?;
+        let (result, _) =
+            live_vendor_detection(&format!("{base}/turnstile"), "!!window.__marks", |r| {
+                r.complete
+                    && r.challenges.len() == 2
+                    && r.challenges.iter().all(|c| c.frame.is_some())
+            })
+            .await?;
+        server.abort();
+        eprintln!("live turnstile: {}", serde_json::to_string(&result)?);
+        assert_eq!(result.challenges.len(), 2, "{result:#?}");
+        let frames: std::collections::HashSet<_> = result
+            .challenges
+            .iter()
+            .filter_map(|c| c.frame.as_ref().map(|f| f.frame_id.clone()))
+            .collect();
+        assert_eq!(frames.len(), 2, "{result:#?}");
+        assert!(
+            result
+                .challenges
+                .iter()
+                .all(|c| c.kind == CaptchaKind::Turnstile)
+        );
+        Ok(())
+    }
+
+    async fn live_dom_detection(html: &str, setup: &str) -> anyhow::Result<Detection> {
+        use super::super::page::LivePage;
+        use browseros_cdp::{CdpClient, ConnectOptions};
+        use browseros_core::{Browser, pages::NewPageOptions};
+
+        let port: u16 = std::env::var("CAPTCHA_LIVE_CDP_PORT")?.parse()?;
+        assert!(![9010, 9011, 9121, 9211, 9212, 9213, 9214, 9215].contains(&port));
+        let connection = std::sync::Arc::new(CdpClient::connect(ConnectOptions::new(port)).await?);
+        let browser = Browser::new(connection.clone());
+        let id = browser
+            .new_page("about:blank", NewPageOptions::default())
+            .await?;
+        let page = LivePage::with_dom_world(browser.view().await, id.clone(), live_dom_world());
+        page.eval_main(&format!(
+            "document.body.innerHTML = {}; {setup}; null",
+            serde_json::to_string(html)?
+        ))
+        .await?;
+        let result = detect(&page, Duration::from_secs(2)).await;
+        browser.close_page(id).await?;
+        connection.disconnect().await;
+        Ok(result?)
+    }
+
+    #[tokio::test]
+    #[ignore = "requires an owned dev browser at CAPTCHA_LIVE_CDP_PORT"]
+    async fn tests_that_live_page_settings_arrive_whole() -> anyhow::Result<()> {
+        let long = "k".repeat(3000);
+        let recaptcha = live_dom_detection(
+            "<div style=\"width:304px;height:78px\"><textarea id=\"g-recaptcha-response\" name=\"g-recaptcha-response\" style=\"display:none\"></textarea></div>",
+            &format!("window.___grecaptcha_cfg = {{clients: {{0: {{a: {{sitekey: 'key', s: '{long}'}}}}}}}}"),
+        )
+        .await?;
+        assert!(recaptcha.complete);
+        assert_eq!(recaptcha.challenges.len(), 1, "{:?}", recaptcha.challenges);
+        assert_eq!(recaptcha.challenges[0].kind, CaptchaKind::RecaptchaV2);
+        assert_eq!(recaptcha.challenges[0].sitekey.as_deref(), Some("key"));
+        assert_eq!(
+            recaptcha.challenges[0].recaptcha_s.as_deref(),
+            Some(long.as_str())
+        );
+
+        // The top document's key comes through the vendor read, a child's through its gate.
+        let aws = "<div id=\"captcha-container\" style=\"width:300px;height:100px\">AWS WAF</div>";
+        let settings = format!("gokuProps = {{key: '{long}'}}");
+        for (html, setup, in_child) in [
+            (aws.to_owned(), format!("window.{settings}"), false),
+            (
+                "<iframe style=\"width:360px;height:180px\"></iframe>".to_owned(),
+                format!(
+                    "const f = document.querySelector('iframe'); f.contentDocument.body.innerHTML = {}; f.contentWindow.{settings}",
+                    serde_json::to_string(aws)?
+                ),
+                true,
+            ),
+        ] {
+            let result = live_dom_detection(&html, &setup).await?;
+            assert!(result.complete, "in child: {in_child}");
+            assert_eq!(result.challenges.len(), 1, "{:?}", result.challenges);
+            let challenge = &result.challenges[0];
+            assert_eq!(challenge.kind, CaptchaKind::AwsWaf);
+            assert_eq!(challenge.host_frame.is_some(), in_child);
+            assert_eq!(challenge.sitekey.as_deref(), Some(long.as_str()));
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore = "requires an owned dev browser at CAPTCHA_LIVE_CDP_PORT"]
+    async fn tests_that_live_response_tokens_belong_to_the_selected_widget() -> anyhow::Result<()> {
+        for (attribute, field, kind) in [
+            (
+                "class=\"geetest_widget\"",
+                "captcha_output",
+                CaptchaKind::Geetest,
+            ),
+            (
+                "id=\"awswaf-widget\"",
+                "captcha_voucher",
+                CaptchaKind::AwsWaf,
+            ),
+        ] {
+            for inside in [false, true] {
+                let token = format!("<input name=\"{field}\" value=\"old-answer\">");
+                let html = format!(
+                    "<div {attribute} style=\"width:300px;height:100px\">Widget{}</div>{}",
+                    if inside { &token } else { "" },
+                    if inside { "" } else { &token }
+                );
+                let result = live_dom_detection(&html, "").await?;
+                assert!(result.complete);
+                assert_eq!(result.challenges.len(), 1);
+                assert_eq!(result.challenges[0].kind, kind);
+                assert_eq!(
+                    result.challenges[0].state,
+                    if inside {
+                        ChallengeState::Passed
+                    } else {
+                        ChallengeState::Active
+                    },
+                    "{kind:?}, inside={inside}"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore = "requires an owned dev browser at CAPTCHA_LIVE_CDP_PORT"]
+    async fn tests_that_live_response_fields_in_shadows_do_not_duplicate_widgets()
+    -> anyhow::Result<()> {
+        for mode in ["open", "closed"] {
+            let html = r#"<div class="g-recaptcha" data-sitekey="test" data-size="invisible" style="width:300px;height:100px"><x-response></x-response></div>"#;
+            let setup = format!(
+                "document.querySelector('x-response').attachShadow({{mode:'{mode}'}}).innerHTML = '<textarea name=\"g-recaptcha-response\"></textarea>'"
+            );
+            let result = live_dom_detection(html, &setup).await?;
+            assert!(result.complete);
+            assert_eq!(result.challenges.len(), 1, "{mode}");
+            assert_eq!(result.challenges[0].kind, CaptchaKind::RecaptchaV2);
+            assert_eq!(result.challenges[0].state, ChallengeState::WidgetOnly);
+        }
+        Ok(())
+    }
+}

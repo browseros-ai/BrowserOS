@@ -104,7 +104,8 @@ gh workflow run release-docker.yml --ref main -f version=0.52.0.1 -f push=false
 
 The workflow builds this commit's server for both architectures on WarpBuild's
 32-vCPU x64 runner (zig cross-compiles arm64; see `warpbuild-ci.md`), with a
-WarpBuild-backed Cargo cache of the shared build-dir. It then builds and tests each
+WarpBuild-backed Cargo cache of `target/neo-docker` (the job's `CARGO_TARGET_DIR`,
+which holds intermediates and final artifacts). It then builds and tests each
 image natively: amd64 on `ubuntu-latest`, arm64 on `ubuntu-24.04-arm`. Each first
 checks that the image's `browseros-claw-server` is byte-identical to the server job's
 binary, replacing the one the browser package bundles. Both run the viewer/MCP smoke

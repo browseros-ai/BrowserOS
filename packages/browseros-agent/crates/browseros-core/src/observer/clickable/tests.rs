@@ -281,3 +281,147 @@ fn a_malformed_capture_yields_fewer_hits_not_a_panic() {
 
     assert!(page.hits().is_empty());
 }
+
+const TEXT_NODE: i64 = 3;
+
+/// Closed shadow roots as Chromium serializes them: no node for the root, the host's flat
+/// children are the root's top level, and every node inside carries the root's type.
+impl Page {
+    /// An element inside a shadow root of type `kind`, under its flat `parent`.
+    fn inside(&mut self, parent: usize, name: &str, kind: &str) -> usize {
+        let node = self.element(parent, name, &[], "auto");
+        self.mark(node, kind)
+    }
+
+    fn mark(&mut self, node: usize, kind: &str) -> usize {
+        self.nodes.shadow_root_type.index.push(node as i64);
+        let kind = self.string(kind);
+        self.nodes.shadow_root_type.value.push(kind);
+        node
+    }
+
+    fn seeds(self) -> Vec<i64> {
+        let document = Document {
+            nodes: self.nodes,
+            layout: self.layout,
+        };
+        closed_shadow_seeds(&document, &self.strings)
+    }
+}
+
+#[test]
+fn a_page_without_a_closed_root_has_no_seeds() {
+    let mut page = Page::new();
+    let body = page.body;
+    page.element(body, "DIV", &[], "auto");
+    let host = page.element(body, "DIV", &[], "auto");
+    page.inside(host, "BUTTON", "open");
+    // "closed" in the page's own text is not a root type.
+    page.node(Some(body), TEXT_NODE, "closed", &[]);
+
+    assert!(page.seeds().is_empty());
+}
+
+#[test]
+fn each_flat_parent_with_closed_element_children_gives_its_first_one() {
+    let mut page = Page::new();
+    let body = page.body;
+    let host = page.element(body, "DIV", &[], "auto");
+    let top = page.inside(host, "DIV", "closed");
+    let sibling = page.inside(host, "MY-CARD", "closed");
+    let child = page.inside(top, "SPAN", "closed");
+    page.inside(top, "INPUT", "closed");
+    let under_sibling = page.inside(sibling, "SPAN", "closed");
+
+    assert_eq!(
+        page.seeds(),
+        [backend(top), backend(child), backend(under_sibling)],
+        "the host's first, then each parent inside the root that could host one, once"
+    );
+}
+
+#[test]
+fn a_parent_inside_a_closed_root_that_cannot_host_one_gives_no_seed() {
+    let mut page = Page::new();
+    let body = page.body;
+    let host = page.element(body, "DIV", &[], "auto");
+    let list = page.inside(host, "UL", "closed");
+    for _ in 0..3 {
+        let item = page.inside(list, "LI", "closed");
+        let button = page.inside(item, "BUTTON", "closed");
+        page.inside(button, "SPAN", "closed");
+    }
+
+    assert_eq!(
+        page.seeds(),
+        [backend(list)],
+        "a list, its items and their buttons can host no root: one root, one seed"
+    );
+}
+
+#[test]
+fn a_closed_root_inside_a_closed_root_gets_a_seed_and_the_outermost_come_first() {
+    let mut page = Page::new();
+    let body = page.body;
+    let outer_host = page.element(body, "DIV", &[], "auto");
+    let outer_top = page.inside(outer_host, "SECTION", "closed");
+    let inner_host = page.inside(outer_top, "MY-INNER", "closed");
+    let inner_top = page.inside(inner_host, "BUTTON", "closed");
+    let open_host = page.element(body, "DIV", &[], "auto");
+    let open_top = page.inside(open_host, "DIV", "open");
+    let in_open = page.inside(open_top, "MY-WIDGET", "open");
+    let closed_in_open = page.inside(in_open, "INPUT", "closed");
+
+    assert_eq!(
+        page.seeds(),
+        [
+            backend(outer_top),
+            backend(closed_in_open),
+            backend(inner_host),
+            backend(inner_top),
+        ],
+        "every root has a seed; the tops of roots whose host is not in a closed root lead"
+    );
+}
+
+#[test]
+fn text_pseudo_elements_and_slots_give_no_seeds() {
+    let mut page = Page::new();
+    let body = page.body;
+    let host = page.element(body, "DIV", &[], "auto");
+    let text = page.node(Some(host), TEXT_NODE, "#text", &[]);
+    page.mark(text, "closed");
+    let pseudo = page.inside(host, "::before", "closed");
+    page.nodes.pseudo_type.index.push(pseudo as i64);
+    let before = page.string("before");
+    page.nodes.pseudo_type.value.push(before);
+    let slot = page.inside(host, "SLOT", "closed");
+    // What a slot shows in the flat tree, a node assigned from the host's own tree or the slot's
+    // fallback content, is reached through that tree's own host.
+    page.element(slot, "P", &[], "auto");
+    page.inside(slot, "SPAN", "closed");
+
+    assert_eq!(
+        page.seeds(),
+        [backend(slot)],
+        "the first element child of the host, never a text node, a pseudo-element or what a \
+         slot shows"
+    );
+}
+
+#[test]
+fn a_malformed_capture_yields_fewer_seeds_not_a_panic() {
+    assert!(closed_shadow_seeds(&Document::default(), &[]).is_empty());
+
+    let mut page = Page::new();
+    let body = page.body;
+    let host = page.element(body, "DIV", &[], "auto");
+    let lost = page.inside(host, "DIV", "closed");
+    page.inside(lost, "SPAN", "closed");
+    page.nodes.backend_node_id.truncate(lost);
+    page.nodes.shadow_root_type.index.push(-3);
+    page.nodes.shadow_root_type.value.push(999);
+    page.nodes.parent_index.push(77);
+
+    assert!(page.seeds().is_empty());
+}

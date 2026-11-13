@@ -1,0 +1,36 @@
+[package]
+name = "neo-trace"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Bounded run and operation records, screenshots and request replay for hosted BrowserOS Neo (claw-sdk)"
+
+[dependencies]
+browseros-core.workspace = true
+futures-util.workspace = true
+percent-encoding.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sea-orm.workspace = true
+sea-orm-migration.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+uuid = { workspace = true, features = ["v7"] }
+# Only behind the `ts-rs` feature below.
+ts-rs = { workspace = true, optional = true }
+
+[features]
+# Derives ts-rs's `TS` on the record types that cross the run envelope (`ErrorOwner`, `Delivery`,
+# `OperationId`), which neo-server prints in the prelude's generated TypeScript; the orphan rule
+# keeps the derive here. Only neo-server turns it on.
+ts-rs = ["dep:ts-rs"]
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
+
+[lints]
+workspace = true

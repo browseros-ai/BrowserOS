@@ -1,0 +1,533 @@
+//! The keyboard and mouse ops and their registration metadata.
+//!
+//! ```text
+//!  keyboard.* / mouse.* ── admit the page ── focus lease (tabs core did not create)
+//!    ── the tab's input lock ── the burst, built on a copy of the tab's devices
+//!    ── send_effect ── the typing window (keys) ── the burst, on the page's root session
+//! ```
+//!
+//! Script options share the input's top level with positional params, as in Playwright.
+//! `options!` keeps the positional fields out of generated script option keys.
+//!
+//! Positions are the page's main-viewport CSS pixels, as in Playwright: the root session hit
+//! tests them through every frame, and keys go to the focused frame, out-of-process ones
+//! included (decisions.md, root-session input). The tab's devices take the copy's state only
+//! when its burst goes out, so a call refused before that (an unknown key, a refused
+//! recheck) leaves nothing held for the next one.
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use serde::Deserialize;
+use serde_json::Value;
+use ts_rs::TS;
+
+use crate::input::{
+    BurstFailure, ClickOptions, InputDevices, InputStep, Keyboard, MouseButton, PageInput, Point,
+    Typed, UnknownKey,
+};
+use crate::listed_enum::listed_enum;
+use crate::op_input::OpArgs;
+use crate::op_scope::OpScope;
+use crate::op_spec::{OpSpec, PAGE};
+use crate::page::OpPage;
+use crate::target::PageRef;
+use crate::wire::{self, Describe, Nothing, OpWire, Route, Run, options};
+use crate::{ErrorCode, Playwright, PlaywrightError, action};
+
+listed_enum! {
+    /// Page-level keyboard and mouse input. `mouse.dblclick` is `mouse.click` with a click
+    /// count of 2, as in Playwright's client.
+    pub(crate) enum InputOp {
+        KeyboardDown,
+        KeyboardUp,
+        KeyboardPress,
+        KeyboardType,
+        KeyboardInsertText,
+        MouseMove,
+        MouseDown,
+        MouseUp,
+        MouseClick,
+        MouseWheel,
+    }
+}
+
+impl InputOp {
+    /// Describes the same input shapes and null answers the runtime route handles.
+    pub(crate) fn wire(self) -> OpWire {
+        route(self, Describe)
+    }
+
+    /// This op's registration metadata.
+    pub(crate) const fn spec(self) -> OpSpec {
+        match self {
+            Self::KeyboardDown => OpSpec::write("keyboard.down", PAGE, "hold a key down"),
+            Self::KeyboardUp => OpSpec::write("keyboard.up", PAGE, "release a held key"),
+            Self::KeyboardPress => OpSpec::write(
+                "keyboard.press",
+                PAGE,
+                "press a key or chord on the focused element",
+            ),
+            Self::KeyboardType => OpSpec::write(
+                "keyboard.type",
+                PAGE,
+                "type text key by key into the focused element",
+            ),
+            Self::KeyboardInsertText => OpSpec::write(
+                "keyboard.insertText",
+                PAGE,
+                "insert text into the focused element without key events",
+            ),
+            Self::MouseMove => OpSpec::write("mouse.move", PAGE, "move the mouse to a point"),
+            Self::MouseDown => OpSpec::write(
+                "mouse.down",
+                PAGE,
+                "press a mouse button where the mouse is",
+            ),
+            Self::MouseUp => OpSpec::write("mouse.up", PAGE, "release a mouse button"),
+            Self::MouseClick => {
+                OpSpec::write("mouse.click", PAGE, "click at a point; also mouse.dblclick")
+            }
+            Self::MouseWheel => {
+                OpSpec::write("mouse.wheel", PAGE, "scroll the wheel where the mouse is")
+            }
+        }
+    }
+}
+
+/// `keyboard.down(key)` and `keyboard.up(key)`.
+#[derive(Debug, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+#[ts(rename = "KeyboardKeyInput")]
+struct KeyInput {
+    page: PageRef,
+    key: Typed,
+}
+options!(KeyInput);
+
+/// `keyboard.press(key, { delay })`.
+#[derive(Debug, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+#[ts(rename = "KeyboardPressInput")]
+struct PressInput {
+    page: PageRef,
+    key: Typed,
+    #[serde(default)]
+    #[ts(optional)]
+    delay: Option<f64>,
+}
+options!(PressInput, flat, positional["key"]);
+
+/// `keyboard.type(text, { delay })`.
+#[derive(Debug, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+#[ts(rename = "KeyboardTypeInput")]
+struct TypeInput {
+    page: PageRef,
+    text: Typed,
+    #[serde(default)]
+    #[ts(optional)]
+    delay: Option<f64>,
+}
+options!(TypeInput, flat, positional["text"]);
+
+/// `keyboard.insertText(text)`.
+#[derive(Debug, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+#[ts(rename = "KeyboardInsertTextInput")]
+struct InsertTextInput {
+    page: PageRef,
+    text: Typed,
+}
+options!(InsertTextInput);
+
+/// `mouse.move(x, y, { steps })`.
+#[derive(Debug, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+#[ts(rename = "MouseMoveInput")]
+struct MoveInput {
+    page: PageRef,
+    x: f64,
+    y: f64,
+    #[serde(default)]
+    #[ts(optional)]
+    steps: Option<u32>,
+}
+options!(MoveInput, flat, positional ["x", "y"]);
+
+/// `mouse.down({ button, clickCount })` and `mouse.up(..)`.
+#[derive(Debug, Deserialize, TS)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+#[ts(rename = "MouseButtonInput")]
+struct ButtonInput {
+    page: PageRef,
+    #[serde(default)]
+    #[ts(optional)]
+    button: Option<WireButton>,
+    #[serde(default)]
+    #[ts(optional)]
+    click_count: Option<u32>,
+}
+options!(ButtonInput, flat);
+
+/// `mouse.click(x, y, { button, clickCount, delay })` and `mouse.dblclick`.
+#[derive(Debug, Deserialize, TS)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+#[ts(rename = "MouseClickInput")]
+struct ClickInput {
+    page: PageRef,
+    x: f64,
+    y: f64,
+    #[serde(default)]
+    #[ts(optional)]
+    button: Option<WireButton>,
+    #[serde(default)]
+    #[ts(optional)]
+    click_count: Option<u32>,
+    #[serde(default)]
+    #[ts(optional)]
+    delay: Option<f64>,
+}
+options!(ClickInput, flat, positional ["x", "y"]);
+
+/// `mouse.wheel(deltaX, deltaY)`.
+#[derive(Debug, Deserialize, TS)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+#[ts(rename = "MouseWheelInput")]
+struct WheelInput {
+    page: PageRef,
+    delta_x: f64,
+    delta_y: f64,
+}
+options!(WheelInput);
+
+#[derive(Clone, Copy, Debug, Deserialize, TS)]
+#[serde(rename_all = "lowercase")]
+#[ts(rename = "MouseButton")]
+enum WireButton {
+    Left,
+    Right,
+    Middle,
+}
+
+fn button(wire: Option<WireButton>) -> MouseButton {
+    match wire {
+        None | Some(WireButton::Left) => MouseButton::Left,
+        Some(WireButton::Right) => MouseButton::Right,
+        Some(WireButton::Middle) => MouseButton::Middle,
+    }
+}
+
+/// Runs one keyboard or mouse op through the shared decode/call/encode boundary. The route
+/// boxes the burst future so the dispatcher does not inherit its device state machine.
+pub(crate) async fn invoke(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    op: InputOp,
+    args: OpArgs,
+) -> Result<Value, PlaywrightError> {
+    route(op, Run { pw, scope, args }).await
+}
+
+/// Run and Describe share this exhaustive list. Admission, leases and device-state commit
+/// remain inside `burst`; describing a contract never acquires any of them.
+fn route<'a, R: Route<'a>>(op: InputOp, r: R) -> R::Out {
+    match op {
+        InputOp::KeyboardDown => r.op(wire::command("Page.keyboardDown"), keyboard_down),
+        InputOp::KeyboardUp => r.op(wire::command("Page.keyboardUp"), keyboard_up),
+        InputOp::KeyboardPress => r.op(wire::command("Page.keyboardPress"), keyboard_press),
+        InputOp::KeyboardType => r.op(wire::command("Page.keyboardType"), keyboard_type),
+        InputOp::KeyboardInsertText => r.op(
+            wire::command("Page.keyboardInsertText"),
+            keyboard_insert_text,
+        ),
+        InputOp::MouseMove => r.op(wire::command("Page.mouseMove"), mouse_move),
+        InputOp::MouseDown => r.op(wire::command("Page.mouseDown"), mouse_down),
+        InputOp::MouseUp => r.op(wire::command("Page.mouseUp"), mouse_up),
+        InputOp::MouseClick => r.op(wire::command("Page.mouseClick"), mouse_click),
+        InputOp::MouseWheel => r.op(wire::command("Page.mouseWheel"), mouse_wheel),
+    }
+}
+
+async fn keyboard_down(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: KeyInput,
+) -> Result<Nothing, PlaywrightError> {
+    burst(pw, scope, &input.page, |devices| {
+        devices.keyboard.down(&input.key.0)
+    })
+    .await
+}
+
+async fn keyboard_up(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: KeyInput,
+) -> Result<Nothing, PlaywrightError> {
+    burst(pw, scope, &input.page, |devices| {
+        devices.keyboard.up(&input.key.0)
+    })
+    .await
+}
+
+async fn keyboard_press(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: PressInput,
+) -> Result<Nothing, PlaywrightError> {
+    let delay = millis(input.delay);
+    burst(pw, scope, &input.page, |devices| {
+        devices.keyboard.press(&input.key.0, delay)
+    })
+    .await
+}
+
+async fn keyboard_type(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: TypeInput,
+) -> Result<Nothing, PlaywrightError> {
+    let delay = millis(input.delay);
+    burst(pw, scope, &input.page, |devices| {
+        Ok(devices.keyboard.type_text(&input.text.0, delay))
+    })
+    .await
+}
+
+async fn keyboard_insert_text(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: InsertTextInput,
+) -> Result<Nothing, PlaywrightError> {
+    burst(pw, scope, &input.page, |_| {
+        Ok(Keyboard::insert_text(&input.text.0))
+    })
+    .await
+}
+
+async fn mouse_move(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: MoveInput,
+) -> Result<Nothing, PlaywrightError> {
+    let to = Point {
+        x: input.x,
+        y: input.y,
+    };
+    let steps = input.steps.unwrap_or(1);
+    burst(pw, scope, &input.page, |devices| {
+        let held = devices.keyboard.modifiers();
+        Ok(devices.mouse.move_to(to, steps, held))
+    })
+    .await
+}
+
+async fn mouse_down(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: ButtonInput,
+) -> Result<Nothing, PlaywrightError> {
+    let pressed = button(input.button);
+    let count = input.click_count.unwrap_or(1);
+    burst(pw, scope, &input.page, |devices| {
+        let held = devices.keyboard.modifiers();
+        Ok(devices.mouse.down(pressed, count, held))
+    })
+    .await
+}
+
+async fn mouse_up(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: ButtonInput,
+) -> Result<Nothing, PlaywrightError> {
+    let pressed = button(input.button);
+    let count = input.click_count.unwrap_or(1);
+    burst(pw, scope, &input.page, |devices| {
+        let held = devices.keyboard.modifiers();
+        Ok(devices.mouse.up(pressed, count, held))
+    })
+    .await
+}
+
+async fn mouse_click(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: ClickInput,
+) -> Result<Nothing, PlaywrightError> {
+    // 1.64.1's protocol gives `mouse.click` no `steps` (mouse.rs, `ClickOptions`).
+    let options = ClickOptions {
+        button: button(input.button),
+        click_count: input.click_count.unwrap_or(1),
+        delay: millis(input.delay),
+        steps: 1,
+    };
+    let at = Point {
+        x: input.x,
+        y: input.y,
+    };
+    burst(pw, scope, &input.page, |devices| {
+        let held = devices.keyboard.modifiers();
+        Ok(devices.mouse.click(at, options, held))
+    })
+    .await
+}
+
+async fn mouse_wheel(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: WheelInput,
+) -> Result<Nothing, PlaywrightError> {
+    burst(pw, scope, &input.page, |devices| {
+        let held = devices.keyboard.modifiers();
+        Ok(devices.mouse.wheel(input.delta_x, input.delta_y, held))
+    })
+    .await
+}
+
+/// One call's burst on `page`, from admission to its last step. `build` turns the call into
+/// steps on a copy of the tab's devices; an unknown key fails the op before anything is sent.
+async fn burst(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    page: &PageRef,
+    build: impl FnOnce(&mut InputDevices) -> Result<Vec<InputStep>, UnknownKey>,
+) -> Result<(), PlaywrightError> {
+    let page = OpPage::admit_handle(pw, scope, page).await?;
+    let _lease = action::lease(scope, &page).await?;
+    let mut input = hold(scope, &page).await?;
+    let mut planned = input.plan();
+    let steps = build(&mut planned)
+        .map_err(|unknown| scope.fail(ErrorCode::InvalidInput, &unknown.to_string()))?;
+    let sent = scope.send_effect()?;
+    input
+        .send_planned(&sent, scope, planned, steps)
+        .await
+        .map_err(|failure| burst_failed(scope, failure))
+}
+
+/// The tab's input lock, within the op's timeout, with the tab brought forward first: a mouse
+/// move or wheel is acked at the tab's next frame, and a cross-site frame's document takes the
+/// focus only once its tab has the page focus this gives (focus emulation reaches only the main
+/// frame's process).
+pub(crate) async fn hold(
+    scope: &OpScope<'_>,
+    page: &OpPage<'_>,
+) -> Result<PageInput, PlaywrightError> {
+    scope.bring_forward(page.tab()).await;
+    let scale = scope.view().pointer_scale(page.core_page());
+    let held = PageInput::hold(Arc::clone(page.state().input()), page.root_session(), scale);
+    scope
+        .within(held)
+        .await
+        .map_err(|_expired| scope.timed_out(ErrorCode::NotActionable))
+}
+
+/// A burst that could not go out whole; what it sent may have landed.
+pub(crate) fn burst_failed(scope: &OpScope<'_>, failure: BurstFailure) -> PlaywrightError {
+    match failure {
+        BurstFailure::Expired => scope.timed_out(ErrorCode::NotActionable),
+        BurstFailure::Cdp(error) => scope.core_error(&error).after_input(),
+    }
+}
+
+/// A Playwright delay in milliseconds; a negative or non-finite one waits nothing, as a
+/// negative JavaScript timer does.
+pub(crate) fn millis(delay: Option<f64>) -> Duration {
+    delay
+        .filter(|millis| millis.is_finite() && *millis > 0.0)
+        .and_then(|millis| Duration::try_from_secs_f64(millis / 1000.0).ok())
+        .unwrap_or(Duration::ZERO)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error;
+
+    use serde_json::json;
+
+    use super::InputOp;
+    use crate::op::Op;
+    use crate::op_scope::OpScope;
+    use crate::target::CallHeader;
+    use crate::test_env::{self, TestEnv};
+    use crate::wire::Nothing;
+    use crate::{ErrorCode, Playwright, op_output};
+
+    #[tokio::test]
+    async fn tests_that_bad_options_name_the_flat_parameter() -> Result<(), Box<dyn Error>> {
+        let pw = Playwright::new(test_env::offline_session());
+        let page = json!({ "$neo": "page", "tab": 1007 });
+        // These are the only script-visible error changes in alignment: serde names the
+        // upstream parameter itself instead of the removed options bag.
+        for (name, field, input) in [
+            (
+                "keyboard.press",
+                "delay",
+                json!({ "page": page, "key": "a", "delay": "bad" }),
+            ),
+            (
+                "keyboard.type",
+                "delay",
+                json!({ "page": page, "text": "a", "delay": "bad" }),
+            ),
+            (
+                "mouse.move",
+                "steps",
+                json!({ "page": page, "x": 1, "y": 2, "steps": "bad" }),
+            ),
+            (
+                "mouse.down",
+                "button",
+                json!({ "page": page, "button": "bad" }),
+            ),
+            (
+                "mouse.up",
+                "clickCount",
+                json!({ "page": page, "clickCount": "bad" }),
+            ),
+            (
+                "mouse.click",
+                "delay",
+                json!({ "page": page, "x": 1, "y": 2, "delay": "bad" }),
+            ),
+        ] {
+            let op = Op::from_name(name).ok_or("the input op is registered")?;
+            let error = pw
+                .invoke(&TestEnv::new(), op, input)
+                .await
+                .err()
+                .ok_or("an invalid option must fail at decode, before browser admission")?;
+            assert_eq!(error.error_code(), Some(ErrorCode::InvalidInput));
+            assert!(
+                error.message().starts_with(&format!("{name}: {field}: ")),
+                "the flat parameter owns the decode error: {error}"
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_every_input_answer_keeps_its_null_bytes() -> Result<(), Box<dyn Error>> {
+        // Input already answered null before route migration. A typed empty object would
+        // change those bytes, even though the script's methods discard their answers.
+        let answer: Nothing = ();
+        let env = TestEnv::new();
+        for op in InputOp::ALL {
+            let wire = op.wire();
+            let registered = Op::from_name(op.spec().name).ok_or("the input op is registered")?;
+            let scope = OpScope::new(&env, registered, CallHeader::default());
+            let output = op_output::to_output(&scope, &answer)?;
+            assert_eq!(serde_json::to_string(&output)?, "null");
+            assert_eq!(
+                wire.output,
+                "null",
+                "{} must still answer null",
+                op.spec().name
+            );
+            scope.release_objects().await;
+        }
+        Ok(())
+    }
+}

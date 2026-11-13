@@ -8,7 +8,7 @@ use axum::{
     http::{HeaderMap, Request, StatusCode, header},
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
-use browseros_cdp::{CdpError, CdpEvent, SessionId as CdpSessionId};
+use browseros_cdp::{CdpError, CdpEvent, SessionId as CdpSessionId, TargetedEvents};
 use browseros_core::{BrowserSession, BrowserSessionHooks, CdpConnection, TargetId};
 use claw_server::{
     AppState, build_router,
@@ -29,7 +29,7 @@ use std::{
     time::Duration,
 };
 use tempfile::TempDir;
-use tokio::sync::{Notify, broadcast};
+use tokio::sync::{Notify, broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 use tower::ServiceExt;
 
@@ -46,6 +46,7 @@ struct TestApp {
 
 struct FixtureConnection {
     events: broadcast::Sender<CdpEvent>,
+    targeted: TargetedEvents,
     tabs: tokio::sync::Mutex<Vec<Value>>,
     get_tabs_calls: AtomicUsize,
     fail_next_get_tabs: AtomicBool,
@@ -74,6 +75,7 @@ impl FixtureConnection {
         let (events, _) = broadcast::channel(1);
         Arc::new(Self {
             events,
+            targeted: TargetedEvents::default(),
             tabs: tokio::sync::Mutex::new((1..=8).map(fixture_tab).collect()),
             get_tabs_calls: AtomicUsize::new(0),
             fail_next_get_tabs: AtomicBool::new(false),
@@ -226,6 +228,10 @@ impl CdpConnection for FixtureConnection {
 
     fn events(&self) -> broadcast::Receiver<CdpEvent> {
         self.events.subscribe()
+    }
+
+    fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+        self.targeted.subscribe(method)
     }
 
     fn is_connected(&self) -> bool {
