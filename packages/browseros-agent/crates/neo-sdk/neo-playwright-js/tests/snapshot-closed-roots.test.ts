@@ -35,7 +35,7 @@ it('tests that every v1 form and mode full open with the line, and the same text
   expect(renderFullSnapshot(page(5, true), 8000)).toBe(`${LINE}\n${whole}`)
 })
 
-it('tests that the line sits under the text notice and survives the size cap', () => {
+it('tests that the line sits under the text notice and that no size cap removes it', () => {
   // About 4,000 tokens of text: over the 3,000 the default keeps text for, and over a cap of 1,000.
   const large = page(500, true)
   const v1 = renderSnapshotV1(large, withDefaults({})).text.split('\n')
@@ -47,6 +47,17 @@ it('tests that the line sits under the text notice and survives the size cap', (
   const full = renderFullSnapshot(large, 1000).split('\n')
   expect(full[0]).toBe(LINE)
   expect(full.some((line) => line.startsWith('# cut: '))).toBe(true)
+  // No limit hides it, as none hides the cut line; the size the cut line gives leaves it out.
+  for (const maxTokens of [1, 10]) {
+    const tiny = renderSnapshotV1(large, withDefaults({ maxTokens })).text
+    expect(tiny.split('\n')).toContain(LINE)
+    expect(renderFullSnapshot(large, maxTokens).split('\n')[0]).toBe(LINE)
+    const without = renderSnapshotV1(
+      page(500, false),
+      withDefaults({ maxTokens }),
+    )
+    expect(tiny.replace(`${LINE}\n`, '')).toBe(without.text)
+  }
 })
 
 it("tests that Playwright's own YAML never prints the line", () => {

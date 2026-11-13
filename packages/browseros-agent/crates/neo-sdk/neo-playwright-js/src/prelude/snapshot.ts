@@ -159,6 +159,7 @@ export function renderFullSnapshot(
   maxTokens: number,
 ): string {
   return cap(
+    [],
     partialHead(result),
     printed(yamlLines(result, false)),
     maxTokens * CHARS_PER_TOKEN,

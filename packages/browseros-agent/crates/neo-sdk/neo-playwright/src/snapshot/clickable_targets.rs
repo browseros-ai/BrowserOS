@@ -89,9 +89,9 @@ pub(super) struct Marking {
 
 /// Closed-root seeds over every frame of one snapshot attempt: found in the frames' captures, and
 /// sent to their probes. A frame counts its seeds as found once its capture is read, and as sent
-/// only once they are resolved into its world, so a frame whose read failed or ran out of time
-/// after that, or whose seeds the cap cut, leaves `sent` short: some closed roots may be unread,
-/// and the snapshot's text says so.
+/// only once each is resolved into its world, so a frame whose read failed or ran out of time
+/// after that, a seed removed from the page since the capture, or seeds the cap cut leave `sent`
+/// short: some closed roots may be unread, and the snapshot's text says so.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) struct SeedCount {
     pub(super) found: usize,
@@ -246,24 +246,26 @@ impl Marking {
             ));
             seeds.truncate(SEED_CAP);
         }
-        let sending = seeds.len();
         let targets = hits
             .into_iter()
             .filter(|(_, reasons)| !reasons.iter().any(|reason| reason == POINTER_REASON))
             .map(|(node, _)| (Fed::Target, node));
-        let nodes = seeds.into_iter().map(|node| (Fed::Seed, node)).chain(targets);
+        let nodes = seeds
+            .into_iter()
+            .map(|node| (Fed::Seed, node))
+            .chain(targets);
         let resolved: Vec<(Fed, Option<String>)> = stream::iter(nodes)
             .map(|(fed, node)| async move {
-                resolve(scope, world, node).await.map(|object| (fed, object))
+                resolve(scope, world, node)
+                    .await
+                    .map(|object| (fed, object))
             })
             .buffer_unordered(RESOLVES_IN_FLIGHT)
             .try_collect()
             .await?;
-        // A seed that left its document since the capture resolved to nothing: there is no root
-        // of it left to read, so it counts as sent.
-        self.count_seeds(|count| count.sent += sending);
         let mut feed = Feed::default();
-        // A node that left its document since the capture resolved to nothing and is skipped.
+        // A node that left its document since the capture resolved to nothing and is skipped. A
+        // seed that did is not sent: its root may still hold the rest of what it held.
         for (fed, object) in resolved {
             let Some(object) = object else { continue };
             match fed {
@@ -271,6 +273,7 @@ impl Marking {
                 Fed::Target => feed.targets.push(object),
             }
         }
+        self.count_seeds(|count| count.sent += feed.seeds.len());
         Ok(feed)
     }
 }

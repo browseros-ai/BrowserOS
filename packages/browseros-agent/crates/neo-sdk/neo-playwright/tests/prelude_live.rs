@@ -1902,10 +1902,16 @@ fn assert_closed_content_reads(read: &Value) {
         1,
         "a role locator reaches the nested closed root"
     );
-    assert_eq!(field("clicked"),
-        1, "the click through the ref reached the page");
-    assert_eq!(field("value"),
-        "typed", "the fill through the ref reached the page");
+    assert_eq!(
+        field("clicked"),
+        1,
+        "the click through the ref reached the page"
+    );
+    assert_eq!(
+        field("value"),
+        "typed",
+        "the fill through the ref reached the page"
+    );
     assert_eq!(
         field("pageReads"),
         json!([null, null, null]),
@@ -1924,7 +1930,9 @@ async fn assert_closed_change_is_listed(
         js_runner::run_script(host, init, "return { base: await page.ariaSnapshot() }").await?;
     run.end_run(Some(&base));
     let button = ref_on(
-        base.get("base").and_then(Value::as_str).ok_or("the baseline")?,
+        base.get("base")
+            .and_then(Value::as_str)
+            .ok_or("the baseline")?,
         "- button \"Closed button\"",
     )?;
     let changed = js_runner::run_script(
@@ -1977,15 +1985,26 @@ async fn assert_the_switch_keeps_roots_closed(run: &Arc<LiveRun>, url: &Value) -
         .get("ai")
         .and_then(Value::as_str)
         .ok_or("Playwright's ai text")?;
-    for inside in ["Closed button", "Closed box", "Nested button", "Outer text", "Slot text"] {
-        assert!(!ai.contains(inside), "under the switch {inside} stays closed: {ai}");
+    for inside in [
+        "Closed button",
+        "Closed box",
+        "Nested button",
+        "Outer text",
+        "Slot text",
+    ] {
+        assert!(
+            !ai.contains(inside),
+            "under the switch {inside} stays closed: {ai}"
+        );
     }
     assert!(
         ai.contains("Slotted button"),
         "the host's own button is light content, which upstream reads: {ai}"
     );
     assert!(
-        !methods.iter().any(|method| method == "DOMSnapshot.captureSnapshot"),
+        !methods
+            .iter()
+            .any(|method| method == "DOMSnapshot.captureSnapshot"),
         "under the switch no capture is made: {methods:?}"
     );
     Ok(())
@@ -2089,13 +2108,16 @@ async fn tests_that_more_closed_roots_than_the_cap_say_so_in_the_text() -> TestR
     for options in ["{ text: false }", "{ mode: 'full' }"] {
         let text = snapshot_of(&host, &many, options).await?;
         assert_eq!(text.lines().next(), Some(line), "{options}: {text}");
-        assert!(text.contains("- button \"Card 0\" [ref="), "{options}: {text}");
+        assert!(
+            text.contains("- button \"Card 0\" [ref="),
+            "{options}: {text}"
+        );
     }
     let notes = notes(&run);
     assert!(
-        notes
-            .iter()
-            .any(|line| line == "  closed shadow roots: a frame has 1001 seeds, the first 1000 sent"),
+        notes.iter().any(
+            |line| line == "  closed shadow roots: a frame has 1001 seeds, the first 1000 sent"
+        ),
         "the cut is on the call log: {notes:#?}"
     );
     let few = server.url("127.0.0.1", "/closed/few.html");
@@ -2156,11 +2178,20 @@ async fn tests_that_closed_roots_slot_their_hosts_children_as_open_ones_do() -> 
         let closed_text = without_refs(&snapshot_of(&host, &closed, options).await?);
         let open_text = without_refs(&snapshot_of(&host, &open, options).await?);
         assert_eq!(closed_text, open_text, "{options}");
-        for shown in ["Named", "Ay", "Bee", "Manual", "Two", "Outer", "Inner", "Deep"] {
-            assert_eq!(closed_text.matches(shown).count(), 1, "{options}: {shown}\n{closed_text}");
+        for shown in [
+            "Named", "Ay", "Bee", "Manual", "Two", "Outer", "Inner", "Deep",
+        ] {
+            assert_eq!(
+                closed_text.matches(shown).count(),
+                1,
+                "{options}: {shown}\n{closed_text}"
+            );
         }
         for hidden in ["Unslotted", "One"] {
-            assert!(!closed_text.contains(hidden), "{options}: {hidden}\n{closed_text}");
+            assert!(
+                !closed_text.contains(hidden),
+                "{options}: {hidden}\n{closed_text}"
+            );
         }
         assert!(
             closed_text.find("\"Ay\"") < closed_text.find("\"Bee\""),
@@ -2170,7 +2201,10 @@ async fn tests_that_closed_roots_slot_their_hosts_children_as_open_ones_do() -> 
     let upstream: Arc<dyn OpHost> = Arc::new(Upstream(Arc::clone(&run)));
     let ai = snapshot_of(&upstream, &closed, "{ mode: 'ai' }").await?;
     for inside in ["Named", "Manual", "Outer", "Inner"] {
-        assert!(!ai.contains(inside), "under the switch {inside} stays closed: {ai}");
+        assert!(
+            !ai.contains(inside),
+            "under the switch {inside} stays closed: {ai}"
+        );
     }
     assert!(
         ai.find("\"Bee\"") < ai.find("\"Ay\""),
