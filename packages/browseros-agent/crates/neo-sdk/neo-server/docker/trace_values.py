@@ -188,7 +188,7 @@ def run_case(client, socket_path, token_file, tag, mode, origin, server):
     require(repeated["meta"] == reply["meta"] and repeated["value"] == reply["value"], f"{mode} immediate repeat changed its reply")
     require(server.downloads == before + 1, f"{mode} repeat executed the download again")
 
-    failed_meta = {**meta, "requestId": f"{tag}-{mode}-error"}
+    failed_meta = {**meta, "requestId": f"{tag}-{mode}-failed-request"}
     failed = call_run(client, f"throw new Error({json.dumps(markers['run-error'])});", failed_meta)
     require(failed["meta"].get("status") == "error", f"{mode} throwing script did not fail")
     failed_id = failed["meta"].get("id")
