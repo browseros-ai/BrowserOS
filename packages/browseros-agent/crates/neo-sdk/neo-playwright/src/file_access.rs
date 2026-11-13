@@ -175,6 +175,12 @@ impl FileAccess {
 
     /// Authorizes a destination, including missing tails and final symlinks. Writes outside
     /// Neo's own locations remain unrestricted; read roots are not a write allowlist.
+    ///
+    /// The check judges path names, and the save then makes its folders and writes by path name.
+    /// It protects against a script, whose only writes are regular files and the folders their
+    /// saves make, and assumes that only Neo and the host create links under a listed folder or
+    /// the home: it does not cover a hostile process in the container that plants a link between
+    /// this check and the write.
     pub async fn write(&self, path: &Path) -> Result<WritePath, FileAccessError> {
         let resolved = resolve(path, ResolveMode::Candidate).await?;
         let target = resolved
