@@ -9,6 +9,7 @@ import type { FrameInfo } from "./FrameInfo";
 export type PageFrames = { frames?: Array<FrameInfo>, 
 /**
  * `true` when an out-of-process frame under the tree could not be read: `frames` then lacks
- * it (and what it holds). The operation's notes name each such frame, for the host.
+ * it (and what it holds). The operation's record is marked `framesIncomplete` for the host,
+ * and the server's warn line names each such frame and its error.
  */
 incomplete?: boolean, };

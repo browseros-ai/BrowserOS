@@ -233,6 +233,7 @@ fn operation_fields(op: &OperationRow, inlined: &Inlined, fields: Fields) -> api
             .then(|| inlined.screenshot(op.id).map(Box::new))
             .flatten(),
         main_world: op.main_world,
+        frames_incomplete: op.frames_incomplete,
         internal: op.is_internal(),
     }
 }

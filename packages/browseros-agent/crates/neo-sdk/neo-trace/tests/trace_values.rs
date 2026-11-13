@@ -128,6 +128,7 @@ fn operation_ended(id: OperationId) -> OperationEnded {
             title: Some("Checkout".to_owned()),
         }),
         main_world: true,
+        frames_incomplete: false,
         at: at(i64::from(id.seq) * 10 + 5),
     }
 }

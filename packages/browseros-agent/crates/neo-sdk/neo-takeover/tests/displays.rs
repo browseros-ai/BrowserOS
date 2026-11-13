@@ -471,6 +471,7 @@ impl Harness {
             error: None,
             page_after: None,
             main_world: false,
+            frames_incomplete: false,
             at,
         });
     }

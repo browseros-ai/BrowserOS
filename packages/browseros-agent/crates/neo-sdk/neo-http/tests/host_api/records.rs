@@ -366,6 +366,7 @@ async fn record_values_read_back_as_given_in_every_channel() -> TestResult {
             title: Some(format!("Welcome {value}")),
         }),
         main_world: false,
+        frames_incomplete: false,
         at: at(2),
     });
     h.sink.run_ended(RunEnded {
@@ -479,6 +480,7 @@ async fn starts_defer_input_and_ends_publish_the_original_values() -> TestResult
         error: None,
         page_after: None,
         main_world: false,
+        frames_incomplete: false,
         at: at(2),
     });
     h.sink.run_ended(RunEnded {
@@ -569,6 +571,72 @@ async fn operation_routes_return_script_sites_and_omit_missing_sites() -> TestRe
     Ok(())
 }
 
+/// Every operation route says whether an ended operation's frame-tree read was whole, true or
+/// false, on full and summary reads, and leaves `framesIncomplete` out while one runs. The reads
+/// are Neo's own, so `internal=false` leaves them out, as the host's guide says.
+#[tokio::test]
+async fn operation_routes_say_which_frame_tree_reads_were_not_whole() -> TestResult {
+    let h = harness().await?;
+    let run = start_run(&h.sink, Start::default());
+    let short = OperationId::new(run, 1);
+    let whole = OperationId::new(run, 2);
+    let running = OperationId::new(run, 3);
+    for id in [short, whole, running] {
+        op_started(
+            &h.sink,
+            id,
+            Op {
+                name: "page.frames",
+                effect: Effect::Read,
+                ..Op::write(3, 1)
+            },
+        );
+    }
+    for (id, frames_incomplete) in [(short, true), (whole, false)] {
+        h.sink.op_ended(OperationEnded {
+            id,
+            outcome: Outcome::Ok,
+            delivery: Delivery::Done,
+            sent_at: None,
+            result: None,
+            error: None,
+            page_after: None,
+            main_world: false,
+            frames_incomplete,
+            at: at(3),
+        });
+    }
+    h.flushed().await?;
+    for query in ["", "?fields=summary"] {
+        let detail = h.get(&format!("/v1/runs/{run}{query}")).await?;
+        assert_eq!(detail.status, StatusCode::OK, "{}", detail.body);
+        let in_run: Vec<_> = detail.body["operations"]
+            .as_array()
+            .ok_or("the run's operations")?
+            .iter()
+            .map(|op| op.get("framesIncomplete").cloned())
+            .collect();
+        assert_eq!(
+            in_run,
+            [Some(json!(true)), Some(json!(false)), None],
+            "{query}"
+        );
+    }
+    let operation = h.get(&format!("/v1/operations/{short}")).await?;
+    assert_eq!(operation.body["framesIncomplete"], json!(true));
+    let tail = h.get("/v1/trace").await?;
+    let in_tail: Vec<_> = tail.body["operations"]
+        .as_array()
+        .ok_or("the tail's operations")?
+        .iter()
+        .map(|op| op.get("framesIncomplete").cloned())
+        .collect();
+    assert_eq!(in_tail, [Some(json!(true)), Some(json!(false)), None]);
+    let script_only = h.get(&format!("/v1/runs/{run}?internal=false")).await?;
+    assert_eq!(script_only.body["operations"], json!([]));
+    Ok(())
+}
+
 /// Every operation route says whether an ended operation ran script in the page's main world,
 /// true or false, and leaves `mainWorld` out while one runs, rather than guessing.
 #[tokio::test]
@@ -602,6 +670,7 @@ async fn operation_routes_say_which_operations_ran_in_the_main_world() -> TestRe
             error: None,
             page_after: None,
             main_world,
+            frames_incomplete: false,
             at: at(3),
         });
     }

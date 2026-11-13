@@ -74,6 +74,7 @@ async fn all_open_native_tabs_include_distinct_task_history_and_current_metadata
             title: None,
         }),
         main_world: false,
+        frames_incomplete: false,
         at: support::at(3),
     });
     h.flushed().await?;

@@ -134,6 +134,7 @@ fn op_ended(sink: &TraceSink, id: OperationId, delivery: Delivery, result: Optio
             title: Some("Done".into()),
         }),
         main_world: false,
+        frames_incomplete: false,
         at: at(i64::from(id.seq) * 10 + 5),
     });
 }
@@ -192,6 +193,7 @@ fn answered(
         error: None,
         page_after,
         main_world: false,
+        frames_incomplete: false,
         at: at(millis + 5),
     }
 }
@@ -820,6 +822,7 @@ async fn an_operations_main_world_flag_reads_back_as_its_end_gave_it()
     op_started(&h.sink, simple(goto, "page.goto", Effect::Write));
     h.sink.op_ended(OperationEnded {
         main_world: true,
+        frames_incomplete: false,
         ..answered(evaluate, 10, None, None)
     });
     h.sink.op_ended(answered(click, 20, None, None));
@@ -1627,6 +1630,7 @@ fn ended(id: OperationId) -> OperationEnded {
         error: None,
         page_after: None,
         main_world: false,
+        frames_incomplete: false,
         at: at(i64::from(id.seq) * 10 + 5),
     }
 }

@@ -109,6 +109,7 @@ fn operation(
         }),
         page_after: None,
         main_world: false,
+        frames_incomplete: false,
         at: at(i64::from(id.seq) + 1),
     });
 }
@@ -240,6 +241,7 @@ fn named(sink: &TraceSink, id: OperationId, name: &str, effect: Effect, tab: i64
         error: None,
         page_after: None,
         main_world: false,
+        frames_incomplete: false,
         at: at(i64::from(id.seq) + 1),
     });
 }
@@ -283,6 +285,7 @@ async fn neos_own_listeners_make_no_tab_the_runs_for_its_run_end_shots() -> Test
             title: None,
         }),
         main_world: false,
+        frames_incomplete: false,
         at: at(9),
     });
     let after = waiting_jobs(&mut h).await?;
@@ -845,6 +848,7 @@ async fn a_protected_operation_and_its_tab_get_no_picture() -> TestResult {
                 title: None,
             }),
             main_world: false,
+            frames_incomplete: false,
             at: at(i64::from(seq) + 1),
         });
     }

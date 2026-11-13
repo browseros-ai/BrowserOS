@@ -88,6 +88,9 @@ pub struct Operation {
     /// True when the operation ran script in the page's main world, the page's own JavaScript world, rather than Neo's isolated world. Present once the operation has ended, so an operation still running, one whose end Neo never recorded, or one recorded before this field has none.
     #[serde(rename = "mainWorld", skip_serializing_if = "Option::is_none")]
     pub main_world: Option<bool>,
+    /// True when the operation read a tab's frame tree that was not whole: an out-of-process frame's subtree (a cross-site iframe's) could not be read, or no tree came back at all. Neo's own `page.frames` reads carry it. The script's `page.frames()` then lists the frames that were read, and the tree is read again before the script's next operation settles, so a later `page.frames` operation of the same tab shows whether that read was whole. It describes this one read: `false` on an operation that failed (refused, timed out) says nothing about the tree, which it did not answer. Present once the operation has ended, so an operation still running, one whose end Neo never recorded, or one recorded before this field has none.
+    #[serde(rename = "framesIncomplete", skip_serializing_if = "Option::is_none")]
+    pub frames_incomplete: Option<bool>,
     /// True for Neo-owned subscription work, derived from the shared subscription-name rule and the absence of a script call site. Explicit script listeners carry a site and are false. Historical listeners without recorded sites are indistinguishable from Neo-owned work and are true. This field appears on every operation read and event.
     #[serde(rename = "internal")]
     pub internal: bool,
@@ -131,6 +134,7 @@ impl Operation {
             has_screenshot,
             screenshot: None,
             main_world: None,
+            frames_incomplete: None,
             internal,
         }
     }

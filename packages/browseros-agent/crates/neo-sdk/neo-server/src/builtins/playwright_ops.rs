@@ -769,6 +769,10 @@ impl<M> OpEnv for OpCtxEnv<'_, M> {
         self.op.mark_main_world();
     }
 
+    fn frames_incomplete(&self) {
+        self.op.mark_frames_incomplete();
+    }
+
     fn note(&self, line: String) {
         self.op.note(line);
     }

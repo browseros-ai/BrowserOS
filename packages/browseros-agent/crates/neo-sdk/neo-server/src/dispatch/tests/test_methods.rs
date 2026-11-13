@@ -40,6 +40,7 @@ pub(super) fn test_methods(
 ) -> Result<(), RegistryError> {
     registry.define(Write)?;
     registry.define(MainWorldWrite)?;
+    registry.define(ShortFrameRead)?;
     registry.define(Read)?;
     registry.define(TakeoverRead {
         lock: Arc::clone(&shared.lock),
@@ -132,6 +133,32 @@ impl Method for MainWorldWrite {
             op.mark_main_world();
             json!({ "ran": true })
         }))
+    }
+}
+
+/// A frame-tree read that came back short, as sdk-playwright reports one through
+/// `OpEnv::frames_incomplete`.
+struct ShortFrameRead;
+
+impl Method for ShortFrameRead {
+    type Input = OnPage;
+    type Output = Value;
+
+    fn spec(&self) -> MethodSpec {
+        MethodSpec::new("test.frames_incomplete", Effect::Read)
+    }
+
+    fn target(input: &OnPage) -> Option<&PageTarget> {
+        Some(&input.page)
+    }
+
+    fn call(
+        &self,
+        op: &OpCtx<Self>,
+        _input: OnPage,
+    ) -> impl Future<Output = Result<Value, LeafError>> + Send {
+        op.mark_frames_incomplete();
+        future::ready(Ok(json!({ "incomplete": true })))
     }
 }
 

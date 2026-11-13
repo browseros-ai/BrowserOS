@@ -386,6 +386,11 @@ impl<'env> OpScope<'env> {
         self.env.main_world();
     }
 
+    /// Tells the host this op's frame-tree read is not whole (`OpEnv::frames_incomplete`).
+    pub(crate) fn frames_incomplete(&self) {
+        self.env.frames_incomplete();
+    }
+
     /// Re-runs the host's attempt-stage policies, then marks the op sent, and returns the
     /// proof every effect takes. Call it right before each attempt's effect: an action that
     /// retries its input re-checks before every attempt, because the owner can take over

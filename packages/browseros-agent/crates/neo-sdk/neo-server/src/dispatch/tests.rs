@@ -136,6 +136,31 @@ async fn an_ops_record_says_whether_it_ran_in_the_main_world() -> Result<(), Box
     Ok(())
 }
 
+/// An op's trace record says whether its frame-tree read was whole, as the method marked it,
+/// true or false: the mark a host reads to find a run whose script got a short tree.
+#[tokio::test]
+async fn an_ops_record_says_whether_its_frame_tree_read_was_whole() -> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let page = harness.page("https://example.com/").await?;
+    let (run, _guard) = harness.run()?;
+
+    let (short, reply) = harness
+        .submit(
+            &run,
+            "test.frames_incomplete",
+            json!({ "page": handle(&page) }),
+        )
+        .await;
+    assert!(reply.outcome.is_ok(), "{:?}", reply.outcome);
+    let (write, reply) = harness
+        .submit(&run, "test.write", json!({ "page": handle(&page) }))
+        .await;
+    assert!(reply.outcome.is_ok(), "{:?}", reply.outcome);
+    assert_eq!(harness.row(short).await?.frames_incomplete, Some(true));
+    assert_eq!(harness.row(write).await?.frames_incomplete, Some(false));
+    Ok(())
+}
+
 #[tokio::test]
 async fn a_refused_recheck_is_the_ops_error_however_the_method_then_fails()
 -> Result<(), Box<dyn Error>> {

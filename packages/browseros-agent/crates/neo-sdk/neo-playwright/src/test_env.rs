@@ -22,6 +22,8 @@ pub(crate) enum EnvCall {
     MarkSent,
     /// The op said it is about to send script into a page's main world.
     MainWorld,
+    /// The op said its frame-tree read is not whole.
+    FramesIncomplete,
     Note(String),
     /// The close evidence handed to the host with a delivered event.
     ReportClose(TabId, TargetId, u64),
@@ -146,6 +148,10 @@ impl OpEnv for TestEnv {
 
     fn main_world(&self) {
         self.record(EnvCall::MainWorld);
+    }
+
+    fn frames_incomplete(&self) {
+        self.record(EnvCall::FramesIncomplete);
     }
 
     fn report_close(&self, tab: TabId, target: &TargetId, seq: u64) {
