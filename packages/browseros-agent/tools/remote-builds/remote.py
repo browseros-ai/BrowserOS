@@ -76,9 +76,10 @@ def manifest(crabbox: str, root: Path, config: Path) -> list[dict]:
     return sorted(files, key=lambda row: row["path"])
 
 
-def fingerprint(path: Path, allow_link: bool = False) -> tuple:
+def fingerprint(path: Path, allow_link: bool = False, allow_directory: bool = False) -> tuple:
     value = path.lstat()
-    if not stat.S_ISREG(value.st_mode) and not (allow_link and stat.S_ISLNK(value.st_mode)):
+    if (not stat.S_ISREG(value.st_mode) and not (allow_link and stat.S_ISLNK(value.st_mode))
+            and not (allow_directory and stat.S_ISDIR(value.st_mode))):
         raise Failure("source contains a symlink or non-regular file")
     return value.st_dev, value.st_ino, value.st_size, value.st_mode, value.st_mtime_ns, value.st_ctime_ns
 
@@ -115,9 +116,24 @@ def snapshot_source(repository: Path, relative: Path, selected: set[str], links:
         target = Path(os.readlink(source))
         if target.is_absolute():
             raise Failure("absolute source symlinks are not transferred")
-        relative = Path(os.path.normpath(relative.parent / target))
-        if relative.is_absolute() or ".." in relative.parts:
-            raise Failure("source symlink escapes the transferred tree")
+        # Inspect the actual traversal before collapsing '..'. For example,
+        # '.scratch/../CLAUDE.md' can resolve outside this tree when .scratch is
+        # a directory link, even though lexical normalization looks harmless.
+        directories = {parent for path in selected for parent in Path(path).parents}
+        candidate = relative.parent
+        for index, component in enumerate(target.parts):
+            if component == "..":
+                if candidate == Path("."):
+                    raise Failure("source symlink escapes the transferred tree")
+                candidate = candidate.parent
+            else:
+                candidate /= component
+            if index < len(target.parts) - 1:
+                directory = repository / candidate
+                if candidate not in directories or directory.is_symlink() or not directory.is_dir():
+                    raise Failure("source symlink traverses an excluded path or directory link")
+                observed.append((candidate.as_posix(), fingerprint(directory, allow_directory=True)))
+        relative = candidate
 
 
 def index_snapshot(snapshot: Path) -> None:

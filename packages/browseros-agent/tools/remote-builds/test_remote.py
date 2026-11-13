@@ -354,6 +354,21 @@ class TransferTests(unittest.TestCase):
             with self.assertRaisesRegex(remote.Failure, "source changed"):
                 remote.freeze(CRABBOX, self.repo, self.frozen, self.config)
 
+    def test_parent_traversal_cannot_hide_a_directory_symlink_or_excluded_hop(self):
+        self.write("packages/browseros-agent/CLAUDE.md", "approved\n")
+        agent = self.repo / "packages/browseros-agent"
+        shutil.rmtree(agent / ".scratch")
+        (agent / ".scratch").symlink_to(self.repo / ".git", target_is_directory=True)
+        self.track_link("AGENTS.md", ".scratch/../CLAUDE.md")
+        with self.assertRaisesRegex(remote.Failure, "excluded path or directory link"):
+            remote.freeze(CRABBOX, self.repo, self.frozen, self.config)
+
+    def test_relative_parent_link_within_selected_directories_is_allowed(self):
+        self.write("packages/browseros-agent/CLAUDE.md", "approved\n")
+        self.track_link("src/AGENTS.md", "../CLAUDE.md")
+        remote.freeze(CRABBOX, self.repo, self.frozen, self.config)
+        self.assertEqual("approved\n", (self.frozen / "packages/browseros-agent/src/AGENTS.md").read_text())
+
     def test_legacy_image_manifest_adds_only_its_five_declared_inputs(self):
         for path in remote.LEGACY_SUPERVISOR:
             self.write(path, "legacy supervisor source\n")
