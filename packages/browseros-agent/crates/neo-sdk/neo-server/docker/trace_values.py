@@ -302,6 +302,13 @@ def database_files():
     return [database] + ([wal] if wal.exists() else [])
 
 
+def check_transport_logs(logged, markers):
+    """MCP carries script text and CDP carries typed bytes; frame dumps can print them as hex."""
+    for kind, label in (("script", "script text"), ("argument", "typed bytes")):
+        marker = markers[kind].encode()
+        require(marker not in logged and marker.hex().encode() not in logged, f"TRACE log exposed {label}")
+
+
 def check_control(case):
     record, markers = case["record"], case["markers"]
     operations = record.get("operations") or []
@@ -318,11 +325,7 @@ def check_control(case):
     # Entered text already prints as a character count in the default call log. Preserve
     # that contract while proving the fill announcement reached the real debug sink.
     require(f"fill(<{len(markers['argument'])} characters>)".encode() in logged, "on control has no debug fill announcement")
-    # The script marker travels through MCP; the typed argument reaches a real CDP
-    # Input.insertText frame. Check plaintext and the frame logger's hexadecimal rendering.
-    for kind, label in (("script", "script text"), ("argument", "typed bytes")):
-        marker = markers[kind].encode()
-        require(marker not in logged and marker.hex().encode() not in logged, f"TRACE log exposed {label}")
+    check_transport_logs(logged, markers)
     require(any(markers["error"] in (op.get("error") or {}).get("message", "") for op in operations), "on control has no stored operation error canary")
     require(markers["run-error"] in (case["failed_record"].get("error") or {}).get("message", ""), "on control has no stored run error canary")
     database = sqlite3.connect(f"file:{TRACE_DIR / 'trace.db'}?mode=ro", uri=True)
@@ -542,6 +545,7 @@ def probe(url, socket_path, token_file):
         require(logs.is_dir(), "server log folder is missing, so its raw scan cannot prove absence")
         log_files = [path for path in logs.rglob("*") if path.is_file()]
         require(log_files, "no server log file was available for the canary scan")
+        check_transport_logs(b"".join(path.read_bytes() for path in log_files), off["markers"])
         off_markers = {**off["markers"], "crash-blob": off_crash["canary"]}
         for kind, paths in scan(database_files() + output_files + log_files, off_markers).items():
             require(not paths, f"off {kind} canary remains in raw database, WAL, outputs or server logs")
