@@ -43,7 +43,7 @@ use crate::owner_view::{self, OwnerView};
 use crate::screen::Screen;
 use crate::surface::{Seen, Surface};
 use crate::surface_steps::{self, PlanFor};
-use crate::{BrowserTabs, FitId, PartError, ScreenHolder, ScreenSize, Xvnc};
+use crate::{BrowserTabs, FitId, PartError, ScreenHolder, ScreenSize, TabHold, Xvnc};
 use browseros_core::{TabId, TargetId};
 use neo_trace::EpochMillis;
 use std::collections::HashMap;
@@ -298,6 +298,19 @@ impl Fits {
     #[must_use]
     pub fn view(&self, id: FitId) -> Option<Fit> {
         self.table().get(&id).map(|entry| entry.fit.clone())
+    }
+
+    /// Whether an active fit is on `tab` now, or when its last fit was restored: the idle-tab
+    /// janitor keeps a fitted tab, which is how a host shows it to the owner, and restarts its
+    /// idle clock from the restore. `None` when no fit named the tab within the last hour
+    /// (`limits::KEEP_RESTORED_FIT`). Never waits on the browser.
+    #[must_use]
+    pub fn hold(&self, tab: TabId) -> Option<TabHold> {
+        self.table()
+            .values()
+            .filter(|entry| entry.fit.tab == tab)
+            .map(|entry| entry.restored().map_or(TabHold::Now, TabHold::Until))
+            .reduce(TabHold::latest)
     }
 
     /// The owner's browser bar, on the fitted tab. It is the host's own call, not the agent's,

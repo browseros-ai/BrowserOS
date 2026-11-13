@@ -23,7 +23,7 @@ An unknown id throws `task_not_found`, whose hint points to `context.pages()` an
 The reply is exactly what the script returned, plus console lines and existing notes.
 Hosts get touched tasks in `_meta["com.browseros.neo/run"].tasks`; host task ids and the
 neo-viewer proxy keep their existing behavior. Tasks live in memory (at most 4096);
-a restart forgets them while tabs stay. The janitor closes agent-opened tabs idle for 30 minutes.
+a restart forgets them while tabs stay. The janitor closes agent-opened tabs nobody used for the host's `tabs.idleCloseSeconds`, 30 minutes by default.
 
 ```text
 host / MCP run

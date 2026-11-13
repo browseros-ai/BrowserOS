@@ -74,6 +74,7 @@ mod screen_rule;
 mod screen_size;
 mod surface;
 mod surface_steps;
+mod tab_hold;
 mod takeovers;
 #[doc(hidden)]
 pub mod testing;
@@ -90,6 +91,7 @@ pub use part_error::PartError;
 pub use part_ids::{FitId, LockId, TakeoverId, UnknownId};
 pub use screen_rule::{OwnerHasScreen, ScreenHolder};
 pub use screen_size::{NotAScreenSize, ScreenSize, Xvnc};
+pub use tab_hold::TabHold;
 pub use takeovers::{
     ReleaseReason, Takeover, TakeoverRequest, TakeoverState, TakeoverTtl, Takeovers,
 };

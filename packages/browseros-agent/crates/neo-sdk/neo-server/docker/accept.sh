@@ -33,6 +33,9 @@
 #                    small bytes stay inline; 300 KiB of text is still result_too_large
 #   mcp-remote       9011 is the same MCP over TLS; with NEO_MCP_REMOTE=false (the default) a
 #                    sibling container is cut off on 9010 and 9011; with true it is answered
+#   settings         PATCH /v1/settings applies and lists an unknown name, a bad value is 400 and
+#                    changes nothing; after SIGKILL of the server alone (the browser relaunches it)
+#                    GET answers what the host set; settings.json is 0600 neo under /data
 #   restart-browser  neo-quit 9110 quits cleanly, the supervisor restarts Neo, a new run passes
 #   stop             docker stop -t 25 takes under 20 s, exits 0, Neo and claw-sdk log the stop
 #   persist          a new container on the same /data reads the run and replays its requestId
@@ -155,6 +158,16 @@ as_agent=(setpriv --reuid 2002 --regid 2002 --clear-groups)
 client() { local name=$1; shift; docker exec -w /opt/neo-accept "$name" "$@"; }
 run_call() { client "$1" "${as_host[@]}" python3 accept_client.py run http://127.0.0.1:9010/mcp "$2" "$3"; }
 host_get() { client "$1" "${as_host[@]}" python3 accept_client.py host /run/neo/host.sock /run/neo-accept/host-token "$2"; }
+host_send() { # name method path json
+  client "$1" "${as_host[@]}" python3 accept_client.py host-send /run/neo/host.sock /run/neo-accept/host-token "$2" "$3" "$4"
+}
+server_pid() { # name: the claw-sdk server's pid, by its argv[0] (only this check's container).
+  # Not /proc/<pid>/exe: under the dropped capabilities root may not read another uid's.
+  docker exec "$1" sh -c 'server=$(neo-server-info path)
+    for p in /proc/[0-9]*; do
+      [ "$(tr "\0" "\n" < "$p/cmdline" 2>/dev/null | head -1)" = "$server" ] && echo "${p#/proc/}"
+    done' | head -1
+}
 probe() { # target-ip port scheme, from a throwaway sibling on the same network
   docker run --rm -i --name "$prefix-probe" --network "$network" --entrypoint python3 "$image" \
     - probe "$1" "$2" "$3" < "$here/accept_client.py"
@@ -208,7 +221,7 @@ detail="$image_arch, browser $(fact browser), server $(fact marker) $(fact sha |
 if [ ${#problems[@]} -eq 0 ]; then result PASS identity "$detail"; else result FAIL identity "${problems[*]}"; fi
 
 if [ "$image_arch" != "$engine_arch" ]; then
-  for check in boot mcp host-api downloads blobs mcp-remote restart-browser stop persist kill-all captcha-keys; do
+  for check in boot mcp host-api downloads blobs settings mcp-remote restart-browser stop persist kill-all captcha-keys; do
     result SKIP "$check" "$image_arch image on a $engine_arch engine: emulated, not evidence"
   done
   printf '\n'; printf '%s\n' "${results[@]}"
@@ -301,6 +314,36 @@ if [ "$booted" = 1 ]; then
   if [ "$tls" = 200 ] && [ "$(jget "$remote_http" 'd["http"]')" = closed ] && [ "$(jget "$remote_tls" 'd["http"]')" = closed ]; then
     remote_off_ok=1
   fi
+
+  # --- settings ------------------------------------------------------------------------------
+  # The browser relaunches a killed server by itself and no host notices, so what the host set
+  # must come back from /data before the server's first run. Only the server is killed.
+  set_reply=$(host_send "$main" PATCH /v1/settings \
+    '{"tabs":{"idleCloseSeconds":300},"trace":{"retentionSeconds":86400},"files":{"readDirs":["/data"]}}')
+  refused=$(host_send "$main" PATCH /v1/settings '{"tabs":{"idleCloseSeconds":5}}')
+  old_pid=$(server_pid "$main") new_pid="" read_back='{}'
+  [ -n "$old_pid" ] && docker exec "$main" kill -KILL "$old_pid"
+  for _ in $(seq 1 60); do
+    new_pid=$(server_pid "$main")
+    [ -n "$new_pid" ] && [ "$new_pid" != "$old_pid" ] && break
+    sleep 1
+  done
+  for _ in $(seq 1 60); do
+    read_back=$(host_get "$main" /v1/settings)
+    [ "$(jget "$read_back" 'd["status"]')" = 200 ] && break
+    sleep 1
+  done
+  file_mode=$(docker exec "$main" stat -c '%a %U' /data/browserclaw/claw-sdk/settings.json 2>&1)
+  wanted='{"tabs": {"idleCloseSeconds": 300}, "trace": {"retentionSeconds": 86400}}'
+  if [ "$(jget "$set_reply" 'd["status"]')" = 200 ] && [ "$(jget "$set_reply" 'd["body"]["unknown"]')" = "['files']" ] \
+      && [ "$(jget "$refused" 'd["status"]')" = 400 ] && [ -n "$old_pid" ] && [ -n "$new_pid" ] && [ "$new_pid" != "$old_pid" ] \
+      && [ "$(jget "$read_back" '__import__("json").dumps(d["body"]["settings"], sort_keys=True)')" = "$wanted" ] \
+      && [ "$file_mode" = "600 neo" ]; then
+    result PASS settings "set 300 s / 1 day with files.* listed unknown, 5 s refused; server $old_pid killed, $new_pid relaunched, GET answers what the host set; settings.json $file_mode"
+  else
+    result FAIL settings "set=${set_reply:0:200}; refused=${refused:0:160}; pid $old_pid -> $new_pid; read=${read_back:0:200}; file=$file_mode"
+  fi
+  host_send "$main" PUT /v1/settings '{}' >/dev/null
 
   # --- restart-browser -----------------------------------------------------------------------
   docker exec "$main" neo-quit 9110; quit_status=$?
@@ -419,7 +462,7 @@ for pid in pids:
     result FAIL captcha-keys "image's own keys listed=$main_captcha (want $want_main); host key file listed=${keyed_captcha:-not booted}"
   fi
 else
-  for check in mcp host-api downloads blobs mcp-remote restart-browser stop persist kill-all captcha-keys; do
+  for check in mcp host-api downloads blobs settings mcp-remote restart-browser stop persist kill-all captcha-keys; do
     result FAIL "$check" "not run: the image did not boot"
   done
 fi

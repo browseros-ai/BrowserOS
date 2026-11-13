@@ -61,7 +61,7 @@ use axum::{Json, Router};
 use browseros_cdp::{CdpClient, ConnectOptions, ReconnectPolicy};
 use browseros_core::viewport::{ViewportMode, ViewportRequest, Viewports};
 use browseros_core::{BrowserSession, BrowserSessionHooks, BrowserView, PageJs, TabId};
-use neo_service::{HostAuth, HostToken, PeerRule, Service, ServiceInputs, host_service};
+use neo_service::{HostAuth, HostToken, PeerRule, Service, ServiceInputs, Settings, host_service};
 use neo_takeover::{Front, FrontError, LockTarget, Locks, ScreenSize, Xvnc};
 use neo_trace::{
     Delivery, Effect, EpochMillis, OperationEnded, OperationId, OperationKind, OperationStarted,
@@ -211,6 +211,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
             home: args.neo_screen,
         },
         cdp_port: args.cdp_port,
+        // Beside trace.db, where the app keeps them.
+        settings: Settings::load(dir.join("settings.json")).await,
     });
     let surface = SurfaceCalls {
         sink: sink.clone(),

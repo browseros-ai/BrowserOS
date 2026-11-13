@@ -11,7 +11,7 @@ use crate::host_service::Authenticated;
 use crate::service::ServiceState;
 use crate::{
     display_route, events_route, fit_routes, live_tabs, part_routes, record_routes, response_id,
-    tab_routes, takeover_routes,
+    settings_routes, tab_routes, takeover_routes,
 };
 use axum::extract::Request;
 use axum::middleware::Next;
@@ -63,6 +63,12 @@ pub(crate) fn router(state: Arc<ServiceState>) -> Router {
         .route(
             "/v1/takeovers/{takeover_id}/release",
             post(takeover_routes::release_takeover),
+        )
+        .route(
+            "/v1/settings",
+            get(settings_routes::get_settings)
+                .put(settings_routes::put_settings)
+                .patch(settings_routes::patch_settings),
         )
         .fallback(not_found)
         .with_state(state)

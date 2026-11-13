@@ -10,6 +10,7 @@ use axum::Router;
 use browseros_core::NativeCapabilities;
 use neo_captcha::CaptchaSolver;
 use neo_captcha::config::{CAPSOLVER_KEY_FILE_ENV, TWOCAPTCHA_KEY_FILE_ENV};
+use neo_service::Settings;
 use neo_trace::{
     EpochMillis, Redactor, RetentionPolicy, TraceError, TraceSink, TraceStore, WriterConfig,
 };
@@ -25,7 +26,7 @@ use crate::browser::{BrowserLink, TabRegistry};
 use crate::builtins::{self, BuiltinDeps, CaptchaClaims, PlaywrightFacade, TabJanitor};
 use crate::config::{AppConfig, Defaults, HostedMode};
 use crate::dispatch::{Dispatcher, Observer, RegistryBuilder};
-use crate::host::{AgentFront, HostApi, HostInputs, TakeoverLock};
+use crate::host::{AgentFront, HostApi, HostHolds, HostInputs, TakeoverLock};
 use crate::http::agent_router;
 use crate::mcp::McpServer;
 use crate::run::{RunService, RunServiceParts};
@@ -38,12 +39,13 @@ use crate::test_support::FakeCdp;
 /// ```text
 ///  start ─ bind the agent port (taken: exit 2) ─ trace store + writer (with the
 ///          screenshot queue) ─ host socket (with a usable token; bind failure: exit 1)
+///          and the host's settings (saved beside trace.db, or the defaults with no socket)
 ///        ─ TabRegistry + BrowserLink (connects in the background) ─ PlaywrightFacade (built on
 ///          the link's first connect) ─ CaptchaSolver (with a provider key) ─ Registry
 ///          (built-ins, neo-playwright's ops)
 ///        ─ Dispatcher (rules: builtins::door_rules) ─ RunService ─ McpServer
 ///        ─ host API task (starts neo-service once the link connects, then serves the
-///          socket) ─ housekeeping task ─ agent router
+///          socket) ─ housekeeping task (reads the host's settings each pass) ─ agent router
 ///  serve ─ until SIGTERM ─ runs stop (shutting_down) ─ connections drain ─ trace flushed
 /// ```
 ///
@@ -94,9 +96,10 @@ impl App {
     pub(crate) async fn hosted_housekeeping(
         janitor: TabJanitor,
         trace: TraceSink,
+        settings: Settings,
         shutdown: CancellationToken,
     ) {
-        housekeeping(janitor, trace, shutdown).await;
+        housekeeping(janitor, trace, settings, shutdown).await;
     }
 
     /// The tokio runtime Neo runs on: multi-thread, with `Defaults::WORKER_STACK_BYTES` worker
@@ -172,10 +175,13 @@ impl App {
                 screenshots,
                 xvnc: config.env.xvnc,
                 cdp_port: config.launch.cdp_port,
+                settings_file: config.env.settings_file(),
             },
         )
         .await
         .map_err(|error| StartError::HostSocket(error.to_string()))?;
+        // Loaded by the bind, before anything below reads them, so the first run follows them.
+        let settings = host.settings().clone();
 
         let tabs = Arc::new(TabRegistry::new());
         let native = NativeCapabilities::from_browseros_version(config.browseros_version());
@@ -220,15 +226,25 @@ impl App {
             orphan_grace: Defaults::ORPHAN_GRACE,
         });
         let mcp = McpServer::new(runs, dispatcher.registry());
+        // Armed by the host API with its locks and fits, for the janitor.
+        let holds = Arc::new(HostHolds::default());
         tokio::spawn(host.serve(
             Arc::clone(&browser),
-            Arc::clone(&takeover),
+            takeover,
             front,
+            Arc::clone(&holds),
             shutdown.clone(),
         ));
         tokio::spawn(housekeeping(
-            TabJanitor::new(dispatcher, Arc::clone(&browser), tabs, takeover),
+            TabJanitor::new(
+                dispatcher,
+                Arc::clone(&browser),
+                tabs,
+                holds,
+                settings.clone(),
+            ),
             trace.clone(),
+            settings,
             shutdown.clone(),
         ));
         Ok(Self {
@@ -298,8 +314,15 @@ impl fmt::Debug for App {
 /// Both intervals fire once at start, so a Neo that restarts often still sweeps. A step that
 /// fails is logged and tried again on its next tick: none of them may take the process down,
 /// and none blocks a run. A sweep in progress at SIGTERM is dropped with the runtime; the
-/// store marks its run `interrupted` at the next start.
-async fn housekeeping(janitor: TabJanitor, trace: TraceSink, shutdown: CancellationToken) {
+/// store marks its run `interrupted` at the next start. Each step reads the host's settings as
+/// it starts (`tabs.idleCloseSeconds`, `trace.retentionSeconds`), so a change applies at its
+/// next tick, with no restart.
+async fn housekeeping(
+    janitor: TabJanitor,
+    trace: TraceSink,
+    settings: Settings,
+    shutdown: CancellationToken,
+) {
     let mut upkeep = time::interval(Defaults::HOUSEKEEPING_EVERY);
     let mut retention = time::interval(Defaults::TRACE_SWEEP_EVERY);
     // A tick missed while a sweep waited on the browser is not worth catching up on.
@@ -315,7 +338,11 @@ async fn housekeeping(janitor: TabJanitor, trace: TraceSink, shutdown: Cancellat
                 }
             }
             _ = retention.tick() => {
-                match trace.sweep(RetentionPolicy::default(), EpochMillis::now()).await {
+                let policy = RetentionPolicy {
+                    max_age: settings.trace_retention(),
+                    ..RetentionPolicy::default()
+                };
+                match trace.sweep(policy, EpochMillis::now()).await {
                     Ok(swept) => debug!(?swept, "trace retention sweep"),
                     Err(error) => warn!(%error, "the trace retention sweep failed; retrying on the next tick"),
                 }

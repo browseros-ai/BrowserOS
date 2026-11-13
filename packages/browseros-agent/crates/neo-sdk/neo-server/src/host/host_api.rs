@@ -2,16 +2,16 @@
 //! links, both served until SIGTERM.
 
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use neo_service::{HostAuth, HostToken, PeerRule, Service, ServiceInputs, TokenError};
+use neo_service::{HostAuth, HostToken, PeerRule, Service, ServiceInputs, Settings, TokenError};
 use neo_takeover::Xvnc;
 use neo_trace::{ShotJobs, TraceSink, TraceStore};
 use tokio::fs;
 use tokio_util::sync::CancellationToken;
 
-use super::{AgentFront, TakeoverLock, tab_feed};
+use super::{AgentFront, HostHolds, TakeoverLock, tab_feed};
 use crate::browser::BrowserLink;
 use crate::config::HostApiConfig;
 use crate::http::{BindError, HostListener};
@@ -19,9 +19,10 @@ use crate::http::{BindError, HostListener};
 /// Neo's host API (neo-service) from startup until it serves zuzu over the host socket.
 ///
 /// ```text
-///  start ─ bind: token file ─ unset or unusable: no socket (run still works)
-///                           └ usable: HostListener::bind (failure fails the start) + peer rule
-///  serve ─ the link's first connect ─▶ Service::start ─▶ TakeoverLock armed
+///  start ─ bind: token file ─ unset or unusable: no socket (run still works), default settings
+///                           └ usable: HostListener::bind (failure fails the start) + peer rule,
+///                                     then the settings the host saved (settings.json)
+///  serve ─ the link's first connect ─▶ Service::start ─▶ TakeoverLock, HostHolds armed
 ///        ─▶ tab events subscribed ─▶ tab state reconciled with a watched listing ─▶ tab_feed
 ///        └▶ host_service(service.router(), auth) on the socket, until SIGTERM
 /// ```
@@ -33,6 +34,7 @@ use crate::http::{BindError, HostListener};
 pub(crate) struct HostApi {
     inputs: HostInputs,
     socket: Option<HostSocket>,
+    settings: Settings,
 }
 
 /// What the service is built from that Neo holds at startup. The browser's half, the session
@@ -51,6 +53,8 @@ pub(crate) struct HostInputs {
     /// views open a connection of their own to it, so their frames never queue behind the
     /// agent's commands.
     pub(crate) cdp_port: u16,
+    /// Where `/v1/settings` saves what the host set: `settings.json` beside `trace.db`.
+    pub(crate) settings_file: PathBuf,
 }
 
 /// The bound host listener and the auth in front of every request on it.
@@ -73,6 +77,10 @@ impl HostApi {
     /// is no socket, as neo-service asks: never a host API behind a weak or unusable
     /// token. A socket that cannot be bound fails the start, because a host that configured a
     /// token expects the API to be there.
+    ///
+    /// With a socket, the settings are what the host saved, loaded before anything reads them,
+    /// so the first run already follows them. Without one they are the defaults, and a saved
+    /// file is left alone: no host could see or change what it would apply.
     pub(crate) async fn bind(
         config: &HostApiConfig,
         inputs: HostInputs,
@@ -90,21 +98,44 @@ impl HostApi {
                 }
             },
         };
-        Ok(Self { inputs, socket })
+        let settings = if socket.is_some() {
+            Settings::load(inputs.settings_file.clone()).await
+        } else {
+            tracing::info!(file = %inputs.settings_file.display(), "no host API, so every setting is at its default; a saved settings file is ignored");
+            Settings::defaults()
+        };
+        Ok(Self {
+            inputs,
+            socket,
+            settings,
+        })
+    }
+
+    /// The settings every part reads (the janitor, the retention sweep), live: a host's change
+    /// reaches them through these same values.
+    #[must_use]
+    pub(crate) fn settings(&self) -> &Settings {
+        &self.settings
     }
 
     /// Starts the service once the browser link's first connect lands, then serves it on the
     /// socket until `shutdown`. `takeover` is armed before the socket serves, so a lock a host
     /// takes refuses the agent from its first moment, and the first reconciliation of tab state
-    /// runs before it serves, so it cannot end a lock a host just set.
+    /// runs before it serves, so it cannot end a lock a host just set. `holds` is armed with it,
+    /// so the janitor sees every lock and fit a host takes.
     pub(crate) async fn serve(
         self,
         link: Arc<BrowserLink>,
         takeover: Arc<TakeoverLock>,
         front: Arc<AgentFront>,
+        holds: Arc<HostHolds>,
         shutdown: CancellationToken,
     ) {
-        let Self { inputs, socket } = self;
+        let Self {
+            inputs,
+            socket,
+            settings,
+        } = self;
         let session = tokio::select! {
             () = shutdown.cancelled() => return,
             session = link.linked() => session,
@@ -115,6 +146,7 @@ impl HostApi {
             screenshots,
             xvnc,
             cdp_port,
+            settings_file: _,
         } = inputs;
         let service = Service::start(ServiceInputs {
             store,
@@ -124,8 +156,13 @@ impl HostApi {
             screenshots,
             xvnc,
             cdp_port,
+            settings,
         });
         takeover.arm(Arc::clone(service.locks()));
+        holds.arm({
+            let service = service.clone();
+            move |tab| service.tab_hold(tab)
+        });
         // The owner's two claims, the tab and the screen, from the same moment: no implicit
         // agent move runs past a viewer or a takeover once a host can open one.
         front.arm(service.front().clone());

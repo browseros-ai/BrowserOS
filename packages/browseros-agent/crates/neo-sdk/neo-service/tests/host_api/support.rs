@@ -15,7 +15,7 @@ use browseros_core::viewport::Viewports;
 use futures_util::StreamExt;
 use neo_capture::CaptureTransport;
 use neo_capture::testing::{ScriptedCdp, ScriptedTransport};
-use neo_service::{HostAuth, HostToken, PeerInfo, Service, ServiceInputs, host_router};
+use neo_service::{HostAuth, HostToken, PeerInfo, Service, ServiceInputs, Settings, host_router};
 use neo_takeover::ScreenSize;
 use neo_takeover::testing::FakeXvnc;
 use neo_trace::{
@@ -173,6 +173,7 @@ async fn start(
             xvnc: xvnc.xvnc(HOME_SCREEN),
             // Never dialed: the live views capture over the transport below.
             cdp_port: 0,
+            settings: Settings::load(dir.path().join("settings.json")).await,
         },
         capture_transport.unwrap_or_else(|| Arc::new(ScriptedTransport(Arc::clone(&capture)))),
     );

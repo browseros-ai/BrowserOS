@@ -139,6 +139,13 @@ impl EnvConfig {
     pub(crate) fn trace_dir(&self) -> PathBuf {
         self.state_dir.join("claw-sdk")
     }
+
+    /// Where `/v1/settings` saves what the host set: beside `trace.db`, not in it, because a
+    /// trace store that does not open is moved aside, and the settings must not go with it.
+    #[must_use]
+    pub(crate) fn settings_file(&self) -> PathBuf {
+        self.trace_dir().join("settings.json")
+    }
 }
 
 /// Parses a set variable, failing the start on a malformed value: a deployment that set one
