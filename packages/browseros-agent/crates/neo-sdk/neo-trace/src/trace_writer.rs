@@ -561,6 +561,11 @@ impl Writer {
                         shots.send(job);
                     }
                 }
+                // After the commit, so the deletes are in the log the checkpoint empties, and
+                // before the reply, so a sweep that answered has left nothing it deleted behind.
+                if swept.iter().any(|swept| swept.runs > 0) {
+                    self.store.truncate_log().await;
+                }
                 for (swept, reply) in swept.into_iter().zip(sweep_replies) {
                     let _ = reply.send(Ok(swept));
                 }

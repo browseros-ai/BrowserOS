@@ -177,16 +177,18 @@ impl TabJanitor {
                 kept.push(page.tab.0);
                 continue;
             }
-            let hold = self.holds.hold(page.tab);
-            if !self.tabs.still_idle(page.tab, idle_time, now, hold) {
-                tracing::debug!(run = %run.id(), tab = page.tab.0, "an idle agent tab was used again before its close; left open");
-                continue;
-            }
             let Ok(Some(open)) = time::timeout_at(deadline, self.browser_tabs()).await else {
                 kept.push(page.tab.0);
                 continue;
             };
             if !open.contains(&page.tab) {
+                continue;
+            }
+            // After the listing's round trip, right before the close: a run may have used the
+            // tab, or a host fitted it, since the sweep chose it.
+            let hold = self.holds.hold(page.tab);
+            if !self.tabs.still_idle(page.tab, idle_time, now, hold) {
+                tracing::debug!(run = %run.id(), tab = page.tab.0, "an idle agent tab was used again before its close; left open");
                 continue;
             }
             if !self.leaves_another(&open, page.tab, &closed) {

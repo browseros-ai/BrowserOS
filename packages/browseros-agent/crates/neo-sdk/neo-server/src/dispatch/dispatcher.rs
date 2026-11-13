@@ -754,6 +754,9 @@ impl Dispatcher {
                     let seen = self.tabs.seen();
                     if self.browser.page(page.tab).await.is_some() {
                         self.tabs.popup(page, opener.tab, seen);
+                        // The run that received it may use it a while later, as it does a tab
+                        // it opened, so the janitor leaves it while the run is in flight.
+                        self.tabs.used_in_run(page.tab, run.id());
                     }
                 }
                 PageChange::Gone { target, seq } => {

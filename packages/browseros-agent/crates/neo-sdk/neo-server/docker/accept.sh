@@ -336,7 +336,7 @@ if [ "$booted" = 1 ]; then
   file_mode=$(docker exec "$main" stat -c '%a %U' /data/browserclaw/claw-sdk/settings.json 2>&1)
   wanted='{"tabs": {"idleCloseSeconds": 300}, "trace": {"retentionSeconds": 86400}}'
   if [ "$(jget "$set_reply" 'd["status"]')" = 200 ] && [ "$(jget "$set_reply" 'd["body"]["unknown"]')" = "['files']" ] \
-      && [ "$(jget "$refused" 'd["status"]')" = 400 ] && [ -n "$new_pid" ] && [ "$new_pid" != "$old_pid" ] \
+      && [ "$(jget "$refused" 'd["status"]')" = 400 ] && [ -n "$old_pid" ] && [ -n "$new_pid" ] && [ "$new_pid" != "$old_pid" ] \
       && [ "$(jget "$read_back" '__import__("json").dumps(d["body"]["settings"], sort_keys=True)')" = "$wanted" ] \
       && [ "$file_mode" = "600 neo" ]; then
     result PASS settings "set 300 s / 1 day with files.* listed unknown, 5 s refused; server $old_pid killed, $new_pid relaunched, GET answers what the host set; settings.json $file_mode"

@@ -151,9 +151,10 @@ impl TraceStore {
         if salvage::read_log(path).await == salvage::Log::Damaged {
             return Err(TraceError::DamagedLog);
         }
-        // Secure delete zeroes what a delete frees, so a run that retention removed (the host's
-        // `trace.retentionSeconds`) leaves no readable bytes behind in the file. Without it a
-        // deleted reply stayed findable in `trace.db` until SQLite reused its page.
+        // Secure delete zeroes what a delete frees; with the log checkpoint after a sweep
+        // (`truncate_log`), a run that retention removed (the host's `trace.retentionSeconds`)
+        // leaves no readable bytes behind. Without it a deleted reply stayed findable in
+        // `trace.db` until SQLite reused its page.
         let options = SqliteConnectOptions::new()
             .filename(path)
             .busy_timeout(Duration::from_secs(5))
@@ -195,6 +196,12 @@ impl TraceStore {
 
     pub(crate) fn db(&self) -> &DatabaseConnection {
         &self.db
+    }
+
+    /// Copies every committed page into `trace.db` and empties its write-ahead log, after a
+    /// retention sweep that deleted runs (`trace_migrator::truncate_log`).
+    pub(crate) async fn truncate_log(&self) {
+        trace_migrator::truncate_log(&self.db).await;
     }
 
     pub(crate) fn files(&self) -> &ShotFiles {
