@@ -952,6 +952,72 @@ mod browser_only_tests {
         Ok(())
     }
 
+    /// A tab whose contents Chromium swapped since admission: the browser knows the admitted
+    /// target no more, which must not pass for a page already gone. The tab's current target,
+    /// from the browser's tab list, is closed instead.
+    #[derive(Default)]
+    struct Swapped {
+        /// The browser refused the admitted target: its list shows the current one from then on.
+        refused: AtomicBool,
+        closed: AtomicBool,
+    }
+
+    /// The target the tab shows after the swap.
+    const CURRENT: &str = "swapped-in";
+
+    impl TabScript for Swapped {
+        fn probe(&self, _frame: &str, _request: &Value) -> ProbeAnswer {
+            ProbeAnswer::unexpected()
+        }
+
+        fn cdp_error(&self, method: &str, params: &Value) -> Option<&'static str> {
+            let refused = method == "Target.closeTarget" && params["targetId"] == SCRIPTED_MAIN;
+            if refused {
+                self.refused.store(true, Ordering::SeqCst);
+            }
+            refused.then_some("No target with given id found")
+        }
+
+        fn cdp_reply(&self, method: &str, _params: &Value) -> Option<Value> {
+            match method {
+                "Target.closeTarget" => {
+                    self.closed.store(true, Ordering::SeqCst);
+                    Some(json!({ "success": true }))
+                }
+                "Browser.getTabs" if self.closed.load(Ordering::SeqCst) => {
+                    Some(json!({ "tabs": [] }))
+                }
+                "Browser.getTabs" if self.refused.load(Ordering::SeqCst) => {
+                    Some(json!({ "tabs": [{ "tabId": 7, "targetId": CURRENT,
+                    "windowId": 1, "url": "https://a.test/", "title": "A", "isActive": true,
+                    "isLoading": false, "loadProgress": 1.0, "isPinned": false,
+                    "isHidden": false }] }))
+                }
+                _ => None,
+            }
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_a_close_after_a_swap_closes_the_tabs_current_target()
+    -> Result<(), Box<dyn Error>> {
+        let tab = ScriptedTab::new(Swapped::default());
+        // Core lists the tab before the swap is visible, so admission names the old target.
+        let run = ScriptedRun::over(&tab).await?;
+        let input = json!({ "call": {}, "page": run.page });
+        invoke(&run, "page.close", input).await??;
+        assert_eq!(
+            tab.sent("Target.closeTarget"),
+            2,
+            "the admitted target, which the browser no longer knows, then the current one"
+        );
+        assert!(
+            tab.script().closed.load(Ordering::SeqCst),
+            "{CURRENT} closed"
+        );
+        Ok(())
+    }
+
     /// A tab the browser keeps listing is never answered closed: the close fails as a timeout
     /// once its own timeout passes, so whoever closes it can try again.
     #[tokio::test(start_paused = true)]

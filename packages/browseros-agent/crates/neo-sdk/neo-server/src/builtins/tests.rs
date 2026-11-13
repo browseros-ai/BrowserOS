@@ -1617,10 +1617,9 @@ async fn the_janitor_keeps_a_tab_the_browser_keeps_and_closes_it_later()
     Ok(())
 }
 
-/// The target core named at admission can have been replaced since. The browser then knows no
-/// such target, which must not read as a tab already gone: the tab's current target, from the
-/// browser's tab list, is closed. The swap's target events are held, so core still names the old
-/// target when the close starts.
+/// A tab whose target was replaced right before its close: whether or not core heard of the swap
+/// first (a listing can land between them), the close ends on the tab's current target and the
+/// tab is gone. The stale-target path itself is `page_op.rs`'s unit test.
 #[tokio::test]
 async fn a_close_closes_the_tabs_current_target_after_a_swap() -> Result<(), Box<dyn Error>> {
     let harness = Harness::new().await?;
@@ -1632,10 +1631,17 @@ async fn a_close_closes_the_tabs_current_target_after_a_swap() -> Result<(), Box
     assert!(harness.fake.replace_target(page.tab));
     value(within(harness.submit(&run, "page.close", json!({ "page": handle(&page) }))).await?)?;
     harness.fake.release_events();
+    let closes: Vec<Value> = harness
+        .fake
+        .calls()
+        .into_iter()
+        .filter(|call| call.method == "Target.closeTarget")
+        .map(|call| call.params["targetId"].clone())
+        .collect();
     assert_eq!(
-        harness.fake.count("Target.closeTarget"),
-        2,
-        "the old target first, which the browser no longer knows, then the current one"
+        closes.last(),
+        Some(&json!(format!("target-{}.1", page.tab.0))),
+        "the last close named the tab's current target: {closes:?}"
     );
     assert!(harness.fake.tabs().iter().all(|tab| *tab != page.tab));
     assert!(!harness.is_open(page.tab).await?, "the tab is gone");

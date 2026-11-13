@@ -268,6 +268,12 @@ pub(crate) trait TabScript: Send + Sync + 'static {
         None
     }
 
+    /// The protocol error Chromium fails `method` with, such as a target it no longer knows.
+    /// Asked before [`TabScript::cdp_reply`]; `None` answers as usual.
+    fn cdp_error(&self, _method: &str, _params: &Value) -> Option<&'static str> {
+        None
+    }
+
     /// Whether the tab's main frame has left for a document no world can be made in yet: an
     /// install then fails as for a frame that is gone.
     fn left(&self) -> bool {
@@ -451,6 +457,12 @@ impl<S: TabScript> ScriptedTab<S> {
         if !delay.is_zero() {
             let _slowed = Slowed::new(&self.slowed);
             time::sleep(delay).await;
+        }
+        if let Some(message) = self.script.cdp_error(method, params) {
+            return Err(CdpError::Protocol {
+                code: -32000,
+                message: message.to_owned(),
+            });
         }
         if let Some(reply) = self.script.cdp_reply(method, params) {
             return Ok(reply);
