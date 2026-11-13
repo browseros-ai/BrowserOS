@@ -13,6 +13,7 @@ import http.server
 import json
 import os
 from pathlib import Path
+import pwd
 import tempfile
 import threading
 import uuid
@@ -40,13 +41,18 @@ FILE_FACTS = """async input => {
 def process_places(token_file):
     """The entrypoint adds directories to the browser/server environment after Docker starts."""
     values = dict(os.environ)
+    found = False
     for proc in Path('/proc').glob('[0-9]*'):
         try:
             command = (proc / 'cmdline').read_bytes().split(b'\0')[0]
-            if not command.endswith((b'/claw-sdk', b'/neo-server', b'/browseros-claw-sdk')):
+            environ = (proc / 'environ').read_bytes().split(b'\0')
+            # The server is installed under the browser's bundled name, so it is also found by
+            # the environment the entrypoint gives the browser and the server it starts.
+            if not (command.endswith((b'/claw-sdk', b'/neo-server', b'/browseros-claw-sdk')) or
+                    any(item.startswith(b'BROWSERCLAW_DIR=') for item in environ)):
                 continue
-            values.update(item.decode().split('=', 1) for item in
-                          (proc / 'environ').read_bytes().split(b'\0') if b'=' in item)
+            values.update(item.decode().split('=', 1) for item in environ if b'=' in item)
+            found = True
             break
         except (OSError, UnicodeError):
             continue
@@ -55,6 +61,9 @@ def process_places(token_file):
         'state': Path(values.get('BROWSERCLAW_DIR', data + '/browserclaw')) / 'claw-sdk',
         'profile': Path(values.get('CLAW_PROFILE_DIR', data + '/profile')),
         'downloads': Path(values.get('CLAW_DOWNLOADS_DIR', data + '/downloads')),
+        # The entrypoint runs Neo as neo with HOME set to that user's home. A root without
+        # ptrace rights cannot read Neo's environment, and then the passwd entry names it.
+        'home': Path(values['HOME'] if found else pwd.getpwnam('neo').pw_dir),
         'token': Path(token_file),
         'captcha': [Path(values[key]) for key in
                     ('BROWSEROS_CAPSOLVER_API_KEY_FILE', 'BROWSEROS_2CAPTCHA_API_KEY_FILE')
@@ -253,6 +262,128 @@ def live_change(proof, origin_root):
                     run=got['meta'].get('id'))
 
 
+def write_methods(origin):
+    """Every operation that writes a file at a script's path, as (name, setup, operation with PATH)."""
+    download_prepare = (f'await page.goto({json.dumps(origin + "/")});\n' +
+                        "const [d] = await Promise.all([page.waitForEvent('download'), page.locator('#get').click()]);\n")
+    return [
+        ('download.saveAs', download_prepare, 'await d.saveAs(PATH)'),
+        ('page.screenshot', PREPARE, "await page.screenshot({path:PATH,type:'png'})"),
+        ('locator.screenshot', PREPARE, "await page.locator('#zone').screenshot({path:PATH,type:'png'})"),
+        ('element.screenshot', PREPARE + "const el=await page.locator('#zone').elementHandle();\n",
+         "await el.screenshot({path:PATH,type:'png'})"),
+    ]
+
+
+def home_files(proof, places, outside, origin):
+    """Neo's home, the HOME of its server, browser, crash reporter, Xvnc and window manager.
+
+    Every write method is refused there, through direct, dot-dot, symlink and /proc spellings,
+    with existing bytes unchanged and no folder created. The cases include the browser's
+    certificate store, the crash reporter's settings and fontconfig's files. Reads are refused
+    even with `/` or the home itself listed. A folder the host lists inside the home stays
+    usable, but a dot-folder never is. The image's `~/Downloads` link is judged by its real
+    path, the downloads folder, so a download saved through it and uploaded again works.
+    """
+    home, downloads = places['home'], places['downloads']
+    marker = outside.name
+    crash = home / '.config' / 'browser-claw' / 'Crash Reports' / 'settings.dat'
+    caches = sorted((home / '.cache' / 'fontconfig').glob('*.cache-*'))
+    required = [home / '.bashrc', home / '.bash_logout', *caches[:1]]
+    proof.check("the server's home holds the dotfiles and a fontconfig cache",
+                bool(caches) and all(path.is_file() for path in required),
+                home=str(home), crashSettings=crash.is_file())
+    existing = [path for path in [*required, crash] if path.is_file()]
+    created = [home / '.pki' / 'nssdb' / 'cert9.db', home / '.config' / 'fontconfig' / 'fonts.conf',
+               home / (marker + '-new.png')]
+    created += [] if crash.is_file() else [crash]
+    link = outside / 'neo-home'
+    link.symlink_to(home, target_is_directory=True)
+    climb = '../' * (len(downloads.parts) - 1)
+    spellings = [Path(str(downloads) + '/' + climb + str(home / '.bashrc').lstrip('/')),
+                 link / '.bashrc', link / '.pki' / 'nssdb' / 'cert9.db',
+                 Path('/proc/self/root') / home.relative_to('/') / '.bashrc',
+                 outside / 'missing-home' / '..' / link.name / '.config' / 'fontconfig' / 'fonts.conf']
+    absent = [path for path in (home / '.pki', home / '.config' / 'fontconfig', outside / 'missing-home')
+              if not path.exists()]
+    snapshots = {path: path.read_bytes() for path in existing}
+    for name, prepare, operation in write_methods(origin):
+        for index, target in enumerate(existing + created + spellings):
+            got = proof.run(prepare + operation.replace('PATH', json.dumps(str(target))) + '; return true;')
+            proof.refused(f'{name} home destination #{index}', got, target, own=True)
+            proof.check(f'{name} home bytes unchanged #{index}',
+                        all(path.read_bytes() == raw for path, raw in snapshots.items()))
+            for path, raw in snapshots.items():
+                if path.read_bytes() != raw:
+                    path.write_bytes(raw)
+            proof.check(f'{name} home creates nothing #{index}',
+                        not any(path.exists() for path in created + absent))
+
+    proof.patch(['/'])
+    for path in (home / '.bashrc', caches[0] if caches else home / '.bash_logout'):
+        proof.denied('home file read with / listed: ' + path.name, upload(path), path, own=True)
+    for path in (home, home.parent):
+        proof.denied('directory upload refuses home ancestor ' + str(path),
+                     upload(path, '#directory'), path, own=True)
+    proof.patch([str(home)])
+    proof.denied('listing the home itself opens nothing in it', upload(home / '.bashrc'),
+                 home / '.bashrc', own=True)
+
+    owner = home.stat()
+    listed, dotted = home / ('neo-accept-open-' + marker), home / ('.neo-accept-dot-' + marker)
+    try:
+        for folder in (listed, dotted):
+            folder.mkdir()
+            (folder / 'readable.txt').write_text('ordinary')
+            for path in (folder, folder / 'readable.txt'):
+                os.chown(path, owner.st_uid, owner.st_gid)
+        shot = "await page.screenshot({path:PATH,type:'png'}); return true;"
+        proof.patch([str(downloads)])
+        proof.denied('an unlisted folder in the home is refused', upload(listed / 'readable.txt'),
+                     listed / 'readable.txt', own=True)
+        proof.patch([str(downloads), str(listed)])
+        proof.allowed('a listed folder in the home is readable',
+                      upload_matches(listed / 'readable.txt', 'readable.txt'))
+        written = listed / 'shot.png'
+        got = proof.run(PREPARE + shot.replace('PATH', json.dumps(str(written))))
+        proof.check('a listed folder in the home is writable', got['meta'].get('status') == 'ok' and
+                    written.is_file() and written.read_bytes().startswith(b'\x89PNG\r\n\x1a\n'),
+                    run=got['meta'].get('id'))
+        proof.patch([str(downloads), str(dotted)])
+        proof.denied('a listed dot-folder in the home stays refused', upload(dotted / 'readable.txt'),
+                     dotted / 'readable.txt', own=True)
+        target = dotted / 'shot.png'
+        proof.denied('a listed dot-folder in the home is not writable',
+                     "await page.screenshot({path:" + json.dumps(str(target)) + ",type:'png'})",
+                     target, own=True)
+        proof.check('the dot-folder holds no screenshot', not target.exists())
+    finally:
+        for folder in (listed, dotted):
+            for child in folder.glob('*'):
+                child.unlink(missing_ok=True)
+            with contextlib.suppress(OSError):
+                folder.rmdir()
+
+    proof.patch([str(downloads)])
+    alias = home / 'Downloads'
+    proof.check('the image links ~/Downloads to the downloads folder',
+                alias.is_symlink() and Path(os.path.realpath(alias)) == Path(os.path.realpath(downloads)))
+    for spelling, folder, tag in (('real path', downloads, 'real'), ('~/Downloads alias', alias, 'alias')):
+        saved = folder / f'{marker}-{tag}.csv'
+        got = proof.run(f'await page.goto({json.dumps(origin + "/")});\n' +
+                        "const [d] = await Promise.all([page.waitForEvent('download'), page.locator('#get').click()]);\n" +
+                        f'await d.saveAs({json.dumps(str(saved))});\n' +
+                        f"await page.locator('#f').setInputFiles({json.dumps(str(saved))});\n" +
+                        "return await page.locator('#f').evaluate(el => ({name: el.files[0].name, size: el.files[0].size}));")
+        facts = proof.value(got) or {}
+        real = downloads / saved.name
+        proof.check(f'a download saved by its {spelling} and uploaded again',
+                    got['meta'].get('status') == 'ok' and facts.get('name') == saved.name and
+                    facts.get('size') == len(STATEMENT) and real.is_file() and real.read_bytes() == STATEMENT,
+                    run=got['meta'].get('id'), status=got['meta'].get('status'))
+        real.unlink(missing_ok=True)
+
+
 def protected_writes(proof, places, outside, origin, snapshots):
     """Compare host bytes and missing parent folders as well as API refusal and delivery."""
     state, profile = places['state'], places['profile']
@@ -269,16 +400,7 @@ def protected_writes(proof, places, outside, origin, snapshots):
     targets.append(outside / 'missing' / '..' / link.name / (marker + '-transition') / 'file.png')
     missing = [state / (marker + '-new'), profile / (marker + '-new'),
                state / (marker + '-link'), state / (marker + '-transition'), outside / 'missing']
-    download_prepare = (f'await page.goto({json.dumps(origin + "/")});\n' +
-                        "const [d] = await Promise.all([page.waitForEvent('download'), page.locator('#get').click()]);\n")
-    writers = [
-        ('download.saveAs', download_prepare, 'await d.saveAs(PATH)'),
-        ('page.screenshot', PREPARE, "await page.screenshot({path:PATH,type:'png'})"),
-        ('locator.screenshot', PREPARE, "await page.locator('#zone').screenshot({path:PATH,type:'png'})"),
-        ('element.screenshot', PREPARE + "const el=await page.locator('#zone').elementHandle();\n",
-         "await el.screenshot({path:PATH,type:'png'})"),
-    ]
-    for name, prepare, operation in writers:
+    for name, prepare, operation in write_methods(origin):
         for index, target in enumerate(targets):
             got = proof.run(prepare + operation.replace('PATH', json.dumps(str(target))) + '; return true;')
             unchanged = all(path.read_bytes() == raw for path, raw in snapshots.items())
@@ -501,6 +623,8 @@ def policy(proof, places):
                         all(path.read_bytes() == snapshots[path] for name, path in profile_fixtures))
             proof.check('settings bytes unchanged by all refused writes',
                         (places['state'] / 'settings.json').read_bytes() == snapshots[places['state'] / 'settings.json'])
+            # Last: it changes files.readDirs, which rewrites settings.json.
+            home_files(proof, places, outside, origin)
         finally:
             for path in created_profile_files:
                 path.unlink(missing_ok=True)

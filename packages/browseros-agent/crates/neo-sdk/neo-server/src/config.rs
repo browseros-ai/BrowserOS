@@ -20,5 +20,5 @@ mod launch_config;
 
 pub use app_config::{AppConfig, ConfigError};
 pub(crate) use defaults::Defaults;
-pub(crate) use env_config::{EnvConfig, HostApiConfig, HostedMode};
+pub(crate) use env_config::{EnvConfig, HostApiConfig, HostedMode, NeoHome};
 pub(crate) use launch_config::LaunchConfig;

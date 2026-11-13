@@ -18,6 +18,8 @@ pub(crate) struct EnvConfig {
     pub(crate) downloads_dir: Option<PathBuf>,
     /// `CLAW_PROFILE_DIR`, with launch-file fallback owned by `AppConfig`.
     pub(crate) profile_dir: Option<PathBuf>,
+    /// The home Neo's server and browser run in, and whether it is Neo's own to protect.
+    pub(crate) neo_home: NeoHome,
     /// Both configured CAPTCHA key files, including missing files, protected independently
     /// of whether a solver could read and enable them at startup.
     pub(crate) captcha_key_files: Vec<PathBuf>,
@@ -56,6 +58,21 @@ pub(crate) enum HostedMode {
         /// The value as set, or `None` when unset.
         value: Option<String>,
     },
+}
+
+/// Whether the home the server runs in is Neo's own, which `AppConfig::file_access` then
+/// protects from scripts (`ProtectedPath::Home`). The browser, its crash reporter, fontconfig
+/// and GTK all read files under `HOME` without being asked.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum NeoHome {
+    /// Hosted mode: `HOME`, else the passwd entry's home. The SDK image's entrypoint gives the
+    /// server, the browser and every helper the same `HOME`, and Chromium reads `HOME` first.
+    Own(PathBuf),
+    /// Hosted mode, but neither `HOME` nor the passwd entry names a home. Logged at start.
+    Unknown,
+    /// Outside hosted mode the home is a developer's own, and in the Node embedding
+    /// (`HostedOptions`) its host launched the browser under the host's own home.
+    NotNeos,
 }
 
 /// Where the host listener binds (design D1). zuzu points these at its shared `/run/mirror-neo/`.
@@ -112,6 +129,11 @@ impl EnvConfig {
             Some(value) if value == "1" => HostedMode::On,
             value => HostedMode::Off { value },
         };
+        let neo_home = match (&hosted_mode, &home) {
+            (HostedMode::On, Some(home)) => NeoHome::Own(home.clone()),
+            (HostedMode::On, None) => NeoHome::Unknown,
+            (HostedMode::Off { .. }, _) => NeoHome::NotNeos,
+        };
         let host_api = HostApiConfig {
             socket: read("CLAW_HOST_SOCKET")
                 .map_or_else(|| state_dir.join("host.sock"), PathBuf::from),
@@ -135,6 +157,7 @@ impl EnvConfig {
             state_dir,
             downloads_dir,
             profile_dir: read("CLAW_PROFILE_DIR").map(PathBuf::from),
+            neo_home,
             captcha_key_files: [
                 "BROWSEROS_CAPSOLVER_API_KEY_FILE",
                 "BROWSEROS_2CAPTCHA_API_KEY_FILE",
@@ -194,7 +217,7 @@ mod tests {
 
     use neo_takeover::{ScreenSize, Xvnc};
 
-    use super::{EnvConfig, HostApiConfig, HostedMode};
+    use super::{EnvConfig, HostApiConfig, HostedMode, NeoHome};
     use crate::config::{ConfigError, Defaults};
 
     fn env(vars: &[(&str, &str)]) -> Result<EnvConfig, ConfigError> {
@@ -214,6 +237,7 @@ mod tests {
                 state_dir: PathBuf::from("/home/neo/.browserclaw"),
                 downloads_dir: Some(PathBuf::from("/home/neo/Downloads")),
                 profile_dir: None,
+                neo_home: NeoHome::NotNeos,
                 captcha_key_files: Vec::new(),
                 log_filter: Defaults::LOG_FILTER.to_owned(),
                 hosted_mode: HostedMode::Off { value: None },
@@ -318,6 +342,35 @@ mod tests {
                 "{value:?} is not Chromium's opt-in; Neo starts anyway and names the value"
             );
         }
+        Ok(())
+    }
+
+    #[test]
+    fn the_home_is_neos_own_only_in_hosted_mode() -> Result<(), Box<dyn Error>> {
+        let hosted = [("HOME", "/home/neo"), ("BROWSERCLAW_HOSTED_MODE", "1")];
+        assert_eq!(
+            env(&hosted)?.neo_home,
+            NeoHome::Own(PathBuf::from("/home/neo"))
+        );
+        let passwd = EnvConfig::from_lookup(
+            &|name| (name == "BROWSERCLAW_HOSTED_MODE").then(|| "1".to_owned()),
+            &|| Some(PathBuf::from("/home/neo")),
+        )?;
+        assert_eq!(
+            passwd.neo_home,
+            NeoHome::Own(PathBuf::from("/home/neo")),
+            "an unset HOME falls back to the passwd entry's, as Chromium's does"
+        );
+        let homeless = env(&[
+            ("BROWSERCLAW_DIR", "/state"),
+            ("BROWSERCLAW_HOSTED_MODE", "1"),
+        ])?;
+        assert_eq!(homeless.neo_home, NeoHome::Unknown);
+        assert_eq!(
+            env(&[("HOME", "/Users/dev")])?.neo_home,
+            NeoHome::NotNeos,
+            "outside hosted mode the home is a developer's own"
+        );
         Ok(())
     }
 

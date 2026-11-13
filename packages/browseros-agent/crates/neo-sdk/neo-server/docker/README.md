@@ -121,6 +121,14 @@ survive a server restart. `PUT {}` restores the downloads default.
 
 Even `["/"]` cannot allow Neo's state directory, browser profile, host token or CAPTCHA key
 files. Scripts cannot overwrite those locations with a download or screenshot either.
+
+The same goes for Neo's home, `/home/neo`, the `HOME` of the server, the browser, its crash
+reporter, Xvnc and the window manager. They read files there without being asked: the
+browser's certificate store `~/.pki/nssdb`, fontconfig's files, and the crash reporter's
+settings. A folder the host lists in `files.readDirs` inside the home stays usable, unless its
+first name below the home starts with a dot. `/home/neo/Downloads` links to
+`/data/downloads`, and a path through it is judged by that real path.
+
 Directory uploads that contain a protected location are refused. Writes elsewhere retain
 Playwright's existing behavior, including `download.saveAs()` outside the read roots.
 
