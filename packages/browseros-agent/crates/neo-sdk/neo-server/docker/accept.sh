@@ -714,8 +714,17 @@ for pid in pids:
     # The image's own keys under a host's other ids (the entrypoint re-owns Neo's home, the
     # keys' folder, to them): the server still reads every key, and no file door a script has
     # reads or overwrites one, even with / listed.
+    # Started as the host-key container above is: an expendable tmpfs /data (start_neo's shared
+    # volume would clash), the host's token and group, the image last.
+    scratch_neo() { # name [docker run args...]
+      local name=$1; shift
+      docker run --memory 3g --memory-swap 3g -d --name "$name" --network "$network" --shm-size=1g \
+        --tmpfs /data:rw,size=1g --label neo-sdk-accept="$run_id" "${host_caps[@]}" \
+        -v "$secrets:/run/neo-accept:ro" -e CLAW_HOST_TOKEN_FILE=/run/neo-accept/host-token \
+        -e NEO_HOST_GID=$host_gid "$@" "$image" >/dev/null
+    }
     own="$prefix-own-keys" own_keys="" own_captcha=""
-    start_neo "$own" --tmpfs /data:rw,size=1g -e PUID=2345 -e PGID=2345
+    scratch_neo "$own" -e PUID=2345 -e PGID=2345
     if wait_healthy "$own" 90 >/dev/null && install_client "$own"; then
       own_captcha=$(lists_captcha "$own")
       own_line=$(docker logs "$own" 2>&1 | grep -F 'neo.solveCaptcha is ' | head -1)
@@ -732,7 +741,7 @@ for pid in pids:
       || captcha_problems+=("own key files: $(jget "$own_keys" '"; ".join(d["problems"])' || printf '%s' "${own_keys:0:200}")")
     # A host turns solving off by setting both variables empty.
     off="$prefix-keys-off" off_captcha=""
-    start_neo "$off" --tmpfs /data:rw,size=1g -e BROWSEROS_CAPSOLVER_API_KEY_FILE= -e BROWSEROS_2CAPTCHA_API_KEY_FILE=
+    scratch_neo "$off" -e BROWSEROS_CAPSOLVER_API_KEY_FILE= -e BROWSEROS_2CAPTCHA_API_KEY_FILE=
     if wait_healthy "$off" 90 >/dev/null && install_client "$off"; then off_captcha=$(lists_captcha "$off"); fi
     remove "$off"
     [ "$off_captcha" = False ] || captcha_problems+=("empty key variables listed=${off_captcha:-not booted} (want False)")
