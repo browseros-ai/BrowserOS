@@ -16,6 +16,8 @@
 
 mod aria_snapshot;
 mod clickable_targets;
+// Spike only (feat/chromium-tree-spike): desktop's engine on a hosted tab.
+mod desktop_snapshot;
 mod pending_baselines;
 mod snapshot_baselines;
 mod snapshot_calls;

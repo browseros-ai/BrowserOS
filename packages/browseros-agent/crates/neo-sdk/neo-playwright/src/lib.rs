@@ -60,6 +60,8 @@ mod read;
 mod resolve;
 mod run_state;
 mod snapshot;
+/// Spike only (feat/chromium-tree-spike, never merged): CDP bytes of a desktop snapshot.
+pub mod spike_cdp_meter;
 mod target;
 #[cfg(test)]
 mod test_env;

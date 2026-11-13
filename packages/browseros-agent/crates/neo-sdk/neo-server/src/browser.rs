@@ -24,6 +24,8 @@
 
 mod browser_link;
 mod page_ref;
+// Spike only (feat/chromium-tree-spike): CDP bytes for page.desktopSnapshot.
+mod spike_metered;
 mod tab_registry;
 mod tab_watch;
 mod task_book;

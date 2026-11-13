@@ -87,7 +87,10 @@ impl BrowserLink {
             let options = options.clone();
             async move {
                 let client = CdpClient::connect(options).await?;
-                Ok(Arc::new(client) as Arc<dyn CdpConnection>)
+                // Spike only (feat/chromium-tree-spike): counted for page.desktopSnapshot.
+                Ok(Arc::new(super::spike_metered::MeteredConnection {
+                    inner: Arc::new(client),
+                }) as Arc<dyn CdpConnection>)
             }
         })
     }

@@ -62,6 +62,7 @@ listed_enum! {
         Locator,
         Baseline,
         Pending,
+        Desktop,
     }
 }
 
@@ -92,6 +93,13 @@ impl SnapshotOp {
                 PAGE,
                 "the tab's delta baseline: the last whole-page v1 snapshot text of that \
                  document its caller was given, with its form, or null",
+            ),
+            // Spike only (feat/chromium-tree-spike, never merged).
+            Self::Desktop => OpSpec::read(
+                "page.desktopSnapshot",
+                PAGE,
+                "spike: desktop Neo's own snapshot of the tab (browseros-core), its refs as \
+                 element handles",
             ),
             Self::Pending => OpSpec::read(
                 "page.snapshotPending",
@@ -142,6 +150,13 @@ fn route<'a, R: Route<'a>>(op: SnapshotOp, r: R) -> R::Out {
                  keeps for the next delta",
             ),
             record_pending,
+        ),
+        SnapshotOp::Desktop => r.op(
+            wire::neo_only(
+                "spike only: desktop Neo's snapshot engine run on a hosted tab, to compare \
+                 it with the default format; never merged",
+            ),
+            super::desktop_snapshot::desktop_snapshot,
         ),
     }
 }
