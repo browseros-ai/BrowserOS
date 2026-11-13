@@ -158,7 +158,10 @@ describe('createAnthropicFactory baseUrl handling', () => {
       model: 'claude-sonnet-4-6',
       apiKey: 'sk-anthropic-test',
     })
-    expect(lastCallArgs.anthropic).toEqual({ apiKey: 'sk-anthropic-test' })
+    expect(lastCallArgs.anthropic).toEqual({
+      apiKey: 'sk-anthropic-test',
+      fetch: expect.any(Function),
+    })
     expect(lastCallArgs.anthropic).not.toHaveProperty('baseURL')
   })
 
@@ -198,7 +201,10 @@ describe('createOpenAIFactory baseUrl handling', () => {
       model: 'gpt-4o',
       apiKey: 'sk-openai-test',
     })
-    expect(lastCallArgs.openai).toEqual({ apiKey: 'sk-openai-test' })
+    expect(lastCallArgs.openai).toEqual({
+      apiKey: 'sk-openai-test',
+      fetch: expect.any(Function),
+    })
     expect(lastCallArgs.openai).not.toHaveProperty('baseURL')
   })
 })
@@ -225,7 +231,10 @@ describe('createGoogleFactory baseUrl handling', () => {
       model: 'gemini-2.5-flash',
       apiKey: 'goog-key',
     })
-    expect(lastCallArgs.google).toEqual({ apiKey: 'goog-key' })
+    expect(lastCallArgs.google).toEqual({
+      apiKey: 'goog-key',
+      fetch: expect.any(Function),
+    })
   })
 })
 
