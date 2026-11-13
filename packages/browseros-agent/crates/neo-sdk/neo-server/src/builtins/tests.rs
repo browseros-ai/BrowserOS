@@ -5111,11 +5111,11 @@ async fn a_close_makes_sure_of_neos_tab_first() -> Result<(), Box<dyn Error>> {
         .calls()
         .into_iter()
         .map(|call| call.method)
-        .filter(|method| method == "Browser.createTab" || method == "Browser.closeTab")
+        .filter(|method| method == "Browser.createTab" || method == "Target.closeTarget")
         .collect();
     assert_eq!(
         calls,
-        vec!["Browser.createTab", "Browser.createTab", "Browser.closeTab"],
+        vec!["Browser.createTab", "Browser.createTab", "Target.closeTarget"],
         "the script's tab, then Neo's tab, then the close"
     );
     let neo = blank.current().ok_or("Neo's tab")?;
