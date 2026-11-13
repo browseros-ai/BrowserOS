@@ -234,7 +234,7 @@ impl ClawMcpService {
             || !self
                 .state
                 .billing
-                .has_feature(crate::app::ULTRAFAST_FEATURE)
+                .has_feature(crate::services::billing::ULTRAFAST_FEATURE)
                 .await
         {
             return not_started(page, "fast browsing is not on this plan");

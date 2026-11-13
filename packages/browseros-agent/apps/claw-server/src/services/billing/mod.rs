@@ -22,6 +22,9 @@ pub use config::BillingConfig;
 pub use licence::Status;
 pub use secret::Secret;
 
+/// The plan feature that turns ultrafast on.
+pub const ULTRAFAST_FEATURE: &str = "claw.ultrafast";
+
 use crate::clock::now_epoch_ms;
 use client::GatewayClient;
 use licence::{APP, Licence, LicenceError, SignedLicence};

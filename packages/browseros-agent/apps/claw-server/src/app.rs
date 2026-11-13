@@ -84,8 +84,7 @@ pub struct AppState {
     pub migration: MigrationOutcome,
 }
 
-/// The plan feature that turns ultrafast skills on.
-pub const ULTRAFAST_FEATURE: &str = "claw.ultrafast";
+pub use crate::services::billing::ULTRAFAST_FEATURE;
 
 /// Overall cap on how long a human-help request stays open before it is reaped, so a crashed or
 /// non-looping agent never leaves a stale "needs you" request behind.
