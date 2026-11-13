@@ -626,6 +626,42 @@ async fn tests_that_a_tab_stuck_mid_navigation_closes_at_once() -> TestResult {
     .await
 }
 
+/// Upstream's default close runs no beforeunload: a page that asks to stay, after the user
+/// interacted with it (Chromium asks only then), still closes, with no dialog left open.
+/// Red until the default close stops going through core's `Browser.closeTab`, which runs
+/// beforeunload (measured on BrowserOS; `Target.closeTarget` does not).
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_close_runs_no_beforeunload() -> TestResult {
+    with_page(|run, server, page| async move {
+        let result = async {
+            goto(&run, &page, &server.url("/beforeunload.html"), "load").await?;
+            run.click(&page, "body").await?;
+            assert_eq!(
+                run.eval(&page, "navigator.userActivation.hasBeenActive")
+                    .await?,
+                json!(true),
+                "the page may ask to stay"
+            );
+            time::timeout(
+                BROWSER_ONLY,
+                run.invoke("page.close", json!({ "page": brand(&page) })),
+            )
+            .await
+            .map_err(|_elapsed| "page.close waited on the page")??;
+            let listed = listed_pages(&run).await?;
+            assert!(
+                !listed.iter().any(|(id, _)| *id == page),
+                "the tab closed, beforeunload notwithstanding: {listed:?}"
+            );
+            Ok(())
+        }
+        .await;
+        (run, result)
+    })
+    .await
+}
+
 /// Waits until the browser reports `page` loading, then checks that it answers no page command
 /// for a second: the state a tab is in while its navigation waits on a server that never answers.
 async fn stuck(run: &LiveRun, page: &TestPage) -> TestResult {
