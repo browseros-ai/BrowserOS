@@ -100,9 +100,12 @@ under a stopped container).
 It is started as [the image's README](../../crates/neo-sdk/neo-server/docker/README.md) shows for
 a standalone start: its own Docker network, `NEO_MCP_REMOTE=true`, and the host API over the
 development option `CLAW_HOST_TCP` with a token file the command writes (mode 0600) in the state
-folder; both ports are published on 127.0.0.1 at ports Docker picks. It also sets the development
-option `CLAW_TRACE_VALUE_BYTES=262144`, so Neo's trace keeps each call's arguments and result whole
-up to Neo's own reply limit rather than its 2 KiB default: the right panel shows them whole. Inside the container
+folder; both ports are published on 127.0.0.1 at ports Docker picks. Once the container is
+healthy, the viewer sends `PUT /v1/settings {"trace":{"valueBytes":262144}}` through the host API
+(`server/neo-settings.ts`), so Neo's trace keeps each call's arguments and result whole up to Neo's
+own reply limit rather than its 2 KiB default: the right panel shows them whole. Neo keeps the
+setting under the container's `/data`; with `--upstream` the viewer sets nothing, since the server
+is someone else's. An image older than the setting gets a warning and keeps its cut values. Inside the container
 `CLAW_HOST_TCP` binds `0.0.0.0:9300`: bound to `127.0.0.1` the published port answers nothing,
 since Docker's port forward arrives from outside the container's loopback. When Docker's address
 pools are used up it names a /24 itself and says so. The command is the only control: the page

@@ -20,6 +20,9 @@ pub struct SettingsState {
     /// On a `PUT` or `PATCH` answer only: the names the server skipped because it does not know them, such as `tabs.idleCloseMinutes`. Empty when it knew every name.
     #[serde(rename = "unknown", skip_serializing_if = "Option::is_none")]
     pub unknown: Option<Vec<String>>,
+    /// On a `PUT` or `PATCH` answer only: the settings the server has that were sent with a name of an open list it does not have yet, such as a new `trace.screenshots` mode. Each is skipped as if it were left out (`PUT`: its default; `PATCH`: its value stays). The value is never repeated. Empty when it knew every value.
+    #[serde(rename = "unknownValues", skip_serializing_if = "Option::is_none")]
+    pub unknown_values: Option<Vec<String>>,
 }
 
 impl SettingsState {
@@ -28,6 +31,7 @@ impl SettingsState {
             settings: Box::new(settings),
             defaults: Box::new(defaults),
             unknown: None,
+            unknown_values: None,
         }
     }
 }

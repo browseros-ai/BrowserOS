@@ -10,13 +10,15 @@
 
 use crate::api_error::ApiError;
 use crate::service::ServiceState;
+use crate::setting::Setting;
 use crate::settings::ChangeMode;
-use crate::wire::{self, SettingsBody};
+use crate::wire;
 use axum::Json;
 use axum::body::Bytes;
 use axum::extract::State;
 use axum::http::{HeaderMap, header};
 use neo_sdk_api as api;
+use std::mem;
 use std::sync::Arc;
 
 pub(crate) async fn get_settings(
@@ -61,15 +63,25 @@ async fn change(
     body: &[u8],
     mode: ChangeMode,
 ) -> Result<Json<api::SettingsState>, ApiError> {
-    let SettingsBody {
-        values, unknown, ..
-    } = wire::settings_request(body)?;
-    for name in &unknown {
+    let mut request = wire::settings_request(body)?;
+    for name in &request.unknown {
         tracing::warn!(
             name,
             "a host set a setting this server does not know; skipped"
         );
     }
+    for name in &request.unknown_values {
+        // The setting and what this server takes, never the value the host sent.
+        let known = Setting::find(name)
+            .map(Setting::values_text)
+            .unwrap_or_default();
+        tracing::warn!(
+            name,
+            known,
+            "a host set a value this server does not have; skipped"
+        );
+    }
+    let values = mem::take(&mut request.values);
     service
         .settings
         .change(values, mode)
@@ -77,6 +89,6 @@ async fn change(
         .map_err(|error| ApiError::internal(format!("saving the settings: {error}")))?;
     Ok(Json(wire::settings_state(
         &service.settings,
-        Some(unknown),
+        Some(request),
     )?))
 }

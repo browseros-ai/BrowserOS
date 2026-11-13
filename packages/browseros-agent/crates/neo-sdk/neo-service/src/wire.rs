@@ -5,7 +5,7 @@
 use crate::api_error::ApiError;
 use crate::event_log::EventKind;
 use crate::limits::{MAX_NAVIGATE_INPUT, VIEWER_SIDE};
-use crate::setting::{SETTINGS, Setting, SettingValue};
+use crate::setting::{Checked, SETTINGS, Setting, SettingValue};
 use crate::settings::{SetValues, Settings};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
@@ -512,16 +512,20 @@ pub(crate) struct SettingsBody {
     /// Dotted names the server skipped: a name no setting has, at the level where it stops
     /// being one (`tabs.idleCloseMinutes`, or `files` for a whole unknown group).
     pub(crate) unknown: Vec<String>,
+    /// Settings the server has, sent with a name of an open list it does not have (a
+    /// `trace.screenshots` mode from a newer server): skipped as if left out. Only the setting
+    /// is named, never the value.
+    pub(crate) unknown_values: Vec<&'static str>,
     /// One per setting at fault: its name and the rule it broke, never the value.
     pub(crate) faults: Vec<String>,
 }
 
-/// `PUT` and `PATCH /v1/settings`: the values to apply, and the names skipped; `faults` is empty.
+/// `PUT` and `PATCH /v1/settings`: the values to apply, and what was skipped; `faults` is empty.
 /// The body is decoded here rather than into the generated `Settings` type, which would drop an
 /// unknown name without a word; the host is told what was skipped instead. A refusal names
 /// every setting at fault, and then nothing is applied.
 pub(crate) fn settings_request(body: &[u8]) -> Result<SettingsBody, ApiError> {
-    let shape = r#"{"tabs"?: {"idleCloseSeconds"?: integer}, …}"#;
+    let shape = r#"{"tabs"?: {"idleCloseSeconds"?: integer}, "trace"?: {…}}"#;
     let json: serde_json::Value = serde_json::from_slice(body).map_err(|_| not_the_body(shape))?;
     let checked = settings_body(&json).ok_or_else(|| not_the_body(shape))?;
     if !checked.faults.is_empty() {
@@ -554,10 +558,11 @@ fn check_settings(
         };
         if let Some(setting) = Setting::find(&name) {
             match setting.check(value) {
-                Ok(value) => {
+                Checked::Value(value) => {
                     checked.values.insert(setting.name, value);
                 }
-                Err(rule) => checked.faults.push(format!("`{}` {rule}", setting.name)),
+                Checked::UnknownValue => checked.unknown_values.push(setting.name),
+                Checked::Refused(rule) => checked.faults.push(format!("`{}` {rule}", setting.name)),
             }
         } else if Setting::is_group(&name) {
             match value.as_object() {
@@ -601,11 +606,11 @@ pub(crate) fn settings_object(
     serde_json::Value::Object(root)
 }
 
-/// The settings as a host reads them: each at its value, and each default. `unknown` is the
-/// names a `PUT` or `PATCH` skipped, absent on a `GET`.
+/// The settings as a host reads them: each at its value, and each default. `skipped` is what a
+/// `PUT` or `PATCH` skipped, both lists always present then; a `GET` has neither.
 pub(crate) fn settings_state(
     settings: &Settings,
-    unknown: Option<Vec<String>>,
+    skipped: Option<SettingsBody>,
 ) -> Result<api::SettingsState, ApiError> {
     let current = settings_object(
         settings
@@ -627,8 +632,20 @@ pub(crate) fn settings_state(
             ))
         })
     };
+    let (unknown, unknown_values) = match skipped {
+        Some(SettingsBody {
+            unknown,
+            unknown_values,
+            ..
+        }) => (
+            Some(unknown),
+            Some(unknown_values.into_iter().map(str::to_owned).collect()),
+        ),
+        None => (None, None),
+    };
     Ok(api::SettingsState {
         unknown,
+        unknown_values,
         ..api::SettingsState::new(typed(current)?, typed(defaults)?)
     })
 }

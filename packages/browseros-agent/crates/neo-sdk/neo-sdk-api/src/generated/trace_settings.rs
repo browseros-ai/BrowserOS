@@ -16,12 +16,20 @@ pub struct TraceSettings {
     /// Runs older than this are deleted with their operations, their screenshots and Neo's copy of their downloads; a repeat of a deleted run's `requestId` runs again. Neo sweeps every 10 minutes. A file the browser saved in the downloads folder stays.
     #[serde(rename = "retentionSeconds", skip_serializing_if = "Option::is_none")]
     pub retention_seconds: Option<i64>,
+    /// Neo's own screenshots. `perOperation`: after each write, after a failure the website or the script caused, and of each tab a run touched when it ends. `off`: none, from the next operation that ends (a screenshot already ordered is still taken). A script's own `page.screenshot()` is its result and is kept either way. A name this server does not have is skipped and listed in `unknownValues`.
+    #[serde(rename = "screenshots", skip_serializing_if = "Option::is_none")]
+    pub screenshots: Option<String>,
+    /// Keeps each operation's arguments and result, a run's result, and any one string in them whole up to this many bytes, from the next operation that ends. `0` keeps the trace's own limits: 4 KiB arguments, 2 KiB results, 1 KiB strings. A higher value stores more of what a script typed and got.
+    #[serde(rename = "valueBytes", skip_serializing_if = "Option::is_none")]
+    pub value_bytes: Option<i64>,
 }
 
 impl TraceSettings {
     pub fn new() -> TraceSettings {
         TraceSettings {
             retention_seconds: None,
+            screenshots: None,
+            value_bytes: None,
         }
     }
 }

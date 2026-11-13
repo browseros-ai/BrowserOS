@@ -8,6 +8,8 @@
 //!  PUT / PATCH ─▶ settings_routes ─▶ Settings::change ─ save (temp file, rename) ─▶ switch ─▶ 200
 //!                                                        └ fails: 500, nothing switched
 //!  janitor, retention sweep (the app) ─▶ Settings::tab_idle_close, ::trace_retention, each pass
+//!  trace writer (the app's Settings::watch) ◀── RecordPolicy, at start and after each change,
+//!                                              before the change answers
 //! ```
 //!
 //! The browser restarts a killed server by itself, and no host notices (the settings design,
@@ -16,12 +18,16 @@
 //! The file lives beside `trace.db`, not in it: the server moves a trace store it cannot open
 //! aside, and the settings must not vanish with it.
 
-use crate::setting::{SETTINGS, Setting, SettingValue, TAB_IDLE_CLOSE, TRACE_RETENTION};
+use crate::setting::{
+    SCREENSHOTS_OFF, SETTINGS, Setting, SettingValue, TAB_IDLE_CLOSE, TRACE_RETENTION,
+    TRACE_SCREENSHOTS, TRACE_VALUE_BYTES,
+};
 use crate::wire;
+use neo_trace::{RecordPolicy, Screenshots};
 use std::collections::BTreeMap;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, PoisonError, RwLock};
+use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use std::time::Duration;
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
@@ -47,7 +53,12 @@ struct Inner {
     /// One change at a time, from its save to its switch, so two calls cannot interleave a
     /// file and the live values that disagree.
     changing: tokio::sync::Mutex<()>,
+    /// The parts told of every change, in order, before it answers (`Settings::watch`).
+    watchers: Mutex<Vec<Watcher>>,
 }
+
+/// A part told of every change: the app hands the trace writer its record policy with one.
+type Watcher = Box<dyn Fn(&Settings) + Send + Sync>;
 
 /// How a change treats the settings it does not name.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -82,6 +93,7 @@ impl Settings {
                 file,
                 set: RwLock::new(set),
                 changing: tokio::sync::Mutex::new(()),
+                watchers: Mutex::default(),
             }),
         }
     }
@@ -98,6 +110,36 @@ impl Settings {
     #[must_use]
     pub fn trace_retention(&self) -> Duration {
         Duration::from_secs(self.whole(&TRACE_RETENTION))
+    }
+
+    /// `trace.screenshots` and `trace.valueBytes`: what the trace writer records. It gets them
+    /// in a message (`TraceSink::record_policy`), sent by a [`Settings::watch`] the app sets up.
+    #[must_use]
+    pub fn trace_policy(&self) -> RecordPolicy {
+        let screenshots = match value_of(&self.set(), &TRACE_SCREENSHOTS) {
+            SettingValue::Choice(SCREENSHOTS_OFF) => Screenshots::Off,
+            SettingValue::Choice(_) | SettingValue::Whole(_) => Screenshots::PerOperation,
+        };
+        RecordPolicy {
+            screenshots,
+            value_bytes: usize::try_from(self.whole(&TRACE_VALUE_BYTES)).unwrap_or(usize::MAX),
+        }
+    }
+
+    /// Calls `apply` now, and again after every change, before the change answers: a part that
+    /// is handed its settings rather than reading them on each pass. Called in change order,
+    /// under the change's own lock, so `apply` must not wait.
+    pub fn watch(&self, apply: impl Fn(&Self) + Send + Sync + 'static) {
+        // Under the watchers' lock, which a change takes to call them after it switched: a
+        // change that lands meanwhile calls this one too, after it, so the last call is never
+        // older than the values.
+        let mut watchers = self
+            .inner
+            .watchers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        apply(self);
+        watchers.push(Box::new(apply));
     }
 
     /// Every setting at its current value: what the host set, or the default.
@@ -137,6 +179,15 @@ impl Settings {
             .set
             .write()
             .unwrap_or_else(PoisonError::into_inner) = after.clone();
+        for apply in self
+            .inner
+            .watchers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+        {
+            apply(self);
+        }
         log_change(&before, &after);
         Ok(())
     }
@@ -158,8 +209,9 @@ impl Settings {
     }
 
     fn whole(&self, setting: &Setting) -> u64 {
-        match value_of(&self.set(), setting) {
-            SettingValue::Whole(whole) => whole,
+        match (value_of(&self.set(), setting), setting.default_value()) {
+            (SettingValue::Whole(whole), _) | (_, SettingValue::Whole(whole)) => whole,
+            (SettingValue::Choice(_), SettingValue::Choice(_)) => 0,
         }
     }
 
@@ -204,6 +256,12 @@ async fn read_saved(file: &Path) -> SetValues {
     }
     for fault in &saved.faults {
         tracing::warn!(file = %file.display(), fault, "a saved setting falls back to its default");
+    }
+    for name in &saved.unknown_values {
+        let known = Setting::find(name)
+            .map(Setting::values_text)
+            .unwrap_or_default();
+        tracing::warn!(file = %file.display(), name, known, "a saved setting has a value this build does not have; it falls back to its default");
     }
     let applied: Vec<String> = saved
         .values
@@ -270,7 +328,7 @@ fn log_change(before: &SetValues, after: &SetValues) {
 #[cfg(test)]
 mod tests {
     use super::Settings;
-    use neo_trace::RetentionPolicy;
+    use neo_trace::{RecordPolicy, RetentionPolicy};
     use std::time::Duration;
 
     #[test]
@@ -285,6 +343,11 @@ mod tests {
             settings.tab_idle_close(),
             Duration::from_mins(30),
             "the janitor closed agent tabs after 30 idle minutes before the setting existed"
+        );
+        assert_eq!(
+            settings.trace_policy(),
+            RecordPolicy::default(),
+            "Neo's own screenshots on, and the trace's default value limits"
         );
     }
 }

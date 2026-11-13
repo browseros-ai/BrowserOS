@@ -1764,3 +1764,68 @@ async fn a_swept_run_leaves_no_readable_bytes_in_the_file()
     }
     Ok(())
 }
+
+/// The host's `trace.valueBytes` reaches the writer as a policy in its own queue: an operation
+/// that ends after it keeps a long result whole, one before it was cut at the default 2 KiB, and
+/// `0` brings the default back.
+#[tokio::test]
+async fn a_raised_value_size_keeps_the_next_operations_result_whole()
+-> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    use neo_trace::RecordPolicy;
+
+    let h = harness(WriterConfig::default()).await;
+    let long = "x".repeat(10_000);
+    let run = start_in(&h.sink, None, 0);
+    let ended_with = |seq: u32| OperationEnded {
+        result: Some(json!({ "text": long })),
+        ..ended(OperationId::new(run, seq))
+    };
+    h.sink.op_started(started(simple(
+        OperationId::new(run, 1),
+        "page.evaluate",
+        Effect::Read,
+    )));
+    h.sink.op_ended(ended_with(1));
+    h.sink.record_policy(RecordPolicy {
+        value_bytes: 262_144,
+        ..RecordPolicy::default()
+    });
+    h.sink.op_started(started(simple(
+        OperationId::new(run, 2),
+        "page.evaluate",
+        Effect::Read,
+    )));
+    h.sink.op_ended(ended_with(2));
+    h.sink.record_policy(RecordPolicy::default());
+    h.sink.op_started(started(simple(
+        OperationId::new(run, 3),
+        "page.evaluate",
+        Effect::Read,
+    )));
+    h.sink.op_ended(ended_with(3));
+    flushed(&h).await;
+
+    let kept = |seq: u32| {
+        let store = h.store.clone();
+        async move {
+            let row = store
+                .operation(OperationId::new(run, seq))
+                .await?
+                .ok_or("operation not found")?;
+            Ok::<_, Box<dyn std::error::Error + Send + Sync>>(
+                row.result == Some(json!({ "text": long_text() })),
+            )
+        }
+    };
+    assert!(
+        !kept(1).await?,
+        "before the policy: cut at the default limits"
+    );
+    assert!(kept(2).await?, "after it: whole, up to valueBytes");
+    assert!(!kept(3).await?, "0 brings the default limits back");
+    Ok(())
+}
+
+fn long_text() -> String {
+    "x".repeat(10_000)
+}

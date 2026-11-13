@@ -44,10 +44,10 @@ impl Default for RedactionLimits {
 
 impl RedactionLimits {
     /// The defaults, with an operation's arguments and result, and any one string inside them,
-    /// raised to `bytes` where that is larger. A development setting (`CLAW_TRACE_VALUE_BYTES`
-    /// on the server): a tool that shows whole values, such as the Neo viewer, asks for one;
-    /// production leaves it unset, so its trace stays at the defaults. Nothing else changes:
-    /// host data, text, notes and code keep their own limits.
+    /// raised to `bytes` where that is larger. The host's `trace.valueBytes` setting
+    /// (`RecordPolicy::value_bytes`): a tool that shows whole values, such as the Neo viewer, sets
+    /// it; a host that sets nothing keeps the defaults. Nothing else changes: host data, text,
+    /// notes and code keep their own limits.
     #[must_use]
     pub fn new_with_value_bytes(bytes: usize) -> Self {
         let base = Self::default();

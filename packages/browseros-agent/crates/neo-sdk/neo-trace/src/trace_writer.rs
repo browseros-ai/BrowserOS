@@ -48,8 +48,8 @@ use crate::storage::{
 use crate::trace_store::{self, RetentionPolicy, Swept};
 use crate::{
     Delivery, Effect, EpochMillis, OperationEnded, OperationId, OperationReached, OperationStarted,
-    Outcome, Redactor, RunEffects, RunEnded, RunId, RunStarted, RunStatus, Shot, ShotAnswer,
-    ShotJob, ShotQueue, TaskId, TraceError, TraceStore, Truncation,
+    Outcome, RecordPolicy, Redactor, RunEffects, RunEnded, RunId, RunStarted, RunStatus,
+    Screenshots, Shot, ShotAnswer, ShotJob, ShotQueue, TaskId, TraceError, TraceStore, Truncation,
 };
 use browseros_core::TabId;
 use serde_json::Value;
@@ -172,6 +172,8 @@ enum Command {
         op: OperationId,
         shot: Shot,
     },
+    /// What to record from now on: the host changed `trace.*`.
+    Policy(RecordPolicy),
 }
 
 /// Operation events dropped over the backlog cap, per run. Shared by every sink and the writer
@@ -219,6 +221,7 @@ enum Work {
         op: OperationId,
         shot: Shot,
     },
+    Policy(RecordPolicy),
 }
 
 struct SinkInner {
@@ -326,6 +329,15 @@ impl TraceSink {
         done.await.map_err(|_| TraceError::Closed)?
     }
 
+    /// What the writer records from the next event it handles: Neo's own screenshots and the
+    /// size of the values it keeps whole (the host's `trace.*` settings). In the queue, so every
+    /// record sent before this call follows the old policy and every one after it the new.
+    pub fn record_policy(&self, policy: RecordPolicy) {
+        if self.command(Command::Policy(policy)).is_err() {
+            tracing::warn!("trace writer stopped; record policy not applied");
+        }
+    }
+
     /// A screenshot job's answer, from [`ShotAnswer`]. It goes through the same queue and
     /// backlog count as every command, so the writer's count stays balanced.
     pub(crate) fn screenshot_answered(&self, op: OperationId, shot: Shot) {
@@ -383,6 +395,7 @@ pub fn spawn_writer(
     let writer = Writer {
         store: store.clone(),
         redactor,
+        policy: RecordPolicy::default(),
         config,
         runs: HashMap::new(),
         dropped,
@@ -448,6 +461,8 @@ struct OpenOperation {
 struct Writer {
     store: TraceStore,
     redactor: Redactor,
+    /// What the host asked to record; `RecordPolicy::default` until the app sends one.
+    policy: RecordPolicy,
     config: WriterConfig,
     runs: HashMap<RunId, OpenRun>,
     dropped: Arc<DroppedEvents>,
@@ -517,6 +532,7 @@ impl Writer {
                     work.push(Work::Screenshot { op, shot });
                     answers.push((op, shot));
                 }
+                Command::Policy(policy) => work.push(Work::Policy(policy)),
             }
         }
         let mut published = Vec::new();
@@ -531,6 +547,7 @@ impl Writer {
                         let outputs = self.store.outputs().clone();
                         swept.push(tx.sweep(&files, &outputs, policy, now).await?);
                     }
+                    Work::Policy(policy) => self.set_policy(policy),
                     Work::Screenshot { op, shot } => {
                         tx.store_screenshot(op, shot).await?;
                         // Only run-end shots read this, so it need not wait for the commit: an
@@ -881,9 +898,12 @@ impl Writer {
     }
 
     /// Makes a job for `op` on `tab`, which reaches the camera once this batch commits. False
-    /// without a camera, or once no sink is left to carry the answer back (the writer is
-    /// draining after its last sink was dropped).
+    /// without a camera, while the host turned Neo's screenshots off, or once no sink is left to
+    /// carry the answer back (the writer is draining after its last sink was dropped).
     fn plan_shot(&mut self, op: OperationId, tab: TabId) -> bool {
+        if self.policy.screenshots == Screenshots::Off {
+            return false;
+        }
         let (Some(_), Some(inner)) = (&self.shots, self.sink.upgrade()) else {
             return false;
         };
@@ -894,6 +914,16 @@ impl Writer {
             answer: ShotAnswer::new(op, TraceSink { inner }),
         });
         true
+    }
+
+    /// The host's policy, from now on. The redactor is rebuilt from it, so a raised
+    /// `value_bytes` keeps the next operation's values whole. A policy is not a row: a batch that
+    /// rolls back keeps it.
+    fn set_policy(&mut self, policy: RecordPolicy) {
+        if policy != self.policy {
+            self.redactor = Redactor::new(policy.limits());
+            self.policy = policy;
+        }
     }
 
     /// Counts one answered job of `run` in this batch. True when it answers the last job of a

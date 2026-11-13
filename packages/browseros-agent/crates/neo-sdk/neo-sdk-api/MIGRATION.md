@@ -115,11 +115,16 @@ The hosted server read its behaviour from `neo.toml` (`tabs.grouping`, `tabs.clo
 | `run.wall_timeout_seconds = 120` | each `run` call's `timeout` (`120000`) | Per call, not a setting |
 | `tabs.grouping`, `scripts.isolated_world` | — | No tab groups; Neo's own page scripts always run in the isolated world |
 | — | `trace.retentionSeconds` | How long the trace keeps a run, 7 days by default and at least an hour |
+| — | `trace.screenshots` | `off` stops Neo's own screenshots; a script's `page.screenshot()` is kept either way |
+| — | `trace.valueBytes` | How much of each value the trace keeps whole; replaces the environment value `CLAW_TRACE_VALUE_BYTES` (#3517) |
 
 A name Neo does not know is skipped and listed in the answer's `unknown`, never refused, so a host can send
-its whole list to any server version. A value out of range is refused with 400, naming the setting, and
-nothing applies. Neo saves what the host set and loads it at every start: a restart of the server alone
-keeps it, and a new container needs the call again. A server from before the settings answers 404.
+its whole list to any server version. A value of an open list Neo does not have yet is skipped the same way
+and its setting named in `unknownValues`. A value out of range is refused with 400, naming the setting, and
+nothing applies. Neo saves what the host set under `/data` and loads it at every start, a restart of the
+server alone and a new container on the same `/data` alike. Send the `PUT` at every start of the host
+anyway, so the saved set is what the host wants now and not what an older host or a hand `PATCH` left. A
+server from before the settings answers 404.
 
 ## Downloads
 
