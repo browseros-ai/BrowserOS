@@ -170,8 +170,9 @@ impl FrameTree {
         self.hosts.get(frame)
     }
 
-    /// Keep endpoint hints only after a complete admitted discovery. Stamp the start, so a
-    /// renderer swap during discovery invalidates the hint rather than being hidden by it.
+    /// Keep endpoint hints only after a complete admitted discovery, stamped at its start.
+    /// An incomplete read leaves the previous tree and journal position intact: advancing that
+    /// position could hide the event that invalidates a cached "only frame" result.
     pub(crate) fn remember(
         &self,
         pw: &Playwright,
@@ -180,6 +181,9 @@ impl FrameTree {
         root: &ProtocolSession,
         since: u64,
     ) {
+        if !self.is_whole() {
+            return;
+        }
         let (Some(root_id), Some(main)) = (root.session_id(), self.frames.first()) else {
             return;
         };
@@ -539,16 +543,90 @@ pub(crate) fn sample_tree() -> Result<FrameTree, serde_json::Error> {
 mod tests {
     use std::error::Error;
 
-    use browseros_core::FrameId;
+    use browseros_core::{FrameId, SessionId, TabId};
     use serde::Serialize;
     use serde_json::json;
 
     use super::{FrameTree, PageFrames, answer, sample_tree};
-    use crate::Op;
+    use crate::events::{EventHub, PageEvent};
     use crate::op_scope::OpScope;
     use crate::page::document_watch::FrameTreeReply;
     use crate::target::CallHeader;
-    use crate::test_env::{EnvCall, TestEnv};
+    use crate::test_env::{self, EnvCall, TestEnv};
+    use crate::{Op, Playwright};
+
+    /// An unread OOPIF leaves only the main frame in this tree. It cannot establish a negative
+    /// hint or advance an older tree's journal position past the event that invalidates it.
+    #[tokio::test]
+    async fn an_incomplete_tree_never_establishes_a_negative_adoption_hint()
+    -> Result<(), Box<dyn Error>> {
+        let pw = Playwright::new(test_env::offline_session());
+        let env = TestEnv::new();
+        let op = Op::from_name("page.frames").ok_or("page.frames is an op")?;
+        let scope = OpScope::new(&env, op, CallHeader::default());
+        let session = SessionId::from("root");
+        let root = pw.browser().protocol_session(session.clone());
+        let main = FrameId("main".to_owned());
+        let attachment = super::RootAttachment {
+            session: session.clone(),
+            frame: main.clone(),
+            epoch: pw.browser().connection().connection_epoch(),
+        };
+        let mut short = sample_tree()?;
+        short.frames.retain(|frame| frame.id == main);
+        short.hosts.insert(main.clone(), root.clone());
+        short
+            .unread
+            .push(("unread-child".to_owned(), "session attaching".to_owned()));
+        let (events, mut writer) = EventHub::new();
+        let hint = || {
+            scope.run_state().frames.may_have_other_frame(
+                TabId(7),
+                &attachment,
+                &main,
+                &session,
+                &events,
+            )
+        };
+        short.remember(&pw, &scope, TabId(7), &root, events.head());
+        assert!(
+            hint(),
+            "an unread child cannot prove that the main frame is alone"
+        );
+
+        short.unread.clear();
+        short.remember(&pw, &scope, TabId(7), &root, events.head());
+        assert!(!hint(), "a whole singleton tree still proves absence");
+
+        writer.record(PageEvent::FrameSwapped(FrameId("unread-child".to_owned())));
+        assert!(hint(), "the old journal position sees the topology change");
+        short
+            .unread
+            .push(("unread-child".to_owned(), "session attaching".to_owned()));
+        short.remember(&pw, &scope, TabId(7), &root, events.head());
+        assert!(
+            hint(),
+            "an incomplete refresh must not hide the earlier topology event"
+        );
+
+        let mut previous = sample_tree()?;
+        for frame in &previous.frames {
+            previous.hosts.insert(frame.id.clone(), root.clone());
+        }
+        previous.remember(&pw, &scope, TabId(7), &root, events.head());
+        short.remember(&pw, &scope, TabId(7), &root, events.head());
+        let child = FrameId("child".to_owned());
+        let cached = scope
+            .run_state()
+            .frames
+            .cached(TabId(7), &attachment, &child, &events);
+        assert_eq!(
+            cached.and_then(|route| route.session_id().cloned()),
+            Some(session),
+            "a valid endpoint from the previous whole tree survives the incomplete refresh"
+        );
+        Ok(())
+    }
 
     /// A read that came back whole leaves the op's record unmarked. One that lacks an
     /// out-of-process frame, or got no tree at all, marks it (`OpEnv::frames_incomplete`), so a
