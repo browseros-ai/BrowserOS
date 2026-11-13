@@ -156,7 +156,7 @@ async function startNeo(
   await configureHostApi(hostApi)
   if ((await applyViewerSettings()) === 'unsupported') {
     console.warn(
-      `neo-viewer: ${currentImage} has no /v1/settings, so its trace cuts operation values at 2 KiB`,
+      `neo-viewer: ${currentImage} does not take trace.valueBytes, so its trace cuts operation values at 2 KiB`,
     )
   }
   return { mcpUrl: container.mcpUrl, hostApi }

@@ -29,8 +29,9 @@ export interface SettingsSeams {
 
 /**
  * Sets the viewer's settings on its own Neo. `applied` once Neo answered with them;
- * `unsupported` from an image older than `/v1/settings` (404), whose values stay cut at Neo's
- * defaults. Throws when Neo refused the body (a viewer bug) or the host API never answered.
+ * `unsupported` from an image older than the setting (no `/v1/settings`, 404, or one that lists
+ * `trace.valueBytes` in `unknown`), whose values stay cut at Neo's defaults. Throws when Neo
+ * refused the body (a viewer bug) or the host API never answered.
  */
 export async function applyViewerSettings(
   seams: SettingsSeams = {},
@@ -87,7 +88,10 @@ async function attempt(
   }
   const state = (await response.json()) as {
     settings?: { trace?: { valueBytes?: number } }
+    unknown?: string[]
   }
+  // An image with the settings but from before this one skips the name, as any unknown setting.
+  if (state.unknown?.includes('trace.valueBytes')) return 'unsupported'
   if (state.settings?.trace?.valueBytes !== TRACE_VALUE_BYTES) {
     throw new Error(
       `neo-viewer: Neo answered /v1/settings without trace.valueBytes ${TRACE_VALUE_BYTES}`,

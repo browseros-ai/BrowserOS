@@ -52,6 +52,18 @@ test('it waits for the host API to serve, then sets it', async () => {
   expect(host.calls).toHaveLength(3)
 })
 
+test('an image with the settings but not trace.valueBytes is reported, not a failure', async () => {
+  const host = fakeHost([
+    () =>
+      Response.json({
+        settings: { tabs: { idleCloseSeconds: 1800 } },
+        defaults: { tabs: { idleCloseSeconds: 1800 } },
+        unknown: ['trace.valueBytes'],
+      }),
+  ])
+  expect(await applyViewerSettings({ fetch: host.send })).toBe('unsupported')
+})
+
 test('an image older than /v1/settings is reported, not a failure', async () => {
   const host = fakeHost([
     () =>
