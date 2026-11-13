@@ -7,8 +7,9 @@
 //!                        ├─ Dispatch: Input.* on the tab's root session, pointer scale applied
 //!                        └─ Wait: OpScope::sleep, Rust's clock
 //!  dropped part-way (error, timeout, the host dropping the op)
-//!     └─ the releases it owes go into TabInput.owed; a spawned flush, or the next holder,
-//!        whichever takes the lock first, sends them before anything else
+//!     └─ the releases it owes go into TabInput.owed, each with the session its burst used; a
+//!        spawned flush, or the next holder, whichever takes the lock first, sends them before
+//!        anything else, each on its own session
 //! ```
 //!
 //! A burst is built on a copy of the devices, which advances through all of it, and the copy
@@ -38,8 +39,10 @@ use crate::op_scope::{OpScope, Sent};
 /// One tab's input state behind its input lock.
 pub(crate) struct TabInput {
     devices: InputDevices,
-    /// Releases a burst that stopped part-way still owes the browser, oldest first.
-    owed: Vec<InputEvent>,
+    /// Releases a burst that stopped part-way still owes the browser, oldest first, each with
+    /// the session its burst went out on: a key-up carries its key, so one owed by a burst into a
+    /// cross-site frame (the private entry's) must never reach the page around that frame.
+    owed: Vec<(ProtocolSession, InputEvent)>,
 }
 
 /// Events can carry typed text, which never prints (STYLE P4); the count is enough.
@@ -61,12 +64,12 @@ impl TabInput {
         }
     }
 
-    /// Sends what earlier bursts owe, without their waits. Every holder of the lock calls it
-    /// before anything else. A tab that closed holds nothing, so a failed send is dropped with
-    /// the rest.
-    pub(crate) async fn flush_owed(&mut self, session: &ProtocolSession, pointer_scale: f64) {
-        for event in mem::take(&mut self.owed) {
-            let _released = dispatch(session, pointer_scale, &event).await;
+    /// Sends what earlier bursts owe, without their waits, each on the session its burst used.
+    /// Every holder of the lock calls it before anything else. A tab or frame that closed holds
+    /// nothing, so a failed send is dropped with the rest.
+    pub(crate) async fn flush_owed(&mut self, pointer_scale: f64) {
+        for (session, event) in mem::take(&mut self.owed) {
+            let _released = dispatch(&session, pointer_scale, &event).await;
         }
     }
 }
@@ -105,7 +108,7 @@ impl PageInput {
         pointer_scale: f64,
     ) -> Self {
         let mut tab = tab.lock_owned().await;
-        tab.flush_owed(&session, pointer_scale).await;
+        tab.flush_owed(pointer_scale).await;
         Self {
             tab,
             session,
@@ -137,6 +140,36 @@ impl PageInput {
     ) -> Result<(), BurstFailure> {
         self.tab.devices = planned;
         self.send_first(sent, scope, steps, usize::MAX).await
+    }
+
+    /// [`PageInput::send_planned`] with every event on `session` instead of the tab's root
+    /// session. The private entry types into a box in a cross-site frame on that frame's own
+    /// session, so its text lands in that frame or nowhere: measured on main, a key and an
+    /// `Input.insertText` on a frame's session typed nothing anywhere once the top page had
+    /// taken the focus, where the root session handed them to the thief's box
+    /// (`claw-sdk/protected-fill/spikes/probe-2026-11-12`). The releases a stopped burst owes go
+    /// out on `session` too, or not at all: a key-up carries its key (ruling R24).
+    pub(crate) async fn send_planned_on(
+        &mut self,
+        sent: &Sent<'_>,
+        scope: &OpScope<'_>,
+        planned: InputDevices,
+        steps: Vec<InputStep>,
+        session: &ProtocolSession,
+    ) -> Result<(), BurstFailure> {
+        let root = mem::replace(&mut self.session, session.clone());
+        let burst = self.send_planned(sent, scope, planned, steps).await;
+        // A burst that stopped part-way owes its releases on `session`, never on the root
+        // session, which would hand a key-up, and the key in it, to the page around the frame.
+        // If the op is dropped before this line, `Drop` still finds `session` in place.
+        if burst.is_err() {
+            let owed = self.owed();
+            self.tab
+                .owed
+                .extend(owed.into_iter().map(|event| (session.clone(), event)));
+        }
+        self.session = root;
+        burst
     }
 
     /// Sends the first `count` of `steps` and keeps the rest for [`PageInput::resume`]. The rest
@@ -184,7 +217,7 @@ impl PageInput {
         let modifiers = tab.devices.keyboard.modifiers();
         for step in tab.devices.mouse.up(button, 1, modifiers) {
             if let InputStep::Dispatch(event) = step {
-                tab.owed.push(event);
+                tab.owed.push((self.session.clone(), event));
             }
         }
     }
@@ -268,7 +301,10 @@ impl PageInput {
 impl Drop for PageInput {
     fn drop(&mut self) {
         let owed = self.owed();
-        self.tab.owed.extend(owed);
+        let session = self.session.clone();
+        self.tab
+            .owed
+            .extend(owed.into_iter().map(|event| (session.clone(), event)));
         if self.tab.owed.is_empty() {
             return;
         }
@@ -276,11 +312,10 @@ impl Drop for PageInput {
             return;
         };
         let tab = Arc::clone(OwnedMutexGuard::mutex(&self.tab));
-        let session = self.session.clone();
         let scale = self.pointer_scale;
         drop(runtime.spawn(async move {
             let mut tab = tab.lock_owned().await;
-            tab.flush_owed(&session, scale).await;
+            tab.flush_owed(scale).await;
         }));
     }
 }

@@ -3,8 +3,9 @@
 //!
 //! - zuzu's 32 covered-rule cases (`claw-sdk/zuzu/pin-move/covered-own-label.md`), on zuzu's own
 //!   fixture pages, each answering as main's rule answers;
-//! - main's rule itself, read out of `browseros-core`'s source (`HIT_TEST_BLOCKER_JS`) and run on
-//!   every box of those pages beside the port, so the two cannot drift apart;
+//! - main's rule itself, `browseros-core`'s own point and hit test (`get_element_center`,
+//!   `click_blocker_at_point`, its `HIT_TEST_BLOCKER_JS`) run on every box of those pages beside
+//!   the port, so the two cannot drift apart;
 //! - each refusal of the look on its own page, the facts, and the look's promises to the host:
 //!   it never marks itself sent and its notes carry no preview.
 //!
@@ -25,175 +26,25 @@ mod fixture_server;
     reason = "shared with suites that run ops in a run of their own"
 )]
 mod live_browser;
+#[path = "support/private_host.rs"]
+#[expect(
+    dead_code,
+    reason = "the entry's suite scripts the host's lock and the tab's place; the look needs neither"
+)]
+mod private_host;
 
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::Arc;
 use std::time::Duration;
 
-use browseros_core::BrowserView;
-use fixture_server::{FixtureServer, Page};
+use browseros_core::input::geometry;
+use browseros_core::{BrowserView, FrameId};
+
+use fixture_server::FixtureServer;
 use live_browser::{LiveBrowser, TestPage, TestResult};
-use neo_playwright::{
-    BoxLook, EntryError, Expect, LookField, LookRequest, OpEnv, Refusal, RunState,
-};
+use neo_playwright::{BoxLook, EntryError, Expect, LookField, LookRequest};
+use private_host::HostEnv;
 use serde_json::{Value, json};
 use tokio::time::{self, Instant};
-
-/// Main's covered rule, as `browseros-core` ships it.
-const GEOMETRY: &str = include_str!("../../../browseros-core/src/input/geometry.rs");
-
-/// The host's side of the look: records whether it was marked sent and what it noted.
-struct HostEnv {
-    view: BrowserView,
-    run_state: Arc<RunState>,
-    sent: AtomicBool,
-    notes: Mutex<Vec<String>>,
-}
-
-impl HostEnv {
-    fn new(live: &LiveBrowser) -> Self {
-        Self {
-            view: BrowserView::unbound(Arc::clone(&live.browser), None),
-            run_state: Arc::default(),
-            sent: AtomicBool::new(false),
-            notes: Mutex::default(),
-        }
-    }
-
-    fn notes(&self) -> Vec<String> {
-        self.notes
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
-    }
-}
-
-impl OpEnv for HostEnv {
-    fn view(&self) -> &BrowserView {
-        &self.view
-    }
-
-    fn run_state(&self) -> &Arc<RunState> {
-        &self.run_state
-    }
-
-    fn recheck(&self) -> Result<(), Refusal> {
-        Ok(())
-    }
-
-    fn mark_sent(&self) {
-        self.sent.store(true, Ordering::SeqCst);
-    }
-
-    fn note(&self, line: String) {
-        self.notes
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .push(line);
-    }
-}
-
-fn pages() -> HashMap<String, Page> {
-    [
-        (
-            "covered-login",
-            include_str!("data/private/covered-login.html"),
-        ),
-        (
-            "covered-card",
-            include_str!("data/private/covered-card.html"),
-        ),
-        (
-            "covered-cardframe",
-            include_str!("data/private/covered-cardframe.html"),
-        ),
-        (
-            "covered-select",
-            include_str!("data/private/covered-select.html"),
-        ),
-        ("look", include_str!("data/private/look.html")),
-        ("nested", include_str!("data/private/nested.html")),
-    ]
-    .into_iter()
-    .map(|(name, body)| {
-        let page = Page::html(body).with_header("cache-control", "no-store");
-        (format!("/private/{name}.html"), page)
-    })
-    .collect()
-}
-
-/// One printed node: its role, its name and its ref.
-#[derive(Debug)]
-struct Printed {
-    role: String,
-    name: String,
-    r#ref: String,
-}
-
-/// Every ref a snapshot printed, child frames included.
-fn printed(json: &Value) -> Vec<Printed> {
-    fn visit(node: &Value, out: &mut Vec<Printed>) {
-        if let Some(r#ref) = node.get("ref").and_then(Value::as_str) {
-            out.push(Printed {
-                role: text_of(node, "role"),
-                name: text_of(node, "name"),
-                r#ref: r#ref.to_owned(),
-            });
-        }
-        for child in node
-            .get("children")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-        {
-            visit(child, out);
-        }
-    }
-    let mut out = Vec::new();
-    for node in json.as_array().into_iter().flatten() {
-        visit(node, &mut out);
-    }
-    out
-}
-
-fn text_of(node: &Value, key: &str) -> String {
-    node.get(key)
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_owned()
-}
-
-/// The page's ai-mode snapshot, as an agent takes it.
-async fn snapshot(live: &LiveBrowser, page: &TestPage) -> TestResult<Vec<Printed>> {
-    let reply = live
-        .invoke(
-            "page.ariaSnapshot",
-            json!({
-                "call": { "api": "page.ariaSnapshot", "timeoutMs": 10_000 },
-                "page": page.brand(),
-                "mode": "ai",
-            }),
-        )
-        .await??;
-    Ok(printed(reply.get("json").unwrap_or(&Value::Null)))
-}
-
-/// The ref of the node `role` named `name`, once a snapshot prints it (a card frame loads after
-/// its page).
-async fn ref_of(live: &LiveBrowser, page: &TestPage, role: &str, name: &str) -> TestResult<String> {
-    for _ in 0..50 {
-        let found = snapshot(live, page)
-            .await?
-            .into_iter()
-            .find(|node| node.role == role && node.name == name);
-        if let Some(node) = found {
-            return Ok(node.r#ref);
-        }
-        time::sleep(Duration::from_millis(100)).await;
-    }
-    Err(format!("no {role} named {name:?} printed within 5 s").into())
-}
 
 fn expecting(origin: &str) -> Expect {
     Expect {
@@ -280,55 +131,76 @@ fn code(look: &BoxLook) -> Option<&str> {
     refusal.map(|error| error.code.as_str())
 }
 
-/// Main's `HIT_TEST_BLOCKER_JS`, verbatim from `browseros-core`.
-fn main_rule() -> TestResult<&'static str> {
-    let start = "const HIT_TEST_BLOCKER_JS: &str = r#\"";
-    let from = GEOMETRY
-        .find(start)
-        .ok_or("geometry.rs has no HIT_TEST_BLOCKER_JS")?
-        + start.len();
-    let rest = GEOMETRY.get(from..).ok_or("geometry.rs ends early")?;
-    let to = rest
-        .find("\"#;")
-        .ok_or("HIT_TEST_BLOCKER_JS is not closed")?;
-    Ok(rest.get(..to).ok_or("geometry.rs ends early")?.trim())
-}
-
-/// Whether main's own rule finds a blocker at the box `r#ref` names: its script, called on the
-/// box with the centre main took from the protocol, in the box's own target's coordinates (the
-/// page's for a same-origin frame, the frame's own for a cross-site one). Runs in the box's
-/// document's main world, as `locator.evaluate` does; the DOM it reads is the same.
-async fn main_rule_blocks(live: &LiveBrowser, page: &TestPage, r#ref: &str) -> TestResult<bool> {
-    let function = format!(
-        "(box) => {{
-           const blockerAt = {};
-           const rect = box.getBoundingClientRect();
-           let x = rect.left + rect.width / 2, y = rect.top + rect.height / 2;
-           for (let doc = box.ownerDocument; doc.defaultView && doc.defaultView.frameElement;) {{
-             const frame = doc.defaultView.frameElement, at = frame.getBoundingClientRect();
-             x += at.x + frame.clientLeft; y += at.y + frame.clientTop; doc = frame.ownerDocument;
-           }}
-           return blockerAt.call(box, x, y) !== null;
-         }}",
-        main_rule()?
-    );
+/// Whether main's own fill would find a blocker at the box `r#ref` names: `browseros-core`'s
+/// own functions, called as its fill called them (input/fill.rs), on the box's own target
+/// session: `scroll_into_view`, `get_element_center` (the centre of the first content quad,
+/// `DOM.getContentQuads`) and `click_blocker_at_point` (`HIT_TEST_BLOCKER_JS`). `own_frame`
+/// names a box in the page's only cross-site frame, which is its own target.
+async fn main_rule_blocks(
+    live: &LiveBrowser,
+    page: &TestPage,
+    r#ref: &str,
+    own_frame: bool,
+) -> TestResult<bool> {
     let target = json!({
         "$neo": "locator", "page": page.brand(),
         "chunks": [{ "parts": [{ "name": "aria-ref", "body": r#ref, "source": r#ref }] }],
         "display": format!("getByRef('{ref}')"),
     });
-    let input = json!({
-        "call": { "api": "locator.evaluate", "timeoutMs": 10_000 },
-        "target": target, "strict": "strict",
-        "expression": function, "isFunction": true,
-        "arg": { "value": r#"{"v":"undefined"}"#, "handles": [] },
-    });
-    let value = live.invoke("locator.evaluate", input).await??;
-    let blocks = value
-        .as_bool()
-        .or_else(|| value.get("b").and_then(Value::as_bool))
-        .ok_or_else(|| format!("main's rule answered {value}"))?;
-    Ok(blocks)
+    let handle = live
+        .invoke(
+            "locator.waitFor",
+            json!({ "call": { "api": "locator.elementHandle", "timeoutMs": 10_000 },
+                "target": target, "strict": "strict", "state": "attached",
+                "omitReturnValue": false }),
+        )
+        .await??;
+    let node = handle
+        .get("node")
+        .and_then(Value::as_i64)
+        .ok_or_else(|| format!("no node in {handle}"))?;
+    let root = live
+        .browser
+        .pages
+        .get_session(page.id.clone())
+        .await?
+        .session;
+    let session = if own_frame {
+        // A cross-site frame is its own target, and the page's frame tree does not list it; the
+        // page's DOM still names its frame on the <iframe> element.
+        let document = root
+            .send_value("DOM.getDocument", json!({ "depth": -1 }))
+            .await?;
+        let child = iframe_frame_id(&document).ok_or("the page has no <iframe> with a frame")?;
+        BrowserView::unbound(Arc::clone(&live.browser), None)
+            .frame_session(page.id.clone(), FrameId(child))
+            .await?
+    } else {
+        root
+    };
+    geometry::scroll_into_view(&session, node).await;
+    let point = geometry::get_element_center(&session, node).await?;
+    Ok(geometry::click_blocker_at_point(&session, node, point)
+        .await?
+        .is_some())
+}
+
+/// The `frameId` of the first `<iframe>` in a `DOM.getDocument` tree.
+fn iframe_frame_id(node: &Value) -> Option<String> {
+    if node.get("nodeName").and_then(Value::as_str) == Some("IFRAME")
+        && let Some(frame) = node.get("frameId").and_then(Value::as_str)
+    {
+        return Some(frame.to_owned());
+    }
+    let children = node.get("children").and_then(Value::as_array);
+    let document = node.get("contentDocument").into_iter();
+    let root = node.get("root").into_iter();
+    children
+        .into_iter()
+        .flatten()
+        .chain(document)
+        .chain(root)
+        .find_map(iframe_frame_id)
 }
 
 /// One of zuzu's pages and what main's rule says about its boxes: (role, name, covered).
@@ -470,18 +342,12 @@ const COVERED: &[CoveredPage] = &[
     },
 ];
 
-/// The page's site and the other one, as origins.
-fn origins(server: &FixtureServer) -> (String, String) {
-    let origin = |host: &str| server.url(host, "/").trim_end_matches('/').to_owned();
-    (origin("127.0.0.1"), origin("localhost"))
-}
-
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_the_look_answers_zuzus_covered_cases_as_mains_rule() -> TestResult {
-    let server = FixtureServer::start(pages()).await?;
+    let server = FixtureServer::start(private_host::pages()).await?;
     let live = LiveBrowser::connect().await?;
-    let (page_origin, other_origin) = origins(&server);
+    let (page_origin, other_origin) = private_host::origins(&server);
     let mut failures = Vec::new();
     for case in COVERED {
         let page = live.open(&server.url("127.0.0.1", case.path)).await?;
@@ -490,7 +356,7 @@ async fn tests_that_the_look_answers_zuzus_covered_cases_as_mains_rule() -> Test
             Site::Other => &other_origin,
         };
         for &(role, name, covered) in case.boxes {
-            let r#ref = ref_of(&live, &page, role, name).await?;
+            let r#ref = private_host::ref_of(&live, &page, role, name).await?;
             let env = HostEnv::new(&live);
             let answer =
                 look_one(&live, &env, &page, field(&r#ref, Some(expecting(origin)))).await?;
@@ -508,17 +374,15 @@ async fn tests_that_the_look_answers_zuzus_covered_cases_as_mains_rule() -> Test
                     case.cases
                 ));
             }
-            let main = main_rule_blocks(&live, &page, &r#ref).await?;
+            let own_frame = matches!(case.frame_site, Site::Other);
+            let main = main_rule_blocks(&live, &page, &r#ref, own_frame).await?;
             if main != covered {
                 failures.push(format!(
                     "{}: {name}: main's own rule says covered={main}",
                     case.cases
                 ));
             }
-            assert!(
-                !env.sent.load(Ordering::SeqCst),
-                "a look never marks itself sent"
-            );
+            assert!(!env.was_sent(), "a look never marks itself sent");
         }
         live.close(&page).await?;
     }
@@ -532,15 +396,15 @@ async fn tests_that_the_look_answers_zuzus_covered_cases_as_mains_rule() -> Test
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_a_box_without_a_ref_and_a_dropdown_answer_as_zuzu_expects() -> TestResult {
-    let server = FixtureServer::start(pages()).await?;
+    let server = FixtureServer::start(private_host::pages()).await?;
     let live = LiveBrowser::connect().await?;
-    let (page_origin, _) = origins(&server);
+    let (page_origin, _) = private_host::origins(&server);
 
     let page = live
         .open(&server.url("127.0.0.1", "/private/covered-login.html?mode=pe"))
         .await?;
-    ref_of(&live, &page, "textbox", "Email").await?;
-    let printed = snapshot(&live, &page).await?;
+    private_host::ref_of(&live, &page, "textbox", "Email").await?;
+    let printed = private_host::snapshot(&live, &page).await?;
     assert!(
         !printed
             .iter()
@@ -568,7 +432,7 @@ async fn tests_that_a_box_without_a_ref_and_a_dropdown_answer_as_zuzu_expects() 
     let page = live
         .open(&server.url("127.0.0.1", "/private/covered-select.html"))
         .await?;
-    let month = ref_of(&live, &page, "combobox", "Expiry month").await?;
+    let month = private_host::ref_of(&live, &page, "combobox", "Expiry month").await?;
     let env = HostEnv::new(&live);
     let answer = look_one(
         &live,
@@ -588,13 +452,13 @@ async fn tests_that_a_box_without_a_ref_and_a_dropdown_answer_as_zuzu_expects() 
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_the_look_answers_the_page_as_it_is_now() -> TestResult {
-    let server = FixtureServer::start(pages()).await?;
+    let server = FixtureServer::start(private_host::pages()).await?;
     let live = LiveBrowser::connect().await?;
-    let (page_origin, _) = origins(&server);
+    let (page_origin, _) = private_host::origins(&server);
     let page = live
         .open(&server.url("127.0.0.1", "/private/covered-login.html?mode=none"))
         .await?;
-    let password = ref_of(&live, &page, "textbox", "Password").await?;
+    let password = private_host::ref_of(&live, &page, "textbox", "Password").await?;
     live.main_world(&page, "window.coverFor(1500)").await?;
     let env = HostEnv::new(&live);
     let started = Instant::now();
@@ -647,12 +511,12 @@ struct LookPage {
 
 impl LookPage {
     async fn open() -> TestResult<Self> {
-        let server = FixtureServer::start(pages()).await?;
+        let server = FixtureServer::start(private_host::pages()).await?;
         let live = LiveBrowser::connect().await?;
-        let (origin, _) = origins(&server);
+        let (origin, _) = private_host::origins(&server);
         let url = server.url("127.0.0.1", "/private/look.html");
         let page = live.open(&url).await?;
-        let password = ref_of(&live, &page, "textbox", "Password").await?;
+        let password = private_host::ref_of(&live, &page, "textbox", "Password").await?;
         let approved = Expect {
             origin: origin.clone(),
             kind: Some("password".to_owned()),
@@ -674,7 +538,7 @@ impl LookPage {
     }
 
     async fn ref_of(&self, role: &str, name: &str) -> TestResult<String> {
-        ref_of(&self.live, &self.page, role, name).await
+        private_host::ref_of(&self.live, &self.page, role, name).await
     }
 
     async fn look(&self, env: &HostEnv, field: LookField) -> TestResult<BoxLook> {
@@ -711,20 +575,33 @@ async fn tests_that_an_approved_box_answers_its_facts() -> TestResult {
                 "maxLength": 24, "inputMode": "text", "name": "password", "id": "pw",
                 "sized": true, "empty": true }),
     );
+    // The check call has no value, so no length: a box's maxlength refuses nothing (step 7 is
+    // the entry's), and the facts carry it for the host to compare.
+    let code_box = at.ref_of("textbox", "Code").await?;
+    let answer = at.look(&env, at.plain(&code_box)).await?;
+    assert_eq!(code(&answer), None);
+    assert_eq!(answer.facts.and_then(|facts| facts.max_length), Some(6));
+    // Each box answers on its own: one that names nothing does not end the look at the others.
+    let three = vec![
+        at.plain(&at.password),
+        at.plain("e999"),
+        at.plain(&code_box),
+    ];
+    let answers = look(&at.live, &env, &at.page, None, three).await?;
+    let codes: Vec<Option<&str>> = answers.iter().map(code).collect();
+    assert_eq!(codes, vec![None, Some("element_detached"), None]);
+    assert!(answers.first().is_some_and(|first| first.facts.is_some()));
+    assert!(answers.get(2).is_some_and(|third| third.facts.is_some()));
     // The check call before any approval checks no origin and no fact.
     let answer = at.look(&env, field(&at.password, None)).await?;
     assert_eq!(code(&answer), None);
-    let code_box = at.ref_of("textbox", "Code").await?;
     let answer = at.look(&env, field(&code_box, None)).await?;
     assert_eq!(
         answer.facts.map(|facts| facts.empty),
         Some(false),
         "a box with text is not empty"
     );
-    assert!(
-        !env.sent.load(Ordering::SeqCst),
-        "a look never marks itself sent"
-    );
+    assert!(!env.was_sent(), "a look never marks itself sent");
     // A preview prints the `value` attribute (123 on the code box): the look notes none.
     // The look writes no call-log line at all, so no preview and no text of the page.
     let notes = env.notes();
@@ -929,10 +806,7 @@ async fn tests_that_a_box_that_changed_since_the_snapshot_is_refused() -> TestRe
         assert_eq!(code(&answer), Some("element_detached"), "{ref}");
         assert_eq!(answer.facts, None, "{ref}");
     }
-    assert!(
-        !env.sent.load(Ordering::SeqCst),
-        "a look never marks itself sent"
-    );
+    assert!(!env.was_sent(), "a look never marks itself sent");
     at.close().await
 }
 
@@ -941,13 +815,13 @@ async fn tests_that_a_box_that_changed_since_the_snapshot_is_refused() -> TestRe
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_a_cross_site_box_answers_its_frames_origin_on_a_tab_behind() -> TestResult {
-    let server = FixtureServer::start(pages()).await?;
+    let server = FixtureServer::start(private_host::pages()).await?;
     let live = LiveBrowser::connect().await?;
-    let (page_origin, other_origin) = origins(&server);
+    let (page_origin, other_origin) = private_host::origins(&server);
     let page = live
         .open(&server.url("127.0.0.1", "/private/covered-cardframe.html?inner=none"))
         .await?;
-    let number = ref_of(&live, &page, "textbox", "Card number").await?;
+    let number = private_host::ref_of(&live, &page, "textbox", "Card number").await?;
     assert!(
         number.starts_with('f'),
         "the card box is in a frame: {number}"

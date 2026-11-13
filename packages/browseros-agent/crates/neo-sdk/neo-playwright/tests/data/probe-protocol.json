@@ -1,5 +1,5 @@
 {
-  "protocol": 33,
+  "protocol": 34,
   "callFunction": "function (request, root, ...nodes) { const probe = globalThis.__neoProbe; return probe ? probe.call(request, root ?? this, nodes) : { kind: \"uninstalled\" }; }",
   "replyKinds": {
     "describe": [
@@ -43,6 +43,10 @@
       "notFocused"
     ],
     "look": [
+      "value",
+      "detached"
+    ],
+    "private": [
       "value",
       "detached"
     ],
@@ -493,6 +497,52 @@
         "cut": false,
         "keys": true,
         "frameVisible": true
+      }
+    },
+    {
+      "op": "private",
+      "pin": 3,
+      "step": {
+        "kind": "focus",
+        "text": "CANARY-example",
+        "spaced": false
+      }
+    },
+    {
+      "op": "private",
+      "pin": 3,
+      "step": {
+        "kind": "focused"
+      }
+    },
+    {
+      "op": "private",
+      "pin": 3,
+      "step": {
+        "kind": "holds",
+        "text": "4242 4242",
+        "spaced": true
+      }
+    },
+    {
+      "op": "private",
+      "pin": 3,
+      "step": {
+        "kind": "readBack"
+      }
+    },
+    {
+      "op": "private",
+      "pin": 3,
+      "step": {
+        "kind": "forget"
+      }
+    },
+    {
+      "op": "private",
+      "pin": 3,
+      "step": {
+        "kind": "markFocused"
       }
     },
     {
@@ -1129,19 +1179,19 @@
   "replies": [
     {
       "kind": "described",
-      "protocol": 33,
+      "protocol": 34,
       "seq": 0,
       "url": "https://example.com/"
     },
     {
       "kind": "described",
-      "protocol": 33,
+      "protocol": 34,
       "seq": 347,
       "url": "https://pay.example/frame"
     },
     {
       "kind": "described",
-      "protocol": 33,
+      "protocol": 34,
       "seq": 512340,
       "url": "https://example.com/",
       "retired": 0
@@ -1385,6 +1435,56 @@
         "refusal": {
           "code": "notAnInput"
         }
+      }
+    },
+    {
+      "kind": "value",
+      "value": {
+        "kind": "focus",
+        "focus": "held"
+      }
+    },
+    {
+      "kind": "value",
+      "value": {
+        "kind": "focus",
+        "focus": "noDocumentFocus"
+      }
+    },
+    {
+      "kind": "value",
+      "value": {
+        "kind": "focus",
+        "focus": "moving"
+      }
+    },
+    {
+      "kind": "value",
+      "value": {
+        "kind": "holds",
+        "holds": true
+      }
+    },
+    {
+      "kind": "value",
+      "value": {
+        "kind": "readBack",
+        "state": "left",
+        "heldAtLastInput": true,
+        "moving": false
+      }
+    },
+    {
+      "kind": "value",
+      "value": {
+        "kind": "forgot"
+      }
+    },
+    {
+      "kind": "value",
+      "value": {
+        "kind": "markedFocused",
+        "marked": true
       }
     },
     {

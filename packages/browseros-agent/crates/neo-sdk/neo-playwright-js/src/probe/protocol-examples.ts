@@ -193,6 +193,22 @@ export const REQUEST_EXAMPLES: { [O in Op]: AtLeastOne<RequestOf<O>> } = {
       look: { cut: false, keys: true, frameVisible: true },
     },
   ],
+  private: [
+    {
+      op: 'private',
+      pin: 3,
+      step: { kind: 'focus', text: 'CANARY-example', spaced: false },
+    },
+    { op: 'private', pin: 3, step: { kind: 'focused' } },
+    {
+      op: 'private',
+      pin: 3,
+      step: { kind: 'holds', text: '4242 4242', spaced: true },
+    },
+    { op: 'private', pin: 3, step: { kind: 'readBack' } },
+    { op: 'private', pin: 3, step: { kind: 'forget' } },
+    { op: 'private', pin: 3, step: { kind: 'markFocused' } },
+  ],
   read: [
     {
       op: 'read',
@@ -542,6 +558,21 @@ const REPLY_EXAMPLES: {
       kind: 'value',
       value: { refusal: { code: 'notAnInput' } },
     },
+    { kind: 'value', value: { kind: 'focus', focus: 'held' } },
+    { kind: 'value', value: { kind: 'focus', focus: 'noDocumentFocus' } },
+    { kind: 'value', value: { kind: 'focus', focus: 'moving' } },
+    { kind: 'value', value: { kind: 'holds', holds: true } },
+    {
+      kind: 'value',
+      value: {
+        kind: 'readBack',
+        state: 'left',
+        heldAtLastInput: true,
+        moving: false,
+      },
+    },
+    { kind: 'value', value: { kind: 'forgot' } },
+    { kind: 'value', value: { kind: 'markedFocused', marked: true } },
   ],
   read: [
     { kind: 'read', value: 'Welcome' },

@@ -13,7 +13,7 @@ use serde_json::value::{self, RawValue};
 use serde_json::{Map, Value, json};
 use ts_rs::TS;
 
-use crate::private_entry::BoxAsk;
+use crate::private_entry::{BoxAsk, PrivateStep};
 use crate::probe::probe_reply::{Point, Rect};
 use crate::target::{Chunk, Strictness};
 use crate::world::{FrameSeq, Pin};
@@ -144,6 +144,9 @@ pub(crate) enum ProbeRequest {
     /// The private entry's look at a pinned box (protected-fill design section 5.3): `value`
     /// with its facts or the first check it fails (`Looked`), or `detached`. Reads no value.
     Look { pin: Pin, look: BoxAsk },
+    /// One step of the private entry on a pinned box (design sections 5.4 to 5.6): `value`
+    /// with its answer (`PrivateAnswer`), or `detached` for a pin that is gone.
+    Private { pin: Pin, step: PrivateStep },
     /// One read of one element, resolved in the same call.
     Read {
         target: ProbeTarget,

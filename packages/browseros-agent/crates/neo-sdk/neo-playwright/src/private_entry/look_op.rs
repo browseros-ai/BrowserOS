@@ -11,31 +11,32 @@
 //! The look never logs a resolution or a preview: a preview prints every attribute, `value`
 //! included, so a page that mirrors what is typed into an attribute would put it in the call log.
 
+use std::pin::pin;
 use std::time::Duration;
 
-use browseros_core::TabId;
+use browseros_core::{FrameId, TabId};
+use futures_util::future::{self, Either};
 use serde_json::{Value, json};
 use tokio::time::Instant;
 
+use crate::action::requested_navigations::RequestedNavigations;
 use crate::op_scope::OpScope;
 use crate::page::OpPage;
 use crate::private_entry::{
-    BoxAsk, BoxFacts, EntryCode, LookField, LookRefusal, LookRefused, Looked,
+    BoxAsk, BoxFacts, EntryCode, EntryError, LookField, LookRefusal, LookRefused, Looked, Sending,
 };
 use crate::probe::{ParsedSelector, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget, Want};
 use crate::resolve::{self, Resolved, Resolver};
 use crate::target::{AriaRefJump, LocatorTarget, Strictness};
 use crate::world::{Pin, Place};
-use crate::{ErrorCode, PlaywrightError};
+use crate::{ErrorCode, Playwright, PlaywrightError, Refusal, TimedOut};
 
 /// A box the look found: where it lives, its pin there, its facts, and the first check it
 /// fails now (`None` when it passed every one).
 pub(crate) struct LookedBox {
     /// The box's frame world, its parents and their visibility.
-    #[expect(dead_code, reason = "the entry (pull request 2) types in this world")]
     pub(crate) site: Resolved,
     /// The box, pinned in that world for the entry's next calls.
-    #[expect(dead_code, reason = "the entry (pull request 2) focuses this pin")]
     pub(crate) pin: Pin,
     pub(crate) facts: BoxFacts,
     pub(crate) refusal: Option<EntryCode>,
@@ -71,14 +72,48 @@ impl TabAddress {
         let Some(wanted) = wanted else {
             return Ok(Self::Unnamed);
         };
-        let world = within(scope, page.world(&page.main_endpoint(), Place::Main))
-            .await?
-            .map_err(failure_code)?;
+        // A main frame whose document went away under the read has navigated: the tab is no
+        // longer at the address the host approved.
+        let world = match within(scope, page.world(&page.main_endpoint(), Place::Main)).await? {
+            Ok(world) => world,
+            Err(ProbeFailure::Gone(_)) => return Ok(Self::Changed),
+            Err(failure) => return Err(failure_code(failure)),
+        };
         match within(scope, resolve::ask(&world, &ProbeRequest::Describe, None)).await? {
             Ok(ProbeReply::Described { url, .. }) if url == wanted => Ok(Self::Same),
-            Ok(ProbeReply::Described { .. }) => Ok(Self::Changed),
+            Ok(ProbeReply::Described { .. }) | Err(ProbeFailure::Gone(_)) => Ok(Self::Changed),
             Ok(_) => Err(EntryCode::Internal),
             Err(failure) => Err(failure_code(failure)),
+        }
+    }
+}
+
+/// A navigation of the tab's main frame the page requested since the call began. Chromium
+/// answers no call into a renderer that is starting a navigation until it commits or fails
+/// (`action/requested_navigations.rs`), so a look raced with this answers at once instead of
+/// waiting for its deadline: the page is changing under the host's approval.
+pub(crate) struct MainNavigation {
+    requested: RequestedNavigations,
+    frame: FrameId,
+}
+
+impl MainNavigation {
+    /// Starts watching, before the first call into the page.
+    pub(crate) fn watch(pw: &Playwright, page: &OpPage<'_>) -> Self {
+        let root = page.root_session();
+        let sessions = root.session_id().into_iter().cloned().collect();
+        Self {
+            requested: RequestedNavigations::watch(pw.browser().cdp_events(), sessions),
+            frame: page.main_endpoint().frame,
+        }
+    }
+
+    /// `call`'s answer, or `None` once the main frame has a navigation pending.
+    pub(crate) async fn race<F: Future>(&mut self, call: F) -> Option<F::Output> {
+        let pending = pin!(self.requested.pending_in(&self.frame));
+        match future::select(pin!(call), pending).await {
+            Either::Left((answered, _)) => Some(answered),
+            Either::Right(((), _)) => None,
         }
     }
 }
@@ -221,6 +256,11 @@ pub(crate) async fn within<F: Future>(
 
 /// A failure of the crate's own machinery, as the entry's code.
 pub(crate) fn playwright_code(error: &PlaywrightError) -> EntryCode {
+    // The scope's own timeout is the entry's deadline, whatever code the leaf that met it chose
+    // (waiting for the tab's input answers `not_actionable`).
+    if error.timed_out() == TimedOut::Yes {
+        return EntryCode::RunTimeout;
+    }
     match error.error_code() {
         Some(ErrorCode::ElementDetached | ErrorCode::InvalidInput) => EntryCode::ElementDetached,
         Some(ErrorCode::TargetClosed) => EntryCode::TargetClosed,
@@ -228,6 +268,31 @@ pub(crate) fn playwright_code(error: &PlaywrightError) -> EntryCode {
         Some(ErrorCode::WaitTimeout) => EntryCode::RunTimeout,
         _ => EntryCode::Internal,
     }
+}
+
+/// The entry's error for a failure of the crate's machinery or of the door's rules: a host
+/// policy's refusal (a lock, a busy page, a scope the view refused) passes through with its own
+/// owner and code (design section 15, promise 2); anything else maps by [`playwright_code`].
+pub(crate) fn error_of(error: &PlaywrightError, sending: Sending) -> EntryError {
+    if error.error_code().is_some() {
+        return EntryError::of(playwright_code(error), sending);
+    }
+    let refusal = Refusal {
+        owner: error.owner(),
+        code: error.code().to_owned(),
+        message: error.message().to_owned(),
+        host_code: error.host_code().map(str::to_owned),
+    };
+    EntryError::refused(refusal, sending)
+}
+
+/// Whether a failure ends the whole call rather than one box's answer: the tab, the browser
+/// connection or the deadline (design section 4.8; ruling R32).
+pub(crate) fn ends_the_call(code: EntryCode) -> bool {
+    matches!(
+        code,
+        EntryCode::TargetClosed | EntryCode::BrowserDisconnected | EntryCode::RunTimeout
+    )
 }
 
 /// A probe call that failed below the page: a lost connection or a closed frame.
@@ -273,6 +338,7 @@ mod tests {
             "x5",
             "e5 ",
             "#4",
+            "f2e4e",
             "e-1",
             "aria-ref=e5",
         ] {
