@@ -1579,6 +1579,10 @@ fn assert_marked_preview(failure: &PreviewFailure) {
 /// both conformance policies, direct previews and the engine's preview of an intercepting box.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one real host fill feeds the preview and accessible-error matrices in both policies"
+)]
 async fn tests_that_marked_previews_hide_mirrored_attributes_in_every_diagnostic() -> TestResult {
     let bench = Bench::start().await?;
     for place in PLACES {
