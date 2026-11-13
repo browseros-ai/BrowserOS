@@ -34,7 +34,8 @@ use fixture_server::FixtureServer;
 use input_recording::{InputCall, InputRecording};
 use live_browser::{LiveBrowser, TestPage, TestResult};
 use neo_playwright::{
-    BoxSpec, Entry, EntryOutcome, EntryRequest, Expect, Op, PictureCheck, PrivateField, PrivateText,
+    BoxSpec, Entry, EntryOutcome, EntryRequest, Expect, Op, PictureCheck, PrivateField,
+    PrivateText, RunState,
 };
 use neo_trace::{Delivery, ErrorOwner};
 use private_host::HostEnv;
@@ -2551,5 +2552,314 @@ async fn tests_that_a_frame_that_does_not_answer_withholds() -> TestResult {
     );
     // The connection closes and the frame runs again before the tab closes.
     holding.await?;
+    bench.close(opened).await
+}
+
+/// A `locator` handle on `page` for a CSS path, one selector a frame: `["#inner", "#code"]` is
+/// `#code` inside the frame `#inner` holds.
+fn css_target(page: &Value, path: &[&str]) -> Value {
+    let chunks: Vec<Value> = path
+        .iter()
+        .map(|css| {
+            json!({ "parts": [{
+                "name": "css",
+                "body": [{ "simples": [{
+                    "selector": { "css": css, "functions": [] }, "combinator": "",
+                }] }],
+                "source": css,
+            }] })
+        })
+        .collect();
+    json!({
+        "$neo": "locator", "page": page, "chunks": chunks,
+        "display": format!("locator('{}')", path.join(" >> ")),
+    })
+}
+
+/// Runs `call` in the page's own world until it answers 1: a frame's document loads after its
+/// page, and the fixture's moves answer 0 until it is there.
+async fn page_does(bench: &Bench, opened: &Opened, call: &str) -> TestResult {
+    for _ in 0..250 {
+        if bench.live.main_world(&opened.page, call).await? == json!(1) {
+            return Ok(());
+        }
+        time::sleep(Duration::from_millis(20)).await;
+    }
+    Err(format!("the page never did {call}").into())
+}
+
+/// The page's ai-mode snapshot as the agent gets it, all of its JSON.
+async fn printed_snapshot(bench: &Bench, page: &Value) -> TestResult<String> {
+    printed_in_run(bench, Arc::default(), page).await
+}
+
+/// The same, inside `run`: one agent run's caches, its frame tree among them, carry over.
+async fn printed_in_run(bench: &Bench, run: Arc<RunState>, page: &Value) -> TestResult<String> {
+    Ok(bench
+        .live
+        .invoke_in_run(run, "page.ariaSnapshot", page_snapshot(page, false))
+        .await??
+        .to_string())
+}
+
+/// Ruling R53: the mark travels with the node. A box the entry typed into, which the page then
+/// moves into a same-origin frame, stays masked there: `inputValue()` reads bullets, a name built
+/// from it prints bullets, and the snapshot never prints the value. Moved back, it is masked as
+/// before. The mark lives only on the box's wrapper in Neo's isolated world: the page's own
+/// world sees no property of Neo's on the box, and setting the key there marks nothing. Nothing
+/// Neo prints names the key.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_the_mark_travels_with_a_box_moved_into_another_frame() -> TestResult {
+    const KEY: &str = "neo.privatelyTyped";
+    let bench = Bench::start().await?;
+    let bullets = "•".repeat(MARKED.chars().count());
+    let opened = bench.open("/private/moved-box.html", Place::Front).await?;
+    let code = bench.r#ref(&opened, "textbox", "Code").await?;
+    let env = bench.host(&opened);
+    let entry = bench
+        .enter(
+            &env,
+            &opened,
+            vec![Field::new(&code, &bench.page_origin).with(MARKED)?],
+        )
+        .await;
+    assert_eq!(entry.outcome, EntryOutcome::Entered, "{entry:?}");
+    let page = opened.page.brand();
+    let read = |path: &'static [&'static str]| {
+        let live = &bench.live;
+        let input = input_value(&css_target(&page, path));
+        async move { live.invoke("locator.inputValue", input).await }
+    };
+
+    // (a) Into a same-origin frame.
+    page_does(&bench, &opened, "moveIn()").await?;
+    assert_eq!(
+        read(&["#inner", "#code"]).await??,
+        json!(bullets),
+        "(a) inputValue() in the frame reads bullets"
+    );
+    let printed = printed_snapshot(&bench, &page).await?;
+    assert!(
+        !printed.contains(MARKED) && printed.contains(&format!("Send {bullets}")),
+        "(a) the name built from the moved box prints bullets, the value nowhere: {printed}"
+    );
+
+    // (b) Back into the page.
+    page_does(&bench, &opened, "moveOut()").await?;
+    assert_eq!(
+        read(&["#code"]).await??,
+        json!(bullets),
+        "(b) moved back, inputValue() reads bullets"
+    );
+    let printed = printed_snapshot(&bench, &page).await?;
+    assert!(
+        !printed.contains(MARKED) && printed.contains(&format!("Send {bullets}")),
+        "(b) moved back, masked as before: {printed}"
+    );
+
+    // (d) The page's own world: no property of Neo's on the box, and the key set there on the
+    // box the entry never typed into marks nothing.
+    let own = bench
+        .live
+        .main_world(
+            &opened.page,
+            "(() => { const box = document.getElementById('code'); \
+               return JSON.stringify([Object.getOwnPropertyNames(box), \
+                 Object.getOwnPropertySymbols(box).map(String)]); })()",
+        )
+        .await?;
+    assert_eq!(
+        own,
+        json!("[[],[]]"),
+        "(d) the page sees nothing of Neo's on the box"
+    );
+    bench
+        .live
+        .main_world(
+            &opened.page,
+            &format!(
+                "(() => {{ const plain = document.getElementById('plain'); \
+                   plain.value = 'page-held'; \
+                   Object.defineProperty(plain, Symbol.for('{KEY}'), {{ value: true }}); \
+                   plain['{KEY}'] = true; return 1; }})()"
+            ),
+        )
+        .await?;
+    assert_eq!(
+        read(&["#plain"]).await??,
+        json!("page-held"),
+        "(d) the key set in the page's world marks nothing"
+    );
+
+    // (e) Nothing Neo prints names the key: not the snapshot, not an element preview.
+    let preview = preview_failure(
+        &bench,
+        &opened,
+        "expect.locator",
+        expectation(
+            ("target", css_target(&page, &["#code"])),
+            "toBeHidden",
+            &json!({ "expression": "to.be.hidden", "isNot": false }),
+        ),
+    )
+    .await?;
+    for (what, text) in [("snapshot", &printed), ("preview", &preview.message)] {
+        assert!(
+            !text.contains(KEY) && !text.contains("privatelyTyped"),
+            "(e) the {what} names no key of Neo's: {text}"
+        );
+    }
+    bench.close(opened).await
+}
+
+/// Ruling R53: a box marked inside a frame (so its prototype is that frame's), which the page
+/// moves into its own document before removing the frame. A later agent run (another script)
+/// learns the tab's frames afresh: after a `page.evaluate`, which stores the tab's frame tree in
+/// the run, the tree proves one frame and a snapshot would skip the document-wide field scan.
+/// The tab took a private entry, so the scan still runs and guards the box's foreign
+/// prototype: a name built from it prints bullets.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_box_marked_in_a_removed_frame_stays_masked() -> TestResult {
+    let bench = Bench::start().await?;
+    let bullets = "•".repeat(MARKED.chars().count());
+    let opened = bench
+        .open("/private/moved-box.html?inside=1", Place::Front)
+        .await?;
+    let code = bench.r#ref(&opened, "textbox", "Code").await?;
+    let env = bench.host(&opened);
+    let entry = bench
+        .enter(
+            &env,
+            &opened,
+            vec![Field::new(&code, &bench.page_origin).with(MARKED)?],
+        )
+        .await;
+    assert_eq!(entry.outcome, EntryOutcome::Entered, "{entry:?}");
+    let page = opened.page.brand();
+    page_does(&bench, &opened, "moveOut()").await?;
+    page_does(&bench, &opened, "dropFrame()").await?;
+    // A run that starts after the frame left and evaluates first, as a script may.
+    let run: Arc<RunState> = Arc::default();
+    bench
+        .live
+        .invoke_in_run(
+            Arc::clone(&run),
+            "page.evaluate",
+            json!({
+                "call": { "api": "page.evaluate", "timeoutMs": 5_000 }, "page": page,
+                "expression": "() => 1", "isFunction": true,
+                "arg": { "value": r#"{"v":"undefined"}"#, "handles": [] },
+            }),
+        )
+        .await??;
+    for round in 0..3 {
+        let printed = printed_in_run(&bench, Arc::clone(&run), &page).await?;
+        assert!(
+            !printed.contains(MARKED) && printed.contains(&format!("Send {bullets}")),
+            "(c) #{round}: the name built from the box prints bullets: {printed}"
+        );
+    }
+    bench.close(opened).await
+}
+
+/// Ruling R53's mark lives on the box's wrapper in Neo's isolated world, so it lives as long as
+/// that wrapper does. A Chromium that ever dropped such a wrapper in a garbage collection while
+/// the box lives would take every mark with it, and nothing else would notice; this row does.
+/// It guards the browser's wrapper lifetime, not our code: no change of ours makes it fail.
+/// First as the design's author probed it: collections while the box sits in its page, which
+/// alone proves little, since Neo's own world still holds the box then. Then the real test:
+/// only the page's world holds the box while the collections run.
+///
+/// What in Neo's world can hold a box strongly (probe sources, at this commit), and how the
+/// second phase lets go of each, so the next reader can check the list is still complete:
+/// - `Pins` (world.ts): every element a resolve, read or action pinned, strongly, until 512
+///   newer entries evict it. The 520 reads on Plain evict the box's pins.
+/// - `active` (private-entry.ts): the box under entry, until `readBack` or `forget`; the entry
+///   is over before the first phase.
+/// - The vendored engine's last ai snapshot (`_lastAriaSnapshotForQuery`), replaced by each
+///   snapshot: the one taken after the stash does not hold the box.
+/// - An armed hit-target check (act.ts), until its verdict or expiry: none is armed here.
+/// - Cleared within the call that fills them, so never between calls: the pointer-target maps
+///   (pointer-targets.ts, at the end of each snapshot) and the slot maps (shadow-roots.ts, on
+///   the next microtask).
+/// - Weak, so never: the aria refs (`WeakRef`), the element maps of aria-ref.ts, files.ts,
+///   shadow-roots.ts and private-entry.ts (`WeakMap`), and frame pins (`WeakRef`).
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_the_mark_outlives_garbage_collections() -> TestResult {
+    let bench = Bench::start().await?;
+    let bullets = "•".repeat(MARKED.chars().count());
+    let opened = bench.open("/private/moved-box.html", Place::Front).await?;
+    let code = bench.r#ref(&opened, "textbox", "Code").await?;
+    let env = bench.host(&opened);
+    let entry = bench
+        .enter(
+            &env,
+            &opened,
+            vec![Field::new(&code, &bench.page_origin).with(MARKED)?],
+        )
+        .await;
+    assert_eq!(entry.outcome, EntryOutcome::Entered, "{entry:?}");
+    let page = opened.page.brand();
+    let session = private_host::root_session(&bench.live, &opened.page).await?;
+    let collect = || async {
+        for _ in 0..5 {
+            session
+                .send_value("HeapProfiler.collectGarbage", json!({}))
+                .await?;
+            // Churn the page's own heap too, so a collection has something to move.
+            bench
+                .live
+                .main_world(
+                    &opened.page,
+                    "(() => { const junk = []; \
+                       for (let i = 0; i < 200000; i++) junk.push({ i }); \
+                       return junk.length; })()",
+                )
+                .await?;
+        }
+        TestResult::Ok(())
+    };
+    let masked = |phase: &'static str| {
+        let page = &page;
+        let bench = &bench;
+        let bullets = &bullets;
+        async move {
+            let read = bench
+                .live
+                .invoke(
+                    "locator.inputValue",
+                    input_value(&css_target(page, &["#code"])),
+                )
+                .await??;
+            assert_eq!(read, json!(bullets), "{phase}: inputValue reads bullets");
+            let printed = printed_snapshot(bench, page).await?;
+            assert!(
+                !printed.contains(MARKED) && printed.contains(&format!("Send {bullets}")),
+                "{phase}: the snapshot holds no value: {printed}"
+            );
+            TestResult::Ok(())
+        }
+    };
+
+    collect().await?;
+    masked("collected while the box sits in its page").await?;
+
+    page_does(&bench, &opened, "stash()").await?;
+    printed_snapshot(&bench, &page).await?;
+    for _ in 0..520 {
+        bench
+            .live
+            .invoke(
+                "locator.inputValue",
+                input_value(&css_target(&page, &["#plain"])),
+            )
+            .await??;
+    }
+    collect().await?;
+    page_does(&bench, &opened, "restore()").await?;
+    masked("collected while only the page held the box").await?;
     bench.close(opened).await
 }

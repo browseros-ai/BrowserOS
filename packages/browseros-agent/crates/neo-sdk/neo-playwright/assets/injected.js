@@ -8717,19 +8717,20 @@ ${value.stack}`;
   }
 
   // crates/neo-sdk/neo-playwright-js/src/probe/private-entry.ts
-  var marked = new WeakSet;
+  var MARK = Symbol.for("neo.privatelyTyped");
   var anyMarked = false;
   var LEAVES = ["beforeunload", "pagehide"];
   var watched = new WeakMap;
   var active = new Map;
   function privatelyTyped(element) {
-    return marked.has(element);
+    return Object.hasOwn(element, MARK);
   }
   function anyPrivatelyTyped() {
     return anyMarked;
   }
   function mark(element) {
-    marked.add(element);
+    if (!Object.hasOwn(element, MARK))
+      Object.defineProperty(element, MARK, { value: true });
     anyMarked = true;
   }
   function privateStep(world, request) {
@@ -9899,7 +9900,7 @@ ${value.stack}`;
       roleOf: (of) => injected.utils.getAriaRole(of),
       isVisible: (of) => injected.utils.isElementVisible(of)
     };
-    const take = () => marked2(targets, engine, plain);
+    const take = () => marked(targets, engine, plain);
     const { result, skipped } = output.tree(element, take);
     const { json, iframeRefs, iframeDepths } = result;
     const iframes = [];
@@ -9921,7 +9922,7 @@ ${value.stack}`;
       ...skipped ? { marksSkipped: true } : {}
     };
   }
-  function marked2(targets, engine, snapshot) {
+  function marked(targets, engine, snapshot) {
     const elements = targets.filter((node) => node instanceof Element);
     if (elements.length === 0)
       return { result: snapshot(), skipped: false };

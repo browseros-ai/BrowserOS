@@ -261,7 +261,7 @@ impl Fill {
         // refuses the fill before it starts: nothing typed, the id unused.
         if let Err(error) = self.filled.remember(tab, page.target_id).await {
             tracing::error!(%error, run = %id, "cannot record the tab that takes the fill; it types nothing");
-            return refuse(ticket, Refused::RecordUnavailable);
+            return refuse(ticket, Refused::FilledTabsUnavailable);
         }
         let recorded = match ticket.as_mut() {
             Some(ticket) => ticket.started().await,
