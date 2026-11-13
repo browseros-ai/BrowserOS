@@ -205,13 +205,20 @@ impl FileAccess {
             };
             let mut allowed = Vec::new();
             if let ProtectedPath::Home { open, .. } = own {
-                // A missing folder lifts nothing, as a missing read root grants nothing.
+                // A folder not made yet is judged by the real path it will have, so the first
+                // save into the downloads folder can make it. A read still needs an existing
+                // read root. A file, or a link that resolves nowhere, lifts nothing.
                 for folder in roots.iter().chain(open) {
-                    if let Ok(real) = fs::canonicalize(folder).await
-                        && fs::metadata(&real).await.is_ok_and(|meta| meta.is_dir())
-                    {
-                        allowed.push(real);
+                    let Ok(Resolution {
+                        target: Some(real), ..
+                    }) = resolve(folder, ResolveMode::Protected).await
+                    else {
+                        continue;
+                    };
+                    if fs::metadata(&real).await.is_ok_and(|meta| !meta.is_dir()) {
+                        continue;
                     }
+                    allowed.push(real);
                 }
             }
             // An unusable credential must not disable unrelated file operations. Protection
@@ -815,11 +822,19 @@ mod tests {
         let inside = home.join("Inside");
         fs::create_dir(&inside).await?;
         fs::write(inside.join("saved.csv"), "ordinary").await?;
+        symlink(home.join(".cache/fontconfig"), home.join("into-cache"))?;
+        let listed = home.join("listed-not-made");
         let policy = FileAccess::new(
-            Vec::new,
+            move || vec![listed.clone()],
             vec![ProtectedPath::Home {
                 path: home.clone(),
-                open: vec![inside.clone(), home.join("not-made")],
+                open: vec![
+                    inside.clone(),
+                    home.join("Downloads-not-made"),
+                    home.join(".config/not-made"),
+                    home.join("into-cache"),
+                    home.join(".bashrc"),
+                ],
             }],
         );
         assert!(policy.write(&inside.join("saved.csv")).await.is_ok());
@@ -828,12 +843,35 @@ mod tests {
             Some(FileAccessError::OutsideReadDirs),
             "a read still needs files.readDirs"
         );
+        for path in [
+            "Downloads-not-made/new/file.png",
+            "listed-not-made/file.png",
+        ] {
+            assert!(
+                policy.write(&home.join(path)).await.is_ok(),
+                "a folder not made yet is judged by its real path: {path}"
+            );
+        }
         assert_eq!(
-            policy.write(&home.join("not-made/file.png")).await.err(),
-            Some(FileAccessError::OwnFiles),
-            "a missing open folder lifts nothing"
+            policy
+                .read(&home.join("listed-not-made/file.png"))
+                .await
+                .err(),
+            Some(FileAccessError::OutsideReadDirs),
+            "a missing read root grants no read"
         );
-        assert!(!home.join("not-made").exists());
+        for path in [
+            ".config/not-made/file.png",
+            "into-cache/fonts.cache-9",
+            ".bashrc",
+        ] {
+            assert_eq!(
+                policy.write(&home.join(path)).await.err(),
+                Some(FileAccessError::OwnFiles),
+                "{path}: a dot-entry, a link into one, or a file lifts nothing"
+            );
+        }
+        assert!(!home.join("Downloads-not-made").exists() && !home.join(".pki").exists());
         Ok(())
     }
 }

@@ -289,14 +289,12 @@ def home_files(proof, places, outside, origin):
     marker = outside.name
     crash = home / '.config' / 'browser-claw' / 'Crash Reports' / 'settings.dat'
     caches = sorted((home / '.cache' / 'fontconfig').glob('*.cache-*'))
-    required = [home / '.bashrc', home / '.bash_logout', *caches[:1]]
-    proof.check("the server's home holds the dotfiles and a fontconfig cache",
-                bool(caches) and all(path.is_file() for path in required),
-                home=str(home), crashSettings=crash.is_file())
-    existing = [path for path in [*required, crash] if path.is_file()]
+    required = [home / '.bashrc', home / '.bash_logout', *caches[:1], crash]
+    proof.check("the server's home holds the dotfiles, a fontconfig cache and the crash settings",
+                bool(caches) and all(path.is_file() for path in required), home=str(home))
+    existing = [path for path in required if path.is_file()]
     created = [home / '.pki' / 'nssdb' / 'cert9.db', home / '.config' / 'fontconfig' / 'fonts.conf',
                home / (marker + '-new.png')]
-    created += [] if crash.is_file() else [crash]
     link = outside / 'neo-home'
     link.symlink_to(home, target_is_directory=True)
     climb = '../' * (len(downloads.parts) - 1)
