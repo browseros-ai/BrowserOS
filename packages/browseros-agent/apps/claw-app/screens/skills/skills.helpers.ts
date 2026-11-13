@@ -146,6 +146,7 @@ const STUCK_WHILE: Record<ReplayVerb, string> = {
   type: 'typing on a page',
   attach: 'handling a file',
   submit: 'sending a form',
+  browse: 'clicking through a page',
   done: 'finishing up',
 }
 

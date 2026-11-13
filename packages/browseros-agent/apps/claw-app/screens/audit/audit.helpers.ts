@@ -1,4 +1,9 @@
-import type { AuditAgent } from '@browseros/claw-api'
+import type {
+  AuditAgent,
+  SessionPursueRun,
+  SessionPursueStep,
+  SessionUltrafastRun,
+} from '@browseros/claw-api'
 import { agentIdentity } from '@/components/harness/harness.types'
 import type { TaskSummary } from '@/modules/api/audit.hooks'
 
@@ -170,4 +175,64 @@ export function chipTokens(tokens: number): string {
     return thousands >= 10 ? '10k' : `${thousands}k`
   }
   return `${Math.round(value / 1_000).toLocaleString('en-US')}k`
+}
+
+function stepsLabel(steps: number): string {
+  return steps === 1 ? '1 step' : `${steps} steps`
+}
+
+/** History card pill for a task where neo used pursue: what neo did, in one short phrase. */
+export function pursuePill(pursue: SessionPursueRun): string {
+  if (pursue.outcome === 'completed') {
+    return `ultrafast · neo did it in ${ultrafastTime(pursue.durationMs)}`
+  }
+  if (pursue.steps.length === 0) return 'ultrafast · neo handed back'
+  return `ultrafast · neo did ${stepsLabel(pursue.steps.length)}`
+}
+
+/** Task header pill for a pursue task, with pages and tokens when neo counted them. */
+export function pursueHeader(
+  pursue: SessionPursueRun,
+  ultrafast?: SessionUltrafastRun,
+): string {
+  const time = ultrafastTime(pursue.durationMs)
+  const did =
+    pursue.outcome === 'completed'
+      ? `ultrafast · neo did it in ${time}`
+      : pursue.steps.length === 0
+        ? `ultrafast · neo handed back after ${time}`
+        : `ultrafast · neo did ${stepsLabel(pursue.steps.length)} in ${time}`
+  if (!ultrafast) return did
+  return `${did} · ${pagesLabel(ultrafast.pagesRead)}, ${chipTokens(ultrafast.tokensSaved)} tokens saved`
+}
+
+/** One of neo's steps in plain words, from only what was recorded. */
+export function pursueStepLabel(step: SessionPursueStep): string {
+  const text = step.text
+  switch (step.action) {
+    case 'click':
+      return 'Clicked'
+    case 'type':
+      return text ? `Typed "${text}"` : 'Typed into a field'
+    case 'press':
+      return text ? `Pressed ${text}` : 'Pressed a key'
+    case 'check':
+      return 'Ticked a box'
+    case 'uncheck':
+      return 'Unticked a box'
+    case 'select':
+      return text ? `Chose "${text}"` : 'Chose an option'
+    case 'scroll':
+      return 'Scrolled the page'
+    case 'drag':
+      return 'Dragged an item'
+    case 'dialog':
+      return 'Answered a pop-up'
+    case 'open':
+      return text ? `Opened ${text}` : 'Opened a page'
+    case 'back':
+      return 'Went back'
+    case 'reload':
+      return 'Reloaded the page'
+  }
 }

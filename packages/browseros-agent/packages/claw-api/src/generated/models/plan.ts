@@ -12,6 +12,11 @@
  * Do not edit the class manually.
  */
 
+import type {
+    SessionSummary,
+    SessionUltrafastRun,
+} from './sessions.js';
+
 /**
  *
  * @export
@@ -407,6 +412,32 @@ export interface PlanRateLimitedError {
      * @memberof PlanRateLimitedError
      */
     retryAfterSeconds?: number;
+}
+
+/**
+ * What ultrafast has done on this computer, from the task history: every task where ultrafast did work (a skill that ran without the agent, or a pursue that finished or handed back).
+ * @export
+ * @interface PlanSavings
+ */
+export interface PlanSavings {
+    /**
+     * Time, pages read and tokens saved, summed across those tasks. Time includes every pursue; pages and tokens count only where neo counted them, so pursue runs from before that add time alone.
+     * @type {SessionUltrafastRun}
+     * @memberof PlanSavings
+     */
+    totals: SessionUltrafastRun;
+    /**
+     * How many tasks ultrafast did work in.
+     * @type {number}
+     * @memberof PlanSavings
+     */
+    tasks: number;
+    /**
+     * The newest of those tasks, newest first, each with what neo measured (`ultrafast`) and what it did with pursue (`pursue`) where recorded.
+     * @type {Array<SessionSummary>}
+     * @memberof PlanSavings
+     */
+    latest: Array<SessionSummary>;
 }
 
 /**

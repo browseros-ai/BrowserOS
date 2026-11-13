@@ -15,6 +15,7 @@ import {
   useTaskScreenshotBaseUrl,
 } from '@/modules/api/audit.hooks'
 import {
+  pursuePill,
   taskTime,
   taskWhen,
   tookLabel,
@@ -103,7 +104,11 @@ export function TaskRow({ task, now, timeOnly = false }: TaskRowProps) {
           <span aria-hidden>·</span>
           <span>{tookLabel(task.durationMs)}</span>
         </span>
-        {task.ultrafast ? (
+        {task.pursue ? (
+          <UltrafastRunBadge className="mt-1">
+            {pursuePill(task.pursue)}
+          </UltrafastRunBadge>
+        ) : task.ultrafast ? (
           <UltrafastRunBadge className="mt-1">
             ultrafast · {ultrafastTime(task.ultrafast.durationMs)}
           </UltrafastRunBadge>

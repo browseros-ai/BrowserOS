@@ -290,3 +290,23 @@ export function checkoutPhase(progress: CheckoutProgress): CheckoutPhase {
   }
   return 'waiting'
 }
+
+/** The big savings number: "640", "4.2k", "973k", then "1.2M". */
+export function savingsTokens(tokens: number): string {
+  const value = Math.max(0, Math.round(tokens))
+  if (value < 1_000) return String(value)
+  if (value < 10_000) return `${(Math.round(value / 100) / 10).toFixed(1)}k`
+  if (value < 999_500) return `${Math.round(value / 1_000)}k`
+  return `${(Math.round(value / 100_000) / 10).toFixed(1)}M`
+}
+
+/** Time neo worked in total: "40 sec", "8 min", then "1 hr 12 min". */
+export function savingsTime(durationMs: number): string {
+  const seconds = Math.round(Math.max(0, durationMs) / 1_000)
+  if (seconds < 60) return `${seconds} sec`
+  const minutes = Math.round(seconds / 60)
+  if (minutes < 60) return `${minutes} min`
+  const hours = Math.floor(minutes / 60)
+  const rest = minutes % 60
+  return rest === 0 ? `${hours} hr` : `${hours} hr ${rest} min`
+}

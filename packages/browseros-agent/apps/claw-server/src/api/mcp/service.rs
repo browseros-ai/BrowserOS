@@ -9,7 +9,7 @@ use crate::{
         hosted,
         naming::{SESSION_NAME_INPUT_MAX_LEN, normalize_small_name, session_group_title},
         observers::audit::{LocalToolDispatch, record_local_tool_dispatch},
-        prompt::mcp_instructions,
+        prompt::{mcp_instructions, with_pursue_guidance},
         session_handle, tab_grouping,
     },
     config::{ServerMode, TabGrouping},
@@ -66,8 +66,10 @@ const AGENT_NAME_ARG_DESCRIPTION: &str = "Optional fallback identifying your cli
 /// `taskName` instead of `name_session`.
 const AGENT_NAME_TASK_SENTENCE: &str = "Put your task name in name_session, not here.";
 const HOSTED_AGENT_NAME_TASK_SENTENCE: &str = "Put your task name in taskName, not here.";
+mod pursue;
 mod ultrafast;
 
+pub(super) use pursue::PURSUE_TOOL_NAME;
 pub(super) use ultrafast::RUN_SKILL_TOOL_NAME;
 pub(super) const SAVE_SKILL_TOOL_NAME: &str = "save_skill";
 const SAVE_SKILL_DESCRIPTION: &str = "When you finish a repeatable browser task the user is likely to run again, save it as a BrowserOS neo skill so it can be re-run by name later; save genuinely repeatable, user-valuable tasks, not one-offs. Give a lowercase-hyphen name, a one-line description, the ordered steps, and any shortcuts learned this run. In the steps, name the exact browser SDK calls you actually used this session (e.g. browser.wait, browser.read, browser.pages.newPage) so a later run reuses them verbatim; never invent, rename, or guess a method that is not in the run tool's SDK (there is no browser.waitFor, for example). The skill is saved and linked into your agents under a neo- prefix (neo-<name>) so it never clobbers your own skills and you can list them all by typing /neo; a name given without the prefix is namespaced automatically. Call again with the same name to update it in place.";
@@ -210,6 +212,7 @@ impl ClawMcpService {
         // Tools whose native feature the connected browser lacks are not offered. The list is
         // fixed for the process (the identity is), and execute_tool refuses cached callers.
         let native = self.native();
+        let pursue_offered = self.pursue_offered();
         let mut tools = self
             .catalog
             .iter()
@@ -220,6 +223,13 @@ impl ClawMcpService {
                     self.state.config.behavior.run_policy,
                 )
             })
+            .map(|tool| {
+                if pursue_offered {
+                    pursue::with_pursue_first(tool)
+                } else {
+                    tool
+                }
+            })
             .map(&decorate)
             .collect::<Vec<_>>();
         let mut local = vec![
@@ -229,6 +239,9 @@ impl ClawMcpService {
         ];
         if self.ultrafast() {
             local.push(ultrafast::run_skill_tool());
+        }
+        if pursue_offered {
+            local.push(pursue::pursue_tool());
         }
         if self.state.captcha.is_some() {
             local.push(super::captcha::solve_captcha_tool());
@@ -1094,13 +1107,20 @@ impl ServerHandler for ClawMcpService {
         implementation.title = Some(SERVER_TITLE.to_string());
         InitializeResult::new(capabilities)
             .with_server_info(implementation)
-            .with_instructions(mcp_instructions(
-                self.mode(),
-                self.human_help(),
-                self.ultrafast(),
-                self.native(),
-                self.tab_grouping(),
-            ))
+            .with_instructions({
+                let instructions = mcp_instructions(
+                    self.mode(),
+                    self.human_help(),
+                    self.ultrafast(),
+                    self.native(),
+                    self.tab_grouping(),
+                );
+                if self.pursue_offered() {
+                    with_pursue_guidance(instructions)
+                } else {
+                    instructions
+                }
+            })
     }
 
     fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
@@ -1201,6 +1221,9 @@ impl ServerHandler for ClawMcpService {
         if name == RUN_SKILL_TOOL_NAME {
             return self.run_skill_offer();
         }
+        if name == PURSUE_TOOL_NAME && self.pursue_offered() {
+            return Some(session_handle::offer(pursue::pursue_tool()));
+        }
         // Catalog-wide even for hidden tools: rmcp caches these input schemas by name, and a
         // cached caller should reach execute_tool's explanation, not method-not-found.
         let native = self.native();
@@ -1225,6 +1248,11 @@ impl ServerHandler for ClawMcpService {
         let is_request_help = request.name == REQUEST_HELP_TOOL_NAME;
         let is_await_help = request.name == AWAIT_HELP_TOOL_NAME;
         let is_run_skill = request.name == RUN_SKILL_TOOL_NAME && self.ultrafast();
+        // Routed on a desktop server with a worker even when the plan has lapsed, so a cached
+        // caller is handed back to run rather than told the tool does not exist.
+        let is_pursue = request.name == PURSUE_TOOL_NAME
+            && !self.mode().is_hosted()
+            && self.state.decisions.url().is_some();
         let is_solve_captcha = request.name == "solve_captcha" && self.state.captcha.is_some();
         let tool_index = self.find_tool_index(&request.name);
         if !is_name_session
@@ -1233,6 +1261,7 @@ impl ServerHandler for ClawMcpService {
             && !is_request_help
             && !is_await_help
             && !is_run_skill
+            && !is_pursue
             && !is_solve_captcha
             && tool_index.is_none()
         {
@@ -1338,6 +1367,10 @@ impl ServerHandler for ClawMcpService {
                 self.human_help() == HumanHelp::On,
             )
             .await)
+        } else if is_pursue {
+            Ok(self
+                .call_pursue(&started, &raw_args, context.ct.clone())
+                .await)
         } else if is_run_skill {
             Ok(self
                 .call_run_skill(&started, &raw_args, context.ct.clone())
@@ -3940,6 +3973,48 @@ mod tests {
         assert_eq!(offered(&service), (false, false, Some(false)));
         call.state.ultrafast.set(true);
         assert_eq!(offered(&service), (true, true, Some(true)));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn pursue_and_its_place_before_run_follow_the_ultrafast_switch() -> anyhow::Result<()> {
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let mut state = call.state.clone();
+        state.decisions = Arc::new(crate::services::decisions::Decisions::new(Some(
+            "http://127.0.0.1:9/".parse()?,
+        )));
+        let service = ClawMcpService::new(state.clone());
+        let offered = |service: &ClawMcpService| {
+            let tools = service.listed_tools(false);
+            let run_names_pursue = tools
+                .iter()
+                .find(|tool| tool.name == "run")
+                .and_then(|tool| tool.description.as_deref())
+                .is_some_and(|description| description.contains("call pursue first"));
+            let instructions = service.get_info().instructions.unwrap_or_default();
+            (
+                tools.iter().any(|tool| tool.name == PURSUE_TOOL_NAME),
+                service.get_tool(PURSUE_TOOL_NAME).is_some(),
+                run_names_pursue,
+                instructions.contains("Start each task that does something on a site with pursue"),
+                instructions.contains("Reach for run first"),
+            )
+        };
+
+        assert_eq!(offered(&service), (false, false, false, false, true));
+        state.ultrafast.set(true);
+        assert_eq!(offered(&service), (true, true, true, true, false));
+        state.ultrafast.set(false);
+        assert_eq!(offered(&service), (false, false, false, false, true));
+
+        state.decisions = Arc::new(crate::services::decisions::Decisions::new(None));
+        state.ultrafast.set(true);
+        let without_worker = ClawMcpService::new(state);
+        assert_eq!(
+            offered(&without_worker),
+            (false, false, false, false, true),
+            "no decisions worker, no pursue"
+        );
         Ok(())
     }
 

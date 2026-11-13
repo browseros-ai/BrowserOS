@@ -880,6 +880,26 @@ export interface paths {
     patch?: never
     trace?: never
   }
+  '/api/v1/plan/savings': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /**
+     * What ultrafast has done on this computer.
+     * @description Derived from the local task history, so it works offline. Tasks recorded before ultrafast kept its numbers count nothing.
+     */
+    get: operations['getPlanSavings']
+    put?: never
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
 }
 export type webhooks = Record<string, never>
 export interface components {
@@ -1080,11 +1100,11 @@ export interface components {
        */
       totalTokenEstimate: number
     }
-    /** @description What neo did on its own while ultrafast skills ran without the agent in this session, summed across every such run. */
+    /** @description What neo did on its own in this session's ultrafast runs (skills that ran without the agent, and pursue runs that read the page), summed. */
     SessionUltrafastRun: {
       /**
        * Format: int64
-       * @description Time the ultrafast skill runs took, in milliseconds.
+       * @description Time those runs took, in milliseconds.
        */
       durationMs: number
       /**
@@ -1097,6 +1117,43 @@ export interface components {
        * @description Estimated tokens of page text neo read itself that never went to the agent.
        */
       tokensSaved: number
+    }
+    /** @description One thing neo did on the page during pursue. */
+    SessionPursueStep: {
+      /**
+       * @description The kind of step, as recorded.
+       * @enum {string}
+       */
+      action:
+        | 'click'
+        | 'type'
+        | 'press'
+        | 'check'
+        | 'uncheck'
+        | 'select'
+        | 'scroll'
+        | 'drag'
+        | 'dialog'
+        | 'open'
+        | 'back'
+        | 'reload'
+      /** @description What the step carried when it was recorded: the text typed, the key pressed, the option chosen, or the site opened. Absent when nothing was recorded or the value was redacted. */
+      text?: string
+    }
+    /** @description What neo did with pursue in this session, derived from the steps it recorded while pursue ran. */
+    SessionPursueRun: {
+      /**
+       * @description How the session's last pursue ended: neo finished the goal, or handed the page back to the agent.
+       * @enum {string}
+       */
+      outcome: 'completed' | 'handed_back'
+      /**
+       * Format: int64
+       * @description Time the session's pursue calls took, in milliseconds.
+       */
+      durationMs: number
+      /** @description The steps neo took on the page, in order. */
+      steps: components['schemas']['SessionPursueStep'][]
     }
     SessionSummary: {
       sessionId: string
@@ -1125,8 +1182,10 @@ export interface components {
       latestScreenshotId?: number
       /** @description Estimated token consumption of this session's tool traffic, summed across all dispatches and refreshed live as they land. Present only when the session has dispatches and every one carries token-estimator v1; absent for legacy or otherwise unmeasured sessions. */
       tokenUsage?: components['schemas']['SessionTokenUsage']
-      /** @description Present only when an ultrafast skill ran to the end without the agent in this session. */
+      /** @description Present only when this session had an ultrafast run: a skill that ran to the end without the agent, or a pursue that read the page. */
       ultrafast?: components['schemas']['SessionUltrafastRun']
+      /** @description Present only when this session had a pursue call that finished its goal or handed the page back. */
+      pursue?: components['schemas']['SessionPursueRun']
       /** @description Present only on summaries returned by an explicit `status=live` list query. */
       live?: components['schemas']['LiveSessionState']
     }
@@ -1777,6 +1836,18 @@ export interface components {
        * @description The billing portal page to open in a new tab.
        */
       url: string
+    }
+    /** @description What ultrafast has done on this computer, from the task history: every task where ultrafast did work (a skill that ran without the agent, or a pursue that finished or handed back). */
+    PlanSavings: {
+      /** @description Time, pages read and tokens saved, summed across those tasks. Time includes every pursue; pages and tokens count only where neo counted them, so pursue runs from before that add time alone. */
+      totals: components['schemas']['SessionUltrafastRun']
+      /**
+       * Format: int64
+       * @description How many tasks ultrafast did work in.
+       */
+      tasks: number
+      /** @description The newest of those tasks, newest first, each with what neo measured (`ultrafast`) and what it did with pursue (`pursue`) where recorded. */
+      latest: components['schemas']['SessionSummary'][]
     }
   }
   responses: {
@@ -3478,6 +3549,28 @@ export interface operations {
       }
       403: components['responses']['PlanForbidden']
       404: components['responses']['PlanNotFound']
+      500: components['responses']['InternalError']
+    }
+  }
+  getPlanSavings: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description Totals and the newest ultrafast tasks. */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['PlanSavings']
+        }
+      }
+      403: components['responses']['PlanForbidden']
       500: components['responses']['InternalError']
     }
   }

@@ -15,7 +15,7 @@ use crate::{
         capture::{CaptureHub, CdpPortTransport, LiveSessionTabs},
         cockpit::{CockpitQuery, SessionVisualService, TabActivityRecord, TabActivityService},
         harness::HarnessService,
-        harness_skills::load_browserclaw_skill,
+        harness_skills::{load_browserclaw_skill, with_ultrafast},
         profiles::ProfileService,
         recordings::{LiveRecordingBus, RecordingIngestService, RecordingStore},
         replay::ReplayService,
@@ -76,6 +76,8 @@ pub struct AppState {
     pub extension_updates: Arc<crate::services::extension_updates::ExtensionUpdates>,
     /// ultrafast. Without a billing gateway in this build it reads as no plan and refuses the rest.
     pub billing: Arc<crate::services::billing::Billing>,
+    /// The decisions worker pursue reaches the decision model and the writer through.
+    pub decisions: Arc<crate::services::decisions::Decisions>,
     pub shutdown: ShutdownHandle,
     /// How the data this server opened compares to the schema this build knows, published on
     /// `/system/info` so the app can prompt an update when the database is ahead of the server.
@@ -139,17 +141,21 @@ impl AppState {
             crate::db::tool_calls_daily::ToolCallsDailyRepository::new(database.clone()),
         );
         let skill = load_browserclaw_skill(&config.resources_dir, config.behavior.tab_grouping)?;
+        let ultrafast_skill = with_ultrafast(&skill)?;
         let claude_desktop = Arc::new(crate::services::claude_desktop::ClaudeDesktop::new(
             &home_dir,
             config.browserclaw_dir.join("claude-desktop"),
         ));
-        let harness = Arc::new(HarnessService::new_with_managed_skill(
-            config.browserclaw_dir.join("mcp-manager"),
-            config.browserclaw_dir.join("harness-integrations"),
-            home_dir,
-            skill,
-            analytics_sink.clone(),
-        ));
+        let harness = Arc::new(
+            HarnessService::new_with_managed_skill(
+                config.browserclaw_dir.join("mcp-manager"),
+                config.browserclaw_dir.join("harness-integrations"),
+                home_dir,
+                skill,
+                analytics_sink.clone(),
+            )
+            .with_ultrafast_skill(ultrafast_skill),
+        );
         let skills = Arc::new(SkillService::new(
             SkillsRepository::new(database.clone()),
             harness.clone(),
@@ -253,6 +259,9 @@ impl AppState {
             )
             .await,
         );
+        let decisions = Arc::new(crate::services::decisions::Decisions::for_build(
+            config.mode.is_hosted(),
+        ));
         Ok(Self {
             config,
             audit_log,
@@ -291,6 +300,7 @@ impl AppState {
             claude_desktop,
             extension_updates: Arc::default(),
             billing,
+            decisions,
             shutdown,
             migration,
         })
@@ -303,12 +313,22 @@ impl AppState {
         self.ultrafast.is_on() && !self.config.mode.is_hosted()
     }
 
-    /// Follows the plan: ultrafast skills are on while it includes them. When that changes,
-    /// SKILL.md files follow, and connected agents hear about it through their tool list.
-    /// Returns whether it changed.
+    /// Follows the plan: ultrafast is on while it includes it. When that changes, SKILL.md files
+    /// and the guide installed in connected agents follow, and those agents hear about it through
+    /// their tool list. Returns whether it changed.
     pub async fn sync_ultrafast_with_plan(&self) -> bool {
         let on = !self.config.mode.is_hosted() && self.billing.has_feature(ULTRAFAST_FEATURE).await;
-        if !self.ultrafast.set(on) {
+        let changed = self.ultrafast.set(on);
+        // Outside the change check: a switch pinned on at startup never reports a change, and the
+        // guide only re-installs when its own state moves.
+        if let Err(error) = self
+            .harness
+            .set_ultrafast_skill(self.ultrafast_enabled())
+            .await
+        {
+            tracing::warn!(error = %error, "agent guide sync failed");
+        }
+        if !changed {
             return false;
         }
         if let Err(error) = self.skills.sync_skill_md(self.ultrafast_enabled()).await {

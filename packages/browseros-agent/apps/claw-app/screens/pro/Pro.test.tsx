@@ -23,6 +23,8 @@ import type {
   PlanKeyChange,
   PlanPortalRequest,
   PlanPricing,
+  PlanSavings,
+  SessionSummary,
   StartPlanCheckoutRequest,
 } from '@browseros/claw-api'
 import { ApiResponseError } from '@browseros/claw-api-client'
@@ -108,6 +110,59 @@ const OTHER = computer({
 })
 const KEY: PlanKey = { hint: '7K2QM', cap: 5, computers: [THIS, OTHER] }
 
+const NO_SAVINGS: PlanSavings = {
+  totals: { durationMs: 0, pagesRead: 0, tokensSaved: 0 },
+  tasks: 0,
+  latest: [],
+}
+
+const ranOn = (
+  sessionId: string,
+  name: string,
+  ultrafast: SessionSummary['ultrafast'],
+  pursue?: SessionSummary['pursue'],
+): SessionSummary =>
+  ({
+    sessionId,
+    name,
+    slug: 'claude',
+    label: 'Claude Code',
+    status: 'done',
+    startedAt: new Date(2026, 10, 13, 9, 5).getTime(),
+    durationMs: 30_000,
+    dispatchCount: 6,
+    errorCount: 0,
+    ultrafast,
+    pursue,
+  }) as SessionSummary
+
+const SAVINGS: PlanSavings = {
+  totals: { durationMs: 468_000, pagesRead: 141, tokensSaved: 972_900 },
+  tasks: 23,
+  latest: [
+    ranOn('pursue-1', 'Search flights to Singapore', undefined, {
+      outcome: 'handed_back',
+      durationMs: 5_662,
+      steps: [
+        { action: 'click' },
+        { action: 'click' },
+        { action: 'type', text: 'Singapore' },
+      ],
+    }),
+    ranOn(
+      'pursue-2',
+      'Search amazon.in for Colgate',
+      { durationMs: 7_317, pagesRead: 5, tokensSaved: 18_204 },
+      { outcome: 'completed', durationMs: 7_317, steps: [] },
+    ),
+    ranOn('skill-1', 'Today’s phone deals on Flipkart', {
+      durationMs: 15_354,
+      pagesRead: 9,
+      tokensSaved: 61_942,
+    }),
+  ],
+}
+
 function apiError(status: number, body: Record<string, unknown>) {
   return new ApiResponseError(new Response(null, { status }), body)
 }
@@ -116,6 +171,7 @@ interface Server {
   plan: () => Promise<Plan>
   pricing: () => Promise<PlanPricing>
   key: () => Promise<PlanKey>
+  savings: () => Promise<PlanSavings>
   startCheckout: (body: StartPlanCheckoutRequest) => Promise<unknown>
   checkout: () => Promise<PlanCheckoutStatus>
   activate: (body: ActivatePlanKeyRequest) => Promise<PlanKeyChange>
@@ -135,6 +191,7 @@ function resetServer() {
     plan: async () => planOf(),
     pricing: async () => PRICING,
     key: async () => KEY,
+    savings: async () => NO_SAVINGS,
     startCheckout: async () => ({
       checkoutId: 'checkout-1',
       url: 'https://checkout.stripe.com/c/pay/cs_test_1',
@@ -166,6 +223,7 @@ mock.module('@/modules/api/client', () => ({
     getPlan: () => record('getPlan', undefined, server.plan),
     getPlanPricing: () => record('getPlanPricing', undefined, server.pricing),
     getPlanKey: () => record('getPlanKey', undefined, server.key),
+    getPlanSavings: () => record('getPlanSavings', undefined, server.savings),
     startPlanCheckout: (body: StartPlanCheckoutRequest) =>
       record('startPlanCheckout', body, () => server.startCheckout(body)),
     getPlanCheckout: () =>
@@ -670,6 +728,89 @@ describe('the ultrafast page', () => {
     expect(text()).toContain(
       'Couldn’t check your plan. Connect to the internet and neo checks again.',
     )
+  })
+})
+
+describe('what ultrafast has saved', () => {
+  it('tests that ultrafast shows the tokens saved, the totals and the latest runs', async () => {
+    server.plan = async () => PRO
+    server.savings = async () => SAVINGS
+    await mount()
+
+    expect(text()).toContain('973ktokens saved')
+    expect(
+      button(
+        'Page text neo read itself that never went to your AI agent, in tokens, which is what your agent’s plan charges for. Browsing tasks from before neo counted pages add their time only.',
+      ),
+    ).toBeTruthy()
+    expect(text()).toContain('pages read141')
+    expect(text()).toContain('tasks23')
+    expect(text()).toContain('neo working8 min')
+    expect(text()).toContain('Latest')
+    expect(text()).toContain('Search flights to Singapore')
+    expect(text()).toContain('ultrafast · neo did 3 steps3 steps')
+    expect(text()).toContain('Search amazon.in for Colgate')
+    expect(text()).toContain(
+      'ultrafast · neo did it in 7 sec5 pages, 18k tokens saved',
+    )
+    expect(text()).toContain('ultrafast · 15 sec')
+    expect(text()).toContain('9 pages, 62k tokens saved')
+    const links = [...container.querySelectorAll('a')].map((link) => [
+      nameOf(link),
+      link.getAttribute('href'),
+    ])
+    expect(links).toContainEqual(['See all', '/audit'])
+    expect(links.find(([name]) => name?.startsWith('Search flights'))).toEqual([
+      expect.stringContaining('Search flights to Singapore'),
+      '/audit/pursue-1',
+    ])
+    expect(text()).not.toContain('Sample numbers')
+  })
+
+  it('tests that before the first run it starts at zero and offers Show me how', async () => {
+    server.plan = async () => PRO
+    await mount()
+
+    expect(text()).toContain('0tokens saved so far')
+    expect(text()).toContain('Run a task with ultrafast to start.')
+    expect(text()).not.toContain('Latest')
+
+    await click('Show me how')
+    expect(dialog().getAttribute('aria-label')).toBe('ultrafast browsing')
+  })
+
+  it('tests that savings it can’t load say so and Try again asks again', async () => {
+    server.plan = async () => PRO
+    server.savings = async () => {
+      throw new Error('offline')
+    }
+    await mount()
+
+    expect(container.querySelector('[role="alert"]')?.textContent).toBe(
+      'Couldn’t load what ultrafast has saved.',
+    )
+    expect(text()).toContain('You’re on ultrafast')
+    server.savings = async () => SAVINGS
+    await click('Try again')
+    expect(text()).toContain('973ktokens saved')
+    expect(callsTo('getPlanSavings')).toHaveLength(2)
+  })
+
+  it('tests that savings show a placeholder while they load', async () => {
+    server.plan = async () => PRO
+    server.savings = () => new Promise<PlanSavings>(() => undefined)
+    await mount()
+
+    const section = container.querySelector(
+      '[aria-label="What ultrafast has saved"]',
+    )
+    expect(section?.getAttribute('aria-busy')).toBe('true')
+    expect(text()).not.toContain('tokens saved')
+  })
+
+  it('tests that Free never asks for savings', async () => {
+    await mount()
+    expect(callsTo('getPlanSavings')).toHaveLength(0)
   })
 })
 

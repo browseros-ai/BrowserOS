@@ -9,9 +9,10 @@ import {
   Send,
   TriangleAlert,
   Type,
+  Zap,
 } from 'lucide-react'
 import { useReducedMotion } from 'motion/react'
-import { useEffect, useId, useRef } from 'react'
+import { Fragment, useEffect, useId, useRef } from 'react'
 import { Button } from '@/components/motion/button/base'
 import { Card } from '@/components/motion/card'
 import type { DescribedStep } from '@/lib/step-sentences'
@@ -39,6 +40,7 @@ const VERB_ICON: Record<ReplayVerb, LucideIcon> = {
   type: Type,
   attach: Paperclip,
   submit: Send,
+  browse: Zap,
   done: Check,
 }
 
@@ -75,6 +77,12 @@ export function TaskSteps({
     })
   }, [activeIndex, reduce])
 
+  // A hand back with nothing recorded after it still says who carries on.
+  const lastHandBack = steps.findLastIndex((step) => step.handedBack)
+  const endsWithHandBack =
+    lastHandBack >= 0 &&
+    !steps.slice(lastHandBack + 1).some((step) => step.afterHandBack)
+
   const progress =
     activeIndex >= 0
       ? `Step ${activeIndex + 1} of ${steps.length}`
@@ -99,16 +107,19 @@ export function TaskSteps({
         ) : (
           <ol className="flex flex-col">
             {steps.map((step, index) => (
-              <StepRow
-                key={step.dispatchIds[0] ?? index}
-                step={step}
-                index={index}
-                activeIndex={activeIndex}
-                last={index === steps.length - 1}
-                time={offsetLabel(step.firstAt, startedAt)}
-                onSelect={onSelect}
-              />
+              <Fragment key={step.dispatchIds[0] ?? index}>
+                {step.afterHandBack ? <HandBackNote /> : null}
+                <StepRow
+                  step={step}
+                  index={index}
+                  activeIndex={activeIndex}
+                  last={index === steps.length - 1}
+                  time={offsetLabel(step.firstAt, startedAt)}
+                  onSelect={onSelect}
+                />
+              </Fragment>
             ))}
+            {endsWithHandBack ? <HandBackNote /> : null}
           </ol>
         )}
       </div>
@@ -153,6 +164,16 @@ export function TaskSteps({
 }
 
 // ---------------------------------------------------------------------------
+
+/** Where neo hands a task back and the agent carries on: a continuation, not a failure. */
+function HandBackNote() {
+  return (
+    <li className="flex items-center gap-2 py-1.5 pl-[50px] text-[12.5px] text-ink-3">
+      <span>Back to your agent</span>
+      <span aria-hidden className="h-px flex-1 bg-border" />
+    </li>
+  )
+}
 
 function StepRow({
   step,

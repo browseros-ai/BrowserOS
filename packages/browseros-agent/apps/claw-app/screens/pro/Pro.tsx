@@ -41,6 +41,7 @@ import {
   pickPeriod,
   ULTRAFAST_STEPS,
 } from './pro.helpers'
+import { SavingsHero } from './SavingsHero'
 
 const TITLE = (
   <>
@@ -54,7 +55,8 @@ const TITLE = (
  * a plain list.
  */
 export function Pro() {
-  const { plan, pricing, prices, planKey, checkout, portal } = useProData()
+  const { plan, pricing, prices, planKey, savings, checkout, portal } =
+    useProData()
   const [wantedPeriod, setWantedPeriod] = useState<BillingPeriod>('month')
   const [keyDialogOpen, setKeyDialogOpen] = useState(false)
   const [keyDialogOpens, setKeyDialogOpens] = useState(0)
@@ -99,6 +101,13 @@ export function Pro() {
       {pro ? (
         <>
           <PageHeader title={TITLE} />
+          <SavingsHero
+            savings={savings}
+            onShowMe={() => {
+              setTourOpens((count) => count + 1)
+              setTourAt(0)
+            }}
+          />
           <PlanPanel
             plan={current}
             portal={portal}

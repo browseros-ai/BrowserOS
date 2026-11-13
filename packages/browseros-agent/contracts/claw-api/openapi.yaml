@@ -106,6 +106,8 @@ paths:
     $ref: ./paths/plan.yaml#/portal
   /api/v1/plan/refresh:
     $ref: ./paths/plan.yaml#/refresh
+  /api/v1/plan/savings:
+    $ref: ./paths/plan.yaml#/savings
 components:
   parameters:
     SessionId:
@@ -202,6 +204,10 @@ components:
       $ref: ./schemas/sessions.yaml#/SessionTokenUsage
     SessionUltrafastRun:
       $ref: ./schemas/sessions.yaml#/SessionUltrafastRun
+    SessionPursueStep:
+      $ref: ./schemas/sessions.yaml#/SessionPursueStep
+    SessionPursueRun:
+      $ref: ./schemas/sessions.yaml#/SessionPursueRun
     SessionSummary:
       $ref: ./schemas/sessions.yaml#/SessionSummary
     SessionList:
@@ -344,3 +350,5 @@ components:
       $ref: ./schemas/plan.yaml#/PlanPortalRequest
     PlanPortal:
       $ref: ./schemas/plan.yaml#/PlanPortal
+    PlanSavings:
+      $ref: ./schemas/plan.yaml#/PlanSavings

@@ -1,6 +1,7 @@
-//! What neo did on its own while an ultrafast skill ran without the agent, derived from the
-//! audit rows a session already records: the `run_skill` dispatch, the `run` script it
-//! dispatched internally, and the primitives that script recorded as its children.
+//! What neo did on its own in a session, derived from the audit rows it already records. For an
+//! ultrafast skill that ran without the agent: the `run_skill` dispatch, the `run` script it
+//! dispatched internally, and the primitives that script recorded as its children. For ultrafast
+//! browsing: each `pursue` dispatch, which keeps the pages it read and their token estimate.
 
 use crate::db::audit_log::ToolDispatchRow;
 
@@ -11,12 +12,24 @@ pub struct UltrafastRunStats {
     pub tokens_saved: i64,
 }
 
-/// Sums every `run_skill` call in the session that finished its flow without the agent. The
-/// internal `run` is recorded as its own top-level dispatch, so it is matched to the skill call
-/// by starting inside that call's time span. Returns `None` when no such run exists.
+/// Sums every `run_skill` call in the session that finished its flow without the agent, and every
+/// `pursue` call that read at least one page. A skill's internal `run` is recorded as its own
+/// top-level dispatch, so it is matched to the skill call by starting inside that call's time
+/// span. Returns `None` when no such run exists.
 #[must_use]
 pub fn ultrafast_run_stats(dispatches: &[ToolDispatchRow]) -> Option<UltrafastRunStats> {
     let mut stats: Option<UltrafastRunStats> = None;
+    for (row, (pages, tokens)) in dispatches
+        .iter()
+        .filter_map(|row| pursue_reads(row).map(|reads| (row, reads)))
+    {
+        let entry = stats.get_or_insert_with(UltrafastRunStats::default);
+        entry.duration_ms = entry
+            .duration_ms
+            .saturating_add(row.duration_ms.unwrap_or(0).max(0));
+        entry.pages_read = entry.pages_read.saturating_add(pages);
+        entry.tokens_saved = entry.tokens_saved.saturating_add(tokens);
+    }
     for skill in dispatches
         .iter()
         .filter(|row| row.tool_name == "run_skill" && finished_without_agent(row))
@@ -50,6 +63,25 @@ pub fn ultrafast_run_stats(dispatches: &[ToolDispatchRow]) -> Option<UltrafastRu
         }
     }
     stats
+}
+
+/// The pages a `pursue` call read itself and their token estimate, when it read any. Calls
+/// recorded before pursue kept these numbers have none, and count nothing.
+pub(crate) fn pursue_reads(row: &ToolDispatchRow) -> Option<(i64, i64)> {
+    if row.tool_name != "pursue" {
+        return None;
+    }
+    let meta = serde_json::from_str::<serde_json::Value>(row.result_meta.as_deref()?).ok()?;
+    let pages = meta
+        .get("pagesRead")
+        .and_then(serde_json::Value::as_i64)
+        .filter(|pages| *pages > 0)?;
+    let tokens = meta
+        .get("pageTokens")
+        .and_then(serde_json::Value::as_i64)
+        .unwrap_or(0)
+        .max(0);
+    Some((pages, tokens))
 }
 
 /// A finished flow returns `output` and `steps`; a refusal or a hand-back to the agent does not.
@@ -245,5 +277,80 @@ mod tests {
             meta: SCRIPT,
         })];
         assert_eq!(ultrafast_run_stats(&rows), None);
+    }
+
+    fn pursue(id: i64, at: i64, duration_ms: i64, meta: &str) -> ToolDispatchRow {
+        row(&Spec {
+            id,
+            at,
+            tool: "pursue",
+            key: "pursue",
+            parent: None,
+            duration_ms,
+            output_tokens: 120,
+            meta,
+        })
+    }
+
+    #[test]
+    fn a_pursue_run_counts_the_pages_it_read_and_their_tokens() {
+        let rows = vec![
+            pursue(
+                1,
+                0,
+                7_317,
+                r#"{"isError":false,"outcome":"handed_back","pagesRead":5,"pageTokens":18204,"structuredKeys":[]}"#,
+            ),
+            pursue(
+                2,
+                9_000,
+                2_000,
+                r#"{"isError":false,"outcome":"completed","pagesRead":2,"pageTokens":4000,"structuredKeys":[]}"#,
+            ),
+        ];
+        assert_eq!(
+            ultrafast_run_stats(&rows),
+            Some(UltrafastRunStats {
+                duration_ms: 9_317,
+                pages_read: 7,
+                tokens_saved: 22_204,
+            })
+        );
+    }
+
+    #[test]
+    fn a_pursue_run_without_page_counts_counts_nothing() {
+        let older = pursue(
+            1,
+            0,
+            4_000,
+            r#"{"isError":false,"outcome":"completed","structuredKeys":[]}"#,
+        );
+        let read_nothing = pursue(
+            2,
+            5_000,
+            30,
+            r#"{"isError":false,"outcome":"handed_back","pagesRead":0,"pageTokens":0,"structuredKeys":[]}"#,
+        );
+        assert_eq!(ultrafast_run_stats(&[older, read_nothing]), None);
+    }
+
+    #[test]
+    fn skill_and_pursue_runs_in_one_session_add_up() {
+        let mut rows = phone_deals_run(DONE);
+        rows.push(pursue(
+            900,
+            90_000,
+            6_000,
+            r#"{"isError":false,"outcome":"completed","pagesRead":3,"pageTokens":9000,"structuredKeys":[]}"#,
+        ));
+        assert_eq!(
+            ultrafast_run_stats(&rows),
+            Some(UltrafastRunStats {
+                duration_ms: 21_354,
+                pages_read: 12,
+                tokens_saved: 70_942,
+            })
+        );
     }
 }

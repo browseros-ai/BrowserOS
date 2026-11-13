@@ -137,14 +137,14 @@ SessionUltrafastRun:
   additionalProperties: false
   required: [durationMs, pagesRead, tokensSaved]
   description: >-
-    What neo did on its own while ultrafast skills ran without the agent in
-    this session, summed across every such run.
+    What neo did on its own in this session's ultrafast runs (skills that ran
+    without the agent, and pursue runs that read the page), summed.
   properties:
     durationMs:
       type: integer
       format: int64
       minimum: 0
-      description: Time the ultrafast skill runs took, in milliseconds.
+      description: Time those runs took, in milliseconds.
     pagesRead:
       type: integer
       format: int64
@@ -158,6 +158,46 @@ SessionUltrafastRun:
       description: >-
         Estimated tokens of page text neo read itself that never went to the
         agent.
+SessionPursueStep:
+  type: object
+  additionalProperties: false
+  required: [action]
+  description: One thing neo did on the page during pursue.
+  properties:
+    action:
+      type: string
+      enum: [click, type, press, check, uncheck, select, scroll, drag, dialog, open, back, reload]
+      description: The kind of step, as recorded.
+    text:
+      type: string
+      description: >-
+        What the step carried when it was recorded: the text typed, the key
+        pressed, the option chosen, or the site opened. Absent when nothing was
+        recorded or the value was redacted.
+SessionPursueRun:
+  type: object
+  additionalProperties: false
+  required: [outcome, durationMs, steps]
+  description: >-
+    What neo did with pursue in this session, derived from the steps it
+    recorded while pursue ran.
+  properties:
+    outcome:
+      type: string
+      enum: [completed, handed_back]
+      description: >-
+        How the session's last pursue ended: neo finished the goal, or handed
+        the page back to the agent.
+    durationMs:
+      type: integer
+      format: int64
+      minimum: 0
+      description: Time the session's pursue calls took, in milliseconds.
+    steps:
+      type: array
+      items:
+        $ref: '#/SessionPursueStep'
+      description: The steps neo took on the page, in order.
 SessionSummary:
   type: object
   additionalProperties: false
@@ -234,8 +274,14 @@ SessionSummary:
       allOf:
         - $ref: '#/SessionUltrafastRun'
       description: >-
-        Present only when an ultrafast skill ran to the end without the agent
-        in this session.
+        Present only when this session had an ultrafast run: a skill that ran
+        to the end without the agent, or a pursue that read the page.
+    pursue:
+      allOf:
+        - $ref: '#/SessionPursueRun'
+      description: >-
+        Present only when this session had a pursue call that finished its goal
+        or handed the page back.
     live:
       allOf:
         - $ref: '#/LiveSessionState'

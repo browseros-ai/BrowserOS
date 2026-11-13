@@ -20,6 +20,7 @@ import {
   useUpdateAgentSettings,
 } from '@/modules/api/agent-settings.hooks'
 import { toastApiError } from '@/modules/toast/toast'
+import { NeoSteps } from './NeoSteps'
 import { PagesVisited } from './PagesVisited'
 import { ReplayTheater } from './ReplayTheater'
 import { SnapshotGallery } from './SnapshotGallery'
@@ -151,6 +152,7 @@ export function TaskDetailPage({ focus }: { focus?: 'player' } = {}) {
           steps={<TaskSteps {...stepList} layout="rail" />}
         />
       ) : null}
+      {session.pursue ? <NeoSteps pursue={session.pursue} /> : null}
       <PagesVisited pages={data.pages} />
       <SnapshotGallery
         sessionId={sessionId}

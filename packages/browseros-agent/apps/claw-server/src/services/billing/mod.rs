@@ -173,6 +173,31 @@ impl Billing {
         }
     }
 
+    /// The licence as the gateway signed it, read fresh so a refreshed one is used straight away.
+    pub async fn signed_licence(&self) -> Option<SignedLicence> {
+        match &self.inner {
+            Some(inner) => inner.state.read().await.signed.clone(),
+            None => None,
+        }
+    }
+
+    /// [`Self::has_feature`] for a caller that cannot wait, such as building a tool list. Reads no
+    /// while a refresh is writing the plan, which lasts microseconds; anything that spends money
+    /// asks the waiting version again.
+    #[must_use]
+    pub fn has_feature_now(&self, feature: &str) -> bool {
+        self.inner
+            .as_ref()
+            .and_then(|inner| inner.state.try_read().ok())
+            .is_some_and(|state| {
+                state
+                    .snapshot(now_epoch_ms())
+                    .features
+                    .iter()
+                    .any(|enabled| enabled == feature)
+            })
+    }
+
     /// Whether the plan turns `feature` on right now.
     pub async fn has_feature(&self, feature: &str) -> bool {
         self.plan()
