@@ -1801,7 +1801,6 @@ fn init_observation_orders_the_seed_before_later_replies() -> Result<(), TestErr
                 url: Some("https://seed.example/".into()),
                 title: Some("Seed".into()),
                 closed: false,
-                frames_changed: None,
             }],
             observed: Some(Observation {
                 seq: 100,

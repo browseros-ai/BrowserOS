@@ -127,7 +127,6 @@ mod tests {
                 url: None,
                 title: None,
                 closed: true,
-                frames_changed: None,
             }],
             &HashMap::new(),
         );

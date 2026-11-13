@@ -237,13 +237,9 @@ impl EventLog for PlaywrightFacade {
             .and_then(|pw| pw.navigated_target(target))
     }
 
-    fn frames_changed(&self, target: &TargetId) -> Option<u64> {
+    fn frame_versions(&self) -> Vec<(TabId, u64)> {
         self.playwright
             .get()
-            .and_then(|pw| pw.frames_changed_target(target))
-    }
-
-    fn frames_head(&self) -> u64 {
-        self.playwright.get().map_or(0, |pw| pw.frames_head())
+            .map_or_else(Vec::new, |pw| pw.frame_versions())
     }
 }

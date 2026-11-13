@@ -6,4 +6,9 @@ import type { ResponseInfo } from "./ResponseInfo";
  * A bounded wait returns its cursor and complete frame facts together, so the client can
  * refresh synchronous accessors without an additional untimed browser operation.
  */
-export type NavigationReply = { response: ResponseInfo | null, url: string | null, frameSnapshotAttempted: boolean, frames: Array<FrameInfo>, navigationSeq: number, };
+export type NavigationReply = { response: ResponseInfo | null, url: string | null, frameSnapshotAttempted: boolean, 
+/**
+ * Absent when an out-of-process frame could not be read: the prelude then reads the tree
+ * again itself (`page.frames`), rather than take a partial one.
+ */
+frames?: Array<FrameInfo>, navigationSeq: number, };

@@ -313,6 +313,14 @@ fn settle(
     // The host's private typing keeps no call-log line at all, as it keeps no page address
     // (ruling R35): a shared typing helper's note could name the page, or worse.
     let notes = state.take_notes();
+    // A tab's frame tree that Neo could not read whole is never silent: its read's notes
+    // (neo-playwright `frame_tree::frames`) name the frame and the error, at warn, whatever the
+    // values policy. They hold no page value, only a frame id and a browser error.
+    if spec.name == "page.frames" {
+        for note in notes.iter().filter(|note| note.starts_with("frame tree ")) {
+            tracing::warn!(operation = %id, tab = ?tab, %note, "a tab's frame tree is not whole");
+        }
+    }
     for note in notes
         .into_iter()
         .filter(|_| spec.record != OperationKind::Protected)

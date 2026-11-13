@@ -357,12 +357,9 @@ impl RunService {
                     .zip(observation.infos)
                     .zip(observation.workers)
                     .map(|((page, info), workers)| {
-                        let target = info.as_ref().map(|info| info.target_id.clone());
                         let mut fact = PageFact::in_view(page, info, run.view());
                         fact.task_id = self.tabs.owner(page.tab).map(|id| id.to_string());
                         fact.workers = workers;
-                        fact.frames_changed = target
-                            .and_then(|target| self.dispatcher.observer().frames_changed(&target));
                         fact
                     })
                     .collect();

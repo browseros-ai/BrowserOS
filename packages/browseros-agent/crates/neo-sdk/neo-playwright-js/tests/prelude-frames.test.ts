@@ -72,8 +72,12 @@ it('tests that a refused frames read keeps the main frame and starts the run', a
     ),
   )
   expect(outcome).toEqual({ frames: 1, title: 'Title' })
-  expect(runtime.startCalls.map((call) => call.name)).toEqual(['page.frames'])
-  // The tree it could not read is read again once the script's next operation is answered.
+  // Tried once more before the first statement, then again once the script's next operation
+  // is answered: a refusal stays the tree's state until a read succeeds.
+  expect(runtime.startCalls.map((call) => call.name)).toEqual([
+    'page.frames',
+    'page.frames',
+  ])
   expect(runtime.calls.map((call) => call.name)).toEqual([
     'page.title',
     'page.frames',
@@ -437,6 +441,13 @@ it("tests that the script's own listener on another listed tab makes that tab wo
 // first-host shape: a later run focuses and types through refs into the frame, then walks
 // frames() with no wait. The first awaited operation reads the tree again before it resolves.
 const MAIN_ONLY = { frames: [TREE.frames[0]] }
+/** TREE with one more cross-site frame, as a tab looks once a frame was added to it. */
+const ADDED = {
+  frames: [
+    ...TREE.frames,
+    { id: 'late', parentId: 'main', name: 'late', url: 'https://c.example/' },
+  ],
+}
 const REFUSED_READ = {
   err: {
     code: 'owner_has_control',
@@ -449,53 +460,49 @@ const REFUSED_READ = {
   },
 }
 
-it("tests that the run's own page whose start read came back short has its whole tree after the script's first awaited operation", async () => {
-  for (const short of [{ ...MAIN_ONLY, incomplete: true }, {}, REFUSED_READ]) {
+it("tests that the run's own page whose start read came back short is read once more before the script's first statement", async () => {
+  for (const short of [{ ...MAIN_ONLY, incomplete: true }, {}]) {
     let read = 0
     const runtime = loadPrelude({
       seed: SEED,
-      answer: (call) => {
-        if (call.name === 'page.frames') return read++ === 0 ? short : TREE
-        return 'ok'
-      },
+      answer: (call) =>
+        call.name === 'page.frames' ? (read++ === 0 ? short : TREE) : 'ok',
     })
-    const counts = json(
-      await runtime.run(`
-        const atStart = page.frames().length
-        await page.keyboard.type('4')
-        return [atStart, page.frames().map((f) => f.name())]
-      `),
+    const names = json(
+      await runtime.run('return page.frames().map((f) => f.name())'),
     )
-    expect(counts).toEqual([1, ['', 'same', 'cross']])
+    expect(names).toEqual(['', 'same', 'cross'])
   }
+})
+
+it("tests that the run's own page whose start reads were refused has its whole tree after the script's first awaited operation", async () => {
+  let read = 0
+  const runtime = loadPrelude({
+    seed: SEED,
+    answer: (call) => {
+      if (call.name === 'page.frames') return read++ < 2 ? REFUSED_READ : TREE
+      return 'ok'
+    },
+  })
+  const counts = json(
+    await runtime.run(`
+      const atStart = page.frames().length
+      await page.keyboard.type('4')
+      return [atStart, page.frames().map((f) => f.name())]
+    `),
+  )
+  expect(counts).toEqual([1, ['', 'same', 'cross']])
 })
 
 it("tests that a frame added to another task's tab mid-run shows after the script's next awaited operation, with no wait", async () => {
   let reads = 0
-  const added = {
-    frames: [
-      ...TREE.frames,
-      { id: 'late', parentId: 'main', name: 'late', url: 'https://c.example/' },
-    ],
-  }
   const runtime = loadPrelude({
     seed: OBSERVER,
     answer: (call) => {
       if (call.name === 'page.frames')
-        return tabOf(call) === 1009 && reads++ > 0 ? added : TREE
-      // The reply of the script's op says tab 1009's frames changed.
-      return {
-        ok: 'Agent',
-        pages: [
-          {
-            tab: 1009,
-            url: 'https://a.example/',
-            closed: false,
-            framesChanged: 3,
-          },
-        ],
-        observed: { seq: 1, events: 0 },
-      }
+        return tabOf(call) === 1009 && reads++ > 0 ? ADDED : TREE
+      // The reply of the script's op on its own page carries every tab's frame-tree version.
+      return { ok: 'Agent', frames: [{ tab: 1009, version: 3 }] }
     },
   })
   const counts = json(
@@ -509,95 +516,111 @@ it("tests that a frame added to another task's tab mid-run shows after the scrip
   expect(counts).toEqual([3, 4])
 })
 
-it('tests that a page whose frames change on every operation is read at most once per 250 ms', async () => {
-  let version = 0
+it('tests that a tab the script never used shows a frame added mid-run at its first read after an operation', async () => {
+  let reads = 0
   const runtime = loadPrelude({
     seed: OBSERVER,
-    now: 1_000,
     answer: (call) => {
-      if (call.name === 'page.frames') return TREE
-      version += 1
+      if (call.name === 'page.frames')
+        return tabOf(call) === 1009 && reads++ > 0 ? ADDED : TREE
+      return { ok: 'Agent', frames: [{ tab: 1009, version: 3 }] }
+    },
+  })
+  const count = json(
+    await runtime.run(`
+      await page.title()
+      return ${OTHER}.frames().length
+    `),
+  )
+  expect(count).toEqual(4)
+})
+
+it('tests that a rejected operation also leaves every changed tree read before the script catches it', async () => {
+  let reads = 0
+  const runtime = loadPrelude({
+    seed: OBSERVER,
+    answer: (call) => {
+      if (call.name === 'page.frames')
+        return tabOf(call) === 1009 && reads++ > 0 ? ADDED : TREE
       return {
-        ok: 'Agent',
-        pages: [
-          {
-            tab: 1009,
-            url: 'https://a.example/',
-            closed: false,
-            framesChanged: version,
-          },
-        ],
-        observed: { seq: version, events: 0 },
+        err: {
+          code: 'wait_timeout',
+          owner: 'website',
+          delivery: 'done',
+          retryable: true,
+          operationId: 'run.3',
+          timeout: true,
+          message: 'locator.click: Timeout 5000ms exceeded',
+        },
+        frames: [{ tab: 1009, version: 3 }],
       }
     },
   })
-  await runtime.run('for (let i = 0; i < 10; i++) await page.title()')
-  expect(reads(runtime.calls).filter(([tab]) => tab === 1009)).toEqual([
-    [1009, 'page.frames'],
-  ])
+  const count = json(
+    await runtime.run(`
+      try { await page.locator('#go').click() } catch {}
+      return ${OTHER}.frames().length
+    `),
+  )
+  expect(count).toEqual(4)
 })
 
-it("tests that a page first seen mid-run has its whole tree by the script's next await", async () => {
+it('tests that a page whose frames change between every two operations has its current tree after each', async () => {
+  let version = 0
+  const runtime = loadPrelude({
+    seed: OBSERVER,
+    answer: (call) => {
+      if (call.name === 'page.frames')
+        return tabOf(call) === 1009
+          ? {
+              frames: [
+                TREE.frames[0],
+                ...Array.from({ length: version }, (_, i) => ({
+                  id: `f${i}`,
+                  parentId: 'main',
+                  name: `f${i}`,
+                  url: 'https://c.example/',
+                })),
+              ],
+            }
+          : TREE
+      version += 1
+      return { ok: 'Agent', frames: [{ tab: 1009, version }] }
+    },
+  })
+  const counts = json(
+    await runtime.run(`
+      const p = ${OTHER}
+      const counts = []
+      for (let i = 0; i < 4; i++) {
+        await page.title()
+        counts.push(p.frames().length)
+      }
+      return counts
+    `),
+  )
+  // One read of the tab per operation: each sees the frames that operation's reply announced.
+  expect(counts).toEqual([2, 3, 4, 5])
+  expect(reads(runtime.calls).filter(([tab]) => tab === 1009)).toHaveLength(4)
+})
+
+it('tests that a page first seen mid-run has its whole tree when the operation that handed it out resolves', async () => {
   const runtime = loadPrelude({
     seed: SEED,
     answer: (call) => {
       if (call.name === 'page.frames') return TREE
-      if (call.name === 'test.page')
-        return {
-          ok: { $neo: 'page', tab: 1011 },
-          pages: [{ tab: 1011, url: 'https://a.example/', closed: false }],
-          observed: { seq: 1, events: 0 },
-        }
+      if (call.name === 'context.newPage')
+        return { page: { $neo: 'page', tab: 1011 }, url: 'https://a.example/' }
       return 'ok'
     },
   })
   const names = json(
     await runtime.run(`
-      const other = await __neo.invoke('test.page', {})
-      await page.title()
+      const other = await context.newPage()
       return other.frames().map((f) => f.name())
     `),
   )
   expect(names).toEqual(['', 'same', 'cross'])
-})
-
-// A reply carries the facts of the tabs its op touched, so an op on the script's own page says
-// nothing of another task's tab. Every reply carries the browser's frame-change head instead.
-it("tests that a frame added to a tab the script reads shows after an operation on another page, from the reply's head", async () => {
-  let reads = 0
-  const added = {
-    frames: [
-      ...TREE.frames,
-      { id: 'late', parentId: 'main', name: 'late', url: 'https://c.example/' },
-    ],
-  }
-  const runtime = loadPrelude({
-    seed: OBSERVER,
-    answer: (call) => {
-      if (call.name === 'page.frames')
-        return tabOf(call) === 1009 && reads++ > 0 ? added : TREE
-      return { ok: 'Agent', framesHead: 5 }
-    },
-  })
-  const outcome = json(
-    await runtime.run(`
-      const p = ${OTHER}
-      const before = p.frames().length
-      await page.title()
-      return [before, p.frames().length]
-    `),
-  )
-  expect(outcome).toEqual([3, 4])
-})
-
-it('tests that a moved head reads no page the script neither acted on nor read the frames of', async () => {
-  const runtime = loadPrelude({
-    seed: OBSERVER,
-    answer: (call) =>
-      call.name === 'page.frames' ? TREE : { ok: 'Agent', framesHead: 9 },
-  })
-  await runtime.run('await page.title()')
-  expect(reads(runtime.calls).filter(([tab]) => tab === 1009)).toEqual([])
 })
 
 it('tests that a frame missing from the tree a wait reads is detached', async () => {

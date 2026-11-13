@@ -1655,6 +1655,7 @@ impl Watcher {
         }
         let page = self.view.page_for_session(session).await?;
         let info = self.browser.pages.get_info(page).await?;
+        self.writer.tab_id(info.target_id.clone(), info.tab_id);
         self.sessions
             .insert(session.clone(), info.target_id.clone());
         self.lifecycle_sources.attach(session, &info.target_id);
@@ -1669,6 +1670,9 @@ impl Watcher {
         if let Ok(Ok(listing)) = time::timeout(Duration::from_secs(1), self.view.list_pages()).await
         {
             let full = self.writer.hub().wants_context_lifecycle();
+            for page in &listing.pages {
+                self.writer.tab_id(page.target_id.clone(), page.tab_id);
+            }
             for page in listing.pages {
                 if self.browser.pages.is_agent_created(&page.page_id).await
                     || self

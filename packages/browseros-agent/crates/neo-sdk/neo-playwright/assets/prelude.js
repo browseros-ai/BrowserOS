@@ -803,7 +803,7 @@
   }
   async function settled(site) {
     if (site.value !== "")
-      await settle();
+      await settle().catch(() => {});
   }
   async function invoke(op, site, call, args, signal) {
     try {
@@ -824,6 +824,7 @@
       const held = pumpsCaughtUp(op);
       if (held)
         await held;
+      await settled(site);
       throw withAbortCause(shapeBridgeError(op, call.api, thrown), signal);
     }
   }
@@ -851,6 +852,7 @@
       const held = pumpsCaughtUp(op);
       if (held)
         await held;
+      await settled(site);
       throw withAbortCause(shapeBridgeError(op, call.api, thrown), signal);
     }
   }
@@ -909,7 +911,7 @@
         pages: readPageFacts(field(envelope, "pages")),
         defaultPage: readTab(field(envelope, "defaultPage")),
         pickedPage: readTab(field(envelope, "pickedPage")),
-        framesHead: Number(field(envelope, "framesHead") ?? 0) || 0
+        frames: readFrameVersions(field(envelope, "frames"))
       });
     });
   }
@@ -983,12 +985,18 @@
       const workers = readWorkers(field(page, "workers"));
       if (workers)
         fact.workers = workers;
-      const framesChanged = field(page, "framesChanged");
-      if (typeof framesChanged === "number")
-        fact.framesChanged = framesChanged;
       facts.push(fact);
     }
     return facts;
+  }
+  function readFrameVersions(value) {
+    if (!Array.isArray(value))
+      return [];
+    return value.flatMap((entry) => {
+      const tab = field(entry, "tab");
+      const version = field(entry, "version");
+      return typeof tab === "number" && typeof version === "number" ? [{ tab, version }] : [];
+    });
   }
   function readWorkers(value) {
     if (!Array.isArray(value))
@@ -11011,6 +11019,8 @@ ${changes}`;
   }
 
   // crates/neo-sdk/neo-playwright-js/src/prelude/page.ts
+  var FRAMES_RETRY_MS = 100;
+
   class Page extends EventEmitter {
     _tab;
     #taskId = null;
@@ -11036,9 +11046,8 @@ ${changes}`;
     _framesWatched = false;
     _framesChanged = 0;
     #framesReadAt = 0;
-    #framesHeadAt = 0;
     #framesIncomplete = false;
-    #settledAt = Number.NEGATIVE_INFINITY;
+    #framesRead = null;
     _navigationsInFlight = 0;
     #publications = new Publications;
     #childFrames = new Map;
@@ -11530,6 +11539,7 @@ ${changes}`;
         });
       }
       ready?.();
+      await this._context._settleFrames().catch(() => {});
       return navigationResponse(frame, result);
     }
     #payloadCurrent(at) {
@@ -11538,7 +11548,25 @@ ${changes}`;
     async _readInitialFrames(timeoutMs = 0) {
       if (this._tab === null || this._closed)
         return;
-      await this._refreshFrames("page.frames", timeoutMs).catch(() => this._framesUnknown());
+      if (await this._readFrames(timeoutMs))
+        return;
+      if (this.#framesIncomplete && !this._closed) {
+        await sleep("page.frames", FRAMES_RETRY_MS).catch(() => {});
+        await this._readFrames(timeoutMs);
+      }
+    }
+    _readFrames(timeoutMs) {
+      if (this.#framesRead)
+        return this.#framesRead;
+      const read = this._refreshFrames("page.frames", timeoutMs).catch(() => {
+        this._framesUnknown();
+        return false;
+      }).finally(() => {
+        if (this.#framesRead === read)
+          this.#framesRead = null;
+      });
+      this.#framesRead = read;
+      return read;
     }
     async _refreshFrames(api, timeoutMs = 0) {
       const site = INTERNAL_SITE;
@@ -11547,7 +11575,6 @@ ${changes}`;
       if (this.#payloadCurrent(observed) && Array.isArray(tree?.frames)) {
         this._applyFrames(tree.frames, observed);
         this.#framesReadAt = version;
-        this.#framesHeadAt = this._context._framesHead;
         this.#framesIncomplete = tree.incomplete === true;
         return !this.#framesIncomplete;
       }
@@ -11559,16 +11586,13 @@ ${changes}`;
       this.#framesIncomplete = true;
       this._framesWatched = true;
     }
-    _framesStale(now, minGapMs) {
+    _frameVersion(version) {
+      this._framesChanged = Math.max(this._framesChanged, version);
+    }
+    _framesStale() {
       if (this._tab === null || this._closed || this._navigationsInFlight > 0)
         return false;
-      const changed = this._framesChanged > this.#framesReadAt || (this._working || this._framesWatched) && this._context._framesHead > this.#framesHeadAt;
-      if (!this.#framesIncomplete && !changed)
-        return false;
-      if (now - this.#settledAt < minGapMs)
-        return false;
-      this.#settledAt = now;
-      return true;
+      return this.#framesRead !== null || this.#framesIncomplete || this._framesChanged > this.#framesReadAt;
     }
     _applyFrames(infos, at = null) {
       const current = (id) => !at || (this.#frameSequences.get(id) ?? 0) <= at.events;
@@ -11703,8 +11727,6 @@ ${changes}`;
         this._tab = fact.tab;
       if (fact.taskId !== undefined)
         this.#taskId = fact.taskId;
-      if (fact.framesChanged !== undefined)
-        this._framesChanged = Math.max(this._framesChanged, fact.framesChanged);
       if (at === null) {
         this.#applyViewport(fact.viewportSize);
         if (fact.url !== undefined && !this.#urlKnown) {
@@ -11902,7 +11924,6 @@ ${changes}`;
 
   // crates/neo-sdk/neo-playwright-js/src/prelude/context.ts
   var LISTED_FRAMES_TIMEOUT_MS = 1000;
-  var SETTLE_GAP_MS = 250;
   function pageFact(value) {
     if (value instanceof Page)
       return value._tab === null ? null : { tab: value._tab };
@@ -11928,7 +11949,6 @@ ${changes}`;
     #unopened = null;
     #handed = new WeakSet;
     #started = false;
-    _framesHead = 0;
     constructor() {
       super();
       this._events = new EventHub(this);
@@ -12036,11 +12056,10 @@ ${changes}`;
       await Promise.all([...pages].map((page) => page._readInitialFrames(page === runPage ? 0 : LISTED_FRAMES_TIMEOUT_MS)));
     }
     async _settleFrames() {
-      const now = Date.now();
-      const stale = this._knownPages().filter((page) => page._framesStale(now, SETTLE_GAP_MS));
+      const stale = this._knownPages().filter((page) => page._framesStale());
       if (stale.length === 0)
         return;
-      await Promise.all(stale.map((page) => page._refreshFrames("page.frames", LISTED_FRAMES_TIMEOUT_MS).catch(() => page._framesUnknown())));
+      await Promise.all(stale.map((page) => page._readFrames(LISTED_FRAMES_TIMEOUT_MS)));
     }
     async _refreshWorkingFrames(api) {
       const working = this._knownPages().filter((page) => (page._working || page._framesWatched) && page._tab !== null && page._navigationsInFlight === 0);
@@ -12057,9 +12076,10 @@ ${changes}`;
       defaultPage,
       pickedPage,
       observed,
-      framesHead
+      frames
     }) {
-      this._framesHead = Math.max(this._framesHead, framesHead);
+      for (const { tab, version } of frames)
+        this.#byTab.get(tab)?._frameVersion(version);
       const page = this.#unopened;
       const held = pickedPage ? this.#byTab.get(pickedPage.tab) : undefined;
       const bind = defaultPage ?? (held && this.#handed.has(held) ? null : pickedPage);

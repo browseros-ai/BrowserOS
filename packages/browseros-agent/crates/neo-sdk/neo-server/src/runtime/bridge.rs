@@ -4,6 +4,7 @@ use std::collections::{HashMap, VecDeque};
 use std::mem;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
+use browseros_core::TabId;
 use futures_util::FutureExt;
 use futures_util::future::{BoxFuture, Shared};
 use neo_trace::{Delivery, ErrorOwner, OperationId};
@@ -138,13 +139,13 @@ pub(crate) enum Envelope<'a> {
         )]
         #[ts(optional = nullable)]
         completed_navigations: &'a [u64],
-        /// The browser's frame-change head (`Observer::frames_head`): it moves whenever any
-        /// tab's frames change. The prelude reads again the trees of the pages the script uses
-        /// once it passes the head their tree was read at, so a tab this op did not touch, whose
-        /// facts the reply does not carry, is caught too. Absent before any change.
-        #[serde(rename = "framesHead", skip_serializing_if = "is_zero")]
+        /// Every tab's frame-tree version (`Observer::frame_versions`): a version moves when the
+        /// tab's frames change, never on a read of the tree. The prelude reads a tab's tree again
+        /// before the script's operation resolves once its version passes the one it read at,
+        /// whichever tab the op touched. Absent before any change.
+        #[serde(skip_serializing_if = "<[FrameVersion]>::is_empty")]
         #[ts(optional = nullable)]
-        frames_head: u64,
+        frames: &'a [FrameVersion],
     },
     /// The op failed; the bootstrap rejects with a `NeoError` carrying `err`'s fields.
     Err {
@@ -176,10 +177,17 @@ pub(crate) enum Envelope<'a> {
         #[ts(optional = nullable)]
         completed_navigations: &'a [u64],
         /// As for `Ok`.
-        #[serde(rename = "framesHead", skip_serializing_if = "is_zero")]
+        #[serde(skip_serializing_if = "<[FrameVersion]>::is_empty")]
         #[ts(optional = nullable)]
-        frames_head: u64,
+        frames: &'a [FrameVersion],
     },
+}
+
+/// One tab's frame-tree version on a reply (`Envelope::Ok` `frames`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, TS)]
+pub(crate) struct FrameVersion {
+    pub(crate) tab: TabId,
+    pub(crate) version: u64,
 }
 
 /// The fields of the script's `NeoError`, named as the trace names them. errors.ts copies all
@@ -305,7 +313,14 @@ impl Bridge {
         completed.extend(reply.completed_publications.iter().copied());
         completed.sort_unstable();
         completed.dedup();
-        envelope(&reply, &completed, self.dispatcher.observer().frames_head())
+        let frames: Vec<FrameVersion> = self
+            .dispatcher
+            .observer()
+            .frame_versions()
+            .into_iter()
+            .map(|(tab, version)| FrameVersion { tab, version })
+            .collect();
+        envelope(&reply, &completed, &frames)
     }
 
     /// The bootstrap's abort of the op it keyed `key`: `{"key", "reason"}`. An op that already
@@ -414,7 +429,11 @@ fn navigation_publication(name: &str, input: &Value) -> Option<NavigationPublica
 }
 
 /// The text `__neo_invoke` resolves with for `reply`: [`Envelope`] as JSON, never a failure.
-pub(crate) fn envelope(reply: &OpReply, completed_navigations: &[u64], frames_head: u64) -> String {
+pub(crate) fn envelope(
+    reply: &OpReply,
+    completed_navigations: &[u64],
+    frames: &[FrameVersion],
+) -> String {
     let pumped = reply.pumped;
     let default_page = reply.default_page.as_ref().map(DefaultPage::from);
     let picked_page = reply.picked_page.as_ref().map(DefaultPage::from);
@@ -427,7 +446,7 @@ pub(crate) fn envelope(reply: &OpReply, completed_navigations: &[u64], frames_he
             picked_page,
             pumped,
             completed_navigations,
-            frames_head,
+            frames,
         },
         Err(failure) => Envelope::Err {
             err: ErrBody::from(failure),
@@ -437,7 +456,7 @@ pub(crate) fn envelope(reply: &OpReply, completed_navigations: &[u64], frames_he
             picked_page,
             pumped,
             completed_navigations,
-            frames_head,
+            frames,
         },
     };
     serde_json::to_string(&envelope).unwrap_or_else(|error| {

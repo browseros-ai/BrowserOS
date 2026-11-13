@@ -63,14 +63,9 @@ pub(crate) trait EventLog: Send + Sync {
     fn navigated(&self, _target: &TargetId) -> Option<u64> {
         None
     }
-    /// The target's frame-tree version (`PageFact::frames_changed`). `None` when the log has
-    /// seen no change of its frames.
-    fn frames_changed(&self, _target: &TargetId) -> Option<u64> {
-        None
-    }
-    /// The newest frame-tree version of any tab; 0 before any change.
-    fn frames_head(&self) -> u64 {
-        0
+    /// Every tab's frame-tree version (`Envelope::Ok` `frames`); empty before any change.
+    fn frame_versions(&self) -> Vec<(TabId, u64)> {
+        Vec::new()
     }
 }
 
@@ -180,14 +175,9 @@ impl Observer {
         self.log.navigated(target)
     }
 
-    /// `target`'s frame-tree version (`PageFact::frames_changed`).
-    pub(crate) fn frames_changed(&self, target: &TargetId) -> Option<u64> {
-        self.log.frames_changed(target)
-    }
-
-    /// The newest frame-tree version of any tab (`Envelope::Ok` `frames_head`).
-    pub(crate) fn frames_head(&self) -> u64 {
-        self.log.frames_head()
+    /// Every tab's frame-tree version (`Envelope::Ok` `frames`).
+    pub(crate) fn frame_versions(&self) -> Vec<(TabId, u64)> {
+        self.log.frame_versions()
     }
 
     /// Groups all delivered closes by tab. Multiple target-bound subscriptions can coexist

@@ -60,12 +60,12 @@ pumped?: number,
  */
 completedNavigations?: Array<number>, 
 /**
- * The browser's frame-change head (`Observer::frames_head`): it moves whenever any
- * tab's frames change. The prelude reads again the trees of the pages the script uses
- * once it passes the head their tree was read at, so a tab this op did not touch, whose
- * facts the reply does not carry, is caught too. Absent before any change.
+ * Every tab's frame-tree version (`Observer::frame_versions`): a version moves when the
+ * tab's frames change, never on a read of the tree. The prelude reads a tab's tree again
+ * before the script's operation resolves once its version passes the one it read at,
+ * whichever tab the op touched. Absent before any change.
  */
-framesHead?: number, } | { 
+frames?: Array<FrameVersion>, } | { 
 /**
  * The failure as the door decided it.
  */
@@ -97,7 +97,7 @@ completedNavigations?: Array<number>,
 /**
  * As for `Ok`.
  */
-framesHead?: number, };
+frames?: Array<FrameVersion>, };
 
 /**
  * The fields of the script's `NeoError`, named as the trace names them. errors.ts copies all
@@ -142,6 +142,11 @@ matcher?: unknown, };
  * Whose behavior must change to fix a failure.
  */
 export type ErrorOwner = "neo" | "script" | "website" | "host";
+
+/**
+ * One tab's frame-tree version on a reply (`Envelope::Ok` `frames`).
+ */
+export type FrameVersion = { tab: TabId, version: number, };
 
 /**
  * Freshness of a batch of page facts. Neither counter is a page identity.
@@ -204,15 +209,7 @@ viewportSize?: Size,
 /**
  * Captured under the same observation serial as the page cache read.
  */
-workers?: Array<WorkerInfo>, 
-/**
- * The tab's frame-tree version: it moves when the tab's frames change (a child frame
- * attaches, leaves or navigates, an out-of-process frame's session comes or goes, the main
- * frame commits), never on a read of the tree. A run that holds the tab's tree reads it
- * again before the script's operation resolves once this passes the version it read at.
- * Absent before the tab's frames first changed while Neo followed it.
- */
-framesChanged?: number, };
+workers?: Array<WorkerInfo>, };
 
 /**
  * A live browser tab resolved by the dispatcher before policies run. This is the only page

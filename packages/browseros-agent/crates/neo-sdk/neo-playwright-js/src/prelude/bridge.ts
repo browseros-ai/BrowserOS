@@ -82,8 +82,8 @@ export type Reply = {
   pages: PageFact[]
   defaultPage: Wire.DefaultPage | null
   pickedPage: Wire.DefaultPage | null
-  /** The browser's frame-change head (`Envelope.framesHead`); 0 when absent. */
-  framesHead: number
+  /** Every tab's frame-tree version (`Envelope.frames`); empty when absent. */
+  frames: Wire.FrameVersion[]
 }
 
 /** Keep the header's recorded byte position while stamping policy after all arguments. */
@@ -101,10 +101,11 @@ function requestInput<Op extends OpName>(call: CallHeader, args: OpInputs[Op]) {
  * the call in flight, which the bootstrap aborts as soon as it is sent.
  */
 /**
- * Runs after each of the script's own operations, before its promise resolves: the context
- * reads again the frame tree of every page whose frames changed since it last read them
- * (`BrowserContext._settleFrames`), so `frames()` is the page's real tree after every awaited
- * operation. Neo's own operations (an empty site) never run it, so its reads do not recurse.
+ * Runs after each of the script's own operations, answered or rejected, before its promise
+ * settles: the context reads again the frame tree of every page whose frames changed since it
+ * last read them (`BrowserContext._settleFrames`), so `frames()` is the page's real tree after
+ * every awaited operation. Neo's own operations (an empty site) never run it, so its reads do
+ * not recurse.
  */
 let settle: () => Promise<void> = async () => {}
 
@@ -114,7 +115,8 @@ export function onSettle(step: () => Promise<void>): void {
 }
 
 async function settled(site: CallSite): Promise<void> {
-  if (site.value !== '') await settle()
+  // Neo's own reads that fail are the settle step's own business; they never fail the script.
+  if (site.value !== '') await settle().catch(() => {})
 }
 
 export async function invoke<Op extends OpName>(
@@ -139,6 +141,8 @@ export async function invoke<Op extends OpName>(
   } catch (thrown) {
     const held = pumpsCaughtUp(op)
     if (held) await held
+    // A failed operation may still have changed the page (an action that threw midway).
+    await settled(site)
     throw withAbortCause(shapeBridgeError(op, call.api, thrown), signal)
   }
 }
@@ -178,6 +182,8 @@ export async function invokeObserved<Op extends OpName>(
   } catch (thrown) {
     const held = pumpsCaughtUp(op)
     if (held) await held
+    // A failed operation may still have changed the page (an action that threw midway).
+    await settled(site)
     throw withAbortCause(shapeBridgeError(op, call.api, thrown), signal)
   }
 }
@@ -274,8 +280,7 @@ export function onReply(listener: (reply: Reply) => void): void {
       pages: readPageFacts(field<Wire.Envelope>(envelope, 'pages')),
       defaultPage: readTab(field<Wire.Envelope>(envelope, 'defaultPage')),
       pickedPage: readTab(field<Wire.Envelope>(envelope, 'pickedPage')),
-      framesHead:
-        Number(field<Wire.Envelope>(envelope, 'framesHead') ?? 0) || 0,
+      frames: readFrameVersions(field<Wire.Envelope>(envelope, 'frames')),
     })
   })
 }
@@ -387,11 +392,21 @@ function readPageFacts(pages: unknown): PageFact[] {
       fact.viewportSize = { width, height }
     const workers = readWorkers(field<Wire.PageFact>(page, 'workers'))
     if (workers) fact.workers = workers
-    const framesChanged = field<Wire.PageFact>(page, 'framesChanged')
-    if (typeof framesChanged === 'number') fact.framesChanged = framesChanged
     facts.push(fact)
   }
   return facts
+}
+
+/** The tabs' frame-tree versions a reply carries, dropping any entry that is not two numbers. */
+function readFrameVersions(value: unknown): Wire.FrameVersion[] {
+  if (!Array.isArray(value)) return []
+  return value.flatMap((entry) => {
+    const tab = field<Wire.FrameVersion>(entry, 'tab')
+    const version = field<Wire.FrameVersion>(entry, 'version')
+    return typeof tab === 'number' && typeof version === 'number'
+      ? [{ tab, version }]
+      : []
+  })
 }
 
 /** Worker metadata is validated once at the reply boundary, independently of page facts. */

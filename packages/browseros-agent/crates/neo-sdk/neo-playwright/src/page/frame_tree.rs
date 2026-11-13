@@ -123,6 +123,19 @@ impl FrameTree {
         self.frames
     }
 
+    /// Whether every out-of-process frame the browser lists under the tree was read.
+    pub(crate) fn is_whole(&self) -> bool {
+        self.unread.is_empty()
+    }
+
+    /// The frames for a reply that supplements the prelude's tree (an evaluate's, a tag's, a
+    /// navigation's): `None` unless the tree is whole, so a partial tree never replaces a whole
+    /// one the prelude holds and detaches the frames it lacks. The prelude reads the tree again
+    /// with `page.frames`, whose answer marks a partial tree `incomplete`.
+    pub(crate) fn into_whole_frames(self) -> Option<Vec<FrameInfo>> {
+        self.is_whole().then_some(self.frames)
+    }
+
     /// The documents under `root`, including itself, in stable identity order. A replacement
     /// document must reach its own lifecycle state even if its Frame object was retained.
     pub(crate) fn documents(&self, root: &FrameId) -> Vec<FrameDocument> {
@@ -265,8 +278,8 @@ pub(crate) async fn frames(
     // the prelude reads the tree again before the script's next operation resolves.
     let incomplete = frames.as_ref().is_some_and(|tree| !tree.unread.is_empty());
     match &frames {
-        // Hosts match these notes' first words (`frame tree incomplete:`, `frame tree not read:`)
-        // in the run record's `page.frames` operations, so they stay as they are.
+        // Debug notes, never stored in the run's record; neo-server logs those starting `frame tree`
+        // at warn (operation_guard), so a read that was not whole can be found afterwards.
         None => scope.log(
             "frame tree not read: the tab was loading or navigating past the read's time; its \
              frames stay as they were"
@@ -532,6 +545,26 @@ mod tests {
         })?;
         assert_eq!(without, serde_json::to_string(&Before { frames: None })?);
         assert_eq!(without, "{}", "no frames read is no key at all");
+        Ok(())
+    }
+
+    #[test]
+    fn tests_that_a_partial_tree_never_supplements_a_reply() -> Result<(), serde_json::Error> {
+        let whole = sample_tree()?;
+        assert!(whole.is_whole());
+        assert_eq!(
+            whole.into_whole_frames().map(|frames| frames.len()),
+            Some(2)
+        );
+        let mut partial = sample_tree()?;
+        partial
+            .unread
+            .push(("oopif-1".to_owned(), "session detached".to_owned()));
+        assert!(!partial.is_whole());
+        assert!(
+            partial.into_whole_frames().is_none(),
+            "an evaluate, a tag or a navigation answers no tree rather than a short one"
+        );
         Ok(())
     }
 

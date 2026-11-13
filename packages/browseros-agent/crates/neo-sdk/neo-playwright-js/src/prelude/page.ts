@@ -99,6 +99,13 @@ import type {
 } from './wire'
 import { Worker } from './worker'
 
+/**
+ * The pause before Neo reads once more a tab whose first read came back partial or empty: long
+ * enough for an out-of-process frame's session to finish attaching, short enough to keep the
+ * run's start quick.
+ */
+const FRAMES_RETRY_MS = 100
+
 /** Page-scoped preferences; omitted values are retained and null clears just that override. */
 export type MediaOptions = {
   media?: 'screen' | 'print' | null
@@ -158,16 +165,14 @@ export class Page extends EventEmitter {
    * load wait's reply, or an evaluate's reply update it.
    */
   _framesWatched = false
-  /** The newest frame-tree version a fact gave this tab (`PageFact.framesChanged`). */
+  /** The newest frame-tree version a reply gave this tab (`Envelope.frames`). */
   _framesChanged = 0
   /** The version the cached tree was read at; the tree is stale once `_framesChanged` passes it. */
   #framesReadAt = 0
-  /** The context's frame-change head when the cached tree was read (`_framesStale`). */
-  #framesHeadAt = 0
-  /** Whether the last read answered a partial tree: an out-of-process frame could not be read. */
+  /** Whether the last read answered a partial tree, no tree, or failed. */
   #framesIncomplete = false
-  /** When a settle step last read this tab, which bounds a page whose frames keep changing. */
-  #settledAt = Number.NEGATIVE_INFINITY
+  /** Neo's read of this tab's tree in flight, which a settle step joins rather than repeats. */
+  #framesRead: Promise<boolean> | null = null
   /**
    * Navigation ops (goto, reload, goBack, goForward) in flight on this page. While Chromium has
    * not answered a `Page.navigate` (or history or reload command) for a tab, it holds every
@@ -1232,6 +1237,9 @@ export class Page extends EventEmitter {
     // No browser await remains after this mark. A later evaluate may now publish this
     // navigation's public promise before returning its own observation.
     ready?.()
+    // The navigation's frames were applied after its operation's settle step: a tree its own
+    // read left incomplete is read once more before the navigation returns to the script.
+    await this._context._settleFrames().catch(() => {})
     return navigationResponse(frame, result)
   }
 
@@ -1254,11 +1262,34 @@ export class Page extends EventEmitter {
    */
   async _readInitialFrames(timeoutMs = 0): Promise<void> {
     if (this._tab === null || this._closed) return
-    // A read that fails, answers no tree or a partial one leaves the tree unknown
-    // (`_framesUnknown`, `#framesIncomplete`): it is read again before the next operation resolves.
-    await this._refreshFrames('page.frames', timeoutMs).catch(() =>
-      this._framesUnknown(),
-    )
+    // A read that answers no tree or a partial one (an out-of-process frame's session was still
+    // attaching, the tab was loading) is read once more before the tree is handed to the script.
+    // One still not whole, or refused, stays marked (`#framesIncomplete`) and is read again
+    // before the script's next operation settles.
+    if (await this._readFrames(timeoutMs)) return
+    if (this.#framesIncomplete && !this._closed) {
+      await sleep('page.frames', FRAMES_RETRY_MS).catch(() => {})
+      await this._readFrames(timeoutMs)
+    }
+  }
+
+  /**
+   * Neo's read of this tab's tree, or the one already in flight: two settle steps, or a start
+   * read and a settle step, never read one tab twice at once. Says whether the whole tree was
+   * applied; a failed read marks the tree unknown and says no.
+   */
+  _readFrames(timeoutMs: number): Promise<boolean> {
+    if (this.#framesRead) return this.#framesRead
+    const read = this._refreshFrames('page.frames', timeoutMs)
+      .catch(() => {
+        this._framesUnknown()
+        return false
+      })
+      .finally(() => {
+        if (this.#framesRead === read) this.#framesRead = null
+      })
+    this.#framesRead = read
+    return read
   }
 
   /**
@@ -1269,7 +1300,7 @@ export class Page extends EventEmitter {
   async _refreshFrames(api: string, timeoutMs = 0): Promise<boolean> {
     const site = INTERNAL_SITE
     // Taken before the read: a change of this tab's frames that the read races is newer than
-    // this, and the read's own reply carries the tab's facts, so it reads again.
+    // this, and every reply carries the tab's version, so the next settle step reads again.
     const version = this._framesChanged
     const { value: tree, observed } = await invokeObserved(
       'page.frames',
@@ -1284,9 +1315,6 @@ export class Page extends EventEmitter {
     if (this.#payloadCurrent(observed) && Array.isArray(tree?.frames)) {
       this._applyFrames(tree.frames, observed)
       this.#framesReadAt = version
-      // The head as the read's reply left it: this tab's own changes are tracked by its version
-      // above, so the head only has to catch other tabs' changes after this.
-      this.#framesHeadAt = this._context._framesHead
       this.#framesIncomplete = tree.incomplete === true
       return !this.#framesIncomplete
     }
@@ -1311,27 +1339,25 @@ export class Page extends EventEmitter {
     this._framesWatched = true
   }
 
+  /** Records `version`, this tab's frame-tree version from a reply (`Envelope.frames`). */
+  _frameVersion(version: number): void {
+    this._framesChanged = Math.max(this._framesChanged, version)
+  }
+
   /**
-   * Whether the settle step reads this tab now (`BrowserContext._settleFrames`): its tree changed
-   * since it was read, or the last read was partial, and it was not read by a settle in the last
-   * `minGapMs`. The gap is the bound on a page that adds frames all the time: at most one such
-   * read per tab in that span, so a busy page's tree lags it by at most that much.
+   * Whether a settle step must have this tab's tree read before the script's operation settles
+   * (`BrowserContext._settleFrames`): a read of it is in flight (a page first seen mid-run, a
+   * start read), its version moved since its tree was read, or its last read was not whole. A
+   * tab with a navigation op in flight is left to that navigation's own reply.
    */
-  _framesStale(now: number, minGapMs: number): boolean {
+  _framesStale(): boolean {
     if (this._tab === null || this._closed || this._navigationsInFlight > 0)
       return false
-    // A tab's own version comes only with its facts, which a reply carries for the tabs its op
-    // touched; the head comes with every reply. When only the head moved, the pages the script
-    // uses (acted on, or read the frames of) are read again: one of them may be the tab whose
-    // frames changed, and a page the script never looks into can wait for its next read.
-    const changed =
-      this._framesChanged > this.#framesReadAt ||
-      ((this._working || this._framesWatched) &&
-        this._context._framesHead > this.#framesHeadAt)
-    if (!this.#framesIncomplete && !changed) return false
-    if (now - this.#settledAt < minGapMs) return false
-    this.#settledAt = now
-    return true
+    return (
+      this.#framesRead !== null ||
+      this.#framesIncomplete ||
+      this._framesChanged > this.#framesReadAt
+    )
   }
 
   /**
@@ -1515,8 +1541,6 @@ export class Page extends EventEmitter {
   ): void {
     if (fact.tab !== undefined) this._tab = fact.tab
     if (fact.taskId !== undefined) this.#taskId = fact.taskId
-    if (fact.framesChanged !== undefined)
-      this._framesChanged = Math.max(this._framesChanged, fact.framesChanged)
     if (at === null) {
       this.#applyViewport(fact.viewportSize)
       if (fact.url !== undefined && !this.#urlKnown) {
