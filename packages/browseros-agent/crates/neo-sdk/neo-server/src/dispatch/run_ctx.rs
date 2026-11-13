@@ -24,7 +24,7 @@ use super::run_tasks::RunTasks;
 use super::{
     CallSite, Dispatcher, ErrorCode, Lifetime, MethodSpec, OperationError, TaskKind, TaskNote,
 };
-use crate::browser::{PageRef, RunView, TabRegistry, TaskRecord};
+use crate::browser::{PageRef, RunScope, RunView, Sight, TabRegistry, TabsScope, TaskRecord};
 
 /// One `run` call as the door sees it: its identity, the browser view it captured, its budget,
 /// why it stopped, the ops it started, what they changed, and the state features keep per run.
@@ -37,6 +37,10 @@ pub(crate) struct RunCtx {
     task_id: Option<TaskId>,
     /// The family of the host's task, read once at the run's start ([`RunCtx::family`]).
     family: Option<TaskId>,
+    /// What the run may reach, fixed at its start ([`RunCtx::sight`]).
+    scope: RunScope,
+    /// Read for the run's sight of each tab, live: the scope is fixed, which tabs it covers is not.
+    tabs: Arc<TabRegistry>,
     view: BrowserView,
     /// The CDP epoch the view was taken at. The unbound view would silently follow a new
     /// socket, so the door refuses once the link's epoch differs.
@@ -89,6 +93,10 @@ pub(crate) struct RunStart {
     pub(crate) deadline: Instant,
     /// The task's tab when the run service knows it; otherwise resolved on first use.
     pub(crate) default_page: Option<PageRef>,
+    /// The tab scope setting as the run read it at its start. With the run's task it decides
+    /// what the run may reach ([`RunScope::decide`]). Neo's own runs (the janitor, private
+    /// typing) read `Browser` always: they reach every tab.
+    pub(crate) tabs_scope: TabsScope,
 }
 
 /// The run's end record. A plain data bag.
@@ -153,6 +161,8 @@ struct RunLedger {
     not_awaited: Vec<OpLine>,
     /// Pages this run closed, so a later use is the script's mistake, not Neo's.
     closed_by_run: HashSet<TabId>,
+    /// Tabs this bound run's own opens named ([`RunCtx::opened`]). Bounded by the run's opens.
+    opened_by_run: HashSet<TabId>,
 }
 
 /// The run's op tasks. Closed at teardown; a closed set admits nothing.
@@ -189,6 +199,7 @@ impl RunCtx {
             view,
             deadline,
             default_page,
+            tabs_scope,
         } = start;
         let trace = door.trace();
         if let Some(task) = &task_id {
@@ -203,6 +214,7 @@ impl RunCtx {
                 .task_family(task)
                 .unwrap_or_else(|| task.clone())
         });
+        let scope = RunScope::decide(tabs_scope, family.as_ref());
         let tasks = Mutex::new(RunTasks::new(task_id.clone()));
         // In use from the start: the janitor must not close the task's tab between the run's
         // start and its first op.
@@ -220,6 +232,8 @@ impl RunCtx {
             id,
             task_id,
             family,
+            scope,
+            tabs: Arc::clone(door.tabs()),
             view: view.view,
             epoch: view.epoch,
             deadline,
@@ -274,6 +288,34 @@ impl RunCtx {
     #[must_use]
     pub(crate) fn family(&self) -> Option<&TaskId> {
         self.family.as_ref()
+    }
+
+    /// What this run may reach, fixed at its start.
+    #[must_use]
+    pub(crate) fn scope(&self) -> &RunScope {
+        &self.scope
+    }
+
+    /// Whether this run may reach `tab` now: the registry's answer for its scope, except that a
+    /// bound run's own open is shown from the moment the browser names it, before its task
+    /// holds it ([`RunCtx::opened`]).
+    #[must_use]
+    pub(crate) fn sight(&self, tab: TabId) -> Sight {
+        if self.scope.is_bound() && self.lock_ledger().opened_by_run.contains(&tab) {
+            return match self.tabs.sight(&RunScope::Browser, tab) {
+                Sight::Reserved => Sight::Reserved,
+                Sight::Shown | Sight::Closed | Sight::Foreign => Sight::Shown,
+            };
+        }
+        self.tabs.sight(&self.scope, tab)
+    }
+
+    /// This run's own open named `tab`. Its task takes it once the open returns; until then the
+    /// run sees it all the same, and after that its task holds it.
+    pub(crate) fn opened(&self, tab: TabId) {
+        if self.scope.is_bound() {
+            self.lock_ledger().opened_by_run.insert(tab);
+        }
     }
 
     /// Sets the task used by subsequent opens and the unresolved built-in page.

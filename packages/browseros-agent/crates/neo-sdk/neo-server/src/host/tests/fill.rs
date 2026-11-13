@@ -37,6 +37,7 @@ use tracing::Dispatch;
 use tracing::subscriber::{self, NoSubscriber};
 
 use super::{Host, Reply, TOKEN, TestResult, request, within};
+use crate::browser::TabsScope;
 use crate::builtins::{ENTRY_BACKSTOP, HOST_FILL, HOST_FILL_CHECK, HOST_FILL_CODE, PrivateEntry};
 use crate::dispatch::{
     Call, ErrorCode, LeafError, Method, MethodSpec, OpCtx, OpFailure, PageTarget, RegistryBuilder,
@@ -511,6 +512,7 @@ async fn script_call(
             view,
             deadline: Instant::now() + Duration::from_secs(10),
             default_page: None,
+            tabs_scope: TabsScope::Browser,
         },
     );
     let reply = host

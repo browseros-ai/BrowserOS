@@ -4,20 +4,26 @@
 mod harness;
 mod test_methods;
 
+use std::collections::HashMap;
 use std::error::Error;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
+use browseros_core::TabId;
 use futures_util::future;
-use neo_trace::{Delivery, Effect, ErrorOwner, OperationId, Outcome, RunEffects, RunStatus};
+use neo_trace::{
+    Delivery, Effect, ErrorOwner, OperationId, Outcome, RunEffects, RunStatus, TaskId,
+    TraceRecordEvent,
+};
 use serde_json::{Value, json};
+use tokio::time;
 
 use self::harness::{GATE_PARTIES, Harness, SeenCheck, within};
-use crate::browser::PageRef;
+use crate::browser::{PageRef, TabsScope};
 use crate::dispatch::{
-    Call, Caller, ErrorCode, OpFailure, OpReply, OpsReport, PendingReply, RunEnd, StopReason,
-    TEXT_CHARS,
+    Call, Caller, ErrorCode, OpFailure, OpReply, OpsReport, PendingReply, RunCtx, RunEnd,
+    StopReason, TEXT_CHARS,
 };
 
 /// The page brand a script sends for `page`.
@@ -30,6 +36,12 @@ fn failure(reply: OpReply) -> Result<OpFailure, Box<dyn Error>> {
         Ok(value) => Err(format!("expected a failure, got {value}").into()),
         Err(failure) => Ok(failure),
     }
+}
+
+fn returned(reply: OpReply) -> Result<Value, Box<dyn Error>> {
+    reply
+        .outcome
+        .map_err(|failure| format!("expected a value, got {:?}", failure.error).into())
 }
 
 fn owner_and_code(failure: &OpFailure) -> (ErrorOwner, ErrorCode) {
@@ -1043,5 +1055,276 @@ async fn fact_replies_carry_increasing_observations_and_empty_replies_carry_none
         .await;
     assert!(empty.pages.is_empty());
     assert!(empty.observed.is_none());
+    Ok(())
+}
+
+/// Two host tasks, `host-s` holding `mine` and `host-r` holding `theirs`, and the owner's `free`
+/// tab that no task holds.
+struct Families {
+    mine: PageRef,
+    theirs: PageRef,
+    free: PageRef,
+    host: TaskId,
+    other: TaskId,
+}
+
+async fn families(harness: &Harness) -> Result<Families, Box<dyn Error>> {
+    let mine = harness.page("https://mine.example/").await?;
+    let theirs = harness.page("https://theirs.example/").await?;
+    let free = harness.page("https://free.example/").await?;
+    let host = TaskId::parse("host-s")?;
+    let other = TaskId::parse("host-r")?;
+    for (page, task) in [(&mine, &host), (&theirs, &other)] {
+        harness.tabs.ensure_task(task)?;
+        harness.tabs.touched(page, harness.tabs.seen());
+        harness.tabs.own(page, task)?;
+    }
+    harness.tabs.touched(&free, harness.tabs.seen());
+    Ok(Families {
+        mine,
+        theirs,
+        free,
+        host,
+        other,
+    })
+}
+
+#[tokio::test]
+async fn a_bound_run_is_refused_a_tab_outside_its_family_before_the_record_names_it()
+-> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let tabs = families(&harness).await?;
+    let (run, _guard) = harness.run_in(TabsScope::Task, Some(&tabs.host))?;
+    let never = PageRef { tab: TabId(99_999) };
+    let mut messages = Vec::new();
+    let mut events = harness.sink.subscribe();
+    let mut refused_ops = Vec::new();
+    for page in [&tabs.theirs, &tabs.free, &never] {
+        let (operation, reply) = harness
+            .submit(&run, "test.read", json!({ "page": handle(page) }))
+            .await;
+        refused_ops.push(operation);
+        let refused = failure(reply)?;
+        assert_eq!(
+            owner_and_code(&refused),
+            (ErrorOwner::Script, ErrorCode::PAGE_NOT_IN_TASK),
+            "another task's tab, no task's tab and no tab at all are answered alike"
+        );
+        assert_eq!(refused.delivery, Delivery::NotSent);
+        assert!(refused.retryable, "nothing was sent");
+        messages.push(refused.error.message().to_owned());
+        assert_eq!(
+            harness.row(operation).await?.tab,
+            None,
+            "the record never names the refused tab: no run link, picture or follower move"
+        );
+    }
+    messages.dedup();
+    assert_eq!(
+        messages.len(),
+        1,
+        "one message for every tab outside the family"
+    );
+
+    let (operation, reply) = harness
+        .submit(&run, "test.read", json!({ "page": handle(&tabs.mine) }))
+        .await;
+    assert_eq!(returned(reply)?, json!({ "tab": tabs.mine.tab.0 }));
+    assert_eq!(harness.row(operation).await?.tab, Some(tabs.mine.tab));
+    let mut started = HashMap::new();
+    while let Ok(event) = events.try_recv() {
+        if let TraceRecordEvent::OperationStarted {
+            id, tab, touched, ..
+        } = event
+        {
+            started.insert(id, (tab, touched));
+        }
+    }
+    for operation in refused_ops {
+        assert_eq!(
+            started.get(&operation),
+            Some(&(None, None)),
+            "a follower and the run-end pictures are told of no tab"
+        );
+    }
+    let summary = harness
+        .store
+        .run_summary(run.id())
+        .await?
+        .ok_or("the run is recorded")?;
+    assert_eq!(
+        summary.tabs,
+        vec![tabs.mine.tab],
+        "the run links only the tab it was allowed"
+    );
+
+    for scope in [TabsScope::Browser, TabsScope::Task] {
+        let task = match scope {
+            TabsScope::Browser => Some(&tabs.host),
+            TabsScope::Task => None,
+        };
+        let (unbound, _unbound_guard) = harness.run_in(scope, task)?;
+        let reply = harness
+            .submit(
+                &unbound,
+                "test.read",
+                json!({ "page": handle(&tabs.theirs) }),
+            )
+            .await
+            .1;
+        assert_eq!(
+            returned(reply)?,
+            json!({ "tab": tabs.theirs.tab.0 }),
+            "a run that is not bound reaches every tab, as before task scope"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_page_brand_deep_in_a_bound_runs_arguments_is_asked_too() -> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let tabs = families(&harness).await?;
+    let (run, _guard) = harness.run_in(TabsScope::Task, Some(&tabs.host))?;
+    let deep = |page: &PageRef| json!({ "options": [{ "to": { "page": handle(page) } }] });
+    let (operation, reply) = harness.submit(&run, "test.any", deep(&tabs.theirs)).await;
+    assert_eq!(
+        owner_and_code(&failure(reply)?),
+        (ErrorOwner::Script, ErrorCode::PAGE_NOT_IN_TASK)
+    );
+    assert_eq!(harness.row(operation).await?.tab, None);
+    let reply = harness.submit(&run, "test.any", deep(&tabs.mine)).await.1;
+    assert_eq!(returned(reply)?, deep(&tabs.mine), "its own tab passes");
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_bound_runs_result_never_names_a_tab_outside_its_family() -> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let tabs = families(&harness).await?;
+    let (run, _guard) = harness.run_in(TabsScope::Task, Some(&tabs.host))?;
+    let names = |page: &PageRef| json!({ "tab": page.tab.0 });
+    let withheld = failure(
+        harness
+            .submit(&run, "test.names_tab", names(&tabs.theirs))
+            .await
+            .1,
+    )?;
+    assert_eq!(
+        owner_and_code(&withheld),
+        (ErrorOwner::Neo, ErrorCode::INTERNAL_ERROR),
+        "a result naming another task's tab is Neo's bug, withheld"
+    );
+    assert!(
+        harness
+            .submit(&run, "test.names_tab", names(&tabs.mine))
+            .await
+            .1
+            .outcome
+            .is_ok()
+    );
+    let (unbound, _unbound_guard) = harness.run_in(TabsScope::Browser, Some(&tabs.host))?;
+    assert!(
+        harness
+            .submit(&unbound, "test.names_tab", names(&tabs.theirs))
+            .await
+            .1
+            .outcome
+            .is_ok(),
+        "a run that is not bound gets every result, as before task scope"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_bound_runs_family_tab_that_closed_answers_page_closed() -> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let tabs = families(&harness).await?;
+    assert!(
+        harness.fake.close_tab(tabs.mine.tab),
+        "the fake had the tab"
+    );
+    harness.until_forgotten(&tabs.mine).await?;
+    while harness.tabs.owner(tabs.mine.tab).is_some() {
+        time::sleep(Duration::from_millis(5)).await;
+    }
+    let (run, _guard) = harness.run_in(TabsScope::Task, Some(&tabs.host))?;
+    let (operation, reply) = harness
+        .submit(&run, "test.read", json!({ "page": handle(&tabs.mine) }))
+        .await;
+    assert_eq!(
+        failure(reply)?.error.code(),
+        ErrorCode::PAGE_CLOSED,
+        "its own family's tab closed"
+    );
+    assert_eq!(harness.row(operation).await?.tab, None);
+    let (other, _other_guard) = harness.run_in(TabsScope::Task, Some(&tabs.other))?;
+    assert_eq!(
+        failure(
+            harness
+                .submit(&other, "test.read", json!({ "page": handle(&tabs.mine) }))
+                .await
+                .1
+        )?
+        .error
+        .code(),
+        ErrorCode::PAGE_NOT_IN_TASK,
+        "another family never learns the tab closed"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn every_rule_seam_keeps_a_bound_run_to_its_family() -> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let tabs = families(&harness).await?;
+    let checked = async |run: &Arc<RunCtx>, page: &PageRef| -> Result<Value, Box<dyn Error>> {
+        let reply = harness
+            .submit(run, "test.checks_tab", json!({ "tab": page.tab.0 }))
+            .await
+            .1;
+        Ok(returned(reply)?["refused"].clone())
+    };
+    let (run, _guard) = harness.run_in(TabsScope::Task, Some(&tabs.host))?;
+    assert_eq!(
+        checked(&run, &tabs.theirs).await?,
+        json!("page_not_in_task"),
+        "an event naming another task's tab is withheld from a bound run"
+    );
+    assert_eq!(checked(&run, &tabs.mine).await?, Value::Null);
+    let (unbound, _unbound_guard) = harness.run_in(TabsScope::Browser, Some(&tabs.host))?;
+    assert_eq!(
+        checked(&unbound, &tabs.theirs).await?,
+        Value::Null,
+        "as before task scope"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_bound_run_hears_its_own_family_tab_close() -> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let tabs = families(&harness).await?;
+    let (run, _guard) = harness.run_in(TabsScope::Task, Some(&tabs.host))?;
+    let (_, closed) = harness
+        .submit(&run, "test.close", json!({ "page": handle(&tabs.mine) }))
+        .await;
+    let fact = closed.pages.first().ok_or("the closed page is reported")?;
+    assert!(
+        fact.closed,
+        "the family's closed tab still reaches the run as closed"
+    );
+    assert_eq!(
+        failure(
+            harness
+                .submit(&run, "test.read", json!({ "page": handle(&tabs.mine) }))
+                .await
+                .1
+        )?
+        .error
+        .code(),
+        ErrorCode::PAGE_CLOSED,
+        "naming it afterwards is refused as closed"
+    );
     Ok(())
 }

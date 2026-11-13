@@ -38,7 +38,7 @@ use super::fill_answer::{self, Refused, owner_name};
 use super::fill_ledger::{Admission, FillLedger, FillTicket};
 use super::fill_request::{CheckRequest, FillRequest};
 use super::{FilledTabs, TakeoverLock};
-use crate::browser::{BrowserLink, PageRef};
+use crate::browser::{BrowserLink, PageRef, TabsScope};
 use crate::builtins::{
     ENTRY_BACKSTOP, FillProgress, FillValues, HOST_FILL, HOST_FILL_CHECK, HOST_FILL_CHECK_CODE,
     HOST_FILL_CODE, boxes_args,
@@ -285,6 +285,7 @@ impl Fill {
                 // run ends and restarts its idle clock then: `host.fill` is Neo's op, which the
                 // door does not count as a script's use (ruling R27).
                 default_page: Some(PageRef { tab }),
+                tabs_scope: TabsScope::Browser,
             },
         );
         if let Some(lock) = lock {
@@ -354,6 +355,7 @@ impl Fill {
                 view,
                 deadline: Instant::now() + timeout + ENTRY_BACKSTOP,
                 default_page: Some(PageRef { tab }),
+                tabs_scope: TabsScope::Browser,
             },
         );
         if let Some(lock) = lock {

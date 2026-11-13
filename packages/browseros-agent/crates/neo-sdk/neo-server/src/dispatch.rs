@@ -39,6 +39,7 @@ mod refusal_brand;
 mod registry;
 mod run_ctx;
 mod run_tasks;
+mod tabs_named;
 #[cfg(test)]
 mod tests;
 
@@ -60,3 +61,4 @@ pub(crate) use registry::{Registry, RegistryBuilder, RegistryError};
 pub(crate) use run_ctx::{OpLine, OpsReport, RunCtx, RunEnd, RunGuard, RunStart, StopReason};
 
 pub(crate) use run_tasks::{TabNote, TaskKind, TaskNote};
+pub(crate) use tabs_named::tabs_named;

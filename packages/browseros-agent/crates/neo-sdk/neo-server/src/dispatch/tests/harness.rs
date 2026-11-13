@@ -8,8 +8,8 @@ use std::time::Duration;
 
 use browseros_core::{NativeCapabilities, TabId};
 use neo_trace::{
-    Effect, OperationId, OperationRow, RedactionLimits, Redactor, RunId, TraceSink, TraceStore,
-    WriterConfig, spawn_writer,
+    Effect, OperationId, OperationRow, RedactionLimits, Redactor, RunId, TaskId, TraceSink,
+    TraceStore, WriterConfig, spawn_writer,
 };
 use serde_json::Value;
 use tempfile::TempDir;
@@ -17,7 +17,7 @@ use tokio::sync::{Barrier, Notify};
 use tokio::time::{self, Instant};
 
 use super::test_methods::{Shared, test_methods};
-use crate::browser::{BrowserLink, PageRef, TabRegistry};
+use crate::browser::{BrowserLink, PageRef, TabRegistry, TabsScope};
 use crate::dispatch::{
     Call, Caller, Dispatcher, ErrorCode, Observer, OpReply, OperationError, Policy, PolicyCheck,
     RegistryBuilder, RunCtx, RunGuard, RunStart,
@@ -135,6 +135,28 @@ impl Harness {
             view,
             deadline: Instant::now() + Duration::from_secs(300),
             default_page: None,
+            tabs_scope: TabsScope::Browser,
+        };
+        Ok(RunCtx::start(&self.dispatcher, start))
+    }
+
+    /// A recorded run that read `scope` at its start, for host task `task`.
+    pub(super) fn run_in(
+        &self,
+        scope: TabsScope,
+        task: Option<&TaskId>,
+    ) -> Result<(Arc<RunCtx>, RunGuard), Box<dyn Error>> {
+        let view = self.link.view().ok_or("the link is up")?;
+        let start = RunStart {
+            id: RunId::new(),
+            code: String::new(),
+            request_id: None,
+            task_id: task.cloned(),
+            host_data: None,
+            view,
+            deadline: Instant::now() + Duration::from_secs(300),
+            default_page: None,
+            tabs_scope: scope,
         };
         Ok(RunCtx::start(&self.dispatcher, start))
     }

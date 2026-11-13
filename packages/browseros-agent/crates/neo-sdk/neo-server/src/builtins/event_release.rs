@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::browser::PageRef;
-use crate::dispatch::{ErrorCode, LeafError, OpCtx, OperationError, PageChange};
+use crate::dispatch::{ErrorCode, LeafError, OpCtx, OperationError, PageChange, tabs_named};
 
 /// Whether a Playwright op's result carries events, whose tabs the door's rules clear one by one
 /// before it is released.
@@ -183,29 +183,6 @@ fn refusal<M>(op: &OpCtx<M>, event: &Value) -> Option<OperationError> {
     let mut tabs = Vec::new();
     tabs_named(event, &mut tabs);
     tabs.into_iter().find_map(|tab| op.check_tab(tab).err())
-}
-
-/// Adds the tab of every page brand in `value`, `{"$neo":"page","tab":1234}`, to `tabs`.
-fn tabs_named(value: &Value, tabs: &mut Vec<TabId>) {
-    match value {
-        Value::Object(fields) => {
-            let page = fields.get("$neo").and_then(Value::as_str) == Some("page");
-            if let (true, Some(tab)) = (page, fields.get("tab").and_then(Value::as_i64))
-                && !tabs.contains(&TabId(tab))
-            {
-                tabs.push(TabId(tab));
-            }
-            for field in fields.values() {
-                tabs_named(field, tabs);
-            }
-        }
-        Value::Array(items) => {
-            for item in items {
-                tabs_named(item, tabs);
-            }
-        }
-        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
-    }
 }
 
 #[expect(
