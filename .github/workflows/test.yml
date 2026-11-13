@@ -122,6 +122,13 @@ jobs:
       - name: Install dependencies
         run: bun ci
 
+      # Local fixture tests only: this must never submit a job to the shared fleet.
+      # Transfer fixtures additionally require the complete pinned Crabbox release;
+      # those are run manually as documented in tools/remote-builds/README.md.
+      - name: Check remote-build admission and cleanup helpers
+        if: matrix.suite == 'claw-sdk-quality'
+        run: python3 -m unittest discover -s tools/remote-builds -p 'test_*.py' -v
+
       - name: Resolve BrowserOS cache key
         if: matrix.needs_browser == true
         id: browseros-cache-key

@@ -65,6 +65,7 @@
     "captcha:fixtures": "bun crates/neo-sdk/neo-captcha/testbed/fixtures/serve.ts",
     "test:main": "bun run ./scripts/run-test-suite.ts main",
     "test:neo-spec": "bun crates/neo-sdk/neo-playwright-tests/spec.ts",
+    "remote": "python3 tools/remote-builds/remote.py",
     "neo:viewer": "cd tools/neo-viewer && bun run start",
     "test:captcha-docker-e2e": "bash crates/neo-sdk/neo-captcha/testbed/docker/run.sh",
     "check": "bun run lint && bun run typecheck && bun run fallow",
