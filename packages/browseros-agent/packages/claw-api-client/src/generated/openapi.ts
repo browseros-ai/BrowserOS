@@ -773,12 +773,16 @@ export interface components {
       humanHelpEnabled: boolean
       /** @description Whether successful MCP tool replies include a tip to close the task's tab group when finished. */
       taskCleanupTipEnabled: boolean
+      /** @description Whether pages are recorded for task replays. When false, no new replay is stored and History shows each step's picture instead of the replay. */
+      sessionReplaysEnabled: boolean
     }
     UpdateAgentSettingsRequest: {
       /** @description Omit to preserve the saved human help preference. */
       humanHelpEnabled?: boolean
       /** @description Omit to preserve the saved cleanup tip preference. */
       taskCleanupTipEnabled?: boolean
+      /** @description Omit to preserve the saved session replay preference. */
+      sessionReplaysEnabled?: boolean
     }
     /** @enum {string} */
     SessionStatus: 'live' | 'done' | 'failed' | 'cancelled'

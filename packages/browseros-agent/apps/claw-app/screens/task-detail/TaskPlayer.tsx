@@ -13,6 +13,8 @@ interface TaskPlayerProps {
   ref?: Ref<HTMLDivElement>
   sessionId: string
   replay: ReplaySession
+  /** False when replays are turned off: the step's picture shows instead. */
+  showReplay: boolean
   /** The step being shown when there is no recording to play. */
   step?: DescribedStep
   /** Its picture, when there is no recording to play here. */
@@ -32,13 +34,14 @@ export function TaskPlayer({
   ref,
   sessionId,
   replay,
+  showReplay,
   step,
   snapshotId,
   onFullScreen,
   fullScreen,
 }: TaskPlayerProps) {
   const baseUrl = useTaskScreenshotBaseUrl()
-  const hasRecording = replay.plan.durationSeconds > 0
+  const hasRecording = showReplay && replay.plan.durationSeconds > 0
   const pictureSrc =
     snapshotId !== null && baseUrl !== null
       ? taskScreenshotUrl(sessionId, snapshotId, baseUrl)
@@ -59,7 +62,7 @@ export function TaskPlayer({
           posterSrc={pictureSrc}
           onToggleFullScreen={onFullScreen}
         />
-      ) : replay.recordingState === 'loading' ? (
+      ) : showReplay && replay.recordingState === 'loading' ? (
         <ReplayPanel
           session={replay}
           loading

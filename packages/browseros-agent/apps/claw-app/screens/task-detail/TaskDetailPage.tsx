@@ -80,10 +80,13 @@ export function TaskDetailPage({ focus }: { focus?: 'player' } = {}) {
   const { session, dispatches } = data.detail
   const { replay } = data
   const steps = showHidden ? data.allSteps : data.steps
-  const hasRecording = replay.plan.durationSeconds > 0
+  // With replays turned off in Settings, the page shows each step's picture.
+  const showReplay = data.sessionReplaysEnabled
+  const hasRecording = showReplay && replay.plan.durationSeconds > 0
   // A recording still downloading already drives the steps from the start, so
   // the highlighted step does not jump when playback becomes ready.
-  const followsPlayer = hasRecording || replay.recordingState === 'loading'
+  const followsPlayer =
+    hasRecording || (showReplay && replay.recordingState === 'loading')
 
   const currentDispatchId = replay.state.currentAction?.frame.dispatchId
   const activeIndex = followsPlayer
@@ -131,6 +134,7 @@ export function TaskDetailPage({ focus }: { focus?: 'player' } = {}) {
           }}
           sessionId={sessionId}
           replay={replay}
+          showReplay={showReplay}
           step={shownStep}
           snapshotId={
             pictureStep

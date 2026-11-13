@@ -31,6 +31,7 @@ import * as api from '@/modules/api/client'
 const settingsOf = (overrides: Partial<AgentSettings> = {}): AgentSettings => ({
   humanHelpEnabled: true,
   taskCleanupTipEnabled: false,
+  sessionReplaysEnabled: true,
   ...overrides,
 })
 
@@ -114,6 +115,7 @@ mock.module('@/components/theme-provider', () => ({
 }))
 
 const CLEANUP_SWITCH = '[aria-label="Tidy up when a task finishes"]'
+const REPLAYS_SWITCH = '[aria-label="Record task replays"]'
 
 const { useAgentSettings } = await import('@/modules/api/agent-settings.hooks')
 const { useAuditAgents } = await import('@/modules/api/audit.hooks')
@@ -153,6 +155,21 @@ describe('Settings screen', () => {
       'Your AI agents close the pages they opened once they’re done.',
     )
   })
+
+  it.each([true, false])(
+    'tests that the task replays switch reflects the saved value %p',
+    (sessionReplaysEnabled) => {
+      const page = renderPage(settingsOf({ sessionReplaysEnabled }))
+      const toggle = switchIn(page, REPLAYS_SWITCH)
+      expect(toggle.getAttribute('aria-checked')).toBe(
+        String(sessionReplaysEnabled),
+      )
+      expect(
+        page.getElementById(toggle.getAttribute('aria-describedby') ?? '')
+          ?.textContent,
+      ).toContain('new tasks aren’t recorded')
+    },
+  )
 
   it.each([true, false])(
     'tests that human help reflects the saved value %p',
@@ -320,6 +337,30 @@ describe('Settings screen interactions', () => {
     )
     Reflect.deleteProperty(globalThis, 'requestAnimationFrame')
     Reflect.deleteProperty(globalThis, 'cancelAnimationFrame')
+  })
+
+  it('tests that turning task replays off saves only that choice', async () => {
+    let saved = settingsOf()
+    server.read = async () => ({ ...saved })
+    server.save = async (body) => {
+      saved = { ...saved, ...body }
+      return saved
+    }
+    await mount()
+    expect(
+      switchIn(container, REPLAYS_SWITCH).getAttribute('aria-checked'),
+    ).toBe('true')
+
+    await clickSwitch(REPLAYS_SWITCH)
+
+    expect(server.saves.at(-1)).toEqual({ sessionReplaysEnabled: false })
+    expect(
+      switchIn(container, REPLAYS_SWITCH).getAttribute('aria-checked'),
+    ).toBe('false')
+    expect(saved).toMatchObject({
+      humanHelpEnabled: true,
+      sessionReplaysEnabled: false,
+    })
   })
 
   it('tests that both cleanup tip states preserve human-help changes made in another settings page', async () => {

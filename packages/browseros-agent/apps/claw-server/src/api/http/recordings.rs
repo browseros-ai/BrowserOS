@@ -31,6 +31,11 @@ pub(super) async fn append_document_events(
             "recording tab, document, batch, and gap headers are invalid",
         ));
     }
+    // Opted out of replays: store nothing and tell the recorder to stop. The batch
+    // still succeeds, so the extension's outbox drains instead of retrying it.
+    if !state.agent_settings.session_replays_enabled() {
+        return Ok(Json(AppendRecordingEventsResponse::new(0, true)));
+    }
     let parsed = parse_recording_events(&body);
     let appended = state
         .recording_ingest

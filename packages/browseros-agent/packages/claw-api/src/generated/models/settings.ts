@@ -30,6 +30,12 @@ export interface AgentSettings {
      * @memberof AgentSettings
      */
     taskCleanupTipEnabled: boolean;
+    /**
+     * Whether pages are recorded for task replays. When false, no new replay is stored and History shows each step's picture instead of the replay.
+     * @type {boolean}
+     * @memberof AgentSettings
+     */
+    sessionReplaysEnabled: boolean;
 }
 
 /**
@@ -76,6 +82,12 @@ export interface UpdateAgentSettingsRequest {
      * @memberof UpdateAgentSettingsRequest
      */
     taskCleanupTipEnabled?: boolean;
+    /**
+     * Omit to preserve the saved session replay preference.
+     * @type {boolean}
+     * @memberof UpdateAgentSettingsRequest
+     */
+    sessionReplaysEnabled?: boolean;
 }
 
 /**
