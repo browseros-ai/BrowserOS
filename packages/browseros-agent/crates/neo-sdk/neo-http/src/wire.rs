@@ -359,7 +359,7 @@ pub(crate) fn keep_request(body: &[u8]) -> Result<Option<Duration>, ApiError> {
         return Err(not_the_body(shape));
     }
     let request: api::TabKeepRequest =
-        serde_json::from_slice(body).map_err(|_| not_the_body(shape))?;
+        serde_json::from_value(json).map_err(|_| not_the_body(shape))?;
     request
         .ttl_seconds
         .map(|seconds| {
