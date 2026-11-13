@@ -955,6 +955,30 @@ describe('Use a licence key', () => {
     await click('Turn on ultrafast', dialog())
   }
 
+  it('tests that the key stays reachable while the price is still loading', async () => {
+    server.pricing = () => new Promise<PlanPricing>(() => undefined)
+    await openDialog()
+    expect(dialog()).toBeTruthy()
+  })
+
+  it('tests that the key stays reachable when the price can’t be fetched', async () => {
+    server.pricing = async () => {
+      throw apiError(503, { code: 'billing_unavailable', message: 'Down.' })
+    }
+    await mount()
+    expect(container.querySelector('[role="alert"]')).toBeTruthy()
+    await click('Use a licence key')
+    expect(dialog()).toBeTruthy()
+  })
+
+  it('tests that the key stays reachable when no price is on offer', async () => {
+    server.pricing = async () => ({ plans: [] })
+    await mount()
+    expect(text()).not.toContain('Get ultrafast')
+    await click('Use a licence key')
+    expect(dialog()).toBeTruthy()
+  })
+
   it('tests that part of a key is caught here, without asking the server', async () => {
     await openDialog()
     expect(text()).toContain('It’s in the email we sent when you paid.')

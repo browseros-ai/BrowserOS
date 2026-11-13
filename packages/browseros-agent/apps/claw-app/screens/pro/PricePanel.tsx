@@ -50,27 +50,35 @@ export function PricePanel({
   onBuy,
   onUseKey,
 }: PricePanelProps) {
+  const ended = keyHasEnded(plan)
+  // Someone who paid on another computer needs only their key, never the price.
+  const useKey = ended ? null : <UseKeyLink onUseKey={onUseKey} />
+
   if (pricing.isPending) {
     return (
-      <div className="flex w-full flex-col gap-4">
-        <Skeleton className="h-9 w-56" />
-        <Skeleton className="h-12 w-40" />
-        <Skeleton className="h-[46px] w-44" />
-      </div>
+      <>
+        <div className="flex w-full flex-col gap-4">
+          <Skeleton className="h-9 w-56" />
+          <Skeleton className="h-12 w-40" />
+          <Skeleton className="h-[46px] w-44" />
+        </div>
+        {useKey}
+      </>
     )
   }
-  if (pricing.isError || !prices) {
+  const price = prices ? (prices[period] ?? prices.month ?? prices.year) : null
+  if (pricing.isError || !prices || !price) {
     return (
-      <p role="alert" className="text-[14.5px] text-ink-2">
-        {apiErrorMessage(pricing.error) ?? PLAN_UNCHECKED}
-      </p>
+      <>
+        <p role="alert" className="text-[14.5px] text-ink-2">
+          {apiErrorMessage(pricing.error) ?? PLAN_UNCHECKED}
+        </p>
+        {useKey}
+      </>
     )
   }
 
-  const price = prices[period] ?? prices.month ?? prices.year
-  if (!price) return null
   const amount = formatPrice(price)
-  const ended = keyHasEnded(plan)
 
   if (checkout.phase === 'waiting' || checkout.phase === 'confirming') {
     return (
@@ -111,17 +119,21 @@ export function PricePanel({
             : null}
           Cancel any time.
         </span>
-        {ended ? null : (
-          <button
-            type="button"
-            onClick={onUseKey}
-            className="rounded-sm font-semibold text-accent-ink underline-offset-4 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            Use a licence key
-          </button>
-        )}
+        {useKey}
       </p>
     </>
+  )
+}
+
+function UseKeyLink({ onUseKey }: { onUseKey: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onUseKey}
+      className="rounded-sm font-semibold text-[13.5px] text-accent-ink underline-offset-4 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+    >
+      Use a licence key
+    </button>
   )
 }
 
