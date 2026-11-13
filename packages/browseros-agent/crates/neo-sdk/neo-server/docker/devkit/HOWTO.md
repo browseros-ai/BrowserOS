@@ -77,6 +77,10 @@ run 01a1acf4-cf1f-7102-8a53-f7b39569a66e ok effects=done 73ms tabs=[1276814799]
 
 `aria-ref.js` reads `page.ariaSnapshot()`, takes the ref printed for a button, and reads that element back through `page.getByRef(ref)` and `aria-ref=`.
 
+`await locator.ref({ timeout: 1500 })` is Neo's own read. It waits for exactly one attached element, even without size, and returns its engine ref, an earlier minted ref, or a new `n<k>` ref with an `f<seq>` prefix in other documents. Two matches fail strictly; no match times out. `page.getByRef(ref)` keeps naming that node across runs until removal or navigation, and minting changes neither snapshot output nor action checks. Keep the ref with its task and use that task's page, because ref strings are tab-local and two tabs can each hold their own `n1`.
+
+For a field printed without a ref, call `const ref = await field.ref()` on its role and exact-name locator, then check the attributes through `page.getByRef(ref)` so they belong to the node you keep. In a later run, use `page.getByRef(ref).focus()` and `page.keyboard.type(text)`. A `click` or `fill` still waits for a visible target under Playwright's usual rules.
+
 `page.ariaSnapshot()` (the same as `{ mode: 'ai' }`) lists what a script can act on, in Playwright's line syntax with Playwright's refs, and the page's text while the whole snapshot stays under about 3,000 tokens:
 
 ```text

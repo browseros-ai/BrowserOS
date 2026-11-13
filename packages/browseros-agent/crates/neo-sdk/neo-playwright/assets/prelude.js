@@ -126,6 +126,11 @@
       target: "target",
       lifetime: "operation"
     },
+    "locator.ref": {
+      effect: "read",
+      target: "target",
+      lifetime: "operation"
+    },
     "locator.isEnabled": {
       effect: "read",
       target: "target",
@@ -2011,6 +2016,7 @@
     "locator.innerHTML": (site, call, input, signal) => invoke("locator.innerHTML", site, call, input, signal),
     "locator.getAttribute": (site, call, input, signal) => invoke("locator.getAttribute", site, call, input, signal),
     "locator.inputValue": (site, call, input, signal) => invoke("locator.inputValue", site, call, input, signal),
+    "locator.ref": (site, call, input, signal) => invoke("locator.ref", site, call, input, signal),
     "locator.isEnabled": (site, call, input, signal) => invoke("locator.isEnabled", site, call, input, signal),
     "locator.isDisabled": (site, call, input, signal) => invoke("locator.isDisabled", site, call, input, signal),
     "locator.isEditable": (site, call, input, signal) => invoke("locator.isEditable", site, call, input, signal),
@@ -7259,6 +7265,12 @@ ${value.stack}`;
         strict: true
       });
     }
+    ref(options = {}) {
+      return this._frame._read("locator.ref", "locator.ref", this._selector, {
+        ...options,
+        strict: true
+      });
+    }
     getAttribute(name, options = {}) {
       return this._frame._getAttribute("locator.getAttribute", this._selector, name, {
         ...options,
@@ -7544,6 +7556,19 @@ ${value.stack}`;
     "tab",
     "treeitem"
   ]);
+  var FIELD = new Set([
+    "textbox",
+    "searchbox",
+    "spinbutton",
+    "slider",
+    "combobox",
+    "listbox",
+    "checkbox",
+    "radio",
+    "switch",
+    "menuitemcheckbox",
+    "menuitemradio"
+  ]);
   var SECTION = new Set([
     "banner",
     "navigation",
@@ -7683,8 +7708,8 @@ ${value.stack}`;
         this.section(child, level, text);
       else if (child.role === "heading")
         this.heading(child, level);
-      else if (actionable(child))
-        this.actionable(child, level, text);
+      else if (actionable(child) || fieldWithoutRef(child))
+        this.control(child, level, text);
       else {
         if (child.role === "img") {
           if (child.name && text)
@@ -7761,7 +7786,7 @@ ${value.stack}`;
       }), level);
       this.content(node, level, false);
     }
-    actionable(node, level, text) {
+    control(node, level, text) {
       let value;
       if (node.text !== undefined && node.text !== node.name)
         value = node.text;
@@ -7829,6 +7854,9 @@ ${value.stack}`;
   function actionable(node) {
     return node.ref !== undefined && (INTERACTIVE.has(node.role) || node.cursor === "pointer");
   }
+  function fieldWithoutRef(node) {
+    return node.ref === undefined && FIELD.has(node.role);
+  }
   function copy(node, keep) {
     const { children: _children, ref, cursor, url, text: _text, ...line } = node;
     const copied = { ...line };
@@ -7862,7 +7890,7 @@ ${value.stack}`;
     return line.textLine && SEPARATORS_ONLY.test(line.body);
   }
   function nameAsContent(node) {
-    if (!node.name || node.text !== undefined || node.role === "heading")
+    if (!node.name || node.text !== undefined || node.role === "heading" || fieldWithoutRef(node))
       return;
     return saysNothing(node.children) ? node.name : undefined;
   }
@@ -7900,7 +7928,7 @@ ${value.stack}`;
         const child = children[index];
         if (typeof child === "string" || child.role === "text")
           stack.push(child);
-        else if (!actionable(child))
+        else if (!actionable(child) && !fieldWithoutRef(child))
           stack.push(nameAsContent(child) ?? child);
       }
     }

@@ -1,5 +1,5 @@
 {
-  "protocol": 29,
+  "protocol": 30,
   "callFunction": "function (request, root, ...nodes) { const probe = globalThis.__neoProbe; return probe ? probe.call(request, root ?? this, nodes) : { kind: \"uninstalled\" }; }",
   "replyKinds": {
     "describe": [
@@ -499,6 +499,25 @@
       "frameVisible": true,
       "read": {
         "kind": "inputValue"
+      }
+    },
+    {
+      "op": "read",
+      "target": {
+        "chunk": {
+          "parts": [
+            {
+              "name": "internal:role",
+              "body": "button[name=\"Go\"i]",
+              "source": "button[name=\"Go\"i]"
+            }
+          ]
+        }
+      },
+      "strictness": "strict",
+      "frameVisible": true,
+      "read": {
+        "kind": "ref"
       }
     },
     {
@@ -1026,19 +1045,19 @@
   "replies": [
     {
       "kind": "described",
-      "protocol": 29,
+      "protocol": 30,
       "seq": 0,
       "url": "https://example.com/"
     },
     {
       "kind": "described",
-      "protocol": 29,
+      "protocol": 30,
       "seq": 347,
       "url": "https://pay.example/frame"
     },
     {
       "kind": "described",
-      "protocol": 29,
+      "protocol": 30,
       "seq": 512340,
       "url": "https://example.com/",
       "retired": 0

@@ -1,0 +1,40 @@
+<!doctype html>
+<style>
+  .nosize { position: absolute; width: 0; height: 0; padding: 0; border: 0; opacity: 0; }
+  .material input { position: absolute; opacity: 0; pointer-events: none; }
+  #draw { cursor: pointer; width: 200px; height: 32px; }
+</style>
+<p>Enter the code we sent you</p>
+<input class="nosize" id="one" aria-label="Verification code">
+<div id="draw" onclick="document.querySelector('#one').focus()">Drawn code entry</div>
+<button id="verify">Verify</button>
+<div id="digits"></div>
+<label>Code<input class="nosize" id="labelled"></label>
+<input class="nosize" type="number" aria-label="Number code">
+<input class="nosize" type="radio" name="plan" aria-label="Monthly">
+<input class="nosize" type="radio" name="plan" aria-label="Yearly" checked>
+<select aria-label="Quantity" style="pointer-events:none"><option selected>1</option><option>2</option></select>
+<input class="nosize" aria-label="Homepage">
+<input aria-label="Never shown" style="display:none">
+<input aria-label="Sized transparent trap" style="opacity:0">
+<div class="material" id="material"></div>
+<script>
+  for (let i = 1; i <= 6; i++) {
+    const input = document.createElement('input');
+    input.className = 'nosize';
+    input.setAttribute('aria-label', `Digit ${i}`);
+    document.querySelector('#digits').append(input);
+  }
+  for (let i = 1; i <= 7; i++) {
+    const label = document.createElement('label');
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.checked = i === 2;
+    input.indeterminate = i === 3;
+    input.disabled = i === 4;
+    const span = document.createElement('span');
+    span.textContent = `Material ${i}`;
+    label.append(input, span);
+    document.querySelector('#material').append(label);
+  }
+</script>

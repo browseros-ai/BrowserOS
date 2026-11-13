@@ -64,6 +64,7 @@ const FRAMES = {
 const ANSWERS = {
   'locator.selectOption': ['a'],
   'locator.count': 0,
+  'locator.ref': 'n1',
   'locator.normalize': { resolvedSelector: 'internal:role=button[name="Go"i]' },
   'locator.allTextContents': [],
   'locator.allInnerTexts': [],
@@ -182,7 +183,7 @@ const EVERY_OP = `
   // Rust stats paths before any page work, so the offline decode needs one that exists: '.'.
   await l.setInputFiles('.'); await l.setInputFiles({ name: 'a.txt', mimeType: 'text/plain', buffer: Buffer.from('a') })
   await l.dispatchEvent('click'); await l.scrollIntoViewIfNeeded()
-  await l.textContent(); await l.innerText(); await l.innerHTML(); await l.getAttribute('id'); await l.inputValue()
+  await l.textContent(); await l.innerText(); await l.innerHTML(); await l.getAttribute('id'); await l.inputValue(); await l.ref()
   await l.isEnabled(); await l.isDisabled(); await l.isEditable(); await l.isChecked(); await l.isVisible(); await l.isHidden()
   await l.count(); await l.normalize(); await l.allTextContents(); await l.allInnerTexts(); await l.boundingBox(); await l.waitFor(sample('locator.waitFor'))
   const handle = await l.elementHandle(); await handle.click(); await l.elementHandles()

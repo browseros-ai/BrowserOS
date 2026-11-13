@@ -33,6 +33,7 @@ listed_enum! {
         InnerHtml,
         GetAttribute,
         InputValue,
+        Ref,
         IsEnabled,
         IsDisabled,
         IsEditable,
@@ -84,6 +85,7 @@ impl ReadOp {
                 TARGET,
                 "a form control's value, as upstream's inputValue reads it",
             ),
+            Self::Ref => OpSpec::read("locator.ref", TARGET, "a stable ref for one attached node"),
             Self::IsEnabled => OpSpec::read(
                 "locator.isEnabled",
                 TARGET,
@@ -294,6 +296,10 @@ fn route<'a, R: Route<'a>>(op: ReadOp, r: R) -> R::Out {
         ReadOp::InnerHtml => r.op(wire::command("ElementHandle.innerHTML"), inner_html),
         ReadOp::GetAttribute => r.op(wire::command("ElementHandle.getAttribute"), get_attribute),
         ReadOp::InputValue => r.op(wire::command("ElementHandle.inputValue"), input_value),
+        ReadOp::Ref => r.op(
+            wire::neo_only("Neo's node-bound identity for a host's later run on the same tab"),
+            element_ref,
+        ),
         ReadOp::IsEnabled => r.op(wire::command("ElementHandle.isEnabled"), is_enabled),
         ReadOp::IsDisabled => r.op(wire::command("ElementHandle.isDisabled"), is_disabled),
         ReadOp::IsEditable => r.op(wire::command("ElementHandle.isEditable"), is_editable),
@@ -373,6 +379,29 @@ async fn input_value(
     input: ElementInput,
 ) -> Result<String, PlaywrightError> {
     element(pw, scope, input, Read::InputValue).await
+}
+
+/// Resolution and minting use one probe read, so a rerender cannot swap the checked node
+/// between a locator query and the identity that the host keeps for its later run.
+async fn element_ref(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: ElementInput,
+) -> Result<String, PlaywrightError> {
+    let reference = element(
+        pw,
+        scope,
+        ElementInput {
+            strict: Strictness::Strict,
+            ..input
+        },
+        Read::Ref,
+    )
+    .await?;
+    if let Some(tab) = scope.admitted_tab() {
+        scope.run_state().opened_tabs.refs_issued(tab);
+    }
+    Ok(reference)
 }
 
 async fn is_enabled(

@@ -250,6 +250,7 @@ type ElementReadOp =
   | 'locator.innerText'
   | 'locator.innerHTML'
   | 'locator.inputValue'
+  | 'locator.ref'
   | 'locator.isChecked'
   | 'locator.isDisabled'
   | 'locator.isEditable'

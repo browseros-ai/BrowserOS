@@ -1,0 +1,52 @@
+const assert = (ok, message) => { if (!ok) throw new Error(message); };
+const field = page.getByRole('textbox', { name: 'Verification code', exact: true });
+assert(await field.count() === 1, 'the line names exactly one no-size field');
+const before = await page.ariaSnapshot();
+const interactive = await page.ariaSnapshot({ text: false });
+for (const snapshot of [before, interactive]) {
+  assert(snapshot.includes('- textbox "Verification code"'), snapshot);
+  assert(!snapshot.includes('- textbox "Verification code" [ref='), snapshot);
+  assert(snapshot.includes('- spinbutton "Number code"'), snapshot);
+  assert(snapshot.includes('- textbox "Code"'), snapshot);
+  assert(snapshot.includes('- radio "Yearly" [checked]'), snapshot);
+  assert(snapshot.includes('- combobox "Quantity":\n  - option "1" [selected]\n  - option "2"'), snapshot);
+  assert((snapshot.match(/- checkbox "Material /g) || []).length === 7, snapshot);
+  assert(snapshot.includes('- checkbox "Material 3" [checked=mixed]'), snapshot);
+  assert(snapshot.includes('- checkbox "Material 4" [disabled]'), snapshot);
+  assert(!snapshot.includes('Never shown'), snapshot);
+  assert(snapshot.includes('- textbox "Homepage"'), snapshot);
+  assert(/textbox "Sized transparent trap" \[ref=/.test(snapshot), snapshot);
+  for (let i = 1; i <= 6; i++) assert(snapshot.includes(`- textbox "Digit ${i}"`), snapshot);
+}
+const ref = await field.ref();
+assert(/^(?:f[1-9]\d*)?n1$/.test(ref), `first minted ref ${ref}`);
+assert(await field.ref() === ref, 'same node must reuse its minted ref');
+assert(await page.ariaSnapshot() === before, 'minting changed the default snapshot');
+assert(await page.ariaSnapshot({ text: false }) === interactive, 'minting changed the interactive snapshot');
+const printed = /button "Verify" \[ref=([^\]]+)\]/.exec(before)?.[1];
+assert(await page.getByRole('button', { name: 'Verify', exact: true }).ref() === printed, 'engine ref must win');
+const number = page.getByRole('spinbutton', { name: 'Number code', exact: true });
+assert(await number.count() === 1, 'number input role is spinbutton');
+const numberRef = await number.ref();
+assert(numberRef !== ref, 'different nodes need different refs');
+const digits = [];
+for (let i = 1; i <= 6; i++) {
+  const digit = page.getByRole('textbox', { name: `Digit ${i}`, exact: true });
+  assert(await digit.count() === 1, 'digit role locator must match once');
+  digits.push(await digit.ref());
+}
+const frame = page.frameLocator('iframe');
+const framed = frame.getByRole('textbox', { name: 'Verification code', exact: true });
+assert(await framed.count() === 1, 'cross-origin role locator must match once');
+const frameRef = await framed.ref();
+assert(/^f[1-9]\d*n1$/.test(frameRef), `framed ref ${frameRef}`);
+const buttonRef = await frame.getByRole('button', { name: 'Frame action' }).ref();
+const strict = await field.or(number).ref().then(() => '', error => error.message);
+assert(strict.includes('strict mode violation'), strict);
+const missing = await page.locator('#absent').ref({ timeout: 100 }).then(() => '', error => error.message);
+assert(/Timeout|timeout|exceeded/.test(missing), missing);
+await page.locator('#draw').click();
+await page.keyboard.type('123');
+const active = await page.ariaSnapshot();
+assert(active.includes('- textbox "Verification code" [active]: "123"'), active);
+return { tab: page.toJSON().tab, ref, numberRef, digits, frameRef, buttonRef, baseline: active };

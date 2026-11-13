@@ -149,34 +149,49 @@ pub(crate) struct Chunk {
 }
 
 /// A ref that leads a frame's selector. The resolver goes straight to the document that
-/// printed it, so a ref names the element it was printed for or fails at once.
+/// issued it, so a snapshot or minted ref names that one element or fails at once.
 ///
 /// Neo also jumps for a bare `e<n>`, which upstream resolves in the current frame: in Neo a
 /// bare ref is seq 0, the main frame's first document, and once that document is gone the ref
 /// must fail (`element_detached`) instead of being looked up in whatever the frame shows now.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct AriaRefJump {
-    /// The document that printed the ref.
+    /// The document that issued the ref.
     pub(crate) seq: FrameSeq,
     /// The element's number in that document.
     pub(crate) element: u32,
+    /// Engine snapshots and explicitly minted refs have independent counters.
+    pub(crate) kind: AriaRefKind,
+}
+
+/// The disjoint namespaces sharing one document's ref map.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AriaRefKind {
+    Snapshot,
+    Minted,
 }
 
 impl AriaRefJump {
-    /// Reads a ref exactly as Neo prints one: `e<n>` or `f<seq>e<n>`, decimal, with no sign,
+    /// Reads a snapshot or minted ref: `[f<seq>]e<n>` or `[f<seq>]n<n>`, with no sign,
     /// space or leading zero. Seq 0 prints bare, so `f0e5` is not a ref, and refs count from
-    /// `e1`. Anything else names no element any snapshot printed.
+    /// `e1` or `n1`. Anything else is not a canonical ref.
     pub(crate) fn parse(body: &str) -> Option<Self> {
-        let (seq, element) = match body.strip_prefix('f') {
+        let (seq, local) = match body.strip_prefix('f') {
             Some(rest) => {
-                let (seq, element) = rest.split_once('e')?;
-                (positive(seq)?, element)
+                let at = rest.find(['e', 'n'])?;
+                let (seq, local) = rest.split_at(at);
+                (positive(seq)?, local)
             }
-            None => (0, body.strip_prefix('e')?),
+            None => (0, body),
+        };
+        let (kind, element) = match local.strip_prefix('e') {
+            Some(element) => (AriaRefKind::Snapshot, element),
+            None => (AriaRefKind::Minted, local.strip_prefix('n')?),
         };
         Some(Self {
             seq: FrameSeq(seq),
             element: positive(element)?,
+            kind,
         })
     }
 }
@@ -193,9 +208,13 @@ fn positive(digits: &str) -> Option<u32> {
 
 impl fmt::Display for AriaRefJump {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let prefix = match self.kind {
+            AriaRefKind::Snapshot => 'e',
+            AriaRefKind::Minted => 'n',
+        };
         match self.seq {
-            FrameSeq(0) => write!(f, "e{}", self.element),
-            FrameSeq(seq) => write!(f, "f{seq}e{}", self.element),
+            FrameSeq(0) => write!(f, "{prefix}{}", self.element),
+            FrameSeq(seq) => write!(f, "f{seq}{prefix}{}", self.element),
         }
     }
 }
@@ -233,8 +252,8 @@ impl ParsedSelectorShape {
         };
         AriaRefJump::parse(body).map(Some).ok_or_else(|| {
             format!(
-                "aria-ref={body:?} is not a ref; refs look like e5 or f2e5, as \
-                 page.ariaSnapshot({{ mode: 'ai' }}) prints them"
+                "aria-ref={body:?} is not a ref; use an e5 or f2e5 from a snapshot, \
+                 or an n1 or f2n1 from locator.ref()"
             )
         })
     }
@@ -332,7 +351,9 @@ mod tests {
     use browseros_core::{FrameId, TabId};
     use serde_json::{Value, json};
 
-    use super::{AriaRefJump, CallHeader, Chunk, PageRef, RootHandle, Strictness, Target};
+    use super::{
+        AriaRefJump, AriaRefKind, CallHeader, Chunk, PageRef, RootHandle, Strictness, Target,
+    };
     use crate::Op;
     use crate::op_output::to_output;
     use crate::op_scope::OpScope;
@@ -367,7 +388,8 @@ mod tests {
             jumped,
             Some(AriaRefJump {
                 seq: FrameSeq(7),
-                element: 3
+                element: 3,
+                kind: AriaRefKind::Snapshot,
             })
         );
         assert_eq!(jumped.map(|jump| jump.to_string()).as_deref(), Some("f7e3"));
@@ -381,12 +403,33 @@ mod tests {
             jumped,
             Some(AriaRefJump {
                 seq: FrameSeq(0),
-                element: 5
+                element: 5,
+                kind: AriaRefKind::Snapshot,
             }),
             "e5 was printed by seq 0, and must fail once that document is gone"
         );
         assert_eq!(jumped.map(|jump| jump.to_string()).as_deref(), Some("e5"));
         Ok(())
+    }
+
+    #[test]
+    fn tests_that_minted_refs_preserve_their_namespace_and_decimal_form() {
+        for body in ["n1", "f2n3", "e1", "f2e3"] {
+            let parsed = AriaRefJump::parse(body);
+            assert_eq!(parsed.map(|jump| jump.to_string()).as_deref(), Some(body));
+        }
+        for body in [
+            "n0",
+            "n01",
+            "f0n1",
+            "fn1",
+            "x1",
+            "n+1",
+            "f01n1",
+            "n4294967296",
+        ] {
+            assert_eq!(AriaRefJump::parse(body), None, "invalid ref {body}");
+        }
     }
 
     /// The vendored parser keeps what follows `=` as the body, spaces included, so
@@ -465,7 +508,8 @@ mod tests {
             hop.jump,
             Some(AriaRefJump {
                 seq: FrameSeq(7),
-                element: 3
+                element: 3,
+                kind: AriaRefKind::Snapshot,
             })
         );
         assert!(

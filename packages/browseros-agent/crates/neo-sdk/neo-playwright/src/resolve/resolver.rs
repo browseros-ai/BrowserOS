@@ -674,7 +674,7 @@ fn detached(scope: &OpScope<'_>, stale: &str) -> PlaywrightError {
     )
 }
 
-/// What a ref that cannot match says. On a tab this run opened and has not snapshotted, no ref
+/// What a ref that cannot match says. On a tab this run opened that has issued no refs, no ref
 /// can be the tab's own, and a new snapshot of it brings nothing back: most often the ref is
 /// from the last run, which ran in another tab, so the message names the way to keep a tab.
 /// Every other tab gets `<ref> <ordinary>; take a new snapshot`. Both ref failures (an element
@@ -682,7 +682,7 @@ fn detached(scope: &OpScope<'_>, stale: &str) -> PlaywrightError {
 fn ref_message(scope: &OpScope<'_>, r#ref: &str, ordinary: &str) -> String {
     let opened_here = scope
         .admitted_tab()
-        .is_some_and(|tab| scope.run_state().opened_tabs.opened_unsnapshotted(tab));
+        .is_some_and(|tab| scope.run_state().opened_tabs.opened_without_refs(tab));
     if opened_here {
         format!(
             "{ref} is not from this tab, which this run opened: a ref works only in the tab \

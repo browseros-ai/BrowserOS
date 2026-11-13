@@ -679,6 +679,66 @@ async fn a_picked_tasks_page_has_its_tabs_url_before_any_action() -> TestResult 
     on_browseros(|rig| Box::pin(task_page_at_once(rig))).await
 }
 
+/// The actual MCP boundary creates a fresh realm on each call. A task preserves its tab,
+/// whose isolated document map owns the ref between the host's check and its later typing.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_locator_ref_is_node_bound_in_a_later_run_of_the_same_task() -> TestResult {
+    on_browseros(|rig| Box::pin(locator_ref_across_runs(rig))).await
+}
+
+async fn locator_ref_across_runs(rig: &Rig) -> TestResult {
+    let client = rig.client().await?;
+    let first = value_of(&client, r#"
+        const task = await neo.createTask('node-bound ref');
+        await page.setContent('<input aria-label="Code" style="width:0;height:0;padding:0;border:0">');
+        const snapshot = await page.ariaSnapshot();
+        const ref = await page.getByRole('textbox', { name: 'Code', exact: true }).ref();
+        return { task: task.id, ref, unchanged: snapshot === await page.ariaSnapshot() };
+    "#, &json!({})).await?;
+    let task = first.get("task").ok_or("the first run returns its task")?;
+    let reference = first.get("ref").ok_or("the first run returns its ref")?;
+    assert_eq!(reference, &json!("n1"));
+    assert_eq!(first.get("unchanged"), Some(&json!(true)));
+    let second = value_of(
+        &client,
+        &format!(
+            r"
+        await neo.task({task});
+        const ref = {reference};
+        const field = page.getByRef(ref);
+        const name = await field.evaluate(element => element.getAttribute('aria-label'));
+        await field.focus();
+        await page.keyboard.type('604918');
+        const value = await field.inputValue();
+        await field.evaluate(element => element.replaceWith(element.cloneNode()));
+        const stale = await field.focus().then(() => '', error => error.message);
+        const fresh = await page.getByRole('textbox', {{ name: 'Code', exact: true }}).ref();
+        return {{ name, value, stale, fresh }};
+    ",
+        ),
+        &json!({}),
+    )
+    .await?;
+    assert_eq!(second.get("name"), Some(&json!("Code")));
+    assert_eq!(second.get("value"), Some(&json!("604918")));
+    assert!(
+        second
+            .get("stale")
+            .and_then(Value::as_str)
+            .is_some_and(|s| s.contains("not on the page any more")),
+        "{second}"
+    );
+    assert_ne!(second.get("fresh"), Some(reference));
+    value_of(
+        &client,
+        &format!("const task = await neo.task({task}); await task.close();"),
+        &json!({}),
+    )
+    .await?;
+    client.cancel().await?;
+    Ok(())
+}
+
 /// The value of a run that must have succeeded.
 async fn value_of(client: &Client, code: &str, meta: &Value) -> Result<Value, Box<dyn Error>> {
     let result = run(client, code, meta).await?;

@@ -48,6 +48,54 @@ const SELECTOR_GOLDENS: &str =
 /// every tab of the browser, so another test's new page would answer `context.once('page')`.
 static ALONE: Semaphore = Semaphore::const_new(1);
 
+/// A ref's caller crosses a run boundary, while its node stays in the document's isolated
+/// world. The child is on another site so the saved parent path must survive an OOPIF jump.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_locator_refs_keep_node_identity_across_runs_and_cross_site_frames() -> TestResult
+{
+    let _alone = ALONE.acquire().await?;
+    let child = r#"<input aria-label="Verification code" style="width:0;height:0;padding:0;border:0;position:absolute">
+        <button style="pointer-events:none" onclick="this.dataset.clicked='yes'">Frame action</button>"#;
+    let server = FixtureServer::start(HashMap::from([
+        (
+            "/nosize".to_owned(),
+            Page::html(include_str!("data/prelude/nosize.html")),
+        ),
+        ("/child".to_owned(), Page::html(child)),
+    ]))
+    .await?;
+    let run = Arc::new(LiveRun::connect().await?);
+    let host: Arc<dyn OpHost> = Arc::clone(&run) as Arc<dyn OpHost>;
+    let first = js_runner::run_script(
+        &host,
+        &json!({ "page": null }),
+        &format!(
+            "await page.goto({url});\n\
+             await page.evaluate(src => {{ const iframe = document.createElement('iframe'); \
+                 iframe.src = src; document.body.append(iframe); }}, {child});\n\
+             await page.frameLocator('iframe').getByRole('textbox').waitFor({{ state: 'attached' }});\n\
+             {checks}",
+            url = json!(server.url("127.0.0.1", "/nosize")),
+            child = json!(server.url("localhost", "/child")),
+            checks = include_str!("data/prelude/locator-refs-first.js"),
+        ),
+    ).await?;
+    run.end_run(Some(&first));
+    let tab = first["tab"].as_i64().ok_or("the first run keeps its tab")?;
+    let second = js_runner::run_script(
+        &host,
+        &json!({ "page": { "$neo": "page", "tab": tab } }),
+        &format!(
+            "const saved = {first};\ntry {{ {checks} }} finally {{ await page.close(); }}",
+            checks = include_str!("data/prelude/locator-refs-second.js"),
+        ),
+    )
+    .await?;
+    assert_eq!(second["checked"], true, "{second}");
+    Ok(())
+}
+
 /// A host for scripts that must not reach Rust: builders are values and send nothing.
 struct NoOps;
 

@@ -48,8 +48,8 @@ pub struct RunState {
     /// The run's whole-page snapshot calls and when each one's timeout passes: the baseline ops
     /// after a tree are held to their own call's, by Rust's clock alone.
     pub(crate) snapshot_calls: SnapshotCalls,
-    /// The tabs the run opened and snapshotted: on a tab it opened and never snapshotted, a
-    /// failed ref came from another tab, and its message says so.
+    /// The tabs the run opened and the tabs that issued refs through a snapshot or `ref()`.
+    /// A failed ref on a new tab that has issued none gets the other-tab diagnostic.
     pub(crate) opened_tabs: OpenedTabs,
 }
 

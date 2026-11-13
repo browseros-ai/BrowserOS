@@ -462,6 +462,8 @@ pub(crate) enum Read {
     InnerText,
     InnerHtml,
     InputValue,
+    /// A stable node identity in Neo's document ref map, without changing snapshot refs.
+    Ref,
     /// The border box in the element's own frame's viewport, or null with no layout box.
     BoundingBox,
     Attribute {

@@ -459,6 +459,14 @@ export class Locator {
     )
   }
 
+  /** Neo-only. Keeps this node's identity across runs on its task's page, even without size. */
+  ref(options: TimeoutOption = {}): Promise<string> {
+    return this._frame._read('locator.ref', 'locator.ref', this._selector, {
+      ...options,
+      strict: true,
+    })
+  }
+
   getAttribute(
     name: string,
     options: TimeoutOption = {},

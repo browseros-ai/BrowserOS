@@ -32,6 +32,13 @@ import type { Expect } from '@playwright/test'
 import type * as pw from 'playwright-core'
 
 declare module 'playwright-core' {
+  interface Locator {
+    /** Neo-only. Strictly resolves one attached element and returns its node-bound ref.
+     * Reuses an engine ref or mints n<k>, prefixed f<seq> in other documents. Keep the ref
+     * with its task's page for later runs. Removal or navigation makes it stale; minting
+     * changes neither snapshots nor actionability checks. */
+    ref(options?: { timeout?: number }): Promise<string>
+  }
   /** Playwright's Page, plus: */
   interface Page {
     /** The tab's id. It stays the same across runs. `null` only for the built-in `page`

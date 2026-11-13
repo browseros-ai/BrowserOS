@@ -8330,6 +8330,9 @@ ${value.stack}`;
   // crates/neo-sdk/neo-playwright-js/src/probe/aria-ref.ts
   class RefMap {
     byRef = new Map;
+    printedByElement = new WeakMap;
+    mintedByElement = new WeakMap;
+    nextMinted = 1;
     frameKeys = new WeakMap;
     nextFrameKey = 1;
     unresolved = [];
@@ -8354,11 +8357,25 @@ ${value.stack}`;
       return { elements, staleRef };
     }
     remember(refs) {
-      for (const [ref, { element }] of refs)
+      for (const [ref, { element }] of refs) {
         this.byRef.set(ref, new WeakRef(element));
+        this.printedByElement.set(element, ref);
+      }
       for (const [ref, weak] of this.byRef)
         if (!weak.deref())
           this.byRef.delete(ref);
+    }
+    forElement(element, seq) {
+      const printed = this.printedByElement.get(element);
+      if (printed !== undefined && this.byRef.get(printed)?.deref() === element)
+        return printed;
+      const known = this.mintedByElement.get(element);
+      if (known !== undefined)
+        return known;
+      const ref = `${seq === 0 ? "" : `f${seq}`}n${this.nextMinted++}`;
+      this.mintedByElement.set(element, ref);
+      this.byRef.set(ref, new WeakRef(element));
+      return ref;
     }
     frameKey(iframe) {
       const known = this.frameKeys.get(iframe);
@@ -8376,6 +8393,8 @@ ${value.stack}`;
           Reflect.deleteProperty(element, "_ariaRef");
       }
       this.byRef.clear();
+      this.printedByElement = new WeakMap;
+      this.mintedByElement = new WeakMap;
       this.frameKeys = new WeakMap;
     }
   }
@@ -8649,7 +8668,7 @@ ${value.stack}`;
   }
 
   // crates/neo-sdk/neo-playwright-js/src/probe/protocol.ts
-  var PROTOCOL = 29;
+  var PROTOCOL = 30;
 
   // crates/neo-sdk/neo-playwright-js/src/probe/read.ts
   var XHTML = "http://www.w3.org/1999/xhtml";
@@ -8670,6 +8689,8 @@ ${value.stack}`;
         return (_world, element) => element.getAttribute(read.name);
       case "inputValue":
         return inputValue;
+      case "ref":
+        return (world, element) => world.refs.forElement(element, world.seq);
       case "state":
         return (world, element) => world.injected.elementState(element, read.state, frameVisible).matches;
       case "boundingBox":

@@ -3,9 +3,9 @@
  * match. Both run in the engine's isolated world, which reads the page's DOM as the page has
  * it. Neither waits; Rust's retry loop does.
  *
- * Each read is upstream's callback from server/frames.ts at v1.64.1 (`textContent`,
- * `innerText`, `inputValue` and the rest), with the same checks and the same thrown
- * messages, run here instead of through `injected.eval`.
+ * Playwright reads use upstream's callbacks from server/frames.ts at v1.64.1 (`textContent`,
+ * `innerText`, `inputValue` and the rest), with the same checks and thrown messages. Neo's
+ * `ref` read records node identity in the document-owned map after that same strict resolution.
  */
 import { parentElementOrShadowHost } from '../../../neo-playwright/third_party/playwright/packages/injected/src/domUtils'
 import type {
@@ -46,6 +46,8 @@ function readerFor(request: ReadRequest, root: Node | undefined): Reader {
       return (_world, element) => element.getAttribute(read.name)
     case 'inputValue':
       return inputValue
+    case 'ref':
+      return (world, element) => world.refs.forElement(element, world.seq)
     case 'state':
       // Upstream's `elementState`: `visible` and `hidden` read the element itself and its
       // frames' visibility, the others follow a label to its control and throw on an element
