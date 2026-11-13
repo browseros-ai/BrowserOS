@@ -1,5 +1,4 @@
-//! A returned value too large for the run's reply, made to fit by keeping its bytes with the run
-//! (zuzu gap G3).
+//! A returned value too large for the run's reply, made to fit by keeping its bytes with the run.
 //!
 //! ```text
 //!  settled JSON over MAX_RESULT_BYTES ─ parse ─ every {"$neo":"bytes","base64"} in the value

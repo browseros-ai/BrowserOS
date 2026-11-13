@@ -141,7 +141,7 @@ test('a run that named its own task is followed by that task', async () => {
   const neo = await neoWithAgent(trace)
   const viewer = await viewerWith(neo.host)
   trace.current = {
-    runs: [...UNTASKED.runs, { id: 'r2', taskId: 'zuzu-7', startedAt: 2 }],
+    runs: [...UNTASKED.runs, { id: 'r2', taskId: 'host-7', startedAt: 2 }],
     operations: [
       ...UNTASKED.operations,
       { id: 'r2.1', runId: 'r2', name: 'page.goto', tabId: 11 },
@@ -149,7 +149,7 @@ test('a run that named its own task is followed by that task', async () => {
   }
   expect((await status(viewer)).agent).toEqual({
     tab: TAB_ONE,
-    taskId: 'zuzu-7',
+    taskId: 'host-7',
   })
   // Before the agent acts on a tab, and once its tab has closed, there is nothing to follow.
   trace.current = { runs: [], operations: [] }

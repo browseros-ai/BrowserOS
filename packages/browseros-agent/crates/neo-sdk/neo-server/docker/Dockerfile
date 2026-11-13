@@ -1,8 +1,8 @@
 # syntax=docker/dockerfile:1
 #
 # The BrowserOS Neo SDK image: the released neo browser plus this commit's SDK server
-# (browseros-claw-sdk, one MCP tool: `run`), for hosts that build on it (zuzu's cell image) or
-# run it alone. README.md beside this file is the host contract. Build it with build.sh, from one
+# (browseros-claw-sdk, one MCP tool: `run`), for hosts that build on it or run it alone.
+# README.md beside this file is the host contract. Build it with build.sh, from one
 # context, packages/browseros-agent, filtered by Dockerfile.dockerignore. The image owns its
 # browser supervisor (supervisor/ beside this file); the default Neo image, packages/browseros/
 # docker/neo with claw-server, is production's and shares nothing with it.

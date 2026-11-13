@@ -1,6 +1,5 @@
 //! The private entry (protected-fill design sections 5.4 to 5.6) through
-//! `Playwright::enter_privately`, against a real browser, on zuzu's acceptance fixtures
-//! (`claw-sdk/zuzu/night/sdk-acceptance.md`, S1): a sign-in, a covered box, values a box cuts,
+//! `Playwright::enter_privately`, against a real browser: a sign-in, a covered box, values a box cuts,
 //! boxes that submit, a box replaced mid-entry, one character per box, boxes in cross-site
 //! frames, focus thieves, a lock, a deadline, and a page that mirrors the value into an
 //! attribute. Each case where the tab's place matters runs on a tab in front and a tab behind.
@@ -265,7 +264,7 @@ const EMAIL: &str = "ada@fixture.example";
 const PASSWORD: &str = "CANARY-covered-pw-1";
 const CARD: &str = "4000056655665556";
 
-/// B11, B05y: a sign-in's two boxes, typed in one insertion each and read back, on a tab in
+/// A sign-in's two boxes, typed in one insertion each and read back, on a tab in
 /// front and a tab behind. The tab is marked for the camera; the door was asked and told.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
@@ -304,7 +303,7 @@ async fn tests_that_a_sign_in_is_entered_and_read_back() -> TestResult {
     Ok(())
 }
 
-/// B11c: a password box under a cookie banner refuses the whole sign-in before the username is
+/// A password box under a cookie banner refuses the whole sign-in before the username is
 /// typed; nothing was sent, so the refusal is retryable and the tab is not marked.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
@@ -337,9 +336,9 @@ async fn tests_that_a_covered_box_refuses_the_form_before_any_key() -> TestResul
     bench.close(opened).await
 }
 
-/// B11k: a password the box's maxlength cuts is entered when the host allows the cut, and
-/// refused before any key when it does not. B05x, B05z, B05zx: a code that cannot fit is
-/// refused before any key, never `entered_page_moved`.
+/// A password the box's maxlength cuts is entered when the host allows the cut, and
+/// refused before any key when it does not. A code that cannot fit is refused before any key,
+/// never `entered_page_moved`.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_a_value_the_box_cuts_needs_the_hosts_leave() -> TestResult {
@@ -367,7 +366,11 @@ async fn tests_that_a_value_the_box_cuts_needs_the_hosts_leave() -> TestResult {
             vec![Field::new(&password, origin).cut().with(long)?],
         )
         .await;
-    assert_eq!(entry.outcome, EntryOutcome::Entered, "B11k: {entry:?}");
+    assert_eq!(
+        entry.outcome,
+        EntryOutcome::Entered,
+        "truncated password: {entry:?}"
+    );
     assert_eq!(entry.typed, vec![8]);
     assert_eq!(bench.value(&opened, &password).await?, "CANARY-c");
     bench.close(opened).await?;
@@ -437,11 +440,10 @@ async fn tests_that_a_value_the_box_cuts_needs_the_hosts_leave() -> TestResult {
     Ok(())
 }
 
-/// B05v, B05w, B11v: a box whose form submits on its last character, or on its first input
-/// event, is `entered_page_moved` (B05v also `entered`, as zuzu allows; B11v exactly
-/// `entered_page_moved`). B05y: a box that stays is `entered`. B05h, B05j, B05g: the address
-/// changing alone moves nothing. B05zf: a form that submits as the box takes the focus types
-/// nothing and is never `entered_page_moved`.
+/// A box whose form submits on its last character or first input event is
+/// `entered_page_moved`. A final-character submission may also be `entered`.
+/// A box that stays is `entered`; an address change alone moves nothing. A form that submits
+/// as the box takes focus types nothing and is never `entered_page_moved`.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_a_box_that_submits_is_entered_page_moved() -> TestResult {
@@ -493,9 +495,13 @@ async fn tests_that_a_box_that_submits_is_entered_page_moved() -> TestResult {
         assert_eq!(
             entry.outcome,
             EntryOutcome::EnteredPageMoved,
-            "{place:?} B11v: {entry:?}"
+            "{place:?} first-event submit: {entry:?}"
         );
-        assert_eq!(entry.delivery, Delivery::Done, "{place:?} B11v");
+        assert_eq!(
+            entry.delivery,
+            Delivery::Done,
+            "{place:?} first-event submit"
+        );
         bench.close(opened).await?;
 
         let opened = bench.open("/private/moved.html?mode=focus", place).await?;
@@ -506,23 +512,27 @@ async fn tests_that_a_box_that_submits_is_entered_page_moved() -> TestResult {
         assert_ne!(
             entry.outcome,
             EntryOutcome::EnteredPageMoved,
-            "{place:?} B05zf"
+            "{place:?} submit on focus"
         );
         assert_ne!(
             entry.outcome,
             EntryOutcome::Entered,
-            "{place:?} B05zf: {entry:?}"
+            "{place:?} submit on focus: {entry:?}"
         );
-        assert_eq!(entry.typed, vec![0], "{place:?} B05zf: nothing typed");
+        assert_eq!(
+            entry.typed,
+            vec![0],
+            "{place:?} submit on focus: nothing typed"
+        );
         bench.close(opened).await?;
     }
     Ok(())
 }
 
-/// B06x (finding I1): the site replaces the box after the third of six keys; the focus check
+/// The site replaces the box after the third of six keys; the focus check
 /// before the fourth stops the entry: `uncertain`, delivery unknown, three characters typed.
-/// B05t: six one-digit boxes the form removes after the third digit: `uncertain` at the third.
-/// B05t1: six one-digit boxes that stay: each holds its digit.
+/// Six one-digit boxes the form removes after the third digit: `uncertain` at the third.
+/// Six one-digit boxes that stay: each holds its digit.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_a_box_that_goes_mid_entry_is_uncertain() -> TestResult {
@@ -537,11 +547,11 @@ async fn tests_that_a_box_that_goes_mid_entry_is_uncertain() -> TestResult {
         assert_eq!(
             entry.outcome,
             EntryOutcome::Uncertain,
-            "{place:?} B06x: {entry:?}"
+            "{place:?} replaced box: {entry:?}"
         );
-        assert_eq!(code(&entry), Some("focus_lost"), "{place:?} B06x");
-        assert_eq!(entry.delivery, Delivery::Unknown, "{place:?} B06x");
-        assert_eq!(entry.typed, vec![3], "{place:?} B06x");
+        assert_eq!(code(&entry), Some("focus_lost"), "{place:?} replaced box");
+        assert_eq!(entry.delivery, Delivery::Unknown, "{place:?} replaced box");
+        assert_eq!(entry.typed, vec![3], "{place:?} replaced box");
         bench.close(opened).await?;
 
         for (mode, wanted) in [
@@ -578,7 +588,7 @@ async fn tests_that_a_box_that_goes_mid_entry_is_uncertain() -> TestResult {
     Ok(())
 }
 
-/// B05fx, B05fc, B11fx, B06fx: boxes in cross-site frames, each looked at in its own frame and
+/// Boxes in cross-site frames, each looked at in its own frame and
 /// typed on that frame's own session, on a tab in front and a tab behind.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
@@ -599,12 +609,12 @@ async fn tests_that_boxes_in_cross_site_frames_are_entered() -> TestResult {
         assert_eq!(
             entry.outcome,
             EntryOutcome::Entered,
-            "{place:?} B05fx: {entry:?}"
+            "{place:?} cross-site card: {entry:?}"
         );
         assert_eq!(
             bench.value(&opened, &number).await?,
             CARD,
-            "{place:?} B05fx"
+            "{place:?} cross-site card"
         );
         bench.close(opened).await?;
 
@@ -625,14 +635,14 @@ async fn tests_that_boxes_in_cross_site_frames_are_entered() -> TestResult {
         assert_eq!(
             entry.outcome,
             EntryOutcome::Entered,
-            "{place:?} B05fc: {entry:?}"
+            "{place:?} cross-site code: {entry:?}"
         );
         assert_eq!(entry.typed, vec![16, 5, 3]);
         for (r#ref, value) in &refs {
             assert_eq!(
                 bench.value(&opened, r#ref).await?,
                 *value,
-                "{place:?} B05fc"
+                "{place:?} cross-site code"
             );
         }
         bench.close(opened).await?;
@@ -649,7 +659,7 @@ async fn tests_that_boxes_in_cross_site_frames_are_entered() -> TestResult {
         assert_eq!(
             entry.outcome,
             EntryOutcome::Entered,
-            "{place:?} B11fx: {entry:?}"
+            "{place:?} cross-site sign-in: {entry:?}"
         );
         assert_eq!(bench.value(&opened, &password).await?, "CANARY-xframe-pw");
         bench.close(opened).await?;
@@ -664,7 +674,7 @@ async fn tests_that_boxes_in_cross_site_frames_are_entered() -> TestResult {
         assert_eq!(
             entry.outcome,
             EntryOutcome::Entered,
-            "{place:?} B06fx: {entry:?}"
+            "{place:?} cross-site password: {entry:?}"
         );
         assert_eq!(bench.value(&opened, &code_box).await?, "246813");
         bench.close(opened).await?;
@@ -672,7 +682,7 @@ async fn tests_that_boxes_in_cross_site_frames_are_entered() -> TestResult {
     Ok(())
 }
 
-/// B05fs: the card box hands the focus to another box as it takes it; B05ft: the page takes
+/// The card box hands focus to another box as it takes it, or the page takes
 /// the focus back into its own box when the frame takes it: `not_focused`, nothing in either
 /// box.
 #[tokio::test]
@@ -681,7 +691,7 @@ async fn tests_that_a_focus_thief_gets_nothing() -> TestResult {
     let bench = Bench::start().await?;
     let other = &bench.other_origin;
     for place in PLACES {
-        // zuzu runs these five times each: a thief that wins one race in five still fails.
+        // Repeat the focus races: a thief that wins one race in five still fails.
         for round in 1..=5 {
             let opened = bench
                 .open("/private/card-frames.html?swap=number", place)
@@ -695,12 +705,12 @@ async fn tests_that_a_focus_thief_gets_nothing() -> TestResult {
             assert_eq!(
                 entry.outcome,
                 EntryOutcome::Refused,
-                "{place:?} B05fs #{round}: {entry:?}"
+                "{place:?} focus transfer #{round}: {entry:?}"
             );
             assert_eq!(
                 code(&entry),
                 Some("not_focused"),
-                "{place:?} B05fs #{round}"
+                "{place:?} focus transfer #{round}"
             );
             assert_eq!(
                 entry.delivery,
@@ -714,12 +724,12 @@ async fn tests_that_a_focus_thief_gets_nothing() -> TestResult {
             assert_eq!(
                 bench.value(&opened, &number).await?,
                 "",
-                "{place:?} B05fs #{round}"
+                "{place:?} focus transfer #{round}"
             );
             assert_eq!(
                 bench.value(&opened, &thief).await?,
                 "",
-                "{place:?} B05fs #{round}"
+                "{place:?} focus transfer #{round}"
             );
             bench.close(opened).await?;
 
@@ -738,22 +748,22 @@ async fn tests_that_a_focus_thief_gets_nothing() -> TestResult {
             assert_eq!(
                 entry.outcome,
                 EntryOutcome::Refused,
-                "{place:?} B05ft #{round}: {entry:?}"
+                "{place:?} focus thief #{round}: {entry:?}"
             );
             assert_eq!(
                 code(&entry),
                 Some("not_focused"),
-                "{place:?} B05ft #{round}"
+                "{place:?} focus thief #{round}"
             );
             assert_eq!(
                 bench.value(&opened, &number).await?,
                 "",
-                "{place:?} B05ft #{round}"
+                "{place:?} focus thief #{round}"
             );
             assert_eq!(
                 bench.value(&opened, &thief).await?,
                 "",
-                "{place:?} B05ft #{round}"
+                "{place:?} focus thief #{round}"
             );
             bench.close(opened).await?;
         }
@@ -801,9 +811,9 @@ async fn tests_that_a_focus_stolen_mid_entry_stops_it() -> TestResult {
     Ok(())
 }
 
-/// Finding I2's own case: a box that keeps less than what is typed, with no maxlength, holds
+/// The page rewrite case: a box that keeps less than what is typed, with no maxlength, holds
 /// something else at the read-back: `uncertain`, `value_not_taken`, the whole value counted.
-/// B05g's code that cannot fit its maxlength is refused before any key.
+/// A code that cannot fit its maxlength is refused before any key.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_a_box_that_keeps_less_is_not_taken() -> TestResult {
@@ -839,15 +849,15 @@ async fn tests_that_a_box_that_keeps_less_is_not_taken() -> TestResult {
         assert_eq!(
             code(&entry),
             Some("value_too_long"),
-            "{place:?} B05g: {entry:?}"
+            "{place:?} oversized code: {entry:?}"
         );
-        assert_eq!(entry.typed, vec![0], "{place:?} B05g");
+        assert_eq!(entry.typed, vec![0], "{place:?} oversized code");
         bench.close(opened).await?;
     }
     Ok(())
 }
 
-/// Case 5a, B11f: the password box is swapped out as it takes the focus: the username is typed,
+/// The password box is swapped out as it takes the focus: the username is typed,
 /// the entry stops at the password box with nothing typed into it or its copy: `partial`. The
 /// six one-digit boxes whose fourth hands the focus back to the first once (sixonce): `entered`,
 /// each box its digit. The focus step's `select()` already gives the fourth box the focus, which
@@ -870,12 +880,24 @@ async fn tests_that_a_box_lost_at_its_focus_step_leaves_the_rest_partial() -> Te
         assert_eq!(
             entry.outcome,
             EntryOutcome::Partial,
-            "{place:?} B11f: {entry:?}"
+            "{place:?} replaced password: {entry:?}"
         );
         assert_eq!((entry.at, code(&entry)), (Some(1), Some("not_focused")));
-        assert_eq!(entry.typed, vec![EMAIL.len(), 0], "{place:?} B11f");
-        assert_eq!(entry.delivery, Delivery::Done, "{place:?} B11f");
-        assert_eq!(bench.value(&opened, &email).await?, EMAIL, "{place:?} B11f");
+        assert_eq!(
+            entry.typed,
+            vec![EMAIL.len(), 0],
+            "{place:?} replaced password"
+        );
+        assert_eq!(
+            entry.delivery,
+            Delivery::Done,
+            "{place:?} replaced password"
+        );
+        assert_eq!(
+            bench.value(&opened, &email).await?,
+            EMAIL,
+            "{place:?} replaced password"
+        );
         let copy = bench.r#ref(&opened, "textbox", "Password").await?;
         assert_eq!(
             bench.value(&opened, &copy).await?,
@@ -986,7 +1008,7 @@ async fn tests_that_a_full_box_with_no_size_takes_the_whole_new_code() -> TestRe
 
 /// The same full box with a size needs no key first: the selection is replaced by the first
 /// character, by keys and by one insertion, and the page never sees it empty in between (a page
-/// that submits on its first input event, B11v). One insertion is exactly one input event.
+/// that submits on its first input event). One insertion is exactly one input event.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_a_full_box_with_a_size_is_replaced_without_emptying() -> TestResult {

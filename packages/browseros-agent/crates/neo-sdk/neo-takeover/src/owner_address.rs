@@ -1,5 +1,4 @@
-//! What the owner typed into their browser bar, as the address to open: zuzu's
-//! `ownerAddress`. Pure.
+//! Resolves the owner's browser-bar text into a web address or a search, without browser I/O.
 //!
 //! Text that names a scheme or carries credentials is never searched, so a password typed as
 //! `alice:secret@bank.example` cannot reach a search engine's logs: it opens only as an http or
@@ -78,7 +77,7 @@ fn signed_in(typed: &str) -> bool {
         .is_some_and(|at| at > 0 && typed[at..].starts_with('@'))
 }
 
-/// zuzu's `webURL`: `about:blank`, or an http(s) URL with a host and no credentials, at most
+/// Accepts `about:blank`, or an http(s) URL with a host and no credentials, at most
 /// 2000 bytes. A `%` that does not start an escape is refused as Go's parser refuses it; the
 /// WHATWG parser would keep it.
 fn is_web_address(address: &str) -> bool {
@@ -104,7 +103,7 @@ fn is_web_address(address: &str) -> bool {
 mod tests {
     use super::{Address, owner_address};
 
-    /// zuzu's `TestTypedTextOpensAsAnAddressOrASearch`, and the cases around its edges.
+    /// Addresses, searches and malformed input all preserve the no-credentials rule.
     #[test]
     fn typed_text_opens_as_an_address_or_a_search_and_never_searches_credentials() {
         for (typed, want) in [

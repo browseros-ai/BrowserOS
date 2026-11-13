@@ -89,8 +89,8 @@ pub struct RunStarted {
     pub id: RunId,
     /// The script, as given. The writer bounds it.
     pub code: String,
-    /// The host's own id for this request (`_meta["com.browseros.neo/run"].requestId`, zuzu's
-    /// tool-call id). It is the host's lookup key, and admission never runs a repeat of it.
+    /// The host's own id for this request (`_meta["com.browseros.neo/run"].requestId`, the host's
+    /// tool-call id). Admission does not repeat it while its request history is retained.
     /// Stored verbatim to preserve the replay lookup key.
     pub request_id: Option<RequestId>,
     /// The host's task this run belongs to (`_meta["com.browseros.neo/run"].taskId`). Runs are

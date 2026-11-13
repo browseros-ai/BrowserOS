@@ -1,6 +1,5 @@
 //! Fits a tab to its owner's screen, keeps it fitted while the owner's viewer resizes the
-//! screen, and puts it back exactly as it found it (design D13's fit). It replaces zuzu's
-//! `fitOwnerView`, `steerOwnerTab` and `giveBack`.
+//! screen, and restores the tab, window and screen when the owner gives control back.
 //!
 //! State, each piece with one owner:
 //! - the fits, in a table behind a `std::sync::Mutex` that no code holds across an await, so

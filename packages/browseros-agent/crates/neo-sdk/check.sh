@@ -23,6 +23,8 @@ AGENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)" # packages/brows
 REPO_DIR="$(cd "$AGENT_DIR/../.." && pwd)"
 cd "$AGENT_DIR"
 
+python3 "$AGENT_DIR/crates/neo-sdk/check-public-names.py" "$REPO_DIR"
+
 # The toolchain CI pins in test.yml. Clippy's lints change between releases, so the gate runs CI's
 # exact one, whatever `stable` is locally. The grep fails as soon as test.yml moves to another pin.
 TOOLCHAIN="1.98.0"

@@ -1,4 +1,4 @@
-//! The v1 takeover flow's routes as zuzu calls them: the contract's `Takeover`, every refusal,
+//! The v1 takeover flow's routes as the host calls them: the contract's `Takeover`, every refusal,
 //! `wait=`, `takeover.state` on `/v1/events`, the takeover's lock refused on the lock route,
 //! and a tab that closes. The flow's order and budget are the takeover crate's own tests'; the
 //! display's `release=` binding is in `display.rs`.

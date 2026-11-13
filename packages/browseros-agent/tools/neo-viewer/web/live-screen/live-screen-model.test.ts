@@ -44,11 +44,11 @@ test('follow keeps the agent’s tab in front: by tab, or by task when its run n
   })
   const byTask = liveScreenReducer(byTab, {
     type: 'status',
-    status: { ...UP, agent: { tab: TWO, taskId: 'zuzu-7' } },
+    status: { ...UP, agent: { tab: TWO, taskId: 'host-7' } },
   })
   expect(displayRequestFor(byTask)).toEqual({
     mode: 'view',
-    follow: { taskId: 'zuzu-7' },
+    follow: { taskId: 'host-7' },
   })
   expect(displayRequestFor(run({ type: 'mode', mode: 'control' }))).toEqual({
     mode: 'control',

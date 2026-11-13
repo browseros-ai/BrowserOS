@@ -264,7 +264,7 @@ async fn a_run_reads_back_as_a_tree_with_owners_and_deliveries() {
         &h.sink,
         Op {
             kind: OperationKind::Defined,
-            ..simple(fill, "zuzu.auth.fill", Effect::Write)
+            ..simple(fill, "host.fill", Effect::Write)
         },
     );
     op_started(
@@ -1919,7 +1919,7 @@ fn scripted(sink: &TraceSink, id: OperationId, name: &str, tab: TabId, millis: i
     sink.op_ended(answered(id, millis, None, None));
 }
 
-/// zuzu shortens retention to get what a run typed off the disk, so a swept run's bytes must not
+/// Retention can remove what a run typed from disk, so a swept run's bytes must not
 /// stay readable in the file or its log once the sweep answers. Secure delete zeroes the freed
 /// cells, and the sweep then checkpoints the log, which holds the older copies under WAL.
 #[tokio::test]

@@ -1,0 +1,22 @@
+name: Public source
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  public-names:
+    name: Public naming
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      # No path filter: a reference in docs or another package must be caught too.
+      - name: Check tracked source
+        run: python3 packages/browseros-agent/crates/neo-sdk/check-public-names.py .
+      - name: Test naming policy
+        run: python3 packages/browseros-agent/crates/neo-sdk/check-public-names-test.py

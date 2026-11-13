@@ -1,5 +1,5 @@
-//! A fake Xvnc for the tests of the takeover parts and of the crates built on them (zuzu's
-//! `fakeNeoScreen`, ported). Hidden from the documented API; nothing in production builds one.
+//! A fake Xvnc for the tests of the takeover parts and of the crates built on them.
+//! Hidden from the documented API; nothing in production builds one.
 //!
 //! It speaks RFB 3.8 with no security and one screen, as TigerVNC does in Neo's image:
 //! - the first update a client asks for carries the layout (reason 0);

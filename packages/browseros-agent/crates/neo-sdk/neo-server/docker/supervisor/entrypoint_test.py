@@ -412,11 +412,11 @@ class OutputDirectoryTest(unittest.TestCase):
         declaration = re.search(r"^readonly OUTPUTS=.*$", SCRIPT, re.MULTILINE)
         self.assertIsNotNone(declaration)
         for override, expected in [
-            ("", "/var/lib/mirror/neo/tool-output"),
+            ("", "/var/lib/host/neo/tool-output"),
             ("/shared/output files", "/shared/output files"),
         ]:
             result = run_bash(
-                "NEO_DATA_DIR=/var/lib/mirror/neo\n"
+                "NEO_DATA_DIR=/var/lib/host/neo\n"
                 f"NEO_OUTPUT_DIR={shlex.quote(override)}\n"
                 + declaration.group(0) + '\nprintf "%s" "$OUTPUTS"\n'
             )

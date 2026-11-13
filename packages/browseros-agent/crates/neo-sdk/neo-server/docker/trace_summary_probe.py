@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prove zuzu's S20 audit contract inside a local SDK image as the host uid.
+"""Prove the host's audit timeline contract inside a local SDK image as the host uid.
 
 Run beside accept_client.py and smoke.py with Python's standard library. The caller owns the
 container, its memory cap, isolated network, host-token mount, and cleanup. This probe drives
@@ -16,14 +16,14 @@ from accept_client import call_run, connect, host_raw
 
 SOCKET = "/run/neo/host.sock"
 TOKEN = "/run/neo-recipes/host-token"
-CANARIES = ["s20-secret-7731", "s20-code-5521", "s20-result-8842", "s20-error-3390"]
+CANARIES = ["audit-secret-7731", "audit-code-5521", "audit-result-8842", "audit-error-3390"]
 
 
 class Form(http.server.BaseHTTPRequestHandler):
     """Local fixture with stable audit metadata and no external network dependency."""
 
     def do_GET(self):
-        body = b'<title>S20 form</title><input type=password aria-label=Password><h1>Audit</h1>'
+        body = b'<title>Audit form</title><input type=password aria-label=Password><h1>Audit</h1>'
         self.send_response(200)
         self.send_header("Content-Type", "text/html")
         self.send_header("Content-Length", str(len(body)))
@@ -55,7 +55,7 @@ def check_fields(value):
 
 
 def probe(origin):
-    task = "s20-audit-" + uuid.uuid4().hex[:10]
+    task = "audit-audit-" + uuid.uuid4().hex[:10]
     other_task = task + "-other"
     client = connect("http://127.0.0.1:9010/mcp")
     runs = []

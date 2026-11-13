@@ -19,7 +19,7 @@ describe('readRequestBody', () => {
           params: {
             name: 'run',
             _meta: {
-              'com.browseros.neo/run': { taskId: 'zuzu-1' },
+              'com.browseros.neo/run': { taskId: 'host-1' },
               'io.modelcontextprotocol/clientInfo': {
                 name: 'claude-code',
                 version: '2.1.322',
@@ -32,7 +32,7 @@ describe('readRequestBody', () => {
     const message = body.messages[0]
     if (!message) throw new Error('no message')
     expect(isRunCall(message)).toBe(true)
-    expect(agentTaskId(message)).toBe('zuzu-1')
+    expect(agentTaskId(message)).toBe('host-1')
     expect(clientInfoOf(message)).toEqual({
       name: 'claude-code',
       version: '2.1.322',

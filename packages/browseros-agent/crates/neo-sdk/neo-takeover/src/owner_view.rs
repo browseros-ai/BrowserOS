@@ -1,7 +1,6 @@
 //! What the owner's page needs from a fitted tab, read every 750 ms: the boxes of the fields a
 //! phone keyboard opens for, the browser bar, and the pages the tab opened, which on a phone
-//! are pulled into the tab. zuzu's `ownerViewScript` and `ownerTabJS`, tuned against real
-//! phones, ported.
+//! are pulled into the tab.
 //!
 //! Geometry only: the script reads where fields and the page's drawings of them are, never
 //! their values, labels' words or text. It runs in BrowserOS's isolated world (core's
@@ -135,8 +134,7 @@ fn script(mode: FitMode) -> String {
 
 /// `(field, top) => bool`: whether the page draws `field` with its own elements, given `top`,
 /// the element the browser finds on top at the field's place (its middle, or for a field with
-/// no size, its top-left corner) when that is neither the field nor inside it. zuzu's
-/// `neo.DrawnBy` (ZUZU-282), ported, but for its own-label exception (below). The page draws
+/// no size, its top-left corner) when that is neither the field nor inside it. The page draws
 /// the field when all hold:
 ///
 /// - the page renders the field: `display:none`, which has no client rects, never counts;
@@ -147,7 +145,7 @@ fn script(mode: FitMode) -> String {
 ///   `role=button`/`role=link`), which draws itself. Only a field with no size may be drawn by
 ///   its own label, as a digit row inside the label that holds the code input. The nearest
 ///   control must be that label: a "Resend code" link inside it is the link's, and a tap there
-///   follows the link. zuzu exempted everything inside the label, links and buttons included;
+///   follows the link;
 /// - a `top` that holds the field counts only for a field with no size, and only when it draws
 ///   something else beside the field: a rendered child that does not hold the field, as a digit
 ///   row holding the input and its digits. A wrapper that holds nothing but the field, or the
@@ -170,8 +168,8 @@ const DRAWN_BY: &str = "(field, top) => {
 /// `(field, top) => Element`: what a tap on a drawn field with no size must land on, the
 /// drawing as a whole rather than the one digit at the field's corner. That is `top` when it
 /// holds the field; else the branch of the scope that holds `top`, or the field's parent when
-/// that branch sits beside the field there, unless the parent is the field's whole form. zuzu's
-/// `ownerViewScript`, ported unchanged. [`DRAWN_BY`] has checked that the scope holds `top`, so
+/// that branch sits beside the field there, unless the parent is the field's whole form.
+/// [`DRAWN_BY`] has checked that the scope holds `top`, so
 /// the climb ends inside it.
 const DRAWING: &str = "(field, top) => {
     if (top.contains(field)) return top;
@@ -350,12 +348,11 @@ mod live_tests {
 <input id="otp" inputmode="numeric" autocomplete="one-time-code" maxlength="6" aria-label="Code">
 <div class="digits"><span></span><span></span><span></span><span></span><span></span><span></span></div></div>"#;
 
-    /// zuzu's scenario 89 page (`cell/harness/test/e2e-gateway.mjs`, `/local-browser-fixture?keyboard=1`),
-    /// unchanged but for its script: one visible field and one drawn code box get a keyboard
+    /// One visible field and one drawn code box get a keyboard
     /// box; a disabled field, a read-only one, and a field with no size that nothing draws
     /// (alone in a bordered wrapper, before a button, beside text, `display:none`, alone in the
     /// body) do not.
-    const ZUZU_SCENARIO_89: &str = concat!(
+    const DRAWN_CODE_PAGE: &str = concat!(
         r#"<title>Local pilot fixture</title><meta name="viewport" content="width=device-width"><body>"#,
         r#"<input id="mobile-text" value="keyboard-private-fixture"><input disabled value="disabled"><textarea readonly>read only</textarea>"#,
         r#"<form><input id="drawn-code" aria-label="Code" style="position:absolute;width:0;height:0;padding:0;border:0;opacity:0">"#,
@@ -481,15 +478,15 @@ mod live_tests {
 
     #[tokio::test]
     #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
-    async fn zuzus_scenario_89_page_gets_its_visible_field_and_its_drawn_code() -> TestResult {
+    async fn a_page_gets_its_visible_field_and_its_drawn_code() -> TestResult {
         let [boxes, want] =
-            boxes_on(ZUZU_SCENARIO_89, &["#mobile-text", "#drawn-code + div"]).await?;
+            boxes_on(DRAWN_CODE_PAGE, &["#mobile-text", "#drawn-code + div"]).await?;
         assert_eq!(boxes, want);
         Ok(())
     }
 
     /// A field with a size under the page's drawing keeps its own box; one under its own label's
-    /// text gets none, as zuzu's rule has it. A field with no size inside a label that draws it
+    /// text gets none. A field with no size inside a label that draws it
     /// gets the label's box, but a link inside that label at the field's place is the link's, not
     /// a drawing of the field. No honeypot gets a box: off screen, before a button, alone, beside
     /// only a link. A form whose control is named `contains` shadows `form.contains`, so its drawn

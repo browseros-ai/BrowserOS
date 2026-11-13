@@ -117,7 +117,7 @@ to identify the browser's actual folders. The SDK image supplies both itself.
 ## Hosted API migration
 
 When the Neo Docker image runs claw-sdk instead of claw-server, the hosted `/v1` API on port
-9010 goes away. There is no compatibility shim, since zuzu is the only client. This note maps
+9010 goes away. There is no compatibility shim. This note maps
 every old call to its replacement in [`openapi.yaml`](openapi.yaml).
 
 ## What changes for every call
@@ -136,7 +136,7 @@ ignored, so `http://neo/v1/…` works.
 Send `_meta["com.browseros.neo/run"] = {requestId?, taskId?, hostData?}` with each `run`. All
 three are optional, and the two ids are at most 128 bytes each:
 
-- `requestId` is your id for the call (zuzu's tool-call id). A repeat of it never runs again,
+- `requestId` is your id for the call (such as a tool-call id). A repeat of it never runs again,
   within its task when the run has a `taskId`, else across Neo.
 - `taskId` is your id for the calls of one task. It replaces the session for grouping. You
   list a task's runs, trace and events by it, and the agent's `page` starts on the task's last
@@ -183,17 +183,17 @@ Task metadata adds no reply text; the agent must return `task.id` to keep it.
 | hosted `/v1` | claw-sdk API | Notes |
 |---|---|---|
 | `GET /v1/sessions?client=&since=&until=&q=&cursor=&limit=` | `GET /v1/runs?taskId=&since=&until=&cursor=&limit=` | There are no sessions to list. A task's runs come back newest first. `q` and `client` filters are gone; `name`, `site` and `summary` are not recorded |
-| `GET /v1/sessions/{id}` (`status`, `toolCalls[].page`) | `GET /v1/trace?taskId={taskId}&tail=20` | Nothing is live or ended without a session; each run has its own `status`. zuzu's `CurrentTab` becomes the newest operation's `tabId` in the tail. `GET /v1/runs?tab={tabId}` lists the runs that acted on one tab |
-| `GET /v1/sessions/{id}?include=screenshots` (zuzu's `Audit`) | `GET /v1/trace?taskId={taskId}&tail=20&screenshots=last:4` | `tail` and `screenshots=last:N` replace `trimNeoAudit`. Add `tab={tabId}` to keep only the operations on one tab |
+| `GET /v1/sessions/{id}` (`status`, `toolCalls[].page`) | `GET /v1/trace?taskId={taskId}&tail=20` | Nothing is live or ended without a session; each run has its own `status`. The current tab is the newest operation's `tabId` in the tail. `GET /v1/runs?tab={tabId}` lists the runs that acted on one tab |
+| `GET /v1/sessions/{id}?include=screenshots` | `GET /v1/trace?taskId={taskId}&tail=20&screenshots=last:4` | `tail` and `screenshots=last:N` bound the audit response. Add `tab={tabId}` to keep only the operations on one tab |
 | `GET /v1/sessions/{id}?wait=60` | `GET /v1/runs/{runId}?wait=60` | Completeness is per run (`complete`), not per session |
 | `toolCalls[]` | `GET /v1/runs/{runId}`: `operations[]` | `parentId` links wrap retries and host calls; `tabId` is the tab each operation targeted. The run id is on the `run` result's `_meta["com.browseros.neo/run"].id` |
-| — (zuzu's before/after audit diff) | `GET /v1/runs?requestId={toolCallId}&taskId={taskId}` | With a `requestId`, a lookup after a transport timeout says whether the run started and what it sent. Neo always returns its own run id |
+| Run lookup after a timeout | `GET /v1/runs?requestId={toolCallId}&taskId={taskId}` | With a `requestId`, a lookup after a transport timeout says whether the run started and what it sent. Neo always returns its own run id |
 | `GET /v1/sessions/{id}/recording` (rrweb) | — | Recording is deferred. The old endpoint returned no pages in the Docker image anyway, because the bundled extensions are off |
 | `GET /v1/sessions/{id}/screencast?quality=&tab=` | `GET /v1/tabs/{tabId}/screencast?quality=` | The tab is in the path; there is no stream that follows a session's current tab. Read parts by `Content-Length`, as today. The stream ends when the tab closes. `tab.closed` on `/v1/events` replaces the five-second `Live()` poll |
 | `GET /v1/sessions/{id}/video?quality=&tab=` | `GET /v1/tabs/{tabId}/video?quality=` | As for the screencast |
 | `GET /v1/events?session=` | `GET /v1/events?taskId=&tab=` | `session.*` events are gone. `tab.closed` is new, and run and operation events carry `taskId` and `tabId`. Resume with `Last-Event-ID`; `stream.reset` means events were missed, so re-read the state endpoints |
-| — (Xvnc on 127.0.0.1:5900, no auth) | `GET /v1/display?mode=view\|control&followTab={tabId}` or `&followTask={taskId}` | RFB over WebSocket. `view` drops input; `followTab` or `followTask` (not both) replaces zuzu's `follow`/`toFront`; `control` forwards input |
-| — (zuzu's handoff: `frontPage`, `fitOwnerView`, `giveBack`, `steerOwnerTab`) | `POST /v1/takeovers {tabId, viewer?, reads?, ttlSeconds?}` when the owner opens the link, `POST /v1/takeovers/{id}/release` when they are done | The flow composes small parts a host can also use alone: `POST /v1/locks {tabId, reads?, ttlSeconds}`, `POST /v1/tabs/{tabId}/fit` (+ `GET /v1/fits/{id}`, `…/navigate`, `…/restore`), and `/v1/display`. Neo locks the agent out of the tab (`host / owner_has_control`) and fits the page to the owner's screen. `reads: block` is the default; send `allow` to let the agent keep reading the tab. To pause a whole task, stop sending its runs |
+| — (Xvnc on 127.0.0.1:5900, no auth) | `GET /v1/display?mode=view\|control&followTab={tabId}` or `&followTask={taskId}` | RFB over WebSocket. `view` drops input; `followTab` or `followTask` (not both) follows the selected tab or task; `control` forwards input |
+| Owner handoff | `POST /v1/takeovers {tabId, viewer?, reads?, ttlSeconds?}` when the owner opens the link, `POST /v1/takeovers/{id}/release` when they are done | The flow composes small parts a host can also use alone: `POST /v1/locks {tabId, reads?, ttlSeconds}`, `POST /v1/tabs/{tabId}/fit` (+ `GET /v1/fits/{id}`, `…/navigate`, `…/restore`), and `/v1/display`. Neo locks the agent out of the tab (`host / owner_has_control`) and fits the page to the owner's screen. `reads: block` is the default; send `allow` to let the agent keep reading the tab. To pause a whole task, stop sending its runs |
 
 ## Settings
 
@@ -239,7 +239,7 @@ tab the agent left, and Neo's tab keeps the browser alive.
 
 ## Downloads
 
-zuzu's `neo_download` → `neo_upload` and `import` flows move into the script and onto the run's
+Download, upload and import flows run in the script and use the run's
 record. A script waits for the file with Playwright's own calls:
 
 ```js
@@ -259,14 +259,13 @@ return { path: await download.path(), filename: download.suggestedFilename() };
   (`application/octet-stream`, the suggested name in `Content-Disposition`), on the host socket
   with the same token. They are a copy Neo took when the run ended, so they are there as soon as
   the run's reply is, and they go when retention removes the run (7 days). This replaces reading
-  the file through `read_output` parts: `/data` stays `neo 0700`.
+  the file through script output parts: `/data` stays `neo 0700`.
 - A download still being written when the run ended is recorded `in_progress` with no bytes.
   Await `download.path()` before returning when the host needs the file.
 
 ## Large results
 
-A `run` reply carries its value inline, at most 256 KiB of JSON. zuzu's `read_output` route for
-bigger outputs (full-page screenshots, PDFs, `DecodeRun`'s fallback) becomes blobs:
+A `run` reply carries its value inline, at most 256 KiB of JSON. Bigger outputs such as full-page screenshots and PDFs use blobs:
 
 - When a returned value would be over the limit, Neo keeps its largest byte values (a `Buffer`
   or `Uint8Array`, which travel as `{"$neo":"bytes","base64"}`) with the run, largest first until
@@ -288,8 +287,7 @@ return { shot };   // {"shot": {"$neo":"blob","id":"b0","size":1505153}} when it
 
 ## Typing a host's secret
 
-zuzu's own entry scripts (`fill.js`, `login_fill.js`, `code_entry.js`, `focus_box.js`), sent as
-`run` code with the secret inside, become one host call. The value never enters a script, a
+To type a secret without embedding it in `run` code, use one host call. The value never enters a script, a
 record or a picture:
 
 ```http
@@ -306,9 +304,8 @@ POST /v1/tabs/{tabId}/fill
   by selector. `expect.origin` is required: the box's own frame must be on it. Every other fact
   sent in `expect` must still hold when Neo looks (`box_changed`).
 - **Look first, without a value**: `POST /v1/tabs/{tabId}/fill/check` takes the same fields
-  with no `value` and answers each box's facts and the first refusal a fill would meet now. It
-  replaces `fields.js` and the box checks in `auth_fields.go`; zuzu's rule for which box may take
-  which secret stays in Go, on these facts. Send the facts you approved back as `expect` on the
+  with no `value` and answers each box's facts and the first refusal a fill would meet now. The host decides which box may take
+  which secret from these facts. Send the facts you approved back as `expect` on the
   fill, so the look at approval and the look at typing are one rule. It takes `lockId` as the
   fill does.
 - **Read `outcome` first.** Every answer about the page is a 200: `entered`,
@@ -327,7 +324,7 @@ POST /v1/tabs/{tabId}/fill
   `Sec-Fetch-Site`) is `403 forbidden`, and no script can name the methods.
 - **The record.** The fill is a run of Neo's own with one operation, `host.fill` (kind
   `protected`), whose `args` name the boxes and each value's length. It records no page address,
-  no title and no call-log notes. Drop the trace exclusion of scenario `88-secret-canary`.
+  no title and no call-log notes.
 - **No pictures of that tab again.** From the fill on, Neo takes no screenshot of the tab for
   the rest of its life: going back in history restores a plain box's value into a new document.
   Its operations keep `hasScreenshot: false`, and their screenshot answers `404 not_found`. A
@@ -339,7 +336,7 @@ POST /v1/tabs/{tabId}/fill
   per character, whatever the page declares: the snapshot, `locator.inputValue()`, and every
   assertion (the received value and aria tree, the preview and the failure's snapshot), so
   `toHaveValue` compares against the bullets. A script's own code in the page (`evaluate`) still
-  reads the value; zuzu's redactor for its own secrets stays.
+  reads the value; the host must redact its own outputs as needed.
 - **Two gaps, until later masking work.** An element preview in a call log or error (`locator
   resolved to <input …>`) prints the box's attributes unmasked, so a page that writes the typed
   value into the `value` attribute shows it in a failed assertion or action on that box. And
@@ -348,8 +345,8 @@ POST /v1/tabs/{tabId}/fill
 - **Not covered**: what the owner types in a takeover or on the display, a script's own fill
   and the browser's autofill; a box the page re-creates, or a value Back restores, has no mark.
   A Neo restart keeps which tabs took a fill (a synced record beside the trace). `neo.solveCaptcha`
-  still photographs its challenge. A dropdown (`expiry_select.js` stays), a link with a token in
-  its address (`open_link.js` stays), and the browser's saved form state, which can bring a
+  still photographs its challenge. A dropdown, a link with a token in
+  its address, and the browser's saved form state, which can bring a
   value back after a restore (the host clears it). The contract's fill route lists each limit.
 - **A script's own fill of a card number** is not this route, and its pictures are withheld
   anyway: Neo stores no picture of a tab while any frame of it shows a box masking treats as

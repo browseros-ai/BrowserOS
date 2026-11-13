@@ -290,7 +290,7 @@ impl<'a> EntryRun<'a> {
         // its maxlength, so with a full box the first key empties it and its own character is
         // dropped (measured: 246813 left 46813). A sized box and an empty one need no key: the
         // focus step's selection is replaced by the first character, and a page that submits on
-        // its first input event must never see an empty box (B11v).
+        // its first input event must never see an empty box.
         if !looked.facts.sized && !looked.facts.empty {
             self.empty_box(page, sent, input, &box_at, &text, spaced)
                 .await?;

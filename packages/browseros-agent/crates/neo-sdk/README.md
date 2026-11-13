@@ -57,8 +57,8 @@ operation that records no value, address or picture (`neo-server/src/host/fill_s
 tab while any frame of it shows a box masking treats as private, not empty and painted in clear,
 such as a card number a script typed; a password box paints bullets, so sign-in pages keep theirs.
 
-`neo-server/docker/` builds the Neo SDK image, the browser plus this server, for hosts such as
-zuzu: see [its README](neo-server/docker/README.md).
+`neo-server/docker/` builds the Neo SDK image, the browser plus this server.
+See [the image's README](neo-server/docker/README.md) for host integration.
 
 The pre-existing browser infrastructure (`browseros-cdp`, `browseros-core` and the other
 workspace crates) stays outside this folder. Desktop depends on `neo-captcha` and

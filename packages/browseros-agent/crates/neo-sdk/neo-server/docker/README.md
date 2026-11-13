@@ -2,8 +2,8 @@
 
 A Linux image of the BrowserOS neo browser and this commit's SDK server, `browseros-claw-sdk`. Agents get
 one MCP tool, `run` (Playwright JavaScript against the browser), and the host gets the `/v1` host API on a
-Unix socket. It is built for hosts that build on it, such as zuzu's cell image (`FROM neo-sdk:<tag>`), and
-it runs on its own too. It is not production's image: that is the default Neo image
+Unix socket. A host can build on it with `FROM neo-sdk:<tag>` or run it on its own.
+Production uses the default Neo image
 (`packages/browseros/docker/neo`, claw-server), which this one shares no file with. CI builds and tests
 it in `.github/workflows/neo-sdk-image.yml`, which publishes it only when asked (Publish below).
 
@@ -23,7 +23,7 @@ choosing from the server binary's version marker; a change to it changes this im
 
 ```sh
 crates/neo-sdk/neo-server/docker/build.sh --platform linux/arm64   # a dev Mac
-crates/neo-sdk/neo-server/docker/build.sh --platform linux/amd64   # zuzu's cells
+crates/neo-sdk/neo-server/docker/build.sh --platform linux/amd64   # host containers
 ```
 
 The tag is `neo-sdk:<browser>-<commit>-<arch>`, with `-dirty` before the arch when
@@ -152,8 +152,9 @@ Nothing listens on 6080: this image serves no noVNC viewer.
 
 - The agent ports 9010 and 9011 have no authentication. Whoever reaches them can run arbitrary Playwright
   JavaScript in the owner's logged-in browser.
-- Every process in the container's network namespace reaches both. In zuzu's cell that includes mirrord,
-  the harness and the agent, so only the host's uid filter keeps them apart.
+- Every process in the container's network namespace reaches both, including the host's supervisor
+  and any agent process. If untrusted processes share it, restrict their access, for example
+  with uid firewall rules.
 - With `NEO_MCP_REMOTE=true`, every peer that can route to the container reaches them too: other containers
   on the same Docker network, or hosts in a VPC.
 - Publishing a port on `127.0.0.1` only hides it from other machines. It does not isolate peers inside the
@@ -259,28 +260,28 @@ They become 0400 files owned by neo in the `neo-sdk-keyed` target, and the image
 public registry. That stage is rebuilt without its cache every time, so a rotated key never survives in a
 cached layer, and a keyless build never mounts a key at all.
 
-## Use it from zuzu
+## Use it from a host
 
 ```sh
 # in a BrowserOS checkout, packages/browseros-agent
 crates/neo-sdk/neo-server/docker/build.sh --platform linux/amd64
-# in zuzu's cell/Dockerfile
+# in the host's Dockerfile
 FROM neo-sdk:0.52.1.2-<commit>-amd64
 ```
 
-zuzu keeps calling `/usr/local/bin/neo-entrypoint` from its own supervisor, as root, with the same `/data`
-layout and the neo user. It passes `NEO_HOST_GID` and `CLAW_HOST_TOKEN_FILE` (its `env -i` filter must let
-`CLAW_*` through), adds the socket's group to mirrord, and adds 9011 to its firewall's Neo ports.
+Call `/usr/local/bin/neo-entrypoint` from the host's supervisor as root, with the `/data`
+layout and neo user described above. Pass `NEO_HOST_GID` and `CLAW_HOST_TOKEN_FILE`, allow
+`CLAW_*` through any `env -i` filter, add the socket's group to the host's supervisor,
+and include 9011 in the firewall rules for Neo's ports.
 
-How Neo behaves is set on the host API, not in a file or the environment: once Neo answers, and before
-its first run, mirrord sends `PUT /v1/settings` with everything it wants, such as
-`{"tabs":{"idleCloseSeconds":300}}`. Neo saves it under `/data` and loads it again at every start: when
-the browser restarts the server, and in a new container on the same `/data`. mirrord still sends its `PUT`
-at every start of its own, so the saved set is what it wants now, not what an older mirrord or a hand
-`PATCH` left there. The settings and their ranges are in [the server's README](../README.md#settings).
+Set Neo's behavior through the host API before the first run. Send `PUT /v1/settings`
+with the host's full settings, such as `{"tabs":{"idleCloseSeconds":300}}`. Neo saves them
+under `/data` and loads them when the server or container restarts. Send the full settings
+at each host startup to replace older settings and manual patches. The settings and their
+ranges are in [the server's README](../README.md#settings).
 
 Neo keeps one blank tab of its own open at all times (`owner: "neo"` in `GET /v1/tabs`), so closing
-every other tab never ends the browser: mirrord's tab reset no longer needs a keeper tab of its own.
+every other tab never ends the browser. A host does not need a keeper tab of its own.
 Once the owner browses in that tab it is theirs again, and Neo opens a new blank one.
 
 ## Run it alone, for a quick look

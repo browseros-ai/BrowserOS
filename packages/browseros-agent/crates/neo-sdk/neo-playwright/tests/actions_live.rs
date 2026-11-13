@@ -1109,7 +1109,7 @@ async fn tests_that_a_click_waits_for_the_navigation_it_requested() -> TestResul
 
 /// A locator that never matches logs only `waiting for <locator>`, as upstream's does: an
 /// attempt's lines wait until the element is found, and no "detached" retry is logged for an
-/// element that was never there (zuzu G10).
+/// element that was never there.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_a_locator_matching_nothing_logs_only_its_wait() -> TestResult {

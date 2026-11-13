@@ -255,8 +255,8 @@ clear_sessions() {
 # What the display offers depends on which server this image runs. The answer
 # comes from the installed binary's version marker (neo-server-info), read at
 # every start and never from a variable, so no build path can pair a server with
-# the other one's display, and hosts that run this script under `env -i` (zuzu's
-# cell) get the same answer. A server that cannot be identified stops the
+# the other one's display, and hosts that run this script under `env -i`
+# get the same answer. A server that cannot be identified stops the
 # container instead of falling back to the open display. Everything else reads
 # these flags, never the kind:
 #   VIEWER                noVNC on 6080 (websockify, no authentication). claw-sdk
@@ -302,7 +302,7 @@ prepare_host_socket() {
   [[ "$gid" =~ ^[0-9]+$ ]] || die "NEO_HOST_GID must be numeric"
   mkdir -p "$HOST_SOCKET_DIR"
   # chown first: a change of owner can clear the setgid bit. Then chmod as a
-  # member of the group: without CAP_FSETID, which zuzu's cells do not grant,
+  # member of the group: without CAP_FSETID, which a host container may omit,
   # Linux silently drops a setgid bit set by a process outside the directory's
   # group, and the socket would get neo's group instead of the host's.
   chown "neo:$gid" "$HOST_SOCKET_DIR"
@@ -316,8 +316,8 @@ prepare_host_socket() {
 start_display() {
   # X servers expect a root-owned, sticky socket directory.
   mkdir -p /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix
-  # An Xvnc killed with the rest of the container's processes (zuzu's OOM path
-  # kills them all at once and restarts this script) leaves its socket and lock
+  # An Xvnc killed with the rest of the container's processes, as on a host's
+  # OOM restart, leaves its socket and lock
   # behind, and the wait below would then pass before the new one listens, so
   # vncconfig and openbox lose the display. Nothing else starts an X server
   # here, so any :1 left at this point is stale.

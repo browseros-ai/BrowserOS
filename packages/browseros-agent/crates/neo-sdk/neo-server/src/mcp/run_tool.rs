@@ -187,7 +187,7 @@ mod tests {
                 "[unknown outcome] locator.click at run:3:7 (op 7) was sent but not confirmed. \
                  Take a snapshot before repeating it."
             ),
-            "sdk-traces' wording, which zuzu's own warning used"
+            "the warning describes where values remain visible"
         );
         Ok(())
     }

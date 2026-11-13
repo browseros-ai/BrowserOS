@@ -1,4 +1,4 @@
-//! The v1 takeover flow (design D13): zuzu's owner opens the takeover link, and later is done.
+//! The v1 takeover flow (design D13): the host's owner opens the takeover link, and later is done.
 //! It is a short composition over the parts. Each part stays useful alone and keeps every rule
 //! about its own state, so a different flow replaces this module and leaves the parts as they
 //! are.

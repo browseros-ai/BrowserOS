@@ -1,4 +1,4 @@
-//! Neo's host side: the host API zuzu reaches over the host socket (neo-http), and the
+//! Neo's host side: the host API the host reaches over the host socket (neo-http), and the
 //! takeover lock it feeds back into the door.
 //!
 //! ```text

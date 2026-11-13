@@ -1,4 +1,4 @@
-//! The host side as zuzu and the door meet it: the real neo-http behind the real
+//! The host side as the host and the door meet it: the real neo-http behind the real
 //! `host_service` auth on a temp Unix socket, over the fake browser and a real trace store.
 
 use std::error::Error;

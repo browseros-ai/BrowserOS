@@ -22,7 +22,7 @@ function tokensOf(code: string): string[] {
 const OWNER =
   "const p=await context.newPage();await p.goto(\"https://example.com\");const info=await p.evaluate(()=>({title:document.title,links:[...document.querySelectorAll('a')].map(a=>a.href).slice(0,5),h1:document.querySelector('h1')?.textContent}));return info;"
 
-// Scripts as agents sent them through the viewer (claude-code and zuzu-style), minified.
+// Minified scripts as agents sent them through the viewer.
 const SCRIPTS = [
   OWNER,
   "await page.goto('https://en.wikipedia.org/wiki/Grace_Hopper');return await page.title();",

@@ -12,8 +12,7 @@ type HoldSource = Arc<dyn Fn(TabId) -> Option<TabHold> + Send + Sync>;
 /// Whether the host holds a tab with a lock, a fit, or a keep, now or until when (the settings design,
 /// section 2, "What inactivity means"). The janitor never closes a held tab, and restarts its
 /// idle clock when the last claim lets go: a lock keeps the agent off a tab the owner is
-/// using, and a fit is how a host shows the tab to the owner, without a lock in zuzu's
-/// handoff. A keep protects a tab waiting for approval without blocking the agent.
+/// using, and a fit shows the tab to the owner even without a lock. A keep protects a tab waiting for approval without blocking the agent.
 ///
 /// The locks, fits, and keeps belong to neo-http, which starts only once the browser link's first
 /// connect lands. Until the host API arms this, the host holds nothing, which is exact: all

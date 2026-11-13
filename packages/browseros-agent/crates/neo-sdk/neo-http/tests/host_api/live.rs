@@ -1,4 +1,4 @@
-//! The live views as zuzu reads them: MJPEG parts by `Content-Length`, and MP4 bytes in order,
+//! The live views as the host reads them: MJPEG parts by `Content-Length`, and MP4 bytes in order,
 //! from the scripted capture connection. Streams stay pinned to the tab until it closes.
 
 use crate::support::{BoxError, Harness, TestResult, harness, harness_with_capture};
@@ -79,7 +79,7 @@ impl Live {
         }
     }
 
-    /// The next MJPEG part, read by its `Content-Length` as zuzu's relay reads it.
+    /// The next MJPEG part, read by its `Content-Length` as the host's relay reads it.
     async fn part(&mut self) -> Result<Part, BoxError> {
         loop {
             if let Some(part) = self.take_part()? {

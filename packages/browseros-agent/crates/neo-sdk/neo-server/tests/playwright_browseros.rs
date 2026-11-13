@@ -1142,7 +1142,7 @@ window.addEventListener('DOMContentLoaded', () => {
 });
 </script>";
 
-/// S3b, tier 2's `selectors-css` cases `should work with :is` (L389) and `:scope` (L431). A
+/// Tier 2's `selectors-css` cases `should work with :is` (L389) and `:scope` (L431). A
 /// locator's brand carries its parsed selector, and `:scope` inside `:has()` parses 28 levels deep,
 /// past where the run's encoding of an op's input overflowed the realm's stack. Each call answers
 /// what Playwright 1.64.1 does, as tier 2 records it, through `$$eval` and a locator's `count`.

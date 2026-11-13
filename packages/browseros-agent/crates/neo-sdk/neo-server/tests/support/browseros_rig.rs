@@ -1,6 +1,6 @@
 //! The real-browser rig the BrowserOS tests share: a headless BrowserOS on a fresh profile, the
 //! built `browseros-claw-sdk` launched the way Chromium launches it, an MCP client on its agent
-//! port, and plain HTTP on its host socket the way zuzu reads it.
+//! port, and plain HTTP on its host socket the way the host reads it.
 //!
 //! Each test file includes it as `pub mod`, so the helpers one file does not use are not dead
 //! code there.
@@ -288,7 +288,7 @@ impl Rig {
         self.cdp_port
     }
 
-    /// One GET on the host socket, as zuzu sends it, with the bearer token when given.
+    /// One GET on the host socket, as the host sends it, with the bearer token when given.
     pub async fn host_get(
         &self,
         path: &str,
@@ -297,7 +297,7 @@ impl Rig {
         self.host_call("GET", path, token, None).await
     }
 
-    /// One request on the host socket, as zuzu sends it, with the bearer token when given.
+    /// One request on the host socket, as the host sends it, with the bearer token when given.
     pub async fn host_call(
         &self,
         method: &str,
