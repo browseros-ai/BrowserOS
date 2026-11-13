@@ -305,6 +305,11 @@ async fn a_takeovers_display_closes_with_4002_at_its_release() -> TestResult {
     let id = takeover.body["id"].as_str().ok_or("an id")?;
     let released = h.post(&format!("/v1/takeovers/{id}/release"), "").await?;
     assert_eq!(released.status, 200, "{}", released.body);
+    assert_eq!(
+        released.body["inputDrained"], true,
+        "Xvnc closed the connection the release half-closed: {}",
+        released.body
+    );
     let (code, reason) = closed(&mut control).await?;
     assert_eq!(code, 4002, "{reason}");
     assert!(reason.starts_with("released"), "{reason}");
@@ -322,6 +327,38 @@ async fn a_takeovers_display_closes_with_4002_at_its_release() -> TestResult {
         response.status(),
         101,
         "spectators are back after the release"
+    );
+    Ok(())
+}
+
+/// The contract's promise on a client's close: it is answered only after every binary frame
+/// before it reached Neo's screen, and for a control display after the screen read them, so a
+/// host that waits for the answer knows the owner's last keys landed.
+#[tokio::test]
+async fn a_close_frame_is_answered_after_the_keys_before_it_reached_xvnc() -> TestResult {
+    const KEYS: usize = 20;
+    let h = harness().await?;
+    let socket = serve(&h)?;
+    let (mut control, _) = handshake(&socket.path, Open::new("mode=control")).await?;
+    for _ in 0..KEYS {
+        control.send(Message::binary(QEMU_A.to_vec())).await?;
+    }
+    control.send(Message::Close(None)).await?;
+    loop {
+        match timeout(WITHIN, control.next()).await? {
+            Some(Ok(Message::Close(_))) | None => break,
+            Some(Ok(_)) => {}
+            Some(Err(error)) => return Err(error.into()),
+        }
+    }
+
+    let keys = (0..h.xvnc.connections())
+        .flat_map(|connection| h.xvnc.received(connection))
+        .filter(|message| message.as_slice() == QEMU_A)
+        .count();
+    assert_eq!(
+        keys, KEYS,
+        "every key had reached Xvnc when the close was answered"
     );
     Ok(())
 }

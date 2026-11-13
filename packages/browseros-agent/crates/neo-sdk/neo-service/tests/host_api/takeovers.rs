@@ -3,7 +3,7 @@
 //! and a tab that closes. The flow's order and budget are the takeover crate's own tests'; the
 //! display's `release=` binding is in `display.rs`.
 
-use crate::support::{BoxError, EventStream, Harness, Sse, TestResult, harness};
+use crate::support::{BoxError, EventStream, HOME_SCREEN, Harness, Sse, TestResult, harness};
 use axum::http::StatusCode;
 use browseros_core::TabId;
 use neo_takeover::{LockTarget, OwnerHasScreen, ScreenHolder, TakeoverId};
@@ -96,6 +96,43 @@ async fn a_takeover_starts_and_is_released_through_the_routes() -> TestResult {
         twice.body, released.body,
         "the first release's answer stands"
     );
+    Ok(())
+}
+
+/// A host's refit during a takeover refits the takeover's own fit, which its release restores.
+#[tokio::test]
+async fn a_host_refit_during_a_takeover_gives_the_takeovers_fit() -> TestResult {
+    let h = harness().await?;
+    h.browser.open_tab(12);
+    let takeover = start(
+        &h,
+        json!({"tabId": 12, "viewer": {"width": 390, "height": 844}}),
+    )
+    .await?;
+    let fit_id = takeover["fitId"]
+        .as_str()
+        .ok_or("a takeover with a viewer has a fit")?;
+
+    let refit = h
+        .post("/v1/tabs/12/fit", r#"{"width": 412, "height": 915}"#)
+        .await?;
+    assert_eq!(refit.status, StatusCode::OK, "{}", refit.body);
+    assert_eq!(refit.body["id"], fit_id, "the takeover's own fit");
+    assert_eq!(
+        refit.body["screen"]["width"], 412,
+        "refitted to the new viewer"
+    );
+    assert_eq!(h.xvnc.size().width, 412);
+
+    let released = h
+        .post(&format!("/v1/takeovers/{}/release", id(&takeover)?), "")
+        .await?;
+    assert_eq!(released.status, StatusCode::OK, "{}", released.body);
+    assert!(
+        h.get(&format!("/v1/fits/{fit_id}")).await?.body["restoredAt"].is_i64(),
+        "the release restored the refitted fit"
+    );
+    assert_eq!(h.xvnc.size(), HOME_SCREEN, "and put the screen home");
     Ok(())
 }
 

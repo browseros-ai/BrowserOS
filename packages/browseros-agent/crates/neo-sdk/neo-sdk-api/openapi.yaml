@@ -423,6 +423,17 @@ paths:
         takeover is `404 not_found`, and one whose takeover's release has begun is
         `409 takeover_released`.
 
+        When a control display ends, by the client's close frame or its takeover's release, Neo
+        stops forwarding, half-closes its connection to the screen and waits up to 2 s for the
+        screen to close it. The screen reads a connection in order and closes it at its end of
+        stream, so that close shows the screen read every input message the display forwarded.
+        The guarantee that the owner's input landed before the display ended holds only when the
+        takeover's release answers `inputDrained: true`. A `false` after the bounded 2 s wait is
+        intentional: Neo does not wait longer, and for that release the guarantee does not hold.
+        A client's close frame is answered only after every whole RFB message in the binary
+        frames before it was handled (forwarded to the screen, or dropped in `view`), and for a
+        control display after that wait.
+
         A display ends with a WebSocket close frame that says why:
         - `4002` released: the display's takeover was released;
         - `1008`: the client sent something the display refuses: an RFB message it does not
@@ -549,8 +560,12 @@ paths:
         Neo has one screen and one window, so the window's state is recorded once, by the first
         fit while no other is active, and put back at the last restore. Each tab's viewport mode
         is recorded by its own first fit. The first fit of a tab returns a new fit; while that
-        fit is active, fitting the tab again refits it and returns the same fit. While a mobile
-        fit is active, pages the tab opens are pulled into it.
+        fit is active, fitting the tab again refits it and returns the same fit. That holds for a
+        takeover's fit too: while a takeover started with a viewer is active, fitting its tab
+        refits the takeover's fit and returns it (the takeover's `fitId`), and the takeover's
+        release restores it. A takeover started without a viewer has no fit, so a fit of its tab
+        is a fit of its own, which that release does not restore. While a mobile fit is active,
+        pages the tab opens are pulled into it.
       parameters:
         - $ref: '#/components/parameters/TabId'
       requestBody:
@@ -718,7 +733,12 @@ paths:
       summary: Give the browser back. Idempotent; returns once the agent's lock is lifted.
       description: |
         The flow closes the takeover's display, restores the fit, and releases the lock
-        last. The steps share a 10 s budget. A step that fails does not stop the rest,
+        last. Closing a control display waits up to 2 s for Neo's screen to read the owner's last
+        input (`/v1/display`). Only an answer with `inputDrained: true` guarantees that every key
+        the display forwarded was read before the release went on, so that a host can read what
+        the owner typed with no key landing after it. A `false` after that bounded wait is
+        intentional and means the guarantee does not hold for this release. The steps share a
+        10 s budget. A step that fails does not stop the rest,
         and once the budget is spent the lock is released while a step still running finishes.
         A second release answers as the first did. Neo releases a takeover itself 10 s before
         `expiresAt` (`expired`), so the steps run while the agent is still locked out, and when
@@ -1523,6 +1543,19 @@ components:
         display:
           type: string
           description: The control display to open for the owner; it closes at release.
+        inputDrained:
+          type: boolean
+          description: >-
+            Set by the release. The owner's input is guaranteed to have landed only when this is
+            `true`: every control display bound to the takeover ended with each input message it
+            forwarded whole and Neo's screen closing the connection Neo had half-closed, within
+            2 s, so the screen read all of that input before the release went on, and none
+            arrives later. Input a release cuts off before Neo forwarded it is dropped, never
+            delivered late. `false` is intentional after the bounded 2 s wait and means the
+            guarantee does not hold for this release: the screen kept the connection open or
+            closed it first, the release cut a message in two, or a display was still forwarding
+            when the release's budget ran out. Absent while the takeover is active, and when no
+            control display was bound to it.
         createdAt:
           type: integer
           format: int64

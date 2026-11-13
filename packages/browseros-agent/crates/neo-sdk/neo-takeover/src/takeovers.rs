@@ -8,8 +8,8 @@
 //!            ─▶ hold the screen ─▶ fit(tab, viewer)? ─▶ active
 //!            (still fitting when the TTL release is due ─▶ given back as a release
 //!            is ─▶ released(expired), never active)
-//!  release:  close its displays ─▶ restore(fit) ─▶ let the screen go ─▶ unlock
-//!            ─▶ released(reason): by the host, 10 s before the lock's deadline (expired),
+//!  release:  close its displays, each drained to Xvnc ─▶ restore(fit) ─▶ let the screen go
+//!            ─▶ unlock ─▶ released(reason): by the host, 10 s before the lock's end (expired),
 //!            or when the tab closes (tab_closed, without the restore)
 //! ```
 //!
@@ -149,6 +149,11 @@ pub struct Takeover {
     pub created_at: EpochMillis,
     /// When the lock's TTL ends. The takeover is released 10 s before.
     pub expires_at: EpochMillis,
+    /// Whether Xvnc read all of the owner's input through the takeover's control displays
+    /// ([`DisplayBinding::input_drained`]). Set by the release, which answers only after those
+    /// displays ended, so a host can read what the owner typed without a key landing later.
+    /// `None` while active, and when no display was bound to it.
+    pub input_drained: Option<bool>,
 }
 
 /// One takeover's place in the table.
@@ -296,6 +301,7 @@ impl Takeovers {
             fit: None,
             created_at: lock.created_at,
             expires_at: lock.expires_at,
+            input_drained: None,
         };
         if let Some(viewer) = viewer {
             let fits = Arc::clone(&self.fits);
@@ -425,11 +431,13 @@ impl Takeovers {
         let budget = Instant::now() + GIVE_BACK;
         let id = takeover.id;
         let tab_open = reason != ReleaseReason::TabClosed;
+        let displays = binding.clone();
         give_back_step(budget, id, "closing its displays", async move {
             binding.close().await;
             Ok(())
         })
         .await;
+        let input_drained = displays.input_drained();
         if tab_open {
             let fits = Arc::clone(&self.fits);
             give_back_step(budget, id, "restoring its fit", async move {
@@ -447,6 +455,7 @@ impl Takeovers {
                 reason,
                 at: EpochMillis::now(),
             },
+            input_drained,
             ..takeover
         };
         {

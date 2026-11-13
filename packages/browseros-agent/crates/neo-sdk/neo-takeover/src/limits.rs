@@ -113,6 +113,12 @@ pub(crate) const XVNC_DIAL: Duration = Duration::from_secs(2);
 /// The most Xvnc bytes one read takes before they go to the viewer as one frame.
 pub(crate) const SERVER_CHUNK: usize = 64 * 1024;
 
+/// How long a control display that ended waits for Xvnc to close the connection Neo half-closed.
+/// Xvnc's close is the proof that it read the owner's last input; one that has not closed by then
+/// is left, and the display ends undrained. Inside the give-back's budget below, so a release
+/// that waits for it still restores the fit before the lock's deadline.
+pub(crate) const XVNC_DRAIN: Duration = Duration::from_secs(2);
+
 /// How often a follower re-checks its pause and its tab, besides each operation the followed
 /// task starts. It also covers a trace event stream that lagged.
 pub(crate) const FOLLOW_TICK: Duration = Duration::from_secs(1);

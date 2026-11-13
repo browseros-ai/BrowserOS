@@ -10,10 +10,22 @@
 //! A bound display runs under its binding's task tracker. Release cancels it and waits for its
 //! forwarding to stop before restoring the fit and lifting the agent's lock. RFB bytes are
 //! framed and judged by mode, never interpreted as field values.
+//!
+//! A control display does not end when its forwarding stops. It half-closes its connection to
+//! Xvnc and waits, at most [`XVNC_DRAIN`], for Xvnc to close it. Xvnc reads a connection in order
+//! and closes it at its end of stream, so that close shows the owner's last input was read, and
+//! a host may read what they typed once the display ended. The display's binding keeps whether
+//! that held, and a takeover's release reports it.
+//!
+//! ```text
+//!  viewer's close frame, or release ─▶ forwarding stops ─▶ FIN to Xvnc
+//!    ─▶ Xvnc's bytes read and dropped until it closes (≤ 2 s) ─▶ drained, or not
+//!    ─▶ the display ends: the viewer's close is answered, a release restores the fit
+//! ```
 
 use crate::browser_tabs::{ScreenHoldGuard, ViewWatchGuard};
 use crate::follow::Follower;
-use crate::limits::{SERVER_CHUNK, XVNC_DIAL};
+use crate::limits::{SERVER_CHUNK, XVNC_DIAL, XVNC_DRAIN};
 use crate::rfb_client::{ClientFramer, DisplayMode, Verdict, verdict};
 use crate::{BrowserTabs, Front, Locks, PartError, ScreenHolder, follow, screen_rule};
 use browseros_core::TabId;
@@ -23,8 +35,8 @@ use neo_trace::{TaskId, TraceSink, TraceStore};
 use std::io;
 use std::net::SocketAddr;
 use std::pin::pin;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
@@ -76,8 +88,10 @@ pub enum DisplayEnd {
 pub struct DisplayBinding {
     /// Cancelled once, by [`DisplayBinding::close`].
     released: CancellationToken,
-    /// Each bound display while it forwards RFB bytes.
+    /// Each bound display while it forwards RFB bytes and drains its connection to Xvnc.
     live: TaskTracker,
+    /// Whether every bound display that ended drained; `None` until one has ended.
+    drained: Arc<Mutex<Option<bool>>>,
 }
 
 impl DisplayBinding {
@@ -87,9 +101,10 @@ impl DisplayBinding {
         Self::default()
     }
 
-    /// Ends every display bound to this one, and returns once each has stopped forwarding.
-    /// A display bound after this ends at once, so a release leaves no moment in which
-    /// a display that just bound could take input.
+    /// Ends every display bound to this one, and returns once each has stopped forwarding and
+    /// drained its connection to Xvnc, at most [`XVNC_DRAIN`] later. A display bound after this
+    /// ends at once, so a release leaves no moment in which a display that just bound could take
+    /// input.
     pub async fn close(&self) {
         self.released.cancel();
         self.live.close();
@@ -100,6 +115,27 @@ impl DisplayBinding {
     #[must_use]
     pub fn is_closed(&self) -> bool {
         self.released.is_cancelled()
+    }
+
+    /// Whether Xvnc read all of the owner's input: `None` while no display bound to this one has
+    /// ended, then `true` only if every one that ended forwarded each message whole and saw Xvnc
+    /// close the connection it had half-closed. A display still forwarding makes it `false`, since
+    /// its last input is unproven.
+    #[must_use]
+    pub fn input_drained(&self) -> Option<bool> {
+        // The tracker first: a display records its outcome before it leaves the tracker, so once
+        // the tracker is empty every display that ended has recorded. Read the other way round, a
+        // display ending between the two reads would be missed.
+        if !self.live.is_empty() {
+            return Some(false);
+        }
+        *self.drained.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// One bound display ended, drained or not.
+    fn ended(&self, drained: bool) {
+        let mut all = self.drained.lock().unwrap_or_else(PoisonError::into_inner);
+        *all = Some(all.unwrap_or(true) && drained);
     }
 }
 
@@ -241,7 +277,7 @@ impl Admitted {
     /// WebSocket frames and puts them back in.
     ///
     /// A bound display runs inside its binding's tracker, so [`DisplayBinding::close`] waits for
-    /// its forwarding to stop before the takeover restores the fit.
+    /// its forwarding to stop, and its drain, before the takeover restores the fit.
     pub async fn serve<I, O>(self, from_viewer: I, to_viewer: O) -> DisplayEnd
     where
         I: Stream<Item = Bytes> + Send,
@@ -276,7 +312,7 @@ impl Admitted {
             role,
             server,
         } = self;
-        let end = match role {
+        let (end, drained) = match role {
             Role::View {
                 follower,
                 _watch: watch,
@@ -285,7 +321,7 @@ impl Admitted {
                 let closing = Closing::Never;
                 let proxy =
                     Proxy::new(DisplayMode::View).run(server, from_viewer, to_viewer, &closing);
-                match follower {
+                let ended = match follower {
                     None => proxy.await,
                     Some(follower) => {
                         let mut proxy = pin!(proxy);
@@ -293,28 +329,35 @@ impl Admitted {
                         // follower can send another activation.
                         tokio::select! {
                             biased;
-                            end = &mut proxy => end,
+                            ended = &mut proxy => ended,
                             () = follow::run(follower, &displays) => proxy.await,
                         }
                     }
-                }
+                };
+                (ended.end, ended.drained)
             }
             Role::Control {
                 binding,
                 _held: held,
             } => {
-                let closing = binding.map_or(Closing::Never, |binding| {
-                    Closing::Released(binding.released)
+                let closing = binding.as_ref().map_or(Closing::Never, |binding| {
+                    Closing::Released(binding.released.clone())
                 });
-                let end = Proxy::new(DisplayMode::Control)
+                let ended = Proxy::new(DisplayMode::Control)
                     .run(server, from_viewer, to_viewer, &closing)
                     .await;
-                // Owner front ownership outlives every byte this display forwards.
+                // Before the display leaves its binding's tracker, so a release that waited for
+                // it reads the outcome.
+                if let (Some(binding), Some(drained)) = (&binding, ended.drained) {
+                    binding.ended(drained);
+                }
+                // Owner front ownership outlives every byte this display forwards, and the
+                // drain that proves Xvnc took them.
                 drop(held);
-                end
+                (ended.end, ended.drained)
             }
         };
-        tracing::info!(display = id, ?end, "a display ended");
+        tracing::info!(display = id, ?end, ?drained, "a display ended");
         end
     }
 }
@@ -353,6 +396,10 @@ impl Closing {
 struct Proxy {
     mode: DisplayMode,
     framer: ClientFramer,
+    /// A message's write to Xvnc began and has not finished. A release cancels forwarding at
+    /// once, so it can cut a message in two: Xvnc then reads a truncated message before Neo's
+    /// end of stream, and its close proves nothing about the owner's input.
+    writing: bool,
 }
 
 impl Proxy {
@@ -360,39 +407,52 @@ impl Proxy {
         Self {
             mode,
             framer: ClientFramer::default(),
+            writing: false,
         }
     }
 
-    /// Runs until one side ends, the viewer is refused, or `closing` fires.
+    /// Runs until one side ends, the viewer is refused, or `closing` fires; then a control
+    /// display drains its connection to Xvnc ([`drain`]).
     ///
     /// The two directions never wait on each other, and `closing` races both: a viewer that
     /// stopped reading, a stuck Xvnc never keeps a display that must close
-    /// forwarding, and a release never waits on them.
+    /// forwarding, and a release never waits on them. The drain is bounded by [`XVNC_DRAIN`].
     async fn run<I, O>(
         mut self,
         server: TcpStream,
         from_viewer: I,
         to_viewer: O,
         closing: &Closing,
-    ) -> DisplayEnd
+    ) -> Ended
     where
         I: Stream<Item = Bytes>,
         O: Sink<Bytes>,
     {
-        let (from_server, to_server) = server.into_split();
-        tokio::select! {
+        let (mut from_server, mut to_server) = server.into_split();
+        let end = tokio::select! {
             biased;
             end = closing.closed() => end,
-            end = screen_to_viewer(from_server, to_viewer, closing) => end,
-            end = self.viewer_to_screen(from_viewer, to_server) => end,
-        }
+            end = screen_to_viewer(&mut from_server, to_viewer, closing) => end,
+            end = self.viewer_to_screen(from_viewer, &mut to_server) => end,
+        };
+        let drained = match (self.mode, end) {
+            (DisplayMode::View, _) => None,
+            // Xvnc ended the connection, or refused a write, before Neo was done: nothing shows
+            // it read the last input.
+            (DisplayMode::Control, DisplayEnd::ScreenClosed) => Some(false),
+            (DisplayMode::Control, _) => {
+                let closed = drain(from_server, to_server).await;
+                Some(closed && !self.writing)
+            }
+        };
+        Ended { end, drained }
     }
 
     /// The viewer's bytes as they come, through the framer and the verdict table, to Xvnc.
     async fn viewer_to_screen<I>(
         &mut self,
         from_viewer: I,
-        mut to_server: OwnedWriteHalf,
+        to_server: &mut OwnedWriteHalf,
     ) -> DisplayEnd
     where
         I: Stream<Item = Bytes>,
@@ -403,7 +463,7 @@ impl Proxy {
                 return DisplayEnd::ViewerLeft;
             };
             self.framer.push(&bytes);
-            if let Err(end) = self.forward(&mut to_server).await {
+            if let Err(end) = self.forward(to_server).await {
                 return end;
             }
         }
@@ -419,10 +479,12 @@ impl Proxy {
                 Verdict::Drop => continue,
                 Verdict::Pass => {}
             }
+            self.writing = true;
             to_server
                 .write_all(&bytes)
                 .await
                 .map_err(|_| DisplayEnd::ScreenClosed)?;
+            self.writing = false;
         }
         Ok(())
     }
@@ -434,7 +496,7 @@ impl Proxy {
 /// send multiple chunks, so the outer select alone would allow bytes read after cancellation
 /// to escape. Binding close waits for this forwarding to end before the fit is restored.
 async fn screen_to_viewer<O>(
-    mut from_server: OwnedReadHalf,
+    from_server: &mut OwnedReadHalf,
     to_viewer: O,
     closing: &Closing,
 ) -> DisplayEnd
@@ -456,6 +518,39 @@ where
             return DisplayEnd::ViewerLeft;
         }
     }
+}
+
+/// How a display's proxy ended, and for a control display whether its drain held.
+struct Ended {
+    end: DisplayEnd,
+    /// `None` for a view, which forwards no input to prove.
+    drained: Option<bool>,
+}
+
+/// Half-closes a control display's connection to Xvnc, then reads and drops what Xvnc still sends
+/// until Xvnc closes it, for at most [`XVNC_DRAIN`]. Whether Xvnc closed in time.
+///
+/// Xvnc reads a connection in order and closes it at its end of stream, so its close shows it
+/// read every byte before Neo's FIN, the owner's last input included. Nothing read here reaches
+/// the viewer, which keeps a release's rule that no frame read after it does. Reading to the end
+/// also leaves nothing unread on the socket, so closing it sends a FIN, not a reset.
+async fn drain(mut from_server: OwnedReadHalf, mut to_server: OwnedWriteHalf) -> bool {
+    if to_server.shutdown().await.is_err() {
+        return false;
+    }
+    let mut dropped = vec![0; SERVER_CHUNK];
+    let closed = async {
+        loop {
+            match from_server.read(&mut dropped).await {
+                Ok(0) => return true,
+                Ok(_) => {}
+                Err(_) => return false,
+            }
+        }
+    };
+    tokio::time::timeout(XVNC_DRAIN, closed)
+        .await
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -488,7 +583,8 @@ mod tests {
             });
         let proxy = tokio::spawn({
             let closing = Closing::Released(close.clone());
-            async move { screen_to_viewer(from_server, to_viewer, &closing).await }
+            let mut from_server = from_server;
+            async move { screen_to_viewer(&mut from_server, to_viewer, &closing).await }
         });
 
         xvnc.write_all(b"before").await?;

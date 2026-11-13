@@ -372,6 +372,7 @@ pub(crate) fn takeover(takeover: &Takeover) -> api::Takeover {
         created_at: takeover.created_at.millis(),
         released_at,
         expires_at: takeover.expires_at.millis(),
+        input_drained: takeover.input_drained,
     }
 }
 
