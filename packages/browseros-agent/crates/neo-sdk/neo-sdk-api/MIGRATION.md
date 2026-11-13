@@ -100,7 +100,11 @@ uploads elsewhere must add that absolute folder, or send `{ name, mimeType, buff
 The rule also covers `drop`, script/style tag paths and page/context init-script paths.
 
 The state directory, browser profile, host token and CAPTCHA key files are always protected
-from script reads and writes, even with `["/"]` listed. A directory upload containing a
+from script reads and writes, even with `["/"]` listed. In hosted mode, so on the SDK image,
+the home of Neo's user (`/home/neo`) is protected the same way. Inside it a script works only in
+the downloads folder or in a listed folder whose first name below the home is not a dot-entry,
+and there the list also allows writes. A script can no longer save under `/home/neo`: save under
+`/data/downloads`, `/tmp` or a listed folder instead. A directory upload containing a
 protected location is refused. Writes elsewhere stay unchanged. Relative paths use Neo's
 working directory, symlinks resolve before authorization, and allowed aliases retain their
 filenames. Empty lists deny path reads; missing listed folders grant no access. Refusals are
