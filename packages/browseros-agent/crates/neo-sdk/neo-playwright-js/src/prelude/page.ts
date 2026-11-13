@@ -1188,33 +1188,25 @@ export class Page extends EventEmitter {
     work: (ready: () => void, publication: NavigationPublication) => Promise<T>,
   ): Promise<T> {
     this._navigationsInFlight++
-    const tracked = this.#publications.track(async (ready, publication) => {
+    return this.#publications.track(async (ready, publication) => {
+      let outcome: { value: T } | { error: unknown }
       try {
-        return await work(ready, publication)
+        outcome = { value: await work(ready, publication) }
+      } catch (error) {
+        outcome = { error }
       } finally {
         this._navigationsInFlight--
       }
+      // The settle steps skip a page while its navigation is in flight (Chromium answers no
+      // command for it), so the navigating page itself is read here, once the counter dropped,
+      // before the navigation, answered or failed, reaches the script. It stays inside the
+      // tracked work on purpose: an evaluate that publishes this navigation (`publishReady`)
+      // waits for it, so the navigation still resolves before that evaluate returns (upstream's
+      // order, spec WA-104). The read is Neo's own and bounded (`LISTED_FRAMES_TIMEOUT_MS`).
+      await this._context._settleFrames().catch(() => {})
+      if ('error' in outcome) throw outcome.error
+      return outcome.value
     })
-    return this.#settledAfter(tracked)
-  }
-
-  /**
-   * `navigation`'s outcome once the trees it left stale are read. The settle steps skip a page
-   * while its navigation is in flight (Chromium answers no command for it), so the navigating
-   * page itself is read here: after the counter dropped, and after the tracked work published,
-   * so no browser await follows its `ready` mark (`_navigated`). A navigation that failed is
-   * settled too, before its error reaches the script.
-   */
-  async #settledAfter<T>(navigation: Promise<T>): Promise<T> {
-    let outcome: { value: T } | { error: unknown }
-    try {
-      outcome = { value: await navigation }
-    } catch (error) {
-      outcome = { error }
-    }
-    await this._context._settleFrames().catch(() => {})
-    if ('error' in outcome) throw outcome.error
-    return outcome.value
   }
 
   /** Publish only a navigation whose requested load or native reply already completed. */
@@ -1262,8 +1254,10 @@ export class Page extends EventEmitter {
     }
     // A modern native reply already attempted its bounded snapshot. If superseded, discard
     // those facts instead of reading a replacement renderer on an older op's completion.
-    // No browser await remains after this mark. A later evaluate may now publish this
-    // navigation's public promise before returning its own observation.
+    // After this mark a later evaluate may publish this navigation's public promise before
+    // returning its own observation, so it waits for the rest of the tracked work. The only
+    // browser await left is `_navigating`'s bounded settle read of the trees this navigation
+    // left stale, which that evaluate joins so the navigation still resolves first.
     ready?.()
     // The navigation's frames were applied after its operation's settle step: a tree its reply
     // or its own read left stale is read once more before the navigation returns to the

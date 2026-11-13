@@ -11507,26 +11507,20 @@ ${changes}`;
     }
     _navigating(work) {
       this._navigationsInFlight++;
-      const tracked = this.#publications.track(async (ready, publication) => {
+      return this.#publications.track(async (ready, publication) => {
+        let outcome;
         try {
-          return await work(ready, publication);
+          outcome = { value: await work(ready, publication) };
+        } catch (error) {
+          outcome = { error };
         } finally {
           this._navigationsInFlight--;
         }
+        await this._context._settleFrames().catch(() => {});
+        if ("error" in outcome)
+          throw outcome.error;
+        return outcome.value;
       });
-      return this.#settledAfter(tracked);
-    }
-    async#settledAfter(navigation) {
-      let outcome;
-      try {
-        outcome = { value: await navigation };
-      } catch (error) {
-        outcome = { error };
-      }
-      await this._context._settleFrames().catch(() => {});
-      if ("error" in outcome)
-        throw outcome.error;
-      return outcome.value;
     }
     async _publishCompleted() {
       await this.#publications.publishReady();
