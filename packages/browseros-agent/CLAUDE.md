@@ -1,52 +1,59 @@
 # BrowserOS Agent contributor ground rules
 
-A Bun-workspaces monorepo for the BrowserOS MCP server, agent extension UI, and shared packages.
+A monorepo for the BrowserOS MCP server, agent extension UI, Neo SDK, and shared packages: Bun
+workspaces for TypeScript (`apps/`, `packages/`) and a Cargo workspace for Rust (`crates/`,
+`apps/claw-server`).
 
 ## Before you push
 
-Run the root check suite and the tests:
-
-```
-bun run check
-bun run test
+```sh
+bun run check   # lint, typecheck, Fallow
+bun run test    # the Bun test suites; Rust is separate
 ```
 
-`bun run check` runs lint, typecheck, and Fallow. `bun run test` runs the full test suite. For docs-only changes, also run `git diff --check`. For release/build changes, run the relevant `bun run build:*` command.
+After Rust changes, also run `bun run test:rust`, `bun run lint:rust`, and `bun run fmt:rust`.
+After docs-only changes, also run `git diff --check`. After release or build changes, run the
+matching `bun run build:*` command.
 
 ## Live browser tests
 
-For a test that expects an existing CDP browser, use:
+Run a test that reads `BROWSEROS_CDP_PORT` through the launcher, keeping its own command and
+flags:
 
 ```sh
-bun run test:browser -- <your existing test command>
+bun run test:browser -- cargo test -p neo-playwright --test pages_live -- --ignored
 ```
 
-It supplies `BROWSEROS_CDP_PORT` and owns browser startup, private state, and cleanup. Keep
-the existing Cargo command and flags. Do not launch the installed app directly or share a
-running browser across independent test commands. Logs and `result.json` stay at the
-artifact path printed to stderr; `NEO_E2E_BROWSER` selects another browser build.
+Each run starts a fresh headless Neo on a free port, supplies the port, and cleans up; start no
+browser and set no port beforehand. Give every independent test command its own run, because
+suites that share a browser clear each other's tabs and cookies. Never point a test at the
+installed app: its bundled server reconciles your real MCP configuration and skills. Logs and
+`result.json` stay in the artifact directory printed to stderr. `NEO_E2E_BROWSER` selects
+another browser build. The launcher needs Node 22+.
 
-`test:neo-spec` and full MCP fixtures already own their browsers; use their existing
-launchers without nesting `test:browser`. Interactive app work uses `dev:claw:watch`.
-The launcher itself runs on Node 22+; agents invoke its Bun package alias.
+`bun run test:neo-spec` and the full MCP fixtures launch their own browsers; run them directly,
+not under `test:browser`. Interactive app work uses `bun run dev:claw:watch`.
 
-## Universal rules
+## Conventions
 
-- Use extensionless TypeScript imports: `./utils`, not `./utils.js`.
-- Use Bun: `bun <file>`, `bun test`, `bun install`, `bun run <script>`. Bun loads env files; do not add dotenv unless a script proves it needs one.
-- Use kebab-case for folders and multi-word non-component files; app-specific framework exceptions live in the app CLAUDE files.
-- Keep shared constants in `@browseros/shared` instead of scattering magic values:
-  - `@browseros/shared/constants/ports`
-  - `@browseros/shared/constants/timeouts`
-  - `@browseros/shared/constants/limits`
-  - `@browseros/shared/constants/urls`
-  - `@browseros/shared/constants/paths`
-  - `@browseros/shared/types/logger`
-- Logger messages should not include `[prefix]` tags; development logging already adds file, line, and function.
-- Keep comments minimal. Comment hidden constraints, subtle invariants, critical warnings, or surprising behavior; do not restate obvious code.
-- New packages go in `packages/`; apps go in `apps/`. Avoid package-wide `index.ts` barrels and expose narrow files with both `types` and `default` entries in `package.json`.
+- Use Bun for TypeScript: `bun <file>`, `bun test`, `bun install`, `bun run <script>`. Bun loads
+  env files itself, so add dotenv only when a script proves it needs it.
+- Write extensionless TypeScript imports: `./utils`, not `./utils.js`.
+- Name folders and multi-word non-component files in kebab-case; `apps/app/CLAUDE.md` lists the
+  UI exceptions.
+- Put shared constants and types in `@browseros/shared` (entry points in its `package.json`
+  `exports`) instead of inline magic values.
+- Write logger messages as plain text. Development logging already prefixes file, line, and
+  function, so a `[prefix]` tag repeats it.
+- Keep comments minimal. Comment hidden constraints, subtle invariants, critical warnings, or
+  surprising behavior; do not restate obvious code.
+- New packages go in `packages/`, apps in `apps/`, Rust crates in `crates/`. A package exposes
+  narrow `package.json` `exports` entries, each with `types` and `default`, rather than a
+  package-wide `index.ts` barrel.
 
 ## Where to look
 
-- For server-specific guidance, see `apps/server/CLAUDE.md`.
-- For extension/app UI specifics, see `apps/app/CLAUDE.md`.
+- Server work: `apps/server/CLAUDE.md`.
+- Extension and app UI work: `apps/app/CLAUDE.md`.
+- Neo SDK crates: `crates/neo-sdk/STYLE.md` holds the rules review checks, and
+  `crates/neo-sdk/check.sh` runs them.
