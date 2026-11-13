@@ -1288,6 +1288,14 @@ def sign_all_components(
                 entitlements_name = "helper-gpu-entitlements.plist"
             elif "Plugin" in helper.name:
                 entitlements_name = "helper-plugin-entitlements.plist"
+            elif helper.name.endswith("Helper.app") and not any(
+                variant in helper.name
+                for variant in ("Renderer", "GPU", "Plugin", "Alerts")
+            ):
+                # The base helper hosts utility processes, including the
+                # Widevine CDM, which is signed by Google's Team ID and fails
+                # library validation unless it is disabled.
+                entitlements_name = "helper-entitlements.plist"
 
             if entitlements_name:
                 for ent_dir in entitlements_dirs:
