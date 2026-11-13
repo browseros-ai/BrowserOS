@@ -2159,117 +2159,43 @@ async fn tests_that_adopted_private_fields_are_masked_in_every_snapshot_format()
     Ok(())
 }
 
-/// A → B → two A siblings exercises adoption through a cross-site intermediate frame.
-/// Neither leaf has a same-process parent or child, and both source realms stay alive until
-/// the public snapshots and the independent native-walk witness have been inspected.
-#[tokio::test]
-#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
-async fn tests_that_sibling_adopted_private_fields_are_masked_across_a_cross_site_parent()
--> TestResult {
-    let _alone = ALONE.acquire().await?;
-    let server = FixtureServer::start(HashMap::from([(
-        "/adopted-siblings.html".to_owned(),
-        Page::html(include_str!(
-            "data/adopted-private-fields/sibling-page.html"
-        )),
-    )]))
-    .await?;
-    let run = Arc::new(LiveRun::connect().await?);
-    let host: Arc<dyn OpHost> = Arc::clone(&run) as Arc<dyn OpHost>;
-    let url = server.url("127.0.0.1", "/adopted-siblings.html?role=top");
-    let prepared = js_runner::run_script(
-        &host,
-        &json!({ "page": null }),
-        &format!(
-            "const p = page; await p.goto({url});\n\
-             const bridge = p.locator('#adoption-bridge').contentFrame();\n\
-             const source = bridge.locator('#adoption-source').contentFrame().locator('body');\n\
-             const destination = bridge.locator('#adoption-destination').contentFrame().locator('body');\n\
-             await source.locator('#ready').waitFor(); await destination.locator('#ready').waitFor();\n\
-             const initial = [await p.ariaSnapshot({{ mode: 'ai' }}), await source.ariaSnapshot({{ mode: 'ai' }})];\n\
-             const values = {values};\n\
-             for (const [index, id] of ['private-password', 'private-textarea', 'public-input', 'public-textarea'].entries())\n\
-               await source.locator('#' + id).fill(values[index]);\n\
-             return {{ page: p, initial }};",
-            url = json!(url),
-            values = json!(adopted_field_values("document-sibling")),
-        ),
-    )
-    .await?;
-    let page = live_run::test_page(&prepared["page"])?;
-    let core_page = run.core_page(&page).await?;
-    let frames = run
-        .invoke(
-            "page.frames",
-            json!({ "call": {}, "page": prepared["page"] }),
-        )
-        .await?;
-    let frame_id = |role: &str| -> TestResult<FrameId> {
-        frames
-            .get("frames")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .find(|frame| {
-                frame
-                    .get("url")
-                    .and_then(Value::as_str)
-                    .is_some_and(|url| url.ends_with(&format!("role={role}")))
-            })
-            .and_then(|frame| frame.get("id"))
-            .and_then(Value::as_str)
-            .map(|id| FrameId(id.to_owned()))
-            .ok_or_else(|| format!("the {role} sibling is in the admitted frame tree").into())
-    };
-    let source_frame = frame_id("source")?;
-    let destination_frame = frame_id("destination")?;
-    let source_session = run
+/// Resolve only the fixture's already admitted leaf, then use its actual CDP endpoint for
+/// the independent observer. Separate OOPIF targets may still hold same-origin live wrappers.
+async fn adopted_sibling_world(
+    run: &LiveRun,
+    page: &TestPage,
+    frames: &Value,
+    role: &str,
+) -> TestResult<(ProtocolSession, i64)> {
+    let suffix = format!("role={role}");
+    let frame = frames
+        .get("frames")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .find(|frame| {
+            frame
+                .get("url")
+                .and_then(Value::as_str)
+                .is_some_and(|url| url.ends_with(&suffix))
+        })
+        .and_then(|frame| frame.get("id"))
+        .and_then(Value::as_str)
+        .map(|id| FrameId(id.to_owned()))
+        .ok_or_else(|| format!("the {role} sibling is in the admitted frame tree"))?;
+    let session = run
         .browser()
         .frames()
-        .resolve_frame_target(core_page.clone(), Some(source_frame.clone()), None, true)
+        .resolve_frame_target(run.core_page(page).await?, Some(frame.clone()), None, true)
         .await?
         .session;
-    let destination_session = run
-        .browser()
-        .frames()
-        .resolve_frame_target(core_page, Some(destination_frame.clone()), None, true)
-        .await?
-        .session;
-    let source_world =
-        snapshot_native_world(&source_session, &json!(source_frame.as_str())).await?;
-    let destination_world =
-        snapshot_native_world(&destination_session, &json!(destination_frame.as_str())).await?;
-    snapshot_world_eval(&source_session, source_world, ADOPTED_SOURCE_WITNESS).await?;
-    snapshot_world_eval(
-        &destination_session,
-        destination_world,
-        ADOPTED_STYLE_WITNESS,
-    )
-    .await?;
-    // Reuse the full text/JSON/scoped-output matrix. The top fixture proxies explicit reads
-    // to the destination while its source sibling and cross-site bridge remain connected.
-    let (_, collect) = ADOPTED_FIELD_SNAPSHOT_SCRIPT
-        .split_once("const snapshots = {};")
-        .ok_or("the shared fixture has a snapshot collection boundary")?;
-    let init = json!({ "page": prepared["page"] });
-    let collected = js_runner::run_script(&host, &init, &format!(
-        "const p = page; const initial = {initial};\n\
-         const destination = p.locator('#adoption-bridge').contentFrame().locator('#adoption-destination').contentFrame().locator('body');\n\
-         const facts = await p.evaluate(() => window.adoption.adopt());\n\
-         const snapshots = {{}};\n{collect}",
-        initial = prepared["initial"],
-    )).await;
-    let during = snapshot_world_eval(
-        &destination_session,
-        destination_world,
-        ADOPTED_STYLE_WITNESS_RESULT,
-    )
-    .await;
-    let after =
-        snapshot_world_eval(&source_session, source_world, ADOPTED_SOURCE_WITNESS_RESULT).await;
-    let closed = js_runner::run_script(&host, &init, "await page.close();").await;
-    let opened = collected?;
-    assert_adopted_native_witness(&during?, &after?, "document-sibling")?;
+    let world = snapshot_native_world(&session, &json!(frame.as_str())).await?;
+    Ok((session, world))
+}
+
+/// The sibling case shares the ordinary output contract; only its retained source topology
+/// differs from the parent/child cases. Default page mode stays in the outer frame.
+fn assert_adopted_sibling_snapshots(opened: &Value) -> TestResult {
     assert_eq!(opened["initial"].as_array().map(Vec::len), Some(2));
     assert_eq!(
         opened["snapshots"].as_object().map(serde_json::Map::len),
@@ -2311,6 +2237,89 @@ async fn tests_that_sibling_adopted_private_fields_are_masked_across_a_cross_sit
         }
     }
     assert_adopted_reads(&opened["reads"], "document-sibling", false)?;
+    Ok(())
+}
+
+/// A → B → two A siblings exercises adoption through a cross-site intermediate frame.
+/// Neither leaf has a same-process parent or child, and both source realms stay alive until
+/// the public snapshots and the independent native-walk witness have been inspected.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_sibling_adopted_private_fields_are_masked_across_a_cross_site_parent()
+-> TestResult {
+    let _alone = ALONE.acquire().await?;
+    let server = FixtureServer::start(HashMap::from([(
+        "/adopted-siblings.html".to_owned(),
+        Page::html(include_str!(
+            "data/adopted-private-fields/sibling-page.html"
+        )),
+    )]))
+    .await?;
+    let run = Arc::new(LiveRun::connect().await?);
+    let host: Arc<dyn OpHost> = Arc::clone(&run) as Arc<dyn OpHost>;
+    let url = server.url("127.0.0.1", "/adopted-siblings.html?role=top");
+    let prepared = js_runner::run_script(
+        &host,
+        &json!({ "page": null }),
+        &format!(
+            "const p = page; await p.goto({url});\n\
+             const bridge = p.locator('#adoption-bridge').contentFrame();\n\
+             const source = bridge.locator('#adoption-source').contentFrame().locator('body');\n\
+             const destination = bridge.locator('#adoption-destination').contentFrame().locator('body');\n\
+             await source.locator('#ready').waitFor(); await destination.locator('#ready').waitFor();\n\
+             const initial = [await p.ariaSnapshot({{ mode: 'ai' }}), await source.ariaSnapshot({{ mode: 'ai' }})];\n\
+             const values = {values};\n\
+             for (const [index, id] of ['private-password', 'private-textarea', 'public-input', 'public-textarea'].entries())\n\
+               await source.locator('#' + id).fill(values[index]);\n\
+             return {{ page: p, initial }};",
+            url = json!(url),
+            values = json!(adopted_field_values("document-sibling")),
+        ),
+    )
+    .await?;
+    let page = live_run::test_page(&prepared["page"])?;
+    let frames = run
+        .invoke(
+            "page.frames",
+            json!({ "call": {}, "page": prepared["page"] }),
+        )
+        .await?;
+    let (source_session, source_world) =
+        adopted_sibling_world(&run, &page, &frames, "source").await?;
+    let (destination_session, destination_world) =
+        adopted_sibling_world(&run, &page, &frames, "destination").await?;
+    snapshot_world_eval(&source_session, source_world, ADOPTED_SOURCE_WITNESS).await?;
+    snapshot_world_eval(
+        &destination_session,
+        destination_world,
+        ADOPTED_STYLE_WITNESS,
+    )
+    .await?;
+    // Reuse the full text/JSON/scoped-output matrix. The top fixture proxies explicit reads
+    // to the destination while its source sibling and cross-site bridge remain connected.
+    let (_, collect) = ADOPTED_FIELD_SNAPSHOT_SCRIPT
+        .split_once("const snapshots = {};")
+        .ok_or("the shared fixture has a snapshot collection boundary")?;
+    let init = json!({ "page": prepared["page"] });
+    let collected = js_runner::run_script(&host, &init, &format!(
+        "const p = page; const initial = {initial};\n\
+         const destination = p.locator('#adoption-bridge').contentFrame().locator('#adoption-destination').contentFrame().locator('body');\n\
+         const facts = await p.evaluate(() => window.adoption.adopt());\n\
+         const snapshots = {{}};\n{collect}",
+        initial = prepared["initial"],
+    )).await;
+    let during = snapshot_world_eval(
+        &destination_session,
+        destination_world,
+        ADOPTED_STYLE_WITNESS_RESULT,
+    )
+    .await;
+    let after =
+        snapshot_world_eval(&source_session, source_world, ADOPTED_SOURCE_WITNESS_RESULT).await;
+    let closed = js_runner::run_script(&host, &init, "await page.close();").await;
+    let opened = collected?;
+    assert_adopted_native_witness(&during?, &after?, "document-sibling")?;
+    assert_adopted_sibling_snapshots(&opened)?;
     closed?;
     run.end_run(None);
     Ok(())
