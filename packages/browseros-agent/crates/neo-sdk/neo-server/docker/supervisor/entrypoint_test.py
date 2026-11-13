@@ -398,7 +398,7 @@ class StartNeoTest(unittest.TestCase):
                 if supplied.startswith("-- --"):
                     expected_switches.insert(0, "--enable-features=CDPScreenshotNewSurface")
 
-                self.assertEqual(calls, ["forget_zoom_levels", "spawn_as_neo"] * 2)
+                self.assertEqual(calls, ["forget_zoom_levels", "clear_sessions", "spawn_as_neo"] * 2)
                 self.assertEqual(argv[-len(expected):], expected)
                 self.assertEqual(
                     [arg for arg in argv
