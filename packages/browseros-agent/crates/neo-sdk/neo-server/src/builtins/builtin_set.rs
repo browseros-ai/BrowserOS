@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use neo_captcha::CaptchaSolver;
 
-use super::{CaptchaClaims, PlaywrightFacade, neo_tasks, playwright_ops, solve_captcha};
+use super::{CaptchaClaims, PlaywrightFacade, host_fill, neo_tasks, playwright_ops, solve_captcha};
 use crate::dispatch::{Policy, RegistryBuilder, RegistryError};
 use crate::host::TakeoverLock;
 
@@ -31,6 +31,7 @@ pub(crate) fn builtin_set(
     } = deps;
     neo_tasks::neo_tasks(builder)?;
     playwright_ops::playwright_ops(builder, &playwright)?;
+    host_fill::host_fill(builder, &playwright)?;
     solve_captcha::solve_captcha(builder, solver, claims)
 }
 

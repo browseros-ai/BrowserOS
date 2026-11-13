@@ -1971,6 +1971,7 @@ dependencies = [
  "neo-captcha",
  "neo-http",
  "neo-playwright",
+ "neo-sdk-api",
  "neo-server",
  "neo-takeover",
  "neo-trace",

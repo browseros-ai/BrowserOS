@@ -2,7 +2,7 @@
 
 use std::future::Future;
 
-use neo_trace::Effect;
+use neo_trace::{Effect, OperationKind};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
@@ -58,6 +58,10 @@ pub(crate) struct MethodSpec {
     /// Whether the method runs the agent's own script in its page's main world, which decides
     /// what of its end the door checks against the rules before release.
     pub(crate) page_script: PageScript,
+    /// How the trace files the op. `Protected` is the host's private typing: the trace takes
+    /// no picture of it (`neo-trace`'s screenshot rule), so only an `Internal` method that
+    /// Neo's own Rust runs for the host may say so.
+    pub(crate) record: OperationKind,
 }
 
 impl MethodSpec {
@@ -71,6 +75,7 @@ impl MethodSpec {
             listing: Listing::Hidden,
             lifetime: Lifetime::Operation,
             page_script: PageScript::Isolated,
+            record: OperationKind::Builtin,
         }
     }
 }

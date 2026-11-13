@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
 use browseros_core::{BrowserView, TabId};
+use neo_takeover::LockId;
 use neo_trace::{
     Delivery, Effect, EpochMillis, ErrorRecord, OperationId, Outcome, RequestId, RunEffects,
     RunEnded, RunId, RunStarted, RunStatus, TaskId, TraceSink,
@@ -49,6 +50,8 @@ pub(crate) struct RunCtx {
     ops: Mutex<OpTasks>,
     slots: Mutex<RunSlots>,
     tasks: Mutex<RunTasks>,
+    /// The host lock this run's ops pass ([`RunCtx::pass_lock`]). Write-once.
+    lock_pass: OnceLock<LockId>,
 }
 
 /// Why a run stopped. Each reason decides who owns the ops it cut short.
@@ -219,6 +222,7 @@ impl RunCtx {
             ops: Mutex::default(),
             slots: Mutex::default(),
             tasks,
+            lock_pass: OnceLock::new(),
         });
         let guard = RunGuard {
             run: Some(Arc::clone(&run)),
@@ -232,6 +236,20 @@ impl RunCtx {
     #[must_use]
     pub(crate) fn id(&self) -> RunId {
         self.id
+    }
+
+    /// Lets this run's ops pass host lock `lock`, as the takeover rule reads it
+    /// (`PolicyCheck::lock_pass`). Only the host's private typing calls it, before it submits its
+    /// one op, with the `lockId` the host named and Neo checked is held on that op's tab: the
+    /// host types through its own lock. A script's run never has one. Write-once.
+    pub(crate) fn pass_lock(&self, lock: LockId) {
+        let _ = self.lock_pass.set(lock);
+    }
+
+    /// The host lock this run's ops pass, if any.
+    #[must_use]
+    pub(crate) fn lock_pass(&self) -> Option<LockId> {
+        self.lock_pass.get().copied()
     }
 
     /// The host's task, if it sent one.

@@ -99,6 +99,8 @@ browseros-cdp.workspace = true
 browseros-core = { workspace = true, features = ["ts-rs"] }
 # The Playwright API agent scripts call: its op table and the facade that runs each op.
 neo-playwright.workspace = true
+# The host API's wire types: the private typing routes answer with them (host/fill_service.rs).
+neo-sdk-api.workspace = true
 # The host API: its routes, auth and event log, and the takeover locks the door asks.
 neo-http.workspace = true
 neo-takeover.workspace = true

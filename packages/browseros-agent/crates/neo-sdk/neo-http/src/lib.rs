@@ -19,6 +19,8 @@
 //!                                  │                     lock and takeover changes, tab.closed
 //!                                  ├▶ /v1/tabs/{id}/screencast, /video ◀── CaptureHub ◀── Chromium,
 //!                                  │                                             on its own CDP socket
+//!                                  ├▶ /v1/tabs/{id}/fill, /fill/check ─▶ the app's FillDoor
+//!                                  │    (armed by the app: the host's private typing)
 //!                                  ├▶ GET /v1/display ─ WebSocket, RFB ─▶ Displays ─▶ Xvnc
 //!                                  │    release=<takeover> binds a control display to it
 //!                                  └▶ /v1/settings ─▶ Settings ─ saved beside trace.db; the app's
@@ -39,7 +41,8 @@
 //!  idle-tab janitor (app) ─▶ Service::tab_hold: a lock or a fit on the tab, now or until when
 //! ```
 //!
-//! The app implements no trait for this crate. The takeover parts themselves live in
+//! The app implements no trait for this crate; it arms the fill routes with a closure
+//! ([`Service::arm_fill`]), since what a fill does lives beside its dispatcher. The takeover parts themselves live in
 //! `neo-takeover`, which knows nothing of HTTP; this crate builds them once and serves
 //! their routes.
 
@@ -57,6 +60,7 @@ mod display_route;
 mod event_log;
 mod event_resume;
 mod events_route;
+mod fill_route;
 mod fit_routes;
 mod host_auth;
 mod host_service;
@@ -77,6 +81,7 @@ mod tab_stamps;
 mod takeover_routes;
 mod wire;
 
+pub use fill_route::{FillAsk, FillDoor, FillRefusal, FillReply, FillVerb};
 pub use host_auth::{HostAuth, HostToken, PeerRule, TokenError};
 pub use host_service::{PeerInfo, host_router, host_service};
 pub use service::{Service, ServiceInputs, TabOwner};

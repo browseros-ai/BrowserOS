@@ -559,6 +559,7 @@ impl Dispatcher {
             caller,
             tab: page.map(|page| page.tab),
             operation: state.id(),
+            lock_pass: run.lock_pass(),
         };
         if let Err(refusal) = self.check(&check) {
             return guard.finish(Ending::Refused(refusal), Vec::new(), default_page, None);

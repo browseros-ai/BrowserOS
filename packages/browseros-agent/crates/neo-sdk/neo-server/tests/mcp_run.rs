@@ -642,3 +642,38 @@ fn screenshots_and_pdfs_work_after_a_trace_store_is_replaced() -> TestResult {
         Ok(())
     })
 }
+
+/// The host's private typing is reached only on the host listener (protected-fill design,
+/// section 7): the agent's port has no fill route, and the `run` tool names neither the route nor
+/// its internal methods, which a script cannot call.
+#[test]
+fn the_agent_port_has_no_fill_route_and_the_run_tool_never_names_it() -> TestResult {
+    on_neo_runtime(async {
+        let neo = Neo::start().await?;
+        let body =
+            r#"{"fields":[{"ref":"e1","value":"CANARY-agent-port","expect":{"origin":"x"}}]}"#;
+        for path in ["/v1/tabs/1/fill", "/v1/tabs/1/fill/check"] {
+            let reply = neo
+                .raw(&format!(
+                    "POST {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                ))
+                .await?;
+            assert!(reply.starts_with("HTTP/1.1 404"), "{path}: {reply}");
+        }
+        let client = neo.modern_client().await?;
+        let tools = client.list_tools(None).await?.tools;
+        for tool in &tools {
+            let description = tool.description.as_deref().unwrap_or_default();
+            for named in ["host.fill", "fillCheck", "/v1/tabs"] {
+                assert!(
+                    !description.contains(named),
+                    "{}: names {named}: {description}",
+                    tool.name
+                );
+            }
+        }
+        client.cancel().await?;
+        Ok(())
+    })
+}

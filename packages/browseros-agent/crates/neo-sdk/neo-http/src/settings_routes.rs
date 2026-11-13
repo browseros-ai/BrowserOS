@@ -48,8 +48,9 @@ pub(crate) async fn patch_settings(
 }
 
 /// 403 for a request a web page sent: every browser fetch, form and navigation carries `Origin`
-/// or `Sec-Fetch-Site` (a same-origin one too), and the host's own clients send neither.
-fn refuse_pages(headers: &HeaderMap) -> Result<(), ApiError> {
+/// or `Sec-Fetch-Site` (a same-origin one too), and the host's own clients send neither. The
+/// fill routes refuse with it too (`fill_route`).
+pub(crate) fn refuse_pages(headers: &HeaderMap) -> Result<(), ApiError> {
     if headers.contains_key(header::ORIGIN) || headers.contains_key("sec-fetch-site") {
         return Err(ApiError::forbidden(
             "a request from a web page is never served here",

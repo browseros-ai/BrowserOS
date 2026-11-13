@@ -27,12 +27,36 @@ use crate::browser::{BrowserLink, NeoTab, TabRegistry};
 use crate::builtins::{self, BuiltinDeps, CaptchaClaims, PlaywrightFacade, TabJanitor};
 use crate::config::{AppConfig, Defaults, HostedMode};
 use crate::dispatch::{Dispatcher, Observer, RegistryBuilder};
-use crate::host::{AgentFront, HostApi, HostHolds, HostInputs, TakeoverLock};
+use crate::host::{
+    AgentFront, FillLedger, FillService, FillServiceParts, HostApi, HostHolds, HostInputs,
+    TakeoverLock,
+};
 use crate::http::agent_router;
 use crate::mcp::McpServer;
 use crate::run::{RunService, RunServiceParts};
 #[cfg(feature = "test-support")]
 use crate::test_support::FakeCdp;
+
+/// The host's private typing (`POST /v1/tabs/{tabId}/fill`), over the app's one door. Its record
+/// of request ids lives beside the trace and keeps what the trace keeps: the host's
+/// `trace.retentionSeconds`, read at every prune, as the retention sweep reads it.
+async fn private_typing(
+    trace_dir: &Path,
+    settings: &Settings,
+    dispatcher: &Arc<Dispatcher>,
+    browser: &Arc<BrowserLink>,
+    takeover: &Arc<TakeoverLock>,
+    shutdown: &CancellationToken,
+) -> Arc<FillService> {
+    let retention = settings.clone();
+    FillService::new(FillServiceParts {
+        dispatcher: Arc::clone(dispatcher),
+        browser: Arc::clone(browser),
+        takeover: Arc::clone(takeover),
+        ledger: FillLedger::open(trace_dir, move || retention.trace_retention()).await,
+        shutdown: shutdown.clone(),
+    })
+}
 
 /// Neo's sidecar, started: the agent listener bound, the browser link connecting, and every
 /// long-lived part built.
@@ -44,7 +68,8 @@ use crate::test_support::FakeCdp;
 ///        ─ TabRegistry + BrowserLink (connects in the background) ─ PlaywrightFacade (built on
 ///          the link's first connect) ─ CaptchaSolver (with a provider key) ─ Registry
 ///          (built-ins, neo-playwright's ops)
-///        ─ Dispatcher (rules: builtins::door_rules) ─ RunService ─ McpServer
+///        ─ Dispatcher (rules: builtins::door_rules) ─ RunService ─ McpServer ─ FillService
+///          (the host's private typing, with its request record beside the trace)
 ///        ─ host API task (starts neo-http once the link connects, then serves the
 ///          socket) ─ housekeeping task (reads the host's settings each pass) ─ agent router
 ///  serve ─ until SIGTERM ─ runs stop (shutting_down) ─ connections drain ─ trace flushed
@@ -149,6 +174,10 @@ impl App {
 
     /// Startup, in dependency order. `link` starts the browser link over the real port or a
     /// test's fake; everything else is the same either way.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the composition root: one top-to-bottom startup order, which split helpers would hide"
+    )]
     async fn start_on(
         config: AppConfig,
         link: impl FnOnce(NativeCapabilities, Arc<TabRegistry>) -> Arc<BrowserLink>,
@@ -226,7 +255,16 @@ impl App {
         let mcp = McpServer::new(runs, dispatcher.registry());
         // Armed by the host API with its locks and fits, for the janitor.
         let holds = Arc::new(HostHolds::default());
-        tokio::spawn(host.serve(
+        let fill = private_typing(
+            &config.env.trace_dir(),
+            &settings,
+            &dispatcher,
+            &browser,
+            &takeover,
+            &shutdown,
+        )
+        .await;
+        tokio::spawn(host.with_fill(fill).serve(
             Arc::clone(&browser),
             takeover,
             front,

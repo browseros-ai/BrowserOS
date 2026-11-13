@@ -12,7 +12,11 @@
 //!        ─▶ Service::retain_tabs(a listing taken then, Service::tab_fence from before it)
 //!        ─▶ tab_feed
 //!        ─▶ host_service(service.router(), auth) on the socket
-//!  door (every op, every recheck) ─▶ TakeoverLock::check ─▶ Locks::check
+//!        ─▶ Service::arm_fill(FillService::door): the host's private typing
+//!  door (every op, every recheck) ─▶ TakeoverLock::check ─▶ Locks::check, or
+//!        Locks::check_passing for a fill's run, which may pass the one lock its host named
+//!  POST /v1/tabs/{tab}/fill ─▶ FillService ─ FillLedger (its own record of request ids,
+//!        beside the trace) ─ a Neo-started run with one host.fill op (fill_service.rs)
 //!  idle-tab janitor ─▶ HostHolds::hold ─▶ Service::tab_hold: a lock or a fit, now or until when
 //!  an op's input or capture ─▶ AgentFront::bring_forward ─▶ Front::bring_forward (agent_front.rs)
 //!  tab_watch's events, in order ─▶ tab_feed ─▶ Service::tab_closed, and on a
@@ -25,6 +29,10 @@
 //! browser link's tab listings to its own door. Nothing here implements a trait for the service.
 
 mod agent_front;
+mod fill_answer;
+mod fill_ledger;
+mod fill_request;
+mod fill_service;
 mod host_api;
 mod host_holds;
 mod tab_feed;
@@ -33,6 +41,8 @@ mod takeover_lock;
 mod tests;
 
 pub(crate) use agent_front::AgentFront;
+pub(crate) use fill_ledger::FillLedger;
+pub(crate) use fill_service::{FillService, FillServiceParts};
 pub(crate) use host_api::{HostApi, HostInputs};
 pub(crate) use host_holds::HostHolds;
 pub(crate) use takeover_lock::TakeoverLock;

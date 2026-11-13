@@ -6,6 +6,8 @@
 //!              │  ─ op_marks: each op's marks, and whether it is held, from its capabilities
 //!              │  ─ event_release: an event pull's events through the rules, tab by tab
 //!              ├▶ neo_tasks: named task records, tab lists, and child opens/closes
+//!              ├▶ host_fill: host.fill and host.fillCheck, internal: the host's private typing,
+//!              │  which the run service submits in a run of its own for the host's fill route
 //!              └▶ solve_captcha: neo.solveCaptcha ─ CaptchaClaims (also the door's busy rule)
 //!  TabJanitor::sweep ─▶ a Neo-origin run ─▶ Dispatcher::submit(page.close) per idle agent tab
 //!  keep_downloads ─▶ at a run's end, the finished files its download events handed it, copied
@@ -26,6 +28,7 @@
 mod builtin_set;
 mod captcha_claims;
 mod event_release;
+mod host_fill;
 mod keep_downloads;
 mod neo_tasks;
 mod op_marks;
@@ -38,6 +41,13 @@ mod tests;
 
 pub(crate) use builtin_set::{BuiltinDeps, builtin_set, door_rules};
 pub(crate) use captcha_claims::CaptchaClaims;
+pub(crate) use host_fill::{
+    CHECK as HOST_FILL_CHECK, CHECK_CODE as HOST_FILL_CHECK_CODE, ENTRY_BACKSTOP,
+    FILL as HOST_FILL, FILL_CODE as HOST_FILL_CODE, FillProgress, FillValues, RecordedBox,
+    boxes_args,
+};
+#[cfg(test)]
+pub(crate) use host_fill::{EntryParts, PrivateEntry, register as register_host_fill};
 pub(crate) use keep_downloads::keep_downloads;
 pub(crate) use playwright_facade::PlaywrightFacade;
 pub(crate) use playwright_ops::{PLAYWRIGHT_PRELUDE, remove_init_scripts};

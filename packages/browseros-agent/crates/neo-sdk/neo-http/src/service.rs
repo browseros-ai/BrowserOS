@@ -10,6 +10,7 @@
 //! tab that opened after it, through a host route (`tab_stamps`).
 
 use crate::event_log::{EventKind, EventLog, LogEvent};
+use crate::fill_route::{FillDoor, FillGate};
 use crate::live_tabs::LiveTabs;
 use crate::screenshot_taker::Camera;
 use crate::settings::Settings;
@@ -90,6 +91,8 @@ pub(crate) struct ServiceState {
     pub(crate) settings: Settings,
     /// Which tab Neo keeps for itself (`ServiceInputs::tab_owner`).
     pub(crate) tab_owner: TabOwner,
+    /// The fill routes' door, armed by the app ([`Service::arm_fill`]).
+    pub(crate) fill: FillGate,
     /// Cancels the hub's shutdown token when the service is dropped, which ends every live
     /// stream and capture.
     _live_shutdown: DropGuard,
@@ -183,6 +186,7 @@ impl Service {
                 stamps,
                 settings,
                 tab_owner,
+                fill: FillGate::default(),
                 _live_shutdown: shutdown.drop_guard(),
             }),
         }
@@ -192,6 +196,13 @@ impl Service {
     /// [`host_service`](crate::host_service), which puts the host auth in front.
     pub fn router(&self) -> Router {
         router::router(Arc::clone(&self.state))
+    }
+
+    /// Arms `POST /v1/tabs/{tabId}/fill` and `/fill/check` with what a fill does, which lives in
+    /// the app beside its dispatcher. Arm it before the socket serves; until then the routes
+    /// answer 503 `browser_unavailable`. The first arm stays.
+    pub fn arm_fill(&self, door: FillDoor) {
+        self.state.fill.arm(door);
     }
 
     /// The tab locks the routes take. The app's lock policy asks [`Locks::check`] about every

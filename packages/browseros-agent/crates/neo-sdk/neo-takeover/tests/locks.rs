@@ -6,8 +6,8 @@
 
 use browseros_core::TabId;
 use neo_takeover::{
-    Lock, LockBinding, LockEnd, LockId, LockTarget, LockTtl, Locks, OwnerHasControl, PartError,
-    Reads, TakeoverId,
+    Lock, LockBinding, LockEnd, LockId, LockTarget, LockTtl, Locks, NamedLock, OwnerHasControl,
+    PartError, Reads, TakeoverId,
 };
 use neo_trace::{
     Delivery, Effect, EpochMillis, OperationEnded, OperationId, OperationKind, OperationStarted,
@@ -507,6 +507,92 @@ async fn a_past_instant_is_judged_by_the_locks_that_covered_it_held_or_ended() -
         h.locks
             .check_at(other, Effect::Write, held.created_at.plus_millis(-1)),
         Ok(())
+    );
+    Ok(())
+}
+
+/// The host's private typing names the one lock it holds on the tab it types into
+/// (`Locks::check_passing`): that lock lets the fill through, every other lock still refuses,
+/// and a lock that is not held on that tab passes nothing (`Locks::holds`).
+#[tokio::test]
+async fn a_named_lock_passes_the_fill_and_no_other_lock_does() -> TestResult {
+    let h = harness().await?;
+    let (tab, other) = (TabId(12), TabId(13));
+    let named = h
+        .locks
+        .lock(tab, Reads::Block, ttl(60)?, LockBinding::Host)
+        .await;
+    assert_eq!(h.locks.named(named.id, tab), NamedLock::HostHeld);
+    assert_eq!(
+        h.locks.named(named.id, other),
+        NamedLock::NotHeld,
+        "held on its own tab only"
+    );
+    assert_eq!(
+        h.locks
+            .check_passing(LockTarget::Tab(tab), Effect::Write, named.id),
+        Ok(()),
+        "the named lock passes its holder's fill"
+    );
+    assert_eq!(
+        h.locks.check(LockTarget::Tab(tab), Effect::Write),
+        refused_by(&named),
+        "the agent is still locked out"
+    );
+
+    // A second lock on the same tab still refuses the fill.
+    let second = h
+        .locks
+        .lock(tab, Reads::Allow, ttl(60)?, LockBinding::Host)
+        .await;
+    assert_eq!(
+        h.locks
+            .check_passing(LockTarget::Tab(tab), Effect::Write, named.id),
+        refused_by(&second)
+    );
+    h.locks.unlock_host(second.id)?;
+
+    // A lock held on another tab passes nothing here.
+    let elsewhere = h
+        .locks
+        .lock(other, Reads::Block, ttl(60)?, LockBinding::Host)
+        .await;
+    assert_eq!(
+        h.locks
+            .check_passing(LockTarget::Tab(other), Effect::Write, named.id),
+        refused_by(&elsewhere)
+    );
+
+    // Released, it is held nowhere and passes nothing it could refuse.
+    h.locks.unlock_host(named.id)?;
+    assert_eq!(h.locks.named(named.id, tab), NamedLock::NotHeld);
+    assert_eq!(
+        h.locks
+            .check_passing(LockTarget::Tab(tab), Effect::Write, named.id),
+        Ok(()),
+        "no lock is left on the tab"
+    );
+    assert_eq!(
+        h.locks.named(LockId::new(), tab),
+        NamedLock::NotHeld,
+        "an id no lock has"
+    );
+
+    // A takeover's lock is the owner's: named, it is told apart and passes nothing.
+    let owners = h
+        .locks
+        .lock(
+            tab,
+            Reads::Block,
+            ttl(60)?,
+            LockBinding::Takeover(TakeoverId::new()),
+        )
+        .await;
+    assert_eq!(h.locks.named(owners.id, tab), NamedLock::TakeoverHeld);
+    assert_eq!(
+        h.locks
+            .check_passing(LockTarget::Tab(tab), Effect::Write, owners.id),
+        refused_by(&owners)
     );
     Ok(())
 }

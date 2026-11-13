@@ -27,6 +27,8 @@ pub(crate) enum ErrorCode {
     FitRestored,
     DisplayUnavailable,
     TakeoverReleased,
+    TraceUnavailable,
+    LockReleased,
 }
 
 impl ErrorCode {
@@ -45,6 +47,8 @@ impl ErrorCode {
             Self::FitRestored => "fit_restored",
             Self::DisplayUnavailable => "display_unavailable",
             Self::TakeoverReleased => "takeover_released",
+            Self::TraceUnavailable => "trace_unavailable",
+            Self::LockReleased => "lock_released",
         }
     }
 }
@@ -83,6 +87,29 @@ impl ApiError {
     /// 404 `not_found`.
     pub(crate) fn not_found(message: impl Into<Cow<'static, str>>) -> Self {
         Self::new(StatusCode::NOT_FOUND, ErrorCode::NotFound, message)
+    }
+
+    /// 409 `lock_released`: a lock the request named is not held.
+    pub(crate) fn lock_released(message: impl Into<Cow<'static, str>>) -> Self {
+        Self::new(StatusCode::CONFLICT, ErrorCode::LockReleased, message)
+    }
+
+    /// 503 `browser_unavailable`: Neo cannot reach the browser yet.
+    pub(crate) fn browser_unavailable(message: impl Into<Cow<'static, str>>) -> Self {
+        Self::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            ErrorCode::BrowserUnavailable,
+            message,
+        )
+    }
+
+    /// 503 `trace_unavailable`: the trace cannot be read to check a `requestId`.
+    pub(crate) fn trace_unavailable(message: impl Into<Cow<'static, str>>) -> Self {
+        Self::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            ErrorCode::TraceUnavailable,
+            message,
+        )
     }
 
     /// 404 `tab_not_found`: no open tab has the id.
