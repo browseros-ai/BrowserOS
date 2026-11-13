@@ -7,6 +7,7 @@ mod downloads;
 mod errors;
 mod events;
 mod fits;
+mod listener_compatibility;
 mod live;
 mod locks;
 mod reconcile;

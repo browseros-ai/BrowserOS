@@ -28,9 +28,13 @@ subscription-name rule used by screenshots and touched-tab following, plus an ab
 call site. Explicit script listeners such as `page.on` carry their site and stay in the view.
 Historical listener rows without sites cannot distinguish script listeners from Neo's own work.
 
-With neither option, all existing fields retain their full values and presence; operation rows
-gain only the additive `internal` boolean. Explicit defaults are `fields=full&internal=true`.
-Summary ignores screenshot-inlining options and leaves `hasScreenshot` intact.
+Default answers have two additive compatibility changes. Every operation row gains `internal`.
+Newly recorded explicit `page.on` and `context.on` listener changes also gain their script `site`,
+which the old prelude omitted. These sites appear in default run detail, single-operation reads,
+trace tails, and operation events, even without either new query option. Neo's own listeners and
+event pump keep no site. Existing stored rows are not rewritten, and their other fields retain
+their values and presence. Explicit defaults are `fields=full&internal=true`. Summary ignores
+screenshot-inlining options and leaves `hasScreenshot` intact.
 
 This is a read view. Values remain stored in `trace.db`, and full reads, downloads, blobs, and
 screenshot endpoints retain their existing access. URL and title can themselves contain values;
