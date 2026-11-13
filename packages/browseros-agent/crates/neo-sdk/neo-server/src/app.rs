@@ -542,6 +542,7 @@ fn log_startup(config: &AppConfig, address: SocketAddr) {
 #[cfg(test)]
 mod housekeeping_tests {
     use std::sync::Arc;
+    use std::task::Poll;
     use std::time::Duration;
 
     use futures_util::poll;
@@ -565,6 +566,10 @@ mod housekeeping_tests {
             Arc::new(HostHolds::default()),
             rig.settings.clone(),
         );
+        // Every wait below only bounds a hang: a passing run takes milliseconds, and a deadline
+        // costs nothing then, so it is generous for GitHub's runners and a loaded machine (one
+        // run in 1,600 missed 5 s with 200 copies running at once).
+        let hang = Duration::from_secs(30);
         let mut upkeep = Box::pin(housekeeping(
             janitor,
             rig.sink.clone(),
@@ -573,27 +578,64 @@ mod housekeeping_tests {
             rig.shutdown.clone(),
         ));
 
-        // Consume both immediate startup ticks while there are no tabs or outputs. The
-        // retention request is their only pending step; flush settles it before the second
-        // poll finishes that branch and waits for the next interval.
+        // The minute pass's startup tick must have run before the test writes a blob that is
+        // already due, or that pass removes it. Two polls do not guarantee it: an interval's
+        // first tick is due at once, but tokio fires a timer only once its millisecond has
+        // passed, so neither tick may be ready on the first poll, and `select!` then takes the
+        // two ready ticks in random order, so the retention tick can take the second poll and
+        // leave the minute pass for later (1 run in 50 at a load of 12). So the test waits for
+        // the pass itself: a sentinel blob, already due, is gone only once the startup pass ran.
+        let sentinel = RunId::new();
+        let blob = BlobId::new(0);
+        outputs
+            .keep_blobs_until(sentinel, EpochMillis::now().plus_millis(-1))
+            .await?;
+        outputs.keep_blob(sentinel, blob, b"due at startup").await?;
         task::yield_now().await;
         let starting = time::Instant::now();
-        assert!(poll!(upkeep.as_mut()).is_pending());
+        within(hang, async {
+            loop {
+                assert!(poll!(upkeep.as_mut()).is_pending());
+                // The retention tick's request settles here, whichever pass the poll took.
+                rig.sink.flush().await?;
+                if outputs.open_blob(sentinel, blob).await?.is_none() {
+                    return Ok::<(), TestError>(());
+                }
+                task::yield_now().await;
+            }
+        })
+        .await??;
+        // The minute pass's next tick is due a period after the startup tick was taken, at the
+        // latest by now. Only that pass matters to the blob: retention removes a run's outputs
+        // with its rows, and the run below has none (checked).
         let started_by = time::Instant::now();
-        rig.sink.flush().await?;
-        assert!(poll!(upkeep.as_mut()).is_pending());
 
         let expiring = RunId::new();
         let ordinary = RunId::new();
-        let blob = BlobId::new(0);
-        // Blob expiry uses wall time, independently of the paused interval clock below.
-        outputs
-            .keep_blobs_until(expiring, EpochMillis::now().plus_millis(-1))
-            .await?;
-        outputs.keep_blob(expiring, blob, b"expires").await?;
-        outputs
-            .keep_blob(ordinary, blob, b"ordinary retention")
-            .await?;
+        // Blob expiry uses wall time, independently of the paused interval clock below. The
+        // startup pass may still be removing the sentinel's expiry sidecar, and it holds the
+        // expiry list's lock until it ends, which `keep_blobs_until` waits for: only polling
+        // the housekeeping future ends that pass, so the writes run while the test drives it.
+        let mut writes = Box::pin(async {
+            outputs
+                .keep_blobs_until(expiring, EpochMillis::now().plus_millis(-1))
+                .await?;
+            outputs.keep_blob(expiring, blob, b"expires").await?;
+            outputs
+                .keep_blob(ordinary, blob, b"ordinary retention")
+                .await?;
+            Ok::<(), TestError>(())
+        });
+        within(hang, async {
+            loop {
+                assert!(poll!(upkeep.as_mut()).is_pending());
+                if let Poll::Ready(written) = poll!(writes.as_mut()) {
+                    return written;
+                }
+                task::yield_now().await;
+            }
+        })
+        .await??;
         // No SQLite row exists for retention to select and remove with its outputs.
         assert!(rig.store.run_summary(expiring).await?.is_none());
         let blob_path = rig
@@ -617,7 +659,7 @@ mod housekeeping_tests {
         time::advance(next_tick.saturating_duration_since(time::Instant::now())).await;
         time::resume();
 
-        let expired = within(Duration::from_secs(5), async {
+        let expired = within(hang, async {
             while outputs.open_blob(expiring, blob).await?.is_some() {
                 time::sleep(Duration::from_millis(5)).await;
             }
@@ -625,7 +667,7 @@ mod housekeeping_tests {
         })
         .await;
         rig.shutdown.cancel();
-        within(Duration::from_secs(5), worker).await??;
+        within(hang, worker).await??;
         expired??;
         assert!(outputs.open_blob(ordinary, blob).await?.is_some());
         Ok(())
