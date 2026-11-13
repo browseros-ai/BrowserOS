@@ -106,6 +106,11 @@ Release restores the tab's original viewport request, including its previous pre
 The last fit also restores the resting display size and saved window state. These use the
 existing best-effort restoration path. A failed or timed-out release can leave restoration
 incomplete, and restoring geometry cannot undo page events or requests caused during the fit.
+
+Original viewport requests and window states are held in memory. A server restart forgets
+active fits. Startup attempts to return the display to its configured home size and fullscreen
+windows to maximized, but it cannot recover the agent's original custom viewport or window
+state. This existing recovery limit also applies to unscaled takeovers.
 The default takeover blocks agent reads, including screenshots. Use `reads: "allow"` when
 scripts need to capture the tab during a takeover.
 

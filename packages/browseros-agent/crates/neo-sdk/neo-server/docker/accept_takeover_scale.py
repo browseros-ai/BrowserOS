@@ -61,7 +61,8 @@ const publish=()=>{const v=visualViewport;document.getElementById('proof').textC
     touch:{points:navigator.maxTouchPoints,ontouchstart:'ontouchstart' in window},
     identity:{userAgent:navigator.userAgent,platform:navigator.platform,mobile:navigator.userAgentData?.mobile}},
     outer:[outerWidth,outerHeight],available:[screen.availWidth,screen.availHeight,screen.availLeft,screen.availTop],
-    position:[screenX,screenY]},frameReady,eventSeq,events});};setInterval(publish,100);publish();
+    position:[screenX,screenY]},frameReady,eventSeq,events});};
+addEventListener('neo-proof-refresh',publish);setInterval(publish,100);publish();
 </script>"""
 FRAME = """<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">
 <style>html,body{margin:0;overflow:hidden}input{width:100vw;height:100vh;box-sizing:border-box;
@@ -263,13 +264,15 @@ class Window:
 
     def __init__(self):
         with urllib.request.urlopen("http://127.0.0.1:9110/json/version", timeout=5) as response:
-            target = urllib.parse.urlparse(json.load(response)["webSocketDebuggerUrl"])
+            self.debugger_url = json.load(response)["webSocketDebuggerUrl"]
+            target = urllib.parse.urlparse(self.debugger_url)
         self.websocket = WebSocket(socket.create_connection((target.hostname, target.port), timeout=5), target.netloc, target.path)
         self.serial = 0
 
-    def bounds(self, target):
+    def command(self, method, params=None):
+        """Keep one browser connection across a server restart to distinguish it from a relaunch."""
         self.serial += 1
-        self.websocket.send(1, json.dumps({"id": self.serial, "method": "Browser.getWindowForTarget", "params": {"targetId": target}}).encode())
+        self.websocket.send(1, json.dumps({"id": self.serial, "method": method, "params": params or {}}).encode())
         deadline, message = time.monotonic() + 10, bytearray()
         while True:
             opcode, payload, final = self.websocket.receive(deadline)
@@ -280,6 +283,9 @@ class Window:
                 if result.get("id") == self.serial:
                     assert "error" not in result, result
                     return result["result"]
+
+    def bounds(self, target):
+        return self.command("Browser.getWindowForTarget", {"targetId": target})
 
     def close(self):
         self.websocket.close()
