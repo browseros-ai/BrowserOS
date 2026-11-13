@@ -29,8 +29,9 @@ test commands their own runs: suites can clear shared tabs and cookies. The laun
 the bundled server and isolates the browser home to protect real MCP configuration and
 shared skills. It requires Node 22+.
 
-`bun run test:neo-spec` and full MCP fixtures keep their own launchers. Use
-`bun run dev:claw:watch` for interactive app work.
+`bun run test:neo-spec`, the server's browser tests (`apps/server/tests/__helpers__`), and the
+claw-mcp contract suite (`bun run test:claw-mcp-contract`) keep their own launchers; run them
+directly, not under `test:browser`. Use `bun run dev:claw:watch` for interactive app work.
 
 For browser overrides or run artifacts, read [the live-test guide](CONTRIBUTING.md#run-live-browser-tests).
 
@@ -45,11 +46,29 @@ For browser overrides or run artifacts, read [the live-test guide](CONTRIBUTING.
   `exports`) instead of inline magic values.
 - Write logger messages as plain text. Development logging already prefixes file, line, and
   function, so a `[prefix]` tag repeats it.
-- Keep comments minimal. Comment hidden constraints, subtle invariants, critical warnings, or
-  surprising behavior; do not restate obvious code.
 - New packages go in `packages/`, apps in `apps/`, Rust crates in `crates/`. A package exposes
   narrow `package.json` `exports` entries, each with `types` and `default`, rather than a
   package-wide `index.ts` barrel.
+
+## Code comments
+
+- **Default to explanatory comments for non-trivial code.** A new engineer should understand the
+  architecture without reconstructing it across several files.
+- Names explain local behavior. Comments explain system-level purpose, ownership, data flow, and
+  important tradeoffs.
+- Add comments at important seams: process or thread boundaries, async handoffs, lifecycle and
+  cleanup, cancellation, permissions, protocol translation, request correlation, ordering, and
+  persistence.
+- Explain hidden constraints and what would break if an invariant were removed.
+- New non-trivial modules and central types should have a concise docstring explaining their role
+  in the larger system.
+- Multi-step flows spanning several files may use a short block comment or ASCII diagram.
+- Docstrings may use 1–3 concise sentences. Complex interfaces may use a short paragraph when
+  necessary.
+- Before finishing a non-trivial change, review every modified file for missing architectural
+  context.
+- Keep straightforward code uncluttered. Avoid line-by-line paraphrases, PR narration, stale TODOs,
+  and commented-out code.
 
 ## Where to look
 
