@@ -1,4 +1,5 @@
-//! The agent's tab in front before Neo sends it input or captures it, so Linux draws it.
+//! The agent's tab in front before Neo sends it input or captures it, so Linux draws it, and so
+//! the tab has the page focus its cross-site frames read (`focus()` takes the input hold too).
 //!
 //! ```text
 //!  neo-playwright op ─ input lock / capture ─▶ OpEnv::bring_forward(tab) ─▶ AgentFront
@@ -11,8 +12,9 @@
 //! ```
 //!
 //! Only the SDK reaches this: desktop's server never runs neo-playwright, and its rule that an
-//! agent never switches the user's tab stands. A tab that stays behind is as slow as before on
-//! Linux, never wrong, so nothing here fails or refuses an op.
+//! agent never switches the user's tab stands. Nothing here fails or refuses an op: a tab that
+//! stays behind is as slow as before on Linux, and its cross-site frames stay unfocused after
+//! `focus()` (`toBeFocused()` fails there), which is what real Playwright sees on such a tab too.
 
 use std::sync::Arc;
 
@@ -53,19 +55,32 @@ impl AgentFront {
 
     /// Makes `tab` its window's active tab if nothing of the owner's says otherwise. Never fails:
     /// what happened is logged.
-    // TODO(remove): on Linux no display draws a background agent tab, and without this two
-    // things are slow there (SS-054, LH-001):
-    // - Input and frames: the focus emulation core gives the tab keeps it rendering frames that
-    //   viz throttles to one BeginFrame a second (ThrottleUndrawnFrames), so every mouse move
-    //   waits ~1 s for its ack.
-    // - Captures: a screenshot waits for the presentation of a forced frame, ~1.2 s headed and
-    //   possibly forever headless. This is not the throttle (1.2 s with zero throttled
-    //   BeginFrames); its cause is not yet found. The first lead is Chromium's
+    // TODO(remove): without this a background agent tab breaks three things, two of them on
+    // Linux only, where no display draws such a tab (SS-054, LH-001):
+    // - Input and frames (Linux): the focus emulation core gives the tab keeps it rendering
+    //   frames that viz throttles to one BeginFrame a second (ThrottleUndrawnFrames), so every
+    //   mouse move waits ~1 s for its ack.
+    // - Captures (Linux): a screenshot waits for the presentation of a forced frame, ~1.2 s
+    //   headed and possibly forever headless. This is not the throttle (1.2 s with zero
+    //   throttled BeginFrames); its cause is not yet found. The first lead is Chromium's
     //   CDPScreenshotNewSurface feature, not yet measured.
-    // Remove it only when BOTH are fast for a background agent tab on Linux, i.e.
-    // `neo-playwright/tests/background_tab_live.rs` passes there. The planned focus-emulation
-    // patch (claw-sdk `lead/verify/ss054/BROWSER-PATCH-DESIGN.md`) lifts the throttle only, so
-    // it is not enough alone.
+    // - Focus in cross-site frames (every platform): each renderer process keeps its own focus
+    //   state, and core's focus emulation is on the page session only (as upstream Playwright
+    //   sets it), so it reaches only the main frame's process. A cross-site frame's process reads
+    //   the tab's real page focus, which a background tab lacks until it is activated or input
+    //   reaches it: there, after `focus()`, `document.hasFocus()` stays false and Playwright's
+    //   `toBeFocused()` fails. Measured on a background tab with no activation:
+    //   `Emulation.setFocusEmulationEnabled` sent on the frame's own session makes it true
+    //   (claw-sdk `lead/verify/oopif-focus/NOTES.md`).
+    // Remove it only when ALL of these hold for a background agent tab:
+    // 1. Input and rAF are fast on Linux: the focus-emulation browser patch
+    //    (claw-sdk `lead/verify/ss054/BROWSER-PATCH-DESIGN.md`), which lifts the throttle only.
+    // 2. Captures are fast on Linux: `neo-playwright/tests/background_tab_live.rs` passes there.
+    // 3. Cross-site frames take focus: Neo sends `Emulation.setFocusEmulationEnabled` on every
+    //    out-of-process frame session of an agent tab (at attach, after a frame's cross-process
+    //    navigation, nested frames too), and `tests/cross_site_focus_browseros.rs` passes with
+    //    this activation gone. The browser patch needs the same per-frame command to unthrottle
+    //    those frames, so one change can serve 1 and 3.
     pub(crate) async fn bring_forward(
         self: Arc<Self>,
         view: BrowserView,
