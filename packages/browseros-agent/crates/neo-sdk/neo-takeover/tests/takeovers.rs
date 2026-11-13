@@ -395,6 +395,46 @@ async fn release_gives_back_in_order_and_lifts_the_lock_last() -> TestResult {
     Ok(())
 }
 
+/// The release answers whether Xvnc read all the owner typed: true once it closed the display's
+/// half-closed connection, false when it kept it open past Neo's 2 s, absent with no display.
+#[tokio::test]
+async fn a_release_says_whether_the_owners_input_was_drained() -> TestResult {
+    let h = harness(&[3]).await?;
+    let typed = h.takeovers.start(request(None)?).await?;
+    assert_eq!(typed.input_drained, None, "nothing to say while active");
+    let control = h.owner_typing(&typed).await?;
+    let released = h.takeovers.release(typed.id, ReleaseReason::Done).await?;
+    assert_eq!(control.ended().await?, DisplayEnd::Released);
+    assert_eq!(released.input_drained, Some(true));
+    assert_eq!(
+        h.takeovers.get(typed.id),
+        Some(released),
+        "and it stays read"
+    );
+
+    h.xvnc.stay_open();
+    let held = h.takeovers.start(request(None)?).await?;
+    let control = h.owner_typing(&held).await?;
+    let releasing = Instant::now();
+    let released = h.takeovers.release(held.id, ReleaseReason::Done).await?;
+    let took = releasing.elapsed();
+    assert_eq!(control.ended().await?, DisplayEnd::Released);
+    assert_eq!(released.input_drained, Some(false));
+    assert!(
+        took >= Duration::from_secs(2) && took < Duration::from_secs(3),
+        "the release waited out Neo's 2 s drain and no more: {took:?}"
+    );
+    assert!(!h.locks.is_locked(TAB), "and lifted the lock");
+
+    let untouched = h.takeovers.start(request(None)?).await?;
+    let released = h
+        .takeovers
+        .release(untouched.id, ReleaseReason::Done)
+        .await?;
+    assert_eq!(released.input_drained, None, "no display was bound to it");
+    Ok(())
+}
+
 #[tokio::test]
 async fn views_and_the_lock_stay_until_the_give_back_is_done() -> TestResult {
     let h = harness(&[3]).await?;

@@ -227,7 +227,8 @@ The takeover answers with the display to open:
 {"id":"tk_01a1acf4-f1fa-7751-a50a-47f6f6be4019","tabId":1276814799,"state":"active","lockId":"lk_01a1acf4-f1fa-7751-a50a-480a66e09075","display":"/v1/display?mode=control&release=tk_01a1acf4-f1fa-7751-a50a-47f6f6be4019",...}
 ```
 
-Release closes that display (`4002 released`) and lifts the lock.
+Release closes that display (`4002 released`) once Xvnc has read the owner's last input, waiting
+up to 2 s for it, and lifts the lock. Its answer's `inputDrained` says whether Xvnc did.
 
 ### Run them all
 

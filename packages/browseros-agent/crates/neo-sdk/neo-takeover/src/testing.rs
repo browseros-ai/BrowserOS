@@ -10,7 +10,10 @@
 //! - a test can paint the screen ([`FakeXvnc::paint`]): every update then carries that pixel,
 //!   and a held request is answered with it, as Xvnc answers once the browser repaints;
 //! - it takes every message a display may pass on, and records each one a connection sends, its
-//!   handshake included ([`FakeXvnc::received`]). Any other message closes the connection.
+//!   handshake included ([`FakeXvnc::received`]). Any other message closes the connection;
+//! - like Xvnc, it closes a connection at its client's end of stream. A test can make it busy
+//!   instead ([`FakeXvnc::hold_reads`]: a client's bytes wait on the socket) or keep a connection
+//!   open past that end ([`FakeXvnc::stay_open`]).
 //!
 //! The bytes are written and framed by hand, not with `rfb_server`'s or `rfb_client`'s parsers,
 //! so a parser bug cannot hide behind a fake that shares it.
@@ -40,6 +43,8 @@ struct Shared {
     changes: watch::Sender<u64>,
     /// Bumped by every paint, which a held request also waits for.
     paints: watch::Sender<u64>,
+    /// While true, no connection reads what its client sends after the handshake.
+    reads_held: watch::Sender<bool>,
 }
 
 struct State {
@@ -52,6 +57,10 @@ struct State {
     requests: Vec<String>,
     /// Every message each connection sent, by the order connections were accepted.
     received: Vec<Vec<Vec<u8>>>,
+    /// Each connection whose client's end of stream it read, by the same order.
+    ended: Vec<bool>,
+    /// Whether a connection stays open after its client's end of stream.
+    stays_open: bool,
     answer: Answer,
     /// Cancelled to close every open connection.
     open: CancellationToken,
@@ -84,11 +93,14 @@ impl FakeXvnc {
                 screen_flags: 0,
                 requests: Vec::new(),
                 received: Vec::new(),
+                ended: Vec::new(),
+                stays_open: false,
                 answer: Answer::Apply,
                 open: CancellationToken::new(),
             }),
             changes: watch::channel(0).0,
             paints: watch::channel(0).0,
+            reads_held: watch::channel(false).0,
         });
         let accepting = tokio::spawn({
             let shared = Arc::clone(&shared);
@@ -97,6 +109,7 @@ impl FakeXvnc {
                     let (connection, open) = {
                         let mut state = shared.state();
                         state.received.push(Vec::new());
+                        state.ended.push(false);
                         (state.received.len() - 1, state.open.clone())
                     };
                     tokio::spawn(serve(Arc::clone(&shared), socket, connection, open));
@@ -154,6 +167,35 @@ impl FakeXvnc {
             .get(connection)
             .cloned()
             .unwrap_or_default()
+    }
+
+    /// Whether connection `connection` read its client's end of stream: the client half-closed or
+    /// closed it.
+    #[must_use]
+    pub fn saw_end(&self, connection: usize) -> bool {
+        self.shared
+            .state()
+            .ended
+            .get(connection)
+            .copied()
+            .unwrap_or(false)
+    }
+
+    /// Stops reading what clients send after their handshake, as a busy Xvnc does: the bytes
+    /// wait on each socket, in order, until [`FakeXvnc::resume_reads`].
+    pub fn hold_reads(&self) {
+        self.shared.reads_held.send_replace(true);
+    }
+
+    /// Reads what clients send again, from where each connection stopped.
+    pub fn resume_reads(&self) {
+        self.shared.reads_held.send_replace(false);
+    }
+
+    /// Keeps each connection open after its client's end of stream from now on, instead of
+    /// closing it as Xvnc does, until the fake drops it.
+    pub fn stay_open(&self) {
+        self.shared.state().stays_open = true;
     }
 
     /// Lists the screen with this id and these flags from now on, as TigerVNC does when it
@@ -259,6 +301,22 @@ impl Shared {
         matches!(self.state().answer, Answer::Never)
     }
 
+    /// A client's end of stream on `connection`: noted, then the connection closes as Xvnc's does,
+    /// or stays open until the fake drops it.
+    async fn client_ended(&self, connection: usize) -> io::Result<()> {
+        let stays_open = {
+            let mut state = self.state();
+            if let Some(ended) = state.ended.get_mut(connection) {
+                *ended = true;
+            }
+            state.stays_open
+        };
+        if stays_open {
+            std::future::pending::<()>().await;
+        }
+        Ok(())
+    }
+
     fn record(&self, connection: usize, message: &[u8]) {
         if let Some(received) = self.state().received.get_mut(connection) {
             received.push(message.to_vec());
@@ -308,10 +366,12 @@ async fn converse(shared: &Shared, socket: &mut TcpStream, connection: usize) ->
 
     let mut changes = shared.changes.subscribe();
     let mut paints = shared.paints.subscribe();
+    let mut reads_held = shared.reads_held.subscribe();
     let mut layout = Some((0, 0));
     // An incremental update request the fake holds until the screen changes.
     let mut held = false;
     loop {
+        let reading = !*reads_held.borrow_and_update();
         let kind = tokio::select! {
             biased;
             changed = changes.changed(), if held => {
@@ -333,7 +393,19 @@ async fn converse(shared: &Shared, socket: &mut TcpStream, connection: usize) ->
                 socket.write_all(&shared.update(None)).await?;
                 continue;
             }
-            kind = socket.read_u8() => kind?,
+            resumed = reads_held.changed(), if !reading => {
+                if resumed.is_err() {
+                    return Ok(());
+                }
+                continue;
+            }
+            kind = socket.read_u8(), if reading => match kind {
+                Ok(kind) => kind,
+                Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => {
+                    return shared.client_ended(connection).await;
+                }
+                Err(error) => return Err(error),
+            },
         };
         let Some(message) = read_message(socket, kind).await? else {
             return Ok(());

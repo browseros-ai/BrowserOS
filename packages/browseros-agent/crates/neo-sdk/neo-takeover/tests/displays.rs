@@ -732,6 +732,90 @@ async fn a_display_bound_after_its_binding_closed_ends_at_once() -> TestResult {
     Ok(())
 }
 
+/// The owner's last keys, sent just before the viewer closes, have all been read by a busy Xvnc
+/// by the time the display counts as ended: it half-closes and waits for Xvnc to close.
+#[tokio::test]
+async fn a_control_display_ends_only_once_a_busy_xvnc_has_read_the_last_keys() -> TestResult {
+    let h = harness().await?;
+    h.xvnc.hold_reads();
+    let mut control = h.control(None).await?;
+    control.send(HANDSHAKE);
+    h.received(0, 3).await?;
+    control.send(&KEY_A);
+    control.send(&KEY_A_UP);
+    control.leave();
+
+    assert!(
+        timeout(QUIET, &mut control.serving).await.is_err(),
+        "the display has not ended while Xvnc has not read the keys"
+    );
+    assert_eq!(h.xvnc.received(0), handshake_received(), "nothing read yet");
+    h.xvnc.resume_reads();
+    let ended = control.ended().await?;
+    let mut expected = handshake_received();
+    expected.extend([KEY_A.to_vec(), KEY_A_UP.to_vec()]);
+    assert_eq!(
+        h.xvnc.received(0),
+        expected,
+        "when the display ended, Xvnc had read both keys"
+    );
+    assert!(h.xvnc.saw_end(0), "and then Neo's half-close");
+    assert_eq!(ended, DisplayEnd::ViewerLeft);
+    Ok(())
+}
+
+/// An Xvnc that never closes the half-closed connection holds a control display for Neo's 2 s
+/// drain and no longer, and the display's binding reports the input as not drained.
+#[tokio::test]
+async fn an_xvnc_that_stays_open_gets_two_seconds_and_no_more() -> TestResult {
+    let h = harness().await?;
+    h.xvnc.stay_open();
+    let binding = DisplayBinding::new();
+    let mut control = h.control(Some(binding.clone())).await?;
+    control.send(HANDSHAKE);
+    control.send(&KEY_A);
+    h.received(0, 4).await?;
+
+    let left = std::time::Instant::now();
+    control.leave();
+    let ended = control.ended().await?;
+    let waited = left.elapsed();
+    assert_eq!(ended, DisplayEnd::ViewerLeft);
+    assert!(h.xvnc.saw_end(0), "Neo half-closed the connection");
+    // The lower bound is Neo's drain (`limits::XVNC_DRAIN`). The upper leaves room for a loaded
+    // machine's scheduling, far below a second drain.
+    assert!(
+        waited >= Duration::from_secs(2) && waited < Duration::from_secs(3),
+        "the display ended {waited:?} after its viewer left"
+    );
+    assert_eq!(binding.input_drained(), Some(false));
+    Ok(())
+}
+
+/// A binding knows nothing until one of its displays ended, proves nothing while one still
+/// forwards, and reports drained once Xvnc closed the connection a release half-closed.
+#[tokio::test]
+async fn a_binding_reports_whether_its_displays_input_was_drained() -> TestResult {
+    let h = harness().await?;
+    let binding = DisplayBinding::new();
+    assert_eq!(binding.input_drained(), None, "no display ended yet");
+    let control = h.control(Some(binding.clone())).await?;
+    control.send(HANDSHAKE);
+    control.send(&KEY_A);
+    h.received(0, 4).await?;
+    assert_eq!(
+        binding.input_drained(),
+        Some(false),
+        "a display still forwarding proves nothing"
+    );
+
+    timeout(WITHIN, binding.close()).await?;
+    assert_eq!(control.ended().await?, DisplayEnd::Released);
+    assert!(h.xvnc.saw_end(0), "the release half-closed the connection");
+    assert_eq!(binding.input_drained(), Some(true));
+    Ok(())
+}
+
 /// Control forwards both key encodings, clipboard messages and pointer input unchanged.
 #[tokio::test]
 async fn a_control_display_forwards_keys_pastes_and_pointer_input() -> TestResult {
