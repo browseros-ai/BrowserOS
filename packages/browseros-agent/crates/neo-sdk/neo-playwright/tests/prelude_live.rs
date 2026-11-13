@@ -351,7 +351,8 @@ async fn tests_that_an_unopened_run_page_opens_no_tab() -> TestResult {
 }
 
 /// A4: a frames read the door refuses, as under the owner's takeover, keeps the main frame alone,
-/// and the run still starts; its own first op meets the refusal itself.
+/// and the run still starts; its own first op meets the refusal itself. The tree it could not read
+/// is read again once that op is answered.
 #[tokio::test]
 async fn tests_that_a_refused_frames_read_still_starts_the_run() -> TestResult {
     let recording = Recording::answering_frames(None);
@@ -363,7 +364,10 @@ async fn tests_that_a_refused_frames_read_still_starts_the_run() -> TestResult {
     )
     .await?;
     assert_eq!(outcome, json!({ "frames": 1, "title": "Title" }));
-    assert_eq!(recording.sent(), ["page.frames", "page.title"]);
+    assert_eq!(
+        recording.sent(),
+        ["page.frames", "page.title", "page.frames"]
+    );
     Ok(())
 }
 

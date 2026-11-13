@@ -63,6 +63,11 @@ pub(crate) trait EventLog: Send + Sync {
     fn navigated(&self, _target: &TargetId) -> Option<u64> {
         None
     }
+    /// The target's frame-tree version (`PageFact::frames_changed`). `None` when the log has
+    /// seen no change of its frames.
+    fn frames_changed(&self, _target: &TargetId) -> Option<u64> {
+        None
+    }
 }
 
 /// A worker identity in the host protocol, independent of the browser adapter. The prelude's
@@ -169,6 +174,11 @@ impl Observer {
     /// The newest retained main-frame navigation of `target`.
     pub(crate) fn navigated(&self, target: &TargetId) -> Option<u64> {
         self.log.navigated(target)
+    }
+
+    /// `target`'s frame-tree version (`PageFact::frames_changed`).
+    pub(crate) fn frames_changed(&self, target: &TargetId) -> Option<u64> {
+        self.log.frames_changed(target)
     }
 
     /// Groups all delivered closes by tab. Multiple target-bound subscriptions can coexist

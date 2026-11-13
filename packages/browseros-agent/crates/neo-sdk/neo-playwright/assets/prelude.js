@@ -797,6 +797,14 @@
     const header = upstreamSnapshots ? { ...call, conformance: true } : call;
     return Object.assign({ call: header, ...args }, { call: header });
   }
+  var settle = async () => {};
+  function onSettle(step) {
+    settle = step;
+  }
+  async function settled(site) {
+    if (site.value !== "")
+      await settle();
+  }
   async function invoke(op, site, call, args, signal) {
     try {
       const ready = readyChoosers(op);
@@ -810,6 +818,7 @@
       const held = pumpsCaughtUp(op);
       if (held)
         await held;
+      await settled(site);
       return value;
     } catch (thrown) {
       const held = pumpsCaughtUp(op);
@@ -833,6 +842,7 @@
       const held = pumpsCaughtUp(op);
       if (held)
         await held;
+      await settled(site);
       return {
         value: field(reply, "value"),
         observed: readObservation(field(reply, "observed"))
@@ -972,6 +982,9 @@
       const workers = readWorkers(field(page, "workers"));
       if (workers)
         fact.workers = workers;
+      const framesChanged = field(page, "framesChanged");
+      if (typeof framesChanged === "number")
+        fact.framesChanged = framesChanged;
       facts.push(fact);
     }
     return facts;
@@ -11020,6 +11033,10 @@ ${changes}`;
     #approvedClose = null;
     _working = false;
     _framesWatched = false;
+    _framesChanged = 0;
+    #framesReadAt = 0;
+    #framesIncomplete = false;
+    #settledAt = Number.NEGATIVE_INFINITY;
     _navigationsInFlight = 0;
     #publications = new Publications;
     #childFrames = new Map;
@@ -11519,15 +11536,35 @@ ${changes}`;
     async _readInitialFrames(timeoutMs = 0) {
       if (this._tab === null || this._closed)
         return;
-      await this._refreshFrames("page.frames", timeoutMs).catch(() => {
-        this._framesWatched = true;
-      });
+      await this._refreshFrames("page.frames", timeoutMs).catch(() => this._framesUnknown());
     }
     async _refreshFrames(api, timeoutMs = 0) {
       const site = INTERNAL_SITE;
+      const version = this._framesChanged;
       const { value: tree, observed } = await invokeObserved("page.frames", site, { api, timeoutMs }, { page: await this._brand(api, { working: false }) });
-      if (this.#payloadCurrent(observed) && Array.isArray(tree?.frames))
+      if (this.#payloadCurrent(observed) && Array.isArray(tree?.frames)) {
         this._applyFrames(tree.frames, observed);
+        this.#framesReadAt = version;
+        this.#framesIncomplete = tree.incomplete === true;
+        return !this.#framesIncomplete;
+      }
+      if (this.#payloadCurrent(observed))
+        this._framesUnknown();
+      return false;
+    }
+    _framesUnknown() {
+      this.#framesIncomplete = true;
+      this._framesWatched = true;
+    }
+    _framesStale(now, minGapMs) {
+      if (this._tab === null || this._closed || this._navigationsInFlight > 0)
+        return false;
+      if (!this.#framesIncomplete && this._framesChanged <= this.#framesReadAt)
+        return false;
+      if (now - this.#settledAt < minGapMs)
+        return false;
+      this.#settledAt = now;
+      return true;
     }
     _applyFrames(infos, at = null) {
       const current = (id) => !at || (this.#frameSequences.get(id) ?? 0) <= at.events;
@@ -11662,6 +11699,8 @@ ${changes}`;
         this._tab = fact.tab;
       if (fact.taskId !== undefined)
         this.#taskId = fact.taskId;
+      if (fact.framesChanged !== undefined)
+        this._framesChanged = Math.max(this._framesChanged, fact.framesChanged);
       if (at === null) {
         this.#applyViewport(fact.viewportSize);
         if (fact.url !== undefined && !this.#urlKnown) {
@@ -11859,6 +11898,7 @@ ${changes}`;
 
   // crates/neo-sdk/neo-playwright-js/src/prelude/context.ts
   var LISTED_FRAMES_TIMEOUT_MS = 1000;
+  var SETTLE_GAP_MS = 250;
   function pageFact(value) {
     if (value instanceof Page)
       return value._tab === null ? null : { tab: value._tab };
@@ -11953,12 +11993,15 @@ ${changes}`;
     }
     _pageFor(fact, at = null, approved = null) {
       let page = this.#byTab.get(fact.tab);
+      const fresh = !page;
       if (!page) {
         page = new Page(this, fact.tab, fact.url);
         page._working = this.#started;
         this.#byTab.set(fact.tab, page);
       }
       page._applyFact(fact, at, approved);
+      if (fresh && this.#started && !page.isClosed())
+        page._readInitialFrames(LISTED_FRAMES_TIMEOUT_MS);
       return page;
     }
     _pageFromResult(value, url) {
@@ -11986,6 +12029,13 @@ ${changes}`;
     async _readInitialFrames(runPage) {
       const pages = new Set([runPage, ...this._knownPages()]);
       await Promise.all([...pages].map((page) => page._readInitialFrames(page === runPage ? 0 : LISTED_FRAMES_TIMEOUT_MS)));
+    }
+    async _settleFrames() {
+      const now = Date.now();
+      const stale = this._knownPages().filter((page) => page._framesStale(now, SETTLE_GAP_MS));
+      if (stale.length === 0)
+        return;
+      await Promise.all(stale.map((page) => page._refreshFrames("page.frames", LISTED_FRAMES_TIMEOUT_MS).catch(() => page._framesUnknown())));
     }
     async _refreshWorkingFrames(api) {
       const working = this._knownPages().filter((page) => (page._working || page._framesWatched) && page._tab !== null && page._navigationsInFlight === 0);
@@ -19542,12 +19592,12 @@ Timeout: ${timeout}ms`);
     for (const name of Object.keys(valueMatchers(actual, state)))
       built[name] = (...args) => {
         const run = (value) => Reflect.apply(valueMatchers(value, state)[name], undefined, args);
-        return state.promise ? settle(actual, state, run, name) : run(actual);
+        return state.promise ? settle2(actual, state, run, name) : run(actual);
       };
     for (const name of Object.keys(RETRYING))
       built[name] = (...args) => {
         const site = captureSite();
-        return state.promise ? settle(actual, state, (value) => retrying(name, site, value, state, args), name) : retrying(name, site, actual, state, args);
+        return state.promise ? settle2(actual, state, (value) => retrying(name, site, value, state, args), name) : retrying(name, site, actual, state, args);
       };
     built.toPass = (options) => toPass(actual, state, options);
     installUnsupportedExpect(built, "matchers");
@@ -19562,7 +19612,7 @@ Timeout: ${timeout}ms`);
     });
     return built;
   }
-  async function settle(actual, state, match, name) {
+  async function settle2(actual, state, match, name) {
     const subject = typeof actual === "function" ? Reflect.apply(actual, undefined, []) : actual;
     if (!(subject instanceof Promise) && typeof Reflect.get(Object(subject), "then") !== "function")
       fail(state, `${header(name, state)}
@@ -19722,6 +19772,7 @@ Call Log:
   });
   registerBrand("bytes", (json) => Buffer.from(String(Reflect.get(json, "base64") ?? ""), "base64"));
   onReply((reply) => context2._applyReply(reply));
+  onSettle(() => context2._settleFrames());
   provide("page", awaitsProviders() ? async (init) => {
     const page = context2._runPage(init);
     await context2._readInitialFrames(page);

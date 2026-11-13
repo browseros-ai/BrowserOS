@@ -73,7 +73,11 @@ it('tests that a refused frames read keeps the main frame and starts the run', a
   )
   expect(outcome).toEqual({ frames: 1, title: 'Title' })
   expect(runtime.startCalls.map((call) => call.name)).toEqual(['page.frames'])
-  expect(runtime.calls.map((call) => call.name)).toEqual(['page.title'])
+  // The tree it could not read is read again once the script's next operation is answered.
+  expect(runtime.calls.map((call) => call.name)).toEqual([
+    'page.title',
+    'page.frames',
+  ])
 })
 
 it('tests that an omitted metadata tree preserves retained Frame objects', async () => {
@@ -160,6 +164,8 @@ it('tests that waitForTimeout reads the frames of each working page once, and of
   ])
   expect(reads(runtime.calls)).toEqual([
     [1007, 'page.waitForTimeout'],
+    // The title's reply named 1011: a page first seen mid-run has its tree read at once.
+    [1011, 'page.frames'],
     [1007, 'frame.waitForTimeout'],
     [1009, 'frame.waitForTimeout'],
     [1011, 'frame.waitForTimeout'],
@@ -424,6 +430,135 @@ it("tests that the script's own listener on another listed tab makes that tab wo
       [1009, 'page.waitForTimeout'],
     ])
   }
+})
+
+// The run's own page can come back short at the start: the native read could not read an
+// out-of-process child (`incomplete`), ran out of its own time (no tree), or was refused. The
+// first-host shape: a later run focuses and types through refs into the frame, then walks
+// frames() with no wait. The first awaited operation reads the tree again before it resolves.
+const MAIN_ONLY = { frames: [TREE.frames[0]] }
+const REFUSED_READ = {
+  err: {
+    code: 'owner_has_control',
+    owner: 'host',
+    delivery: 'not_sent',
+    retryable: true,
+    operationId: 'run.1',
+    timeout: false,
+    message: 'page.frames: the owner has control of this tab',
+  },
+}
+
+it("tests that the run's own page whose start read came back short has its whole tree after the script's first awaited operation", async () => {
+  for (const short of [{ ...MAIN_ONLY, incomplete: true }, {}, REFUSED_READ]) {
+    let read = 0
+    const runtime = loadPrelude({
+      seed: SEED,
+      answer: (call) => {
+        if (call.name === 'page.frames') return read++ === 0 ? short : TREE
+        return 'ok'
+      },
+    })
+    const counts = json(
+      await runtime.run(`
+        const atStart = page.frames().length
+        await page.keyboard.type('4')
+        return [atStart, page.frames().map((f) => f.name())]
+      `),
+    )
+    expect(counts).toEqual([1, ['', 'same', 'cross']])
+  }
+})
+
+it("tests that a frame added to another task's tab mid-run shows after the script's next awaited operation, with no wait", async () => {
+  let reads = 0
+  const added = {
+    frames: [
+      ...TREE.frames,
+      { id: 'late', parentId: 'main', name: 'late', url: 'https://c.example/' },
+    ],
+  }
+  const runtime = loadPrelude({
+    seed: OBSERVER,
+    answer: (call) => {
+      if (call.name === 'page.frames')
+        return tabOf(call) === 1009 && reads++ > 0 ? added : TREE
+      // The reply of the script's op says tab 1009's frames changed.
+      return {
+        ok: 'Agent',
+        pages: [
+          {
+            tab: 1009,
+            url: 'https://a.example/',
+            closed: false,
+            framesChanged: 3,
+          },
+        ],
+        observed: { seq: 1, events: 0 },
+      }
+    },
+  })
+  const counts = json(
+    await runtime.run(`
+      const p = ${OTHER}
+      const before = p.frames().length
+      await page.title()
+      return [before, p.frames().length]
+    `),
+  )
+  expect(counts).toEqual([3, 4])
+})
+
+it('tests that a page whose frames change on every operation is read at most once per 250 ms', async () => {
+  let version = 0
+  const runtime = loadPrelude({
+    seed: OBSERVER,
+    now: 1_000,
+    answer: (call) => {
+      if (call.name === 'page.frames') return TREE
+      version += 1
+      return {
+        ok: 'Agent',
+        pages: [
+          {
+            tab: 1009,
+            url: 'https://a.example/',
+            closed: false,
+            framesChanged: version,
+          },
+        ],
+        observed: { seq: version, events: 0 },
+      }
+    },
+  })
+  await runtime.run('for (let i = 0; i < 10; i++) await page.title()')
+  expect(reads(runtime.calls).filter(([tab]) => tab === 1009)).toEqual([
+    [1009, 'page.frames'],
+  ])
+})
+
+it("tests that a page first seen mid-run has its whole tree by the script's next await", async () => {
+  const runtime = loadPrelude({
+    seed: SEED,
+    answer: (call) => {
+      if (call.name === 'page.frames') return TREE
+      if (call.name === 'test.page')
+        return {
+          ok: { $neo: 'page', tab: 1011 },
+          pages: [{ tab: 1011, url: 'https://a.example/', closed: false }],
+          observed: { seq: 1, events: 0 },
+        }
+      return 'ok'
+    },
+  })
+  const names = json(
+    await runtime.run(`
+      const other = await __neo.invoke('test.page', {})
+      await page.title()
+      return other.frames().map((f) => f.name())
+    `),
+  )
+  expect(names).toEqual(['', 'same', 'cross'])
 })
 
 it('tests that a frame missing from the tree a wait reads is detached', async () => {

@@ -155,6 +155,7 @@ fn live(tab: i64) -> PageFact {
             id: "worker-1".to_owned(),
             url: "https://facts.example/worker.js".to_owned(),
         }]),
+        frames_changed: None,
     }
 }
 
@@ -168,6 +169,7 @@ fn closed(tab: i64) -> PageFact {
         closed: true,
         viewport_size: None,
         workers: None,
+        frames_changed: None,
     }
 }
 

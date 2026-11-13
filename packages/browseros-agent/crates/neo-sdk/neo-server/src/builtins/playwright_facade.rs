@@ -236,4 +236,10 @@ impl EventLog for PlaywrightFacade {
             .get()
             .and_then(|pw| pw.navigated_target(target))
     }
+
+    fn frames_changed(&self, target: &TargetId) -> Option<u64> {
+        self.playwright
+            .get()
+            .and_then(|pw| pw.frames_changed_target(target))
+    }
 }

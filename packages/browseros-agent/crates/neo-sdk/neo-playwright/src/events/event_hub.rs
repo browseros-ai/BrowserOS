@@ -53,6 +53,14 @@ struct EventLog {
     /// ring cannot evict one the host has not refreshed its URL facts for. The watcher marks
     /// them (`EventWriter::main_frame_navigated`); a tab's entry goes with its recorded close.
     navigated: HashMap<TargetId, u64>,
+    /// Each open tab's frame-tree version: it moves when a child frame attaches, detaches or
+    /// navigates, when an out-of-process frame's session comes or goes, and when the main frame
+    /// commits a new document, so a run that holds the tab's tree knows it changed
+    /// (`PageFact::frames_changed`). Only the browser's own events move it, never a read of
+    /// the tree. Kept apart from `records`, as `navigated` is; a tab's entry goes with its close.
+    frames: HashMap<TargetId, u64>,
+    /// The last version handed out: versions grow across tabs, so a tab's never repeats.
+    last_frames: u64,
 }
 
 /// One event, numbered and stamped when the watcher recorded it.
@@ -249,6 +257,12 @@ impl EventHub {
         self.lock_log().navigated.get(target).copied()
     }
 
+    /// `target`'s frame-tree version (see `EventLog::frames`), `None` before its frames first
+    /// changed while the watcher followed it.
+    pub(crate) fn frames_changed_at(&self, target: &TargetId) -> Option<u64> {
+        self.lock_log().frames.get(target).copied()
+    }
+
     /// The type of a dialog recorded on `target` after seq `after` that is still open, if
     /// any. An action whose input such a dialog blocks names it when it times out: Chromium
     /// acknowledges no input and answers no page call until the dialog closes (measured).
@@ -306,6 +320,7 @@ impl EventWriter {
             let seq = log.last_seq;
             if let PageEvent::Closed(target) = &event {
                 log.navigated.remove(target);
+                log.frames.remove(target);
             }
             log.records.push_back(EventRecord {
                 seq,
@@ -362,6 +377,15 @@ impl EventWriter {
     /// navigation is never kept, so the map holds one entry per open tab.
     pub(crate) fn main_frame_navigated(&mut self, tab: TargetId, seq: u64) {
         self.hub.lock_log().navigated.insert(tab, seq);
+    }
+
+    /// Records that `tab`'s frame tree changed (see `EventLog::frames`). The watcher calls it, as
+    /// only the watcher knows which tab a frame's session belongs to.
+    pub(crate) fn frames_changed(&mut self, tab: TargetId) {
+        let mut log = self.hub.lock_log();
+        log.last_frames += 1;
+        let version = log.last_frames;
+        log.frames.insert(tab, version);
     }
 
     /// The hub this writer appends to.

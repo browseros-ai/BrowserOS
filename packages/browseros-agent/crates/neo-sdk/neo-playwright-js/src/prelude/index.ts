@@ -14,7 +14,13 @@
  * tests/prelude-globals.test.ts pins the globals this bundle may name.
  */
 
-import { awaitsProviders, onReply, provide, registerBrand } from './bridge'
+import {
+  awaitsProviders,
+  onReply,
+  onSettle,
+  provide,
+  registerBrand,
+} from './bridge'
 import { Browser } from './browser'
 import { Buffer } from './buffer'
 import { BrowserContext } from './context'
@@ -63,6 +69,7 @@ registerBrand('bytes', (json) =>
   Buffer.from(String(Reflect.get(json, 'base64') ?? ''), 'base64'),
 )
 onReply((reply) => context._applyReply(reply))
+onSettle(() => context._settleFrames())
 
 // The agent function's parameters, after the bootstrap's own. claw-sdk's placeholder page
 // prelude provides `page` and `context` too; these replace them when both are loaded.

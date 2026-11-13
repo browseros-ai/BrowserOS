@@ -785,6 +785,13 @@ impl Watcher {
 
     /// A session went: its tab and its contexts are forgotten.
     fn session_detached(&mut self, session: &SessionId) {
+        // An out-of-process frame's session going changes its tab's tree (`frame_logs` holds
+        // exactly those sessions).
+        if self.frame_logs.contains_key(session)
+            && let Some(tab) = self.sessions.get(session).cloned()
+        {
+            self.writer.frames_changed(tab);
+        }
         self.recorded.forget(session);
         self.root_observers.remove(session);
         self.worker_runtime.remove(session);
@@ -1600,6 +1607,8 @@ impl Watcher {
                         .attach(&session_id, &TargetId(target_info.target_id.clone()));
                     self.frames.insert(target_info.target_id, tab.clone());
                     self.sessions.insert(session_id.clone(), tab.clone());
+                    // Its subtree is readable only from now on: a tree read before it lacks it.
+                    self.writer.frames_changed(tab.clone());
                     self.frame_logs.insert(session_id.clone(), FrameLog::Off);
                     if self.lifecycle_sources.accepts(&session_id) {
                         self.seed_frame_session(&tab, &session_id).await;
@@ -1977,8 +1986,15 @@ impl Watcher {
     /// frame's commit. Same-document navigations and process swaps change no number.
     async fn frame_lifecycle(&mut self, method: &str, session: &SessionId, params: &Value) {
         if let Some(target) = self.target_of(session).await {
+            let mut changed = false;
             for event in self.lifecycle.record(&target, method, params) {
                 self.writer.record(PageEvent::FrameLifecycle(event));
+                changed = true;
+            }
+            // A child frame attached, left or committed, or the main frame did: the tab's tree
+            // is no longer the one a run last read (`EventWriter::frames_changed`).
+            if changed || method == "Page.frameNavigated" {
+                self.writer.frames_changed(target);
             }
         }
         match method {

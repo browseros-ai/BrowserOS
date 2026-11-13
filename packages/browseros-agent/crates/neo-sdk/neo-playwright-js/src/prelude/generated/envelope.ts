@@ -193,7 +193,15 @@ viewportSize?: Size,
 /**
  * Captured under the same observation serial as the page cache read.
  */
-workers?: Array<WorkerInfo>, };
+workers?: Array<WorkerInfo>, 
+/**
+ * The tab's frame-tree version: it moves when the tab's frames change (a child frame
+ * attaches, leaves or navigates, an out-of-process frame's session comes or goes, the main
+ * frame commits), never on a read of the tree. A run that holds the tab's tree reads it
+ * again before the script's operation resolves once this passes the version it read at.
+ * Absent before the tab's frames first changed while Neo followed it.
+ */
+framesChanged?: number, };
 
 /**
  * A live browser tab resolved by the dispatcher before policies run. This is the only page

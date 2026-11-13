@@ -165,6 +165,14 @@ pub(crate) struct PageFact {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub(crate) workers: Option<Vec<super::observation::WorkerFact>>,
+    /// The tab's frame-tree version: it moves when the tab's frames change (a child frame
+    /// attaches, leaves or navigates, an out-of-process frame's session comes or goes, the main
+    /// frame commits), never on a read of the tree. A run that holds the tab's tree reads it
+    /// again before the script's operation resolves once this passes the version it read at.
+    /// Absent before the tab's frames first changed while Neo followed it.
+    #[serde(rename = "framesChanged", skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub(crate) frames_changed: Option<u64>,
 }
 
 /// The answer to a submitted call. It always arrives: once the call has an op id, its guard
@@ -862,8 +870,10 @@ impl Dispatcher {
             } else {
                 infos.next().flatten()
             };
+            let target = info.as_ref().map(|info| info.target_id.clone());
             let mut fact = PageFact::in_view(&page, info, run.view());
             fact.task_id = self.tabs.owner(page.tab).map(|id| id.to_string());
+            fact.frames_changed = target.and_then(|target| self.observer.frames_changed(&target));
             fact.workers = if closed.contains(&page.tab) {
                 Some(Vec::new())
             } else {
@@ -1020,6 +1030,7 @@ impl PageFact {
                 closed: false,
                 viewport_size: None,
                 workers: None,
+                frames_changed: None,
             },
             None => Self {
                 tab,
@@ -1029,6 +1040,7 @@ impl PageFact {
                 closed: true,
                 viewport_size: None,
                 workers: None,
+                frames_changed: None,
             },
         }
     }

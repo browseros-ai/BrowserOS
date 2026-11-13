@@ -98,6 +98,23 @@ function requestInput<Op extends OpName>(call: CallHeader, args: OpInputs[Op]) {
  * the op (signal.ts). The method checked it when the script called it; one that fired since is
  * the call in flight, which the bootstrap aborts as soon as it is sent.
  */
+/**
+ * Runs after each of the script's own operations, before its promise resolves: the context
+ * reads again the frame tree of every page whose frames changed since it last read them
+ * (`BrowserContext._settleFrames`), so `frames()` is the page's real tree after every awaited
+ * operation. Neo's own operations (an empty site) never run it, so its reads do not recurse.
+ */
+let settle: () => Promise<void> = async () => {}
+
+/** Sets the step [`settle`] runs. */
+export function onSettle(step: () => Promise<void>): void {
+  settle = step
+}
+
+async function settled(site: CallSite): Promise<void> {
+  if (site.value !== '') await settle()
+}
+
 export async function invoke<Op extends OpName>(
   op: Op,
   site: CallSite,
@@ -115,6 +132,7 @@ export async function invoke<Op extends OpName>(
     })) as OpOutputs[Op]
     const held = pumpsCaughtUp(op)
     if (held) await held
+    await settled(site)
     return value
   } catch (thrown) {
     const held = pumpsCaughtUp(op)
@@ -150,6 +168,7 @@ export async function invokeObserved<Op extends OpName>(
     })
     const held = pumpsCaughtUp(op)
     if (held) await held
+    await settled(site)
     return {
       value: field(reply, 'value') as OpOutputs[Op],
       observed: readObservation(field(reply, 'observed')),
@@ -364,6 +383,8 @@ function readPageFacts(pages: unknown): PageFact[] {
       fact.viewportSize = { width, height }
     const workers = readWorkers(field<Wire.PageFact>(page, 'workers'))
     if (workers) fact.workers = workers
+    const framesChanged = field<Wire.PageFact>(page, 'framesChanged')
+    if (typeof framesChanged === 'number') fact.framesChanged = framesChanged
     facts.push(fact)
   }
   return facts

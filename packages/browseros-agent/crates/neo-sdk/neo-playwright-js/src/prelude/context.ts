@@ -29,6 +29,13 @@ import { TimeoutSettings } from './timeouts'
  */
 const LISTED_FRAMES_TIMEOUT_MS = 1_000
 
+/**
+ * The least time between two of the settle step's reads of one tab (`Page._framesStale`): a page
+ * that adds or swaps frames constantly costs at most four tree reads a second, however many
+ * operations the script makes on it, and its `frames()` lags the page by at most this much.
+ */
+const SETTLE_GAP_MS = 250
+
 /** The page an op result names: a revived Page, or a raw `{"$neo":"page","tab":1}` brand. */
 function pageFact(value: unknown): PageFact | null {
   if (value instanceof Page)
@@ -213,12 +220,20 @@ export class BrowserContext extends EventEmitter {
     approved: number | null = null,
   ): Page {
     let page = this.#byTab.get(fact.tab)
+    const fresh = !page
     if (!page) {
       page = new Page(this, fact.tab, fact.url)
       page._working = this.#started
       this.#byTab.set(fact.tab, page)
     }
     page._applyFact(fact, at, approved)
+    // A page first seen once the run started (a popup, a new page, an op's result, a tab
+    // another run opened, one a start read's reply listed) has its tree read now, in the
+    // background, as the start reads every listed tab's: it is there by the script's next
+    // await. A sync getter cannot wait for it, so in the instant it is handed out (a popup
+    // listener) `frames()` lists what was read so far, as upstream's does as a popup opens.
+    if (fresh && this.#started && !page.isClosed())
+      void page._readInitialFrames(LISTED_FRAMES_TIMEOUT_MS)
     return page
   }
 
@@ -272,6 +287,27 @@ export class BrowserContext extends EventEmitter {
         page._readInitialFrames(
           page === runPage ? 0 : LISTED_FRAMES_TIMEOUT_MS,
         ),
+      ),
+    )
+  }
+
+  /**
+   * Before one of the script's operations resolves (bridge.ts `onSettle`): reads again, in
+   * parallel, the tree of every page whose frames changed since it was read or whose last read
+   * was partial, so `frames()` is each page's real tree after every awaited operation. A page
+   * whose frames did not change costs nothing here. These reads are Neo's own, like the start's.
+   */
+  async _settleFrames(): Promise<void> {
+    const now = Date.now()
+    const stale = this._knownPages().filter((page) =>
+      page._framesStale(now, SETTLE_GAP_MS),
+    )
+    if (stale.length === 0) return
+    await Promise.all(
+      stale.map((page) =>
+        page
+          ._refreshFrames('page.frames', LISTED_FRAMES_TIMEOUT_MS)
+          .catch(() => page._framesUnknown()),
       ),
     )
   }

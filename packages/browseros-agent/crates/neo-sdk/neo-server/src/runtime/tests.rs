@@ -1801,6 +1801,7 @@ fn init_observation_orders_the_seed_before_later_replies() -> Result<(), TestErr
                 url: Some("https://seed.example/".into()),
                 title: Some("Seed".into()),
                 closed: false,
+                frames_changed: None,
             }],
             observed: Some(Observation {
                 seq: 100,
@@ -2231,9 +2232,12 @@ fn neo_creates_tasks_and_reuses_one_handle_per_id() -> Result<(), TestError> {
         );
         rig.sink.flush().await?;
         let detail = rig.store.run(run.id()).await?.ok_or("recorded task run")?;
+        // The script's own calls: Neo's own reads of the task's tabs, first seen in these
+        // replies, are left out (`OperationRow::is_internal`).
         let calls: Vec<_> = detail
             .operations
             .iter()
+            .filter(|op| !op.is_internal())
             .map(|op| (&op.name, &op.args))
             .collect();
         assert_eq!(

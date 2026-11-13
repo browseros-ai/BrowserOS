@@ -184,6 +184,13 @@ impl Playwright {
         self.events.navigated_at(target)
     }
 
+    /// A native target's frame-tree version, for the host's page facts: it moves whenever the
+    /// tab's frames change, so a run that read the tree knows to read it again.
+    #[must_use]
+    pub fn frames_changed_target(&self, target: &TargetId) -> Option<u64> {
+        self.events.frames_changed_at(target)
+    }
+
     /// The browser connection, for what an op does after it admitted its page: raw sessions,
     /// frame sessions, core's frame registry and events.
     pub(crate) fn browser(&self) -> &BrowserSession {

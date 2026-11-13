@@ -55,6 +55,11 @@ pub(crate) struct PageFrames {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     frames: Option<Vec<FrameInfo>>,
+    /// `true` when an out-of-process frame under the tree could not be read: `frames` then lacks
+    /// it (and what it holds). The operation's notes name each such frame, for the host.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    incomplete: Option<bool>,
 }
 
 /// A page's frames, each parent before its children; the first is the main frame.
@@ -63,6 +68,10 @@ pub(crate) struct FrameTree {
     frames: Vec<FrameInfo>,
     #[serde(skip)]
     hosts: HashMap<FrameId, ProtocolSession>,
+    /// The out-of-process frames the browser lists under this tree whose own tree could not be
+    /// read, and why: the tree lacks them, so it is incomplete rather than whole.
+    #[serde(skip)]
+    unread: Vec<(String, String)>,
 }
 
 /// Stable identity for one document when validating subtree lifecycle readiness.
@@ -252,7 +261,25 @@ pub(crate) async fn frames(
         Ok(result) => result?,
         Err(_expired) => return Err(scope.timed_out(ErrorCode::WaitTimeout)),
     };
+    // Neither a short tree nor a missing one is silent: the run's record keeps a note of it, and
+    // the prelude reads the tree again before the script's next operation resolves.
+    let incomplete = frames.as_ref().is_some_and(|tree| !tree.unread.is_empty());
+    match &frames {
+        None => scope.log(
+            "the tab's frame tree was not read in time (it was loading or navigating): the \
+             frames stay as they were"
+                .to_owned(),
+        ),
+        Some(tree) => {
+            for (frame, error) in &tree.unread {
+                scope.log(format!(
+                    "the out-of-process frame {frame} could not be read, so the tree lacks it: {error}"
+                ));
+            }
+        }
+    }
     Ok(PageFrames {
+        incomplete: incomplete.then_some(true),
         frames: frames.map(FrameTree::into_frames),
     })
 }
@@ -324,7 +351,8 @@ pub(crate) async fn read_every(
 /// What a read does with a cross-site frame whose own tree cannot be read.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Subtrees {
-    /// Leave it out: the frame may have gone away between the two reads.
+    /// Leave it out, and mark the tree not whole (`FrameTree::unread`): the frame may have gone
+    /// away between the two reads, or its session may still be attaching.
     Skip,
     /// Fail the read.
     Require,
@@ -372,14 +400,16 @@ async fn read_frames(
             else {
                 continue;
             };
-            match oopif_tree(browser, page, &oopif.target_id, parent).await {
+            match oopif_tree_retried(browser, page, &oopif.target_id, parent).await {
                 Ok(subtree) => tree.add_hosted(
                     subtree.tree.frame_tree,
                     oopif.parent_frame_id.as_deref(),
                     &subtree.session,
                 ),
                 Err(error) if subtrees == Subtrees::Require => return Err(error),
-                Err(_skipped) => {}
+                Err(error) => tree
+                    .unread
+                    .push((oopif.target_id.clone(), error.to_string())),
             }
         }
     }
@@ -389,6 +419,34 @@ async fn read_frames(
 /// `session`'s own frames: its root and the same-process frames under it.
 pub(crate) async fn frame_tree(session: &ProtocolSession) -> Result<FrameTreeReply, CoreError> {
     decode(session.send_value("Page.getFrameTree", json!({})).await?)
+}
+
+/// Pauses before each try of an OOPIF's tree. Its session may still be attaching (core attaches
+/// an OOPIF it has not seen on demand, and the browser's attach event can land between two
+/// tries), so a failed read is tried again before the tree is answered as incomplete. The whole
+/// read stays inside [`SNAPSHOT_BUDGET`].
+const OOPIF_TRIES: [Duration; 3] = [
+    Duration::ZERO,
+    Duration::from_millis(50),
+    Duration::from_millis(150),
+];
+
+/// [`oopif_tree`], tried [`OOPIF_TRIES`] times; the last failure when none answered.
+async fn oopif_tree_retried(
+    browser: &BrowserSession,
+    page: &PageId,
+    frame: &str,
+    parent: &ProtocolSession,
+) -> Result<HostedTree, CoreError> {
+    let mut failed = None;
+    for pause in OOPIF_TRIES {
+        time::sleep(pause).await;
+        match oopif_tree(browser, page, frame, parent).await {
+            Ok(tree) => return Ok(tree),
+            Err(error) => failed = Some(error),
+        }
+    }
+    Err(failed.unwrap_or_else(|| CoreError::Message("no read was tried".to_owned())))
 }
 
 /// One OOPIF's own frame tree, on the session core's frame registry holds for it.
@@ -453,6 +511,7 @@ mod tests {
         }
         let with = serde_json::to_string(&PageFrames {
             frames: Some(sample_tree()?.into_frames()),
+            incomplete: None,
         })?;
         assert_eq!(
             with,
@@ -464,7 +523,10 @@ mod tests {
             with,
             r#"{"frames":[{"id":"main","parentId":null,"name":"","url":"https://main.test/"},{"id":"child","parentId":"main","name":"ad","url":"https://child.test/"}]}"#
         );
-        let without = serde_json::to_string(&PageFrames { frames: None })?;
+        let without = serde_json::to_string(&PageFrames {
+            frames: None,
+            incomplete: None,
+        })?;
         assert_eq!(without, serde_json::to_string(&Before { frames: None })?);
         assert_eq!(without, "{}", "no frames read is no key at all");
         Ok(())
