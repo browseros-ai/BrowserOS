@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TabSettings {
-    /// Neo closes a tab the agent opened, or a popup one of those opened, once nothing has used it for this long. A tab is in use while a run that used it is in flight, while a lock holds it and while a fit is on it; its clock restarts when the last of those ends. Neo never closes the browser's last tab, and checks once a minute.
+    /// Neo closes a tab the agent opened, or a popup one of those opened, once nothing has used it for this long. A tab is in use while a run that used it is in flight, while a lock holds it, a fit is on it, or a host keep protects it; its clock restarts when the last of those ends. Neo never closes the browser's last tab, and checks once a minute.
     #[serde(rename = "idleCloseSeconds", skip_serializing_if = "Option::is_none")]
     pub idle_close_seconds: Option<i64>,
 }

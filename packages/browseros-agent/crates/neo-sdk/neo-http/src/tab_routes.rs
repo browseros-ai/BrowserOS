@@ -4,6 +4,7 @@
 
 use crate::api_error::ApiError;
 use crate::service::ServiceState;
+use crate::wire;
 use axum::Json;
 use axum::extract::State;
 use browseros_cdp::browser;
@@ -40,6 +41,10 @@ pub(crate) async fn list_tabs(
                 .map(|task| task.to_string())
                 .collect(),
             owner: (service.tab_owner)(TabId(tab.tab_id)).map(str::to_owned),
+            keep: service
+                .keeps
+                .get(TabId(tab.tab_id))
+                .map(|keep| Box::new(wire::keep(keep))),
         })
         .collect();
     Ok(Json(api::TabList::new(items)))

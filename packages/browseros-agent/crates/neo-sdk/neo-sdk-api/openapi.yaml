@@ -333,6 +333,7 @@ paths:
         These are historical associations, not exclusive ownership or a permission check.
         Tab ids can be reused after a browser restart. The list is a point-in-time observation;
         a tab may close or navigate after the listing. No separate host CDP connection is needed.
+        A tab with a host keep carries `keep`, empty without a limit or containing `expiresAt`.
       responses:
         '200':
           description: All currently open tabs, or an empty list when none are open.
@@ -350,6 +351,69 @@ paths:
                 $ref: '#/components/schemas/Error'
         '503':
           $ref: '#/components/responses/Unavailable'
+  /v1/tabs/{tabId}/keep:
+    parameters:
+      - $ref: '#/components/parameters/TabId'
+    put:
+      operationId: keepTab
+      summary: Keep an open tab from idle cleanup until the host releases it.
+      description: |
+        Sets or replaces this tab's keep. An absent body or `{}` keeps it without a time limit.
+        `ttlSeconds` ends it automatically after 1 to 2,592,000 seconds. A keep accepts any tab a
+        lock can name, including the owner's pages and Neo's blank tab. An internal, extension,
+        or devtools tab that the native inventory lists but a lock cannot name answers 404
+        `tab_not_found`. Agent operations, including closing the tab, remain available. Only
+        idle cleanup treats the tab as in use.
+
+        A keep ends on DELETE, expiry, tab closure, or server restart. DELETE and expiry restart
+        the idle clock at that instant, giving the tab one full idle interval. Keeps live only in
+        memory. After a server-only restart, preexisting tabs are discovered rather than
+        agent-opened, so idle cleanup does not close them. Persisting keeps could protect a
+        different tab after a browser restart reuses its number. If tab origins become persistent,
+        keeps must become persistent in the same change. No trace record or event is created.
+
+        A tab can close concurrently with this request. The host must handle `tab.closed` even
+        after a successful response. Older images answer 404 `not_found` for this route, distinct
+        from `tab_not_found` when this image cannot find the tab.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TabKeepRequest'
+      responses:
+        '200':
+          description: The tab's replacement keep.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TabKeepResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+    delete:
+      operationId: releaseTabKeep
+      summary: Release a tab's keep, including when the tab or keep is already gone.
+      description: >-
+        Safe to repeat. Never contacts the browser and always returns 200 for an integer tab id.
+        Releasing an active keep restarts the tab's idle clock. Repeating DELETE after release
+        does not postpone idle cleanup. No trace record or event is created.
+      responses:
+        '200':
+          description: The tab no longer has a keep.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TabKeepDeleted'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
   /v1/tabs/{tabId}/screencast:
     get:
       operationId: getScreencast
@@ -1235,10 +1299,51 @@ components:
           description: >-
             Present on a tab Neo keeps for itself. `neo`: Neo's one blank tab, which keeps the
             browser open when every other tab closes. No script sees or reaches it, no task
-            takes it, and Neo opens another if it closes; a lock, a fit, a takeover or a display
+            takes it, and Neo opens another if it closes; a lock, a fit, a keep, a takeover or a display
             treats it as any tab. Once it shows a page (the owner browsed in it, or a fit
             navigated it), Neo opens a new blank tab and the old one becomes an ordinary tab
             without this field. Absent on every other tab.
+        keep:
+          description: Present only while the host keeps this tab from idle cleanup.
+          allOf:
+            - $ref: '#/components/schemas/TabKeep'
+    TabKeep:
+      type: object
+      description: A host's keep. An empty object has no time limit.
+      properties:
+        expiresAt:
+          type: integer
+          format: int64
+          description: Unix epoch milliseconds when this keep ends. Absent without a time limit.
+    TabKeepRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        ttlSeconds:
+          type: integer
+          format: int64
+          minimum: 1
+          maximum: 2592000
+          description: >-
+            Omit for no time limit. A keep blocks nothing and only spares a tab from idle
+            cleanup. It ends on server restart, so a crashed host cannot hold anything that
+            matters. A mandatory cap would only require a renewal timer.
+    TabKeepResult:
+      type: object
+      required: [tabId, keep]
+      properties:
+        tabId:
+          type: integer
+          format: int64
+        keep:
+          $ref: '#/components/schemas/TabKeep'
+    TabKeepDeleted:
+      type: object
+      required: [tabId]
+      properties:
+        tabId:
+          type: integer
+          format: int64
     PageRef:
       type: object
       properties:
@@ -2185,7 +2290,7 @@ components:
           description: >-
             Neo closes a tab the agent opened, or a popup one of those opened, once nothing has
             used it for this long. A tab is in use while a run that used it is in flight, while
-            a lock holds it and while a fit is on it; its clock restarts when the last of those
+            a lock holds it, a fit is on it, or a host keep protects it; its clock restarts when the last of those
             ends. Neo never closes the browser's last tab, and checks once a minute.
     TraceSettings:
       type: object

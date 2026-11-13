@@ -81,6 +81,12 @@ pub(crate) const IDLE_CLOSE_SECONDS: RangeInclusive<u64> = 60..=86_400;
 /// days, which protects the disk.
 pub(crate) const RETENTION_SECONDS: RangeInclusive<u64> = 3_600..=2_592_000;
 
+/// A host's optional tab keep TTL. An absent TTL has no deadline of its own.
+pub(crate) const KEEP_SECONDS: RangeInclusive<u64> = 1..=2_592_000;
+
+/// How long the janitor can recover a keep's exact end instant after DELETE or lazy expiry.
+pub(crate) const ENDED_KEEP_RETENTION: Duration = Duration::from_secs(3_600);
+
 /// `trace.valueBytes`, in bytes: up to Neo's own reply limit, 256 KiB, which is what the Neo
 /// viewer asks for. `0` keeps the trace's default limits.
 pub(crate) const VALUE_BYTES: RangeInclusive<u64> = 0..=262_144;

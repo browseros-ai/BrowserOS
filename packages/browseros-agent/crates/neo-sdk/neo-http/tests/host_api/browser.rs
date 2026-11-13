@@ -54,6 +54,8 @@ pub(crate) struct ScriptedBrowser {
     urls: Mutex<HashMap<i64, String>>,
     /// `Browser.getTabs` fails, as when the browser is gone.
     unreachable: AtomicBool,
+    /// A tab that closes after the next listing snapshot, before a host route checks again.
+    close_after_listing: Mutex<Option<i64>>,
     captures: watch::Sender<Captures>,
     /// Captures, by number, that never answer whatever `captures` says.
     hung: Mutex<Vec<usize>>,
@@ -71,6 +73,7 @@ impl ScriptedBrowser {
             front: Mutex::default(),
             urls: Mutex::default(),
             unreachable: AtomicBool::new(false),
+            close_after_listing: Mutex::default(),
             captures: watch::channel(Captures::Answer).0,
             hung: Mutex::default(),
             started: watch::channel(0).0,
@@ -103,6 +106,13 @@ impl ScriptedBrowser {
 
     pub(crate) fn close_tab(&self, tab: i64) {
         self.lock_tabs().retain(|open| *open != tab);
+    }
+
+    pub(crate) fn close_after_next_listing(&self, tab: i64) {
+        *self
+            .close_after_listing
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(tab);
     }
 
     /// Brings `tab` to the front, as the agent's or the owner's `Browser.activateTab` does.
@@ -220,6 +230,14 @@ impl ScriptedBrowser {
             }
             "Browser.getTabs" => {
                 let open = self.lock_tabs().clone();
+                if let Some(tab) = self
+                    .close_after_listing
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .take()
+                {
+                    self.close_tab(tab);
+                }
                 Ok(json!({
                     "tabs": open.into_iter().map(|tab| self.tab(tab)).collect::<Vec<_>>(),
                 }))

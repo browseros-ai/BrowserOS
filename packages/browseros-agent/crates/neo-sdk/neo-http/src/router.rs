@@ -10,13 +10,13 @@ use crate::api_error::ApiError;
 use crate::host_service::Authenticated;
 use crate::service::ServiceState;
 use crate::{
-    display_route, events_route, fill_route, fit_routes, live_tabs, part_routes, record_routes,
-    response_id, settings_routes, tab_routes, takeover_routes,
+    display_route, events_route, fill_route, fit_routes, keep_routes, live_tabs, part_routes,
+    record_routes, response_id, settings_routes, tab_routes, takeover_routes,
 };
 use axum::extract::Request;
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{get, post, put};
 use axum::{Router, middleware};
 use std::sync::Arc;
 
@@ -43,6 +43,10 @@ pub(crate) fn router(state: Arc<ServiceState>) -> Router {
         .route("/v1/trace", get(record_routes::get_trace))
         .route("/v1/events", get(events_route::stream_events))
         .route("/v1/tabs", get(tab_routes::list_tabs))
+        .route(
+            "/v1/tabs/{tab_id}/keep",
+            put(keep_routes::put_keep).delete(keep_routes::delete_keep),
+        )
         .route("/v1/tabs/{tab_id}/screencast", get(live_tabs::screencast))
         .route("/v1/tabs/{tab_id}/video", get(live_tabs::video))
         .route("/v1/tabs/{tab_id}/fill", post(fill_route::fill))

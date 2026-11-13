@@ -1,5 +1,33 @@
 # Migrating from hosted `/v1` (claw-server) to the claw-sdk API
 
+## Keep a tab while a task waits
+
+Send `PUT /v1/tabs/{tabId}/keep` on the host listener when an approval wait starts. An absent
+body or `{}` keeps the tab until you release it. Send `{"ttlSeconds":3600}` to end the keep
+after an hour. The optional limit accepts 1 to 2,592,000 seconds. There is no cap without a
+limit because a keep blocks nothing and only spares a tab from idle cleanup. It ends on server
+restart, so a crashed host cannot hold anything that matters. Repeating PUT replaces the
+previous limit, including replacing it with no limit. `GET /v1/tabs` includes `keep: {}` or
+`keep: {"expiresAt": ...}` on each kept tab. `expiresAt` is Unix epoch milliseconds.
+
+Send `DELETE /v1/tabs/{tabId}/keep` when the wait ends. DELETE succeeds even when the keep or
+tab is already gone and never needs a browser connection. Release and expiry restart the idle
+clock, giving the tab one full `tabs.idleCloseSeconds` interval. Closing the tab also ends its
+keep, whether the owner, a script, or `task.close()` closes it. A keep permits every agent
+operation. It only prevents idle cleanup. Only the host can set one, with its existing token.
+No run, operation, or event is recorded. Each PUT and DELETE writes an info log line.
+
+Replace periodic keepalive reads with these two calls. A keep is independent of settings,
+locks, fits, and takeovers. Any tab a lock can name is accepted, including Neo's blank tab.
+Internal, extension, and devtools tabs that locks cannot name return 404 `tab_not_found`, even
+when the native inventory lists them. An absent tab
+returns 404 `tab_not_found`; an older image with no keep route returns 404 `not_found`.
+
+Keeps live in memory and end on server restart. After a server-only restart, preexisting tabs
+are discovered as `Found`, so idle cleanup already leaves them alone. Persisting a keep could
+instead protect the wrong tab after a browser restart reuses its number. If tab origins ever
+survive server restart, keeps must become persistent in that same change.
+
 ## Trace summaries for an audit timeline
 
 One request returns a page of runs with their operations, newest runs first and each run's
@@ -171,7 +199,7 @@ The hosted server read its behaviour from `neo.toml` (`tabs.grouping`, `tabs.clo
 
 | `neo.toml` | claw-sdk | Notes |
 |---|---|---|
-| `tabs.close_after_minutes = 5` | `PUT /v1/settings {"tabs":{"idleCloseSeconds":300}}` | Counts from the tab's last use, not from a session's end: a run in flight that used the tab, a lock or a fit on it all count as use. A popup an agent's tab opened is closed with it. Neo's own blank tab keeps the browser open |
+| `tabs.close_after_minutes = 5` | `PUT /v1/settings {"tabs":{"idleCloseSeconds":300}}` | Counts from the tab's last use, not from a session's end: a run in flight that used the tab, a lock, a fit, or a host keep on it all count as use. A popup an agent's tab opened is closed with it. Neo's own blank tab keeps the browser open |
 | `run.wall_timeout_seconds = 120` | each `run` call's `timeout` (`120000`) | Per call, not a setting |
 | `tabs.grouping`, `scripts.isolated_world` | — | No tab groups; Neo's own page scripts always run in the isolated world |
 | — | `trace.retentionSeconds` | How long the trace keeps a run, 7 days by default and at least an hour |
