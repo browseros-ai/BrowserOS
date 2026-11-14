@@ -1,12 +1,16 @@
 //! Exercise the targeting metadata contract across actual HTTP serialization.
 //! A disposable native peer supplies identity and loading state; all requests go
-//! through the real router, task store, tool dispatch, effects, and wire envelope.
+//! through the hosted router, task store, tool dispatch, effects, and wire envelope.
+//! Desktop keeps those handlers internal and refuses their MCP names before minting a task.
 
 use browseros_cdp::{CdpError, CdpEvent, TargetedEvents};
 use browseros_core::{
     BrowserSession, BrowserSessionHooks, CdpConnection, NativeCapabilities, SessionId,
 };
-use claw_server::{AppState, build_router, config::Config};
+use claw_server::{
+    AppState, build_router,
+    config::{Config, ServerMode},
+};
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
 use std::{
@@ -182,6 +186,10 @@ struct HttpPeer {
 
 impl HttpPeer {
     async fn start() -> anyhow::Result<Self> {
+        Self::start_in_mode(ServerMode::Hosted).await
+    }
+
+    async fn start_in_mode(mode: ServerMode) -> anyhow::Result<Self> {
         let dir = tempfile::tempdir()?;
         let config = Arc::new(Config {
             server_port: 9200,
@@ -198,7 +206,7 @@ impl HttpPeer {
                 capabilities: current_native(),
                 asserted: false,
             },
-            mode: Default::default(),
+            mode,
             behavior: Default::default(),
             behavior_ignored: Vec::new(),
         });
@@ -258,7 +266,6 @@ impl HttpPeer {
             .unwrap_or(&body);
         let value: Value = serde_json::from_str(encoded.trim())?;
         assert!(value["error"].is_null(), "{value}");
-        assert_ne!(value["result"]["isError"], true, "{value}");
         Ok(value["result"].clone())
     }
 
@@ -271,8 +278,11 @@ impl HttpPeer {
         if let Some(handle) = handle {
             arguments["session"] = json!(handle);
         }
-        self.request("tools/call", json!({"name":name, "arguments":arguments}))
-            .await
+        let result = self
+            .request("tools/call", json!({"name":name, "arguments":arguments}))
+            .await?;
+        assert_ne!(result["isError"], true, "{result}");
+        Ok(result)
     }
 }
 
@@ -458,5 +468,39 @@ async fn browser_profiles_http_roundtrip_preserves_descriptors_and_load_outcome(
         structured(&target)?["status"]["profile"],
         loaded_engineering_profile()
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn desktop_targeting_tools_are_unlisted_and_refused_without_starting_a_task()
+-> anyhow::Result<()> {
+    let peer = HttpPeer::start_in_mode(ServerMode::Desktop).await?;
+    let tools = peer.request("tools/list", json!({})).await?;
+    let names = tools["tools"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("tools missing: {tools}"))?
+        .iter()
+        .filter_map(|tool| tool["name"].as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(names, ["run", "request_human_help", "await_human_help"]);
+    for name in ["browser_profiles", "browser_target"] {
+        let refusal = peer
+            .request(
+                "tools/call",
+                json!({"name":name, "arguments":{"action":"get"}}),
+            )
+            .await?;
+        assert_eq!(refusal["isError"], true, "{refusal}");
+        assert!(
+            refusal["content"][0]["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("run")),
+            "{refusal}"
+        );
+        assert!(
+            refusal["_meta"]["com.browseros.neo/session"].is_null(),
+            "{refusal}"
+        );
+    }
     Ok(())
 }

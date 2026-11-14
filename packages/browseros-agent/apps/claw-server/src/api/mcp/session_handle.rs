@@ -65,6 +65,19 @@ pub(super) fn offer(mut tool: Tool) -> Tool {
     tool
 }
 
+/// Desktop continuity is an SDK task, with pages discoverable through Playwright.
+/// Hosted keeps its existing target-binding description verbatim.
+pub(super) fn offer_for_mode(tool: Tool, mode: crate::config::ServerMode) -> Tool {
+    let mut tool = offer(tool);
+    if !mode.is_hosted() {
+        tool.input_schema = Arc::new(with_property(
+            tool.input_schema.as_ref().clone(),
+            "Opaque logical task handle. When a client has no transport session, the server returns it in every result. Pass it as session on later calls to keep the same SDK task. Find its pages with context.pages() and page.taskId. Omit it on the first call or to start a separate task after Stop; a stopped handle stays stopped.",
+        ));
+    }
+    tool
+}
+
 fn with_property(mut schema: JsonObject, description: &str) -> JsonObject {
     let properties = schema
         .entry("properties")
