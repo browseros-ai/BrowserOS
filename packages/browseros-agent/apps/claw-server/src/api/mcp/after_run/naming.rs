@@ -13,6 +13,18 @@ use crate::{
     services::neo::{RunOutcome, RunStatus, TaskTouchKind},
 };
 
+/// Live naming and the parent audit row share one declaration rule so History
+/// retains the same label, including when task creation precedes a run failure.
+pub(in crate::api::mcp) fn created_task_name(outcome: &RunOutcome) -> Option<String> {
+    outcome
+        .tasks
+        .iter()
+        .filter(|task| task.kind == TaskTouchKind::Created)
+        .filter_map(|task| task.name.as_deref())
+        .map(normalize_small_name)
+        .find(|name| !name.is_empty())
+}
+
 pub(in crate::api::mcp) async fn apply(
     state: &AppState,
     started: &StartedSession,
@@ -25,14 +37,7 @@ pub(in crate::api::mcp) async fn apply(
     {
         started.session.reset_pursue_handoff();
     }
-    let name = outcome
-        .tasks
-        .iter()
-        .filter(|task| task.kind == TaskTouchKind::Created)
-        .filter_map(|task| task.name.as_deref())
-        .map(normalize_small_name)
-        .find(|name| !name.is_empty());
-    if let Some(name) = name {
+    if let Some(name) = created_task_name(outcome) {
         started.session.rename(name.clone()).await;
         // Keep search metadata bounded to the same local label as the cockpit.
         // The script and its return value remain redacted in the run's audit row.

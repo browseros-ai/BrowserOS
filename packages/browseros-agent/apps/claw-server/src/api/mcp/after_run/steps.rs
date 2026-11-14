@@ -15,7 +15,7 @@ use crate::{
 };
 use browseros_mcp::token_estimate::TOKEN_ESTIMATOR_VERSION;
 use serde_json::json;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// A run's reply notes and deferred child rows share one deadline. The caller
 /// records the parent first, then publishes these children through the audit actor.
@@ -70,7 +70,7 @@ pub(in crate::api::mcp) async fn prepare(
             .await
             .into_iter()
             .collect();
-        for operation in operations {
+        for operation in projected_operations(operations) {
             let page_id = match operation.tab_id {
                 Some(tab) => tab_ref::page_for_tab(state, tab)
                     .await
@@ -130,6 +130,23 @@ pub(in crate::api::mcp) async fn prepare(
         began,
         deadline,
     }
+}
+
+/// `task.newPage` records its `context.newPage` child too. Both map to the same
+/// cockpit step, so retain the parent opening without hiding unrelated child work.
+fn projected_operations(operations: &[RunOperation]) -> impl Iterator<Item = &RunOperation> {
+    let page_openings = operations
+        .iter()
+        .filter(|operation| operation.name.audit_name() == "pages.newPage")
+        .map(|operation| operation.id.as_str())
+        .collect::<BTreeSet<_>>();
+    operations.iter().filter(move |operation| {
+        operation.name.audit_name() != "pages.newPage"
+            || !operation
+                .parent_id
+                .as_deref()
+                .is_some_and(|parent| page_openings.contains(parent))
+    })
 }
 
 /// Reuse the legacy script notice's wording, with native tab ids that Playwright
@@ -211,4 +228,74 @@ async fn foreign_write_notice(
     Some(format!(
         "Note: this script used tabs that are not yours. {listed}. You are allowed to use them; leave them as you found them unless the user asked you to change them."
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn operation(
+        id: &str,
+        parent_id: Option<&str>,
+        name: &str,
+    ) -> serde_json::Result<RunOperation> {
+        serde_json::from_value(json!({
+            "id": id,
+            "parentId": parent_id,
+            "name": name,
+            "tabId": null,
+            "startedAt": 1_000,
+            "durationMs": 20,
+            "outcome": "ok",
+            "effect": "write",
+            "delivery": "done",
+        }))
+    }
+
+    #[test]
+    fn task_page_open_projects_once_from_parent_child_operations() -> anyhow::Result<()> {
+        let operations = vec![
+            operation("run:1", None, "task.newPage")?,
+            operation("run:2", Some("run:1"), "context.newPage")?,
+        ];
+        let projected = projected_operations(&operations).collect::<Vec<_>>();
+        assert_eq!(projected.len(), 1);
+        assert_eq!(projected[0].id, "run:1");
+        assert_eq!(projected[0].name.audit_name(), "pages.newPage");
+        Ok(())
+    }
+
+    #[test]
+    fn distinct_page_openings_survive_identical_timing() -> anyhow::Result<()> {
+        let operations = vec![
+            operation("run:1", None, "context.newPage")?,
+            operation("run:2", None, "task.newPage")?,
+            operation("run:3", Some("run:2"), "context.newPage")?,
+            operation("run:4", None, "task.newPage")?,
+            operation("run:5", Some("run:4"), "context.newPage")?,
+        ];
+        let ids = projected_operations(&operations)
+            .map(|operation| operation.id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, ["run:1", "run:2", "run:4"]);
+        Ok(())
+    }
+
+    #[test]
+    fn unrelated_nested_operations_remain_visible() -> anyhow::Result<()> {
+        let operations = vec![
+            operation("run:1", None, "task.newPage")?,
+            operation("run:2", Some("run:1"), "context.newPage")?,
+            operation("run:3", Some("run:1"), "page.goto")?,
+            operation("run:4", Some("run:1"), "page.title")?,
+            operation("run:5", Some("run:4"), "locator.count")?,
+            operation("run:6", Some("run:4"), "context.newPage")?,
+            operation("run:7", Some("run:missing"), "context.newPage")?,
+        ];
+        let ids = projected_operations(&operations)
+            .map(|operation| operation.id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, ["run:1", "run:3", "run:4", "run:5", "run:6", "run:7"]);
+        Ok(())
+    }
 }

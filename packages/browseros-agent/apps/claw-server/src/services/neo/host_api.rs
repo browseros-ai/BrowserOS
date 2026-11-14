@@ -20,6 +20,9 @@ pub(super) struct HostApi {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RunOperation {
+    /// SDK identities preserve operation ancestry when the host flattens its audit rows.
+    pub id: String,
+    pub parent_id: Option<String>,
     pub name: OperationName,
     pub tab_id: Option<i64>,
     page: Option<OperationPage>,
@@ -333,6 +336,7 @@ mod tests {
     fn summary_decodes_only_the_opened_tab_identity() -> anyhow::Result<()> {
         let record: RunRecord = serde_json::from_value(json!({
             "operations": [{
+                "id": "run:1",
                 "name": "context.newPage",
                 "tabId": null,
                 "page": {

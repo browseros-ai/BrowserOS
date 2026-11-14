@@ -68,8 +68,10 @@ pub(super) async fn call(
     };
     let mut pending_steps = None;
     let mut sdk_run_id = None;
+    let mut task_name = None;
     let mut result = match outcome {
         Some(Ok(outcome)) => {
+            task_name = after_run::naming::created_task_name(&outcome);
             state
                 .neo
                 .observe_tasks(started.session.convo_id(), &outcome.tasks);
@@ -107,7 +109,8 @@ pub(super) async fn call(
     result.content.extend(window_note.map(ContentBlock::text));
     let duration_ms = i64::try_from(began.elapsed().as_millis()).unwrap_or(i64::MAX);
     // A script and its return value can both contain secrets. Persist only outcome
-    // flags, opaque SDK run correlation and token counts, including on engine errors.
+    // flags, opaque SDK run correlation, the normalized declared task label and
+    // token counts. The label belongs to the parent so it survives session closure.
     let event = AuditEvent::without_preview(RecordToolDispatchInput {
         agent_id: started.session.convo_id().as_str().to_string(),
         slug: started.session.agent().slug().to_string(),
@@ -124,6 +127,7 @@ pub(super) async fn call(
             "isError": result.is_error.unwrap_or(false),
             "cancelled": cancelled,
             "sdkRunId": sdk_run_id,
+            "taskName": task_name,
             "contentSummary": format!("{} block(s)", result.content.len()),
         })
         .to_string(),
