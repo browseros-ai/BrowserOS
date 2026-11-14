@@ -11,6 +11,7 @@ use neo_trace::{
     WriterConfig, spawn_writer,
 };
 use serde_json::{Value, json};
+use std::error::Error;
 use std::time::Duration;
 use std::{fs, io};
 use tempfile::TempDir;
@@ -1663,7 +1664,7 @@ fn on_tab(sink: &TraceSink, id: OperationId, name: &str, tab: i64, millis: i64) 
 /// acting on it, so each task's run record, its `/v1/tabs` association and its last tab are its
 /// own pages only.
 #[tokio::test]
-async fn a_subscription_makes_no_tab_a_runs_or_a_tasks() -> Result<(), Box<dyn std::error::Error>> {
+async fn a_subscription_makes_no_tab_a_runs_or_a_tasks() -> Result<(), Box<dyn Error>> {
     let h = harness(WriterConfig::default()).await;
     let alpha = start_in(&h.sink, Some("alpha"), 0);
     let beta = start_in(&h.sink, Some("beta"), 0);
@@ -1745,8 +1746,7 @@ async fn a_subscription_makes_no_tab_a_runs_or_a_tasks() -> Result<(), Box<dyn s
 /// task's last tab stay its own pages. Sent with a call site, the same name counts as any of the
 /// script's operations does.
 #[tokio::test]
-async fn neos_own_frame_reads_make_no_tab_a_runs_or_a_tasks()
--> Result<(), Box<dyn std::error::Error>> {
+async fn neos_own_frame_reads_make_no_tab_a_runs_or_a_tasks() -> Result<(), Box<dyn Error>> {
     let h = harness(WriterConfig::default()).await;
     let alpha = start_in(&h.sink, Some("alpha"), 0);
     let beta = start_in(&h.sink, Some("beta"), 0);
@@ -1926,7 +1926,8 @@ fn long_text() -> String {
 /// keeps none, as runs from before the field do. A request without a task under the `task` tab
 /// scope finds only a run without one, so it never replays a reply a bound run gave.
 #[tokio::test]
-async fn a_run_keeps_the_tabs_it_saw_and_a_taskless_request_finds_only_taskless_runs() {
+async fn a_run_keeps_the_tabs_it_saw_and_a_taskless_request_finds_only_taskless_runs()
+-> Result<(), Box<dyn Error>> {
     let h = harness(WriterConfig::default()).await;
     let bound = RunId::new();
     h.sink.run_started(RunStarted {
@@ -1950,28 +1951,29 @@ async fn a_run_keeps_the_tabs_it_saw_and_a_taskless_request_finds_only_taskless_
     read_on(&h.sink, OperationId::new(unseen, 1), None, 30);
     flushed(&h).await;
 
-    let scope = async |run: RunId| {
-        h.store
+    let scope = async |run: RunId| -> Result<Option<RunTabsScope>, Box<dyn Error>> {
+        let summary = h
+            .store
             .run_summary(run)
-            .await
-            .ok()
-            .flatten()
-            .and_then(|summary| summary.tabs_scope)
+            .await?
+            .ok_or("the run is recorded")?;
+        Ok(summary.tabs_scope)
     };
-    assert_eq!(scope(bound).await, Some(RunTabsScope::Task));
-    assert_eq!(scope(unbound).await, Some(RunTabsScope::Browser));
-    assert_eq!(scope(unseen).await, None, "no start record, no scope");
+    assert_eq!(scope(bound).await?, Some(RunTabsScope::Task));
+    assert_eq!(scope(unbound).await?, Some(RunTabsScope::Browser));
+    assert_eq!(scope(unseen).await?, None, "no start record, no scope");
 
-    let any = h.store.run_by_request(&request("same"), None).await;
+    let any = h.store.run_by_request(&request("same"), None).await?;
     assert_eq!(
-        any.ok().flatten().map(|run| run.id),
+        any.map(|run| run.id),
         Some(bound),
         "under the browser scope, the earliest run with the request id, tasked or not"
     );
-    let untasked = h.store.run_by_untasked_request(&request("same")).await;
+    let untasked = h.store.run_by_untasked_request(&request("same")).await?;
     assert_eq!(
-        untasked.ok().flatten().map(|run| run.id),
+        untasked.map(|run| run.id),
         Some(unbound),
         "under the task scope, only a run without a task"
     );
+    Ok(())
 }
