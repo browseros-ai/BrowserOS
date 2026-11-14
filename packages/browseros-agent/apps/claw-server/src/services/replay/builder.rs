@@ -400,6 +400,64 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn creation_claim_exports_metadata_then_checkpoint_before_run_actions()
+    -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let index = Arc::new(RecordingIndex::new(
+            Database::open(dir.path().join(DATABASE_FILENAME)).await?,
+        ));
+        let recordings = RecordingStore::new(
+            dir.path().join("recordings"),
+            dir.path().join("replays"),
+            index.clone(),
+            10,
+            Duration::from_secs(1),
+        );
+        recordings
+            .append_batch(
+                "018f47a7-1c2b-7def-8123-0123456789ab",
+                11,
+                Some("created-target"),
+                &[
+                    RecordingEventInput {
+                        ts: 100,
+                        event_type: Some(json!(4)),
+                        data: Some(json!({ "href": "https://example.com" })),
+                    },
+                    RecordingEventInput {
+                        ts: 101,
+                        event_type: Some(json!(2)),
+                        data: Some(json!({ "id": "initial-checkpoint" })),
+                    },
+                    event(120, "first-run-action"),
+                    event(150, "second-run-action"),
+                ],
+                "created-batch",
+                false,
+            )
+            .await?;
+        index
+            .insert_session_tab("session-a", "agent-a", 11, Some("created-target"), 90, None)
+            .await?;
+        let events = ReplayService::new(recordings, index)
+            .read_session("session-a")
+            .await?;
+        assert_eq!(
+            events
+                .iter()
+                .map(|event| (event.event.ts, event.event.event_type.clone()))
+                .collect::<Vec<_>>(),
+            [
+                (100, Some(json!(4))),
+                (101, Some(json!(2))),
+                (120, Some(json!(3))),
+                (150, Some(json!(3))),
+            ]
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn pre_existing_tab_never_exports_events_or_checkpoints_before_its_claim()
     -> anyhow::Result<()> {
         let dir = tempdir()?;
