@@ -421,7 +421,14 @@ frameVisible: boolean, scroll: ScrollPlan, position?: Point, arm?: ArmPlan, } | 
  * R60): a frame that is only shifted is placed by its corner, and a point that hits
  * nothing, or hits what holds the frame, is clear. A click keeps upstream's answer.
  */
-look: boolean, } | { "op": "edit", pin: Pin, edit: Edit, } | { "op": "look", pin: Pin, look: BoxAsk, } | { "op": "private", pin: Pin, step: PrivateStep, } | { "op": "privateShown" } | { "op": "read", target: ProbeTarget, strictness: Strictness, frameVisible: boolean, read: Read, } | { "op": "readAll", target: ProbeTarget, read: ReadAll, } | { "op": "screenshotMask", target: ProbeTarget, color: string, } | { "op": "screenshotMaskCleanup" } | { "op": "selector", target: ProbeTarget, } | { "op": "snapshot", root: ProbeTarget, mode: SnapshotMode, 
+look: boolean, } | { "op": "edit", pin: Pin, edit: Edit, } | { "op": "look", pin: Pin, look: BoxAsk, } | { "op": "private", pin: Pin, step: PrivateStep, } | { "op": "privateShown", 
+/**
+ * The camera's walk of closed shadow roots on demand (ruling R65): the call's nodes are
+ * closed roots Rust resolved into this world from the hosts `PrivateHosts` handed over.
+ * The world keeps them for this question alone, never for its engine
+ * (probe/private-shown.ts).
+ */
+walk?: boolean, } | { "op": "privateHosts", limit: number, } | { "op": "read", target: ProbeTarget, strictness: Strictness, frameVisible: boolean, read: Read, } | { "op": "readAll", target: ProbeTarget, read: ReadAll, } | { "op": "screenshotMask", target: ProbeTarget, color: string, } | { "op": "screenshotMaskCleanup" } | { "op": "selector", target: ProbeTarget, } | { "op": "snapshot", root: ProbeTarget, mode: SnapshotMode, 
 /**
  * Any integer, as upstream passes it: a child frame's depth can come out zero or
  * negative, and the engine reads those differently from no depth.

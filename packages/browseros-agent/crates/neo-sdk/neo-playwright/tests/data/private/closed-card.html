@@ -1,10 +1,51 @@
 <!doctype html><meta charset=utf-8><title>Closed card</title>
 <!-- A card box the page declares (cc-number), inside a CLOSED shadow root, with a button beside
-     it so a marked snapshot's clickable read finds the root. The page's own script keeps the root
-     and fills the box, as the keyboard could: no snapshot or locator reaches it first. -->
+     it so a marked snapshot's clickable read finds the root. No snapshot or locator reaches it
+     first. focusCard() and blurCard() give the box the focus and take it away, so a script's
+     keyboard alone can type into it; fillCard(value) writes its value with no event, as the
+     page's own script would. attachSecond() attaches a second closed root with an empty card box
+     after the page loaded, and focusSecond() gives that box the focus. ?fill=1 fills the box on
+     load and ?focus=1 focuses it, and again whenever the frame takes the focus (for the box in a
+     cross-site frame, which the test cannot script from the page above). ?cancel=beforeinput
+     cancels each beforeinput and writes its text itself; ?cancel=key cancels each key and writes
+     it itself, so no input event fires at all. removeHost() takes the root's host out of the
+     document. ?light=1 adds a card box in the page's own document that its script fills on load,
+     and fillLight(value) writes it. -->
 <div id=host></div>
+<div id=later></div>
 <script>
 const root = document.getElementById('host').attachShadow({ mode: 'closed' });
 root.innerHTML = '<label>Card number <input id=card autocomplete=cc-number style="width:280px;height:30px"></label><div onclick="1" style="width:80px;height:24px;border:1px solid #888">Pay</div>';
 window.fillCard = (value) => { root.getElementById('card').value = value; return root.getElementById('card').value.length; };
+window.focusCard = () => { root.getElementById('card').focus(); return true; };
+window.blurCard = () => { root.getElementById('card').blur(); return true; };
+const query = new URLSearchParams(location.search);
+if (query.get('fill')) fillCard('4000056655665556');
+// A cross-site frame cannot take the focus while its page holds it, so the box takes it when
+// the frame does.
+if (query.get('focus')) { focusCard(); window.addEventListener('focus', focusCard); }
+const card = root.getElementById('card');
+if (query.get('cancel') === 'beforeinput') card.addEventListener('beforeinput', (event) => {
+  event.preventDefault();
+  if (event.data) card.value += event.data;
+});
+if (query.get('cancel') === 'key') card.addEventListener('keydown', (event) => {
+  if (event.key.length !== 1) return;
+  event.preventDefault();
+  card.value += event.key;
+});
+window.removeHost = () => { document.getElementById('host').remove(); return true; };
+if (query.get('light')) {
+  const light = document.body.appendChild(document.createElement('input'));
+  light.setAttribute('autocomplete', 'cc-number');
+  light.value = '5555555555554444';
+  window.fillLight = (value) => { light.value = value; return true; };
+}
+let second;
+window.attachSecond = () => {
+  second = document.getElementById('later').attachShadow({ mode: 'closed' });
+  second.innerHTML = '<label>Second card <input id=second autocomplete=cc-number style="width:280px;height:30px"></label>';
+  return true;
+};
+window.focusSecond = () => { second.getElementById('second').focus(); return true; };
 </script>

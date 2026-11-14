@@ -4169,32 +4169,9 @@ async fn tests_that_a_value_typed_and_emptied_between_two_looks_changes_the_read
     Ok(())
 }
 
-/// Ruling R45's named limit: until a snapshot of the document has walked a closed shadow root,
-/// Neo does not know the boxes inside it, and a picture taken then can show what one holds,
-/// whoever typed it (here the page's own script; the keyboard would do the same). A marked
-/// snapshot that walks the root closes it for that document.
-#[tokio::test]
-#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
-async fn tests_that_a_box_in_a_closed_root_is_known_once_a_snapshot_walked_it() -> TestResult {
-    let bench = Bench::start().await?;
-    let opened = bench
-        .open("/private/closed-card.html", Place::Front)
-        .await?;
-    let typed = bench
-        .live
-        .main_world(&opened.page, "fillCard('4242424242424242')")
-        .await?;
-    assert_eq!(typed, json!(16));
-    let playwright = &bench.live.playwright;
-    assert!(
-        matches!(
-            playwright.picture_check(opened.page.tab).await,
-            PictureCheck::Clear { .. }
-        ),
-        "the limit: no snapshot walked the closed root yet"
-    );
-    // A marked snapshot: clickable marking reads the DOM capture and hands the closed root's
-    // seeds to the document's world.
+/// A marked snapshot of `opened`: clickable marking reads the DOM capture and hands the closed
+/// roots' seeds to the document's world, which opens them to its engine.
+async fn marked_snapshot(bench: &Bench, opened: &Opened) -> TestResult {
     bench
         .live
         .invoke(
@@ -4205,11 +4182,984 @@ async fn tests_that_a_box_in_a_closed_root_is_known_once_a_snapshot_walked_it() 
             }),
         )
         .await??;
+    Ok(())
+}
+
+/// The DOM capture a marked snapshot sends. The camera's walk on demand never sends one.
+const CAPTURE: &str = "DOMSnapshot.captureSnapshot";
+/// The call that names a host's closed root for the camera's walk on demand, once per host.
+const DESCRIBE: &str = "DOM.describeNode";
+/// The call that brings a closed root into Neo's world for that walk.
+const RESOLVE: &str = "DOM.resolveNode";
+/// The walk's object group going, released when the walk ends.
+const RELEASE: &str = "Runtime.releaseObjectGroup";
+
+/// `text` typed with the page's keyboard alone, as a script's `keyboard.type` does: trusted key
+/// and input events into whatever holds the focus, with no locator and no snapshot.
+async fn type_keys(bench: &Bench, opened: &Opened, text: &str) -> TestResult {
+    bench
+        .live
+        .invoke(
+            "keyboard.type",
+            json!({
+                "call": { "api": "keyboard.type", "timeoutMs": 0 },
+                "page": opened.page.brand(), "text": text,
+            }),
+        )
+        .await??;
+    Ok(())
+}
+
+/// Whether the walk's object group was released within two seconds: its owner's drop spawns the
+/// release, which may land after the reading returned.
+async fn released(bench: &Bench) -> bool {
+    let until = Instant::now() + Duration::from_secs(2);
+    while bench.recording.calls(RELEASE) == 0 && Instant::now() < until {
+        time::sleep(Duration::from_millis(20)).await;
+    }
+    bench.recording.calls(RELEASE) > 0
+}
+
+/// One key pressed with the page's keyboard alone (`keyboard.press`).
+async fn press_key(bench: &Bench, opened: &Opened, key: &str) -> TestResult {
+    bench
+        .live
+        .invoke(
+            "keyboard.press",
+            json!({
+                "call": { "api": "keyboard.press", "timeoutMs": 0 },
+                "page": opened.page.brand(), "key": key,
+            }),
+        )
+        .await??;
+    Ok(())
+}
+
+/// A clear reading's text, or an error naming what came instead.
+fn clear(check: &PictureCheck, what: &str) -> TestResult<String> {
+    match check {
+        PictureCheck::Clear { reading } => Ok(reading.clone()),
+        other => Err(format!("{what}: a clear reading, not {other:?}").into()),
+    }
+}
+
+/// The camera's walk on demand (ruling R65), row 1: a card number typed into a box inside a
+/// closed shadow root by a script's keyboard alone, no snapshot and no locator, then the focus
+/// taken away, so only the typing events bring the root: the next reading reads private. Main
+/// reads clear, the box unknown until a snapshot walks the root. One host asked, one description,
+/// no DOM capture, and the walk's object group released. Emptied, the page reads clear, and the
+/// host is not asked again. Fails with the walk left out (reads clear).
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_typing_into_a_closed_root_reads_private_at_the_next_reading() -> TestResult {
+    let bench = Bench::start().await?;
+    let opened = bench
+        .open("/private/closed-card.html", Place::Front)
+        .await?;
+    let playwright = &bench.live.playwright;
+    let tab = opened.page.tab;
+    clear(&playwright.picture_check(tab).await, "before typing")?;
+    bench.live.main_world(&opened.page, "focusCard()").await?;
+    type_keys(&bench, &opened, CARD).await?;
+    bench.live.main_world(&opened.page, "blurCard()").await?;
+    bench.recording.reset_calls();
+    assert_eq!(
+        playwright.picture_check(tab).await,
+        PictureCheck::Private,
+        "row 1: typing reached the closed root"
+    );
+    assert_eq!(bench.recording.calls(CAPTURE), 0, "no DOM capture");
+    assert_eq!(bench.recording.calls(DESCRIBE), 1, "one host asked");
+    assert!(released(&bench).await, "the walk's object group released");
+    bench.live.main_world(&opened.page, "fillCard('')").await?;
+    bench.recording.reset_calls();
+    clear(&playwright.picture_check(tab).await, "emptied")?;
+    assert_eq!(bench.recording.calls(DESCRIBE), 0, "a host is asked once");
+    bench.close(opened).await
+}
+
+/// The input count of the one document a reading lists (`frame=loader#count;`), if any.
+fn counted(reading: &str) -> Option<u64> {
+    reading
+        .rsplit('#')
+        .next()
+        .and_then(|count| count.trim_end_matches(';').parse().ok())
+}
+
+/// The walk on demand, row 1b: the first input into an unknown closed root is counted at once.
+/// One character typed into the closed card box and removed again before the next reading: that
+/// reading reads the root, its box empty and clear, so only the count can drop a picture taken
+/// while the character showed. The count is above zero. Fails with the first input not counted.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_value_typed_and_gone_in_an_unknown_root_is_counted() -> TestResult {
+    let bench = Bench::start().await?;
+    let opened = bench
+        .open("/private/closed-card.html", Place::Front)
+        .await?;
+    let playwright = &bench.live.playwright;
+    clear(&playwright.picture_check(opened.page.tab).await, "before")?;
+    bench.live.main_world(&opened.page, "focusCard()").await?;
+    type_keys(&bench, &opened, "4").await?;
+    press_key(&bench, &opened, "Backspace").await?;
+    bench.live.main_world(&opened.page, "blurCard()").await?;
+    let after = clear(&playwright.picture_check(opened.page.tab).await, "after")?;
+    assert!(
+        counted(&after).is_some_and(|count| count > 0),
+        "the input was counted: {after}"
+    );
+    bench.close(opened).await
+}
+
+/// The walk on demand, row 2: a box that holds the focus at a reading is read, so a card number
+/// typed before Neo's first reading in the document (before its listeners existed) reads private
+/// while its box keeps the focus. The named limit beside it: the same, with the focus taken away
+/// before that first reading, reads clear. Fails with the focus not followed (the first case
+/// reads clear).
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_box_holding_the_focus_at_a_reading_is_read() -> TestResult {
+    let bench = Bench::start().await?;
+    let playwright = &bench.live.playwright;
+    for blurred in [false, true] {
+        let opened = bench
+            .open("/private/closed-card.html", Place::Front)
+            .await?;
+        bench.live.main_world(&opened.page, "focusCard()").await?;
+        type_keys(&bench, &opened, CARD).await?;
+        if blurred {
+            bench.live.main_world(&opened.page, "blurCard()").await?;
+        }
+        bench.recording.reset_calls();
+        let first = playwright.picture_check(opened.page.tab).await;
+        if blurred {
+            clear(
+                &first,
+                "typed before the first reading, the focus gone: the limit",
+            )?;
+        } else {
+            assert_eq!(first, PictureCheck::Private, "the box holds the focus");
+        }
+        assert_eq!(bench.recording.calls(CAPTURE), 0, "no DOM capture");
+        bench.close(opened).await?;
+    }
+    Ok(())
+}
+
+/// The walk on demand, row 3: a closed root the page attaches after the document's first
+/// reading (a single-page checkout that mounts its card form later), then typed into, reads
+/// private at the next reading. On the first head this was the limit: the walk was spent at the
+/// first reading. Fails with the walk left out.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_root_attached_after_the_first_reading_is_read_once_typed_into() -> TestResult
+{
+    let bench = Bench::start().await?;
+    let opened = bench
+        .open("/private/closed-card.html", Place::Front)
+        .await?;
+    let playwright = &bench.live.playwright;
+    clear(&playwright.picture_check(opened.page.tab).await, "first")?;
+    bench
+        .live
+        .main_world(&opened.page, "attachSecond() && focusSecond()")
+        .await?;
+    type_keys(&bench, &opened, CARD).await?;
+    bench.recording.reset_calls();
     assert_eq!(
         playwright.picture_check(opened.page.tab).await,
         PictureCheck::Private,
-        "after a marked snapshot walked the root, its box is known"
+        "the late root, typed into"
     );
+    assert_eq!(bench.recording.calls(CAPTURE), 0, "no DOM capture");
+    bench.close(opened).await
+}
+
+/// The walk on demand, row 4: a box two closed roots deep, typed into, reads private at the next
+/// reading, on a small page and on one of 75,000 elements (whose DOM capture takes about 930 ms):
+/// the outer host from the typing, its root's focus to the inner host, two descriptions, each
+/// host asked once, no capture. The reading's time is printed. Fails with one round a reading
+/// (the inner root is read only at the reading after).
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_nested_closed_roots_are_followed_on_a_large_page() -> TestResult {
+    let bench = Bench::start().await?;
+    let playwright = &bench.live.playwright;
+    for nodes in [0, 75_000] {
+        let opened = bench
+            .open(
+                &format!("/private/closed-nested.html?nodes={nodes}"),
+                Place::Front,
+            )
+            .await?;
+        clear(&playwright.picture_check(opened.page.tab).await, "first")?;
+        bench.live.main_world(&opened.page, "focusDeep()").await?;
+        type_keys(&bench, &opened, CARD).await?;
+        bench.recording.reset_calls();
+        let started = Instant::now();
+        let reading = playwright.picture_check(opened.page.tab).await;
+        let took = started.elapsed();
+        #[expect(
+            clippy::print_stderr,
+            reason = "the walk's measured cost goes to the test output for the pull request"
+        )]
+        {
+            eprintln!(
+                "WALK ON DEMAND, two closed roots deep, {nodes} elements: the reading took {took:?}"
+            );
+        }
+        assert_eq!(
+            reading,
+            PictureCheck::Private,
+            "{nodes}: the inner root's box"
+        );
+        assert_eq!(
+            bench.recording.calls(DESCRIBE),
+            2,
+            "{nodes}: each host once"
+        );
+        assert_eq!(bench.recording.calls(CAPTURE), 0, "{nodes}: no DOM capture");
+        bench.recording.reset_calls();
+        assert_eq!(
+            playwright.picture_check(opened.page.tab).await,
+            PictureCheck::Private
+        );
+        assert_eq!(
+            bench.recording.calls(DESCRIBE),
+            0,
+            "{nodes}: not asked again"
+        );
+        bench.close(opened).await?;
+    }
+    Ok(())
+}
+
+/// The walk on demand, row 5 (the design keeper's ruling A): a key that types nothing fires no
+/// input event, so it moves no reading. `PageDown` and Tab with nothing in focus land on the body,
+/// arrow keys on a listbox of divs, and Tab from it lands on a focusable span; a video with
+/// controls, a details element and a focusable div take a key each. Every reading equals the one
+/// before the keys, so no picture main stores is dropped. The video and the details element are
+/// never described; the focused div is, once, by the focus rule, and nothing is resolved for it.
+/// Fails with keydown listened for (the first key on the body moves the reading).
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_key_that_types_nothing_moves_no_reading() -> TestResult {
+    let bench = Bench::start().await?;
+    let opened = bench
+        .open("/private/closed-plain.html", Place::Front)
+        .await?;
+    let playwright = &bench.live.playwright;
+    let tab = opened.page.tab;
+    bench.live.main_world(&opened.page, "blurAll()").await?;
+    let before = clear(&playwright.picture_check(tab).await, "before")?;
+    bench.recording.reset_calls();
+    for key in ["PageDown", "Tab"] {
+        bench.live.main_world(&opened.page, "blurAll()").await?;
+        press_key(&bench, &opened, key).await?;
+        let after = clear(&playwright.picture_check(tab).await, key)?;
+        assert_eq!(before, after, "{key} on the body moves no reading");
+    }
+    bench
+        .live
+        .main_world(&opened.page, "focusOn('list')")
+        .await?;
+    for key in ["ArrowDown", "ArrowDown", "ArrowDown", "Tab"] {
+        press_key(&bench, &opened, key).await?;
+    }
+    let after = clear(&playwright.picture_check(tab).await, "the list")?;
+    assert_eq!(
+        before, after,
+        "arrow keys and Tab onto the span move no reading"
+    );
+    // A browser-made root's element never stands for a host: neither is described.
+    bench.recording.reset_calls();
+    for id in ["v", "d"] {
+        bench
+            .live
+            .main_world(&opened.page, &format!("focusOn('{id}')"))
+            .await?;
+        press_key(&bench, &opened, "a").await?;
+        let after = clear(&playwright.picture_check(tab).await, id)?;
+        assert_eq!(before, after, "a key on #{id} moves no reading");
+    }
+    assert_eq!(
+        bench.recording.calls(DESCRIBE),
+        0,
+        "the video and details: none asked"
+    );
+    assert_eq!(bench.recording.calls(RESOLVE), 0, "nothing resolved");
+    // A focusable div that holds the focus is described once, by the focus rule, never again.
+    bench
+        .live
+        .main_world(&opened.page, "focusOn('pad')")
+        .await?;
+    for key in ["a", "b"] {
+        press_key(&bench, &opened, key).await?;
+        let after = clear(&playwright.picture_check(tab).await, "pad")?;
+        assert_eq!(before, after, "a key on the pad moves no reading");
+    }
+    assert_eq!(bench.recording.calls(DESCRIBE), 1, "the pad once");
+    assert_eq!(bench.recording.calls(RESOLVE), 0, "it carries no root");
+    assert_eq!(bench.recording.calls(CAPTURE), 0, "no DOM capture");
+    bench.close(opened).await
+}
+
+/// The walk on demand, row 5b (the lead's rows, the design keeper's editing-host ruling): what
+/// takes input itself moves nothing. Typing into an editable region, and with the caret in an
+/// element inside one; a select changed by the keyboard, whose trusted input event names the
+/// select; typing into a document in design mode; and a region editable by style alone. None of
+/// these boxes is private, so the reading stays as it was: no input event named a host. An editing
+/// host that holds the focus is described once, by the focus rule. What the page measured, each
+/// input event's first target and what counts as editable, is printed. Fails with an editing host
+/// named by its own events (the reading moves).
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_what_takes_input_itself_asks_nothing() -> TestResult {
+    let bench = Bench::start().await?;
+    let playwright = &bench.live.playwright;
+    for (what, setup, keys) in [
+        ("an editable region", "focusOn('editor')", "abc"),
+        ("an element inside one", "caretInside()", "abc"),
+        ("a select", "focusOn('pick')", "t"),
+        ("design mode", "design()", "abc"),
+        ("a region editable by style", "caretIn('styled')", "abc"),
+    ] {
+        let opened = bench
+            .open("/private/closed-plain.html", Place::Front)
+            .await?;
+        let tab = opened.page.tab;
+        bench.live.main_world(&opened.page, setup).await?;
+        // Counted from before the first reading: the focus rule must not take it for a host either.
+        bench.recording.reset_calls();
+        let before = clear(&playwright.picture_check(tab).await, what)?;
+        type_keys(&bench, &opened, keys).await?;
+        let after = clear(&playwright.picture_check(tab).await, what)?;
+        let seen = bench.live.main_world(&opened.page, "seen()").await?;
+        #[expect(
+            clippy::print_stderr,
+            reason = "what the page measured goes to the test output for the design keeper"
+        )]
+        {
+            eprintln!("WHAT TAKES INPUT, {what}: {seen}");
+        }
+        assert!(
+            seen.as_str()
+                .is_some_and(|seen| !seen.contains("\"firsts\":[]")),
+            "{what}: an input event fired: {seen}"
+        );
+        assert_eq!(before, after, "{what}: no reading moved, no host named");
+        assert!(
+            bench.recording.calls(DESCRIBE) <= 1,
+            "{what}: at most the focused element, once, by the focus"
+        );
+        if what == "an editable region" {
+            assert_eq!(
+                bench.recording.calls(DESCRIBE),
+                1,
+                "the focused editing host, described once"
+            );
+        }
+        bench.close(opened).await?;
+    }
+    Ok(())
+}
+
+/// The walk on demand, row 5c (the design keeper's editable ruling): inside an editable region no
+/// event is certain, so a box in a closed root there is read through the focus. A card component
+/// with a closed root inside a contenteditable region, a closed-root host in a document in design
+/// mode, and an editing host that is itself a closed shadow host: each card box focused and typed
+/// into reads private at the next reading. The fifth named limit beside them: typed and its focus
+/// taken away before that reading, the card component's and the editing host's box stay unknown
+/// (clear, the count unmoved). Fails with the focus leaving editable elements out (the three read
+/// clear).
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_closed_root_inside_an_editable_region_is_read() -> TestResult {
+    let bench = Bench::start().await?;
+    let playwright = &bench.live.playwright;
+    for (what, setup, id, blurred) in [
+        ("a card component in a region", "true", "embed", false),
+        (
+            "a host in a document in design mode",
+            "design() && true",
+            "cardhost",
+            false,
+        ),
+        (
+            "an editing host that is a closed shadow host",
+            "true",
+            "edithost",
+            false,
+        ),
+        (
+            "a card component in a region, focus gone",
+            "true",
+            "embed",
+            true,
+        ),
+        ("an editing host, focus gone", "true", "edithost", true),
+    ] {
+        let opened = bench
+            .open("/private/closed-plain.html", Place::Front)
+            .await?;
+        let tab = opened.page.tab;
+        bench.live.main_world(&opened.page, setup).await?;
+        let before = clear(&playwright.picture_check(tab).await, what)?;
+        bench
+            .live
+            .main_world(&opened.page, &format!("focusCardIn('{id}')"))
+            .await?;
+        type_keys(&bench, &opened, CARD).await?;
+        if blurred {
+            bench
+                .live
+                .main_world(&opened.page, &format!("blurCardIn('{id}')"))
+                .await?;
+            let after = clear(&playwright.picture_check(tab).await, what)?;
+            assert_eq!(
+                before, after,
+                "{what}: the fifth limit, its typing not counted"
+            );
+        } else {
+            assert_eq!(
+                playwright.picture_check(tab).await,
+                PictureCheck::Private,
+                "{what}: read through the focus"
+            );
+        }
+        bench.close(opened).await?;
+    }
+    Ok(())
+}
+
+/// The walk on demand, row 5d (the design keeper's editable ruling): a text dropped on a paragraph
+/// inside a contenteditable region fires beforeinput naming the paragraph, an editable element
+/// that is not the region's editing host (measured by the snapshot design's reviewer). It asks,
+/// counts and names nothing: three readings after the drop are clear and the same as before it,
+/// none unknown. Fails with an event naming an editable element counted (the readings move, then
+/// read unknown).
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_text_dropped_in_an_editor_moves_nothing() -> TestResult {
+    let bench = Bench::start().await?;
+    let opened = bench
+        .open("/private/closed-plain.html", Place::Front)
+        .await?;
+    let playwright = &bench.live.playwright;
+    let tab = opened.page.tab;
+    let before = clear(&playwright.picture_check(tab).await, "before")?;
+    let centre = bench.live.main_world(&opened.page, "rect('para')").await?;
+    let centre: Vec<i64> = serde_json::from_str(centre.as_str().ok_or("rect")?)?;
+    let session = bench
+        .live
+        .browser
+        .pages
+        .get_session(opened.page.id.clone())
+        .await?;
+    let data = json!({
+        "items": [{ "mimeType": "text/plain", "data": "DROPPED" }],
+        "dragOperationsMask": 1,
+    });
+    for kind in ["dragEnter", "dragOver", "drop"] {
+        let _sent: Value = session
+            .session
+            .send(
+                "Input.dispatchDragEvent",
+                json!({ "type": kind, "x": centre.first(), "y": centre.get(1), "data": data }),
+            )
+            .await?;
+    }
+    time::sleep(Duration::from_millis(200)).await;
+    let dropped = bench
+        .live
+        .main_world(&opened.page, "document.getElementById('para').textContent")
+        .await?;
+    assert!(
+        dropped
+            .as_str()
+            .is_some_and(|text| text.contains("DROPPED")),
+        "the drop landed: {dropped}"
+    );
+    for reading in 1..=3 {
+        let after = clear(
+            &playwright.picture_check(tab).await,
+            &format!("reading {reading}"),
+        )?;
+        assert_eq!(before, after, "reading {reading}: the drop moved nothing");
+    }
+    bench.close(opened).await
+}
+
+/// The walk on demand, row 6 (the design keeper's ruling A): the page cancels beforeinput and
+/// writes the value itself. beforeinput still fires, trusted, with the host as its first target,
+/// so the box is counted at once and read private at the next reading though its focus is gone.
+/// The fourth limit beside it: a page that cancels the key itself fires no input event at all, so
+/// its box reads private while it holds the focus at a reading, and clear when it lost the focus
+/// before Neo's next reading. Fails with beforeinput not listened for (the first case reads clear).
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_page_that_writes_the_value_itself_is_read_while_it_can_be() -> TestResult {
+    let bench = Bench::start().await?;
+    let playwright = &bench.live.playwright;
+    for (cancel, blurred, expected) in [
+        ("beforeinput", true, "private"),
+        ("key", false, "private"),
+        ("key", true, "clear, the fourth limit"),
+    ] {
+        let opened = bench
+            .open(
+                &format!("/private/closed-card.html?cancel={cancel}"),
+                Place::Front,
+            )
+            .await?;
+        let tab = opened.page.tab;
+        clear(&playwright.picture_check(tab).await, "before")?;
+        bench.live.main_world(&opened.page, "focusCard()").await?;
+        type_keys(&bench, &opened, CARD).await?;
+        if blurred {
+            bench.live.main_world(&opened.page, "blurCard()").await?;
+        }
+        let reading = playwright.picture_check(tab).await;
+        let case = format!("{cancel} cancelled, focus kept {}", !blurred);
+        if expected == "private" {
+            assert_eq!(reading, PictureCheck::Private, "{case}");
+        } else {
+            clear(&reading, &format!("{case}: {expected}"))?;
+        }
+        bench.close(opened).await?;
+    }
+    Ok(())
+}
+
+/// The walk on demand, row 7 (the design keeper's ruling B): hosts an input event named are
+/// handed over first and the walk goes on while they wait, so a card typed after many other
+/// closed roots took input is read at the first reading after: forty roots typed into, then the
+/// card, reads private. Past what one reading's rounds take (eighty roots), a host that input
+/// reached and that is not asked yet makes the reading unknown, never clear, and a later reading
+/// reads private. Fails with such a host left unasked as clear (the eighty case reads clear).
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_host_that_input_reached_is_never_clear_while_it_waits() -> TestResult {
+    let bench = Bench::start().await?;
+    let playwright = &bench.live.playwright;
+    for count in [40, 80] {
+        let opened = bench
+            .open(
+                &format!("/private/closed-many.html?n={count}"),
+                Place::Front,
+            )
+            .await?;
+        let tab = opened.page.tab;
+        clear(&playwright.picture_check(tab).await, "before")?;
+        for index in 0..count {
+            bench
+                .live
+                .main_world(&opened.page, &format!("focusBox({index})"))
+                .await?;
+            type_keys(&bench, &opened, "x").await?;
+        }
+        bench.live.main_world(&opened.page, "focusCard()").await?;
+        type_keys(&bench, &opened, CARD).await?;
+        bench.live.main_world(&opened.page, "blurAll()").await?;
+        let first = playwright.picture_check(tab).await;
+        assert!(
+            matches!(first, PictureCheck::Private | PictureCheck::Unknown),
+            "{count}: private or unknown, never clear: {first:?}"
+        );
+        if count == 40 {
+            assert_eq!(
+                first,
+                PictureCheck::Private,
+                "40: read at the first reading"
+            );
+        }
+        let mut later = first;
+        for _ in 0..3 {
+            if later == PictureCheck::Private {
+                break;
+            }
+            later = playwright.picture_check(tab).await;
+        }
+        assert_eq!(
+            later,
+            PictureCheck::Private,
+            "{count}: read within a few readings"
+        );
+        bench.close(opened).await?;
+    }
+    Ok(())
+}
+
+/// The card page read once, then a card number typed into its closed root by the keyboard alone
+/// and the focus taken away, so only the input events bring the root.
+async fn card_typed_and_left(bench: &Bench, opened: &Opened) -> TestResult {
+    clear(
+        &bench.live.playwright.picture_check(opened.page.tab).await,
+        "before",
+    )?;
+    bench.live.main_world(&opened.page, "focusCard()").await?;
+    type_keys(bench, opened, CARD).await?;
+    bench.live.main_world(&opened.page, "blurCard()").await?;
+    Ok(())
+}
+
+/// The walk on demand, row 8 (the design keeper's ruling on a failed read, five readings): a host
+/// that an input event named and whose description fails is handed over again at each reading,
+/// and the reading is unknown while it is unread. Refused or unanswered once: unknown, then
+/// private at the next reading. Refused five times: unknown five times, then clear as on main,
+/// and never asked again. The count is the host's own: a second closed root typed into later,
+/// with its description refused, is unknown again, and private once it is answered. Fails with a
+/// failed read left as clear, with the host not handed over again, and with no bound on the tries.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_host_that_input_reached_is_tried_for_five_readings() -> TestResult {
+    let bench = Bench::start().await?;
+    let playwright = &bench.live.playwright;
+    for how in [Failing::Refuse, Failing::Hang] {
+        let opened = bench
+            .open("/private/closed-card.html", Place::Front)
+            .await?;
+        card_typed_and_left(&bench, &opened).await?;
+        bench.recording.fail(DESCRIBE, how);
+        let failed = playwright.picture_check(opened.page.tab).await;
+        bench.recording.stop_failing();
+        assert_eq!(failed, PictureCheck::Unknown, "{how:?}: unread, so unknown");
+        assert!(released(&bench).await, "{how:?}: the walk's group released");
+        assert_eq!(
+            playwright.picture_check(opened.page.tab).await,
+            PictureCheck::Private,
+            "{how:?}: handed over again and read"
+        );
+        bench.close(opened).await?;
+    }
+    let opened = bench
+        .open("/private/closed-card.html", Place::Front)
+        .await?;
+    card_typed_and_left(&bench, &opened).await?;
+    let tab = opened.page.tab;
+    bench.recording.fail(DESCRIBE, Failing::Refuse);
+    for reading in 1..=5 {
+        assert_eq!(
+            playwright.picture_check(tab).await,
+            PictureCheck::Unknown,
+            "refused at reading {reading}"
+        );
+    }
+    bench.recording.reset_calls();
+    clear(
+        &playwright.picture_check(tab).await,
+        "after five, as on main",
+    )?;
+    assert_eq!(bench.recording.calls(DESCRIBE), 0, "not asked again");
+    bench.recording.stop_failing();
+    clear(&playwright.picture_check(tab).await, "and later")?;
+    assert_eq!(bench.recording.calls(DESCRIBE), 0, "never asked again");
+    bench
+        .live
+        .main_world(&opened.page, "attachSecond() && focusSecond()")
+        .await?;
+    type_keys(&bench, &opened, CARD).await?;
+    bench.recording.fail(DESCRIBE, Failing::Refuse);
+    let second = playwright.picture_check(tab).await;
+    bench.recording.stop_failing();
+    assert_eq!(second, PictureCheck::Unknown, "the second host's own count");
+    assert_eq!(playwright.picture_check(tab).await, PictureCheck::Private);
+    bench.close(opened).await
+}
+
+/// The walk on demand, row 8b (the design keeper's finding on the third head): typing names its
+/// host for certain whatever the focus's one ask found before. The box in the closed root holds
+/// the focus at a reading whose description of the host is refused: that reading is as on main.
+/// Then a card number is typed: unknown while the description is still refused, private once it
+/// goes through. And a focusable div, asked once by the focus with no root, then given a closed
+/// root with a card box and typed into: read, private. Fails with a host the focus asked done
+/// with for good (both read clear).
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_typing_names_a_host_the_focus_asked_before() -> TestResult {
+    let bench = Bench::start().await?;
+    let playwright = &bench.live.playwright;
+    let opened = bench
+        .open("/private/closed-card.html", Place::Front)
+        .await?;
+    let tab = opened.page.tab;
+    clear(&playwright.picture_check(tab).await, "before")?;
+    bench.live.main_world(&opened.page, "focusCard()").await?;
+    bench.recording.fail(DESCRIBE, Failing::Refuse);
+    clear(
+        &playwright.picture_check(tab).await,
+        "the focus's one ask, refused",
+    )?;
+    type_keys(&bench, &opened, CARD).await?;
+    let refused = playwright.picture_check(tab).await;
+    bench.recording.stop_failing();
+    assert_eq!(
+        refused,
+        PictureCheck::Unknown,
+        "named by the typing, unread"
+    );
+    assert_eq!(
+        playwright.picture_check(tab).await,
+        PictureCheck::Private,
+        "read once the description goes through"
+    );
+    bench.close(opened).await?;
+    let opened = bench
+        .open("/private/closed-plain.html", Place::Front)
+        .await?;
+    let tab = opened.page.tab;
+    bench
+        .live
+        .main_world(&opened.page, "focusOn('pad')")
+        .await?;
+    bench.recording.reset_calls();
+    clear(&playwright.picture_check(tab).await, "the pad, asked")?;
+    assert_eq!(
+        bench.recording.calls(DESCRIBE),
+        1,
+        "the focus asked the pad once"
+    );
+    bench.live.main_world(&opened.page, "rootOnPad()").await?;
+    type_keys(&bench, &opened, CARD).await?;
+    assert_eq!(
+        playwright.picture_check(tab).await,
+        PictureCheck::Private,
+        "the root attached later, typed into"
+    );
+    bench.close(opened).await
+}
+
+/// The walk on demand, row 9c (Greptile's finding on #3661): a reading that sees a private value
+/// shown is private, and no walk may put a later clear answer in its place. A card box in the
+/// page's own document shows a number its script wrote while a card is typed into the closed
+/// root: that reading is private and asks nothing. Once the page empties its own box, the next
+/// reading walks and reads the closed root's card, private. Fails with the walk taken after an
+/// answer that shows a value (the first reading describes the host).
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_private_answer_is_never_walked_over() -> TestResult {
+    let bench = Bench::start().await?;
+    let opened = bench
+        .open("/private/closed-card.html?light=1", Place::Front)
+        .await?;
+    let playwright = &bench.live.playwright;
+    let tab = opened.page.tab;
+    assert_eq!(playwright.picture_check(tab).await, PictureCheck::Private);
+    bench.live.main_world(&opened.page, "focusCard()").await?;
+    type_keys(&bench, &opened, CARD).await?;
+    bench.live.main_world(&opened.page, "blurCard()").await?;
+    bench.recording.reset_calls();
+    assert_eq!(
+        playwright.picture_check(tab).await,
+        PictureCheck::Private,
+        "the page's own box shows its number"
+    );
+    assert_eq!(
+        bench.recording.calls(DESCRIBE),
+        0,
+        "no walk past a shown value"
+    );
+    bench.live.main_world(&opened.page, "fillLight('')").await?;
+    assert_eq!(
+        playwright.picture_check(tab).await,
+        PictureCheck::Private,
+        "the closed root's card, read now"
+    );
+    assert_eq!(
+        bench.recording.calls(DESCRIBE),
+        1,
+        "the host asked at that reading"
+    );
+    bench.close(opened).await
+}
+
+/// The walk on demand, row 9 (the lead's rule): a host that left the document is gone, not
+/// unread. A card typed into a closed root whose host the page then removes, before the next
+/// reading: that reading is clear, not unknown, nothing is asked, and the next one is the same.
+/// Fails with a removed host left waiting (the reading reads unknown).
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_host_that_left_the_document_costs_no_picture() -> TestResult {
+    let bench = Bench::start().await?;
+    let opened = bench
+        .open("/private/closed-card.html", Place::Front)
+        .await?;
+    let playwright = &bench.live.playwright;
+    let tab = opened.page.tab;
+    clear(&playwright.picture_check(tab).await, "before")?;
+    bench.live.main_world(&opened.page, "focusCard()").await?;
+    type_keys(&bench, &opened, CARD).await?;
+    bench.live.main_world(&opened.page, "removeHost()").await?;
+    bench.recording.reset_calls();
+    let gone = clear(&playwright.picture_check(tab).await, "gone")?;
+    assert_eq!(bench.recording.calls(DESCRIBE), 0, "nothing asked");
+    let next = clear(&playwright.picture_check(tab).await, "next")?;
+    assert_eq!(gone, next, "it stopped counting");
+    bench.close(opened).await
+}
+
+/// The walk on demand, row 10, a named limit: a card number the page's own script writes into a
+/// box inside a closed root, with no event, and the box never held the focus: the reading is
+/// clear, as on main, and nothing is asked.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_value_the_page_wrote_with_no_event_reads_clear() -> TestResult {
+    let bench = Bench::start().await?;
+    let opened = bench
+        .open("/private/closed-card.html?fill=1", Place::Front)
+        .await?;
+    bench.recording.reset_calls();
+    clear(
+        &bench.live.playwright.picture_check(opened.page.tab).await,
+        "the limit",
+    )?;
+    assert_eq!(bench.recording.calls(DESCRIBE), 0, "nothing asked");
+    assert_eq!(bench.recording.calls(CAPTURE), 0, "no DOM capture");
+    bench.close(opened).await
+}
+
+/// Waits until every frame of `opened` has loaded (or three seconds), asked of the page itself,
+/// so a camera reading sees each frame's document.
+async fn frames_loaded(bench: &Bench, opened: &Opened) -> TestResult {
+    bench
+        .live
+        .main_world(
+            &opened.page,
+            "Promise.all([...document.querySelectorAll('iframe')].map((f) => new Promise((done) => { \
+             let ready = false; try { ready = f.contentDocument?.readyState === 'complete' \
+             && f.contentDocument.URL !== 'about:blank' } catch {} \
+             if (ready) done(true); else { f.addEventListener('load', () => done(true)); \
+             setTimeout(() => done(true), 3000) } }))).then(() => true)",
+        )
+        .await?;
+    Ok(())
+}
+
+/// The walk on demand, row 11: a box inside a closed root of a child frame, typed into by a
+/// script's keyboard alone, reads private: a same-site frame on the page's session, and a
+/// cross-site frame on its own, each walked in its own world with no DOM capture. Fails with the
+/// walk left out.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_typing_into_a_closed_root_in_a_frame_reads_private() -> TestResult {
+    let bench = Bench::start().await?;
+    let playwright = &bench.live.playwright;
+    for (path, focus) in [
+        ("/private/closed-frame.html", "focusFrameCard()"),
+        (
+            "/private/xframe.html?src=closed-card.html%3Ffocus%3D1",
+            "document.getElementById('x').focus(); true",
+        ),
+    ] {
+        let opened = bench.open(path, Place::Front).await?;
+        frames_loaded(&bench, &opened).await?;
+        clear(&playwright.picture_check(opened.page.tab).await, path)?;
+        bench.live.main_world(&opened.page, focus).await?;
+        type_keys(&bench, &opened, CARD).await?;
+        bench.recording.reset_calls();
+        assert_eq!(
+            playwright.picture_check(opened.page.tab).await,
+            PictureCheck::Private,
+            "{path}: the frame's closed root, typed into"
+        );
+        assert_eq!(bench.recording.calls(CAPTURE), 0, "{path}: no DOM capture");
+        bench.close(opened).await?;
+    }
+    Ok(())
+}
+
+/// Input is counted in a closed root a marked snapshot opened (the snapshot design's reviewer's
+/// findings D and C), in the reviewer's seven orders: the snapshot before the first reading, and
+/// started 0, 10 and 30 ms after the first reading began, twice each; and an eighth, the snapshot
+/// after the first reading ended. A root the world knows but no reading entered yet gets its
+/// listener from the document's listener, as the event passes on its way to the root. One
+/// character typed and removed again leaves the frame's input count above zero at the next
+/// reading; nothing is asked, as the root is known. Fails with the listener left to the readings
+/// (the order 0 ms after the first reading began reads `#0`).
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_input_in_a_closed_root_a_snapshot_opened_moves_the_reading() -> TestResult {
+    let bench = Bench::start().await?;
+    let playwright = &bench.live.playwright;
+    // None: the snapshot first; Some(ms): started ms after the reading began; u64::MAX: after it.
+    for after in [
+        None,
+        Some(0),
+        Some(0),
+        Some(10),
+        Some(10),
+        Some(30),
+        Some(30),
+        Some(u64::MAX),
+    ] {
+        let opened = bench
+            .open("/private/closed-card.html", Place::Front)
+            .await?;
+        let tab = opened.page.tab;
+        let first = match after {
+            None => {
+                marked_snapshot(&bench, &opened).await?;
+                playwright.picture_check(tab).await
+            }
+            Some(u64::MAX) => {
+                let reading = playwright.picture_check(tab).await;
+                marked_snapshot(&bench, &opened).await?;
+                reading
+            }
+            Some(ms) => {
+                let snapshot = async {
+                    time::sleep(Duration::from_millis(ms)).await;
+                    marked_snapshot(&bench, &opened).await
+                };
+                let (reading, snapshot) = tokio::join!(playwright.picture_check(tab), snapshot);
+                snapshot?;
+                reading
+            }
+        };
+        clear(&first, &format!("{after:?}: first"))?;
+        bench.live.main_world(&opened.page, "focusCard()").await?;
+        type_keys(&bench, &opened, "4").await?;
+        press_key(&bench, &opened, "Backspace").await?;
+        bench.recording.reset_calls();
+        let second = clear(&playwright.picture_check(tab).await, "second")?;
+        // The count itself, not the reading: a root the snapshot opened after the first reading
+        // lists its box at the second one whatever was counted.
+        assert!(
+            counted(&second).is_some_and(|count| count > 0),
+            "{after:?}: the input was counted: {second}"
+        );
+        assert_eq!(
+            bench.recording.calls(DESCRIBE),
+            0,
+            "{after:?}: a known root asks nothing"
+        );
+        bench.close(opened).await?;
+    }
+    Ok(())
+}
+
+/// The design keeper's probe page: a 150,000-element main document and five small same-process
+/// frames with closed roots, answering one after another. On the first head the camera's capture
+/// of that session cost the picture. The walk on demand sends nothing here, as nothing is typed
+/// and no box holds the focus: both readings, 150 ms apart, are clear, with no DOM capture and no
+/// description.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_huge_page_with_staggered_small_frames_keeps_its_pictures() -> TestResult {
+    let bench = Bench::start().await?;
+    let opened = bench
+        .open("/private/huge-staggered.html", Place::Front)
+        .await?;
+    frames_loaded(&bench, &opened).await?;
+    let playwright = &bench.live.playwright;
+    bench.recording.reset_calls();
+    let first = playwright.picture_check(opened.page.tab).await;
+    time::sleep(Duration::from_millis(150)).await;
+    let second = playwright.picture_check(opened.page.tab).await;
+    clear(&first, "first")?;
+    clear(&second, "second")?;
+    assert_eq!(bench.recording.calls(CAPTURE), 0, "no DOM capture");
+    assert_eq!(bench.recording.calls(DESCRIBE), 0, "nothing asked");
     bench.close(opened).await
 }
 

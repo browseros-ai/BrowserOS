@@ -1,0 +1,22 @@
+<!doctype html><meta charset=utf-8><title>Closed many</title>
+<!-- ?n=N closed shadow roots, each with a plain box, and one more with a card box (#card-host,
+     last): typing one character into each plain box leaves N hosts waiting for the camera's walk
+     on demand before the card is typed. focusBox(i) and focusCard() give a box the focus,
+     blurAll() takes it away. -->
+<div id=many></div>
+<div id=card-host></div>
+<script>
+const count = Number(new URLSearchParams(location.search).get('n') || 0);
+const boxes = [];
+for (let index = 0; index < count; index++) {
+  const host = document.getElementById('many').appendChild(document.createElement('div'));
+  const root = host.attachShadow({ mode: 'closed' });
+  root.innerHTML = '<input style="width:40px">';
+  boxes.push(root.querySelector('input'));
+}
+const card = document.getElementById('card-host').attachShadow({ mode: 'closed' });
+card.innerHTML = '<label>Card number <input autocomplete=cc-number style="width:280px;height:30px"></label>';
+window.focusBox = (index) => { boxes[index].focus(); return true; };
+window.focusCard = () => { card.querySelector('input').focus(); return true; };
+window.blurAll = () => { document.activeElement?.blur(); return true; };
+</script>

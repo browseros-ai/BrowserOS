@@ -2887,19 +2887,39 @@ components:
             typed into privately counts as private there. A tab that took the host's private fill
             (`POST /v1/tabs/{tabId}/fill`) is pictured like any other, unless `fill.pictures` is
             `never`.
-            Measured on Stripe's card widgets. A widget that hides a complete number and shows
-            its last four digits keeps its pictures, and they show those four digits. Other
-            providers' widgets were not sampled. Limits: a private value that appears and
-            disappears inside one capture window, in a document that held no private box at the
-            first look and is gone by the second, can be in a stored picture. Until a snapshot of a
-            document has walked a closed shadow root, Neo does not know the boxes inside it, so a
-            picture taken then can show what one holds, whoever typed it. A `page.ariaSnapshot()`
-            in Neo's own format (no mode, `ai` or `full`) walks it and closes this for that
-            document; mode `default` and `ariaSnapshotJSON()` do not, and a closed root the page
-            attaches after the walk is unknown again until the next one. Between its two readings
-            around a picture Neo counts typing and the owner's input, not a value a page's own
-            script sets itself and not input inside a closed shadow root: such a value shown and
-            cleared again in between is not seen.
+            Measured on Stripe's card widgets. A widget that hides a complete number and shows its
+            last four digits keeps its pictures, and they show those four digits. Other providers'
+            widgets were not sampled. Limits: a private value that appears and disappears inside one
+            capture window, in a document that held no private box at the first look and is gone by
+            the second, can be in a stored picture. A box inside a closed shadow root is known to
+            Neo once typing reaches it (an input event, from a script's keyboard or the owner's),
+            once it holds the focus at one of Neo's readings, or once a `page.ariaSnapshot()` in
+            Neo's own format (no mode, `ai` or `full`) has walked its root; mode `default` and
+            `ariaSnapshotJSON()` do not walk. Neo then reads that root from its host, without
+            capturing the page, and drops the picture taken around the first input that reached it.
+            Until it has read a root that typing reached, Neo stores no picture of the tab, and
+            tries again at each reading, five readings at most: after five failed reads such a host
+            reads as on main. A key that types nothing (Tab, an arrow key, PageDown) changes
+            nothing. Not known, so a picture can show what such a box holds: a value that came with
+            no event and never held the focus (written by the page's own script, or there when the
+            document loaded); a value typed with the keyboard alone before Neo's first reading in
+            that document, in a box that no longer holds the focus at that reading; typing on a page
+            that stops its events at the window, before Neo's listener; a box whose page cancels the
+            key and writes the value itself, when that box no longer holds the focus at Neo's next
+            reading; and a box inside a closed root in an editable region, or whose host is itself
+            editable (a document in design mode included), which is known only through the focus:
+            once its host held the focus at one of Neo's readings and that one read went through.
+            Its typing is not counted before that, as no event inside an editable region tells a
+            closed root's typing from the editor's own. A host avoids the second by sending a
+            private value through the fill route: its box has a ref from a snapshot in Neo's own
+            format, which has read the box's closed root, so Neo knows the box before anything is
+            typed, and a box Neo typed into privately counts as private there. A root Neo found
+            through the focus alone and cannot read in time stays unknown, and is not asked again
+            unless typing then reaches it. A box in a closed root nested inside another is reached
+            through the focus, or through typing once Neo knows the outer root; one more than four
+            closed roots deep is read over more than one reading. Between its two readings around a
+            picture Neo counts typing and the owner's input, not a value a page's own script sets
+            itself: such a value shown and cleared again in between is not seen.
         valueBytes:
           type: integer
           format: int64

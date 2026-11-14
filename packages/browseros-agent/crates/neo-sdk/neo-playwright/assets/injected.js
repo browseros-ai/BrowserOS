@@ -9757,27 +9757,203 @@ ${value.stack}`;
     };
   }
 
+  // crates/neo-sdk/neo-playwright-js/src/probe/browseros-ui.ts
+  var BROWSEROS_UI_HOSTS = new Set([
+    "browseros-neo-takeover"
+  ]);
+  function isBrowserOSUi(element) {
+    return BROWSEROS_UI_HOSTS.has(element.localName);
+  }
+
   // crates/neo-sdk/neo-playwright-js/src/probe/private-shown.ts
   var inputs = 0;
-  var counting = false;
-  function privateShown(world) {
+  var heard;
+  var listened = new WeakSet;
+  var walkedRoots = new WeakMap;
+  var waiting = new Set;
+  var pointed = new WeakSet;
+  var entries = new WeakMap;
+  var certain = new WeakSet;
+  var done = new WeakSet;
+  var tries = new WeakMap;
+  var NAMED_TRIES = 5;
+  var readings = 0;
+  var WAITING_MOST = 64;
+  var FOCUS_DEPTH = 32;
+  var SHADOW_HOSTS = new Set([
+    "article",
+    "aside",
+    "blockquote",
+    "body",
+    "div",
+    "footer",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "header",
+    "main",
+    "nav",
+    "p",
+    "section",
+    "span"
+  ]);
+  var XHTML = "http://www.w3.org/1999/xhtml";
+  function privateShown(world, request, _root, nodes) {
     const { document: document2 } = world.injected;
     const view = document2.defaultView;
-    if (!counting) {
-      counting = true;
-      document2.addEventListener("input", (event) => {
-        const target = event.composedPath()[0];
-        if (target instanceof Element && paintedInClear(target, view))
+    if (!heard) {
+      heard = (event) => {
+        const first = event.composedPath()[0];
+        if (!(first instanceof Element))
+          return;
+        const known = knownRoot(first);
+        if (known)
+          listen2(known);
+        if (event.type === "input" && paintedInClear(first, view))
           inputs += 1;
-      }, true);
+        if (!event.isTrusted || !unknownHost(first) || done.has(first))
+          return;
+        inputs += 1;
+        point(first, true);
+      };
+      document2.addEventListener("beforeinput", heard, true);
+      document2.addEventListener("input", heard, true);
     }
-    const { shown, boxes } = look2(document2, view);
-    return { kind: "value", value: { shown, inputs, boxes } };
+    if (request.walk === true)
+      keep(nodes);
+    else {
+      readings += 1;
+      sweep();
+    }
+    pointFocus(document2);
+    const { shown, boxes } = look2(document2);
+    const hosts = waiting.size > 0 ? { hosts: true } : {};
+    const named = namedWaiting() ? { named: true } : {};
+    return { kind: "value", value: { shown, inputs, boxes, ...hosts, ...named } };
   }
-  function look2(document2, view) {
+  function privateHosts(request) {
+    const hosts = [];
+    for (const first of [true, false]) {
+      for (const ref of waiting) {
+        if (hosts.length >= request.limit)
+          return hosts;
+        const host = ref.deref();
+        if (!host?.isConnected) {
+          drop2(ref, host);
+          continue;
+        }
+        if (certain.has(host) !== first)
+          continue;
+        if (first) {
+          const tried = tries.get(host) ?? { count: 0, at: 0 };
+          if (tried.at === readings)
+            continue;
+          tries.set(host, { count: tried.count + 1, at: readings });
+        } else {
+          waiting.delete(ref);
+        }
+        hosts.push(host);
+      }
+    }
+    return hosts;
+  }
+  function sweep() {
+    for (const ref of waiting) {
+      const host = ref.deref();
+      const spent = host && (tries.get(host)?.count ?? 0) >= NAMED_TRIES;
+      if (!host?.isConnected || spent)
+        drop2(ref, host);
+    }
+  }
+  function drop2(ref, host) {
+    waiting.delete(ref);
+    if (host)
+      done.add(host);
+  }
+  function namedWaiting() {
+    for (const ref of waiting) {
+      const host = ref.deref();
+      if (host?.isConnected && certain.has(host))
+        return true;
+    }
+    return false;
+  }
+  function keep(roots) {
+    for (const root of roots) {
+      if (!(root instanceof ShadowRoot) || root.mode !== "closed")
+        continue;
+      const host = root.host;
+      if (isBrowserOSUi(host) || walkedRoots.has(host))
+        continue;
+      walkedRoots.set(host, root);
+      const entry = entries.get(host);
+      if (entry)
+        drop2(entry, host);
+    }
+  }
+  function knownRoot(host) {
+    return walkedRoots.get(host) ?? host.shadowRoot;
+  }
+  function unknownHost(element) {
+    return mayCarryRoot(element) && !editable(element);
+  }
+  function mayCarryRoot(element) {
+    if (element.namespaceURI !== XHTML || isBrowserOSUi(element))
+      return false;
+    const name = element.localName;
+    if (!SHADOW_HOSTS.has(name) && !name.includes("-"))
+      return false;
+    return knownRoot(element) === null;
+  }
+  function editable(element) {
+    if (Reflect.get(element, "isContentEditable") === true)
+      return true;
+    const modify = element.ownerDocument.defaultView?.getComputedStyle(element).getPropertyValue("-webkit-user-modify");
+    return modify?.startsWith("read-write") === true;
+  }
+  function point(host, byInput = false) {
+    if (byInput)
+      certain.add(host);
+    const entry = entries.get(host);
+    if (entry && waiting.has(entry))
+      return;
+    if (pointed.has(host) && !byInput)
+      return;
+    if (!byInput && waiting.size >= WAITING_MOST)
+      return;
+    pointed.add(host);
+    const fresh = new WeakRef(host);
+    entries.set(host, fresh);
+    waiting.add(fresh);
+  }
+  function listen2(root) {
+    if (root.mode !== "closed" || listened.has(root) || !heard)
+      return;
+    listened.add(root);
+    root.addEventListener("beforeinput", heard, true);
+    root.addEventListener("input", heard, true);
+  }
+  function pointFocus(document2) {
+    let holder = document2.activeElement;
+    for (let depth = 0;holder && depth < FOCUS_DEPTH; depth += 1) {
+      const inner = knownRoot(holder)?.activeElement;
+      if (!inner)
+        break;
+      holder = inner;
+    }
+    if (holder?.matches(":focus") && mayCarryRoot(holder))
+      point(holder);
+  }
+  function look2(document2) {
+    const view = document2.defaultView;
     const roots = [document2];
     let boxes = false;
     for (const root of roots) {
+      if (root instanceof ShadowRoot)
+        listen2(root);
       for (const field of root.querySelectorAll("input, textarea")) {
         if (!isPrivateField(field, { declared: true }))
           continue;
@@ -9786,7 +9962,7 @@ ${value.stack}`;
           return { shown: true, boxes };
       }
       for (const host of root.querySelectorAll("*")) {
-        const shadow = host.shadowRoot;
+        const shadow = knownRoot(host);
         if (shadow)
           roots.push(shadow);
       }
@@ -9809,10 +9985,10 @@ ${value.stack}`;
   }
 
   // crates/neo-sdk/neo-playwright-js/src/probe/protocol.ts
-  var PROTOCOL = 43;
+  var PROTOCOL = 44;
 
   // crates/neo-sdk/neo-playwright-js/src/probe/read.ts
-  var XHTML = "http://www.w3.org/1999/xhtml";
+  var XHTML2 = "http://www.w3.org/1999/xhtml";
   function readerFor(request, root) {
     const { read, frameVisible } = request;
     switch (read.kind) {
@@ -9820,7 +9996,7 @@ ${value.stack}`;
         return (_world, element) => element.textContent;
       case "innerText":
         return (world, element) => {
-          if (element.namespaceURI !== XHTML)
+          if (element.namespaceURI !== XHTML2)
             throw world.injected.createStacklessError("Node is not an HTMLElement");
           return element.innerText;
         };
@@ -10017,14 +10193,6 @@ ${value.stack}`;
   function screenshotMaskCleanup(world) {
     world.injected.hideHighlight();
     return { kind: "value", value: null };
-  }
-
-  // crates/neo-sdk/neo-playwright-js/src/probe/browseros-ui.ts
-  var BROWSEROS_UI_HOSTS = new Set([
-    "browseros-neo-takeover"
-  ]);
-  function isBrowserOSUi(element) {
-    return BROWSEROS_UI_HOSTS.has(element.localName);
   }
 
   // crates/neo-sdk/neo-playwright-js/src/probe/shadow-roots.ts
@@ -10607,6 +10775,8 @@ ${value.stack}`;
         const { request, policy } = call;
         if (request.op === "pinned")
           return pinned(booted, request);
+        if (request.op === "privateHosts")
+          return privateHosts(request);
         const output = new FailureOutput(booted, policy);
         const reply = output.run(() => dispatch(booted, request.op, request, scope, nodes, output));
         return reply instanceof Promise ? reply.catch(thrownReply) : reply;
@@ -10658,7 +10828,7 @@ ${value.stack}`;
     if (typeof request !== "object" || request === null)
       return false;
     const op = Reflect.get(request, "op");
-    return typeof op === "string" && (op === "pinned" || Object.hasOwn(HANDLERS, op));
+    return typeof op === "string" && (op === "pinned" || op === "privateHosts" || Object.hasOwn(HANDLERS, op));
   }
   function parseBootOptions(options) {
     const frameSeq = typeof options === "object" && options !== null ? Reflect.get(options, "frameSeq") : undefined;
