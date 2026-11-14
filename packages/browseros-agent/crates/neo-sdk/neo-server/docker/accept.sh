@@ -43,9 +43,10 @@
 #                    and the next run passes
 #   task-page        20 times each, a task's next run starts on its own tab after a run that ends
 #                    on a wait, a wait loop cut by its deadline, or its script's act on another
-#                    task's tab and the New Tab; two tasks interleaved; once another task closed
-#                    the tab, a new tab of its own (accept_task_page.py)
-#   frames           10 times each, another task's tab read through context.pages() lists its
+#                    task's tab and the New Tab (under tabs.scope browser, set for that shape and
+#                    put back); two tasks interleaved; once a run without a task closed the tab,
+#                    a new tab of its own (accept_task_page.py)
+#   frames           10 times each, a task's tab read by a run without a task lists its
 #                    cross-site and same-origin frames at the script's first statement and after
 #                    a title; a later run of the task that opened it too; a cross-site frame
 #                    added mid-run shows after the script's next wait (accept_frames.py)
@@ -608,9 +609,10 @@ PY
 
   # --- task-page -----------------------------------------------------------------------------
   # Which tab a task's next run starts on: its own, whatever the last run ended on (a wait, a
-  # wait loop cut by the deadline, the script's own act on another task's tab), and a new one
-  # once someone else closed it (accept_task_page.py).
-  task_page=$(client "$main" "${as_host[@]}" python3 accept_task_page.py http://127.0.0.1:9010/mcp 20 2>&1)
+  # wait loop cut by the deadline, the script's own act on another task's tab under the browser
+  # tab scope), and a new one once a script without a task closed it (accept_task_page.py).
+  task_page=$(client "$main" "${as_host[@]}" python3 accept_task_page.py http://127.0.0.1:9010/mcp \
+    /run/neo/host.sock /run/neo-accept/host-token 20 2>&1)
   if [ -n "$logs_dir" ]; then mkdir -p "$logs_dir"; printf '%s\n' "$task_page" > "$logs_dir/task-page.json"; fi
   if [ "$(jget "$task_page" 'd["ok"]')" = True ]; then
     result PASS task-page "$(jget "$task_page" 'd["detail"]')"
@@ -620,7 +622,8 @@ PY
 
   # --- frames --------------------------------------------------------------------------------
   # Every page a script reaches lists its whole frame tree, cross-site children included, from
-  # its first statement: another task's tab, the shape a host's observer reads (accept_frames.py).
+  # its first statement: a task's tab read by a run without a task, the shape a host's observer
+  # reads (accept_frames.py).
   frames=$(client "$main" "${as_host[@]}" python3 accept_frames.py http://127.0.0.1:9010/mcp 10 2>&1)
   if [ -n "$logs_dir" ]; then mkdir -p "$logs_dir"; printf '%s\n' "$frames" > "$logs_dir/frames.json"; fi
   if [ "$(jget "$frames" 'd["ok"]')" = True ]; then

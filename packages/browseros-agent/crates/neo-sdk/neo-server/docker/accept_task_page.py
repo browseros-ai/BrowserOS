@@ -7,7 +7,7 @@ ends every `page.waitForTimeout`, its listeners, the event pump), and it is neve
 tab or the browser's New Tab, even one the script reached through `context.pages()`. A task with
 no open tab gets a new one.
 
-  accept_task_page.py <mcp-url> [reps]
+  accept_task_page.py <mcp-url> <host-socket> <host-token-file> [reps] [shapes]
 
 Every shape runs `reps` times (default 20), each repetition in fresh tasks, beside a neighbour
 task's tab and whatever else the browser has open (its New Tab). The shapes are the first host's
@@ -17,10 +17,13 @@ the previous run's last call was a wait.
   wait-middle    goto; a run that only waits; the next run reads `page`
   ends-on-wait   goto, a click and a read, then a wait as the script's last call
   wait-loop      a wait loop that the run's deadline ends (a card entry that never saves)
-  other-tab      the script itself acts on every other tab through `context.pages()`
+  other-tab      the script itself acts on every other tab through `context.pages()`. Only the
+                 `browser` tab scope lets a task's run reach another task's tab, so this shape
+                 sets `tabs.scope` to `browser` over the host socket for its own repetitions
+                 and puts the value it found back after
   interleaved    two tasks: each goes to its page, each waits, each reads
-  closed         another task closes the task's tab after a wait: its next run opens a new tab
-                 of its own
+  closed         a run without a task (the owner's or a host's own script, which sees every tab)
+                 closes the task's tab after a wait: its next run opens a new tab of its own
 
 Prints one JSON object: ok, how many repetitions of each shape went wrong, the first problems.
 Standard library only.
@@ -30,7 +33,7 @@ import json
 import sys
 import uuid
 
-from accept_client import RUN_META, connect
+from accept_client import RUN_META, connect, host
 
 WAIT = "await page.waitForTimeout(300); return 1;"
 READ = "return { tab: page.tabId, task: page.taskId };"
@@ -41,18 +44,20 @@ def url(title: str) -> str:
 
 
 class Runs:
-    """`run` calls over one MCP session, each naming its task in `_meta` as a host does."""
+    """`run` calls over one MCP session, each naming its task in `_meta` as a host does, or none
+    for the owner's or a host's own script; and the host socket, for the tab scope."""
 
-    def __init__(self, mcp_url: str):
+    def __init__(self, mcp_url: str, socket_path: str, token_file: str):
         self.client = connect(mcp_url)
+        self.socket_path, self.token_file = socket_path, token_file
 
-    def run(self, task: str, code: str, timeout: int = 60_000):
+    def run(self, task: str | None, code: str, timeout: int = 60_000):
         result = self.client.call(
             "tools/call",
             {
                 "name": "run",
                 "arguments": {"code": code, "timeout": timeout},
-                "_meta": {RUN_META: {"taskId": task}},
+                "_meta": {RUN_META: {"taskId": task} if task is not None else {}},
             },
         )
         structured = result.get("structuredContent") or {}
@@ -65,6 +70,16 @@ class Runs:
     def page(self, task: str) -> dict:
         value, error = self.run(task, READ)
         return value if isinstance(value, dict) else {"error": error}
+
+    def tab_scope(self, scope: str | None = None) -> str | None:
+        """`tabs.scope` as the server has it, after setting it to `scope` when one is given."""
+        if scope is None:
+            reply = host(self.socket_path, self.token_file, "/v1/settings")
+        else:
+            body = json.dumps({"tabs": {"scope": scope}})
+            reply = host(self.socket_path, self.token_file, "/v1/settings", "PATCH", body)
+        settings = reply.get("body", {}).get("settings", {}) if reply.get("status") == 200 else {}
+        return settings.get("tabs", {}).get("scope")
 
     def close(self, task: str) -> None:
         """Closes the tabs `task` owns, never `page` itself: where `page` is wrong it is a
@@ -161,14 +176,15 @@ def interleaved(runs: Runs, i: int, problems: list) -> bool:
     return ok
 
 
-def closed(runs: Runs, i: int, problems: list, closer: str) -> bool:
+def closed(runs: Runs, i: int, problems: list) -> bool:
     name = task("closed", i)
     opened = runs.goto(name)
     if not waited(runs, name, problems, f"closed {i}"):
         return False
-    # Closed from outside the task (here the neighbour's script), as the owner closes a tab.
+    # Closed from outside the task, as the owner or a host's own script closes a tab: a run
+    # without a task, which sees every tab under either tab scope.
     shut, error = runs.run(
-        closer,
+        None,
         f"const q = context.pages().find((p) => p.tabId === {json.dumps(opened)}); "
         "if (!q) return 0; await q.close(); return 1;",
     )
@@ -206,22 +222,33 @@ SHAPES = {
 }
 
 
+def shape_runs(runs: Runs, shape: str, reps: int, problems: list) -> int:
+    """How many of `shape`'s repetitions went wrong. `other-tab` runs under the `browser` tab
+    scope, set for its repetitions alone and then put back."""
+    check = SHAPES[shape]
+    if shape != "other-tab":
+        return sum(0 if check(runs, i, problems) else 1 for i in range(1, reps + 1))
+    before = runs.tab_scope()
+    if runs.tab_scope("browser") != "browser":
+        problems.append(f"other-tab: tabs.scope did not become browser (was {before})")
+        return reps
+    try:
+        return sum(0 if check(runs, i, problems) else 1 for i in range(1, reps + 1))
+    finally:
+        if before is not None and runs.tab_scope(before) != before:
+            problems.append(f"other-tab: tabs.scope was not put back to {before}")
+
+
 def main() -> None:
-    mcp_url = sys.argv[1]
-    reps = int(sys.argv[2]) if len(sys.argv) > 2 else 20
-    shapes = sys.argv[3].split(",") if len(sys.argv) > 3 else list(SHAPES)
-    runs = Runs(mcp_url)
+    mcp_url, socket_path, token_file = sys.argv[1:4]
+    reps = int(sys.argv[4]) if len(sys.argv) > 4 else 20
+    shapes = sys.argv[5].split(",") if len(sys.argv) > 5 else list(SHAPES)
+    runs = Runs(mcp_url, socket_path, token_file)
     # A neighbour task's tab stays open throughout: the tab a wrong `page` most often was.
     neighbour = task("neighbour", 0)
     runs.goto(neighbour)
     problems: list = []
-    wrong = {}
-    for shape in shapes:
-        check = SHAPES[shape]
-        wrong[shape] = sum(
-            0 if (check(runs, i, problems, neighbour) if shape == "closed" else check(runs, i, problems)) else 1
-            for i in range(1, reps + 1)
-        )
+    wrong = {shape: shape_runs(runs, shape, reps, problems) for shape in shapes}
     runs.close(neighbour)
     counts = ", ".join(f"{shape} {wrong[shape]}/{reps}" for shape in shapes)
     print(
