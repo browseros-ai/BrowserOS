@@ -351,6 +351,18 @@ impl TabRegistry {
         self.lock().tasks.holder(tab).cloned()
     }
 
+    /// The tab that opened `tab`, as a registered popup or as the browser announced it, or
+    /// `None` for a tab opened by hand. A released takeover's `openedTabs` read it, so a host can
+    /// tell a tab the owner opened from one a page opened.
+    pub(crate) fn opener(&self, tab: TabId) -> Option<TabId> {
+        let state = self.lock();
+        state
+            .popups
+            .get(&tab)
+            .copied()
+            .or_else(|| state.announced.opener(tab))
+    }
+
     /// Starts an agent-named task in `family`: one created in a run whose host task is of that
     /// family, so it counts as that run's own.
     pub(crate) fn create_task_in(
@@ -1329,6 +1341,25 @@ mod tests {
             "but never Neo's blank tab"
         );
         Ok(())
+    }
+
+    /// A released takeover's `openedTabs` name each tab's opener: a popup's, from the browser's
+    /// announcement or from its registration, and none for a tab opened by hand.
+    #[test]
+    fn a_tab_names_its_opener_as_announced_or_registered_and_a_hand_opened_one_none() {
+        let tabs = TabRegistry::new();
+        let opener = page(1, 101);
+        tabs.opened_by_agent(&opener, tabs.seen());
+        let announced = TabId(102);
+        tabs.note_opener(announced, opener.tab);
+        let registered = PageRef { tab: TabId(103) };
+        tabs.popup(&registered, opener.tab, tabs.seen());
+        let by_hand = page(4, 104);
+        tabs.touched(&by_hand, tabs.seen());
+        assert_eq!(tabs.opener(announced), Some(opener.tab), "announced");
+        assert_eq!(tabs.opener(registered.tab), Some(opener.tab), "registered");
+        assert_eq!(tabs.opener(by_hand.tab), None, "opened by hand");
+        assert_eq!(tabs.opener(opener.tab), None, "the opener itself");
     }
 
     #[test]

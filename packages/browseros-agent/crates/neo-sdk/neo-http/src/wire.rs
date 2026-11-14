@@ -482,6 +482,18 @@ pub(crate) fn takeover(takeover: &Takeover) -> api::Takeover {
         released_at,
         expires_at: takeover.expires_at.millis(),
         input_drained: takeover.input_drained,
+        opened_tabs: takeover.opened_tabs.as_ref().map(|opened| {
+            opened
+                .iter()
+                .map(|tab| api::OpenedTab {
+                    tab_id: tab.tab.0,
+                    url: tab.url.clone(),
+                    in_front: tab.in_front,
+                    task_id: tab.task_id.clone(),
+                    opener_tab_id: tab.opener.map(|opener| opener.0),
+                })
+                .collect()
+        }),
     }
 }
 

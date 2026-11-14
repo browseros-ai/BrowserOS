@@ -2068,6 +2068,36 @@ components:
           description: >-
             The takeover lock's TTL. At most 20 minutes, the same fixed cap as a lock's. Neo
             releases the takeover 10 s before it ends.
+    OpenedTab:
+      type: object
+      description: A tab that first appeared while a takeover was active.
+      required: [tabId, url, inFront, taskId, openerTabId]
+      properties:
+        tabId:
+          type: integer
+          format: int64
+        url:
+          type: string
+          description: Its address when the release began.
+        inFront:
+          type: boolean
+          description: >-
+            Whether the browser showed it in front when the release began, before the fit was
+            restored or the screen let go: the owner's last focus. When no listed tab is in
+            front, the owner left another tab in front, usually the takeover's own.
+        taskId:
+          type: string
+          nullable: true
+          description: >-
+            The task holding it when the release began, or `null` when no task holds it. A popup
+            of a task's tab already belongs to that task.
+        openerTabId:
+          type: integer
+          format: int64
+          nullable: true
+          description: >-
+            The tab that opened it, or `null` for one the owner opened by hand. A host cannot
+            tell those apart from a page's `window.open`; Neo can, through the opener.
     Takeover:
       type: object
       required: [id, tabId, state, lockId, display, createdAt, expiresAt]
@@ -2104,6 +2134,18 @@ components:
             closed it first, the release cut a message in two, or a display was still forwarding
             when the release's budget ran out. Absent while the takeover is active, and when no
             control display was bound to it.
+        openedTabs:
+          type: array
+          description: >-
+            Set by the release, the same whatever ended it: every tab that first appeared while
+            the takeover was active and was still open when its release began, oldest first, at
+            most 256. Neo gives none of them to a task: each stays with the task holding it, or
+            with no task, hidden from bound runs and never closed by the janitor. The host acts
+            on the list by its own rule (for example, only on the tab the owner left in front),
+            or ignores it. Takeovers active at once each list a tab opened during both. If the browser's tabs cannot be listed at the release, every tab noted is
+            listed, with an empty `url` and `inFront` false. Absent while the takeover is active.
+          items:
+            $ref: '#/components/schemas/OpenedTab'
         createdAt:
           type: integer
           format: int64

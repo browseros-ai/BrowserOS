@@ -182,7 +182,12 @@ impl HostApi {
                 (held == Some(tab)).then_some("neo")
             }),
             // `GET /v1/tabs` names the task holding each tab now: the one task scope binds it to.
-            tab_task: Arc::new(move |tab| tabs.holder(tab).map(|holder| holder.task.to_string())),
+            // A released takeover's `openedTabs` read it too, and the tab that opened each one.
+            tab_task: {
+                let tabs = Arc::clone(&tabs);
+                Arc::new(move |tab| tabs.holder(tab).map(|holder| holder.task.to_string()))
+            },
+            tab_opener: Arc::new(move |tab| tabs.opener(tab)),
         });
         takeover.arm(Arc::clone(service.locks()));
         holds.arm({

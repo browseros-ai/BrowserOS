@@ -38,6 +38,8 @@ pub mod navigate_request;
 pub use self::navigate_request::NavigateRequest;
 pub mod navigate_result;
 pub use self::navigate_result::NavigateResult;
+pub mod opened_tab;
+pub use self::opened_tab::OpenedTab;
 pub mod operation;
 pub use self::operation::Operation;
 pub mod operation_error;

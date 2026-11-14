@@ -25,9 +25,11 @@ pub(crate) async fn reconcile(service: &Service, link: &BrowserLink) -> u64 {
     listing.watched.generation
 }
 
-/// Feeds closes to the host API in order so locks end even for tabs no agent op touched.
+/// Feeds closes to the host API in order so locks end even for tabs no agent op touched, and
+/// opens so each active takeover notes the tabs the owner may hand back (`openedTabs`).
 /// Reconcile when the watch restarts or the feed falls behind; `reconciled` identifies the
-/// watch generation the last listing covered. Opens need no host bookkeeping.
+/// watch generation the last listing covered. An open missed while the feed fell behind is not
+/// noted: a release lists only what it heard of.
 pub(crate) async fn tab_feed(
     service: Service,
     link: Arc<BrowserLink>,
@@ -43,7 +45,12 @@ pub(crate) async fn tab_feed(
                     service.tab_closed(tab).await;
                 }
             }
-            Ok(TabEvent::Opened { .. }) => {}
+            // Every active takeover notes the tab, for its release's `openedTabs`.
+            Ok(TabEvent::Opened { epoch, tab }) => {
+                if link.epoch() == Some(epoch) {
+                    service.tab_opened(tab);
+                }
+            }
             Ok(TabEvent::Watching(watched)) => {
                 if watched.generation > reconciled {
                     reconciled = reconcile(&service, &link).await;
