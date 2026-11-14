@@ -63,34 +63,6 @@ class Site(http.server.BaseHTTPRequestHandler):
         del format, args
 
 
-def noopener(scope: Scope, owner: str, other: str, origin: str) -> None:
-    """A's noopener popups are A's: its next run has both, another task's run neither."""
-    opened = (
-        f"const p = await context.newPage(); await p.goto({json.dumps(origin + '/opener')});\n"
-        "const [one] = await Promise.all([p.waitForEvent('popup'), p.click('#open')]);\n"
-        "const [two] = await Promise.all([p.waitForEvent('popup'), p.click('#link')]);\n"
-        "await one.waitForLoadState(); await two.waitForLoadState();\n"
-        "return { one: one.tabId, two: two.tabId };"
-    )
-    value, error, _, _ = scope.run(owner, opened)
-    popups = value if isinstance(value, dict) else {}
-    one, two = popups.get("one"), popups.get("two")
-    if not isinstance(one, int) or not isinstance(two, int):
-        scope.expect("noopener-opened", False, (value, error))
-        return
-    mine = (
-        "const t = (id) => context.pages().find((q) => q.tabId === id);\n"
-        f"return {{ one: (await t({one})?.title()) ?? null, two: (await t({two})?.title()) ?? null }};"
-    )
-    value, error, _, _ = scope.run(owner, mine)
-    scope.expect("noopener-own", value == {"one": "child one", "two": "child two"}, (value, error))
-    listed, error, _, _ = scope.run(other, f"return context.pages().some((q) => q.tabId === {one} || q.tabId === {two});")
-    scope.expect("noopener-listed", listed is False, (listed, error))
-    for target in (one, two):
-        value, error, _, _ = scope.run(other, named(target))
-        scope.expect("noopener-refused", error == "page_not_in_task", (target, value, error))
-
-
 def page_url(title: str) -> str:
     return f"data:text/html,<title>{title}</title><h1>{title}</h1>"
 
@@ -129,6 +101,34 @@ def lookup(tab: int) -> str:
 def named(tab: int) -> str:
     """The page reference a script's own `page.title()` sends, naming `tab` directly."""
     return f"return await __neo.invoke('page.title', {{ page: {{ '$neo': 'page', tab: {tab} }} }});"
+
+
+def noopener(scope: Scope, owner: str, other: str, origin: str) -> None:
+    """A's noopener popups are A's: its next run has both, another task's run neither."""
+    opened = (
+        f"const p = await context.newPage(); await p.goto({json.dumps(origin + '/opener')});\n"
+        "const [one] = await Promise.all([p.waitForEvent('popup'), p.click('#open')]);\n"
+        "const [two] = await Promise.all([p.waitForEvent('popup'), p.click('#link')]);\n"
+        "await one.waitForLoadState(); await two.waitForLoadState();\n"
+        "return { one: one.tabId, two: two.tabId };"
+    )
+    value, error, _, _ = scope.run(owner, opened)
+    popups = value if isinstance(value, dict) else {}
+    one, two = popups.get("one"), popups.get("two")
+    if not isinstance(one, int) or not isinstance(two, int):
+        scope.expect("noopener-opened", False, (value, error))
+        return
+    mine = (
+        "const t = (id) => context.pages().find((q) => q.tabId === id);\n"
+        f"return {{ one: (await t({one})?.title()) ?? null, two: (await t({two})?.title()) ?? null }};"
+    )
+    value, error, _, _ = scope.run(owner, mine)
+    scope.expect("noopener-own", value == {"one": "child one", "two": "child two"}, (value, error))
+    listed, error, _, _ = scope.run(other, f"return context.pages().some((q) => q.tabId === {one} || q.tabId === {two});")
+    scope.expect("noopener-listed", listed is False, (listed, error))
+    for target in (one, two):
+        value, error, _, _ = scope.run(other, named(target))
+        scope.expect("noopener-refused", error == "page_not_in_task", (target, value, error))
 
 
 def check(scope: Scope) -> None:
