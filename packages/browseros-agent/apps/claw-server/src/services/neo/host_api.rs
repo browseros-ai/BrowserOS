@@ -16,7 +16,7 @@ pub(super) struct HostApi {
     token: String,
 }
 
-/// SDK metadata shared by replay claims, redacted cockpit rows and preview eligibility.
+/// SDK metadata shared by replay ownership claims and redacted cockpit child rows.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RunOperation {
@@ -132,8 +132,6 @@ pub enum OperationName {
     Screenshot,
     #[serde(rename = "page.close")]
     Close,
-    #[serde(rename = "neo.cdp")]
-    Cdp,
     #[serde(other)]
     Other,
 }
@@ -155,7 +153,7 @@ impl OperationName {
             Self::Read => "read",
             Self::Screenshot => "screenshot",
             Self::Close => "pages.close",
-            Self::Cdp | Self::Other => "sdk.operation",
+            Self::Other => "sdk.operation",
         }
     }
 }
@@ -172,53 +170,9 @@ pub enum OperationOutcome {
     Unknown,
 }
 
-/// A bounded metadata read can contain useful partial operations without proving
-/// that every call was observed. Only settled records can permit a screenshot.
 #[derive(Deserialize)]
-#[serde(from = "RunRecord")]
-pub struct RunRecordRead {
-    pub operations: Vec<RunOperation>,
-    settled: bool,
-}
-
-impl RunRecordRead {
-    #[must_use]
-    pub fn unread() -> Self {
-        Self {
-            operations: Vec::new(),
-            settled: false,
-        }
-    }
-
-    /// Summary reads hide CDP arguments, so every CDP call suppresses the image
-    /// under the sensitive-data policy. Only complete, gap-free records prove its absence.
-    #[must_use]
-    pub fn proves_no_raw_cdp(&self) -> bool {
-        self.settled
-            && !self.operations.is_empty()
-            && !self
-                .operations
-                .iter()
-                .any(|operation| matches!(operation.name, OperationName::Cdp))
-    }
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
 struct RunRecord {
     operations: Vec<RunOperation>,
-    #[serde(default)]
-    complete: bool,
-    trace_gaps: Option<i64>,
-}
-
-impl From<RunRecord> for RunRecordRead {
-    fn from(record: RunRecord) -> Self {
-        Self {
-            operations: record.operations,
-            settled: record.complete && record.trace_gaps.is_none_or(|gaps| gaps == 0),
-        }
-    }
 }
 
 impl HostApi {
@@ -236,7 +190,7 @@ impl HostApi {
         })
     }
 
-    async fn operations(&self, run_id: &str) -> Result<RunRecordRead, EngineUnavailable> {
+    async fn operations(&self, run_id: &str) -> Result<Vec<RunOperation>, EngineUnavailable> {
         let bytes = self
             .read(
                 &["v1", "runs", run_id],
@@ -244,7 +198,8 @@ impl HostApi {
                 8 * 1024 * 1024,
             )
             .await?;
-        serde_json::from_slice(&bytes)
+        serde_json::from_slice::<RunRecord>(&bytes)
+            .map(|run| run.operations)
             .map_err(|_| EngineUnavailable::new("SDK run metadata had an invalid shape"))
     }
 
@@ -341,7 +296,7 @@ impl NeoEngine {
     }
 
     /// A missing or failed host listener never changes the completed run reply.
-    pub async fn operations(&self, run_id: &str) -> RunRecordRead {
+    pub async fn operations(&self, run_id: &str) -> Vec<RunOperation> {
         let host = self
             .inner
             .connection
@@ -351,22 +306,22 @@ impl NeoEngine {
             .clone();
         let Some(host) = host else {
             tracing::warn!("SDK run metadata unavailable without a host connection");
-            return RunRecordRead::unread();
+            return Vec::new();
         };
         let began = std::time::Instant::now();
         match host.operations(run_id).await {
-            Ok(record) => {
+            Ok(operations) => {
                 tracing::debug!(
                     run_id,
                     elapsed_us = u64::try_from(began.elapsed().as_micros()).unwrap_or(u64::MAX),
-                    operation_count = record.operations.len(),
+                    operation_count = operations.len(),
                     "SDK run metadata read completed"
                 );
-                record
+                operations
             }
             Err(error) => {
                 tracing::warn!(%error, "SDK run metadata projection skipped");
-                RunRecordRead::unread()
+                Vec::new()
             }
         }
     }
@@ -376,83 +331,6 @@ impl NeoEngine {
 mod tests {
     use super::*;
     use serde_json::json;
-
-    #[test]
-    fn preview_safety_requires_a_settled_record_without_raw_cdp() -> anyhow::Result<()> {
-        let operation = |name: &str| {
-            json!({
-                "id": format!("run.{name}"),
-                "name": name,
-                "startedAt": 123,
-                "effect": "write",
-                "delivery": "done",
-                "outcome": "ok"
-            })
-        };
-        let plain = operation("locator.fill");
-        let cases = [
-            (
-                "complete record",
-                json!({"complete": true, "operations": [plain.clone()]}),
-                true,
-            ),
-            (
-                "explicit zero gaps",
-                json!({"complete": true, "traceGaps": 0, "operations": [plain.clone()]}),
-                true,
-            ),
-            (
-                "incomplete record",
-                json!({"complete": false, "operations": [plain.clone()]}),
-                false,
-            ),
-            (
-                "missing completeness",
-                json!({"operations": [plain.clone()]}),
-                false,
-            ),
-            (
-                "trace gaps",
-                json!({"complete": true, "traceGaps": 1, "operations": [plain.clone()]}),
-                false,
-            ),
-            (
-                "invalid negative gaps",
-                json!({"complete": true, "traceGaps": -1, "operations": [plain.clone()]}),
-                false,
-            ),
-            (
-                "empty record",
-                json!({"complete": true, "operations": []}),
-                false,
-            ),
-            (
-                "raw CDP",
-                json!({"complete": true, "operations": [plain.clone(), operation("neo.cdp")]}),
-                false,
-            ),
-            (
-                "future summary field",
-                json!({"complete": true, "futureField": 42, "operations": [plain]}),
-                true,
-            ),
-        ];
-        for (label, value, expected) in cases {
-            let record: RunRecordRead = serde_json::from_value(value)?;
-            assert_eq!(record.proves_no_raw_cdp(), expected, "{label}");
-        }
-        assert!(!RunRecordRead::unread().proves_no_raw_cdp());
-        let cdp: RunOperation = serde_json::from_value(operation("neo.cdp"))?;
-        assert_eq!(cdp.name.audit_name(), "sdk.operation");
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn missing_host_connection_is_unread_metadata() {
-        let record = NeoEngine::disabled("test").operations("run").await;
-        assert!(record.operations.is_empty());
-        assert!(!record.proves_no_raw_cdp());
-    }
 
     #[test]
     fn summary_decodes_only_the_opened_tab_identity() -> anyhow::Result<()> {

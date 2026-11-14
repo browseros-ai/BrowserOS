@@ -179,20 +179,15 @@ async fn build_event(
         preview: if skip_screenshot {
             None
         } else {
-            Some(preview_callback(&call.state, &identity.session))
+            Some(preview_callback(call, &identity.session))
         },
     })
 }
 
-/// The audit worker invokes this after storing the row. Weak references keep
-/// queued previews from extending session or service teardown.
-pub(in crate::api::mcp) fn preview_callback(
-    state: &AppState,
-    session: &Arc<Session>,
-) -> AuditPreview {
+fn preview_callback(call: &ToolCall, session: &Arc<Session>) -> AuditPreview {
     let session = Arc::downgrade(session);
-    let visuals = Arc::downgrade(&state.visuals);
-    let screenshots = Arc::downgrade(&state.screenshots);
+    let visuals = Arc::downgrade(&call.state.visuals);
+    let screenshots = Arc::downgrade(&call.state.screenshots);
     Arc::new(move |session_id, row_id| {
         let session = session.clone();
         let visuals = visuals.clone();
