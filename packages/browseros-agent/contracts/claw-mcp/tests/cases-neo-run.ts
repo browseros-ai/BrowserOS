@@ -1,10 +1,11 @@
-/** Verifies Playwright forwarding and the SDK child's parent-death life line. */
+/** Verifies SDK forwarding, session tab ownership and grouping, and child cleanup. */
+import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { findFreePort } from './browser'
 import type { ContractCase } from './cases'
-import { expectOk, waitUntil } from './helpers'
+import { apiGet, expectOk, waitUntil } from './helpers'
 import { McpSession, readRpcResponse } from './mcp-client'
 import { RUST_BINARY } from './rust-server'
 
@@ -354,4 +355,217 @@ export const neoRunCases: ContractCase[] = [
       }
     },
   },
+  {
+    name: "neo run: a session's tabs are claimed and grouped",
+    async run(ctx) {
+      const session = await ctx.openSession('codex')
+      await waitUntil(
+        async () =>
+          !(
+            await session.callTool('run', {
+              code: 'return context.pages().map(p => p.tabId)',
+            })
+          ).isError,
+        'the SDK browser link',
+        { timeoutMs: 30_000 },
+      )
+      const existingTargets = await pageTargetIds(ctx.browser.cdpPort)
+      const failures: unknown[] = []
+      try {
+        // Use the implicit host task so tasks=[] replies must still project its tabs.
+        const opened = await session.callTool('run', {
+          code: `const first = await context.newPage();
+const second = await context.newPage();
+await first.goto(${JSON.stringify(ctx.fixture('/form.html'))});
+await second.goto(${JSON.stringify(ctx.fixture('/dynamic.html'))});
+return [first.tabId, second.tabId]`,
+        })
+        expectOk(opened, 'opening two session tabs')
+        const ids = opened.structuredContent?.value
+        assert(Array.isArray(ids), 'run must return the two native tab ids')
+        assert.equal(ids.length, 2)
+        const tabIds = ids.map((id: unknown) => {
+          assert(typeof id === 'number' && Number.isSafeInteger(id))
+          return id
+        })
+        const firstTabId = tabIds[0]
+        assert(firstTabId !== undefined)
+        assert.notEqual(firstTabId, tabIds[1])
+
+        const readGroups = async () => {
+          const result = await privateBrowserCommand(
+            ctx.browser.cdpPort,
+            'Browser.getTabGroups',
+          )
+          assert(result !== null && typeof result === 'object')
+          assert('groups' in result && Array.isArray(result.groups))
+          return result.groups.map((group: unknown) => {
+            assert(group !== null && typeof group === 'object')
+            assert('groupId' in group && typeof group.groupId === 'string')
+            assert('title' in group && typeof group.title === 'string')
+            assert('tabIds' in group && Array.isArray(group.tabIds))
+            const members = group.tabIds.map((id: unknown) => {
+              assert(typeof id === 'number' && Number.isSafeInteger(id))
+              return id
+            })
+            return {
+              groupId: group.groupId,
+              title: group.title,
+              tabIds: members,
+            }
+          })
+        }
+        await waitUntil(async () => {
+          const groups = await readGroups()
+          const matching = groups.filter((group) =>
+            tabIds.some((id) => group.tabIds.includes(id)),
+          )
+          return (
+            matching.length === 1 &&
+            matching[0]?.title.startsWith('codex/') === true &&
+            tabIds.every((id) => matching[0]?.tabIds.includes(id))
+          )
+        }, 'both session tabs in one codex/task group')
+
+        await waitUntil(async () => {
+          const response = await apiGet(
+            ctx.server,
+            '/api/v1/sessions?status=live',
+          )
+          assert(
+            response.ok,
+            `cockpit session list failed (${response.status})`,
+          )
+          const result: unknown = await response.json()
+          assert(result !== null && typeof result === 'object')
+          assert('items' in result && Array.isArray(result.items))
+          const own: unknown = result.items.find(
+            (item: unknown) =>
+              item !== null &&
+              typeof item === 'object' &&
+              'sessionId' in item &&
+              item.sessionId === session.sessionId,
+          )
+          if (own === undefined) return false
+          assert(own !== null && typeof own === 'object')
+          assert(
+            'live' in own && own.live !== null && typeof own.live === 'object',
+          )
+          assert(
+            'browserTabs' in own.live && Array.isArray(own.live.browserTabs),
+          )
+          const claimed = own.live.browserTabs.map((tab: unknown) => {
+            assert(tab !== null && typeof tab === 'object')
+            assert(
+              'browserTabId' in tab && typeof tab.browserTabId === 'number',
+            )
+            return tab.browserTabId
+          })
+          return tabIds.every((id) => claimed.includes(id))
+        }, 'the cockpit to list both tabs for the session')
+
+        // A second CDP client represents an agent's explicit placement. Future
+        // host reconciliation must leave an already-claimed tab in that group.
+        const regrouped = await privateBrowserCommand(
+          ctx.browser.cdpPort,
+          'Browser.createTabGroup',
+          { tabIds: [firstTabId], title: 'agent placement' },
+        )
+        assert(regrouped !== null && typeof regrouped === 'object')
+        assert('group' in regrouped && regrouped.group !== null)
+        assert(
+          typeof regrouped.group === 'object' && 'groupId' in regrouped.group,
+        )
+        const explicitGroupId = regrouped.group.groupId
+        assert(typeof explicitGroupId === 'string')
+        const later = await session.callTool('run', {
+          code: 'return context.pages().map(p => p.tabId)',
+        })
+        expectOk(later, 'a later run after explicit regrouping')
+        const groups = await readGroups()
+        assert(
+          groups.some(
+            (group) =>
+              group.groupId === explicitGroupId &&
+              group.title === 'agent placement' &&
+              group.tabIds.includes(firstTabId),
+          ),
+          'a later run moved or renamed the explicitly grouped tab',
+        )
+      } catch (error) {
+        failures.push(error)
+      }
+      try {
+        if (await ctx.browser.isRunning()) {
+          await closeCreatedPages(ctx.browser.cdpPort, existingTargets)
+        }
+      } catch (error) {
+        failures.push(error)
+      }
+      if (failures.length === 1) throw failures[0]
+      if (failures.length > 1) {
+        throw new AggregateError(
+          failures,
+          'Neo grouping case and cleanup failed',
+        )
+      }
+    },
+  },
 ]
+
+/** Reads the launcher's private browser independently of the server under test. */
+async function privateBrowserCommand(
+  cdpPort: number,
+  method: string,
+  params: Record<string, unknown> = {},
+): Promise<unknown> {
+  const response = await fetch(`http://127.0.0.1:${cdpPort}/json/version`, {
+    signal: AbortSignal.timeout(2_000),
+  })
+  assert(response.ok, `private browser version failed (${response.status})`)
+  const version: unknown = await response.json()
+  assert(version !== null && typeof version === 'object')
+  assert('webSocketDebuggerUrl' in version)
+  assert(typeof version.webSocketDebuggerUrl === 'string')
+  const socket = new WebSocket(version.webSocketDebuggerUrl)
+  let deadline: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await new Promise<unknown>((resolve, reject) => {
+      deadline = setTimeout(
+        () => reject(new Error(`CDP ${method} timed out`)),
+        10_000,
+      )
+      socket.addEventListener('open', () => {
+        socket.send(JSON.stringify({ id: 1, method, params }))
+      })
+      socket.addEventListener('error', () =>
+        reject(new Error('private CDP socket failed')),
+      )
+      socket.addEventListener('close', () =>
+        reject(new Error('private CDP socket closed')),
+      )
+      socket.addEventListener('message', (event) => {
+        try {
+          const message: unknown = JSON.parse(String(event.data))
+          assert(message !== null && typeof message === 'object')
+          if (!('id' in message) || message.id !== 1) return
+          if ('error' in message) {
+            reject(
+              new Error(
+                `CDP ${method} failed ${JSON.stringify(message.error)}`,
+              ),
+            )
+          } else {
+            assert('result' in message, `CDP ${method} returned no result`)
+            resolve(message.result)
+          }
+        } catch (error) {
+          reject(error)
+        }
+      })
+    })
+  } finally {
+    clearTimeout(deadline)
+    socket.close()
+  }
+}

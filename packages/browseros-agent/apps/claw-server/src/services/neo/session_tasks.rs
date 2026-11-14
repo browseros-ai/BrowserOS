@@ -1,6 +1,8 @@
 //! Session task identity is host state, separate from the SDK's tab ownership.
 //! Each session starts with one deterministic host task and follows explicit
-//! script task picks reported by the SDK, including picks from failed runs.
+//! tasks reported by the SDK, including touches from failed runs. Metadata lists
+//! each task once in first-touch order, so current follows the last listed open
+//! task and cannot infer a script's final selection when it revisits an earlier task.
 
 use std::collections::{HashMap, HashSet};
 
@@ -54,6 +56,8 @@ pub(super) struct SessionTasks {
 
 struct Session {
     current: TaskKey,
+    // Keep every open task the session touched, not only current. A later census
+    // may find tabs under any of them, including the implicit host task.
     tasks: HashSet<TaskKey>,
 }
 
@@ -93,5 +97,76 @@ impl SessionTasks {
 
     pub(super) fn tasks(&mut self, convo: &ConvoId) -> Vec<TaskKey> {
         self.session(convo).tasks.iter().cloned().collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn touch(id: &str, kind: TaskTouchKind) -> TaskTouch {
+        TaskTouch {
+            id: TaskKey::for_session(&ConvoId::new(id)),
+            name: None,
+            kind,
+            tabs: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn implicit_host_task_is_kept_without_metadata_touches() {
+        let convo = ConvoId::new("session");
+        let mut sessions = SessionTasks::default();
+        sessions.observe(&convo, &[]);
+        assert_eq!(sessions.current(&convo), TaskKey::for_session(&convo));
+        assert_eq!(sessions.tasks(&convo), vec![TaskKey::for_session(&convo)]);
+    }
+
+    #[test]
+    fn all_open_tasks_remain_eligible_for_claims_independently_of_current() {
+        let convo = ConvoId::new("session");
+        let mut sessions = SessionTasks::default();
+        let a = touch("a", TaskTouchKind::Created);
+        let b = touch("b", TaskTouchKind::Fetched);
+        sessions.observe(&convo, &[a.clone(), b.clone()]);
+        assert_eq!(sessions.current(&convo), b.id.clone());
+        assert_eq!(
+            sessions.tasks(&convo).into_iter().collect::<HashSet<_>>(),
+            HashSet::from([TaskKey::for_session(&convo), a.id, b.id]),
+        );
+    }
+
+    #[test]
+    fn closing_current_removes_it_and_restores_the_host_task() {
+        let convo = ConvoId::new("session");
+        let mut sessions = SessionTasks::default();
+        sessions.observe(&convo, &[touch("a", TaskTouchKind::Created)]);
+        sessions.observe(&convo, &[touch("a", TaskTouchKind::Closed)]);
+        assert_eq!(sessions.current(&convo), TaskKey::for_session(&convo));
+        assert_eq!(sessions.tasks(&convo), vec![TaskKey::for_session(&convo)]);
+    }
+
+    #[test]
+    fn last_listed_open_task_wins_without_guessing_a_revisited_task() {
+        let convo = ConvoId::new("session");
+        let mut sessions = SessionTasks::default();
+        // A script selecting A, B, A reports only A, B. Only another run that
+        // explicitly fetches A supplies evidence for changing current back to A.
+        sessions.observe(
+            &convo,
+            &[
+                touch("a", TaskTouchKind::Fetched),
+                touch("b", TaskTouchKind::Fetched),
+            ],
+        );
+        assert_eq!(
+            sessions.current(&convo),
+            touch("b", TaskTouchKind::Fetched).id
+        );
+        sessions.observe(&convo, &[touch("a", TaskTouchKind::Fetched)]);
+        assert_eq!(
+            sessions.current(&convo),
+            touch("a", TaskTouchKind::Fetched).id
+        );
     }
 }
