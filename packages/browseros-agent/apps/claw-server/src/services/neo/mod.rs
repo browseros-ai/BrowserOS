@@ -44,6 +44,8 @@ struct Inner {
     supervisor: Mutex<Option<JoinHandle<()>>>,
 }
 
+/// The wire belongs to the current child. The last validated definition survives
+/// that child's failure so discovery can still offer the SDK's cached tool.
 #[derive(Default)]
 struct Connection {
     wire: Option<wire::Wire>,
@@ -65,11 +67,13 @@ pub enum EngineState {
 
 /// Launch facts from the host. The original file supplies the browser's native
 /// identity and profile-protection path without exposing SDK config to callers.
+#[derive(Clone)]
 pub struct EngineLaunch {
     state_dir: PathBuf,
     resources_dir: PathBuf,
     config_path: PathBuf,
     cdp_port: u16,
+    browseros_version: Option<String>,
     hosted: bool,
 }
 
@@ -81,6 +85,11 @@ impl EngineLaunch {
             resources_dir: config.resources_dir.clone(),
             config_path: config_path.to_path_buf(),
             cdp_port: config.cdp_port,
+            browseros_version: config
+                .native
+                .capabilities
+                .browseros_version()
+                .map(|version| version.to_string()),
             hosted: config.mode.is_hosted(),
         }
     }
@@ -96,6 +105,25 @@ pub struct RunTool {
 }
 
 impl RunTool {
+    /// rmcp remembers the first schema for a tool name. Reject a stale saved
+    /// dialect before discovery can pin it for this host process's lifetime.
+    #[cfg(unix)]
+    fn has_compatible_schema(&self) -> bool {
+        let schema = &self.input_schema;
+        let Some(properties) = schema.get("properties").and_then(Value::as_object) else {
+            return false;
+        };
+        schema.get("type") == Some(&json!("object"))
+            && schema.get("additionalProperties") == Some(&json!(false))
+            && schema.get("required") == Some(&json!(["code"]))
+            && properties.len() == 2
+            && properties.get("code").and_then(|code| code.get("type")) == Some(&json!("string"))
+            && properties
+                .get("timeout")
+                .and_then(|timeout| timeout.get("type"))
+                == Some(&json!("integer"))
+    }
+
     #[must_use]
     pub fn fallback() -> Self {
         Self {
@@ -207,10 +235,14 @@ impl NeoEngine {
 
     /// Starts once without holding up host boot. A failed start becomes state.
     pub fn start(&self, launch: EngineLaunch) {
+        if self.inner.stop.is_cancelled() {
+            return;
+        }
         if self.inner.started.swap(true, Ordering::AcqRel) {
             return;
         }
         if launch.hosted {
+            tracing::info!("the Playwright engine is disabled in hosted mode");
             self.inner
                 .state
                 .send_replace(EngineState::Disabled("hosted mode uses its existing run"));
@@ -218,13 +250,11 @@ impl NeoEngine {
         }
         #[cfg(unix)]
         {
+            tracing::info!("the Playwright engine is starting");
             self.inner.state.send_replace(EngineState::Starting);
             let engine = self.clone();
             let task = tokio::spawn(async move {
-                if let Err(error) = child::supervise(&engine, launch).await {
-                    tracing::warn!(%error, "the Playwright engine stopped");
-                    engine.unavailable(error.reason);
-                }
+                child::supervise(&engine, launch).await;
             });
             *self
                 .inner
@@ -233,9 +263,12 @@ impl NeoEngine {
                 .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(task);
         }
         #[cfg(not(unix))]
-        self.inner.state.send_replace(EngineState::Disabled(
-            "the Playwright run is not available on Windows yet",
-        ));
+        {
+            tracing::info!("the Playwright engine is disabled on Windows");
+            self.inner.state.send_replace(EngineState::Disabled(
+                "the Playwright run is not available on Windows yet",
+            ));
+        }
     }
 
     #[must_use]
@@ -278,8 +311,14 @@ impl NeoEngine {
             return tool.clone();
         }
         let mut tool = RunTool::fallback();
-        if let EngineState::Disabled(why) = self.state() {
-            tool.description = format!("run is unavailable: {why}.");
+        match self.state() {
+            EngineState::Disabled(why) => {
+                tool.description = format!("run is unavailable: {why}.");
+            }
+            EngineState::Unavailable { reason, .. } => {
+                tool.description = format!("run is unavailable: {reason}.");
+            }
+            EngineState::Starting | EngineState::Ready => {}
         }
         tool
     }
@@ -287,7 +326,7 @@ impl NeoEngine {
     /// Dropping this future drops the response stream. Without requestId the
     /// SDK cancels immediately when its stateless HTTP caller disappears.
     pub async fn run(&self, call: RunCall) -> Result<RunOutcome, EngineUnavailable> {
-        if !matches!(self.state(), EngineState::Ready) {
+        if self.inner.stop.is_cancelled() || !matches!(self.state(), EngineState::Ready) {
             return Err(self.not_ready());
         }
         let wire = self
@@ -298,7 +337,11 @@ impl NeoEngine {
             .wire
             .clone()
             .ok_or_else(|| self.not_ready())?;
-        wire.run(call).await
+        let result = wire.run(call).await;
+        if result.is_err() && !matches!(self.state(), EngineState::Ready) {
+            return Err(self.not_ready());
+        }
+        result
     }
 
     #[must_use]
@@ -344,6 +387,7 @@ impl NeoEngine {
     /// necessary. kill_on_drop also covers cancellation of the supervisor.
     pub async fn shutdown(&self) {
         self.inner.stop.cancel();
+        self.unavailable("the Playwright engine was shut down".to_owned());
         let task = self
             .inner
             .supervisor
@@ -361,22 +405,37 @@ impl NeoEngine {
     }
 
     fn unavailable(&self, reason: String) {
+        tracing::info!(%reason, "the Playwright engine is unavailable");
+        self.unavailable_until(reason, None);
+    }
+
+    fn unavailable_until(&self, reason: String, retry_at: Option<Instant>) {
         self.inner
             .connection
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .wire = None;
-        self.inner.state.send_replace(EngineState::Unavailable {
-            reason,
-            retry_at: None,
-        });
+        self.inner
+            .state
+            .send_replace(EngineState::Unavailable { reason, retry_at });
     }
 
     fn not_ready(&self) -> EngineUnavailable {
+        // Readiness can race shutdown on another runtime thread. Once stopped,
+        // no caller may forward more work even if it saw the previous Ready state.
+        if self.inner.stop.is_cancelled() {
+            return EngineUnavailable::new("the Playwright engine was shut down");
+        }
         EngineUnavailable::new(match self.state() {
             EngineState::Disabled(why) => why.to_owned(),
             EngineState::Starting => "the Playwright engine is starting".to_owned(),
-            EngineState::Unavailable { reason, .. } => reason,
+            EngineState::Unavailable { reason, retry_at } => {
+                if retry_at.is_some() {
+                    format!("{reason}; restarting")
+                } else {
+                    reason
+                }
+            }
             EngineState::Ready => "the Playwright engine connection is gone".to_owned(),
         })
     }
@@ -402,7 +461,7 @@ pub fn engine_main() -> ! {
 
 #[cfg(test)]
 mod tests {
-    use super::{EngineState, NeoEngine, RunTool};
+    use super::{EngineState, NeoEngine, RunCall, RunTool};
     use std::time::Duration;
 
     #[tokio::test(start_paused = true)]
@@ -434,6 +493,24 @@ mod tests {
             .tool = Some(tool);
         engine.inner.state.send_replace(EngineState::Ready);
         assert_eq!(waiting.await?.description, "SDK definition");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn stopped_engine_refuses_runs_even_with_a_stale_ready_snapshot() -> anyhow::Result<()> {
+        let engine = NeoEngine::for_test_endpoint(9)?;
+        engine.inner.stop.cancel();
+        let result = engine
+            .run(RunCall {
+                args: serde_json::from_value(serde_json::json!({"code": "return 1"}))?,
+                task: None,
+                host_data: serde_json::Value::Null,
+            })
+            .await;
+        let Err(error) = result else {
+            anyhow::bail!("a stopped engine accepted a run");
+        };
+        assert!(error.reason.contains("shut down"));
         Ok(())
     }
 }
