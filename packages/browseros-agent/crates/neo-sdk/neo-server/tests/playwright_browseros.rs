@@ -1111,58 +1111,33 @@ return { heard: heard.tabId === opened.tabId, listed: listed.length === 1 && lis
 async fn bound_walls(rig: &Rig) -> TestResult {
     rig.until_ready().await?;
     let client = rig.client().await?;
-    let opened = run(
+    let owner = json!({ "taskId": "wall-owner" });
+    let tab = opened_tab(
         &client,
         "await page.goto('data:text/html,<title>walled</title>'); return page.tabId;",
-        &json!({ "taskId": "wall-owner" }),
+        &owner,
     )
     .await?;
-    let tab = opened
-        .structured_content
-        .as_ref()
-        .and_then(|reply| reply.get("value"))
-        .and_then(Value::as_i64)
-        .ok_or("the owner task's tab")?;
-    let value_of = |result: &CallToolResult| {
-        result
-            .structured_content
-            .as_ref()
-            .and_then(|reply| reply.get("value"))
-            .cloned()
-    };
-    let code_of = |result: &CallToolResult| {
-        result
-            .structured_content
-            .as_ref()
-            .and_then(|reply| reply.pointer("/error/code"))
-            .cloned()
-    };
-    let loose = run(
+    let loose = opened_tab(
         &client,
         "await page.goto('data:text/html,<title>loose</title>'); return page.tabId;",
         &json!({}),
     )
     .await?;
-    let loose = value_of(&loose)
-        .and_then(|value| value.as_i64())
-        .ok_or("a tab no task holds")?;
-    let created = run(
+    let created = opened_tab(
         &client,
         "const t = await neo.createTask(); const p = await t.newPage(); \
          await p.goto('data:text/html,<title>created</title>'); return p.tabId;",
-        &json!({ "taskId": "wall-owner" }),
+        &owner,
     )
     .await?;
-    let created = value_of(&created)
-        .and_then(|value| value.as_i64())
-        .ok_or("the created task's tab")?;
     let listed = run(
         &client,
         "return context.pages().map((q) => q.tabId);",
         &json!({ "taskId": "wall-other" }),
     )
     .await?;
-    assert_eq!(value_of(&listed), Some(json!([])), "{listed:?}");
+    assert_eq!(script_value(&listed), Some(json!([])), "{listed:?}");
     for target in [tab, loose, created] {
         let named = run(
             &client,
@@ -1173,7 +1148,7 @@ async fn bound_walls(rig: &Rig) -> TestResult {
         )
         .await?;
         assert_eq!(
-            code_of(&named),
+            error_code(&named),
             Some(json!("page_not_in_task")),
             "{target}: {named:?}"
         );
@@ -1184,11 +1159,11 @@ async fn bound_walls(rig: &Rig) -> TestResult {
             "const t = (id) => context.pages().find((q) => q.tabId === id);\n\
              return {{ own: (await t({tab})?.title()) ?? null, created: (await t({created})?.title()) ?? null, loose: !!t({loose}) }};"
         ),
-        &json!({ "taskId": "wall-owner" }),
+        &owner,
     )
     .await?;
     assert_eq!(
-        value_of(&mine),
+        script_value(&mine),
         Some(json!({ "own": "walled", "created": "created", "loose": false })),
         "{mine:?}"
     );
@@ -1199,7 +1174,7 @@ async fn bound_walls(rig: &Rig) -> TestResult {
     )
     .await?;
     assert_eq!(
-        code_of(&fetched),
+        error_code(&fetched),
         Some(json!("task_not_found")),
         "{fetched:?}"
     );
@@ -1207,19 +1182,42 @@ async fn bound_walls(rig: &Rig) -> TestResult {
     let read = format!(
         "const p = context.pages().find((q) => q.tabId === {tab}); return p ? await p.title() : null;"
     );
-    for meta in [json!({}), json!({ "taskId": "wall-owner" })] {
+    for meta in [json!({}), owner] {
         let result = run(&client, &read, &meta).await?;
         assert_eq!(
-            result
-                .structured_content
-                .as_ref()
-                .and_then(|reply| reply.get("value")),
-            Some(&json!("walled")),
+            script_value(&result),
+            Some(json!("walled")),
             "{meta}: {result:?}"
         );
     }
     client.cancel().await?;
     Ok(())
+}
+
+/// A run's value, `None` when it failed.
+fn script_value(result: &CallToolResult) -> Option<Value> {
+    result
+        .structured_content
+        .as_ref()
+        .and_then(|reply| reply.get("value"))
+        .cloned()
+}
+
+/// A failed run's error code.
+fn error_code(result: &CallToolResult) -> Option<Value> {
+    result
+        .structured_content
+        .as_ref()
+        .and_then(|reply| reply.pointer("/error/code"))
+        .cloned()
+}
+
+/// The tab id a script that opens one returns, run with `meta`.
+async fn opened_tab(client: &Client, code: &str, meta: &Value) -> Result<i64, Box<dyn Error>> {
+    let result = run(client, code, meta).await?;
+    script_value(&result)
+        .and_then(|value| value.as_i64())
+        .ok_or_else(|| format!("no tab: {result:?}").into())
 }
 
 async fn drive(rig: &Rig) -> TestResult {
