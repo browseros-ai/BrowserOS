@@ -42,9 +42,11 @@ export interface ContractCase {
 
 import { neoRunCases } from './cases-neo-run'
 import { playwrightRunCases } from './cases-playwright-run'
+import { recipeCases } from './cases-recipes'
 import { transportCases } from './cases-transport'
 
 export const contractCases: ContractCase[] = [
+  ...recipeCases,
   ...transportCases,
   ...neoRunCases,
   ...playwrightRunCases,

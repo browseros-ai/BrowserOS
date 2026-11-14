@@ -19,7 +19,8 @@ use serde_json::{Value, json};
 use std::time::Instant;
 use tokio_util::sync::CancellationToken;
 
-/// Prepare the window, forward, then reconcile tabs, naming and audit, in that order.
+/// Prepare the window, forward, reconcile tabs/naming and prepare reply notes.
+/// Persist the parent before publishing children so every visible child has its run.
 /// Dropping the engine future closes its HTTP connection so the SDK cancels the run.
 pub(super) async fn call(
     state: &AppState,
@@ -65,6 +66,8 @@ pub(super) async fn call(
         Some(Ok(outcome)) => outcome.status == RunStatus::Cancelled,
         Some(Err(_)) => false,
     };
+    let mut pending_steps = None;
+    let mut sdk_run_id = None;
     let mut result = match outcome {
         Some(Ok(outcome)) => {
             state
@@ -72,7 +75,10 @@ pub(super) async fn call(
                 .observe_tasks(started.session.convo_id(), &outcome.tasks);
             let mut notes = after_run::tabs::apply(state, started, &outcome).await;
             notes.extend(after_run::naming::apply(state, started, &outcome).await);
-            after_run::steps::apply(state, started, &outcome, &dispatch_id).await;
+            let mut steps = after_run::steps::prepare(state, started, &outcome, &dispatch_id).await;
+            notes.append(&mut steps.notes);
+            pending_steps = Some(steps);
+            sdk_run_id = Some(outcome.run_id.clone());
             let mut reply = outcome.reply;
             reply
                 .content
@@ -84,8 +90,8 @@ pub(super) async fn call(
     };
     result.content.extend(window_note.map(ContentBlock::text));
     let duration_ms = i64::try_from(began.elapsed().as_millis()).unwrap_or(i64::MAX);
-    // A script and its return value can both contain secrets. Persist only fixed
-    // outcome flags and token counts, even for invalid arguments and engine errors.
+    // A script and its return value can both contain secrets. Persist only outcome
+    // flags, opaque SDK run correlation and token counts, including on engine errors.
     let event = AuditEvent::without_preview(RecordToolDispatchInput {
         agent_id: started.session.convo_id().as_str().to_string(),
         slug: started.session.agent().slug().to_string(),
@@ -101,6 +107,7 @@ pub(super) async fn call(
         result_meta: json!({
             "isError": result.is_error.unwrap_or(false),
             "cancelled": cancelled,
+            "sdkRunId": sdk_run_id,
             "contentSummary": format!("{} block(s)", result.content.len()),
         })
         .to_string(),
@@ -112,8 +119,13 @@ pub(super) async fn call(
         tool_output_token_estimate: estimate_tool_output_tokens(&result.content),
         token_estimator_version: TOKEN_ESTIMATOR_VERSION,
     });
-    if let Err(error) = state.audit_worker.submit(event).await {
-        tracing::warn!(%error, "Playwright run audit admission failed");
+    match state.audit_worker.submit(event).await {
+        Ok(()) => {
+            if let Some(steps) = pending_steps {
+                steps.record(state, started.session.id().as_str()).await;
+            }
+        }
+        Err(error) => tracing::warn!(%error, "Playwright run audit admission failed"),
     }
     if !started.session.finish_dispatch(&dispatch_id).await
         && started.session.operator_stop_requested()
