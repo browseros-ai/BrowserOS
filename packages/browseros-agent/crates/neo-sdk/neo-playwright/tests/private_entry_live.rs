@@ -4791,6 +4791,50 @@ async fn tests_that_typing_names_a_host_the_focus_asked_before() -> TestResult {
     bench.close(opened).await
 }
 
+/// The walk on demand, row 9c (Greptile's finding on #3661): a reading that sees a private value
+/// shown is private, and no walk may put a later clear answer in its place. A card box in the
+/// page's own document shows a number its script wrote while a card is typed into the closed
+/// root: that reading is private and asks nothing. Once the page empties its own box, the next
+/// reading walks and reads the closed root's card, private. Fails with the walk taken after an
+/// answer that shows a value (the first reading describes the host).
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_private_answer_is_never_walked_over() -> TestResult {
+    let bench = Bench::start().await?;
+    let opened = bench
+        .open("/private/closed-card.html?light=1", Place::Front)
+        .await?;
+    let playwright = &bench.live.playwright;
+    let tab = opened.page.tab;
+    assert_eq!(playwright.picture_check(tab).await, PictureCheck::Private);
+    bench.live.main_world(&opened.page, "focusCard()").await?;
+    type_keys(&bench, &opened, CARD).await?;
+    bench.live.main_world(&opened.page, "blurCard()").await?;
+    bench.recording.reset_calls();
+    assert_eq!(
+        playwright.picture_check(tab).await,
+        PictureCheck::Private,
+        "the page's own box shows its number"
+    );
+    assert_eq!(
+        bench.recording.calls(DESCRIBE),
+        0,
+        "no walk past a shown value"
+    );
+    bench.live.main_world(&opened.page, "fillLight('')").await?;
+    assert_eq!(
+        playwright.picture_check(tab).await,
+        PictureCheck::Private,
+        "the closed root's card, read now"
+    );
+    assert_eq!(
+        bench.recording.calls(DESCRIBE),
+        1,
+        "the host asked at that reading"
+    );
+    bench.close(opened).await
+}
+
 /// The walk on demand, row 9 (the lead's rule): a host that left the document is gone, not
 /// unread. A card typed into a closed root whose host the page then removes, before the next
 /// reading: that reading is clear, not unknown, nothing is asked, and the next one is the same.

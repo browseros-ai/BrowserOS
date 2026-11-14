@@ -197,7 +197,7 @@ impl Playwright {
                     .await
                     .unwrap_or((Asked::Failed, None));
                 let asked = match (asked, world) {
-                    (Asked::Answered(reply), Some(world)) if waiting(&reply) => {
+                    (Asked::Answered(reply), Some(world)) if walk_wanted(&reply) => {
                         let ends = (Instant::now() + WALK_BUDGET).min(deadline - WALK_RESERVE);
                         walked(&world, reply, ends).await
                     }
@@ -267,6 +267,14 @@ impl Playwright {
     }
 }
 
+/// Whether a frame's first answer calls for the walk: hosts wait, and no private value shows yet.
+/// An answer that shows one already makes the reading private, and a walk after it could only
+/// put a later clear answer in its place (a value the page cleared meanwhile, with no event): the
+/// hosts wait for the next reading instead, unasked.
+fn walk_wanted(reply: &ProbeReply) -> bool {
+    waiting(reply) && !flag(reply, "shown")
+}
+
 /// Whether `reply` names hosts waiting for the camera's walk on demand (`hosts`).
 fn waiting(reply: &ProbeReply) -> bool {
     flag(reply, "hosts")
@@ -313,6 +321,10 @@ async fn walked(world: &IsolatedWorld, first: ProbeReply, ends: Instant) -> Aske
         }
         match time::timeout_at(ends, round(world, name)).await {
             Ok(Ok(Round::Idle)) => break,
+            // An answer that shows a private value is the reading: no later round may replace it.
+            Ok(Ok(Round::Answered(second))) if flag(&second, "shown") => {
+                return Asked::Answered(second);
+            }
             Ok(Ok(Round::Answered(second))) => {
                 unread = named(&second);
                 let more = waiting(&second);
@@ -574,6 +586,29 @@ mod tests {
 
     /// A walk's second reply stands only when it is a whole answer: an error reply, or a value
     /// missing a field, keeps the frame's first answer.
+    /// Greptile's finding on #3661: the walk never starts after an answer that shows a private
+    /// value, so no later clear answer can take its place; hosts alone call for it.
+    #[test]
+    fn tests_that_a_private_answer_is_never_walked_over() -> Result<(), Box<dyn Error>> {
+        use super::walk_wanted;
+
+        let reply = |value: Value| -> Result<ProbeReply, Box<dyn Error>> {
+            Ok(serde_json::from_value(
+                json!({ "kind": "value", "value": value }),
+            )?)
+        };
+        let shown = json!({ "shown": true, "inputs": 0, "boxes": true, "hosts": true });
+        let waiting = json!({ "shown": false, "inputs": 1, "boxes": false, "hosts": true });
+        let idle = json!({ "shown": false, "inputs": 0, "boxes": false });
+        assert!(!walk_wanted(&reply(shown)?), "a value shows: no walk");
+        assert!(
+            walk_wanted(&reply(waiting)?),
+            "hosts wait, nothing shows: walk"
+        );
+        assert!(!walk_wanted(&reply(idle)?), "no host waits: no walk");
+        Ok(())
+    }
+
     #[test]
     fn tests_that_only_a_whole_second_answer_replaces_the_first() -> Result<(), Box<dyn Error>> {
         use super::complete;

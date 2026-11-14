@@ -9,7 +9,8 @@
      cross-site frame, which the test cannot script from the page above). ?cancel=beforeinput
      cancels each beforeinput and writes its text itself; ?cancel=key cancels each key and writes
      it itself, so no input event fires at all. removeHost() takes the root's host out of the
-     document. -->
+     document. ?light=1 adds a card box in the page's own document that its script fills on load,
+     and fillLight(value) writes it. -->
 <div id=host></div>
 <div id=later></div>
 <script>
@@ -34,6 +35,12 @@ if (query.get('cancel') === 'key') card.addEventListener('keydown', (event) => {
   card.value += event.key;
 });
 window.removeHost = () => { document.getElementById('host').remove(); return true; };
+if (query.get('light')) {
+  const light = document.body.appendChild(document.createElement('input'));
+  light.setAttribute('autocomplete', 'cc-number');
+  light.value = '5555555555554444';
+  window.fillLight = (value) => { light.value = value; return true; };
+}
 let second;
 window.attachSecond = () => {
   second = document.getElementById('later').attachShadow({ mode: 'closed' });
