@@ -59,6 +59,25 @@ pub fn with_pursue_guidance(instructions: String) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api::mcp::surface::removed_tool_reference;
+
+    #[test]
+    fn installed_guides_and_recipe_reference_use_the_current_tool_surface() {
+        let reference = crate::services::harness_skills::recipes::markdown();
+        for (name, content) in [
+            (
+                "bundled skill",
+                include_str!("../../../../../resources/skills/browserclaw/SKILL.md"),
+            ),
+            (
+                "standalone skill",
+                include_str!("../../../../../../../skills/browseros-neo/SKILL.md"),
+            ),
+            ("rendered recipes.md", reference.as_str()),
+        ] {
+            assert_eq!(removed_tool_reference(content), None, "{name}: {content}");
+        }
+    }
 
     #[test]
     fn every_desktop_configuration_teaches_its_available_features_and_recipes() {
@@ -74,6 +93,7 @@ mod tests {
                             grouping,
                         );
                         for text in [instructions.clone(), with_pursue_guidance(instructions)] {
+                            assert_eq!(removed_tool_reference(&text), None, "{text}");
                             for recipe in recipes::all() {
                                 assert!(text.contains(&recipe.title), "{}", recipe.title);
                             }

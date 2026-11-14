@@ -5,8 +5,10 @@
  */
 import { expect } from 'bun:test'
 import recipes from '../../../resources/skills/browserclaw/recipes.json'
-import type { ContractCase } from './cases'
-import { expectOk } from './helpers'
+import type { CaseContext, ContractCase } from './cases'
+import { expectOk, waitUntil } from './helpers'
+import { McpSession } from './mcp-client'
+import { startRustServer } from './rust-server'
 
 const scenarios: Record<string, { prepare: string; verify: string }> = {
   'list-groups': {
@@ -61,12 +63,14 @@ const scenarios: Record<string, { prepare: string; verify: string }> = {
       "expect((await neo.cdp('Browser.getWindows')).windows.some(window => window.windowId === windowId)).toBe(false); windowId = undefined;",
   },
   'list-profiles': {
-    prepare: '',
+    prepare:
+      "const { profiles } = await neo.cdp('Browser.getProfiles'); const browserProfileId = profiles.find(profile => profile.loaded).browserProfileId;",
     verify:
       'expect(result.profiles.some(profile => profile.browserProfileId === browserProfileId)).toBe(true);',
   },
   'load-profile': {
-    prepare: '',
+    prepare:
+      "const { profiles } = await neo.cdp('Browser.getProfiles'); const browserProfileId = profiles.find(profile => profile.loaded).browserProfileId;",
     verify:
       'expect(result.profile.browserProfileId).toBe(browserProfileId); expect(result.profile.loaded).toBe(true); expect(typeof result.profile.browserContextId).toBe("string");',
   },
@@ -82,12 +86,45 @@ const scenarios: Record<string, { prepare: string; verify: string }> = {
   },
 }
 
+async function withRecipeSession(
+  ctx: CaseContext,
+  recipeId: string,
+  check: (mcp: McpSession) => Promise<void>,
+): Promise<void> {
+  if (recipeId !== 'list-profiles' && recipeId !== 'load-profile') {
+    return check(ctx.mcp)
+  }
+
+  // The generic sidecar has no native identity. Only these profile examples
+  // require the native API supported by the suite's private BrowserOS binary.
+  const server = await startRustServer(ctx.browser.cdpPort, {
+    env: { CLAW_NATIVE_BROWSEROS_VERSION: '0.51.1.3' },
+  })
+  try {
+    const mcp = await McpSession.connect(server.baseUrl, 'recipe-profiles')
+    try {
+      // HTTP health precedes the SDK's browser attachment. Probe the actual run
+      // boundary so the first recipe cannot race that asynchronous handoff.
+      await waitUntil(async () => {
+        const response = await mcp.callTool('run', { code: 'return true' })
+        return !response.isError && response.structuredContent?.value === true
+      }, 'recipe browser attachment')
+      await check(mcp)
+    } finally {
+      await mcp.close()
+    }
+  } finally {
+    await server.stop()
+  }
+}
+
 export const recipeCases: ContractCase[] = recipes.map((recipe) => ({
   name: `recipes: ${recipe.title}`,
   async run(ctx) {
-    if (recipe.id === 'open-tab-in-window') {
-      const opened = await ctx.mcp.callTool('run', {
-        code: `
+    return withRecipeSession(ctx, recipe.id, async (mcp) => {
+      if (recipe.id === 'open-tab-in-window') {
+        const opened = await mcp.callTool('run', {
+          code: `
 const { window } = await neo.cdp('Browser.createWindow', {});
 const windowId = window.windowId;
 const url = ${JSON.stringify(ctx.fixture('/form.html'))};
@@ -98,25 +135,25 @@ try {
   await neo.cdp('Browser.closeWindow', { windowId });
   throw error;
 }`,
-      })
-      expectOk(opened)
-      const created = opened.structuredContent?.value
-      if (
-        !created ||
-        typeof created !== 'object' ||
-        !('tabId' in created) ||
-        typeof created.tabId !== 'number' ||
-        !('windowId' in created) ||
-        typeof created.windowId !== 'number'
-      )
-        throw new Error(
-          'The window recipe omitted its created tab or window id',
+        })
+        expectOk(opened)
+        const created = opened.structuredContent?.value
+        if (
+          !created ||
+          typeof created !== 'object' ||
+          !('tabId' in created) ||
+          typeof created.tabId !== 'number' ||
+          !('windowId' in created) ||
+          typeof created.windowId !== 'number'
         )
-      const { tabId, windowId } = created
-      // Raw CDP creation is learned by the next run's page census. Waiting inside
-      // the creating run cannot refresh context.pages(), which is a local list.
-      const adopted = await ctx.mcp.callTool('run', {
-        code: `
+          throw new Error(
+            'The window recipe omitted its created tab or window id',
+          )
+        const { tabId, windowId } = created
+        // Raw CDP creation is learned by the next run's page census. Waiting inside
+        // the creating run cannot refresh context.pages(), which is a local list.
+        const adopted = await mcp.callTool('run', {
+          code: `
 try {
   const found = context.pages().find(page => page.tabId === ${tabId});
   expect(found).toBeDefined();
@@ -125,15 +162,16 @@ try {
 } finally {
   await neo.cdp('Browser.closeWindow', { windowId: ${windowId} });
 }`,
-      })
-      expectOk(adopted)
-      expect(adopted.structuredContent?.value).toBe(recipe.id)
-      return
-    }
-    const scenario = scenarios[recipe.id]
-    if (!scenario) throw new Error(`Recipe ${recipe.id} needs a live scenario`)
-    const response = await ctx.mcp.callTool('run', {
-      code: `
+        })
+        expectOk(adopted)
+        expect(adopted.structuredContent?.value).toBe(recipe.id)
+        return
+      }
+      const scenario = scenarios[recipe.id]
+      if (!scenario)
+        throw new Error(`Recipe ${recipe.id} needs a live scenario`)
+      const response = await mcp.callTool('run', {
+        code: `
 const task = await neo.createTask('recipe check');
 let windowId, openedWindowId;
 try {
@@ -142,8 +180,6 @@ try {
   const url = ${JSON.stringify(ctx.fixture('/form.html'))};
   await primary.goto(url);
   const tabIds = [other.tabId];
-  const { profiles } = await neo.cdp('Browser.getProfiles');
-  const browserProfileId = profiles.find(profile => profile.loaded).browserProfileId;
   let groupId;
   ${scenario.prepare}
   const result = await (async (page) => { ${recipe.code} })(primary);
@@ -154,8 +190,9 @@ try {
   if (windowId) await neo.cdp('Browser.closeWindow', { windowId });
   await task.close();
 }`,
+      })
+      expectOk(response)
+      expect(response.structuredContent?.value).toBe(recipe.id)
     })
-    expectOk(response)
-    expect(response.structuredContent?.value).toBe(recipe.id)
   },
 }))
