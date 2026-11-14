@@ -295,6 +295,11 @@ async fn a_bound_run_is_refused_another_tasks_tab_and_a_taskless_run_its_task() 
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_bound_runs_noopener_popups_are_its_tasks_and_no_other_tasks() -> TestResult {
+    on_browseros(|rig| Box::pin(noopener_popups(rig))).await
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_script_fills_and_clicks_a_form_and_expects_the_answer() -> TestResult {
     on_browseros(|rig| Box::pin(fill_and_click(rig))).await
 }
@@ -1194,6 +1199,77 @@ async fn bound_walls(rig: &Rig) -> TestResult {
     Ok(())
 }
 
+/// Under task scope, a bound run's popups opened without an opener the page can reach
+/// (`window.open(url, '_blank', 'noopener')` and a `target=_blank rel=noopener` link) are its
+/// task's: Neo knows each one's opener. Its task's next run lists and reads both; another task's
+/// run lists neither and is refused naming one. The image's `task-scope` check drives the same.
+async fn noopener_popups(rig: &Rig) -> TestResult {
+    rig.until_ready().await?;
+    let dir = tempfile::tempdir()?;
+    let server = format!(
+        "http://127.0.0.1:{}",
+        serve_pages(&dir.path().join("unused")).await?
+    );
+    let client = rig.client().await?;
+    let owner = json!({ "taskId": "noopener-owner" });
+    let other = json!({ "taskId": "noopener-other" });
+    let opened = run(
+        &client,
+        &format!(
+            "const p = await context.newPage(); await p.goto('{server}/opener');\n\
+             const [one] = await Promise.all([p.waitForEvent('popup'), p.click('#open')]);\n\
+             const [two] = await Promise.all([p.waitForEvent('popup'), p.click('#link')]);\n\
+             await one.waitForLoadState(); await two.waitForLoadState();\n\
+             return [one.tabId, two.tabId];"
+        ),
+        &owner,
+    )
+    .await?;
+    let popups: Vec<i64> = script_value(&opened)
+        .and_then(|value| serde_json::from_value(value).ok())
+        .ok_or_else(|| format!("two popups: {opened:?}"))?;
+    let mine = run(
+        &client,
+        &format!(
+            "const ids = {popups:?};\n\
+             return Promise.all(ids.map((id) => context.pages().find((q) => q.tabId === id)?.title() ?? null));"
+        ),
+        &owner,
+    )
+    .await?;
+    assert_eq!(
+        script_value(&mine),
+        Some(json!(["reached", "reached"])),
+        "{mine:?}"
+    );
+    let listed = run(
+        &client,
+        &format!(
+            "const ids = {popups:?}; return context.pages().some((q) => ids.includes(q.tabId));"
+        ),
+        &other,
+    )
+    .await?;
+    assert_eq!(script_value(&listed), Some(json!(false)), "{listed:?}");
+    for popup in popups {
+        let named = run(
+            &client,
+            &format!(
+                "return await __neo.invoke('page.title', {{ page: {{ '$neo': 'page', tab: {popup} }} }});"
+            ),
+            &other,
+        )
+        .await?;
+        assert_eq!(
+            error_code(&named),
+            Some(json!("page_not_in_task")),
+            "{popup}: {named:?}"
+        );
+    }
+    client.cancel().await?;
+    Ok(())
+}
+
 /// A run's value, `None` when it failed.
 fn script_value(result: &CallToolResult) -> Option<Value> {
     result
@@ -1853,6 +1929,13 @@ async fn serve_pages(secret: &Path) -> Result<u16, Box<dyn Error>> {
                     Some("/to-hosts") => redirect("file:///etc/hosts"),
                     Some("/to-secret") => redirect(&secret),
                     Some("/to-page") => redirect("/page"),
+                    Some("/opener") => {
+                        let body = "<title>opener</title><button id=open onclick=\"window.open('/page?one', '_blank', 'noopener')\">one</button><a id=link href=\"/page?two\" target=_blank rel=noopener>two</a>";
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                            body.len()
+                        )
+                    }
                     Some("/frames") => {
                         let body = "<title>frames</title><iframe src=\"/page\"></iframe>";
                         format!(

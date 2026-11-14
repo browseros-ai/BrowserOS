@@ -51,9 +51,10 @@
 #                    a title; a later run of the task that opened it too; a cross-site frame
 #                    added mid-run shows after the script's next wait (accept_frames.py)
 #   task-scope       under the default tabs.scope task: a task's run neither lists nor may name
-#                    another task's tab (page_not_in_task), whose holder stays; a run without a
-#                    task gets task_not_found for a host's task and still reads the tab
-#                    (accept_task_scope.py)
+#                    another task's tab (page_not_in_task), a tab no task holds or a created task's
+#                    tab, with no trace link; a task's noopener popups (window.open and a
+#                    rel=noopener link) are its own; a run without a task gets task_not_found for a
+#                    host's task and still reads the tab (accept_task_scope.py)
 #   tab-keep         host keeps survive idle sweeps; DELETE and TTL restart the idle clock;
 #                    agents can fill, read, and close kept tabs, including task.close()
 #   takeover-scale   366x700 phone metrics at 1x/2x, actual RFB 366x700/732x1400; PNG/JPEG

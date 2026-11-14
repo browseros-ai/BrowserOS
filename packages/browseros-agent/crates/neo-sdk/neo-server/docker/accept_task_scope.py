@@ -24,15 +24,43 @@ task), and a tab of a task A's run created:
              taskIds lists B; A's tab lists A, so the trace links tabs at all
   task-api   a run without a task asking for A (neo.task) gets task_not_found, tabsScope browser
   untasked   a run without a task still lists A's tab and reads its title
+  noopener   A's run opens two popups from its own tab, one with window.open(url, '_blank',
+             'noopener') and one through a target=_blank rel=noopener link; A's next run lists and
+             reads both; B's run lists neither, and naming either is refused page_not_in_task.
+             Without an opener the page can reach, Neo still knows each popup's opener, so it
+             joins A's task. The pages come from a server here on 127.0.0.1, as window.open
+             cannot open a data: URL.
 
 Prints one JSON object: ok, detail, the first problems. Standard library only.
 """
 
+import http.server
 import json
 import sys
+import threading
 import uuid
 
 from accept_client import call_run, connect, host
+
+
+class Site(http.server.BaseHTTPRequestHandler):
+    """`/opener`, with a noopener window.open button and a rel=noopener link, and `/child?<name>`."""
+
+    def do_GET(self):
+        path, _, name = self.path.partition("?")
+        body = {
+            "/opener": "<title>opener</title><button id=open onclick=\"window.open('/child?one', '_blank', "
+            "'noopener')\">one</button><a id=link href='/child?two' target=_blank rel=noopener>two</a>",
+            "/child": f"<title>child {name}</title><p>{name}</p>",
+        }.get(path, "")
+        self.send_response(200 if body else 404)
+        self.send_header("Content-Type", "text/html")
+        self.send_header("Content-Length", str(len(body.encode())))
+        self.end_headers()
+        self.wfile.write(body.encode())
+
+    def log_message(self, format, *args):  # noqa: A002 (the base class's name)
+        del format, args
 
 
 def page_url(title: str) -> str:
@@ -42,9 +70,10 @@ def page_url(title: str) -> str:
 class Scope:
     """`run` calls over one MCP session, with a task in `_meta` or none, and the host socket."""
 
-    def __init__(self, mcp_url: str, socket_path: str, token_file: str):
+    def __init__(self, mcp_url: str, socket_path: str, token_file: str, origin: str):
         self.client = connect(mcp_url)
         self.socket_path, self.token_file = socket_path, token_file
+        self.origin = origin
         self.problems: list[str] = []
 
     def run(self, task: str | None, code: str):
@@ -72,6 +101,34 @@ def lookup(tab: int) -> str:
 def named(tab: int) -> str:
     """The page reference a script's own `page.title()` sends, naming `tab` directly."""
     return f"return await __neo.invoke('page.title', {{ page: {{ '$neo': 'page', tab: {tab} }} }});"
+
+
+def noopener(scope: Scope, owner: str, other: str, origin: str) -> None:
+    """A's noopener popups are A's: its next run has both, another task's run neither."""
+    opened = (
+        f"const p = await context.newPage(); await p.goto({json.dumps(origin + '/opener')});\n"
+        "const [one] = await Promise.all([p.waitForEvent('popup'), p.click('#open')]);\n"
+        "const [two] = await Promise.all([p.waitForEvent('popup'), p.click('#link')]);\n"
+        "await one.waitForLoadState(); await two.waitForLoadState();\n"
+        "return { one: one.tabId, two: two.tabId };"
+    )
+    value, error, _, _ = scope.run(owner, opened)
+    popups = value if isinstance(value, dict) else {}
+    one, two = popups.get("one"), popups.get("two")
+    if not isinstance(one, int) or not isinstance(two, int):
+        scope.expect("noopener-opened", False, (value, error))
+        return
+    mine = (
+        "const t = (id) => context.pages().find((q) => q.tabId === id);\n"
+        f"return {{ one: (await t({one})?.title()) ?? null, two: (await t({two})?.title()) ?? null }};"
+    )
+    value, error, _, _ = scope.run(owner, mine)
+    scope.expect("noopener-own", value == {"one": "child one", "two": "child two"}, (value, error))
+    listed, error, _, _ = scope.run(other, f"return context.pages().some((q) => q.tabId === {one} || q.tabId === {two});")
+    scope.expect("noopener-listed", listed is False, (listed, error))
+    for target in (one, two):
+        value, error, _, _ = scope.run(other, named(target))
+        scope.expect("noopener-refused", error == "page_not_in_task", (target, value, error))
 
 
 def check(scope: Scope) -> None:
@@ -144,6 +201,7 @@ def check(scope: Scope) -> None:
         )
         value, error, _, _ = scope.run(None, lookup(tab) + "return p ? await p.title() : null;")
         scope.expect("untasked", value == "own", (value, error))
+        noopener(scope, owner, other, scope.origin)
     finally:
         scope.run(owner, "for (const q of context.pages()) await q.close(); return 1;")
         if loose is not None:
@@ -152,14 +210,19 @@ def check(scope: Scope) -> None:
 
 def main() -> None:
     mcp_url, socket_path, token_file = sys.argv[1:4]
-    scope = Scope(mcp_url, socket_path, token_file)
-    check(scope)
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Site)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        scope = Scope(mcp_url, socket_path, token_file, f"http://127.0.0.1:{server.server_address[1]}")
+        check(scope)
+    finally:
+        server.shutdown()
     ok = not scope.problems
     detail = (
         "under tabs.scope task: another task's tab, a tab no task holds and a created task's tab "
         "are unlisted and refused page_not_in_task by another task's run, with no trace link; "
-        "the owner keeps its own and its created task's tabs; a run without a task gets "
-        "task_not_found for a host's task and still reads the tab"
+        "the owner keeps its own and its created task's tabs and its noopener popups; a run "
+        "without a task gets task_not_found for a host's task and still reads the tab"
         if ok
         else "task scope wrong"
     )
