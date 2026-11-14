@@ -1340,3 +1340,52 @@ async fn a_release_that_cannot_list_the_browsers_tabs_lists_every_tab_noted() ->
     assert_eq!(released.opened_tabs, Some(vec![by_hand(7, "", false)]));
     Ok(())
 }
+
+/// The opener is read as the tab opens: once the opener closes, as the takeover's own tab does
+/// when it ends the takeover, the app no longer knows the link, and the popup still names it.
+#[tokio::test]
+async fn a_popup_keeps_its_opener_after_the_opener_closes() -> TestResult {
+    let known: Arc<std::sync::Mutex<HashMap<i64, i64>>> = Arc::default();
+    let links = TabLinks {
+        task: Arc::new(|_| None),
+        opener: {
+            let known = Arc::clone(&known);
+            Arc::new(move |tab| {
+                known
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .get(&tab.0)
+                    .map(|opener| TabId(*opener))
+            })
+        },
+    };
+    let h = harness_with(&[3], links).await?;
+    let takeover = h.takeovers.start(request(None)?).await?;
+    known
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .insert(8, 3);
+    h.browser
+        .open_popup(3, 8, "https://sign-in.example/", "link");
+    h.takeovers.note_opened(TabId(8));
+    // The takeover's tab closes; the app forgets the popup's link with it.
+    known
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clear();
+    h.browser.close_tab(3);
+    h.takeovers.tab_closed(TAB).await;
+    let released = h.takeovers.get(takeover.id).ok_or("the takeover")?;
+    assert_eq!(released_for(&released), Some(ReleaseReason::TabClosed));
+    assert_eq!(
+        released.opened_tabs,
+        Some(vec![OpenedTab {
+            tab: TabId(8),
+            url: "https://sign-in.example/".to_owned(),
+            in_front: false,
+            task_id: None,
+            opener: Some(TAB),
+        }])
+    );
+    Ok(())
+}

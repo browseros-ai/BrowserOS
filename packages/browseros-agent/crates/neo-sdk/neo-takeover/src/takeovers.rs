@@ -234,8 +234,18 @@ struct Held {
     screen: ScreenHoldGuard,
     /// Stops the TTL release once the takeover's give-back has begun.
     timer: DropGuard,
-    /// The tabs that opened while it was active, oldest first, at most [`OPENED_TABS`].
-    opened: Vec<TabId>,
+    /// The tabs that opened while it was active, oldest first, at most [`OPENED_TABS`], each with
+    /// its opener as the app knew it then.
+    opened: Vec<Opened>,
+}
+
+/// A tab noted as opened, with the tab that opened it as the app knew it at the open. The opener
+/// is read then because the app forgets the link once the opener closes, which a release that
+/// the takeover's own tab closing started always comes after.
+#[derive(Clone, Copy)]
+struct Opened {
+    tab: TabId,
+    opener: Option<TabId>,
 }
 
 /// What a give-back returns to the parts. A published takeover holds them all. A start that ran
@@ -249,7 +259,7 @@ struct Parts {
     /// Stops the TTL release once the give-back has begun.
     timer: DropGuard,
     /// The tabs that opened while it was active, for `openedTabs`.
-    opened: Vec<TabId>,
+    opened: Vec<Opened>,
 }
 
 impl Parts {
@@ -563,7 +573,7 @@ impl Takeovers {
     /// listing that fails or takes over [`OPENED_LISTING`] lists every noted tab, with no address
     /// and none in front: the host may then give a tab that closed meanwhile, which the give
     /// refuses as not found, but it never misses one the owner opened.
-    async fn opened_tabs(&self, id: TakeoverId, opened: &[TabId]) -> Vec<OpenedTab> {
+    async fn opened_tabs(&self, id: TakeoverId, opened: &[Opened]) -> Vec<OpenedTab> {
         if opened.is_empty() {
             return Vec::new();
         }
@@ -580,7 +590,7 @@ impl Takeovers {
         };
         opened
             .iter()
-            .filter_map(|&tab| {
+            .filter_map(|&Opened { tab, opener }| {
                 let (url, in_front) = match &listed {
                     Some(listed) => {
                         let found = listed.iter().find(|listed| listed.tab == tab)?;
@@ -593,7 +603,8 @@ impl Takeovers {
                     url,
                     in_front,
                     task_id: (self.links.task)(tab),
-                    opener: (self.links.opener)(tab),
+                    // As at the open, else as now: a popup registered after its open.
+                    opener: opener.or_else(|| (self.links.opener)(tab)),
                 })
             })
             .collect()
@@ -604,12 +615,13 @@ impl Takeovers {
     /// releasing notes nothing: the owner reaches the screen once one is active, and a release
     /// lists what it noted when it began.
     pub fn note_opened(&self, tab: TabId) {
+        let opener = (self.links.opener)(tab);
         for entry in self.table().values_mut() {
             if let Phase::Active(held) = &mut entry.phase
                 && held.opened.len() < OPENED_TABS
-                && !held.opened.contains(&tab)
+                && !held.opened.iter().any(|opened| opened.tab == tab)
             {
-                held.opened.push(tab);
+                held.opened.push(Opened { tab, opener });
             }
         }
     }

@@ -375,18 +375,21 @@ impl Watch {
         self.openers
             .retain(|target, _| pages.iter().any(|page| page.target_id.as_str() == target));
         let open: BTreeSet<TabId> = pages.iter().map(|page| page.tab_id).collect();
-        for tab in mem::take(&mut self.closing) {
-            if !open.contains(&tab) {
-                self.tabs.forget_announced(tab);
-                self.send(TabEvent::Closed {
+        // Opens go out before closes: a takeover whose tab closed in this listing is released by
+        // its close, and a tab the owner opened in the same moment must reach its notes first,
+        // or the release would miss it for good.
+        if let Some(before) = &self.open {
+            for &tab in open.difference(before) {
+                self.send(TabEvent::Opened {
                     epoch: current.epoch,
                     tab,
                 });
             }
         }
-        if let Some(before) = &self.open {
-            for &tab in open.difference(before) {
-                self.send(TabEvent::Opened {
+        for tab in mem::take(&mut self.closing) {
+            if !open.contains(&tab) {
+                self.tabs.forget_announced(tab);
+                self.send(TabEvent::Closed {
                     epoch: current.epoch,
                     tab,
                 });
