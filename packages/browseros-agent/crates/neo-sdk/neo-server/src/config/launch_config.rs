@@ -46,7 +46,8 @@ impl LaunchConfig {
     }
 
     /// Parses the file's text. Unknown keys are ignored, because Chromium adds launch fields
-    /// without coordinating with the sidecar; a known key with the wrong type is an error.
+    /// without coordinating with the sidecar. Ports and directories remain typed; opaque
+    /// instance and flags values are interpreted conservatively and otherwise ignored.
     fn parse(text: &str, config_dir: &Path) -> Result<Self, serde_json::Error> {
         let file: LaunchFile = serde_json::from_str(text)?;
         let resources_dir = match file.directories.resources {
@@ -77,7 +78,12 @@ impl LaunchConfig {
             resources_dir,
             execution_dir,
             browseros_version,
-            script_cdp: file.flags.script_cdp,
+            script_cdp: file
+                .flags
+                .as_object()
+                .and_then(|flags| flags.get("script_cdp"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
         })
     }
 }
@@ -90,18 +96,14 @@ struct LaunchFile {
     ports: Ports,
     #[serde(default)]
     directories: Directories,
+    // Chromium owns this otherwise-ignored value. Only an object with an explicit boolean
+    // permission opts in; arbitrary legacy values still start with raw script CDP off.
     #[serde(default)]
-    flags: Flags,
+    flags: Value,
     /// Untyped on purpose: a missing, malformed or wrong-typed identity leaves the version
     /// unknown instead of failing the parse.
     #[serde(default)]
     instance: Option<Value>,
-}
-
-#[derive(Default, Deserialize)]
-struct Flags {
-    #[serde(default)]
-    script_cdp: bool,
 }
 
 #[derive(Default, Deserialize)]
@@ -185,18 +187,21 @@ mod tests {
             (r#"{"flags": {}}"#, false),
             (r#"{"flags": {"script_cdp": false}}"#, false),
             (r#"{"flags": {"script_cdp": true}}"#, true),
+            (r#"{"flags": null}"#, false),
+            (r#"{"flags": "x"}"#, false),
+            (r#"{"flags": 1}"#, false),
+            (r#"{"flags": true}"#, false),
+            (r#"{"flags": []}"#, false),
+            (r#"{"flags": [true]}"#, false),
+            (r#"{"flags": {"script_cdp": "true"}}"#, false),
+            (r#"{"flags": {"script_cdp": 1}}"#, false),
+            (r#"{"flags": {"script_cdp": null}}"#, false),
+            (r#"{"flags": {"script_cdp": [true]}}"#, false),
         ] {
             assert_eq!(
                 LaunchConfig::parse(text, Path::new(""))?.script_cdp,
                 enabled,
-                "only an explicit true grants scripts raw CDP"
-            );
-        }
-        for value in ["null", "1", r#""true""#, "[]", "{}"] {
-            let text = format!(r#"{{"flags": {{"script_cdp": {value}}}}}"#);
-            assert!(
-                LaunchConfig::parse(&text, Path::new("")).is_err(),
-                "a malformed permission flag must fail startup: {text}"
+                "only object true grants raw CDP; every other legacy flag value still starts"
             );
         }
         Ok(())

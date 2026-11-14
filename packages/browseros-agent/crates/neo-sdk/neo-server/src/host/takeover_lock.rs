@@ -6,7 +6,7 @@ use browseros_core::TabId;
 use neo_takeover::{LockId, LockTarget, Locks, NamedLock};
 use tokio::sync::SetOnce;
 
-use crate::dispatch::{ErrorCode, OperationError, Policy, PolicyCheck};
+use crate::dispatch::{ErrorCode, Listing, OperationError, Policy, PolicyCheck};
 
 /// The takeover lock rule (design D7 rule 4, decision 19). The door asks it about every op, at
 /// admission and again in each `OpCtx::recheck` before a write is sent; a held lock on the op's
@@ -59,10 +59,16 @@ impl Policy for TakeoverLock {
         let Some(locks) = self.locks.get() else {
             return Ok(());
         };
-        // The door resolves an op's page to its tab before any rule runs, and refuses a page it
-        // cannot resolve, so `None` is an op with no page at all. `UnmappedPage` (a page whose
-        // tab is unknown, refused under any lock) cannot arise from this door.
-        let target = check.tab.map_or(LockTarget::NoPage, LockTarget::Tab);
+        // A browser-level raw command may read or close any tab. Treat it as touching every
+        // locked tab, including host locks, at admission, send recheck and reply release.
+        // Hidden means disabled here; that call must keep its host-owned cdp_unavailable error.
+        let target = match check.tab {
+            Some(tab) => LockTarget::Tab(tab),
+            None if check.method.name == "neo.cdp" && check.method.listing != Listing::Hidden => {
+                LockTarget::UnmappedPage
+            }
+            None => LockTarget::NoPage,
+        };
         let decided = match check.lock_pass {
             // The host's private typing through its own lock: the pass holds only while that
             // lock does. Released or expired, the agent is no longer locked out as the host

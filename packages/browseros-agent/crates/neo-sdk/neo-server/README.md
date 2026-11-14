@@ -162,20 +162,26 @@ const { group } = await neo.cdp('Browser.createTabGroup', {
   tabIds: [page.tabId],
   title: 'Research',
 })
-await neo.cdp('Page.bringToFront', {}, { page })
+await neo.cdp('Browser.updateTabGroup', { groupId: group.groupId, title: 'Research notes' })
+const { groups } = await neo.cdp('Browser.getTabGroups')
 ```
 
 This call bypasses Neo's page model. Prefer Playwright pages and locators whenever they support the action. It provides no session object or event subscription. Every call is registered as a write, traced with its method and params, and raced with run cancellation and the deadline. A successful command reports `effects: "done"`, including a command that only reads.
 
-Page-scoped replies also pass the dispatcher's read-release check, so a takeover that blocks reads before the browser answers withholds that page data. Native commands that the host's browser version does not support fail `host / unsupported` before being marked sent. A browser response rejecting an unknown method or invalid parameters fails `script / cdp_error` with definite delivery.
+Page-scoped replies also pass the dispatcher's read-release check, so a takeover that blocks reads before the browser answers withholds that page data. Native commands that the host's browser version does not support fail `host / unsupported` before being marked sent. Every protocol error the browser answers for the script's command fails `script / cdp_error` with definite delivery, regardless of the protocol code. Lost connections, gone sessions and timeouts remain Neo-owned failures.
 
-When `flags.script_cdp` is absent or false, `neo.cdp` stays registered but is hidden from the `run` description. Calling it fails `host / cdp_unavailable` with nothing sent, even when the call supplies the unopened default `page`. The embedded `hosted-run` composition leaves it off too. Playwright's `context.newCDPSession` and `browser.newBrowserCDPSession` remain unsupported with the flag on or off.
+Only a JSON `flags` object with `script_cdp` exactly `true` enables the call. Every other value, including `null`, strings, numbers and arrays, is ignored and leaves it off. When `flags.script_cdp` is absent or false, `neo.cdp` stays registered but is hidden from the `run` description. Calling it fails `host / cdp_unavailable` with nothing sent, even when the call supplies the unopened default `page`. The embedded `hosted-run` composition leaves it off too. Playwright's `context.newCDPSession` and `browser.newBrowserCDPSession` remain unsupported with the flag on or off.
 
 These commands fail `script / unsupported` before any send, even when enabled:
 
 | Command | Why Neo refuses it |
 |---|---|
 | `Browser.close` | Would close the browser that Neo serves. |
+| `Browser.crash` | Would crash the browser that Neo serves. |
+| `Browser.crashGpuProcess` | Would crash the browser's GPU process and disrupt Neo's rendering. |
+| `Page.crash` | Would crash a tab Neo drives. |
+| `Browser.setDownloadBehavior` | Would replace Neo's connection-wide download behavior and event setup. |
+| `Page.setDownloadBehavior` | Would replace Neo's download behavior for that page session. |
 | `Target.setAutoAttach` | Would replace the link's target attachment policy. |
 | `Target.attachToTarget` | Would create sessions outside the link's target bookkeeping. |
 | `Target.detachFromTarget` | Could detach sessions owned by the link. |
@@ -184,6 +190,10 @@ These commands fail `script / unsupported` before any send, even when enabled:
 | `Target.autoAttachRelated` | Cancels the previous auto-attach configuration and attaches targets outside the link's bookkeeping. |
 | `Target.attachToBrowserTarget` | Would create an unmanaged browser session. |
 | `Target.sendMessageToTarget` | Tunnels arbitrary commands around the refusals above. |
+
+`Target.closeTarget` and `Browser.closeTab` also fail `script / unsupported` when either their target or tab id names Neo's own blank tab. `Browser.closeWindow` is refused when the window contains that tab. This keeps the browser available after other tabs close.
+
+A browser-level call with no `page` fails `host / owner_has_control` before send while any takeover or host lock is held. A page-scoped call still uses that page's lock rules. The same rules run again before send and before releasing page data, so a lock taken while a raw call waits can withhold its reply.
 
 The host sends its ids in `_meta["com.browseros.neo/run"]` as `{ requestId?, taskId?, hostData? }`. Neo refuses unknown keys as `host / invalid_meta`. `hostData` is up to 2048 bytes of JSON that Neo stores with the run and never reads.
 
@@ -264,7 +274,7 @@ A built-in is a private type in `src/builtins/` that implements `dispatch::Metho
 1. Write an input type with `#[serde(deny_unknown_fields)]` and an output type that implements `Serialize`.
 2. Implement `Method`:
    - `spec` returns a `MethodSpec` with the name scripts call, its `Effect` (`Read` or `Write`), and its `Listing` in the `run` description.
-   - `target` returns the input's `PageTarget`, or `None` for a method with no page. There is no default, so the takeover lock always sees the tab a method acts on.
+   - `target` returns the input's `PageTarget`, or `None` for a method with no page. There is no default, so the takeover lock sees every page-scoped call. A browser-level `neo.cdp` call is conservatively refused while any lock is held.
    - `call` does the work through its `OpCtx<Self>`. Await browser calls through `op.race`. A write calls `op.recheck()?` and then `op.mark_sent()` right before it sends, and the door derives delivery from that.
 3. Register it with `builder.define` from `builtin_set` in `src/builtins/builtin_set.rs`. A duplicate name fails the start.
 4. Expose it to scripts from a prelude in `src/runtime/js/` with `__neo.invoke('<name>', input)`. A new parameter of the agent's function goes through `__neo.provide`, and a test in `run_description.rs` fails until the description names it.

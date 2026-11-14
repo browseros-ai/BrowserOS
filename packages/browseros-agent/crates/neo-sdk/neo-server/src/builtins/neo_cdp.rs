@@ -2,25 +2,30 @@
 //! Calls still pass through the dispatcher for policy, cancellation, delivery and tracing.
 
 use browseros_cdp::CdpError;
-use browseros_core::CoreError;
+use browseros_cdp::browser::GetTabInfoResult;
+use browseros_core::{CoreError, TabId};
 use neo_trace::Effect;
 use serde::Deserialize;
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 
 use crate::dispatch::{
-    ErrorCode, LeafError, Listing, Method, MethodSpec, OpCtx, OperationError, PageScript,
-    PageTarget, RegistryBuilder, RegistryError,
+    self, ErrorCode, LeafError, Listing, Method, MethodSpec, OpCtx, OperationError, PageScript,
+    PageTarget, RegistryBuilder, RegistryError, TEXT_CHARS,
 };
 
-const LISTED: &str = "neo.cdp(method, params?, { page }?) -> the command's result: sends one \
-    Chrome DevTools Protocol command to the browser, or to page's tab session. For what \
-    Playwright lacks (tab groups, windows, profiles, history). Prefer page and locators for \
-    anything they can do. This call bypasses Neo's page model.";
+const LISTED: &str = "neo.cdp(method, params?, { page }?) -> CDP result. Request/reply only, \
+    no events; some commands are refused. Use for browser features Playwright lacks, such as \
+    Browser.getTabGroups. Bypasses Neo's page model; prefer page and locators when available.";
 
 /// These commands would close Neo's browser, interfere with target bookkeeping, or tunnel
 /// commands around this request/reply boundary.
 const REFUSED: &[&str] = &[
     "Browser.close",
+    "Browser.crash",
+    "Browser.crashGpuProcess",
+    "Page.crash",
+    "Browser.setDownloadBehavior",
+    "Page.setDownloadBehavior",
     "Target.setAutoAttach",
     "Target.attachToTarget",
     "Target.detachFromTarget",
@@ -115,7 +120,8 @@ impl<const ENABLED: bool> Method for NeoCdp<ENABLED> {
         } else {
             None
         };
-        // Session lookup can wait. Recheck takeover and CAPTCHA rules at the send boundary.
+        protect_neo_tab(op, &input.method, &params).await?;
+        // Session lookup and the reserved-tab check can wait. Recheck at the send boundary.
         op.recheck()?;
         op.mark_sent();
         let result = op
@@ -130,19 +136,64 @@ impl<const ENABLED: bool> Method for NeoCdp<ENABLED> {
     }
 }
 
-/// The script owns malformed raw commands; transport failures keep the door's ambiguous
-/// classification, and other browser answers retain the SDK's ordinary CDP error handling.
+/// Raw close commands name their victim in params, outside the page handle the door resolves.
+/// Native lookup maps both Chromium page and tab target IDs to the same reserved tab.
+async fn protect_neo_tab<const ENABLED: bool>(
+    op: &OpCtx<NeoCdp<ENABLED>>,
+    method: &str,
+    params: &Value,
+) -> Result<(), LeafError> {
+    let reserved = match method {
+        "Target.closeTarget" | "Browser.closeTab" => {
+            let tab = if let Some(target) = params.get("targetId").and_then(Value::as_str) {
+                let value = op
+                    .race_answer(op.run().view().cdp(
+                        "Browser.getTabInfo",
+                        json!({ "targetId": target }),
+                        None,
+                    ))
+                    .await?
+                    .map_err(answer_error)?;
+                let resolved: GetTabInfoResult =
+                    serde_json::from_value(value).map_err(|error| {
+                        LeafError::definite(OperationError::neo(ErrorCode::CDP_ERROR, error))
+                    })?;
+                Some(resolved.tab.tab_id)
+            } else {
+                params.get("tabId").and_then(Value::as_i64)
+            };
+            tab.is_some_and(|tab| op.tabs().is_neo(TabId(tab)))
+        }
+        "Browser.closeWindow" => {
+            let listing = op.race(op.run().view().list_pages()).await?;
+            listing.pages.iter().any(|page| {
+                op.tabs().is_neo(page.tab_id)
+                    && page.window_id.is_some_and(|window| {
+                        params.get("windowId").and_then(Value::as_i64) == Some(window.0)
+                    })
+            })
+        }
+        _ => false,
+    };
+    if reserved {
+        return Err(LeafError::definite(OperationError::script(
+            ErrorCode::UNSUPPORTED,
+            "Neo keeps its own blank tab open so the browser stays available; raw CDP cannot close that tab or its window",
+        )));
+    }
+    Ok(())
+}
+
+/// Every protocol reply answers the script's raw command. Transport failures keep the door's
+/// Neo-owned ambiguous classification; browser text is bounded because it can echo the method.
 fn answer_error(error: CoreError) -> LeafError {
     match error {
-        error @ CoreError::Cdp(CdpError::Protocol {
-            code: -32601 | -32602,
-            ..
-        }) => LeafError::definite(OperationError::script(ErrorCode::CDP_ERROR, error)),
+        CoreError::Cdp(CdpError::Protocol { .. }) => LeafError::definite(OperationError::script(
+            ErrorCode::CDP_ERROR,
+            dispatch::clip(error.to_string(), TEXT_CHARS),
+        )),
         CoreError::UnknownPage(_) | CoreError::UnknownPageShort(_) => {
             LeafError::definite(OperationError::neo(ErrorCode::PAGE_CLOSED, error))
-        }
-        CoreError::Cdp(CdpError::Protocol { .. }) => {
-            LeafError::definite(OperationError::neo(ErrorCode::CDP_ERROR, error))
         }
         other => LeafError::from(OperationError::neo(ErrorCode::INTERNAL_ERROR, other)),
     }

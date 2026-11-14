@@ -73,6 +73,9 @@ struct Harness {
     _dir: TempDir,
 }
 
+const DESKTOP_MODE: bool = false;
+const HOSTED_MODE: bool = true;
+
 impl Harness {
     /// A Neo with no CAPTCHA provider key.
     async fn new() -> Result<Self, Box<dyn Error>> {
@@ -81,7 +84,7 @@ impl Harness {
 
     /// A Neo with the chosen CAPTCHA solver.
     async fn with_solver(solver: Option<Arc<CaptchaSolver>>) -> Result<Self, Box<dyn Error>> {
-        Self::with_mode::<false>(solver, false).await
+        Self::with_mode::<false>(solver, DESKTOP_MODE).await
     }
 
     /// A browser with explicit event capabilities: the fake can emit native console events.
@@ -1671,6 +1674,8 @@ async fn a_close_closes_the_tabs_current_target_after_a_swap() -> Result<(), Box
 #[tokio::test]
 async fn script_cdp_off_does_not_resolve_even_a_lazy_page() -> Result<(), Box<dyn Error>> {
     let harness = Harness::new().await?;
+    let owner = harness.owner_tab("https://owner.example/").await?;
+    let _lock = harness.lock(owner.tab, Reads::Block).await?;
     assert!(
         !harness
             .dispatcher
@@ -1727,11 +1732,16 @@ async fn script_cdp_off_does_not_resolve_even_a_lazy_page() -> Result<(), Box<dy
 #[tokio::test]
 async fn script_cdp_refuses_link_commands_before_resolving_a_lazy_page()
 -> Result<(), Box<dyn Error>> {
-    let harness = Harness::with_mode::<true>(None, false).await?;
+    let harness = Harness::with_mode::<true>(None, DESKTOP_MODE).await?;
     let (run, _guard) = harness.run()?;
     let creates = harness.fake.count("Browser.createTab");
     for method in [
         "Browser.close",
+        "Browser.crash",
+        "Browser.crashGpuProcess",
+        "Page.crash",
+        "Browser.setDownloadBehavior",
+        "Page.setDownloadBehavior",
         "Target.setAutoAttach",
         "Target.attachToTarget",
         "Target.detachFromTarget",
@@ -1786,8 +1796,128 @@ async fn script_cdp_refuses_link_commands_before_resolving_a_lazy_page()
 }
 
 #[tokio::test]
+async fn script_cdp_cannot_close_neos_reserved_tab_or_its_window() -> Result<(), Box<dyn Error>> {
+    let harness = Harness::with_mode::<true>(None, DESKTOP_MODE).await?;
+    let blank = blank_tab(&harness);
+    let tab = within(blank.ensure(Adopt::Allowed))
+        .await?
+        .ok_or("Neo's tab opened")?;
+    let (run, _guard) = harness.run()?;
+    let listing = run.view().list_pages().await?;
+    let neo = listing
+        .pages
+        .iter()
+        .find(|page| page.tab_id == tab)
+        .ok_or("core lists Neo's tab")?;
+    let window = neo.window_id.ok_or("Neo's tab belongs to a window")?;
+    let native_tab = run
+        .view()
+        .cdp("Browser.getTabInfo", json!({ "tabId": tab.0 }), None)
+        .await?;
+    // Chromium's page and tab target IDs both resolve to one native tab. The fake's normal
+    // lookup accepts tab IDs only, so supply that same tab record for both target aliases.
+    harness.fake.answer("Browser.getTabInfo", native_tab);
+    let tab_target = format!("tab-target-{}", tab.0);
+    for (method, params) in [
+        (
+            "Target.closeTarget",
+            json!({ "targetId": neo.target_id.as_str() }),
+        ),
+        ("Target.closeTarget", json!({ "targetId": tab_target })),
+        ("Browser.closeTab", json!({ "tabId": tab.0 })),
+        (
+            "Browser.closeTab",
+            json!({ "targetId": neo.target_id.as_str() }),
+        ),
+        ("Browser.closeTab", json!({ "targetId": tab_target })),
+        ("Browser.closeWindow", json!({ "windowId": window.0 })),
+    ] {
+        let before = harness.fake.count(method);
+        let (op, reply) = harness
+            .submit_op(
+                &run,
+                "neo.cdp",
+                json!({ "method": method, "params": params }),
+            )
+            .await;
+        let refused = failure(reply)?;
+        assert_eq!(
+            (
+                refused.error.owner(),
+                refused.error.code(),
+                refused.delivery
+            ),
+            (
+                ErrorOwner::Script,
+                ErrorCode::UNSUPPORTED,
+                Delivery::NotSent
+            ),
+            "Neo's reserved blank tab must be protected before {method} is sent"
+        );
+        assert!(
+            refused.error.message().contains("blank tab"),
+            "the refusal explains Neo's reserved tab"
+        );
+        assert_eq!(
+            harness.fake.count(method),
+            before,
+            "{method} never reaches the browser"
+        );
+        assert_eq!(harness.row(op).await?.sent_at, None);
+    }
+    assert!(harness.is_open(tab).await?, "Neo's keeper tab remains open");
+    Ok(())
+}
+
+#[tokio::test]
+async fn script_cdp_browser_calls_are_refused_under_any_lock_then_work_after_unlock()
+-> Result<(), Box<dyn Error>> {
+    let harness = Harness::with_mode::<true>(None, DESKTOP_MODE).await?;
+    let page = harness.owner_tab("https://owner.example/").await?;
+    let (run, _guard) = harness.run()?;
+    for reads in [Reads::Allow, Reads::Block] {
+        let lock = harness.lock(page.tab, reads).await?;
+        let before = harness.fake.count("Browser.getWindows");
+        let refused = failure(
+            harness
+                .submit(&run, "neo.cdp", json!({ "method": "Browser.getWindows" }))
+                .await,
+        )?;
+        assert_eq!(
+            (
+                refused.error.owner(),
+                refused.error.code(),
+                refused.delivery
+            ),
+            (
+                ErrorOwner::Host,
+                ErrorCode::OWNER_HAS_CONTROL,
+                Delivery::NotSent
+            )
+        );
+        assert_eq!(
+            harness.fake.count("Browser.getWindows"),
+            before,
+            "even a read-only raw command must not expose locked tabs"
+        );
+        harness.locks.unlock_host(lock.id)?;
+        value(
+            harness
+                .submit(&run, "neo.cdp", json!({ "method": "Browser.getWindows" }))
+                .await,
+        )?;
+        assert_eq!(
+            harness.fake.count("Browser.getWindows"),
+            before + 1,
+            "unlock restores browser-level calls"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn script_cdp_round_trips_params_and_records_a_write() -> Result<(), Box<dyn Error>> {
-    let harness = Harness::with_mode::<true>(None, false).await?;
+    let harness = Harness::with_mode::<true>(None, DESKTOP_MODE).await?;
     assert!(
         harness
             .dispatcher
@@ -1832,7 +1962,7 @@ async fn script_cdp_round_trips_params_and_records_a_write() -> Result<(), Box<d
 #[tokio::test]
 async fn script_cdp_native_capability_refusals_are_host_owned_and_not_sent()
 -> Result<(), Box<dyn Error>> {
-    let harness = Harness::with_mode::<true>(None, false).await?;
+    let harness = Harness::with_mode::<true>(None, DESKTOP_MODE).await?;
     let (run, _guard) = harness.run()?;
     let (op, reply) = harness
         .submit_op(&run, "neo.cdp", json!({ "method": "Browser.getProfiles" }))
@@ -1855,7 +1985,7 @@ async fn script_cdp_native_capability_refusals_are_host_owned_and_not_sent()
 #[tokio::test]
 async fn script_cdp_withholds_page_data_when_takeover_blocks_reads_before_reply()
 -> Result<(), Box<dyn Error>> {
-    let harness = Harness::with_mode::<true>(None, false).await?;
+    let harness = Harness::with_mode::<true>(None, DESKTOP_MODE).await?;
     let page = harness.owner_tab("https://bank.example/").await?;
     harness.fake.answer(
         "Runtime.evaluate",
@@ -1894,7 +2024,7 @@ async fn script_cdp_withholds_page_data_when_takeover_blocks_reads_before_reply(
 #[test]
 fn script_cdp_keeps_sdk_shaped_json_as_plain_data_in_quickjs() -> Result<(), TestError> {
     on_neo_runtime(async {
-        let harness = Harness::with_mode::<true>(None, false)
+        let harness = Harness::with_mode::<true>(None, DESKTOP_MODE)
             .await
             .map_err(|error| error.to_string())?;
         let data = json!({
@@ -1927,7 +2057,7 @@ fn script_cdp_keeps_sdk_shaped_json_as_plain_data_in_quickjs() -> Result<(), Tes
 
 #[tokio::test]
 async fn script_cdp_cancellation_after_send_reports_unknown() -> Result<(), Box<dyn Error>> {
-    let harness = Harness::with_mode::<true>(None, false).await?;
+    let harness = Harness::with_mode::<true>(None, DESKTOP_MODE).await?;
     harness.fake.hang("Browser.getWindows");
     let (run, _guard) = harness.run()?;
     let pending = harness.dispatcher.submit(
@@ -1962,7 +2092,7 @@ async fn script_cdp_cancellation_after_send_reports_unknown() -> Result<(), Box<
 #[tokio::test]
 async fn script_cdp_uses_the_admitted_tabs_session_and_takeover_rules() -> Result<(), Box<dyn Error>>
 {
-    let harness = Harness::with_mode::<true>(None, false).await?;
+    let harness = Harness::with_mode::<true>(None, DESKTOP_MODE).await?;
     let (run, _guard) = harness.run()?;
     let page = harness.owner_tab("https://before.example/").await?;
     harness.fake.serve("https://after.example/", "After");
@@ -4364,7 +4494,7 @@ fn captured_bytes_can_be_saved_from_quickjs_without_admitting_a_tab() -> Result<
 #[tokio::test]
 async fn hosted_console_and_pageerror_waits_refuse_without_changing_listeners()
 -> Result<(), Box<dyn Error>> {
-    let harness = Harness::with_mode::<false>(None, true).await?;
+    let harness = Harness::with_mode::<false>(None, HOSTED_MODE).await?;
     let page = harness.owner_tab("https://example.com/events").await?;
     let (run, _guard) = harness.run()?;
     for event in ["console", "pageerror"] {

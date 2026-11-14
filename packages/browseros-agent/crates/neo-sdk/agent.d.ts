@@ -70,7 +70,7 @@ declare global {
   type Page = pw.Page
 
   interface Neo {
-    /** Send one CDP request. Off unless the host launch file sets flags.script_cdp.
+    /** Send one CDP request. Works only when the host launch file sets flags.script_cdp to true.
      * With page, use its tab session. Bypasses Neo's page model; prefer Playwright when possible. */
     cdp(
       method: string,
