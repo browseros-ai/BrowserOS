@@ -27,7 +27,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{config::Config, ids::ConvoId};
 
-pub use host_api::{OperationOutcome, RunOperation};
+pub use host_api::{OperationOutcome, RunOperation, RunRecordRead};
 pub use session_tasks::TaskKey;
 
 /// Cheap shared handle. Tests construct a disabled engine, so building AppState
