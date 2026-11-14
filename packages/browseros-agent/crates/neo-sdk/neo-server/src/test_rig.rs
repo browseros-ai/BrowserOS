@@ -4,10 +4,11 @@
 
 use std::error::Error;
 use std::future::{self, Future};
-use std::panic;
+use std::io::{self, Write};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError, mpsc as std_mpsc};
 use std::time::Duration;
+use std::{panic, process};
 
 use browseros_core::NativeCapabilities;
 use browseros_core::pages::NewPageOptions;
@@ -53,7 +54,16 @@ impl ManualClock {
     pub(crate) fn pause() -> Self {
         let (release, held) = std_mpsc::channel();
         let worker = task::spawn_blocking(move || {
-            let _ = held.recv();
+            // Frozen Tokio time also freezes its hang guards. A blocking-task panic would
+            // not reach the waiting test, so use a wall-clock watchdog and fail the binary.
+            if let Err(std_mpsc::RecvTimeoutError::Timeout) =
+                held.recv_timeout(Duration::from_secs(120))
+            {
+                let _ = io::stderr()
+                    .lock()
+                    .write_all(b"test stalled for 120 seconds with the manual clock frozen\n");
+                process::abort();
+            }
         });
         time::pause();
         Self {

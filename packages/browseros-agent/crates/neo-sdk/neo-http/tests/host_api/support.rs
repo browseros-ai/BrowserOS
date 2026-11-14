@@ -26,6 +26,8 @@ use neo_trace::{
 use serde_json::Value;
 use std::collections::HashMap;
 use std::future::Future;
+use std::io::{self, Write};
+use std::process;
 use std::sync::{Arc, Mutex, PoisonError, mpsc};
 use std::time::Duration;
 use tower::ServiceExt;
@@ -55,7 +57,17 @@ impl ManualClock {
     fn hold(&mut self) {
         let (release, held) = mpsc::channel();
         self.worker = Some(tokio::task::spawn_blocking(move || {
-            let _ = held.recv();
+            // Tokio hang guards cannot expire while this worker holds virtual time fixed.
+            // A panic here would stay in an unobserved JoinHandle, so abort the test binary
+            // on a wall-clock stall instead of leaving the ordinary SDK gate hung.
+            if let Err(mpsc::RecvTimeoutError::Timeout) =
+                held.recv_timeout(Duration::from_secs(120))
+            {
+                let _ = io::stderr()
+                    .lock()
+                    .write_all(b"test stalled for 120 seconds with the manual clock frozen\n");
+                process::abort();
+            }
         }));
         self.release = Some(release);
     }
