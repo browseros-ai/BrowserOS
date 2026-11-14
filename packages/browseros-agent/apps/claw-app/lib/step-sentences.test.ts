@@ -346,6 +346,49 @@ describe('calls made inside a run script', () => {
 })
 
 describe('SDK run audit rows', () => {
+  it.each([
+    ['nav.goto', 'Opened a new page'],
+    ['pages.newPage', 'Opened a new page'],
+    ['nav.back', 'Went back to the page'],
+    ['nav.forward', 'Went forward to the page'],
+    ['nav.reload', 'Reloaded the page'],
+    ['input.click', 'Clicked on the page'],
+    ['input.fill', 'Typed into the page'],
+    ['input.press', 'Pressed a key on the page'],
+    ['input.hover', 'Moved to an item on the page'],
+    ['input.selectOption', 'Picked an option on the page'],
+    ['read', 'Read the page'],
+    ['screenshot', 'Took a picture of the page'],
+    ['pages.close', 'Closed a page it had opened'],
+    ['sdk.operation', 'Worked in the browser'],
+  ])('describes the redacted SDK child %s', (toolName, sentence) => {
+    const child = {
+      ...call(toolName, { args: ['[redacted]'] }),
+      parentDispatchId: 'run-1',
+    }
+    expect(describeStep(child)).toBe(sentence)
+    expect(
+      describeSteps([child], { includeHidden: true }).steps[0]?.sentence,
+    ).toBe(sentence)
+  })
+
+  it('tells a run through its redacted unknown child', () => {
+    const run = {
+      ...call('run', { args: { code: '[redacted]' } }),
+      dispatchKey: 'run-1',
+    }
+    const child = {
+      ...call('sdk.operation', { args: ['[redacted]'] }),
+      parentDispatchId: run.dispatchKey,
+    }
+    const { steps, hiddenCount } = describeSteps([run, child])
+    expect(hiddenCount).toBe(1)
+    expect(steps.map((step) => step.sentence)).toEqual([
+      'Worked in the browser',
+    ])
+    expect(steps[0]?.dispatchIds).toEqual([child.dispatchId])
+  })
+
   it('describes a redacted run without child rows', () => {
     const run = call('run', { args: { code: '[redacted]' } })
     expect(describeStep(run)).toBe('Ran a browser script')
