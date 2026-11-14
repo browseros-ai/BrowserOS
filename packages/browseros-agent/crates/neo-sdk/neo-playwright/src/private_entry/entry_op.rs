@@ -118,26 +118,40 @@ impl Playwright {
 
     /// Whether `tab` took a private entry: true from the moment an entry marks it, before its
     /// first character, until the tab closes, since going back in history restores a typed
-    /// value into a new document that has no mark (rulings R15 and R28). The host's camera asks
-    /// it before and after each capture and takes no picture of such a tab (design section
-    /// 10.3, pull request 4).
+    /// value into a new document that has no mark (rulings R15 and R28). Whatever the host's
+    /// `fill.pictures`: the mask's search for a moved box reads it too.
     #[must_use]
     pub fn took_private_text(&self, tab: TabId) -> bool {
         self.private_tabs().took(tab)
     }
 
+    /// Whether a picture of `tab` is withheld now: the host's `fill.pictures` is `never` and the
+    /// tab took a private entry (ruling R58). The host's camera asks it before and after each
+    /// capture (design section 10.3); a script's own pictures are refused on the same answer.
+    #[must_use]
+    pub fn withholds_picture(&self, tab: TabId) -> bool {
+        self.private_tabs().withholds_picture(tab)
+    }
+
+    /// The host's `fill.pictures` (ruling R58): `true` for `never`. The host sets it at start and
+    /// on every change of its settings; a picture reads it as it is asked for.
+    pub fn set_fill_pictures_never(&self, never: bool) {
+        self.private_tabs().set_pictures_never(never);
+    }
+
     /// Marks `tab` as having taken a private entry, as if this process had typed into it: for
     /// a host that kept the fact across a Neo restart while the browser kept the tab (ruling
-    /// R45). From then on Neo's camera and a script's own pictures refuse the tab, as
-    /// [`Playwright::took_private_text`] says. Nothing unmarks a tab.
+    /// R45). From then on, while the host's `fill.pictures` is `never`, Neo's camera and a
+    /// script's own pictures refuse the tab ([`Playwright::withholds_picture`]). Nothing unmarks a
+    /// tab.
     pub fn keep_private_tab(&self, tab: TabId) {
         self.private_tabs().mark(tab);
     }
 
     /// Treats every tab as having taken a private entry, for this instance's life: for a host
     /// that cannot tell which tabs its record names (it could not list the browser's tabs at
-    /// start). Neo's camera and a script's own pictures then refuse every tab: the record fails
-    /// closed.
+    /// start). While the host's `fill.pictures` is `never`, Neo's camera and a script's own
+    /// pictures then refuse every tab: the record fails closed.
     pub fn keep_every_tab(&self) {
         self.private_tabs().mark_every();
     }

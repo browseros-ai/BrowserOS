@@ -21,6 +21,7 @@ fn defaults() -> Value {
         "tabs": { "idleCloseSeconds": 1800 },
         "trace": { "retentionSeconds": 604_800, "screenshots": "perOperation", "valueBytes": 0, "values": "on" },
         "files": { "readDirs": [] },
+        "fill": { "pictures": "allowed" },
     })
 }
 
@@ -76,6 +77,7 @@ async fn put_replaces_everything_and_patch_changes_only_what_it_names() -> TestR
         "tabs": { "idleCloseSeconds": 300 },
         "trace": { "retentionSeconds": 86_400, "screenshots": "perOperation", "valueBytes": 0, "values": "on" },
         "files": { "readDirs": [] },
+        "fill": { "pictures": "allowed" },
     });
     assert_eq!(put.status, StatusCode::OK, "{}", put.body);
     assert_eq!(put.body["settings"], set);
@@ -98,6 +100,7 @@ async fn put_replaces_everything_and_patch_changes_only_what_it_names() -> TestR
             "tabs": { "idleCloseSeconds": 600 },
             "trace": { "retentionSeconds": 86_400, "screenshots": "perOperation", "valueBytes": 0, "values": "on" },
             "files": { "readDirs": [] },
+            "fill": { "pictures": "allowed" },
         }),
         "PATCH keeps what it does not name"
     );
@@ -140,6 +143,7 @@ async fn an_unknown_name_is_skipped_listed_and_never_stops_the_known_ones() -> T
             "tabs": { "idleCloseSeconds": 300 },
             "trace": { "retentionSeconds": 7200, "screenshots": "perOperation", "valueBytes": 0, "values": "on" },
             "files": { "readDirs": [] },
+            "fill": { "pictures": "allowed" },
         }),
         "the known settings in the same call still apply"
     );
@@ -823,6 +827,55 @@ async fn values_off_reaches_records_and_events_without_payloads() -> TestResult 
     assert!(
         !all.contains("canary-host-api"),
         "no trace read or event carries a canary"
+    );
+    Ok(())
+}
+
+/// Ruling R58: `fill.pictures` is `allowed` by default, takes `never`, skips a name this server
+/// does not have and names its setting in `unknownValues` (never quoting it), and refuses a value
+/// that is not a name, applying nothing. Fails with the row left out of the table (the group
+/// missing from the answer).
+#[tokio::test]
+async fn fill_pictures_defaults_to_allowed_and_takes_never() -> TestResult {
+    let harness = harness().await?;
+    let got = harness.get("/v1/settings").await?;
+    assert_eq!(
+        got.body["settings"]["fill"]["pictures"], "allowed",
+        "{}",
+        got.body
+    );
+    assert_eq!(got.body["defaults"]["fill"]["pictures"], "allowed");
+
+    let never = harness.patch(r#"{"fill":{"pictures":"never"}}"#).await?;
+    assert_eq!(never.status, StatusCode::OK, "{}", never.body);
+    assert_eq!(never.body["settings"]["fill"]["pictures"], "never");
+
+    let unknown = harness
+        .patch(r#"{"fill":{"pictures":"sometimes"}}"#)
+        .await?;
+    assert_eq!(unknown.status, StatusCode::OK, "{}", unknown.body);
+    assert_eq!(unknown.body["unknownValues"], json!(["fill.pictures"]));
+    assert_eq!(
+        unknown.body["settings"]["fill"]["pictures"], "never",
+        "the setting keeps its value"
+    );
+    assert!(
+        !unknown.body.to_string().contains("sometimes"),
+        "the value sent is never repeated: {}",
+        unknown.body
+    );
+
+    let wrong = harness.patch(r#"{"fill":{"pictures":false}}"#).await?;
+    assert_eq!(wrong.status, StatusCode::BAD_REQUEST, "{}", wrong.body);
+    assert!(
+        wrong.body.to_string().contains("fill.pictures"),
+        "the refusal names the setting: {}",
+        wrong.body
+    );
+    let after = harness.get("/v1/settings").await?;
+    assert_eq!(
+        after.body["settings"]["fill"]["pictures"], "never",
+        "nothing applied"
     );
     Ok(())
 }

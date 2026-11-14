@@ -1,5 +1,6 @@
 //! The process's one neo-playwright facade.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
@@ -40,6 +41,10 @@ pub(crate) struct PlaywrightFacade {
     /// set when the facade is built, so no op runs before it holds them (ruling R45). `None` in
     /// the embedding, which serves no host API and so no fill.
     filled: Option<Arc<FilledTabs>>,
+    /// The host's `fill.pictures` is `never` (ruling R58), from its settings at start and on every
+    /// change. Kept here as well as in the entry's own set, so a change made before the facade's
+    /// first connect reaches the entry when it is built.
+    pictures_never: AtomicBool,
 }
 
 impl PlaywrightFacade {
@@ -59,6 +64,7 @@ impl PlaywrightFacade {
             playwright: OnceCell::new(),
             blank_tab: SetOnce::new(),
             filled,
+            pictures_never: AtomicBool::new(false),
         });
         // Waits for a first connect that may never come; nothing waits on this task.
         let early = Arc::clone(&facade);
@@ -119,12 +125,37 @@ impl PlaywrightFacade {
         &self.file_access
     }
 
-    /// Whether `tab` took a host's private typing, for the camera, which must not wait: `false`
-    /// before the facade is built, when no entry can have run.
-    pub(crate) fn took_private_text(&self, tab: TabId) -> bool {
+    /// Whether Neo's camera withholds a picture of `tab` now, which must not wait: the host's
+    /// `fill.pictures` is `never` and the tab took a private fill (ruling R58). `false` before
+    /// the facade is built, when no entry can have run.
+    pub(crate) fn withholds_picture(&self, tab: TabId) -> bool {
         self.playwright
             .get()
-            .is_some_and(|playwright| playwright.took_private_text(tab))
+            .is_some_and(|playwright| playwright.withholds_picture(tab))
+    }
+
+    /// The host's `fill.pictures` (ruling R58): `true` for `never`. Applied to the entry now if
+    /// it is built, and to it again whenever an op gets it ([`Self::get`]).
+    pub(crate) fn set_fill_pictures_never(&self, never: bool) {
+        self.pictures_never.store(never, Ordering::Release);
+        if let Some(playwright) = self.playwright.get() {
+            self.sync_pictures(playwright);
+        }
+    }
+
+    /// Applies the stored `fill.pictures` to the entry until what it applied is what is stored.
+    /// The settings watcher and every [`Self::get`] call this, from any thread: a change stored
+    /// while an older value is being applied is seen by the check that follows and applied again,
+    /// so an older read never overwrites a newer change. Every store is followed by a call, so
+    /// the entry ends at the last value stored.
+    fn sync_pictures(&self, playwright: &Playwright) {
+        loop {
+            let never = self.pictures_never.load(Ordering::Acquire);
+            playwright.set_fill_pictures_never(never);
+            if self.pictures_never.load(Ordering::Acquire) == never {
+                return;
+            }
+        }
     }
 
     /// What `tab` shows now, for the camera (ruling R45): whether any frame holds a box masking
@@ -144,7 +175,8 @@ impl PlaywrightFacade {
     /// inside a run, and a run starts only once the link connected, so this does not wait on
     /// the browser.
     pub(crate) async fn get(&self) -> &Arc<Playwright> {
-        self.playwright
+        let playwright = self
+            .playwright
             .get_or_init(|| async {
                 let playwright = Playwright::new(self.link.linked().await);
                 if let Some(filled) = &self.filled {
@@ -152,7 +184,11 @@ impl PlaywrightFacade {
                 }
                 playwright
             })
-            .await
+            .await;
+        // A change of `fill.pictures` that came while the entry was being built reached only
+        // this facade: every op gets the setting as it stands.
+        self.sync_pictures(playwright);
+        playwright
     }
 }
 

@@ -491,7 +491,8 @@ paths:
         A box under its field's own drawing is typed by default. A site often draws over a box
         an element that is no `<label>`: a floating label, or a code field's digit cells. Such a
         drawing does not cover its box when it is in the box's own document, inside the box's
-        parent or that parent's parent, holds no control and is none, and lies within the box's
+        parent or that parent's parent, holds no control and is none (a `<label>` of another
+        control counts as one), and lies within the box's
         rectangle grown by half on each side. A drawing that shows the box's own accessible name
         lets it be typed either way; a drawing that shows nothing only key by key (`keys`), as a
         code is typed, and in one insertion it answers `box_covered`. Still refused either way,
@@ -506,8 +507,8 @@ paths:
         What this gives up: Neo types where a person's click would land on the field's drawing,
         not on the box; a layer over one field that repeats its name, or a blank one when typing
         key by key, passes; and the check after the typing reads text only, so a value a site
-        paints as an image is not seen (no snapshot prints such an image, and a tab that took a
-        fill is not pictured).
+        paints as an image is not seen (no snapshot prints such an image, and under
+        `fill.pictures: never` a tab that took a fill is not pictured).
 
         The value is in no record. Neo starts a run of its own with one operation, `host.fill`
         (kind `protected`), whose `args` name the boxes, the expected origins and the number of
@@ -544,19 +545,30 @@ paths:
 
         After a fill, its tab is changed for the rest of its life, from before the first key:
 
-        - Neo takes no picture of it. Its operations keep `hasScreenshot: false`, and their
-          screenshot answers `404 not_found` with "this operation's picture was withheld: its
-          tab had taken a private fill or showed a private box's value". Neo keeps the tabs that
-          took a fill, by target, in a synced record beside the trace, written before the first
-          key, so this holds across a Neo restart while the browser keeps the tab (a tab whose
-          target the browser changes meanwhile, if it ever does, is not found again); a fill
-          whose record cannot be written is refused, nothing typed.
-        - A script's own `page.screenshot()`, `locator.screenshot()` and `page.pdf()` of it fail
-          `host / private_tab`, with nothing sent. It is permanent for that tab: a repeat fails
-          the same way, though `retryable` reads `true` (nothing was sent). The message the
-          script reads says so: "This tab took a private fill, so Neo takes no picture of it for
-          the rest of the tab's life. Trying again will not succeed. Read the page with
-          page.ariaSnapshot() instead."
+        - Its pictures follow the host's `fill.pictures` (`PUT /v1/settings`). Under the default,
+          `allowed`, the tab is pictured like any other: a script's `page.screenshot()`,
+          `locator.screenshot()` and `page.pdf()` work, and Neo's own screenshots picture it,
+          except while a frame shows a private box's value in clear (`trace.screenshots`). What a
+          model can see by default: a script can take a picture of a tab after a private fill. A
+          password box paints bullets. A card number, a security code and a one-time code are
+          painted in clear, so a model that takes a screenshot can see one that Neo typed
+          privately. It still cannot read it as text. A host that does not want that sets
+          `fill.pictures` to `never` before the first fill.
+        - Under `never`, Neo takes no picture of it. Its operations keep `hasScreenshot: false`,
+          and their screenshot answers `404 not_found` with "this operation's picture was
+          withheld: its tab had taken a private fill or showed a private box's value". A fill
+          made under `never` writes its tab, by target, into Neo's synced record beside the trace
+          before the first key, so this holds across a Neo restart while the browser keeps the
+          tab (a tab whose target the browser changes meanwhile, if it ever does, is not found
+          again); such a fill whose record cannot be written is refused, nothing typed. `never`
+          covers every tab Neo knows took a fill: those filled in this run of the server, whatever
+          the setting was, and after a restart only those filled while it was `never`.
+        - Under `never`, a script's own `page.screenshot()`, `locator.screenshot()` and
+          `page.pdf()` of it fail `host / private_tab`, with nothing sent. A repeat fails the same
+          way while the setting stands, though `retryable` reads `true` (nothing was sent). The
+          message the script reads says so: "This tab took a private fill, and the host set Neo to
+          take no picture of such a tab for the rest of its life. Trying again will not succeed.
+          Read the page with page.ariaSnapshot() instead."
         - A box Neo typed into answers one `•` per character to every read Neo makes: the
           snapshot, with or without the spec harness's switch, `locator.inputValue()`, and every
           assertion (the received value and aria tree, the preview and the failure's snapshot),
@@ -569,7 +581,8 @@ paths:
           browser's autofill: none of them marks a box or a tab.
         - The boxes' marks survive a restart of the same Neo; an upgrade that changes the
           page-side engine's protocol loses them for the documents still open, so a plain box's
-          value prints there again (no picture of its tab is taken either way).
+          value prints there again (under `fill.pictures: never` no picture of its tab is taken
+          either way).
         - Going back in history restores a plain box's value into a new document, and a page that
           re-creates the box (a re-render, `cloneNode`) makes a new element. Neither carries the
           mark, so their value prints.
@@ -587,10 +600,14 @@ paths:
           (`toHaveValue`, on the box or on its label) compares against the bullets there too,
           and its message prints the box's value as `<N characters>`. The search that finds a
           moved box stays on for every tab after a private fill, even after the filled tab
-          closes. After a restart of Neo it is on again when Neo's record restores a tab
-          that took a fill, or at the next private fill. If Neo cannot tell which tabs the
-          record names, it enables the search for every tab. Until then a name built from a
-          moved box can print its value. Its own line still prints no clear value, and `inputValue()`
+          closes. After a restart of Neo it is on again when Neo's record restores a tab that
+          took a fill, or at the next private fill. Neo writes that record only under
+          `fill.pictures: never`: under the default the search is off after every restart of Neo
+          until the next private fill, and until then a name built from any moved marked box can
+          print its value, a box moved in from another window and a box moved out of a frame that
+          was then removed alike. Under `never` it comes back at start for a recorded tab that is
+          still open. If Neo cannot tell which tabs the record names, it enables the search for
+          every tab. Its own line still prints no clear value, and `inputValue()`
           and assertions on the box or its label still use bullets: they ask the node itself.
         - A script's own code in the page (`evaluate`) reads what the page holds.
       parameters:
@@ -1084,7 +1101,9 @@ paths:
         `trace.values` and `trace.screenshots` off. An invalid known value for either switch
         uses off; an invalid `trace` group turns both off. Other invalid values keep their
         defaults, including retention. Unknown names are skipped with a warning. Neo always
-        starts; recording-off fallbacks appear in GET and persist in the next API save.
+        starts; recording-off fallbacks appear in GET and persist in the next API save. A saved
+        `fill.pictures` that this server cannot use falls back to `allowed`, so a host that needs
+        `never` reads `GET /v1/settings` after start.
 
         In the SDK image the saved path is `/data/browserclaw/claw-sdk/settings.json`.
         At every entrypoint start, a regular `/etc/neo/settings.json` atomically replaces it,
@@ -1338,8 +1357,9 @@ components:
         Neo could not start the takeover (`internal_error`), the display is unavailable
         (`display_unavailable`), Neo could not reach the browser (`browser_unavailable`), or it
         cannot write one of a fill's records (`trace_unavailable`): the request record a
-        `requestId` names, so it cannot promise one typing, or, for any fill with a `requestId`
-        or not, its record of the tabs that took a fill. Nothing was typed.
+        `requestId` names, so it cannot promise one typing, or, for a fill made under
+        `fill.pictures: never`, with a `requestId` or not, its record of the tabs that took a
+        fill. Nothing was typed.
       content:
         application/json:
           schema:
@@ -1362,8 +1382,8 @@ components:
           description: >-
             Stable snake_case, e.g. `owner_has_control`, `strict_mode_violation`, `target_closed`.
             `host / private_tab` refuses a script's own picture of a tab that took a private
-            fill (`POST /v1/tabs/{tabId}/fill`). It is permanent for that tab: a repeat fails the
-            same way.
+            fill (`POST /v1/tabs/{tabId}/fill`) while the host's `fill.pictures` is `never`. A
+            repeat fails the same way while that setting stands.
         hostCode:
           type: string
           description: The host's own code when `code` is `host_error`, e.g. `needs_owner`.
@@ -2436,6 +2456,36 @@ components:
           $ref: '#/components/schemas/TraceSettings'
         files:
           $ref: '#/components/schemas/FilesSettings'
+        fill:
+          $ref: '#/components/schemas/FillSettings'
+    FillSettings:
+      type: object
+      properties:
+        pictures:
+          type: string
+          x-extensible-enum: [allowed, never]
+          default: allowed
+          description: >-
+            Whether a tab that took the host's private fill (`POST /v1/tabs/{tabId}/fill`) is
+            pictured. `allowed`: like any other tab; a script's `page.screenshot()`,
+            `locator.screenshot()` and `page.pdf()` work, and Neo's own screenshots picture it.
+            `never`: no picture of it for the tab's life, by a script (`private_tab`) or by Neo,
+            kept across a restart of Neo by Neo's record of the tabs that took a fill. A picture
+            reads it when it is asked for, so a change applies from the next picture. A fill
+            reads it when it starts, and only under `never` writes its tab into that record before
+            the first character (a fill whose record cannot be written is then refused,
+            `trace_unavailable`, nothing typed). `never` covers every tab Neo knows took a fill:
+            those filled in this run of the server, whatever the setting was, and after a restart
+            those filled while it was `never`. A host that wants it sets it before its first
+            fill. What a model can see by default: a script can take a picture of a tab after a
+            private fill. A password box paints bullets. A card number, a security code and a
+            one-time code are painted in clear, so a model that takes a screenshot can see one
+            that Neo typed privately. It still cannot read it as text. A host that does not want
+            that sets `fill.pictures` to `never` before the first fill. Under either value Neo's
+            own picture is withheld while a frame shows a private box's value in clear
+            (`trace.screenshots`). A name this server does not have is skipped and listed in
+            `unknownValues`: then `PUT` applies the default, `allowed`, and `PATCH` keeps the
+            value it had, so a host that needs `never` checks `unknownValues`.
     FilesSettings:
       type: object
       properties:
@@ -2500,8 +2550,10 @@ components:
             reads every frame before and after each picture for this. It drops a picture taken
             while a frame that holds a private box came, went or moved to another document, or
             while a private box took input. Frames that hold no private box do not count. A
-            frame or a reading that does not answer in time withholds the picture. A tab that
-            took the host's private fill (`POST /v1/tabs/{tabId}/fill`) is never pictured.
+            frame or a reading that does not answer in time withholds the picture, and a box Neo
+            typed into privately counts as private there. A tab that took the host's private fill
+            (`POST /v1/tabs/{tabId}/fill`) is pictured like any other, unless `fill.pictures` is
+            `never`.
             Measured on Stripe's card widgets. A widget that hides a complete number and shows
             its last four digits keeps its pictures, and they show those four digits. Other
             providers' widgets were not sampled. Limits: a private value that appears and

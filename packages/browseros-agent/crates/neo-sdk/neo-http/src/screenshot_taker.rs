@@ -15,8 +15,9 @@
 //!      past CAPTURE_TIMEOUT: aborted, then again from the lookup after CAPTURE_BACKOFF,
 //!        CAPTURE_ATTEMPTS all timed out, or CAPTURE_BUDGET spent ─────────▶ Dropped
 //!    write the JPEG at the job's path ────────────────────────────────────▶ Taken
-//!  a tab that took a host's private typing, asked before the capture and again before the
-//!    write, so a capture the fill's start straddles is thrown away ───────────▶ Withheld
+//!  a tab that took a host's private typing while `fill.pictures` is `never`, asked before the
+//!    capture and again before the write, so a capture the fill's start straddles is thrown
+//!    away (ruling R58) ───────────────────────────────────────────────────────▶ Withheld
 //!  a frame showing a private box's value, read before and after the capture
 //!    (ruling R45), or no reading within VERDICT_BUDGET ─────────────────────────▶ Withheld
 //!  the two readings differ: a frame holding a private box came, went or moved to another
@@ -64,7 +65,8 @@ use tokio::time::Instant;
 pub(crate) struct Camera {
     pub(crate) browser: Arc<BrowserSession>,
     pub(crate) viewports: Arc<Viewports>,
-    /// The tabs never pictured: those that took a host's private typing (`private_tabs`).
+    /// The tabs not pictured: those that took a host's private typing, while the host's
+    /// `fill.pictures` is `never` (`private_tabs`, ruling R58).
     pub(crate) private: Arc<PrivateTabs>,
 }
 

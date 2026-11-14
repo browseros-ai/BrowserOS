@@ -57,6 +57,8 @@ operation that records no value, address or picture (`neo-server/src/host/fill_s
 [the image's host typing guide](neo-server/docker/README.md#type-a-hosts-secret) describes its use). Neo also stores no picture of a
 tab while any frame of it shows a box masking treats as private, not empty and painted in clear,
 such as a card number a script typed; a password box paints bullets, so sign-in pages keep theirs.
+Otherwise a tab that took a host's fill is pictured like any other by default; a host that wants no
+picture of it sets `fill.pictures` to `never` ([the server's settings](neo-server/README.md#settings)).
 
 `neo-server/docker/` builds the Neo SDK image, the browser plus this server.
 See [the image's README](neo-server/docker/README.md) for host integration.

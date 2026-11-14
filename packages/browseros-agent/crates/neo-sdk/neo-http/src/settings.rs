@@ -19,8 +19,9 @@
 //! aside, and the settings must not vanish with it.
 
 use crate::setting::{
-    Checked, FILE_READ_DIRS, SCREENSHOTS_OFF, SETTINGS, Setting, SettingValue, TAB_IDLE_CLOSE,
-    TRACE_RETENTION, TRACE_SCREENSHOTS, TRACE_VALUE_BYTES, TRACE_VALUES,
+    Checked, FILE_READ_DIRS, FILL_PICTURES, FILL_PICTURES_NEVER, SCREENSHOTS_OFF, SETTINGS,
+    Setting, SettingValue, TAB_IDLE_CLOSE, TRACE_RETENTION, TRACE_SCREENSHOTS, TRACE_VALUE_BYTES,
+    TRACE_VALUES,
 };
 use crate::wire;
 use neo_trace::{RecordPolicy, Screenshots, Values};
@@ -133,6 +134,18 @@ impl Settings {
     #[must_use]
     pub fn trace_retention(&self) -> Duration {
         Duration::from_secs(self.whole(&TRACE_RETENTION))
+    }
+
+    /// `fill.pictures` is `never`: no picture of a tab that took a host's private fill, by a script
+    /// or by Neo, and each fill writes its tab into the record of filled tabs first (ruling R58).
+    /// Read when a picture is asked for and when a fill starts, so a change takes effect from the
+    /// next one.
+    #[must_use]
+    pub fn fill_pictures_never(&self) -> bool {
+        matches!(
+            self.value(&FILL_PICTURES),
+            SettingValue::Choice(FILL_PICTURES_NEVER)
+        )
     }
 
     /// `trace.screenshots`, `trace.valueBytes` and `trace.values`: what the trace writer records. It gets them
@@ -425,7 +438,7 @@ mod tests {
     use std::time::Duration;
 
     #[test]
-    fn every_default_is_todays_behaviour() {
+    fn every_default_keeps_todays_behaviour_but_fill_pictures() {
         let settings = Settings::defaults(Default::default());
         assert_eq!(
             settings.trace_retention(),
@@ -442,7 +455,48 @@ mod tests {
             RecordPolicy::default(),
             "Neo's own screenshots on, and the trace's default value limits"
         );
+        assert!(
+            !settings.fill_pictures_never(),
+            "ruling R58: a tab that took a private fill is pictured by default, the owner's \
+             decision, where before it never was"
+        );
     }
+    /// Ruling R58 with the saved settings file: a saved `fill.pictures: never` is honoured from
+    /// the start, before any fill; a saved value this build cannot use (an unknown name, a value
+    /// of the wrong type) reads as `allowed`, the default, while the file's other settings still
+    /// apply. Fails with `never` as the row's saved fallback (the unusable one reads `never`).
+    #[tokio::test]
+    async fn a_saved_fill_pictures_is_honoured_and_an_unusable_one_reads_allowed()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use super::SettingsDefaults;
+
+        let dir = tempfile::tempdir()?;
+        let file = dir.path().join("settings.json");
+        tokio::fs::write(&file, br#"{"fill":{"pictures":"never"}}"#).await?;
+        let saved = Settings::load(file.clone(), SettingsDefaults::default()).await;
+        assert!(
+            saved.fill_pictures_never(),
+            "a saved never holds from the start"
+        );
+        for unusable in [
+            &br#"{"fill":{"pictures":"sometimes"},"trace":{"retentionSeconds":7200}}"#[..],
+            &br#"{"fill":{"pictures":false},"trace":{"retentionSeconds":7200}}"#[..],
+        ] {
+            tokio::fs::write(&file, unusable).await?;
+            let loaded = Settings::load(file.clone(), SettingsDefaults::default()).await;
+            assert!(
+                !loaded.fill_pictures_never(),
+                "an unusable value reads allowed"
+            );
+            assert_eq!(
+                loaded.trace_retention(),
+                Duration::from_secs(7200),
+                "the file's other settings still apply"
+            );
+        }
+        Ok(())
+    }
+
     #[tokio::test]
     async fn application_defaults_drive_answers_reset_and_saved_fallback()
     -> Result<(), Box<dyn std::error::Error>> {

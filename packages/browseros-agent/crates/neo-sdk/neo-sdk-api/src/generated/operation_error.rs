@@ -16,7 +16,7 @@ pub struct OperationError {
     /// Whose behavior must change to fix it: `neo` (browser, OS or Neo itself), `script` (the agent's own code: a syntax error, `invalid_input`, `strict_mode_violation`, `no_match`, `method_unavailable`), `website` (what the page did) or `host` (the host's rules, services or owner, including `owner_has_control`).
     #[serde(rename = "owner")]
     pub owner: String,
-    /// Stable snake_case, e.g. `owner_has_control`, `strict_mode_violation`, `target_closed`. `host / private_tab` refuses a script's own picture of a tab that took a private fill (`POST /v1/tabs/{tabId}/fill`). It is permanent for that tab: a repeat fails the same way.
+    /// Stable snake_case, e.g. `owner_has_control`, `strict_mode_violation`, `target_closed`. `host / private_tab` refuses a script's own picture of a tab that took a private fill (`POST /v1/tabs/{tabId}/fill`) while the host's `fill.pictures` is `never`. A repeat fails the same way while that setting stands.
     #[serde(rename = "code")]
     pub code: String,
     /// The host's own code when `code` is `host_error`, e.g. `needs_owner`.

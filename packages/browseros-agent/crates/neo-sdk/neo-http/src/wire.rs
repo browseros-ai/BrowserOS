@@ -673,7 +673,7 @@ impl fmt::Display for SettingFault {
 /// unknown name without a word; the host is told what was skipped instead. A refusal names
 /// every setting at fault, and then nothing is applied.
 pub(crate) fn settings_request(body: &[u8]) -> Result<SettingsBody, ApiError> {
-    let shape = r#"{"tabs"?: {"idleCloseSeconds"?: integer}, "trace"?: {…}}"#;
+    let shape = r#"{"tabs"?: {"idleCloseSeconds"?: integer}, "trace"?: {…}, "fill"?: {…}}"#;
     let json: serde_json::Value = serde_json::from_slice(body).map_err(|_| not_the_body(shape))?;
     let checked = settings_body(&json).ok_or_else(|| not_the_body(shape))?;
     if !checked.faults.is_empty() {

@@ -2364,9 +2364,10 @@ async fn tests_that_a_privately_typed_box_in_a_cross_site_frame_reads_as_bullets
     Ok(())
 }
 
-/// Protected fill 4/5 (ruling R46): once a tab took a private fill, a script's own
-/// `page.screenshot()` and `locator.screenshot()` of it are refused with one host-owned error,
-/// `private_tab`, and another tab still screenshots.
+/// Rulings R46 and R58: once a tab took a private fill, a script's own `page.screenshot()` and
+/// `locator.screenshot()` of it work under the host's default `fill.pictures: allowed`, and
+/// under `never` are refused with one host-owned error, `private_tab`; another tab still
+/// screenshots. Fails with the setting left out of the refusal (refused by default).
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_a_script_takes_no_picture_of_a_tab_that_took_a_private_fill() -> TestResult {
@@ -2390,13 +2391,21 @@ async fn tests_that_a_script_takes_no_picture_of_a_tab_that_took_a_private_fill(
         input
     };
     let page = opened.page.brand();
-    for (what, input) in [
-        ("page.screenshot", shot(&page, None)),
-        (
-            "locator.screenshot",
-            shot(&page, Some(ref_target(&page, &email))),
-        ),
-    ] {
+    let shots = || {
+        [
+            ("page.screenshot", shot(&page, None)),
+            (
+                "locator.screenshot",
+                shot(&page, Some(ref_target(&page, &email))),
+            ),
+        ]
+    };
+    for (what, input) in shots() {
+        let pictured = bench.live.invoke("page.screenshot", input).await?;
+        assert!(pictured.is_ok(), "{what} under the default: {pictured:?}");
+    }
+    bench.live.playwright.set_fill_pictures_never(true);
+    for (what, input) in shots() {
         let Err(refused) = bench.live.invoke("page.screenshot", input).await? else {
             return Err(format!("{what} pictured a tab that took a private fill").into());
         };
@@ -2407,9 +2416,9 @@ async fn tests_that_a_script_takes_no_picture_of_a_tab_that_took_a_private_fill(
         );
         assert_eq!(
             refused.message(),
-            "This tab took a private fill, so Neo takes no picture of it for the rest of the \
-             tab's life. Trying again will not succeed. Read the page with page.ariaSnapshot() \
-             instead.",
+            "This tab took a private fill, and the host set Neo to take no picture of such a \
+             tab for the rest of its life. Trying again will not succeed. Read the page with \
+             page.ariaSnapshot() instead.",
             "{what}"
         );
     }

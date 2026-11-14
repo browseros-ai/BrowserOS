@@ -42,7 +42,7 @@ pub(crate) enum Rule {
     /// One name from an open list: a later server may know more names than `values`. A name
     /// this server does not know is skipped, as an unknown setting is, and never refused.
     Choice {
-        /// Used when the host set nothing: today's behaviour.
+        /// Used when the host set nothing: today's behaviour, unless the row says otherwise.
         default: &'static str,
         /// The names this server knows.
         values: &'static [&'static str],
@@ -133,6 +133,30 @@ pub(crate) const TRACE_VALUES: Setting = Setting {
     },
 };
 
+/// Whether a tab that took a host's private fill may be pictured (protected-fill ruling R58):
+/// `allowed`, like any other tab; `never`, no picture of it for the tab's life, by a script or by
+/// Neo, kept across a restart by the record of filled tabs. The default is `allowed`, the owner's
+/// decision of 2026-11-13, which changes what the server did before it: a host that wants the old
+/// rule sets `never` before its first fill.
+pub(crate) const FILL_PICTURES: Setting = Setting {
+    name: "fill.pictures",
+    // A saved value this build cannot use reads as the default, `allowed`, with the load's loud
+    // warning (the lead's decision, protected-fill spec R58, "A saved settings file at start"). A
+    // bad settings file never costs the product a function: a recording switch falls to `off`
+    // because that loses nothing a run does, and this one falls to `allowed` because `never`
+    // refuses pictures, and refuses a fill when its record cannot be written. A host that needs
+    // `never` reads `GET /v1/settings` after start.
+    invalid_saved: None,
+    rule: Rule::Choice {
+        default: FILL_PICTURES_ALLOWED,
+        values: &[FILL_PICTURES_ALLOWED, FILL_PICTURES_NEVER],
+    },
+};
+
+/// `fill.pictures`'s names.
+pub(crate) const FILL_PICTURES_ALLOWED: &str = "allowed";
+pub(crate) const FILL_PICTURES_NEVER: &str = "never";
+
 /// The live folders scripts may read by path, with the application-supplied downloads default.
 pub(crate) const FILE_READ_DIRS: Setting = Setting {
     name: "files.readDirs",
@@ -148,6 +172,7 @@ pub(crate) const SETTINGS: &[Setting] = &[
     TRACE_VALUE_BYTES,
     TRACE_VALUES,
     FILE_READ_DIRS,
+    FILL_PICTURES,
 ];
 
 impl Setting {

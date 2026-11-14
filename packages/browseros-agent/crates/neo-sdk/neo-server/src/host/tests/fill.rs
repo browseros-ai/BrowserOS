@@ -1598,6 +1598,7 @@ async fn the_check_passes_its_hosts_own_lock_as_the_fill_does() -> TestResult {
 #[tokio::test]
 async fn a_tab_that_took_a_fill_is_never_pictured_again() -> TestResult {
     let (host, tab) = ready().await?;
+    set_pictures(&host, "never").await?;
     let other = host.fake.open_tab("https://other.example/", "Other");
     let answer = fill(&host, tab, &canary_body(&json!({}))).await?;
     assert_eq!(answer.body["outcome"], "entered", "{answer:?}");
@@ -1645,13 +1646,32 @@ async fn a_tab_that_took_a_fill_is_never_pictured_again() -> TestResult {
     Ok(())
 }
 
-/// Ruling R45: a fill writes its tab's target into the record beside the trace before its
-/// first character, so a Neo restart while the browser keeps the tab still takes no picture of
-/// it; a record that cannot be written refuses the fill, nothing typed.
+/// Rulings R45 and R58: a fill made under the host's `fill.pictures: never` writes its tab's
+/// target into the record beside the trace before its first character, so a Neo restart while
+/// the browser keeps the tab still takes no picture of it, and a record that cannot be written
+/// refuses the fill, nothing typed. Under the default, `allowed`, a fill writes no record and is
+/// not refused when the record cannot be written. Fails with the record written whatever the
+/// setting (the default writes a line, or is refused).
 #[tokio::test]
-async fn a_fill_records_its_tab_before_typing_and_a_record_that_cannot_be_written_refuses()
--> TestResult {
+async fn a_fill_records_its_tab_first_only_under_never() -> TestResult {
     let (host, tab) = ready().await?;
+    let answer = fill(&host, tab, &canary_body(&json!({}))).await?;
+    assert_eq!(answer.body["outcome"], "entered", "{answer:?}");
+    let written = fs::read_to_string(host.dir.path().join(FILLED_TABS_FILE)).unwrap_or_default();
+    assert!(
+        written.trim().is_empty(),
+        "the default writes no record: {written:?}"
+    );
+    let (unwritable, unwritable_tab) = ready().await?;
+    fs::create_dir(unwritable.dir.path().join(FILLED_TABS_FILE))?;
+    let entered = fill(&unwritable, unwritable_tab, &canary_body(&json!({}))).await?;
+    assert_eq!(
+        entered.body["outcome"], "entered",
+        "the default needs no record: {entered:?}"
+    );
+
+    let (host, tab) = ready().await?;
+    set_pictures(&host, "never").await?;
     let answer = fill(&host, tab, &canary_body(&json!({}))).await?;
     assert_eq!(answer.body["outcome"], "entered", "{answer:?}");
     let target = host
@@ -1668,6 +1688,7 @@ async fn a_fill_records_its_tab_before_typing_and_a_record_that_cannot_be_writte
     );
 
     let (other, other_tab) = ready().await?;
+    set_pictures(&other, "never").await?;
     fs::create_dir(other.dir.path().join(FILLED_TABS_FILE))?;
     let refused = fill(&other, other_tab, &canary_body(&json!({}))).await?;
     assert_eq!(refused.status, 503, "{refused:?}");
@@ -1678,6 +1699,20 @@ async fn a_fill_records_its_tab_before_typing_and_a_record_that_cannot_be_writte
         "its own sentence, not the request record's: this fill names no requestId"
     );
     assert_eq!(other.entry.calls(), 0, "nothing typed");
+    Ok(())
+}
+
+/// Sets the host's `fill.pictures` (ruling R58) through the settings route.
+async fn set_pictures(host: &Host, value: &str) -> TestResult {
+    let reply = request(
+        &host.socket,
+        "PATCH",
+        "/v1/settings",
+        Some(TOKEN),
+        Some(&json!({ "fill": { "pictures": value } })),
+    )
+    .await?;
+    assert_eq!(reply.status, 200, "{reply:?}");
     Ok(())
 }
 

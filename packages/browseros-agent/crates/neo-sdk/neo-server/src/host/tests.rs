@@ -76,9 +76,18 @@ struct Host {
 }
 
 /// The scripted entry's answer to which tabs took a fill, as the app wires the real entry's.
-fn entry_took(entry: &Arc<ScriptedEntry>) -> TookPrivateText {
+/// The host's `fill.pictures` as the app wires it for the fill's start (ruling R58).
+fn settings_pictures_never(settings: &Settings) -> super::fill_service::PicturesNever {
+    let settings = settings.clone();
+    Arc::new(move || settings.fill_pictures_never())
+}
+
+/// The scripted entry's tabs as the app wires the camera's answer (ruling R58): withheld only
+/// while the host's `fill.pictures` is `never`.
+fn entry_took(entry: &Arc<ScriptedEntry>, settings: &Settings) -> TookPrivateText {
     let entry = Arc::clone(entry);
-    Arc::new(move |tab| entry.took(tab))
+    let settings = settings.clone();
+    Arc::new(move |tab| settings.fill_pictures_never() && entry.took(tab))
 }
 
 /// The scripted entry's reading of what a tab shows, as the app wires `picture_check`.
@@ -178,8 +187,9 @@ impl Host {
             takeover: Arc::clone(&takeover),
             ledger: FillLedger::open(dir.path(), || Duration::from_hours(7 * 24)).await,
             filled: FilledTabs::open(dir.path()).await,
+            pictures_never: settings_pictures_never(&settings),
             shutdown: shutdown.clone(),
-            took: entry_took(&entry),
+            took: entry_took(&entry, &settings),
             checks: entry_checks(&entry),
         });
         let serving = tokio::spawn(host.with_fill(fill).serve(
