@@ -400,6 +400,100 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn pre_existing_tab_never_exports_events_or_checkpoints_before_its_claim()
+    -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let index = Arc::new(RecordingIndex::new(
+            Database::open(dir.path().join(DATABASE_FILENAME)).await?,
+        ));
+        let recordings = RecordingStore::new(
+            dir.path().join("recordings"),
+            dir.path().join("replays"),
+            index.clone(),
+            10,
+            Duration::from_secs(1),
+        );
+        let document = "018f47a7-1c2b-7def-8123-0123456789ab";
+        recordings
+            .append_batch(
+                document,
+                11,
+                Some("existing-target"),
+                &[
+                    RecordingEventInput {
+                        ts: 90,
+                        event_type: Some(json!(2)),
+                        data: Some(json!({ "id": "private-checkpoint" })),
+                    },
+                    event(99, "private-browsing"),
+                    event(100, "claim-boundary"),
+                    event(110, "session-action"),
+                ],
+                "before-checkpoint",
+                false,
+            )
+            .await?;
+        index
+            .insert_session_tab(
+                "session-a",
+                "agent-a",
+                11,
+                Some("existing-target"),
+                100,
+                Some(200),
+            )
+            .await?;
+        let replay = ReplayService::new(recordings.clone(), index);
+
+        let without_checkpoint = replay.read_session("session-a").await?;
+        assert_eq!(
+            without_checkpoint
+                .iter()
+                .map(|event| event.event.ts)
+                .collect::<Vec<_>>(),
+            [100, 110],
+            "a missing owned checkpoint must not backfill private browsing"
+        );
+
+        recordings
+            .append_batch(
+                document,
+                11,
+                Some("existing-target"),
+                &[
+                    RecordingEventInput {
+                        ts: 120,
+                        event_type: Some(json!(2)),
+                        data: Some(json!({ "id": "owned-checkpoint" })),
+                    },
+                    event(150, "session-action-after-checkpoint"),
+                    event(200, "release-boundary"),
+                    event(201, "browsing-after-release"),
+                ],
+                "after-checkpoint",
+                false,
+            )
+            .await?;
+
+        let events = replay.read_session("session-a").await?;
+        assert_eq!(
+            events
+                .iter()
+                .map(|event| (event.event.ts, event.event.event_type.clone()))
+                .collect::<Vec<_>>(),
+            [
+                (100, Some(json!(3))),
+                (110, Some(json!(3))),
+                (120, Some(json!(2))),
+                (150, Some(json!(3))),
+                (200, Some(json!(3))),
+            ],
+            "only events inside the session's inclusive ownership window are replayed"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn joins_tab_windows_across_document_targets_and_filters_exactly() -> anyhow::Result<()> {
         let dir = tempdir()?;
         let index = Arc::new(RecordingIndex::new(

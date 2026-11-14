@@ -1,4 +1,6 @@
 /** Verifies SDK forwarding, session tab ownership and grouping, and child cleanup. */
+
+import { Database } from 'bun:sqlite'
 import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -1135,6 +1137,276 @@ return await page.screenshot({clip: {x:0,y:0,width:900,height:700}})`,
       }
     },
   },
+  {
+    name: 'neo run: replay retains the created tab checkpoint across two runs',
+    async run(ctx) {
+      const recorderScript = resolve(
+        Bun.resolveSync(
+          'rrweb',
+          resolve(import.meta.dir, '../../../apps/claw-app'),
+        ),
+        '../rrweb.umd.min.cjs',
+      )
+      // The launcher disables extensions. Capture real rrweb events in its
+      // private page, then deliver them through the recorder's production route.
+      const scripts = Bun.serve({
+        hostname: '127.0.0.1',
+        port: 0,
+        fetch: () =>
+          new Response(Bun.file(recorderScript), {
+            headers: { 'content-type': 'text/javascript' },
+          }),
+      })
+      const recorderUrl = JSON.stringify(
+        `http://127.0.0.1:${scripts.port}/rrweb.js`,
+      )
+      const startRecorder = `await p.addScriptTag({url: ${recorderUrl}});
+await p.evaluate(() => {
+  window.__replayEvents = [];
+  window.__stopReplay = rrweb.record({
+    emit: event => window.__replayEvents.push(event),
+    maskAllInputs: true
+  });
+});`
+      const database = new Database(
+        resolve(ctx.server.homeDir, '../browserclaw/browserclaw.sqlite'),
+        { readonly: true },
+      )
+      function recordingBatch(value: unknown) {
+        assert(Array.isArray(value))
+        return value.map((event: unknown) => {
+          assert(event !== null && typeof event === 'object')
+          assert('timestamp' in event && typeof event.timestamp === 'number')
+          assert('type' in event && typeof event.type === 'number')
+          assert('data' in event)
+          return { ts: event.timestamp, type: event.type, data: event.data }
+        })
+      }
+      async function ingest(
+        tabId: number,
+        documentId: string,
+        batch: ReturnType<typeof recordingBatch>,
+      ) {
+        assert(batch.length > 0, 'the browser recorder captured no events')
+        const response = await fetch(
+          `${ctx.server.baseUrl}/api/v1/recordings/events`,
+          {
+            method: 'POST',
+            headers: {
+              'content-type': 'application/x-ndjson',
+              'x-recording-tab-id': String(tabId),
+              'x-recording-document-id': documentId,
+              'x-recording-batch-id': crypto.randomUUID(),
+            },
+            body: batch.map((event) => JSON.stringify(event)).join('\n'),
+            signal: AbortSignal.timeout(10_000),
+          },
+        )
+        assert(response.ok, `recording ingest failed (${response.status})`)
+      }
+      async function exportedEvents(session: McpSession) {
+        const response = await apiGet(
+          ctx.server,
+          `/api/v1/sessions/${session.sessionId}/recording/events`,
+        )
+        assert(response.ok)
+        return (await response.text())
+          .split('\n')
+          .filter(Boolean)
+          .map((line) => {
+            const event: unknown = JSON.parse(line)
+            assert(event !== null && typeof event === 'object')
+            assert('type' in event && typeof event.type === 'number')
+            assert('ts' in event && typeof event.ts === 'number')
+            assert('tabId' in event && typeof event.tabId === 'number')
+            return event
+          })
+      }
+      try {
+        for (const opener of ['explicit', 'default']) {
+          const session = await ctx.openSession(`neo-replay-${opener}`)
+          const documentId = crypto.randomUUID().replaceAll('-', '')
+          const events: ReturnType<typeof recordingBatch> = []
+          let tabId: number | undefined
+          for (let run = 0; run < 2; run += 1) {
+            const setup =
+              run === 0
+                ? `${opener === 'explicit' ? 'const p = await context.newPage();' : 'const p = page;'}
+await p.goto(${JSON.stringify(ctx.fixture('/form.html'))});
+${startRecorder}`
+                : `const p = context.pages().find(p => p.tabId === ${tabId});`
+            const result = await session.callTool('run', {
+              code: `${setup}
+await p.locator('#name').fill('Replay run ${run + 1}');
+await p.getByRole('button', {name: 'Submit', exact: true}).click();
+return { tabId: p.tabId, events: await p.evaluate(() => window.__replayEvents.splice(0)) };`,
+            })
+            expectOk(result, `${opener} page replay run ${run + 1}`)
+            const value = result.structuredContent?.value
+            assert(value !== null && typeof value === 'object')
+            assert('tabId' in value && typeof value.tabId === 'number')
+            assert('events' in value)
+            tabId = value.tabId
+            const batch = recordingBatch(value.events)
+            events.push(...batch)
+            await ingest(tabId, documentId, batch)
+          }
+          await session.close()
+          await waitUntil(async () => {
+            const response = await apiGet(
+              ctx.server,
+              `/api/v1/sessions/${session.sessionId}/recording`,
+            )
+            assert(response.ok)
+            const metadata: unknown = await response.json()
+            assert(metadata !== null && typeof metadata === 'object')
+            return 'hasData' in metadata && metadata.hasData === true
+          }, `the closed ${opener} page session recording metadata`)
+          const exported = await exportedEvents(session)
+          assert(exported.length > 0, 'the session exported an empty replay')
+          assert.deepEqual(
+            exported.slice(0, 2).map((event) => event.type),
+            [4, 2],
+            `${opener} page replay must start with metadata and a full snapshot`,
+          )
+          assert.deepEqual(
+            exported.map((event) => event.ts),
+            events.map((event) => event.ts),
+            'the two-run replay must retain every event from the task-created tab',
+          )
+          assert(session.sessionId !== undefined && tabId !== undefined)
+          const claim = database
+            .query<{ claimed_at: number }, [string, number]>(
+              'SELECT claimed_at FROM session_tabs WHERE session_id = ? AND tab_id = ?',
+            )
+            .get(session.sessionId, tabId)
+          const run = database
+            .query<{ created_at: number | null }, [string]>(
+              "SELECT MIN(created_at) AS created_at FROM tool_dispatches WHERE session_id = ? AND tool_name = 'run'",
+            )
+            .get(session.sessionId)
+          const checkpoint = events.find((event) => event.type === 2)
+          assert(claim && run && checkpoint)
+          assert(run.created_at !== null)
+          assert(run.created_at <= claim.claimed_at)
+          assert(claim.claimed_at <= checkpoint.ts)
+        }
+
+        const session = await ctx.openSession('neo-replay-privacy')
+        const userUrl = `${ctx.fixture('/form.html')}?private=${crypto.randomUUID()}`
+        // Native creation and typing precede every SDK write, so this page has
+        // no task holder whose provenance could admit it into a session replay.
+        const target = await privateBrowserCommand(
+          ctx.browser.cdpPort,
+          'Target.createTarget',
+          { url: userUrl },
+        )
+        assert(target !== null && typeof target === 'object')
+        assert('targetId' in target && typeof target.targetId === 'string')
+        try {
+          const targetId = target.targetId
+          await waitUntil(async () => {
+            const readiness = await privateBrowserCommand(
+              ctx.browser.cdpPort,
+              'Runtime.evaluate',
+              {
+                expression:
+                  "document.readyState !== 'loading' && !!document.querySelector('#name')",
+                returnByValue: true,
+              },
+              targetId,
+            )
+            assert(readiness !== null && typeof readiness === 'object')
+            assert('result' in readiness && readiness.result !== null)
+            assert(typeof readiness.result === 'object')
+            return (
+              'value' in readiness.result && readiness.result.value === true
+            )
+          }, 'the native user tab form')
+          const started = await privateBrowserCommand(
+            ctx.browser.cdpPort,
+            'Runtime.evaluate',
+            {
+              expression: `(async () => {
+  await new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = ${recorderUrl};
+    script.onload = resolve;
+    script.onerror = reject;
+    document.head.append(script);
+  });
+  window.__replayEvents = [];
+  window.__stopReplay = rrweb.record({emit: event => window.__replayEvents.push(event)});
+  document.querySelector('#name').focus();
+})()`,
+              awaitPromise: true,
+            },
+            targetId,
+          )
+          assert(started !== null && typeof started === 'object')
+          assert(!('exceptionDetails' in started), JSON.stringify(started))
+          await privateBrowserCommand(
+            ctx.browser.cdpPort,
+            'Input.insertText',
+            { text: 'private user text' },
+            targetId,
+          )
+          const result = await session.callTool('run', {
+            code: `const p = context.pages().find(p => p.url() === ${JSON.stringify(userUrl)});
+await p.locator('#name').fill('session write');
+return p.tabId;`,
+          })
+          expectOk(result, 'writing a pre-existing user tab')
+          const tabId = result.structuredContent?.value
+          assert(typeof tabId === 'number')
+          const captured = await privateBrowserCommand(
+            ctx.browser.cdpPort,
+            'Runtime.evaluate',
+            {
+              expression: 'window.__stopReplay(); window.__replayEvents',
+              returnByValue: true,
+            },
+            targetId,
+          )
+          assert(captured !== null && typeof captured === 'object')
+          assert('result' in captured && captured.result !== null)
+          assert(
+            typeof captured.result === 'object' && 'value' in captured.result,
+          )
+          const batch = recordingBatch(captured.result.value)
+          assert(JSON.stringify(batch).includes('private user text'))
+          await ingest(tabId, crypto.randomUUID().replaceAll('-', ''), batch)
+          await session.close()
+          assert(session.sessionId !== undefined)
+          assert.equal(
+            database
+              .query<{ count: number }, [string, number]>(
+                'SELECT COUNT(*) AS count FROM session_tabs WHERE session_id = ? AND tab_id = ?',
+              )
+              .get(session.sessionId, tabId)?.count,
+            0,
+            'writing a user tab must not create a session ownership window',
+          )
+          assert.deepEqual(
+            await exportedEvents(session),
+            [],
+            'a session replay must not expose any event from the user tab',
+          )
+        } finally {
+          await privateBrowserCommand(
+            ctx.browser.cdpPort,
+            'Target.closeTarget',
+            {
+              targetId: target.targetId,
+            },
+          )
+        }
+      } finally {
+        database.close()
+        await scripts.stop(true)
+      }
+    },
+  },
 ]
 
 /** Reads the launcher's private browser independently of the server under test. */
@@ -1142,6 +1414,7 @@ async function privateBrowserCommand(
   cdpPort: number,
   method: string,
   params: Record<string, unknown> = {},
+  targetId?: string,
 ): Promise<unknown> {
   const response = await fetch(`http://127.0.0.1:${cdpPort}/json/version`, {
     signal: AbortSignal.timeout(2_000),
@@ -1151,7 +1424,30 @@ async function privateBrowserCommand(
   assert(version !== null && typeof version === 'object')
   assert('webSocketDebuggerUrl' in version)
   assert(typeof version.webSocketDebuggerUrl === 'string')
-  const socket = new WebSocket(version.webSocketDebuggerUrl)
+  let websocketUrl = version.webSocketDebuggerUrl
+  if (targetId) {
+    const targetsResponse = await fetch(
+      `http://127.0.0.1:${cdpPort}/json/list`,
+      {
+        signal: AbortSignal.timeout(2_000),
+      },
+    )
+    assert(targetsResponse.ok)
+    const targets: unknown = await targetsResponse.json()
+    assert(Array.isArray(targets))
+    const target: unknown = targets.find(
+      (candidate: unknown) =>
+        candidate !== null &&
+        typeof candidate === 'object' &&
+        'id' in candidate &&
+        candidate.id === targetId,
+    )
+    assert(target !== null && typeof target === 'object')
+    assert('webSocketDebuggerUrl' in target)
+    assert(typeof target.webSocketDebuggerUrl === 'string')
+    websocketUrl = target.webSocketDebuggerUrl
+  }
+  const socket = new WebSocket(websocketUrl)
   let deadline: ReturnType<typeof setTimeout> | undefined
   try {
     return await new Promise<unknown>((resolve, reject) => {
