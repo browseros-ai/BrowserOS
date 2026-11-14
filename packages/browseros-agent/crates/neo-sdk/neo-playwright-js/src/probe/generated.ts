@@ -52,7 +52,11 @@ keys: boolean,
  * Every `<iframe>` on the way down to the box's frame is visible: a box in a hidden frame
  * does not show either.
  */
-frameVisible: boolean, };
+frameVisible: boolean, 
+/**
+ * Where the page side leaves the page before its checks (ruling R62).
+ */
+scroll: LookScroll, };
 
 /**
  * What the host approved about a box. The look refuses the box when a fact the host sent no
@@ -285,6 +289,12 @@ export type LookRefusal = "notAnInput" | "wrongOrigin" | "wrongType" | "boxChang
  * The first check a box fails, and for `boxChanged` the fact that differs.
  */
 export type LookRefused = { code: LookRefusal, fact?: BoxFact, };
+
+/**
+ * The page side's own part of the look's scroll. Rust's first step, the browser's own instant
+ * scroll of the whole box (ruling R61), always runs before the look.
+ */
+export type LookScroll = "asItIs" | "centre";
 
 /**
  * The look's answer for one box (`value` payload of the `look` request): its facts whenever it

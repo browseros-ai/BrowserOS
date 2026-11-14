@@ -292,9 +292,9 @@ error_codes! {
     /// Something else takes the pointer at the box: in its own document (main's covered rule),
     /// or in any page above its frame (ruling R60).
     BOX_COVERED = "box_covered";
-    /// A page above the box's frame could not be asked what takes the pointer at the box,
-    /// cannot show the frame, or changes the frame's size or angle, so nothing was typed
-    /// (ruling R60).
+    /// The box could not be brought into view (ruling R62), or a page above the box's frame
+    /// could not be asked what takes the pointer at the box, cannot show the frame, or changes
+    /// the frame's size or angle (ruling R60). Nothing was typed.
     COVER_UNREAD = "cover_unread";
     /// The value is longer than the box's `maxlength`, and the host did not accept a cut.
     VALUE_TOO_LONG = "value_too_long";

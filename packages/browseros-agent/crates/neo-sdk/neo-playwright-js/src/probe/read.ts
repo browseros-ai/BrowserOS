@@ -147,19 +147,26 @@ function borderBox(element: Element): Rect | null {
 }
 
 /**
- * The private look's point for the pages above the box's frame (ruling R60): its border box's
- * centre, only when that lies inside this frame's viewport. A box whose centre is outside is not
- * asked above, as before: a page above would be asked at a place outside the frame, where a
- * neighbour of the frame would read as a cover.
+ * The private look's in-view test for every sized box it passed (ruling R62), and its point for
+ * the pages above the box's frame (ruling R60): the border box's centre, only when that lies
+ * inside this frame's view, its scrollbars left out, or the window's view on a page with no
+ * scrolling element. A centre outside the view is brought into view by the look's second scroll
+ * step, or the box answers `cover_unread`; the pages above are asked only at a centre in view,
+ * since outside the frame a neighbour of the frame would read as a cover.
  */
 function viewCentre(element: Element): { x: number; y: number } | null {
   const box = borderBox(element)
   if (!box) return null
   const x = box.x + box.width / 2
   const y = box.y + box.height / 2
+  // The view without its scrollbars: a hit on a scrollbar finds only the root. A page in quirks
+  // mode whose html and body both set overflow has no scrolling element; its view is then the
+  // window's, scrollbars and all.
   const view = element.ownerDocument.defaultView
-  if (!view || x < 0 || y < 0 || x >= view.innerWidth || y >= view.innerHeight)
-    return null
+  const port = element.ownerDocument.scrollingElement
+  const width = port ? port.clientWidth : (view?.innerWidth ?? 0)
+  const height = port ? port.clientHeight : (view?.innerHeight ?? 0)
+  if (x < 0 || y < 0 || x >= width || y >= height) return null
   return { x, y }
 }
 

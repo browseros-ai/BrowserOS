@@ -500,7 +500,11 @@ paths:
         first; a box that is gone, not a text input, on another origin, of another type,
         changed from what the host approved, disabled, hidden, covered, or too short for the
         value refuses the whole call before any key. Neo brings each box into view at once
-        before it asks what covers it, whatever scrolling the page has set. Then it types each value, in one insertion
+        before it asks what covers it, whatever scrolling the page has set, and a box larger
+        than its view by its centre, which leaves the page scrolled there. A box with a size
+        that Neo cannot bring into view (a page that cannot scroll there, as a dialog's scroll
+        lock makes it, or a box parked off the page) is not typed, and answers `cover_unread`.
+        Then it types each value, in one insertion
         or (`keys`) key by key with the focus checked before each character, asking the rules
         again before each box and each key (a lock taken mid-entry stops the entry there), and
         reads each box back. It does not wait: a box in another state now is refused now;
@@ -2376,8 +2380,10 @@ components:
             `element_detached`, `not_an_input`, `wrong_origin`, `wrong_type`, `box_changed`,
             `page_changed`, `box_not_editable`, `box_hidden`, `box_covered` (something takes
             the pointer at the box, in its own document or in a page above its frame: dismiss
-            it, or scroll until the box is clear of it, and try again), `cover_unread` (a page
-            above the box's frame could not be asked what covers the box: try again; or it cannot
+            it, or scroll until the box is clear of it, and try again), `cover_unread` (the box
+            is not in view and could not be brought into view: close what locks the page, such as
+            a dialog, or scroll the box into view, and try again; or a page above the box's frame
+            could not be asked what covers the box: try again; or it cannot
             show the frame: scroll the frame into view and try again; or it scales or turns the
             frame: try again once the page has stopped moving), `value_too_long`,
             `not_focused`, `focus_lost`, `value_not_taken`, `box_not_cleared` (a box with no

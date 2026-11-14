@@ -8848,6 +8848,12 @@ ${value.stack}`;
     coverWrappers.delete(element);
     if (!isTextInput(element))
       return { refusal: { code: "notAnInput" } };
+    if (ask.scroll === "centre")
+      element.scrollIntoView({
+        block: "center",
+        inline: "center",
+        behavior: "instant"
+      });
     const facts = factsOf(element);
     const refusal = firstRefusal(world, element, facts, ask);
     return refusal ? { facts, refusal } : { facts };
@@ -9609,7 +9615,7 @@ ${value.stack}`;
   }
 
   // crates/neo-sdk/neo-playwright-js/src/probe/protocol.ts
-  var PROTOCOL = 40;
+  var PROTOCOL = 41;
 
   // crates/neo-sdk/neo-playwright-js/src/probe/read.ts
   var XHTML = "http://www.w3.org/1999/xhtml";
@@ -9691,7 +9697,10 @@ ${value.stack}`;
     const x = box.x + box.width / 2;
     const y = box.y + box.height / 2;
     const view = element.ownerDocument.defaultView;
-    if (!view || x < 0 || y < 0 || x >= view.innerWidth || y >= view.innerHeight)
+    const port = element.ownerDocument.scrollingElement;
+    const width = port ? port.clientWidth : view?.innerWidth ?? 0;
+    const height = port ? port.clientHeight : view?.innerHeight ?? 0;
+    if (x < 0 || y < 0 || x >= width || y >= height)
       return null;
     return { x, y };
   }

@@ -1,0 +1,24 @@
+<html><head><meta charset=utf-8><title>Quirks sign-in</title>
+<!-- No doctype: the browser lays this page out in quirks mode, as many old sign-in pages and
+     device admin pages are (ruling R62). html and body both set overflow, so the body is the
+     scroller and document.scrollingElement is null. The password box is in view.
+     ?sheet=1 lays a sheet over the whole view. -->
+<style>
+  html { overflow: hidden; height: 100%; }
+  body { margin: 0; overflow: auto; height: 100%; }
+  #sheet { position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: 10;
+           background: rgba(0, 0, 0, 0.4); }
+</style></head>
+<body>
+<p style="margin: 20px">Sign in</p>
+<input id=pw type=password aria-label="Password" style="margin: 20px; width: 220px; height: 30px">
+<div style="height: 3000px"></div>
+<script>
+  if (new URLSearchParams(location.search).get('sheet')) {
+    var sheet = document.createElement('div')
+    sheet.id = 'sheet'
+    sheet.textContent = 'Accept all'
+    document.body.appendChild(sheet)
+  }
+</script>
+</body></html>

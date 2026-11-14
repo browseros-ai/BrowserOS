@@ -1270,12 +1270,13 @@ const ABOVE: &[AbovePage] = &[
         None,
     ),
     AbovePage {
+        // Passed until ruling R62: a box out of its own frame's view cannot be brought there.
         inner: "/private/parent-cover-box.html?away=1",
         ..above(
             "a box far off its own frame's viewport, as payment frames lay a helper box",
             "cover=none",
             &[Host::OtherSite],
-            None,
+            Some(EntryCode::CoverUnread(Unread::Unreachable)),
         )
     },
     above(
@@ -1435,4 +1436,176 @@ async fn tests_that_a_box_under_a_sticky_header_above_its_frame_passes_once_clea
         );
     }
     live.close(&page).await
+}
+
+/// Ruling R62's rows 1 to 4 and 6 for the look, which the host's check call makes: a sized box
+/// that the look's instant scroll cannot bring into its own frame's view answers `cover_unread`,
+/// by one insertion and key by key: a password box 3000 pixels down a page that cannot scroll,
+/// with a sheet over the view and without it, a helper box parked far off the page's left edge,
+/// and a 1 by 1 box just off its top-left corner. A box in view, a box below the fold of a page
+/// that can scroll, and a box in view on a page in quirks mode with no scrolling element (its
+/// view is the window's), pass as before; the last answers `box_covered` under a sheet. Fails
+/// with the view test taken out of the look: nothing is at an out-of-view box's centre, and
+/// nothing passes.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_box_that_cannot_be_brought_into_view_is_refused() -> TestResult {
+    let server = FixtureServer::start(private_host::pages()).await?;
+    let live = LiveBrowser::connect().await?;
+    let (page_origin, _) = private_host::origins(&server);
+    let unreachable = Some(EntryCode::CoverUnread(Unread::Unreachable));
+    let cases = [
+        (
+            "/private/smooth-login.html?lock=1&sheet=1",
+            "#pw",
+            unreachable,
+        ),
+        ("/private/smooth-login.html?lock=1", "#pw", unreachable),
+        ("/private/out-of-view.html", "#helper", unreachable),
+        ("/private/out-of-view.html", "#corner", unreachable),
+        ("/private/out-of-view.html", "#email", None),
+        // A page in quirks mode with no scrolling element: its view is the window's.
+        ("/private/quirks-login.html", "#pw", None),
+        (
+            "/private/quirks-login.html?sheet=1",
+            "#pw",
+            Some(EntryCode::BoxCovered(CoverIn::OwnDocument)),
+        ),
+        ("/private/smooth-login.html?plain=1", "#pw", None),
+    ];
+    let mut failures = Vec::new();
+    for (path, css, wanted) in cases {
+        let page = live.open(&server.url("127.0.0.1", path)).await?;
+        let r#ref = mint_ref(&live, &page, css).await?;
+        let env = HostEnv::new(&live);
+        for keys in [false, true] {
+            let ask = LookField {
+                keys,
+                ..field(&r#ref, Some(expecting(&page_origin)))
+            };
+            let answer = look_one(&live, &env, &page, ask).await?;
+            if sentence(&answer) != wanted.map(EntryCode::message) {
+                failures.push(format!("{path} {css}, keys {keys}: {:?}", code(&answer)));
+            }
+        }
+        assert!(!env.was_sent(), "a look never marks itself sent");
+        live.close(&page).await?;
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+    Ok(())
+}
+
+/// Ruling R62's second writing, rows 8 to 12 for the look, which the host's check call makes: a
+/// box larger than its view, which the browser's scroll shows by its nearest edge or leaves
+/// where it is, is brought into view by its centre and looked at again there. A text box three
+/// views tall with its top showing, and one that fills the view, in the page's own document and
+/// in a small frame of another site: clear, they pass and end with their centre in view; under
+/// a sheet, laid in their own document or by the page above over the frame, `box_covered`. The
+/// tall box on a page that cannot scroll, and a fixed box with its centre off the view's edge,
+/// still answer `cover_unread`. Row 14: a box two views wide whose centre lies under a scrollbar
+/// the page draws itself, 16 pixels on every platform, is centred and looked at there: passed
+/// clear, `box_covered` under a sheet (main typed it under the sheet; so does a view test that
+/// counts the scrollbar in). Fails with the centre scroll taken out: the tall and filling
+/// boxes answer `cover_unread`; with the second look taken out, their sheet rows in the own
+/// document pass.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_box_larger_than_its_view_is_looked_at_by_its_centre() -> TestResult {
+    let sites = Sites::start().await?;
+    let live = LiveBrowser::connect().await?;
+    let own = Some(EntryCode::BoxCovered(CoverIn::OwnDocument));
+    let above = Some(EntryCode::BoxCovered(CoverIn::PageAbove));
+    let unreachable = Some(EntryCode::CoverUnread(Unread::Unreachable));
+    let inner = |query: &str| format!("/private/larger-than-view.html?{query}");
+    let cases = [
+        (
+            sites.url(Host::Page, &inner("shape=tall")),
+            Host::Page,
+            None,
+        ),
+        (
+            sites.url(Host::Page, &inner("shape=tall&sheet=1")),
+            Host::Page,
+            own,
+        ),
+        (
+            sites.url(Host::Page, &inner("shape=fills")),
+            Host::Page,
+            None,
+        ),
+        (
+            sites.url(Host::Page, &inner("shape=fills&sheet=1")),
+            Host::Page,
+            own,
+        ),
+        (
+            sites.url(Host::Page, &inner("shape=strip&bar=1")),
+            Host::Page,
+            None,
+        ),
+        (
+            sites.url(Host::Page, &inner("shape=strip&bar=1&sheet=1")),
+            Host::Page,
+            own,
+        ),
+        (
+            sites.url(Host::Page, &inner("shape=tall&lock=1")),
+            Host::Page,
+            unreachable,
+        ),
+        (
+            sites.url(Host::Page, &inner("shape=fixed")),
+            Host::Page,
+            unreachable,
+        ),
+        (
+            sites.page("cover=none", &[Host::OtherSite], &inner("shape=tall")),
+            Host::OtherSite,
+            None,
+        ),
+        (
+            sites.page("cover=sheet", &[Host::OtherSite], &inner("shape=tall")),
+            Host::OtherSite,
+            above,
+        ),
+        (
+            sites.page("cover=none", &[Host::OtherSite], &inner("shape=fills")),
+            Host::OtherSite,
+            None,
+        ),
+        (
+            sites.page("cover=sheet", &[Host::OtherSite], &inner("shape=fills")),
+            Host::OtherSite,
+            above,
+        ),
+    ];
+    let mut failures = Vec::new();
+    for (url, host, wanted) in cases {
+        let page = live.open(&url).await?;
+        let r#ref = private_host::ref_of(&live, &page, "textbox", "Secret").await?;
+        let env = HostEnv::new(&live);
+        for keys in [false, true] {
+            let ask = LookField {
+                keys,
+                ..field(&r#ref, Some(expecting(&sites.origin(host))))
+            };
+            let answer = look_one(&live, &env, &page, ask).await?;
+            if sentence(&answer) != wanted.map(EntryCode::message) {
+                failures.push(format!("{url}, keys {keys}: {:?}", code(&answer)));
+            }
+        }
+        // The page is left where the centre scroll put it.
+        if wanted.is_none()
+            && matches!(host, Host::Page)
+            && live.main_world(&page, "centreInView()").await? != json!(true)
+        {
+            failures.push(format!(
+                "{url}: the box's centre is not in view after the look"
+            ));
+        }
+        assert!(!env.was_sent(), "a look never marks itself sent");
+        live.close(&page).await?;
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+    Ok(())
 }

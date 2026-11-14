@@ -141,6 +141,18 @@ pub(crate) fn pages() -> HashMap<String, Page> {
             include_str!("../data/private/smooth-login.html"),
         ),
         (
+            "out-of-view",
+            include_str!("../data/private/out-of-view.html"),
+        ),
+        (
+            "larger-than-view",
+            include_str!("../data/private/larger-than-view.html"),
+        ),
+        (
+            "quirks-login",
+            include_str!("../data/private/quirks-login.html"),
+        ),
+        (
             "covered-select",
             include_str!("../data/private/covered-select.html"),
         ),

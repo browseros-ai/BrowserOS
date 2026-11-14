@@ -173,6 +173,7 @@ export const REQUEST_EXAMPLES: { [O in Op]: AtLeastOne<RequestOf<O>> } = {
         cut: false,
         keys: false,
         frameVisible: true,
+        scroll: 'asItIs',
       },
     },
     {
@@ -191,12 +192,13 @@ export const REQUEST_EXAMPLES: { [O in Op]: AtLeastOne<RequestOf<O>> } = {
         cut: true,
         keys: false,
         frameVisible: true,
+        scroll: 'centre',
       },
     },
     {
       op: 'look',
       pin: 5,
-      look: { cut: false, keys: true, frameVisible: true },
+      look: { cut: false, keys: true, frameVisible: true, scroll: 'asItIs' },
     },
   ],
   private: [

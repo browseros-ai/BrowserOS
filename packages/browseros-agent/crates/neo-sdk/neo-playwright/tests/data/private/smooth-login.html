@@ -8,6 +8,7 @@
   input { width: 260px; height: 34px; margin: 10px; box-sizing: border-box; }
   iframe { width: 360px; height: 120px; border: 0; display: block; }
   #sheet { position: fixed; inset: 0; z-index: 10; background: rgba(0, 0, 0, 0.4); }
+  body.locked { position: fixed; width: 100%; }
 </style>
 <!-- A password box far below the fold of a page that scrolls smoothly (ruling R61). The page's
      own scrollIntoViewIfNeeded animates here, so a hit asked straight after it finds nothing at
@@ -18,7 +19,9 @@
      ?plain=1: nothing scrolls smoothly.
      ?frame=1: the box in a frame of this page's own origin, 3000 pixels down the smooth root.
      ?inner=1: that frame's page, the box alone at its top.
-     ?sheet=1: a sheet over the whole view, as a consent dialog lays one. -->
+     ?sheet=1: a sheet over the whole view, as a consent dialog lays one.
+     ?lock=1: the page cannot scroll at all, as a dialog's scroll lock by a fixed body makes it
+     (ruling R62): the box 3000 pixels down cannot be brought into view. -->
 <script>
   const q = new URLSearchParams(location.search)
   const box = '<input id=pw type=password autocomplete=current-password aria-label="Password">'
@@ -32,6 +35,7 @@
       document.write(far('<iframe title="Sign-in frame" src="/private/smooth-login.html?inner=1"></iframe>'))
     else document.write(far(box))
     if (q.get('sheet')) document.write('<div id=sheet>Accept all</div>')
+    if (q.get('lock')) document.body.className = 'locked'
   }
   // Where the box's own scroller stands: the container's, or the page's.
   window.standing = () => Math.round(document.querySelector('.scroller')?.scrollTop ?? scrollY)

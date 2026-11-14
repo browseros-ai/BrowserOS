@@ -32,7 +32,7 @@ mod look_op;
 mod picture_check;
 mod private_text;
 
-pub(crate) use box_ask::{BoxAsk, LookRefusal, LookRefused, Looked};
+pub(crate) use box_ask::{BoxAsk, LookRefusal, LookRefused, LookScroll, Looked};
 pub use box_look::{BoxFacts, BoxLook};
 pub use box_spec::{BoxSpec, Expect};
 pub use entry::{
