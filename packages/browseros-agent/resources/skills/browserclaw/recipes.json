@@ -1,0 +1,86 @@
+[
+  {
+    "id": "list-groups",
+    "title": "List tab groups",
+    "when": "Find groupId, windowId and tabIds before changing an existing group.",
+    "code": "return await neo.cdp('Browser.getTabGroups');"
+  },
+  {
+    "id": "create-group",
+    "title": "Create a tab group",
+    "when": "Group your current page. Replace research with your task label; keep the returned groupId.",
+    "code": "return await neo.cdp('Browser.createTabGroup', { tabIds: [page.tabId], title: 'research' });"
+  },
+  {
+    "id": "update-group",
+    "title": "Retitle or recolour a tab group",
+    "when": "Set groupId from the group list. Change title, color or collapsed; omitted fields stay unchanged. Colors are grey, blue, red, yellow, green, pink, purple, cyan and orange.",
+    "code": "return await neo.cdp('Browser.updateTabGroup', { groupId, title: 'research notes', color: 'blue', collapsed: false });"
+  },
+  {
+    "id": "add-to-group",
+    "title": "Add tabs to a group",
+    "when": "Set groupId from the group list and tabIds from page.tabId values. Adding moves those tabs into that group.",
+    "code": "return await neo.cdp('Browser.addTabsToGroup', { groupId, tabIds });"
+  },
+  {
+    "id": "remove-from-group",
+    "title": "Remove tabs from a group",
+    "when": "Set tabIds from page.tabId values. The tabs stay open; removing the last tab destroys the empty group.",
+    "code": "return await neo.cdp('Browser.removeTabsFromGroup', { tabIds });"
+  },
+  {
+    "id": "close-group",
+    "title": "Close a tab group",
+    "when": "Set groupId from the group list. This closes every tab in that group; inspect its tabIds first.",
+    "code": "return await neo.cdp('Browser.closeTabGroup', { groupId });"
+  },
+  {
+    "id": "list-windows",
+    "title": "List windows",
+    "when": "Find windowId and the active tab. liveBrowserContextId identifies a loaded profile; browserContextId is only a legacy label.",
+    "code": "return await neo.cdp('Browser.getWindows');"
+  },
+  {
+    "id": "open-window",
+    "title": "Open a window",
+    "when": "Open an inactive normal window. To choose a loaded profile, pass its browserContextId from the profile list.",
+    "code": "return await neo.cdp('Browser.createWindow', {});"
+  },
+  {
+    "id": "close-window",
+    "title": "Close a window",
+    "when": "Set windowId from the window list. This closes all tabs in that window; inspect it first.",
+    "code": "return await neo.cdp('Browser.closeWindow', { windowId });"
+  },
+  {
+    "id": "open-tab-in-window",
+    "title": "Open a tab in a chosen window",
+    "when": "Set windowId from the window list and url to the destination. In the next run, find the returned tabId in context.pages() to use Playwright on it. Placement is per call, with no saved window binding.",
+    "code": "const { tab } = await neo.cdp('Browser.createTab', { windowId, url, background: true }); return { tabId: tab.tabId };"
+  },
+  {
+    "id": "list-profiles",
+    "title": "List profiles",
+    "when": "Discover saved regular profiles without loading them. browserProfileId is a saved-profile handle; browserContextId identifies a loaded profile and expires on browser restart.",
+    "code": "return await neo.cdp('Browser.getProfiles');"
+  },
+  {
+    "id": "load-profile",
+    "title": "Load a profile",
+    "when": "Set browserProfileId from the profile list. Loading opens no window and changes no task binding. Use the returned profile.browserContextId when creating a window in that profile.",
+    "code": "return await neo.cdp('Browser.loadProfile', { browserProfileId });"
+  },
+  {
+    "id": "recent-history",
+    "title": "Read recent history",
+    "when": "Read up to 20 recent entries. To choose a loaded profile, pass its browserContextId from the profile list.",
+    "code": "return await neo.cdp('History.getRecent', { maxResults: 20 });"
+  },
+  {
+    "id": "focus-tab",
+    "title": "Bring a tab to the front",
+    "when": "Use the page you intend to show. This selects that tab in its window.",
+    "code": "return await neo.cdp('Browser.activateTab', { tabId: page.tabId });"
+  }
+]

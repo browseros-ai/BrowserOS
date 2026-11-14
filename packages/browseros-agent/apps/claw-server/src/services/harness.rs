@@ -186,6 +186,7 @@ pub struct HarnessService {
 #[derive(Clone)]
 struct ManagedSkill {
     reconciler: SkillReconciler,
+    workspace_dir: PathBuf,
     spec: SkillSpec,
     /// The guide installed while ultrafast is on, when the server has one.
     ultrafast_spec: Option<SkillSpec>,
@@ -235,6 +236,7 @@ impl HarnessService {
     ) -> Self {
         let environment = SkillEnvironment::current(&home_dir);
         let managed_skill = ManagedSkill {
+            workspace_dir: skill_workspace_dir.clone(),
             reconciler: SkillReconciler::new(skill_workspace_dir.clone())
                 .with_provisioned_roots(environment.common_skill_roots())
                 .with_owned_name(super::harness_skills::MANAGED_SKILL_DIRECTORY),
@@ -774,6 +776,11 @@ fn reconcile_managed_skill(
             // native/legacy cleanup because their consumers are currently unknown.
             let mut outcome = reconciler
                 .repair_provisioned(managed_skill.current_spec(), &managed_skill.environment)?;
+            super::harness_skills::install_recipe_files(
+                &managed_skill.workspace_dir,
+                managed_skill.current_spec(),
+                &mut outcome,
+            );
             outcome.warnings.push(SkillWarning {
                 target: workspace_dir.to_path_buf(),
                 message: format!(
@@ -796,11 +803,17 @@ fn reconcile_managed_skill(
             "migrated legacy BrowserOS neo skill directories to the current name"
         );
     }
-    reconciler.reconcile(
+    let mut outcome = reconciler.reconcile(
         managed_skill.current_spec(),
         &consumers,
         &managed_skill.environment,
-    )
+    )?;
+    super::harness_skills::install_recipe_files(
+        &managed_skill.workspace_dir,
+        managed_skill.current_spec(),
+        &mut outcome,
+    );
+    Ok(outcome)
 }
 
 fn reconcile_skill_warning(
@@ -1461,5 +1474,201 @@ mod tests {
     #[test]
     fn empty_machine_sweeps_nothing() {
         assert_eq!(first_run_connect_targets(&[]), Some(Vec::new()));
+    }
+
+    #[test]
+    fn managed_skill_reconciliation_installs_and_repairs_its_recipe_guide() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let workspace_dir = root.path().join("mcp");
+        let skill_workspace_dir = root.path().join("skills");
+        let home = root.path().join("home");
+        let managed = ManagedSkill {
+            workspace_dir: skill_workspace_dir.clone(),
+            reconciler: SkillReconciler::new(&skill_workspace_dir)
+                .with_owned_name(super::super::harness_skills::MANAGED_SKILL_DIRECTORY),
+            spec: SkillSpec::new("browseros-neo", "managed instructions\n")?,
+            ultrafast_spec: None,
+            ultrafast: Arc::default(),
+            environment: SkillEnvironment::new(
+                &home,
+                harness_integrations::TargetPlatform::current(),
+            ),
+        };
+        let manager = McpManager::new(&workspace_dir);
+        let installed = reconcile_managed_skill(&manager, &workspace_dir, &managed)?;
+        assert!(installed.warnings.is_empty(), "{:?}", installed.warnings);
+        let target = home.join(".agents/skills/browseros-neo");
+        let recipes_path = target.join("recipes.md");
+        let expected = crate::api::mcp::recipes::markdown();
+        assert_eq!(fs::read_to_string(&recipes_path)?, expected);
+        assert_eq!(
+            fs::read_to_string(target.join("SKILL.md"))?,
+            managed.spec.content()
+        );
+
+        let unchanged = reconcile_managed_skill(&manager, &workspace_dir, &managed)?;
+        assert!(unchanged.warnings.is_empty(), "{:?}", unchanged.warnings);
+        assert_eq!(fs::read_to_string(&recipes_path)?, expected);
+
+        fs::remove_file(&recipes_path)?;
+        reconcile_managed_skill(&manager, &workspace_dir, &managed)?;
+        assert_eq!(fs::read_to_string(&recipes_path)?, expected);
+
+        fs::remove_file(&recipes_path)?;
+        fs::create_dir_all(&workspace_dir)?;
+        fs::write(workspace_dir.join("manifest.json"), "broken MCP manifest")?;
+        let repaired = reconcile_managed_skill(&manager, &workspace_dir, &managed)?;
+        assert_eq!(fs::read_to_string(&recipes_path)?, expected);
+        assert!(repaired.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("Could not discover MCP connections")
+        }));
+        Ok(())
+    }
+
+    #[test]
+    fn recipe_install_preserves_foreign_or_failed_guides_and_reports_auxiliary_errors()
+    -> anyhow::Result<()> {
+        use sha2::Digest;
+
+        let root = tempfile::tempdir()?;
+        let skill_workspace_dir = root.path().join("skills");
+        let target = root.path().join("agent/browseros-neo");
+        let spec = SkillSpec::new("browseros-neo", "managed instructions\n")?;
+        SkillReconciler::new(&skill_workspace_dir)
+            .with_provisioned_roots([root.path().join("agent")])
+            .with_owned_name(spec.name())
+            .reconcile(
+                &spec,
+                &BTreeSet::new(),
+                &SkillEnvironment::new(
+                    root.path().join("home"),
+                    harness_integrations::TargetPlatform::current(),
+                ),
+            )?;
+        let marker_path = target.join(".browserclaw-managed.json");
+        let marker_content = fs::read_to_string(&marker_path)?;
+        let mut marker: serde_json::Value = serde_json::from_str(&marker_content)?;
+        marker["managedBy"] = json!("someone else");
+        fs::write(&marker_path, serde_json::to_string(&marker)?)?;
+        let recipes_path = target.join("recipes.md");
+        fs::write(&recipes_path, "keep foreign recipes")?;
+        let mut outcome = SkillReconcileOutcome::default();
+        super::super::harness_skills::install_recipe_files(
+            &skill_workspace_dir,
+            &spec,
+            &mut outcome,
+        );
+        assert_eq!(fs::read_to_string(&recipes_path)?, "keep foreign recipes");
+
+        fs::write(&marker_path, marker_content)?;
+        fs::write(target.join("SKILL.md"), "another guide")?;
+        super::super::harness_skills::install_recipe_files(
+            &skill_workspace_dir,
+            &spec,
+            &mut outcome,
+        );
+        assert_eq!(fs::read_to_string(&recipes_path)?, "keep foreign recipes");
+
+        fs::write(target.join("SKILL.md"), spec.content())?;
+        outcome.warnings.push(SkillWarning {
+            target: fs::canonicalize(&target)?,
+            message: "guide install failed".into(),
+        });
+        super::super::harness_skills::install_recipe_files(
+            &skill_workspace_dir,
+            &spec,
+            &mut outcome,
+        );
+        assert_eq!(fs::read_to_string(&recipes_path)?, "keep foreign recipes");
+
+        outcome.warnings.clear();
+        super::super::harness_skills::install_recipe_files(
+            &skill_workspace_dir,
+            &spec,
+            &mut outcome,
+        );
+        assert_eq!(fs::read_to_string(&recipes_path)?, "keep foreign recipes");
+        assert!(
+            outcome
+                .warnings
+                .iter()
+                .any(|warning| { warning.message.contains("contains user content or edits") })
+        );
+
+        let expected = crate::api::mcp::recipes::markdown();
+        let edited = format!("{expected}my personal notes\n");
+        fs::write(&recipes_path, &edited)?;
+        outcome.warnings.clear();
+        super::super::harness_skills::install_recipe_files(
+            &skill_workspace_dir,
+            &spec,
+            &mut outcome,
+        );
+        assert_eq!(fs::read_to_string(&recipes_path)?, edited);
+        assert!(
+            outcome
+                .warnings
+                .iter()
+                .any(|warning| { warning.message.contains("contains user content or edits") })
+        );
+
+        let previous_body = "# BrowserOS neo recipes\n\nPrevious generated instructions.\n";
+        let previous = format!(
+            "<!-- browseros-neo generated recipes sha256:{:x} -->\n{previous_body}",
+            sha2::Sha256::digest(previous_body.as_bytes())
+        );
+        fs::write(&recipes_path, previous)?;
+        outcome.warnings.clear();
+        super::super::harness_skills::install_recipe_files(
+            &skill_workspace_dir,
+            &spec,
+            &mut outcome,
+        );
+        assert!(outcome.warnings.is_empty(), "{:?}", outcome.warnings);
+        assert_eq!(fs::read_to_string(&recipes_path)?, expected);
+
+        outcome.warnings.clear();
+        fs::remove_file(&recipes_path)?;
+        fs::create_dir(&recipes_path)?;
+        super::super::harness_skills::install_recipe_files(
+            &skill_workspace_dir,
+            &spec,
+            &mut outcome,
+        );
+        assert!(outcome.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("Could not install managed browser recipes")
+        }));
+        assert_eq!(fs::read_to_string(target.join("SKILL.md"))?, spec.content());
+
+        #[cfg(unix)]
+        {
+            fs::remove_dir(&recipes_path)?;
+            let foreign_file = root.path().join("foreign-recipes.md");
+            fs::write(&foreign_file, "external recipe content")?;
+            std::os::unix::fs::symlink(&foreign_file, &recipes_path)?;
+            outcome.warnings.clear();
+            super::super::harness_skills::install_recipe_files(
+                &skill_workspace_dir,
+                &spec,
+                &mut outcome,
+            );
+            assert!(
+                fs::symlink_metadata(&recipes_path)?
+                    .file_type()
+                    .is_symlink()
+            );
+            assert_eq!(fs::read_to_string(foreign_file)?, "external recipe content");
+            assert!(
+                outcome
+                    .warnings
+                    .iter()
+                    .any(|warning| { warning.message.contains("not a regular file") })
+            );
+        }
+        Ok(())
     }
 }
