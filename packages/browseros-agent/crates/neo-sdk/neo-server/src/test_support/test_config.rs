@@ -19,6 +19,7 @@ use crate::config::{
 pub fn test_config(state_dir: &Path) -> AppConfig {
     let launch = LaunchConfig {
         server_port: 0,
+        script_cdp: false,
         cdp_port: Defaults::CDP_PORT,
         resources_dir: state_dir.join("resources"),
         execution_dir: Some(state_dir.join("profile").join(".browseros")),

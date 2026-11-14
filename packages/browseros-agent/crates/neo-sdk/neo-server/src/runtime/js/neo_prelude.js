@@ -1,4 +1,4 @@
-// Neo's task API and CAPTCHA solver, supplied as the agent's `neo` parameter. Task handles
+// Neo's task API, launch-gated CDP, and CAPTCHA solver, supplied as the agent's `neo` parameter. Task handles
 // live for one run; their pages are the Playwright provider's shared Page objects.
 
 ;(() => {
@@ -105,6 +105,17 @@
           await invoke('neo.createTask', name === undefined ? {} : { name }),
         ),
       task: async (id) => Task._from(await invoke('neo.task', { id })),
+      // Raw CDP bypasses the page model. Do not settle frames after a refused command,
+      // because that could send browser work even when this permission is off.
+      cdp: async (method, params = {}, { page } = {}) =>
+        // CDP results are JSON data, even when a site returns keys that look like SDK handles.
+        JSON.parse(
+          await __neo.invoke('neo.cdp', {
+            method,
+            params,
+            ...(page === undefined ? {} : { page }),
+          }),
+        ),
       // Every CAPTCHA verdict, unsolved included, remains a value to branch on.
       solveCaptcha: (page) => invoke('neo.solveCaptcha', { page }),
     })

@@ -3,7 +3,7 @@ use std::num::NonZeroU16;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use super::{ConfigError, Defaults};
 
@@ -27,6 +27,8 @@ pub(crate) struct LaunchConfig {
     /// native capabilities. `None` when missing, blank or not a string, because an unknown
     /// version only hides gated features and must never fail the start.
     pub(crate) browseros_version: Option<String>,
+    /// Raw script CDP is a host launch decision, never a live setting. Absent is off.
+    pub(crate) script_cdp: bool,
 }
 
 impl LaunchConfig {
@@ -44,7 +46,8 @@ impl LaunchConfig {
     }
 
     /// Parses the file's text. Unknown keys are ignored, because Chromium adds launch fields
-    /// without coordinating with the sidecar; a known key with the wrong type is an error.
+    /// without coordinating with the sidecar. Ports and directories remain typed; opaque
+    /// instance and flags values are interpreted conservatively and otherwise ignored.
     fn parse(text: &str, config_dir: &Path) -> Result<Self, serde_json::Error> {
         let file: LaunchFile = serde_json::from_str(text)?;
         let resources_dir = match file.directories.resources {
@@ -75,18 +78,28 @@ impl LaunchConfig {
             resources_dir,
             execution_dir,
             browseros_version,
+            script_cdp: file
+                .extra
+                .get("flags")
+                .and_then(Value::as_object)
+                .and_then(|flags| flags.get("script_cdp"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
         })
     }
 }
 
-/// The file as Chromium writes it: `ports`, `directories`, `flags` and `instance`. Only the
-/// keys Neo reads are named.
+/// Chromium's typed launch fields plus opaque legacy keys. `flags` is interpreted from
+/// `extra` afterward, preserving last-value semantics for repeated keys.
 #[derive(Deserialize)]
 struct LaunchFile {
     #[serde(default)]
     ports: Ports,
     #[serde(default)]
     directories: Directories,
+    // Keep legacy launch keys opaque, with the last repeated value winning as in a JSON map.
+    #[serde(flatten)]
+    extra: Map<String, Value>,
     /// Untyped on purpose: a missing, malformed or wrong-typed identity leaves the version
     /// unknown instead of failing the parse.
     #[serde(default)]
@@ -138,6 +151,7 @@ mod tests {
                 resources_dir: Path::new("/opt/neo/resources").to_path_buf(),
                 execution_dir: Some(Path::new("/srv/exec").to_path_buf()),
                 browseros_version: Some("0.51.1.3".to_owned()),
+                script_cdp: false,
             },
             "Chromium adds launch keys freely, so unknown ones must not fail the start"
         );
@@ -163,6 +177,36 @@ mod tests {
             "resources sit beside the launch file by default"
         );
         assert_eq!(config.browseros_version, None, "no instance, no version");
+        Ok(())
+    }
+
+    #[test]
+    fn script_cdp_requires_an_explicit_boolean_launch_flag() -> Result<(), Box<dyn Error>> {
+        for (text, enabled) in [
+            ("{}", false),
+            (r#"{"flags": {}}"#, false),
+            (r#"{"flags": {"script_cdp": false}}"#, false),
+            (r#"{"flags": {"script_cdp": true}}"#, true),
+            (r#"{"flags": null}"#, false),
+            (r#"{"flags": "x"}"#, false),
+            (r#"{"flags": 1}"#, false),
+            (r#"{"flags": true}"#, false),
+            (r#"{"flags": []}"#, false),
+            (r#"{"flags": [true]}"#, false),
+            (r#"{"flags": {"script_cdp": "true"}}"#, false),
+            (r#"{"flags": {"script_cdp": 1}}"#, false),
+            (r#"{"flags": {"script_cdp": null}}"#, false),
+            (r#"{"flags": {"script_cdp": [true]}}"#, false),
+            (r#"{"flags": 1, "flags": 2}"#, false),
+            (r#"{"flags": 1, "flags": {"script_cdp": true}}"#, true),
+            (r#"{"flags": {"script_cdp": true}, "flags": 2}"#, false),
+        ] {
+            assert_eq!(
+                LaunchConfig::parse(text, Path::new(""))?.script_cdp,
+                enabled,
+                "only object true grants raw CDP; every other legacy flag value still starts"
+            );
+        }
         Ok(())
     }
 
