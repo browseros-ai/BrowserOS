@@ -3,10 +3,8 @@
  * the production entrypoint over real HTTP with a real BrowserOS attached and
  * asserts observable tool behavior only.
  *
- * CASE ORDER IS LOAD-BEARING: cases run sequentially per server in
- * array order against one shared browser profile. State-poisoning
- * cases (killing the browser) must stay last; cases that open dialogs
- * or pages clean them up before returning.
+ * Cases run sequentially against one suite-owned browser profile. The runner
+ * closes tabs between cases, including tabs opened by scripts that fail.
  */
 
 import type { BrowserHandle } from './browser'
@@ -20,21 +18,13 @@ export interface CaseContext {
   browser: BrowserHandle
   /** Primary MCP session, shared across cases within one server run. */
   mcp: McpSession
-  /**
-   * A session on a second server told the browser's BrowserOS version, as BrowserOS launches
-   * it in production. Its views are profile-scoped, so page access runs through the scoped
-   * admission guards; the primary server treats the browser as an unknown native and skips
-   * them. Started on first use and shared by later cases. On a browser without native
-   * profile targeting this is the primary session: such a BrowserOS runs unbound too.
-   */
-  scopedMcp(): Promise<McpSession>
   /** Extra sessions (ownership/naming/audit cases); auto-closed at run end. */
   openSession(clientName?: string): Promise<McpSession>
   /** URL on the primary fixture origin. */
   fixture(path: string): string
   /** URL on the secondary fixture origin (cross-origin iframes). */
   fixture2(path: string): string
-  /** `tabs new` on the given session (default primary); returns the page id and tracks it for post-case cleanup. */
+  /** `run` opens a tab on the given session and returns its native tab id. */
   openPage(url: string, session?: McpSession): Promise<number>
   scratchDir: string
 }
@@ -45,57 +35,17 @@ export interface ContractCase {
   browserArgs?: string[]
   /** Override the suite's launch mode; visual batches can match hosted Neo's headed X server. */
   headless?: boolean
-  /** ~12 cases carry true: the <60s tier run by test:claw-mcp-smoke. */
+  /** Core browser and transport cases run by test:claw-mcp-smoke. */
   smoke?: boolean
   run(ctx: CaseContext): Promise<void>
 }
 
-import { actCases } from './cases-act'
-import { captureIoCases } from './cases-capture-io'
-import { clawLayerCases } from './cases-claw-layer'
-import { clickRecoveryCases } from './cases-click-recovery'
-import { fillCases } from './cases-fill'
-import { fillReadbackCases } from './cases-fill-readback'
-import { frameRefCases } from './cases-frame-refs'
-import { isolationCases } from './cases-isolation'
-import { labelCases } from './cases-labels'
-import { navigateSnapshotCases } from './cases-navigate-snapshot'
 import { neoRunCases } from './cases-neo-run'
-import { outputCases } from './cases-outputs'
-import { readEvalCases } from './cases-read-eval'
-import { runBudgetCases } from './cases-run-budget'
-import { screenshotScaleCases } from './cases-screenshot-scale'
-import { sdkInputCases } from './cases-sdk-input'
-import { sdkNavigationCases } from './cases-sdk-navigation'
-import { sdkReadEvalCases } from './cases-sdk-read-eval'
-import { snapshotConcurrencyCases } from './cases-snapshot-concurrency'
-import { tabsCases } from './cases-tabs'
+import { playwrightRunCases } from './cases-playwright-run'
 import { transportCases } from './cases-transport'
-import { ultrafastCases } from './cases-ultrafast'
 
-// Order is load-bearing: clawLayerCases ends with the browser-kill case,
-// which must be the final case per server run — it poisons the browser.
 export const contractCases: ContractCase[] = [
   ...transportCases,
   ...neoRunCases,
-  ...tabsCases,
-  ...navigateSnapshotCases,
-  ...labelCases,
-  ...snapshotConcurrencyCases,
-  ...frameRefCases,
-  ...actCases,
-  ...clickRecoveryCases,
-  ...fillCases,
-  ...fillReadbackCases,
-  ...readEvalCases,
-  ...isolationCases,
-  ...captureIoCases,
-  ...outputCases,
-  ...runBudgetCases,
-  ...sdkInputCases,
-  ...sdkNavigationCases,
-  ...sdkReadEvalCases,
-  ...screenshotScaleCases,
-  ...ultrafastCases,
-  ...clawLayerCases,
+  ...playwrightRunCases,
 ]

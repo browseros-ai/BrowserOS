@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { describeSteps } from '../../../apps/claw-app/lib/step-sentences'
 import { findFreePort } from './browser'
 import type { ContractCase } from './cases'
 import { apiGet, expectOk, waitUntil } from './helpers'
@@ -517,6 +518,129 @@ return [first.tabId, second.tabId]`,
           'Neo grouping case and cleanup failed',
         )
       }
+    },
+  },
+  {
+    name: 'neo run: three steps reach the cockpit with redacted values',
+    async run(ctx) {
+      const session = await ctx.openSession('neo-steps-contract')
+      // Resolve the lazy implicit page before counting this run's three calls.
+      await waitUntil(
+        async () =>
+          !(
+            await session.callTool('run', { code: 'return await page.title()' })
+          ).isError,
+        'the SDK browser link',
+        { timeoutMs: 30_000 },
+      )
+      const secret = 'c8-private-typed-value'
+      const result = await session.callTool('run', {
+        code: `await page.goto(${JSON.stringify(ctx.fixture('/form.html'))});
+await page.locator('input').first().fill(${JSON.stringify(secret)});
+return await page.title()`,
+      })
+      expectOk(result, 'a three-step run')
+      await waitUntil(async () => {
+        const response = await apiGet(
+          ctx.server,
+          `/api/v1/sessions/${session.sessionId}`,
+        )
+        assert(response.ok)
+        const detail: unknown = await response.json()
+        assert(detail !== null && typeof detail === 'object')
+        assert('session' in detail && detail.session !== null)
+        assert(typeof detail.session === 'object')
+        assert(
+          'tokenUsage' in detail.session,
+          'child rows disabled token accounting',
+        )
+        assert('dispatches' in detail && Array.isArray(detail.dispatches))
+        const rows = detail.dispatches.map((row: unknown) => {
+          assert(row !== null && typeof row === 'object')
+          assert('dispatchKey' in row && typeof row.dispatchKey === 'string')
+          assert('toolName' in row && typeof row.toolName === 'string')
+          return row
+        })
+        const parent = rows.findLast((row) => row.toolName === 'run')
+        if (!parent) return false
+        const children = rows.filter(
+          (row) =>
+            'parentDispatchId' in row &&
+            row.parentDispatchId === parent.dispatchKey,
+        )
+        assert.equal(
+          children.length,
+          3,
+          JSON.stringify(
+            rows.map((row) => ({
+              tool: row.toolName,
+              key: row.dispatchKey,
+              parent: 'parentDispatchId' in row ? row.parentDispatchId : null,
+            })),
+          ),
+        )
+        assert.deepEqual(children.map((row) => row.toolName).sort(), [
+          'input.fill',
+          'nav.goto',
+          'read',
+        ])
+        assert(!JSON.stringify([parent, ...children]).includes(secret))
+        for (const row of [parent, ...children]) {
+          assert('argsJson' in row && typeof row.argsJson === 'string')
+          assert(row.argsJson.includes('[redacted]'))
+          assert(!('url' in row) || row.url === null)
+          assert(!('title' in row) || row.title === null)
+        }
+        const displayed = describeSteps(
+          [parent, ...children].map((row) => {
+            assert('dispatchId' in row && typeof row.dispatchId === 'number')
+            assert('createdAt' in row && typeof row.createdAt === 'number')
+            assert('slug' in row && typeof row.slug === 'string')
+            assert('label' in row && typeof row.label === 'string')
+            assert('sessionId' in row && typeof row.sessionId === 'string')
+            assert('argsJson' in row && typeof row.argsJson === 'string')
+            return {
+              dispatchId: row.dispatchId,
+              createdAt: row.createdAt,
+              slug: row.slug,
+              label: row.label,
+              sessionId: row.sessionId,
+              toolName: row.toolName,
+              argsJson: row.argsJson,
+            }
+          }),
+        )
+        assert.deepEqual(
+          displayed.steps.map((step) => step.sentence),
+          ['Opened a new page', 'Typed into the page', 'Read the page'],
+        )
+        return true
+      }, 'one run parent and three redacted child steps in the cockpit session')
+      expectOk(
+        await session.callTool('run', {
+          code: `try { await __neo.invoke(${JSON.stringify(secret)}, {}); } catch {} return 1`,
+        }),
+      )
+      await waitUntil(async () => {
+        const response = await apiGet(
+          ctx.server,
+          `/api/v1/sessions/${session.sessionId}`,
+        )
+        const detail: unknown = await response.json()
+        assert(
+          !JSON.stringify(detail).includes(secret),
+          'unknown operation name escaped redaction',
+        )
+        assert(detail !== null && typeof detail === 'object')
+        assert('dispatches' in detail && Array.isArray(detail.dispatches))
+        return detail.dispatches.some(
+          (row: unknown) =>
+            row !== null &&
+            typeof row === 'object' &&
+            'toolName' in row &&
+            row.toolName === 'sdk.operation',
+        )
+      }, 'a redacted unknown operation row')
     },
   },
 ]
