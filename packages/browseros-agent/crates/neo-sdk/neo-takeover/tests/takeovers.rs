@@ -1451,6 +1451,28 @@ async fn past_256_opens_a_release_keeps_the_newest_and_says_the_list_is_cut() ->
     Ok(())
 }
 
+/// A tab the takeover already noted, which comes back (the tab watch reports a tab again when it
+/// returns from an extension's page to a web page), is no new open: past 256, the first tab
+/// returning neither counts twice nor pushes a newer tab out.
+#[tokio::test]
+async fn a_tab_noted_before_that_returns_is_no_new_open() -> TestResult {
+    let h = harness(&[3]).await?;
+    let takeover = h.takeovers.start(request(None)?).await?;
+    owner_opens_many(&h, 1000, 257);
+    h.takeovers.note_opened(TabId(1000), None);
+    h.takeovers.note_opened(TabId(1256), None);
+    let released = h
+        .takeovers
+        .release(takeover.id, ReleaseReason::Done)
+        .await?;
+    assert_eq!(listed_ids(&released), (1001..1257).collect::<Vec<_>>());
+    assert_eq!(
+        (released.opened_tabs_noted, released.opened_tabs_truncated),
+        (Some(257), Some(true))
+    );
+    Ok(())
+}
+
 /// Up to 256 opens, the list is whole and says so.
 #[tokio::test]
 async fn up_to_256_opens_the_list_is_whole() -> TestResult {

@@ -66,7 +66,7 @@ use crate::{
 use browseros_core::TabId;
 use futures_util::future::{self, BoxFuture, FutureExt};
 use neo_trace::EpochMillis;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::Duration;
@@ -255,13 +255,18 @@ struct Held {
 #[derive(Default)]
 struct Noted {
     tabs: VecDeque<Opened>,
+    /// Every tab noted during the takeover, kept or not: the tab watch reports a tab again when
+    /// it comes back from a page core leaves out (an extension's), and a return is no new open.
+    /// Bounded by the tabs one takeover sees in its life, 20 minutes at most.
+    seen: HashSet<TabId>,
     count: usize,
 }
 
 impl Noted {
-    /// Notes a tab's first open; a tab already noted is not counted twice.
+    /// Notes a tab's first open. A tab noted before, still kept or already dropped from the
+    /// newest, is neither counted again nor put back.
     fn note(&mut self, opened: Opened) {
-        if self.tabs.iter().any(|noted| noted.tab == opened.tab) {
+        if !self.seen.insert(opened.tab) {
             return;
         }
         self.count += 1;
