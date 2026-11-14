@@ -25,6 +25,38 @@ pub struct RunOperation {
     pub started_at: i64,
     pub duration_ms: Option<i64>,
     pub outcome: Option<OperationOutcome>,
+    effect: OperationEffect,
+    delivery: Option<OperationDelivery>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum OperationEffect {
+    Write,
+    #[serde(other)]
+    Other,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum OperationDelivery {
+    Done,
+    Unknown,
+    #[serde(other)]
+    Other,
+}
+
+impl RunOperation {
+    /// A write sent without confirmation still needs the advisory label.
+    /// Reads, unsent attempts and incomplete records cannot establish a write.
+    #[must_use]
+    pub fn is_sent_write(&self) -> bool {
+        matches!(self.effect, OperationEffect::Write)
+            && matches!(
+                self.delivery,
+                Some(OperationDelivery::Done | OperationDelivery::Unknown)
+            )
+    }
 }
 
 /// Translate SDK calls into the existing cockpit vocabulary. Unknown method
