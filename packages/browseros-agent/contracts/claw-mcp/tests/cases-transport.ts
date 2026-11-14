@@ -7,38 +7,13 @@
 import type { ContractCase } from './cases'
 import { apiGet, expectError, waitUntil } from './helpers'
 
-// The harness sidecar carries no instance.browseros_version, so claw-server treats the
-// browser as an unknown native and does not offer tools gated on a BrowserOS release
-// (browser_profiles and browser_target need profile targeting, BrowserOS 0.51.1.3+).
-const EXPECTED_TOOLS = [
-  'act',
-  'await_human_help',
-  'diff',
-  'download',
-  'evaluate_in_page',
-  'grep',
-  'history',
-  'mark_skill_run',
-  'name_session',
-  'navigate',
-  'pdf',
-  'read',
-  'read_output',
-  'request_human_help',
-  'run',
-  'save_skill',
-  'screenshot',
-  'snapshot',
-  'tab_groups',
-  'tabs',
-  'upload',
-  'wait',
-  'windows',
-]
+// The private server starts with human help on and no decisions worker. Pursue
+// is offered only when ultrafast and a decisions worker are both configured.
+const EXPECTED_TOOLS = ['await_human_help', 'request_human_help', 'run']
 
 export const transportCases: ContractCase[] = [
   {
-    name: 'transport: tools/list exposes the catalog for an unknown native, including run',
+    name: 'transport: tools/list exposes run and the enabled desktop exceptions',
     smoke: true,
     async run(ctx) {
       const tools = await ctx.mcp.listTools()
@@ -49,14 +24,14 @@ export const transportCases: ContractCase[] = [
     },
   },
   {
-    name: 'transport: a cached call to a hidden native-gated tool is refused',
+    name: 'transport: a removed tool is refused with a pointer to run',
     smoke: true,
     async run(ctx) {
       const text = expectError(
-        await ctx.mcp.callTool('browser_profiles', {}),
-        'browser_profiles on an unknown native',
+        await ctx.mcp.callTool('snapshot', {}),
+        'removed snapshot tool',
       )
-      if (!text.includes('native_feature_unavailable: profile targeting')) {
+      if (!/\brun\b/i.test(text)) {
         throw new Error(`unexpected refusal: ${text.slice(0, 300)}`)
       }
     },
