@@ -864,16 +864,18 @@ async fn tests_that_the_mark_follows_a_code_a_widget_mirrors() -> TestResult {
     bench.close(opened).await
 }
 
-/// Ruling R50's row 13b: the page moves the text into another box and focuses it, inside the
-/// box's input event, so the read-back finds the box empty and marks the control that holds
-/// the focus (markFocused). That control reads as bullets, as on main, and so does a clone the
-/// page makes of it afterwards: markFocused keeps a digest of what the control holds. Fails with
-/// that digest left out of markFocused (the clone prints the value).
+/// Ruling R50's row 13b: the page moves a part of the text, all but its first character, into
+/// another box and focuses it, inside the box's input event, so the read-back finds the box empty
+/// and marks the control that holds the focus (markFocused). That control reads as bullets, as on
+/// main, and so does a clone the page makes of it afterwards: markFocused keeps a digest of what
+/// the control holds. The part is not the value the box was given, so that digest alone masks
+/// the clone. Fails with the digest left out of markFocused (the clone prints the part).
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_the_mark_follows_the_value_into_a_clone_of_the_focused_control() -> TestResult {
     let bench = Bench::start().await?;
-    let bullets = "•".repeat(FOLLOWED.len());
+    // The page moves all but the first character.
+    let bullets = "•".repeat(FOLLOWED.len() - 1);
     let opened = bench.open("/private/mark-moves.html", Place::Front).await?;
     let mover = bench.r#ref(&opened, "textbox", "Mover").await?;
     let catch = bench.r#ref(&opened, "textbox", "Catch").await?;

@@ -658,6 +658,10 @@ paths:
           case: that text does not contain the value. A page that copies the whole number into
           a longer field is. A host's means are its own withholding of pictures
           (`fill.pictures`) and the check call's `contains` on the box it knows.
+        - A copy of the whole value that the page writes a moment after the fill, when no box
+          held the value in between, prints. A host meets it on a widget that spreads a code
+          across boxes and mirrors it late. Fill such a widget one box at a time. The fill's
+          `uncertain` outcome is the sign.
         - `neo.solveCaptcha` photographs the challenge's own rectangle and sends it to the
           provider, on such a tab too.
         - An element preview in a call log or an error (`locator resolved to <input …>`) prints

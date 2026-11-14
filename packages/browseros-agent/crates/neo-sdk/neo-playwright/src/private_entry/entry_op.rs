@@ -92,8 +92,10 @@ impl Playwright {
                         Err(code) if look_op::ends_the_call(code) => return Err(error(code)),
                         Err(code) => (None, Some(code)),
                     };
-                    // A box the compare could not read answers why, never a `false`.
-                    let refusal = found.refusal.or(unread);
+                    // A box the compare could not read answers why, never a `false`, and that
+                    // reason comes before the look's own refusal: a covered or hidden box
+                    // otherwise answers both booleans, so the host must see why they are absent.
+                    let refusal = unread.or(found.refusal);
                     BoxLook {
                         facts: Some(found.facts),
                         refusal: refusal.map(error),
