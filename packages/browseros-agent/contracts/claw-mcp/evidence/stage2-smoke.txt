@@ -1,0 +1,310 @@
+$ bun contracts/claw-mcp/tests/run.ts --smoke
+warning: failed to parse serde attribute
+  | 
+  | deserialize_with = "optional_bool"
+  | 
+  = note: ts-rs failed to parse this attribute. It will be ignored.
+warning: failed to parse serde attribute
+  | 
+  | deserialize_with = "optional_bool"
+  | 
+  = note: ts-rs failed to parse this attribute. It will be ignored.
+warning: failed to parse serde attribute
+  | 
+  | deserialize_with = "optional_bool"
+  | 
+  = note: ts-rs failed to parse this attribute. It will be ignored.
+warning: failed to parse serde attribute
+  | 
+  | deserialize_with = "optional_bool"
+  | 
+  = note: ts-rs failed to parse this attribute. It will be ignored.
+warning: failed to parse serde attribute
+  | 
+  | deserialize_with = "optional_bool"
+  | 
+  = note: ts-rs failed to parse this attribute. It will be ignored.
+warning: failed to parse serde attribute
+  | 
+  | deserialize_with = "optional_bool"
+  | 
+  = note: ts-rs failed to parse this attribute. It will be ignored.
+warning: failed to parse serde attribute
+  | 
+  | deserialize_with = "optional_bool"
+  | 
+  = note: ts-rs failed to parse this attribute. It will be ignored.
+warning: failed to parse serde attribute
+  | 
+  | deserialize_with = "optional_bool"
+  | 
+  = note: ts-rs failed to parse this attribute. It will be ignored.
+warning: failed to parse serde attribute
+  | 
+  | deserialize_with = "optional_bool"
+  | 
+  = note: ts-rs failed to parse this attribute. It will be ignored.
+warning: failed to parse serde attribute
+  | 
+  | deserialize_with = "optional_bool"
+  | 
+  = note: ts-rs failed to parse this attribute. It will be ignored.
+warning: failed to parse serde attribute
+  | 
+  | deserialize_with = "optional_bool"
+  | 
+  = note: ts-rs failed to parse this attribute. It will be ignored.
+warning: failed to parse serde attribute
+  | 
+  | deserialize_with = "optional_bool"
+  | 
+  = note: ts-rs failed to parse this attribute. It will be ignored.
+warning: failed to parse serde attribute
+  | 
+  | deserialize_with = "optional_bool"
+  | 
+  = note: ts-rs failed to parse this attribute. It will be ignored.
+warning: failed to parse serde attribute
+  | 
+  | deserialize_with = "optional_drop_data"
+  | 
+  = note: ts-rs failed to parse this attribute. It will be ignored.
+warning: failed to parse serde attribute
+  | 
+  | deserialize_with = "optional_bool"
+  | 
+  = note: ts-rs failed to parse this attribute. It will be ignored.
+warning: failed to parse serde attribute
+  | 
+  | deserialize_with = "optional_bool"
+  | 
+  = note: ts-rs failed to parse this attribute. It will be ignored.
+warning: failed to parse serde attribute
+  | 
+  | deserialize_with = "optional_selection_list"
+  | 
+  = note: ts-rs failed to parse this attribute. It will be ignored.
+warning: failed to parse serde attribute
+  | 
+  | deserialize_with = "optional_selection_list"
+  | 
+  = note: ts-rs failed to parse this attribute. It will be ignored.
+warning: failed to parse serde attribute
+  | 
+  | deserialize_with = "optional_bool"
+  | 
+  = note: ts-rs failed to parse this attribute. It will be ignored.
+warning: failed to parse serde attribute
+  | 
+  | deserialize_with = "optional_bool"
+  | 
+  = note: ts-rs failed to parse this attribute. It will be ignored.
+warning: failed to parse serde attribute
+  | 
+  | deny_unknown_fields 
+  | 
+  = note: ts-rs failed to parse this attribute. It will be ignored.
+warning: failed to parse serde attribute
+  | 
+  | deny_unknown_fields 
+  | 
+  = note: ts-rs failed to parse this attribute. It will be ignored.
+warning: failed to parse serde attribute
+  | 
+  | transparent 
+  | 
+  = note: ts-rs failed to parse this attribute. It will be ignored.
+warning: failed to parse serde attribute
+  | 
+  | transparent 
+  | 
+  = note: ts-rs failed to parse this attribute. It will be ignored.
+warning: failed to parse serde attribute
+  | 
+  | alias = "networkidle0"
+  | 
+  = note: ts-rs failed to parse this attribute. It will be ignored.
+warning: failed to parse serde attribute
+  | 
+  | transparent 
+  | 
+  = note: ts-rs failed to parse this attribute. It will be ignored.
+warning: failed to parse serde attribute
+  | 
+  | deny_unknown_fields 
+  | 
+  = note: ts-rs failed to parse this attribute. It will be ignored.
+warning: failed to parse serde attribute
+  | 
+  | deny_unknown_fields 
+  | 
+  = note: ts-rs failed to parse this attribute. It will be ignored.
+warning: failed to parse serde attribute
+  | 
+  | deny_unknown_fields 
+  | 
+  = note: ts-rs failed to parse this attribute. It will be ignored.
+warning: failed to parse serde attribute
+  | 
+  | deserialize_with = "present"
+  | 
+  = note: ts-rs failed to parse this attribute. It will be ignored.
+warning: failed to parse serde attribute
+  | 
+  | transparent 
+  | 
+  = note: ts-rs failed to parse this attribute. It will be ignored.
+warning: failed to parse serde attribute
+  | 
+  | deny_unknown_fields 
+  | 
+  = note: ts-rs failed to parse this attribute. It will be ignored.
+warning: failed to parse serde attribute
+  | 
+  | deny_unknown_fields 
+  | 
+  = note: ts-rs failed to parse this attribute. It will be ignored.
+warning: failed to parse serde attribute
+  | 
+  | deny_unknown_fields 
+  | 
+  = note: ts-rs failed to parse this attribute. It will be ignored.
+warning: failed to parse serde attribute
+  | 
+  | transparent 
+  | 
+  = note: ts-rs failed to parse this attribute. It will be ignored.
+warning: failed to parse serde attribute
+  | 
+  | deny_unknown_fields 
+  | 
+  = note: ts-rs failed to parse this attribute. It will be ignored.
+warning: failed to parse serde attribute
+  | 
+  | transparent 
+  | 
+  = note: ts-rs failed to parse this attribute. It will be ignored.
+warning: failed to parse serde attribute
+  | 
+  | deny_unknown_fields 
+  | 
+  = note: ts-rs failed to parse this attribute. It will be ignored.
+warning: failed to parse serde attribute
+  | 
+  | deserialize_with = "supplied_state"
+  | 
+  = note: ts-rs failed to parse this attribute. It will be ignored.
+    Finished `dev` profile [unoptimized] target(s) in 0.22s
+bun test v1.4.2 (744846f84)
+
+contracts/claw-mcp/tests/rust-conformance.test.ts:
+(pass) Rust /mcp conformance > transport: tools/list exposes run and the enabled desktop exceptions [4238.85ms]
+(pass) Rust /mcp conformance > transport: a removed tool is refused with a pointer to run [142.58ms]
+(pass) Rust /mcp conformance > transport: browser-shaped requests are rejected with 403 [140.34ms]
+2026-11-14T04:18:39.695366Z  INFO browseros_claw_server_rs: native BrowserOS identity from launch config native=unknown BrowserOS version
+2026-11-14T04:18:39.695439Z  INFO browseros_claw_server_rs: server mode mode="desktop" env="BROWSERCLAW_HOSTED_MODE"
+2026-11-14T04:18:39.695461Z  INFO browseros_claw_server_rs: server behaviour tab_grouping="auto" tab_close_after=3600s isolated_world=true run_wall_timeout_seconds=60 file_env="BROWSERCLAW_CONFIG_FILE"
+2026-11-14T04:18:39.705490Z  INFO sea_orm_migration::migrator: Applying all pending migrations
+2026-11-14T04:18:39.705895Z  INFO sea_orm_migration::migrator: Applying migration 'm0001_baseline'
+2026-11-14T04:18:39.708298Z  INFO sea_orm_migration::migrator: Migration 'm0001_baseline' has been applied
+2026-11-14T04:18:39.708436Z  INFO sea_orm_migration::migrator: Applying migration 'm0002_add_recordings_and_claims'
+2026-11-14T04:18:39.709132Z  INFO sea_orm_migration::migrator: Migration 'm0002_add_recordings_and_claims' has been applied
+2026-11-14T04:18:39.709231Z  INFO sea_orm_migration::migrator: Applying migration 'm0003_document_recordings_and_tab_ownership'
+2026-11-14T04:18:39.710781Z  INFO sea_orm_migration::migrator: Migration 'm0003_document_recordings_and_tab_ownership' has been applied
+2026-11-14T04:18:39.710907Z  INFO sea_orm_migration::migrator: Applying migration 'm0004_atomic_recording_payloads'
+2026-11-14T04:18:39.711060Z  INFO sea_orm_migration::migrator: Migration 'm0004_atomic_recording_payloads' has been applied
+2026-11-14T04:18:39.711156Z  INFO sea_orm_migration::migrator: Applying migration 'm0005_reclassify_task_status'
+2026-11-14T04:18:39.711516Z  INFO sea_orm_migration::migrator: Migration 'm0005_reclassify_task_status' has been applied
+2026-11-14T04:18:39.711600Z  INFO sea_orm_migration::migrator: Applying migration 'm0006_add_tool_token_estimates'
+2026-11-14T04:18:39.712824Z  INFO sea_orm_migration::migrator: Migration 'm0006_add_tool_token_estimates' has been applied
+2026-11-14T04:18:39.712904Z  INFO sea_orm_migration::migrator: Applying migration 'm0007_add_session_efficiency_stats'
+2026-11-14T04:18:39.713219Z  INFO sea_orm_migration::migrator: Migration 'm0007_add_session_efficiency_stats' has been applied
+2026-11-14T04:18:39.713306Z  INFO sea_orm_migration::migrator: Applying migration 'm0008_add_task_token_estimates'
+2026-11-14T04:18:39.714425Z  INFO sea_orm_migration::migrator: Migration 'm0008_add_task_token_estimates' has been applied
+2026-11-14T04:18:39.714505Z  INFO sea_orm_migration::migrator: Applying migration 'm0009_rebase_screenshot_baseline'
+2026-11-14T04:18:39.714572Z  INFO sea_orm_migration::migrator: Migration 'm0009_rebase_screenshot_baseline' has been applied
+2026-11-14T04:18:39.714640Z  INFO sea_orm_migration::migrator: Applying migration 'm0010_sum_session_efficiency_durations'
+2026-11-14T04:18:39.714756Z  INFO sea_orm_migration::migrator: Migration 'm0010_sum_session_efficiency_durations' has been applied
+2026-11-14T04:18:39.714827Z  INFO sea_orm_migration::migrator: Applying migration 'm0011_use_session_durations_for_efficiency'
+2026-11-14T04:18:39.714922Z  INFO sea_orm_migration::migrator: Migration 'm0011_use_session_durations_for_efficiency' has been applied
+2026-11-14T04:18:39.714989Z  INFO sea_orm_migration::migrator: Applying migration 'm0012_recording_payload_files'
+2026-11-14T04:18:39.715250Z  INFO sea_orm_migration::migrator: Migration 'm0012_recording_payload_files' has been applied
+2026-11-14T04:18:39.715324Z  INFO sea_orm_migration::migrator: Applying migration 'm0013_add_parent_dispatch_id'
+2026-11-14T04:18:39.715703Z  INFO sea_orm_migration::migrator: Migration 'm0013_add_parent_dispatch_id' has been applied
+2026-11-14T04:18:39.715783Z  INFO sea_orm_migration::migrator: Applying migration 'm0014_add_skills_and_runs'
+2026-11-14T04:18:39.716483Z  INFO sea_orm_migration::migrator: Migration 'm0014_add_skills_and_runs' has been applied
+2026-11-14T04:18:39.716559Z  INFO sea_orm_migration::migrator: Applying migration 'm0015_add_skill_run_marks'
+2026-11-14T04:18:39.716934Z  INFO sea_orm_migration::migrator: Migration 'm0015_add_skill_run_marks' has been applied
+2026-11-14T04:18:39.717012Z  INFO sea_orm_migration::migrator: Applying migration 'm0016_add_task_summary'
+2026-11-14T04:18:39.717789Z  INFO sea_orm_migration::migrator: Migration 'm0016_add_task_summary' has been applied
+2026-11-14T04:18:39.717911Z  INFO sea_orm_migration::migrator: Applying migration 'm0017_add_run_error_budget'
+2026-11-14T04:18:39.718074Z  INFO sea_orm_migration::migrator: Migration 'm0017_add_run_error_budget' has been applied
+2026-11-14T04:18:39.718156Z  INFO sea_orm_migration::migrator: Applying migration 'm0018_add_feedback_invite'
+2026-11-14T04:18:39.718310Z  INFO sea_orm_migration::migrator: Migration 'm0018_add_feedback_invite' has been applied
+2026-11-14T04:18:39.718398Z  INFO sea_orm_migration::migrator: Applying migration 'm0019_add_feedback_invite_dismissal'
+2026-11-14T04:18:39.718858Z  INFO sea_orm_migration::migrator: Migration 'm0019_add_feedback_invite_dismissal' has been applied
+2026-11-14T04:18:39.718937Z  INFO sea_orm_migration::migrator: Applying migration 'm0020_add_feedback_invite_snooze'
+2026-11-14T04:18:39.719383Z  INFO sea_orm_migration::migrator: Migration 'm0020_add_feedback_invite_snooze' has been applied
+2026-11-14T04:18:39.719458Z  INFO sea_orm_migration::migrator: Applying migration 'm0021_add_skill_flows'
+2026-11-14T04:18:39.719638Z  INFO sea_orm_migration::migrator: Migration 'm0021_add_skill_flows' has been applied
+2026-11-14T04:18:39.719721Z  INFO sea_orm_migration::migrator: Applying migration 'm0022_add_mode_to_skill_runs'
+2026-11-14T04:18:39.722524Z  INFO sea_orm_migration::migrator: Migration 'm0022_add_mode_to_skill_runs' has been applied
+2026-11-14T04:18:39.722640Z  INFO sea_orm_migration::migrator: Applying migration 'm0023_add_tool_calls_daily'
+2026-11-14T04:18:39.722822Z  INFO sea_orm_migration::migrator: Migration 'm0023_add_tool_calls_daily' has been applied
+2026-11-14T04:18:39.722907Z  INFO sea_orm_migration::migrator: Applying migration 'm0024_add_write_consent_to_skill_flows'
+2026-11-14T04:18:39.725776Z  INFO sea_orm_migration::migrator: Migration 'm0024_add_write_consent_to_skill_flows' has been applied
+2026-11-14T04:18:39.726323Z  INFO claw_server::services::error_reporting: run failures are not sent to Sentry; writing them to run-failures.log directory=/var/folders/2n/d_2gttlj0bd3gzlhq9xxrj6w0000gp/T/claw-mcp-neo-run-8GFKno/browserclaw/logs
+2026-11-14T04:18:39.726499Z  WARN claw_server::services::harness_skills: BrowserClaw skill resource unavailable; using embedded fallback path=/var/folders/2n/d_2gttlj0bd3gzlhq9xxrj6w0000gp/T/claw-mcp-neo-run-8GFKno/resources/skills/browserclaw/SKILL.md error=No such file or directory (os error 2)
+2026-11-14T04:18:39.728720Z  INFO browseros_cdp::client: CDP link established epoch=1
+2026-11-14T04:18:39.731425Z  INFO claw_server::services::browser::connection: connected to BrowserOS CDP epoch=1
+2026-11-14T04:18:39.732190Z  INFO browseros_claw_server_rs: claw-server listening bound=127.0.0.1:50725
+2026-11-14T04:18:39.732234Z  INFO claw_server::services::neo: the Playwright engine is starting
+2026-11-14T04:18:39.732375Z  INFO claw_server::runtime: audit retention sweep finished sessions_deleted=0 recordings_deleted=0 bytes_reclaimed=0
+2026-11-14T04:18:39.733328Z  INFO claw_server::services::neo::child: the Playwright engine was started pid=62848 port=50731
+2026-11-14T04:18:39.741180Z  INFO neo_server::app: claw-sdk serving version="0.1.0" address=127.0.0.1:50731 cdp_port=50638 resources=/var/folders/2n/d_2gttlj0bd3gzlhq9xxrj6w0000gp/T/claw-mcp-neo-run-8GFKno/resources browseros_version_from_env=false state_dir=/var/folders/2n/d_2gttlj0bd3gzlhq9xxrj6w0000gp/T/claw-mcp-neo-run-8GFKno/browserclaw xvnc=127.0.0.1:9 screen=1600x1000
+2026-11-14T04:18:39.742997Z ERROR neo_server::app: BROWSERCLAW_HOSTED_MODE is not "1": popups will open as windows Neo cannot drive value=Some("0")
+2026-11-14T04:18:39.743022Z  WARN neo_server::app: neo.solveCaptcha is off: no readable CAPTCHA provider key (BROWSEROS_CAPSOLVER_API_KEY_FILE, BROWSEROS_2CAPTCHA_API_KEY_FILE); a call fails host / captcha_unavailable
+2026-11-14T04:18:39.743187Z  INFO claw_server::services::harness::reconciliation: reconciled harness integrations connected=0 updated=0 installed_skills=2 updated_skills=0 removed_skills=0
+2026-11-14T04:18:39.745578Z  INFO sea_orm_migration::migrator: Applying all pending migrations
+2026-11-14T04:18:39.745832Z  INFO sea_orm_migration::migrator: Applying migration 'm0001_trace_baseline'
+2026-11-14T04:18:39.747036Z  INFO sea_orm_migration::migrator: Migration 'm0001_trace_baseline' has been applied
+2026-11-14T04:18:39.747135Z  INFO sea_orm_migration::migrator: Applying migration 'm0002_operation_site'
+2026-11-14T04:18:39.747311Z  INFO sea_orm_migration::migrator: Migration 'm0002_operation_site' has been applied
+2026-11-14T04:18:39.747349Z  INFO sea_orm_migration::migrator: Applying migration 'm0003_operation_main_world'
+2026-11-14T04:18:39.747542Z  INFO sea_orm_migration::migrator: Migration 'm0003_operation_main_world' has been applied
+2026-11-14T04:18:39.747597Z  INFO sea_orm_migration::migrator: Applying migration 'm0004_trace_values'
+2026-11-14T04:18:39.747899Z  INFO sea_orm_migration::migrator: Migration 'm0004_trace_values' has been applied
+2026-11-14T04:18:39.747939Z  INFO sea_orm_migration::migrator: Applying migration 'm0005_operation_frames_incomplete'
+2026-11-14T04:18:39.748096Z  INFO sea_orm_migration::migrator: Migration 'm0005_operation_frames_incomplete' has been applied
+2026-11-14T04:18:39.749034Z  WARN neo_server::host::host_api: no host API: CLAW_HOST_TOKEN_FILE is unset
+2026-11-14T04:18:39.749193Z  INFO neo_http::settings: saved settings loaded file=/var/folders/2n/d_2gttlj0bd3gzlhq9xxrj6w0000gp/T/claw-mcp-neo-run-8GFKno/browserclaw/claw-sdk/settings.json applied=tabs.idleCloseSeconds=86400 trace.screenshots="off"
+2026-11-14T04:18:39.749462Z  WARN neo_server::config::app_config: browser profile is not protected: set CLAW_PROFILE_DIR when the launch execution directory does not identify .browseros
+2026-11-14T04:18:39.750815Z  INFO browseros_cdp::client: CDP link established epoch=1
+2026-11-14T04:18:39.750880Z  INFO neo_server::browser::browser_link: connected to the browser over CDP epoch=1
+2026-11-14T04:18:39.756438Z  INFO neo_server::browser::neo_tab: Neo's blank tab: adopted a blank tab tab=467012863
+2026-11-14T04:18:39.760086Z  WARN neo_takeover::fits: could not put Neo's screen at its home size error=Neo's screen did not take the change: Connection refused (os error 61) home=1600x1000
+2026-11-14T04:18:39.788596Z  INFO claw_server::services::neo::child: the Playwright engine is ready pid=62848 port=50731
+2026-11-14T04:18:39.894045Z  INFO http_request{request_id=01M7C4ES4K4T7C44ZSB27K8KWY method=POST path=/mcp}: rmcp::transport::streamable_http_server::session::local: create new session session_id="19010203-c15b-4f3d-b6e1-9c1617fe984a"
+2026-11-14T04:18:39.894358Z  INFO serve_inner: rmcp::service: Service initialized as server peer_info=Some(InitializeRequestParams { meta: None, protocol_version: ProtocolVersion("2025-03-26"), capabilities: ClientCapabilities { experimental: None, extensions: None, roots: None, sampling: None, elicitation: None }, client_info: Implementation { name: "neo-run-contract", title: None, version: "0.0.1", description: None, icons: None, website_url: None } })
+2026-11-14T04:18:39.895150Z  INFO serve_inner: rmcp::service: received notification notification=InitializedNotification(NotificationNoParam { method: InitializedNotificationMethod, extensions: Extensions })
+2026-11-14T04:18:39.896471Z  INFO serve_inner: claw_server::api::mcp::service: mcp session initialized session_id=19010203-c15b-4f3d-b6e1-9c1617fe984a agent=neo-run-contract-fuzzy-fox
+2026-11-14T04:18:40.262703Z  INFO http_request{request_id=01M7C4ESG2D0FYXPYYKZ0ZY4FX method=POST path=/mcp}:serve_inner: rmcp::service: Service initialized as server peer_info=Some(InitializeRequestParams { meta: None, protocol_version: ProtocolVersion("2026-07-28"), capabilities: ClientCapabilities { experimental: None, extensions: None, roots: None, sampling: None, elicitation: None }, client_info: Implementation { name: "rmcp", title: None, version: "3.2.0", description: None, icons: None, website_url: None } })
+2026-11-14T04:18:40.264070Z  INFO http_request{request_id=01M7C4ESG2D0FYXPYYKZ0ZY4FX method=POST path=/mcp}:serve_inner: claw_server::api::mcp::service: mcp session initialized session_id=eea94d35 agent=neo-stateless-agent-glad-badger
+2026-11-14T04:18:40.465411Z  INFO http_request{request_id=01M7C4ESG2D0FYXPYYKZ0ZY4FX method=POST path=/mcp}:serve_inner: rmcp::service: input stream terminated
+2026-11-14T04:18:40.465471Z  INFO http_request{request_id=01M7C4ESG2D0FYXPYYKZ0ZY4FX method=POST path=/mcp}:serve_inner: rmcp::service: serve finished quit_reason=Closed
+2026-11-14T04:18:40.468375Z  INFO http_request{request_id=01M7C4ESPH78ZVFZFM453D2GYH method=POST path=/mcp}:serve_inner: rmcp::service: Service initialized as server peer_info=Some(InitializeRequestParams { meta: None, protocol_version: ProtocolVersion("2026-07-28"), capabilities: ClientCapabilities { experimental: None, extensions: None, roots: None, sampling: None, elicitation: None }, client_info: Implementation { name: "rmcp", title: None, version: "3.2.0", description: None, icons: None, website_url: None } })
+2026-11-14T04:18:40.613258Z  INFO http_request{request_id=01M7C4ESPH78ZVFZFM453D2GYH method=POST path=/mcp}:serve_inner: rmcp::service: input stream terminated
+2026-11-14T04:18:40.613323Z  INFO http_request{request_id=01M7C4ESPH78ZVFZFM453D2GYH method=POST path=/mcp}:serve_inner: rmcp::service: serve finished quit_reason=Closed
+(pass) Rust /mcp conformance > neo run: playwright drives a real tab [1244.18ms]
+(pass) Rust /mcp conformance > playwright run: navigate and read a page [353.28ms]
+(pass) Rust /mcp conformance > playwright run: ariaSnapshot refs drive getByRef click [405.87ms]
+(pass) Rust /mcp conformance > playwright run: fill a field and read its submitted value [410.00ms]
+(pass) Rust /mcp conformance > playwright run: context.newPage opens distinct readable tabs [517.16ms]
+(pass) Rust /mcp conformance > playwright run: upload a Buffer payload without a host path [374.65ms]
+(pass) Rust /mcp conformance > playwright run: download.saveAs writes the downloaded bytes [400.50ms]
+(pass) Rust /mcp conformance > playwright run: expect failure includes expected and received values [281.59ms]
+
+ 11 pass
+ 0 fail
+ 10 expect() calls
+Ran 11 tests across 1 file. [8.56s]
