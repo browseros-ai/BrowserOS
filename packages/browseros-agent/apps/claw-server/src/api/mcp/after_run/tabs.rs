@@ -291,6 +291,7 @@ mod tests {
     fn first_claim_uses_only_proven_creation_within_the_host_run() -> anyhow::Result<()> {
         let operation = |name: &str, outcome: &str, tab_id: i64, started_at: i64| {
             json!({
+                "id": format!("{name}:{tab_id}:{started_at}"),
                 "name": name,
                 "outcome": outcome,
                 "page": {"tabId": tab_id},
@@ -357,6 +358,7 @@ mod tests {
                 "an input tab is not creation proof",
                 1,
                 vec![json!({
+                    "id": "run:1",
                     "name": "context.newPage",
                     "outcome": "ok",
                     "tabId": 1,
