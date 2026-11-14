@@ -15,7 +15,7 @@ let nextId = 1
 function call(
   toolName: string,
   options: {
-    args?: Record<string, unknown> | unknown[]
+    args?: Record<string, unknown> | readonly unknown[]
     title?: string
     url?: string
     meta?: Record<string, unknown>
@@ -322,7 +322,7 @@ describe('calls made inside a run script', () => {
     expect(hiddenCount).toBe(1)
     expect(steps.map((step) => step.sentence)).toEqual([
       'Opened amazon.in',
-      'Worked on Amazon.in Shopping Cart',
+      'Ran a browser script',
     ])
   })
 
@@ -342,6 +342,99 @@ describe('calls made inside a run script', () => {
     expect(verbForCall(call('nav.goto', { args: [3, 'https://x.y'] }))).toBe(
       'navigate',
     )
+  })
+})
+
+describe('SDK run audit rows', () => {
+  it('describes a redacted run without child rows', () => {
+    const run = call('run', { args: { code: '[redacted]' } })
+    expect(describeStep(run)).toBe('Ran a browser script')
+    const { steps, hiddenCount } = describeSteps([run])
+    expect(hiddenCount).toBe(0)
+    expect(steps.map((step) => step.sentence)).toEqual(['Ran a browser script'])
+  })
+
+  it('uses an optional task name without treating the page or agent label as one', () => {
+    expect(
+      describeStep(
+        call('run', {
+          args: { code: '[redacted]', taskName: '  Find flights  ' },
+          ...FLIGHTS,
+        }),
+      ),
+    ).toBe('Ran a browser script for Find flights')
+    expect(describeStep(call('run', FLIGHTS))).toBe('Ran a browser script')
+    expect(
+      describeStep(call('run', { args: { taskName: 'x'.repeat(100) } })),
+    ).toBe(`Ran a browser script for ${'x'.repeat(59)}…`)
+  })
+
+  it.each(['', '   ', null, 42, { name: 'Find flights' }])(
+    'ignores a task name that is not a nonblank string: %j',
+    (taskName) => {
+      expect(describeStep(call('run', { args: { taskName } }))).toBe(
+        'Ran a browser script',
+      )
+    },
+  )
+
+  it('still describes a run when its recorded arguments are malformed', () => {
+    expect(describeStep({ ...call('run'), argsJson: '{' })).toBe(
+      'Ran a browser script',
+    )
+  })
+
+  it.each([
+    { args: undefined },
+    { args: { code: 'private script' } },
+    { args: [3, { text: 'private text' }] },
+  ])(
+    'uses the same readable fallback for an unfamiliar operation with args %j',
+    ({ args }) => {
+      expect(describeStep(call('future.operation', { args }))).toBe(
+        'Worked in the browser',
+      )
+      expect(
+        describeStep(
+          call('future.operation', { args, title: 'Google Flights' }),
+        ),
+      ).toBe('Worked on Google Flights')
+    },
+  )
+
+  it.each(['constructor', 'toString', '__proto__'])(
+    'treats the inherited property name %s as an unfamiliar operation',
+    (toolName) => {
+      for (const args of [undefined, [3, { text: '[redacted]' }]]) {
+        const row = call(toolName, { args })
+        expect(describeStep(row)).toBe('Worked in the browser')
+        expect(verbForCall(row)).toBe('read')
+        expect(isBehindTheScenes(row)).toBe(false)
+      }
+    },
+  )
+
+  it('keeps unfamiliar child dispatches in the displayed steps', () => {
+    const run = {
+      ...call('run', { args: { code: '[redacted]' } }),
+      dispatchKey: 'run-1',
+    }
+    const children = ['future.operation', 'another.operation'].map(
+      (toolName) => ({
+        ...call(toolName, { args: { value: '[redacted]' }, ...FLIGHTS }),
+        parentDispatchId: run.dispatchKey,
+      }),
+    )
+    const { steps, hiddenCount } = describeSteps([run, ...children])
+    expect(hiddenCount).toBe(0)
+    expect(steps.map((step) => step.sentence)).toEqual([
+      'Ran a browser script',
+      'Worked on San Francisco to New York | Google Flights',
+    ])
+    expect(steps.flatMap((step) => step.dispatchIds)).toEqual([
+      run.dispatchId,
+      ...children.map((child) => child.dispatchId),
+    ])
   })
 })
 
