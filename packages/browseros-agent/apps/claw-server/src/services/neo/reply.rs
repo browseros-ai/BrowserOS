@@ -74,7 +74,7 @@ pub(super) fn shape_with_blobs(
 
 /// Only canonical returned blob markers may trigger a host fetch. Console text
 /// and ordinary objects with extra fields remain script data.
-pub(super) fn blob_requests(reply: &AgentReply) -> BTreeMap<String, u64> {
+pub(super) fn blob_requests(reply: &AgentReply) -> Option<BTreeMap<String, u64>> {
     let mut blobs = BTreeMap::new();
     let mut pending: Vec<_> = reply
         .structured_content
@@ -84,8 +84,12 @@ pub(super) fn blob_requests(reply: &AgentReply) -> BTreeMap<String, u64> {
         .collect();
     while let Some(node) = pending.pop() {
         if is_blob(node) {
-            if let (Some(id), Some(size)) = (node["id"].as_str(), node["size"].as_u64()) {
-                blobs.insert(id.to_owned(), size);
+            if let (Some(id), Some(size)) = (node["id"].as_str(), node["size"].as_u64())
+                && blobs
+                    .insert(id.to_owned(), size)
+                    .is_some_and(|previous| previous != size)
+            {
+                return None;
             }
         } else {
             match node {
@@ -95,7 +99,7 @@ pub(super) fn blob_requests(reply: &AgentReply) -> BTreeMap<String, u64> {
             }
         }
     }
-    blobs
+    Some(blobs)
 }
 
 /// One presentation of a returned value. Image indices refer to the final MCP
@@ -208,7 +212,7 @@ mod tests {
         ));
         assert_eq!(
             blob_requests(&original),
-            BTreeMap::from([("b0".to_owned(), 8)])
+            Some(BTreeMap::from([("b0".to_owned(), 8)]))
         );
         let shaped = serde_json::to_value(shape_with_blobs(
             original,
@@ -238,6 +242,14 @@ mod tests {
             &BTreeMap::from([("b0".to_owned(), b"%PDF-1.4".to_vec())]),
         );
         assert_eq!(serde_json::to_vec(&shaped)?, expected);
+        let inconsistent = reply(
+            json!([
+                {"$neo":"blob", "id":"b0", "size":8},
+                {"$neo":"blob", "id":"b0", "size":9},
+            ]),
+            "",
+        );
+        assert!(blob_requests(&inconsistent).is_none());
         Ok(())
     }
 

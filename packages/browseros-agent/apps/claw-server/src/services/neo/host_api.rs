@@ -191,7 +191,10 @@ impl NeoEngine {
     /// A missing/expired blob or a restart keeps the existing markers and note.
     pub(super) async fn hydrate_blobs(&self, outcome: &mut RunOutcome) {
         const MAX_BLOB_BYTES: usize = 16 * 1024 * 1024;
-        let requests = reply::blob_requests(&outcome.reply);
+        let Some(requests) = reply::blob_requests(&outcome.reply) else {
+            tracing::warn!("SDK blob presentation skipped for inconsistent markers");
+            return;
+        };
         if requests.is_empty() {
             return;
         }
