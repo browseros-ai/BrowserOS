@@ -194,6 +194,7 @@ These commands fail `script / unsupported` before any send, even when enabled:
 `Target.closeTarget` and `Browser.closeTab` also fail `script / unsupported` when either their target or tab id names Neo's own blank tab. `Browser.closeWindow` is refused when the window contains that tab. This keeps the browser available after other tabs close. A tab-group command can still close Neo's tab, and Neo opens another.
 
 While any takeover or host lock is held, every enabled `neo.cdp` call fails `host / owner_has_control` before send, with or without `page`. The same rules run again before send and before releasing page data, so a lock taken while a raw call waits can withhold its reply.
+While another operation's CAPTCHA solve holds a tab, enabled `neo.cdp` calls fail `script / page_busy` before send, with or without `page`. Calls already sent complete and release their answers.
 
 The host sends its ids in `_meta["com.browseros.neo/run"]` as `{ requestId?, taskId?, hostData? }`. Neo refuses unknown keys as `host / invalid_meta`. `hostData` is up to 2048 bytes of JSON that Neo stores with the run and never reads.
 
