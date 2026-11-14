@@ -290,6 +290,11 @@ async fn a_bound_run_hears_the_tab_it_opens_while_it_waits_for_one() -> TestResu
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_bound_run_is_refused_another_tasks_tab_and_a_taskless_run_its_task() -> TestResult {
+    on_browseros(|rig| Box::pin(bound_walls(rig))).await
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_script_fills_and_clicks_a_form_and_expects_the_answer() -> TestResult {
     on_browseros(|rig| Box::pin(fill_and_click(rig))).await
 }
@@ -1095,6 +1100,75 @@ return { heard: heard.tabId === opened.tabId, listed: listed.length === 1 && lis
         Some(&json!({ "heard": true, "listed": true })),
         "{result:?}"
     );
+    Ok(())
+}
+
+/// The default's two walls, as the image's `task-scope` check drives them: a run of another task
+/// that names a task's tab by its id is refused `page_not_in_task` before anything is sent, and
+/// a run without a task that asks for a host's task gets `task_not_found`. The run without a
+/// task still reads the tab, and its own task's later run still has it.
+async fn bound_walls(rig: &Rig) -> TestResult {
+    rig.until_ready().await?;
+    let client = rig.client().await?;
+    let opened = run(
+        &client,
+        "await page.goto('data:text/html,<title>walled</title>'); return page.tabId;",
+        &json!({ "taskId": "wall-owner" }),
+    )
+    .await?;
+    let tab = opened
+        .structured_content
+        .as_ref()
+        .and_then(|reply| reply.get("value"))
+        .and_then(Value::as_i64)
+        .ok_or("the owner task's tab")?;
+    let code_of = |result: &CallToolResult| {
+        result
+            .structured_content
+            .as_ref()
+            .and_then(|reply| reply.pointer("/error/code"))
+            .cloned()
+    };
+    let named = run(
+        &client,
+        &format!(
+            "return await __neo.invoke('page.title', {{ page: {{ '$neo': 'page', tab: {tab} }} }});"
+        ),
+        &json!({ "taskId": "wall-other" }),
+    )
+    .await?;
+    assert_eq!(
+        code_of(&named),
+        Some(json!("page_not_in_task")),
+        "{named:?}"
+    );
+    let fetched = run(
+        &client,
+        "return (await neo.task('wall-owner')).id;",
+        &json!({}),
+    )
+    .await?;
+    assert_eq!(
+        code_of(&fetched),
+        Some(json!("task_not_found")),
+        "{fetched:?}"
+    );
+    assert_eq!(outcome(&fetched)?.get("tabsScope"), Some(&json!("browser")));
+    let read = format!(
+        "const p = context.pages().find((q) => q.tabId === {tab}); return p ? await p.title() : null;"
+    );
+    for meta in [json!({}), json!({ "taskId": "wall-owner" })] {
+        let result = run(&client, &read, &meta).await?;
+        assert_eq!(
+            result
+                .structured_content
+                .as_ref()
+                .and_then(|reply| reply.get("value")),
+            Some(&json!("walled")),
+            "{meta}: {result:?}"
+        );
+    }
+    client.cancel().await?;
     Ok(())
 }
 

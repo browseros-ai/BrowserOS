@@ -50,6 +50,10 @@
 #                    cross-site and same-origin frames at the script's first statement and after
 #                    a title; a later run of the task that opened it too; a cross-site frame
 #                    added mid-run shows after the script's next wait (accept_frames.py)
+#   task-scope       under the default tabs.scope task: a task's run neither lists nor may name
+#                    another task's tab (page_not_in_task), whose holder stays; a run without a
+#                    task gets task_not_found for a host's task and still reads the tab
+#                    (accept_task_scope.py)
 #   tab-keep         host keeps survive idle sweeps; DELETE and TTL restart the idle clock;
 #                    agents can fill, read, and close kept tabs, including task.close()
 #   takeover-scale   366x700 phone metrics at 1x/2x, actual RFB 366x700/732x1400; PNG/JPEG
@@ -198,7 +202,8 @@ install_client() { # name: the probes, beside smoke.py whose MCP client they reu
   local file
   for file in "$here/smoke.py" "$here/smoke_sdk.py" "$here/accept_client.py" "$here/accept_files.py" \
     "$here/trace_values.py" "$here/accept_task_page.py" "$here/accept_tab_keep.py" \
-    "$here/accept_frames.py" "$here/accept_settings_file.py" "$here/accept_takeover_scale.py" "$here/accept_takeover_lifecycle.py"; do
+    "$here/accept_frames.py" "$here/accept_task_scope.py" "$here/accept_settings_file.py" \
+    "$here/accept_takeover_scale.py" "$here/accept_takeover_lifecycle.py"; do
     docker cp -q "$file" "$1:/opt/neo-accept/" || return 1
   done
 }
@@ -630,6 +635,19 @@ PY
     result PASS frames "$(jget "$frames" 'd["detail"]')"
   else
     result FAIL frames "$(jget "$frames" 'd["detail"] + "; " + "; ".join(d["problems"][:3])' || printf '%s' "${frames:0:300}")"
+  fi
+
+  # --- task-scope ----------------------------------------------------------------------------
+  # The default tab scope, as a host meets it: a task's run cannot list or name another task's
+  # tab, and a run without a task cannot use a host's task but still sees every tab
+  # (accept_task_scope.py).
+  task_scope=$(client "$main" "${as_host[@]}" python3 accept_task_scope.py http://127.0.0.1:9010/mcp \
+    /run/neo/host.sock /run/neo-accept/host-token 2>&1)
+  if [ -n "$logs_dir" ]; then mkdir -p "$logs_dir"; printf '%s\n' "$task_scope" > "$logs_dir/task-scope.json"; fi
+  if [ "$(jget "$task_scope" 'd["ok"]')" = True ]; then
+    result PASS task-scope "$(jget "$task_scope" 'd["detail"]')"
+  else
+    result FAIL task-scope "$(jget "$task_scope" 'd["detail"] + "; " + "; ".join(d["problems"][:3])' || printf '%s' "${task_scope:0:300}")"
   fi
 
   tab_keep=$(client "$main" "${as_host[@]}" python3 accept_tab_keep.py \
