@@ -209,6 +209,12 @@ impl Session {
         self.pursue_handed_back.load(Ordering::Acquire)
     }
 
+    /// A newly created SDK task is fresh work even when its display label repeats.
+    /// Ordinary touches of an existing task must keep an outstanding handback intact.
+    pub fn reset_pursue_handoff(&self) {
+        self.pursue_handed_back.store(false, Ordering::Release);
+    }
+
     pub fn mark_pursue_handed_back(&self) {
         self.pursue_handed_back.store(true, Ordering::Release);
     }

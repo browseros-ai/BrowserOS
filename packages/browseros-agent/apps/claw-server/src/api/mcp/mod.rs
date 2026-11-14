@@ -14,6 +14,7 @@ pub mod pursue;
 pub mod script_hook;
 mod service;
 mod session_handle;
+mod surface;
 mod tab_grouping;
 pub mod tab_ref;
 mod timeouts;
