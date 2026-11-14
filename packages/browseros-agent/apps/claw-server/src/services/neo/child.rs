@@ -3,7 +3,10 @@
 
 #![cfg(unix)]
 
-use std::{future::Future, io, net::TcpListener, path::Path, process::Stdio, time::Duration};
+use std::{
+    future::Future, io, net::TcpListener, os::unix::fs::PermissionsExt, path::Path, process::Stdio,
+    time::Duration,
+};
 
 use serde_json::{Value, json};
 use tokio::{
@@ -221,6 +224,7 @@ async fn spawn(launch: &EngineLaunch, previous_port: Option<u16>) -> io::Result<
     // Unix sockets have a short path limit. Keep them outside the possibly deep
     // state directory while the explicit token path still gets SDK protection.
     let host_files = tempfile::Builder::new().prefix("neo-host-").tempdir()?;
+    fs::set_permissions(host_files.path(), std::fs::Permissions::from_mode(0o700)).await?;
     let token = format!(
         "{}{}",
         uuid::Uuid::new_v4().simple(),
@@ -228,6 +232,7 @@ async fn spawn(launch: &EngineLaunch, previous_port: Option<u16>) -> io::Result<
     );
     let token_path = host_files.path().join("token");
     fs::write(&token_path, &token).await?;
+    fs::set_permissions(&token_path, std::fs::Permissions::from_mode(0o600)).await?;
     let host_reservation = reserve_port(None)?;
     let host_port = host_reservation.local_addr()?.port();
     let host = HostApi::new(host_port, token).map_err(io::Error::other)?;

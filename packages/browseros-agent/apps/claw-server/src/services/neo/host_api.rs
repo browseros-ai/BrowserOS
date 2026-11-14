@@ -20,11 +20,86 @@ pub(super) struct HostApi {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RunOperation {
-    pub name: String,
+    pub name: OperationName,
     pub tab_id: Option<i64>,
     pub started_at: i64,
     pub duration_ms: Option<i64>,
     pub outcome: Option<OperationOutcome>,
+}
+
+/// Translate SDK calls into the existing cockpit vocabulary. Unknown method
+/// names can be supplied by scripts to a failed dispatch, so never persist them.
+#[derive(Deserialize)]
+pub enum OperationName {
+    #[serde(rename = "page.goto", alias = "frame.goto")]
+    Navigate,
+    #[serde(rename = "context.newPage", alias = "task.newPage")]
+    NewPage,
+    #[serde(rename = "page.goBack")]
+    Back,
+    #[serde(rename = "page.goForward")]
+    Forward,
+    #[serde(rename = "page.reload")]
+    Reload,
+    #[serde(
+        rename = "locator.click",
+        alias = "locator.dblclick",
+        alias = "page.mouse.click"
+    )]
+    Click,
+    #[serde(
+        rename = "locator.fill",
+        alias = "locator.type",
+        alias = "locator.pressSequentially",
+        alias = "page.keyboard.type",
+        alias = "page.keyboard.insertText"
+    )]
+    Fill,
+    #[serde(rename = "locator.press", alias = "page.keyboard.press")]
+    Press,
+    #[serde(rename = "locator.hover", alias = "locator.focus")]
+    Hover,
+    #[serde(rename = "locator.selectOption")]
+    Select,
+    #[serde(
+        rename = "page.title",
+        alias = "page.content",
+        alias = "page.snapshot",
+        alias = "locator.innerText",
+        alias = "locator.textContent",
+        alias = "locator.count",
+        alias = "page.evaluate",
+        alias = "locator.evaluate"
+    )]
+    Read,
+    #[serde(rename = "page.screenshot", alias = "locator.screenshot")]
+    Screenshot,
+    #[serde(rename = "page.close")]
+    Close,
+    #[serde(other)]
+    Other,
+}
+
+impl OperationName {
+    #[must_use]
+    pub fn audit_name(&self) -> &'static str {
+        match self {
+            Self::Navigate => "nav.goto",
+            Self::NewPage => "pages.newPage",
+            Self::Back => "nav.back",
+            Self::Forward => "nav.forward",
+            Self::Reload => "nav.reload",
+            Self::Click => "input.click",
+            Self::Fill => "input.fill",
+            Self::Press => "input.press",
+            Self::Hover => "input.hover",
+            Self::Select => "input.selectOption",
+            Self::Read => "read",
+            Self::Screenshot => "screenshot",
+            Self::Close => "pages.close",
+            Self::Other => "sdk.operation",
+        }
+    }
 }
 
 /// Unknown future outcomes decode without failing the metadata read.

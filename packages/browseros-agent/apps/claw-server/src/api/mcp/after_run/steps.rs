@@ -12,6 +12,7 @@ use crate::{
         neo::{OperationOutcome, RunOutcome},
     },
 };
+use browseros_mcp::token_estimate::TOKEN_ESTIMATOR_VERSION;
 use serde_json::json;
 
 pub(in crate::api::mcp) async fn apply(
@@ -36,13 +37,15 @@ pub(in crate::api::mcp) async fn apply(
                 slug: started.session.agent().slug().to_owned(),
                 agent_label: started.agent_label.clone(),
                 session_id: started.session.id().as_str().to_owned(),
-                tool_name: operation.name,
+                tool_name: operation.name.audit_name().to_owned(),
                 page_id,
                 tab_id: operation.tab_id,
                 target_id: None,
                 url: None,
                 title: None,
-                args_json: json!({"value": "[redacted]"}).to_string(),
+                // The cockpit recognizes positional args as a script child and
+                // hides its parent run. Preserve that shape with no real values.
+                args_json: json!(["[redacted]"]).to_string(),
                 result_meta: json!({
                     "isError": matches!(operation.outcome, Some(OperationOutcome::Error)),
                     "cancelled": matches!(operation.outcome, Some(OperationOutcome::Cancelled)),
@@ -55,7 +58,7 @@ pub(in crate::api::mcp) async fn apply(
                 // Child rows describe internal work, not extra MCP traffic.
                 tool_input_token_estimate: 0,
                 tool_output_token_estimate: 0,
-                token_estimator_version: 0,
+                token_estimator_version: TOKEN_ESTIMATOR_VERSION,
             });
             if let Err(error) = state.audit_worker.submit(event).await {
                 tracing::warn!(%error, "SDK child audit admission failed");
