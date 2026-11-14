@@ -803,6 +803,175 @@ return await page.screenshot({clip: {x:0,y:0,width:900,height:700}})`,
       }
     },
   },
+  {
+    name: 'neo run: readiness follows engine recovery while health stays live',
+    async run(ctx) {
+      const existingTargets = await pageTargetIds(ctx.browser.cdpPort)
+      const root = await mkdtemp(join(tmpdir(), 'claw-mcp-neo-ready-'))
+      const homeDir = join(root, 'home')
+      const resources = join(root, 'resources')
+      await mkdir(join(homeDir, '.config'), { recursive: true })
+      await mkdir(resources, { recursive: true })
+      const serverPort = await findFreePort()
+      const sidecar = join(root, 'sidecar.json')
+      await writeFile(
+        sidecar,
+        JSON.stringify({
+          ports: { server: serverPort, cdp: ctx.browser.cdpPort },
+          directories: { resources },
+          flags: { devMode: false },
+        }),
+      )
+      // A separate parent gives this case a recorded child PID to kill without
+      // interrupting the suite server or its cleanup session. The browser is suite-owned.
+      const parent = Bun.spawn({
+        cmd: [RUST_BINARY, '--config', sidecar],
+        cwd: resolve(import.meta.dir, '../../..'),
+        env: {
+          ...process.env,
+          HOME: homeDir,
+          USERPROFILE: homeDir,
+          XDG_CONFIG_HOME: join(homeDir, '.config'),
+          CLAUDE_CONFIG_DIR: homeDir,
+          APPDATA: join(homeDir, 'AppData', 'Roaming'),
+          LOCALAPPDATA: join(homeDir, 'AppData', 'Local'),
+          BROWSERCLAW_DIR: join(root, 'browserclaw'),
+          BROWSEROS_DIR: join(root, 'browseros'),
+          BROWSEROS_OUTPUT_DIR: join(root, 'browseros', 'tool-output'),
+          BROWSERCLAW_HOSTED_MODE: '0',
+          CLAW_ANALYTICS_ENABLED: 'false',
+        },
+        stdin: 'ignore',
+        stdout: 'ignore',
+        stderr: 'inherit',
+      })
+      const baseUrl = `http://127.0.0.1:${serverPort}`
+      const get = (path: string) =>
+        fetch(`${baseUrl}${path}`, { signal: AbortSignal.timeout(1_000) })
+      const failures: unknown[] = []
+      let mcp: McpSession | undefined
+      try {
+        await waitUntil(
+          async () => {
+            assert.equal(parent.exitCode, null, 'private claw server exited')
+            try {
+              return (await get('/system/ready')).ok
+            } catch {
+              return false
+            }
+          },
+          'the private server to be ready',
+          { timeoutMs: 30_000 },
+        )
+        const session = await McpSession.connect(baseUrl, 'neo-ready-contract')
+        mcp = session
+        await waitUntil(
+          async () =>
+            !(await session.callTool('run', { code: 'return 1' })).isError,
+          'the private engine to execute run',
+          { timeoutMs: 30_000 },
+        )
+        const healthy = await get('/system/health')
+        assert.equal(healthy.status, 200)
+        const healthBody = await healthy.text()
+        const assertLive = async () => {
+          assert.equal(
+            parent.exitCode,
+            null,
+            'engine recovery replaced the host',
+          )
+          assert(
+            processExists(parent.pid),
+            'the recorded host PID must stay live',
+          )
+          const response = await get('/system/health')
+          assert.equal(response.status, 200)
+          assert.equal(
+            await response.text(),
+            healthBody,
+            'health body changed during engine recovery',
+          )
+        }
+        const children = engineChildren(parent.pid)
+        assert.equal(children.length, 1)
+        const enginePid = children[0]
+        assert(enginePid !== undefined)
+        process.kill(enginePid, 'SIGKILL')
+        await waitUntil(
+          async () => {
+            await assertLive()
+            const result = await session.callTool('run', { code: 'return 1' })
+            return (
+              result.isError === true &&
+              result.content.some((item) => item.text?.includes('restarting'))
+            )
+          },
+          'run to report the recorded engine restarting',
+          { timeoutMs: 5_000, intervalMs: 25 },
+        )
+        assert.equal(
+          (await get('/system/ready')).status,
+          503,
+          'readiness must fail while run reports engine restart',
+        )
+        await waitUntil(
+          async () => {
+            await assertLive()
+            const result = await session.callTool('run', { code: 'return 1' })
+            if (result.isError) return false
+            assert.equal(result.structuredContent?.value, 1)
+            return (await get('/system/ready')).status === 200
+          },
+          'the same MCP session and readiness to recover',
+          { timeoutMs: 30_000, intervalMs: 25 },
+        )
+      } catch (error) {
+        failures.push(error)
+      }
+      try {
+        await mcp?.close()
+      } catch (error) {
+        failures.push(error)
+      }
+      // Neither a failed session close nor child inspection may skip stopping
+      // the private host before its browser targets and state are reclaimed.
+      let children: number[] = []
+      try {
+        children = engineChildren(parent.pid)
+      } catch (error) {
+        failures.push(error)
+      }
+      try {
+        if (parent.exitCode === null) parent.kill(9)
+        await parent.exited
+        for (const enginePid of children) {
+          await waitUntil(
+            () => !processExists(enginePid),
+            `recorded SDK child ${enginePid} to exit with its parent`,
+            { timeoutMs: 2_000, intervalMs: 25 },
+          )
+        }
+      } catch (error) {
+        failures.push(error)
+      }
+      try {
+        if (await ctx.browser.isRunning()) {
+          await closeCreatedPages(ctx.browser.cdpPort, existingTargets)
+        }
+      } catch (error) {
+        failures.push(error)
+      }
+      try {
+        await rm(root, { recursive: true, force: true })
+      } catch (error) {
+        failures.push(error)
+      }
+      if (failures.length === 1) throw failures[0]
+      if (failures.length > 1) {
+        throw new AggregateError(failures, 'Readiness case and cleanup failed')
+      }
+    },
+  },
 ]
 
 /** Reads the launcher's private browser independently of the server under test. */
