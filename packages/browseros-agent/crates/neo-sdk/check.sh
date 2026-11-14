@@ -11,8 +11,9 @@
 # Every crate gets clippy -D warnings on all targets and its tests (except TESTS_NOT_RUN below),
 # on CI's exact toolchain. The SDK image's Python scripts (neo-server/docker) get their tests and
 # an import each, and the pinned ruff where uv is installed, as CI's image scripts job does. The
-# page-side Bun suite (neo-playwright-js) runs under the repository's pinned Bun, as CI's
-# "Tests / browseros-playwright-js" job runs it. None of these tests needs a display or a browser: the live suites skip
+# Bun suites (neo-playwright-js's page side, neo-server's conformance tables) run under the
+# repository's pinned Bun, and the spec corpus's add-on lock file is resolved with --locked, as the
+# spec run builds it. None of these tests needs a display or a browser: the live suites skip
 # themselves (`#[ignore]`, or no `CLAW_SDK_E2E_BROWSER`), as CI's `cargo test --workspace` runs
 # them. The [lints] tables and clippy.toml need nothing here, because Cargo and clippy read them
 # on every build.
@@ -48,6 +49,11 @@ cargo_pinned() { cargo "+${TOOLCHAIN}" "$@"; }
 # when the `bun` on PATH is another version.
 BUN_PINNED="$(python3 -c 'import json; print(json.load(open("package.json"))["engines"]["bun"])')"
 BUN_BIN="$(command -v "${BUN:-bun}" || true)"
+# Absolute, as the page-side step links it from another folder: a link to a relative path reads
+# that path from the link's own folder, and the suite would fall back to the default bun.
+if [[ -n "$BUN_BIN" && "$BUN_BIN" != /* ]]; then
+  BUN_BIN="$(cd "$(dirname "$BUN_BIN")" && pwd)/$(basename "$BUN_BIN")"
+fi
 BUN_FOUND="$([[ -n "$BUN_BIN" ]] && "$BUN_BIN" --version 2>/dev/null || true)"
 if [[ "$BUN_FOUND" != "$BUN_PINNED" ]]; then
   echo "check.sh: the page-side suite needs Bun ${BUN_PINNED} (package.json engines.bun); ${BUN:-bun} here is ${BUN_FOUND:-missing}." >&2
@@ -196,16 +202,18 @@ PY
   fi
 )
 
-# The page-side Bun suite: the probe's handlers on linkedom, the protocol examples against both
-# sides, the committed asset against a fresh build. Nothing above runs it, and GitHub's
-# "Tests / browseros-playwright-js" job does, so a change that broke it passed this gate and failed
-# only on GitHub. A checkout with no node_modules (the remote pool's) gets a frozen install of the
-# root and this package alone: 129 packages in under a second there, where a whole `bun ci` takes
-# 81 s; the suite then takes about 20 s. A tree that has node_modules is left as it is. The suite's
-# runner starts `bun` again, so a private directory with one link named `bun` to the pinned binary
-# goes first on PATH, whatever that binary is called (npm's copy is bun.exe, alone in its folder).
+# The Bun suites. neo-playwright-js's page side: the probe's handlers on linkedom, the protocol
+# examples against both sides, the committed asset against a fresh build; GitHub's
+# "Tests / browseros-playwright-js" job runs it. neo-server's conformance tables: the judge's list
+# of what Neo refuses against the production table, which no CI job runs. Nothing above runs
+# either, so a change that broke one passed this gate. A checkout with no node_modules (the
+# remote pool's) gets a frozen install of the root and these packages alone (well under a second
+# there, where a whole `bun ci` takes 81 s); the suites then take about 20 s. A tree that has
+# node_modules is left as it is. The runners start `bun` again, so a private directory with one
+# link named `bun` to the pinned binary goes first on PATH, whatever that binary is called (npm's
+# copy is bun.exe, alone in its folder).
 PAGE_DIR="crates/neo-sdk/neo-playwright-js"
-step "page-side suite (${PAGE_DIR}, Bun ${BUN_PINNED})"
+step "Bun suites (${PAGE_DIR}, neo-server conformance; Bun ${BUN_PINNED})"
 (
   bun_dir="$(mktemp -d)"
   trap 'rm -rf "$bun_dir"' EXIT
@@ -214,11 +222,21 @@ step "page-side suite (${PAGE_DIR}, Bun ${BUN_PINNED})"
   export PATH
   if [[ ! -d node_modules ]]; then
     root="$(python3 -c 'import json; print(json.load(open("package.json"))["name"])')"
-    bun install --frozen-lockfile --filter "$root" --filter @browseros/neo-playwright-js
+    bun install --frozen-lockfile --filter "$root" --filter @browseros/neo-playwright-js \
+      --filter @browseros/neo-server
   fi
-  cd "$PAGE_DIR"
-  bun run test
+  (cd "$PAGE_DIR" && bun run test)
+  (cd crates/neo-sdk/neo-server && bun run test:conformance)
 )
+
+# The spec corpus builds its add-on (neo-playwright-tests/node/claw-addon) with --locked against a
+# lock file of its own, which nothing above reads: a dependency an SDK crate gained passed this
+# gate and stopped the spec run at its build. Resolving that lock with --locked, without building,
+# fails the same way in under a second.
+ADDON_MANIFEST="crates/neo-sdk/neo-playwright-tests/node/claw-addon/Cargo.toml"
+step "spec add-on lock (${ADDON_MANIFEST%/Cargo.toml})"
+cargo_pinned metadata --locked --format-version 1 --manifest-path "$ADDON_MANIFEST" >/dev/null
+echo "  ok"
 
 step "clippy -D warnings"
 cargo_pinned clippy "${ALL_ARGS[@]}" --all-targets --locked -- -D warnings

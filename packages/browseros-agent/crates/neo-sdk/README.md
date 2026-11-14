@@ -144,7 +144,11 @@ CARGO_BUILD_BUILD_DIR="$PWD/target/build-private" crates/neo-sdk/check.sh
 
 The gate covers every Rust crate in this folder: rustfmt, clippy `-D warnings` and tests for each
 (not yet `neo-captcha`'s tests, which are flaky; `check.sh` says why), plus Google's rustfmt
-options and the forbidden-dependency check for `neo-server` and `neo-playwright`. Follow [STYLE.md](STYLE.md) and the workspace's
+options and the forbidden-dependency check for `neo-server` and `neo-playwright`, and
+`neo-server`'s `hosted-run` build. It also runs the SDK image's Python scripts' tests and imports
+(and ruff where uv is installed), the Bun suites of `neo-playwright-js` and `neo-server`'s
+conformance tables under the pinned Bun (`BUN=/path/to/bun` names one), and resolves the spec
+corpus add-on's lock file with `--locked`. Follow [STYLE.md](STYLE.md) and the workspace's
 contributor rules. Build the server with `cargo build -p neo-server --bin browseros-claw-sdk`.
 Use Bun 1.4.2 in `neo-playwright-js` for `bun run build`, `bun run build:check` and its tests.
 Regenerate the host contract from the agent root with `bun run codegen:neo-sdk-api`; never
