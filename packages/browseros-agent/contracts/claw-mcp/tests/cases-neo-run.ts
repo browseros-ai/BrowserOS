@@ -8,7 +8,7 @@ import { findFreePort } from './browser'
 import type { ContractCase } from './cases'
 import { apiGet, expectOk, waitUntil } from './helpers'
 import { McpSession, readRpcResponse } from './mcp-client'
-import { RUST_BINARY } from './rust-server'
+import { RUST_BINARY, startRustServer } from './rust-server'
 
 function engineChildren(parentPid: number): number[] {
   const result = Bun.spawnSync({
@@ -641,6 +641,166 @@ return await page.title()`,
             row.toolName === 'sdk.operation',
         )
       }, 'a redacted unknown operation row')
+    },
+  },
+  {
+    name: 'neo run: a large screenshot is an MCP image',
+    async run(ctx) {
+      const session = await ctx.openSession('neo-large-picture')
+      await waitUntil(
+        async () =>
+          !(
+            await session.callTool('run', { code: 'return await page.title()' })
+          ).isError,
+        'the SDK browser link',
+        { timeoutMs: 30_000 },
+      )
+      const result = await session.callTool('run', {
+        code: `await page.setViewportSize({width:1000,height:800});
+await page.setContent("<canvas id=c width=900 height=700></canvas><script>const g=document.querySelector('#c').getContext('2d');const d=g.createImageData(900,700);let seed=123;for(let i=0;i<d.data.length;i++){seed=(1664525*seed+1013904223)>>>0;d.data[i]=i%4===3?255:seed>>>24;}g.putImageData(d,0,0);</script>");
+return await page.screenshot({clip: {x:0,y:0,width:900,height:700}})`,
+      })
+      expectOk(result, 'large screenshot')
+      const image = result.content.find((block) => block.type === 'image')
+      assert(image, 'the SDK blob was not returned as an MCP image')
+      assert.equal(image.mimeType, 'image/png')
+      assert(typeof image.data === 'string')
+      const bytes = Buffer.from(image.data, 'base64')
+      assert(
+        bytes.length >= 700_000,
+        `expected at least 700 KB, got ${bytes.length}`,
+      )
+      assert(
+        bytes
+          .subarray(0, 8)
+          .equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])),
+      )
+      assert.equal(
+        result.structuredContent?.value,
+        `[image at content[${result.content.indexOf(image)}] (image/png)]`,
+      )
+      assert(
+        !result.content.some((block) =>
+          block.text?.includes('Blob bytes are not available'),
+        ),
+      )
+      const missing = await session.callTool('run', {
+        code: 'return {"$neo":"blob", id:"b99", size:700000}',
+      })
+      expectOk(missing, 'a missing output blob must not fail the run')
+      assert.deepEqual(missing.structuredContent?.value, {
+        $neo: 'blob',
+        id: 'b99',
+        size: 700000,
+      })
+      assert(
+        missing.content.some((block) =>
+          block.text?.includes('Blob bytes are not available'),
+        ),
+      )
+    },
+  },
+  {
+    name: 'neo run: reopens one inactive Default window after all windows close',
+    headless: false,
+    async run(ctx) {
+      const windows = async () => {
+        const result = await privateBrowserCommand(
+          ctx.browser.cdpPort,
+          'Browser.getWindows',
+        )
+        assert(result !== null && typeof result === 'object')
+        assert('windows' in result && Array.isArray(result.windows))
+        return result.windows.map((window: unknown) => {
+          assert(window !== null && typeof window === 'object')
+          assert('windowId' in window && typeof window.windowId === 'number')
+          assert(
+            'windowType' in window && typeof window.windowType === 'string',
+          )
+          assert('isActive' in window && typeof window.isActive === 'boolean')
+          assert('browserContextId' in window)
+          return {
+            id: window.windowId,
+            type: window.windowType,
+            active: window.isActive,
+            profile: window.browserContextId,
+          }
+        })
+      }
+      const closeWindows = async () => {
+        // The launcher gives this case its own headed profile and CDP port.
+        // Closing every window models macOS without touching a signed-in browser.
+        for (const window of await windows()) {
+          await privateBrowserCommand(
+            ctx.browser.cdpPort,
+            'Browser.closeWindow',
+            { windowId: window.id },
+          )
+        }
+        await waitUntil(
+          async () => (await windows()).length === 0,
+          'all private windows to close',
+        )
+      }
+      const openPage = async (session: McpSession) => {
+        const result = await session.callTool('run', {
+          code: 'const p = await context.newPage(); return p.tabId',
+        })
+        expectOk(result, 'opening a page with no browser window')
+        const id = result.structuredContent?.value
+        assert(typeof id === 'number' && Number.isSafeInteger(id))
+        return id
+      }
+
+      // The generic suite sidecar has no native version. This case exercises
+      // profile-routed recovery on a browser that supports profile targeting.
+      const server = await startRustServer(ctx.browser.cdpPort, {
+        env: { CLAW_NATIVE_BROWSEROS_VERSION: '0.51.1.3' },
+      })
+      const sessions: McpSession[] = []
+      try {
+        const primary = await McpSession.connect(server.baseUrl, 'neo-window')
+        sessions.push(primary)
+        await closeWindows()
+        await openPage(primary)
+        const reopened = await windows()
+        assert.equal(reopened.length, 1, 'run must reopen exactly one window')
+        const window = reopened[0]
+        assert(window)
+        assert.equal(window.type, 'normal')
+        assert.equal(window.profile, 'Default')
+        assert.equal(
+          window.active,
+          false,
+          'recovery must not activate the window',
+        )
+        await openPage(primary)
+        assert.deepEqual(
+          (await windows()).map((item) => item.id),
+          [window.id],
+          'a run with a window must reuse it',
+        )
+
+        const second = await McpSession.connect(
+          server.baseUrl,
+          'neo-window-concurrent',
+        )
+        sessions.push(second)
+        await closeWindows()
+        const ids = await Promise.all([openPage(primary), openPage(second)])
+        assert.notEqual(ids[0], ids[1])
+        assert.equal(
+          (await windows()).length,
+          1,
+          'concurrent runs must reopen one window',
+        )
+      } finally {
+        try {
+          for (const session of sessions) await session.close()
+        } finally {
+          await server.stop()
+        }
+      }
     },
   },
 ]

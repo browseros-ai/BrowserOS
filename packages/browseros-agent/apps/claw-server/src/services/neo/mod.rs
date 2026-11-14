@@ -340,9 +340,12 @@ impl NeoEngine {
             .wire
             .clone()
             .ok_or_else(|| self.not_ready())?;
-        let result = wire.run(call).await;
+        let mut result = wire.run(call).await;
         if result.is_err() && !matches!(self.state(), EngineState::Ready) {
             return Err(self.not_ready());
+        }
+        if let Ok(outcome) = &mut result {
+            self.hydrate_blobs(outcome).await;
         }
         result
     }
