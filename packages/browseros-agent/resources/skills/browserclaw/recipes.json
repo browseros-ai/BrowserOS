@@ -8,7 +8,7 @@
   {
     "id": "create-group",
     "title": "Create a tab group",
-    "when": "Group your current page. Replace research with your task label; keep the returned groupId. With automatic grouping, later session tabs in the same window join this group and do not get a second automatic group. The server never collapses or closes groups your script creates; your script owns cleanup.",
+    "when": "Group your current page. Replace research with your task label; keep the returned groupId. The tab stays in the group your script creates; automatic grouping never moves it or retitles, collapses or closes that group. Your script owns cleanup. With automatic grouping, other session tabs still use the automatic group, so both groups can appear in one window.",
     "code": "return await neo.cdp('Browser.createTabGroup', { tabIds: [page.tabId], title: 'research' });"
   },
   {
@@ -32,7 +32,7 @@
   {
     "id": "close-group",
     "title": "Close a tab group",
-    "when": "Set groupId from the group list. This closes every tab in that group; inspect its tabIds first. The server never collapses or closes script-made groups. Your script owns tidying the group it created, including any later session tabs that joined it in this window. Never include Neo's reserved blank tab. Protected tab/window closes report script / unsupported; leave the reserved tab and window open rather than using group closure to bypass that refusal.",
+    "when": "Set groupId from the group list. This closes every tab in that group; inspect its tabIds first. The server never retitles, collapses or closes a group your script creates; your script owns cleanup. Other session tabs can be in a separate automatic group in the same window, so check which group you are closing. Never include Neo's reserved blank tab. Protected tab/window closes report script / unsupported; leave the reserved tab and window open rather than using group closure to bypass that refusal.",
     "code": "return await neo.cdp('Browser.closeTabGroup', { groupId });"
   },
   {

@@ -26,7 +26,7 @@ pub(crate) const MANAGED_SKILL_DIRECTORY: &str = "browseros-neo";
 pub(crate) const LEGACY_SKILL_DIRECTORY_NAME: &str = "browserclaw";
 
 /// Explicit grouping omits only the server's automatic grouping promise.
-const SKILL_GROUP_PROMISE: &str = "Tabs are grouped as `<client>/<task>`. If a script creates its own group, later session tabs in that window join that group instead of a second automatic group. The server never collapses or closes script-made groups; the creating script owns cleanup.";
+const SKILL_GROUP_PROMISE: &str = "Tabs are grouped as `<client>/<task>`. A tab a script puts in its own group stays there; automatic grouping never moves it or retitles, collapses or closes that group. The script owns its group's cleanup. Other session tabs still use the automatic `<client>/<task>` group, so both groups can appear in one window.";
 
 /// The installed guide starts page actions with pursue only while ultrafast offers it.
 const SKILL_RUN_FIRST: (&str, &str) = (

@@ -14,7 +14,7 @@ Start with `const task = await neo.createTask('research notes'); return task.id`
 The desktop session remembers its task between runs. Keep the id and use `await neo.task(id)` after a reconnect.
 `context.pages()` lists tabs with `page.tabId` and `page.taskId`. A null taskId means an unassigned tab, often the user's.
 Open your own tabs with `context.newPage()` or `task.newPage()` for exploratory work. Leave other people's tabs as you found them unless asked to change them.
-Tabs are grouped as `<client>/<task>`. If a script creates its own group, later session tabs in that window join that group instead of a second automatic group. The server never collapses or closes script-made groups; the creating script owns cleanup.
+Tabs are grouped as `<client>/<task>`. A tab a script puts in its own group stays there; automatic grouping never moves it or retitles, collapses or closes that group. The script owns its group's cleanup. Other session tabs still use the automatic `<client>/<task>` group, so both groups can appear in one window.
 Preserve useful pages when the task ends. Use `task.close()` only when its tabs can all close.
 
 ## Playwright in run
