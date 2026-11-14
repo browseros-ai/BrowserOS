@@ -249,11 +249,10 @@ def shape_runs(runs: Runs, shape: str, reps: int, problems: list) -> int:
     return wrong
 
 
-def main() -> None:
-    mcp_url, socket_path, token_file = sys.argv[1:4]
-    reps = int(sys.argv[4]) if len(sys.argv) > 4 else 20
-    shapes = sys.argv[5].split(",") if len(sys.argv) > 5 else list(SHAPES)
-    runs = Runs(mcp_url, socket_path, token_file)
+def accept(runs: Runs, reps: int, shapes: list[str]) -> dict:
+    """The check's result, which accept.sh reads: `ok` is false when any repetition of any shape
+    went wrong, including every repetition of a shape whose tab scope could not be read, set or
+    put back."""
     # A neighbour task's tab stays open throughout: the tab a wrong `page` most often was.
     neighbour = task("neighbour", 0)
     runs.goto(neighbour)
@@ -261,17 +260,20 @@ def main() -> None:
     wrong = {shape: shape_runs(runs, shape, reps, problems) for shape in shapes}
     runs.close(neighbour)
     counts = ", ".join(f"{shape} {wrong[shape]}/{reps}" for shape in shapes)
-    print(
-        json.dumps(
-            {
-                "ok": not any(wrong.values()),
-                "wrong": wrong,
-                "reps": reps,
-                "detail": f"next run's page not the task's own tab: {counts}",
-                "problems": problems[:12],
-            }
-        )
-    )
+    return {
+        "ok": not any(wrong.values()),
+        "wrong": wrong,
+        "reps": reps,
+        "detail": f"next run's page not the task's own tab: {counts}",
+        "problems": problems[:12],
+    }
+
+
+def main() -> None:
+    mcp_url, socket_path, token_file = sys.argv[1:4]
+    reps = int(sys.argv[4]) if len(sys.argv) > 4 else 20
+    shapes = sys.argv[5].split(",") if len(sys.argv) > 5 else list(SHAPES)
+    print(json.dumps(accept(Runs(mcp_url, socket_path, token_file), reps, shapes)))
 
 
 if __name__ == "__main__":
