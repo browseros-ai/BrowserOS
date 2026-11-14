@@ -2,7 +2,7 @@
 
 use std::any::{Any, TypeId};
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
 use browseros_core::{TabId, TargetId};
 use neo_takeover::TabHold;
@@ -36,7 +36,15 @@ const OPENER_HOPS: usize = 16;
 /// else closes the tab.
 pub(crate) struct TabRegistry {
     state: Mutex<TabState>,
+    /// Where the tab watch reports each tab it sees open, with its opener, as it sees it: the
+    /// host's takeovers, which list the tabs opened during each (`openedTabs`). Set once by the
+    /// host API; until then opens go nowhere.
+    opens: OnceLock<OpenSink>,
 }
+
+/// Takes each tab the tab watch sees open and the tab that opened it, synchronously, before the
+/// watch sends any close from the same listing. It must not wait.
+pub(crate) type OpenSink = Arc<dyn Fn(TabId, Option<TabId>) + Send + Sync>;
 
 /// Who opened a tab. Core has no public `is_agent_created`, so Neo's own page opener marks its
 /// tabs here. A popup an agent's tab opened is the agent's too (the settings design, decision
@@ -90,6 +98,7 @@ impl TabRegistry {
     pub(crate) fn new() -> Self {
         Self {
             state: Mutex::default(),
+            opens: OnceLock::new(),
         }
     }
 
@@ -351,6 +360,18 @@ impl TabRegistry {
         self.lock().tasks.holder(tab).cloned()
     }
 
+    /// The tab that opened `tab`, as a registered popup or as the browser announced it, or
+    /// `None` for a tab opened by hand. A released takeover's `openedTabs` read it, so a host can
+    /// tell a tab the owner opened from one a page opened.
+    pub(crate) fn opener(&self, tab: TabId) -> Option<TabId> {
+        let state = self.lock();
+        state
+            .popups
+            .get(&tab)
+            .copied()
+            .or_else(|| state.announced.opener(tab))
+    }
+
     /// Starts an agent-named task in `family`: one created in a run whose host task is of that
     /// family, so it counts as that run's own.
     pub(crate) fn create_task_in(
@@ -417,6 +438,21 @@ impl TabRegistry {
     /// discovery announces every live popup again.
     pub(crate) fn forget_openers(&self) {
         self.lock().announced.clear();
+    }
+
+    /// Where the tab watch reports each tab it sees open ([`OpenSink`]), once: false when one is
+    /// already set, which stays.
+    pub(crate) fn set_open_sink(&self, sink: OpenSink) -> bool {
+        self.opens.set(sink).is_ok()
+    }
+
+    /// The tab watch saw `tab` open, opened by `opener` as the browser announced it. Reported at
+    /// once, outside the registry's lock, so no reader waits behind another (a takeover's
+    /// release) to hear of it.
+    pub(crate) fn opened(&self, tab: TabId, opener: Option<TabId>) {
+        if let Some(sink) = self.opens.get() {
+            sink(tab, opener);
+        }
     }
 
     /// Where the task book's changes go from now on ([`BookSink`]), once: false when a sink is
@@ -1329,6 +1365,25 @@ mod tests {
             "but never Neo's blank tab"
         );
         Ok(())
+    }
+
+    /// A released takeover's `openedTabs` name each tab's opener: a popup's, from the browser's
+    /// announcement or from its registration, and none for a tab opened by hand.
+    #[test]
+    fn a_tab_names_its_opener_as_announced_or_registered_and_a_hand_opened_one_none() {
+        let tabs = TabRegistry::new();
+        let opener = page(1, 101);
+        tabs.opened_by_agent(&opener, tabs.seen());
+        let announced = TabId(102);
+        tabs.note_opener(announced, opener.tab);
+        let registered = PageRef { tab: TabId(103) };
+        tabs.popup(&registered, opener.tab, tabs.seen());
+        let by_hand = page(4, 104);
+        tabs.touched(&by_hand, tabs.seen());
+        assert_eq!(tabs.opener(announced), Some(opener.tab), "announced");
+        assert_eq!(tabs.opener(registered.tab), Some(opener.tab), "registered");
+        assert_eq!(tabs.opener(by_hand.tab), None, "opened by hand");
+        assert_eq!(tabs.opener(opener.tab), None, "the opener itself");
     }
 
     #[test]

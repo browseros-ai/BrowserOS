@@ -27,7 +27,8 @@ pub(crate) async fn reconcile(service: &Service, link: &BrowserLink) -> u64 {
 
 /// Feeds closes to the host API in order so locks end even for tabs no agent op touched.
 /// Reconcile when the watch restarts or the feed falls behind; `reconciled` identifies the
-/// watch generation the last listing covered. Opens need no host bookkeeping.
+/// watch generation the last listing covered. Opens go to the takeovers from the tab watch, not
+/// through here (see `HostApi::bind`).
 pub(crate) async fn tab_feed(
     service: Service,
     link: Arc<BrowserLink>,
@@ -43,6 +44,8 @@ pub(crate) async fn tab_feed(
                     service.tab_closed(tab).await;
                 }
             }
+            // Opens reach the takeovers from the tab watch itself, as it sees them
+            // (`TabRegistry::opened`): here they would wait behind a close's release.
             Ok(TabEvent::Opened { .. }) => {}
             Ok(TabEvent::Watching(watched)) => {
                 if watched.generation > reconciled {

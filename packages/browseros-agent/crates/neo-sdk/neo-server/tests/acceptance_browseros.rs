@@ -31,7 +31,8 @@ use std::path::Path;
 use std::time::Duration;
 
 use browseros_rig::{
-    CaptchaKey, Client, HOST_TOKEN, Rig, TestResult, browser_or_skip, get, outcome, run,
+    CaptchaKey, Client, HOST_TOKEN, PATIENCE, Rig, TestResult, browser_or_skip, get, outcome, put,
+    run,
 };
 use fixture_server::{FixtureServer, Page};
 use neo_trace::{RedactionLimits, Redactor, RunDetail, RunId, RunStatus, TraceStore};
@@ -80,6 +81,114 @@ async fn drive(rig: &mut Rig) -> TestResult {
     client.cancel().await?;
     assert_eq!(rig.stop_neo().await?, Some(0), "SIGTERM is a normal stop");
     Ok(())
+}
+
+/// The takeover's hand-back on a real browser: during a takeover of the agent's tab the owner
+/// opens a tab by hand, which the browser shows in front; the release lists it in `openedTabs`
+/// with `inFront` true and no task or opener, and Neo gives it to no task.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_tab_the_owner_opens_during_a_takeover_is_listed_at_its_release_in_front() -> TestResult {
+    let Some(browser) = browser_or_skip() else {
+        return Ok(());
+    };
+    let rig = Rig::start(&browser, CaptchaKey::Absent)?;
+    let failure = match time::timeout(TEST_BUDGET, hand_back(&rig)).await {
+        Ok(Ok(())) => return Ok(()),
+        Ok(Err(error)) => error.to_string(),
+        Err(_elapsed) => format!("the hand-back did not finish within {TEST_BUDGET:?}"),
+    };
+    Err(format!("{failure}\n{}", rig.logs()).into())
+}
+
+async fn hand_back(rig: &Rig) -> TestResult {
+    rig.until_ready().await?;
+    let client = rig.client().await?;
+    let (_, tab) = the_agent_opens_a_tab(&client).await?;
+    client.cancel().await?;
+    let started = rig
+        .host(
+            "POST",
+            "/v1/takeovers",
+            Some(HOST_TOKEN),
+            Some(&json!({ "tabId": tab })),
+        )
+        .await?;
+    assert_eq!(started.status, 200, "{}", started.text());
+    let started = started.json()?;
+    let id = started
+        .get("id")
+        .and_then(Value::as_str)
+        .ok_or("the takeover's id")?;
+    // The owner opens a tab by hand; the browser shows a new tab in front.
+    let url = "data:text/html,handed-back";
+    put(rig.cdp_port(), &format!("/json/new?{url}")).await?;
+    let opened = time::timeout(PATIENCE, async {
+        loop {
+            let tabs = rig
+                .host("GET", "/v1/tabs", Some(HOST_TOKEN), None)
+                .await?
+                .json()?;
+            let found = tabs
+                .get("items")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .find(|item| item.get("url") == Some(&json!(url)))
+                .and_then(|item| item.get("tabId").and_then(Value::as_i64));
+            if let Some(found) = found {
+                return Ok::<_, Box<dyn Error>>(found);
+            }
+            time::sleep(Duration::from_millis(200)).await;
+        }
+    })
+    .await
+    .map_err(|_elapsed| "the owner's tab is listed")??;
+    // The host API lists the tab from the browser at once; the tab watch notes it to the
+    // takeovers as it registers it, so wait for a run to list it before the release.
+    time::timeout(PATIENCE, async {
+        while !rig_saw_open(rig, opened).await? {
+            time::sleep(Duration::from_millis(200)).await;
+        }
+        Ok::<_, Box<dyn Error>>(())
+    })
+    .await
+    .map_err(|_elapsed| "Neo registered the owner's tab")??;
+    let released = rig
+        .host(
+            "POST",
+            &format!("/v1/takeovers/{id}/release"),
+            Some(HOST_TOKEN),
+            None,
+        )
+        .await?;
+    assert_eq!(released.status, 200, "{}", released.text());
+    let released = released.json()?;
+    assert_eq!(
+        released.get("openedTabs"),
+        Some(&json!([{
+            "tabId": opened,
+            "url": url,
+            "inFront": true,
+            "taskId": null,
+            "openerTabId": null,
+        }])),
+        "{released}"
+    );
+    Ok(())
+}
+
+/// Whether Neo's own tab registry has `tab`, which the tab watch fills as it hears of each tab:
+/// a run without a task lists it then.
+async fn rig_saw_open(rig: &Rig, tab: i64) -> Result<bool, Box<dyn Error>> {
+    let client = rig.client().await?;
+    let result = run(
+        &client,
+        &format!("return context.pages().some((q) => q.tabId === {tab});"),
+        &json!({}),
+    )
+    .await?;
+    client.cancel().await?;
+    Ok(value(&result)? == &json!(true))
 }
 
 /// Inspect persisted snapshot results, before text rendering and after a later run reads the

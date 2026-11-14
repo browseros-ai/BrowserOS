@@ -204,6 +204,39 @@ async fn next_event(
     Ok(time::timeout(Duration::from_secs(5), events.recv()).await??)
 }
 
+/// One listing that finds a tab gone and another new reports the open first: a takeover released
+/// by its tab's close must have noted a tab the owner opened in the same moment.
+#[tokio::test(start_paused = true)]
+async fn a_listing_reports_its_opens_before_its_closes() -> Result<(), Box<dyn Error>> {
+    let fake = FakeCdp::new();
+    let first = fake.open_tab("https://example.com/", "Example");
+    let link = start(&fake, &Arc::new(TabRegistry::new()));
+    let mut events = link.tab_events();
+    assert!(matches!(
+        next_event(&mut events).await?,
+        TabEvent::Watching(_)
+    ));
+    assert!(fake.close_tab(first), "the fake had the tab");
+    let second = fake.open_tab("https://example.org/", "Other");
+    assert_eq!(
+        (
+            next_event(&mut events).await?,
+            next_event(&mut events).await?
+        ),
+        (
+            TabEvent::Opened {
+                epoch: 1,
+                tab: second,
+            },
+            TabEvent::Closed {
+                epoch: 1,
+                tab: first,
+            },
+        )
+    );
+    Ok(())
+}
+
 #[tokio::test(start_paused = true)]
 async fn every_open_and_close_is_reported_in_order_under_its_socket() -> Result<(), Box<dyn Error>>
 {

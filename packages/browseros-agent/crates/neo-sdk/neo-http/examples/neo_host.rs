@@ -217,6 +217,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         // This harness keeps no tab of its own.
         tab_owner: Arc::new(|_| None),
         tab_task: Arc::new(|_| None),
+        tab_opener: Arc::new(|_| None),
     });
     let surface = SurfaceCalls {
         sink: sink.clone(),

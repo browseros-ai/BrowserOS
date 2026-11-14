@@ -22,7 +22,7 @@ use axum::Router;
 use browseros_core::viewport::Viewports;
 use browseros_core::{BrowserSession, ProtocolSession, TabId};
 use neo_screencast::{CaptureHub, CaptureTransport, CdpPortTransport};
-use neo_takeover::{BrowserTabs, Displays, Fits, Front, Locks, TabHold, Takeovers, Xvnc};
+use neo_takeover::{BrowserTabs, Displays, Fits, Front, Locks, TabHold, TabLinks, Takeovers, Xvnc};
 use neo_trace::{EpochMillis, ShotJobs, TraceSink, TraceStore};
 use std::sync::Arc;
 use tokio_util::sync::{CancellationToken, DropGuard};
@@ -56,8 +56,10 @@ pub struct ServiceInputs {
     /// the app's blank tab, `None` for every other tab.
     pub tab_owner: TabOwner,
     /// The task holding each tab now, for `GET /v1/tabs`'s `taskId`: the one whose runs, under
-    /// task scope, see it.
+    /// task scope, see it. A released takeover's `openedTabs` read it too.
     pub tab_task: TabTask,
+    /// The tab that opened each tab, for a released takeover's `openedTabs` `openerTabId`.
+    pub tab_opener: TabOpener,
 }
 
 /// Names the tab Neo keeps for itself (`Some("neo")` for its blank tab), or `None`. Asked once per
@@ -67,6 +69,10 @@ pub type TabOwner = Arc<dyn Fn(TabId) -> Option<&'static str> + Send + Sync>;
 /// Names the task holding a tab now, or `None` for a tab no task holds. Asked once per tab of each
 /// `GET /v1/tabs`; it must not wait.
 pub type TabTask = Arc<dyn Fn(TabId) -> Option<String> + Send + Sync>;
+
+/// Names the tab that opened a tab, or `None` for one opened by hand. Asked once per tab a
+/// takeover's release lists; it must not wait.
+pub type TabOpener = Arc<dyn Fn(TabId) -> Option<TabId> + Send + Sync>;
 
 /// The host API, started. Cheap to clone.
 #[derive(Clone)]
@@ -149,6 +155,7 @@ impl Service {
             settings,
             tab_owner,
             tab_task,
+            tab_opener,
         } = inputs;
         let events = EventLog::start(store.clone(), sink.subscribe());
         let locks = Locks::new(store.clone(), sink.clone());
@@ -171,7 +178,15 @@ impl Service {
             sink.clone(),
             store.clone(),
         );
-        let takeovers = Takeovers::new(Arc::clone(&locks), Arc::clone(&fits), browser.clone());
+        let takeovers = Takeovers::new(
+            Arc::clone(&locks),
+            Arc::clone(&fits),
+            browser.clone(),
+            TabLinks {
+                task: Arc::clone(&tab_task),
+                opener: tab_opener,
+            },
+        );
         events.follow_takeovers(takeovers.subscribe());
         let front = displays.front();
         // A Neo restart in the middle of a fit drops the fit, but would leave Xvnc at the
@@ -288,6 +303,14 @@ impl Service {
             Some(tab),
             &wire::tab_closed_event(tab, EpochMillis::now()),
         ));
+    }
+
+    /// A tab opened that was not open before, as the app's tab watch saw it, with the tab that
+    /// opened it when the browser said: every active takeover notes it for its release's
+    /// `openedTabs`, so a host learns which tabs the owner opened during a handoff. Neo gives
+    /// none of them to a task. It must be called as the watch sees the open, not after a wait.
+    pub fn tab_opened(&self, tab: TabId, opener: Option<TabId>) {
+        self.state.takeovers.note_opened(tab, opener);
     }
 
     /// Where a reconcile's listing begins among the host's changes to tabs. Take it before

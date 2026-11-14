@@ -140,3 +140,12 @@ pub(crate) const KEEP_RELEASED_TAKEOVER: Duration = Duration::from_secs(60 * 60)
 /// Takeover state changes the broadcast holds for a slow reader. The service's event log reads
 /// them at once; one that falls this far behind gets `stream.reset` instead.
 pub(crate) const TAKEOVER_CHANGES: usize = 256;
+
+/// The most tabs one takeover notes as opened while it is active, for its release's
+/// `openedTabs`. A handoff opens a few; the bound keeps a page that opens tabs in a loop from
+/// growing the table.
+pub(crate) const OPENED_TABS: usize = 256;
+
+/// How long a release waits for the one listing of the browser's tabs that its `openedTabs`
+/// read, within its own give-back budget.
+pub(crate) const OPENED_LISTING: Duration = Duration::from_secs(2);

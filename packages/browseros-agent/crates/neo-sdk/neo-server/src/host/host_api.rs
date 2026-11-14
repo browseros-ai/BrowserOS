@@ -182,7 +182,22 @@ impl HostApi {
                 (held == Some(tab)).then_some("neo")
             }),
             // `GET /v1/tabs` names the task holding each tab now: the one task scope binds it to.
-            tab_task: Arc::new(move |tab| tabs.holder(tab).map(|holder| holder.task.to_string())),
+            // A released takeover's `openedTabs` read it too, and the tab that opened each one.
+            tab_task: {
+                let tabs = Arc::clone(&tabs);
+                Arc::new(move |tab| tabs.holder(tab).map(|holder| holder.task.to_string()))
+            },
+            tab_opener: {
+                let tabs = Arc::clone(&tabs);
+                Arc::new(move |tab| tabs.opener(tab))
+            },
+        });
+        // Each tab the tab watch sees open reaches every active takeover at once, with its
+        // opener as the browser announced it, for the release's `openedTabs`. Not through the
+        // tab feed, which waits out each close's release before it reads on.
+        tabs.set_open_sink({
+            let service = service.clone();
+            Arc::new(move |tab, opener| service.tab_opened(tab, opener))
         });
         takeover.arm(Arc::clone(service.locks()));
         holds.arm({

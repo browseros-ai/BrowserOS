@@ -118,6 +118,20 @@ state. This existing recovery limit also applies to unscaled takeovers.
 The default takeover blocks agent reads, including screenshots. Use `reads: "allow"` when
 scripts need to capture the tab during a takeover.
 
+### The hand-back
+
+The owner may open tabs during a takeover: a sign-in popup of the shared tab, or their bank by
+hand. Neo gives none of them to a task. The release, whatever ended it (done, idle, the host,
+the TTL, the tab closing), lists them in `openedTabs`: every tab that first appeared while the
+takeover was active and was still open when the release began, each with its `url`, `inFront`
+(the tab the owner left in front), `taskId` (the task holding it, or `null`) and `openerTabId`
+(the tab that opened it, or `null` for one opened by hand). `GET /v1/takeovers/{id}` answers the
+same list once released, and a repeated release answers the first one's. Each tab stays with
+the task holding it, or with no task (hidden from bound runs, never closed by the janitor); the
+host acts on the list by its own rule. Takeovers active at once each list a tab opened during
+both. If the release cannot list the browser's tabs within 2 s, it still lists every tab it
+noted, with `url` and `inFront` `null` (unknown), so a host never misses one the owner opened.
+
 From `packages/browseros-agent`, run the existing SDK gate with private build state:
 
 ```sh

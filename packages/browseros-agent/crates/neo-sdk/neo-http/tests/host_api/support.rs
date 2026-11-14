@@ -296,6 +296,7 @@ async fn start(
                         .cloned()
                 })
             },
+            tab_opener: Arc::new(|_| None),
         },
         capture_transport.unwrap_or_else(|| Arc::new(ScriptedTransport(Arc::clone(&capture)))),
     );
