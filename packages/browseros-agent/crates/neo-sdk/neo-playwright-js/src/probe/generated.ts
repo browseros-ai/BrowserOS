@@ -428,7 +428,7 @@ look: boolean, } | { "op": "edit", pin: Pin, edit: Edit, } | { "op": "look", pin
  * The world keeps them for this question alone, never for its engine
  * (probe/private-shown.ts).
  */
-walk?: boolean, } | { "op": "privateHosts" } | { "op": "read", target: ProbeTarget, strictness: Strictness, frameVisible: boolean, read: Read, } | { "op": "readAll", target: ProbeTarget, read: ReadAll, } | { "op": "screenshotMask", target: ProbeTarget, color: string, } | { "op": "screenshotMaskCleanup" } | { "op": "selector", target: ProbeTarget, } | { "op": "snapshot", root: ProbeTarget, mode: SnapshotMode, 
+walk?: boolean, } | { "op": "privateHosts", limit: number, } | { "op": "read", target: ProbeTarget, strictness: Strictness, frameVisible: boolean, read: Read, } | { "op": "readAll", target: ProbeTarget, read: ReadAll, } | { "op": "screenshotMask", target: ProbeTarget, color: string, } | { "op": "screenshotMaskCleanup" } | { "op": "selector", target: ProbeTarget, } | { "op": "snapshot", root: ProbeTarget, mode: SnapshotMode, 
 /**
  * Any integer, as upstream passes it: a child frame's depth can come out zero or
  * negative, and the engine reads those differently from no depth.

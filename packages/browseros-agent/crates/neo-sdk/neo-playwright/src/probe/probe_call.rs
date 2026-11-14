@@ -600,17 +600,19 @@ pub(crate) async fn pinned_nodes(
 }
 
 /// The hosts the camera's question has waiting (`privateHosts`, ruling R65), outside any op as
-/// that question is: elements a trusted typing event or the focus pointed at, which take no input
+/// that question is: elements a trusted input event or the focus pointed at, which take no input
 /// themselves and may carry a closed shadow root the world does not know. Handed over by deep
 /// serialization, as [`pinned_nodes`] reads backend ids, so Rust takes no pin and no handle of a
 /// host: the call's remote array lives in `group`, the walk's own object group, until the walk
-/// ends. The page marks each host handed as it goes, so a host is asked once whatever follows.
+/// ends. The page keeps the count of what it handed over: a host the focus pointed at once, one an
+/// input event named once a reading until its root is kept, five readings at most.
 /// No page script runs: the request's handler only reads the world's own list.
 pub(crate) async fn private_hosts(
     world: &IsolatedWorld,
     group: &str,
+    limit: u32,
 ) -> Result<Vec<BackendNodeId>, ProbeFailure> {
-    let request = ProbeRequest::PrivateHosts;
+    let request = ProbeRequest::PrivateHosts { limit };
     let call = ProbeCall {
         request: &request,
         policy: ProbePolicy {

@@ -19,8 +19,8 @@
  * root from its host, on demand (ruling R65):
  *
  * ```text
- *  typing reaches a closed root ─ a trusted input or keydown event whose first target takes no
- *    input itself: a closed boundary retargeted it to the host ─ counted at once, host waiting
+ *  typing reaches a closed root ─ a trusted input or beforeinput event whose first target takes
+ *    no input itself: a closed boundary retargeted it to the host ─ counted at once, host waiting
  *  a reading finds the focus on such a host ─ host waiting
  *  the answer says `hosts` ─ Rust asks `privateHosts` (below) for them, each once,
  *    reads each host's closed root from the browser (DOM.describeNode) and resolves it into this
@@ -36,17 +36,24 @@
  * What it does not see, named in the contract: a value inside a closed root that came with no
  * event and never held the focus (a page's own script writes `.value =`, which fires nothing);
  * a value typed before the first reading in this document, whose box no longer holds the focus
- * at that reading (the listeners are added at that reading); and a page that stops the event at
- * the window before this world's listener.
+ * at that reading (the listeners are added at that reading); a page that stops the event at the
+ * window before this world's listener; and a box whose page takes the keys itself and cancels
+ * them, so no input event fires, which is known only while it holds the focus at a reading. A key
+ * is not listened for: one that types nothing fires no input event, so PageDown, an arrow key or
+ * Tab never moves a reading (ruling R65's third condition).
  */
 import { isBrowserOSUi } from './browseros-ui'
 import { isPrivateField } from './private-field-values'
-import type { PrivateShownRequest, Value } from './protocol'
+import type {
+  PrivateHostsRequest,
+  PrivateShownRequest,
+  Value,
+} from './protocol'
 import type { World } from './world'
 
 /** Input events on a private box painted in clear, since the first reading in this document. */
 let inputs = 0
-/** Hears every trusted input and key event; set by the first reading in this document. */
+/** Hears every input and beforeinput event; set by the first reading in this document. */
 let heard: ((event: Event) => void) | undefined
 /**
  * The closed shadow roots that hear input already: at the document an event's path stops at a
@@ -68,13 +75,37 @@ const walkedRoots = new WeakMap<Element, ShadowRoot>()
  * removes before the next reading goes; each is pointed at once (`pointed`).
  */
 const waiting = new Set<WeakRef<Element>>()
-/** Every host ever pointed at, waiting or handed over: each is asked once. */
+/** Every host ever pointed at, waiting or handed over: each is pointed at once. */
 const pointed = new WeakSet<Element>()
-/** The hosts handed to Rust, whatever became of them: their events are no longer counted here. */
+/** Each waiting host's entry in `waiting`, so a host whose root is kept leaves it. */
+const entries = new WeakMap<Element, WeakRef<Element>>()
+/**
+ * The hosts a trusted input event named. An input event fires on what takes input, so a first
+ * target that takes none is a closed boundary's retargeting: a real host. Handed over first, never
+ * dropped from the wait, and while one waits unasked the camera's reading is not clear (`named`).
+ */
+const certain = new WeakSet<Element>()
+/**
+ * The hosts done with: handed to Rust and read, or handed and not readable (a host the focus
+ * pointed at, at once; one an input event named, after `NAMED_TRIES` readings), or gone from the
+ * document. Their events are no longer counted here and they are never asked again.
+ */
 const handed = new WeakSet<Element>()
+/**
+ * For a host an input event named and not yet read: how many readings it was handed over at, and
+ * the last one. Handed over again at each reading until its root is kept, the reading unknown
+ * meanwhile, and as on main after the fifth, which bounds what a host that can never be read costs.
+ */
+const tries = new WeakMap<Element, { count: number; at: number }>()
+const NAMED_TRIES = 5
+/** The camera's readings in this document: each first question of one counts. */
+let readings = 0
 
-/** How many hosts one `privateHosts` call hands over; the rest wait for the next reading. */
-const HOSTS_PER_CALL = 16
+/**
+ * The most hosts that wait at once. A host only the focus named is not added past it (nor marked
+ * pointed, so a later reading can add it); a host an input event named always is.
+ */
+const WAITING_MOST = 64
 /** How deep the focus is followed through known roots at one reading (rule 6's bound). */
 const FOCUS_DEPTH = 32
 
@@ -117,43 +148,96 @@ export function privateShown(
     heard = (event: Event) => {
       const first = event.composedPath()[0]
       if (!(first instanceof Element)) return
+      // A closed root this world knows (a marked snapshot opened it after the last reading) but
+      // no reading has entered yet has no listener. The event has not reached the root, so one
+      // added now still hears it.
+      const known = knownRoot(first)
+      if (known) listen(known)
       if (event.type === 'input' && paintedInClear(first, view)) inputs += 1
-      // A trusted event whose first target takes no input came out of a closed root this world
-      // does not know: counted at once, so the picture around it is dropped whether or not the
-      // root is then found, until its host is handed over.
+      // A trusted input event whose first target takes no input came out of a closed root this
+      // world does not know: counted at once, so the picture around it is dropped whether or not
+      // the root is then found, until its host is handed over. beforeinput too, for a page that
+      // cancels it and writes the value itself.
       if (!event.isTrusted || !unknownHost(first) || handed.has(first)) return
       inputs += 1
-      point(first)
+      point(first, true)
     }
     // Capture phase on the document, in this isolated world: the page can neither see nor stop
     // it below the window. The event's first target is the box itself, inside an open shadow
     // root too, and a closed root's host otherwise.
+    document.addEventListener('beforeinput', heard, true)
     document.addEventListener('input', heard, true)
-    document.addEventListener('keydown', heard, true)
   }
   if (request.walk === true) keep(nodes)
+  else {
+    readings += 1
+    sweep()
+  }
   pointFocus(document)
-  const { shown, boxes } = look(document, view, heard)
+  const { shown, boxes } = look(document)
+  // `hosts`: some wait for the camera's walk; `named`: one of them an input event named, which
+  // the camera must read before the reading may be clear.
   const hosts = waiting.size > 0 ? { hosts: true } : {}
-  return { kind: 'value', value: { shown, inputs, boxes, ...hosts } }
+  const named = namedWaiting() ? { named: true } : {}
+  return { kind: 'value', value: { shown, inputs, boxes, ...hosts, ...named } }
 }
 
 /**
- * `privateHosts`: the hosts waiting, handed to Rust by deep serialization (a by-handle request),
- * each marked handed as it goes, so a host is asked once whether or not a root comes back. A host
- * the page removed is dropped, handed too.
+ * `privateHosts`: up to `limit` of the hosts waiting, the ones an input event named first, handed
+ * to Rust by deep serialization (a by-handle request). A host the focus pointed at is done with as
+ * it goes, so it is asked once whether or not a root comes back. One an input event named is
+ * handed over once a reading and stays waiting until its root is kept (`keep`) or its tries run
+ * out (`sweep`).
  */
-export function privateHosts(): Element[] {
+export function privateHosts(request: PrivateHostsRequest): Element[] {
   const hosts: Element[] = []
-  for (const ref of waiting) {
-    if (hosts.length === HOSTS_PER_CALL) break
-    waiting.delete(ref)
-    const host = ref.deref()
-    if (!host) continue
-    handed.add(host)
-    if (host.isConnected) hosts.push(host)
+  for (const first of [true, false]) {
+    for (const ref of waiting) {
+      if (hosts.length >= request.limit) return hosts
+      const host = ref.deref()
+      if (!host || !host.isConnected) {
+        drop(ref, host)
+        continue
+      }
+      if (certain.has(host) !== first) continue
+      if (first) {
+        const tried = tries.get(host) ?? { count: 0, at: 0 }
+        if (tried.at === readings) continue
+        tries.set(host, { count: tried.count + 1, at: readings })
+      } else {
+        drop(ref, host)
+      }
+      hosts.push(host)
+    }
   }
   return hosts
+}
+
+/**
+ * At each reading: a host gone from the document is dropped, so it stops counting and costs no
+ * picture; one an input event named whose fifth reading has passed is as on main from now on.
+ */
+function sweep(): void {
+  for (const ref of waiting) {
+    const host = ref.deref()
+    const spent = host && (tries.get(host)?.count ?? 0) >= NAMED_TRIES
+    if (!host || !host.isConnected || spent) drop(ref, host)
+  }
+}
+
+/** Takes a host out of the wait, done with. */
+function drop(ref: WeakRef<Element>, host: Element | undefined): void {
+  waiting.delete(ref)
+  if (host) handed.add(host)
+}
+
+/** Whether a host an input event named waits unread, in the document. */
+function namedWaiting(): boolean {
+  for (const ref of waiting) {
+    const host = ref.deref()
+    if (host?.isConnected && certain.has(host)) return true
+  }
+  return false
 }
 
 /**
@@ -168,6 +252,9 @@ function keep(roots: readonly unknown[]): void {
     const host = root.host
     if (isBrowserOSUi(host) || walkedRoots.has(host)) continue
     walkedRoots.set(host, root)
+    // Read: out of the wait for good, its input counted by the root's own listener from now on.
+    const entry = entries.get(host)
+    if (entry) drop(entry, host)
   }
 }
 
@@ -178,8 +265,9 @@ function knownRoot(host: Element): ShadowRoot | null {
 
 /**
  * Whether `element` may stand for a box inside a closed root this world does not know: it takes
- * no input itself (not an input, a textarea, a select or an editable element), it may carry an
- * author shadow root, and no root of it is known here.
+ * no input itself (not an input, a textarea, a select or an editable region; measured, the body
+ * of a document in design mode, which its input events name, is editable), it may carry an author
+ * shadow root, and no root of it is known here.
  */
 function unknownHost(element: Element): boolean {
   if (element.namespaceURI !== XHTML || isBrowserOSUi(element)) return false
@@ -189,10 +277,23 @@ function unknownHost(element: Element): boolean {
   return knownRoot(element) === null
 }
 
-function point(host: Element): void {
+function point(host: Element, byInput = false): void {
+  if (byInput) certain.add(host)
   if (pointed.has(host)) return
+  if (!byInput && waiting.size >= WAITING_MOST) return
   pointed.add(host)
-  waiting.add(new WeakRef(host))
+  const entry = new WeakRef(host)
+  entries.set(host, entry)
+  waiting.add(entry)
+}
+
+/** Gives a closed root the input and beforeinput listener, once (`listened`). */
+function listen(root: ShadowRoot): void {
+  if (root.mode !== 'closed' || listened.has(root) || !heard) return
+  listened.add(root)
+  // Inside the root, a box's event starts at the box, and a nested closed root's at its host.
+  root.addEventListener('beforeinput', heard, true)
+  root.addEventListener('input', heard, true)
 }
 
 /**
@@ -214,26 +315,14 @@ function pointFocus(document: Document): void {
 
 /**
  * Whether a private box shows its value, and whether the document holds a private box at all.
- * Every closed root it enters without a listener gets `listen` on it (`listened`).
+ * Every closed root it enters gets its listener (`listen`).
  */
-function look(
-  document: Document,
-  view: Window | null,
-  listen: (event: Event) => void,
-): { shown: boolean; boxes: boolean } {
+function look(document: Document): { shown: boolean; boxes: boolean } {
+  const view = document.defaultView
   const roots: (Document | ShadowRoot)[] = [document]
   let boxes = false
   for (const root of roots) {
-    if (
-      root instanceof ShadowRoot &&
-      root.mode === 'closed' &&
-      !listened.has(root)
-    ) {
-      listened.add(root)
-      // Inside the root, a box's event starts at the box, and a nested closed root's at its host.
-      root.addEventListener('input', listen, true)
-      root.addEventListener('keydown', listen, true)
-    }
+    if (root instanceof ShadowRoot) listen(root)
     for (const field of root.querySelectorAll('input, textarea')) {
       if (!isPrivateField(field, { declared: true })) continue
       boxes = true

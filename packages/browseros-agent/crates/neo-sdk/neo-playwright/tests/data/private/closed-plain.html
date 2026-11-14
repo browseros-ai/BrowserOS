@@ -1,15 +1,37 @@
 <!doctype html><meta charset=utf-8><title>Closed plain</title>
-<!-- A CLOSED shadow root that holds a search box and a button, and no private box, beside three
-     elements that take the focus and no input: a plain focusable div (#pad, no shadow root), a
-     video with controls (#v) and a details element (#d), whose roots the browser makes itself.
-     focusOn(id) gives one the focus. The camera's walk on demand asks the pad once and never the
-     other two, and the page keeps its pictures as on main. -->
+<!-- A CLOSED shadow root that holds a search box and a button, and no private box, beside
+     elements a key can land on: a plain focusable div (#pad), a listbox of divs (#list) and a
+     focusable span after it (#chip, where Tab from the list goes), a video with controls (#v) and
+     a details element (#d), whose roots the browser makes itself, an editable region (#editor,
+     with an element inside it, #inside), and a select (#pick). focusOn(id) gives one the focus,
+     caretInside() puts the caret in #inside, blurAll() takes the focus away, design() turns the
+     document's design mode on. The page records each input event's first target and whether the
+     body counts as editable (seen()), so a row reports what it measured. The camera's walk on
+     demand moves no reading for any of them. -->
 <div id=host></div>
 <div id=pad tabindex=0 style="width:80px;height:24px;border:1px solid #888">Pad</div>
+<div id=list role=listbox tabindex=0><div role=option>One</div><div role=option>Two</div><div role=option>Three</div></div>
+<span id=chip tabindex=0>Chip</span>
 <video id=v controls width=200 height=60></video>
 <details id=d tabindex=0><summary>More</summary>Text</details>
+<div id=editor contenteditable style="width:200px;height:24px;border:1px solid #888">Edit <b id=inside>here</b></div>
+<select id=pick><option>One</option><option>Two</option><option>Three</option></select>
 <script>
 const root = document.getElementById('host').attachShadow({ mode: 'closed' });
 root.innerHTML = '<label>Search <input id=search value="running shoes" style="width:280px;height:30px"></label><div onclick="1" style="width:80px;height:24px;border:1px solid #888">Go</div>';
+const firsts = [];
+document.addEventListener('input', (event) => firsts.push(event.composedPath()[0].localName), true);
 window.focusOn = (id) => { document.getElementById(id).focus(); return document.activeElement.id; };
+window.blurAll = () => { document.activeElement?.blur(); return true; };
+window.caretInside = () => {
+  document.getElementById('editor').focus();
+  const range = document.createRange();
+  range.selectNodeContents(document.getElementById('inside'));
+  range.collapse(false);
+  getSelection().removeAllRanges();
+  getSelection().addRange(range);
+  return true;
+};
+window.design = () => { document.designMode = 'on'; document.body.focus(); return document.designMode; };
+window.seen = () => JSON.stringify({ firsts, bodyEditable: document.body.isContentEditable, active: document.activeElement?.localName });
 </script>

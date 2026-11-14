@@ -124,7 +124,7 @@ function createProbe() {
       const { request, policy } = call
       if (request.op === 'pinned') return pinned(booted, request)
       // By handle too: the camera's waiting hosts, read by Rust through deep serialization.
-      if (request.op === 'privateHosts') return privateHosts()
+      if (request.op === 'privateHosts') return privateHosts(request)
       const output = new FailureOutput(booted, policy)
       // Only synchronous engine work owns these hooks. Async handlers retain output for
       // later diagnostics, through its formatter or tree scope; no mutable mode survives here.

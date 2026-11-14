@@ -6,7 +6,10 @@
      page's own script would. attachSecond() attaches a second closed root with an empty card box
      after the page loaded, and focusSecond() gives that box the focus. ?fill=1 fills the box on
      load and ?focus=1 focuses it, and again whenever the frame takes the focus (for the box in a
-     cross-site frame, which the test cannot script from the page above). -->
+     cross-site frame, which the test cannot script from the page above). ?cancel=beforeinput
+     cancels each beforeinput and writes its text itself; ?cancel=key cancels each key and writes
+     it itself, so no input event fires at all. removeHost() takes the root's host out of the
+     document. -->
 <div id=host></div>
 <div id=later></div>
 <script>
@@ -20,6 +23,17 @@ if (query.get('fill')) fillCard('4000056655665556');
 // A cross-site frame cannot take the focus while its page holds it, so the box takes it when
 // the frame does.
 if (query.get('focus')) { focusCard(); window.addEventListener('focus', focusCard); }
+const card = root.getElementById('card');
+if (query.get('cancel') === 'beforeinput') card.addEventListener('beforeinput', (event) => {
+  event.preventDefault();
+  if (event.data) card.value += event.data;
+});
+if (query.get('cancel') === 'key') card.addEventListener('keydown', (event) => {
+  if (event.key.length !== 1) return;
+  event.preventDefault();
+  card.value += event.key;
+});
+window.removeHost = () => { document.getElementById('host').remove(); return true; };
 let second;
 window.attachSecond = () => {
   second = document.getElementById('later').attachShadow({ mode: 'closed' });

@@ -185,10 +185,12 @@ pub(crate) enum ProbeRequest {
         walk: bool,
     },
     /// The hosts the camera's question has waiting, by handle (`returnByValue: false`, read
-    /// through deep serialization): elements a trusted typing event or the focus pointed at,
+    /// through deep serialization): elements a trusted input event or the focus pointed at,
     /// which take no input themselves and may carry a closed shadow root this world does not
-    /// know. Each is handed over once, whatever Rust then finds (ruling R65).
-    PrivateHosts,
+    /// know. At most `limit`, the ones an input event named first. A host the focus pointed at is
+    /// handed over once; one an input event named once a reading until its root is kept, five
+    /// readings at most (ruling R65).
+    PrivateHosts { limit: u32 },
     /// One read of one element, resolved in the same call.
     Read {
         target: ProbeTarget,

@@ -203,7 +203,8 @@
       "walk": true
     },
     {
-      "op": "privateHosts"
+      "op": "privateHosts",
+      "limit": 16
     },
     {
       "op": "webStorage",

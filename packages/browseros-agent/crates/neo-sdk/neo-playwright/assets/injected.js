@@ -9772,8 +9772,13 @@ ${value.stack}`;
   var walkedRoots = new WeakMap;
   var waiting = new Set;
   var pointed = new WeakSet;
+  var entries = new WeakMap;
+  var certain = new WeakSet;
   var handed = new WeakSet;
-  var HOSTS_PER_CALL = 16;
+  var tries = new WeakMap;
+  var NAMED_TRIES = 5;
+  var readings = 0;
+  var WAITING_MOST = 64;
   var FOCUS_DEPTH = 32;
   var SHADOW_HOSTS = new Set([
     "article",
@@ -9804,37 +9809,77 @@ ${value.stack}`;
         const first = event.composedPath()[0];
         if (!(first instanceof Element))
           return;
+        const known = knownRoot(first);
+        if (known)
+          listen2(known);
         if (event.type === "input" && paintedInClear(first, view))
           inputs += 1;
         if (!event.isTrusted || !unknownHost(first) || handed.has(first))
           return;
         inputs += 1;
-        point(first);
+        point(first, true);
       };
+      document2.addEventListener("beforeinput", heard, true);
       document2.addEventListener("input", heard, true);
-      document2.addEventListener("keydown", heard, true);
     }
     if (request.walk === true)
       keep(nodes);
+    else {
+      readings += 1;
+      sweep();
+    }
     pointFocus(document2);
-    const { shown, boxes } = look2(document2, view, heard);
+    const { shown, boxes } = look2(document2);
     const hosts = waiting.size > 0 ? { hosts: true } : {};
-    return { kind: "value", value: { shown, inputs, boxes, ...hosts } };
+    const named = namedWaiting() ? { named: true } : {};
+    return { kind: "value", value: { shown, inputs, boxes, ...hosts, ...named } };
   }
-  function privateHosts() {
+  function privateHosts(request) {
     const hosts = [];
-    for (const ref of waiting) {
-      if (hosts.length === HOSTS_PER_CALL)
-        break;
-      waiting.delete(ref);
-      const host = ref.deref();
-      if (!host)
-        continue;
-      handed.add(host);
-      if (host.isConnected)
+    for (const first of [true, false]) {
+      for (const ref of waiting) {
+        if (hosts.length >= request.limit)
+          return hosts;
+        const host = ref.deref();
+        if (!host || !host.isConnected) {
+          drop2(ref, host);
+          continue;
+        }
+        if (certain.has(host) !== first)
+          continue;
+        if (first) {
+          const tried = tries.get(host) ?? { count: 0, at: 0 };
+          if (tried.at === readings)
+            continue;
+          tries.set(host, { count: tried.count + 1, at: readings });
+        } else {
+          drop2(ref, host);
+        }
         hosts.push(host);
+      }
     }
     return hosts;
+  }
+  function sweep() {
+    for (const ref of waiting) {
+      const host = ref.deref();
+      const spent = host && (tries.get(host)?.count ?? 0) >= NAMED_TRIES;
+      if (!host || !host.isConnected || spent)
+        drop2(ref, host);
+    }
+  }
+  function drop2(ref, host) {
+    waiting.delete(ref);
+    if (host)
+      handed.add(host);
+  }
+  function namedWaiting() {
+    for (const ref of waiting) {
+      const host = ref.deref();
+      if (host?.isConnected && certain.has(host))
+        return true;
+    }
+    return false;
   }
   function keep(roots) {
     for (const root of roots) {
@@ -9844,6 +9889,9 @@ ${value.stack}`;
       if (isBrowserOSUi(host) || walkedRoots.has(host))
         continue;
       walkedRoots.set(host, root);
+      const entry = entries.get(host);
+      if (entry)
+        drop2(entry, host);
     }
   }
   function knownRoot(host) {
@@ -9859,11 +9907,24 @@ ${value.stack}`;
       return false;
     return knownRoot(element) === null;
   }
-  function point(host) {
+  function point(host, byInput = false) {
+    if (byInput)
+      certain.add(host);
     if (pointed.has(host))
       return;
+    if (!byInput && waiting.size >= WAITING_MOST)
+      return;
     pointed.add(host);
-    waiting.add(new WeakRef(host));
+    const entry = new WeakRef(host);
+    entries.set(host, entry);
+    waiting.add(entry);
+  }
+  function listen2(root) {
+    if (root.mode !== "closed" || listened.has(root) || !heard)
+      return;
+    listened.add(root);
+    root.addEventListener("beforeinput", heard, true);
+    root.addEventListener("input", heard, true);
   }
   function pointFocus(document2) {
     let holder = document2.activeElement;
@@ -9876,15 +9937,13 @@ ${value.stack}`;
     if (holder?.matches(":focus") && unknownHost(holder))
       point(holder);
   }
-  function look2(document2, view, listen) {
+  function look2(document2) {
+    const view = document2.defaultView;
     const roots = [document2];
     let boxes = false;
     for (const root of roots) {
-      if (root instanceof ShadowRoot && root.mode === "closed" && !listened.has(root)) {
-        listened.add(root);
-        root.addEventListener("input", listen, true);
-        root.addEventListener("keydown", listen, true);
-      }
+      if (root instanceof ShadowRoot)
+        listen2(root);
       for (const field of root.querySelectorAll("input, textarea")) {
         if (!isPrivateField(field, { declared: true }))
           continue;
@@ -10707,7 +10766,7 @@ ${value.stack}`;
         if (request.op === "pinned")
           return pinned(booted, request);
         if (request.op === "privateHosts")
-          return privateHosts();
+          return privateHosts(request);
         const output = new FailureOutput(booted, policy);
         const reply = output.run(() => dispatch(booted, request.op, request, scope, nodes, output));
         return reply instanceof Promise ? reply.catch(thrownReply) : reply;

@@ -30,7 +30,7 @@ export const REQUEST_EXAMPLES: { [O in Op]: AtLeastOne<RequestOf<O>> } = {
   screenshotMask: [{ op: 'screenshotMask', target: GO_BUTTON, color: '#F0F' }],
   screenshotMaskCleanup: [{ op: 'screenshotMaskCleanup' }],
   privateShown: [{ op: 'privateShown' }, { op: 'privateShown', walk: true }],
-  privateHosts: [{ op: 'privateHosts' }],
+  privateHosts: [{ op: 'privateHosts', limit: 16 }],
   webStorage: [
     { op: 'webStorage', kind: 'local', action: 'items' },
     { op: 'webStorage', kind: 'session', action: 'getItem', name: 'token' },

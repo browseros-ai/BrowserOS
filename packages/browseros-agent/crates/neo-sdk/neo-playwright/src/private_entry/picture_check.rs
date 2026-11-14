@@ -32,22 +32,27 @@
 //!
 //! A box inside a closed shadow root is out of reach of every script, so the camera reaches such
 //! a root from its host, on demand (ruling R65). Typing that reaches the root arrives at the
-//! world's listener as a trusted event whose first target is the host, which takes no input
-//! itself; a box that holds the focus makes its host the document's active element. The page
-//! side counts such an event as input at once and keeps the host until the camera asks for it.
-//! No DOM capture: a host costs one description and one resolve, about 2 ms for a chain of two
-//! roots on a page of 75,000 elements, whose capture would take 930 ms. Each host is asked once,
-//! and anything short of a full second answer within [`WALK_BUDGET`] leaves the first answer as it
-//! was, so the walk never turns a clear reading into an unknown one (the design keeper's
-//! conditions). A root nothing typed into and whose box never held the focus stays unknown until
-//! a marked snapshot opens it to the world, a named limit.
+//! world's listener as a trusted input or beforeinput event whose first target is the host, which
+//! takes no input itself; a box that holds the focus makes its host the document's active
+//! element. The page side counts such an event as input at once and keeps the host until the
+//! camera asks for it. A key is not listened for: one that types nothing fires no input event and
+//! never moves a reading. No DOM capture: a host costs one description and one resolve, about 2
+//! ms for a chain of two roots on a page of 75,000 elements, whose capture would take 930 ms.
+//!
+//! What a failed read costs depends on what pointed at the host (the design keeper's rulings). A
+//! host the focus pointed at is asked once, and a read that fails or runs out of time leaves the
+//! answer as main gives it, so for such a host the walk never turns a clear reading into an
+//! unknown one. A host that typing reached is certain to hold a box someone typed into: while it
+//! is unread the reading is unknown, and it is handed over again at each reading, five at most,
+//! after which it reads as on main. A root nothing typed into and whose box never held the focus
+//! stays unknown until a marked snapshot opens it to the world, a named limit.
 //!
 //! A tab that took the host's private fill never reaches this question: the entry's tab-life
 //! set withholds it first. So what decides here is what the page itself declares private and a
 //! script typed, or the owner did. A frame that cannot be read answers `Unknown`, which the camera
 //! treats as private: a picture is never stored on a guess.
 
-use std::fmt::{Debug, Write as _};
+use std::fmt::Write as _;
 use std::time::Duration;
 
 use browseros_core::{FrameId, TabId};
@@ -80,8 +85,13 @@ const WALK_RESERVE: Duration = Duration::from_millis(200);
 
 /// How many rounds one frame's walk takes at one reading. A root found in one round may hold the
 /// focus on a nested host, which the second answer points at, and the next round reads its root;
-/// a chain deeper than this goes on at the next reading, whose answer still names its host.
+/// while hosts wait the walk goes on. A chain deeper than this goes on at the next reading, whose
+/// answer still names its host.
 const WALK_ROUNDS: usize = 4;
+
+/// How many hosts one round takes. The page hands over first the hosts a trusted input event
+/// named (real closed hosts), then the one the focus pointed at.
+const HOSTS_PER_ROUND: u32 = 16;
 
 /// One frame's answer to the camera's question.
 enum Asked {
@@ -189,7 +199,7 @@ impl Playwright {
                 let asked = match (asked, world) {
                     (Asked::Answered(reply), Some(world)) if waiting(&reply) => {
                         let ends = (Instant::now() + WALK_BUDGET).min(deadline - WALK_RESERVE);
-                        Asked::Answered(walked(&world, reply, ends).await)
+                        walked(&world, reply, ends).await
                     }
                     (asked, _) => asked,
                 };
@@ -259,65 +269,106 @@ impl Playwright {
 
 /// Whether `reply` names hosts waiting for the camera's walk on demand (`hosts`).
 fn waiting(reply: &ProbeReply) -> bool {
+    flag(reply, "hosts")
+}
+
+/// Whether `reply` names a host waiting that a trusted input event named (`named`): typing
+/// reached a closed root there, so the reading is not clear until that host is asked.
+fn named(reply: &ProbeReply) -> bool {
+    flag(reply, "named")
+}
+
+fn flag(reply: &ProbeReply, name: &str) -> bool {
     matches!(reply, ProbeReply::Value { value }
-        if value.as_value().get("hosts").and_then(Value::as_bool) == Some(true))
+        if value.as_value().get(name).and_then(Value::as_bool) == Some(true))
 }
 
 /// The frame's answer once the closed roots of the hosts it has waiting are read (ruling R65):
 /// round by round, the hosts handed over, each one's closed root from the browser, and the
-/// question again with those roots, up to [`WALK_ROUNDS`] and by `ends`. Everything short of a
-/// whole second answer leaves the answer before it: no host with a closed root, a hand-over,
-/// description, resolve or question that fails or runs out of time, an answer in part. The page
-/// marks a host handed as it goes, so none of those is tried again.
+/// question again with the roots found, while hosts wait, up to [`WALK_ROUNDS`] and by `ends`.
+///
+/// The page keeps the rules of who waits (`private-shown.ts`): a host the focus pointed at is
+/// asked once, and a failed read leaves it as on main; one that a trusted input event named is
+/// handed over again at each reading until its root is kept, five readings at most. While such a
+/// host waits unread, whatever stopped the walk (a failed read, no time left, a hand-over that
+/// failed, more hosts than the rounds take), the reading is unknown, never clear: typing reached a
+/// closed root there and its box is unread (the design keeper's ruling B). Debug lines name the
+/// step and never what a host or its description holds.
 ///
 /// It runs outside any op, as the question itself does: the hand-over's remote array and the
 /// resolved roots live in an object group of the walk's own, released when it ends on every path,
 /// a timeout that drops it included. The world keeps the roots for this question alone and never
 /// opens them to its engine.
-async fn walked(world: &IsolatedWorld, first: ProbeReply, ends: Instant) -> ProbeReply {
+async fn walked(world: &IsolatedWorld, first: ProbeReply, ends: Instant) -> Asked {
     let group = ObjectGroup::new();
     let name = group.on(world.session());
+    let mut unread = named(&first);
     let mut reply = first;
     for _ in 0..WALK_ROUNDS {
         // A round started late would still hand its hosts over before the timeout is asked
         // (tokio polls the future first), spending them with nothing read: they wait instead.
         if Instant::now() >= ends {
-            tracing::debug!(
-                frame = world.frame().as_str(),
-                "the camera's walk of a closed shadow root had no time left"
-            );
-            return reply;
+            ended(world, "no time left");
+            break;
         }
-        let ended = match time::timeout_at(ends, round(world, name)).await {
-            Ok(Ok(None)) => return reply,
-            Ok(Ok(Some(second))) if complete(&second) => {
+        match time::timeout_at(ends, round(world, name)).await {
+            Ok(Ok(Round::Idle)) => break,
+            Ok(Ok(Round::Answered(second))) => {
+                unread = named(&second);
                 let more = waiting(&second);
                 reply = second;
-                if more {
-                    continue;
+                if !more {
+                    break;
                 }
-                return reply;
             }
-            Ok(Ok(Some(_))) => "an answer in part".to_owned(),
-            Ok(Err(words)) => words,
-            Err(_late) => "timeout".to_owned(),
-        };
-        tracing::debug!(
-            frame = world.frame().as_str(),
-            reason = %ended,
-            "the camera's walk of a closed shadow root ended early"
-        );
-        return reply;
+            Ok(Ok(Round::Unanswered(why)) | Err(why)) => {
+                ended(world, why);
+                break;
+            }
+            Err(_late) => {
+                ended(world, "timeout");
+                break;
+            }
+        }
     }
-    reply
+    if unread {
+        ended(world, "typing reached a closed root that is not read yet");
+        return Asked::Failed;
+    }
+    Asked::Answered(reply)
 }
 
-/// One round of the walk: the hosts waiting, each one's closed root, and the question again with
-/// those roots; `None` when no host handed over carries a closed root.
-async fn round(world: &IsolatedWorld, group: &str) -> Result<Option<ProbeReply>, String> {
-    let hosts = probe::private_hosts(world, group)
+/// One debug line where the walk stops short: the step only.
+fn ended(world: &IsolatedWorld, why: &str) {
+    tracing::debug!(
+        frame = world.frame().as_str(),
+        why,
+        "the camera's walk of a closed shadow root ended early"
+    );
+}
+
+/// What one round of the walk came to.
+enum Round {
+    /// No host waited to be handed over at this reading.
+    Idle,
+    /// The question asked again with the roots found, perhaps none, answered whole: its flags say
+    /// what still waits.
+    Answered(ProbeReply),
+    /// Hosts were handed over, and the question asked again failed or answered in part.
+    Unanswered(&'static str),
+}
+
+/// One round of the walk: up to [`HOSTS_PER_ROUND`] of the hosts waiting, each one's closed root,
+/// and the question again with the roots found. It is asked even when none came back, so the
+/// page's answer says whether a host that input reached is still unread. `Err` when the
+/// hand-over itself failed.
+async fn round(world: &IsolatedWorld, group: &str) -> Result<Round, &'static str> {
+    let hosts = probe::private_hosts(world, group, HOSTS_PER_ROUND)
         .await
-        .map_err(|failure| format!("the hand-over failed: {failure:?}"))?;
+        .map_err(|_failed| "the hand-over failed")?;
+    if hosts.is_empty() {
+        return Ok(Round::Idle);
+    }
     let roots: Vec<String> = join_all(
         hosts
             .into_iter()
@@ -327,13 +378,11 @@ async fn round(world: &IsolatedWorld, group: &str) -> Result<Option<ProbeReply>,
     .into_iter()
     .flatten()
     .collect();
-    if roots.is_empty() {
-        return Ok(None);
-    }
-    probe::picture_question(world, Some(&roots))
-        .await
-        .map(Some)
-        .map_err(|failure| format!("the second question failed: {failure:?}"))
+    Ok(match probe::picture_question(world, Some(&roots)).await {
+        Ok(second) if complete(&second) => Round::Answered(second),
+        Ok(_) => Round::Unanswered("an answer in part"),
+        Err(_failed) => Round::Unanswered("the second question failed"),
+    })
 }
 
 /// `DOM.describeNode`'s answer: the host and the shadow roots it carries.
@@ -385,11 +434,12 @@ struct ResolvedObject {
 /// description says `user-agent`. Depth 0 lists the host's shadow roots without its children,
 /// which on a container of 20,000 elements measured 4.2 MB and 244 ms at depth 1.
 async fn closed_root(world: &IsolatedWorld, group: &str, host: BackendNodeId) -> Option<String> {
-    let failed = |step: &str, error: &dyn Debug| {
+    // The step only: an error can carry what the browser answered, and a description the host's
+    // attributes, which a component may mirror its box's value into.
+    let failed = |step: &str| {
         tracing::debug!(
             frame = world.frame().as_str(),
             step,
-            error = ?error,
             "the camera could not read a host's closed shadow root"
         );
     };
@@ -400,7 +450,7 @@ async fn closed_root(world: &IsolatedWorld, group: &str, host: BackendNodeId) ->
             json!({ "backendNodeId": host, "depth": 0 }),
         )
         .await
-        .map_err(|error| failed("describe", &error))
+        .map_err(|_error| failed("describe"))
         .ok()?;
     let root = closed_of(described.node)?;
     let params = json!({
@@ -412,7 +462,7 @@ async fn closed_root(world: &IsolatedWorld, group: &str, host: BackendNodeId) ->
         .session()
         .send::<_, Resolved>("DOM.resolveNode", params)
         .await
-        .map_err(|error| failed("resolve", &error))
+        .map_err(|_error| failed("resolve"))
         .ok()?;
     Some(resolved.object.object_id)
 }
@@ -533,7 +583,7 @@ mod tests {
                 json!({ "kind": "value", "value": value }),
             )?)
         };
-        let whole = json!({ "shown": false, "inputs": 0, "boxes": true, "elements": 9 });
+        let whole = json!({ "shown": false, "inputs": 0, "boxes": true });
         assert!(complete(&reply(&whole)?));
         assert!(!complete(&reply(
             &json!({ "shown": false, "boxes": true })

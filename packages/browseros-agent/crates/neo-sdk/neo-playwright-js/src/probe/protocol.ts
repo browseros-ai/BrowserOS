@@ -53,6 +53,7 @@ export type SnapshotRequest = RequestOf<'snapshot'>
 export type ExpectRequest = RequestOf<'expect'>
 export type MatchUrlRequest = RequestOf<'matchUrl'>
 export type PinnedRequest = RequestOf<'pinned'>
+export type PrivateHostsRequest = RequestOf<'privateHosts'>
 export type DocumentRequest = RequestOf<'document'>
 export type SetContentRequest = RequestOf<'setContent'>
 export type ArmInputRequest = RequestOf<'armInput'>
