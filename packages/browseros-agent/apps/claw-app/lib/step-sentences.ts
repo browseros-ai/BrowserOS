@@ -49,7 +49,8 @@ export const TOOL_TO_VERB: Record<string, ReplayVerb> = {
 }
 
 export function verbForTool(toolName: string): ReplayVerb {
-  return TOOL_TO_VERB[toolName] ?? 'read'
+  // SDK operation names are open-ended; prototype properties are not tool entries.
+  return Object.hasOwn(TOOL_TO_VERB, toolName) ? TOOL_TO_VERB[toolName] : 'read'
 }
 
 /** Calls that only set up or check the agent's own state. */
@@ -124,7 +125,7 @@ function normalizeCall(
   const tool = dispatch.toolName
   const raw = parseJson(dispatch.argsJson)
   if (!Array.isArray(raw)) return { tool, args: isArgs(raw) ? raw : {} }
-  const kind = INPUT_KINDS[tool]
+  const kind = Object.hasOwn(INPUT_KINDS, tool) ? INPUT_KINDS[tool] : undefined
   if (kind === 'press') return { tool: 'act', args: { kind, key: raw[1] } }
   if (kind === 'scroll') {
     return { tool: 'act', args: { kind, direction: raw[1] } }
@@ -187,6 +188,14 @@ function describePursue(args: Args): string {
   return goal
     ? `neo took over the clicking: “${truncate(goal)}”`
     : 'neo took over the clicking'
+}
+
+/** A redacted run can stand alone, with a task name only when its audit row carries one. */
+function describeRun(args: Args): string {
+  const taskName = stringArg(args, 'taskName')
+  return taskName
+    ? `Ran a browser script for ${truncate(taskName)}`
+    : 'Ran a browser script'
 }
 
 function stringArg(args: Args, key: string): string | undefined {
@@ -390,6 +399,8 @@ export function describeStep(dispatch: ToolDispatchRow): string {
       return describeSkillSave(args)
     case 'pursue':
       return describePursue(args)
+    case 'run':
+      return describeRun(args)
     case 'run_skill': {
       const name = stringArg(args, 'name')
       return name ? `Ran ${name} the fast way` : 'Ran a skill the fast way'
