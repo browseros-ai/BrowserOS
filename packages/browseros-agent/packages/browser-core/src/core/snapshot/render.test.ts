@@ -22,6 +22,42 @@ function name(value: string): AXNode['name'] {
 }
 
 describe('renderSnapshot', () => {
+  test('keeps zero and fractional numeric field values', () => {
+    const nodes: AXNode[] = [
+      ax('1', 'RootWebArea', { children: ['2', '3'] }),
+      ax('2', 'spinbutton', {
+        name: name('Quantity'),
+        backendDOMNodeId: 1,
+        value: { type: 'integer', value: 0 },
+      }),
+      ax('3', 'spinbutton', {
+        name: name('Offset'),
+        backendDOMNodeId: 2,
+        value: { type: 'number', value: -1.25 },
+      }),
+    ]
+    expect(renderSnapshot(nodes, { refs: new RefMap() }).text).toBe(
+      '- spinbutton "Quantity" [ref=e1]: "0"\n- spinbutton "Offset" [ref=e2]: "-1.25"',
+    )
+  })
+
+  test('does not stringify non-finite or boolean field values', () => {
+    for (const value of [true, Number.NaN, Number.POSITIVE_INFINITY]) {
+      const nodes: AXNode[] = [
+        ax('1', 'RootWebArea', { children: ['2'] }),
+        ax('2', 'spinbutton', {
+          backendDOMNodeId: 1,
+          value: { type: 'number', value },
+        }),
+      ]
+      expect(renderSnapshot(nodes, { refs: new RefMap() }).text).toBe(
+        '- spinbutton [ref=e1]',
+      )
+    }
+    const nodes = [ax('1', 'button', { value: { type: 'integer', value: 42 } })]
+    expect(renderSnapshot(nodes, { refs: new RefMap() }).text).toBe('- button')
+  })
+
   test('renders semantic tree with refs only on actionable nodes', () => {
     const nodes: AXNode[] = [
       ax('1', 'RootWebArea', { children: ['2', '6'] }),
