@@ -555,6 +555,86 @@ async fn tests_that_a_box_on_a_page_that_cannot_scroll_is_refused_before_any_key
     Ok(())
 }
 
+/// Ruling R62's second writing, rows 8 to 11 for the fill: a text box three views tall with its
+/// top showing, and one that fills the view, are brought into view by their centre and looked at
+/// again there. In the page's own document, by one insertion and key by key, on a tab in front
+/// and a tab behind: clear, entered and read back, the box's centre in view when the fill ends;
+/// under a sheet over the view, refused `box_covered` before any key. In a small frame of
+/// another site: clear, entered; a sheet laid by the page above over the frame, refused. Fails
+/// with the centre scroll taken out: each is refused `cover_unread`.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_box_larger_than_its_view_is_entered_by_its_centre() -> TestResult {
+    const SECRET: &str = "CANARY-larger-than-view-8";
+    let bench = Bench::start().await?;
+    let shapes = ["shape=tall", "shape=fills"];
+    for shape in shapes {
+        for sheet in [false, true] {
+            let path = format!(
+                "/private/larger-than-view.html?{shape}{}",
+                if sheet { "&sheet=1" } else { "" }
+            );
+            for place in PLACES {
+                for keys in [false, true] {
+                    let case = format!("{path}, {place:?}, keys {keys}");
+                    let opened = bench.open(&path, place).await?;
+                    let secret = bench.r#ref(&opened, "textbox", "Secret").await?;
+                    let env = bench.host(&opened);
+                    let field = Field::new(&secret, &bench.page_origin);
+                    let field = if keys { field.keys() } else { field };
+                    let entry = bench.enter(&env, &opened, vec![field.with(SECRET)?]).await;
+                    if sheet {
+                        assert_eq!(entry.outcome, EntryOutcome::Refused, "{case}: {entry:?}");
+                        assert_eq!(code(&entry), Some("box_covered"), "{case}");
+                        assert_eq!(bench.value(&opened, &secret).await?, "", "{case}");
+                    } else {
+                        assert_eq!(entry.outcome, EntryOutcome::Entered, "{case}: {entry:?}");
+                        assert_eq!(bench.value(&opened, &secret).await?, SECRET, "{case}");
+                        let centred = bench
+                            .live
+                            .main_world(&opened.page, "centreInView()")
+                            .await?;
+                        assert_eq!(
+                            centred,
+                            json!(true),
+                            "{case}: the centre in view at the end"
+                        );
+                    }
+                    bench.close(opened).await?;
+                }
+            }
+        }
+    }
+    for shape in shapes {
+        let inner = bench.server.url(
+            "localhost",
+            &format!("/private/larger-than-view.html?{shape}"),
+        );
+        let frame: String = byte_serialize(inner.as_bytes()).collect();
+        for (cover, entered) in [("none", true), ("sheet", false)] {
+            let path = format!("/private/parent-cover.html?cover={cover}&frame={frame}");
+            for place in PLACES {
+                let case = format!("{shape} in a frame, cover {cover}, {place:?}");
+                let opened = bench.open(&path, place).await?;
+                let secret = bench.r#ref(&opened, "textbox", "Secret").await?;
+                let env = bench.host(&opened);
+                let field = Field::new(&secret, &bench.other_origin).with(SECRET)?;
+                let entry = bench.enter(&env, &opened, vec![field]).await;
+                if entered {
+                    assert_eq!(entry.outcome, EntryOutcome::Entered, "{case}: {entry:?}");
+                    assert_eq!(bench.value(&opened, &secret).await?, SECRET, "{case}");
+                } else {
+                    assert_eq!(entry.outcome, EntryOutcome::Refused, "{case}: {entry:?}");
+                    assert_eq!(code(&entry), Some("box_covered"), "{case}");
+                    assert_eq!(bench.value(&opened, &secret).await?, "", "{case}");
+                }
+                bench.close(opened).await?;
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Rulings R55 and R56: a sign-in whose two boxes each sit under a sibling div that draws the
 /// field's name and takes the pointer, which is no `<label>`. With nothing set by the host, both
 /// boxes are entered and read back whole, by one insertion and key by key, on a tab in front and

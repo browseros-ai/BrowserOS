@@ -199,36 +199,149 @@ pub(crate) async fn look_at(
             keys: field.keys,
             frame_visible: site.frame_visible(),
         };
-        let looked = match within(
-            scope,
-            site.call(scope, page, &ProbeRequest::Look { pin, look: ask }),
-        )
-        .await?
-        {
-            Ok(ProbeReply::Value { value }) => decode_looked(value.into_value())?,
-            // The pin's element left its document, or the document went, since the resolve.
-            Ok(ProbeReply::Detached) | Err(ProbeFailure::Gone(_)) => {
-                return Ok(Look::Unfound(EntryCode::ElementDetached));
-            }
-            Ok(_) => return Err(EntryCode::Internal),
-            Err(failure) => return Err(failure_code(failure)),
-        };
-        let above = match pages_above(scope, page, &site, pin, &looked).await? {
-            Above::Clear => None,
-            Above::Refused(code) => Some(code),
-            Above::Gone => return Ok(Look::Unfound(EntryCode::ElementDetached)),
+        let Some((looked, above)) = look_in_view(scope, page, &site, pin, &ask).await? else {
+            return Ok(Look::Unfound(EntryCode::ElementDetached));
         };
         return Ok(found(site, pin, looked, above, address));
     }
     Ok(Look::Unfound(EntryCode::ElementDetached))
 }
 
+/// The page side's look at the pinned box, where it stands in its own frame's view (ruling R62),
+/// and what the pages above its frame say of it (ruling R60): the look and the refusal they
+/// add, or `None` when the box or a frame on the way went away.
+///
+/// The look's scroll has two steps. Step 1, R61's, brought the whole box into view before this.
+/// A box larger than its view is shown by its nearest edge, so its centre can stay out of view
+/// though the page could show it. Step 2 runs only then, for a sized box the page side passed:
+/// it brings the centre itself into view at once, runs the page side's look again so that its
+/// own hit is asked at a centre in view, and reads the centre again. Once for each look. Only a
+/// centre still out of view answers `cover_unread`: the page cannot scroll there. The page is
+/// left where step 2 put it. A box in view after step 1 never reaches step 2, so nothing changes
+/// for it: not its answer, not the page's place, not the number of messages.
+async fn look_in_view(
+    scope: &OpScope<'_>,
+    page: &OpPage<'_>,
+    site: &Resolved,
+    pin: Pin,
+    ask: &BoxAsk,
+) -> Result<Option<(Looked, Option<EntryCode>)>, EntryCode> {
+    let Some(mut looked) = look_once(scope, page, site, pin, ask).await? else {
+        return Ok(None);
+    };
+    let mut place = place_of(scope, page, site, pin, &looked).await?;
+    if matches!(place, Standing::Out) {
+        if !centre_into_view(scope, page, site, pin).await? {
+            return Ok(None);
+        }
+        let Some(again) = look_once(scope, page, site, pin, ask).await? else {
+            return Ok(None);
+        };
+        looked = again;
+        place = place_of(scope, page, site, pin, &looked).await?;
+    }
+    let above = match place {
+        Standing::Unasked => None,
+        Standing::Out => Some(EntryCode::CoverUnread(Unread::Unreachable)),
+        Standing::Gone => return Ok(None),
+        Standing::In(centre) => match pages_above(scope, page, site, centre).await? {
+            Above::Clear => None,
+            Above::Refused(code) => Some(code),
+            Above::Gone => return Ok(None),
+        },
+    };
+    Ok(Some((looked, above)))
+}
+
+/// One page-side look at the pinned box; `None` when its element left its document, or the
+/// document went, since the resolve.
+async fn look_once(
+    scope: &OpScope<'_>,
+    page: &OpPage<'_>,
+    site: &Resolved,
+    pin: Pin,
+    ask: &BoxAsk,
+) -> Result<Option<Looked>, EntryCode> {
+    let request = ProbeRequest::Look {
+        pin,
+        look: ask.clone(),
+    };
+    match within(scope, site.call(scope, page, &request)).await? {
+        Ok(ProbeReply::Value { value }) => decode_looked(value.into_value()).map(Some),
+        Ok(ProbeReply::Detached) | Err(ProbeFailure::Gone(_)) => Ok(None),
+        Ok(_) => Err(EntryCode::Internal),
+        Err(failure) => Err(failure_code(failure)),
+    }
+}
+
+/// Where a box stands in its own frame's view.
+#[derive(Clone, Copy, Debug)]
+enum Standing {
+    /// Nothing to place: the page side refused the box, or it has no size and is reached by
+    /// focus alone.
+    Unasked,
+    /// The centre of its border box, inside its own frame's view.
+    In(Point),
+    /// Its centre outside its own frame's view.
+    Out,
+    /// The box went away.
+    Gone,
+}
+
+/// The `viewCentre` read for a sized box the page side passed. The click's own measure is not
+/// used: it called a box wholly above and left of the view in view.
+async fn place_of(
+    scope: &OpScope<'_>,
+    page: &OpPage<'_>,
+    site: &Resolved,
+    pin: Pin,
+    looked: &Looked,
+) -> Result<Standing, EntryCode> {
+    let sized = looked.facts.as_ref().is_some_and(|facts| facts.sized);
+    if looked.refusal.is_some() || !sized {
+        return Ok(Standing::Unasked);
+    }
+    let read = ProbeRequest::Read {
+        target: ProbeTarget::Pin(pin),
+        strictness: Strictness::Strict,
+        frame_visible: site.frame_visible(),
+        read: Read::ViewCentre,
+    };
+    match within(scope, site.call(scope, page, &read)).await? {
+        Ok(ProbeReply::Read { value, .. }) => {
+            match serde_json::from_value::<Option<Point>>(value.into_value()) {
+                Ok(Some(centre)) => Ok(Standing::In(centre)),
+                Ok(None) => Ok(Standing::Out),
+                Err(_unreadable) => Err(EntryCode::Internal),
+            }
+        }
+        Ok(ProbeReply::Detached) | Err(ProbeFailure::Gone(_)) => Ok(Standing::Gone),
+        Ok(_) => Err(EntryCode::Internal),
+        Err(failure) => Err(failure_code(failure)),
+    }
+}
+
+/// Step 2 of the look's scroll: the box's centre into the middle of its view at once, in its own
+/// frame and every frame above (`protocol_scroll::centre_into_view`). `false` when the box went
+/// away.
+async fn centre_into_view(
+    scope: &OpScope<'_>,
+    page: &OpPage<'_>,
+    site: &Resolved,
+    pin: Pin,
+) -> Result<bool, EntryCode> {
+    let centred = protocol_scroll::centre_into_view(scope, page, site.world(), pin);
+    match within(scope, centred).await? {
+        Ok(()) => Ok(true),
+        Err(ProbeFailure::Gone(_)) => Ok(false),
+        Err(failure) => Err(failure_code(failure)),
+    }
+}
+
 /// What the pages above a box's frame say of its centre (ruling R60).
 #[derive(Debug, PartialEq, Eq)]
 enum Above {
-    /// The box is in view in its own frame and nothing above takes the pointer there, or there
-    /// was nothing to ask: the page side already refused it, or it has no size and is reached by
-    /// focus.
+    /// Nothing above takes the pointer there, or the box is in the main frame.
     Clear,
     /// `box_covered` from a page above, or `cover_unread`.
     Refused(EntryCode),
@@ -236,21 +349,15 @@ enum Above {
     Gone,
 }
 
-/// First whether the box can be seen at all (ruling R62): after the look's instant scroll
-/// (ruling R61), a sized box whose centre is still outside its own frame's view is not typed,
-/// in the page's own document as in a frame. Nothing is at such a centre, and nothing used to
-/// read as no cover: a box 3000 pixels down a page that cannot scroll (a dialog's scroll lock by
-/// a fixed body) was entered under a sheet over the view. It answers `cover_unread`.
+/// Asks every page above the box's frame, from the top document down, what takes the pointer
+/// at the box's centre, out-of-process frames included. The page side's look sees only the
+/// documents its frame can reach (`frameElement` stops at an origin boundary), so before this a
+/// banner in a cross-origin parent over a sign-in frame was not seen, and a host reported a
+/// password typed under one. This reuses the click's projection (`frame_projection::project`,
+/// upstream's `_checkFrameIsHitTarget`) with the look's rules (`Asker::Look`):
 ///
-/// Then, for a box in a child frame, asks every page above the box's frame, from the top
-/// document down, what takes the pointer at the box's centre, out-of-process frames included.
-/// The page side's look sees only the documents its frame can reach (`frameElement` stops at an
-/// origin boundary), so before this a banner in a cross-origin parent over a sign-in frame was
-/// not seen, and a host reported a password typed under one. This reuses the click's projection
-/// (`frame_projection::project`, upstream's `_checkFrameIsHitTarget`) with the look's rules
-/// (`Asker::Look`):
-///
-/// - the look first brought the box into view at once in every page (ruling R61);
+/// - the box is already in view in its own frame (`look_in_view`), and the look's instant
+///   scrolls brought it into view in every page above too (rulings R61 and R62);
 /// - a parent's hit on the frame's owner element, or on what holds it, is clear; a parent that
 ///   still cannot show the point (it cannot scroll there, or clips the frame away) answers
 ///   `cover_unread`;
@@ -264,34 +371,8 @@ async fn pages_above(
     scope: &OpScope<'_>,
     page: &OpPage<'_>,
     site: &Resolved,
-    pin: Pin,
-    looked: &Looked,
+    centre: Point,
 ) -> Result<Above, EntryCode> {
-    let sized = looked.facts.as_ref().is_some_and(|facts| facts.sized);
-    if looked.refusal.is_some() || !sized {
-        return Ok(Above::Clear);
-    }
-    // Where the look's instant scroll (ruling R61) left the box: its centre in its own frame's
-    // view, or none when that centre is outside it. The click's own measure is not used here: it
-    // called a box wholly above and left of the view in view.
-    let read = ProbeRequest::Read {
-        target: ProbeTarget::Pin(pin),
-        strictness: Strictness::Strict,
-        frame_visible: site.frame_visible(),
-        read: Read::ViewCentre,
-    };
-    let centre = match within(scope, site.call(scope, page, &read)).await? {
-        Ok(ProbeReply::Read { value, .. }) => {
-            serde_json::from_value::<Option<Point>>(value.into_value())
-                .map_err(|_unreadable| EntryCode::Internal)?
-        }
-        Ok(ProbeReply::Detached) | Err(ProbeFailure::Gone(_)) => return Ok(Above::Gone),
-        Ok(_) => return Err(EntryCode::Internal),
-        Err(failure) => return Err(failure_code(failure)),
-    };
-    let Some(centre) = centre else {
-        return Ok(Above::Refused(EntryCode::CoverUnread(Unread::Unreachable)));
-    };
     if site.path().hops().is_empty() {
         return Ok(Above::Clear);
     }

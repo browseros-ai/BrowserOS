@@ -48,6 +48,38 @@ pub(crate) async fn scroll_if_needed(
     }
 }
 
+/// The element's centre into the middle of its view at once, in its own scrollers and every
+/// frame above, whatever their `scroll-behavior`: `scrollIntoView` with `block` and `inline` at
+/// `center` and `behavior: 'instant'`, called on the pinned element in Neo's isolated world, so a
+/// page's own override of the method is never reached. The private look's second step uses it
+/// for a box larger than its view, which [`scroll_if_needed`] shows by its nearest edge
+/// (protected-fill ruling R62). The protocol's call with a rectangle at the centre was measured
+/// to leave that rectangle at the view's edge, under the scrollbar, where a hit finds nothing.
+pub(crate) async fn centre_into_view(
+    scope: &OpScope<'_>,
+    page: &OpPage<'_>,
+    world: &IsolatedWorld,
+    pin: Pin,
+) -> Result<(), ProbeFailure> {
+    let Some(object) = probe::pinned_object(scope, page, world, pin).await? else {
+        return Ok(());
+    };
+    let params = json!({
+        "objectId": object,
+        "functionDeclaration": CENTRE_INTO_VIEW,
+        "returnByValue": true,
+        "objectGroup": scope.object_group(world.session()),
+    });
+    world
+        .session()
+        .send::<_, Value>("Runtime.callFunctionOn", params)
+        .await
+        .map(|_| ())
+        .map_err(ProbeFailure::from_core)
+}
+
+const CENTRE_INTO_VIEW: &str = "function () { this.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' }) }";
+
 /// The two refusals upstream turns into `error:notvisible` and `error:notconnected`
 /// (crPage.ts `_scrollRectIntoViewIfNeeded`).
 fn unscrollable(error: &CoreError) -> bool {

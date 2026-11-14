@@ -500,7 +500,8 @@ paths:
         first; a box that is gone, not a text input, on another origin, of another type,
         changed from what the host approved, disabled, hidden, covered, or too short for the
         value refuses the whole call before any key. Neo brings each box into view at once
-        before it asks what covers it, whatever scrolling the page has set. A box with a size
+        before it asks what covers it, whatever scrolling the page has set, and a box larger
+        than its view by its centre, which leaves the page scrolled there. A box with a size
         that Neo cannot bring into view (a page that cannot scroll there, as a dialog's scroll
         lock makes it, or a box parked off the page) is not typed, and answers `cover_unread`.
         Then it types each value, in one insertion

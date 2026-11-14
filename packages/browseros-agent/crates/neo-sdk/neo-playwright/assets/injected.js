@@ -9690,8 +9690,8 @@ ${value.stack}`;
       return null;
     const x = box.x + box.width / 2;
     const y = box.y + box.height / 2;
-    const view = element.ownerDocument.defaultView;
-    if (!view || x < 0 || y < 0 || x >= view.innerWidth || y >= view.innerHeight)
+    const port = element.ownerDocument.scrollingElement;
+    if (!port || x < 0 || y < 0 || x >= port.clientWidth || y >= port.clientHeight)
       return null;
     return { x, y };
   }

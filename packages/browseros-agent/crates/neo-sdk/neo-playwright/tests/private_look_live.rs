@@ -1485,3 +1485,105 @@ async fn tests_that_a_box_that_cannot_be_brought_into_view_is_refused() -> TestR
     assert!(failures.is_empty(), "{failures:#?}");
     Ok(())
 }
+
+/// Ruling R62's second writing, rows 8 to 12 for the look, which the host's check call makes: a
+/// box larger than its view, which the browser's scroll shows by its nearest edge or leaves
+/// where it is, is brought into view by its centre and looked at again there. A text box three
+/// views tall with its top showing, and one that fills the view, in the page's own document and
+/// in a small frame of another site: clear, they pass and end with their centre in view; under
+/// a sheet, laid in their own document or by the page above over the frame, `box_covered`. The
+/// tall box on a page that cannot scroll, and a fixed box with its centre off the view's edge,
+/// still answer `cover_unread`. Fails with the centre scroll taken out: the tall and filling
+/// boxes answer `cover_unread`; with the second look taken out, their sheet rows in the own
+/// document pass.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_box_larger_than_its_view_is_looked_at_by_its_centre() -> TestResult {
+    let sites = Sites::start().await?;
+    let live = LiveBrowser::connect().await?;
+    let own = Some(EntryCode::BoxCovered(CoverIn::OwnDocument));
+    let above = Some(EntryCode::BoxCovered(CoverIn::PageAbove));
+    let unreachable = Some(EntryCode::CoverUnread(Unread::Unreachable));
+    let inner = |query: &str| format!("/private/larger-than-view.html?{query}");
+    let cases = [
+        (
+            sites.url(Host::Page, &inner("shape=tall")),
+            Host::Page,
+            None,
+        ),
+        (
+            sites.url(Host::Page, &inner("shape=tall&sheet=1")),
+            Host::Page,
+            own,
+        ),
+        (
+            sites.url(Host::Page, &inner("shape=fills")),
+            Host::Page,
+            None,
+        ),
+        (
+            sites.url(Host::Page, &inner("shape=fills&sheet=1")),
+            Host::Page,
+            own,
+        ),
+        (
+            sites.url(Host::Page, &inner("shape=tall&lock=1")),
+            Host::Page,
+            unreachable,
+        ),
+        (
+            sites.url(Host::Page, &inner("shape=fixed")),
+            Host::Page,
+            unreachable,
+        ),
+        (
+            sites.page("cover=none", &[Host::OtherSite], &inner("shape=tall")),
+            Host::OtherSite,
+            None,
+        ),
+        (
+            sites.page("cover=sheet", &[Host::OtherSite], &inner("shape=tall")),
+            Host::OtherSite,
+            above,
+        ),
+        (
+            sites.page("cover=none", &[Host::OtherSite], &inner("shape=fills")),
+            Host::OtherSite,
+            None,
+        ),
+        (
+            sites.page("cover=sheet", &[Host::OtherSite], &inner("shape=fills")),
+            Host::OtherSite,
+            above,
+        ),
+    ];
+    let mut failures = Vec::new();
+    for (url, host, wanted) in cases {
+        let page = live.open(&url).await?;
+        let r#ref = private_host::ref_of(&live, &page, "textbox", "Secret").await?;
+        let env = HostEnv::new(&live);
+        for keys in [false, true] {
+            let ask = LookField {
+                keys,
+                ..field(&r#ref, Some(expecting(&sites.origin(host))))
+            };
+            let answer = look_one(&live, &env, &page, ask).await?;
+            if sentence(&answer) != wanted.map(EntryCode::message) {
+                failures.push(format!("{url}, keys {keys}: {:?}", code(&answer)));
+            }
+        }
+        // The page is left where the centre scroll put it.
+        if wanted.is_none()
+            && matches!(host, Host::Page)
+            && live.main_world(&page, "centreInView()").await? != json!(true)
+        {
+            failures.push(format!(
+                "{url}: the box's centre is not in view after the look"
+            ));
+        }
+        assert!(!env.was_sent(), "a look never marks itself sent");
+        live.close(&page).await?;
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+    Ok(())
+}

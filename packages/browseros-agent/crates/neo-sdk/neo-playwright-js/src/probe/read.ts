@@ -148,7 +148,7 @@ function borderBox(element: Element): Rect | null {
 
 /**
  * The private look's point for the pages above the box's frame (ruling R60): its border box's
- * centre, only when that lies inside this frame's viewport. A box whose centre is outside is not
+ * centre, only when that lies inside this frame's viewport, its scrollbars left out. A box whose centre is outside is not
  * asked above, as before: a page above would be asked at a place outside the frame, where a
  * neighbour of the frame would read as a cover.
  */
@@ -157,8 +157,15 @@ function viewCentre(element: Element): { x: number; y: number } | null {
   if (!box) return null
   const x = box.x + box.width / 2
   const y = box.y + box.height / 2
-  const view = element.ownerDocument.defaultView
-  if (!view || x < 0 || y < 0 || x >= view.innerWidth || y >= view.innerHeight)
+  // The view without its scrollbars: a hit on a scrollbar finds only the root.
+  const port = element.ownerDocument.scrollingElement
+  if (
+    !port ||
+    x < 0 ||
+    y < 0 ||
+    x >= port.clientWidth ||
+    y >= port.clientHeight
+  )
     return null
   return { x, y }
 }

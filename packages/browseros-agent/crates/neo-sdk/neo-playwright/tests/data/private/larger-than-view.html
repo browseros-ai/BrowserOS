@@ -1,0 +1,37 @@
+<!doctype html><meta charset=utf-8><title>A box larger than its view</title>
+<style>
+  body { margin: 0; }
+  body.locked { position: fixed; width: 100%; }
+  #sheet { position: fixed; inset: 0; z-index: 10; background: rgba(0, 0, 0, 0.4); }
+  .room { width: 500vw; height: 800vh; }
+  .box { position: absolute; box-sizing: border-box; margin: 0; }
+  .tall { left: 20px; top: calc(100vh - 40px); width: min(300px, calc(100vw - 40px)); height: 300vh; }
+  .fills { left: 0; top: 20px; width: 200vw; height: 400vh; }
+  .fixed { position: fixed; left: 20px; top: calc(100vh - 20px); width: 200px; height: 80px; }
+</style>
+<!-- A text box partly in view with its centre outside the view (ruling R62, second writing).
+     The browser's "scroll into view if needed" shows a box larger than the view by its nearest
+     edge, or leaves it where it is when it already fills the view, so its centre stays out of
+     view though the page could show it. Sizes are in view units, so the same shapes fit a small
+     frame whatever size it had when its page loaded.
+     ?shape=tall   three views tall, its top 40 pixels showing at the bottom of the view
+     ?shape=fills  four views tall and two wide, the page scrolled so the box fills the view
+     ?shape=fixed  position: fixed, its centre off the bottom edge, where no scroll moves it
+     ?lock=1       the page cannot scroll at all (a fixed body)
+     ?sheet=1      a sheet over the whole view, as a consent dialog lays one -->
+<div class=room></div>
+<script>
+  const q = new URLSearchParams(location.search)
+  document.write('<input class="box ' + q.get('shape') + '" aria-label="Secret">')
+  if (q.get('lock')) document.body.className = 'locked'
+  if (q.get('sheet')) document.write('<div id=sheet>Accept all</div>')
+  if (q.get('shape') === 'fills') addEventListener('load', () => scrollTo(0, 40))
+  // Whether the box's centre is in this page's view now, its scrollbars left out.
+  window.centreInView = () => {
+    const r = document.querySelector('.box').getBoundingClientRect()
+    const x = r.left + r.width / 2
+    const y = r.top + r.height / 2
+    const port = document.scrollingElement
+    return x >= 0 && y >= 0 && x < port.clientWidth && y < port.clientHeight
+  }
+</script>
