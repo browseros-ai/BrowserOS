@@ -345,7 +345,8 @@ async fn launch_config(launch: &EngineLaunch, port: u16) -> io::Result<Value> {
     Ok(config)
 }
 
-/// Desktop owns these two settings even when an earlier SDK launch saved overrides.
+/// Desktop owns these settings even when an earlier SDK launch saved overrides.
+/// Every desktop run carries a task. Browser scope keeps user and other agents' tabs accessible.
 /// Merge atomically so a crash cannot restore hosted defaults or drop unrelated settings.
 async fn configure_settings(path: &Path) -> io::Result<()> {
     let mut settings: serde_json::Map<String, Value> = match fs::read(path).await {
@@ -357,6 +358,7 @@ async fn configure_settings(path: &Path) -> io::Result<()> {
         Err(error) => return Err(error),
     };
     for (section, key, value) in [
+        ("tabs", "scope", json!("browser")),
         ("tabs", "idleCloseSeconds", json!(86400)),
         ("trace", "screenshots", json!("off")),
     ] {
@@ -757,11 +759,12 @@ mod tests {
         for existing in [
             json!({}),
             json!({"tabs":null,"trace":[]}),
-            json!({"tabs":{"idleCloseSeconds":1800},"trace":{"screenshots":"operations","valueBytes":42}}),
+            json!({"tabs":{"scope":"task","idleCloseSeconds":1800},"trace":{"screenshots":"operations","valueBytes":42}}),
         ] {
             tokio::fs::write(&path, serde_json::to_vec(&existing)?).await?;
             configure_settings(&path).await?;
             let saved: Value = serde_json::from_slice(&tokio::fs::read(&path).await?)?;
+            assert_eq!(saved["tabs"]["scope"], "browser");
             assert_eq!(saved["tabs"]["idleCloseSeconds"], 86400);
             assert_eq!(saved["trace"]["screenshots"], "off");
             assert_eq!(
@@ -774,7 +777,7 @@ mod tests {
         let saved: Value = serde_json::from_slice(&tokio::fs::read(&path).await?)?;
         assert_eq!(
             saved,
-            json!({"tabs":{"idleCloseSeconds":86400},"trace":{"screenshots":"off"}})
+            json!({"tabs":{"scope":"browser","idleCloseSeconds":86400},"trace":{"screenshots":"off"}})
         );
         Ok(())
     }
@@ -805,7 +808,7 @@ mod tests {
         let saved: Value = serde_json::from_slice(&tokio::fs::read(&path).await?)?;
         assert_eq!(
             saved,
-            json!({"tabs":{"idleCloseSeconds":86400},"trace":{"screenshots":"off"}})
+            json!({"tabs":{"scope":"browser","idleCloseSeconds":86400},"trace":{"screenshots":"off"}})
         );
         Ok(())
     }
