@@ -12,7 +12,19 @@ use tokio::{
     time::Instant,
 };
 
-use super::{EngineLaunch, EngineState, EngineUnavailable, NeoEngine, RunTool, wire::Wire};
+use super::{
+    EngineLaunch, EngineState, EngineUnavailable, NeoEngine, RunTool, host_api::HostApi, wire::Wire,
+};
+
+/// Attempt-owned credentials remain available through normal child shutdown.
+struct Spawned {
+    child: Child,
+    wire: Wire,
+    host: HostApi,
+    launch_file: tempfile::TempPath,
+    host_files: tempfile::TempDir,
+    port: u16,
+}
 
 /// Failed attempts move through this capped schedule. A minute of healthy
 /// service resets it, so a rapid crash loop cannot keep retrying once a second.
@@ -115,7 +127,14 @@ async fn run_attempt(
         () = engine.inner.stop.cancelled() => return AttemptExit::Stopped,
         spawned = spawn(&launch, previous_port) => spawned,
     };
-    let (mut child, wire, _launch_file, port) = match spawned {
+    let Spawned {
+        mut child,
+        wire,
+        host,
+        launch_file: _launch_file,
+        host_files: _host_files,
+        port,
+    } = match spawned {
         Ok(spawned) => spawned,
         Err(error) => {
             return AttemptExit::Failed {
@@ -159,6 +178,7 @@ async fn run_attempt(
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             connection.wire = Some(wire);
+            connection.host = Some(host);
             connection.tool = Some(tool);
         }
         ready_at = Some(Instant::now());
@@ -184,10 +204,7 @@ async fn run_attempt(
     }
 }
 
-async fn spawn(
-    launch: &EngineLaunch,
-    previous_port: Option<u16>,
-) -> io::Result<(Child, Wire, tempfile::TempPath, u16)> {
+async fn spawn(launch: &EngineLaunch, previous_port: Option<u16>) -> io::Result<Spawned> {
     let state_dir = std::path::absolute(&launch.state_dir)?;
     let sdk_dir = state_dir.join("claw-sdk");
     fs::create_dir_all(&sdk_dir).await?;
@@ -199,6 +216,21 @@ async fn spawn(
     let config = launch_config(launch, port).await?;
     let config_path = temporary_json(&sdk_dir, &config).await?;
     let wire = Wire::new(port).map_err(io::Error::other)?;
+    // Each attempt has its own 0700 directory and socket. Shared desktop state
+    // can host several stdio parents, so fixed credential/socket paths would race.
+    // Unix sockets have a short path limit. Keep them outside the possibly deep
+    // state directory while the explicit token path still gets SDK protection.
+    let host_files = tempfile::Builder::new().prefix("neo-host-").tempdir()?;
+    let token = format!(
+        "{}{}",
+        uuid::Uuid::new_v4().simple(),
+        uuid::Uuid::new_v4().simple()
+    );
+    let token_path = host_files.path().join("token");
+    fs::write(&token_path, &token).await?;
+    let host_reservation = reserve_port(None)?;
+    let host_port = host_reservation.local_addr()?.port();
+    let host = HostApi::new(host_port, token).map_err(io::Error::other)?;
     let mut command = Command::new(std::env::current_exe()?);
     command
         .arg("__neo-sdk")
@@ -207,22 +239,28 @@ async fn spawn(
         .env("BROWSERCLAW_DIR", &state_dir)
         .env("BROWSERCLAW_HOSTED_MODE", "0")
         .env("CLAW_XVNC_ADDR", "127.0.0.1:9")
-        // Optional host listeners must not inherit another SDK's socket/token.
-        // MCP needs none, and the browser owns its actual downloads location.
-        .env_remove("CLAW_HOST_TCP")
-        .env_remove("CLAW_HOST_SOCKET")
-        .env_remove("CLAW_HOST_TOKEN_FILE")
+        .env("CLAW_HOST_TCP", format!("127.0.0.1:{host_port}"))
+        .env("CLAW_HOST_SOCKET", host_files.path().join("host.sock"))
+        .env("CLAW_HOST_TOKEN_FILE", &token_path)
         .env_remove("CLAW_DOWNLOADS_DIR")
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::inherit())
         .kill_on_drop(true);
     drop(reservation);
+    drop(host_reservation);
     let child = command.spawn()?;
     tracing::info!(pid = child.id(), port, "the Playwright engine was started");
     // Keep this private path for the whole attempt so an operator can inspect
     // the actual version/flags/port used by this particular child.
-    Ok((child, wire, config_path, port))
+    Ok(Spawned {
+        child,
+        wire,
+        host,
+        launch_file: config_path,
+        host_files,
+        port,
+    })
 }
 
 fn reserve_port(previous_port: Option<u16>) -> io::Result<TcpListener> {

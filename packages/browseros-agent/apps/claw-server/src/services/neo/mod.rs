@@ -5,6 +5,7 @@
 mod child;
 #[cfg(unix)]
 mod engine_main;
+mod host_api;
 mod reply;
 mod session_tasks;
 mod wire;
@@ -26,6 +27,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{config::Config, ids::ConvoId};
 
+pub use host_api::{OperationOutcome, RunOperation};
 pub use session_tasks::TaskKey;
 
 /// Cheap shared handle. Tests construct a disabled engine, so building AppState
@@ -49,6 +51,7 @@ struct Inner {
 #[derive(Default)]
 struct Connection {
     wire: Option<wire::Wire>,
+    host: Option<host_api::HostApi>,
     tool: Option<RunTool>,
 }
 
@@ -410,11 +413,14 @@ impl NeoEngine {
     }
 
     fn unavailable_until(&self, reason: String, retry_at: Option<Instant>) {
-        self.inner
+        let mut connection = self
+            .inner
             .connection
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .wire = None;
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        connection.wire = None;
+        connection.host = None;
+        drop(connection);
         self.inner
             .state
             .send_replace(EngineState::Unavailable { reason, retry_at });

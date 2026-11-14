@@ -519,6 +519,62 @@ return [first.tabId, second.tabId]`,
       }
     },
   },
+  {
+    name: 'neo run: three steps reach the cockpit with redacted values',
+    async run(ctx) {
+      const session = await ctx.openSession('neo-steps-contract')
+      await waitUntil(
+        async () =>
+          !(await session.callTool('run', { code: 'return 1' })).isError,
+        'the SDK browser link',
+        { timeoutMs: 30_000 },
+      )
+      const secret = 'c8-private-typed-value'
+      const result = await session.callTool('run', {
+        code: `await page.goto(${JSON.stringify(ctx.fixture('/form.html'))});
+await page.locator('input').first().fill(${JSON.stringify(secret)});
+return await page.title()`,
+      })
+      expectOk(result, 'a three-step run')
+      await waitUntil(async () => {
+        const response = await apiGet(
+          ctx.server,
+          `/api/v1/sessions/${session.sessionId}`,
+        )
+        assert(response.ok)
+        const detail: unknown = await response.json()
+        assert(detail !== null && typeof detail === 'object')
+        assert('dispatches' in detail && Array.isArray(detail.dispatches))
+        const rows = detail.dispatches.map((row: unknown) => {
+          assert(row !== null && typeof row === 'object')
+          assert('dispatchKey' in row && typeof row.dispatchKey === 'string')
+          assert('toolName' in row && typeof row.toolName === 'string')
+          return row
+        })
+        const parent = rows.findLast((row) => row.toolName === 'run')
+        if (!parent) return false
+        const children = rows.filter(
+          (row) =>
+            'parentDispatchId' in row &&
+            row.parentDispatchId === parent.dispatchKey,
+        )
+        if (children.length !== 3) return false
+        assert.deepEqual(children.map((row) => row.toolName).sort(), [
+          'locator.fill',
+          'page.goto',
+          'page.title',
+        ])
+        assert(!JSON.stringify([parent, ...children]).includes(secret))
+        for (const row of [parent, ...children]) {
+          assert('argsJson' in row && typeof row.argsJson === 'string')
+          assert(row.argsJson.includes('[redacted]'))
+          assert(!('url' in row) || row.url === null)
+          assert(!('title' in row) || row.title === null)
+        }
+        return true
+      }, 'one run parent and three redacted child steps in the cockpit session')
+    },
+  },
 ]
 
 /** Reads the launcher's private browser independently of the server under test. */

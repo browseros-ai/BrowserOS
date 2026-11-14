@@ -68,6 +68,7 @@ pub(super) async fn call(
                 .observe_tasks(started.session.convo_id(), &outcome.tasks);
             let mut notes = after_run::tabs::apply(state, started, &outcome).await;
             notes.extend(after_run::naming::apply(state, started, &outcome).await);
+            after_run::steps::apply(state, started, &outcome, &dispatch_id).await;
             let mut reply = outcome.reply;
             reply
                 .content
