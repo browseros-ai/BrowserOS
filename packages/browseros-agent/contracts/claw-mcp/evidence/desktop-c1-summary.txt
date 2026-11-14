@@ -1,0 +1,42 @@
+Partial desktop stage 2, after C1 ca6d91c67 (#3626), before C2.
+Rebased C5 commit 463869bebd preserves C1's neoRunCases registration.
+Bun 1.4.2; Rust 1.98.0 via rustup; installed BrowserOS neo.
+Each case launched its own private browser profile and desktop server.
+No signed-in owner browser was used.
+
+Build from packages/browseros-agent:
+PATH="$HOME/.cargo/bin:$PATH" RUSTUP_TOOLCHAIN=1.98.0 CARGO_BUILD_BUILD_DIR="$PWD/target/build-private" cargo build --locked -p claw-server
+Result: passed.
+
+Each case below ran separately from packages/browseros-agent with:
+PATH="$HOME/.cargo/bin:$PATH" RUSTUP_TOOLCHAIN=1.98.0 CARGO_BUILD_BUILD_DIR="$PWD/target/build-private" BROWSEROS_BINARY='/Applications/BrowserOS neo.app/Contents/MacOS/BrowserOS neo' CLAW_MCP_ONLY='<full case name>' bun test --preload <local MCP recorder> ./contracts/claw-mcp/tests/rust-conformance.test.ts
+The recorder captures callTool arguments and complete replies into desktop-c1.jsonl.
+
+PASS playwright run: navigate and read a page
+PASS playwright run: ariaSnapshot refs drive getByRef click
+PASS playwright run: fill a field and read its submitted value
+PASS playwright run: context.newPage opens distinct readable tabs
+PASS playwright run: upload a Buffer payload without a host path
+PASS playwright run: download.saveAs writes the downloaded bytes
+PASS playwright run: expect failure includes expected and received values
+PASS playwright run: explicit tasks retain their page across runs
+PASS playwright run: screenshot resolves to PNG bytes
+PASS playwright run: pdf resolves to PDF bytes
+PASS playwright run: file navigation is refused
+PASS playwright run: uploads outside files.readDirs are refused
+PASS neo run: playwright drives a real tab
+
+13 pass
+0 fail
+No server findings. Expected expect/file-navigation/upload-policy errors satisfied their contracts.
+bun run check: passed after rebase.
+No tool-list or removed-tool case ran. Full smoke and full conformance remain
+pending captain confirmation that C2 has landed. Rust unit/lint, Chromium, SDK,
+and codegen gates are inapplicable; C5 changed only contracts and proof artifacts.
+The prior sf-review round was clean. This update preserves upstream registry lines
+and adds evidence; it makes no additional implementation change.
+
+Execution issue, not a server finding: an initial preload-before-test command
+invoked the broad package script. Its owned process tree was stopped, the captain
+was notified, and none of its results count. The corrected test-first command was
+first proven against the scoped client tests, 3 pass and 0 fail, then used above.
