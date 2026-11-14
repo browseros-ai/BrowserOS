@@ -543,6 +543,7 @@ dependencies = [
  "hosted-api",
  "neo-captcha",
  "neo-screencast",
+ "neo-server",
  "os_info",
  "posthog-rs",
  "pulldown-cmark",

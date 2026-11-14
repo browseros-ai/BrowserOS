@@ -6,6 +6,7 @@ use claw_server::{
     api::mcp::browser_mcp_service,
     build_router,
     config::{Cli, CliAction},
+    services::neo::{self, EngineLaunch},
 };
 use rmcp::{serve_server, transport::stdio};
 use serde_json::json;
@@ -49,6 +50,10 @@ const WORKER_STACK_BYTES: usize = 8 * 1024 * 1024;
 
 /// `#[tokio::main]` with a larger worker stack, which the attribute cannot set.
 fn main() -> anyhow::Result<()> {
+    // Re-exec enters the SDK before the host creates a runtime or installs logging.
+    if neo::is_engine_invocation() {
+        neo::engine_main();
+    }
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .thread_stack_size(WORKER_STACK_BYTES)
@@ -66,7 +71,7 @@ async fn async_main() -> anyhow::Result<()> {
         }
         CliAction::Run { config, stdio } => (config, stdio),
     };
-    let config = Arc::new(claw_server::config::Config::load(config_path)?);
+    let config = Arc::new(claw_server::config::Config::load(&config_path)?);
     // Process-wide and fixed from here on; every page script reads it as it runs.
     browseros_core::page_js::set_isolated_world_enabled(config.behavior.isolated_world);
     let _guard = init_tracing(config.clone())?;
@@ -100,8 +105,11 @@ async fn async_main() -> anyhow::Result<()> {
     // Report one-time startup conditions worth seeing remotely, such as a database migrated by a
     // newer BrowserOS neo (read-forward). Consent-gated and drawn from the shared daily budget.
     state.report_startup_state().await;
+    let engine = state.neo.clone();
+    let launch = EngineLaunch::from_config(&config, &config_path);
     let mut runtime = AppRuntime::start(state);
-    let run_result = run(&mut runtime, config, stdio_mode).await;
+    let run_result = run(&mut runtime, config, stdio_mode, launch).await;
+    engine.shutdown().await;
     let shutdown_result = runtime.shutdown().await;
     let outcome = match (run_result, shutdown_result) {
         (Ok(()), Ok(())) => Ok(()),
@@ -172,6 +180,7 @@ async fn run(
     runtime: &mut AppRuntime,
     config: Arc<claw_server::config::Config>,
     stdio_mode: bool,
+    launch: EngineLaunch,
 ) -> anyhow::Result<()> {
     let state = runtime.state();
     state.browser.wait_for_initial_attempt().await;
@@ -186,9 +195,10 @@ async fn run(
         );
     }
     if stdio_mode {
+        state.neo.start(launch);
         return serve_stdio(state).await;
     }
-    serve(runtime, config).await
+    serve(runtime, config, launch).await
 }
 
 fn epoch_ms() -> u64 {
@@ -269,6 +279,7 @@ fn init_tracing(config: Arc<claw_server::config::Config>) -> anyhow::Result<Work
 async fn serve(
     runtime: &mut AppRuntime,
     config: Arc<claw_server::config::Config>,
+    launch: EngineLaunch,
 ) -> anyhow::Result<()> {
     let state = runtime.state();
     let heal_state = state.clone();
@@ -279,6 +290,9 @@ async fn serve(
         config,
         analytics,
         async move {
+            // This task is spawned only after the singleton listener is bound.
+            // SDK startup failure stays local to run and never fails host startup.
+            heal_state.neo.start(launch);
             // Only the HTTP process that acquired the listener owns provisioning.
             // Keep repair off request handling and stop it with this runtime.
             heal_state

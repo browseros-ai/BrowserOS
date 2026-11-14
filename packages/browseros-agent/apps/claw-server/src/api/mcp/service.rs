@@ -117,9 +117,9 @@ struct ServiceLifecycle {
 }
 
 #[derive(Clone)]
-struct StartedSession {
-    session: Arc<Session>,
-    agent_label: String,
+pub(super) struct StartedSession {
+    pub(super) session: Arc<Session>,
+    pub(super) agent_label: String,
 }
 
 /// The two names have different owners: the declared identity keeps existing
@@ -256,6 +256,14 @@ impl ClawMcpService {
                 .filter(|tool| hosted::refusal(mode, &tool.name).is_none())
                 .map(&decorate),
         );
+        if !mode.is_hosted()
+            && let Some(tool) = tools.iter_mut().find(|tool| tool.name == "run")
+        {
+            // Host session fields are stripped before forwarding. Keep them in
+            // the offered schema so stateless clients can carry their task handle.
+            let run = self.state.neo.tool_snapshot();
+            *tool = decorate(Tool::new("run", run.description, run.input_schema));
+        }
         tools
     }
 
@@ -1162,11 +1170,18 @@ impl ServerHandler for ClawMcpService {
         let is_modern_revision = context
             .protocol_version()
             .is_some_and(|version| version >= ProtocolVersion::V_2026_07_28);
-        let mut result = ListToolsResult::with_all_items(self.listed_tools(is_modern_revision));
-        if is_modern_revision {
-            result = result.with_ttl_ms(0).with_cache_scope(CacheScope::Public);
+        async move {
+            if !self.mode().is_hosted() {
+                // Initial tool discovery may wait, while initialize and health
+                // remain independent of the best-effort engine startup.
+                let _ = self.state.neo.tool().await;
+            }
+            let mut result = ListToolsResult::with_all_items(self.listed_tools(is_modern_revision));
+            if is_modern_revision {
+                result = result.with_ttl_ms(0).with_cache_scope(CacheScope::Public);
+            }
+            Ok(result)
         }
-        std::future::ready(Ok(result))
     }
 
     // Accept the 2026-07-28 `subscriptions/listen` stream instead of returning
@@ -1206,6 +1221,14 @@ impl ServerHandler for ClawMcpService {
     }
 
     fn get_tool(&self, name: &str) -> Option<Tool> {
+        if name == "run" && !self.mode().is_hosted() {
+            let run = self.state.neo.tool_snapshot();
+            return Some(session_handle::offer(Tool::new(
+                "run",
+                run.description,
+                run.input_schema,
+            )));
+        }
         if name == "solve_captcha" && self.state.captcha.is_some() {
             return Some(session_handle::offer(super::captcha::solve_captcha_tool()));
         }
@@ -1341,7 +1364,15 @@ impl ServerHandler for ClawMcpService {
         let tool_started_at = tokio::time::Instant::now();
         let tool_name = request.name.to_string();
 
-        let result = if is_name_session {
+        let result = if request.name == "run" && !self.mode().is_hosted() {
+            Ok(super::neo_run::call(
+                &self.state,
+                &started,
+                raw_args.as_object().cloned().unwrap_or_default(),
+                context.ct.clone(),
+            )
+            .await)
+        } else if is_name_session {
             Ok(self.call_name_session(&started, &raw_args).await)
         } else if is_save_skill {
             Ok(self
@@ -2085,6 +2116,82 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn desktop_run_keeps_sdk_arguments_and_host_session_decorators() -> anyhow::Result<()> {
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let service = ClawMcpService::new(call.state);
+        let sdk = service.state.neo.tool_snapshot();
+        for modern in [false, true] {
+            let run = service
+                .listed_tools(modern)
+                .into_iter()
+                .find(|tool| tool.name == "run")
+                .ok_or_else(|| anyhow::anyhow!("run missing"))?;
+            assert_eq!(run.description.as_deref(), Some(sdk.description.as_str()));
+            for field in ["code", "timeout"] {
+                assert_eq!(
+                    run.input_schema["properties"][field],
+                    sdk.input_schema["properties"][field]
+                );
+            }
+            assert_eq!(run.input_schema["properties"]["session"]["type"], "string");
+            assert_eq!(run.input_schema["additionalProperties"], false);
+            assert_eq!(
+                run.input_schema["properties"].get(AGENT_NAME_ARG).is_some(),
+                modern
+            );
+        }
+        let run = service
+            .get_tool("run")
+            .ok_or_else(|| anyhow::anyhow!("run lookup missing"))?;
+        assert_eq!(
+            run.input_schema["properties"]["code"],
+            sdk.input_schema["properties"]["code"]
+        );
+        assert_eq!(run.input_schema["properties"]["session"]["type"], "string");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn desktop_run_strips_host_fields_before_the_sdk_wire() -> anyhow::Result<()> {
+        use crate::services::neo::NeoEngine;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let port = listener.local_addr()?.port();
+        let (sent, mut received) = tokio::sync::mpsc::unbounded_channel();
+        let app = axum::Router::new().route(
+            "/mcp",
+            axum::routing::post(move |axum::Json(body): axum::Json<Value>| {
+                let sent = sent.clone();
+                async move {
+                    let _ = sent.send(body["params"]["arguments"].clone());
+                    axum::Json(json!({
+                        "jsonrpc":"2.0", "id":body["id"], "result": {
+                            "content":[], "structuredContent":{"value":42}, "isError":false,
+                            "_meta":{"com.browseros.neo/run":{
+                                "id":"fake-run", "status":"ok", "effects":"none", "tasks":[]
+                            }}
+                        }
+                    }))
+                }
+            }),
+        );
+        let server = tokio::spawn(async move { axum::serve(listener, app).await });
+        let mut call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        call.state.neo = NeoEngine::for_test_endpoint(port)?;
+        let service = ClawMcpService::new(call.state);
+        let result = call_tool_value(service, "run", json!({
+            "code":"return 42", "timeout":1000, "session":"old-handle", "agentName":"test-agent", "taskName":"test task"
+        })).await?.map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        server.abort();
+        assert_eq!(result["structuredContent"]["value"], 42);
+        let forwarded = received
+            .recv()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("no forwarded arguments"))?;
+        assert_eq!(forwarded, json!({"code":"return 42", "timeout":1000}));
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn tests_that_only_hosted_servers_offer_set_viewport() -> anyhow::Result<()> {
         let hosted = viewport_test_service(ServerMode::Hosted).await?;
         let tool = hosted
@@ -2134,22 +2241,25 @@ mod tests {
     #[tokio::test]
     async fn tests_that_only_hosted_run_scripts_get_page_set_viewport() -> anyhow::Result<()> {
         let code = "try { return typeof browser.page(1).setViewport } catch (e) { return 'refused: ' + e.message }";
-        for (mode, expected) in [
-            (ServerMode::Hosted, "function"),
-            (
-                ServerMode::Desktop,
-                "refused: page.setViewport is not a method",
-            ),
-        ] {
+        for mode in [ServerMode::Hosted, ServerMode::Desktop] {
             let service = viewport_test_service(mode).await?;
             let result = call_tool_value(service, "run", json!({"code": code}))
                 .await?
                 .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+            if mode == ServerMode::Desktop {
+                assert_eq!(result["isError"], true);
+                assert!(
+                    result
+                        .to_string()
+                        .contains("Playwright engine has not been started")
+                );
+                continue;
+            }
             let value = result["structuredContent"]["value"]
                 .as_str()
                 .unwrap_or_default()
                 .to_string();
-            assert!(value.starts_with(expected), "{mode:?}: {result}");
+            assert!(value.starts_with("function"), "{mode:?}: {result}");
         }
         Ok(())
     }
@@ -4003,7 +4113,7 @@ mod tests {
 
         assert_eq!(offered(&service), (false, false, false, false, true));
         state.ultrafast.set(true);
-        assert_eq!(offered(&service), (true, true, true, true, false));
+        assert_eq!(offered(&service), (true, true, false, true, false));
         state.ultrafast.set(false);
         assert_eq!(offered(&service), (false, false, false, false, true));
 
