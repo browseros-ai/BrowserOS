@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Download module - Download release artifacts from CDN"""
 
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -10,7 +11,7 @@ import requests
 
 from ..core.context import Context
 from ..core.step import Step, ValidationError
-from ..lib.utils import log_info, log_error
+from ..lib.utils import log_info
 from .common import (
     PLATFORMS,
     PLATFORM_DISPLAY_NAMES,
@@ -56,8 +57,7 @@ class DownloadModule(Step):
         metadata = fetch_all_release_metadata(version, ctx.env, ctx.product.id)
 
         if not metadata:
-            log_error(f"No release metadata found for version {version}")
-            return
+            raise RuntimeError(f"No release metadata found for version {version}")
 
         if self.output_dir:
             download_dir = self.output_dir / version
@@ -66,6 +66,8 @@ class DownloadModule(Step):
         download_dir.mkdir(parents=True, exist_ok=True)
 
         log_info(f"\nDownloading to {download_dir}\n")
+
+        failures: list[str] = []
 
         platforms_to_download = (
             [self.os_filter] if self.os_filter else PLATFORMS
@@ -92,16 +94,24 @@ class DownloadModule(Step):
                     continue
 
                 dest_path = download_dir / filename
-                self._download_file(url, dest_path, filename, expected_size)
+                if not self._download_file(url, dest_path, filename, expected_size):
+                    failures.append(filename)
 
             log_info("")
+
+        if failures:
+            raise RuntimeError(
+                f"Failed to download {len(failures)} artifact(s): "
+                + ", ".join(failures)
+            )
 
         log_info(f"Downloaded to: {download_dir}")
 
     def _download_file(
         self, url: str, dest: Path, filename: str, expected_size: int
-    ) -> None:
-        """Download a file with progress indicator"""
+    ) -> bool:
+        """Download to a .partial staging file, renamed into place on success"""
+        partial = dest.with_name(dest.name + ".partial")
         try:
             response = requests.get(url, stream=True, timeout=30)
             response.raise_for_status()
@@ -110,7 +120,7 @@ class DownloadModule(Step):
             total_mb = total_size / (1024 * 1024)
 
             downloaded = 0
-            with open(dest, "wb") as f:
+            with open(partial, "wb") as f:
                 for chunk in response.iter_content(chunk_size=65536):
                     f.write(chunk)
                     downloaded += len(chunk)
@@ -121,9 +131,14 @@ class DownloadModule(Step):
                     )
                     sys.stdout.flush()
 
+            os.replace(partial, dest)
             sys.stdout.write(f"\r  {filename} ({format_size(total_size)})" + " " * 40 + "\n")
             sys.stdout.flush()
+            return True
 
         except requests.RequestException as e:
             sys.stdout.write(f"\r  {filename} - FAILED: {e}" + " " * 40 + "\n")
             sys.stdout.flush()
+            return False
+        finally:
+            partial.unlink(missing_ok=True)
