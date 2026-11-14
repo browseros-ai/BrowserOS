@@ -28,8 +28,9 @@ info:
     the calls of one task, so its runs, events and trace can be listed together.
 
     Task scope (`tabs.scope`, default `task`): a run that carries a `taskId` sees and acts on
-    only its task's tabs: the tabs its task's runs opened, their popups, and the tabs of the
-    tasks those runs created (`neo.createTask`). Any other tab is refused with
+    only its task family's tabs. A family starts at the task a host named; every task its runs
+    create (`neo.createTask`, at any depth) joins it; its tabs are the ones its tasks' runs
+    opened and their popups, sibling tasks' included. Any other tab is refused with
     `page_not_in_task`, and nothing is sent to it. A run without a `taskId` sees every tab, as
     before. Every result says which applied, in `_meta["com.browseros.neo/run"].tabsScope`:
     `task` when the run was bound to its task, `browser` when it was not. An older Neo sends no
@@ -341,7 +342,7 @@ paths:
         appear after its batch commits. Retention removes associations with their runs.
         These are historical associations, not exclusive ownership or a permission check.
         `taskId`, when present, is the task holding the tab now: under the `task` tab scope, the
-        only task whose runs see it.
+        runs of every task in its family see it (see `Tab.taskId`).
         Tab ids can be reused after a browser restart. The list is a point-in-time observation;
         a tab may close or navigate after the listing. No separate host CDP connection is needed.
         A tab with a host keep carries `keep`, empty without a limit or containing `expiresAt`.
@@ -1446,9 +1447,10 @@ components:
           type: string
           description: >-
             The task holding this tab now: the task whose run opened it, or the task of the tab
-            that opened it as a popup. Under the `task` tab scope only that task's runs, and the
-            runs of the task it was created in, see it. Absent on a tab no task holds, such as
-            one the owner opened.
+            that opened it as a popup. Under the `task` tab scope, the runs of every task in that
+            task's family see it: the family starts at the task a host named, and every task its
+            runs create (`neo.createTask`, at any depth) joins it, so sibling tasks see each
+            other's tabs. Absent on a tab no task holds, such as one the owner opened.
         owner:
           type: string
           x-extensible-enum: [neo]
@@ -2562,12 +2564,16 @@ components:
           default: task
           description: >-
             Which tabs a run sees. `task`: a run that carries a `taskId` sees and acts on only its
-            task's tabs (the tabs its task's runs opened, their popups, and the tabs of the tasks
-            those runs created); any other tab is refused with `page_not_in_task`. A run without a
+            task family's tabs (the family starts at the task a host named, and every task its
+            runs create joins it; its tabs are the ones its tasks' runs opened and their popups);
+            any other tab is refused with `page_not_in_task`. A run without a
             `taskId` sees every tab, but cannot pick, open a tab in or close a task a host named.
             `browser`: every run sees every tab, whatever task it carries. A run reads this once,
             at its start, and keeps it to its end. A name this server does not have is skipped
-            and listed in `unknownValues`.
+            and listed in `unknownValues`, as if left out. Where a whole document is read (a `PUT`,
+            the saved settings file, `/etc/neo/settings.json`), it therefore reads as `task`, the
+            default. A `PATCH` changes only what it names, so a skipped value there changes
+            nothing: the setting keeps its value, `browser` included.
     TraceSettings:
       type: object
       properties:
