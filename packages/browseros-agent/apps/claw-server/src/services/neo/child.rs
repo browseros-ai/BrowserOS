@@ -757,11 +757,12 @@ mod tests {
         for existing in [
             json!({}),
             json!({"tabs":null,"trace":[]}),
-            json!({"tabs":{"idleCloseSeconds":1800},"trace":{"screenshots":"operations","valueBytes":42}}),
+            json!({"tabs":{"scope":"task","idleCloseSeconds":1800},"trace":{"screenshots":"operations","valueBytes":42}}),
         ] {
             tokio::fs::write(&path, serde_json::to_vec(&existing)?).await?;
             configure_settings(&path).await?;
             let saved: Value = serde_json::from_slice(&tokio::fs::read(&path).await?)?;
+            assert_eq!(saved["tabs"]["scope"], "browser");
             assert_eq!(saved["tabs"]["idleCloseSeconds"], 86400);
             assert_eq!(saved["trace"]["screenshots"], "off");
             assert_eq!(
@@ -774,7 +775,7 @@ mod tests {
         let saved: Value = serde_json::from_slice(&tokio::fs::read(&path).await?)?;
         assert_eq!(
             saved,
-            json!({"tabs":{"idleCloseSeconds":86400},"trace":{"screenshots":"off"}})
+            json!({"tabs":{"scope":"browser","idleCloseSeconds":86400},"trace":{"screenshots":"off"}})
         );
         Ok(())
     }
@@ -805,7 +806,7 @@ mod tests {
         let saved: Value = serde_json::from_slice(&tokio::fs::read(&path).await?)?;
         assert_eq!(
             saved,
-            json!({"tabs":{"idleCloseSeconds":86400},"trace":{"screenshots":"off"}})
+            json!({"tabs":{"scope":"browser","idleCloseSeconds":86400},"trace":{"screenshots":"off"}})
         );
         Ok(())
     }
