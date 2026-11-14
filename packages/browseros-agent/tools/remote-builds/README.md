@@ -24,7 +24,7 @@ bun run remote fetch-image IMAGE_JOB_UUID
 ```
 
 New jobs check the coordinator before preparing source. Each status, queue and admission request
-first probes SSH with a five-second budget. If it does not answer, the client prints one line
+has a five-second budget, including SSH setup. If it does not answer, the client prints one line
 explaining that the usual cause is this machine's outside IPv4 not being admitted. Check that address:
 
 ```sh
@@ -34,9 +34,12 @@ curl --noproxy '*' -4fsS --connect-timeout 3 --max-time 5 https://api.ipify.org
 Ask the pool operator to compare it with the SSH allowlist and admit it if needed; retrying
 will not help until access is fixed. A timeout can also mean a down VM or a network problem,
 so the hint is not proof of an allowlist mismatch. A reachable but full pool still waits for
-a slot. The five seconds bound the connection probe, not time in the queue: running jobs,
-lease renewals, RPC recovery and artifact transfers keep their existing budgets. `fetch-image`
-uses its saved guest endpoint without requiring the coordinator.
+a slot. The five seconds bound each read/admission request, not total time in the queue.
+Each poll uses one SSH connection so a slow link does not double the waiter refresh interval.
+If an admission reply is lost, no guest command has been dispatched; an unseen reservation
+remains protected by the existing two-minute client lease and independent reaper. Running-job
+RPC recovery, execution, lease renewal, cleanup and artifact transfers keep their existing
+budgets. `fetch-image` uses its saved guest endpoint without requiring the coordinator.
 
 `image` builds the SDK's amd64 image on Linux and runs its native acceptance suite.
 `viewer-image` uses the same builder for your local Docker architecture, then streams and loads

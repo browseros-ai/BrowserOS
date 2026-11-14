@@ -55,7 +55,7 @@ class Failure(RuntimeError):
 
 
 class PoolUnreachable(Failure):
-    """A non-mutating connection probe failed before any coordinator RPC was sent."""
+    """Read/admission got no reply; an unseen reservation remains lease-fenced."""
 
 
 def job_kind(action: str, arguments: list[str]) -> str:
@@ -357,21 +357,6 @@ class PoolClient:
                 target, shlex.join(command)]
         return args
 
-    def preflight(self) -> None:
-        """Probe without mutating slots or reading caller input, so a timeout is safe."""
-        try:
-            result = subprocess.run(self.ssh_args(self.profile["coordinator"], ["true"],
-                                                 connect_timeout=CONNECT_SECONDS),
-                                    stdin=subprocess.DEVNULL, capture_output=True,
-                                    text=True, timeout=CONNECT_SECONDS)
-        except subprocess.TimeoutExpired:
-            raise PoolUnreachable(POOL_UNREACHABLE) from None
-        if result.returncode:
-            if re.search(r"timed out|connection refused|no route to host|network is unreachable|"
-                         r"could not resolve hostname", result.stderr, re.IGNORECASE):
-                raise PoolUnreachable(POOL_UNREACHABLE)
-            raise Failure(" ".join(result.stderr.splitlines()) or "pool SSH preflight failed")
-
     def ssh(self, host: dict, command: list[str], **options) -> str:
         return checked(self.ssh_args(host, command), **options)
 
@@ -430,23 +415,32 @@ class PoolClient:
     def control(self, operation: str, job: str = "") -> dict:
         # UUID-addressed operations are idempotent. A Mac scheduling stall or lost
         # reply can be retried without reserving a second VM or releasing another job.
-        # Probe each read/admission call, including queue polling. A timeout after
-        # the real RPC starts is ambiguous and must keep its UUID-safe retries.
-        if operation in {"status", "queue", "acquire"}:
-            self.preflight()
+        # One bounded read/admission RPC per poll preserves the ten-second waiter
+        # refresh window even on slow SSH links. No guest command is dispatched
+        # until admission replies; a lost reservation reply stays lease-fenced for
+        # the independent reaper. Running-job RPC retries/budgets remain unchanged.
+        admission = operation in {"status", "queue", "acquire"}
         for attempt in range(3):
             try:
-                result = subprocess.run(self.ssh_args(self.profile["coordinator"], ["python3", HELPER + "pool.py"]),
+                result = subprocess.run(self.ssh_args(self.profile["coordinator"], ["python3", HELPER + "pool.py"],
+                                                     connect_timeout=CONNECT_SECONDS if admission else 30),
                                         input=json.dumps({"operation": operation, "job": job, "lease": True,
                                                           "submission": self.submission}),
-                                        capture_output=True, text=True, timeout=100)
+                                        capture_output=True, text=True, timeout=CONNECT_SECONDS if admission else 100)
                 # Application refusals are definitive, not a reason to retry admission.
                 # Parse stdout even on exit 2 so the caller sees its two existing jobs.
                 if result.stdout.strip():
                     value = json.loads(result.stdout)
                     break
+                if admission and re.search(r"timed out|connection refused|no route to host|network is unreachable|"
+                                           r"could not resolve hostname", result.stderr, re.IGNORECASE):
+                    raise PoolUnreachable(POOL_UNREACHABLE)
                 raise Failure(result.stderr.strip() or "coordinator returned no result")
-            except (Failure, ValueError, subprocess.TimeoutExpired):
+            except (Failure, ValueError, subprocess.TimeoutExpired) as error:
+                if admission:
+                    if isinstance(error, subprocess.TimeoutExpired):
+                        raise PoolUnreachable(POOL_UNREACHABLE) from None
+                    raise
                 if attempt == 2:
                     raise
                 time.sleep(attempt + 1)
