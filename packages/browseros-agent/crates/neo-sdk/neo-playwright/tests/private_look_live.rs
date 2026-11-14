@@ -976,3 +976,59 @@ async fn tests_that_a_fields_own_drawing_lets_its_box_through() -> TestResult {
     assert!(failures.is_empty(), "{failures:#?}");
     Ok(())
 }
+
+/// Where the box's own scroller stands on `smooth-login.html`, in CSS pixels down.
+async fn standing(live: &LiveBrowser, page: &TestPage) -> TestResult<f64> {
+    live.main_world(page, "standing()")
+        .await?
+        .as_f64()
+        .ok_or_else(|| "standing() answers a number".into())
+}
+
+/// Ruling R61's rows 1 to 7 for the look, which the host's check call makes: a password box far
+/// below the fold of a page that scrolls smoothly, on its root or on a container between the box
+/// and the root, or in a frame of the page's own origin, is brought into view at once before the
+/// look asks what takes the pointer there. Refused under a sheet over the whole view and passed
+/// without it, by one insertion and key by key; the box's scroller ends at the box, and a box
+/// already in view does not move it. With smooth scrolling off the answers are main's. Fails with
+/// the look's instant scroll left out (`look_op.rs`): the page's own scroll animates, the hit
+/// finds nothing at the box's place, and the sheet passes.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_box_below_the_fold_of_a_smooth_page_is_looked_at_in_view() -> TestResult {
+    let server = FixtureServer::start(private_host::pages()).await?;
+    let live = LiveBrowser::connect().await?;
+    let (page_origin, _) = private_host::origins(&server);
+    let mut failures = Vec::new();
+    for shape in ["", "&scroller=1", "&frame=1", "&plain=1"] {
+        for (sheet, wanted) in [("1", Some("box_covered")), ("", None)] {
+            let path = format!("/private/smooth-login.html?sheet={sheet}{shape}");
+            let page = live.open(&server.url("127.0.0.1", &path)).await?;
+            let r#ref = private_host::ref_of(&live, &page, "textbox", "Password").await?;
+            let env = HostEnv::new(&live);
+            for keys in [false, true] {
+                let ask = LookField {
+                    keys,
+                    ..field(&r#ref, Some(expecting(&page_origin)))
+                };
+                let answer = look_one(&live, &env, &page, ask).await?;
+                if code(&answer) != wanted {
+                    failures.push(format!("{path}, keys {keys}: {:?}", code(&answer)));
+                }
+            }
+            let stood = standing(&live, &page).await?;
+            if stood < 2000.0 {
+                failures.push(format!("{path}: the box's scroller stands at {stood}"));
+            }
+            let ask = field(&r#ref, Some(expecting(&page_origin)));
+            look_one(&live, &env, &page, ask).await?;
+            if (standing(&live, &page).await? - stood).abs() > 0.5 {
+                failures.push(format!("{path}: a box in view moved the page"));
+            }
+            assert!(!env.was_sent(), "a look never marks itself sent");
+            live.close(&page).await?;
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+    Ok(())
+}

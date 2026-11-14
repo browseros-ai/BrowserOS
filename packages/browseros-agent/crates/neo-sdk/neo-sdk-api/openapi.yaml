@@ -482,7 +482,8 @@ paths:
         on, and the value: a password, a one-time code, a card number. Neo looks at every box
         first; a box that is gone, not a text input, on another origin, of another type,
         changed from what the host approved, disabled, hidden, covered, or too short for the
-        value refuses the whole call before any key. Then it types each value, in one insertion
+        value refuses the whole call before any key. Neo brings each box into view at once
+        before it asks what covers it, whatever scrolling the page has set. Then it types each value, in one insertion
         or (`keys`) key by key with the focus checked before each character, asking the rules
         again before each box and each key (a lock taken mid-entry stops the entry there), and
         reads each box back. It does not wait: a box in another state now is refused now;

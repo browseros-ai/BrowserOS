@@ -68,7 +68,7 @@ pub(crate) mod input_files;
 mod key_action;
 mod pointer_action;
 mod pointer_quads;
-mod protocol_scroll;
+pub(crate) mod protocol_scroll;
 pub(crate) mod requested_navigations;
 mod subject;
 

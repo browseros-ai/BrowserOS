@@ -137,6 +137,10 @@ pub(crate) fn pages() -> HashMap<String, Page> {
             include_str!("../data/private/covered-cardframe.html"),
         ),
         (
+            "smooth-login",
+            include_str!("../data/private/smooth-login.html"),
+        ),
+        (
             "covered-select",
             include_str!("../data/private/covered-select.html"),
         ),

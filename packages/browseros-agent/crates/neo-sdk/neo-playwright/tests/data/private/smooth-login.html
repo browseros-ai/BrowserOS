@@ -1,0 +1,38 @@
+<!doctype html><meta charset=utf-8><title>Smooth sign-in</title>
+<style>
+  html { scroll-behavior: smooth; }
+  html.plain { scroll-behavior: auto; }
+  body { margin: 0; font: 15px sans-serif; }
+  .space { height: 3000px; }
+  .scroller { height: 400px; overflow: auto; scroll-behavior: smooth; border: 1px solid #999; }
+  input { width: 260px; height: 34px; margin: 10px; box-sizing: border-box; }
+  iframe { width: 360px; height: 120px; border: 0; display: block; }
+  #sheet { position: fixed; inset: 0; z-index: 10; background: rgba(0, 0, 0, 0.4); }
+</style>
+<!-- A password box far below the fold of a page that scrolls smoothly (ruling R61). The page's
+     own scrollIntoViewIfNeeded animates here, so a hit asked straight after it finds nothing at
+     the box's place; the browser's own scroll is instant.
+     Default: the root scrolls smoothly, the box 3000 pixels down.
+     ?scroller=1: the root scrolls at once; the box is 3000 pixels down a container of this page
+     that scrolls smoothly.
+     ?plain=1: nothing scrolls smoothly.
+     ?frame=1: the box in a frame of this page's own origin, 3000 pixels down the smooth root.
+     ?inner=1: that frame's page, the box alone at its top.
+     ?sheet=1: a sheet over the whole view, as a consent dialog lays one. -->
+<script>
+  const q = new URLSearchParams(location.search)
+  const box = '<input id=pw type=password autocomplete=current-password aria-label="Password">'
+  const far = (inside) => '<div class=space></div>' + inside + '<div class=space></div>'
+  if (q.get('inner')) {
+    document.write(box)
+  } else {
+    if (q.get('plain') || q.get('scroller')) document.documentElement.className = 'plain'
+    if (q.get('scroller')) document.write('<div class=scroller>' + far(box) + '</div>')
+    else if (q.get('frame'))
+      document.write(far('<iframe title="Sign-in frame" src="/private/smooth-login.html?inner=1"></iframe>'))
+    else document.write(far(box))
+    if (q.get('sheet')) document.write('<div id=sheet>Accept all</div>')
+  }
+  // Where the box's own scroller stands: the container's, or the page's.
+  window.standing = () => Math.round(document.querySelector('.scroller')?.scrollTop ?? scrollY)
+</script>
