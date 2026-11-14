@@ -29,8 +29,9 @@ async fn take_over(host: &Host, tab: TabId) -> Result<String, Box<dyn Error>> {
         .to_owned())
 }
 
-/// The takeover as `GET /v1/takeovers/{id}?wait=10` answers once it is released.
-async fn released(host: &Host, id: &str) -> Result<Value, Box<dyn Error>> {
+/// The takeover's hand-back: the takeover as `GET /v1/takeovers/{id}?wait=10` answers once it
+/// is released, its `openedTabs` included.
+async fn hand_back(host: &Host, id: &str) -> Result<Value, Box<dyn Error>> {
     let Reply { status, body } = request(
         &host.socket,
         "GET",
@@ -85,7 +86,7 @@ async fn a_popup_whose_opener_closes_at_once_is_listed_with_its_opener() -> Test
     let popup = host.fake.open_popup(shared, "https://pay.example/");
     assert!(host.fake.close_tab(shared), "the fake had the tab");
     host.fake.release_events();
-    let takeover = released(&host, &id).await?;
+    let takeover = hand_back(&host, &id).await?;
     assert_eq!(takeover["releaseReason"], "tab_closed", "{takeover}");
     assert_eq!(
         takeover["openedTabs"],
@@ -141,7 +142,7 @@ async fn an_open_while_a_closing_tabs_release_waits_is_credited_to_the_takeover_
         released_second.body
     );
     host.fake.release_held();
-    let released_first = released(&host, &first).await?;
+    let released_first = hand_back(&host, &first).await?;
     assert_eq!(released_first["releaseReason"], "tab_closed");
     assert_eq!(
         listed(&released_first),
