@@ -1,16 +1,27 @@
 //! Presents the SDK's returned image bytes as MCP images. The text value and
 //! structured value share image markers, while run metadata and console output
-//! retain the SDK's form. Blob retrieval belongs to the host API, not this adapter.
+//! retain the SDK's form. The host API supplies fetched blobs; this adapter owns
+//! MIME detection, image blocks and the matching text/structured markers.
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use rmcp::model::{CallToolResult, ContentBlock};
 use serde_json::Value;
+use std::collections::BTreeMap;
 
 use super::AgentReply;
 
 const BLOB_NOTE: &str = "Returned output was too large to inline. Blob bytes are not available in this reply; for a picture, use page.screenshot({ path }) or a smaller clip.";
 
-pub(super) fn shape(mut reply: CallToolResult) -> AgentReply {
+pub(super) fn shape(reply: CallToolResult) -> AgentReply {
+    shape_with_blobs(reply, &BTreeMap::new())
+}
+
+/// Reuses the inline-image presentation after the host fetched returned blobs.
+/// The wire already shaped inline bytes, so their content indices stay fixed.
+pub(super) fn shape_with_blobs(
+    mut reply: CallToolResult,
+    blobs: &BTreeMap<String, Vec<u8>>,
+) -> AgentReply {
     let Some(value) = reply
         .structured_content
         .as_ref()
@@ -32,7 +43,14 @@ pub(super) fn shape(mut reply: CallToolResult) -> AgentReply {
     else {
         return reply;
     };
-    let presentation = Presentation::new(value.clone(), reply.content.len());
+    let value = value.clone();
+    let suffix = suffix.to_owned();
+    if !blobs.is_empty() {
+        reply
+            .content
+            .retain(|block| !matches!(block, ContentBlock::Text(text) if text.text == BLOB_NOTE));
+    }
+    let presentation = Presentation::new(value, reply.content.len(), blobs);
     if presentation.images.is_empty() && !presentation.has_blobs {
         return reply;
     }
@@ -54,6 +72,36 @@ pub(super) fn shape(mut reply: CallToolResult) -> AgentReply {
     reply
 }
 
+/// Only canonical returned blob markers may trigger a host fetch. Console text
+/// and ordinary objects with extra fields remain script data.
+pub(super) fn blob_requests(reply: &AgentReply) -> Option<BTreeMap<String, u64>> {
+    let mut blobs = BTreeMap::new();
+    let mut pending: Vec<_> = reply
+        .structured_content
+        .as_ref()
+        .and_then(|structured| structured.get("value"))
+        .into_iter()
+        .collect();
+    while let Some(node) = pending.pop() {
+        if is_blob(node) {
+            if let (Some(id), Some(size)) = (node["id"].as_str(), node["size"].as_u64())
+                && blobs
+                    .insert(id.to_owned(), size)
+                    .is_some_and(|previous| previous != size)
+            {
+                return None;
+            }
+        } else {
+            match node {
+                Value::Array(items) => pending.extend(items),
+                Value::Object(fields) => pending.extend(fields.values()),
+                _ => {}
+            }
+        }
+    }
+    Some(blobs)
+}
+
 /// One presentation of a returned value. Image indices refer to the final MCP
 /// content array, so text and structured consumers find the same image block.
 struct Presentation {
@@ -63,13 +111,29 @@ struct Presentation {
 }
 
 impl Presentation {
-    fn new(mut value: Value, first_image_index: usize) -> Self {
+    fn new(mut value: Value, first_image_index: usize, blobs: &BTreeMap<String, Vec<u8>>) -> Self {
         let mut images = Vec::new();
+        // Repeated references share one content block. The fetch budget bounds
+        // unique bytes; duplicating a large blob here would bypass that bound.
+        let mut blob_images = BTreeMap::new();
         let mut has_blobs = false;
         let mut pending = vec![&mut value];
         // Like the SDK's result fitter, walk iteratively to avoid adding a
         // recursive host stack requirement to values accepted at the wire.
         while let Some(node) = pending.pop() {
+            if is_blob(node)
+                && let Some(id) = node["id"].as_str()
+                && let Some(bytes) = blobs.get(id)
+                && let Some(mime_type) = image_type(bytes)
+            {
+                let index = *blob_images.entry(id.to_owned()).or_insert_with(|| {
+                    let index = first_image_index + images.len();
+                    images.push(ContentBlock::image(STANDARD.encode(bytes), mime_type));
+                    index
+                });
+                *node = Value::String(format!("[image at content[{index}] ({mime_type})]"));
+                continue;
+            }
             if let Some(base64) = bytes_brand(node)
                 && let Ok(bytes) = STANDARD.decode(base64)
                 && let Some(mime_type) = image_type(&bytes)
@@ -136,6 +200,58 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn fetched_images_reuse_inline_indices_and_non_images_keep_the_blob_note()
+    -> Result<(), Box<dyn Error>> {
+        let png = b"\x89PNG\r\n\x1a\n".to_vec();
+        let blob = json!({"$neo":"blob", "id":"b0", "size":png.len()});
+        let original = shape(reply(
+            json!([bytes(&png), blob.clone(), blob]),
+            "\nconsole:\nkept",
+        ));
+        assert_eq!(
+            blob_requests(&original),
+            Some(BTreeMap::from([("b0".to_owned(), 8)]))
+        );
+        let shaped = serde_json::to_value(shape_with_blobs(
+            original,
+            &BTreeMap::from([("b0".to_owned(), png)]),
+        ))?;
+        assert_eq!(shaped["content"][1]["type"], "image");
+        assert_eq!(shaped["content"][2]["type"], "image");
+        assert_eq!(
+            shaped["structuredContent"]["value"][1],
+            "[image at content[2] (image/png)]"
+        );
+        assert_eq!(
+            shaped["structuredContent"]["value"][2],
+            shaped["structuredContent"]["value"][1]
+        );
+        assert_eq!(shaped["content"].as_array().map(Vec::len), Some(3));
+        assert!(
+            shaped["content"][0]["text"]
+                .as_str()
+                .is_some_and(|text| text.ends_with("\nconsole:\nkept"))
+        );
+
+        let original = shape(reply(json!({"$neo":"blob", "id":"b0", "size":8}), ""));
+        let expected = serde_json::to_vec(&original)?;
+        let shaped = shape_with_blobs(
+            original,
+            &BTreeMap::from([("b0".to_owned(), b"%PDF-1.4".to_vec())]),
+        );
+        assert_eq!(serde_json::to_vec(&shaped)?, expected);
+        let inconsistent = reply(
+            json!([
+                {"$neo":"blob", "id":"b0", "size":8},
+                {"$neo":"blob", "id":"b0", "size":9},
+            ]),
+            "",
+        );
+        assert!(blob_requests(&inconsistent).is_none());
+        Ok(())
+    }
 
     fn fixture(source: &str) -> Result<CallToolResult, Box<dyn Error>> {
         let envelope: Value = serde_json::from_str(source)?;
