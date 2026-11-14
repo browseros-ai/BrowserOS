@@ -6,7 +6,7 @@ use std::error::Error;
 use std::future::{self, Future};
 use std::panic;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError, mpsc as std_mpsc};
 use std::time::Duration;
 
 use browseros_core::NativeCapabilities;
@@ -39,6 +39,36 @@ use crate::test_support::FakeCdp;
 
 /// A test's error. `Send`, so a test body can run as a task on Neo's runtime.
 pub(crate) type TestError = Box<dyn Error + Send + Sync>;
+
+/// Keeps Tokio deadlines fixed while the real SQLite worker settles. In pinned Tokio 1.52.3,
+/// scheduling a blocking task inhibits auto-advance synchronously, before its thread starts.
+#[must_use = "retain the guard while test deadlines must remain frozen"]
+pub(crate) struct ManualClock {
+    // Dropping the sender also releases the worker if the test panics.
+    _release: std_mpsc::Sender<()>,
+    _worker: task::JoinHandle<()>,
+}
+
+impl ManualClock {
+    pub(crate) fn pause() -> Self {
+        let (release, held) = std_mpsc::channel();
+        let worker = task::spawn_blocking(move || {
+            let _ = held.recv();
+        });
+        time::pause();
+        Self {
+            _release: release,
+            _worker: worker,
+        }
+    }
+}
+
+impl Drop for ManualClock {
+    fn drop(&mut self) {
+        // Shutdown may flush a writer with its ordinary batching timer.
+        time::resume();
+    }
+}
 
 /// The parts of one Neo process, minus HTTP. A plain data bag.
 pub(crate) struct TestRig {

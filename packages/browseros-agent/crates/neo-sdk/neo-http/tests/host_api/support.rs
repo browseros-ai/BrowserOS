@@ -25,12 +25,65 @@ use neo_trace::{
 };
 use serde_json::Value;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::future::Future;
+use std::sync::{Arc, Mutex, PoisonError, mpsc};
 use std::time::Duration;
 use tower::ServiceExt;
 
 pub(crate) type BoxError = Box<dyn std::error::Error + Send + Sync>;
 pub(crate) type TestResult = Result<(), BoxError>;
+
+/// Keeps paused Tokio time fixed across real SQLite and filesystem work. Pinned Tokio 1.52.3
+/// inhibits auto-advance synchronously when a blocking task is scheduled.
+#[must_use = "retain the guard while test deadlines must remain frozen"]
+pub(crate) struct ManualClock {
+    release: Option<mpsc::Sender<()>>,
+    worker: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl ManualClock {
+    fn pause() -> Self {
+        let mut clock = Self {
+            release: None,
+            worker: None,
+        };
+        clock.hold();
+        tokio::time::pause();
+        clock
+    }
+
+    fn hold(&mut self) {
+        let (release, held) = mpsc::channel();
+        self.worker = Some(tokio::task::spawn_blocking(move || {
+            let _ = held.recv();
+        }));
+        self.release = Some(release);
+    }
+
+    /// Allows natural timer registration and auto-advance only until a latched milestone.
+    /// Callers use this for hung captures and retries, never while waiting on real storage.
+    pub(crate) async fn run_timers_until<F: Future>(&mut self, milestone: F) -> F::Output {
+        let worker = self.worker.take();
+        drop(self.release.take());
+        // Poll the milestone before yielding so its watch and timeout are registered before
+        // the released worker permits any automatic jump.
+        let result = milestone.await;
+        // Acquire in this poll, before an external I/O wait can make Tokio jump ahead.
+        self.hold();
+        if let Some(worker) = worker {
+            let _ = worker.await;
+        }
+        result
+    }
+}
+
+impl Drop for ManualClock {
+    fn drop(&mut self) {
+        tokio::time::resume();
+        // Unconditional release keeps a panic from stranding runtime shutdown.
+        drop(self.release.take());
+    }
+}
 
 /// The token every harness request carries. The router refuses requests that did not pass the
 /// host auth, so the harness serves it the way production does: behind `host_router`.
@@ -92,6 +145,7 @@ pub(crate) const HOME_SCREEN: ScreenSize = ScreenSize {
 /// How the harness starts.
 struct Boot {
     camera: bool,
+    writer: WriterConfig,
     /// The screen's size when the service starts.
     screen: ScreenSize,
     /// The window's state when the service starts.
@@ -113,6 +167,31 @@ pub(crate) async fn harness_with_camera() -> Result<Harness, BoxError> {
         ..Boot::default()
     };
     start(boot).await
+}
+
+/// A camera fixture and the guard that owns its semantic clock. The clock field drops first
+/// so an intact fixture resumes time before releasing its service.
+pub(crate) struct ClockedHarness {
+    pub(crate) clock: ManualClock,
+    pub(crate) harness: Harness,
+}
+
+/// A camera fixture whose deadlines advance only when the test requests it. Single-record
+/// batches bypass the writer's batching timer, which cannot fire while the clock is frozen.
+pub(crate) async fn harness_with_manual_clock() -> Result<ClockedHarness, BoxError> {
+    let harness = start(Boot {
+        camera: true,
+        writer: WriterConfig {
+            batch_max: 1,
+            ..WriterConfig::default()
+        },
+        ..Boot::default()
+    })
+    .await?;
+    Ok(ClockedHarness {
+        clock: ManualClock::pause(),
+        harness,
+    })
 }
 
 /// A service started over what a Neo restart in the middle of a fit leaves: the screen at the
@@ -142,6 +221,7 @@ impl Default for Boot {
     fn default() -> Self {
         Self {
             camera: false,
+            writer: WriterConfig::default(),
             screen: HOME_SCREEN,
             window: "maximized",
             capture_transport: None,
@@ -152,6 +232,7 @@ impl Default for Boot {
 async fn start(
     Boot {
         camera,
+        writer,
         screen,
         window,
         capture_transport,
@@ -165,7 +246,7 @@ async fn start(
     let sink = spawn_writer(
         &store,
         Redactor::new(RedactionLimits::default()),
-        WriterConfig::default(),
+        writer,
         camera.then_some(queue),
     );
     let settings = Settings::load(dir.path().join("settings.json"), Default::default()).await;

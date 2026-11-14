@@ -26,7 +26,7 @@ use super::{
 use crate::browser::{TabsScope, TaskPage};
 use crate::config::Defaults;
 use crate::dispatch::{ErrorCode, OperationError, TEXT_CHARS, TaskKind};
-use crate::test_rig::{TestError, TestRig, on_neo_runtime, within};
+use crate::test_rig::{ManualClock, TestError, TestRig, on_neo_runtime, within};
 
 /// Long enough that only the tests about orphans ever see it run out.
 const GRACE: Duration = Duration::from_secs(30);
@@ -133,6 +133,26 @@ async fn admit(ledger: &Arc<RequestLedger>, request: &str) -> Result<Admission, 
     Ok(ledger
         .admit(&meta(Some(request), None)?, &handle, TabsScope::Task)
         .await)
+}
+
+/// After memory expiry, replay proves the asynchronous confirmation has found the stored row.
+/// A flush alone cannot prove its later SQL lookup and memory update have finished.
+async fn stored_replay(
+    ledger: &Arc<RequestLedger>,
+    request: &str,
+    run: RunId,
+) -> Result<(), TestError> {
+    loop {
+        match admit(ledger, request).await? {
+            Admission::Replay(reply) => {
+                assert_eq!(reply.id, run);
+                return Ok(());
+            }
+            Admission::Duplicate(duplicate) => assert_eq!(duplicate, run),
+            _ => return Err("the completed request must replay once its row is confirmed".into()),
+        }
+        task::yield_now().await;
+    }
 }
 
 /// Admits `request` as a new run and ends it the way the run service does: start and end
@@ -496,74 +516,84 @@ fn an_unreadable_trace_refuses_a_request_id_rather_than_risk_a_second_run() -> R
     })
 }
 
-#[test]
-fn a_request_the_trace_lost_is_refused_after_the_window_never_run_again() -> Result<(), TestError> {
-    on_neo_runtime(async {
-        let rig = TestRig::new().await?;
-        lose_lost_starts(&rig).await?;
-        let limits = LedgerLimits {
-            replay_window: SHORT_WINDOW,
-            ..LedgerLimits::default()
-        };
-        let ledger = RequestLedger::new(rig.store.clone(), rig.sink.clone(), limits);
-        let first = run_once(&rig, &ledger, "lost-1").await?;
-        // Whichever flush runs first is told of the loss; the store shows what landed.
-        let _lost = rig.sink.flush().await;
-        assert_eq!(
-            rig.store.run(first.id).await?.map(|run| run.summary.id),
-            None,
-            "the writer lost the run's records"
-        );
-        match admit(&ledger, "lost-1").await? {
-            Admission::Replay(reply) => assert_eq!(reply.id, first.id),
-            _ => return Err("within the window a repeat replays the first reply".into()),
-        }
-        time::sleep(SHORT_WINDOW * 2).await;
-        match admit(&ledger, "lost-1").await? {
-            Admission::Duplicate(run) => assert_eq!(run, first.id, "the refusal names the run"),
-            _ => {
-                return Err(
-                    "memory is the only proof the request ran, so a late repeat is refused".into(),
-                );
-            }
-        }
-        Ok(())
+#[tokio::test]
+async fn a_request_the_trace_lost_is_refused_after_the_window_never_run_again()
+-> Result<(), TestError> {
+    let rig = TestRig::with_writer(WriterConfig {
+        batch_max: 1,
+        ..WriterConfig::default()
     })
+    .await?;
+    lose_lost_starts(&rig).await?;
+    let _clock = ManualClock::pause();
+    let limits = LedgerLimits {
+        replay_window: SHORT_WINDOW,
+        ..LedgerLimits::default()
+    };
+    let ledger = RequestLedger::new(rig.store.clone(), rig.sink.clone(), limits);
+    let first = run_once(&rig, &ledger, "lost-1").await?;
+    // Whichever flush runs first is told of the loss; the store shows what landed.
+    let _lost = rig.sink.flush().await;
+    assert_eq!(
+        rig.store.run(first.id).await?.map(|run| run.summary.id),
+        None,
+        "the writer lost the run's records"
+    );
+    match admit(&ledger, "lost-1").await? {
+        Admission::Replay(reply) => assert_eq!(reply.id, first.id),
+        _ => return Err("within the window a repeat replays the first reply".into()),
+    }
+    time::advance(SHORT_WINDOW * 2).await;
+    match admit(&ledger, "lost-1").await? {
+        Admission::Duplicate(run) => assert_eq!(run, first.id, "the refusal names the run"),
+        _ => {
+            return Err(
+                "memory is the only proof the request ran, so a late repeat is refused".into(),
+            );
+        }
+    }
+    Ok(())
 }
 
-#[test]
-fn once_too_many_requests_are_unrecorded_a_new_request_id_is_refused() -> Result<(), TestError> {
-    on_neo_runtime(async {
-        let rig = TestRig::new().await?;
-        lose_lost_starts(&rig).await?;
-        let limits = LedgerLimits {
-            replay_window: SHORT_WINDOW,
-            max_unrecorded: 1,
-        };
-        let ledger = RequestLedger::new(rig.store.clone(), rig.sink.clone(), limits);
-        run_once(&rig, &ledger, "kept-1").await?;
-        time::sleep(SHORT_WINDOW * 2).await;
-        run_once(&rig, &ledger, "kept-2").await.map_err(|error| {
-            format!("a request the trace stored leaves memory and holds no place: {error}")
-        })?;
-        run_once(&rig, &ledger, "lost-2").await?;
-        time::sleep(SHORT_WINDOW * 2).await;
-        match admit(&ledger, "fresh-1").await? {
-            Admission::Unavailable(error) => {
-                assert_eq!(error.code(), ErrorCode::TRACE_UNAVAILABLE);
-            }
-            _ => {
-                return Err(
-                    "memory is full of unrecorded requests, so a new one is refused".into(),
-                );
-            }
-        }
-        assert!(
-            matches!(admit(&ledger, "lost-2").await?, Admission::Duplicate(_)),
-            "the unrecorded request is still refused"
-        );
-        Ok(())
+#[tokio::test]
+async fn once_too_many_requests_are_unrecorded_a_new_request_id_is_refused() -> Result<(), TestError>
+{
+    let rig = TestRig::with_writer(WriterConfig {
+        batch_max: 1,
+        ..WriterConfig::default()
     })
+    .await?;
+    lose_lost_starts(&rig).await?;
+    let _clock = ManualClock::pause();
+    let limits = LedgerLimits {
+        replay_window: SHORT_WINDOW,
+        max_unrecorded: 1,
+    };
+    let ledger = RequestLedger::new(rig.store.clone(), rig.sink.clone(), limits);
+    let first = run_once(&rig, &ledger, "kept-1").await?;
+    rig.sink.flush().await?;
+    time::advance(SHORT_WINDOW * 2).await;
+    stored_replay(&ledger, "kept-1", first.id).await?;
+    let second = run_once(&rig, &ledger, "kept-2").await.map_err(|error| {
+        format!("a request the trace stored leaves memory and holds no place: {error}")
+    })?;
+    rig.sink.flush().await?;
+    run_once(&rig, &ledger, "lost-2").await?;
+    time::advance(SHORT_WINDOW * 2).await;
+    stored_replay(&ledger, "kept-2", second.id).await?;
+    match admit(&ledger, "fresh-1").await? {
+        Admission::Unavailable(error) => {
+            assert_eq!(error.code(), ErrorCode::TRACE_UNAVAILABLE);
+        }
+        _ => {
+            return Err("memory is full of unrecorded requests, so a new one is refused".into());
+        }
+    }
+    assert!(
+        matches!(admit(&ledger, "lost-2").await?, Admission::Duplicate(_)),
+        "the unrecorded request is still refused"
+    );
+    Ok(())
 }
 
 #[test]
@@ -1236,34 +1266,38 @@ fn values_off_preserves_the_reply_blobs_and_memory_replay_but_not_restart_replay
 }
 
 /// An off record remains the request-id authority after its in-memory reply expires.
-#[test]
-fn values_off_does_not_execute_a_request_again_after_the_memory_window() -> Result<(), TestError> {
-    on_neo_runtime(async {
-        let rig = TestRig::new().await?;
-        rig.settings.patch(br#"{"trace":{"values":"off"}}"#).await?;
-        let ledger = RequestLedger::new(
-            rig.store.clone(),
-            rig.sink.clone(),
-            LedgerLimits {
-                replay_window: SHORT_WINDOW,
-                ..LedgerLimits::default()
-            },
-        );
-        let first = run_once(&rig, &ledger, "off-expired").await?;
-        rig.sink.flush().await?;
-        assert!(
-            rig.store
-                .replay(first.id, EpochMillis::now())
-                .await?
-                .is_none()
-        );
-        time::sleep(SHORT_WINDOW + Duration::from_millis(20)).await;
-        assert!(
-            matches!(admit(&ledger, "off-expired").await?, Admission::Duplicate(run) if run == first.id)
-        );
-        assert_eq!(runs_of(&rig, "off-expired").await?.len(), 1);
-        Ok(())
+#[tokio::test]
+async fn values_off_does_not_execute_a_request_again_after_the_memory_window()
+-> Result<(), TestError> {
+    let rig = TestRig::with_writer(WriterConfig {
+        batch_max: 1,
+        ..WriterConfig::default()
     })
+    .await?;
+    rig.settings.patch(br#"{"trace":{"values":"off"}}"#).await?;
+    let _clock = ManualClock::pause();
+    let ledger = RequestLedger::new(
+        rig.store.clone(),
+        rig.sink.clone(),
+        LedgerLimits {
+            replay_window: SHORT_WINDOW,
+            ..LedgerLimits::default()
+        },
+    );
+    let first = run_once(&rig, &ledger, "off-expired").await?;
+    rig.sink.flush().await?;
+    assert!(
+        rig.store
+            .replay(first.id, EpochMillis::now())
+            .await?
+            .is_none()
+    );
+    time::advance(SHORT_WINDOW + Duration::from_millis(20)).await;
+    assert!(
+        matches!(admit(&ledger, "off-expired").await?, Admission::Duplicate(run) if run == first.id)
+    );
+    assert_eq!(runs_of(&rig, "off-expired").await?.len(), 1);
+    Ok(())
 }
 
 /// The default debug-note path must not grow a stored payload in either recording mode.
