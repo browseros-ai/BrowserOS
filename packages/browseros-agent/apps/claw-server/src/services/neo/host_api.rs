@@ -381,6 +381,7 @@ mod tests {
     fn preview_safety_requires_a_settled_record_without_raw_cdp() -> anyhow::Result<()> {
         let operation = |name: &str| {
             json!({
+                "id": format!("run.{name}"),
                 "name": name,
                 "startedAt": 123,
                 "effect": "write",

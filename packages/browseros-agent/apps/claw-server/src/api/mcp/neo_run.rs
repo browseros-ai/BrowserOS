@@ -145,12 +145,12 @@ pub(super) async fn call(
             tool_output_token_estimate: estimate_tool_output_tokens(&result.content),
             token_estimator_version: TOKEN_ESTIMATOR_VERSION,
         },
-        preview: run_preview(state, &started.session, cancelled, &record),
+        preview: run_preview(state, &started.session, &record),
     };
-    match state.audit_worker.submit(event).await {
-        Ok(()) => {
+    match state.audit_worker.submit_tracked(event).await {
+        Ok(parent) => {
             if let Some(steps) = pending_steps {
-                steps.record(state, started.session.id().as_str()).await;
+                steps.record(state, parent).await;
             }
         }
         Err(error) => tracing::warn!(%error, "Playwright run audit admission failed"),
@@ -168,10 +168,11 @@ pub(super) async fn call(
 fn run_preview(
     state: &AppState,
     session: &Arc<Session>,
-    cancelled: bool,
     record: &RunRecordRead,
 ) -> Option<AuditPreview> {
-    (!cancelled && record.proves_no_raw_cdp()).then(|| preview_callback(state, session))
+    record
+        .proves_no_raw_cdp()
+        .then(|| preview_callback(state, session))
 }
 
 #[cfg(test)]
@@ -180,8 +181,7 @@ mod tests {
     use crate::api::mcp::test_support::tool_call;
 
     #[tokio::test]
-    async fn parent_run_preview_requires_uncancelled_complete_cdp_free_metadata()
-    -> anyhow::Result<()> {
+    async fn parent_run_preview_requires_complete_cdp_free_metadata() -> anyhow::Result<()> {
         let call = tool_call("run", json!({ "code": "return 1" })).await?;
         let session = &call
             .identity
@@ -190,6 +190,7 @@ mod tests {
             .session;
         let operation = |name: &str| {
             json!({
+                "id": format!("run.{name}"),
                 "name": name,
                 "startedAt": 123,
                 "effect": "write",
@@ -201,58 +202,60 @@ mod tests {
         let cases = [
             (
                 "settled plain run",
-                false,
                 json!({"complete": true, "operations": [plain.clone()]}),
                 true,
             ),
             (
-                "cancelled run",
+                "settled SDK-cancelled run",
+                json!({"status": "cancelled", "complete": true, "operations": [plain.clone()]}),
                 true,
-                json!({"complete": true, "operations": [plain.clone()]}),
-                false,
             ),
             (
                 "partial record",
-                false,
                 json!({"complete": false, "operations": [plain.clone()]}),
                 false,
             ),
             (
                 "missing completeness",
-                false,
                 json!({"operations": [plain.clone()]}),
                 false,
             ),
             (
                 "trace gap",
-                false,
                 json!({"complete": true, "traceGaps": 1, "operations": [plain.clone()]}),
                 false,
             ),
             (
                 "zero operations",
-                false,
                 json!({"complete": true, "operations": []}),
                 false,
             ),
             (
                 "raw CDP",
-                false,
                 json!({"complete": true, "operations": [plain, operation("neo.cdp")]}),
                 false,
             ),
         ];
-        for (label, cancelled, value, expected) in cases {
+        for (label, value, expected) in cases {
             let record = serde_json::from_value(value)?;
             assert_eq!(
-                run_preview(&call.state, session, cancelled, &record).is_some(),
+                run_preview(&call.state, session, &record).is_some(),
                 expected,
                 "{label}"
             );
         }
         assert!(
-            run_preview(&call.state, session, false, &RunRecordRead::unread()).is_none(),
+            run_preview(&call.state, session, &RunRecordRead::unread()).is_none(),
             "unread metadata cannot permit a parent preview"
+        );
+        let record = serde_json::from_value(json!({
+            "complete": true, "operations": [operation("locator.fill")]
+        }))?;
+        session.request_operator_stop();
+        session.stop_dispatches().await;
+        assert!(
+            run_preview(&call.state, session, &record).is_some(),
+            "Stop after a settled clean record retains the teardown-owned preview"
         );
         Ok(())
     }
