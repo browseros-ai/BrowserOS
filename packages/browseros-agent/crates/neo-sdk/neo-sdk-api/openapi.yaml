@@ -643,13 +643,14 @@ paths:
           page-side engine's protocol loses them for the documents still open, so a plain box's
           value prints there again (under `fill.pictures: never` no picture of its tab is taken
           either way).
-        - Going back in history restores a plain box's value into a new document, which keeps no
-          digest, so its value prints. So does a copy in another document (a frame, a pop-up), a
-          copy the page reformats beyond whitespace, dashes and slashes, text the page prints
-          outside a box, and a copy that appears after its digest was forgotten. A box in a
-          closed shadow root Neo's walk has not seen does not hold a digest alive, so a later
-          copy can print. An entry that ends before its read-back keeps no digest: its box has
-          the mark alone.
+        - A reload, or going back in history into a new document, makes a new document that keeps no
+          mark and no digest, so a value that the page or the browser puts back there prints. A
+          document that returns whole from the back-forward cache keeps its marks. A copy in another
+          document (a frame, a pop-up) prints too, as do a copy the page reformats beyond
+          whitespace, dashes and slashes, text the page prints outside a box, and a copy that
+          appears after its digest was forgotten. A box in a closed shadow root Neo's walk has not
+          seen does not hold a digest alive, so a later copy can print. An entry that ends before
+          its read-back keeps no digest: its box has the mark alone.
         - A widget that spreads a code across several boxes shows the digits of the boxes Neo
           did not fill. Fill it one box at a time. The fill's `uncertain` outcome is the sign
           that a value given to one box did not stay there.
