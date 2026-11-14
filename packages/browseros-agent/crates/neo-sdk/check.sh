@@ -10,7 +10,9 @@
 #     ...): plain rustfmt, as CI's `cargo fmt --all --check` and their own `lint:rust` run it.
 # Every crate gets clippy -D warnings on all targets and its tests (except TESTS_NOT_RUN below),
 # on CI's exact toolchain. The SDK image's Python scripts (neo-server/docker) get their tests and
-# an import each, and the pinned ruff where uv is installed, as CI's image scripts job does. None of these tests needs a display or a browser: the live suites skip
+# an import each, and the pinned ruff where uv is installed, as CI's image scripts job does. The
+# page-side Bun suite (neo-playwright-js) runs under the repository's pinned Bun, as CI's
+# "Tests / browseros-playwright-js" job runs it. None of these tests needs a display or a browser: the live suites skip
 # themselves (`#[ignore]`, or no `CLAW_SDK_E2E_BROWSER`), as CI's `cargo test --workspace` runs
 # them. The [lints] tables and clippy.toml need nothing here, because Cargo and clippy read them
 # on every build.
@@ -39,6 +41,21 @@ if ! cargo "+${TOOLCHAIN}" clippy --version >/dev/null 2>&1; then
   exit 1
 fi
 cargo_pinned() { cargo "+${TOOLCHAIN}" "$@"; }
+
+# The Bun CI's setup-bun reads from package.json (`engines.bun`). The page-side suite needs that
+# one: its build check compares the committed probe asset with a fresh build, which another Bun's
+# bundler writes differently (Bun 1.4.4 fails it on an unchanged tree). BUN names the binary
+# when the `bun` on PATH is another version.
+BUN_PINNED="$(python3 -c 'import json; print(json.load(open("package.json"))["engines"]["bun"])')"
+BUN_BIN="$(command -v "${BUN:-bun}" || true)"
+BUN_FOUND="$([[ -n "$BUN_BIN" ]] && "$BUN_BIN" --version 2>/dev/null || true)"
+if [[ "$BUN_FOUND" != "$BUN_PINNED" ]]; then
+  echo "check.sh: the page-side suite needs Bun ${BUN_PINNED} (package.json engines.bun); ${BUN:-bun} here is ${BUN_FOUND:-missing}." >&2
+  echo "  Name it: BUN=/path/to/bun crates/neo-sdk/check.sh" >&2
+  echo "  To get one beside your default Bun, touching no shell start file, this prints its path:" >&2
+  echo "    npx --yes bun@${BUN_PINNED} -e 'console.log(process.execPath)'" >&2
+  exit 1
+fi
 
 # PACKAGES: claw-sdk's lint set. WORKSPACE_LINTED: every other SDK crate. ALL_ARGS: both.
 PACKAGES=()
@@ -177,6 +194,30 @@ PY
     echo "  ruff not run: no uv here. When a ${DOCKER_DIR}/*.py file changed, run it as CI does:"
     echo "    cd packages/browseros-agent/${DOCKER_DIR} && uv run --directory ../../../../../browseros ruff check \"\$PWD\""
   fi
+)
+
+# The page-side Bun suite: the probe's handlers on linkedom, the protocol examples against both
+# sides, the committed asset against a fresh build. Nothing above runs it, and GitHub's
+# "Tests / browseros-playwright-js" job does, so a change that broke it passed this gate and failed
+# only on GitHub. A checkout with no node_modules (the remote pool's) gets a frozen install of the
+# root and this package alone: 129 packages in under a second there, where a whole `bun ci` takes
+# 81 s; the suite then takes about 20 s. A tree that has node_modules is left as it is. The suite's
+# runner starts `bun` again, so a private directory with one link named `bun` to the pinned binary
+# goes first on PATH, whatever that binary is called (npm's copy is bun.exe, alone in its folder).
+PAGE_DIR="crates/neo-sdk/neo-playwright-js"
+step "page-side suite (${PAGE_DIR}, Bun ${BUN_PINNED})"
+(
+  bun_dir="$(mktemp -d)"
+  trap 'rm -rf "$bun_dir"' EXIT
+  ln -s "$BUN_BIN" "$bun_dir/bun"
+  PATH="$bun_dir:$PATH"
+  export PATH
+  if [[ ! -d node_modules ]]; then
+    root="$(python3 -c 'import json; print(json.load(open("package.json"))["name"])')"
+    bun install --frozen-lockfile --filter "$root" --filter @browseros/neo-playwright-js
+  fi
+  cd "$PAGE_DIR"
+  bun run test
 )
 
 step "clippy -D warnings"
