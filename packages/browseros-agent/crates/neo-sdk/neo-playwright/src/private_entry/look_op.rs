@@ -243,11 +243,12 @@ enum Above {
 /// a fixed body) was entered under a sheet over the view. It answers `cover_unread`.
 ///
 /// Then, for a box in a child frame, asks every page above the box's frame, from the top
-/// document down, what takes the pointer at the box's centre, out-of-process frames included. The page side's look sees only the
-/// documents its frame can reach (`frameElement` stops at an origin boundary), so before this a
-/// banner in a cross-origin parent over a sign-in frame was not seen, and a host reported a
-/// password typed under one. This reuses the click's projection (`frame_projection::project`,
-/// upstream's `_checkFrameIsHitTarget`) with the look's rules (`Asker::Look`):
+/// document down, what takes the pointer at the box's centre, out-of-process frames included.
+/// The page side's look sees only the documents its frame can reach (`frameElement` stops at an
+/// origin boundary), so before this a banner in a cross-origin parent over a sign-in frame was
+/// not seen, and a host reported a password typed under one. This reuses the click's projection
+/// (`frame_projection::project`, upstream's `_checkFrameIsHitTarget`) with the look's rules
+/// (`Asker::Look`):
 ///
 /// - the look first brought the box into view at once in every page (ruling R61);
 /// - a parent's hit on the frame's owner element, or on what holds it, is clear; a parent that
