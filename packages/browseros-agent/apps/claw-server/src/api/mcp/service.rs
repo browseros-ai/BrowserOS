@@ -1535,7 +1535,7 @@ async fn rename_session(
 /// stored and indexed for search: drops any whitespace token that looks like an email,
 /// URL, file path, bare domain/filename, or a long digit run (phone / card / account
 /// number). Collapses whitespace and caps the length. Free prose and names are kept;
-/// the agent is instructed to omit those, and the summary never leaves this machine.
+/// the agent is instructed to omit those.
 fn scrub_summary(raw: &str) -> String {
     let scrubbed = raw
         .split_whitespace()
