@@ -1,0 +1,38 @@
+<!doctype html><meta charset=utf-8><title>Mark follows</title>
+<style> body { margin: 24px; font: 15px sans-serif; } input { display: block; margin: 8px 0; width: 260px; } </style>
+<!-- A card box Neo types into privately, and what a page may do with its value afterwards
+     (ruling R50). Its scripts run in the page's own world, as a site's would:
+     recreate() replaces the box with a new element that holds the same value;
+     cloneCard() clones it; copyCard(grouped) copies its value into the Copy box, grouped in fours
+     with spaces when asked; emptyAll() empties every box; guess(text) sets the Guess box. -->
+<input id=card aria-label="Card">
+<input id=copy aria-label="Copy">
+<input id=guess aria-label="Guess">
+<script>
+  const byId = (id) => document.getElementById(id)
+  window.recreate = () => {
+    const old = byId('card')
+    const fresh = document.createElement('input')
+    fresh.id = 'fresh'
+    fresh.setAttribute('aria-label', 'Fresh')
+    fresh.value = old.value
+    old.replaceWith(fresh)
+  }
+  window.cloneCard = () => {
+    const old = byId('card')
+    const twin = old.cloneNode()
+    twin.id = 'twin'
+    twin.setAttribute('aria-label', 'Twin')
+    old.after(twin)
+  }
+  window.copyCard = (grouped) => {
+    const value = byId('card').value
+    byId('copy').value = grouped ? value.replace(/(.{4})(?=.)/g, '$1 ') : value
+  }
+  window.emptyAll = () => {
+    for (const box of document.querySelectorAll('input')) box.value = ''
+  }
+  window.guess = (text) => {
+    byId('guess').value = text
+  }
+</script>

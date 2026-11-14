@@ -33,8 +33,9 @@ use fixture_server::{FixtureServer, Page};
 use input_recording::{InputCall, InputRecording};
 use live_browser::{LiveBrowser, TestPage, TestResult};
 use neo_playwright::{
-    BoxSpec, CoverIn, Drawing, Entry, EntryCode, EntryOutcome, EntryRequest, Expect, Op,
-    PictureCheck, PrivateField, PrivateText, RunState, Unread,
+    BoxLook, BoxSpec, CoverIn, Drawing, Entry, EntryCode, EntryOutcome, EntryRequest, Expect,
+    LookCompare, LookField, LookRequest, Op, PictureCheck, PrivateField, PrivateText, RunState,
+    Unread,
 };
 use neo_trace::{Delivery, ErrorOwner};
 use private_host::HostEnv;
@@ -744,6 +745,445 @@ async fn tests_that_max_length_minus_one_fills_only_a_box_with_none() -> TestRes
         bench.close(opened).await?;
     }
     Ok(())
+}
+
+/// The card value of ruling R50's rows, and its bullets.
+const FOLLOWED: &str = "4242424242424242";
+
+/// What Neo's `inputValue()` answers for the box `r#ref` names: a read through the mask.
+async fn masked_value(bench: &Bench, opened: &Opened, r#ref: &str) -> TestResult<String> {
+    let target = ref_target(&opened.page.brand(), r#ref);
+    let read = bench
+        .live
+        .invoke("locator.inputValue", input_value(&target))
+        .await??;
+    Ok(read.as_str().unwrap_or_default().to_owned())
+}
+
+/// Ruling R50's row 13b: the page moves the text into another box and focuses it, inside the
+/// box's input event, so the read-back finds the box empty and marks the control that holds
+/// the focus (markFocused). That control reads as bullets, as on main, and so does a clone the
+/// page makes of it afterwards: markFocused keeps a digest of what the control holds. Fails with
+/// that digest left out of markFocused (the clone prints the value).
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_the_mark_follows_the_value_into_a_clone_of_the_focused_control() -> TestResult {
+    let bench = Bench::start().await?;
+    let bullets = "•".repeat(FOLLOWED.len());
+    let opened = bench.open("/private/mark-moves.html", Place::Front).await?;
+    let mover = bench.r#ref(&opened, "textbox", "Mover").await?;
+    let catch = bench.r#ref(&opened, "textbox", "Catch").await?;
+    let env = bench.host(&opened);
+    let field = Field::new(&mover, &bench.page_origin).with(FOLLOWED)?;
+    let entry = bench.enter(&env, &opened, vec![field]).await;
+    assert_ne!(
+        entry.outcome,
+        EntryOutcome::Entered,
+        "the text moved: {entry:?}"
+    );
+    assert_eq!(
+        masked_value(&bench, &opened, &catch).await?,
+        bullets,
+        "the control that holds the focus"
+    );
+    bench.live.main_world(&opened.page, "cloneCatch()").await?;
+    let twin = bench.r#ref(&opened, "textbox", "Caught twin").await?;
+    assert_eq!(
+        masked_value(&bench, &opened, &twin).await?,
+        bullets,
+        "a clone of it"
+    );
+    bench.close(opened).await
+}
+
+/// Ruling R50's rows 11, 12, 13, 15 and 16: the mark follows the value. After a private fill of
+/// the Card box, every text control of the document that holds the value reads as bullets
+/// through Neo's reads, though only the Card box carries the mark: a second box the page copies
+/// it into while the Card box still holds it (no new power: the page holds it), a clone, a copy
+/// the page groups with spaces, and a new element the page puts in the Card box's place, also in
+/// a whole-page snapshot, and `toHaveValue` compares it against the bullets. After a reload, a
+/// new document keeps no digest: a box set to the value reads it. Fails with the digest compare
+/// taken out of the mask: each copy reads the value.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_the_mark_follows_the_value_into_copies() -> TestResult {
+    let bench = Bench::start().await?;
+    let bullets = "•".repeat(FOLLOWED.len());
+    let opened = bench
+        .open("/private/mark-follows.html", Place::Front)
+        .await?;
+    let card = bench.r#ref(&opened, "textbox", "Card").await?;
+    let copy = bench.r#ref(&opened, "textbox", "Copy").await?;
+    let env = bench.host(&opened);
+    let field = Field::new(&card, &bench.page_origin).with(FOLLOWED)?;
+    let entry = bench.enter(&env, &opened, vec![field]).await;
+    assert_eq!(entry.outcome, EntryOutcome::Entered, "{entry:?}");
+    let page = &opened.page;
+    // Row 15: a second box set to the value while the filled box still holds it.
+    bench.live.main_world(page, "copyCard(false)").await?;
+    assert_eq!(
+        masked_value(&bench, &opened, &copy).await?,
+        bullets,
+        "the copy"
+    );
+    // Row 13: a copy the page groups with spaces.
+    bench.live.main_world(page, "copyCard(true)").await?;
+    let grouped = "•".repeat(FOLLOWED.len() + 3);
+    assert_eq!(
+        masked_value(&bench, &opened, &copy).await?,
+        grouped,
+        "the grouped copy"
+    );
+    // Row 12: a clone.
+    bench.live.main_world(page, "cloneCard()").await?;
+    let twin = bench.r#ref(&opened, "textbox", "Twin").await?;
+    assert_eq!(
+        masked_value(&bench, &opened, &twin).await?,
+        bullets,
+        "the clone"
+    );
+    // Row 11: a new element in the box's place, also in a whole-page snapshot, and toHaveValue.
+    bench.live.main_world(page, "recreate()").await?;
+    let fresh = bench.r#ref(&opened, "textbox", "Fresh").await?;
+    assert_eq!(
+        masked_value(&bench, &opened, &fresh).await?,
+        bullets,
+        "the new box"
+    );
+    let printed = bench
+        .live
+        .invoke("page.ariaSnapshot", page_snapshot(&page.brand(), false))
+        .await??
+        .to_string();
+    assert!(
+        !printed.contains(FOLLOWED),
+        "the snapshot prints no value: {printed}"
+    );
+    let same_as_bullets = expectation(
+        ("target", ref_target(&page.brand(), &fresh)),
+        "toHaveValue",
+        &json!({ "expression": "to.have.value", "isNot": false,
+            "expectedText": [{ "string": bullets }] }),
+    );
+    bench
+        .live
+        .invoke("expect.locator", same_as_bullets)
+        .await??;
+    // Row 16: a new document keeps no digest.
+    bench.live.main_world(page, "location.reload()").await?;
+    time::sleep(Duration::from_millis(500)).await;
+    bench
+        .live
+        .main_world(
+            page,
+            &format!("document.getElementById('copy').value = '{FOLLOWED}'"),
+        )
+        .await?;
+    let copy = bench.r#ref(&opened, "textbox", "Copy").await?;
+    assert_eq!(
+        masked_value(&bench, &opened, &copy).await?,
+        FOLLOWED,
+        "after a reload"
+    );
+    bench.close(opened).await
+}
+
+/// Ruling R50's row 14, one guess at most: after a private fill the page empties every box that
+/// held the value, and a script makes ten guesses, each by setting the Guess box and reading it
+/// with `inputValue()`, with no whole-page snapshot between. With the right value fifth, none of
+/// the ten reads bullets: the first wrong guess's read forgot the digest. With the right value
+/// first, that one read is bullets (the value is on the page again), and no later read can be,
+/// the right value again included. Fails with forgetting taken out, or done only at a whole-page
+/// snapshot: the fifth guess reads bullets.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_value_that_left_can_be_guessed_once_at_most() -> TestResult {
+    let bench = Bench::start().await?;
+    for right_at in [5, 1] {
+        let opened = bench
+            .open("/private/mark-follows.html", Place::Front)
+            .await?;
+        let card = bench.r#ref(&opened, "textbox", "Card").await?;
+        let guess = bench.r#ref(&opened, "textbox", "Guess").await?;
+        let env = bench.host(&opened);
+        let field = Field::new(&card, &bench.page_origin).with(FOLLOWED)?;
+        let entry = bench.enter(&env, &opened, vec![field]).await;
+        assert_eq!(entry.outcome, EntryOutcome::Entered, "{entry:?}");
+        bench.live.main_world(&opened.page, "emptyAll()").await?;
+        let mut masked = Vec::new();
+        for attempt in 1..=10 {
+            let text = if attempt == right_at || (right_at == 1 && attempt == 6) {
+                FOLLOWED.to_owned()
+            } else {
+                format!("42424242424242{attempt:02}")
+            };
+            bench
+                .live
+                .main_world(&opened.page, &format!("guess('{text}')"))
+                .await?;
+            if masked_value(&bench, &opened, &guess)
+                .await?
+                .starts_with('•')
+            {
+                masked.push(attempt);
+            }
+        }
+        let wanted: Vec<i32> = if right_at == 1 { vec![1] } else { Vec::new() };
+        assert_eq!(
+            masked, wanted,
+            "right value at guess {right_at}: the guesses read as bullets"
+        );
+        bench.close(opened).await?;
+    }
+    Ok(())
+}
+
+/// Ruling R50's row 13a: a page that keeps four characters of what was typed (`value_not_taken`)
+/// then puts a new box in its place that holds them. The digest was kept of what the box held at
+/// its read-back, so the new box reads as bullets. Fails with a digest kept only when the box
+/// holds the value it was given: the new box reads the four characters.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_kept_part_of_the_value_is_masked_where_it_goes() -> TestResult {
+    let bench = Bench::start().await?;
+    let opened = bench.open("/private/rewrite.html", Place::Front).await?;
+    let code_box = bench.r#ref(&opened, "textbox", "Short code").await?;
+    let env = bench.host(&opened);
+    let field = Field::new(&code_box, &bench.page_origin).with("246813")?;
+    let entry = bench.enter(&env, &opened, vec![field]).await;
+    assert_eq!(code(&entry), Some("value_not_taken"), "{entry:?}");
+    bench
+        .live
+        .main_world(
+            &opened.page,
+            "(() => { const old = document.querySelector('input'); \
+             const fresh = document.createElement('input'); \
+             fresh.setAttribute('aria-label', 'Fresh code'); fresh.value = old.value; \
+             old.replaceWith(fresh) })()",
+        )
+        .await?;
+    let fresh = bench.r#ref(&opened, "textbox", "Fresh code").await?;
+    assert_eq!(
+        masked_value(&bench, &opened, &fresh).await?,
+        "••••",
+        "the new box"
+    );
+    bench.close(opened).await
+}
+
+/// One check call on `opened` that compares `value` with the box `r#ref` names (ruling R48).
+async fn compared(
+    bench: &Bench,
+    opened: &Opened,
+    r#ref: &str,
+    value: &str,
+    spaced: bool,
+) -> TestResult<BoxLook> {
+    let env = bench.host(opened);
+    let request = LookRequest {
+        tab: opened.page.tab,
+        url: None,
+        fields: vec![LookField {
+            box_ref: r#ref.to_owned(),
+            expect: None,
+            keys: false,
+        }],
+        compares: vec![Some(LookCompare {
+            value: PrivateText::new(value.to_owned())?,
+            spaced,
+            cut: false,
+        })],
+        deadline: Instant::now() + Duration::from_secs(10),
+    };
+    let looks = bench
+        .live
+        .playwright
+        .look_boxes(&env, &request)
+        .await
+        .map_err(|error| format!("the check failed: {error:?}"))?;
+    assert!(!env.was_sent(), "a check never marks itself sent");
+    looks
+        .into_iter()
+        .next()
+        .ok_or_else(|| "no answer for the box".into())
+}
+
+/// The booleans a check answered, or `None` when it read nothing.
+fn booleans(look: &BoxLook) -> Option<(bool, bool)> {
+    look.compared
+        .map(|compared| (compared.holds, compared.contains))
+}
+
+/// Ruling R48's rows 1 to 5: the check call compares a host's value with a named box, in the
+/// box's isolated world, and answers two booleans. A box after a private fill holds and contains
+/// its value and not another; with `spaced` a box the page groups holds the bare number. A box
+/// that holds the number inside a longer text contains it and does not hold it, grouped too with
+/// `spaced`, and a box the page masked does neither. A covered, a hidden and an out-of-view box
+/// answer their refusal and both booleans: reading needs no hit. A checkbox answers neither. A
+/// box whose frame was removed answers neither, and `element_detached`: never a `false` for a
+/// box Neo did not read. A tab no longer at the host's address answers `page_changed` and
+/// neither boolean: the value goes only where the fill would send it. Fails with containment kept without setting separators aside (the
+/// grouped number in a longer text is not contained), and with an unread box answered as
+/// `holds: false`.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_the_check_call_compares_a_value_with_a_named_box() -> TestResult {
+    const NUMBER: &str = "4242424242424242";
+    const OTHER: &str = "5555555555554444";
+    let bench = Bench::start().await?;
+    let opened = bench.open("/private/compare.html", Place::Front).await?;
+    let r#ref = |name: &'static str| bench.r#ref(&opened, "textbox", name);
+    let card = r#ref("Card").await?;
+    let env = bench.host(&opened);
+    let entry = bench
+        .enter(
+            &env,
+            &opened,
+            vec![Field::new(&card, &bench.page_origin).with(NUMBER)?],
+        )
+        .await;
+    assert_eq!(entry.outcome, EntryOutcome::Entered, "{entry:?}");
+    let both = Some((true, true));
+    let contained = Some((false, true));
+    let neither = Some((false, false));
+    // Row 1.
+    let look = compared(&bench, &opened, &card, NUMBER, false).await?;
+    assert_eq!(booleans(&look), both, "the filled box: {look:?}");
+    let look = compared(&bench, &opened, &card, OTHER, false).await?;
+    assert_eq!(booleans(&look), neither, "another value: {look:?}");
+    let grouped = r#ref("Grouped").await?;
+    let look = compared(&bench, &opened, &grouped, NUMBER, true).await?;
+    assert_eq!(booleans(&look), both, "grouped, spaced: {look:?}");
+    let look = compared(&bench, &opened, &grouped, NUMBER, false).await?;
+    assert_eq!(booleans(&look), neither, "grouped, not spaced: {look:?}");
+    // Row 2.
+    let longer = r#ref("Longer").await?;
+    let look = compared(&bench, &opened, &longer, NUMBER, false).await?;
+    assert_eq!(booleans(&look), contained, "inside a longer text: {look:?}");
+    let longer_grouped = r#ref("Longer grouped").await?;
+    let look = compared(&bench, &opened, &longer_grouped, NUMBER, true).await?;
+    assert_eq!(
+        booleans(&look),
+        contained,
+        "grouped in a longer text: {look:?}"
+    );
+    let masked = r#ref("Masked").await?;
+    let look = compared(&bench, &opened, &masked, NUMBER, true).await?;
+    assert_eq!(booleans(&look), neither, "masked by the page: {look:?}");
+    // Row 3: the refusal and both booleans.
+    // A hidden box prints no ref: a host mints one with `locator.ref()`.
+    for (css, refused) in [
+        ("#covered", "box_covered"),
+        ("#hidden", "box_hidden"),
+        ("#away", "cover_unread"),
+    ] {
+        let name = css;
+        let named = bench.mint(&opened, css).await?;
+        let look = compared(&bench, &opened, &named, NUMBER, false).await?;
+        let code = look.refusal.as_ref().map(|error| error.code.as_str());
+        assert_eq!(
+            (code, booleans(&look)),
+            (Some(refused), both),
+            "{name}: {look:?}"
+        );
+    }
+    // Row 4: no text input.
+    let agree = bench.r#ref(&opened, "checkbox", "Agree").await?;
+    let look = compared(&bench, &opened, &agree, NUMBER, false).await?;
+    assert_eq!(booleans(&look), None, "a checkbox: {look:?}");
+    // Row 8a: a tab no longer at the host's address is refused as the fill is, and not compared.
+    let elsewhere = LookRequest {
+        tab: opened.page.tab,
+        url: Some("https://elsewhere.example/".to_owned()),
+        fields: vec![LookField {
+            box_ref: card.clone(),
+            expect: None,
+            keys: false,
+        }],
+        compares: vec![Some(LookCompare {
+            value: PrivateText::new(NUMBER.to_owned())?,
+            spaced: false,
+            cut: false,
+        })],
+        deadline: Instant::now() + Duration::from_secs(10),
+    };
+    let looks = bench
+        .live
+        .playwright
+        .look_boxes(&env, &elsewhere)
+        .await
+        .map_err(|error| format!("the check failed: {error:?}"))?;
+    let look = looks.first().ok_or("an answer for the box")?;
+    let code = look.refusal.as_ref().map(|error| error.code.as_str());
+    assert_eq!(
+        (code, booleans(look)),
+        (Some("page_changed"), None),
+        "another address: {look:?}"
+    );
+    // Row 5: the ref is dead.
+    let inner = r#ref("Inner box").await?;
+    bench
+        .live
+        .main_world(&opened.page, "document.querySelector('iframe').remove()")
+        .await?;
+    let look = compared(&bench, &opened, &inner, NUMBER, false).await?;
+    let code = look.refusal.as_ref().map(|error| error.code.as_str());
+    assert_eq!(
+        (code, booleans(&look)),
+        (Some("element_detached"), None),
+        "a box whose frame was removed: {look:?}"
+    );
+    bench.close(opened).await
+}
+
+/// Ruling R48's row 6, not read: the box's frame is still there and stops answering for three
+/// seconds. The check ends at its two-second deadline with `run_timeout` and no boolean for the
+/// box: Neo never says `false` of a box it did not read.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_box_whose_frame_does_not_answer_gets_no_boolean() -> TestResult {
+    let bench = Bench::start().await?;
+    let opened = bench.open("/private/busy-frame.html", Place::Front).await?;
+    let busy = bench.r#ref(&opened, "textbox", "Busy box").await?;
+    bench
+        .live
+        .main_world(
+            &opened.page,
+            "document.querySelector('iframe').contentWindow.postMessage('go', '*')",
+        )
+        .await?;
+    let env = bench.host(&opened);
+    let request = LookRequest {
+        tab: opened.page.tab,
+        url: None,
+        fields: vec![LookField {
+            box_ref: busy,
+            expect: None,
+            keys: false,
+        }],
+        compares: vec![Some(LookCompare {
+            value: PrivateText::new("4242424242424242".to_owned())?,
+            spaced: false,
+            cut: false,
+        })],
+        deadline: Instant::now() + Duration::from_secs(2),
+    };
+    let answered = bench.live.playwright.look_boxes(&env, &request).await;
+    match answered {
+        Err(error) => assert_eq!(error.code, "run_timeout", "{error:?}"),
+        Ok(looks) => {
+            let look = looks.first().ok_or("an answer for the box")?;
+            let code = look.refusal.as_ref().map(|error| error.code.as_str());
+            assert_eq!(
+                (code, look.compared),
+                (Some("run_timeout"), None),
+                "{look:?}"
+            );
+        }
+    }
+    // The frame's loop ends a second later: let it, so the browser is idle for the next test.
+    time::sleep(Duration::from_millis(1500)).await;
+    bench.close(opened).await
 }
 
 /// Rulings R55 and R56: a sign-in whose two boxes each sit under a sibling div that draws the

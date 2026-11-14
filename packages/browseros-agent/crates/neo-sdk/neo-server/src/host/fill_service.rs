@@ -40,8 +40,8 @@ use super::fill_request::{CheckRequest, FillRequest};
 use super::{FilledTabs, TakeoverLock};
 use crate::browser::{BrowserLink, PageRef, TabsScope};
 use crate::builtins::{
-    ENTRY_BACKSTOP, FillProgress, FillValues, HOST_FILL, HOST_FILL_CHECK, HOST_FILL_CHECK_CODE,
-    HOST_FILL_CODE, boxes_args,
+    CheckCompared, CheckValues, ENTRY_BACKSTOP, FillProgress, FillValues, HOST_FILL,
+    HOST_FILL_CHECK, HOST_FILL_CHECK_CODE, HOST_FILL_CODE, boxes_args,
 };
 use crate::dispatch::{
     Call, Caller, Dispatcher, ErrorCode, OpFailure, OpReply, PendingReply, RunCtx, RunEnd,
@@ -351,6 +351,7 @@ impl Fill {
             timeout,
             url,
             boxes,
+            values,
         } = request;
         let Some(view) = self.browser.view() else {
             return Err(Refused::BrowserUnavailable);
@@ -382,6 +383,8 @@ impl Fill {
         if let Some(lock) = lock {
             run.pass_lock(lock);
         }
+        // Ruling R48: the values wait in the run's slot beside the op, never in its input.
+        run.slot::<CheckValues>().put(values);
         let call = Call {
             name: HOST_FILL_CHECK.to_owned(),
             input: boxes_args(tab, url.as_deref(), &boxes),
@@ -396,14 +399,24 @@ impl Fill {
             // every box answers that refusal, with no facts.
             Err(failure) => vec![refused_box(&failure); boxes.len()],
         };
-        let answer = api::FillCheckResult {
+        let recorded = api::FillCheckResult {
             run_id: run.id().to_string(),
             fields,
         };
+        // The run records the answer without the compare's booleans, so a check that compared
+        // keeps the shape every check's run has (ruling R48); the host alone gets them.
+        let compared = run.slot::<CheckCompared>().take().unwrap_or_default();
+        let mut answer = recorded.clone();
+        for (field, compared) in answer.fields.iter_mut().zip(compared) {
+            if let Some(compared) = compared {
+                field.holds = Some(compared.holds);
+                field.contains = Some(compared.contains);
+            }
+        }
         guard.finish(RunEnd {
             status: status_of(&run),
             error: None,
-            result: serde_json::to_value(&answer).ok(),
+            result: serde_json::to_value(&recorded).ok(),
             replay: None,
         });
         Ok(answer)
@@ -460,6 +473,8 @@ fn checked(value: Value, boxes: usize) -> Vec<api::FillBoxCheck> {
                 api::FillBoxCheck {
                     facts: None,
                     refusal: Some(Box::new(refusal)),
+                    holds: None,
+                    contains: None,
                 };
                 boxes
             ]
@@ -478,5 +493,7 @@ fn refused_box(failure: &OpFailure) -> api::FillBoxCheck {
             host_code: None,
             operation_id: Some(failure.operation.to_string()),
         })),
+        holds: None,
+        contains: None,
     }
 }

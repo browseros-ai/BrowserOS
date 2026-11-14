@@ -213,6 +213,11 @@ export const REQUEST_EXAMPLES: { [O in Op]: AtLeastOne<RequestOf<O>> } = {
       pin: 3,
       step: { kind: 'holds', text: '4242 4242', spaced: true },
     },
+    {
+      op: 'private',
+      pin: 3,
+      step: { kind: 'compare', text: '4242 4242', spaced: true },
+    },
     { op: 'private', pin: 3, step: { kind: 'readBack' } },
     { op: 'private', pin: 3, step: { kind: 'forget' } },
     { op: 'private', pin: 3, step: { kind: 'markFocused' } },
@@ -592,6 +597,10 @@ const REPLY_EXAMPLES: {
     { kind: 'value', value: { kind: 'focus', focus: 'noDocumentFocus' } },
     { kind: 'value', value: { kind: 'focus', focus: 'moving' } },
     { kind: 'value', value: { kind: 'holds', holds: true } },
+    {
+      kind: 'value',
+      value: { kind: 'compared', holds: false, contains: true },
+    },
     {
       kind: 'value',
       value: {

@@ -37,6 +37,7 @@
  * that frame's tree walk there; no host fill happens under the switch.
  */
 
+import { holdsKeptValue, keepDigest, keepsDigests } from './private-digest'
 import { coverWrapper, renderedText } from './private-look'
 import type {
   BoxState,
@@ -105,14 +106,18 @@ const active = new Map<Pin, Element>()
  */
 const drawnWrappers = new Map<Pin, Element>()
 
-/** Whether Neo typed a private value into `element` (the mask reads it, pull request 4). */
+/**
+ * Whether the mask treats `element` as a box Neo typed a private value into (pull request 4):
+ * it carries the mark, or it held a value this world keeps a digest of when the current read
+ * through the mask began (ruling R50, `private-digest.ts`).
+ */
 export function privatelyTyped(element: Element): boolean {
-  return Object.hasOwn(element, MARK)
+  return Object.hasOwn(element, MARK) || holdsKeptValue(element)
 }
 
-/** Whether this world marked any box yet (`anyMarked`). */
+/** Whether this world marked any box or keeps any digest (`anyMarked`). */
 export function anyPrivatelyTyped(): boolean {
-  return anyMarked
+  return anyMarked || keepsDigests()
 }
 
 function mark(element: Element): void {
@@ -141,9 +146,12 @@ export function privateStep(
   // After `focus`, the box is reached through `active`, connected or not: a read-back must
   // reach a box that left its document, whose listener still knows what it held at its last
   // input. Before it, the box must be in its document.
+  // The check call's compare (ruling R48) reads a box no entry is under, as `focus` starts one.
   const box =
     active.get(pin) ??
-    (step.kind === 'focus' ? world.pins.live(pin) : undefined)
+    (step.kind === 'focus' || step.kind === 'compare'
+      ? world.pins.live(pin)
+      : undefined)
   if (!box) return { kind: 'detached' }
   const answered = answer(world, pin, box, step)
   return answered instanceof Promise ? answered.then(reply) : reply(answered)
@@ -169,6 +177,15 @@ function answer(
         kind: 'holds',
         holds: same(heldText(box), step.text, step.spaced),
       }
+    case 'compare': {
+      // Booleans only: nothing of the value, its place or its count leaves this world.
+      const held = heldText(box)
+      return {
+        kind: 'compared',
+        holds: same(held, step.text, step.spaced),
+        contains: contains(held, step.text, step.spaced),
+      }
+    }
     case 'readBack':
       return readBack(pin, box)
     case 'forget':
@@ -179,7 +196,10 @@ function answer(
   }
 }
 
-/** Marks the text control holding the focus in `box`'s document, down open shadow roots. */
+/**
+ * Marks the text control holding the focus in `box`'s document, down open shadow roots, and
+ * keeps a digest of what it holds (ruling R50): the text may have gone there.
+ */
 function markFocused(box: Element): boolean {
   let holder = box.ownerDocument.activeElement
   while (holder?.shadowRoot?.activeElement)
@@ -188,6 +208,7 @@ function markFocused(box: Element): boolean {
   const name = holder.localName
   if (name !== 'input' && name !== 'textarea') return false
   mark(holder)
+  keepDigest(heldText(holder))
   return true
 }
 
@@ -313,6 +334,9 @@ function readBack(pin: Pin, box: Element): PrivateAnswer {
   else if (entry && same(heldText(box), entry.text, entry.spaced))
     state = 'holds'
   else state = 'other'
+  // The mark follows the value (ruling R50): a digest of what the box holds now, whether that is
+  // the value it was given or another form or part of it. A box that left keeps none.
+  if (state !== 'left') keepDigest(heldText(box))
   // The text may have gone to the control that holds the focus now: it is marked before the
   // box is forgotten, which ends this entry's reach to the box (ruling R26).
   if (state === 'other') markFocused(box)
@@ -345,6 +369,17 @@ function draws(wrapper: Element, text: string): boolean {
 function heldText(box: Element): string {
   const value: unknown = Reflect.get(box, 'value')
   return typeof value === 'string' ? value : ''
+}
+
+/**
+ * Whether `held` contains `text`, or with `spaced` contains it once spaces, dashes and slashes
+ * are set aside in both, the rule `same` uses for equality: true whenever `same` is (ruling R48).
+ */
+function contains(held: string, text: string, spaced: boolean): boolean {
+  if (held.includes(text)) return true
+  if (!spaced) return false
+  const bare = (value: string) => value.replace(/[\s\-/]/g, '')
+  return bare(held).includes(bare(text))
 }
 
 /** Equal, or with `spaced` equal once spaces, dashes and slashes are set aside (`12 / 29`). */

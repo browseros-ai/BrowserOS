@@ -73,6 +73,7 @@ async fn look(
         tab: page.tab,
         url,
         fields,
+        compares: Vec::new(),
         deadline: Instant::now() + Duration::from_secs(10),
     };
     live.playwright

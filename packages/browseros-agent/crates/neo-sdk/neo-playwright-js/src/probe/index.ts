@@ -20,6 +20,7 @@ import { edit } from './edit'
 import { expect } from './expect'
 import { FailureOutput } from './failure-output'
 import { armInput, inputArrived } from './files'
+import { noteHolders } from './private-digest'
 import { privateStep } from './private-entry'
 import { look } from './private-look'
 import { privateShown } from './private-shown'
@@ -179,9 +180,21 @@ function dispatch<O extends Routed>(
   nodes: readonly unknown[],
   output: FailureOutput,
 ): ReplyTo<O> | Promise<ReplyTo<O>> {
+  // Ruling R50: before a read that goes through the mask, note which text controls of this
+  // document hold a value the world keeps a digest of, and forget every digest none holds.
+  if (MASKED_READS.has(op)) noteHolders(document)
   const handler: Handler<O> = HANDLERS[op]
   return handler(world, request, root, nodes, output)
 }
+
+/** The requests that read through the mask: a snapshot, a read, an assertion, the document. */
+const MASKED_READS: ReadonlySet<Routed> = new Set<Routed>([
+  'read',
+  'readAll',
+  'snapshot',
+  'expect',
+  'document',
+])
 
 /** The Rust-owned call envelope is the only policy entry; malformed input cannot bypass it. */
 function isProbeCall(value: unknown): value is ProbeCall {

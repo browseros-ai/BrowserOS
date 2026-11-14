@@ -56,23 +56,52 @@ impl Playwright {
             .unwrap_or(Ok(TabAddress::Changed))
             .map_err(error)?;
         let mut looks = Vec::with_capacity(request.fields.len());
-        for field in &request.fields {
+        for (index, field) in request.fields.iter().enumerate() {
             let look = navigation
                 .race(look_op::look_at(&page, &scope, field, false, None, address))
                 .await
                 // The main frame began to navigate: the page is changing under the approval.
                 .unwrap_or(Ok(Look::Unfound(EntryCode::PageChanged)));
+            // Ruling R48: the value goes only where the fill would send it. A tab no longer at
+            // the host's address is refused `page_changed` with no compare, as the fill is
+            // refused before any character.
+            let compare = request
+                .compares
+                .get(index)
+                .and_then(Option::as_ref)
+                .filter(|_| address != TabAddress::Changed);
             looks.push(match look {
-                Ok(Look::Found(found)) => BoxLook {
-                    facts: Some(found.facts),
-                    refusal: found.refusal.map(error),
-                },
+                Ok(Look::Found(found)) => {
+                    // Ruling R48: the compare reads the box whatever the look said of it.
+                    let compared = match compare {
+                        Some(compare) => navigation
+                            .race(look_op::compare(&page, &scope, &found, compare))
+                            .await
+                            .unwrap_or(Err(EntryCode::PageChanged)),
+                        None => Ok(None),
+                    };
+                    let (compared, unread) = match compared {
+                        Ok(Some(compared)) => (Some(compared), None),
+                        Ok(None) if compare.is_some() => (None, Some(EntryCode::ElementDetached)),
+                        Ok(None) => (None, None),
+                        Err(code) if look_op::ends_the_call(code) => return Err(error(code)),
+                        Err(code) => (None, Some(code)),
+                    };
+                    // A box the compare could not read answers why, never a `false`.
+                    let refusal = found.refusal.or(unread);
+                    BoxLook {
+                        facts: Some(found.facts),
+                        refusal: refusal.map(error),
+                        compared,
+                    }
+                }
                 // The tab, the connection or the deadline ends the call for every box.
                 Err(code) if look_op::ends_the_call(code) => return Err(error(code)),
                 // Anything else is this box's answer, and the rest are still looked at.
                 Ok(Look::Unfound(code)) | Err(code) => BoxLook {
                     facts: None,
                     refusal: Some(error(code)),
+                    compared: None,
                 },
             });
         }

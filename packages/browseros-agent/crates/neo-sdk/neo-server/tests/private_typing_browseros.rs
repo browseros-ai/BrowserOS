@@ -137,23 +137,9 @@ async fn drive(rig: &mut Rig) -> TestResult {
     );
 
     no_picture_after_the_fill(rig, &client).await?;
+    let compared = compared_after_the_fill(rig, tab, user, pw).await?;
 
-    // The record: one protected op, the counts, no picture, no page address.
-    let run_id = at(&answer, "/runId").as_str().ok_or("a runId")?;
-    let record = rig
-        .host(
-            "GET",
-            &format!("/v1/runs/{run_id}?wait=10"),
-            Some(HOST_TOKEN),
-            None,
-        )
-        .await?
-        .json()?;
-    let operation = at(&record, "/operations/0");
-    assert_eq!(at(operation, "/name"), "host.fill", "{record}");
-    assert_eq!(at(operation, "/kind"), "protected");
-    assert_eq!(at(operation, "/hasScreenshot"), false);
-    assert!(at(operation, "/page/url").is_null(), "{operation}");
+    let record = fill_record(rig, &answer).await?;
 
     client.cancel().await?;
     assert_eq!(rig.stop_neo().await?, Some(0), "SIGTERM is a normal stop");
@@ -172,15 +158,89 @@ async fn drive(rig: &mut Rig) -> TestResult {
             .any(|text| text.contains("TRACE")),
         "Neo ran at trace level, so the scan below covers every line it can write"
     );
-    for canary in [USER, PASSWORD] {
+    for canary in [USER, PASSWORD, CHECKED] {
         let files = files_holding(&state, canary)?;
         assert!(files.is_empty(), "{canary} is in {files:?}");
         assert!(!log.contains(canary), "{canary} is in Neo's log");
-        for text in [answer.to_string(), record.to_string(), checked.to_string()] {
+        for text in [&answer, &record, &checked, &compared].map(Value::to_string) {
             assert!(!text.contains(canary), "{canary} is in {text}");
         }
     }
     Ok(())
+}
+
+/// The fill's record: one protected op, the counts, no picture, no page address.
+async fn fill_record(rig: &Rig, answer: &Value) -> Result<Value, Box<dyn Error>> {
+    let run_id = at(answer, "/runId").as_str().ok_or("a runId")?;
+    let record = rig
+        .host(
+            "GET",
+            &format!("/v1/runs/{run_id}?wait=10"),
+            Some(HOST_TOKEN),
+            None,
+        )
+        .await?
+        .json()?;
+    let operation = at(&record, "/operations/0");
+    assert_eq!(at(operation, "/name"), "host.fill", "{record}");
+    assert_eq!(at(operation, "/kind"), "protected");
+    assert_eq!(at(operation, "/hasScreenshot"), false);
+    assert!(at(operation, "/page/url").is_null(), "{operation}");
+    Ok(record)
+}
+
+/// A value the check call compares and nothing else ever sends: it must be in no record.
+const CHECKED: &str = "CANARY-check-only-8D";
+
+/// Ruling R48 after the fill: the check call compares the password box with the password and the
+/// user box with a value nothing else sends, and answers booleans only. The run's record keeps
+/// the shape a check's run has, with neither the values nor the booleans; the caller scans the
+/// answer, the record, the state folder and the log for both values.
+async fn compared_after_the_fill(
+    rig: &Rig,
+    tab: i64,
+    user: &str,
+    pw: &str,
+) -> Result<Value, Box<dyn Error>> {
+    let compare = json!({ "taskId": TASK, "fields": [
+        { "ref": pw, "value": PASSWORD },
+        { "ref": user, "value": CHECKED }
+    ] });
+    let compared = host(rig, &format!("/v1/tabs/{tab}/fill/check"), &compare).await?;
+    assert_eq!(
+        (
+            at(&compared, "/fields/0/holds"),
+            at(&compared, "/fields/0/contains")
+        ),
+        (&json!(true), &json!(true)),
+        "{compared}"
+    );
+    assert_eq!(
+        (
+            at(&compared, "/fields/1/holds"),
+            at(&compared, "/fields/1/contains")
+        ),
+        (&json!(false), &json!(false)),
+        "{compared}"
+    );
+    let run_id = at(&compared, "/runId")
+        .as_str()
+        .ok_or("the check's runId")?;
+    let record = rig
+        .host(
+            "GET",
+            &format!("/v1/runs/{run_id}?wait=10"),
+            Some(HOST_TOKEN),
+            None,
+        )
+        .await?
+        .json()?;
+    let recorded = record.to_string();
+    assert!(
+        !recorded.contains("\"holds\"") && !recorded.contains("\"contains\""),
+        "the check's run keeps its shape: {recorded}"
+    );
+    Ok(json!([compared, record]))
 }
 
 /// After the fill, under the host's `fill.pictures: never` (ruling R58), no picture of its tab

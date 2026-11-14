@@ -780,7 +780,7 @@ impl<'a> EntryRun<'a> {
 }
 
 /// The input types a browser applies `maxlength` to (ruling R23): a cut applies to these only.
-fn cuts(kind: &str) -> bool {
+pub(crate) fn cuts(kind: &str) -> bool {
     matches!(
         kind,
         "text" | "search" | "url" | "tel" | "email" | "password"

@@ -122,6 +122,10 @@ impl OpEnv for HostEnv {
 }
 
 /// The fixture pages, under `/private/`.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one table of the private suites' fixture pages, a line pair each"
+)]
 pub(crate) fn pages() -> HashMap<String, Page> {
     [
         (
@@ -141,6 +145,19 @@ pub(crate) fn pages() -> HashMap<String, Page> {
             include_str!("../data/private/smooth-login.html"),
         ),
         ("maxlength", include_str!("../data/private/maxlength.html")),
+        ("compare", include_str!("../data/private/compare.html")),
+        (
+            "mark-moves",
+            include_str!("../data/private/mark-moves.html"),
+        ),
+        (
+            "busy-frame",
+            include_str!("../data/private/busy-frame.html"),
+        ),
+        (
+            "mark-follows",
+            include_str!("../data/private/mark-follows.html"),
+        ),
         (
             "out-of-view",
             include_str!("../data/private/out-of-view.html"),

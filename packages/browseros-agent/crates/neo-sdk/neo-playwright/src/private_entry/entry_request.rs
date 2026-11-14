@@ -41,8 +41,25 @@ pub struct LookRequest {
     pub url: Option<String>,
     /// The boxes, at least one.
     pub fields: Vec<LookField>,
+    /// What the check call compares in each box (ruling R48), in the fields' order: `None`, or a
+    /// list shorter than the fields, compares nothing for a field. Kept beside the fields, as a
+    /// fill's values are, because a host's value is never cloned or recorded.
+    pub compares: Vec<Option<LookCompare>>,
     /// When the look must end.
     pub deadline: Instant,
+}
+
+/// A host's value the check call compares with one box (ruling R48), and the read-back's rule for
+/// it. The value goes to the box's isolated world only, is compared there, and comes back as two
+/// booleans.
+#[derive(Debug)]
+pub struct LookCompare {
+    /// The value.
+    pub value: PrivateText,
+    /// Equal once whitespace, dashes and slashes are set aside, as the fill's `spaced`.
+    pub spaced: bool,
+    /// The part the box's `maxlength` keeps, as the fill's `cut`.
+    pub cut: bool,
 }
 
 /// One box of a look. The check call can come before the host approved anything, so its
