@@ -1,0 +1,26 @@
+Stage 1 SDK proof, 2026-11-14 UTC
+Bun 1.4.2; installed BrowserOS neo; a new private profile and SDK state directory.
+SDK source tree 56103351506de43a0b50c9555065177384a41831 matches this branch and the unchanged sidecar probe.
+SDK binary SHA256 f96458ffbb57e291ac307aebe840c4b1dbb96307166e9fba07da7c7c61d40f56
+The SDK and private browser stopped successfully. See the JSONL cleanup receipt.
+
+Ran the actual playwrightRunCases plus the SDK browser-request guard case.
+Desktop catalog, removed-tool routing, session teardown/audit and C1/C3/C2b cases
+are host contracts and await stage 2 after C1/C2 land.
+
+PASS playwright run: navigate and read a page
+PASS playwright run: ariaSnapshot refs drive getByRef click
+PASS playwright run: fill a field and read its submitted value
+PASS playwright run: context.newPage opens distinct readable tabs
+PASS playwright run: upload a Buffer payload without a host path
+PASS playwright run: download.saveAs writes the downloaded bytes
+PASS playwright run: expect failure includes expected and received values
+PASS playwright run: explicit tasks retain their page across runs
+PASS playwright run: screenshot resolves to PNG bytes
+PASS playwright run: pdf resolves to PDF bytes
+PASS playwright run: file navigation is refused
+PASS playwright run: uploads outside files.readDirs are refused
+PASS transport: browser-shaped requests are rejected with 403
+
+13 pass
+0 fail
