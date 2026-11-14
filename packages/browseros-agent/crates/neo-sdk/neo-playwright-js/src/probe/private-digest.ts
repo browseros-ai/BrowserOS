@@ -2,8 +2,9 @@
  * The mark follows the value (protected-fill ruling R50). The mark on a box Neo typed a private
  * value into is by element (`private-entry.ts`), so a box the page re-creates or clones, or a
  * copy of the value in another box, would print the value. So at each read-back this world also
- * keeps a keyed digest of what the box held, with whitespace, dashes and slashes set aside, and
- * any text control of this document that holds a kept value is masked as a marked box is.
+ * keeps a keyed digest of what the box held and of the value it was given, with whitespace,
+ * dashes and slashes set aside, and any text control of this document that holds a kept value is
+ * masked as a marked box is.
  *
  * - The key is 128 random bits, made in this isolated world the first time it keeps a digest. It
  *   lives in this module's state and dies with the document. The page's scripts cannot reach it,
@@ -12,10 +13,10 @@
  *   UTF-16 code units: written here with 32-bit halves, because the browser's own digest call
  *   answers later and the mask cannot wait. 64 bits out, kept with the set-aside length, so only
  *   a control whose set-aside text has a kept length is digested at all.
- * - It must not become a way to guess. At the start of every read Neo makes through the mask
- *   (`noteHolders`), a digest that no connected text control of the document holds is forgotten.
- *   Once the value has left the page, a script that sets a box to a guess and reads it gets at
- *   most one answer in bullets, not thousands.
+ * - It must not become a way to guess. At the start of every request into this world
+ *   (`noteHolders`, run by the dispatcher), a digest that no connected text control of the
+ *   document holds is forgotten. Once the value has left the page, a script that sets a box to a
+ *   guess and reads it gets at most one answer in bullets, not thousands.
  */
 
 /** This world's key, four 32-bit words; made when the first digest is kept. */
@@ -24,7 +25,7 @@ let key: Uint32Array | undefined
 /** The kept digests, each with its set-aside text's length. */
 const kept = new Map<string, number>()
 
-/** The controls that held a kept value at the start of the current read through the mask. */
+/** The controls that held a kept value at the start of the current request. */
 let holders = new WeakSet<Element>()
 
 /** The characters a compare sets aside: whitespace, dashes and slashes, as `spaced` does. */
@@ -46,10 +47,11 @@ export function keepsDigests(): boolean {
 }
 
 /**
- * The scan at the start of every read through the mask, before the mask is in place, so the
- * native values are read: notes the text controls of `document` that hold a kept value, and
- * forgets every digest none of them holds. It runs whenever a digest is kept, also when the read
- * touches no holder: that is what lets the first wrong guess forget a value that has left.
+ * The scan at the start of every request, before the mask is asked, so the native values are
+ * read: notes the text controls of `document` that hold a kept value, and forgets every digest
+ * none of them holds. It runs whenever a digest is kept, also when the request touches no
+ * holder: that is what lets the first wrong guess forget a value that has left, and what lets an
+ * element preview in any request's error mask a box the page re-created since the last one.
  */
 export function noteHolders(document: Document): void {
   holders = new WeakSet()
@@ -67,7 +69,7 @@ export function noteHolders(document: Document): void {
   for (const known of kept.keys()) if (!held.has(known)) kept.delete(known)
 }
 
-/** Whether `element` held a kept value at the start of the current read through the mask. */
+/** Whether `element` held a kept value at the start of the current request. */
 export function holdsKeptValue(element: Element): boolean {
   return holders.has(element)
 }

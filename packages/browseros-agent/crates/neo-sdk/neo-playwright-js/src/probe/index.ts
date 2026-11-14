@@ -180,21 +180,15 @@ function dispatch<O extends Routed>(
   nodes: readonly unknown[],
   output: FailureOutput,
 ): ReplyTo<O> | Promise<ReplyTo<O>> {
-  // Ruling R50: before a read that goes through the mask, note which text controls of this
-  // document hold a value the world keeps a digest of, and forget every digest none holds.
-  if (MASKED_READS.has(op)) noteHolders(document)
+  // Ruling R50: at the start of every request, note which text controls of this document hold
+  // a value the world keeps a digest of, and forget every digest none holds. Every request, not
+  // a list of reads: any request's failure output asks the mask for an element's preview
+  // (`isPrivateField`), and so does the camera (`privateShown`); a list is what a new request
+  // would miss. With no digest kept the scan returns at once.
+  noteHolders(document)
   const handler: Handler<O> = HANDLERS[op]
   return handler(world, request, root, nodes, output)
 }
-
-/** The requests that read through the mask: a snapshot, a read, an assertion, the document. */
-const MASKED_READS: ReadonlySet<Routed> = new Set<Routed>([
-  'read',
-  'readAll',
-  'snapshot',
-  'expect',
-  'document',
-])
 
 /** The Rust-owned call envelope is the only policy entry; malformed input cannot bypass it. */
 function isProbeCall(value: unknown): value is ProbeCall {

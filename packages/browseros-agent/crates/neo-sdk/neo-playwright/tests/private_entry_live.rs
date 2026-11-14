@@ -760,6 +760,110 @@ async fn masked_value(bench: &Bench, opened: &Opened, r#ref: &str) -> TestResult
     Ok(read.as_str().unwrap_or_default().to_owned())
 }
 
+/// Ruling R50's row 18: after a private fill the page puts two new elements in the box's place,
+/// each holding the value and mirroring it into its `value` attribute, as a framework does for a
+/// controlled input. A click on a locator that finds both fails strict mode, with no read through
+/// the mask before it: its message and call log preview both as `value="<16 characters>"`, never
+/// the value. Main prints the value there, with or without a snapshot between (measured by the
+/// design's keeper on main 579b45ccf). Fails with the scan run before the five reads alone: no
+/// read came between, so the preview prints the value.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_an_error_preview_masks_a_box_the_page_re_created() -> TestResult {
+    let bench = Bench::start().await?;
+    let marker = format!("value=\"<{} characters>\"", FOLLOWED.len());
+    for conformance in [false, true] {
+        let opened = bench
+            .open("/private/mark-follows.html", Place::Front)
+            .await?;
+        let card = bench.r#ref(&opened, "textbox", "Card").await?;
+        let env = bench.host(&opened);
+        let field = Field::new(&card, &bench.page_origin).with(FOLLOWED)?;
+        let entry = bench.enter(&env, &opened, vec![field]).await;
+        assert_eq!(entry.outcome, EntryOutcome::Entered, "{entry:?}");
+        bench
+            .live
+            .main_world(&opened.page, "recreateMirrored()")
+            .await?;
+        let mirrors = json!({
+            "$neo": "locator", "page": opened.page.brand(),
+            "chunks": [{ "parts": [{ "name": "css", "body": [{ "simples": [{ "selector": { "css": "input.mirror", "functions": [] }, "combinator": "" }] }], "source": "input.mirror" }] }],
+            "display": "locator('input.mirror')",
+        });
+        let input = json!({
+            "call": { "api": "locator.click", "timeoutMs": 700, "conformance": conformance },
+            "target": mirrors, "strict": "strict",
+        });
+        let failure = preview_failure(&bench, &opened, "locator.click", input).await?;
+        assert!(
+            failure.message.contains("strict mode violation"),
+            "{}",
+            failure.message
+        );
+        assert!(failure.message.contains(&marker), "{}", failure.message);
+        for text in iter::once(&failure.message).chain(&failure.notes) {
+            assert!(
+                !text.contains(FOLLOWED),
+                "the preview printed the value: {text}"
+            );
+        }
+        bench.close(opened).await?;
+    }
+    Ok(())
+}
+
+/// Ruling R50's row 13c, modelled on a real pin widget: a code given to its first box is spread
+/// one character to each of four boxes, and the whole code is mirrored into an input the widget
+/// submits. The read-back finds the box holding one character, so the fill is not entered; the
+/// digest of the value the box was given masks the mirror, in an element's read and in the
+/// whole-page snapshot. Another box prints its one character: a named limit, and the contract
+/// tells a host to fill such a widget one box at a time. Fails with no digest kept of what the
+/// box was given: the mirror prints the code.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_the_mark_follows_a_code_a_widget_mirrors() -> TestResult {
+    const CODE: &str = "7391";
+    let bench = Bench::start().await?;
+    let opened = bench.open("/private/pin-mirror.html", Place::Front).await?;
+    let first = bench.r#ref(&opened, "textbox", "Digit 1").await?;
+    let env = bench.host(&opened);
+    let field = Field::new(&first, &bench.page_origin).with(CODE)?;
+    let entry = bench.enter(&env, &opened, vec![field]).await;
+    assert_ne!(
+        entry.outcome,
+        EntryOutcome::Entered,
+        "the widget spread it: {entry:?}"
+    );
+    let whole = bench.r#ref(&opened, "textbox", "Whole code").await?;
+    assert_eq!(
+        masked_value(&bench, &opened, &whole).await?,
+        "••••",
+        "the mirror"
+    );
+    assert_eq!(
+        masked_value(&bench, &opened, &first).await?,
+        "•",
+        "the box the code was given to"
+    );
+    let second = bench.r#ref(&opened, "textbox", "Digit 2").await?;
+    assert_eq!(
+        masked_value(&bench, &opened, &second).await?,
+        "3",
+        "the named limit: one character in another box"
+    );
+    let page = &opened.page;
+    let printed = bench
+        .live
+        .invoke("page.ariaSnapshot", page_snapshot(&page.brand(), false))
+        .await??
+        .to_string();
+    assert!(
+        !printed.contains(CODE),
+        "the snapshot prints no code: {printed}"
+    );
+    bench.close(opened).await
+}
+
 /// Ruling R50's row 13b: the page moves the text into another box and focuses it, inside the
 /// box's input event, so the read-back finds the box empty and marks the control that holds
 /// the focus (markFocused). That control reads as bullets, as on main, and so does a clone the
@@ -971,21 +1075,24 @@ async fn tests_that_a_kept_part_of_the_value_is_masked_where_it_goes() -> TestRe
     bench.close(opened).await
 }
 
-/// One check call on `opened` that compares `value` with the box `r#ref` names (ruling R48).
-async fn compared(
-    bench: &Bench,
+/// A check call's request on `opened` that compares `value` with the box `r#ref` names, the
+/// host having approved `origin` for it (ruling R48), within ten seconds.
+fn compare_request(
     opened: &Opened,
     r#ref: &str,
     value: &str,
     spaced: bool,
-) -> TestResult<BoxLook> {
-    let env = bench.host(opened);
-    let request = LookRequest {
+    origin: &str,
+) -> TestResult<LookRequest> {
+    Ok(LookRequest {
         tab: opened.page.tab,
         url: None,
         fields: vec![LookField {
             box_ref: r#ref.to_owned(),
-            expect: None,
+            expect: Some(Expect {
+                origin: origin.to_owned(),
+                ..Expect::default()
+            }),
             keys: false,
         }],
         compares: vec![Some(LookCompare {
@@ -994,11 +1101,29 @@ async fn compared(
             cut: false,
         })],
         deadline: Instant::now() + Duration::from_secs(10),
-    };
+    })
+}
+
+/// One check call on `opened` that compares `value` with the box `r#ref` names, on the page's
+/// own origin (ruling R48).
+async fn compared(
+    bench: &Bench,
+    opened: &Opened,
+    r#ref: &str,
+    value: &str,
+    spaced: bool,
+) -> TestResult<BoxLook> {
+    let request = compare_request(opened, r#ref, value, spaced, &bench.page_origin)?;
+    look_one(bench, opened, &request).await
+}
+
+/// The check call `request` on `opened`, and its one box's answer.
+async fn look_one(bench: &Bench, opened: &Opened, request: &LookRequest) -> TestResult<BoxLook> {
+    let env = bench.host(opened);
     let looks = bench
         .live
         .playwright
-        .look_boxes(&env, &request)
+        .look_boxes(&env, request)
         .await
         .map_err(|error| format!("the check failed: {error:?}"))?;
     assert!(!env.was_sent(), "a check never marks itself sent");
@@ -1091,35 +1216,7 @@ async fn tests_that_the_check_call_compares_a_value_with_a_named_box() -> TestRe
     let agree = bench.r#ref(&opened, "checkbox", "Agree").await?;
     let look = compared(&bench, &opened, &agree, NUMBER, false).await?;
     assert_eq!(booleans(&look), None, "a checkbox: {look:?}");
-    // Row 8a: a tab no longer at the host's address is refused as the fill is, and not compared.
-    let elsewhere = LookRequest {
-        tab: opened.page.tab,
-        url: Some("https://elsewhere.example/".to_owned()),
-        fields: vec![LookField {
-            box_ref: card.clone(),
-            expect: None,
-            keys: false,
-        }],
-        compares: vec![Some(LookCompare {
-            value: PrivateText::new(NUMBER.to_owned())?,
-            spaced: false,
-            cut: false,
-        })],
-        deadline: Instant::now() + Duration::from_secs(10),
-    };
-    let looks = bench
-        .live
-        .playwright
-        .look_boxes(&env, &elsewhere)
-        .await
-        .map_err(|error| format!("the check failed: {error:?}"))?;
-    let look = looks.first().ok_or("an answer for the box")?;
-    let code = look.refusal.as_ref().map(|error| error.code.as_str());
-    assert_eq!(
-        (code, booleans(look)),
-        (Some("page_changed"), None),
-        "another address: {look:?}"
-    );
+    unapproved_compares_send_nothing(&bench, &opened, &card).await?;
     // Row 5: the ref is dead.
     let inner = r#ref("Inner box").await?;
     bench
@@ -1134,6 +1231,63 @@ async fn tests_that_the_check_call_compares_a_value_with_a_named_box() -> TestRe
         "a box whose frame was removed: {look:?}"
     );
     bench.close(opened).await
+}
+
+/// Ruling R48's rows 8a and 8c on `card`, which holds the number: asserted on what was sent,
+/// the session of every command that carried it. A compare on the approved origin comes first,
+/// to show the watch sees a value that goes. A tab no longer at the host's address and a box on
+/// another origin than the host approved are refused as the fill is, with no boolean, and the
+/// value went to no frame at all.
+async fn unapproved_compares_send_nothing(
+    bench: &Bench,
+    opened: &Opened,
+    card: &str,
+) -> TestResult {
+    const NUMBER: &str = "4242424242424242";
+    // Rows 8a and 8c assert on what was sent: the session of every command that carried the
+    // number. A compare on the approved origin first, to show the watch sees a value that goes.
+    bench.recording.watch_for(NUMBER);
+    let look = compared(bench, opened, card, NUMBER, false).await?;
+    assert_eq!(
+        booleans(&look),
+        Some((true, true)),
+        "the approved origin: {look:?}"
+    );
+    assert!(
+        !bench.recording.take_carriers().is_empty(),
+        "the watch sees the compare's request"
+    );
+    // Row 8a: a tab no longer at the host's address is refused as the fill is, and not compared.
+    let mut elsewhere = compare_request(opened, card, NUMBER, false, &bench.page_origin)?;
+    elsewhere.url = Some("https://elsewhere.example/".to_owned());
+    let look = look_one(bench, opened, &elsewhere).await?;
+    let code = look.refusal.as_ref().map(|error| error.code.as_str());
+    assert_eq!(
+        (code, booleans(&look)),
+        (Some("page_changed"), None),
+        "another address: {look:?}"
+    );
+    assert_eq!(
+        bench.recording.take_carriers(),
+        Vec::<Option<String>>::new(),
+        "not sent"
+    );
+    // Row 8c: a box on another origin than the host approved answers `wrong_origin` and no
+    // boolean, and the value never went to its frame, nor anywhere else.
+    let foreign = compare_request(opened, card, NUMBER, false, &bench.other_origin)?;
+    let look = look_one(bench, opened, &foreign).await?;
+    let code = look.refusal.as_ref().map(|error| error.code.as_str());
+    assert_eq!(
+        (code, booleans(&look)),
+        (Some("wrong_origin"), None),
+        "another origin: {look:?}"
+    );
+    assert_eq!(
+        bench.recording.take_carriers(),
+        Vec::<Option<String>>::new(),
+        "not sent"
+    );
+    Ok(())
 }
 
 /// Ruling R48's row 6, not read: the box's frame is still there and stops answering for three
@@ -1153,21 +1307,10 @@ async fn tests_that_a_box_whose_frame_does_not_answer_gets_no_boolean() -> TestR
         )
         .await?;
     let env = bench.host(&opened);
-    let request = LookRequest {
-        tab: opened.page.tab,
-        url: None,
-        fields: vec![LookField {
-            box_ref: busy,
-            expect: None,
-            keys: false,
-        }],
-        compares: vec![Some(LookCompare {
-            value: PrivateText::new("4242424242424242".to_owned())?,
-            spaced: false,
-            cut: false,
-        })],
-        deadline: Instant::now() + Duration::from_secs(2),
-    };
+    // The frame's own origin, approved, so only its silence keeps the compare from answering.
+    let frame_origin = bench.page_origin.replace("127.0.0.1", "[::1]");
+    let mut request = compare_request(&opened, &busy, FOLLOWED, false, &frame_origin)?;
+    request.deadline = Instant::now() + Duration::from_secs(2);
     let answered = bench.live.playwright.look_boxes(&env, &request).await;
     match answered {
         Err(error) => assert_eq!(error.code, "run_timeout", "{error:?}"),
@@ -2490,7 +2633,8 @@ fn printed_node(tree: &Value, name: &str) -> Option<String> {
 /// still holds what it got. (a) keys: the box's keydown handler focuses the neighbour at the
 /// third key, which lands there: `focus_lost`. (b) one insertion: the box's input handler moves
 /// the value into the neighbour and focuses it: `value_not_taken`. (c) the same move with the
-/// focus on a button marks nothing: the neighbour reads as the page holds it. On a tab in front
+/// focus on a button marks nothing, but the neighbour holds the whole value the entry was given,
+/// whose digest the read-back keeps (ruling R50), so it reads as bullets too. On a tab in front
 /// and behind.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
@@ -2506,7 +2650,7 @@ async fn tests_that_a_box_the_page_sends_the_value_into_is_marked_when_it_holds_
         for (mode, keys, stop, neighbour_holds, masked) in [
             ("keys", true, "focus_lost", third.as_str(), true),
             ("insert", false, "value_not_taken", STRAY, true),
-            ("button", false, "value_not_taken", STRAY, false),
+            ("button", false, "value_not_taken", STRAY, true),
         ] {
             let case = format!("{place:?} {mode}");
             let opened = bench

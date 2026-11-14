@@ -1270,7 +1270,10 @@ async fn request_errors_type_nothing_and_quote_nothing() -> TestResult {
         "POST",
         &format!("/v1/tabs/{}/fill/check", tab.0),
         Some(TOKEN),
-        Some(&json!({ "fields": [{ "ref": "e1", "value": format!("{PASSWORD}\u{7}") }] })),
+        Some(
+            &json!({ "fields": [{ "ref": "e1", "value": format!("{PASSWORD}\u{7}"),
+            "expect": { "origin": "https://pay.example" } }] }),
+        ),
     )
     .await?;
     assert_eq!(checked.status, 400, "{checked:?}");
@@ -1282,6 +1285,30 @@ async fn request_errors_type_nothing_and_quote_nothing() -> TestResult {
     assert!(
         !holds_any(checked.body.to_string().as_bytes(), PASSWORD),
         "{checked:?}"
+    );
+    // Ruling R48's row 8b: a value with no `expect` names no approved origin. A malformed body,
+    // refused before anything is sent, the value not quoted.
+    let looks = host.entry.looks.load(Ordering::SeqCst);
+    let unapproved = request(
+        &host.socket,
+        "POST",
+        &format!("/v1/tabs/{}/fill/check", tab.0),
+        Some(TOKEN),
+        Some(&json!({ "fields": [{ "ref": "e5", "value": PASSWORD }] })),
+    )
+    .await?;
+    assert_eq!(unapproved.status, 400, "{unapproved:?}");
+    assert_eq!(unapproved.body["code"], "invalid_request");
+    let message = unapproved.body["message"].as_str().ok_or("a message")?;
+    assert!(
+        message.starts_with("body.fields[0].expect: a field that carries a value carries expect"),
+        "{message}"
+    );
+    assert!(!holds_any(unapproved.body.to_string().as_bytes(), PASSWORD));
+    assert_eq!(
+        host.entry.looks.load(Ordering::SeqCst),
+        looks,
+        "nothing was sent"
     );
     assert!(host.entry.entered().is_empty());
     // The 404 left the id unused.
@@ -1443,7 +1470,10 @@ async fn the_check_answers_facts_and_refusals_and_types_nothing() -> TestResult 
         "POST",
         &format!("/v1/tabs/{}/fill/check", tab.0),
         Some(TOKEN),
-        Some(&json!({ "fields": [{ "ref": "e5", "value": PASSWORD }, { "ref": "f2e4" }] })),
+        Some(&json!({ "fields": [
+            { "ref": "e5", "value": PASSWORD, "expect": { "origin": "https://pay.example" } },
+            { "ref": "f2e4" }
+        ] })),
     )
     .await?;
     assert_eq!(with_value.status, 200, "{with_value:?}");
@@ -1698,7 +1728,10 @@ async fn the_check_passes_its_hosts_own_lock_as_the_fill_does() -> TestResult {
         .await;
     // Ruling R48: a value to compare changes none of it, and the box is not read.
     let looks = host.entry.looks.load(Ordering::SeqCst);
-    let with_value = json!([{ "ref": "e5", "value": PASSWORD }, { "ref": "f2e4" }]);
+    let with_value = json!([
+        { "ref": "e5", "value": PASSWORD, "expect": { "origin": "https://pay.example" } },
+        { "ref": "f2e4" }
+    ]);
     let takeover = check(json!({ "lockId": owners.id.to_string(), "fields": with_value })).await?;
     assert_eq!(takeover.status, 200, "{takeover:?}");
     for field in 0..2 {

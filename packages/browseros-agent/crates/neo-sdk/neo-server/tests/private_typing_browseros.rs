@@ -137,7 +137,7 @@ async fn drive(rig: &mut Rig) -> TestResult {
     );
 
     no_picture_after_the_fill(rig, &client).await?;
-    let compared = compared_after_the_fill(rig, tab, user, pw).await?;
+    let compared = compared_after_the_fill(rig, tab, &origin, [user, pw]).await?;
 
     let record = fill_record(rig, &answer).await?;
 
@@ -199,12 +199,12 @@ const CHECKED: &str = "CANARY-check-only-8D";
 async fn compared_after_the_fill(
     rig: &Rig,
     tab: i64,
-    user: &str,
-    pw: &str,
+    origin: &str,
+    [user, pw]: [&str; 2],
 ) -> Result<Value, Box<dyn Error>> {
     let compare = json!({ "taskId": TASK, "fields": [
-        { "ref": pw, "value": PASSWORD },
-        { "ref": user, "value": CHECKED }
+        { "ref": pw, "value": PASSWORD, "expect": { "origin": origin } },
+        { "ref": user, "value": CHECKED, "expect": { "origin": origin } }
     ] });
     let compared = host(rig, &format!("/v1/tabs/{tab}/fill/check"), &compare).await?;
     assert_eq!(

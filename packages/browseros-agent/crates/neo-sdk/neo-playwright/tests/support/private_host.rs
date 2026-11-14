@@ -147,6 +147,10 @@ pub(crate) fn pages() -> HashMap<String, Page> {
         ("maxlength", include_str!("../data/private/maxlength.html")),
         ("compare", include_str!("../data/private/compare.html")),
         (
+            "pin-mirror",
+            include_str!("../data/private/pin-mirror.html"),
+        ),
+        (
             "mark-moves",
             include_str!("../data/private/mark-moves.html"),
         ),

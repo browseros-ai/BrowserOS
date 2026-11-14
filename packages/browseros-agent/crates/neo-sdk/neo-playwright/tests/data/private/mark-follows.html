@@ -4,7 +4,9 @@
      (ruling R50). Its scripts run in the page's own world, as a site's would:
      recreate() replaces the box with a new element that holds the same value;
      cloneCard() clones it; copyCard(grouped) copies its value into the Copy box, grouped in fours
-     with spaces when asked; emptyAll() empties every box; guess(text) sets the Guess box. -->
+     with spaces when asked; emptyAll() empties every box; guess(text) sets the Guess box;
+     recreateMirrored() puts two new elements in the box's place, each holding the value and
+     mirroring it into its value attribute, as a framework does for a controlled input. -->
 <input id=card aria-label="Card">
 <input id=copy aria-label="Copy">
 <input id=guess aria-label="Guess">
@@ -28,6 +30,18 @@
   window.copyCard = (grouped) => {
     const value = byId('card').value
     byId('copy').value = grouped ? value.replace(/(.{4})(?=.)/g, '$1 ') : value
+  }
+  window.recreateMirrored = () => {
+    const old = byId('card')
+    const twins = [1, 2].map((n) => {
+      const fresh = document.createElement('input')
+      fresh.className = 'mirror'
+      fresh.setAttribute('aria-label', 'Mirror ' + n)
+      fresh.value = old.value
+      fresh.setAttribute('value', old.value)
+      return fresh
+    })
+    old.replaceWith(...twins)
   }
   window.emptyAll = () => {
     for (const box of document.querySelectorAll('input')) box.value = ''

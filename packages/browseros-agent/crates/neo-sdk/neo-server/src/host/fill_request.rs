@@ -219,6 +219,18 @@ impl CheckRequest {
         for expect in fields.iter().filter_map(|field| field.expect.as_ref()) {
             origin_named(expect)?;
         }
+        // Ruling R48: a value goes only to a box on an origin the host approved, so a field that
+        // carries one names that origin, as a fill's field does. Refused before anything is
+        // sent, and the message names the field, never its value.
+        if let Some(index) = fields
+            .iter()
+            .position(|field| field.value.is_some() && field.expect.is_none())
+        {
+            return Err(format!(
+                "body.fields[{index}].expect: a field that carries a value carries expect with \
+                 the origin of the box's own frame"
+            ));
+        }
         let (boxes, values) = fields
             .into_iter()
             .map(|field| {
@@ -598,9 +610,10 @@ mod tests {
     #[test]
     fn a_check_takes_a_value_to_compare_and_no_request_id() {
         let check = |body: &str| CheckRequest::parse(TabId(7), body.as_bytes());
-        // Ruling R48: a value to compare, beside the box it names, never in its record.
+        // Ruling R48: a value to compare, beside the box it names and its approved origin, never
+        // in its record.
         let with_value = check(&format!(
-            r#"{{"fields":[{{"ref":"e1","value":"{SECRET}"}},{{"ref":"e2"}}]}}"#
+            r#"{{"fields":[{{"ref":"e1","value":"{SECRET}","expect":{{"origin":"x"}}}},{{"ref":"e2"}}]}}"#
         ));
         let parsed = with_value.as_ref().map_err(String::clone);
         assert_eq!(
@@ -612,6 +625,17 @@ mod tests {
             with_value.map(|check| check.boxes).unwrap_or_default()
         );
         assert!(!boxes.contains("CANARY"), "{boxes}");
+        // A value with no `expect` names no approved origin: malformed, and not quoted.
+        let unapproved = check(&format!(
+            r#"{{"fields":[{{"ref":"e1"}},{{"ref":"e2","value":"{SECRET}"}}]}}"#
+        ))
+        .err()
+        .unwrap_or_default();
+        assert!(
+            unapproved.starts_with("body.fields[1].expect: a field that carries a value"),
+            "{unapproved}"
+        );
+        assert!(!unapproved.contains("CANARY"), "{unapproved}");
         let control = check(r#"{"fields":[{"ref":"e1","value":"a\nb"}]}"#)
             .err()
             .unwrap_or_default();

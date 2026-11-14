@@ -43,7 +43,9 @@ pub struct LookRequest {
     pub fields: Vec<LookField>,
     /// What the check call compares in each box (ruling R48), in the fields' order: `None`, or a
     /// list shorter than the fields, compares nothing for a field. Kept beside the fields, as a
-    /// fill's values are, because a host's value is never cloned or recorded.
+    /// fill's values are, because a host's value is never cloned or recorded. A compare is made
+    /// only for a field whose `expect.origin` is the box's own, on a tab still at `url`: the
+    /// value never enters a site the host did not approve.
     pub compares: Vec<Option<LookCompare>>,
     /// When the look must end.
     pub deadline: Instant,

@@ -62,17 +62,22 @@ impl Playwright {
                 .await
                 // The main frame began to navigate: the page is changing under the approval.
                 .unwrap_or(Ok(Look::Unfound(EntryCode::PageChanged)));
-            // Ruling R48: the value goes only where the fill would send it. A tab no longer at
-            // the host's address is refused `page_changed` with no compare, as the fill is
-            // refused before any character.
-            let compare = request
-                .compares
-                .get(index)
-                .and_then(Option::as_ref)
-                .filter(|_| address != TabAddress::Changed);
+            let asked = request.compares.get(index).and_then(Option::as_ref);
             looks.push(match look {
                 Ok(Look::Found(found)) => {
-                    // Ruling R48: the compare reads the box whatever the look said of it.
+                    // Ruling R48: the compare reads the box whatever the look said of it, but the
+                    // value goes only where a fill would send it, so it never enters the process
+                    // of a site the host did not approve. A field without `expect`, a box on
+                    // another origin than `expect.origin` (`wrong_origin`) and a tab no longer at
+                    // the host's address (`page_changed`) are not compared: the probe request is
+                    // never made. The origin is compared here, from the box's own facts, rather
+                    // than read off the refusal, so no refusal order can let a value through.
+                    let approved = address != TabAddress::Changed
+                        && field
+                            .expect
+                            .as_ref()
+                            .is_some_and(|expect| expect.origin == found.facts.origin);
+                    let compare = asked.filter(|_| approved);
                     let compared = match compare {
                         Some(compare) => navigation
                             .race(look_op::compare(&page, &scope, &found, compare))

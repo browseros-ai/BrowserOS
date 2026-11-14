@@ -11,12 +11,12 @@
 use crate::models;
 use serde::{Deserialize, Serialize};
 
-/// FillCheckField : A fill's field, its value optional. `expect` may be left out. With `value`, Neo also compares the box with it (`holds`, `contains`).
+/// FillCheckField : A fill's field, its value optional. `expect` may be left out, except beside a `value`. With `value`, Neo also compares the box with it (`holds`, `contains`).
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
 pub struct FillCheckField {
     #[serde(rename = "ref")]
     pub r#ref: String,
-    /// A value to compare the box with, as a fill's value: 1 to 256 characters, no control character. Compared in the box's own isolated world and nowhere else, and never recorded, echoed or quoted: no trace row, run or operation field, event, log line or error message holds it. The check's run keeps the shape it has without one. `spaced` and `cut` apply to the compare as they do to a fill's read-back.
+    /// A value to compare the box with, as a fill's value: 1 to 256 characters, no control character. Compared in the box's own isolated world and nowhere else, and never recorded, echoed or quoted: no trace row, run or operation field, event, log line or error message holds it. The check's run keeps the shape it has without one. `spaced` and `cut` apply to the compare as they do to a fill's read-back. A field that carries a value carries `expect` with the origin of the box's own frame, as a fill does; without it the request is a malformed body (`invalid_request`), refused before anything is sent.
     #[serde(rename = "value", skip_serializing_if = "Option::is_none")]
     pub value: Option<String>,
     #[serde(rename = "expect", skip_serializing_if = "Option::is_none")]
@@ -31,7 +31,7 @@ pub struct FillCheckField {
 }
 
 impl FillCheckField {
-    /// A fill's field, its value optional. `expect` may be left out. With `value`, Neo also compares the box with it (`holds`, `contains`).
+    /// A fill's field, its value optional. `expect` may be left out, except beside a `value`. With `value`, Neo also compares the box with it (`holds`, `contains`).
     pub fn new(r#ref: String) -> FillCheckField {
         FillCheckField {
             r#ref,

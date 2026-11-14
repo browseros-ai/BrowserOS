@@ -335,8 +335,12 @@ function readBack(pin: Pin, box: Element): PrivateAnswer {
     state = 'holds'
   else state = 'other'
   // The mark follows the value (ruling R50): a digest of what the box holds now, whether that is
-  // the value it was given or another form or part of it. A box that left keeps none.
+  // the value it was given or another form or part of it, and of the value it was given,
+  // whatever it holds. A widget that splits a code across its boxes may mirror the whole of it
+  // into another control (a hidden input), and a box that left may come back re-created with
+  // it. The scan at the next request forgets whichever no control holds.
   if (state !== 'left') keepDigest(heldText(box))
+  if (entry) keepDigest(entry.text)
   // The text may have gone to the control that holds the focus now: it is marked before the
   // box is forgotten, which ends this entry's reach to the box (ruling R26).
   if (state === 'other') markFocused(box)

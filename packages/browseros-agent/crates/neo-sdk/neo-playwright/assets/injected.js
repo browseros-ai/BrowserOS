@@ -9370,6 +9370,8 @@ ${value.stack}`;
       state = "other";
     if (state !== "left")
       keepDigest(heldText(box));
+    if (entry)
+      keepDigest(entry.text);
     if (state === "other")
       markFocused(box);
     const leaving = moving(entry);
@@ -10623,18 +10625,10 @@ ${value.stack}`;
     };
   }
   function dispatch(world, op, request, root, nodes, output) {
-    if (MASKED_READS.has(op))
-      noteHolders(document);
+    noteHolders(document);
     const handler = HANDLERS[op];
     return handler(world, request, root, nodes, output);
   }
-  var MASKED_READS = new Set([
-    "read",
-    "readAll",
-    "snapshot",
-    "expect",
-    "document"
-  ]);
   function isProbeCall(value) {
     if (typeof value !== "object" || value === null)
       return false;
