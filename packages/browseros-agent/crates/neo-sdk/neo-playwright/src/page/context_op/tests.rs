@@ -2,6 +2,7 @@ use std::error::Error;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
+use browseros_core::TabId;
 use futures_util::future;
 use serde_json::{Value, json};
 use tokio::time::{self, Instant};
@@ -213,5 +214,49 @@ async fn tests_that_new_page_sends_again_what_the_client_gave_up_on() -> TestRes
             "{late}: newPage waited for its lifecycle setup"
         );
     }
+    Ok(())
+}
+
+/// The tab `newPage` opened is named to the host as soon as the browser named it, before the
+/// long wait for its first answer: a host that hides tabs from a run must not hide this one
+/// from the run's other ops meanwhile.
+#[tokio::test(start_paused = true)]
+async fn tests_that_new_page_names_its_tab_before_it_readies_it() -> TestResult {
+    let tab = ScriptedTab::new(SlowNewTab::default());
+    let run = ScriptedRun::over(&tab).await?;
+    let Call { op, input } = new_page()?;
+    let opening = run.playwright.invoke(&run.env, op, input);
+    let early = async {
+        time::sleep(Duration::from_secs(1)).await;
+        run.env.opened()
+    };
+    let (opened, named_early) = future::join(opening, early).await;
+    opened?;
+    assert_eq!(
+        named_early,
+        vec![TabId(9)],
+        "named a second in, while its first answer is still 39 s away"
+    );
+    Ok(())
+}
+
+/// `context.pages()` leaves out a tab the host hides from the run, as neo-server hides another
+/// task's tab from a run bound to its own.
+#[tokio::test]
+async fn tests_that_context_pages_leaves_out_a_tab_the_host_hides() -> TestResult {
+    let tab = ScriptedTab::new(SlowNewTab::default());
+    let run = ScriptedRun::over(&tab).await?;
+    let pages = Op::from_name("context.pages").ok_or("context.pages is an op")?;
+    let listed = run
+        .playwright
+        .invoke(&run.env, pages, json!({ "call": {} }))
+        .await?;
+    assert_eq!(listed["pages"][0]["page"]["tab"], 7, "{listed}");
+    run.env.hide(TabId(7));
+    let hidden = run
+        .playwright
+        .invoke(&run.env, pages, json!({ "call": {} }))
+        .await?;
+    assert_eq!(hidden["pages"], json!([]), "{hidden}");
     Ok(())
 }

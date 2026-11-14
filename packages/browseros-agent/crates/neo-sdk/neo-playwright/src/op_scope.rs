@@ -166,21 +166,30 @@ impl<'env> OpScope<'env> {
         self.env.run_state()
     }
 
-    /// Whether `tab` is the host's own, which scripts never see (`OpEnv::is_reserved_tab`). Ask
-    /// after [`OpScope::reserved_tabs_settled`] for any tab a listing or an event named.
-    pub(crate) fn is_reserved_tab(&self, tab: TabId) -> bool {
-        self.env.is_reserved_tab(tab)
+    /// Whether `tab` is one this run may not see (`OpEnv::hides_tab`). Ask after
+    /// [`OpScope::tabs_settled`] for any tab a listing or an event named.
+    pub(crate) fn hides_tab(&self, tab: TabId) -> bool {
+        self.env.hides_tab(tab)
     }
 
-    /// Waits until a reserved tab the host is opening is marked, and one in `listed` (a fresh
-    /// listing a script is about to be shown; empty for an event) that shows a page is handed
-    /// back (`OpEnv::reserved_tabs_settled`).
-    pub(crate) async fn reserved_tabs_settled(&self, listed: &[PageInfo]) {
+    /// Waits until the host's answer for the tabs in `listed` (a fresh listing a script is about
+    /// to be shown; empty for an event) is settled (`OpEnv::tabs_settled`).
+    pub(crate) async fn tabs_settled(&self, listed: &[PageInfo]) {
         let listed: Vec<(TabId, &str)> = listed
             .iter()
             .map(|page| (page.tab_id, page.url.as_str()))
             .collect();
-        self.env.reserved_tabs_settled(&listed).await;
+        self.env.tabs_settled(&listed).await;
+    }
+
+    /// This op opened `tab`, which the browser just named (`OpEnv::opened_tab`).
+    pub(crate) fn opened_tab(&self, tab: TabId) {
+        self.env.opened_tab(tab);
+    }
+
+    /// The browser announced `popup` as opened by `opener` (`OpEnv::popup_opened`).
+    pub(crate) fn popup_opened(&self, popup: TabId, opener: TabId) {
+        self.env.popup_opened(popup, opener);
     }
 
     /// The browser's startup mode, supplied by the host for this operation.

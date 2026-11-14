@@ -774,13 +774,14 @@ async fn opener(
     let opener = match info.target_info.opener_id {
         Some(opener) => {
             let listing = scope.view().list_pages().await.map_err(core)?;
-            // A tab the owner opened from the host's own tab has no opener a script may see.
-            scope.reserved_tabs_settled(&listing.pages).await;
+            // An opener this run may not see (the host's own tab, another task's tab) reads as
+            // none.
+            scope.tabs_settled(&listing.pages).await;
             listing
                 .pages
                 .into_iter()
                 .find(|page| page.target_id.as_str() == opener)
-                .filter(|page| !scope.is_reserved_tab(page.tab_id))
+                .filter(|page| !scope.hides_tab(page.tab_id))
                 .map(|page| PageHandle::new(page.tab_id))
         }
         None => None,

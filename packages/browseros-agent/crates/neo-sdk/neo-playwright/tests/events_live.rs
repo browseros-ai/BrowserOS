@@ -94,6 +94,89 @@ async fn click_soon(run: &LiveRun, page: &TestPage, selector: &str) -> TestResul
     run.click(page, selector).await
 }
 
+/// A run that sees only its family's tabs (as neo-server binds a run to its task) still hears
+/// every popup its page opens, noopener ones included: the engine says each popup's opener
+/// (`OpEnv::popup_opened`) before it judges the popup, so a host that lets a popup follow its
+/// opener shows it. Its own new tab is its own at once (`OpEnv::opened_tab`), and a tab opened
+/// outside the run stays out of its listing.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_bound_run_hears_its_pages_popups_and_lists_only_its_family() -> TestResult {
+    with_page(|run, server, page| async move {
+        let result = async {
+            open(&run, &page, &server.url("/popups.html")).await?;
+            run.bind(&[page.tab]);
+            for (kind, path) in [
+                ("#tab", "/child.html?tab"),
+                ("#noopener", "/child.html?noopener"),
+                ("#blanknoopener", "/child.html?blank-noopener"),
+            ] {
+                let since = now_ms()?;
+                let (popup, clicked) = tokio::join!(
+                    wait_for(&run, Some(&page), "popup", since),
+                    click_soon(&run, &page, kind)
+                );
+                clicked?;
+                let popup = popup?;
+                assert_eq!(
+                    popup["popup"]["url"],
+                    json!(server.url(path)),
+                    "{kind}: {popup}"
+                );
+                run.close_page(&test_page(&popup["popup"]["page"])?).await;
+            }
+            // An opener outside the run's family reads as none.
+            let since = now_ms()?;
+            let (popup, clicked) = tokio::join!(
+                wait_for(&run, Some(&page), "popup", since),
+                click_soon(&run, &page, "#tab")
+            );
+            clicked?;
+            let popup = test_page(&popup?["popup"]["page"])?;
+            run.bind(&[popup.tab]);
+            let opener = run
+                .invoke("page.opener", json!({ "page": brand(&popup) }))
+                .await;
+            run.close_page(&popup).await;
+            assert_eq!(
+                opener?["opener"],
+                Value::Null,
+                "the opener is not the run's"
+            );
+            run.bind(&[page.tab]);
+            // A tab opened outside the run never reaches its context's `page` wait.
+            let since = now_ms()?;
+            let (heard, outside) = tokio::join!(wait_for(&run, None, "page", since), async {
+                time::sleep(Duration::from_millis(50)).await;
+                run.open_adopted(&server.url("/child.html?unheard")).await
+            });
+            run.close_page(&outside?).await;
+            assert!(
+                heard.is_err(),
+                "the wait heard a tab outside the run: {heard:?}"
+            );
+            let own = run.new_page().await?;
+            let outside = run.open_adopted(&server.url("/child.html?outside")).await?;
+            let listed = run.invoke("context.pages", json!({})).await;
+            run.close_page(&own).await;
+            run.close_page(&outside).await;
+            let listed = listed?.to_string();
+            for (tab, shown) in [(&page, true), (&own, true), (&outside, false)] {
+                assert_eq!(
+                    listed.contains(&format!("\"tab\":{}", tab.tab.0)),
+                    shown,
+                    "tab {} listed: {shown}: {listed}",
+                    tab.tab.0
+                );
+            }
+            Ok(())
+        }
+        .await;
+        (run, result)
+    })
+    .await
+}
+
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_every_popup_kind_names_its_opener_and_a_window_is_refused() -> TestResult {

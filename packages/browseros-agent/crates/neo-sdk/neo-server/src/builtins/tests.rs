@@ -5869,6 +5869,86 @@ async fn a_bound_runs_own_open_is_its_own_though_no_task_holds_it() -> Result<()
     Ok(())
 }
 
+/// A bound run's own new tab is its own from the moment the browser names it, while `newPage`
+/// still waits for the tab's first answer: the run's other ops list it meanwhile.
+#[tokio::test]
+async fn a_bound_runs_new_tab_is_its_own_while_new_page_readies_it() -> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let host = TaskId::parse("host-s")?;
+    let (bound, _guard) = run_scoped(&harness, TabsScope::Task, Some(&host))?;
+    harness.fake.hold_next("Page.setLifecycleEventsEnabled");
+    let opening = harness.dispatcher.submit(
+        &bound,
+        Call::script("context.newPage".to_owned(), json!({}), None),
+    );
+    within(async {
+        while harness.fake.count("Page.setLifecycleEventsEnabled") == 0 {
+            time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await?;
+    let pages = value(harness.submit(&bound, "context.pages", json!({})).await)?;
+    harness.fake.release_held();
+    let opened = page_of(&value(within(opening.wait()).await?)?)?;
+    assert_eq!(
+        listed_tabs(&pages),
+        vec![opened.tab.0],
+        "listed while newPage readied it, though no task holds it yet"
+    );
+    Ok(())
+}
+
+/// `Promise.all([context.waitForEvent('page'), context.newPage()])` in a run bound to its task:
+/// the browser announces the new tab before the open's reply names it to Neo, and the wait judges
+/// the tab only once the run's open is named, so it hears the run's own tab.
+#[tokio::test]
+async fn a_bound_runs_page_wait_hears_its_own_new_tab() -> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let host = TaskId::parse("host-s")?;
+    let (bound, _guard) = run_scoped(&harness, TabsScope::Task, Some(&host))?;
+    let wait = json!({
+        "call": { "api": "browserContext.waitForEvent", "timeoutMs": 10000 },
+        "page": null,
+        "event": "page",
+        "since": 0,
+    });
+    let waiting = harness
+        .dispatcher
+        .submit(&bound, Call::script("events.wait".to_owned(), wait, None));
+    within(async {
+        while harness.fake.count("Target.getTargets") == 0 {
+            time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await?;
+    // The browser makes the tab and announces it at once; the reply naming it waits.
+    harness.fake.hold_next("Browser.createTab");
+    let opening = harness.dispatcher.submit(
+        &bound,
+        Call::script("context.newPage".to_owned(), json!({}), None),
+    );
+    within(async {
+        while harness.fake.count("Browser.createTab") == 0 {
+            time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await?;
+    // Long enough for the wait to read the announcement (recorded about a second after it, with
+    // no URL), while the open is still in flight.
+    time::sleep(Duration::from_secs(2)).await;
+    harness.fake.release_held();
+    let opened = page_of(&value(within(opening.wait()).await?)?)?;
+    let heard = value(within(waiting.wait()).await?)?;
+    assert!(
+        heard
+            .to_string()
+            .contains(&format!("\"tab\":{}", opened.tab.0)),
+        "the wait heard the run's own new tab {}: {heard}",
+        opened.tab.0
+    );
+    Ok(())
+}
+
 /// A host may name an agent's task while a close by a run with no task waits for the task's
 /// turn: the close asks again once it holds the turn, and leaves the host's task as it is.
 #[tokio::test]
