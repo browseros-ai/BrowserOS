@@ -37,8 +37,10 @@
  * event and never held the focus (a page's own script writes `.value =`, which fires nothing);
  * a value typed before the first reading in this document, whose box no longer holds the focus
  * at that reading (the listeners are added at that reading); a page that stops the event at the
- * window before this world's listener; and a box whose page takes the keys itself and cancels
- * them, so no input event fires, which is known only while it holds the focus at a reading. A key
+ * window before this world's listener; a box whose page takes the keys itself and cancels them,
+ * so no input event fires, which is known only while it holds the focus at a reading; and a box in
+ * a closed root inside an editable region, or whose host is editable, known only through the
+ * focus, once its host held the focus at a reading and that one read went through. A key
  * is not listened for: one that types nothing fires no input event, so PageDown, an arrow key or
  * Tab never moves a reading (ruling R65's third condition).
  */
@@ -266,17 +268,41 @@ function knownRoot(host: Element): ShadowRoot | null {
 }
 
 /**
- * Whether `element` may stand for a box inside a closed root this world does not know: it takes
- * no input itself (not an input, a textarea, a select or an editable region; measured, the body
- * of a document in design mode, which its input events name, is editable), it may carry an author
- * shadow root, and no root of it is known here.
+ * Whether an input or beforeinput event naming `element` came out of a closed root this world does
+ * not know, for certain: the element may carry one (`mayCarryRoot`), takes no input itself (an
+ * input, a textarea and a select fail the tag rule) and is not editable. Inside an editable region
+ * no event is certain: a text dropped on a paragraph there fires beforeinput naming the paragraph
+ * (measured), and paste and cut are not measured. A box in a closed root there is read through the
+ * focus (`pointFocus`), the contract's fifth limit.
  */
 function unknownHost(element: Element): boolean {
+  return mayCarryRoot(element) && !editable(element)
+}
+
+/**
+ * Whether `element` may carry an author shadow root that this world does not know: HTML, not
+ * BrowserOS's own UI, a tag `attachShadow` accepts, and no root of it known here. What the focus
+ * asks, an editing host included.
+ */
+function mayCarryRoot(element: Element): boolean {
   if (element.namespaceURI !== XHTML || isBrowserOSUi(element)) return false
   const name = element.localName
   if (!SHADOW_HOSTS.has(name) && !name.includes('-')) return false
-  if (Reflect.get(element, 'isContentEditable') === true) return false
   return knownRoot(element) === null
+}
+
+/**
+ * Whether `element` is editable, by every kind measured: `isContentEditable` (contenteditable, an
+ * element inside such a region, a document in design mode), or a computed `-webkit-user-modify`
+ * that is not read-only (a region made editable by style alone, which `isContentEditable` reports
+ * as false, and the elements inside it).
+ */
+function editable(element: Element): boolean {
+  if (Reflect.get(element, 'isContentEditable') === true) return true
+  const modify = element.ownerDocument.defaultView
+    ?.getComputedStyle(element)
+    .getPropertyValue('-webkit-user-modify')
+  return modify?.startsWith('read-write') === true
 }
 
 /**
@@ -318,7 +344,9 @@ function pointFocus(document: Document): void {
     if (!inner) break
     holder = inner
   }
-  if (holder?.matches(':focus') && unknownHost(holder)) point(holder)
+  // Editable or not: inside an editable region no event is certain, so the focus is how a box in a
+  // closed root there gets read (the contract's fifth limit otherwise).
+  if (holder?.matches(':focus') && mayCarryRoot(holder)) point(holder)
 }
 
 /**

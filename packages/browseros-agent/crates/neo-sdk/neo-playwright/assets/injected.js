@@ -9898,14 +9898,21 @@ ${value.stack}`;
     return walkedRoots.get(host) ?? host.shadowRoot;
   }
   function unknownHost(element) {
+    return mayCarryRoot(element) && !editable(element);
+  }
+  function mayCarryRoot(element) {
     if (element.namespaceURI !== XHTML || isBrowserOSUi(element))
       return false;
     const name = element.localName;
     if (!SHADOW_HOSTS.has(name) && !name.includes("-"))
       return false;
-    if (Reflect.get(element, "isContentEditable") === true)
-      return false;
     return knownRoot(element) === null;
+  }
+  function editable(element) {
+    if (Reflect.get(element, "isContentEditable") === true)
+      return true;
+    const modify = element.ownerDocument.defaultView?.getComputedStyle(element).getPropertyValue("-webkit-user-modify");
+    return modify?.startsWith("read-write") === true;
   }
   function point(host, byInput = false) {
     if (byInput)
@@ -9937,7 +9944,7 @@ ${value.stack}`;
         break;
       holder = inner;
     }
-    if (holder?.matches(":focus") && unknownHost(holder))
+    if (holder?.matches(":focus") && mayCarryRoot(holder))
       point(holder);
   }
   function look2(document2) {

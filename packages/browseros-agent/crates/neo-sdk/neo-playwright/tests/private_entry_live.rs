@@ -4504,13 +4504,14 @@ async fn tests_that_a_key_that_types_nothing_moves_no_reading() -> TestResult {
     bench.close(opened).await
 }
 
-/// The walk on demand, row 5b (the lead's rows): what takes input itself asks nothing and moves
-/// nothing. Typing into an editable region, and with the caret in an element inside one; a select
-/// changed by the keyboard, whose trusted input event names the select; and typing into a
-/// document in design mode. None of these boxes is private, so the reading stays as it was, and
-/// no host is handed over. What the page measured, each input event's first target and whether
-/// its body counts as editable in design mode, is printed. Fails with the editable and design-mode
-/// rules left out.
+/// The walk on demand, row 5b (the lead's rows, the design keeper's editing-host ruling): what
+/// takes input itself moves nothing. Typing into an editable region, and with the caret in an
+/// element inside one; a select changed by the keyboard, whose trusted input event names the
+/// select; typing into a document in design mode; and a region editable by style alone. None of
+/// these boxes is private, so the reading stays as it was: no input event named a host. An editing
+/// host that holds the focus is described once, by the focus rule. What the page measured, each
+/// input event's first target and what counts as editable, is printed. Fails with an editing host
+/// named by its own events (the reading moves).
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_what_takes_input_itself_asks_nothing() -> TestResult {
@@ -4521,6 +4522,7 @@ async fn tests_that_what_takes_input_itself_asks_nothing() -> TestResult {
         ("an element inside one", "caretInside()", "abc"),
         ("a select", "focusOn('pick')", "t"),
         ("design mode", "design()", "abc"),
+        ("a region editable by style", "caretIn('styled')", "abc"),
     ] {
         let opened = bench
             .open("/private/closed-plain.html", Place::Front)
@@ -4545,11 +4547,147 @@ async fn tests_that_what_takes_input_itself_asks_nothing() -> TestResult {
                 .is_some_and(|seen| !seen.contains("\"firsts\":[]")),
             "{what}: an input event fired: {seen}"
         );
-        assert_eq!(before, after, "{what}: no reading moved");
-        assert_eq!(bench.recording.calls(DESCRIBE), 0, "{what}: no host asked");
+        assert_eq!(before, after, "{what}: no reading moved, no host named");
+        assert!(
+            bench.recording.calls(DESCRIBE) <= 1,
+            "{what}: at most the focused element, once, by the focus"
+        );
+        if what == "an editable region" {
+            assert_eq!(
+                bench.recording.calls(DESCRIBE),
+                1,
+                "the focused editing host, described once"
+            );
+        }
         bench.close(opened).await?;
     }
     Ok(())
+}
+
+/// The walk on demand, row 5c (the design keeper's editable ruling): inside an editable region no
+/// event is certain, so a box in a closed root there is read through the focus. A card component
+/// with a closed root inside a contenteditable region, a closed-root host in a document in design
+/// mode, and an editing host that is itself a closed shadow host: each card box focused and typed
+/// into reads private at the next reading. The fifth named limit beside them: typed and its focus
+/// taken away before that reading, the card component's and the editing host's box stay unknown
+/// (clear, the count unmoved). Fails with the focus leaving editable elements out (the three read
+/// clear).
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_closed_root_inside_an_editable_region_is_read() -> TestResult {
+    let bench = Bench::start().await?;
+    let playwright = &bench.live.playwright;
+    for (what, setup, id, blurred) in [
+        ("a card component in a region", "true", "embed", false),
+        (
+            "a host in a document in design mode",
+            "design() && true",
+            "cardhost",
+            false,
+        ),
+        (
+            "an editing host that is a closed shadow host",
+            "true",
+            "edithost",
+            false,
+        ),
+        (
+            "a card component in a region, focus gone",
+            "true",
+            "embed",
+            true,
+        ),
+        ("an editing host, focus gone", "true", "edithost", true),
+    ] {
+        let opened = bench
+            .open("/private/closed-plain.html", Place::Front)
+            .await?;
+        let tab = opened.page.tab;
+        bench.live.main_world(&opened.page, setup).await?;
+        let before = clear(&playwright.picture_check(tab).await, what)?;
+        bench
+            .live
+            .main_world(&opened.page, &format!("focusCardIn('{id}')"))
+            .await?;
+        type_keys(&bench, &opened, CARD).await?;
+        if blurred {
+            bench
+                .live
+                .main_world(&opened.page, &format!("blurCardIn('{id}')"))
+                .await?;
+            let after = clear(&playwright.picture_check(tab).await, what)?;
+            assert_eq!(
+                before, after,
+                "{what}: the fifth limit, its typing not counted"
+            );
+        } else {
+            assert_eq!(
+                playwright.picture_check(tab).await,
+                PictureCheck::Private,
+                "{what}: read through the focus"
+            );
+        }
+        bench.close(opened).await?;
+    }
+    Ok(())
+}
+
+/// The walk on demand, row 5d (the design keeper's editable ruling): a text dropped on a paragraph
+/// inside a contenteditable region fires beforeinput naming the paragraph, an editable element
+/// that is not the region's editing host (measured by the snapshot design's reviewer). It asks,
+/// counts and names nothing: three readings after the drop are clear and the same as before it,
+/// none unknown. Fails with an event naming an editable element counted (the readings move, then
+/// read unknown).
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_text_dropped_in_an_editor_moves_nothing() -> TestResult {
+    let bench = Bench::start().await?;
+    let opened = bench
+        .open("/private/closed-plain.html", Place::Front)
+        .await?;
+    let playwright = &bench.live.playwright;
+    let tab = opened.page.tab;
+    let before = clear(&playwright.picture_check(tab).await, "before")?;
+    let centre = bench.live.main_world(&opened.page, "rect('para')").await?;
+    let centre: Vec<i64> = serde_json::from_str(centre.as_str().ok_or("rect")?)?;
+    let session = bench
+        .live
+        .browser
+        .pages
+        .get_session(opened.page.id.clone())
+        .await?;
+    let data = json!({
+        "items": [{ "mimeType": "text/plain", "data": "DROPPED" }],
+        "dragOperationsMask": 1,
+    });
+    for kind in ["dragEnter", "dragOver", "drop"] {
+        let _sent: Value = session
+            .session
+            .send(
+                "Input.dispatchDragEvent",
+                json!({ "type": kind, "x": centre.first(), "y": centre.get(1), "data": data }),
+            )
+            .await?;
+    }
+    time::sleep(Duration::from_millis(200)).await;
+    let dropped = bench
+        .live
+        .main_world(&opened.page, "document.getElementById('para').textContent")
+        .await?;
+    assert!(
+        dropped
+            .as_str()
+            .is_some_and(|text| text.contains("DROPPED")),
+        "the drop landed: {dropped}"
+    );
+    for reading in 1..=3 {
+        let after = clear(
+            &playwright.picture_check(tab).await,
+            &format!("reading {reading}"),
+        )?;
+        assert_eq!(before, after, "reading {reading}: the drop moved nothing");
+    }
+    bench.close(opened).await
 }
 
 /// The walk on demand, row 6 (the design keeper's ruling A): the page cancels beforeinput and

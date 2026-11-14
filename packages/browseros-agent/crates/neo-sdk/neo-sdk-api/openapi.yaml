@@ -2904,18 +2904,22 @@ components:
             no event and never held the focus (written by the page's own script, or there when the
             document loaded); a value typed with the keyboard alone before Neo's first reading in
             that document, in a box that no longer holds the focus at that reading; typing on a page
-            that stops its events at the window, before Neo's listener; and a box whose page cancels
-            the key and writes the value itself, when that box no longer holds the focus at Neo's
-            next reading. A host avoids the second by sending a private value through the fill
-            route: its box has a ref from a snapshot in Neo's own format, which has read the box's
-            closed root, so Neo knows the box before anything is typed, and a box Neo typed into
-            privately counts as private there. A root Neo found through the focus alone and cannot
-            read in time stays unknown, and is not asked again unless typing then reaches it. A box
-            in a closed root nested inside another is reached through the focus, or through typing
-            once Neo knows the outer root; one more than four closed roots deep is read over more
-            than one reading. Between its two readings around a picture Neo counts typing and the
-            owner's input, not a value a page's own script sets itself: such a value shown and
-            cleared again in between is not seen.
+            that stops its events at the window, before Neo's listener; a box whose page cancels the
+            key and writes the value itself, when that box no longer holds the focus at Neo's next
+            reading; and a box inside a closed root in an editable region, or whose host is itself
+            editable (a document in design mode included), which is known only through the focus:
+            once its host held the focus at one of Neo's readings and that one read went through.
+            Its typing is not counted before that, as no event inside an editable region tells a
+            closed root's typing from the editor's own. A host avoids the second by sending a
+            private value through the fill route: its box has a ref from a snapshot in Neo's own
+            format, which has read the box's closed root, so Neo knows the box before anything is
+            typed, and a box Neo typed into privately counts as private there. A root Neo found
+            through the focus alone and cannot read in time stays unknown, and is not asked again
+            unless typing then reaches it. A box in a closed root nested inside another is reached
+            through the focus, or through typing once Neo knows the outer root; one more than four
+            closed roots deep is read over more than one reading. Between its two readings around a
+            picture Neo counts typing and the owner's input, not a value a page's own script sets
+            itself: such a value shown and cleared again in between is not seen.
         valueBytes:
           type: integer
           format: int64

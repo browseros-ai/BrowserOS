@@ -6,7 +6,12 @@
      with an element inside it, #inside), and a select (#pick). focusOn(id) gives one the focus,
      caretInside() puts the caret in #inside, blurAll() takes the focus away, design() turns the
      document's design mode on, and rootOnPad() attaches a closed root with a card box to the pad
-     afterwards and gives that box the focus. The page records each input event's first target and whether the
+     afterwards and gives that box the focus. Three closed card boxes for the editable rows, each
+     given the focus by focusCardIn(id): #embed, a card component inside the editable region
+     #region; #cardhost, a plain host (for design mode); #edithost, an editing host that is itself
+     a closed shadow host; blurCardIn(id) takes the focus from it. #styled is made editable by
+     style alone (-webkit-user-modify). rect(id) gives an element's centre, for a drop on #para, a
+     paragraph inside #region. --> The page records each input event's first target and whether the
      body counts as editable (seen()), so a row reports what it measured. The camera's walk on
      demand moves no reading for any of them. -->
 <div id=host></div>
@@ -17,6 +22,10 @@
 <details id=d tabindex=0><summary>More</summary>Text</details>
 <div id=editor contenteditable style="width:200px;height:24px;border:1px solid #888">Edit <b id=inside>here</b></div>
 <select id=pick><option>One</option><option>Two</option><option>Three</option></select>
+<div id=region contenteditable style="width:300px;border:1px solid #888">Notes <div id=embed></div> more<p id=para>drop target paragraph</p></div>
+<div id=cardhost></div>
+<div id=edithost contenteditable></div>
+<div id=styled style="-webkit-user-modify:read-write;width:200px;height:24px;border:1px solid #888">Styled <b>text</b></div>
 <script>
 const root = document.getElementById('host').attachShadow({ mode: 'closed' });
 root.innerHTML = '<label>Search <input id=search value="running shoes" style="width:280px;height:30px"></label><div onclick="1" style="width:80px;height:24px;border:1px solid #888">Go</div>';
@@ -33,6 +42,28 @@ window.caretInside = () => {
   getSelection().addRange(range);
   return true;
 };
+const cards = {};
+for (const id of ['embed', 'cardhost', 'edithost']) {
+  const card = document.getElementById(id).attachShadow({ mode: 'closed' });
+  card.innerHTML = '<label>Card number <input autocomplete=cc-number style="width:280px;height:30px"></label>';
+  cards[id] = card.querySelector('input');
+}
+window.focusCardIn = (id) => { cards[id].focus(); return true; };
+window.blurCardIn = (id) => { cards[id].blur(); return true; };
+window.rect = (id) => {
+  const box = document.getElementById(id).getBoundingClientRect();
+  return JSON.stringify([Math.round(box.x + box.width / 2), Math.round(box.y + box.height / 2)]);
+};
+window.caretIn = (id) => {
+  const element = document.getElementById(id);
+  element.focus();
+  const range = document.createRange();
+  range.selectNodeContents(element.lastElementChild ?? element);
+  range.collapse(false);
+  getSelection().removeAllRanges();
+  getSelection().addRange(range);
+  return true;
+};
 window.rootOnPad = () => {
   const late = document.getElementById('pad').attachShadow({ mode: 'closed' });
   late.innerHTML = '<label>Card number <input autocomplete=cc-number style="width:280px;height:30px"></label>';
@@ -40,5 +71,5 @@ window.rootOnPad = () => {
   return true;
 };
 window.design = () => { document.designMode = 'on'; document.body.focus(); return document.designMode; };
-window.seen = () => JSON.stringify({ firsts, bodyEditable: document.body.isContentEditable, active: document.activeElement?.localName });
+window.seen = () => JSON.stringify({ firsts, bodyEditable: document.body.isContentEditable, styledEditable: document.getElementById('styled').isContentEditable, active: document.activeElement?.localName });
 </script>
