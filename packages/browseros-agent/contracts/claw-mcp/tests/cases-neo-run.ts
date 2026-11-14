@@ -1135,6 +1135,106 @@ return await page.screenshot({clip: {x:0,y:0,width:900,height:700}})`,
       }
     },
   },
+  {
+    name: 'neo run: history keeps a declared task name after disconnect',
+    async run(ctx) {
+      for (const named of [true, false]) {
+        const session = await ctx.openSession('neo-history-contract')
+        expectOk(
+          await session.callTool('run', {
+            code: named
+              ? "await neo.createTask('Submit Local Request!'); return await page.title()"
+              : 'return await page.title()',
+          }),
+          'history task run',
+        )
+        const liveResponse = await apiGet(
+          ctx.server,
+          `/api/v1/sessions/${session.sessionId}`,
+        )
+        assert(liveResponse.ok)
+        const live: unknown = await liveResponse.json()
+        assert(live !== null && typeof live === 'object')
+        assert('session' in live && live.session !== null)
+        assert(typeof live.session === 'object')
+        if (named) {
+          assert('name' in live.session)
+          assert.equal(live.session.name, 'submit-local-request')
+        }
+        assert((await session.close()).ok, 'MCP session DELETE failed')
+        // Transport teardown and its audit write complete asynchronously. Check
+        // both History routes only after they stop projecting the live label.
+        await waitUntil(async () => {
+          const response = await apiGet(ctx.server, '/api/v1/sessions')
+          assert(response.ok)
+          const history: unknown = await response.json()
+          assert(history !== null && typeof history === 'object')
+          assert('items' in history && Array.isArray(history.items))
+          const item: unknown = history.items.find(
+            (row: unknown) =>
+              row !== null &&
+              typeof row === 'object' &&
+              'sessionId' in row &&
+              row.sessionId === session.sessionId,
+          )
+          if (item === undefined) return false
+          assert(item !== null && typeof item === 'object')
+          assert('status' in item)
+          if (item.status === 'live') return false
+          assert('name' in item)
+          assert.equal(
+            item.name,
+            named ? 'submit-local-request' : 'Session on neo-history-contract',
+          )
+          const detailResponse = await apiGet(
+            ctx.server,
+            `/api/v1/sessions/${session.sessionId}`,
+          )
+          assert(detailResponse.ok)
+          const detail: unknown = await detailResponse.json()
+          assert(detail !== null && typeof detail === 'object')
+          assert('session' in detail && detail.session !== null)
+          assert(typeof detail.session === 'object' && 'name' in detail.session)
+          assert.equal(detail.session.name, item.name)
+          return true
+        }, 'the closed task name in History')
+      }
+    },
+  },
+  {
+    name: 'neo run: history shows each page opening once',
+    async run(ctx) {
+      const session = await ctx.openSession('neo-page-opening-history')
+      expectOk(
+        await session.callTool('run', {
+          code: "await neo.createTask('page opening history'); await page.title(); const second = await context.newPage(); return await second.title()",
+        }),
+        'two page openings',
+      )
+      await waitUntil(async () => {
+        const response = await apiGet(
+          ctx.server,
+          `/api/v1/sessions/${session.sessionId}`,
+        )
+        assert(response.ok)
+        const detail: unknown = await response.json()
+        assert(detail !== null && typeof detail === 'object')
+        assert('dispatches' in detail && Array.isArray(detail.dispatches))
+        const toolNames = detail.dispatches.map((row: unknown) => {
+          assert(row !== null && typeof row === 'object')
+          assert('toolName' in row && typeof row.toolName === 'string')
+          return row.toolName
+        })
+        if (toolNames.filter((name) => name === 'read').length < 2) return false
+        assert.equal(
+          toolNames.filter((name) => name === 'pages.newPage').length,
+          2,
+        )
+        assert.equal(toolNames.filter((name) => name === 'read').length, 2)
+        return true
+      }, 'two distinct page openings and their reads in History')
+    },
+  },
 ]
 
 /** Reads the launcher's private browser independently of the server under test. */

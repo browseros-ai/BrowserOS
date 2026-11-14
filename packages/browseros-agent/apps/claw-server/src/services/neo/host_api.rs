@@ -20,6 +20,9 @@ pub(super) struct HostApi {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RunOperation {
+    /// SDK identities preserve operation ancestry when the host flattens its audit rows.
+    pub id: String,
+    pub parent_id: Option<String>,
     pub name: OperationName,
     pub tab_id: Option<i64>,
     pub started_at: i64,
