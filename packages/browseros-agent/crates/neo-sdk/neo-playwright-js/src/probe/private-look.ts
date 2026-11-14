@@ -7,7 +7,9 @@
  *
  *   2 an <input> whose type takes text       notAnInput
  *   3 its frame on the host's origin         wrongOrigin
- *   4 every fact the host approved holds     wrongType, or boxChanged with the fact
+ *   4 every fact the host approved holds     wrongType, or boxChanged with the fact; a limit
+ *     (a moved limit the value fits holds,   that moved is a changed box only when it would
+ *     ruling R64)                            cut the value (maxLengthMoved otherwise)
  *   5 enabled and not read-only              boxNotEditable
  *   6 the box shows, and nothing else takes  boxHidden, boxCovered
  *     the pointer at its centre              (main's covered rule, below); a box with no
@@ -83,7 +85,14 @@ export function lookAt(world: World, element: Element, ask: BoxAsk): Looked {
     })
   const facts = factsOf(element)
   const refusal = firstRefusal(world, element, facts, ask)
-  return refusal ? { facts, refusal } : { facts }
+  // Ruling R64: the limit moved and still fits, so the look went on; the answer says so.
+  const moved =
+    ask.expect !== undefined && limitMove(facts, ask.expect, ask) === 'fits'
+  return {
+    facts,
+    ...(refusal ? { refusal } : {}),
+    ...(moved ? { maxLengthMoved: true } : {}),
+  }
 }
 
 function firstRefusal(
@@ -96,7 +105,7 @@ function firstRefusal(
   if (expect && facts.origin !== expect.origin) return { code: 'wrongOrigin' }
   if (expect?.type !== undefined && expect.type !== facts.type)
     return { code: 'wrongType' }
-  const fact = expect && changedFact(facts, expect)
+  const fact = expect && changedFact(facts, expect, ask)
   if (fact) return { code: 'boxChanged', fact }
   if (element.disabled || element.readOnly || element.matches(':disabled'))
     return { code: 'boxNotEditable' }
@@ -150,24 +159,51 @@ function originOf(document: Document): string {
   return typeof origin === 'string' ? origin : document.location.origin
 }
 
-function changedFact(facts: BoxFacts, expect: BoxExpect): BoxFact | undefined {
+function changedFact(
+  facts: BoxFacts,
+  expect: BoxExpect,
+  ask: BoxAsk,
+): BoxFact | undefined {
   if (
     expect.autocomplete !== undefined &&
     expect.autocomplete !== facts.autocomplete
   )
     return 'autocomplete'
-  // -1 is the DOM's own word for a box with no maxlength (ruling R49): a host sends it to pin
-  // that the box has none, and the facts, which leave it out, compare as -1.
-  if (
-    expect.maxLength !== undefined &&
-    expect.maxLength !== (facts.maxLength ?? -1)
-  )
-    return 'maxLength'
+  // A limit that moved is a changed box only when the value does not fit it (ruling R64); a
+  // harmless move falls through, so a later fact that differs still refuses.
+  if (limitMove(facts, expect, ask) === 'cuts') return 'maxLength'
   if (expect.inputMode !== undefined && expect.inputMode !== facts.inputMode)
     return 'inputMode'
   if (expect.name !== undefined && expect.name !== facts.name) return 'name'
   if (expect.id !== undefined && expect.id !== facts.id) return 'id'
   return undefined
+}
+
+/**
+ * Ruling R64: the box's limit now against the one the host approved. `same` when the host
+ * approved none (not compared) or the same one; `fits` when it moved and the value fits both the
+ * approved limit and the limit now, or when the look carries no length (the check call's, which
+ * cannot tell, and never refuses for the limit); `cuts` when it moved and the value does not fit
+ * one of them. -1 is the DOM's own word for no limit (ruling R49): the facts, which leave a box's
+ * missing limit out, compare as -1. A value fits a limit when its length in UTF-16 code units is
+ * not above it, when the limit is none, or when the browser applies no maxlength to the box's
+ * type. `cut` plays no part here: with a cut, a host that approved 16 approved the cut at 16, so
+ * a limit gone or lower does not fit a longer value.
+ */
+function limitMove(
+  facts: BoxFacts,
+  expect: BoxExpect,
+  ask: BoxAsk,
+): 'same' | 'fits' | 'cuts' {
+  const approved = expect.maxLength
+  if (approved === undefined) return 'same'
+  const now = facts.maxLength ?? -1
+  if (approved === now) return 'same'
+  const { length } = ask
+  if (length === undefined) return 'fits'
+  const fits = (limit: number) =>
+    limit === -1 || !MAXLENGTH_TYPES.has(facts.type) || length <= limit
+  return fits(approved) && fits(now) ? 'fits' : 'cuts'
 }
 
 function isTextInput(element: Element): element is HTMLInputElement {

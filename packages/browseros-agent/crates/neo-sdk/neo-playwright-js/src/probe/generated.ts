@@ -303,7 +303,13 @@ export type LookScroll = "asItIs" | "centre";
  * is a text input, and the first check it fails. A covered box answers both. A box whose pin
  * is gone answers the protocol's `detached` instead.
  */
-export type Looked = { facts?: BoxFacts, refusal?: LookRefused, };
+export type Looked = { facts?: BoxFacts, refusal?: LookRefused, 
+/**
+ * Ruling R64: the box's `maxlength` is another than the approved one (`expect.maxLength`),
+ * and the value fits both, or the look carries no length (the check call's): no refusal for
+ * the limit. Absent otherwise; a moved limit the value does not fit is `boxChanged`.
+ */
+maxLengthMoved?: boolean, };
 
 /**
  * A private value on its way to Neo's isolated world, where the box's listener and the

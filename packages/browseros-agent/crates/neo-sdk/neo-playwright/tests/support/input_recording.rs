@@ -9,9 +9,11 @@
 //! command, of any method, whose params carry that text: where a host's value went, and where it
 //! never went (ruling R48). Only the session is kept, never the params.
 //!
-//! It also fails one method a test names, refused or left hanging, so a row can show what a
-//! check answers when a read of the browser fails (ruling R63).
+//! It also fails one method a test names, refused or left hanging, from its first call or from
+//! its Nth, and counts every method's calls, so a row can show what a check answers when a read
+//! of the browser fails, the first read or only the second (ruling R63).
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::{future, mem};
 
@@ -47,7 +49,19 @@ pub(crate) struct InputRecording {
     /// The text a test watches for, and the session of each command that carried it since.
     watched: Mutex<Option<(String, Vec<Option<String>>)>>,
     /// The method a test makes fail, and how.
-    failing: Mutex<Option<(String, Failing)>>,
+    failing: Mutex<Option<Fault>>,
+    /// How many times each method was sent, since the last [`InputRecording::reset_calls`].
+    counts: Mutex<HashMap<String, usize>>,
+}
+
+/// A method a test makes fail, how, and from which of its calls since the fault was set.
+struct Fault {
+    method: String,
+    how: Failing,
+    /// The first call to fail, counted from 1.
+    from: usize,
+    /// The calls of `method` since the fault was set.
+    seen: usize,
 }
 
 impl InputRecording {
@@ -57,13 +71,42 @@ impl InputRecording {
             calls: Mutex::new(Vec::new()),
             watched: Mutex::new(None),
             failing: Mutex::new(None),
+            counts: Mutex::new(HashMap::new()),
         })
     }
 
     /// From now on, every `method` command fails `how`, until [`Self::stop_failing`].
     pub(crate) fn fail(&self, method: &str, how: Failing) {
-        *self.failing.lock().unwrap_or_else(PoisonError::into_inner) =
-            Some((method.to_owned(), how));
+        self.fail_from(method, how, 1);
+    }
+
+    /// From now on, `method` goes through for its first `from - 1` calls and then fails `how` at
+    /// every call, until [`Self::stop_failing`].
+    pub(crate) fn fail_from(&self, method: &str, how: Failing, from: usize) {
+        *self.failing.lock().unwrap_or_else(PoisonError::into_inner) = Some(Fault {
+            method: method.to_owned(),
+            how,
+            from,
+            seen: 0,
+        });
+    }
+
+    /// How many times `method` was sent since the last [`Self::reset_calls`].
+    pub(crate) fn calls(&self, method: &str) -> usize {
+        self.counts
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(method)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// Counts every method's calls from zero again.
+    pub(crate) fn reset_calls(&self) {
+        self.counts
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clear();
     }
 
     /// Commands go through again.
@@ -73,12 +116,16 @@ impl InputRecording {
 
     /// How `method` must fail, if a test made it.
     fn note(&self, method: &str) -> Option<Failing> {
-        self.failing
+        *self
+            .counts
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .as_ref()
-            .filter(|(failed, _)| failed == method)
-            .map(|(_, how)| *how)
+            .entry(method.to_owned())
+            .or_default() += 1;
+        let mut failing = self.failing.lock().unwrap_or_else(PoisonError::into_inner);
+        let fault = failing.as_mut().filter(|fault| fault.method == method)?;
+        fault.seen += 1;
+        (fault.seen >= fault.from).then_some(fault.how)
     }
 
     /// From now on, keeps the session of every command whose params carry `text`.

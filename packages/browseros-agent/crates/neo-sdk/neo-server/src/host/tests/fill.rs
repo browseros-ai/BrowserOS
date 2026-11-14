@@ -225,6 +225,7 @@ impl PrivateEntry for ScriptedEntry {
                         typed: lengths,
                         error: None,
                         drawings: drawings_of(script, fields),
+                        max_length_moved: moved_fields(&request),
                     }
                 }
                 Script::Uncertain { at, code } => {
@@ -250,6 +251,7 @@ impl PrivateEntry for ScriptedEntry {
                         typed,
                         error: Some(error),
                         drawings: vec![Drawing::None; fields],
+                        max_length_moved: Vec::new(),
                     }
                 }
                 Script::Hold => {
@@ -269,6 +271,7 @@ impl PrivateEntry for ScriptedEntry {
                             typed: vec![0; fields],
                             error: Some(error),
                             drawings: vec![Drawing::None; fields],
+                            max_length_moved: Vec::new(),
                         };
                     }
                     self.typed(&lengths);
@@ -279,6 +282,7 @@ impl PrivateEntry for ScriptedEntry {
                         typed: lengths,
                         error: None,
                         drawings: vec![Drawing::None; fields],
+                        max_length_moved: Vec::new(),
                     }
                 }
             }
@@ -330,6 +334,8 @@ impl PrivateEntry for ScriptedEntry {
                         }),
                     // The fake's one ref into a frame that left the tab (ruling R63).
                     frame_gone: field.box_ref == GONE_FRAME_REF,
+                    // The fake's one box whose limit moved (ruling R64).
+                    max_length_moved: field.box_ref == MOVED_LIMIT_REF,
                 })
                 .collect())
         })
@@ -1422,6 +1428,21 @@ fn shape(object: &Value) -> Vec<String> {
 /// The fake entry's ref into a frame that is no longer in the tab (ruling R63).
 const GONE_FRAME_REF: &str = "f9e1";
 
+/// The fake entry's ref to a box whose limit moved from the approved one and still fits (ruling
+/// R64).
+const MOVED_LIMIT_REF: &str = "e8";
+
+/// The fields of `request` the fake entry lists as typed after their limit moved (ruling R64).
+fn moved_fields(request: &EntryRequest) -> Vec<usize> {
+    request
+        .fields
+        .iter()
+        .enumerate()
+        .filter(|(_, field)| field.spec.box_ref == MOVED_LIMIT_REF)
+        .map(|(index, _)| index)
+        .collect()
+}
+
 /// Ruling R63 at the route: a dead ref whose frame left the tab answers `frameGone: true` beside
 /// its `element_detached`, in the reply and in the op's recorded result; every other box has no
 /// such key, and no answer carries `false`. A fill's answer has no such field.
@@ -1454,6 +1475,54 @@ async fn the_check_says_frame_gone_only_when_it_is_true() -> TestResult {
     );
     let filled = fill(&host, tab, &canary_body(&json!({}))).await?;
     assert!(!filled.body.to_string().contains("frameGone"), "{filled:?}");
+    Ok(())
+}
+
+/// Ruling R64 at the route: a fill lists the fields typed after their limit moved in
+/// `maxLengthMoved`, and a check answers `maxLengthMoved: true` for such a box, each in the reply
+/// and in the op's recorded result. A fill with no such field has no such key, never an empty
+/// list, and no check answer carries `false`.
+#[tokio::test]
+async fn the_fill_and_the_check_say_when_a_limit_moved() -> TestResult {
+    let (host, tab) = ready().await?;
+    let moved = fill(
+        &host,
+        tab,
+        &json!({ "fields": [
+            { "ref": "e5", "value": PASSWORD, "expect": { "origin": "https://shop.example" } },
+            { "ref": MOVED_LIMIT_REF, "value": "123",
+              "expect": { "origin": "https://pay.example", "maxLength": 4 } }
+        ] }),
+    )
+    .await?;
+    assert_eq!(moved.body["outcome"], "entered", "{moved:?}");
+    assert_eq!(moved.body["maxLengthMoved"], json!([1]), "{moved:?}");
+    let run = moved.body["runId"].as_str().ok_or("a runId")?;
+    let record = get(&host, &format!("/v1/runs/{run}?wait=10")).await?;
+    assert!(
+        record.body.to_string().contains("\"maxLengthMoved\":[1]"),
+        "the record holds it: {record:?}"
+    );
+    let plain = fill(&host, tab, &canary_body(&json!({}))).await?;
+    assert_eq!(plain.body["outcome"], "entered", "{plain:?}");
+    assert!(plain.body.get("maxLengthMoved").is_none(), "{plain:?}");
+    let checked = request(
+        &host.socket,
+        "POST",
+        &format!("/v1/tabs/{}/fill/check", tab.0),
+        Some(TOKEN),
+        Some(&json!({ "fields": [{ "ref": "e5" }, { "ref": MOVED_LIMIT_REF }] })),
+    )
+    .await?;
+    let fields = checked.body["fields"].as_array().ok_or("fields")?;
+    assert!(fields[0].get("maxLengthMoved").is_none(), "{checked:?}");
+    assert_eq!(fields[1]["maxLengthMoved"], true, "{checked:?}");
+    assert!(
+        !checked
+            .body
+            .to_string()
+            .contains("\"maxLengthMoved\":false")
+    );
     Ok(())
 }
 

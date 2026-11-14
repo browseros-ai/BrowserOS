@@ -247,9 +247,7 @@ impl FrameTree {
         }
     }
 
-    /// Whether the tree holds the frame `id`: the check call's dead refs ask it of a whole read
-    /// (ruling R63, `look_op::frames_gone`).
-    pub(crate) fn contains(&self, id: &str) -> bool {
+    fn contains(&self, id: &str) -> bool {
         self.frames.iter().any(|frame| frame.id.as_str() == id)
     }
 

@@ -11,7 +11,7 @@
 use crate::models;
 use serde::{Deserialize, Serialize};
 
-/// FillBoxCheck : One box, on its own: neither field means every check a fill makes before typing passed (but the length).
+/// FillBoxCheck : One box, on its own: neither field means every check a fill makes before typing passed, but the two that need the value's length, which are the length check and whether a limit that moved still fits.
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
 pub struct FillBoxCheck {
     /// The box's facts, whenever the ref names a text input.
@@ -29,10 +29,13 @@ pub struct FillBoxCheck {
     /// Present, and true, only when the ref is dead (`element_detached`) and the frame the box was in is no longer in the tab: the box left the page with it, and nothing there holds the value. A removed payment frame answers this, and so does a page that moved on, for the frames it held. Neo reads the tab's frame tree for the check's dead refs, every frame included, and true needs two reads in a row that agree: both whole, and neither holds the frame. Never false. How the answers fit together, for a host that decides \"the box left the page\": `frameGone` true, it did. `page_changed` is answered for a box Neo still reaches: the tab is no longer at the address the host named, which says the address changed, not that the box left, as a page can change its address and keep its document; take a fresh snapshot. `element_detached` with no `frameGone` is unknown: the box may have left a document whose frame is still there, its document may have been replaced in place (the tab's main document after it moved on, or a frame that reloaded), Neo may have lost its own world there, the ref may be from before a restart of Neo, the frame tree could not be read whole, or frames in the browser, in any tab, were moving to or from their own process while Neo read it; take a fresh snapshot. True says the frame is gone now: a later Back can bring a page back, the fill route's own limit on history. The fill's answer has no such field.
     #[serde(rename = "frameGone", skip_serializing_if = "Option::is_none")]
     pub frame_gone: Option<bool>,
+    /// Present, and true, only when the field sent `expect.maxLength` and the box has another limit now (the limit itself is in `facts.maxLength`). The check call has no length check, so it cannot say whether a value fits a limit that moved, and it never refuses for one: a fill of that box goes on when the value fits both limits, and answers `box_changed` otherwise. Never false.
+    #[serde(rename = "maxLengthMoved", skip_serializing_if = "Option::is_none")]
+    pub max_length_moved: Option<bool>,
 }
 
 impl FillBoxCheck {
-    /// One box, on its own: neither field means every check a fill makes before typing passed (but the length).
+    /// One box, on its own: neither field means every check a fill makes before typing passed, but the two that need the value's length, which are the length check and whether a limit that moved still fits.
     pub fn new() -> FillBoxCheck {
         FillBoxCheck {
             facts: None,
@@ -40,6 +43,7 @@ impl FillBoxCheck {
             holds: None,
             contains: None,
             frame_gone: None,
+            max_length_moved: None,
         }
     }
 }

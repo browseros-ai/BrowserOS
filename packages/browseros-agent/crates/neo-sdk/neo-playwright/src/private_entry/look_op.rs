@@ -49,6 +49,9 @@ pub(crate) struct LookedBox {
     pub(crate) pin: Pin,
     pub(crate) facts: BoxFacts,
     pub(crate) refusal: Option<EntryCode>,
+    /// Ruling R64: the box's limit moved from the approved one and the value fits both, or the
+    /// look carried no length. A fill lists the box when it types it after this look.
+    pub(crate) max_length_moved: bool,
 }
 
 /// What a box looks like now, or why it could not be looked at: its ref names no text input, or
@@ -442,7 +445,11 @@ fn found(
     above: Option<EntryCode>,
     address: TabAddress,
 ) -> Look {
-    let Looked { facts, refusal } = looked;
+    let Looked {
+        facts,
+        refusal,
+        max_length_moved,
+    } = looked;
     let Some(facts) = facts else {
         return Look::Unfound(EntryCode::NotAnInput);
     };
@@ -464,6 +471,7 @@ fn found(
         pin,
         facts,
         refusal,
+        max_length_moved,
     }))
 }
 

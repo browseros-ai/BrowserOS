@@ -11,7 +11,7 @@
 use crate::models;
 use serde::{Deserialize, Serialize};
 
-/// FillExpect : Facts the host approved about the box. Each one sent must still hold (`box_changed`).
+/// FillExpect : Facts the host approved about the box. Each one sent must still hold (`box_changed`), but the limit, `maxLength`, which follows its own rule.
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
 pub struct FillExpect {
     /// The origin of the box's own frame, e.g. `https://pay.example` (`wrong_origin`).
@@ -22,7 +22,7 @@ pub struct FillExpect {
     pub r#type: Option<String>,
     #[serde(rename = "autocomplete", skip_serializing_if = "Option::is_none")]
     pub autocomplete: Option<String>,
-    /// The box's `maxlength`. Send -1 to pin that the box has none, the DOM's own word for it: the box facts leave `maxLength` out for such a box. Absent, it is not checked; 0 is a limit of zero; any other negative number is a malformed body.
+    /// The limit the host approved, the box's `maxlength`. Send -1 for a box approved with no limit, the DOM's own word for it: the box facts leave `maxLength` out for such a box. Absent, it is not checked; 0 is a limit of zero; any other negative number is a malformed body. A card field can move its limit once it knows the card's brand, so a limit that moved is not a changed box: when the box has another limit now, the fill goes on if the value fits both the approved limit and the limit now, and lists the field in `maxLengthMoved`; otherwise `box_changed`, naming `maxLength`. A value fits a limit when its length in UTF-16 code units is not above it, when the limit is none, or when the box's type is one the browser applies no `maxlength` to. `cut` plays no part in this rule.
     #[serde(rename = "maxLength", skip_serializing_if = "Option::is_none")]
     pub max_length: Option<i32>,
     #[serde(rename = "inputMode", skip_serializing_if = "Option::is_none")]
@@ -34,7 +34,7 @@ pub struct FillExpect {
 }
 
 impl FillExpect {
-    /// Facts the host approved about the box. Each one sent must still hold (`box_changed`).
+    /// Facts the host approved about the box. Each one sent must still hold (`box_changed`), but the limit, `maxLength`, which follows its own rule.
     pub fn new(origin: String) -> FillExpect {
         FillExpect {
             origin,
