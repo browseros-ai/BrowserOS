@@ -360,7 +360,11 @@ function fold(text: string): string {
     .replace(/[\s*:]+$/, '')
 }
 
-/** Main's `DOM.scrollIntoViewIfNeeded` before its hit test: a no-op for a box in view. */
+/**
+ * Main's `DOM.scrollIntoViewIfNeeded` before its hit test: a no-op for a box in view. Rust sends
+ * that browser call itself before the look (ruling R61, look_op.rs), since this one follows the
+ * page's `scroll-behavior` and would animate on a smooth page; here it finds the box in view.
+ */
 function scrollIntoViewIfNeeded(box: Element): void {
   const scroll: unknown = Reflect.get(box, 'scrollIntoViewIfNeeded')
   if (typeof scroll === 'function') Reflect.apply(scroll, box, [true])

@@ -19,6 +19,7 @@ use futures_util::future::{self, Either};
 use serde_json::{Value, json};
 use tokio::time::Instant;
 
+use crate::action::protocol_scroll;
 use crate::action::requested_navigations::RequestedNavigations;
 use crate::op_scope::OpScope;
 use crate::page::OpPage;
@@ -165,6 +166,28 @@ pub(crate) async fn look_at(
             }
             Err(failure) => return Err(failure_code(failure)),
         };
+        // Ruling R61: the box into view at once, in its own document and in every page above,
+        // before any hit is asked. Main's rule sent the browser's own scroll, which is instant
+        // and only when needed. The page side's own `scrollIntoViewIfNeeded` follows the
+        // page's `scroll-behavior` and, under `smooth`, animates: its hit test then ran before
+        // the box was in view, found nothing at the box's place, and nothing is no cover
+        // (measured: a box 3000 pixels down under a sheet over the whole view was entered).
+        // After this the page side's scroll finds the box in view and does nothing.
+        match within(
+            scope,
+            protocol_scroll::scroll_if_needed(scope, page, site.world(), pin),
+        )
+        .await?
+        {
+            Ok(()) => {}
+            Err(ProbeFailure::Gone(_)) => {
+                if resolver.lost(&site).is_err() {
+                    return Ok(Look::Unfound(EntryCode::ElementDetached));
+                }
+                continue;
+            }
+            Err(failure) => return Err(failure_code(failure)),
+        }
         let ask = BoxAsk {
             expect: field.expect.clone(),
             length,

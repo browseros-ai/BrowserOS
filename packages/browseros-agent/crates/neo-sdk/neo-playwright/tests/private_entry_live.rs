@@ -344,6 +344,63 @@ async fn tests_that_a_covered_box_refuses_the_form_before_any_key() -> TestResul
     bench.close(opened).await
 }
 
+/// Ruling R61's rows 1, 2, 3 and 6 for the fill: a password box far below the fold of a page
+/// that scrolls smoothly, on its root or on a container between the box and the root, or in a
+/// frame of the page's own origin. Under a sheet over the whole view the entry is refused
+/// `box_covered` before any key, nothing typed; without it the box is entered and read back. By
+/// one insertion and key by key, on a tab in front and a tab behind, and the box's scroller ends
+/// at the box. Fails with the look's instant scroll left out: the page's own scroll animates,
+/// its hit finds nothing at the box's place, and the box is typed under the sheet.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_box_below_the_fold_of_a_smooth_page_is_entered_only_in_view() -> TestResult {
+    let bench = Bench::start().await?;
+    let origin = &bench.page_origin;
+    for shape in ["", "&scroller=1", "&frame=1"] {
+        for place in PLACES {
+            for keys in [false, true] {
+                for sheet in [true, false] {
+                    let path = format!(
+                        "/private/smooth-login.html?sheet={}{shape}",
+                        if sheet { "1" } else { "" }
+                    );
+                    let case = format!("{path}, {place:?}, keys {keys}");
+                    let opened = bench.open(&path, place).await?;
+                    let password = bench.r#ref(&opened, "textbox", "Password").await?;
+                    let env = bench.host(&opened);
+                    let field = Field::new(&password, origin);
+                    let field = if keys { field.keys() } else { field };
+                    let entry = bench
+                        .enter(&env, &opened, vec![field.with(PASSWORD)?])
+                        .await;
+                    if sheet {
+                        assert_eq!(entry.outcome, EntryOutcome::Refused, "{case}: {entry:?}");
+                        assert_eq!(code(&entry), Some("box_covered"), "{case}");
+                        assert_eq!(entry.typed, vec![0], "{case}");
+                        assert_eq!(bench.value(&opened, &password).await?, "", "{case}");
+                        assert!(!env.was_sent(), "{case}");
+                    } else {
+                        assert_eq!(entry.outcome, EntryOutcome::Entered, "{case}: {entry:?}");
+                        assert_eq!(bench.value(&opened, &password).await?, PASSWORD, "{case}");
+                    }
+                    let stood = bench
+                        .live
+                        .main_world(&opened.page, "standing()")
+                        .await?
+                        .as_f64()
+                        .unwrap_or_default();
+                    assert!(
+                        stood > 2000.0,
+                        "{case}: the box's scroller stands at {stood}"
+                    );
+                    bench.close(opened).await?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Rulings R55 and R56: a sign-in whose two boxes each sit under a sibling div that draws the
 /// field's name and takes the pointer, which is no `<label>`. With nothing set by the host, both
 /// boxes are entered and read back whole, by one insertion and key by key, on a tab in front and
