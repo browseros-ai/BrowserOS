@@ -8,7 +8,8 @@ use browseros_cdp::{CdpError, CdpEvent, TargetedEvents};
 use browseros_core::{CdpConnection, SessionId, TabId};
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
-use tokio::sync::{broadcast, mpsc, oneshot};
+use tokio::sync::watch::error::RecvError;
+use tokio::sync::{broadcast, mpsc, oneshot, watch};
 
 /// The one window every fake tab lives in.
 const WINDOW_ID: i64 = 1;
@@ -39,6 +40,7 @@ const EVENT_BACKLOG: usize = 1024;
 #[derive(Debug)]
 pub struct FakeCdp {
     state: Mutex<FakeState>,
+    received: watch::Sender<()>,
     events: broadcast::Sender<CdpEvent>,
     targeted: TargetedEvents,
 }
@@ -126,6 +128,7 @@ impl FakeCdp {
                 lingering: None,
                 linger_listings: None,
             }),
+            received: watch::channel(()).0,
             events: broadcast::channel(EVENT_BACKLOG).0,
             targeted: TargetedEvents::default(),
         })
@@ -375,6 +378,15 @@ impl FakeCdp {
             .count()
     }
 
+    /// Waits for browser receipt, including calls logged before this waiter subscribed.
+    pub async fn received(&self, method: &str) -> Result<(), RecvError> {
+        let mut received = self.received.subscribe();
+        while self.count(method) == 0 {
+            received.changed().await?;
+        }
+        Ok(())
+    }
+
     /// Answers one call. `None` means it never will. `expected` is the caller's epoch for an
     /// epoch-bound send, checked under the same lock that a reconnect takes, as the real
     /// client checks it under its socket lock.
@@ -389,6 +401,8 @@ impl FakeCdp {
             let mut state = self.lock();
             state.reply(expected, method, params, session)
         };
+        // Publish after the call log is visible, even when its reply will hang.
+        self.received.send_replace(());
         match reply {
             Reply::Now(result, events) => {
                 self.emit(events);

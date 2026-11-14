@@ -60,6 +60,7 @@ pub(crate) struct ScriptedBrowser {
     /// Captures, by number, that never answer whatever `captures` says.
     hung: Mutex<Vec<usize>>,
     started: watch::Sender<usize>,
+    cancelled: watch::Sender<usize>,
     events: broadcast::Sender<CdpEvent>,
     targeted: TargetedEvents,
     /// The one window's state; openbox maximizes a normal window.
@@ -77,6 +78,7 @@ impl ScriptedBrowser {
             captures: watch::channel(Captures::Answer).0,
             hung: Mutex::default(),
             started: watch::channel(0).0,
+            cancelled: watch::channel(0).0,
             events: broadcast::channel(16).0,
             targeted: TargetedEvents::default(),
             window: Mutex::new("maximized"),
@@ -166,6 +168,18 @@ impl ScriptedBrowser {
         Ok(())
     }
 
+    /// Native captures cancelled before storage. Core's JPEG fallback can also cancel one, so
+    /// this alone does not prove the enclosing camera attempt ended.
+    pub(crate) async fn captures_cancelled(&self, count: usize) -> Result<(), BoxError> {
+        let mut cancelled = self.cancelled.subscribe();
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            cancelled.wait_for(|cancelled| *cancelled >= count),
+        )
+        .await??;
+        Ok(())
+    }
+
     /// How many captures have started.
     pub(crate) fn captures(&self) -> usize {
         *self.started.borrow()
@@ -211,6 +225,7 @@ impl ScriptedBrowser {
             .contains(&number);
         let mut captures = self.captures.subscribe();
         if hung || *captures.borrow_and_update() == Captures::Hang {
+            let _pending = HungCapture(&self.cancelled);
             std::future::pending::<()>().await;
         }
         if captures
@@ -281,6 +296,16 @@ impl ScriptedBrowser {
             }
             _ => Ok(json!({})),
         }
+    }
+}
+
+/// Latches native-request cancellation without waiting for storage. Both core's JPEG fallback
+/// and the camera's outer timeout can drop this future.
+struct HungCapture<'a>(&'a watch::Sender<usize>);
+
+impl Drop for HungCapture<'_> {
+    fn drop(&mut self) {
+        self.0.send_modify(|cancelled| *cancelled += 1);
     }
 }
 
