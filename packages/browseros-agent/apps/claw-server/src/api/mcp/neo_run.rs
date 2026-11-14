@@ -19,7 +19,8 @@ use serde_json::{Value, json};
 use std::time::Instant;
 use tokio_util::sync::CancellationToken;
 
-/// Prepare the window, forward, then reconcile tabs, naming and audit, in that order.
+/// Prepare the window, forward, reconcile tabs/naming and prepare reply notes.
+/// Persist the parent before publishing children so every visible child has its run.
 /// Dropping the engine future closes its HTTP connection so the SDK cancels the run.
 pub(super) async fn call(
     state: &AppState,
@@ -89,8 +90,8 @@ pub(super) async fn call(
     };
     result.content.extend(window_note.map(ContentBlock::text));
     let duration_ms = i64::try_from(began.elapsed().as_millis()).unwrap_or(i64::MAX);
-    // A script and its return value can both contain secrets. Persist only fixed
-    // outcome flags and token counts, even for invalid arguments and engine errors.
+    // A script and its return value can both contain secrets. Persist only outcome
+    // flags, opaque SDK run correlation and token counts, including on engine errors.
     let event = AuditEvent::without_preview(RecordToolDispatchInput {
         agent_id: started.session.convo_id().as_str().to_string(),
         slug: started.session.agent().slug().to_string(),
