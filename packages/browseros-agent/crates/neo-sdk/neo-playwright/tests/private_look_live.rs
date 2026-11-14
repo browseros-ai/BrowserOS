@@ -1442,8 +1442,9 @@ async fn tests_that_a_box_under_a_sticky_header_above_its_frame_passes_once_clea
 /// that the look's instant scroll cannot bring into its own frame's view answers `cover_unread`,
 /// by one insertion and key by key: a password box 3000 pixels down a page that cannot scroll,
 /// with a sheet over the view and without it, a helper box parked far off the page's left edge,
-/// and a 1 by 1 box just off its top-left corner. A box in view, and a box below the fold of a
-/// page that can scroll, pass as before. Fails with the view test taken out of the look: nothing
+/// and a 1 by 1 box just off its top-left corner. A box in view, a box below the fold of a page
+/// that can scroll, and a box in view on a page in quirks mode with no scrolling element (its
+/// view is the window's), pass as before; the last answers `box_covered` under a sheet. Fails with the view test taken out of the look: nothing
 /// is at an out-of-view box's centre, and nothing passes.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
@@ -1462,6 +1463,13 @@ async fn tests_that_a_box_that_cannot_be_brought_into_view_is_refused() -> TestR
         ("/private/out-of-view.html", "#helper", unreachable),
         ("/private/out-of-view.html", "#corner", unreachable),
         ("/private/out-of-view.html", "#email", None),
+        // A page in quirks mode with no scrolling element: its view is the window's.
+        ("/private/quirks-login.html", "#pw", None),
+        (
+            "/private/quirks-login.html?sheet=1",
+            "#pw",
+            Some(EntryCode::BoxCovered(CoverIn::OwnDocument)),
+        ),
         ("/private/smooth-login.html?plain=1", "#pw", None),
     ];
     let mut failures = Vec::new();

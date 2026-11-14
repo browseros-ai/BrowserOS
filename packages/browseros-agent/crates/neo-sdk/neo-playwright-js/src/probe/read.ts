@@ -157,16 +157,14 @@ function viewCentre(element: Element): { x: number; y: number } | null {
   if (!box) return null
   const x = box.x + box.width / 2
   const y = box.y + box.height / 2
-  // The view without its scrollbars: a hit on a scrollbar finds only the root.
+  // The view without its scrollbars: a hit on a scrollbar finds only the root. A page in quirks
+  // mode whose html and body both set overflow has no scrolling element; its view is then the
+  // window's, scrollbars and all.
+  const view = element.ownerDocument.defaultView
   const port = element.ownerDocument.scrollingElement
-  if (
-    !port ||
-    x < 0 ||
-    y < 0 ||
-    x >= port.clientWidth ||
-    y >= port.clientHeight
-  )
-    return null
+  const width = port ? port.clientWidth : (view?.innerWidth ?? 0)
+  const height = port ? port.clientHeight : (view?.innerHeight ?? 0)
+  if (x < 0 || y < 0 || x >= width || y >= height) return null
   return { x, y }
 }
 

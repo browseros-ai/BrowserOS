@@ -9609,7 +9609,7 @@ ${value.stack}`;
   }
 
   // crates/neo-sdk/neo-playwright-js/src/probe/protocol.ts
-  var PROTOCOL = 40;
+  var PROTOCOL = 41;
 
   // crates/neo-sdk/neo-playwright-js/src/probe/read.ts
   var XHTML = "http://www.w3.org/1999/xhtml";
@@ -9690,8 +9690,11 @@ ${value.stack}`;
       return null;
     const x = box.x + box.width / 2;
     const y = box.y + box.height / 2;
+    const view = element.ownerDocument.defaultView;
     const port = element.ownerDocument.scrollingElement;
-    if (!port || x < 0 || y < 0 || x >= port.clientWidth || y >= port.clientHeight)
+    const width = port ? port.clientWidth : view?.innerWidth ?? 0;
+    const height = port ? port.clientHeight : view?.innerHeight ?? 0;
+    if (x < 0 || y < 0 || x >= width || y >= height)
       return null;
     return { x, y };
   }

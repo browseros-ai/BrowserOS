@@ -555,6 +555,46 @@ async fn tests_that_a_box_on_a_page_that_cannot_scroll_is_refused_before_any_key
     Ok(())
 }
 
+/// Ruling R62 on a page in quirks mode whose html and body both set overflow, so it has no
+/// scrolling element: a password box in view is entered, by one insertion and key by key, front
+/// and behind, and under a sheet over the view refused `box_covered` before any key. Fails when
+/// the view test reads only the scrolling element: every sized box on such a page answers
+/// `cover_unread`.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_box_on_a_quirks_page_with_no_scroller_is_entered() -> TestResult {
+    let bench = Bench::start().await?;
+    let origin = &bench.page_origin;
+    for (path, sheet) in [
+        ("/private/quirks-login.html", false),
+        ("/private/quirks-login.html?sheet=1", true),
+    ] {
+        for place in PLACES {
+            for keys in [false, true] {
+                let case = format!("{path}, {place:?}, keys {keys}");
+                let opened = bench.open(path, place).await?;
+                let password = bench.r#ref(&opened, "textbox", "Password").await?;
+                let env = bench.host(&opened);
+                let field = Field::new(&password, origin);
+                let field = if keys { field.keys() } else { field };
+                let entry = bench
+                    .enter(&env, &opened, vec![field.with(PASSWORD)?])
+                    .await;
+                if sheet {
+                    assert_eq!(entry.outcome, EntryOutcome::Refused, "{case}: {entry:?}");
+                    assert_eq!(code(&entry), Some("box_covered"), "{case}");
+                    assert_eq!(bench.value(&opened, &password).await?, "", "{case}");
+                } else {
+                    assert_eq!(entry.outcome, EntryOutcome::Entered, "{case}: {entry:?}");
+                    assert_eq!(bench.value(&opened, &password).await?, PASSWORD, "{case}");
+                }
+                bench.close(opened).await?;
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Ruling R62's second writing, rows 8 to 11 for the fill: a text box three views tall with its
 /// top showing, and one that fills the view, are brought into view by their centre and looked at
 /// again there. In the page's own document, by one insertion and key by key, on a tab in front
