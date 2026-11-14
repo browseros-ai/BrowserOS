@@ -158,12 +158,23 @@ pub(in crate::api::mcp) async fn apply(
                 state.clone(),
                 create_browser_output_file_access(),
             );
-            for page in newly_claimed {
-                group_new_claim(&call, &browser, page).await;
-            }
+            // Cosmetic browser work must not hold an SDK result behind slow group
+            // operations. Each page retains its census incarnation, and the group
+            // effect rechecks placement and session cancellation after admission.
+            let newly_claimed: Vec<_> = newly_claimed.into_iter().cloned().collect();
+            drop(tokio::spawn(async move {
+                for page in newly_claimed {
+                    group_new_claim(&call, &browser, &page).await;
+                }
+            }));
         }
     }
-    for page in pages {
+    // The shared first-claim helper already records the tab's creation activity.
+    // Only previously held tabs need a separate run event, or one run counts twice.
+    for page in pages
+        .into_iter()
+        .filter(|page| claimed.contains(&page.tab_id.0))
+    {
         state
             .tab_activity
             .record_tool(RecordToolInput {

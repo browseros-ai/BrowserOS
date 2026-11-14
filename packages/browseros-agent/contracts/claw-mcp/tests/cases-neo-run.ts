@@ -459,6 +459,14 @@ return [first.tabId, second.tabId]`,
             assert(
               'browserTabId' in tab && typeof tab.browserTabId === 'number',
             )
+            if (tabIds.includes(tab.browserTabId)) {
+              assert('toolCount' in tab)
+              assert.equal(
+                tab.toolCount,
+                1,
+                'one run counted twice for a new tab',
+              )
+            }
             return tab.browserTabId
           })
           return tabIds.every((id) => claimed.includes(id))
