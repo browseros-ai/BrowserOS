@@ -6,7 +6,7 @@ use crate::config::{ServerMode, TabGrouping};
 use crate::services::agent_settings::HumanHelp;
 use browseros_core::NativeCapabilities;
 
-const BROWSER_GUIDANCE: &str = "BrowserOS neo is the browser for agents, with persistent profiles and live logins.\nUse it for website work unless the user asks for another browser.\nUse run for browser work. Its description is the manual for the Playwright API, limits, files and errors.";
+const BROWSER_GUIDANCE: &str = "BrowserOS neo is the browser for agents, with persistent profiles and live logins.\nUse it for website work unless the user asks for another browser.\nUse run for browser work. Its description is the manual for the Playwright API, limits, files and errors.\nTo see a page, use `return await page.screenshot()` in run so its Buffer comes back as an image you can see. Do not convert it to base64 text.";
 const RUN_FIRST: &str = "Use run for browser work.";
 const PURSUE_FIRST: &str = "Start tasks that act on a site with pursue. Get the tab number from page.tabId in run, then pass the whole outcome.\nIf pursue returns completed, verify in run. If it returns handed_back, continue from its page and skip finished steps; do not call pursue again for that task.\nUse run directly for reads, work across pages, and work the user asks you to script.";
 
@@ -61,6 +61,18 @@ mod tests {
     use super::*;
     use crate::api::mcp::surface::removed_tool_reference;
 
+    const PICTURE_GUIDANCE: &str = "To see a page, use `return await page.screenshot()` in run so its Buffer comes back as an image you can see. Do not convert it to base64 text.";
+
+    #[test]
+    fn installed_guides_teach_direct_image_returns() {
+        for skill in [
+            include_str!("../../../../../resources/skills/browserclaw/SKILL.md"),
+            include_str!("../../../../../../../skills/browseros-neo/SKILL.md"),
+        ] {
+            assert!(skill.contains(PICTURE_GUIDANCE));
+        }
+    }
+
     #[test]
     fn installed_guides_and_recipe_reference_use_the_current_tool_surface() -> anyhow::Result<()> {
         let reference = recipes::instruction_lines();
@@ -111,6 +123,7 @@ mod tests {
                         );
                         for text in [instructions.clone(), with_pursue_guidance(instructions)] {
                             assert_eq!(removed_tool_reference(&text), None, "{text}");
+                            assert!(text.contains(PICTURE_GUIDANCE));
                             for recipe in recipes::all() {
                                 assert!(text.contains(&recipe.title), "{}", recipe.title);
                             }
@@ -173,6 +186,7 @@ mod tests {
                         );
                         assert!(!instructions.contains("neo."));
                         assert!(!instructions.contains("Playwright"));
+                        assert!(!instructions.contains(PICTURE_GUIDANCE));
                         for recipe in recipes::all() {
                             assert!(!instructions.contains(&recipe.title), "{}", recipe.title);
                         }

@@ -23,7 +23,8 @@ Each script is a fresh async function. Await SDK calls and return the result you
 Use `page.ariaSnapshot()` to inspect, locators such as `page.getByRole(...)` to act, then verify the result.
 Refs such as `page.getByRef('e5')` come from the current tree; inspect again after the page changes.
 Wait for a locator or expected state. Read errors and captured logs before retrying; if delivery is unknown, inspect before repeating a write.
-Return `await page.screenshot()` for a visual check or `await page.pdf()` for PDF bytes.
+To see a page, use `return await page.screenshot()` in run so its Buffer comes back as an image you can see. Do not convert it to base64 text.
+Return `await page.pdf()` for PDF bytes.
 Use `download.path()` or `download.saveAs(path)` for downloads. Path uploads must be inside the host's allowed folders, Downloads by default; buffer payloads need no local file.
 The realm is QuickJS, with no Node imports, fetch, or DOM globals. `page.evaluate()` runs inside the page, where site scripts can observe it.
 
