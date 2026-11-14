@@ -32,6 +32,18 @@ impl AuditEvent {
     }
 }
 
+/// Acknowledges one admitted audit row independently of its deferred picture.
+/// Dropping the waiter cannot cancel the row write already owned by the actor.
+pub struct RowStored(oneshot::Receiver<AppResult<()>>);
+
+impl RowStored {
+    pub async fn wait(self) -> AppResult<()> {
+        self.0.await.map_err(|_| {
+            AppError::Internal("audit worker stopped before storing the row".to_string())
+        })?
+    }
+}
+
 trait AuditStore: Send + Sync {
     fn append(&self, input: RecordToolDispatchInput) -> BoxFuture<'_, AppResult<i64>>;
     fn mark_screenshot(&self, dispatch_id: i64) -> BoxFuture<'_, AppResult<()>>;
@@ -61,6 +73,10 @@ struct PreviewRequest {
 
 enum AuditCommand {
     Event(Box<AuditEvent>),
+    TrackedEvent {
+        event: Box<AuditEvent>,
+        stored: oneshot::Sender<AppResult<()>>,
+    },
     Flush {
         session_id: String,
         reply: oneshot::Sender<AppResult<()>>,
@@ -132,6 +148,20 @@ impl AuditWorker {
             .send(AuditCommand::Event(Box::new(event)))
             .await
             .map_err(|_| AppError::Internal("audit worker has shut down".to_string()))
+    }
+
+    /// Admits the parent with the same backpressure as `submit`. Its returned
+    /// acknowledgement gates child rows without waiting for preview capture.
+    pub async fn submit_tracked(&self, event: AuditEvent) -> AppResult<RowStored> {
+        let (stored, result) = oneshot::channel();
+        self.sender
+            .send(AuditCommand::TrackedEvent {
+                event: Box::new(event),
+                stored,
+            })
+            .await
+            .map_err(|_| AppError::Internal("audit worker has shut down".to_string()))?;
+        Ok(RowStored(result))
     }
 
     pub async fn flush_session(&self, session_id: &str) -> AppResult<()> {
@@ -235,34 +265,11 @@ impl AuditActor {
     ) {
         match command {
             AuditCommand::Event(event) => {
-                let event = *event;
-                let session_id = event.input.session_id.clone();
-                let dispatch_id = event.input.dispatch_id.clone();
-                match self.store.append(event.input).await {
-                    Ok(row_id) => {
-                        dirty_sessions.insert(session_id.clone());
-                        if let Some(capture) = event.preview {
-                            self.queue_preview(PreviewRequest {
-                                session_id,
-                                dispatch_id,
-                                row_id,
-                                capture,
-                            });
-                        }
-                    }
-                    Err(error) => {
-                        warn!(
-                            error = %error,
-                            dispatch_id = %dispatch_id,
-                            "audit dispatch append failed"
-                        );
-                        self.sessions
-                            .entry(session_id)
-                            .or_default()
-                            .errors
-                            .push(error.to_string());
-                    }
-                }
+                self.append_event(*event, None, dirty_sessions).await;
+            }
+            AuditCommand::TrackedEvent { event, stored } => {
+                self.append_event(*event, Some(stored), dirty_sessions)
+                    .await;
             }
             AuditCommand::Flush { session_id, reply } => {
                 self.sessions
@@ -279,6 +286,49 @@ impl AuditActor {
                     let _ = reply.send(Err(AppError::Internal(
                         "audit worker shutdown already requested".to_string(),
                     )));
+                }
+            }
+        }
+    }
+
+    async fn append_event(
+        &mut self,
+        event: AuditEvent,
+        stored: Option<oneshot::Sender<AppResult<()>>>,
+        dirty_sessions: &mut HashSet<String>,
+    ) {
+        let session_id = event.input.session_id.clone();
+        let dispatch_id = event.input.dispatch_id.clone();
+        match self.store.append(event.input).await {
+            Ok(row_id) => {
+                // The row is durable before either its children or its picture
+                // may proceed. Preview congestion must not hold this acknowledgement.
+                if let Some(stored) = stored {
+                    let _ = stored.send(Ok(()));
+                }
+                dirty_sessions.insert(session_id.clone());
+                if let Some(capture) = event.preview {
+                    self.queue_preview(PreviewRequest {
+                        session_id,
+                        dispatch_id,
+                        row_id,
+                        capture,
+                    });
+                }
+            }
+            Err(error) => {
+                warn!(
+                    error = %error,
+                    dispatch_id = %dispatch_id,
+                    "audit dispatch append failed"
+                );
+                self.sessions
+                    .entry(session_id)
+                    .or_default()
+                    .errors
+                    .push(error.to_string());
+                if let Some(stored) = stored {
+                    let _ = stored.send(Err(error));
                 }
             }
         }
@@ -440,10 +490,16 @@ mod tests {
         time::{Duration, timeout},
     };
 
+    struct StoredDispatch {
+        tool_name: String,
+        dispatch_id: DispatchId,
+        parent_dispatch_id: Option<DispatchId>,
+    }
+
     struct TestStore {
         append_permits: Semaphore,
         append_started: Notify,
-        rows: StdMutex<Vec<(String, String)>>,
+        rows: StdMutex<Vec<StoredDispatch>>,
         markers: StdMutex<Vec<i64>>,
         refreshes: AtomicUsize,
         next_row_id: AtomicI64,
@@ -470,7 +526,7 @@ mod tests {
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .iter()
-                .map(|(_, tool)| tool.clone())
+                .map(|row| row.tool_name.clone())
                 .collect()
         }
     }
@@ -490,7 +546,11 @@ mod tests {
                 self.rows
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner())
-                    .push((input.session_id, input.tool_name));
+                    .push(StoredDispatch {
+                        tool_name: input.tool_name,
+                        dispatch_id: input.dispatch_id,
+                        parent_dispatch_id: input.parent_dispatch_id,
+                    });
                 Ok(self.next_row_id.fetch_add(1, Ordering::SeqCst))
             })
         }
@@ -729,6 +789,119 @@ mod tests {
             store.refreshes.load(Ordering::SeqCst) <= 2,
             "the first blocked event and one ready batch need at most two projections"
         );
+        worker.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tracked_parent_error_does_not_poison_a_later_row_acknowledgement() -> anyhow::Result<()>
+    {
+        let store = TestStore::new(3, Some("failed-parent"));
+        let worker = AuditWorker::start(store.clone(), 4, 2);
+        let failed = worker.submit_tracked(event("s1", "failed-parent")).await?;
+        let Err(error) = failed.wait().await else {
+            anyhow::bail!("the parent append must fail");
+        };
+        assert!(error.to_string().contains("failed failed-parent"));
+
+        let parent = event("s1", "later-parent");
+        let parent_id = parent.input.dispatch_id.clone();
+        worker.submit_tracked(parent).await?.wait().await?;
+        let mut child = event("s1", "later-child");
+        child.input.parent_dispatch_id = Some(parent_id);
+        worker.submit_tracked(child).await?.wait().await?;
+        assert_eq!(store.tools(), ["later-parent", "later-child"]);
+
+        let Err(error) = worker.flush_session("s1").await else {
+            anyhow::bail!("the full flush must retain the earlier append error");
+        };
+        assert!(error.to_string().contains("failed failed-parent"));
+        worker.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn dropping_a_row_waiter_keeps_its_admitted_parent() -> anyhow::Result<()> {
+        let store = TestStore::new(0, None);
+        let worker = AuditWorker::start(store.clone(), 2, 2);
+        let append_started = store.append_started.notified();
+        let stored = worker.submit_tracked(event("s1", "parent")).await?;
+        append_started.await;
+        drop(stored);
+        store.append_permits.add_permits(1);
+
+        worker.flush_session("s1").await?;
+        assert_eq!(store.tools(), ["parent"]);
+        worker.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tracked_rows_publish_every_child_while_all_picture_slots_are_busy()
+    -> anyhow::Result<()> {
+        let store = TestStore::new(9, None);
+        let previews = BlockingPreview::new();
+        let worker = AuditWorker::start(store.clone(), 16, 2);
+        let mut parents = Vec::new();
+        for session in ["s1", "s2", "s3"] {
+            let parent = preview_event(session, "parent", previews.clone());
+            let id = parent.input.dispatch_id.clone();
+            let stored = worker.submit_tracked(parent).await?;
+            parents.push((session, id, stored));
+        }
+        previews.wait_for_started(2).await;
+        assert_eq!(previews.active.load(Ordering::SeqCst), 2);
+
+        let flush_worker = worker.clone();
+        let mut full_flush = tokio::spawn(async move { flush_worker.flush_session("s3").await });
+        timeout(Duration::from_secs(3), async {
+            for (session, parent_id, stored) in parents {
+                stored.wait().await?;
+                for tool in ["first-child", "second-child"] {
+                    let mut child = event(session, tool);
+                    child.input.parent_dispatch_id = Some(parent_id.clone());
+                    worker.submit_tracked(child).await?.wait().await?;
+                }
+            }
+            Ok::<_, AppError>(())
+        })
+        .await??;
+
+        {
+            let rows = store
+                .rows
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            assert_eq!(
+                rows.len(),
+                9,
+                "all three parents and six children must be stored"
+            );
+            for (child_index, child) in rows.iter().enumerate() {
+                if let Some(parent_id) = &child.parent_dispatch_id {
+                    let Some(parent_index) =
+                        rows.iter().position(|row| &row.dispatch_id == parent_id)
+                    else {
+                        anyhow::bail!("every child needs its actual parent");
+                    };
+                    assert!(
+                        parent_index < child_index,
+                        "a child was stored before its parent"
+                    );
+                }
+            }
+        }
+        assert_eq!(previews.active.load(Ordering::SeqCst), 2);
+        assert_eq!(previews.started_rows().len(), 2);
+        assert!(
+            timeout(Duration::from_millis(1), &mut full_flush)
+                .await
+                .is_err(),
+            "the existing full flush must still wait for queued and active pictures"
+        );
+
+        previews.releases.add_permits(3);
+        full_flush.await??;
         worker.shutdown().await?;
         Ok(())
     }
