@@ -25,7 +25,8 @@ use crate::action::frame_projection::{self, Asker, Projection};
 use crate::action::protocol_scroll;
 use crate::action::requested_navigations::RequestedNavigations;
 use crate::op_scope::OpScope;
-use crate::page::{OpPage, frame_tree};
+use crate::page::OpPage;
+use crate::page::frame_tree::{self, FrameTree};
 use crate::private_entry::{
     BoxAsk, BoxFacts, Compared, CoverIn, EntryCode, EntryError, LookCompare, LookField,
     LookRefusal, LookRefused, LookScroll, Looked, PageSecret, PrivateAnswer, PrivateStep, Sending,
@@ -503,11 +504,13 @@ pub(crate) fn ref_target(tab: TabId, box_ref: &str) -> Option<LocatorTarget> {
 /// Ruling R63: for each of `refs`, the texts of the check's dead refs, whether the frame its
 /// world was installed in is no longer in the tab. Only what Neo knows for certain: true when the
 /// frame table recorded that frame (`FrameWorlds::frame_of`) and one whole read of the tab's frame
-/// tree, every session and out-of-process frames included, does not hold it. False otherwise: a
+/// tree, every session and out-of-process frames included, holds it in neither of two steady
+/// reads in a row (`frame_tree::read_steady`, [`decide`]). False otherwise: a
 /// ref whose world this page never installed (one from before a restart), a frame still there
 /// (its document replaced in place, Neo's world lost over it, the box gone from a live
-/// document), and a tree read that fails, is not whole or runs past the look's deadline. One read
-/// for all the refs, and none when no ref names a recorded frame.
+/// document), and a tree read that fails, is not whole, saw a frame move process, or runs past
+/// the look's deadline. Two reads for all the refs at most, and none when no ref names a recorded
+/// frame.
 ///
 /// A frame id is Chromium's own, kept by a frame across its navigations and reloads, so it
 /// leaves the tree only with the frame: removed by its page, or with a parent document that was
@@ -528,17 +531,49 @@ pub(crate) async fn frames_gone(
         return vec![false; refs.len()];
     }
     let root = page.root_session();
-    let read = frame_tree::read_every(page.browser(), page.core_page(), &root);
-    let tree = match within(scope, read).await {
-        Ok(Ok(tree)) if tree.is_whole() => tree,
-        Ok(Ok(_) | Err(_)) | Err(_) => return vec![false; refs.len()],
+    let read = || async {
+        frame_tree::read_steady(page.browser(), page.core_page(), &root)
+            .await
+            .ok()
+            .flatten()
+            .filter(FrameTree::is_whole)
+            .map(|tree| tree.ids().cloned().collect::<Vec<_>>())
+    };
+    let first = within(scope, read()).await.ok().flatten();
+    // A second read only when the first misses a recorded frame: it alone can make one true.
+    let misses = first
+        .as_deref()
+        .is_some_and(|tree| frames.iter().flatten().any(|frame| !tree.contains(frame)));
+    let second = if misses {
+        within(scope, read()).await.ok().flatten()
+    } else {
+        None
+    };
+    decide(&frames, first.as_deref(), second.as_deref())
+}
+
+/// [`frames_gone`]'s decision from two reads in a row, each the frame ids of a whole, steady read
+/// of the tab's frame tree (`frame_tree::read_steady`), or `None` for a read that failed, was not
+/// whole, saw the out-of-process frames change around the root's tree, or ran out of time. A
+/// recorded frame is gone only when both reads were made and neither holds it. Anything else
+/// answers false for every frame.
+///
+/// The limit of what is certain: a false true needs one frame to change process twice inside
+/// each of two windows of a few milliseconds.
+fn decide(
+    frames: &[Option<FrameId>],
+    first: Option<&[FrameId]>,
+    second: Option<&[FrameId]>,
+) -> Vec<bool> {
+    let (Some(first), Some(second)) = (first, second) else {
+        return vec![false; frames.len()];
     };
     frames
         .iter()
         .map(|frame| {
             frame
                 .as_ref()
-                .is_some_and(|frame| !tree.contains(frame.as_str()))
+                .is_some_and(|frame| !first.contains(frame) && !second.contains(frame))
         })
         .collect()
 }
@@ -693,6 +728,46 @@ mod tests {
             "aria-ref=e5",
         ] {
             assert!(ref_target(TabId(7), bad).is_none(), "{bad}");
+        }
+    }
+
+    /// Ruling R63's decision from two reads in a row (`frames_gone`): gone only for a recorded
+    /// frame that two steady, whole reads both miss.
+    #[test]
+    fn tests_that_frame_gone_is_true_only_when_two_reads_agree() {
+        use browseros_core::FrameId;
+
+        use super::decide;
+
+        let frame = |id: &str| FrameId(id.to_owned());
+        let recorded = [Some(frame("card")), Some(frame("page")), None];
+        let without_card = [frame("page")];
+        let with_card = [frame("page"), frame("card")];
+        assert_eq!(
+            decide(&recorded, Some(&without_card), Some(&without_card)),
+            vec![true, false, false],
+            "both reads miss the card frame; the page frame is there; one never recorded"
+        );
+        assert_eq!(
+            decide(&recorded, Some(&without_card), Some(&with_card)),
+            vec![false; 3],
+            "the second read holds it: not gone"
+        );
+        assert_eq!(
+            decide(&recorded, Some(&with_card), Some(&without_card)),
+            vec![false; 3],
+            "the first read holds it: not gone"
+        );
+        for (first, second, case) in [
+            (
+                None,
+                Some(&without_card[..]),
+                "the first read was not a steady whole read",
+            ),
+            (Some(&without_card[..]), None, "the second read was not one"),
+            (None, None, "neither"),
+        ] {
+            assert_eq!(decide(&recorded, first, second), vec![false; 3], "{case}");
         }
     }
 }
