@@ -53,15 +53,18 @@ class Proof:
         if not ok:
             raise AssertionError(name)
 
-    def settings(self, idle=300, retention=3600):
+    def settings(self, idle=300, retention=3600, file_report=None):
         reply = host(SOCKET, str(TOKEN), '/v1/settings')
         settings = reply.get('body', {}).get('settings', {})
         trace = settings.get('trace', {})
+        observed_file = reply.get('body', {}).get('file')
+        expected_file = file_report or {'state': 'applied', 'unknown': [], 'unknownValues': [], 'invalid': []}
         self.check(f'loaded settings idle={idle} retention={retention}',
                    reply.get('status') == 200 and
                    settings.get('tabs', {}).get('idleCloseSeconds') == idle and
                    trace.get('values') == 'off' and trace.get('screenshots') == 'off' and
-                   trace.get('retentionSeconds') == retention)
+                   trace.get('retentionSeconds') == retention and observed_file == expected_file,
+                   file=observed_file, expectedFile=expected_file)
 
     def ownership(self):
         neo = pwd.getpwnam('neo')
@@ -137,16 +140,22 @@ class Proof:
                    bool(files) and not scan(files, {'canary': canary})['canary'], files=len(files))
 
     def run(self, mode):
-        self.settings()
+        startup_file = {'state': 'partial', 'unknown': ['futureGroup'], 'unknownValues': [], 'invalid': []}
+        self.settings(file_report=startup_file)
         self.ownership()
         self.recording_off()
         if mode == 'saved':
-            for body in ['{"trace":', '{"trace":{"values":false,"screenshots":"blurred","retentionSeconds":5},"tabs":"x"}']:
+            for body, file_report in [
+                ('{"trace":', {'state': 'unreadable', 'unknown': [], 'unknownValues': [], 'invalid': []}),
+                ('{"trace":{"values":false,"screenshots":"blurred","retentionSeconds":5},"tabs":"x"}',
+                 {'state': 'partial', 'unknown': [], 'unknownValues': ['trace.screenshots'],
+                  'invalid': ['tabs', 'trace.retentionSeconds', 'trace.values']}),
+            ]:
                 # The host replaces the saved file before restarting only the server. Keep
                 # it readable by Neo so this exercises parsing, not an ownership failure.
                 self.replace_saved(body)
                 self.restart_server()
-                self.settings(1800, 604800)
+                self.settings(1800, 604800, file_report)
                 self.recording_off()
             self.replace_saved('{"tabs":{"idleCloseSeconds":300},"trace":{"values":"off","screenshots":"off","retentionSeconds":3600}}')
             TOKEN.unlink()
@@ -156,7 +165,9 @@ class Proof:
         elif mode == 'fixed':
             reply = host(SOCKET, str(TOKEN), '/v1/settings', 'PATCH', '{"tabs":{"idleCloseSeconds":600}}')
             self.check('PATCH applies idle 600', reply.get('status') == 200 and
-                       reply.get('body', {}).get('settings', {}).get('tabs', {}).get('idleCloseSeconds') == 600)
+                       reply.get('body', {}).get('settings', {}).get('tabs', {}).get('idleCloseSeconds') == 600 and
+                       'file' not in reply.get('body', {}))
+            self.settings(600, file_report=startup_file)
             self.restart_server()
             self.settings(600)
             self.ownership()

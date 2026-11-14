@@ -36,6 +36,30 @@ use tokio::io::AsyncWriteExt;
 /// The settings the host set, by name. A setting absent here is at its default.
 pub(crate) type SetValues = BTreeMap<&'static str, SettingValue>;
 
+/// The startup file's omissions, retained for this settings instance. Only names belong here,
+/// never input values or the validation rules used in logs.
+pub(crate) struct FileLoadReport {
+    pub(crate) state: FileLoadState,
+    pub(crate) unknown: Vec<String>,
+    pub(crate) unknown_values: Vec<String>,
+    pub(crate) invalid: Vec<String>,
+}
+
+/// The outcome of one startup load, before any API changes can replace the saved file.
+#[derive(Clone, Copy)]
+pub(crate) enum FileLoadState {
+    Absent,
+    Applied,
+    Partial,
+    Unreadable,
+}
+
+/// Keeps the effective startup values and the report of that same load together.
+struct SavedSettings {
+    values: SetValues,
+    report: FileLoadReport,
+}
+
 /// `tabs.scope` as a run reads it at its start ([`Settings::tabs_scope`]). With the run's task it
 /// decides what the run may reach: under `Task`, a run that carries a task sees only its task
 /// family's tabs, and a run with none sees every tab but never takes over a host's task.
@@ -83,6 +107,8 @@ struct Inner {
     /// Where a change is saved; `None` keeps changes in memory (the Node-hosted embedding,
     /// tests).
     file: Option<PathBuf>,
+    /// Written once before sharing `Inner`; later saves never rewrite the startup result.
+    file_report: Option<FileLoadReport>,
     /// What the host set. Read on every pass of every reader, written only by `change`.
     set: RwLock<SetValues>,
     /// One change at a time, from its save to its switch, so two calls cannot interleave a
@@ -109,7 +135,7 @@ impl Settings {
     /// in code rather than reading a server state folder.
     #[must_use]
     pub fn defaults(defaults: SettingsDefaults) -> Self {
-        Self::new(None, SetValues::new(), defaults)
+        Self::new(None, SetValues::new(), defaults, None)
     }
 
     /// The settings saved in `file`, which later changes are saved to. A missing file means
@@ -117,20 +143,31 @@ impl Settings {
     /// Unknown names are skipped; invalid known values use their saved-input fallback or normal
     /// default, with a warning. Good siblings still apply, and this file never prevents startup.
     pub async fn load(file: PathBuf, defaults: SettingsDefaults) -> Self {
-        let set = read_saved(&file).await;
-        Self::new(Some(file), set, defaults)
+        let SavedSettings { values, report } = read_saved(&file).await;
+        Self::new(Some(file), values, defaults, Some(report))
     }
 
-    fn new(file: Option<PathBuf>, set: SetValues, defaults: SettingsDefaults) -> Self {
+    fn new(
+        file: Option<PathBuf>,
+        set: SetValues,
+        defaults: SettingsDefaults,
+        file_report: Option<FileLoadReport>,
+    ) -> Self {
         Self {
             inner: Arc::new(Inner {
                 defaults,
                 file,
+                file_report,
                 set: RwLock::new(set),
                 changing: tokio::sync::Mutex::new(()),
                 watchers: Mutex::default(),
             }),
         }
+    }
+
+    /// The load this instance started with, shared unchanged across settings clones and saves.
+    pub(crate) fn file_report(&self) -> Option<&FileLoadReport> {
+        self.inner.file_report.as_ref()
     }
 
     /// `tabs.idleCloseSeconds`: the idle-tab janitor closes an agent's tab nobody used for this
@@ -327,19 +364,28 @@ fn value_of(set: &SetValues, setting: &Setting, defaults: &SettingsDefaults) -> 
         .unwrap_or_else(|| setting.default_value(defaults))
 }
 
-/// What the last run saved, key by key (`Settings::load`).
-async fn read_saved(file: &Path) -> SetValues {
-    let mut fallback = SetValues::new();
+/// Loads what the last run saved key by key, keeping the load's report with its fallbacks.
+async fn read_saved(file: &Path) -> SavedSettings {
+    let mut loaded = SavedSettings {
+        values: SetValues::new(),
+        report: FileLoadReport {
+            state: FileLoadState::Unreadable,
+            unknown: Vec::new(),
+            unknown_values: Vec::new(),
+            invalid: Vec::new(),
+        },
+    };
     let bytes = match fs::read(file).await {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             tracing::info!(file = %file.display(), "no saved settings; every setting is at its default");
-            return SetValues::new();
+            loaded.report.state = FileLoadState::Absent;
+            return loaded;
         }
         Err(error) => {
             tracing::error!(%error, file = %file.display(), "the saved settings cannot be read; recording switches are off, other settings use defaults");
-            saved_fallbacks("", &mut fallback);
-            return fallback;
+            saved_fallbacks("", &mut loaded.values);
+            return loaded;
         }
     };
     let saved = match serde_json::from_slice(&bytes) {
@@ -348,8 +394,8 @@ async fn read_saved(file: &Path) -> SetValues {
     };
     let Some(mut saved) = saved else {
         tracing::error!(file = %file.display(), "the saved settings are not a JSON object; recording switches are off, other settings use defaults");
-        saved_fallbacks("", &mut fallback);
-        return fallback;
+        saved_fallbacks("", &mut loaded.values);
+        return loaded;
     };
     for name in &saved.unknown {
         tracing::warn!(file = %file.display(), name, "a saved setting this build does not know is skipped");
@@ -379,7 +425,29 @@ async fn read_saved(file: &Path) -> SetValues {
         .map(|(name, value)| format!("{name}={}", Setting::json(value)))
         .collect();
     tracing::info!(file = %file.display(), applied = %applied.join(" "), "saved settings loaded");
-    saved.values
+    // Keep the report independent of the fallback values and log wording. Ordering is part
+    // of the host contract even if the request parser's traversal order changes.
+    let mut invalid: Vec<String> = saved.faults.into_iter().map(|fault| fault.name).collect();
+    saved.unknown.sort_unstable();
+    saved.unknown_values.sort_unstable();
+    invalid.sort_unstable();
+    loaded.report = FileLoadReport {
+        state: if saved.unknown.is_empty() && saved.unknown_values.is_empty() && invalid.is_empty()
+        {
+            FileLoadState::Applied
+        } else {
+            FileLoadState::Partial
+        },
+        unknown: saved.unknown,
+        unknown_values: saved
+            .unknown_values
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+        invalid,
+    };
+    loaded.values = saved.values;
+    loaded
 }
 
 /// A fault belongs to a setting or a dotted ancestor group; an empty name covers the whole

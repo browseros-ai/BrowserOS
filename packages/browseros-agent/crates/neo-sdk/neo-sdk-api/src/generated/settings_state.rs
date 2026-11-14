@@ -17,10 +17,12 @@ pub struct SettingsState {
     pub settings: Box<models::Settings>,
     #[serde(rename = "defaults")]
     pub defaults: Box<models::Settings>,
-    /// On a `PUT` or `PATCH` answer only: the names the server skipped because it does not know them, such as `tabs.idleCloseMinutes`. Empty when it knew every name.
+    #[serde(rename = "file", skip_serializing_if = "Option::is_none")]
+    pub file: Option<Box<models::SettingsFile>>,
+    /// On a `PUT` or `PATCH` answer only: the names skipped in that request because the server does not know them, such as `tabs.idleCloseMinutes`. Empty when it knew every name. The startup file's skipped names belong to `file.unknown` on `GET`.
     #[serde(rename = "unknown", skip_serializing_if = "Option::is_none")]
     pub unknown: Option<Vec<String>>,
-    /// On a `PUT` or `PATCH` answer only: the settings the server has that were sent with a name of an open list it does not have yet, such as a new `trace.screenshots` mode. Each is skipped as if it were left out (`PUT`: its default; `PATCH`: its value stays). The value is never repeated. Empty when it knew every value.
+    /// On a `PUT` or `PATCH` answer only: the settings in that request sent with a name of an open list it does not have yet, such as a new `trace.screenshots` mode. Each is skipped as if it were left out (`PUT`: its default; `PATCH`: its value stays). The value is never repeated. Empty when it knew every value. The startup file's skipped values belong to `file.unknownValues` on `GET`.
     #[serde(rename = "unknownValues", skip_serializing_if = "Option::is_none")]
     pub unknown_values: Option<Vec<String>>,
 }
@@ -30,6 +32,7 @@ impl SettingsState {
         SettingsState {
             settings: Box::new(settings),
             defaults: Box::new(defaults),
+            file: None,
             unknown: None,
             unknown_values: None,
         }
