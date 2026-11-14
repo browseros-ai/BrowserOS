@@ -1523,6 +1523,12 @@ async fn the_fill_and_the_check_say_when_a_limit_moved() -> TestResult {
             .to_string()
             .contains("\"maxLengthMoved\":false")
     );
+    let run = checked.body["runId"].as_str().ok_or("the check's runId")?;
+    let record = get(&host, &format!("/v1/runs/{run}?wait=10")).await?;
+    assert!(
+        record.body.to_string().contains("\"maxLengthMoved\":true"),
+        "the check's record holds it: {record:?}"
+    );
     Ok(())
 }
 

@@ -730,12 +730,13 @@ paths:
         first refusal a fill would meet there now (a covered box answers both). The host can
         approve the facts and send them back as `expect`, so the look at approval and the look at
         typing are one rule. `expect` is optional here: without it the look checks no origin and
-        no fact, and answers only the refusals that need no approval. It takes no value and no
-        `requestId`, types nothing, and skips the length check (it has no value); compare
-        `maxLength` with the value yourself. It takes `lockId` as the fill does, so a host whose
-        own lock blocks reads can look at its tab. Recorded as a run with one operation,
-        `host.fillCheck` (kind `protected`, a read), with no screenshot. The same host-only rules
-        as the fill.
+        no fact, and answers only the refusals that need no approval. It types nothing and takes no
+        `requestId`. A field may carry a value to compare with its box (`holds`, `contains`). It has
+        no length check, with a value too, and never refuses for a limit that moved
+        (`maxLengthMoved`): compare `maxLength` with the value yourself. It takes `lockId` as the
+        fill does, so a host whose own lock blocks reads can look at its tab. Recorded as a run with
+        one operation, `host.fillCheck` (kind `protected`, a read), with no screenshot. The same
+        host-only rules as the fill.
       parameters:
         - $ref: '#/components/parameters/TabId'
       requestBody:
@@ -2445,10 +2446,12 @@ components:
           type: array
           description: >-
             The indexes of the fields whose box had another `maxlength` than the approved one
-            (`expect.maxLength`) at the look right before Neo typed into it, the value fitting both.
-            Read there and only there: a limit that moves while its own box is typed (a number box
-            going from 22 to 17 as an Amex prefix goes in) is not listed, and the read-back decides
-            that box as for any other. Absent when there is none; never an empty list.
+            (`expect.maxLength`) at the look before that box's turn, the value fitting both: where
+            Neo did not refuse for the limit. Read there and only there: a limit that moves while
+            its own box is typed (a number box going from 22 to 17 as an Amex prefix goes in) is not
+            listed, and the read-back decides that box as for any other. A box listed there may
+            still have got no character, when its entry stopped after that look (`typed` says how
+            many). Absent when there is none; never an empty list.
           items:
             type: integer
             format: int32
