@@ -1,6 +1,8 @@
 """Behavioral checks for shared admission, transfer boundaries and snapshot provenance."""
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import redirect_stderr, redirect_stdout
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -268,14 +270,126 @@ class PoolTests(unittest.TestCase):
 
 
 class ReachabilityTests(unittest.TestCase):
+    def test_unreachable_cli_reports_once_before_preparing_or_submitting_a_job(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "key").touch()
+            (root / "known_hosts").touch()
+            config = root / "config.json"
+            config.write_text(json.dumps({"key": str(root / "key"),
+                                          "coordinator": {"host": "192.0.2.1"}}))
+            failures = [subprocess.TimeoutExpired("ssh", 5)] + [
+                        SimpleNamespace(returncode=255, stdout="", stderr=message) for message in
+                        ("ssh: connect to host 192.0.2.1 port 22: Operation timed out\n",
+                         "Connection to 192.0.2.1 port 22 timed out\n",
+                         "Connection timed out during banner exchange\n")]
+            for action in ("queue", "status", "gate"):
+                for failure in failures:
+                    with self.subTest(action=action, failure=type(failure).__name__):
+                        def connect(arguments, **options):
+                            if isinstance(failure, Exception):
+                                raise failure
+                            return failure
+
+                        error, output = io.StringIO(), io.StringIO()
+                        with patch.object(sys, "argv", ["remote", "--config", str(config), action]), \
+                                patch.object(remote.subprocess, "run", side_effect=connect) as invoke, \
+                                patch.object(remote.time, "sleep"), redirect_stderr(error), redirect_stdout(output):
+                            self.assertEqual(1, remote.main())
+                        self.assertEqual(1, invoke.call_count)
+                        self.assertEqual("ssh", invoke.call_args.args[0][0])
+                        self.assertIn("ConnectTimeout=5", invoke.call_args.args[0])
+                        self.assertEqual(5, invoke.call_args.kwargs["timeout"])
+                        self.assertEqual("", output.getvalue())
+                        self.assertEqual(1, len(error.getvalue().splitlines()))
+                        for detail in ("pool did not answer", "usual cause", "outside IPv4", "not admitted",
+                                       "curl --noproxy", "retrying will not help"):
+                            self.assertIn(detail, error.getvalue())
+                        self.assertNotIn("192.0.2.1", error.getvalue())
+
+    def test_queue_wait_and_running_lease_retries_keep_their_existing_budgets(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "key").touch()
+            (root / "known_hosts").touch()
+            client = remote.PoolClient({"key": str(root / "key"),
+                                        "coordinator": {"host": "192.0.2.1"}})
+            client.submission = submission_for()
+            host = {"name": "vm-1", "host": "192.0.2.2"}
+            elapsed, requests, observers, waits = [0], [], [], []
+            disconnected, probes = [False], [0]
+
+            def wait(seconds):
+                elapsed[0] += seconds
+
+            def transport(arguments, **options):
+                if arguments[-1] == "true":
+                    startup = arguments[-2].endswith("@192.0.2.1")
+                    self.assertIn("ConnectTimeout=5" if startup else "ConnectTimeout=30", arguments)
+                    self.assertEqual(5 if startup else 40, options["timeout"])
+                    if startup and disconnected[0]:
+                        probes[0] += 1
+                        if probes[0] == 2:
+                            wait(5)
+                            raise subprocess.TimeoutExpired(arguments, 5)
+                    return SimpleNamespace(returncode=0, stdout="", stderr="")
+                request = json.loads(options["input"])
+                requests.append(request)
+                self.assertEqual(100, options["timeout"])
+                self.assertIn("ConnectTimeout=30", arguments)
+                if request["operation"] == "status":
+                    reply = {"hosts": []}
+                elif request["operation"] == "acquire":
+                    admitted = not disconnected[0] and sum(row["operation"] == "acquire" for row in requests) == 4
+                    reply = {"host": host if admitted else None}
+                elif sum(row["operation"] == "heartbeat" for row in requests) == 1:
+                    # A running lease RPC can outlast startup's budget and lose its
+                    # reply. Its UUID-safe retry must remain available to the client.
+                    self.assertIn("ConnectTimeout=30", arguments)
+                    wait(100)
+                    raise subprocess.TimeoutExpired(arguments, 100)
+                else:
+                    reply = {"renewed": True}
+                return SimpleNamespace(returncode=0, stdout=json.dumps(reply), stderr="")
+
+            def observer(*arguments, **options):
+                child = SimpleNamespace(stdin=io.StringIO(),
+                                        wait=lambda **kwargs: waits.append(kwargs["timeout"]))
+                observers.append(child)
+                return child
+
+            error = io.StringIO()
+            with patch.object(remote.subprocess, "run", side_effect=transport), \
+                    patch.object(remote.subprocess, "Popen", side_effect=observer), \
+                    patch.object(remote.time, "sleep", side_effect=wait), \
+                    patch.object(remote.time, "monotonic", side_effect=lambda: elapsed[0]), redirect_stderr(error):
+                client.control("status")
+                with client.queue_guard("a" * 32, root):
+                    self.assertEqual(host, client.acquire("a" * 32))
+                self.assertEqual(6, elapsed[0])
+                self.assertTrue(client.control("heartbeat", "a" * 32)["renewed"])
+                disconnected[0] = True
+                with self.assertRaises(remote.PoolUnreachable):
+                    with client.queue_guard("b" * 32, root):
+                        client.acquire("b" * 32)
+            self.assertEqual(114, elapsed[0])  # 6 queued + 100 lost RPC + 1 retry + 2 queued + 5 disconnected.
+            self.assertEqual([2], waits)  # Only healthy admission joins the independent observer.
+            self.assertTrue(all(child.stdin.closed for child in observers))
+            self.assertFalse(any(row["operation"] == "withdraw" for row in requests))
+            self.assertIn("All machines busy; waiting for the next free slot.", error.getvalue())
+            self.assertNotIn("pool did not answer", error.getvalue())
+            self.assertEqual(["a" * 32, "a" * 32],
+                             [row["job"] for row in requests if row["operation"] == "heartbeat"])
+
     def test_capacity_refusal_is_not_retried_and_keeps_the_explanation(self):
         client = object.__new__(remote.PoolClient);client.submission = None;client.profile = {"coordinator": {}}
         reason = "worker-a already has two jobs: gate bbbbbbbb; image cccccccc"
         with patch.object(client, "ssh_args", return_value=["ssh"]), \
-                patch.object(remote.subprocess, "run", return_value=SimpleNamespace(stdout=json.dumps({"error": reason}), stderr=reason, returncode=2)) as run:
+                patch.object(remote.subprocess, "run", side_effect=[SimpleNamespace(stdout="", stderr="", returncode=0),
+                             SimpleNamespace(stdout=json.dumps({"error": reason}), stderr=reason, returncode=2)]) as run:
             with self.assertRaisesRegex(remote.Failure, "gate bbbbbbbb; image cccccccc"):
                 client.control("acquire", "d" * 32)
-        self.assertEqual(1, run.call_count)
+        self.assertEqual(2, run.call_count)  # One probe and one definitive refusal, without retries.
 
     def test_explicit_run_batches_keep_their_actual_job_kind(self):
         self.assertEqual("spec", remote.job_kind("run", ["bash", "-lc", "bun run test:neo-spec a; bun run test:neo-spec b"]))

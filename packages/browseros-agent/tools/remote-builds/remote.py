@@ -32,6 +32,12 @@ import time
 import uuid
 
 VERSION = "0.83.0"
+CONNECT_SECONDS = 5
+POOL_UNREACHABLE = (
+    f"pool did not answer within {CONNECT_SECONDS}s; usual cause: this machine's outside IPv4 is not admitted; "
+    "check: curl --noproxy '*' -4fsS --connect-timeout 3 --max-time 5 https://api.ipify.org; "
+    "ask the pool operator to admit it; retrying will not help until pool access is fixed"
+)
 HELPER = "/usr/local/lib/browseros-remote-builds/"
 INCLUDE = ["packages/browseros-agent", ".github/workflows/test.yml"]
 LEGACY_SUPERVISOR = ["packages/browseros/docker/neo/" + name for name in
@@ -46,6 +52,10 @@ EXCLUDE = [".git", ".internal-docs", ".llm", ".scratch", ".grove", ".agents", ".
 
 class Failure(RuntimeError):
     pass
+
+
+class PoolUnreachable(Failure):
+    """A non-mutating connection probe failed before any coordinator RPC was sent."""
 
 
 def job_kind(action: str, arguments: list[str]) -> str:
@@ -337,15 +347,29 @@ class PoolClient:
         if not self.key.is_file() or not self.known_hosts.is_file():
             raise Failure("configure a private SSH key and its adjacent pinned known_hosts file")
 
-    def ssh_args(self, host: dict, command: list[str]) -> list[str]:
+    def ssh_args(self, host: dict, command: list[str], *, connect_timeout: int = 30) -> list[str]:
         target = host.get("user", "buildrunner") + "@" + host["host"]
         args = ["ssh", "-i", str(self.key), "-p", str(host.get("port", 22)),
                 "-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes", "-o", "ForwardAgent=no",
                 "-o", "ControlMaster=no", "-o", "ControlPath=none",
                 "-o", "StrictHostKeyChecking=yes", "-o", "UserKnownHostsFile=" + str(self.known_hosts),
-                "-o", "ConnectTimeout=30", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=4",
+                "-o", f"ConnectTimeout={connect_timeout}", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=4",
                 target, shlex.join(command)]
         return args
+
+    def preflight(self) -> None:
+        """Probe without mutating slots, so any timeout is safe to report immediately."""
+        try:
+            result = subprocess.run(self.ssh_args(self.profile["coordinator"], ["true"],
+                                                 connect_timeout=CONNECT_SECONDS),
+                                    capture_output=True, text=True, timeout=CONNECT_SECONDS)
+        except subprocess.TimeoutExpired:
+            raise PoolUnreachable(POOL_UNREACHABLE) from None
+        if result.returncode:
+            if re.search(r"timed out|connection refused|no route to host|network is unreachable|"
+                         r"could not resolve hostname", result.stderr, re.IGNORECASE):
+                raise PoolUnreachable(POOL_UNREACHABLE)
+            raise Failure(" ".join(result.stderr.splitlines()) or "pool SSH preflight failed")
 
     def ssh(self, host: dict, command: list[str], **options) -> str:
         return checked(self.ssh_args(host, command), **options)
@@ -405,6 +429,10 @@ class PoolClient:
     def control(self, operation: str, job: str = "") -> dict:
         # UUID-addressed operations are idempotent. A Mac scheduling stall or lost
         # reply can be retried without reserving a second VM or releasing another job.
+        # Probe each read/admission call, including queue polling. A timeout after
+        # the real RPC starts is ambiguous and must keep its UUID-safe retries.
+        if operation in {"status", "queue", "acquire"}:
+            self.preflight()
         for attempt in range(3):
             try:
                 result = subprocess.run(self.ssh_args(self.profile["coordinator"], ["python3", HELPER + "pool.py"]),
@@ -444,8 +472,10 @@ class PoolClient:
             yield
         finally:
             watcher.stdin.close()
-            with contextlib.suppress(subprocess.TimeoutExpired):
-                watcher.wait(timeout=2)
+        # Join only after healthy admission. On error, the independent observer
+        # and ten-second expiry own withdrawal, so foreground failure stays prompt.
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            watcher.wait(timeout=2)
 
     @contextlib.contextmanager
     def lease(self, job: str):
@@ -522,6 +552,7 @@ def save_receipt(run_dir: Path, job: str, receipt: dict) -> None:
 
 def execute(profile: dict, action: str, arguments: list[str]) -> int:
     client = PoolClient(profile)
+    client.control("status")  # Check connectivity before snapshotting files or creating a queue observer.
     if action == "viewer-image":
         if arguments:
             raise Failure("viewer-image takes no arguments; it uses the local Docker architecture")
@@ -549,7 +580,6 @@ def execute(profile: dict, action: str, arguments: list[str]) -> int:
     config.write_text(json.dumps(source_policy(client.key, include)))
     config.chmod(0o600)
     host = None
-    acquiring = False
     safe = False
     process = None
     with tempfile.TemporaryDirectory(prefix="source-", dir=run_dir) as name:
@@ -573,10 +603,8 @@ def execute(profile: dict, action: str, arguments: list[str]) -> int:
         # arguments, including a literal "$PWD", retain their exact argument value.
         shell = "exec " + shlex.join(prefix) + ' "$PWD" ' + shlex.join(command)
         try:
-            acquiring = True
             with client.queue_guard(job, run_dir):
                 host = client.acquire(job)
-            acquiring = False
             (run_dir / "job.json").write_text(json.dumps({**job_metadata, "host": host}))
             print(f"Running on {host['name']}", file=sys.stderr)
             argv = [crabbox, "run", "--provider", "ssh", "--static-host", host["host"],
@@ -620,9 +648,6 @@ def execute(profile: dict, action: str, arguments: list[str]) -> int:
                     client.artifacts(finished_host, job, run_dir)
             return 130
         finally:
-            if acquiring:
-                with contextlib.suppress(Failure, OSError, subprocess.SubprocessError):
-                    client.control("withdraw", job)
             if host:
                 if safe:
                     client.control("release", job)
