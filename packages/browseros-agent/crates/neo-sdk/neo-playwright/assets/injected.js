@@ -1461,6 +1461,257 @@
     return result;
   }
 
+  // crates/neo-sdk/neo-playwright/third_party/playwright/packages/injected/src/domUtils.ts
+  var globalOptions = {};
+  function setGlobalOptions(options) {
+    globalOptions = options;
+  }
+  function isInsideScope(scope, element) {
+    while (element) {
+      if (scope.contains(element))
+        return true;
+      element = enclosingShadowHost(element);
+    }
+    return false;
+  }
+  function parentElementOrShadowHost(element) {
+    if (element.parentElement)
+      return element.parentElement;
+    if (!element.parentNode)
+      return;
+    if (element.parentNode.nodeType === 11 && element.parentNode.host)
+      return element.parentNode.host;
+  }
+  function enclosingShadowRootOrDocument(element) {
+    let node = element;
+    while (node.parentNode)
+      node = node.parentNode;
+    if (node.nodeType === 11 || node.nodeType === 9)
+      return node;
+  }
+  function enclosingShadowHost(element) {
+    while (element.parentElement)
+      element = element.parentElement;
+    return parentElementOrShadowHost(element);
+  }
+  function closestCrossShadow(element, css, scope) {
+    while (element) {
+      const closest = element.closest(css);
+      if (scope && closest !== scope && closest?.contains(scope))
+        return;
+      if (closest)
+        return closest;
+      element = enclosingShadowHost(element);
+    }
+  }
+  function getElementComputedStyle(element, pseudo) {
+    const cache = pseudo === "::before" ? cacheStyleBefore : pseudo === "::after" ? cacheStyleAfter : cacheStyle;
+    if (cache && cache.has(element))
+      return cache.get(element);
+    const style = element.ownerDocument && element.ownerDocument.defaultView ? element.ownerDocument.defaultView.getComputedStyle(element, pseudo) : undefined;
+    cache?.set(element, style);
+    return style;
+  }
+  function isElementStyleVisibilityVisible(element, style) {
+    const cached = cacheStyleVisibility?.get(element);
+    if (cached !== undefined)
+      return cached;
+    const result = computeElementStyleVisibilityVisible(element, style);
+    cacheStyleVisibility?.set(element, result);
+    return result;
+  }
+  function computeElementStyleVisibilityVisible(element, style) {
+    style = style ?? getElementComputedStyle(element);
+    if (!style)
+      return true;
+    if (!element.checkVisibility() && !isWebKitListBoxOptionVisible(element, style))
+      return false;
+    if (style.visibility !== "visible")
+      return false;
+    return true;
+  }
+  function isListBoxSelect(select) {
+    return select.multiple || select.size > 1;
+  }
+  function isWebKitListBoxOptionVisible(element, style) {
+    if (globalOptions.browserNameForWorkarounds !== "webkit" || element.nodeName !== "OPTION" || style.display === "none")
+      return false;
+    const select = element.closest("select");
+    if (!select || !isListBoxSelect(select))
+      return false;
+    for (let e = element.parentElement;e && e !== select; e = e.parentElement) {
+      if (getElementComputedStyle(e)?.display === "none")
+        return false;
+    }
+    return isElementStyleVisibilityVisible(select);
+  }
+  function computeBox(element) {
+    const style = getElementComputedStyle(element);
+    if (!style)
+      return { visible: true, inline: false };
+    const cursor = style.cursor;
+    if (style.display === "contents") {
+      for (let child = element.firstChild;child; child = child.nextSibling) {
+        if (child.nodeType === 1 && isElementVisible(child))
+          return { visible: true, inline: false, cursor };
+        if (child.nodeType === 3 && isVisibleTextNode(child))
+          return { visible: true, inline: true, cursor };
+      }
+      return { visible: false, inline: false, cursor };
+    }
+    if (!isElementStyleVisibilityVisible(element, style))
+      return { cursor, visible: false, inline: false };
+    const rect = element.getBoundingClientRect();
+    return { cursor, visible: rect.width > 0 && rect.height > 0, inline: style.display === "inline" };
+  }
+  function isElementVisible(element) {
+    return computeBox(element).visible;
+  }
+  var kTextNodeRange = Symbol("playwrightTextNodeRange");
+  function isVisibleTextNode(node) {
+    const document2 = node.ownerDocument;
+    const range = document2[kTextNodeRange] ??= document2.createRange();
+    range.selectNode(node);
+    const rect = range.getBoundingClientRect();
+    const result = rect.width > 0 && rect.height > 0;
+    range.setStart(document2, 0);
+    range.collapse(true);
+    return result;
+  }
+  function elementSafeTagName(element) {
+    const tagName = element.tagName;
+    if (typeof tagName === "string") {
+      const firstCharCode = tagName.charCodeAt(0);
+      if (firstCharCode >= 97 && firstCharCode <= 122)
+        return tagName.toUpperCase();
+      return tagName;
+    }
+    if (element instanceof HTMLFormElement)
+      return "FORM";
+    return element.tagName.toUpperCase();
+  }
+  var cacheStyle;
+  var cacheStyleBefore;
+  var cacheStyleAfter;
+  var cacheStyleVisibility;
+  var cachesCounter = 0;
+  function beginDOMCaches() {
+    ++cachesCounter;
+    cacheStyle ??= new Map;
+    cacheStyleBefore ??= new Map;
+    cacheStyleAfter ??= new Map;
+    cacheStyleVisibility ??= new Map;
+  }
+  function endDOMCaches() {
+    if (!--cachesCounter) {
+      cacheStyle = undefined;
+      cacheStyleBefore = undefined;
+      cacheStyleAfter = undefined;
+      cacheStyleVisibility = undefined;
+    }
+  }
+
+  // crates/neo-sdk/neo-playwright-js/src/probe/private-frame.ts
+  var EPSILON = 0.000001;
+  function lookFrameBox(world, iframe, point) {
+    const view = iframe.ownerDocument.defaultView;
+    if (!iframe.isConnected || !view)
+      return { kind: "detached" };
+    const looked = point ? lookHit(world, iframe, point) : undefined;
+    return {
+      kind: "frameBox",
+      origin: shiftedOrigin(view, iframe),
+      hit: looked?.hit ?? null,
+      unseen: looked?.unseen ?? false
+    };
+  }
+  function shiftedOrigin(view, iframe) {
+    for (let at = iframe;at; at = flatParent(at)) {
+      if (!onlyShifts(view.getComputedStyle(at)))
+        return null;
+    }
+    const drawn = iframe.getBoundingClientRect();
+    if (!(iframe instanceof HTMLElement) || Math.abs(drawn.width - iframe.offsetWidth) > 1 || Math.abs(drawn.height - iframe.offsetHeight) > 1)
+      return null;
+    const style = view.getComputedStyle(iframe);
+    return {
+      x: drawn.x + parseInt(style.borderLeftWidth || "", 10) + parseInt(style.paddingLeft || "", 10),
+      y: drawn.y + parseInt(style.borderTopWidth || "", 10) + parseInt(style.paddingTop || "", 10)
+    };
+  }
+  function onlyShifts(style) {
+    if (style.scale !== "none" && style.scale !== "")
+      return false;
+    if (style.rotate !== "none" && style.rotate !== "")
+      return false;
+    if (style.zoom !== "1" && style.zoom !== "" && style.zoom !== "normal")
+      return false;
+    if (style.offsetPath !== "none" && style.offsetPath !== "")
+      return false;
+    if (style.transform === "none" || style.transform === "")
+      return true;
+    let matrix;
+    try {
+      matrix = new DOMMatrixReadOnly(style.transform);
+    } catch {
+      return false;
+    }
+    const near = (value, wanted) => Math.abs(value - wanted) < EPSILON;
+    return near(matrix.m11, 1) && near(matrix.m12, 0) && near(matrix.m13, 0) && near(matrix.m14, 0) && near(matrix.m21, 0) && near(matrix.m22, 1) && near(matrix.m23, 0) && near(matrix.m24, 0) && near(matrix.m31, 0) && near(matrix.m32, 0) && near(matrix.m33, 1) && near(matrix.m34, 0) && near(matrix.m43, 0) && near(matrix.m44, 1);
+  }
+  function lookHit(world, iframe, point) {
+    const verdict = world.injected.expectHitTarget(point, iframe);
+    if (verdict === "done")
+      return { hit: verdict, unseen: false };
+    const top = topmostAt(iframe, point);
+    if (top === undefined)
+      return { hit: verdict, unseen: true };
+    if (!holds(top, iframe))
+      return { hit: verdict, unseen: false };
+    const view = iframe.ownerDocument.defaultView;
+    const through = view?.getComputedStyle(iframe).pointerEvents === "none";
+    const root = iframe.getRootNode();
+    const drawn = (root instanceof Document || root instanceof ShadowRoot) && root.elementsFromPoint(point.x, point.y).includes(iframe);
+    if (through || drawn)
+      return { hit: "done", unseen: false };
+    return { hit: verdict, unseen: true };
+  }
+  function topmostAt(iframe, point) {
+    const roots = [];
+    for (let at = iframe;at; ) {
+      const root = at.getRootNode();
+      if (root instanceof Document) {
+        roots.push(root);
+        break;
+      }
+      if (!(root instanceof ShadowRoot))
+        break;
+      roots.push(root);
+      at = root.host;
+    }
+    let top;
+    for (let index = roots.length - 1;index >= 0; index--) {
+      const inner = roots[index].elementsFromPoint(point.x, point.y)[0];
+      if (!inner)
+        break;
+      top = inner;
+      const next = roots[index - 1];
+      if (index && next instanceof ShadowRoot && inner !== next.host)
+        break;
+    }
+    return top;
+  }
+  function holds(element, iframe) {
+    for (let at = iframe;at; at = flatParent(at)) {
+      if (at === element)
+        return true;
+    }
+    return false;
+  }
+  function flatParent(element) {
+    return element.assignedSlot ?? parentElementOrShadowHost(element) ?? null;
+  }
+
   // crates/neo-sdk/neo-playwright/third_party/playwright/packages/isomorphic/ariaSnapshot.ts
   function hasPointerCursor(ariaNode) {
     return ariaNode.box.cursor === "pointer";
@@ -3009,156 +3260,6 @@
     removeNameRepeatingChild,
     unwrapSingleChildGenerics
   ];
-
-  // crates/neo-sdk/neo-playwright/third_party/playwright/packages/injected/src/domUtils.ts
-  var globalOptions = {};
-  function setGlobalOptions(options) {
-    globalOptions = options;
-  }
-  function isInsideScope(scope, element) {
-    while (element) {
-      if (scope.contains(element))
-        return true;
-      element = enclosingShadowHost(element);
-    }
-    return false;
-  }
-  function parentElementOrShadowHost(element) {
-    if (element.parentElement)
-      return element.parentElement;
-    if (!element.parentNode)
-      return;
-    if (element.parentNode.nodeType === 11 && element.parentNode.host)
-      return element.parentNode.host;
-  }
-  function enclosingShadowRootOrDocument(element) {
-    let node = element;
-    while (node.parentNode)
-      node = node.parentNode;
-    if (node.nodeType === 11 || node.nodeType === 9)
-      return node;
-  }
-  function enclosingShadowHost(element) {
-    while (element.parentElement)
-      element = element.parentElement;
-    return parentElementOrShadowHost(element);
-  }
-  function closestCrossShadow(element, css, scope) {
-    while (element) {
-      const closest = element.closest(css);
-      if (scope && closest !== scope && closest?.contains(scope))
-        return;
-      if (closest)
-        return closest;
-      element = enclosingShadowHost(element);
-    }
-  }
-  function getElementComputedStyle(element, pseudo) {
-    const cache = pseudo === "::before" ? cacheStyleBefore : pseudo === "::after" ? cacheStyleAfter : cacheStyle;
-    if (cache && cache.has(element))
-      return cache.get(element);
-    const style = element.ownerDocument && element.ownerDocument.defaultView ? element.ownerDocument.defaultView.getComputedStyle(element, pseudo) : undefined;
-    cache?.set(element, style);
-    return style;
-  }
-  function isElementStyleVisibilityVisible(element, style) {
-    const cached = cacheStyleVisibility?.get(element);
-    if (cached !== undefined)
-      return cached;
-    const result = computeElementStyleVisibilityVisible(element, style);
-    cacheStyleVisibility?.set(element, result);
-    return result;
-  }
-  function computeElementStyleVisibilityVisible(element, style) {
-    style = style ?? getElementComputedStyle(element);
-    if (!style)
-      return true;
-    if (!element.checkVisibility() && !isWebKitListBoxOptionVisible(element, style))
-      return false;
-    if (style.visibility !== "visible")
-      return false;
-    return true;
-  }
-  function isListBoxSelect(select) {
-    return select.multiple || select.size > 1;
-  }
-  function isWebKitListBoxOptionVisible(element, style) {
-    if (globalOptions.browserNameForWorkarounds !== "webkit" || element.nodeName !== "OPTION" || style.display === "none")
-      return false;
-    const select = element.closest("select");
-    if (!select || !isListBoxSelect(select))
-      return false;
-    for (let e = element.parentElement;e && e !== select; e = e.parentElement) {
-      if (getElementComputedStyle(e)?.display === "none")
-        return false;
-    }
-    return isElementStyleVisibilityVisible(select);
-  }
-  function computeBox(element) {
-    const style = getElementComputedStyle(element);
-    if (!style)
-      return { visible: true, inline: false };
-    const cursor = style.cursor;
-    if (style.display === "contents") {
-      for (let child = element.firstChild;child; child = child.nextSibling) {
-        if (child.nodeType === 1 && isElementVisible(child))
-          return { visible: true, inline: false, cursor };
-        if (child.nodeType === 3 && isVisibleTextNode(child))
-          return { visible: true, inline: true, cursor };
-      }
-      return { visible: false, inline: false, cursor };
-    }
-    if (!isElementStyleVisibilityVisible(element, style))
-      return { cursor, visible: false, inline: false };
-    const rect = element.getBoundingClientRect();
-    return { cursor, visible: rect.width > 0 && rect.height > 0, inline: style.display === "inline" };
-  }
-  function isElementVisible(element) {
-    return computeBox(element).visible;
-  }
-  var kTextNodeRange = Symbol("playwrightTextNodeRange");
-  function isVisibleTextNode(node) {
-    const document2 = node.ownerDocument;
-    const range = document2[kTextNodeRange] ??= document2.createRange();
-    range.selectNode(node);
-    const rect = range.getBoundingClientRect();
-    const result = rect.width > 0 && rect.height > 0;
-    range.setStart(document2, 0);
-    range.collapse(true);
-    return result;
-  }
-  function elementSafeTagName(element) {
-    const tagName = element.tagName;
-    if (typeof tagName === "string") {
-      const firstCharCode = tagName.charCodeAt(0);
-      if (firstCharCode >= 97 && firstCharCode <= 122)
-        return tagName.toUpperCase();
-      return tagName;
-    }
-    if (element instanceof HTMLFormElement)
-      return "FORM";
-    return element.tagName.toUpperCase();
-  }
-  var cacheStyle;
-  var cacheStyleBefore;
-  var cacheStyleAfter;
-  var cacheStyleVisibility;
-  var cachesCounter = 0;
-  function beginDOMCaches() {
-    ++cachesCounter;
-    cacheStyle ??= new Map;
-    cacheStyleBefore ??= new Map;
-    cacheStyleAfter ??= new Map;
-    cacheStyleVisibility ??= new Map;
-  }
-  function endDOMCaches() {
-    if (!--cachesCounter) {
-      cacheStyle = undefined;
-      cacheStyleBefore = undefined;
-      cacheStyleAfter = undefined;
-      cacheStyleVisibility = undefined;
-    }
-  }
 
   // crates/neo-sdk/neo-playwright/third_party/playwright/packages/injected/src/roleUtils.ts
   function hasExplicitAccessibleName(e) {
@@ -8343,6 +8444,8 @@ ${value.stack}`;
     if (found.kind !== "one")
       return found;
     const iframe = found.element;
+    if (request.look)
+      return lookFrameBox(world, iframe, request.point);
     const style = world.injected.describeIFrameStyle(iframe);
     if (style === "error:notconnected")
       return { kind: "detached" };
@@ -8350,7 +8453,8 @@ ${value.stack}`;
     return {
       kind: "frameBox",
       origin: style === "transformed" ? null : { x: box.x + style.left, y: box.y + style.top },
-      hit: request.point ? world.injected.expectHitTarget(request.point, iframe) : null
+      hit: request.point ? world.injected.expectHitTarget(request.point, iframe) : null,
+      unseen: false
     };
   }
   function scroll(element, plan) {
@@ -9505,7 +9609,7 @@ ${value.stack}`;
   }
 
   // crates/neo-sdk/neo-playwright-js/src/probe/protocol.ts
-  var PROTOCOL = 39;
+  var PROTOCOL = 40;
 
   // crates/neo-sdk/neo-playwright-js/src/probe/read.ts
   var XHTML = "http://www.w3.org/1999/xhtml";
@@ -9532,6 +9636,8 @@ ${value.stack}`;
         return (world, element) => world.injected.elementState(element, read.state, frameVisible).matches;
       case "boundingBox":
         return (_world, element) => borderBox(element);
+      case "viewCentre":
+        return (_world, element) => viewCentre(element);
       case "frameOrigin":
         return (_world, element) => frameOrigin(element);
       case "located":
@@ -9577,6 +9683,17 @@ ${value.stack}`;
       return null;
     const { x, y, width, height } = element.getBoundingClientRect();
     return { x, y, width, height };
+  }
+  function viewCentre(element) {
+    const box = borderBox(element);
+    if (!box)
+      return null;
+    const x = box.x + box.width / 2;
+    const y = box.y + box.height / 2;
+    const view = element.ownerDocument.defaultView;
+    if (!view || x < 0 || y < 0 || x >= view.innerWidth || y >= view.innerHeight)
+      return null;
+    return { x, y };
   }
   function frameOrigin(element) {
     if (frameSource(element) === undefined)

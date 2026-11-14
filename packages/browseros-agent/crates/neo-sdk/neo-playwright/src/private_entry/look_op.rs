@@ -19,14 +19,18 @@ use futures_util::future::{self, Either};
 use serde_json::{Value, json};
 use tokio::time::Instant;
 
+use crate::action::frame_projection::{self, Asker, Projection};
 use crate::action::protocol_scroll;
 use crate::action::requested_navigations::RequestedNavigations;
 use crate::op_scope::OpScope;
 use crate::page::OpPage;
 use crate::private_entry::{
-    BoxAsk, BoxFacts, EntryCode, EntryError, LookField, LookRefusal, LookRefused, Looked, Sending,
+    BoxAsk, BoxFacts, CoverIn, EntryCode, EntryError, LookField, LookRefusal, LookRefused, Looked,
+    Sending, Unread,
 };
-use crate::probe::{ParsedSelector, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget, Want};
+use crate::probe::{
+    ParsedSelector, Point, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget, Read, Want,
+};
 use crate::resolve::{self, Resolved, Resolver};
 use crate::target::{AriaRefJump, LocatorTarget, Strictness};
 use crate::world::{Pin, Place};
@@ -209,14 +213,118 @@ pub(crate) async fn look_at(
             Ok(_) => return Err(EntryCode::Internal),
             Err(failure) => return Err(failure_code(failure)),
         };
-        return Ok(found(site, pin, looked, address));
+        let above = match pages_above(scope, page, &site, pin, &looked).await? {
+            Above::Clear => None,
+            Above::Refused(code) => Some(code),
+            Above::Gone => return Ok(Look::Unfound(EntryCode::ElementDetached)),
+        };
+        return Ok(found(site, pin, looked, above, address));
     }
     Ok(Look::Unfound(EntryCode::ElementDetached))
 }
 
+/// What the pages above a box's frame say of its centre (ruling R60).
+#[derive(Debug, PartialEq, Eq)]
+enum Above {
+    /// Nothing above takes the pointer there, or there was nothing to ask: the box is in the
+    /// main frame, the page side already refused it, or it has no size and is reached by focus.
+    Clear,
+    /// `box_covered` from a page above, or `cover_unread`.
+    Refused(EntryCode),
+    /// A frame on the way down went away since the look.
+    Gone,
+}
+
+/// Asks every page above the box's frame, from the top document down, what takes the pointer
+/// at the box's centre, out-of-process frames included. The page side's look sees only the
+/// documents its frame can reach (`frameElement` stops at an origin boundary), so before this a
+/// banner in a cross-origin parent over a sign-in frame was not seen, and a host reported a
+/// password typed under one. This reuses the click's projection (`frame_projection::project`,
+/// upstream's `_checkFrameIsHitTarget`) with the look's rules (`Asker::Look`):
+///
+/// - the look first brought the box into view at once in every page (ruling R61); one out of
+///   view in its own frame is not asked above;
+/// - a parent's hit on the frame's owner element, or on what holds it, is clear; a parent that
+///   still cannot show the point (it cannot scroll there, or clips the frame away) answers
+///   `cover_unread`;
+/// - anything else the hit lands on covers, a label or a drawing included: rulings R55 and R56
+///   excuse the field's own in its own document only, since Neo cannot tell that an element of
+///   one document belongs to a field of another;
+/// - a frame that is only shifted is placed by its corner; one whose page changes its size or
+///   angle answers `cover_unread`, as does a parent that fails under the asking. Neo never
+///   guesses a point and never retries here: the sentence tells the agent what to do.
+async fn pages_above(
+    scope: &OpScope<'_>,
+    page: &OpPage<'_>,
+    site: &Resolved,
+    pin: Pin,
+    looked: &Looked,
+) -> Result<Above, EntryCode> {
+    let sized = looked.facts.as_ref().is_some_and(|facts| facts.sized);
+    if looked.refusal.is_some() || !sized || site.path().hops().is_empty() {
+        return Ok(Above::Clear);
+    }
+    // Where the look's instant scroll (ruling R61) left the box: its centre in its own frame's
+    // view, or none when that centre is outside it. A box out of view in its own frame is not
+    // asked above, as before (a payment frame's helper box far off its view): a page above would
+    // be asked at a place outside the frame, where a neighbour of the frame would read as a
+    // cover. The click's own measure is not used here: it calls a box wholly above and left of
+    // the view in view.
+    let read = ProbeRequest::Read {
+        target: ProbeTarget::Pin(pin),
+        strictness: Strictness::Strict,
+        frame_visible: site.frame_visible(),
+        read: Read::ViewCentre,
+    };
+    let centre = match within(scope, site.call(scope, page, &read)).await? {
+        Ok(ProbeReply::Read { value, .. }) => {
+            serde_json::from_value::<Option<Point>>(value.into_value())
+                .map_err(|_unreadable| EntryCode::Internal)?
+        }
+        Ok(ProbeReply::Detached) | Err(ProbeFailure::Gone(_)) => return Ok(Above::Gone),
+        Ok(_) => return Err(EntryCode::Internal),
+        Err(failure) => return Err(failure_code(failure)),
+    };
+    let Some(centre) = centre else {
+        return Ok(Above::Clear);
+    };
+    let projected = within(
+        scope,
+        frame_projection::project(scope, page, site.path(), centre, true, Asker::Look),
+    )
+    .await?;
+    above_of(projected)
+}
+
+/// The projection's answer as the look's. A frame gone on the way down is the box gone; the
+/// entry's own deadline, a closed tab and a lost browser keep their codes; any other failure
+/// under the asking leaves a page above unasked.
+fn above_of(projected: Result<Projection, PlaywrightError>) -> Result<Above, EntryCode> {
+    Ok(match projected {
+        Ok(Projection::At(_)) => Above::Clear,
+        Ok(Projection::Covered { .. }) => Above::Refused(EntryCode::BoxCovered(CoverIn::PageAbove)),
+        Ok(Projection::Transformed) => Above::Refused(EntryCode::CoverUnread(Unread::SizeOrAngle)),
+        Ok(Projection::Unseen) => Above::Refused(EntryCode::CoverUnread(Unread::OutOfView)),
+        Ok(Projection::Gone) => Above::Gone,
+        Err(error) => match playwright_code(&error) {
+            EntryCode::ElementDetached => Above::Gone,
+            code @ (EntryCode::RunTimeout
+            | EntryCode::TargetClosed
+            | EntryCode::BrowserDisconnected) => return Err(code),
+            _ => Above::Refused(EntryCode::CoverUnread(Unread::NotAsked)),
+        },
+    })
+}
+
 /// The page side's answer, with the tab's address checked in its place: right after the
-/// box's origin (step 3).
-fn found(site: Resolved, pin: Pin, looked: Looked, address: TabAddress) -> Look {
+/// box's origin (step 3), and the pages above the box's frame last.
+fn found(
+    site: Resolved,
+    pin: Pin,
+    looked: Looked,
+    above: Option<EntryCode>,
+    address: TabAddress,
+) -> Look {
     let Looked { facts, refusal } = looked;
     let Some(facts) = facts else {
         return Look::Unfound(EntryCode::NotAnInput);
@@ -232,7 +340,7 @@ fn found(site: Resolved, pin: Pin, looked: Looked, address: TabAddress) -> Look 
         }) => Some(EntryCode::WrongOrigin),
         _ if address == TabAddress::Changed => Some(EntryCode::PageChanged),
         Some(refused) => Some(code_of(&refused)),
-        None => None,
+        None => above,
     };
     Look::Found(Box::new(LookedBox {
         site,
@@ -254,7 +362,7 @@ fn code_of(refused: &LookRefused) -> EntryCode {
         },
         LookRefusal::BoxNotEditable => EntryCode::BoxNotEditable,
         LookRefusal::BoxHidden => EntryCode::BoxHidden,
-        LookRefusal::BoxCovered => EntryCode::BoxCovered,
+        LookRefusal::BoxCovered => EntryCode::BoxCovered(CoverIn::OwnDocument),
         LookRefusal::ValueTooLong => EntryCode::ValueTooLong,
     }
 }
@@ -352,8 +460,58 @@ pub(crate) fn timeout_until(deadline: Instant) -> Duration {
 #[cfg(test)]
 mod tests {
     use browseros_core::TabId;
+    use serde_json::json;
 
-    use super::ref_target;
+    use super::{Above, CoverIn, EntryCode, Unread, above_of, ref_target};
+    use crate::action::frame_projection::Projection;
+    use crate::probe::{PageText, Point};
+    use crate::{ErrorCode, PlaywrightError};
+
+    /// Ruling R60's table: what each answer of the pages above the box's frame refuses with.
+    /// Row (a), a page above that fails under the asking, has no live way to make it fail.
+    #[test]
+    fn tests_that_the_pages_above_answer_covered_unread_or_the_entrys_own_code()
+    -> Result<(), serde_json::Error> {
+        let banner: PageText = serde_json::from_value(json!("<div class=\"banner\">"))?;
+        let failed = |code| Err(PlaywrightError::new(code, "frameBox: failed".to_owned()));
+        let point = Point { x: 140.0, y: 147.0 };
+        assert_eq!(above_of(Ok(Projection::At(point))), Ok(Above::Clear));
+        assert_eq!(
+            above_of(Ok(Projection::Covered { by: banner })),
+            Ok(Above::Refused(EntryCode::BoxCovered(CoverIn::PageAbove)))
+        );
+        assert_eq!(
+            above_of(Ok(Projection::Transformed)),
+            Ok(Above::Refused(EntryCode::CoverUnread(Unread::SizeOrAngle)))
+        );
+        assert_eq!(
+            above_of(Ok(Projection::Unseen)),
+            Ok(Above::Refused(EntryCode::CoverUnread(Unread::OutOfView)))
+        );
+        assert_eq!(above_of(Ok(Projection::Gone)), Ok(Above::Gone));
+        assert_eq!(
+            above_of(failed(ErrorCode::ElementDetached)),
+            Ok(Above::Gone)
+        );
+        for unasked in [ErrorCode::Internal, ErrorCode::NotActionable] {
+            let wanted = if unasked == ErrorCode::NotActionable {
+                // A leaf that met its wait answers the entry's own deadline.
+                Err(EntryCode::RunTimeout)
+            } else {
+                Ok(Above::Refused(EntryCode::CoverUnread(Unread::NotAsked)))
+            };
+            assert_eq!(above_of(failed(unasked)), wanted, "{unasked:?}");
+        }
+        assert_eq!(
+            above_of(failed(ErrorCode::TargetClosed)),
+            Err(EntryCode::TargetClosed)
+        );
+        assert_eq!(
+            above_of(failed(ErrorCode::BrowserDisconnected)),
+            Err(EntryCode::BrowserDisconnected)
+        );
+        Ok(())
+    }
 
     #[test]
     fn tests_that_only_a_printed_or_minted_ref_names_a_box() {

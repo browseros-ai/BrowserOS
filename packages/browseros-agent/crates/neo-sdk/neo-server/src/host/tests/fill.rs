@@ -23,7 +23,7 @@ use browseros_core::TabId;
 use futures_util::future::BoxFuture;
 use neo_http::PictureVerdict;
 use neo_playwright::{
-    BoxFacts, BoxLook, Drawing, Entry, EntryCode, EntryError, EntryOutcome, EntryRequest,
+    BoxFacts, BoxLook, CoverIn, Drawing, Entry, EntryCode, EntryError, EntryOutcome, EntryRequest,
     LookRequest, OpEnv, Sending,
 };
 use neo_trace::{Delivery, Effect, RunId};
@@ -645,7 +645,7 @@ async fn the_value_is_in_no_answer_record_file_or_log_on_any_path() -> TestResul
         Script::EnterPageMoved,
         Script::Refuse {
             at: 0,
-            code: EntryCode::BoxCovered,
+            code: EntryCode::BoxCovered(CoverIn::OwnDocument),
         },
         Script::Refuse {
             at: 1,
@@ -875,7 +875,7 @@ async fn a_refusal_types_nothing_and_spends_its_request_id() -> TestResult {
     let (host, tab) = ready().await?;
     host.entry.script(Script::Refuse {
         at: 1,
-        code: EntryCode::BoxCovered,
+        code: EntryCode::BoxCovered(CoverIn::OwnDocument),
     });
     let body = canary_body(&json!({ "requestId": "card-1" }));
     let refused = fill(&host, tab, &body).await?;
@@ -1310,7 +1310,7 @@ async fn the_check_answers_facts_and_refusals_and_types_nothing() -> TestResult 
     let (host, tab) = ready().await?;
     host.entry.script(Script::Refuse {
         at: 1,
-        code: EntryCode::BoxCovered,
+        code: EntryCode::BoxCovered(CoverIn::OwnDocument),
     });
     let body = json!({ "taskId": "task-42", "fields": [
         { "ref": "e5", "expect": { "origin": "https://pay.example" } },

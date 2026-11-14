@@ -109,8 +109,13 @@ export const REQUEST_EXAMPLES: { [O in Op]: AtLeastOne<RequestOf<O>> } = {
   moves: [{ op: 'moves' }],
   disarm: [{ op: 'disarm' }],
   frameBox: [
-    { op: 'frameBox', iframe: chunk('aria-ref=#1') },
-    { op: 'frameBox', iframe: { pin: 4 }, point: { x: 40.5, y: 12 } },
+    { op: 'frameBox', iframe: chunk('aria-ref=#1'), look: false },
+    {
+      op: 'frameBox',
+      iframe: { pin: 4 },
+      point: { x: 40.5, y: 12 },
+      look: true,
+    },
   ],
   edit: [
     { op: 'edit', pin: 3, edit: { kind: 'fill', value: 'hello' } },
@@ -278,6 +283,13 @@ export const REQUEST_EXAMPLES: { [O in Op]: AtLeastOne<RequestOf<O>> } = {
       strictness: 'strict',
       frameVisible: false,
       read: { kind: 'boundingBox' },
+    },
+    {
+      op: 'read',
+      target: { pin: 3 },
+      strictness: 'strict',
+      frameVisible: true,
+      read: { kind: 'viewCentre' },
     },
     {
       op: 'read',
@@ -517,8 +529,14 @@ const REPLY_EXAMPLES: {
   ],
   moves: [{ kind: 'moves', moves: 3 }],
   frameBox: [
-    { kind: 'frameBox', origin: { x: 8, y: 120 }, hit: null },
-    { kind: 'frameBox', origin: null, hit: 'done' },
+    { kind: 'frameBox', origin: { x: 8, y: 120 }, hit: null, unseen: false },
+    { kind: 'frameBox', origin: null, hit: 'done', unseen: false },
+    {
+      kind: 'frameBox',
+      origin: { x: 8, y: 120 },
+      hit: { hitTargetDescription: '<html></html>' },
+      unseen: true,
+    },
   ],
   value: [
     { kind: 'value', value: 'Welcome' },

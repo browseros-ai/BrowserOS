@@ -156,6 +156,11 @@ pub(crate) enum ProbeRequest {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         point: Option<Point>,
+        /// Set only by the private look's cover check of a page above the box's frame (ruling
+        /// R60): a frame that is only shifted is placed by its corner, and a point that hits
+        /// nothing, or hits what holds the frame, is clear. A click keeps upstream's answer.
+        #[serde(default)]
+        look: bool,
     },
     /// `fill`, `selectOptions`, `selectText`, `focus`, `focusToType`, `blur` or
     /// `dispatchEvent` on a pin.
@@ -504,6 +509,10 @@ pub(crate) enum Read {
     Ref,
     /// The border box in the element's own frame's viewport, or null with no layout box.
     BoundingBox,
+    /// The private look's (ruling R60): the centre of the element's border box in its own
+    /// frame's viewport, or null when that centre lies outside the viewport or there is no
+    /// layout box. Pages above the frame are asked at this point, and only when it is in view.
+    ViewCentre,
     Attribute {
         name: String,
     },

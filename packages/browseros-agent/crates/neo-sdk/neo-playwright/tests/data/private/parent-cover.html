@@ -1,0 +1,116 @@
+<!doctype html><meta charset=utf-8><title>Parent cover</title>
+<style>
+  body { margin: 0; font: 15px sans-serif; }
+  #lead { height: 120px; margin: 0; padding: 8px 24px; box-sizing: border-box; }
+  .slot { margin-left: 24px; width: 360px; }
+  .slot iframe { width: 360px; height: 120px; border: 0; display: block; }
+  .banner { position: fixed; left: 0; right: 0; top: 0; height: 280px; z-index: 9;
+            background: rgba(255, 230, 120, 0.95); }
+  .aside { position: fixed; left: 0; right: 0; top: 0; height: 100px; z-index: 9;
+           background: rgba(255, 230, 120, 0.95); }
+  .backdrop { position: fixed; inset: 0; z-index: 9; background: rgba(0, 0, 0, 0.4); }
+  .dialog { position: fixed; left: 420px; top: 40px; width: 300px; height: 160px; z-index: 10;
+            background: #fff; border: 1px solid #333; }
+  .glass { position: absolute; left: 24px; top: 120px; width: 360px; height: 120px; z-index: 9;
+           pointer-events: none; background: rgba(0, 0, 200, 0.15); }
+  header { position: sticky; top: 0; height: 120px; z-index: 9; background: #eee; }
+  .gap { height: 400px; }
+  .tall { height: 1600px; }
+  .scroller { width: 420px; height: 160px; overflow: auto; border: 1px solid #999; }
+  .scroller .gap { height: 300px; }
+  .wrap { border: 6px solid #555; padding: 10px; width: fit-content; }
+  .wrap iframe { border: 4px solid #333 !important; padding: 8px !important; }
+  .stripe iframe { border: none !important; margin: 0 !important; padding: 0 !important;
+                   width: 1px !important; min-width: 100% !important; overflow: hidden !important;
+                   display: block !important; user-select: none !important;
+                   transform: translate(0px) !important; height: 120px; }
+  .scaled iframe { transform: scale(1.5); transform-origin: 0 0; }
+  .turned iframe { transform: rotate(180deg); }
+  html.smooth { scroll-behavior: smooth; }
+  .sheet { position: fixed; inset: 0; z-index: 9; background: rgba(0, 0, 0, 0.05); }
+  .far { height: 3000px; }
+  .pinned { position: fixed; left: 24px; top: 2000px; }
+  .clipped { clip-path: inset(0 0 100% 0); }
+  .inert iframe { pointer-events: none; }
+</style>
+<!-- A frame holding a private box, and what this page lays over it. A click at the box's centre
+     lands on this page's element when one covers the frame there, though nothing covers the box
+     inside its own document.
+     ?frame=   the frame's page, a full address (the test picks its origin);
+     ?cover=   banner: a banner fixed over the top of the page and the frame;
+               aside: a banner fixed above the frame, short of the box;
+               dialog: a dialog and its backdrop over the whole page;
+               glass: a tinted sheet over the frame that lets the pointer through;
+               sheet: a see-through sheet over the whole view that takes the pointer;
+               sticky: a sticky header the test scrolls the frame under, then clear of;
+               anything else: nothing.
+     ?shape=   wrapper: the frame in a bordered, padded wrapper inside a scrolled box;
+               shadow: the frame inside an open shadow root;
+               stripe: the frame styled as a payment frame commonly is (an identity transform);
+               scaled: the frame drawn half as large again;
+               turned: the frame turned upside down, the same size as it is laid out;
+               inert: the frame letting the pointer through to what holds it;
+               anything else: the frame on its own.
+     ?place=   smooth: the frame 3000 pixels down a page whose root scrolls smoothly;
+               pinned: the frame fixed far below the view, where no scroll brings it;
+               clipped: the frame clipped away by its container's clip-path, which no
+                 scroll undoes (Chromium still hit-tests a frame that overflow: clip hides);
+               anything else: near the top. -->
+<p id=lead>Sign in</p>
+<script>
+  const q = new URLSearchParams(location.search)
+  const cover = q.get('cover')
+  const shape = q.get('shape')
+  const place = q.get('place')
+  if (place === 'smooth') document.documentElement.className = 'smooth'
+  const frame = document.createElement('iframe')
+  frame.title = 'Sign-in frame'
+  frame.src = q.get('frame')
+  const slot = document.createElement('div')
+  slot.className = 'slot' + (['stripe', 'scaled', 'turned', 'inert'].includes(shape) ? ' ' + shape : '')
+    + (place === 'pinned' || place === 'clipped' ? ' ' + place : '')
+  if (shape === 'wrapper') {
+    slot.innerHTML = '<div class=scroller><div class=gap></div><div class=wrap></div><div class=gap></div></div>'
+    slot.querySelector('.wrap').appendChild(frame)
+  } else if (shape === 'shadow') {
+    const host = document.createElement('div')
+    const root = host.attachShadow({ mode: 'open' })
+    root.innerHTML = '<style>iframe { width: 360px; height: 120px; border: 0; display: block; }</style>'
+    root.appendChild(frame)
+    slot.appendChild(host)
+  } else {
+    slot.appendChild(frame)
+  }
+  if (place === 'smooth') {
+    const far = document.createElement('div')
+    far.className = 'far'
+    document.body.appendChild(far)
+  }
+  if (cover === 'sticky') {
+    const header = document.createElement('header')
+    header.textContent = 'Shop'
+    document.body.prepend(header)
+    const gap = document.createElement('div')
+    gap.className = 'gap'
+    document.body.appendChild(gap)
+  }
+  document.body.appendChild(slot)
+  const tall = document.createElement('div')
+  tall.className = 'tall'
+  document.body.appendChild(tall)
+  const lay = (className, text, role) => {
+    const element = document.createElement('div')
+    element.className = className
+    element.textContent = text
+    if (role) element.setAttribute('role', role)
+    document.body.appendChild(element)
+  }
+  if (cover === 'banner') lay('banner', 'We use cookies. Accept?')
+  if (cover === 'aside') lay('aside', 'Free delivery today')
+  if (cover === 'dialog') {
+    lay('backdrop', '')
+    lay('dialog', 'Subscribe to our letter?', 'dialog')
+  }
+  if (cover === 'glass') lay('glass', 'Card details')
+  if (cover === 'sheet') lay('sheet', 'Accept all')
+</script>

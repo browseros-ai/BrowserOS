@@ -38,10 +38,13 @@ use browseros_core::input::geometry;
 
 use fixture_server::FixtureServer;
 use live_browser::{LiveBrowser, TestPage, TestResult};
-use neo_playwright::{BoxLook, EntryError, Expect, LookField, LookRequest};
+use neo_playwright::{
+    BoxLook, CoverIn, EntryCode, EntryError, Expect, LookField, LookRequest, Unread,
+};
 use private_host::HostEnv;
 use serde_json::{Value, json};
 use tokio::time::{self, Instant};
+use url::form_urlencoded::byte_serialize;
 
 fn expecting(origin: &str) -> Expect {
     Expect {
@@ -121,7 +124,7 @@ fn code(look: &BoxLook) -> Option<&str> {
     let refusal: Option<&EntryError> = look.refusal.as_ref();
     if let Some(error) = refusal {
         assert!(
-            error.message.ends_with("Nothing was typed.") && !error.message.contains('<'),
+            error.message.contains("Nothing was typed.") && !error.message.contains('<'),
             "{error:?}"
         );
     }
@@ -218,6 +221,11 @@ const fn boxed(
     (named.0, named.1, covered)
 }
 
+/// Pages where the look refuses and main's rule typed: a cover in the page above a frame on
+/// another origin, which main's hit test never asked (ruling R60, `look_op.rs`'s
+/// `pages_above`). Main's own rule still answers not covered there, and is held to that.
+const ABOVE_MAIN: &[&str] = &["the page's overlay over a cross-site frame"];
+
 /// Fixture cases grouped by page. Fill eligibility and the look's `covered` fact must agree
 /// with the core's hit-test rule.
 const COVERED: &[CoveredPage] = &[
@@ -294,10 +302,10 @@ const COVERED: &[CoveredPage] = &[
         boxes: &[boxed(NUMBER, true)],
     },
     CoveredPage {
-        cases: "the page's overlay over a cross-site frame is not seen (kept as main)",
+        cases: "the page's overlay over a cross-site frame",
         path: "/private/covered-cardframe.html?inner=none&outer=1",
         frame_site: Site::Other,
-        boxes: &[boxed(NUMBER, false)],
+        boxes: &[boxed(NUMBER, true)],
     },
     CoveredPage {
         cases: "the page's overlay over a same-origin frame is seen",
@@ -381,7 +389,7 @@ async fn tests_that_the_look_answers_covered_cases_as_the_core_rule() -> TestRes
             }
             let own_frame = matches!(case.frame_site, Site::Other);
             let main = main_rule_blocks(&live, &page, &r#ref, own_frame).await?;
-            if main != covered {
+            if main != (covered && !ABOVE_MAIN.contains(&case.cases)) {
                 failures.push(format!(
                     "{}: {name}: main's own rule says covered={main}",
                     case.cases
@@ -1031,4 +1039,400 @@ async fn tests_that_a_box_below_the_fold_of_a_smooth_page_is_looked_at_in_view()
     }
     assert!(failures.is_empty(), "{failures:#?}");
     Ok(())
+}
+
+/// Where one frame of ruling R60's pages comes from, on the way down from the top page, which is
+/// always on `127.0.0.1` at the first server's port.
+#[derive(Clone, Copy, Debug)]
+enum Host {
+    /// The top page's own origin.
+    Page,
+    /// The second server's port on the same name: another origin of the same site, so the frame
+    /// shares the page's process and still cannot reach the element that holds it (the shape a
+    /// host reported: a site's page framing its sign-in subdomain).
+    SameSite,
+    /// `localhost`: another site, in a process of its own.
+    OtherSite,
+    /// `[::1]`: a third site.
+    ThirdSite,
+}
+
+/// The servers ruling R60's pages need: the first for the top page and the other sites, the
+/// second for a frame on the top page's site but not its origin.
+struct Sites {
+    first: FixtureServer,
+    second: FixtureServer,
+}
+
+impl Sites {
+    async fn start() -> TestResult<Self> {
+        Ok(Self {
+            first: FixtureServer::start(private_host::pages()).await?,
+            second: FixtureServer::start(private_host::pages()).await?,
+        })
+    }
+
+    fn url(&self, host: Host, path: &str) -> String {
+        match host {
+            Host::Page => self.first.url("127.0.0.1", path),
+            Host::SameSite => self.second.url("127.0.0.1", path),
+            Host::OtherSite => self.first.url("localhost", path),
+            Host::ThirdSite => self.first.url("[::1]", path),
+        }
+    }
+
+    fn origin(&self, host: Host) -> String {
+        self.url(host, "/").trim_end_matches('/').to_owned()
+    }
+
+    /// The top page with `query` (what it lays over the frame, and the frame's shape) over
+    /// `frames`, outermost first, the innermost loading `inner`.
+    fn page(&self, query: &str, frames: &[Host], inner: &str) -> String {
+        let encoded = |url: &str| byte_serialize(url.as_bytes()).collect();
+        let Some((last, middle)) = frames.split_last() else {
+            return self.url(Host::Page, inner);
+        };
+        let mut url = self.url(*last, inner);
+        for host in middle.iter().rev() {
+            let frame: String = encoded(&url);
+            url = self.url(
+                *host,
+                &format!("/private/parent-cover-middle.html?frame={frame}"),
+            );
+        }
+        let frame: String = encoded(&url);
+        self.url(
+            Host::Page,
+            &format!("/private/parent-cover.html?{query}&frame={frame}"),
+        )
+    }
+}
+
+const BOX_PAGE: &str = "/private/parent-cover-box.html";
+
+/// The refusal's sentence, which tells a page above's cover from the box's own.
+fn sentence(look: &BoxLook) -> Option<&str> {
+    look.refusal.as_ref().map(|error| error.message.as_str())
+}
+const ABOVE_COVERED: Option<EntryCode> = Some(EntryCode::BoxCovered(CoverIn::PageAbove));
+
+/// One of ruling R60's pages, and the look's answer there by one insertion and key by key.
+struct AbovePage {
+    case: &'static str,
+    /// `parent-cover.html`'s query: what the top page lays over the frame, and its shape.
+    query: &'static str,
+    frames: &'static [Host],
+    inner: &'static str,
+    name: &'static str,
+    inserted: Option<EntryCode>,
+    keyed: Option<EntryCode>,
+}
+
+const fn above(
+    case: &'static str,
+    query: &'static str,
+    frames: &'static [Host],
+    wanted: Option<EntryCode>,
+) -> AbovePage {
+    AbovePage {
+        case,
+        query,
+        frames,
+        inner: BOX_PAGE,
+        name: "Password",
+        inserted: wanted,
+        keyed: wanted,
+    }
+}
+
+/// Ruling R60's rows 1 to 5, 7 and 8, and the keeper's two from real pages. Each refusal fails
+/// with the pages above left unasked (`pages_above` answering `Clear`); each typed row fails
+/// with a parent's hit on what holds the frame, or no hit at all, counted as a cover.
+const ABOVE: &[AbovePage] = &[
+    above(
+        "a banner above a frame on another origin of the same site",
+        "cover=banner",
+        &[Host::SameSite],
+        ABOVE_COVERED,
+    ),
+    above(
+        "a banner above a cross-site frame",
+        "cover=banner",
+        &[Host::OtherSite],
+        ABOVE_COVERED,
+    ),
+    above(
+        "a dialog and its backdrop above a same-site frame",
+        "cover=dialog",
+        &[Host::SameSite],
+        ABOVE_COVERED,
+    ),
+    above(
+        "a dialog and its backdrop above a cross-site frame",
+        "cover=dialog",
+        &[Host::OtherSite],
+        ABOVE_COVERED,
+    ),
+    above(
+        "a grandparent's banner, both frame boundaries cross-site",
+        "cover=banner",
+        &[Host::OtherSite, Host::ThirdSite],
+        ABOVE_COVERED,
+    ),
+    above(
+        "a grandparent's banner over a same-origin parent the page side reaches",
+        "cover=banner",
+        &[Host::OtherSite, Host::OtherSite],
+        ABOVE_COVERED,
+    ),
+    above(
+        "a banner above a payment frame with an identity transform",
+        "cover=banner&shape=stripe",
+        &[Host::OtherSite],
+        ABOVE_COVERED,
+    ),
+    above(
+        "a sheet over a smooth-scrolling page, its same-site frame far below the fold",
+        "cover=sheet&place=smooth",
+        &[Host::SameSite],
+        ABOVE_COVERED,
+    ),
+    above(
+        "a sheet over a smooth-scrolling page, its cross-site frame far below the fold",
+        "cover=sheet&place=smooth",
+        &[Host::OtherSite],
+        ABOVE_COVERED,
+    ),
+    above(
+        "nothing over a smooth-scrolling page, its same-site frame far below the fold",
+        "cover=none&place=smooth",
+        &[Host::SameSite],
+        None,
+    ),
+    above(
+        "nothing over a smooth-scrolling page, its cross-site frame far below the fold",
+        "cover=none&place=smooth",
+        &[Host::OtherSite],
+        None,
+    ),
+    above(
+        "the frame fixed below the view, where no scroll brings it",
+        "cover=none&place=pinned",
+        &[Host::OtherSite],
+        Some(EntryCode::CoverUnread(Unread::OutOfView)),
+    ),
+    above(
+        "the frame clipped away by its container",
+        "cover=none&place=clipped",
+        &[Host::OtherSite],
+        Some(EntryCode::CoverUnread(Unread::OutOfView)),
+    ),
+    above(
+        "nothing above a same-site frame",
+        "cover=none",
+        &[Host::SameSite],
+        None,
+    ),
+    above(
+        "nothing above a cross-site frame",
+        "cover=none",
+        &[Host::OtherSite],
+        None,
+    ),
+    above(
+        "a tinted sheet above the frame that lets the pointer through",
+        "cover=glass",
+        &[Host::OtherSite],
+        None,
+    ),
+    above(
+        "a banner above the frame that stops short of the box",
+        "cover=aside",
+        &[Host::OtherSite],
+        None,
+    ),
+    above(
+        "the frame in a bordered, padded wrapper inside a scrolled box",
+        "cover=none&shape=wrapper",
+        &[Host::OtherSite],
+        None,
+    ),
+    above(
+        "the frame's owner inside an open shadow root",
+        "cover=none&shape=shadow",
+        &[Host::OtherSite],
+        None,
+    ),
+    above(
+        "a payment frame with an identity transform",
+        "cover=none&shape=stripe",
+        &[Host::OtherSite],
+        None,
+    ),
+    AbovePage {
+        inner: "/private/parent-cover-box.html?away=1",
+        ..above(
+            "a box far off its own frame's viewport, as payment frames lay a helper box",
+            "cover=none",
+            &[Host::OtherSite],
+            None,
+        )
+    },
+    above(
+        "a frame the page draws half as large again",
+        "cover=none&shape=scaled",
+        &[Host::OtherSite],
+        Some(EntryCode::CoverUnread(Unread::SizeOrAngle)),
+    ),
+    above(
+        "a frame the page turns upside down, drawn at its own size",
+        "cover=none&shape=turned",
+        &[Host::OtherSite],
+        Some(EntryCode::CoverUnread(Unread::SizeOrAngle)),
+    ),
+    above(
+        "a frame that lets the pointer through to what holds it",
+        "cover=none&shape=inert",
+        &[Host::OtherSite],
+        None,
+    ),
+    // Row 8: rulings R55 and R56 under a clear parent, in the shape a sign-in was built for.
+    AbovePage {
+        inner: "/private/drawn-code.html",
+        name: "Code",
+        inserted: Some(EntryCode::BoxCovered(CoverIn::OwnDocument)),
+        ..above(
+            "the code field's own drawing in a same-site frame, nothing above",
+            "cover=none",
+            &[Host::SameSite],
+            None,
+        )
+    },
+];
+
+/// Ruling R60: a cover in any page above the box's frame refuses, as one in the box's own
+/// document does, with its own sentence; what holds the frame, and a point outside a page's
+/// viewport, are no cover; a frame scaled or turned answers `cover_unread`. A look never marks
+/// itself sent.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_cover_in_a_page_above_the_frame_refuses() -> TestResult {
+    let sites = Sites::start().await?;
+    let live = LiveBrowser::connect().await?;
+    let mut failures = Vec::new();
+    for case in ABOVE {
+        let Some(&inner) = case.frames.last() else {
+            continue;
+        };
+        let page = live
+            .open(&sites.page(case.query, case.frames, case.inner))
+            .await?;
+        let r#ref = private_host::ref_of(&live, &page, "textbox", case.name).await?;
+        let env = HostEnv::new(&live);
+        let origin = sites.origin(inner);
+        for (keys, wanted) in [(false, case.inserted), (true, case.keyed)] {
+            let ask = LookField {
+                keys,
+                ..field(&r#ref, Some(expecting(&origin)))
+            };
+            let answer = look_one(&live, &env, &page, ask).await?;
+            let answered = code(&answer);
+            if answered != wanted.map(EntryCode::as_str) {
+                failures.push(format!(
+                    "{}, keys {keys}: {answered:?} {:?}",
+                    case.case,
+                    sentence(&answer)
+                ));
+            }
+            // Each code's own sentence: a page above's cover is not told as the box's own.
+            if let (Some(error), Some(wanted)) = (answer.refusal.as_ref(), wanted)
+                && error.message != wanted.message()
+            {
+                failures.push(format!("{}: the sentence {:?}", case.case, error.message));
+            }
+            if answer.facts.is_none() {
+                failures.push(format!("{}: no facts", case.case));
+            }
+        }
+        assert!(!env.was_sent(), "a look never marks itself sent");
+        live.close(&page).await?;
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+    Ok(())
+}
+
+/// Ruling R60's same-site frame is the shape a host reported: the frame shares the top page's
+/// process, so the browser gives it no target of its own, and it still cannot reach the element
+/// that holds it, so the page side's look never asks the top page. Rust's question does.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_same_site_frame_shares_the_pages_process_and_reaches_no_holder() -> TestResult
+{
+    let sites = Sites::start().await?;
+    let live = LiveBrowser::connect().await?;
+    for (host, own_target) in [(Host::SameSite, false), (Host::OtherSite, true)] {
+        let inner = sites.url(host, BOX_PAGE);
+        let page = live
+            .open(&sites.page("cover=banner", &[host], BOX_PAGE))
+            .await?;
+        let r#ref = private_host::ref_of(&live, &page, "textbox", "Password").await?;
+        private_host::ref_of(&live, &page, "button", "No frame element").await?;
+        let targets = live
+            .browser
+            .cdp("Target.getTargets", json!({}), None)
+            .await?;
+        let listed = targets
+            .get("targetInfos")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .any(|info| {
+                info.get("type").and_then(Value::as_str) == Some("iframe")
+                    && info.get("url").and_then(Value::as_str) == Some(inner.as_str())
+            });
+        assert_eq!(listed, own_target, "{host:?}: the frame's own target");
+        let env = HostEnv::new(&live);
+        let answer = look_one(
+            &live,
+            &env,
+            &page,
+            field(&r#ref, Some(expecting(&sites.origin(host)))),
+        )
+        .await?;
+        assert_eq!(
+            sentence(&answer),
+            ABOVE_COVERED.map(EntryCode::message),
+            "{host:?}"
+        );
+        live.close(&page).await?;
+    }
+    Ok(())
+}
+
+/// Ruling R60's row 6: a sticky header of the top page over a cross-site frame's box refuses,
+/// and once the page is scrolled so the frame clears the header, the same box passes. Neo
+/// scrolls nothing for it: the box is in view both times.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_box_under_a_sticky_header_above_its_frame_passes_once_clear() -> TestResult {
+    let sites = Sites::start().await?;
+    let live = LiveBrowser::connect().await?;
+    let page = live
+        .open(&sites.page("cover=sticky", &[Host::OtherSite], BOX_PAGE))
+        .await?;
+    let r#ref = private_host::ref_of(&live, &page, "textbox", "Password").await?;
+    let origin = sites.origin(Host::OtherSite);
+    // The frame starts 640 pixels down the page, under a sticky header 120 pixels tall.
+    for (scroll, wanted) in [(620, ABOVE_COVERED), (400, None)] {
+        live.main_world(&page, &format!("scrollTo(0, {scroll})"))
+            .await?;
+        let env = HostEnv::new(&live);
+        let answer = look_one(&live, &env, &page, field(&r#ref, Some(expecting(&origin)))).await?;
+        assert_eq!(
+            sentence(&answer),
+            wanted.map(EntryCode::message),
+            "scrolled to {scroll}"
+        );
+    }
+    live.close(&page).await
 }

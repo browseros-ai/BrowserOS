@@ -93,6 +93,35 @@ impl BoxFact {
     }
 }
 
+/// Where a look found what takes the pointer at a box's centre (`box_covered`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CoverIn {
+    /// The box's own document: main's covered rule, with the field's own label and drawing
+    /// excused (rulings R55 and R56).
+    OwnDocument,
+    /// A page above the box's frame (ruling R60): its hit test at the box's centre lands on
+    /// something other than the frame's owner element or what holds it. Nothing is excused
+    /// there, since Neo cannot tell that an element of one document belongs to a field of
+    /// another.
+    PageAbove,
+}
+
+/// Why a look could not ask a page above the box's frame what takes the pointer there
+/// (`cover_unread`, ruling R60). Nothing is typed: an unasked page counts as covered, under a
+/// code of its own so that a host can tell it from a real cover.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Unread {
+    /// A page above did not answer: its world or session failed under the asking.
+    NotAsked,
+    /// After the box was brought into view at once, a page above still cannot show its place:
+    /// the page cannot scroll there, or the frame is clipped away.
+    OutOfView,
+    /// A page above changes the frame's size or angle (a scale, a rotation, a skew, a 3D
+    /// transform that is not a plain shift, the `scale` and `rotate` properties, a zoom), so
+    /// the box's centre has no single place there. Neo never guesses a point.
+    SizeOrAngle,
+}
+
 /// Every failure of a look or an entry Neo itself decides (design sections 4.4 and 15). A host
 /// policy's refusal (`owner_has_control`, `page_busy`) is not one of these: it passes through
 /// with the policy's own owner and code ([`EntryError::refused`]).
@@ -115,8 +144,11 @@ pub enum EntryCode {
     BoxNotEditable,
     /// The box does not show, or has no size and is not typed key by key.
     BoxHidden,
-    /// Something else takes the pointer at the box's centre (main's covered rule).
-    BoxCovered,
+    /// Something else takes the pointer at the box's centre, in its own document or in a page
+    /// above its frame.
+    BoxCovered(CoverIn),
+    /// A page above the box's frame could not be asked what takes the pointer at the box.
+    CoverUnread(Unread),
     /// The value is longer than the box's `maxlength` and the host did not allow a cut.
     ValueTooLong,
     /// The box did not take the focus, or the page moved it before the box's first character.
@@ -160,7 +192,8 @@ impl EntryCode {
             Self::PageChanged => "page_changed",
             Self::BoxNotEditable => "box_not_editable",
             Self::BoxHidden => "box_hidden",
-            Self::BoxCovered => "box_covered",
+            Self::BoxCovered(_) => "box_covered",
+            Self::CoverUnread(_) => "cover_unread",
             Self::ValueTooLong => "value_too_long",
             Self::NotFocused => "not_focused",
             Self::FocusLost => "focus_lost",
@@ -189,7 +222,7 @@ impl EntryCode {
             | Self::PageChanged
             | Self::BoxNotEditable
             | Self::BoxHidden
-            | Self::BoxCovered
+            | Self::BoxCovered(_)
             | Self::NotFocused
             | Self::FocusLost
             | Self::ValueNotTaken
@@ -197,9 +230,11 @@ impl EntryCode {
             | Self::ValueDrawn
             | Self::ValueStillDrawn
             | Self::PageMoved => ErrorOwner::Website,
-            Self::RunTimeout | Self::TargetClosed | Self::BrowserDisconnected | Self::Internal => {
-                ErrorOwner::Neo
-            }
+            Self::CoverUnread(_)
+            | Self::RunTimeout
+            | Self::TargetClosed
+            | Self::BrowserDisconnected
+            | Self::Internal => ErrorOwner::Neo,
         }
     }
 
@@ -216,7 +251,8 @@ impl EntryCode {
             | Self::PageChanged
             | Self::BoxNotEditable
             | Self::BoxHidden
-            | Self::BoxCovered
+            | Self::BoxCovered(_)
+            | Self::CoverUnread(_)
             | Self::ValueTooLong
             | Self::NotFocused
             | Self::BoxNotCleared
@@ -264,8 +300,27 @@ impl EntryCode {
             }
             Self::BoxNotEditable => "The box is disabled or read-only. Nothing was typed.",
             Self::BoxHidden => "The box does not show on the page. Nothing was typed.",
-            Self::BoxCovered => {
-                "Something else on the page takes the pointer at the box. Nothing was typed."
+            Self::BoxCovered(CoverIn::OwnDocument) => {
+                "Something else on the page takes the pointer at the box. Nothing was typed. \
+                 Dismiss it, or scroll until the box is clear of it, and try again."
+            }
+            Self::BoxCovered(CoverIn::PageAbove) => {
+                "Nothing was typed. Something in the page above the frame that holds this box \
+                 takes the pointer where the box is, such as a banner, a dialog or a header. \
+                 Dismiss it, or scroll until the box is clear of it, and try again."
+            }
+            Self::CoverUnread(Unread::NotAsked) => {
+                "Nothing was typed. Neo could not check whether the page above this box's frame \
+                 covers the box. Try again."
+            }
+            Self::CoverUnread(Unread::OutOfView) => {
+                "Nothing was typed. The frame that holds this box is not in view in the page \
+                 above it. Scroll the frame into view and try again."
+            }
+            Self::CoverUnread(Unread::SizeOrAngle) => {
+                "Nothing was typed. The page above this box's frame scales or rotates the frame, \
+                 so Neo could not check what covers the box. If the page is still moving, try \
+                 again."
             }
             Self::ValueTooLong => {
                 "The value is longer than the box's maxlength allows. Nothing was typed."
@@ -416,12 +471,12 @@ impl Entry {
 mod tests {
     use neo_trace::Delivery;
 
-    use super::{EntryCode, EntryError, Sending, delivery_of};
+    use super::{CoverIn, EntryCode, EntryError, Sending, delivery_of};
     use crate::Answer;
 
     #[test]
     fn tests_that_retryable_means_nothing_was_sent() {
-        let look = EntryError::of(EntryCode::BoxCovered, Sending::NotYet);
+        let look = EntryError::of(EntryCode::BoxCovered(CoverIn::OwnDocument), Sending::NotYet);
         assert!(look.retryable, "every look refusal comes before sending");
         let focus = EntryError::of(EntryCode::NotFocused, Sending::Sent);
         assert!(!focus.retryable, "the focus reached the page");
@@ -441,7 +496,7 @@ mod tests {
         assert_eq!(delivery_of(Sending::Sent, Some(&focus)), Delivery::Done);
         let lost = EntryError::of(EntryCode::FocusLost, Sending::Sent);
         assert_eq!(delivery_of(Sending::Sent, Some(&lost)), Delivery::Unknown);
-        let covered = EntryError::of(EntryCode::BoxCovered, Sending::NotYet);
+        let covered = EntryError::of(EntryCode::BoxCovered(CoverIn::OwnDocument), Sending::NotYet);
         assert_eq!(
             delivery_of(Sending::NotYet, Some(&covered)),
             Delivery::NotSent
@@ -460,7 +515,7 @@ mod tests {
             EntryCode::PageChanged,
             EntryCode::BoxNotEditable,
             EntryCode::BoxHidden,
-            EntryCode::BoxCovered,
+            EntryCode::BoxCovered(CoverIn::OwnDocument),
             EntryCode::ValueTooLong,
             EntryCode::NotFocused,
             EntryCode::FocusLost,

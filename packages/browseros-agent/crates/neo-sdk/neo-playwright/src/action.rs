@@ -63,7 +63,7 @@ mod attempt_log;
 mod element_action;
 mod focus_lease;
 mod form_action;
-mod frame_projection;
+pub(crate) mod frame_projection;
 pub(crate) mod input_files;
 mod key_action;
 mod pointer_action;

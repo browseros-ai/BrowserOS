@@ -289,8 +289,13 @@ error_codes! {
     BOX_NOT_EDITABLE = "box_not_editable";
     /// The box has a size and does not show.
     BOX_HIDDEN = "box_hidden";
-    /// Something else on the page takes the pointer at the box (main's covered rule).
+    /// Something else takes the pointer at the box: in its own document (main's covered rule),
+    /// or in any page above its frame (ruling R60).
     BOX_COVERED = "box_covered";
+    /// A page above the box's frame could not be asked what takes the pointer at the box,
+    /// cannot show the frame, or changes the frame's size or angle, so nothing was typed
+    /// (ruling R60).
+    COVER_UNREAD = "cover_unread";
     /// The value is longer than the box's `maxlength`, and the host did not accept a cut.
     VALUE_TOO_LONG = "value_too_long";
     /// The focus left the box after some characters went in.

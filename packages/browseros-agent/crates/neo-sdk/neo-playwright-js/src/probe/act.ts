@@ -21,6 +21,7 @@
  * action through.
  */
 import type { FailureOutput } from './failure-output'
+import { lookFrameBox } from './private-frame'
 import type {
   ActRequest,
   DisarmRequest,
@@ -239,7 +240,8 @@ export function disarm(
  * One parent frame of an action's element. `origin` is where the iframe's content box starts
  * in this frame's viewport (null when a transform makes it no single offset); with `point`, in
  * this frame's pixels, `hit` says whether the iframe receives events there (upstream's
- * `_checkFrameIsHitTarget`, one level).
+ * `_checkFrameIsHitTarget`, one level). With `look`, the private look's rules instead
+ * (`private-frame.ts`, ruling R60).
  */
 export function frameBox(
   world: World,
@@ -249,6 +251,7 @@ export function frameBox(
   const found = resolveTarget(world, request.iframe, 'firstMatch', root)
   if (found.kind !== 'one') return found
   const iframe = found.element
+  if (request.look) return lookFrameBox(world, iframe, request.point)
   const style = world.injected.describeIFrameStyle(iframe)
   if (style === 'error:notconnected') return { kind: 'detached' }
   const box = iframe.getBoundingClientRect()
@@ -261,6 +264,7 @@ export function frameBox(
     hit: request.point
       ? world.injected.expectHitTarget(request.point, iframe)
       : null,
+    unseen: false,
   }
 }
 

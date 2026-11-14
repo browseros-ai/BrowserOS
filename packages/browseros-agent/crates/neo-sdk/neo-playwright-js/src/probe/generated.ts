@@ -373,7 +373,13 @@ retired?: FrameSeq, } | { "kind": "none", staleRef?: string, } | { "kind": "stri
 /**
  * The original element's border width plus explicit position, not a retarget's rect.
  */
-borderOffset?: Point, resolved?: Resolution, } | { "kind": "covered", by: string, } | { "kind": "armed", rect: Rect, point: Point, token: number, } | { "kind": "verdict", hit: Hit, } | { "kind": "moves", moves: number, } | { "kind": "frameBox", origin: Point | null, hit: Hit | null, } | { "kind": "value", value: PageText, } | { "kind": "notFocused", holder?: string, } | { "kind": "read", value: PageText, resolved?: Resolution, } | { "kind": "values", count: number, values: Array<PageText>, } | { "kind": "selector", selector: string, } | { "kind": "snapshot", json: import('../../../neo-playwright/third_party/playwright/packages/isomorphic/ariaSnapshot').AriaSnapshotJSON, iframes: Array<SnapshotIframe>, 
+borderOffset?: Point, resolved?: Resolution, } | { "kind": "covered", by: string, } | { "kind": "armed", rect: Rect, point: Point, token: number, } | { "kind": "verdict", hit: Hit, } | { "kind": "moves", moves: number, } | { "kind": "frameBox", origin: Point | null, hit: Hit | null, 
+/**
+ * Only for the private look (ruling R60): this page cannot show `point`, which lies
+ * outside its viewport, or where the iframe is clipped away though it takes the
+ * pointer. A click's `frameBox` always answers false.
+ */
+unseen: boolean, } | { "kind": "value", value: PageText, } | { "kind": "notFocused", holder?: string, } | { "kind": "read", value: PageText, resolved?: Resolution, } | { "kind": "values", count: number, values: Array<PageText>, } | { "kind": "selector", selector: string, } | { "kind": "snapshot", json: import('../../../neo-playwright/third_party/playwright/packages/isomorphic/ariaSnapshot').AriaSnapshotJSON, iframes: Array<SnapshotIframe>, 
 /**
  * Clickable marking threw on this page and the snapshot was taken again without it;
  * the op's call log says so.
@@ -391,7 +397,13 @@ export type ProbeRequest = { "op": "describe" } | { "op": "resolve", target: Pro
 /**
  * Every `<iframe>` on the way down is visible (the resolver's hops).
  */
-frameVisible: boolean, scroll: ScrollPlan, position?: Point, arm?: ArmPlan, } | { "op": "verdict", token: number, } | { "op": "moves" } | { "op": "disarm" } | { "op": "frameBox", iframe: ProbeTarget, point?: Point, } | { "op": "edit", pin: Pin, edit: Edit, } | { "op": "look", pin: Pin, look: BoxAsk, } | { "op": "private", pin: Pin, step: PrivateStep, } | { "op": "privateShown" } | { "op": "read", target: ProbeTarget, strictness: Strictness, frameVisible: boolean, read: Read, } | { "op": "readAll", target: ProbeTarget, read: ReadAll, } | { "op": "screenshotMask", target: ProbeTarget, color: string, } | { "op": "screenshotMaskCleanup" } | { "op": "selector", target: ProbeTarget, } | { "op": "snapshot", root: ProbeTarget, mode: SnapshotMode, 
+frameVisible: boolean, scroll: ScrollPlan, position?: Point, arm?: ArmPlan, } | { "op": "verdict", token: number, } | { "op": "moves" } | { "op": "disarm" } | { "op": "frameBox", iframe: ProbeTarget, point?: Point, 
+/**
+ * Set only by the private look's cover check of a page above the box's frame (ruling
+ * R60): a frame that is only shifted is placed by its corner, and a point that hits
+ * nothing, or hits what holds the frame, is clear. A click keeps upstream's answer.
+ */
+look: boolean, } | { "op": "edit", pin: Pin, edit: Edit, } | { "op": "look", pin: Pin, look: BoxAsk, } | { "op": "private", pin: Pin, step: PrivateStep, } | { "op": "privateShown" } | { "op": "read", target: ProbeTarget, strictness: Strictness, frameVisible: boolean, read: Read, } | { "op": "readAll", target: ProbeTarget, read: ReadAll, } | { "op": "screenshotMask", target: ProbeTarget, color: string, } | { "op": "screenshotMaskCleanup" } | { "op": "selector", target: ProbeTarget, } | { "op": "snapshot", root: ProbeTarget, mode: SnapshotMode, 
 /**
  * Any integer, as upstream passes it: a child frame's depth can come out zero or
  * negative, and the engine reads those differently from no depth.
@@ -420,7 +432,7 @@ export type QueryState = "visible" | "hidden" | "enabled" | "disabled" | "editab
 /**
  * What a `read` reads from its element.
  */
-export type Read = { "kind": "textContent" } | { "kind": "innerText" } | { "kind": "innerHtml" } | { "kind": "inputValue" } | { "kind": "ref" } | { "kind": "boundingBox" } | { "kind": "attribute", name: string, } | { "kind": "state", state: QueryState, } | { "kind": "frameOrigin" } | { "kind": "located" } | { "kind": "checkable" } | { "kind": "fileInput", multiple: boolean, directory: boolean, };
+export type Read = { "kind": "textContent" } | { "kind": "innerText" } | { "kind": "innerHtml" } | { "kind": "inputValue" } | { "kind": "ref" } | { "kind": "boundingBox" } | { "kind": "viewCentre" } | { "kind": "attribute", name: string, } | { "kind": "state", state: QueryState, } | { "kind": "frameOrigin" } | { "kind": "located" } | { "kind": "checkable" } | { "kind": "fileInput", multiple: boolean, directory: boolean, };
 
 /**
  * What a `readAll` reads from every match.
