@@ -313,10 +313,12 @@ function clickPoint(
   const width = innerWidth
   const height = innerHeight
   for (const box of boxes) {
-    const left = Math.max(box.left, 0)
-    const right = Math.min(box.right, width)
-    const top = Math.max(box.top, 0)
-    const bottom = Math.min(box.bottom, height)
+    // Clamp every corner as upstream does. Two inverted offscreen spans otherwise have
+    // positive area and admit a point outside the viewport for trusted input.
+    const left = Math.min(Math.max(box.left, 0), width)
+    const right = Math.min(Math.max(box.right, 0), width)
+    const top = Math.min(Math.max(box.top, 0), height)
+    const bottom = Math.min(Math.max(box.bottom, 0), height)
     if ((right - left) * (bottom - top) > 0.99)
       return {
         point: { x: (left + right) / 2, y: (top + bottom) / 2 },
