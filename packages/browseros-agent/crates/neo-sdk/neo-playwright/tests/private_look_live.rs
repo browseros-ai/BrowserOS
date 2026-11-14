@@ -1609,3 +1609,46 @@ async fn tests_that_a_box_larger_than_its_view_is_looked_at_by_its_centre() -> T
     assert!(failures.is_empty(), "{failures:#?}");
     Ok(())
 }
+
+/// Ruling R49's rows 9 and 10 for the look, which the host's check call makes: `expect.maxLength`
+/// of -1 means the box must have no `maxlength`. It passes a box with none and answers
+/// `box_changed`, fact `maxLength`, for a box with one, a limit of 0 included; a limit passes
+/// only its own box, 0 only a box of zero, and an absent `maxLength` is not checked. Fails with
+/// the -1 case taken out of the page side's compare: the box with a `maxlength` passes.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_max_length_minus_one_means_a_box_with_none() -> TestResult {
+    let server = FixtureServer::start(private_host::pages()).await?;
+    let live = LiveBrowser::connect().await?;
+    let (page_origin, _) = private_host::origins(&server);
+    let page = live
+        .open(&server.url("127.0.0.1", "/private/maxlength.html"))
+        .await?;
+    let changed = Some("box_changed");
+    let cases = [
+        ("Note", Some(-1), None),
+        ("Note", Some(6), changed),
+        ("Note", None, None),
+        ("Code", Some(-1), changed),
+        ("Code", Some(6), None),
+        ("Code", None, None),
+        ("Zero", Some(0), None),
+        ("Zero", Some(-1), changed),
+    ];
+    let mut failures = Vec::new();
+    for (name, max_length, wanted) in cases {
+        let r#ref = private_host::ref_of(&live, &page, "textbox", name).await?;
+        let env = HostEnv::new(&live);
+        let expect = Expect {
+            max_length,
+            ..expecting(&page_origin)
+        };
+        let answer = look_one(&live, &env, &page, field(&r#ref, Some(expect))).await?;
+        if code(&answer) != wanted {
+            failures.push(format!("{name} {max_length:?}: {:?}", code(&answer)));
+        }
+    }
+    live.close(&page).await?;
+    assert!(failures.is_empty(), "{failures:#?}");
+    Ok(())
+}

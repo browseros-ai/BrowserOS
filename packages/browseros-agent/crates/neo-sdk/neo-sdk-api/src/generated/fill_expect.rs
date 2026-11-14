@@ -22,6 +22,7 @@ pub struct FillExpect {
     pub r#type: Option<String>,
     #[serde(rename = "autocomplete", skip_serializing_if = "Option::is_none")]
     pub autocomplete: Option<String>,
+    /// The box's `maxlength`. Send -1 to pin that the box has none, the DOM's own word for it: the box facts leave `maxLength` out for such a box. Absent, it is not checked; 0 is a limit of zero; any other negative number is a malformed body.
     #[serde(rename = "maxLength", skip_serializing_if = "Option::is_none")]
     pub max_length: Option<i32>,
     #[serde(rename = "inputMode", skip_serializing_if = "Option::is_none")]

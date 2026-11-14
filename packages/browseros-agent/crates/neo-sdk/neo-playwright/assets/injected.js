@@ -8901,7 +8901,7 @@ ${value.stack}`;
   function changedFact(facts, expect) {
     if (expect.autocomplete !== undefined && expect.autocomplete !== facts.autocomplete)
       return "autocomplete";
-    if (expect.maxLength !== undefined && expect.maxLength !== facts.maxLength)
+    if (expect.maxLength !== undefined && expect.maxLength !== (facts.maxLength ?? -1))
       return "maxLength";
     if (expect.inputMode !== undefined && expect.inputMode !== facts.inputMode)
       return "inputMode";

@@ -1246,6 +1246,39 @@ async fn request_errors_type_nothing_and_quote_nothing() -> TestResult {
     Ok(())
 }
 
+/// Ruling R49 at the route: `expect.maxLength` takes -1 (a box with none), 0 and any limit; -2
+/// is a malformed body, refused before anything is typed, on the fill and on the check call.
+#[tokio::test]
+async fn max_length_below_minus_one_is_a_malformed_body() -> TestResult {
+    let (host, tab) = ready().await?;
+    let body = |max_length: i64| {
+        json!({ "fields": [{ "ref": "e1", "value": PASSWORD,
+            "expect": { "origin": "https://a.example", "maxLength": max_length } }] })
+    };
+    let bad = fill(&host, tab, &body(-2)).await?;
+    assert_eq!(bad.status, 400, "{bad:?}");
+    assert_eq!(bad.body["code"], "invalid_request");
+    let message = bad.body["message"].as_str().ok_or("a message")?;
+    assert!(
+        message.starts_with("body.fields[0].expect.maxLength:"),
+        "{message}"
+    );
+    assert!(host.entry.entered().is_empty());
+    let check = request(
+        &host.socket,
+        "POST",
+        &format!("/v1/tabs/{}/fill/check", tab.0),
+        Some(TOKEN),
+        Some(&json!({ "fields": [{ "ref": "e1",
+            "expect": { "origin": "https://a.example", "maxLength": -2 } }] })),
+    )
+    .await?;
+    assert_eq!(check.status, 400, "{check:?}");
+    let typed = fill(&host, tab, &body(-1)).await?;
+    assert_eq!(typed.body["outcome"], "entered", "{typed:?}");
+    Ok(())
+}
+
 /// Rulings R55 and R56 on the record: an entry whose boxes went under their fields' own drawings
 /// notes each such field on its operation's result, with whether the site drew the value there;
 /// a field with no drawing has no note. Fails with the notes left out of the result.

@@ -215,6 +215,7 @@ impl Bench {
 struct Field {
     r#ref: String,
     origin: String,
+    max_length: Option<i32>,
     cut: bool,
     spaced: bool,
     keys: bool,
@@ -225,6 +226,7 @@ impl Field {
         Self {
             r#ref: r#ref.to_owned(),
             origin: origin.to_owned(),
+            max_length: None,
             cut: false,
             spaced: false,
             keys: false,
@@ -241,6 +243,11 @@ impl Field {
         self
     }
 
+    fn max_length(mut self, max_length: i32) -> Self {
+        self.max_length = Some(max_length);
+        self
+    }
+
     fn spaced(mut self) -> Self {
         self.spaced = true;
         self
@@ -252,6 +259,7 @@ impl Field {
                 box_ref: self.r#ref,
                 expect: Expect {
                     origin: self.origin,
+                    max_length: self.max_length,
                     ..Expect::default()
                 },
                 cut: self.cut,
@@ -705,6 +713,35 @@ async fn tests_that_a_box_larger_than_its_view_is_entered_by_its_centre() -> Tes
                 bench.close(opened).await?;
             }
         }
+    }
+    Ok(())
+}
+
+/// Ruling R49's row 9 for the fill: with `expect.maxLength` of -1, a box with no `maxlength` is
+/// entered and read back, and a box with one is refused `box_changed` before any key, nothing
+/// typed. Fails with the -1 case taken out of the page side's compare.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_max_length_minus_one_fills_only_a_box_with_none() -> TestResult {
+    let bench = Bench::start().await?;
+    let origin = &bench.page_origin;
+    for (name, entered) in [("Note", true), ("Code", false)] {
+        let opened = bench.open("/private/maxlength.html", Place::Front).await?;
+        let r#ref = bench.r#ref(&opened, "textbox", name).await?;
+        let env = bench.host(&opened);
+        let field = Field::new(&r#ref, origin).max_length(-1);
+        let entry = bench
+            .enter(&env, &opened, vec![field.with("CANARY-49")?])
+            .await;
+        if entered {
+            assert_eq!(entry.outcome, EntryOutcome::Entered, "{name}: {entry:?}");
+            assert_eq!(bench.value(&opened, &r#ref).await?, "CANARY-49", "{name}");
+        } else {
+            assert_eq!(entry.outcome, EntryOutcome::Refused, "{name}: {entry:?}");
+            assert_eq!(code(&entry), Some("box_changed"), "{name}");
+            assert_eq!(bench.value(&opened, &r#ref).await?, "", "{name}");
+        }
+        bench.close(opened).await?;
     }
     Ok(())
 }

@@ -140,6 +140,7 @@ pub(crate) fn pages() -> HashMap<String, Page> {
             "smooth-login",
             include_str!("../data/private/smooth-login.html"),
         ),
+        ("maxlength", include_str!("../data/private/maxlength.html")),
         (
             "out-of-view",
             include_str!("../data/private/out-of-view.html"),
