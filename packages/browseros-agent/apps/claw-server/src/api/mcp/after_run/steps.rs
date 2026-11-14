@@ -21,6 +21,7 @@ pub(in crate::api::mcp) async fn apply(
     outcome: &RunOutcome,
     parent: &DispatchId,
 ) {
+    let began = std::time::Instant::now();
     let cancel = started.session.child_token();
     // Bound the entire projection as well as each HTTP read. A congested audit
     // queue or session shutdown must not hold a completed SDK reply indefinitely.
@@ -75,4 +76,9 @@ pub(in crate::api::mcp) async fn apply(
             }
         }
     }
+    tracing::debug!(
+        run_id = outcome.run_id,
+        elapsed_us = u64::try_from(began.elapsed().as_micros()).unwrap_or(u64::MAX),
+        "SDK run steps projection completed"
+    );
 }

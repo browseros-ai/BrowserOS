@@ -644,6 +644,63 @@ return await page.title()`,
     },
   },
   {
+    name: 'neo run: a large screenshot is an MCP image',
+    async run(ctx) {
+      const session = await ctx.openSession('neo-large-picture')
+      await waitUntil(
+        async () =>
+          !(
+            await session.callTool('run', { code: 'return await page.title()' })
+          ).isError,
+        'the SDK browser link',
+        { timeoutMs: 30_000 },
+      )
+      const result = await session.callTool('run', {
+        code: `await page.setViewportSize({width:1000,height:800});
+await page.setContent("<canvas id=c width=900 height=700></canvas><script>const g=document.querySelector('#c').getContext('2d');const d=g.createImageData(900,700);let seed=123;for(let i=0;i<d.data.length;i++){seed=(1664525*seed+1013904223)>>>0;d.data[i]=i%4===3?255:seed>>>24;}g.putImageData(d,0,0);</script>");
+return await page.screenshot({clip: {x:0,y:0,width:900,height:700}})`,
+      })
+      expectOk(result, 'large screenshot')
+      const image = result.content.find((block) => block.type === 'image')
+      assert(image, 'the SDK blob was not returned as an MCP image')
+      assert.equal(image.mimeType, 'image/png')
+      assert(typeof image.data === 'string')
+      const bytes = Buffer.from(image.data, 'base64')
+      assert(
+        bytes.length >= 700_000,
+        `expected at least 700 KB, got ${bytes.length}`,
+      )
+      assert(
+        bytes
+          .subarray(0, 8)
+          .equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])),
+      )
+      assert.equal(
+        result.structuredContent?.value,
+        `[image at content[${result.content.indexOf(image)}] (image/png)]`,
+      )
+      assert(
+        !result.content.some((block) =>
+          block.text?.includes('Blob bytes are not available'),
+        ),
+      )
+      const missing = await session.callTool('run', {
+        code: 'return {"$neo":"blob", id:"b99", size:700000}',
+      })
+      expectOk(missing, 'a missing output blob must not fail the run')
+      assert.deepEqual(missing.structuredContent?.value, {
+        $neo: 'blob',
+        id: 'b99',
+        size: 700000,
+      })
+      assert(
+        missing.content.some((block) =>
+          block.text?.includes('Blob bytes are not available'),
+        ),
+      )
+    },
+  },
+  {
     name: 'neo run: reopens one inactive Default window after all windows close',
     headless: false,
     async run(ctx) {
