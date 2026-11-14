@@ -294,6 +294,7 @@ impl App {
         let mut methods = RegistryBuilder::default();
         // One solver for the process: its paid-task budget and page reservations are its own.
         let deps = BuiltinDeps {
+            script_cdp: config.launch.script_cdp,
             solver: CaptchaSolver::new(config.captcha.clone()).map(Arc::new),
             claims: Arc::clone(&claims),
             playwright: Arc::clone(&playwright),

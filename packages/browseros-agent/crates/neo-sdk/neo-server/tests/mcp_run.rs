@@ -410,6 +410,52 @@ fn without_a_provider_key_solve_captcha_is_unlisted_and_throws_for_the_host() ->
 }
 
 #[test]
+fn without_the_launch_flag_script_cdp_is_hidden_and_fails_for_the_host() -> TestResult {
+    on_neo_runtime(async {
+        let neo = Neo::start().await?;
+        let client = neo.modern_client().await?;
+        let tools = client.list_tools(None).await?.tools;
+        let description = tools
+            .first()
+            .and_then(|tool| tool.description.as_deref())
+            .ok_or("run has a description")?;
+        assert!(
+            !description.contains("neo.cdp"),
+            "an unconfigured host must not offer raw CDP"
+        );
+        let creates = neo.fake.count("Browser.createTab");
+        let result = run(
+            &client,
+            json!({ "code": "return await neo.cdp('Browser.getWindows', { probe: 'script-cdp-off' }, { page });" }),
+            None,
+        )
+        .await?;
+        assert_eq!(result.is_error, Some(true));
+        let meta = outcome(&result)?;
+        assert_eq!(meta["error"]["code"], "cdp_unavailable");
+        assert_eq!(meta["error"]["owner"], "host");
+        assert_eq!(
+            meta["effects"], "none",
+            "a refused call never marks a write sent"
+        );
+        assert!(
+            !neo.fake.calls().iter().any(|call| {
+                call.method == "Browser.getWindows"
+                    && call.params == json!({ "probe": "script-cdp-off" })
+            }),
+            "the script's call never reaches the wire, independently of startup's window reads"
+        );
+        assert_eq!(
+            neo.fake.count("Browser.createTab"),
+            creates,
+            "a refused call must not materialize page"
+        );
+        client.cancel().await?;
+        Ok(())
+    })
+}
+
+#[test]
 fn a_malformed_call_is_refused_with_its_owner_and_still_has_an_id() -> TestResult {
     on_neo_runtime(async {
         let neo = Neo::start().await?;

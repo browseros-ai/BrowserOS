@@ -48,6 +48,7 @@ impl HostedOptions {
         // a script (the spec suite writes its results there); it is not Neo's to protect.
         env.neo_home = NeoHome::NotNeos;
         let launch = LaunchConfig {
+            script_cdp: false,
             server_port: 0,
             cdp_port: 0,
             resources_dir: PathBuf::new(),
