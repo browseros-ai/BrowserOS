@@ -9,7 +9,8 @@
 #   - the workspace's lints (`[lints] workspace = true`: neo-takeover, neo-trace, neo-http,
 #     ...): plain rustfmt, as CI's `cargo fmt --all --check` and their own `lint:rust` run it.
 # Every crate gets clippy -D warnings on all targets and its tests (except TESTS_NOT_RUN below),
-# on CI's exact toolchain. None of these tests needs a display or a browser: the live suites skip
+# on CI's exact toolchain. The SDK image's Python scripts (neo-server/docker) get their tests and
+# an import each, and the pinned ruff where uv is installed, as CI's image scripts job does. None of these tests needs a display or a browser: the live suites skip
 # themselves (`#[ignore]`, or no `CLAW_SDK_E2E_BROWSER`), as CI's `cargo test --workspace` runs
 # them. The [lints] tables and clippy.toml need nothing here, because Cargo and clippy read them
 # on every build.
@@ -137,6 +138,36 @@ if [[ "$failed" -ne 0 ]]; then
   exit 1
 fi
 echo "  ok"
+
+# The SDK image's Python scripts (neo-server/docker): nothing above builds or imports them, and
+# CI's "Neo SDK image / scripts" job checks them, so a broken one used to pass this gate and fail
+# only on GitHub. Their tests as that job runs them, then an import of every script, which fails
+# as the image would on a name a script uses before it defines it. That job's ruff is
+# packages/browseros's pinned one, through uv: it runs here when uv is installed; the remote pool
+# has none, so there the gate names the command to run by hand.
+DOCKER_DIR="crates/neo-sdk/neo-server/docker"
+step "image scripts (${DOCKER_DIR})"
+if ! python3 -c 'import sys; sys.exit(sys.version_info < (3, 10))'; then
+  echo "check.sh: the image scripts need Python 3.10 or later, as the image's 3.12 runs them; python3 here is $(python3 --version 2>&1)." >&2
+  exit 1
+fi
+(
+  cd "$DOCKER_DIR"
+  python3 -m unittest discover -s supervisor -p "*_test.py" -q
+  python3 -m unittest discover -s . -p "*_test.py" -q
+  scripts=()
+  for script in *.py; do
+    [[ "$script" == *_test.py ]] || scripts+=("${script%.py}")
+  done
+  python3 -I -c 'import importlib, sys; sys.path.insert(0, "."); [importlib.import_module(name) for name in sys.argv[1:]]' "${scripts[@]}"
+  echo "  ${#scripts[@]} scripts import"
+  if command -v uv >/dev/null 2>&1; then
+    uv run --quiet --directory "$REPO_DIR/packages/browseros" ruff check "$PWD"
+  else
+    echo "  ruff not run: no uv here. When a ${DOCKER_DIR}/*.py file changed, run it as CI does:"
+    echo "    cd packages/browseros-agent/${DOCKER_DIR} && uv run --directory ../../../../../browseros ruff check \"\$PWD\""
+  fi
+)
 
 step "clippy -D warnings"
 cargo_pinned clippy "${ALL_ARGS[@]}" --all-targets --locked -- -D warnings
