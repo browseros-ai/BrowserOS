@@ -44,7 +44,7 @@ pub fn mcp_instructions(
     let recipe_lines = recipes::instruction_lines();
     let mut paragraphs = vec![BROWSER_GUIDANCE, DESKTOP_GUIDANCE, GROUP_GUIDANCE];
     if !recipe_lines.is_empty() {
-        paragraphs.push("For what Playwright lacks, use these recipes inside run. Set named inputs from live results first; full notes also live in recipes.md beside the installed skill.\nFor neo.cdp, browser protocol errors are script / cdp_error; fix the method or parameters. A page-less call can return host / owner_has_control during human takeover; wait for hand-back and do not bypass it.\nProtected tab/window closes return script / unsupported; leave Neo's reserved blank tab and window open.");
+        paragraphs.push("For what Playwright lacks, use these recipes inside run. Set named inputs from live results first; full notes also live in recipes.md beside the installed skill.\nFor neo.cdp, browser protocol errors are script / cdp_error; fix the method or parameters. Any neo.cdp call returns host / owner_has_control while a human takeover lock is held; wait for hand-back and do not bypass it.\nProtected tab/window closes return script / unsupported; leave Neo's reserved blank tab and window open.");
         paragraphs.push(&recipe_lines);
     }
     paragraphs.extend([help, PAGE_CONTENT_GUARD]);

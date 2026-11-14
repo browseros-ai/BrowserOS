@@ -680,7 +680,7 @@ pub(crate) mod recipes {
 
     pub(crate) fn markdown() -> String {
         let mut content = String::from(
-            "# BrowserOS neo recipes\n\nRun these snippets inside MCP `run`. Set the named inputs from live browser results first. Prefer Playwright for page work.\n\nBrowser protocol errors return `script / cdp_error`; fix the method or parameters before retrying.\nCalls without a page can return `host / owner_has_control` while a human owns a tab. Wait for hand-back; do not bypass it.\nProtected tab or window closes return `script / unsupported`. Leave Neo's reserved blank tab and its window open.\n\n",
+            "# BrowserOS neo recipes\n\nRun these snippets inside MCP `run`. Set the named inputs from live browser results first. Prefer Playwright for page work.\n\nBrowser protocol errors return `script / cdp_error`; fix the method or parameters before retrying.\nAny `neo.cdp` call returns `host / owner_has_control` while a human takeover lock is held, with or without a page. Wait for hand-back; do not bypass it.\nProtected tab or window closes return `script / unsupported`. Leave Neo's reserved blank tab and its window open.\n\n",
         );
         for recipe in all() {
             content.push_str(&format!(
