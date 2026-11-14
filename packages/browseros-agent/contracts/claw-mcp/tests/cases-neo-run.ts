@@ -7,7 +7,7 @@ import { describeSteps } from '../../../apps/claw-app/lib/step-sentences'
 import { findFreePort } from './browser'
 import type { ContractCase } from './cases'
 import { apiGet, expectOk, waitUntil } from './helpers'
-import { McpSession, readRpcResponse } from './mcp-client'
+import { McpSession, readRpcResponse, textOf } from './mcp-client'
 import { RUST_BINARY } from './rust-server'
 
 function engineChildren(parentPid: number): number[] {
@@ -540,6 +540,19 @@ await page.locator('input').first().fill(${JSON.stringify(secret)});
 return await page.title()`,
       })
       expectOk(result, 'a three-step run')
+      assert(
+        '_meta' in result &&
+          result._meta !== null &&
+          typeof result._meta === 'object',
+      )
+      assert('com.browseros.neo/run' in result._meta)
+      const sdkRun = result._meta['com.browseros.neo/run']
+      assert(
+        sdkRun !== null &&
+          typeof sdkRun === 'object' &&
+          'id' in sdkRun &&
+          typeof sdkRun.id === 'string',
+      )
       await waitUntil(async () => {
         const response = await apiGet(
           ctx.server,
@@ -561,13 +574,43 @@ return await page.title()`,
           assert('toolName' in row && typeof row.toolName === 'string')
           return row
         })
-        const parent = rows.findLast((row) => row.toolName === 'run')
+        // Match this run explicitly while waiting for async audit persistence.
+        // Every visible child must already have its actual parent in the route.
+        for (const row of rows) {
+          if (
+            'parentDispatchId' in row &&
+            typeof row.parentDispatchId === 'string'
+          ) {
+            assert(
+              rows.some(
+                (parent) => parent.dispatchKey === row.parentDispatchId,
+              ),
+              'a child appeared before its parent',
+            )
+          }
+        }
+        const parent = rows.find((row) => {
+          if (
+            row.toolName !== 'run' ||
+            !('resultMeta' in row) ||
+            typeof row.resultMeta !== 'string'
+          )
+            return false
+          const metadata: unknown = JSON.parse(row.resultMeta)
+          return (
+            metadata !== null &&
+            typeof metadata === 'object' &&
+            'sdkRunId' in metadata &&
+            metadata.sdkRunId === sdkRun.id
+          )
+        })
         if (!parent) return false
         const children = rows.filter(
           (row) =>
             'parentDispatchId' in row &&
             row.parentDispatchId === parent.dispatchKey,
         )
+        if (children.length < 3) return false
         assert.equal(
           children.length,
           3,
@@ -698,6 +741,92 @@ return await page.screenshot({clip: {x:0,y:0,width:900,height:700}})`,
           block.text?.includes('Blob bytes are not available'),
         ),
       )
+    },
+  },
+  {
+    name: 'neo run: writes to foreign tabs carry an advisory notice',
+    async run(ctx) {
+      const session = await ctx.openSession('neo-ownership-caller')
+      const url = ctx.fixture('/form.html')
+      await waitUntil(
+        async () =>
+          !(
+            await session.callTool('run', {
+              code: `await page.goto(${JSON.stringify(url)}); return 1`,
+            })
+          ).isError,
+        'the SDK browser link',
+        { timeoutMs: 30_000 },
+      )
+      const userUrl = `${url}?user-tab=${crypto.randomUUID()}`
+      // Native creation bypasses the SDK's task holder, just as a user tab does.
+      const target = await privateBrowserCommand(
+        ctx.browser.cdpPort,
+        'Target.createTarget',
+        { url: userUrl },
+      )
+      assert(target !== null && typeof target === 'object')
+      assert('targetId' in target && typeof target.targetId === 'string')
+      try {
+        let userTab: number | undefined
+        await waitUntil(async () => {
+          const result = await session.callTool('run', {
+            code: `return context.pages().find(p => p.url() === ${JSON.stringify(userUrl)})?.tabId`,
+          })
+          if (typeof result.structuredContent?.value !== 'number') return false
+          userTab = result.structuredContent.value
+          return true
+        }, 'the SDK census of the user-created tab')
+        assert(userTab !== undefined)
+        const userPage = `context.pages().find(p => p.tabId === ${userTab})`
+        const read = await session.callTool('run', {
+          code: `return await ${userPage}.title()`,
+        })
+        expectOk(read, 'reading a user tab')
+        assert(!textOf(read).includes('not yours'))
+        const clicked = await session.callTool('run', {
+          code: `const p = ${userPage}; await p.getByRole('button', {name:'Apply',exact:true}).click(); await p.getByRole('button', {name:'Apply',exact:true}).click(); return 1`,
+        })
+        expectOk(clicked, 'clicking a user tab remains allowed')
+        assert(textOf(clicked).includes('tabs that are not yours'))
+        assert(textOf(clicked).includes('the user'))
+        assert(textOf(clicked).includes('You are allowed to use'))
+        assert.equal(
+          textOf(clicked).split(`tab ${userTab} belongs`).length - 1,
+          1,
+        )
+        const own = await session.callTool('run', {
+          code: "await page.getByRole('button', {name:'Apply',exact:true}).click(); return 1",
+        })
+        expectOk(own, 'clicking an owned tab')
+        assert(!textOf(own).includes('not yours'))
+        const other = await ctx.openSession('neo-other-agent')
+        const opened = await other.callTool('run', {
+          code: `await page.goto(${JSON.stringify(url)}); return page.tabId`,
+        })
+        expectOk(opened, 'another agent opening its own tab')
+        const otherTab = opened.structuredContent?.value
+        assert(typeof otherTab === 'number')
+        const otherPage = `context.pages().find(p => p.tabId === ${otherTab})`
+        const borrowed = await session.callTool('run', {
+          code: `await ${otherPage}.getByRole('button', {name:'Apply',exact:true}).click(); return 1`,
+        })
+        expectOk(borrowed, 'clicking another agent tab remains allowed')
+        assert(textOf(borrowed).includes('tabs that are not yours'))
+        assert(textOf(borrowed).includes('another agent'))
+        const unsent = await session.callTool('run', {
+          code: `await ${otherPage}.locator('#missing-c8-element').click({timeout:50})`,
+        })
+        assert(unsent.isError)
+        assert(
+          !textOf(unsent).includes('not yours'),
+          'an unsent write produced an ownership notice',
+        )
+      } finally {
+        await privateBrowserCommand(ctx.browser.cdpPort, 'Target.closeTarget', {
+          targetId: target.targetId,
+        })
+      }
     },
   },
 ]
