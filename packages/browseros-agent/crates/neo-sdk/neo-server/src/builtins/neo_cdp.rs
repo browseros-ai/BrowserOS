@@ -146,31 +146,31 @@ async fn protect_neo_tab<const ENABLED: bool>(
     let reserved = match method {
         "Target.closeTarget" | "Browser.closeTab" => {
             let tab = if let Some(target) = params.get("targetId").and_then(Value::as_str) {
-                let value = op
-                    .race_answer(op.run().view().cdp(
+                let lookup = lookup_answer(
+                    op.race_classified(op.run().view().cdp(
                         "Browser.getTabInfo",
                         json!({ "targetId": target }),
                         None,
                     ))
-                    .await?
-                    .map_err(answer_error)?;
-                let resolved: GetTabInfoResult =
-                    serde_json::from_value(value).map_err(|error| {
-                        LeafError::definite(OperationError::neo(ErrorCode::CDP_ERROR, error))
-                    })?;
-                Some(resolved.tab.tab_id)
+                    .await?,
+                )?;
+                let resolved: Option<GetTabInfoResult> =
+                    lookup.and_then(|value| serde_json::from_value(value).ok());
+                resolved.map(|resolved| resolved.tab.tab_id)
             } else {
                 params.get("tabId").and_then(Value::as_i64)
             };
             tab.is_some_and(|tab| op.tabs().is_neo(TabId(tab)))
         }
         "Browser.closeWindow" => {
-            let listing = op.race(op.run().view().list_pages()).await?;
-            listing.pages.iter().any(|page| {
-                op.tabs().is_neo(page.tab_id)
-                    && page.window_id.is_some_and(|window| {
-                        params.get("windowId").and_then(Value::as_i64) == Some(window.0)
-                    })
+            let listing = lookup_answer(op.race_classified(op.run().view().list_pages()).await?)?;
+            listing.is_some_and(|listing| {
+                listing.pages.iter().any(|page| {
+                    op.tabs().is_neo(page.tab_id)
+                        && page.window_id.is_some_and(|window| {
+                            params.get("windowId").and_then(Value::as_i64) == Some(window.0)
+                        })
+                })
             })
         }
         _ => false,
@@ -182,6 +182,25 @@ async fn protect_neo_tab<const ENABLED: bool>(
         )));
     }
     Ok(())
+}
+
+/// Neo's preflight does not replace the script's command. Failure to identify a reserved
+/// tab permits the command, but a broken connection or session cannot safely continue it.
+fn lookup_answer<T>(lookup: Result<T, CoreError>) -> Result<Option<T>, LeafError> {
+    match lookup {
+        Ok(value) => Ok(Some(value)),
+        Err(
+            error @ CoreError::Cdp(
+                CdpError::ConnectionLost
+                | CdpError::NotConnected
+                | CdpError::ConnectionEpochChanged { .. }
+                | CdpError::SessionGone
+                | CdpError::Transport(_)
+                | CdpError::Discovery(_),
+            ),
+        ) => Err(answer_error(error)),
+        Err(_) => Ok(None),
+    }
 }
 
 /// Every protocol reply answers the script's raw command. Transport failures keep the door's

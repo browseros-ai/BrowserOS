@@ -59,15 +59,13 @@ impl Policy for TakeoverLock {
         let Some(locks) = self.locks.get() else {
             return Ok(());
         };
-        // A browser-level raw command may read or close any tab. Treat it as touching every
-        // locked tab, including host locks, at admission, send recheck and reply release.
-        // Hidden means disabled here; that call must keep its host-owned cdp_unavailable error.
-        let target = match check.tab {
-            Some(tab) => LockTarget::Tab(tab),
-            None if check.method.name == "neo.cdp" && check.method.listing != Listing::Hidden => {
-                LockTarget::UnmappedPage
-            }
-            None => LockTarget::NoPage,
+        // Browser and Target commands can reach every tab even on another page's session.
+        // The disabled NeoCdp variant is the only hidden one. Hiding an enabled variant would
+        // require changing this condition too, or it would silently lose lock protection.
+        let target = if check.method.name == "neo.cdp" && check.method.listing != Listing::Hidden {
+            LockTarget::UnmappedPage
+        } else {
+            check.tab.map_or(LockTarget::NoPage, LockTarget::Tab)
         };
         let decided = match check.lock_pass {
             // The host's private typing through its own lock: the pass holds only while that

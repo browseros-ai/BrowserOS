@@ -8,6 +8,7 @@ use std::future::Future;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
+use browseros_cdp::CdpError;
 use browseros_core::{NativeCapabilities, TabId, TargetId};
 use futures_util::future::{self, Either};
 use neo_captcha::CaptchaSolver;
@@ -1870,46 +1871,181 @@ async fn script_cdp_cannot_close_neos_reserved_tab_or_its_window() -> Result<(),
 }
 
 #[tokio::test]
-async fn script_cdp_browser_calls_are_refused_under_any_lock_then_work_after_unlock()
+async fn script_cdp_calls_on_any_page_are_refused_under_a_lock_then_work_after_unlock()
 -> Result<(), Box<dyn Error>> {
     let harness = Harness::with_mode::<true>(None, DESKTOP_MODE).await?;
-    let page = harness.owner_tab("https://owner.example/").await?;
+    let locked = harness.owner_tab("https://owner.example/").await?;
+    let mine = harness.owner_tab("https://agent.example/").await?;
     let (run, _guard) = harness.run()?;
+    let inputs = [
+        json!({ "method": "Browser.getWindows" }),
+        json!({ "method": "Browser.getWindows", "page": handle(&mine) }),
+    ];
     for reads in [Reads::Allow, Reads::Block] {
-        let lock = harness.lock(page.tab, reads).await?;
+        let lock = harness.lock(locked.tab, reads).await?;
         let before = harness.fake.count("Browser.getWindows");
+        for input in &inputs {
+            let refused = failure(harness.submit(&run, "neo.cdp", input.clone()).await)?;
+            assert_eq!(
+                (
+                    refused.error.owner(),
+                    refused.error.code(),
+                    refused.delivery
+                ),
+                (
+                    ErrorOwner::Host,
+                    ErrorCode::OWNER_HAS_CONTROL,
+                    Delivery::NotSent
+                ),
+                "every enabled raw call must be refused even through another unlocked page"
+            );
+        }
+        assert_eq!(
+            harness.fake.count("Browser.getWindows"),
+            before,
+            "a page session does not narrow a raw command to that page"
+        );
+        harness.locks.unlock_host(lock.id)?;
+        for input in &inputs {
+            value(harness.submit(&run, "neo.cdp", input.clone()).await)?;
+        }
+        assert_eq!(
+            harness.fake.count("Browser.getWindows"),
+            before + inputs.len(),
+            "unlock restores both browser-level and page-session raw calls"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn script_cdp_protocol_errors_are_the_scripts_but_link_and_session_failures_are_neos()
+-> Result<(), Box<dyn Error>> {
+    let harness = Harness::with_mode::<true>(None, DESKTOP_MODE).await?;
+    for (error, owner, delivery) in [
+        (
+            CdpError::Protocol {
+                code: -32000,
+                message: "No tab with given id".to_owned(),
+            },
+            ErrorOwner::Script,
+            Delivery::Done,
+        ),
+        (CdpError::ConnectionLost, ErrorOwner::Neo, Delivery::Unknown),
+        (CdpError::SessionGone, ErrorOwner::Neo, Delivery::Unknown),
+    ] {
+        harness.fake.fail("Browser.getWindows", error);
+        let (run, _guard) = harness.run()?;
         let refused = failure(
             harness
                 .submit(&run, "neo.cdp", json!({ "method": "Browser.getWindows" }))
                 .await,
         )?;
         assert_eq!(
-            (
-                refused.error.owner(),
+            (refused.error.owner(), refused.delivery),
+            (owner, delivery),
+            "a protocol answer belongs to the script; an unconfirmed link or session needs Neo"
+        );
+        if owner == ErrorOwner::Script {
+            assert_eq!(
                 refused.error.code(),
-                refused.delivery
-            ),
-            (
-                ErrorOwner::Host,
-                ErrorCode::OWNER_HAS_CONTROL,
-                Delivery::NotSent
+                ErrorCode::CDP_ERROR,
+                "protocol replies use the stable script CDP code"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn script_cdp_close_uses_the_scripts_command_when_the_lookup_cannot_identify_a_tab()
+-> Result<(), Box<dyn Error>> {
+    let harness = Harness::with_mode::<true>(None, DESKTOP_MODE).await?;
+    harness.fake.fail(
+        "Browser.getTabInfo",
+        CdpError::Protocol {
+            code: -32000,
+            message: "No web contents in the target".to_owned(),
+        },
+    );
+    harness
+        .fake
+        .answer("Target.closeTarget", json!({ "success": true }));
+    let (run, _guard) = harness.run()?;
+    let (op, reply) = harness
+        .submit_op(
+            &run,
+            "neo.cdp",
+            json!({
+                "method": "Target.closeTarget", "params": { "targetId": "shared-worker" },
+            }),
+        )
+        .await;
+    let transported: String = serde_json::from_value(value(reply)?)?;
+    let answer: Value = serde_json::from_str(&transported)?;
+    assert_eq!(
+        answer,
+        json!({ "success": true }),
+        "a non-tab target can still be closed"
+    );
+    assert_eq!(
+        harness.row(op).await?.delivery,
+        Some(Delivery::Done),
+        "the original close reached the browser and was confirmed"
+    );
+
+    harness.fake.unanswer("Target.closeTarget");
+    let refused = failure(
+        harness
+            .submit(
+                &run,
+                "neo.cdp",
+                json!({
+                    "method": "Target.closeTarget", "params": { "targetId": "unknown-target" },
+                }),
             )
-        );
-        assert_eq!(
-            harness.fake.count("Browser.getWindows"),
-            before,
-            "even a read-only raw command must not expose locked tabs"
-        );
-        harness.locks.unlock_host(lock.id)?;
-        value(
+            .await,
+    )?;
+    assert_eq!(
+        (
+            refused.error.owner(),
+            refused.error.code(),
+            refused.delivery
+        ),
+        (ErrorOwner::Script, ErrorCode::CDP_ERROR, Delivery::Done),
+        "the browser answers the original close, not Neo's lookup"
+    );
+    assert!(
+        refused
+            .error
+            .message()
+            .contains("No target with given id found"),
+        "return the original close error rather than the lookup error"
+    );
+
+    for error in [CdpError::ConnectionLost, CdpError::SessionGone] {
+        harness.fake.fail("Browser.getTabInfo", error);
+        let before = harness.fake.count("Target.closeTarget");
+        let refused = failure(
             harness
-                .submit(&run, "neo.cdp", json!({ "method": "Browser.getWindows" }))
+                .submit(
+                    &run,
+                    "neo.cdp",
+                    json!({
+                        "method": "Target.closeTarget", "params": { "targetId": "shared-worker" },
+                    }),
+                )
                 .await,
         )?;
         assert_eq!(
-            harness.fake.count("Browser.getWindows"),
-            before + 1,
-            "unlock restores browser-level calls"
+            (refused.error.owner(), refused.delivery),
+            (ErrorOwner::Neo, Delivery::NotSent),
+            "a broken lookup connection or session cannot safely send the close"
+        );
+        assert_eq!(
+            harness.fake.count("Target.closeTarget"),
+            before,
+            "the broken lookup link must not send a close"
         );
     }
     Ok(())

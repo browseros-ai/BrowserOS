@@ -191,9 +191,9 @@ These commands fail `script / unsupported` before any send, even when enabled:
 | `Target.attachToBrowserTarget` | Would create an unmanaged browser session. |
 | `Target.sendMessageToTarget` | Tunnels arbitrary commands around the refusals above. |
 
-`Target.closeTarget` and `Browser.closeTab` also fail `script / unsupported` when either their target or tab id names Neo's own blank tab. `Browser.closeWindow` is refused when the window contains that tab. This keeps the browser available after other tabs close.
+`Target.closeTarget` and `Browser.closeTab` also fail `script / unsupported` when either their target or tab id names Neo's own blank tab. `Browser.closeWindow` is refused when the window contains that tab. This keeps the browser available after other tabs close. A tab-group command can still close Neo's tab, and Neo opens another.
 
-A browser-level call with no `page` fails `host / owner_has_control` before send while any takeover or host lock is held. A page-scoped call still uses that page's lock rules. The same rules run again before send and before releasing page data, so a lock taken while a raw call waits can withhold its reply.
+While any takeover or host lock is held, every enabled `neo.cdp` call fails `host / owner_has_control` before send, with or without `page`. The same rules run again before send and before releasing page data, so a lock taken while a raw call waits can withhold its reply.
 
 The host sends its ids in `_meta["com.browseros.neo/run"]` as `{ requestId?, taskId?, hostData? }`. Neo refuses unknown keys as `host / invalid_meta`. `hostData` is up to 2048 bytes of JSON that Neo stores with the run and never reads.
 
@@ -274,7 +274,7 @@ A built-in is a private type in `src/builtins/` that implements `dispatch::Metho
 1. Write an input type with `#[serde(deny_unknown_fields)]` and an output type that implements `Serialize`.
 2. Implement `Method`:
    - `spec` returns a `MethodSpec` with the name scripts call, its `Effect` (`Read` or `Write`), and its `Listing` in the `run` description.
-   - `target` returns the input's `PageTarget`, or `None` for a method with no page. There is no default, so the takeover lock sees every page-scoped call. A browser-level `neo.cdp` call is conservatively refused while any lock is held.
+   - `target` returns the input's `PageTarget`, or `None` for a method with no page. There is no default, so the takeover lock sees every page-scoped call. Every enabled `neo.cdp` call is conservatively refused while any lock is held, with or without a page.
    - `call` does the work through its `OpCtx<Self>`. Await browser calls through `op.race`. A write calls `op.recheck()?` and then `op.mark_sent()` right before it sends, and the door derives delivery from that.
 3. Register it with `builder.define` from `builtin_set` in `src/builtins/builtin_set.rs`. A duplicate name fails the start.
 4. Expose it to scripts from a prelude in `src/runtime/js/` with `__neo.invoke('<name>', input)`. A new parameter of the agent's function goes through `__neo.provide`, and a test in `run_description.rs` fails until the description names it.

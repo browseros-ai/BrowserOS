@@ -3,7 +3,7 @@ use std::num::NonZeroU16;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use super::{ConfigError, Defaults};
 
@@ -79,8 +79,9 @@ impl LaunchConfig {
             execution_dir,
             browseros_version,
             script_cdp: file
-                .flags
-                .as_object()
+                .extra
+                .get("flags")
+                .and_then(Value::as_object)
                 .and_then(|flags| flags.get("script_cdp"))
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
@@ -88,18 +89,17 @@ impl LaunchConfig {
     }
 }
 
-/// The file as Chromium writes it: `ports`, `directories`, `flags` and `instance`. Only the
-/// keys Neo reads are named.
+/// Chromium's typed launch fields plus opaque legacy keys. `flags` is interpreted from
+/// `extra` afterward, preserving last-value semantics for repeated keys.
 #[derive(Deserialize)]
 struct LaunchFile {
     #[serde(default)]
     ports: Ports,
     #[serde(default)]
     directories: Directories,
-    // Chromium owns this otherwise-ignored value. Only an object with an explicit boolean
-    // permission opts in; arbitrary legacy values still start with raw script CDP off.
-    #[serde(default)]
-    flags: Value,
+    // Keep legacy launch keys opaque, with the last repeated value winning as in a JSON map.
+    #[serde(flatten)]
+    extra: Map<String, Value>,
     /// Untyped on purpose: a missing, malformed or wrong-typed identity leaves the version
     /// unknown instead of failing the parse.
     #[serde(default)]
@@ -197,6 +197,9 @@ mod tests {
             (r#"{"flags": {"script_cdp": 1}}"#, false),
             (r#"{"flags": {"script_cdp": null}}"#, false),
             (r#"{"flags": {"script_cdp": [true]}}"#, false),
+            (r#"{"flags": 1, "flags": 2}"#, false),
+            (r#"{"flags": 1, "flags": {"script_cdp": true}}"#, true),
+            (r#"{"flags": {"script_cdp": true}, "flags": 2}"#, false),
         ] {
             assert_eq!(
                 LaunchConfig::parse(text, Path::new(""))?.script_cdp,
