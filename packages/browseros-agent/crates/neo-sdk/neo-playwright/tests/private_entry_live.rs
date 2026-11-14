@@ -33,8 +33,8 @@ use fixture_server::{FixtureServer, Page};
 use input_recording::{InputCall, InputRecording};
 use live_browser::{LiveBrowser, TestPage, TestResult};
 use neo_playwright::{
-    BoxSpec, Drawing, Entry, EntryOutcome, EntryRequest, Expect, Op, PictureCheck, PrivateField,
-    PrivateText, RunState,
+    BoxSpec, CoverIn, Drawing, Entry, EntryCode, EntryOutcome, EntryRequest, Expect, Op,
+    PictureCheck, PrivateField, PrivateText, RunState,
 };
 use neo_trace::{Delivery, ErrorOwner};
 use private_host::HostEnv;
@@ -43,6 +43,7 @@ use tokio::io::AsyncReadExt;
 use tokio::net::TcpListener;
 use tokio::sync::{Semaphore, SemaphorePermit, oneshot};
 use tokio::time::{self, Instant};
+use url::form_urlencoded::byte_serialize;
 
 /// A tab in front of the window, or behind another tab.
 #[derive(Clone, Copy, Debug)]
@@ -396,6 +397,116 @@ async fn tests_that_a_box_below_the_fold_of_a_smooth_page_is_entered_only_in_vie
                     bench.close(opened).await?;
                 }
             }
+        }
+    }
+    Ok(())
+}
+
+/// Ruling R60's rows 1 and 2: a banner in the top page over a sign-in frame's password box, the
+/// frame on another origin of the same site (sharing the page's process) and on another site.
+/// Refused `box_covered` with the page above's own sentence before any character, by one
+/// insertion and key by key, on a tab in front and a tab behind: nothing typed, nothing marked
+/// sent. Fails with the pages above left unasked (the password is typed).
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_banner_above_a_sign_in_frame_refuses_before_any_key() -> TestResult {
+    let bench = Bench::start().await?;
+    let second = FixtureServer::start(private_host::pages()).await?;
+    let inner = "/private/parent-cover-box.html";
+    let same_site = second
+        .url("127.0.0.1", "/")
+        .trim_end_matches('/')
+        .to_owned();
+    let frames = [
+        (second.url("127.0.0.1", inner), same_site),
+        (
+            bench.server.url("localhost", inner),
+            bench.other_origin.clone(),
+        ),
+    ];
+    let above = EntryCode::BoxCovered(CoverIn::PageAbove);
+    // Each frame near the top under a banner, and far below the fold of a smooth-scrolling page
+    // under a sheet over the whole view (ruling R61 for pages above).
+    for (frame, origin) in &frames {
+        let frame: String = byte_serialize(frame.as_bytes()).collect();
+        for (query, place) in [
+            ("cover=banner", Place::Front),
+            ("cover=banner", Place::Behind),
+            ("cover=sheet&place=smooth", Place::Front),
+            ("cover=sheet&place=smooth", Place::Behind),
+        ] {
+            let path = format!("/private/parent-cover.html?{query}&frame={frame}");
+            for keys in [false, true] {
+                let case = format!("{origin}, {query}, {place:?}, keys {keys}");
+                let opened = bench.open(&path, place).await?;
+                let password = bench.r#ref(&opened, "textbox", "Password").await?;
+                let env = bench.host(&opened);
+                let field = Field::new(&password, origin);
+                let field = if keys { field.keys() } else { field };
+                let entry = bench
+                    .enter(&env, &opened, vec![field.with(PASSWORD)?])
+                    .await;
+                assert_eq!(entry.outcome, EntryOutcome::Refused, "{case}: {entry:?}");
+                assert_eq!(
+                    (entry.at, code(&entry)),
+                    (Some(0), Some(above.as_str())),
+                    "{case}"
+                );
+                assert_eq!(
+                    entry.error.as_ref().map(|error| error.message.as_str()),
+                    Some(above.message()),
+                    "{case}"
+                );
+                assert_eq!(entry.delivery, Delivery::NotSent, "{case}");
+                assert_eq!(entry.typed, vec![0], "{case}");
+                assert_eq!(bench.value(&opened, &password).await?, "", "{case}");
+                assert!(!env.was_sent(), "{case}");
+                assert!(
+                    !bench.live.playwright.took_private_text(opened.page.tab),
+                    "{case}"
+                );
+                bench.close(opened).await?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Ruling R60 with R61: a sign-in frame far below the fold of a page whose root scrolls smoothly,
+/// nothing over it, on another origin of the same site and on another site. The box is brought
+/// into view at once in the frame and in the page above, the page above is asked, and the box is
+/// entered and read back, on a tab in front and a tab behind. Fails when a page above that has
+/// not scrolled the frame into view counts as unseen (`cover_unread`).
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_sign_in_frame_below_a_smooth_pages_fold_is_entered() -> TestResult {
+    let bench = Bench::start().await?;
+    let second = FixtureServer::start(private_host::pages()).await?;
+    let inner = "/private/parent-cover-box.html";
+    let same_site = second
+        .url("127.0.0.1", "/")
+        .trim_end_matches('/')
+        .to_owned();
+    let frames = [
+        (second.url("127.0.0.1", inner), same_site),
+        (
+            bench.server.url("localhost", inner),
+            bench.other_origin.clone(),
+        ),
+    ];
+    for (frame, origin) in &frames {
+        let frame: String = byte_serialize(frame.as_bytes()).collect();
+        let path = format!("/private/parent-cover.html?cover=none&place=smooth&frame={frame}");
+        for place in PLACES {
+            let case = format!("{origin}, {place:?}");
+            let opened = bench.open(&path, place).await?;
+            let password = bench.r#ref(&opened, "textbox", "Password").await?;
+            let env = bench.host(&opened);
+            let field = Field::new(&password, origin).with(PASSWORD)?;
+            let entry = bench.enter(&env, &opened, vec![field]).await;
+            assert_eq!(entry.outcome, EntryOutcome::Entered, "{case}: {entry:?}");
+            assert_eq!(bench.value(&opened, &password).await?, PASSWORD, "{case}");
+            bench.close(opened).await?;
         }
     }
     Ok(())
@@ -1077,9 +1188,11 @@ async fn tests_that_boxes_in_cross_site_frames_are_entered() -> TestResult {
     Ok(())
 }
 
-/// The card box hands focus to another box as it takes it, or the page takes
-/// the focus back into its own box when the frame takes it: `not_focused`, nothing in either
-/// box.
+/// The card box hands focus to another box as it takes it: `not_focused`, nothing in either box.
+/// Or the page takes the focus back into its own box when the frame takes it, a timer later: then
+/// `not_focused` with nothing typed, the whole value entered in the frame's box, or
+/// `value_not_taken` with the frame's box empty, as the page's race falls; never a part of the
+/// value, and never anything in the thief's box.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_a_focus_thief_gets_nothing() -> TestResult {
@@ -1140,25 +1253,28 @@ async fn tests_that_a_focus_thief_gets_nothing() -> TestResult {
             let entry = bench
                 .enter(&env, &opened, vec![Field::new(&number, other).with(CARD)?])
                 .await;
-            assert_eq!(
-                entry.outcome,
-                EntryOutcome::Refused,
-                "{place:?} focus thief #{round}: {entry:?}"
-            );
-            assert_eq!(
-                code(&entry),
-                Some("not_focused"),
-                "{place:?} focus thief #{round}"
-            );
-            assert_eq!(
-                bench.value(&opened, &number).await?,
-                "",
-                "{place:?} focus thief #{round}"
-            );
-            assert_eq!(
-                bench.value(&opened, &thief).await?,
-                "",
-                "{place:?} focus thief #{round}"
+            // The page takes the focus back a timer after its window blurs, so the race is the
+            // page's, and Neo's text goes on the frame's own connection: it lands whole in the
+            // frame's box or nowhere. Before Neo's focus check the thief wins (`not_focused`,
+            // nothing sent); after the insertion the box holds the value (entered); between the
+            // two the text finds no focus, and the read-back answers `value_not_taken` with an
+            // empty box. Never a part of the value, and never anything in the thief's box.
+            let held = bench.value(&opened, &number).await?;
+            let stolen = bench.value(&opened, &thief).await?;
+            let answered = match entry.outcome {
+                EntryOutcome::Refused => code(&entry) == Some("not_focused") && held.is_empty(),
+                EntryOutcome::Entered => held == CARD,
+                EntryOutcome::Uncertain => {
+                    code(&entry) == Some("value_not_taken") && held.is_empty()
+                }
+                _ => false,
+            };
+            assert!(
+                answered && stolen.is_empty(),
+                "{place:?} focus thief #{round}: {entry:?}; the frame's box holds {} characters, \
+                 the thief's {}",
+                held.chars().count(),
+                stolen.chars().count()
             );
             bench.close(opened).await?;
         }

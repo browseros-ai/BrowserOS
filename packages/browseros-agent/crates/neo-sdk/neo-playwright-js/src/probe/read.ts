@@ -57,6 +57,8 @@ function readerFor(request: ReadRequest, root: Node | undefined): Reader {
         world.injected.elementState(element, read.state, frameVisible).matches
     case 'boundingBox':
       return (_world, element) => borderBox(element)
+    case 'viewCentre':
+      return (_world, element) => viewCentre(element)
     case 'frameOrigin':
       return (_world, element) => frameOrigin(element)
     case 'located':
@@ -142,6 +144,22 @@ function borderBox(element: Element): Rect | null {
   if (element.getClientRects().length === 0) return null
   const { x, y, width, height } = element.getBoundingClientRect()
   return { x, y, width, height }
+}
+
+/**
+ * The private look's point for the pages above the box's frame (ruling R60): its border box's
+ * centre, only when that lies inside this frame's viewport. A box whose centre is outside is not
+ * asked above, as before: a page above would be asked at a place outside the frame, where a
+ * neighbour of the frame would read as a cover.
+ */
+function viewCentre(element: Element): { x: number; y: number } | null {
+  const box = borderBox(element)
+  if (!box) return null
+  const x = box.x + box.width / 2
+  const y = box.y + box.height / 2
+  const view = element.ownerDocument.defaultView
+  if (!view || x < 0 || y < 0 || x >= view.innerWidth || y >= view.innerHeight) return null
+  return { x, y }
 }
 
 /**

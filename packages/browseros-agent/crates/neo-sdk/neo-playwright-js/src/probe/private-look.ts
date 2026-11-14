@@ -178,8 +178,10 @@ function isTextInput(element: Element): element is HTMLInputElement {
  * Anything else covers it.
  *
  * Kept as main, with its three blind spots (design section 5.3): an ancestor drawn over the box
- * counts as the box; a page's overlay over a cross-site frame is not seen; a cover inside the
- * box's own shadow root reads as its shadow host, an ancestor. Where the port differs:
+ * counts as the box; a page's overlay over a frame on another origin is not seen here; a cover
+ * inside the box's own shadow root reads as its shadow host, an ancestor. The second is closed
+ * after this look, in Rust, which asks every page above the box's frame from the top down
+ * (ruling R60: look_op.rs `pages_above`, private-frame.ts). Where the port differs:
  *
  * - A hit test that throws counts as covered, where main typed on.
  * - The point is the centre of the box's border box (`getBoundingClientRect`), where main took

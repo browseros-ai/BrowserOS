@@ -1015,6 +1015,7 @@ impl<'a> PointerRunner<'a> {
             located.path(),
             measured.point,
             !action.force && measured.in_view,
+            frame_projection::Asker::Click,
         );
         let Ok(projected) = self.scope.within(projected).await else {
             return Err(self.timed_out());
@@ -1029,6 +1030,8 @@ impl<'a> PointerRunner<'a> {
                 })
             }
             Projection::Covered { by } => Ok(Placed::Covered { by }),
+            // Only the look's question answers it; a click's point outside a page reads so.
+            Projection::Unseen => Ok(Placed::Outside),
             Projection::Transformed => {
                 // Chromium maps transformed content into its target viewport. As upstream,
                 // parent translation hit tests give way to the actual event interceptor.

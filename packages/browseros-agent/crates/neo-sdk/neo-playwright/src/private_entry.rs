@@ -36,7 +36,8 @@ pub(crate) use box_ask::{BoxAsk, LookRefusal, LookRefused, Looked};
 pub use box_look::{BoxFacts, BoxLook};
 pub use box_spec::{BoxSpec, Expect};
 pub use entry::{
-    BoxFact, Drawing, Entry, EntryCode, EntryError, EntryOutcome, Sending, delivery_of,
+    BoxFact, CoverIn, Drawing, Entry, EntryCode, EntryError, EntryOutcome, Sending, Unread,
+    delivery_of,
 };
 pub(crate) use entry_ask::{BoxState, FocusState, PageSecret, PrivateAnswer, PrivateStep};
 pub use entry_request::{EntryRequest, LookField, LookRequest, PrivateField};

@@ -1,5 +1,5 @@
 {
-  "protocol": 39,
+  "protocol": 40,
   "callFunction": "function (call, root, ...nodes) { const probe = globalThis.__neoProbe; return probe ? probe.call(call, root ?? this, nodes) : { kind: \"uninstalled\" }; }",
   "replyKinds": {
     "describe": [
@@ -403,7 +403,8 @@
             }
           ]
         }
-      }
+      },
+      "look": false
     },
     {
       "op": "frameBox",
@@ -413,7 +414,8 @@
       "point": {
         "x": 40.5,
         "y": 12
-      }
+      },
+      "look": true
     },
     {
       "op": "edit",
@@ -791,6 +793,17 @@
       "frameVisible": false,
       "read": {
         "kind": "boundingBox"
+      }
+    },
+    {
+      "op": "read",
+      "target": {
+        "pin": 3
+      },
+      "strictness": "strict",
+      "frameVisible": true,
+      "read": {
+        "kind": "viewCentre"
       }
     },
     {
@@ -1255,19 +1268,19 @@
   "replies": [
     {
       "kind": "described",
-      "protocol": 39,
+      "protocol": 40,
       "seq": 0,
       "url": "https://example.com/"
     },
     {
       "kind": "described",
-      "protocol": 39,
+      "protocol": 40,
       "seq": 347,
       "url": "https://pay.example/frame"
     },
     {
       "kind": "described",
-      "protocol": 39,
+      "protocol": 40,
       "seq": 512340,
       "url": "https://example.com/",
       "retired": 0
@@ -1408,12 +1421,25 @@
         "x": 8,
         "y": 120
       },
-      "hit": null
+      "hit": null,
+      "unseen": false
     },
     {
       "kind": "frameBox",
       "origin": null,
-      "hit": "done"
+      "hit": "done",
+      "unseen": false
+    },
+    {
+      "kind": "frameBox",
+      "origin": {
+        "x": 8,
+        "y": 120
+      },
+      "hit": {
+        "hitTargetDescription": "<html></html>"
+      },
+      "unseen": true
     },
     {
       "kind": "value",
