@@ -1,0 +1,15 @@
+<!doctype html><meta charset=utf-8><title>Closed frame</title>
+<!-- A closed shadow root with a plain box in the page's own document, and a same-site frame
+     (srcdoc, on the page's session) whose own closed root holds an empty card box.
+     focusFrameCard() gives that box the focus, so a script's keyboard alone types into it. -->
+<div id=host></div>
+<iframe title="Card frame" style="width:360px;height:80px;border:0" srcdoc="<div id=card-host></div><script>const r = document.getElementById('card-host').attachShadow({ mode: 'closed' }); r.innerHTML = '<label>Card number <input autocomplete=cc-number></label>'; window.focusCard = () => { r.querySelector('input').focus(); return true; };</script>"></iframe>
+<script>
+  document.getElementById('host').attachShadow({ mode: 'closed' }).innerHTML =
+    '<label>Search <input value=shoes></label>'
+  window.focusFrameCard = () => {
+    const frame = document.querySelector('iframe')
+    frame.focus()
+    return frame.contentWindow.focusCard()
+  }
+</script>

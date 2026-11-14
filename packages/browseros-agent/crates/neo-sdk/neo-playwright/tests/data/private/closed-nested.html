@@ -1,0 +1,17 @@
+<!doctype html><meta charset=utf-8><title>Closed nested</title>
+<!-- A card box two closed shadow roots deep (an element inside a closed root hosts another closed
+     root), after ?nodes=N plain elements (none by default): the camera's walk on demand follows
+     the focus from the outer root to the inner one. focusDeep() gives the box the focus. -->
+<div id=many></div>
+<div id=outer></div>
+<script>
+const nodes = Number(new URLSearchParams(location.search).get('nodes') || 0);
+const chunk = document.createDocumentFragment();
+for (let index = 0; index < nodes; index++) chunk.appendChild(document.createElement('span'));
+document.getElementById('many').appendChild(chunk);
+const outer = document.getElementById('outer').attachShadow({ mode: 'closed' });
+outer.innerHTML = '<p>Payment</p><div id=inner></div>';
+const inner = outer.getElementById('inner').attachShadow({ mode: 'closed' });
+inner.innerHTML = '<label>Card number <input id=card autocomplete=cc-number style="width:280px;height:30px"></label>';
+window.focusDeep = () => { inner.getElementById('card').focus(); return true; };
+</script>

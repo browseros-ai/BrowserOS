@@ -34,7 +34,7 @@ export type Op = ProbeRequest['op']
 export type RequestMap = { [R in ProbeRequest as R['op']]: R }
 export type RequestOf<O extends Op> = RequestMap[O]
 export type ReplyKind = ProbeReply['kind']
-export type ValueOp = Exclude<Op, 'pinned'>
+export type ValueOp = Exclude<Op, 'pinned' | 'privateHosts'>
 
 export type DescribeRequest = RequestOf<'describe'>
 export type ResolveRequest = RequestOf<'resolve'>

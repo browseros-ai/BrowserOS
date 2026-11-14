@@ -356,7 +356,8 @@ impl PageText {
         self.0
     }
 
-    /// The value, read in place: the camera reads a reply's walk offer and keeps the reply.
+    /// The value, read in place: the camera reads whether a reply names hosts waiting for its walk
+    /// and keeps the reply.
     pub(crate) fn as_value(&self) -> &Value {
         &self.0
     }

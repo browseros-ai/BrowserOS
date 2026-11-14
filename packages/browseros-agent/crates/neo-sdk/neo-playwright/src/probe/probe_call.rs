@@ -95,12 +95,9 @@ pub(crate) async fn cleanup(
 /// no mask and reads neither policy field; the policy is only the envelope every call carries,
 /// so it sends a fixed one. With [`cleanup`], the second sender that runs without an op.
 ///
-/// `walk` is the camera's one walk of the document's closed shadow roots, taken when the
-/// document's first answer offered it (`walkable`, `picture_check.rs`): elements inside them,
-/// resolved into `world` from a capture (`clickable_targets::closed_root_seeds`), which the
-/// world keeps for this question alone and never opens to its engine. That capture and those
-/// resolves are the other CDP traffic the camera sends outside an op; this call stays the one
-/// probe request it sends.
+/// `walk` is the camera's walk of closed shadow roots on demand (ruling R65,
+/// `picture_check.rs`): closed roots resolved into `world` from the hosts [`private_hosts`]
+/// handed over, which the world keeps for this question alone and never opens to its engine.
 pub(crate) async fn picture_question(
     world: &IsolatedWorld,
     walk: Option<&[String]>,
@@ -598,6 +595,69 @@ pub(crate) async fn pinned_nodes(
         Some(DeepNodes::Null) => Err(ProbeFailure::Gone(Ran::No)),
         Some(DeepNodes::Array(_)) | None => Err(ProbeFailure::Broken(
             "the probe returned an incomplete batch of pinned nodes".to_owned(),
+        )),
+    }
+}
+
+/// The hosts the camera's question has waiting (`privateHosts`, ruling R65), outside any op as
+/// that question is: elements a trusted typing event or the focus pointed at, which take no input
+/// themselves and may carry a closed shadow root the world does not know. Handed over by deep
+/// serialization, as [`pinned_nodes`] reads backend ids, so Rust takes no pin and no handle of a
+/// host: the call's remote array lives in `group`, the walk's own object group, until the walk
+/// ends. The page marks each host handed as it goes, so a host is asked once whatever follows.
+/// No page script runs: the request's handler only reads the world's own list.
+pub(crate) async fn private_hosts(
+    world: &IsolatedWorld,
+    group: &str,
+) -> Result<Vec<BackendNodeId>, ProbeFailure> {
+    let request = ProbeRequest::PrivateHosts;
+    let call = ProbeCall {
+        request: &request,
+        policy: ProbePolicy {
+            conformance: false,
+            may_have_other_frame: true,
+        },
+    };
+    // A reply that is no list (`uninstalled`, or an error reply) comes back as null.
+    let function = format!(
+        "function (call) {{ const hosts = ({CALL_FUNCTION}).call(this, call); \
+         return Array.isArray(hosts) ? hosts : null; }}"
+    );
+    let called: Called = world
+        .session()
+        .send(
+            "Runtime.callFunctionOn",
+            json!({
+                "objectId": world.global(),
+                "functionDeclaration": function,
+                "arguments": [{ "value": call }],
+                "objectGroup": group,
+                "serializationOptions": {
+                    "serialization": "deep",
+                    "maxDepth": 2,
+                    "additionalParameters": { "maxNodeDepth": 0, "includeShadowTree": "none" }
+                }
+            }),
+        )
+        .await
+        .map_err(ProbeFailure::from_core)?;
+    if let Some(exception) = called.exception_details {
+        return Err(ProbeFailure::Broken(format!(
+            "the probe threw: {}",
+            exception.message()
+        )));
+    }
+    match called.result.deep_serialized_value {
+        Some(DeepNodes::Array(nodes)) => Ok(nodes
+            .into_iter()
+            .filter_map(|node| match node {
+                DeepNode::Node { backend_node_id } => Some(backend_node_id),
+                DeepNode::Null => None,
+            })
+            .collect()),
+        Some(DeepNodes::Null) => Err(ProbeFailure::Gone(Ran::No)),
+        None => Err(ProbeFailure::Broken(
+            "the probe answered `privateHosts` with no list".to_owned(),
         )),
     }
 }

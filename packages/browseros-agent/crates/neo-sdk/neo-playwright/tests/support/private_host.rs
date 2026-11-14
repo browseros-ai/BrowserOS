@@ -147,6 +147,14 @@ pub(crate) fn pages() -> HashMap<String, Page> {
         ("maxlength", include_str!("../data/private/maxlength.html")),
         ("compare", include_str!("../data/private/compare.html")),
         (
+            "huge-staggered",
+            include_str!("../data/private/huge-staggered.html"),
+        ),
+        (
+            "closed-frame",
+            include_str!("../data/private/closed-frame.html"),
+        ),
+        (
             "card-limits",
             include_str!("../data/private/card-limits.html"),
         ),
@@ -157,6 +165,10 @@ pub(crate) fn pages() -> HashMap<String, Page> {
         (
             "closed-plain",
             include_str!("../data/private/closed-plain.html"),
+        ),
+        (
+            "closed-nested",
+            include_str!("../data/private/closed-nested.html"),
         ),
         (
             "pin-mirror",

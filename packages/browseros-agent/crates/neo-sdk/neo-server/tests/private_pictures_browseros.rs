@@ -493,13 +493,14 @@ await page.goto('data:text/html,' + encodeURIComponent(html));
 return { page };
 "#;
 
-/// Ruling R45's closed-root limit, on the whole stack: the camera walks a document's closed
-/// shadow roots itself at its first reading there, so a card number the page puts into a box
-/// inside one, with no snapshot, is withheld (main stored it). A closed root attached after that
-/// walk is the limit that stays: it is not walked again, and a picture can show what its box holds
-/// until a snapshot opens it.
+/// Ruling R45's named limit, on the whole stack (measured by the design's author): a value the
+/// page's own script writes into a box inside a closed shadow root fires no event, so until a
+/// snapshot of the document has walked that root, or typing has reached it or its box held the
+/// focus (the camera's walk on demand, ruling R65), Neo does not know the box, and a picture
+/// taken then can show what it holds. A snapshot that walks the root closes it for that
+/// document; a closed root attached after that walk is unknown again until the next one.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_box_in_a_closed_root_is_known_once_the_camera_walked_it() -> TestResult {
+async fn a_box_in_a_closed_root_is_known_once_a_snapshot_walked_it() -> TestResult {
     let Some(browser) = browser_or_skip() else {
         return Ok(());
     };
@@ -518,9 +519,9 @@ async fn closed_root(rig: &Rig) -> TestResult {
             Picture::Stored,
         ),
         (
-            "the page puts a card number in, no snapshot yet: the camera walked the root",
+            "the page puts a card number in, no snapshot yet: the limit",
             "await page.click('#fill'); await page.click('#go'); return true;",
-            Picture::Withheld,
+            Picture::Stored,
         ),
         (
             "after the script's own snapshot walked the root",
@@ -533,8 +534,7 @@ async fn closed_root(rig: &Rig) -> TestResult {
             Picture::Stored,
         ),
         (
-            "a second closed root attached after the walk and that snapshot, its box filled: the \
-             limit that stays",
+            "a second closed root attached after that snapshot, its box filled: the limit again",
             "await page.click('#later'); await page.click('#go'); return true;",
             Picture::Stored,
         ),

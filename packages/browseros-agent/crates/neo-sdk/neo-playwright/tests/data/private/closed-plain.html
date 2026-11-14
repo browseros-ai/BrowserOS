@@ -1,8 +1,15 @@
 <!doctype html><meta charset=utf-8><title>Closed plain</title>
-<!-- A CLOSED shadow root that holds a search box and a button, and no private box: the camera's
-     walk of closed roots finds the root and must keep this page's pictures as main does. -->
+<!-- A CLOSED shadow root that holds a search box and a button, and no private box, beside three
+     elements that take the focus and no input: a plain focusable div (#pad, no shadow root), a
+     video with controls (#v) and a details element (#d), whose roots the browser makes itself.
+     focusOn(id) gives one the focus. The camera's walk on demand asks the pad once and never the
+     other two, and the page keeps its pictures as on main. -->
 <div id=host></div>
+<div id=pad tabindex=0 style="width:80px;height:24px;border:1px solid #888">Pad</div>
+<video id=v controls width=200 height=60></video>
+<details id=d tabindex=0><summary>More</summary>Text</details>
 <script>
 const root = document.getElementById('host').attachShadow({ mode: 'closed' });
 root.innerHTML = '<label>Search <input id=search value="running shoes" style="width:280px;height:30px"></label><div onclick="1" style="width:80px;height:24px;border:1px solid #888">Go</div>';
+window.focusOn = (id) => { document.getElementById(id).focus(); return document.activeElement.id; };
 </script>

@@ -23,7 +23,7 @@ import { armInput, inputArrived } from './files'
 import { noteHolders } from './private-digest'
 import { privateStep } from './private-entry'
 import { look } from './private-look'
-import { privateShown } from './private-shown'
+import { privateHosts, privateShown } from './private-shown'
 import {
   type BootOptions,
   type Described,
@@ -123,6 +123,8 @@ function createProbe() {
     try {
       const { request, policy } = call
       if (request.op === 'pinned') return pinned(booted, request)
+      // By handle too: the camera's waiting hosts, read by Rust through deep serialization.
+      if (request.op === 'privateHosts') return privateHosts()
       const output = new FailureOutput(booted, policy)
       // Only synchronous engine work owns these hooks. Async handlers retain output for
       // later diagnostics, through its formatter or tree scope; no mutable mode survives here.
@@ -213,7 +215,8 @@ function hasKnownOp(request: unknown): request is ProbeRequest {
   if (typeof request !== 'object' || request === null) return false
   const op: unknown = Reflect.get(request, 'op')
   return (
-    typeof op === 'string' && (op === 'pinned' || Object.hasOwn(HANDLERS, op))
+    typeof op === 'string' &&
+    (op === 'pinned' || op === 'privateHosts' || Object.hasOwn(HANDLERS, op))
   )
 }
 

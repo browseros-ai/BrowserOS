@@ -107,7 +107,8 @@
     ]
   },
   "byHandle": [
-    "pinned"
+    "pinned",
+    "privateHosts"
   ],
   "anyRequest": [
     "error",
@@ -200,6 +201,9 @@
     {
       "op": "privateShown",
       "walk": true
+    },
+    {
+      "op": "privateHosts"
     },
     {
       "op": "webStorage",

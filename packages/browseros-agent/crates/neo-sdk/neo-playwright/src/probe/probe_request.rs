@@ -176,14 +176,19 @@ pub(crate) enum ProbeRequest {
     /// boolean. Neo's camera asks it in every frame before and after a picture. Reads no value
     /// out of the page.
     PrivateShown {
-        /// The camera's walk of the document's closed shadow roots: the call's nodes are elements
-        /// inside them, from a capture made because the answer said the document had none
-        /// (`walked: false`). The world keeps those roots for this question alone, never for its
-        /// engine (probe/private-shown.ts), and answers `walked: true` from then on.
+        /// The camera's walk of closed shadow roots on demand (ruling R65): the call's nodes are
+        /// closed roots Rust resolved into this world from the hosts `PrivateHosts` handed over.
+        /// The world keeps them for this question alone, never for its engine
+        /// (probe/private-shown.ts).
         #[serde(default, skip_serializing_if = "is_false")]
         #[ts(optional, as = "Option<bool>")]
         walk: bool,
     },
+    /// The hosts the camera's question has waiting, by handle (`returnByValue: false`, read
+    /// through deep serialization): elements a trusted typing event or the focus pointed at,
+    /// which take no input themselves and may carry a closed shadow root this world does not
+    /// know. Each is handed over once, whatever Rust then finds (ruling R65).
+    PrivateHosts,
     /// One read of one element, resolved in the same call.
     Read {
         target: ProbeTarget,
