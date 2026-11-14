@@ -370,9 +370,16 @@ async fn serve_with_boot_task(
         claw_server::services::runtime_file::write(&runtime_dir, &runtime_url).await;
     });
     let shutdown = runtime.state().shutdown;
+    let engine = runtime.state().neo;
     runtime.spawn_task("harness integration reconciliation", boot_task);
     axum::serve(listener, app.into_make_service())
-        .with_graceful_shutdown(wait_for_shutdown(shutdown))
+        .with_graceful_shutdown(async move {
+            wait_for_shutdown(shutdown).await;
+            // Stop SDK work before waiting for HTTP connections to drain. A run
+            // holding a response stream must not keep the child alive during
+            // shutdown, and the supervisor must never respawn it after this point.
+            engine.shutdown().await;
+        })
         .await
         .context("claw-server listener failed")
 }
