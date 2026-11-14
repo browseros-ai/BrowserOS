@@ -242,6 +242,7 @@ impl App {
 
         let store = open_trace(&config.env.trace_dir()).await?;
         let (trace, screenshots) = start_trace(&store);
+        let tabs = Arc::new(TabRegistry::new());
         let host = HostApi::bind(
             &config.env.host_api,
             HostInputs {
@@ -252,6 +253,7 @@ impl App {
                 cdp_port: config.launch.cdp_port,
                 settings_file: config.env.settings_file(),
                 settings_defaults: config.settings_defaults(),
+                tabs: Arc::clone(&tabs),
             },
         )
         .await
@@ -260,7 +262,6 @@ impl App {
         let settings = host.settings().clone();
         follow_trace_policy(&settings, trace.clone());
 
-        let tabs = Arc::new(TabRegistry::new());
         let native = NativeCapabilities::from_browseros_version(config.browseros_version());
         let browser = link(native, Arc::clone(&tabs));
         // Which task holds which tab, kept across a restart of Neo's server: every change of the
@@ -345,7 +346,6 @@ impl App {
             front,
             Arc::clone(&holds),
             Some(blank_tab),
-            Arc::clone(&tabs),
             shutdown.clone(),
         ));
         tokio::spawn(housekeeping(

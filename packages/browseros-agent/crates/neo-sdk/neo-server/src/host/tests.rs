@@ -147,6 +147,7 @@ impl Host {
             cdp_port: 0,
             settings_file: dir.path().join("settings.json"),
             settings_defaults: SettingsDefaults::default(),
+            tabs: Arc::clone(&tabs),
         };
         let sink = inputs.sink.clone();
         let host = HostApi::bind(&config, inputs).await?;
@@ -198,7 +199,6 @@ impl Host {
             Arc::default(),
             Arc::default(),
             Some(Arc::clone(&blank_tab)),
-            Arc::clone(&tabs),
             shutdown.clone(),
         ));
         Ok(Self {

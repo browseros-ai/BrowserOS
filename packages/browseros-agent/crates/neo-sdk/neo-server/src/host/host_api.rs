@@ -61,6 +61,8 @@ pub(crate) struct HostInputs {
     pub(crate) settings_file: PathBuf,
     /// The downloads default discovered by the app, also used when there is no host listener.
     pub(crate) settings_defaults: SettingsDefaults,
+    /// The app's tab registry, whose task book `GET /v1/tabs` reads for each tab's `taskId`.
+    pub(crate) tabs: Arc<TabRegistry>,
 }
 
 /// The bound host listener and the auth in front of every request on it.
@@ -143,7 +145,6 @@ impl HostApi {
         front: Arc<AgentFront>,
         holds: Arc<HostHolds>,
         blank_tab: Option<Arc<NeoTab>>,
-        tabs: Arc<TabRegistry>,
         shutdown: CancellationToken,
     ) {
         let Self {
@@ -164,6 +165,7 @@ impl HostApi {
             cdp_port,
             settings_file: _,
             settings_defaults: _,
+            tabs,
         } = inputs;
         let service = Service::start(ServiceInputs {
             store,
