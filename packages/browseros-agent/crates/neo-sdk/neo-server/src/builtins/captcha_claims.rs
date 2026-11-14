@@ -99,13 +99,14 @@ pub(super) fn busy(holder: OperationId) -> OperationError {
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error;
     use std::sync::Arc;
 
     use browseros_core::TabId;
     use neo_trace::{Effect, OperationId, RunId};
 
     use super::CaptchaClaims;
-    use crate::dispatch::{Caller, ErrorCode, MethodSpec, Policy, PolicyCheck};
+    use crate::dispatch::{Caller, ErrorCode, Listing, MethodSpec, Policy, PolicyCheck};
 
     fn check(
         claims: &CaptchaClaims,
@@ -163,5 +164,50 @@ mod tests {
             Ok(()),
             "the claim ends with the solve's op"
         );
+    }
+
+    #[test]
+    fn enabled_cdp_respects_every_other_claim_and_their_release() -> Result<(), Box<dyn Error>> {
+        let claims = Arc::new(CaptchaClaims::default());
+        let run = RunId::new();
+        let (solve, other) = (OperationId::new(run, 1), OperationId::new(run, 2));
+        let own = claims
+            .try_claim(TabId(7), solve)
+            .map_err(|holder| format!("tab 7 already claimed by {holder}"))?;
+        let foreign = claims
+            .try_claim(TabId(8), other)
+            .map_err(|holder| format!("tab 8 already claimed by {holder}"))?;
+        let method = MethodSpec {
+            listing: Listing::Own("neo.cdp"),
+            ..MethodSpec::new("neo.cdp", Effect::Write)
+        };
+        let check = |tab, operation| {
+            claims
+                .check(&PolicyCheck {
+                    method: &method,
+                    caller: Caller::Script,
+                    tab,
+                    operation,
+                    lock_pass: None,
+                })
+                .map_err(|error| error.code())
+        };
+        for tab in [None, Some(TabId(7)), Some(TabId(8)), Some(TabId(9))] {
+            assert_eq!(
+                check(tab, solve),
+                Err(ErrorCode::PAGE_BUSY),
+                "raw CDP reaches another solve's tab even through its holder's own page"
+            );
+        }
+        drop(foreign);
+        for tab in [None, Some(TabId(7)), Some(TabId(9))] {
+            assert_eq!(check(tab, solve), Ok(()), "an op may pass its own claim");
+            assert_eq!(check(tab, other), Err(ErrorCode::PAGE_BUSY));
+        }
+        drop(own);
+        for tab in [None, Some(TabId(7)), Some(TabId(9))] {
+            assert_eq!(check(tab, other), Ok(()), "release restores raw CDP");
+        }
+        Ok(())
     }
 }

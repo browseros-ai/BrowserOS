@@ -61,6 +61,8 @@ struct Harness {
     /// through `holds`.
     locks: Arc<Locks>,
     takeover: Arc<TakeoverLock>,
+    /// The same claims the dispatcher checks, also available without a paid provider.
+    claims: Arc<CaptchaClaims>,
     /// The host's claims as the janitor reads them: `locks`, and the fits a test puts in
     /// `fits` (a fit needs Neo's screen, which the fake browser has not).
     holds: Arc<HostHolds>,
@@ -165,6 +167,7 @@ impl Harness {
             sink,
             locks,
             takeover,
+            claims,
             holds,
             fits,
             settings,
@@ -1688,6 +1691,10 @@ async fn script_cdp_off_does_not_resolve_even_a_lazy_page() -> Result<(), Box<dy
     );
     let (run, _guard) = harness.run()?;
     let creates = harness.fake.count("Browser.createTab");
+    let _claim = harness
+        .claims
+        .try_claim(owner.tab, OperationId::new(RunId::new(), 1))
+        .map_err(|holder| format!("tab already claimed by {holder}"))?;
     let (op, reply) = harness
         .submit_op(
             &run,
@@ -1915,6 +1922,51 @@ async fn script_cdp_calls_on_any_page_are_refused_under_a_lock_then_work_after_u
             "unlock restores both browser-level and page-session raw calls"
         );
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn script_cdp_respects_a_captcha_claim_on_any_page_until_released()
+-> Result<(), Box<dyn Error>> {
+    let harness = Harness::with_mode::<true>(None, DESKTOP_MODE).await?;
+    let solving = harness.owner_tab("https://captcha.example/").await?;
+    let mine = harness.owner_tab("https://agent.example/").await?;
+    let (run, _guard) = harness.run()?;
+    let claim = harness
+        .claims
+        .try_claim(solving.tab, OperationId::new(RunId::new(), 1))
+        .map_err(|holder| format!("tab already claimed by {holder}"))?;
+    let inputs = [
+        json!({ "method": "Browser.getWindows" }),
+        json!({ "method": "Browser.getWindows", "page": handle(&mine) }),
+    ];
+    let before = harness.fake.count("Browser.getWindows");
+    for input in &inputs {
+        let refused = failure(harness.submit(&run, "neo.cdp", input.clone()).await)?;
+        assert_eq!(
+            (
+                refused.error.owner(),
+                refused.error.code(),
+                refused.delivery
+            ),
+            (ErrorOwner::Script, ErrorCode::PAGE_BUSY, Delivery::NotSent),
+            "raw CDP may reach the solving tab even through an unrelated page"
+        );
+    }
+    assert_eq!(
+        harness.fake.count("Browser.getWindows"),
+        before,
+        "no raw command is sent while another operation holds a claim"
+    );
+    drop(claim);
+    for input in &inputs {
+        value(harness.submit(&run, "neo.cdp", input.clone()).await)?;
+    }
+    assert_eq!(
+        harness.fake.count("Browser.getWindows"),
+        before + inputs.len(),
+        "claim release restores browser-level and page-session raw calls"
+    );
     Ok(())
 }
 
