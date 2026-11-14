@@ -26,7 +26,7 @@ pub struct Tab {
     /// Distinct sorted task ids from retained committed runs that touched this tab.
     #[serde(rename = "taskIds")]
     pub task_ids: Vec<String>,
-    /// The task holding this tab now: the task whose run opened it, or the task of the tab that opened it as a popup. Under the `task` tab scope, the runs of every task in that task's family see it: the family starts at the task a host named, and every task its runs create (`neo.createTask`, at any depth) joins it, so sibling tasks see each other's tabs. Absent on a tab no task holds, such as one the owner opened.
+    /// The task holding this tab now: the task whose run opened it, or the task of the tab that opened it as a popup. Under the `task` tab scope, the runs of every task in that task's family see it: the family starts at the task a host named, and every task its runs create (`neo.createTask`, at any depth) joins it, so sibling tasks see each other's tabs. A task keeps its family for its life, even when a host later names a task an agent created. Absent on a tab no task holds, such as one the owner opened.
     #[serde(rename = "taskId", skip_serializing_if = "Option::is_none")]
     pub task_id: Option<String>,
     /// Present on a tab Neo keeps for itself. `neo`: Neo's one blank tab, which keeps the browser open when every other tab closes. No script sees or reaches it, no task takes it, and Neo opens another if it closes; a lock, a fit, a keep, a takeover or a display treats it as any tab. Once it shows a page (the owner browsed in it, or a fit navigated it), Neo opens a new blank tab and the old one becomes an ordinary tab without this field. Absent on every other tab.

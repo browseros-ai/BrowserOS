@@ -1450,7 +1450,8 @@ components:
             that opened it as a popup. Under the `task` tab scope, the runs of every task in that
             task's family see it: the family starts at the task a host named, and every task its
             runs create (`neo.createTask`, at any depth) joins it, so sibling tasks see each
-            other's tabs. Absent on a tab no task holds, such as one the owner opened.
+            other's tabs. A task keeps its family for its life, even when a host later names a
+            task an agent created. Absent on a tab no task holds, such as one the owner opened.
         owner:
           type: string
           x-extensible-enum: [neo]
