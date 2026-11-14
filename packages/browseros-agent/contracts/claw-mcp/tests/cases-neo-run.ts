@@ -1441,6 +1441,8 @@ await page.getByRole('button', {name: 'Submit', exact: true}).click();
 return page.tabId;`,
         })
         expectOk(result, `plain pictured run ${run + 1}`)
+        // The audit worker coalesces pending previews. Wait for each capture so
+        // this sequential session proves two stored pictures rather than one latest image.
         await waitUntil(
           async () => {
             screenshotIds = await readScreenshots()
