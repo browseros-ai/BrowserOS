@@ -1158,7 +1158,7 @@ fn by_hand(tab: i64, url: &str, in_front: bool) -> OpenedTab {
 /// The owner opens a tab during the takeover, and the tab watch's open reaches the takeovers.
 fn owner_opens(h: &Harness, tab: i64, url: &str) {
     h.browser.open_tab(tab, url);
-    h.takeovers.note_opened(TabId(tab));
+    h.takeovers.note_opened(TabId(tab), None);
 }
 
 /// The hand-back: a release lists each tab the owner opened while the takeover was active and is
@@ -1196,7 +1196,7 @@ async fn a_popup_of_the_takeovers_tab_is_listed_with_its_task_and_opener() -> Te
     let takeover = h.takeovers.start(request(None)?).await?;
     h.browser
         .open_popup(3, 8, "https://card-check.example/", "link");
-    h.takeovers.note_opened(TabId(8));
+    h.takeovers.note_opened(TabId(8), None);
     let released = h
         .takeovers
         .release(takeover.id, ReleaseReason::Host)
@@ -1379,7 +1379,7 @@ async fn a_popup_keeps_its_opener_after_the_opener_closes() -> TestResult {
         .insert(8, 3);
     h.browser
         .open_popup(3, 8, "https://sign-in.example/", "link");
-    h.takeovers.note_opened(TabId(8));
+    h.takeovers.note_opened(TabId(8), None);
     // The takeover's tab closes; the app forgets the popup's link with it.
     known
         .lock()

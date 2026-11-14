@@ -2,7 +2,7 @@
 
 use std::any::{Any, TypeId};
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
 use browseros_core::{TabId, TargetId};
 use neo_takeover::TabHold;
@@ -36,7 +36,15 @@ const OPENER_HOPS: usize = 16;
 /// else closes the tab.
 pub(crate) struct TabRegistry {
     state: Mutex<TabState>,
+    /// Where the tab watch reports each tab it sees open, with its opener, as it sees it: the
+    /// host's takeovers, which list the tabs opened during each (`openedTabs`). Set once by the
+    /// host API; until then opens go nowhere.
+    opens: OnceLock<OpenSink>,
 }
+
+/// Takes each tab the tab watch sees open and the tab that opened it, synchronously, before the
+/// watch sends any close from the same listing. It must not wait.
+pub(crate) type OpenSink = Arc<dyn Fn(TabId, Option<TabId>) + Send + Sync>;
 
 /// Who opened a tab. Core has no public `is_agent_created`, so Neo's own page opener marks its
 /// tabs here. A popup an agent's tab opened is the agent's too (the settings design, decision
@@ -90,6 +98,7 @@ impl TabRegistry {
     pub(crate) fn new() -> Self {
         Self {
             state: Mutex::default(),
+            opens: OnceLock::new(),
         }
     }
 
@@ -429,6 +438,21 @@ impl TabRegistry {
     /// discovery announces every live popup again.
     pub(crate) fn forget_openers(&self) {
         self.lock().announced.clear();
+    }
+
+    /// Where the tab watch reports each tab it sees open ([`OpenSink`]), once: false when one is
+    /// already set, which stays.
+    pub(crate) fn set_open_sink(&self, sink: OpenSink) -> bool {
+        self.opens.set(sink).is_ok()
+    }
+
+    /// The tab watch saw `tab` open, opened by `opener` as the browser announced it. Reported at
+    /// once, outside the registry's lock, so no reader waits behind another (a takeover's
+    /// release) to hear of it.
+    pub(crate) fn opened(&self, tab: TabId, opener: Option<TabId>) {
+        if let Some(sink) = self.opens.get() {
+            sink(tab, opener);
+        }
     }
 
     /// Where the task book's changes go from now on ([`BookSink`]), once: false when a sink is

@@ -612,12 +612,13 @@ impl Takeovers {
             .collect()
     }
 
-    /// `tab` opened, and was not open before: every active takeover notes it, up to
-    /// [`OPENED_TABS`] each, for its release's `openedTabs`. A takeover still starting or already
-    /// releasing notes nothing: the owner reaches the screen once one is active, and a release
-    /// lists what it noted when it began.
-    pub fn note_opened(&self, tab: TabId) {
-        let opener = (self.links.opener)(tab);
+    /// `tab` opened, and was not open before, opened by `opener` as the browser announced it:
+    /// every active takeover notes it, up to [`OPENED_TABS`] each, for its release's
+    /// `openedTabs`. A takeover still starting or already releasing notes nothing: the owner
+    /// reaches the screen once one is active, and a release lists what it noted when it began.
+    /// Without an announced opener, the app's links are asked now.
+    pub fn note_opened(&self, tab: TabId, opener: Option<TabId>) {
+        let opener = opener.or_else(|| (self.links.opener)(tab));
         for entry in self.table().values_mut() {
             if let Phase::Active(held) = &mut entry.phase
                 && held.opened.len() < OPENED_TABS

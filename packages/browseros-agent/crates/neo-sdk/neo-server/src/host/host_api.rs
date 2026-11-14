@@ -187,7 +187,17 @@ impl HostApi {
                 let tabs = Arc::clone(&tabs);
                 Arc::new(move |tab| tabs.holder(tab).map(|holder| holder.task.to_string()))
             },
-            tab_opener: Arc::new(move |tab| tabs.opener(tab)),
+            tab_opener: {
+                let tabs = Arc::clone(&tabs);
+                Arc::new(move |tab| tabs.opener(tab))
+            },
+        });
+        // Each tab the tab watch sees open reaches every active takeover at once, with its
+        // opener as the browser announced it, for the release's `openedTabs`. Not through the
+        // tab feed, which waits out each close's release before it reads on.
+        tabs.set_open_sink({
+            let service = service.clone();
+            Arc::new(move |tab, opener| service.tab_opened(tab, opener))
         });
         takeover.arm(Arc::clone(service.locks()));
         holds.arm({

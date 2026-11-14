@@ -305,11 +305,12 @@ impl Service {
         ));
     }
 
-    /// A tab opened that was not open before, as the app's tab watch saw it: every active
-    /// takeover notes it for its release's `openedTabs`, so a host learns which tabs the owner
-    /// opened during a handoff. Neo gives none of them to a task.
-    pub fn tab_opened(&self, tab: TabId) {
-        self.state.takeovers.note_opened(tab);
+    /// A tab opened that was not open before, as the app's tab watch saw it, with the tab that
+    /// opened it when the browser said: every active takeover notes it for its release's
+    /// `openedTabs`, so a host learns which tabs the owner opened during a handoff. Neo gives
+    /// none of them to a task. It must be called as the watch sees the open, not after a wait.
+    pub fn tab_opened(&self, tab: TabId, opener: Option<TabId>) {
+        self.state.takeovers.note_opened(tab, opener);
     }
 
     /// Where a reconcile's listing begins among the host's changes to tabs. Take it before

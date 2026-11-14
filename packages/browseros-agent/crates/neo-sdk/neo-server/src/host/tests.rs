@@ -36,6 +36,7 @@ use neo_playwright::FileAccess;
 use neo_trace::TraceSink;
 
 mod fill;
+mod hand_back;
 
 use self::fill::{ScriptedEntry, register_controls};
 
