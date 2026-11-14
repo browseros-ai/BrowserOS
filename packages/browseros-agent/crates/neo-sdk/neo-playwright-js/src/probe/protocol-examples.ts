@@ -110,7 +110,12 @@ export const REQUEST_EXAMPLES: { [O in Op]: AtLeastOne<RequestOf<O>> } = {
   disarm: [{ op: 'disarm' }],
   frameBox: [
     { op: 'frameBox', iframe: chunk('aria-ref=#1'), look: false },
-    { op: 'frameBox', iframe: { pin: 4 }, point: { x: 40.5, y: 12 }, look: true },
+    {
+      op: 'frameBox',
+      iframe: { pin: 4 },
+      point: { x: 40.5, y: 12 },
+      look: true,
+    },
   ],
   edit: [
     { op: 'edit', pin: 3, edit: { kind: 'fill', value: 'hello' } },

@@ -82,7 +82,8 @@ function shiftedOrigin(view: Window, iframe: Element): Point | null {
 function onlyShifts(style: CSSStyleDeclaration): boolean {
   if (style.scale !== 'none' && style.scale !== '') return false
   if (style.rotate !== 'none' && style.rotate !== '') return false
-  if (style.zoom !== '1' && style.zoom !== '' && style.zoom !== 'normal') return false
+  if (style.zoom !== '1' && style.zoom !== '' && style.zoom !== 'normal')
+    return false
   if (style.offsetPath !== 'none' && style.offsetPath !== '') return false
   if (style.transform === 'none' || style.transform === '') return true
   let matrix: DOMMatrixReadOnly
@@ -91,7 +92,8 @@ function onlyShifts(style: CSSStyleDeclaration): boolean {
   } catch {
     return false
   }
-  const near = (value: number, wanted: number) => Math.abs(value - wanted) < EPSILON
+  const near = (value: number, wanted: number) =>
+    Math.abs(value - wanted) < EPSILON
   return (
     near(matrix.m11, 1) &&
     near(matrix.m12, 0) &&

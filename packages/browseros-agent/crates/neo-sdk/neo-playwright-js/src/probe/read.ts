@@ -158,7 +158,8 @@ function viewCentre(element: Element): { x: number; y: number } | null {
   const x = box.x + box.width / 2
   const y = box.y + box.height / 2
   const view = element.ownerDocument.defaultView
-  if (!view || x < 0 || y < 0 || x >= view.innerWidth || y >= view.innerHeight) return null
+  if (!view || x < 0 || y < 0 || x >= view.innerWidth || y >= view.innerHeight)
+    return null
   return { x, y }
 }
 

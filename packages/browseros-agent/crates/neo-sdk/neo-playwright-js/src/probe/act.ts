@@ -21,6 +21,7 @@
  * action through.
  */
 import type { FailureOutput } from './failure-output'
+import { lookFrameBox } from './private-frame'
 import type {
   ActRequest,
   DisarmRequest,
@@ -33,7 +34,6 @@ import type {
   ScrollPlan,
   VerdictRequest,
 } from './protocol'
-import { lookFrameBox } from './private-frame'
 import { resolutionOf, resolveTarget } from './resolve'
 import { ProbeError, type World } from './world'
 
