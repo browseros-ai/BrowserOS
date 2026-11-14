@@ -13,8 +13,10 @@ The page is served here on 127.0.0.1, with a same-origin child and a child from 
 different site, so Chromium puts it in its own process, as a payment or a sign-in frame is. Each
 shape runs `reps` times (default 10), each repetition in fresh tasks:
 
-  observer       a task with no tab of its own reads another task's tab (the first host's read of
-                 the agent's tab), with no step before the walk, and after a title
+  observer       a run without a task reads a task's tab (the first host's read of the agent's
+                 tab: under the default task scope a host's own reads send no task, since a run
+                 that carries one sees only its task family's tabs), with no step before the
+                 walk, and after a title
   own-later      a later run of the task that opened the tab takes it from context.pages()
   added          a cross-site frame the page adds 1.5 s after it loads, seen by a run that read
                  the tab's frames and then waited
@@ -64,18 +66,19 @@ class Site(http.server.BaseHTTPRequestHandler):
 
 
 class Runs:
-    """`run` calls over one MCP session, each naming its task in `_meta` as a host does."""
+    """`run` calls over one MCP session, each naming its task in `_meta` as a host does, or none
+    for a host's own read."""
 
     def __init__(self, mcp_url: str):
         self.client = connect(mcp_url)
 
-    def run(self, task: str, code: str):
+    def run(self, task: str | None, code: str):
         result = self.client.call(
             "tools/call",
             {
                 "name": "run",
                 "arguments": {"code": code, "timeout": 60_000},
-                "_meta": {RUN_META: {"taskId": task}},
+                "_meta": {RUN_META: {"taskId": task} if task is not None else {}},
             },
         )
         structured = result.get("structuredContent") or {}
@@ -113,16 +116,16 @@ def main() -> None:
             agent = fresh("agent")
             tab, _ = runs.run(agent, f"await page.goto({json.dumps(origin + '/outer')}); return page.tabId;")
             full = {"cross": True, "sameSite": True, "frames": 3}
-            value, error = runs.run(fresh("observer"), lookup(tab) + walk)
+            value, error = runs.run(None, lookup(tab) + walk)
             check("observer", value, error, {**full, "same": False})
-            value, error = runs.run(fresh("observer"), lookup(tab) + "await p.title();\n" + walk)
+            value, error = runs.run(None, lookup(tab) + "await p.title();\n" + walk)
             check("observer-after-title", value, error, {**full, "same": False})
             value, error = runs.run(agent, lookup(tab) + walk)
             check("own-later", value, error, full)
             late = fresh("late")
             late_tab, _ = runs.run(late, f"await page.goto({json.dumps(origin + '/late')}); return page.tabId;")
             value, error = runs.run(
-                fresh("observer"),
+                None,
                 lookup(late_tab) + "p.frames();\nawait page.waitForTimeout(2500);\n" + walk,
             )
             check("added", value, error, {"cross": True, "frames": 2})

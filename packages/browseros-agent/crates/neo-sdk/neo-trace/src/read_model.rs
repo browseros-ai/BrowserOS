@@ -6,7 +6,7 @@
 
 use crate::{
     Delivery, Effect, EpochMillis, ErrorRecord, OperationId, OperationKind, OperationSite, Outcome,
-    PageState, RequestId, RunDownload, RunEffects, RunId, RunStatus, TaskId,
+    PageState, RequestId, RunDownload, RunEffects, RunId, RunStatus, RunTabsScope, TaskId,
 };
 use browseros_core::TabId;
 use serde_json::Value;
@@ -158,6 +158,8 @@ pub struct RunSummary {
     pub id: RunId,
     /// The host's task it belongs to.
     pub task_id: Option<TaskId>,
+    /// Which tabs it saw; absent for runs recorded before Neo kept it, which saw every tab.
+    pub tabs_scope: Option<RunTabsScope>,
     /// The tabs its operations targeted, ascending.
     pub tabs: Vec<TabId>,
     /// How it ended, or `Running`.

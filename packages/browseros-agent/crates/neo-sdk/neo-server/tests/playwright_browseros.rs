@@ -280,6 +280,21 @@ async fn context_pages_lists_every_tab_in_a_runs_first_statement() -> TestResult
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_bound_runs_first_statement_lists_only_its_tasks_tabs() -> TestResult {
+    on_browseros(|rig| Box::pin(bound_tabs_first(rig))).await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_bound_run_hears_the_tab_it_opens_while_it_waits_for_one() -> TestResult {
+    on_browseros(|rig| Box::pin(bound_hears_its_new_tab(rig))).await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_bound_run_is_refused_another_tasks_tab_and_a_taskless_run_its_task() -> TestResult {
+    on_browseros(|rig| Box::pin(bound_walls(rig))).await
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_script_fills_and_clicks_a_form_and_expects_the_answer() -> TestResult {
     on_browseros(|rig| Box::pin(fill_and_click(rig))).await
 }
@@ -972,9 +987,18 @@ async fn on_browseros(
 
 /// The reply of one `run`, which must have succeeded.
 async fn reply_of(rig: &Rig, code: &str, task: &str) -> Result<Value, Box<dyn Error>> {
+    reply_with(rig, code, &json!({ "taskId": task })).await
+}
+
+/// [`reply_of`] for a run that carries no task, which under task scope still sees every tab.
+async fn untasked_reply_of(rig: &Rig, code: &str) -> Result<Value, Box<dyn Error>> {
+    reply_with(rig, code, &json!({})).await
+}
+
+async fn reply_with(rig: &Rig, code: &str, meta: &Value) -> Result<Value, Box<dyn Error>> {
     rig.until_ready().await?;
     let client = rig.client().await?;
-    let result = run(&client, code, &json!({ "taskId": task })).await?;
+    let result = run(&client, code, meta).await?;
     let meta = outcome(&result)?;
     assert_eq!(meta.get("status"), Some(&json!("ok")), "{result:?}");
     client.cancel().await?;
@@ -1001,19 +1025,199 @@ async fn listen_first(rig: &Rig) -> TestResult {
     Ok(())
 }
 
+/// The owner's tab: no task holds it. Neo's own blank tab, which the launch tab becomes, is
+/// never listed.
+const OWNER_TAB: &str = "data:text/html,owner-tab";
+
+/// A run without a task, which every tab is visible to under either tab scope.
 async fn tabs_first(rig: &Rig) -> TestResult {
-    let reply = reply_of(
-        rig,
-        "return context.pages().map((tab) => tab.url());",
-        "tabs-first",
+    open_owner_tab(rig, OWNER_TAB).await?;
+    let reply = untasked_reply_of(rig, "return context.pages().map((tab) => tab.url());").await?;
+    assert_eq!(
+        reply.get("value"),
+        Some(&json!([OWNER_TAB])),
+        "the owner's tab, listed before any op: {reply}"
+    );
+    Ok(())
+}
+
+/// Under the `task` tab scope, the default, a run that carries a task lists only its task's
+/// tabs, none yet, though the owner has a tab open: `context.pages()` is not the browser's tab
+/// count. Its reply says it was bound; a run without a task says it was not.
+async fn bound_tabs_first(rig: &Rig) -> TestResult {
+    open_owner_tab(rig, OWNER_TAB).await?;
+    let client = rig.client().await?;
+    let listing = "return context.pages().map((tab) => tab.url());";
+    let bound = run(&client, listing, &json!({ "taskId": "bound-first" })).await?;
+    let meta = outcome(&bound)?;
+    assert_eq!(meta.get("tabsScope"), Some(&json!("task")), "{bound:?}");
+    assert_eq!(
+        bound
+            .structured_content
+            .as_ref()
+            .and_then(|reply| reply.get("value")),
+        Some(&json!([])),
+        "its task has no tab yet: {bound:?}"
+    );
+    let free = run(&client, listing, &json!({})).await?;
+    assert_eq!(outcome(&free)?.get("tabsScope"), Some(&json!("browser")));
+    assert_eq!(
+        free.structured_content
+            .as_ref()
+            .and_then(|reply| reply.get("value")),
+        Some(&json!([OWNER_TAB])),
+        "a run without a task sees the owner's tab: {free:?}"
+    );
+    client.cancel().await?;
+    Ok(())
+}
+
+/// Under the `task` tab scope, a bound run's own new tab is its own the moment the browser names
+/// it: a `page` wait raced with `context.newPage()`, the usual Playwright idiom, hears that tab,
+/// and the run lists it and nothing of the owner's.
+async fn bound_hears_its_new_tab(rig: &Rig) -> TestResult {
+    open_owner_tab(rig, OWNER_TAB).await?;
+    let client = rig.client().await?;
+    let script = r"
+const [heard, opened] = await Promise.all([
+  context.waitForEvent('page', { timeout: 10000 }),
+  context.newPage(),
+]);
+const listed = context.pages().map((tab) => tab.tabId);
+await opened.close();
+return { heard: heard.tabId === opened.tabId, listed: listed.length === 1 && listed[0] === opened.tabId };
+";
+    let result = run(&client, script, &json!({ "taskId": "bound-new-page" })).await?;
+    client.cancel().await?;
+    let meta = outcome(&result)?;
+    assert_eq!(meta.get("status"), Some(&json!("ok")), "{result:?}");
+    assert_eq!(meta.get("tabsScope"), Some(&json!("task")), "{result:?}");
+    assert_eq!(
+        result
+            .structured_content
+            .as_ref()
+            .and_then(|reply| reply.get("value")),
+        Some(&json!({ "heard": true, "listed": true })),
+        "{result:?}"
+    );
+    Ok(())
+}
+
+/// The default's two walls, as the image's `task-scope` check drives them: a run of another task
+/// neither lists nor may name (`page_not_in_task`, nothing sent) a task's tab, a tab no task
+/// holds, or the tab of a task the first task's run created; and a run without a task that asks
+/// for a host's task gets `task_not_found`. The run without a task still reads the tab, and the
+/// owner task's later run has its own tab and its created task's, not the loose one.
+async fn bound_walls(rig: &Rig) -> TestResult {
+    rig.until_ready().await?;
+    let client = rig.client().await?;
+    let owner = json!({ "taskId": "wall-owner" });
+    let tab = opened_tab(
+        &client,
+        "await page.goto('data:text/html,<title>walled</title>'); return page.tabId;",
+        &owner,
+    )
+    .await?;
+    let loose = opened_tab(
+        &client,
+        "await page.goto('data:text/html,<title>loose</title>'); return page.tabId;",
+        &json!({}),
+    )
+    .await?;
+    let created = opened_tab(
+        &client,
+        "const t = await neo.createTask(); const p = await t.newPage(); \
+         await p.goto('data:text/html,<title>created</title>'); return p.tabId;",
+        &owner,
+    )
+    .await?;
+    let listed = run(
+        &client,
+        "return context.pages().map((q) => q.tabId);",
+        &json!({ "taskId": "wall-other" }),
+    )
+    .await?;
+    assert_eq!(script_value(&listed), Some(json!([])), "{listed:?}");
+    for target in [tab, loose, created] {
+        let named = run(
+            &client,
+            &format!(
+                "return await __neo.invoke('page.title', {{ page: {{ '$neo': 'page', tab: {target} }} }});"
+            ),
+            &json!({ "taskId": "wall-other" }),
+        )
+        .await?;
+        assert_eq!(
+            error_code(&named),
+            Some(json!("page_not_in_task")),
+            "{target}: {named:?}"
+        );
+    }
+    let mine = run(
+        &client,
+        &format!(
+            "const t = (id) => context.pages().find((q) => q.tabId === id);\n\
+             return {{ own: (await t({tab})?.title()) ?? null, created: (await t({created})?.title()) ?? null, loose: !!t({loose}) }};"
+        ),
+        &owner,
     )
     .await?;
     assert_eq!(
-        reply.get("value"),
-        Some(&json!(["about:blank"])),
-        "the tab the browser started with, listed before any op: {reply}"
+        script_value(&mine),
+        Some(json!({ "own": "walled", "created": "created", "loose": false })),
+        "{mine:?}"
     );
+    let fetched = run(
+        &client,
+        "return (await neo.task('wall-owner')).id;",
+        &json!({}),
+    )
+    .await?;
+    assert_eq!(
+        error_code(&fetched),
+        Some(json!("task_not_found")),
+        "{fetched:?}"
+    );
+    assert_eq!(outcome(&fetched)?.get("tabsScope"), Some(&json!("browser")));
+    let read = format!(
+        "const p = context.pages().find((q) => q.tabId === {tab}); return p ? await p.title() : null;"
+    );
+    for meta in [json!({}), owner] {
+        let result = run(&client, &read, &meta).await?;
+        assert_eq!(
+            script_value(&result),
+            Some(json!("walled")),
+            "{meta}: {result:?}"
+        );
+    }
+    client.cancel().await?;
     Ok(())
+}
+
+/// A run's value, `None` when it failed.
+fn script_value(result: &CallToolResult) -> Option<Value> {
+    result
+        .structured_content
+        .as_ref()
+        .and_then(|reply| reply.get("value"))
+        .cloned()
+}
+
+/// A failed run's error code.
+fn error_code(result: &CallToolResult) -> Option<Value> {
+    result
+        .structured_content
+        .as_ref()
+        .and_then(|reply| reply.pointer("/error/code"))
+        .cloned()
+}
+
+/// The tab id a script that opens one returns, run with `meta`.
+async fn opened_tab(client: &Client, code: &str, meta: &Value) -> Result<i64, Box<dyn Error>> {
+    let result = run(client, code, meta).await?;
+    script_value(&result)
+        .and_then(|value| value.as_i64())
+        .ok_or_else(|| format!("no tab: {result:?}").into())
 }
 
 async fn drive(rig: &Rig) -> TestResult {
@@ -1318,6 +1522,24 @@ fn assert_owner_reads_refused(seen: &Value) {
 /// Opens `urls` as the owner's own tabs, outside any script, and waits until the browser lists
 /// the owner's file page at `owner_url` and every hop page on the web page it moves on to.
 /// Returns the browser's listing.
+/// Opens `url` in a tab of the owner's, as they would, once Neo is ready, and waits until the
+/// browser lists it.
+async fn open_owner_tab(rig: &Rig, url: &str) -> TestResult {
+    rig.until_ready().await?;
+    put(rig.cdp_port(), &format!("/json/new?{url}")).await?;
+    time::timeout(Duration::from_secs(15), async {
+        while !get(rig.cdp_port(), "/json/list")
+            .await?
+            .contains(&format!("\"url\": \"{url}\""))
+        {
+            time::sleep(Duration::from_millis(200)).await;
+        }
+        Ok::<_, Box<dyn Error>>(())
+    })
+    .await
+    .map_err(|_elapsed| "the owner's tab did not open")?
+}
+
 async fn open_owner_tabs(
     rig: &Rig,
     urls: &[String],
@@ -1549,7 +1771,8 @@ async fn owner_file_tab(rig: &Rig) -> TestResult {
         json!(format!("file://{}/", dir.path().display())),
         json!(server),
     );
-    let reply = reply_of(rig, &code, "owner-file-tab").await?;
+    // Without a task: the owner's tabs are no task's, so only a run without one lists them.
+    let reply = untasked_reply_of(rig, &code).await?;
     let seen = reply.get("value").ok_or("the script returns what it saw")?;
 
     // What a script sees: the tab is listed, with its URL, and nothing else.

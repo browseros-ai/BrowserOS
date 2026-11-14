@@ -20,10 +20,11 @@ use neo_takeover::ScreenSize;
 use neo_takeover::testing::FakeXvnc;
 use neo_trace::{
     Delivery, Effect, EpochMillis, OperationEnded, OperationId, OperationKind, OperationStarted,
-    Outcome, RedactionLimits, Redactor, RequestId, RunEnded, RunId, RunStarted, RunStatus, TaskId,
-    TraceSink, TraceStore, WriterConfig, screenshot_queue, spawn_writer,
+    Outcome, RedactionLimits, Redactor, RequestId, RunEnded, RunId, RunStarted, RunStatus,
+    RunTabsScope, TaskId, TraceSink, TraceStore, WriterConfig, screenshot_queue, spawn_writer,
 };
 use serde_json::Value;
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 use tower::ServiceExt;
@@ -73,6 +74,9 @@ pub(crate) struct Harness {
     /// The tab the app keeps for itself (its blank tab), as `ServiceInputs::tab_owner` reports
     /// it; `None` until a test sets one.
     pub(crate) neo_tab: Arc<Mutex<Option<i64>>>,
+    /// The task holding each tab, as `ServiceInputs::tab_task` reports it; empty until a test
+    /// gives a tab to a task.
+    pub(crate) tab_tasks: Arc<Mutex<HashMap<i64, String>>>,
     /// The routes behind the host auth, as a host reaches them.
     pub(crate) router: Router,
     /// `Service::router()` alone, for tests that serve it themselves.
@@ -166,6 +170,7 @@ async fn start(
     );
     let settings = Settings::load(dir.path().join("settings.json"), Default::default()).await;
     let neo_tab: Arc<Mutex<Option<i64>>> = Arc::default();
+    let tab_tasks: Arc<Mutex<HashMap<i64, String>>> = Arc::default();
     let browser = ScriptedBrowser::new();
     browser.set_window(window);
     let xvnc = FakeXvnc::start(screen).await?;
@@ -186,6 +191,16 @@ async fn start(
                 Arc::new(move |tab: TabId| {
                     let held = *neo_tab.lock().unwrap_or_else(PoisonError::into_inner);
                     (held == Some(tab.0)).then_some("neo")
+                })
+            },
+            tab_task: {
+                let tab_tasks = Arc::clone(&tab_tasks);
+                Arc::new(move |tab: TabId| {
+                    tab_tasks
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .get(&tab.0)
+                        .cloned()
                 })
             },
         },
@@ -210,6 +225,7 @@ async fn start(
         service,
         settings,
         neo_tab,
+        tab_tasks,
     })
 }
 
@@ -342,6 +358,7 @@ pub(crate) fn start_known_run(sink: &TraceSink, run: RunId, start: Start<'_>) {
         request_id: start.request.and_then(|id| RequestId::parse(id).ok()),
         task_id: start.task.and_then(|id| TaskId::parse(id).ok()),
         host_data: None,
+        tabs_scope: RunTabsScope::Browser,
         at: at(start.at),
     });
 }

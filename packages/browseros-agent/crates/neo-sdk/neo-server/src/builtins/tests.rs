@@ -20,7 +20,7 @@ use neo_takeover::{Lock, LockBinding, LockTtl, Locks, Reads, TabHold};
 use neo_trace::{
     Delivery, Effect, EpochMillis, ErrorOwner, OperationId, OperationKind, OperationRow,
     OperationStarted, Outcome, RedactionLimits, Redactor, RunEnded, RunId, RunStarted, RunStatus,
-    TaskId, TraceSink, TraceStore, WriterConfig, spawn_writer,
+    RunTabsScope, TaskId, TraceSink, TraceStore, WriterConfig, spawn_writer,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -5162,6 +5162,7 @@ async fn neo_adopts_a_free_blank_tab_only_at_a_watch_start() -> Result<(), Box<d
         request_id: None,
         task_id: Some(TaskId::parse("mail")?),
         host_data: None,
+        tabs_scope: RunTabsScope::Browser,
         at: EpochMillis::now(),
     });
     harness.sink.op_started(OperationStarted {

@@ -6,7 +6,7 @@ use browseros_core::TabId;
 use neo_trace::{
     Delivery, DownloadStatus, Effect, ErrorOwner, ErrorRecord, OperationEnded, OperationId,
     OperationKind, OperationSite, OperationStarted, Outcome, PageState, RunDownload, RunEnded,
-    RunId, RunStarted, RunStatus, TaskId, TraceStore,
+    RunId, RunStarted, RunStatus, RunTabsScope, TaskId, TraceStore,
 };
 use serde_json::json;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
@@ -70,6 +70,7 @@ async fn summary_omits_values_everywhere_and_keeps_audit_metadata() -> TestResul
         request_id: None,
         task_id: Some(TaskId::parse("summary-canary")?),
         host_data: Some(json!({"value": value})),
+        tabs_scope: RunTabsScope::Browser,
         at: at(0),
     });
     h.sink.op_started(OperationStarted {

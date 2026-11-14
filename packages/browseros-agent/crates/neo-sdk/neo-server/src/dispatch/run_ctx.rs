@@ -229,6 +229,7 @@ impl RunCtx {
             request_id,
             task_id: task_id.clone(),
             host_data,
+            tabs_scope: scope.record(),
             at: EpochMillis::now(),
         });
         let run = Arc::new(Self {

@@ -24,8 +24,8 @@ use neo_takeover::{
 };
 use neo_trace::{
     Delivery, Effect, EpochMillis, OperationEnded, OperationId, OperationKind, OperationStarted,
-    Outcome, RedactionLimits, Redactor, RunId, RunStarted, TaskId, TraceSink, TraceStore,
-    WriterConfig, spawn_writer,
+    Outcome, RedactionLimits, Redactor, RunId, RunStarted, RunTabsScope, TaskId, TraceSink,
+    TraceStore, WriterConfig, spawn_writer,
 };
 use serde_json::{Value, json};
 use std::net::SocketAddr;
@@ -486,6 +486,7 @@ impl Harness {
                 request_id: None,
                 task_id: None,
                 host_data: None,
+                tabs_scope: RunTabsScope::Browser,
                 at: EpochMillis::now(),
             });
         }
@@ -553,6 +554,7 @@ fn run_of(run: RunId, task: &TaskId, at: EpochMillis) -> RunStarted {
         request_id: None,
         task_id: Some(task.clone()),
         host_data: None,
+        tabs_scope: RunTabsScope::Browser,
         at,
     }
 }

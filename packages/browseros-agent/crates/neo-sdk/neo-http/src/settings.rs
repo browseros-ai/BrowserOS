@@ -20,8 +20,8 @@
 
 use crate::setting::{
     Checked, FILE_READ_DIRS, FILL_PICTURES, FILL_PICTURES_NEVER, SCREENSHOTS_OFF, SETTINGS,
-    Setting, SettingValue, TAB_IDLE_CLOSE, TRACE_RETENTION, TRACE_SCREENSHOTS, TRACE_VALUE_BYTES,
-    TRACE_VALUES,
+    Setting, SettingValue, TAB_IDLE_CLOSE, TABS_SCOPE, TABS_SCOPE_BROWSER, TRACE_RETENTION,
+    TRACE_SCREENSHOTS, TRACE_VALUE_BYTES, TRACE_VALUES,
 };
 use crate::wire;
 use neo_trace::{RecordPolicy, Screenshots, Values};
@@ -35,6 +35,17 @@ use tokio::io::AsyncWriteExt;
 
 /// The settings the host set, by name. A setting absent here is at its default.
 pub(crate) type SetValues = BTreeMap<&'static str, SettingValue>;
+
+/// `tabs.scope` as a run reads it at its start ([`Settings::tabs_scope`]). With the run's task it
+/// decides what the run may reach: under `Task`, a run that carries a task sees only its task
+/// family's tabs, and a run with none sees every tab but never takes over a host's task.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TabsScope {
+    /// No run is bound, whatever task it carries: every tab, as before task scope.
+    Browser,
+    /// A run that carries a task is bound to its task's family.
+    Task,
+}
 
 /// The host's settings, live. Cheap to clone: every clone reads and changes the same values.
 ///
@@ -127,6 +138,19 @@ impl Settings {
     #[must_use]
     pub fn tab_idle_close(&self) -> Duration {
         Duration::from_secs(self.whole(&TAB_IDLE_CLOSE))
+    }
+
+    /// `tabs.scope`: whether a run that carries a task is bound to its task's tabs. A run reads it
+    /// once, at its start, so a change applies to the runs admitted after it answers, never to
+    /// one already running.
+    #[must_use]
+    pub fn tabs_scope(&self) -> TabsScope {
+        match self.value(&TABS_SCOPE) {
+            SettingValue::Choice(TABS_SCOPE_BROWSER) => TabsScope::Browser,
+            SettingValue::Choice(_) | SettingValue::Whole(_) | SettingValue::Dirs(_) => {
+                TabsScope::Task
+            }
+        }
     }
 
     /// `trace.retentionSeconds`: the retention sweep deletes runs older than this. Read at each
@@ -433,12 +457,12 @@ fn log_change(before: &SetValues, after: &SetValues, defaults: &SettingsDefaults
 
 #[cfg(test)]
 mod tests {
-    use super::Settings;
+    use super::{Settings, TabsScope};
     use neo_trace::{RecordPolicy, RetentionPolicy};
     use std::time::Duration;
 
     #[test]
-    fn every_default_keeps_todays_behaviour_but_fill_pictures() {
+    fn every_default_keeps_todays_behaviour_but_fill_pictures_and_tabs_scope() {
         let settings = Settings::defaults(Default::default());
         assert_eq!(
             settings.trace_retention(),
@@ -459,6 +483,12 @@ mod tests {
             !settings.fill_pictures_never(),
             "ruling R58: a tab that took a private fill is pictured by default, the owner's \
              decision, where before it never was"
+        );
+        assert_eq!(
+            settings.tabs_scope(),
+            TabsScope::Task,
+            "a run that carries a task sees only its task's tabs by default, where before it saw \
+             every tab"
         );
     }
     /// Ruling R58 with the saved settings file: a saved `fill.pictures: never` is honoured from

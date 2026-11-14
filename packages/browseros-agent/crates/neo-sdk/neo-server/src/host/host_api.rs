@@ -14,7 +14,7 @@ use tokio::fs;
 use tokio_util::sync::CancellationToken;
 
 use super::{AgentFront, FillService, HostHolds, TakeoverLock, tab_feed};
-use crate::browser::{BrowserLink, NeoTab};
+use crate::browser::{BrowserLink, NeoTab, TabRegistry};
 use crate::config::HostApiConfig;
 use crate::http::{BindError, HostListener};
 
@@ -61,6 +61,8 @@ pub(crate) struct HostInputs {
     pub(crate) settings_file: PathBuf,
     /// The downloads default discovered by the app, also used when there is no host listener.
     pub(crate) settings_defaults: SettingsDefaults,
+    /// The app's tab registry, whose task book `GET /v1/tabs` reads for each tab's `taskId`.
+    pub(crate) tabs: Arc<TabRegistry>,
 }
 
 /// The bound host listener and the auth in front of every request on it.
@@ -163,6 +165,7 @@ impl HostApi {
             cdp_port,
             settings_file: _,
             settings_defaults: _,
+            tabs,
         } = inputs;
         let service = Service::start(ServiceInputs {
             store,
@@ -178,6 +181,8 @@ impl HostApi {
                 let held = blank_tab.as_ref().and_then(|blank_tab| blank_tab.current());
                 (held == Some(tab)).then_some("neo")
             }),
+            // `GET /v1/tabs` names the task holding each tab now: the one task scope binds it to.
+            tab_task: Arc::new(move |tab| tabs.holder(tab).map(|holder| holder.task.to_string())),
         });
         takeover.arm(Arc::clone(service.locks()));
         holds.arm({

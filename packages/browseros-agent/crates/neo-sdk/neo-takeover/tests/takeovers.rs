@@ -27,7 +27,7 @@ use neo_takeover::{
 };
 use neo_trace::{
     Effect, EpochMillis, OperationId, OperationKind, OperationStarted, RedactionLimits, Redactor,
-    RunId, RunStarted, TaskId, TraceSink, TraceStore, WriterConfig, spawn_writer,
+    RunId, RunStarted, RunTabsScope, TaskId, TraceSink, TraceStore, WriterConfig, spawn_writer,
 };
 use serde_json::json;
 use std::sync::Arc;
@@ -165,6 +165,7 @@ impl Harness {
             request_id: None,
             task_id: Some(task.clone()),
             host_data: None,
+            tabs_scope: RunTabsScope::Browser,
             at: EpochMillis::now(),
         });
         self.sink.op_started(OperationStarted {

@@ -6,7 +6,7 @@ use crate::support::{BoxError, Harness, Reply, TestResult, harness};
 use axum::body::Body;
 use axum::http::{Method, StatusCode};
 use browseros_core::TabId;
-use neo_http::Settings;
+use neo_http::{Settings, TabsScope};
 use neo_takeover::TabHold;
 use neo_trace::{RecordPolicy, Screenshots, Values};
 use serde_json::{Value, json};
@@ -18,7 +18,7 @@ use tokio::time::Instant;
 /// Every setting at its default, as `GET` answers on a new folder.
 fn defaults() -> Value {
     json!({
-        "tabs": { "idleCloseSeconds": 1800 },
+        "tabs": { "idleCloseSeconds": 1800, "scope": "task" },
         "trace": { "retentionSeconds": 604_800, "screenshots": "perOperation", "valueBytes": 0, "values": "on" },
         "files": { "readDirs": [] },
         "fill": { "pictures": "allowed" },
@@ -74,7 +74,7 @@ async fn put_replaces_everything_and_patch_changes_only_what_it_names() -> TestR
         .put(r#"{"tabs":{"idleCloseSeconds":300},"trace":{"retentionSeconds":86400}}"#)
         .await?;
     let set = json!({
-        "tabs": { "idleCloseSeconds": 300 },
+        "tabs": { "idleCloseSeconds": 300, "scope": "task" },
         "trace": { "retentionSeconds": 86_400, "screenshots": "perOperation", "valueBytes": 0, "values": "on" },
         "files": { "readDirs": [] },
         "fill": { "pictures": "allowed" },
@@ -97,7 +97,7 @@ async fn put_replaces_everything_and_patch_changes_only_what_it_names() -> TestR
     assert_eq!(
         patched.body["settings"],
         json!({
-            "tabs": { "idleCloseSeconds": 600 },
+            "tabs": { "idleCloseSeconds": 600, "scope": "task" },
             "trace": { "retentionSeconds": 86_400, "screenshots": "perOperation", "valueBytes": 0, "values": "on" },
             "files": { "readDirs": [] },
             "fill": { "pictures": "allowed" },
@@ -140,7 +140,7 @@ async fn an_unknown_name_is_skipped_listed_and_never_stops_the_known_ones() -> T
     assert_eq!(
         reply.body["settings"],
         json!({
-            "tabs": { "idleCloseSeconds": 300 },
+            "tabs": { "idleCloseSeconds": 300, "scope": "task" },
             "trace": { "retentionSeconds": 7200, "screenshots": "perOperation", "valueBytes": 0, "values": "on" },
             "files": { "readDirs": [] },
             "fill": { "pictures": "allowed" },
@@ -707,7 +707,7 @@ async fn values_off_reaches_records_and_events_without_payloads() -> TestResult 
     use crate::support::{EventStream, at};
     use neo_trace::{
         Delivery, Effect, ErrorOwner, ErrorRecord, OperationEnded, OperationId, OperationKind,
-        OperationStarted, Outcome, PageState, RunEnded, RunId, RunStarted, RunStatus,
+        OperationStarted, Outcome, PageState, RunEnded, RunId, RunStarted, RunStatus, RunTabsScope,
     };
 
     let h = harness().await?;
@@ -724,6 +724,7 @@ async fn values_off_reaches_records_and_events_without_payloads() -> TestResult 
         request_id: None,
         task_id: None,
         host_data: Some(json!({"data":"host-canary-host-api"})),
+        tabs_scope: RunTabsScope::Browser,
         at: at(0),
     });
     h.sink.op_started(OperationStarted {
@@ -876,6 +877,59 @@ async fn fill_pictures_defaults_to_allowed_and_takes_never() -> TestResult {
     assert_eq!(
         after.body["settings"]["fill"]["pictures"], "never",
         "nothing applied"
+    );
+    Ok(())
+}
+
+/// `tabs.scope` is `task` unless a host sets `browser`, the value every run reads at its start.
+/// A value Neo does not have is skipped and named in `unknownValues`, as if left out: a `PATCH`
+/// keeps the value the setting had, a `PUT` puts back the default, `task`. A saved one Neo cannot
+/// read loads as the default.
+#[tokio::test]
+async fn the_tab_scope_is_task_unless_set_and_a_misspelt_value_is_skipped() -> TestResult {
+    let harness = harness().await?;
+    assert_eq!(
+        harness.settings.tabs_scope(),
+        TabsScope::Task,
+        "the default"
+    );
+    let browser = harness.patch(r#"{"tabs":{"scope":"browser"}}"#).await?;
+    assert_eq!(browser.status, StatusCode::OK, "{}", browser.body);
+    assert_eq!(browser.body["settings"]["tabs"]["scope"], "browser");
+    assert_eq!(
+        harness.settings.tabs_scope(),
+        TabsScope::Browser,
+        "the next run reads it"
+    );
+    let patched = harness.patch(r#"{"tabs":{"scope":"Task"}}"#).await?;
+    assert_eq!(patched.status, StatusCode::OK, "{}", patched.body);
+    assert_eq!(patched.body["unknownValues"], json!(["tabs.scope"]));
+    assert_eq!(patched.body["settings"]["tabs"]["scope"], "browser");
+    assert_eq!(
+        harness.settings.tabs_scope(),
+        TabsScope::Browser,
+        "a PATCH that names only a value Neo does not have changes nothing, as for every setting"
+    );
+    let misspelt = harness.put(r#"{"tabs":{"scope":"Browser"}}"#).await?;
+    assert_eq!(misspelt.status, StatusCode::OK, "{}", misspelt.body);
+    assert_eq!(misspelt.body["unknownValues"], json!(["tabs.scope"]));
+    assert_eq!(misspelt.body["settings"]["tabs"]["scope"], "task");
+    assert_eq!(
+        harness.settings.tabs_scope(),
+        TabsScope::Task,
+        "a PUT that leaves it out puts it back to its default"
+    );
+
+    let file = harness.settings_file();
+    std::fs::write(&file, r#"{"tabs":{"scope":"none"}}"#)?;
+    let loaded = Settings::load(file.clone(), Default::default()).await;
+    assert_eq!(loaded.tabs_scope(), TabsScope::Task, "a bad saved value");
+    std::fs::write(&file, r#"{"tabs":{"scope":"browser"}}"#)?;
+    let loaded = Settings::load(file, Default::default()).await;
+    assert_eq!(
+        loaded.tabs_scope(),
+        TabsScope::Browser,
+        "a saved value, as the settings file at start or a fixed file copied over it gives"
     );
     Ok(())
 }

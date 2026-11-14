@@ -71,7 +71,7 @@ pub use record_policy::{RecordPolicy, Screenshots, Values};
 pub use redactor::{Bounded, RedactionLimits, Redactor, Truncation};
 pub use run_download::{DownloadStatus, RunDownload};
 pub use run_outputs::{KeptFile, RunOutputs};
-pub use run_record::{RunEffects, RunEnded, RunStarted, RunStatus};
+pub use run_record::{RunEffects, RunEnded, RunStarted, RunStatus, RunTabsScope};
 pub use salvage::{Loss, Recovery, Salvage};
 pub use screenshot_queue::{Shot, ShotAnswer, ShotJob, ShotJobs, ShotQueue, screenshot_queue};
 pub use trace_error::TraceError;

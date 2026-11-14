@@ -1,11 +1,11 @@
 //! One running run, as the callers waiting on it see it.
 
 use std::pin::pin;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-use neo_trace::RunId;
+use neo_trace::{RunId, RunTabsScope};
 use tokio::sync::{Notify, watch};
 use tokio::time;
 
@@ -22,6 +22,9 @@ use super::RunReply;
 pub(crate) struct RunHandle {
     id: RunId,
     grace: Duration,
+    /// Which tabs the run saw or would have seen, set once at admission, so a reply the run
+    /// never wrote itself (a crash) says it too.
+    tabs_scope: OnceLock<RunTabsScope>,
     reply: watch::Sender<Option<Arc<RunReply>>>,
     waiters: AtomicUsize,
     left: Notify,
@@ -40,6 +43,7 @@ impl RunHandle {
         Arc::new(Self {
             id,
             grace,
+            tabs_scope: OnceLock::new(),
             reply: watch::channel(None).0,
             waiters: AtomicUsize::new(0),
             left: Notify::new(),
@@ -50,6 +54,18 @@ impl RunHandle {
     #[must_use]
     pub(crate) fn id(&self) -> RunId {
         self.id
+    }
+
+    /// Which tabs the run sees, as admission decided it. Write-once.
+    pub(crate) fn set_tabs_scope(&self, scope: RunTabsScope) {
+        let _ = self.tabs_scope.set(scope);
+    }
+
+    /// The reply of a run whose task ended without one, with the run's tab scope.
+    #[must_use]
+    pub(crate) fn crashed(&self) -> RunReply {
+        RunReply::crashed(self.id)
+            .with_tabs_scope(self.tabs_scope.get().copied().unwrap_or_default())
     }
 
     /// A new waiter, counted before it is returned, so the count is never zero between a
@@ -108,7 +124,7 @@ impl Waiter {
             .await
             .ok()
             .and_then(|seen| seen.clone());
-        published.unwrap_or_else(|| Arc::new(RunReply::crashed(self.handle.id)))
+        published.unwrap_or_else(|| Arc::new(self.handle.crashed()))
     }
 }
 

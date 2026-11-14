@@ -9,7 +9,7 @@ use axum::http::StatusCode;
 use browseros_core::TabId;
 use neo_trace::{
     Delivery, Effect, OperationEnded, OperationId, OperationKind, OperationSite, OperationStarted,
-    Outcome, PageState, RunEnded, RunId, RunStarted, RunStatus, TaskId,
+    Outcome, PageState, RunEnded, RunId, RunStarted, RunStatus, RunTabsScope, TaskId,
 };
 use serde_json::json;
 use std::{fs, io};
@@ -338,6 +338,7 @@ async fn record_values_read_back_as_given_in_every_channel() -> TestResult {
         request_id: None,
         task_id: Some(TaskId::parse("checkout")?),
         host_data: Some(json!({"for": value})),
+        tabs_scope: RunTabsScope::Browser,
         at: at(0),
     });
     let read = OperationId::new(run, 1);
@@ -444,6 +445,7 @@ async fn starts_defer_input_and_ends_publish_the_original_values() -> TestResult
         request_id: None,
         task_id: Some(TaskId::parse("checkout")?),
         host_data: Some(json!({"for": found})),
+        tabs_scope: RunTabsScope::Browser,
         at: at(0),
     });
     let fill = OperationId::new(run, 1);

@@ -55,11 +55,18 @@ pub struct ServiceInputs {
     /// Which of the browser's tabs Neo keeps for itself, for `GET /v1/tabs`'s `owner`: `neo` for
     /// the app's blank tab, `None` for every other tab.
     pub tab_owner: TabOwner,
+    /// The task holding each tab now, for `GET /v1/tabs`'s `taskId`: the one whose runs, under
+    /// task scope, see it.
+    pub tab_task: TabTask,
 }
 
 /// Names the tab Neo keeps for itself (`Some("neo")` for its blank tab), or `None`. Asked once per
 /// tab of each `GET /v1/tabs`; it must not wait.
 pub type TabOwner = Arc<dyn Fn(TabId) -> Option<&'static str> + Send + Sync>;
+
+/// Names the task holding a tab now, or `None` for a tab no task holds. Asked once per tab of each
+/// `GET /v1/tabs`; it must not wait.
+pub type TabTask = Arc<dyn Fn(TabId) -> Option<String> + Send + Sync>;
 
 /// The host API, started. Cheap to clone.
 #[derive(Clone)]
@@ -95,6 +102,8 @@ pub(crate) struct ServiceState {
     pub(crate) settings: Settings,
     /// Which tab Neo keeps for itself (`ServiceInputs::tab_owner`).
     pub(crate) tab_owner: TabOwner,
+    /// The task holding each tab now (`ServiceInputs::tab_task`).
+    pub(crate) tab_task: TabTask,
     /// The fill routes' door, armed by the app ([`Service::arm_fill`]).
     pub(crate) fill: FillGate,
     /// The tabs the camera never pictures, armed by the app ([`Service::arm_private_tabs`]).
@@ -139,6 +148,7 @@ impl Service {
             cdp_port: _,
             settings,
             tab_owner,
+            tab_task,
         } = inputs;
         let events = EventLog::start(store.clone(), sink.subscribe());
         let locks = Locks::new(store.clone(), sink.clone());
@@ -195,6 +205,7 @@ impl Service {
                 stamps,
                 settings,
                 tab_owner,
+                tab_task,
                 fill: FillGate::default(),
                 private,
                 _live_shutdown: shutdown.drop_guard(),

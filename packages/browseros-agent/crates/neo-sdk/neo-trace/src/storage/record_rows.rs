@@ -10,14 +10,15 @@ use serde::de::DeserializeOwned;
 use super::entities::operations;
 use crate::{
     Delivery, Effect, EpochMillis, IdError, OperationId, OperationKind, OperationRow, Outcome,
-    PageState, RequestId, RunDetail, RunEffects, RunId, RunStatus, RunSummary, ShotState, TaskId,
-    TraceError,
+    PageState, RequestId, RunDetail, RunEffects, RunId, RunStatus, RunSummary, RunTabsScope,
+    ShotState, TaskId, TraceError,
 };
 
 /// A list projection: deliberately excludes code, host data, results and replay bodies.
 #[derive(FromQueryResult)]
 pub(crate) struct RunSummaryRow {
     pub(crate) values: Option<String>,
+    pub(crate) tabs_scope: Option<String>,
     pub(crate) id: String,
     pub(crate) task_id: Option<String>,
     pub(crate) status: String,
@@ -50,6 +51,11 @@ pub(crate) fn run_summary(row: RunSummaryRow) -> Result<RunSummary, TraceError> 
         values: row.values,
         id: parse_id(&row.id)?,
         task_id: host_id(row.task_id.as_deref(), "task_id", TaskId::parse)?,
+        tabs_scope: row
+            .tabs_scope
+            .as_deref()
+            .map(|text| RunTabsScope::parse(text).ok_or_else(|| corrupt("tabs_scope", text)))
+            .transpose()?,
         tabs: tabs(row.tabs.as_deref())?,
         status: RunStatus::parse(&row.status).ok_or_else(|| corrupt("status", &row.status))?,
         effects: row

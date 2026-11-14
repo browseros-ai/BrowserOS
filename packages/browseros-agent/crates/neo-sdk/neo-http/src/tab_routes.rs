@@ -1,6 +1,7 @@
 //! The host's live native tab inventory joined with committed trace task associations. The
-//! browser supplies identities/presentation; retained runs supply history, never ownership. The
-//! one tab Neo keeps for itself (its blank tab) is listed too, marked `owner: neo`.
+//! browser supplies identities/presentation; retained runs supply history (`taskIds`), and the
+//! app's task book the task holding each tab now (`taskId`), which is what task scope binds a
+//! run to. The one tab Neo keeps for itself (its blank tab) is listed too, marked `owner: neo`.
 
 use crate::api_error::ApiError;
 use crate::service::ServiceState;
@@ -41,6 +42,7 @@ pub(crate) async fn list_tabs(
                 .map(|task| task.to_string())
                 .collect(),
             owner: (service.tab_owner)(TabId(tab.tab_id)).map(str::to_owned),
+            task_id: (service.tab_task)(TabId(tab.tab_id)),
             keep: service
                 .keeps
                 .get(TabId(tab.tab_id))
