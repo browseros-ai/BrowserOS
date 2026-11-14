@@ -346,6 +346,127 @@ describe('calls made inside a run script', () => {
 })
 
 describe('SDK run audit rows', () => {
+  function sdkChild(
+    toolName: string,
+    identity: Pick<ToolDispatchRow, 'parentDispatchId' | 'tabId' | 'pageId'> = {
+      parentDispatchId: 'run-1',
+    },
+  ): ToolDispatchRow {
+    return {
+      ...call(toolName, {
+        args: ['[redacted]'],
+        meta: { cancelled: false, isError: false },
+      }),
+      ...identity,
+    }
+  }
+
+  it('keeps a failed run before its successful children in the normal rail', () => {
+    const run = {
+      ...call('run', {
+        args: { code: '[redacted]' },
+        meta: {
+          cancelled: false,
+          contentSummary: '1 block(s)',
+          isError: true,
+          sdkRunId: 'sdk-run-1',
+        },
+      }),
+      dispatchKey: 'run-1',
+    }
+    const child = sdkChild('read', {
+      parentDispatchId: run.dispatchKey,
+      pageId: 2,
+      tabId: 123,
+    })
+    const { steps, hiddenCount } = describeSteps([run, child])
+    expect(hiddenCount).toBe(0)
+    expect(steps.map((step) => step.sentence)).toEqual([
+      'Something went wrong',
+      'Read the page',
+    ])
+    expect(steps.map((step) => step.isError)).toEqual([true, false])
+    expect(steps.map((step) => step.dispatchIds)).toEqual([
+      [run.dispatchId],
+      [child.dispatchId],
+    ])
+  })
+
+  it('keeps two page openings on different tabs as separate steps', () => {
+    const children = [123, 456].map((tabId) =>
+      sdkChild('pages.newPage', { parentDispatchId: 'run-1', tabId }),
+    )
+    const { steps } = describeSteps(children)
+    expect(steps.map((step) => step.sentence)).toEqual([
+      'Opened a new page',
+      'Opened a new page',
+    ])
+    expect(steps.map((step) => step.dispatchIds)).toEqual(
+      children.map((child) => [child.dispatchId]),
+    )
+  })
+
+  it('keeps redacted page openings separate when their tab is not recorded', () => {
+    const children = [sdkChild('pages.newPage'), sdkChild('pages.newPage')]
+    expect(
+      describeSteps(children).steps.map((step) => step.dispatchIds),
+    ).toEqual(children.map((child) => [child.dispatchId]))
+  })
+
+  it('still folds the same SDK step repeated on one tab in one run', () => {
+    const children = [1, 2].map(() =>
+      sdkChild('input.fill', {
+        parentDispatchId: 'run-1',
+        pageId: 2,
+        tabId: 123,
+      }),
+    )
+    const { steps } = describeSteps(children)
+    expect(steps).toHaveLength(1)
+    expect(steps[0]?.dispatchIds).toEqual(
+      children.map((child) => child.dispatchId),
+    )
+  })
+
+  it('does not fold the same tab step across hidden run parents', () => {
+    const firstRun = {
+      ...call('run', { args: { code: '[redacted]' } }),
+      dispatchKey: 'run-1',
+    }
+    const secondRun = {
+      ...call('run', { args: { code: '[redacted]' } }),
+      dispatchKey: 'run-2',
+    }
+    const first = sdkChild('input.fill', {
+      parentDispatchId: firstRun.dispatchKey,
+      tabId: 123,
+    })
+    const second = sdkChild('input.fill', {
+      parentDispatchId: secondRun.dispatchKey,
+      tabId: 123,
+    })
+    const { steps, hiddenCount } = describeSteps([
+      firstRun,
+      first,
+      secondRun,
+      second,
+    ])
+    expect(hiddenCount).toBe(2)
+    expect(steps.map((step) => step.dispatchIds)).toEqual([
+      [first.dispatchId],
+      [second.dispatchId],
+    ])
+  })
+
+  it('keeps different SDK operations with the same generic sentence separate', () => {
+    const children = ['sdk.operation', 'future.operation'].map((toolName) =>
+      sdkChild(toolName, { parentDispatchId: 'run-1', tabId: 123 }),
+    )
+    expect(
+      describeSteps(children).steps.map((step) => step.dispatchIds),
+    ).toEqual(children.map((child) => [child.dispatchId]))
+  })
+
   it.each([
     ['nav.goto', 'Opened a new page'],
     ['pages.newPage', 'Opened a new page'],
@@ -472,6 +593,7 @@ describe('SDK run audit rows', () => {
     expect(hiddenCount).toBe(0)
     expect(steps.map((step) => step.sentence)).toEqual([
       'Ran a browser script',
+      'Worked on San Francisco to New York | Google Flights',
       'Worked on San Francisco to New York | Google Flights',
     ])
     expect(steps.flatMap((step) => step.dispatchIds)).toEqual([
