@@ -217,6 +217,7 @@ struct Field {
     r#ref: String,
     origin: String,
     max_length: Option<i32>,
+    name: Option<String>,
     cut: bool,
     spaced: bool,
     keys: bool,
@@ -228,10 +229,16 @@ impl Field {
             r#ref: r#ref.to_owned(),
             origin: origin.to_owned(),
             max_length: None,
+            name: None,
             cut: false,
             spaced: false,
             keys: false,
         }
+    }
+
+    fn named(mut self, name: &str) -> Self {
+        self.name = Some(name.to_owned());
+        self
     }
 
     fn keys(mut self) -> Self {
@@ -261,6 +268,7 @@ impl Field {
                 expect: Expect {
                     origin: self.origin,
                     max_length: self.max_length,
+                    name: self.name,
                     ..Expect::default()
                 },
                 cut: self.cut,
@@ -1539,6 +1547,44 @@ async fn tests_that_a_failed_frame_tree_read_says_no_frame_gone() -> TestResult 
     bench.close(opened).await
 }
 
+/// Ruling R63's two reads, held by a row (the design keeper's control): `frame_gone` needs two
+/// steady reads in a row that both miss the frame, so a second read that fails answers no
+/// `frame_gone`. Both frames are removed; a first check answers true and counts its lists of the
+/// out-of-process frames (two per read, the second read's at the end); the same check again with
+/// that list failing from the second read's first call on answers no `frame_gone`. Fails with the
+/// second read replaced by the first.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_frame_gone_needs_the_second_read_too() -> TestResult {
+    const LISTS: &str = "Target.getTargets";
+    let bench = Bench::start().await?;
+    let opened = bench
+        .open("/private/frames-gone.html", Place::Front)
+        .await?;
+    let near = bench.r#ref(&opened, "textbox", "Near box").await?;
+    bench
+        .live
+        .main_world(&opened.page, "removeNear() && removeFar()")
+        .await?;
+    bench.recording.reset_calls();
+    assert_eq!(
+        gone_of(&bench, &opened, &near).await?,
+        (Some(DETACHED.to_owned()), true),
+        "both reads miss the frame"
+    );
+    let lists = bench.recording.calls(LISTS);
+    assert!(lists >= 4, "two reads of two lists each: {lists}");
+    bench.recording.fail_from(LISTS, Failing::Refuse, lists - 1);
+    let look = gone_of(&bench, &opened, &near).await;
+    bench.recording.stop_failing();
+    assert_eq!(
+        look?,
+        (Some(DETACHED.to_owned()), false),
+        "the first read missed the frame and the second failed"
+    );
+    bench.close(opened).await
+}
+
 /// Ruling R63, rows 9 and 10: a field that carries a value, on a frame that left the tab, answers
 /// no `holds` and no `contains`, and `frame_gone`. A fill on that ref answers as on main: refused
 /// `element_detached`, nothing typed; the fill's answer has no such field. Fails with the field
@@ -1565,6 +1611,334 @@ async fn tests_that_a_value_on_a_gone_frame_is_not_compared_and_says_so() -> Tes
     let entry = bench.enter(&env, &opened, vec![field]).await;
     assert_eq!(entry.outcome, EntryOutcome::Refused, "{entry:?}");
     assert_eq!(code(&entry), Some("element_detached"), "{entry:?}");
+    bench.close(opened).await
+}
+
+/// One ruling R64 row of a one-box fill: its number, the page's own setup, the box's role and
+/// name, the approved limit, whether a cut is allowed, the approved name, the value, the answer.
+type LimitRow<'a> = (
+    u32,
+    &'a str,
+    (&'a str, &'a str),
+    i32,
+    bool,
+    Option<&'a str>,
+    &'a str,
+    LimitAnswer,
+);
+
+/// What a ruling R64 row expects of a one-box fill.
+#[derive(Clone, Copy, Debug)]
+enum LimitAnswer {
+    /// Entered, this many characters typed, and listed in `max_length_moved` or not.
+    Entered { typed: usize, listed: bool },
+    /// Refused `box_changed`, naming this fact, nothing typed.
+    Changed(&'static str),
+}
+
+/// Ruling R64, row 1: a Visa number moves the code box's limit from 4 to 3 while it is typed, as
+/// a hosted card field does once it knows the brand. A host that sends back the limits it read
+/// (22, 5, 4) gets the form entered, 16, 5 and 3 characters, and the code box listed as moved.
+/// Main answers `partial`, `box_changed` at the code box. Fails with the rule off (any moved limit
+/// refuses) and with the flag never set.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_limit_moved_by_the_brand_still_takes_a_code_that_fits() -> TestResult {
+    let bench = Bench::start().await?;
+    let opened = bench
+        .open("/private/card-limits.html", Place::Front)
+        .await?;
+    let named = |name: &'static str| bench.r#ref(&opened, "textbox", name);
+    let (number, expiry, code_box) = (
+        named("Card number").await?,
+        named("Expiry").await?,
+        named("Security code").await?,
+    );
+    let origin = &bench.page_origin;
+    let fields = vec![
+        Field::new(&number, origin)
+            .max_length(22)
+            .with("4242424242424242")?,
+        Field::new(&expiry, origin).max_length(5).with("12/34")?,
+        Field::new(&code_box, origin).max_length(4).with("123")?,
+    ];
+    let env = bench.host(&opened);
+    let entry = bench.enter(&env, &opened, fields).await;
+    assert_eq!(entry.outcome, EntryOutcome::Entered, "{entry:?}");
+    assert_eq!(entry.typed, vec![16, 5, 3], "{entry:?}");
+    assert_eq!(entry.max_length_moved, vec![2], "{entry:?}");
+    bench.close(opened).await
+}
+
+/// Ruling R64, the one-box rows: a limit that moved refuses only when the value does not fit both
+/// the approved limit and the limit now; `cut` plays no part in it; -1 is a box approved with no
+/// limit; a box whose type the browser applies no limit to fits any value; a harmless move never
+/// hides a later fact that differs; a limit that moves during its own box's typing is not listed
+/// and the read-back decides. Each row opens the page afresh. Fails with the rule off (rows 2, 4
+/// and 11 refuse), with no refusal for any moved limit (rows 3, 5, 6, 7, 10 and 16 enter), with a
+/// harmless move ending the compare of the facts (row 9 enters), and with the flag never set.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+#[expect(clippy::too_many_lines, reason = "one table of the ruling's rows")]
+async fn tests_that_a_moved_limit_refuses_only_when_it_would_cut_the_value() -> TestResult {
+    use LimitAnswer::{Changed, Entered};
+    const VISA: &str = "4242424242424242";
+    const AMEX: &str = "378282246310005";
+    const TWENTY: &str = "42424242424242424242";
+    let bench = Bench::start().await?;
+    // (row, the page's own setup, role and name of the box, approved limit, cut, approved name,
+    // value, answer)
+    let rows: [LimitRow<'_>; 13] = [
+        (
+            2,
+            "setLimit('number', 17)",
+            ("textbox", "Card number"),
+            22,
+            false,
+            None,
+            AMEX,
+            Entered {
+                typed: 15,
+                listed: true,
+            },
+        ),
+        (
+            3,
+            "setLimit('code', 3)",
+            ("textbox", "Security code"),
+            4,
+            false,
+            None,
+            "1234",
+            Changed("maxLength"),
+        ),
+        (
+            4,
+            "setLimit('plain', 20)",
+            ("textbox", "Plain"),
+            -1,
+            false,
+            None,
+            VISA,
+            Entered {
+                typed: 16,
+                listed: true,
+            },
+        ),
+        (
+            5,
+            "setLimit('plain', 8)",
+            ("textbox", "Plain"),
+            -1,
+            false,
+            None,
+            VISA,
+            Changed("maxLength"),
+        ),
+        (
+            6,
+            "true",
+            ("textbox", "Plain"),
+            16,
+            true,
+            None,
+            TWENTY,
+            Changed("maxLength"),
+        ),
+        (
+            7,
+            "setLimit('plain', 12)",
+            ("textbox", "Plain"),
+            16,
+            true,
+            None,
+            TWENTY,
+            Changed("maxLength"),
+        ),
+        (
+            8,
+            "setLimit('plain', 16)",
+            ("textbox", "Plain"),
+            16,
+            true,
+            None,
+            TWENTY,
+            Entered {
+                typed: 16,
+                listed: false,
+            },
+        ),
+        (
+            9,
+            "setLimit('code', 3) && setName('code', 'other')",
+            ("textbox", "Security code"),
+            4,
+            false,
+            Some("cvc"),
+            "123",
+            Changed("name"),
+        ),
+        (
+            10,
+            "setLimit('plain', 4)",
+            ("textbox", "Plain"),
+            3,
+            false,
+            None,
+            "1234",
+            Changed("maxLength"),
+        ),
+        (
+            11,
+            "setLimit('pin', 3)",
+            ("spinbutton", "Pin"),
+            4,
+            false,
+            None,
+            "123456",
+            Entered {
+                typed: 6,
+                listed: true,
+            },
+        ),
+        (
+            14,
+            "true",
+            ("textbox", "Security code"),
+            4,
+            false,
+            None,
+            "123",
+            Entered {
+                typed: 3,
+                listed: false,
+            },
+        ),
+        (
+            16,
+            "setLimit('plain', 6)",
+            ("textbox", "Plain"),
+            -1,
+            false,
+            None,
+            "CANARY-49",
+            Changed("maxLength"),
+        ),
+        (
+            17,
+            "true",
+            ("textbox", "Card number"),
+            22,
+            false,
+            None,
+            AMEX,
+            Entered {
+                typed: 15,
+                listed: false,
+            },
+        ),
+    ];
+    let mut failures = Vec::new();
+    for (row, setup, (role, name), approved, cut, approved_name, value, answer) in rows {
+        let opened = bench
+            .open("/private/card-limits.html", Place::Front)
+            .await?;
+        bench.live.main_world(&opened.page, setup).await?;
+        let r#ref = bench.r#ref(&opened, role, name).await?;
+        let mut field = Field::new(&r#ref, &bench.page_origin).max_length(approved);
+        if cut {
+            field = field.cut();
+        }
+        if let Some(approved_name) = approved_name {
+            field = field.named(approved_name);
+        }
+        let env = bench.host(&opened);
+        let entry = bench.enter(&env, &opened, vec![field.with(value)?]).await;
+        let held = match answer {
+            Entered { typed, listed } => {
+                let moved: Vec<usize> = if listed { vec![0] } else { Vec::new() };
+                entry.outcome == EntryOutcome::Entered
+                    && entry.typed == vec![typed]
+                    && entry.max_length_moved == moved
+            }
+            Changed(fact) => {
+                entry.outcome == EntryOutcome::Refused
+                    && code(&entry) == Some("box_changed")
+                    && entry
+                        .error
+                        .as_ref()
+                        .is_some_and(|error| error.message.contains(&format!("box's {fact}")))
+                    && entry.typed == vec![0]
+                    && entry.max_length_moved.is_empty()
+            }
+        };
+        if !held {
+            failures.push(format!("row {row}, wanted {answer:?}: {entry:?}"));
+        }
+        bench.close(opened).await?;
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+    Ok(())
+}
+
+/// Ruling R64, the check call's rows (12 to 15): it carries no length, so it never refuses for a
+/// limit that moved; it answers `max_length_moved` with the limit in the facts, with a value too
+/// (whose compare still answers), and not when the limit is the approved one. Row 15 is R49's
+/// check-call row, which changes: -1 on a box that has a limit answers no refusal and the flag,
+/// where main answers `box_changed`. Fails with the rule off (rows 12 and 15 refuse) and with the
+/// flag never set.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_the_check_call_says_a_limit_moved_and_never_refuses_for_it() -> TestResult {
+    let bench = Bench::start().await?;
+    let opened = bench
+        .open("/private/card-limits.html", Place::Front)
+        .await?;
+    bench
+        .live
+        .main_world(&opened.page, "setLimit('code', 3) && setLimit('plain', 6)")
+        .await?;
+    let named = |name: &'static str| bench.r#ref(&opened, "textbox", name);
+    let (code_box, plain, number) = (
+        named("Security code").await?,
+        named("Plain").await?,
+        named("Card number").await?,
+    );
+    let checked = |r#ref: &str, approved: i32, value: Option<&str>| {
+        let mut request = plain_look(&opened, r#ref, Duration::from_secs(10));
+        request.fields[0].expect = Some(Expect {
+            origin: bench.page_origin.clone(),
+            max_length: Some(approved),
+            ..Expect::default()
+        });
+        let compare = value.map(|value| {
+            PrivateText::new(value.to_owned()).map(|value| LookCompare {
+                value,
+                spaced: false,
+                cut: false,
+            })
+        });
+        (request, compare)
+    };
+    for (row, r#ref, approved, value, limit_now, moved) in [
+        (12, &code_box, 4, None, Some(3), true),
+        (13, &code_box, 4, Some("123"), Some(3), true),
+        (14, &number, 22, None, Some(22), false),
+        (15, &plain, -1, None, Some(6), true),
+    ] {
+        let (mut request, compare) = checked(r#ref, approved, value);
+        request.compares = vec![compare.transpose()?];
+        let look = look_one(&bench, &opened, &request).await?;
+        assert!(look.refusal.is_none(), "row {row}: {look:?}");
+        assert_eq!(look.max_length_moved, moved, "row {row}: {look:?}");
+        let facts = look.facts.as_ref().ok_or("facts")?;
+        assert_eq!(facts.max_length, limit_now, "row {row}: {look:?}");
+        assert_eq!(
+            look.compared.is_some(),
+            value.is_some(),
+            "row {row}: {look:?}"
+        );
+    }
     bench.close(opened).await
 }
 

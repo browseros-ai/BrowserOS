@@ -645,7 +645,12 @@ paths:
           either way).
         - A reload, or going back in history into a new document, makes a new document that keeps no
           mark and no digest, so a value that the page or the browser puts back there prints. A
-          document that returns whole from the back-forward cache keeps its marks. A copy in another
+          document that returns whole from the back-forward cache keeps its marks. The SDK image
+          runs the browser with that cache off, so there going back always makes a new document, and
+          the browser's own form restore puts back the value of a plain box with `autocomplete` on,
+          where `inputValue()` and the snapshot print it; a host can test itself on such a box.
+          Until the browser saves no form state, a host masks the values it typed in what its agent
+          reads. A password box and a box with `autocomplete` off come back empty. A copy in another
           document (a frame, a pop-up) prints too, as do a copy the page reformats beyond
           whitespace, dashes and slashes, text the page prints outside a box, and a copy that
           appears after its digest was forgotten. A box in a closed shadow root Neo's walk has not
@@ -725,12 +730,13 @@ paths:
         first refusal a fill would meet there now (a covered box answers both). The host can
         approve the facts and send them back as `expect`, so the look at approval and the look at
         typing are one rule. `expect` is optional here: without it the look checks no origin and
-        no fact, and answers only the refusals that need no approval. It takes no value and no
-        `requestId`, types nothing, and skips the length check (it has no value); compare
-        `maxLength` with the value yourself. It takes `lockId` as the fill does, so a host whose
-        own lock blocks reads can look at its tab. Recorded as a run with one operation,
-        `host.fillCheck` (kind `protected`, a read), with no screenshot. The same host-only rules
-        as the fill.
+        no fact, and answers only the refusals that need no approval. It types nothing and takes no
+        `requestId`. A field may carry a value to compare with its box (`holds`, `contains`). It has
+        no length check, with a value too, and never refuses for a limit that moved
+        (`maxLengthMoved`): compare `maxLength` with the value yourself. It takes `lockId` as the
+        fill does, so a host whose own lock blocks reads can look at its tab. Recorded as a run with
+        one operation, `host.fillCheck` (kind `protected`, a read), with no screenshot. The same
+        host-only rules as the fill.
       parameters:
         - $ref: '#/components/parameters/TabId'
       requestBody:
@@ -2371,7 +2377,9 @@ components:
     FillExpect:
       type: object
       required: [origin]
-      description: Facts the host approved about the box. Each one sent must still hold (`box_changed`).
+      description: >-
+        Facts the host approved about the box. Each one sent must still hold (`box_changed`),
+        but the limit, `maxLength`, which follows its own rule.
       properties:
         origin:
           type: string
@@ -2385,9 +2393,16 @@ components:
           type: integer
           format: int32
           description: >-
-            The box's `maxlength`. Send -1 to pin that the box has none, the DOM's own word for
-            it: the box facts leave `maxLength` out for such a box. Absent, it is not checked; 0
-            is a limit of zero; any other negative number is a malformed body.
+            The limit the host approved, the box's `maxlength`. Send -1 for a box approved with no
+            limit, the DOM's own word for it: the box facts leave `maxLength` out for such a box.
+            Absent, it is not checked; 0 is a limit of zero; any other negative number is a
+            malformed body. A card field can move its limit once it knows the card's brand, so a
+            limit that moved is not a changed box: when the box has another limit now, the fill goes
+            on if the value fits both the approved limit and the limit now, and lists the field in
+            `maxLengthMoved`; otherwise `box_changed`, naming `maxLength`. A value fits a limit when
+            its length in UTF-16 code units is not above it, when the limit is none, or when the
+            box's type is one the browser applies no `maxlength` to. `cut` plays no part in this
+            rule.
         inputMode:
           type: string
         name:
@@ -2424,6 +2439,19 @@ components:
             How many characters went to each box, in the request's order. Never text. Absent
             when Neo could not count them: a fill Neo cut short itself (shutting down), or a
             repeat of a fill Neo never finished (`fill_interrupted`).
+          items:
+            type: integer
+            format: int32
+        maxLengthMoved:
+          type: array
+          description: >-
+            The indexes of the fields whose box had another `maxlength` than the approved one
+            (`expect.maxLength`) at the look before that box's turn, the value fitting both: where
+            Neo did not refuse for the limit. Read there and only there: a limit that moves while
+            its own box is typed (a number box going from 22 to 17 as an Amex prefix goes in) is not
+            listed, and the read-back decides that box as for any other. A box listed there may
+            still have got no character, when its entry stopped after that look (`typed` says how
+            many). Absent when there is none; never an empty list.
           items:
             type: integer
             format: int32
@@ -2535,8 +2563,9 @@ components:
     FillBoxCheck:
       type: object
       description: >-
-        One box, on its own: neither field means every check a fill makes before typing
-        passed (but the length).
+        One box, on its own: neither field means every check a fill makes before typing passed, but
+        the two that need the value's length, which are the length check and whether a limit that
+        moved still fits.
       properties:
         facts:
           description: The box's facts, whenever the ref names a text input.
@@ -2591,6 +2620,14 @@ components:
             or from their own process while Neo read it; take a fresh snapshot. True says the frame
             is gone now: a later Back can bring a page back, the fill route's own limit on history.
             The fill's answer has no such field.
+        maxLengthMoved:
+          type: boolean
+          description: >-
+            Present, and true, only when the field sent `expect.maxLength` and the box has another
+            limit now (the limit itself is in `facts.maxLength`). The check call has no length
+            check, so it cannot say whether a value fits a limit that moved, and it never refuses
+            for one: a fill of that box goes on when the value fits both limits, and answers
+            `box_changed` otherwise. Never false.
     BoxFacts:
       type: object
       required: [origin, type, autocomplete, inputMode, name, id, sized, empty]
@@ -2607,7 +2644,9 @@ components:
         maxLength:
           type: integer
           format: int32
-          description: Absent when the box has none.
+          description: >-
+            Absent when the box has none. The check call never refuses for the limit: comparing
+            the value's length with it is the host's own.
         inputMode:
           type: string
         name:

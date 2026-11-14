@@ -20,7 +20,7 @@ pub struct BoxFacts {
     pub r#type: String,
     #[serde(rename = "autocomplete")]
     pub autocomplete: String,
-    /// Absent when the box has none.
+    /// Absent when the box has none. The check call never refuses for the limit: comparing the value's length with it is the host's own.
     #[serde(rename = "maxLength", skip_serializing_if = "Option::is_none")]
     pub max_length: Option<i32>,
     #[serde(rename = "inputMode")]

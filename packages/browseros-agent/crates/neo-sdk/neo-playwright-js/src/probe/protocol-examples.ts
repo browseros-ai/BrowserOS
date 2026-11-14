@@ -576,6 +576,23 @@ const REPLY_EXAMPLES: {
       kind: 'value',
       value: {
         facts: {
+          origin: 'https://pay.example',
+          type: 'text',
+          autocomplete: 'cc-csc',
+          maxLength: 3,
+          inputMode: 'numeric',
+          name: 'cvc',
+          id: '',
+          sized: true,
+          empty: true,
+        },
+        maxLengthMoved: true,
+      },
+    },
+    {
+      kind: 'value',
+      value: {
+        facts: {
           origin: 'https://bank.example',
           type: 'password',
           autocomplete: 'current-password',

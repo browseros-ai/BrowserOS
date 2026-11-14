@@ -112,6 +112,8 @@ pub(crate) struct EntryRun<'a> {
     typed: Vec<usize>,
     /// How each box's field drawing figured in its entry, from its read-back (rulings R55, R56).
     drawings: Vec<Drawing>,
+    /// The fields whose box Neo typed into after a look that found its limit moved (ruling R64).
+    max_length_moved: Vec<usize>,
     /// The main frame's navigations since admission, raced with every look and the read-back.
     navigation: Option<MainNavigation>,
 }
@@ -124,6 +126,7 @@ impl<'a> EntryRun<'a> {
             sending: Sending::NotYet,
             typed: vec![0; fields],
             drawings: vec![Drawing::None; fields],
+            max_length_moved: Vec::new(),
             navigation: None,
         }
     }
@@ -195,6 +198,11 @@ impl<'a> EntryRun<'a> {
                 .look(&page, field, url, moved)
                 .await
                 .map_err(Stopped::at(at))?;
+            // Ruling R64: this look, right before the box, says whether its limit moved; a move
+            // during the box's own typing is the read-back's to decide.
+            if looked.max_length_moved {
+                self.max_length_moved.push(at);
+            }
             match self
                 .type_box(&sent, &page, &mut input, at, field, looked)
                 .await
@@ -747,6 +755,7 @@ impl<'a> EntryRun<'a> {
             typed: self.typed,
             error: None,
             drawings: self.drawings,
+            max_length_moved: self.max_length_moved,
         }
     }
 
@@ -757,6 +766,7 @@ impl<'a> EntryRun<'a> {
             sending,
             typed,
             drawings,
+            max_length_moved,
             ..
         } = self;
         let Stop { error } = stop;
@@ -775,6 +785,7 @@ impl<'a> EntryRun<'a> {
             typed,
             error: Some(error),
             drawings,
+            max_length_moved,
         }
     }
 }

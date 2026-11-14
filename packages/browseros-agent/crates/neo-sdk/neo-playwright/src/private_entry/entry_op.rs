@@ -101,6 +101,7 @@ impl Playwright {
                         refusal: refusal.map(error),
                         compared,
                         frame_gone: false,
+                        max_length_moved: found.max_length_moved,
                     }
                 }
                 // The tab, the connection or the deadline ends the call for every box.
@@ -111,6 +112,7 @@ impl Playwright {
                     refusal: Some(error(code)),
                     compared: None,
                     frame_gone: false,
+                    max_length_moved: false,
                 },
             });
         }

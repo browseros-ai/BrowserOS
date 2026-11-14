@@ -49,6 +49,9 @@ pub struct BoxLook {
     /// world was installed in is no longer in the tab, read in a whole frame tree. False in every
     /// other case, the route's absent: unknown, never "the frame is there".
     pub frame_gone: bool,
+    /// Ruling R64: the field sent `expect.maxLength` and the box's limit is another one now. The
+    /// check call carries no length, so it never refuses for the limit; the host compares.
+    pub max_length_moved: bool,
 }
 
 /// What the check call's compare found in a box: booleans only, never the value, a position, a

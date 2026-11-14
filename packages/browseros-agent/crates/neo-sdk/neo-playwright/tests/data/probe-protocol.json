@@ -1,5 +1,5 @@
 {
-  "protocol": 42,
+  "protocol": 43,
   "callFunction": "function (call, root, ...nodes) { const probe = globalThis.__neoProbe; return probe ? probe.call(call, root ?? this, nodes) : { kind: \"uninstalled\" }; }",
   "replyKinds": {
     "describe": [
@@ -1280,19 +1280,19 @@
   "replies": [
     {
       "kind": "described",
-      "protocol": 42,
+      "protocol": 43,
       "seq": 0,
       "url": "https://example.com/"
     },
     {
       "kind": "described",
-      "protocol": 42,
+      "protocol": 43,
       "seq": 347,
       "url": "https://pay.example/frame"
     },
     {
       "kind": "described",
-      "protocol": 42,
+      "protocol": 43,
       "seq": 512340,
       "url": "https://example.com/",
       "retired": 0
@@ -1522,6 +1522,23 @@
           "sized": true,
           "empty": true
         }
+      }
+    },
+    {
+      "kind": "value",
+      "value": {
+        "facts": {
+          "origin": "https://pay.example",
+          "type": "text",
+          "autocomplete": "cc-csc",
+          "maxLength": 3,
+          "inputMode": "numeric",
+          "name": "cvc",
+          "id": "",
+          "sized": true,
+          "empty": true
+        },
+        "maxLengthMoved": true
       }
     },
     {

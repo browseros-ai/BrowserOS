@@ -432,6 +432,8 @@ fn checked_box(look: BoxLook) -> api::FillBoxCheck {
         // Ruling R63: true or absent, never false. It carries nothing of a value, so it is in
         // the op's recorded result as in the reply.
         frame_gone: look.frame_gone.then_some(true),
+        // Ruling R64: true or absent, never false; the limit itself is in the facts.
+        max_length_moved: look.max_length_moved.then_some(true),
     }
 }
 

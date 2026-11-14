@@ -9011,7 +9011,12 @@ ${value.stack}`;
       });
     const facts = factsOf(element);
     const refusal = firstRefusal(world, element, facts, ask);
-    return refusal ? { facts, refusal } : { facts };
+    const moved = ask.expect !== undefined && limitMove(facts, ask.expect, ask) === "fits";
+    return {
+      facts,
+      ...refusal ? { refusal } : {},
+      ...moved ? { maxLengthMoved: true } : {}
+    };
   }
   function firstRefusal(world, element, facts, ask) {
     const { expect } = ask;
@@ -9019,7 +9024,7 @@ ${value.stack}`;
       return { code: "wrongOrigin" };
     if (expect?.type !== undefined && expect.type !== facts.type)
       return { code: "wrongType" };
-    const fact = expect && changedFact(facts, expect);
+    const fact = expect && changedFact(facts, expect, ask);
     if (fact)
       return { code: "boxChanged", fact };
     if (element.disabled || element.readOnly || element.matches(":disabled"))
@@ -9053,10 +9058,10 @@ ${value.stack}`;
     const origin = document2.defaultView ? Reflect.get(document2.defaultView, "origin") : undefined;
     return typeof origin === "string" ? origin : document2.location.origin;
   }
-  function changedFact(facts, expect) {
+  function changedFact(facts, expect, ask) {
     if (expect.autocomplete !== undefined && expect.autocomplete !== facts.autocomplete)
       return "autocomplete";
-    if (expect.maxLength !== undefined && expect.maxLength !== (facts.maxLength ?? -1))
+    if (limitMove(facts, expect, ask) === "cuts")
       return "maxLength";
     if (expect.inputMode !== undefined && expect.inputMode !== facts.inputMode)
       return "inputMode";
@@ -9065,6 +9070,19 @@ ${value.stack}`;
     if (expect.id !== undefined && expect.id !== facts.id)
       return "id";
     return;
+  }
+  function limitMove(facts, expect, ask) {
+    const approved = expect.maxLength;
+    if (approved === undefined)
+      return "same";
+    const now = facts.maxLength ?? -1;
+    if (approved === now)
+      return "same";
+    const { length } = ask;
+    if (length === undefined)
+      return "fits";
+    const fits = (limit) => limit === -1 || !MAXLENGTH_TYPES.has(facts.type) || length <= limit;
+    return fits(approved) && fits(now) ? "fits" : "cuts";
   }
   function isTextInput(element) {
     return element.localName === "input" && element.namespaceURI === "http://www.w3.org/1999/xhtml" && TEXT_TYPES.has(String(Reflect.get(element, "type")));
@@ -9791,7 +9809,7 @@ ${value.stack}`;
   }
 
   // crates/neo-sdk/neo-playwright-js/src/probe/protocol.ts
-  var PROTOCOL = 42;
+  var PROTOCOL = 43;
 
   // crates/neo-sdk/neo-playwright-js/src/probe/read.ts
   var XHTML = "http://www.w3.org/1999/xhtml";

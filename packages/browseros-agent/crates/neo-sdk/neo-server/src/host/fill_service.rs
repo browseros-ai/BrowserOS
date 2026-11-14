@@ -476,6 +476,7 @@ fn checked(value: Value, boxes: usize) -> Vec<api::FillBoxCheck> {
                     holds: None,
                     contains: None,
                     frame_gone: None,
+                    max_length_moved: None,
                 };
                 boxes
             ]
@@ -497,5 +498,6 @@ fn refused_box(failure: &OpFailure) -> api::FillBoxCheck {
         holds: None,
         contains: None,
         frame_gone: None,
+        max_length_moved: None,
     }
 }

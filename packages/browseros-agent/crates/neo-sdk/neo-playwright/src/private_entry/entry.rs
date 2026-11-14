@@ -447,6 +447,10 @@ pub struct Entry {
     /// How each box's field drawing figured in its entry, in the request's order; `None` for a
     /// box not read back (rulings R55, R56).
     pub drawings: Vec<Drawing>,
+    /// Ruling R64: the indexes of the fields whose box had another `maxlength` than the approved
+    /// one at the look right before Neo typed into it, the value fitting both, in order. A limit
+    /// that moves while its own box is typed is not listed: the read-back decides that box.
+    pub max_length_moved: Vec<usize>,
 }
 
 /// The door's derivation (`neo-server/src/dispatch/operation_guard.rs`): what an op marked sent
@@ -471,6 +475,7 @@ impl Entry {
             typed: vec![0; fields],
             error: Some(error),
             drawings: vec![Drawing::None; fields],
+            max_length_moved: Vec::new(),
         }
     }
 }

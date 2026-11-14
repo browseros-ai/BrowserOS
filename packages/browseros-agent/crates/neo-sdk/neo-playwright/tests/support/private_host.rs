@@ -147,6 +147,10 @@ pub(crate) fn pages() -> HashMap<String, Page> {
         ("maxlength", include_str!("../data/private/maxlength.html")),
         ("compare", include_str!("../data/private/compare.html")),
         (
+            "card-limits",
+            include_str!("../data/private/card-limits.html"),
+        ),
+        (
             "frames-gone",
             include_str!("../data/private/frames-gone.html"),
         ),

@@ -67,6 +67,12 @@ impl From<Refused> for FillRefusal {
     }
 }
 
+/// Ruling R64: the fields typed after a look that found their limit moved, or absent; never an
+/// empty list.
+fn moved(entry: &Entry) -> Option<Vec<i32>> {
+    (!entry.max_length_moved.is_empty()).then(|| counts(&entry.max_length_moved))
+}
+
 /// The fill's answer from its op's end. `entry` is what the entry answered; `None` when the door
 /// refused the op before the entry ran (a lock, a CAPTCHA solve, a closed tab) or cut it short.
 #[must_use]
@@ -81,6 +87,7 @@ pub(crate) fn fill_answer(
         (Ok(_), Some(entry)) => api::FillResult {
             at: entry.at.map(wire_count),
             typed: Some(counts(&entry.typed)),
+            max_length_moved: moved(&entry),
             ..api::FillResult::new(
                 run,
                 entry.outcome.as_str().to_owned(),
@@ -95,6 +102,7 @@ pub(crate) fn fill_answer(
             api::FillResult {
                 at: entry.at.map(wire_count),
                 typed: Some(counts(&entry.typed)),
+                max_length_moved: moved(&entry),
                 error: Some(Box::new(wire_error(failure))),
                 ..api::FillResult::new(
                     run,

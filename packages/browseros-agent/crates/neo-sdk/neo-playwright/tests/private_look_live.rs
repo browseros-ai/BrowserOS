@@ -683,7 +683,8 @@ async fn tests_that_the_origin_and_the_address_come_first() -> TestResult {
 }
 
 /// Step 4: the type (its own code, the host's) and each other fact (`box_changed`, the fact
-/// named in the message).
+/// named in the message), but the limit: the look the check call makes carries no length, so a
+/// `maxLength` other than the box's answers no refusal and `max_length_moved` (ruling R64).
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_a_box_the_host_did_not_approve_is_refused() -> TestResult {
@@ -704,13 +705,6 @@ async fn tests_that_a_box_the_host_did_not_approve_is_refused() -> TestResult {
             "autocomplete",
             Expect {
                 autocomplete: Some("username".to_owned()),
-                ..approved.clone()
-            },
-        ),
-        (
-            "maxLength",
-            Expect {
-                max_length: Some(8),
                 ..approved.clone()
             },
         ),
@@ -748,6 +742,16 @@ async fn tests_that_a_box_the_host_did_not_approve_is_refused() -> TestResult {
             "{fact}: {message}"
         );
     }
+    let moved = Expect {
+        max_length: Some(8),
+        ..approved.clone()
+    };
+    let answer = at.look(&env, field(&at.password, Some(moved))).await?;
+    assert_eq!(
+        (code(&answer), answer.max_length_moved),
+        (None, true),
+        "another maxLength: {answer:?}"
+    );
     at.close().await
 }
 
@@ -1611,11 +1615,14 @@ async fn tests_that_a_box_larger_than_its_view_is_looked_at_by_its_centre() -> T
     Ok(())
 }
 
-/// Ruling R49's rows 9 and 10 for the look, which the host's check call makes: `expect.maxLength`
-/// of -1 means the box must have no `maxlength`. It passes a box with none and answers
-/// `box_changed`, fact `maxLength`, for a box with one, a limit of 0 included; a limit passes
-/// only its own box, 0 only a box of zero, and an absent `maxLength` is not checked. Fails with
-/// the -1 case taken out of the page side's compare: the box with a `maxlength` passes.
+/// Ruling R49's rows 9 and 10 for the look, which the host's check call makes, as ruling R64
+/// changes them: `expect.maxLength` of -1 means a box approved with no `maxlength`. The check call
+/// carries no length, so it never refuses for the limit: a box whose limit is another than the
+/// approved one answers no refusal and `max_length_moved`, a limit of 0 and -1 included, and the
+/// limit is in its facts; on main it answered `box_changed`. The same limit, and an absent
+/// `maxLength`, answer neither. A fill of such a box refuses a value that does not fit, before
+/// any character (the entry suite's R49 and R64 rows). Fails with the -1 case taken out of the
+/// page side's compare (the boxes with a limit answer no flag), and with the flag never set.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_max_length_minus_one_means_a_box_with_none() -> TestResult {
@@ -1625,19 +1632,18 @@ async fn tests_that_max_length_minus_one_means_a_box_with_none() -> TestResult {
     let page = live
         .open(&server.url("127.0.0.1", "/private/maxlength.html"))
         .await?;
-    let changed = Some("box_changed");
     let cases = [
-        ("Note", Some(-1), None),
-        ("Note", Some(6), changed),
-        ("Note", None, None),
-        ("Code", Some(-1), changed),
-        ("Code", Some(6), None),
-        ("Code", None, None),
-        ("Zero", Some(0), None),
-        ("Zero", Some(-1), changed),
+        ("Note", Some(-1), false),
+        ("Note", Some(6), true),
+        ("Note", None, false),
+        ("Code", Some(-1), true),
+        ("Code", Some(6), false),
+        ("Code", None, false),
+        ("Zero", Some(0), false),
+        ("Zero", Some(-1), true),
     ];
     let mut failures = Vec::new();
-    for (name, max_length, wanted) in cases {
+    for (name, max_length, moved) in cases {
         let r#ref = private_host::ref_of(&live, &page, "textbox", name).await?;
         let env = HostEnv::new(&live);
         let expect = Expect {
@@ -1645,8 +1651,8 @@ async fn tests_that_max_length_minus_one_means_a_box_with_none() -> TestResult {
             ..expecting(&page_origin)
         };
         let answer = look_one(&live, &env, &page, field(&r#ref, Some(expect))).await?;
-        if code(&answer) != wanted {
-            failures.push(format!("{name} {max_length:?}: {:?}", code(&answer)));
+        if code(&answer).is_some() || answer.max_length_moved != moved {
+            failures.push(format!("{name} {max_length:?}: {answer:?}"));
         }
     }
     live.close(&page).await?;
