@@ -1114,7 +1114,9 @@ paths:
         `settings` holds every setting this server knows, each at its value: what the host set,
         or the default. Its shape is a body for `PUT`, so a host can read it, change it and send
         it back. `file` reports this process's startup file load and stays unchanged after API
-        changes. A server older than the settings answers 404. Only the host may call these
+        changes. A server older than this report answers `GET` without `file`, so a host reads
+        an absent `file` as not reported, never as `applied`. A server older than the settings
+        answers 404. Only the host may call these
         routes: a request a web page sends is refused with 403, so a script in the browser Neo
         drives cannot reach them even on the development TCP listener.
       responses:
@@ -2153,17 +2155,31 @@ components:
           type: array
           description: >-
             Set by the release, the same whatever ended it: every tab that first appeared while the
-            takeover was active and was still open when its release began, oldest first, at most
-            256. A tab showing the browser's own or an extension's page, which no script reaches,
-            appears once it shows a web page. Neo gives none of them to a task: each stays with the
-            task holding it, or with no task, hidden from bound runs and never closed by the
-            janitor. The host acts on the list by its own rule (for example, only on the tab the
-            owner left in front), or ignores it. Takeovers active at once each list a tab opened
-            during both. If the browser's tabs cannot be listed at the release (it waits 2 s), every
-            tab noted is still listed, with `url` and `inFront` `null`: unknown, never a guess.
-            Absent while the takeover is active.
+            takeover was active and was still open when its release began, oldest first: the newest
+            256 when more opened (see `openedTabsTruncated`). A tab showing the browser's own or an
+            extension's page, which no script reaches, appears once it shows a web page. Neo gives
+            none of them to a task: each stays with the task holding it, or with no task, hidden
+            from bound runs and never closed by the janitor. The host acts on the list by its own
+            rule (for example, only on the tab the owner left in front), or ignores it. Takeovers
+            active at once each list a tab opened during both. If the browser's tabs cannot be
+            listed at the release (it waits 2 s), every tab it kept is still listed, with `url` and
+            `inFront` `null`: unknown, never a guess. Absent while the takeover is active.
           items:
             $ref: '#/components/schemas/OpenedTab'
+        openedTabsNoted:
+          type: integer
+          format: int64
+          description: >-
+            Set with `openedTabs`: how many tabs first appeared while the takeover was active,
+            in all, closed ones included.
+        openedTabsTruncated:
+          type: boolean
+          description: >-
+            Set with `openedTabs`, and present whenever it is: whether more tabs opened than the
+            256 it keeps. When `true`, `openedTabs` is not every tab the owner opened (it holds
+            the newest), so treat any tab it does not list as unknown, never as one the owner
+            did not open: for example, mark every tab no task holds. The same rule as a `null`
+            `url` or `inFront`: unknown never reads as absent.
         createdAt:
           type: integer
           format: int64

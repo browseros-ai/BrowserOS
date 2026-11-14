@@ -130,7 +130,11 @@ same list once released, and a repeated release answers the first one's. Each ta
 the task holding it, or with no task (hidden from bound runs, never closed by the janitor); the
 host acts on the list by its own rule. Takeovers active at once each list a tab opened during
 both. If the release cannot list the browser's tabs within 2 s, it still lists every tab it
-noted, with `url` and `inFront` `null` (unknown), so a host never misses one the owner opened.
+kept, with `url` and `inFront` `null` (unknown), so a host never misses one the owner opened.
+A takeover keeps the newest 256 tabs opened during it and counts them all: the release says how
+many in `openedTabsNoted`, and `openedTabsTruncated` is `true` when more opened than it kept.
+Then the list is not every tab the owner opened, so treat any tab it does not list as unknown
+(for example, mark every tab no task holds): unknown never reads as absent.
 
 From `packages/browseros-agent`, run the existing SDK gate with private build state:
 

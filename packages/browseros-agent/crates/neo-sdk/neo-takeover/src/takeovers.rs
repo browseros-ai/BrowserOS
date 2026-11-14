@@ -66,7 +66,7 @@ use crate::{
 use browseros_core::TabId;
 use futures_util::future::{self, BoxFuture, FutureExt};
 use neo_trace::EpochMillis;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::Duration;
@@ -167,8 +167,15 @@ pub struct Takeover {
     /// `None` while active, and when no display was bound to it.
     pub input_drained: Option<bool>,
     /// The tabs that first appeared while it was active and were still open when its release
-    /// began. Set by the release, the same whatever its reason; `None` while active.
+    /// began, of the newest [`OPENED_TABS`] it noted. Set by the release, the same whatever its
+    /// reason; `None` while active.
     pub opened_tabs: Option<Vec<OpenedTab>>,
+    /// How many tabs opened while it was active, in all, closed ones included. Set with
+    /// `opened_tabs`.
+    pub opened_tabs_noted: Option<usize>,
+    /// Whether more tabs opened than it kept: then `opened_tabs` is not every tab the owner
+    /// opened, and a tab it does not list is unknown, never absent. Set with `opened_tabs`.
+    pub opened_tabs_truncated: Option<bool>,
 }
 
 /// A tab that first appeared while a takeover was active and was still open when its release
@@ -236,9 +243,43 @@ struct Held {
     screen: ScreenHoldGuard,
     /// Stops the TTL release once the takeover's give-back has begun.
     timer: DropGuard,
-    /// The tabs that opened while it was active, oldest first, at most [`OPENED_TABS`], each with
-    /// its opener as the app knew it then.
-    opened: Vec<Opened>,
+    /// The tabs that opened while it was active, each with its opener as the app knew it then.
+    opened: Noted,
+}
+
+/// The tabs a takeover noted as opened while active: the newest [`OPENED_TABS`], oldest first,
+/// and how many in all. The newest, because the bound counts every open, closed tabs included: a
+/// page that opens tabs in a loop early would otherwise fill the list and hide the owner's last
+/// tabs, where the one left in front usually is. The count is what tells a host the list is not
+/// all of them, so it treats a tab not listed as unknown.
+#[derive(Default)]
+struct Noted {
+    tabs: VecDeque<Opened>,
+    /// Every tab noted during the takeover, kept or not: the tab watch reports a tab again when
+    /// it comes back from a page core leaves out (an extension's), and a return is no new open.
+    /// Bounded by the tabs one takeover sees in its life, 20 minutes at most.
+    seen: HashSet<TabId>,
+    count: usize,
+}
+
+impl Noted {
+    /// Notes a tab's first open. A tab noted before, still kept or already dropped from the
+    /// newest, is neither counted again nor put back.
+    fn note(&mut self, opened: Opened) {
+        if !self.seen.insert(opened.tab) {
+            return;
+        }
+        self.count += 1;
+        if self.tabs.len() == OPENED_TABS {
+            self.tabs.pop_front();
+        }
+        self.tabs.push_back(opened);
+    }
+
+    /// Whether more tabs were noted than kept.
+    fn truncated(&self) -> bool {
+        self.count > self.tabs.len()
+    }
 }
 
 /// A tab noted as opened, with the tab that opened it as the app knew it at the open. The opener
@@ -261,7 +302,7 @@ struct Parts {
     /// Stops the TTL release once the give-back has begun.
     timer: DropGuard,
     /// The tabs that opened while it was active, for `openedTabs`.
-    opened: Vec<Opened>,
+    opened: Noted,
 }
 
 impl Parts {
@@ -383,6 +424,8 @@ impl Takeovers {
             expires_at: lock.expires_at,
             input_drained: None,
             opened_tabs: None,
+            opened_tabs_noted: None,
+            opened_tabs_truncated: None,
         };
         if let Some(viewer) = viewer {
             let fits = Arc::clone(&self.fits);
@@ -407,7 +450,7 @@ impl Takeovers {
                         fit: fitting.map(|fit| fit.ok().map(|fit| fit.id)).boxed(),
                         timer,
                         // Never active, so the owner opened nothing during it.
-                        opened: Vec::new(),
+                        opened: Noted::default(),
                     };
                     return Err(self.overdue(takeover, parts).await);
                 }
@@ -417,7 +460,7 @@ impl Takeovers {
             binding: DisplayBinding::new(),
             screen,
             timer,
-            opened: Vec::new(),
+            opened: Noted::default(),
         };
         // Published only before the TTL release is due, decided under the table's mutex, which
         // the release takes to find the takeover. A start done just in time can reach here late,
@@ -516,7 +559,8 @@ impl Takeovers {
         let budget = Instant::now() + GIVE_BACK;
         let id = takeover.id;
         // Read first, while the owner's front and screen are still as they left them.
-        let opened_tabs = self.opened_tabs(id, &opened).await;
+        let kept: Vec<Opened> = opened.tabs.iter().copied().collect();
+        let opened_tabs = self.opened_tabs(id, &kept).await;
         let tab_open = reason != ReleaseReason::TabClosed;
         let displays = binding.clone();
         give_back_step(budget, id, "closing its displays", async move {
@@ -544,6 +588,8 @@ impl Takeovers {
             },
             input_drained,
             opened_tabs: Some(opened_tabs),
+            opened_tabs_noted: Some(opened.count),
+            opened_tabs_truncated: Some(opened.truncated()),
             ..takeover
         };
         {
@@ -613,18 +659,15 @@ impl Takeovers {
     }
 
     /// `tab` opened, and was not open before, opened by `opener` as the browser announced it:
-    /// every active takeover notes it, up to [`OPENED_TABS`] each, for its release's
-    /// `openedTabs`. A takeover still starting or already releasing notes nothing: the owner
+    /// every active takeover notes it, keeping its newest [`OPENED_TABS`] and counting them all,
+    /// for its release's `openedTabs`. A takeover still starting or already releasing notes nothing: the owner
     /// reaches the screen once one is active, and a release lists what it noted when it began.
     /// Without an announced opener, the app's links are asked now.
     pub fn note_opened(&self, tab: TabId, opener: Option<TabId>) {
         let opener = opener.or_else(|| (self.links.opener)(tab));
         for entry in self.table().values_mut() {
-            if let Phase::Active(held) = &mut entry.phase
-                && held.opened.len() < OPENED_TABS
-                && !held.opened.iter().any(|opened| opened.tab == tab)
-            {
-                held.opened.push(Opened { tab, opener });
+            if let Phase::Active(held) = &mut entry.phase {
+                held.opened.note(Opened { tab, opener });
             }
         }
     }
