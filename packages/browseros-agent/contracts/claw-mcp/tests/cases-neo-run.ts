@@ -823,7 +823,7 @@ return await page.screenshot({clip: {x:0,y:0,width:900,height:700}})`,
         }),
       )
       // A separate parent gives this case a recorded child PID to kill without
-      // interrupting the suite server that owns the browser and cleanup session.
+      // interrupting the suite server or its cleanup session. The browser is suite-owned.
       const parent = Bun.spawn({
         cmd: [RUST_BINARY, '--config', sidecar],
         cwd: resolve(import.meta.dir, '../../..'),
