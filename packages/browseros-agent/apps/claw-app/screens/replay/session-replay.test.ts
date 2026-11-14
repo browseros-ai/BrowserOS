@@ -305,6 +305,18 @@ describe('projection', () => {
 })
 
 describe('address bar', () => {
+  function meta(seconds: number, tabId: number, data: unknown): ReplayEvent {
+    return {
+      ...event(
+        SESSION_START_MS + seconds * 1000,
+        `document-${tabId}`,
+        tabId,
+        4,
+      ),
+      data,
+    }
+  }
+
   const plan = planFor(
     [
       ...track(1, SESSION_START_MS, SESSION_START_MS + 30_000),
@@ -330,6 +342,92 @@ describe('address bar', () => {
   it('has no URL before the tab is first seen', () => {
     expect(plan.urlAt(2, 2)).toBeNull()
     expect(plan.urlAt(null, 10)).toBeNull()
+  })
+
+  it('uses the latest recorded address at the playhead when audit rows omit it', () => {
+    const recordedPlan = planFor(
+      [
+        meta(0, 1, { href: 'https://one.example/start' }),
+        event(SESSION_START_MS + 1, 'document-1'),
+        meta(5, 1, { href: 'https://one.example/next' }),
+        event(SESSION_START_MS + 10_000, 'document-1', 1, 3),
+      ],
+      [frame(2, 1, { url: null })],
+      [1],
+    )
+
+    expect(recordedPlan.urlAt(1, 4.999)).toBe('https://one.example/start')
+    expect(recordedPlan.urlAt(1, 5)).toBe('https://one.example/next')
+    expect(recordedPlan.urlAt(1, 10)).toBe('https://one.example/next')
+    expect(recordedPlan.urlAt(1, 1)).toBe('https://one.example/start')
+  })
+
+  it('does not borrow another tab address or show a later tab before it starts', () => {
+    const recordedPlan = planFor(
+      [
+        meta(0, 1, { href: 'https://one.example/' }),
+        event(SESSION_START_MS + 1, 'document-1'),
+        meta(5, 2, { href: 'https://two.example/' }),
+        event(SESSION_START_MS + 5_001, 'document-2', 2),
+      ],
+      [],
+      [1, 2],
+    )
+
+    expect(recordedPlan.urlAt(1, 6)).toBe('https://one.example/')
+    expect(recordedPlan.urlAt(2, 4.999)).toBeNull()
+    expect(recordedPlan.urlAt(2, 5)).toBe('https://two.example/')
+    expect(recordedPlan.urlAt(99, 6)).toBeNull()
+    expect(recordedPlan.urlAt(null, 6)).toBeNull()
+  })
+
+  it('keeps audit addresses ahead of recording metadata', () => {
+    const recordedPlan = planFor(
+      [
+        meta(0, 1, { href: 'https://recorded.example/' }),
+        event(SESSION_START_MS + 1, 'document-1'),
+        meta(5, 1, { href: 'https://recorded.example/next' }),
+      ],
+      [frame(2, 1, { url: 'https://audit.example/' })],
+      [1],
+    )
+
+    expect(recordedPlan.urlAt(1, 1)).toBe('https://recorded.example/')
+    expect(recordedPlan.urlAt(1, 5)).toBe('https://audit.example/')
+  })
+
+  it('ignores missing, malformed, and blank recorded addresses', () => {
+    const recordedPlan = planFor(
+      [
+        meta(0, 1, { href: 'https://one.example/' }),
+        event(SESSION_START_MS + 1, 'document-1'),
+        ...[null, 'invalid', {}, { href: 42 }, { href: '  ' }].map(
+          (data, index) => meta(index + 1, 1, data),
+        ),
+      ],
+      [],
+      [1],
+    )
+
+    expect(recordedPlan.urlAt(1, 10)).toBe('https://one.example/')
+  })
+
+  it('reads metadata omitted from an incomplete playable stream', () => {
+    const recordedPlan = planFor(
+      [
+        meta(0, 1, { href: 'https://one.example/' }),
+        event(SESSION_START_MS + 1, 'document-1', 1, 3),
+        event(SESSION_START_MS + 20, 'document-1'),
+        event(SESSION_START_MS + 30, 'document-1', 1, 3),
+      ],
+      [],
+      [1],
+    )
+
+    expect(
+      recordedPlan.viewFor(1).events.some((event) => event.type === 4),
+    ).toBe(false)
+    expect(recordedPlan.urlAt(1, 0)).toBe('https://one.example/')
   })
 })
 

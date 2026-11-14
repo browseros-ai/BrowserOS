@@ -219,6 +219,24 @@ export function buildSessionReplayPlan(
         const { frame } = actions[i] as ReplayAction
         if (frame.tabId === tabId && frame.url) return frame.url
       }
+      // SDK audit rows can omit addresses. Read the already loaded recording
+      // so a seek also restores the tab's address without a separate timeline.
+      const events = input.eventsForTab(tabId)
+      const atMs = originMs + time * 1000
+      for (let i = events.length - 1; i >= 0; i--) {
+        const event = events[i]
+        if (event.type !== 4 || event.ts > atMs) continue
+        const { data } = event
+        if (
+          typeof data === 'object' &&
+          data !== null &&
+          'href' in data &&
+          typeof data.href === 'string' &&
+          data.href.trim().length > 0
+        ) {
+          return data.href
+        }
+      }
       return null
     },
   }

@@ -116,6 +116,7 @@ function tabEvents(tabId: number, documentId: string): ReplayEvent[] {
     {
       sessionId: 'session-1',
       documentId,
+      targetId: `target-${documentId}`,
       tabId,
       ts: 11_000,
       type: 3,
