@@ -2,4 +2,5 @@
 //! Each module owns one projection so subsequent chunks can fill them independently.
 
 pub(super) mod naming;
+pub(super) mod steps;
 pub(super) mod tabs;
