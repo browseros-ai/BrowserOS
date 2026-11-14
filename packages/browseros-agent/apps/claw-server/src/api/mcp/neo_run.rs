@@ -1,7 +1,7 @@
 //! Desktop Playwright runs bypass the old script dispatcher. The SDK owns execution;
 //! this boundary owns session correlation, cancellation and a redacted host audit row.
 
-use super::{after_run, dispatch::linked_cancel_token, service::StartedSession};
+use super::{after_run, before_run, dispatch::linked_cancel_token, service::StartedSession};
 use crate::{
     AppState,
     db::audit_log::RecordToolDispatchInput,
@@ -19,7 +19,7 @@ use serde_json::{Value, json};
 use std::time::Instant;
 use tokio_util::sync::CancellationToken;
 
-/// Forward first, then reconcile tabs, naming and audit, in that order.
+/// Prepare the window, forward, then reconcile tabs, naming and audit, in that order.
 /// Dropping the engine future closes its HTTP connection so the SDK cancels the run.
 pub(super) async fn call(
     state: &AppState,
@@ -51,10 +51,14 @@ pub(super) async fn call(
             "client": started.session.client_name(),
         }),
     };
+    let mut window_note = None;
     let outcome = tokio::select! {
         biased;
         () = cancel.cancelled() => None,
-        outcome = state.neo.run(call) => Some(outcome),
+        outcome = async {
+            window_note = before_run::ensure_window(state).await;
+            state.neo.run(call).await
+        } => Some(outcome),
     };
     let cancelled = match &outcome {
         None => true,
@@ -83,6 +87,7 @@ pub(super) async fn call(
         Some(Err(error)) => CallToolResult::error(vec![ContentBlock::text(error.to_string())]),
         None => CallToolResult::error(vec![ContentBlock::text("run was cancelled")]),
     };
+    result.content.extend(window_note.map(ContentBlock::text));
     let duration_ms = i64::try_from(began.elapsed().as_millis()).unwrap_or(i64::MAX);
     // A script and its return value can both contain secrets. Persist only fixed
     // outcome flags and token counts, even for invalid arguments and engine errors.

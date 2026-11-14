@@ -8,7 +8,7 @@ import { findFreePort } from './browser'
 import type { ContractCase } from './cases'
 import { apiGet, expectOk, waitUntil } from './helpers'
 import { McpSession, readRpcResponse, textOf } from './mcp-client'
-import { RUST_BINARY } from './rust-server'
+import { RUST_BINARY, startRustServer } from './rust-server'
 
 function engineChildren(parentPid: number): number[] {
   const result = Bun.spawnSync({
@@ -741,6 +741,109 @@ return await page.screenshot({clip: {x:0,y:0,width:900,height:700}})`,
           block.text?.includes('Blob bytes are not available'),
         ),
       )
+    },
+  },
+  {
+    name: 'neo run: reopens one inactive Default window after all windows close',
+    headless: false,
+    async run(ctx) {
+      const windows = async () => {
+        const result = await privateBrowserCommand(
+          ctx.browser.cdpPort,
+          'Browser.getWindows',
+        )
+        assert(result !== null && typeof result === 'object')
+        assert('windows' in result && Array.isArray(result.windows))
+        return result.windows.map((window: unknown) => {
+          assert(window !== null && typeof window === 'object')
+          assert('windowId' in window && typeof window.windowId === 'number')
+          assert(
+            'windowType' in window && typeof window.windowType === 'string',
+          )
+          assert('isActive' in window && typeof window.isActive === 'boolean')
+          assert('browserContextId' in window)
+          return {
+            id: window.windowId,
+            type: window.windowType,
+            active: window.isActive,
+            profile: window.browserContextId,
+          }
+        })
+      }
+      const closeWindows = async () => {
+        // The launcher gives this case its own headed profile and CDP port.
+        // Closing every window models macOS without touching a signed-in browser.
+        for (const window of await windows()) {
+          await privateBrowserCommand(
+            ctx.browser.cdpPort,
+            'Browser.closeWindow',
+            { windowId: window.id },
+          )
+        }
+        await waitUntil(
+          async () => (await windows()).length === 0,
+          'all private windows to close',
+        )
+      }
+      const openPage = async (session: McpSession) => {
+        const result = await session.callTool('run', {
+          code: 'const p = await context.newPage(); return p.tabId',
+        })
+        expectOk(result, 'opening a page with no browser window')
+        const id = result.structuredContent?.value
+        assert(typeof id === 'number' && Number.isSafeInteger(id))
+        return id
+      }
+
+      // The generic suite sidecar has no native version. This case exercises
+      // profile-routed recovery on a browser that supports profile targeting.
+      const server = await startRustServer(ctx.browser.cdpPort, {
+        env: { CLAW_NATIVE_BROWSEROS_VERSION: '0.51.1.3' },
+      })
+      const sessions: McpSession[] = []
+      try {
+        const primary = await McpSession.connect(server.baseUrl, 'neo-window')
+        sessions.push(primary)
+        await closeWindows()
+        await openPage(primary)
+        const reopened = await windows()
+        assert.equal(reopened.length, 1, 'run must reopen exactly one window')
+        const window = reopened[0]
+        assert(window)
+        assert.equal(window.type, 'normal')
+        assert.equal(window.profile, 'Default')
+        assert.equal(
+          window.active,
+          false,
+          'recovery must not activate the window',
+        )
+        await openPage(primary)
+        assert.deepEqual(
+          (await windows()).map((item) => item.id),
+          [window.id],
+          'a run with a window must reuse it',
+        )
+
+        const second = await McpSession.connect(
+          server.baseUrl,
+          'neo-window-concurrent',
+        )
+        sessions.push(second)
+        await closeWindows()
+        const ids = await Promise.all([openPage(primary), openPage(second)])
+        assert.notEqual(ids[0], ids[1])
+        assert.equal(
+          (await windows()).length,
+          1,
+          'concurrent runs must reopen one window',
+        )
+      } finally {
+        try {
+          for (const session of sessions) await session.close()
+        } finally {
+          await server.stop()
+        }
+      }
     },
   },
   {
