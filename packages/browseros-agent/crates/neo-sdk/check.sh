@@ -141,26 +141,36 @@ echo "  ok"
 
 # The SDK image's Python scripts (neo-server/docker): nothing above builds or imports them, and
 # CI's "Neo SDK image / scripts" job checks them, so a broken one used to pass this gate and fail
-# only on GitHub. Their tests as that job runs them, then an import of every script, which fails
-# as the image would on a name a script uses before it defines it. That job's ruff is
+# only on GitHub. Their tests as that job runs them, then a load of every script, subfolders
+# included, which fails as the image would on a name a script uses before it defines it. That job's ruff is
 # packages/browseros's pinned one, through uv: it runs here when uv is installed; the remote pool
 # has none, so there the gate names the command to run by hand.
 DOCKER_DIR="crates/neo-sdk/neo-server/docker"
 step "image scripts (${DOCKER_DIR})"
-if ! python3 -c 'import sys; sys.exit(sys.version_info < (3, 10))'; then
-  echo "check.sh: the image scripts need Python 3.10 or later, as the image's 3.12 runs them; python3 here is $(python3 --version 2>&1)." >&2
+if ! python3 -c 'import sys; sys.exit(sys.version_info < (3, 12))'; then
+  echo "check.sh: the image scripts need Python 3.12 or later, as the image runs them; python3 here is $(python3 --version 2>&1)." >&2
   exit 1
 fi
 (
   cd "$DOCKER_DIR"
   python3 -m unittest discover -s supervisor -p "*_test.py" -q
   python3 -m unittest discover -s . -p "*_test.py" -q
-  scripts=()
-  for script in *.py; do
-    [[ "$script" == *_test.py ]] || scripts+=("${script%.py}")
-  done
-  python3 -I -c 'import importlib, sys; sys.path.insert(0, "."); [importlib.import_module(name) for name in sys.argv[1:]]' "${scripts[@]}"
-  echo "  ${#scripts[@]} scripts import"
+  # Every script, in subfolders too, by its path: a name like neo-quit.py is no module name.
+  # Each loads as a module, so its `if __name__ == "__main__"` part does not run.
+  python3 -I - <<'PY'
+import importlib.util
+import pathlib
+import sys
+
+scripts = sorted(p for p in pathlib.Path(".").rglob("*.py") if not p.name.endswith("_test.py"))
+for path in scripts:
+    sys.path.insert(0, str(path.parent))  # a script imports the scripts beside it
+    name = "gate_" + "_".join(path.with_suffix("").parts).replace("-", "_")
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+print(f"  {len(scripts)} scripts import")
+PY
   if command -v uv >/dev/null 2>&1; then
     uv run --quiet --directory "$REPO_DIR/packages/browseros" ruff check "$PWD"
   else
