@@ -300,6 +300,7 @@ class ReachabilityTests(unittest.TestCase):
                         self.assertEqual("ssh", invoke.call_args.args[0][0])
                         self.assertIn("ConnectTimeout=5", invoke.call_args.args[0])
                         self.assertEqual(5, invoke.call_args.kwargs["timeout"])
+                        self.assertEqual(subprocess.DEVNULL, invoke.call_args.kwargs["stdin"])
                         self.assertEqual("", output.getvalue())
                         self.assertEqual(1, len(error.getvalue().splitlines()))
                         for detail in ("pool did not answer", "usual cause", "outside IPv4", "not admitted",

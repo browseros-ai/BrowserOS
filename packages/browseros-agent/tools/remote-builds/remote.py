@@ -358,11 +358,12 @@ class PoolClient:
         return args
 
     def preflight(self) -> None:
-        """Probe without mutating slots, so any timeout is safe to report immediately."""
+        """Probe without mutating slots or reading caller input, so a timeout is safe."""
         try:
             result = subprocess.run(self.ssh_args(self.profile["coordinator"], ["true"],
                                                  connect_timeout=CONNECT_SECONDS),
-                                    capture_output=True, text=True, timeout=CONNECT_SECONDS)
+                                    stdin=subprocess.DEVNULL, capture_output=True,
+                                    text=True, timeout=CONNECT_SECONDS)
         except subprocess.TimeoutExpired:
             raise PoolUnreachable(POOL_UNREACHABLE) from None
         if result.returncode:
