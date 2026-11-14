@@ -758,6 +758,10 @@ fn reconcile_managed_skill(
     managed_skill: &ManagedSkill,
 ) -> Result<SkillReconcileOutcome, ManagerError> {
     let preferences = Preferences::read(workspace_dir)?;
+    let recipe_files = super::harness_skills::RecipeFiles::snapshot(
+        &managed_skill.workspace_dir,
+        managed_skill.current_spec(),
+    );
     let reconciler = managed_skill.reconciler.clone().with_provisioned_roots(
         managed_skill
             .environment
@@ -776,7 +780,7 @@ fn reconcile_managed_skill(
             // native/legacy cleanup because their consumers are currently unknown.
             let mut outcome = reconciler
                 .repair_provisioned(managed_skill.current_spec(), &managed_skill.environment)?;
-            super::harness_skills::install_recipe_files(
+            recipe_files.reconcile(
                 &managed_skill.workspace_dir,
                 managed_skill.current_spec(),
                 &mut outcome,
@@ -808,7 +812,7 @@ fn reconcile_managed_skill(
         &consumers,
         &managed_skill.environment,
     )?;
-    super::harness_skills::install_recipe_files(
+    recipe_files.reconcile(
         &managed_skill.workspace_dir,
         managed_skill.current_spec(),
         &mut outcome,
@@ -1499,7 +1503,7 @@ mod tests {
         assert!(installed.warnings.is_empty(), "{:?}", installed.warnings);
         let target = home.join(".agents/skills/browseros-neo");
         let recipes_path = target.join("recipes.md");
-        let expected = crate::api::mcp::recipes::markdown();
+        let expected = super::super::harness_skills::recipes::markdown();
         assert_eq!(fs::read_to_string(&recipes_path)?, expected);
         assert_eq!(
             fs::read_to_string(target.join("SKILL.md"))?,
@@ -1597,7 +1601,7 @@ mod tests {
                 .any(|warning| { warning.message.contains("contains user content or edits") })
         );
 
-        let expected = crate::api::mcp::recipes::markdown();
+        let expected = super::super::harness_skills::recipes::markdown();
         let edited = format!("{expected}my personal notes\n");
         fs::write(&recipes_path, &edited)?;
         outcome.warnings.clear();
@@ -1669,6 +1673,242 @@ mod tests {
                     .any(|warning| { warning.message.contains("not a regular file") })
             );
         }
+        Ok(())
+    }
+
+    #[test]
+    fn retired_recipe_files_remove_only_unchanged_generated_content() -> anyhow::Result<()> {
+        use super::super::harness_skills::{RecipeFiles, install_recipe_files, recipes};
+
+        let generated = recipes::markdown();
+        for (label, content, preserve_recipe, sibling) in [
+            ("generated", generated.clone(), false, false),
+            (
+                "edited",
+                format!("{generated}personal notes\n"),
+                true,
+                false,
+            ),
+            ("user", "my own recipes\n".to_string(), true, false),
+            ("sibling", generated.clone(), false, true),
+        ] {
+            let root = tempfile::tempdir()?;
+            let workspace = root.path().join("state");
+            let target = root.path().join("agent/browseros-neo");
+            let spec = SkillSpec::new("browseros-neo", "managed instructions\n")?;
+            let environment = SkillEnvironment::new(
+                root.path().join("home"),
+                harness_integrations::TargetPlatform::current(),
+            );
+            let mut installed = SkillReconciler::new(&workspace)
+                .with_provisioned_roots([root.path().join("agent")])
+                .with_owned_name(spec.name())
+                .reconcile(&spec, &BTreeSet::new(), &environment)?;
+            install_recipe_files(&workspace, &spec, &mut installed);
+            assert!(
+                installed.warnings.is_empty(),
+                "{label}: {:?}",
+                installed.warnings
+            );
+            let path = target.join("recipes.md");
+            fs::write(&path, &content)?;
+            if sibling {
+                fs::write(target.join("notes.txt"), "keep these notes")?;
+            }
+
+            let recipe_files = RecipeFiles::snapshot(&workspace, &spec);
+            let mut retired = SkillReconciler::new(&workspace)
+                .with_owned_name(spec.name())
+                .reconcile(&spec, &BTreeSet::new(), &environment)?;
+            recipe_files.reconcile(&workspace, &spec, &mut retired);
+            assert!(
+                retired.warnings.is_empty(),
+                "{label}: {:?}",
+                retired.warnings
+            );
+            assert_eq!(retired.removed, 1, "{label}");
+            assert!(!target.join("SKILL.md").exists(), "{label}");
+            if preserve_recipe {
+                assert_eq!(fs::read_to_string(&path)?, content, "{label}");
+            } else {
+                assert!(!path.exists(), "{label}");
+            }
+            assert_eq!(target.exists(), preserve_recipe || sibling, "{label}");
+            if sibling {
+                assert_eq!(
+                    fs::read_to_string(target.join("notes.txt"))?,
+                    "keep these notes"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn retiring_a_skill_preserves_recipe_symlinks_and_their_targets() -> anyhow::Result<()> {
+        use super::super::harness_skills::{RecipeFiles, recipes};
+
+        let root = tempfile::tempdir()?;
+        let workspace = root.path().join("state");
+        let target = root.path().join("agent/browseros-neo");
+        let spec = SkillSpec::new("browseros-neo", "managed instructions\n")?;
+        let environment = SkillEnvironment::new(
+            root.path().join("home"),
+            harness_integrations::TargetPlatform::current(),
+        );
+        SkillReconciler::new(&workspace)
+            .with_provisioned_roots([root.path().join("agent")])
+            .with_owned_name(spec.name())
+            .reconcile(&spec, &BTreeSet::new(), &environment)?;
+        let external = root.path().join("external-recipes.md");
+        let generated = recipes::markdown();
+        fs::write(&external, &generated)?;
+        let path = target.join("recipes.md");
+        std::os::unix::fs::symlink(&external, &path)?;
+        let recipe_files = RecipeFiles::snapshot(&workspace, &spec);
+        let mut retired = SkillReconciler::new(&workspace)
+            .with_owned_name(spec.name())
+            .reconcile(&spec, &BTreeSet::new(), &environment)?;
+        recipe_files.reconcile(&workspace, &spec, &mut retired);
+        assert!(retired.warnings.is_empty(), "{:?}", retired.warnings);
+        assert!(!target.join("SKILL.md").exists());
+        assert!(fs::symlink_metadata(path)?.file_type().is_symlink());
+        assert_eq!(fs::read_to_string(external)?, generated);
+        Ok(())
+    }
+
+    #[test]
+    fn failed_recipe_retirement_is_retried_by_a_fresh_snapshot() -> anyhow::Result<()> {
+        use super::super::harness_skills::{RecipeFiles, install_recipe_files, recipes};
+
+        let root = tempfile::tempdir()?;
+        let workspace = root.path().join("state");
+        let target = root.path().join("agent/browseros-neo");
+        let spec = SkillSpec::new("browseros-neo", "managed instructions\n")?;
+        let environment = SkillEnvironment::new(
+            root.path().join("home"),
+            harness_integrations::TargetPlatform::current(),
+        );
+        let mut installed = SkillReconciler::new(&workspace)
+            .with_provisioned_roots([root.path().join("agent")])
+            .with_owned_name(spec.name())
+            .reconcile(&spec, &BTreeSet::new(), &environment)?;
+        install_recipe_files(&workspace, &spec, &mut installed);
+        assert!(installed.warnings.is_empty(), "{:?}", installed.warnings);
+        let canonical_target = fs::canonicalize(&target)?;
+        let recipe_path = target.join("recipes.md");
+        let generated = recipes::markdown();
+        let snapshot = RecipeFiles::snapshot(&workspace, &spec);
+        fs::write(&recipe_path, [0xff])?;
+        let mut retired = SkillReconciler::new(&workspace)
+            .with_owned_name(spec.name())
+            .reconcile(&spec, &BTreeSet::new(), &environment)?;
+        snapshot.reconcile(&workspace, &spec, &mut retired);
+        assert!(!target.join("SKILL.md").exists());
+        assert!(
+            retired.warnings.iter().any(|warning| {
+                warning.target == canonical_target
+                    && warning.message.contains("Could not remove retired")
+            }),
+            "{:?}",
+            retired.warnings
+        );
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(workspace.join("skills.json"))?)?;
+        assert_eq!(manifest["targets"], json!([]));
+
+        fs::write(&recipe_path, generated)?;
+        let restarted = RecipeFiles::snapshot(&workspace, &spec);
+        let mut retried = SkillReconciler::new(&workspace)
+            .with_owned_name(spec.name())
+            .reconcile(&spec, &BTreeSet::new(), &environment)?;
+        restarted.reconcile(&workspace, &spec, &mut retried);
+        assert!(retried.warnings.is_empty(), "{:?}", retried.warnings);
+        assert!(!target.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn unknown_recipe_target_journals_are_preserved_without_cleanup() -> anyhow::Result<()> {
+        use super::super::harness_skills::{RecipeFiles, install_recipe_files, recipes};
+
+        for journal in [
+            b"user-owned journal".as_slice(),
+            br#"{"version":99,"managedBy":"browserclaw","skillName":"browseros-neo","targets":[]}"#,
+        ] {
+            let root = tempfile::tempdir()?;
+            let workspace = root.path().join("state");
+            let target = root.path().join("agent/browseros-neo");
+            let spec = SkillSpec::new("browseros-neo", "managed instructions\n")?;
+            let environment = SkillEnvironment::new(
+                root.path().join("home"),
+                harness_integrations::TargetPlatform::current(),
+            );
+            let mut installed = SkillReconciler::new(&workspace)
+                .with_provisioned_roots([root.path().join("agent")])
+                .with_owned_name(spec.name())
+                .reconcile(&spec, &BTreeSet::new(), &environment)?;
+            install_recipe_files(&workspace, &spec, &mut installed);
+            let journal_path = workspace.join("recipe-targets.json");
+            fs::write(&journal_path, journal)?;
+            let snapshot = RecipeFiles::snapshot(&workspace, &spec);
+            let mut retired = SkillReconciler::new(&workspace)
+                .with_owned_name(spec.name())
+                .reconcile(&spec, &BTreeSet::new(), &environment)?;
+            snapshot.reconcile(&workspace, &spec, &mut retired);
+            assert_eq!(fs::read(&journal_path)?, journal);
+            assert_eq!(
+                fs::read_to_string(target.join("recipes.md"))?,
+                recipes::markdown()
+            );
+            assert!(retired.warnings.iter().any(|warning| {
+                warning.target == journal_path && warning.message.contains("Could not track")
+            }));
+        }
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn recipe_target_journal_symlinks_are_not_followed_or_replaced() -> anyhow::Result<()> {
+        use super::super::harness_skills::{RecipeFiles, install_recipe_files};
+
+        let root = tempfile::tempdir()?;
+        let workspace = root.path().join("state");
+        let target = root.path().join("agent/browseros-neo");
+        let spec = SkillSpec::new("browseros-neo", "managed instructions\n")?;
+        let environment = SkillEnvironment::new(
+            root.path().join("home"),
+            harness_integrations::TargetPlatform::current(),
+        );
+        let mut installed = SkillReconciler::new(&workspace)
+            .with_provisioned_roots([root.path().join("agent")])
+            .with_owned_name(spec.name())
+            .reconcile(&spec, &BTreeSet::new(), &environment)?;
+        install_recipe_files(&workspace, &spec, &mut installed);
+        let external = root.path().join("foreign-journal.json");
+        fs::write(&external, "keep external data")?;
+        let journal_path = workspace.join("recipe-targets.json");
+        std::os::unix::fs::symlink(&external, &journal_path)?;
+        let snapshot = RecipeFiles::snapshot(&workspace, &spec);
+        let mut retired = SkillReconciler::new(&workspace)
+            .with_owned_name(spec.name())
+            .reconcile(&spec, &BTreeSet::new(), &environment)?;
+        snapshot.reconcile(&workspace, &spec, &mut retired);
+        assert!(
+            fs::symlink_metadata(&journal_path)?
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(fs::read_to_string(external)?, "keep external data");
+        assert!(target.join("recipes.md").exists());
+        assert!(
+            retired
+                .warnings
+                .iter()
+                .any(|warning| warning.target == journal_path)
+        );
         Ok(())
     }
 }

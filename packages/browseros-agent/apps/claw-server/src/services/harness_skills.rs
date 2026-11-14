@@ -1,13 +1,13 @@
 use std::{
+    collections::BTreeSet,
     fs,
     io::{self, Write},
     path::{Path, PathBuf},
 };
 
 use harness_integrations::{SkillReconcileOutcome, SkillSpec, SkillWarning};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-use crate::api::mcp::recipes;
 use crate::config::TabGrouping;
 use crate::error::{AppError, AppResult};
 
@@ -26,7 +26,7 @@ pub(crate) const MANAGED_SKILL_DIRECTORY: &str = "browseros-neo";
 pub(crate) const LEGACY_SKILL_DIRECTORY_NAME: &str = "browserclaw";
 
 /// Explicit grouping omits only the server's automatic grouping promise.
-const SKILL_GROUP_PROMISE: &str = "Tabs are grouped as `<client>/<task>`.";
+const SKILL_GROUP_PROMISE: &str = "Tabs are grouped as `<client>/<task>`. If a script creates its own group, later session tabs in that window join that group instead of a second automatic group. The server never collapses or closes script-made groups; the creating script owns cleanup.";
 
 /// The installed guide starts page actions with pursue only while ultrafast offers it.
 const SKILL_RUN_FIRST: (&str, &str) = (
@@ -54,7 +54,7 @@ pub fn load_browserclaw_skill(
         } else {
             content
                 .lines()
-                .filter(|line| !line.contains("recipes.md"))
+                .filter(|line| !line.contains("recipes.md") && !line.contains("neo.cdp"))
                 .collect::<Vec<_>>()
                 .join("\n")
                 + "\n"
@@ -129,6 +129,224 @@ fn parse_browserclaw_skill(content: String) -> Result<SkillSpec, String> {
         return Err("frontmatter requires a non-empty `description`".to_string());
     }
     SkillSpec::new(MANAGED_SKILL_DIRECTORY, content).map_err(|error| error.to_string())
+}
+
+const RECIPE_TARGETS_FILE: &str = "recipe-targets.json";
+
+/// The skill reconciler can retire its manifest record before recipe cleanup runs.
+/// Journal known destinations first so interrupted or failed cleanup can retry after restart.
+pub(super) enum RecipeFiles {
+    Tracked(BTreeSet<PathBuf>),
+    Unavailable(SkillWarning),
+}
+
+/// Retains generated-reference destinations after the instruction manifest stops naming them.
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RecipeTargetJournal {
+    version: u8,
+    managed_by: String,
+    skill_name: String,
+    targets: BTreeSet<PathBuf>,
+}
+
+impl RecipeFiles {
+    pub(super) fn snapshot(workspace_dir: &Path, spec: &SkillSpec) -> Self {
+        match prepare_recipe_targets(workspace_dir, spec) {
+            Ok(previous_targets) => Self::Tracked(previous_targets),
+            Err(error) => Self::Unavailable(recipe_journal_warning(workspace_dir, error)),
+        }
+    }
+
+    pub(super) fn reconcile(
+        self,
+        workspace_dir: &Path,
+        spec: &SkillSpec,
+        outcome: &mut SkillReconcileOutcome,
+    ) {
+        let previous_targets = match self {
+            Self::Tracked(targets) => Some(targets),
+            Self::Unavailable(warning) => {
+                outcome.warnings.push(warning);
+                None
+            }
+        };
+        install_recipe_files(workspace_dir, spec, outcome);
+        let Some(previous_targets) = previous_targets else {
+            return;
+        };
+        let Some(current_targets) = recipe_targets(workspace_dir, spec) else {
+            return;
+        };
+        let mut pending = current_targets.clone();
+        for target in previous_targets.difference(&current_targets) {
+            if !retire_recipe_target(target, outcome) {
+                pending.insert(target.clone());
+            }
+        }
+        // A failed final write leaves the pre-reconcile journal intact. Repeating
+        // completed cleanup is harmless, while unfinished destinations remain discoverable.
+        if let Err(error) = write_recipe_targets(workspace_dir, spec, pending) {
+            outcome
+                .warnings
+                .push(recipe_journal_warning(workspace_dir, error));
+        }
+    }
+}
+
+fn prepare_recipe_targets(workspace_dir: &Path, spec: &SkillSpec) -> io::Result<BTreeSet<PathBuf>> {
+    let journal = read_recipe_targets(workspace_dir, spec)?;
+    let mut targets = recipe_targets(workspace_dir, spec).unwrap_or_default();
+    targets.extend(
+        journal
+            .iter()
+            .flat_map(|journal| journal.targets.iter().cloned()),
+    );
+    if journal.is_some() || !targets.is_empty() {
+        write_recipe_targets(workspace_dir, spec, targets.clone())?;
+    }
+    Ok(targets)
+}
+
+fn read_recipe_targets(
+    workspace_dir: &Path,
+    spec: &SkillSpec,
+) -> io::Result<Option<RecipeTargetJournal>> {
+    let path = workspace_dir.join(RECIPE_TARGETS_FILE);
+    let Some(metadata) = optional_metadata(&path)? else {
+        return Ok(None);
+    };
+    if !metadata.is_file() {
+        return Err(io::Error::other(
+            "recipe target journal is not a regular file; preserved it",
+        ));
+    }
+    let journal: RecipeTargetJournal =
+        serde_json::from_slice(&fs::read(path)?).map_err(io::Error::other)?;
+    if journal.version != 1
+        || journal.managed_by != "browserclaw"
+        || journal.skill_name != spec.name()
+        || journal.targets.iter().any(|target| !target.is_absolute())
+    {
+        return Err(io::Error::other(
+            "recipe target journal has unknown ownership or version; preserved it",
+        ));
+    }
+    Ok(Some(journal))
+}
+
+fn write_recipe_targets(
+    workspace_dir: &Path,
+    spec: &SkillSpec,
+    targets: BTreeSet<PathBuf>,
+) -> io::Result<()> {
+    // Recheck the destination because an unknown or user-replaced journal is never ours to overwrite.
+    let replace = read_recipe_targets(workspace_dir, spec)?.is_some();
+    fs::create_dir_all(workspace_dir)?;
+    let journal = RecipeTargetJournal {
+        version: 1,
+        managed_by: "browserclaw".to_string(),
+        skill_name: spec.name().to_string(),
+        targets,
+    };
+    let mut temporary = tempfile::NamedTempFile::new_in(workspace_dir)?;
+    serde_json::to_writer_pretty(&mut temporary, &journal).map_err(io::Error::other)?;
+    temporary.write_all(b"\n")?;
+    temporary.as_file().sync_all()?;
+    let path = workspace_dir.join(RECIPE_TARGETS_FILE);
+    if replace {
+        temporary.persist(path).map_err(|error| error.error)?;
+    } else {
+        temporary
+            .persist_noclobber(path)
+            .map_err(|error| error.error)?;
+    }
+    Ok(())
+}
+
+fn recipe_journal_warning(workspace_dir: &Path, error: io::Error) -> SkillWarning {
+    SkillWarning {
+        target: workspace_dir.join(RECIPE_TARGETS_FILE),
+        message: format!(
+            "Could not track browser recipe cleanup; preserved pending files: {error}"
+        ),
+    }
+}
+
+fn retire_recipe_target(target: &Path, outcome: &mut SkillReconcileOutcome) -> bool {
+    if outcome
+        .warnings
+        .iter()
+        .any(|warning| warning.target == target)
+    {
+        return false;
+    }
+    match remove_retired_recipes(target) {
+        Ok(settled) => settled,
+        Err(error) => {
+            outcome.warnings.push(SkillWarning {
+                target: target.to_path_buf(),
+                message: format!("Could not remove retired browser recipes: {error}"),
+            });
+            false
+        }
+    }
+}
+
+fn recipe_targets(workspace_dir: &Path, spec: &SkillSpec) -> Option<BTreeSet<PathBuf>> {
+    let raw = fs::read_to_string(workspace_dir.join("skills.json")).ok()?;
+    let manifest: RecipeInstallManifest = serde_json::from_str(&raw).ok()?;
+    (manifest.version == 1).then(|| {
+        manifest
+            .targets
+            .into_iter()
+            .filter(|entry| entry.skill_name == spec.name())
+            .map(|entry| entry.target_path)
+            .collect()
+    })
+}
+
+fn optional_metadata(path: &Path) -> io::Result<Option<fs::Metadata>> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => Ok(Some(metadata)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+/// Instructions still present mean retirement did not finish; keep the target journaled.
+/// User content and symlinks settle without deletion.
+fn remove_retired_recipes(target: &Path) -> io::Result<bool> {
+    if !optional_metadata(target)?.is_some_and(|metadata| metadata.is_dir()) {
+        return Ok(true);
+    }
+    if optional_metadata(&target.join("SKILL.md"))?.is_some() {
+        return Ok(false);
+    }
+    let path = target.join("recipes.md");
+    if let Some(metadata) = optional_metadata(&path)? {
+        if !metadata.is_file() || !recipes::is_generated_markdown(&fs::read_to_string(&path)?) {
+            return Ok(true);
+        }
+        fs::remove_file(path)?;
+    }
+    remove_empty_recipe_directory(target)?;
+    Ok(true)
+}
+
+fn remove_empty_recipe_directory(target: &Path) -> io::Result<()> {
+    match fs::remove_dir(target) {
+        Ok(()) => Ok(()),
+        Err(error)
+            if matches!(
+                error.kind(),
+                io::ErrorKind::NotFound | io::ErrorKind::DirectoryNotEmpty
+            ) =>
+        {
+            Ok(())
+        }
+        Err(error) => Err(error),
+    }
 }
 
 /// The reconciler owns target discovery and installation. Its manifest is read only after
@@ -346,17 +564,6 @@ mod tests {
         ] {
             assert!(content.contains(required), "missing {required}");
         }
-        for removed in [
-            "snapshot",
-            "evaluate_in_page",
-            "name_session",
-            "save_skill",
-            "tab_groups",
-            "browser_target",
-            "read_output",
-        ] {
-            assert!(!content.contains(removed), "removed tool {removed}");
-        }
         assert!(content.lines().count() < 60);
         Ok(())
     }
@@ -419,5 +626,121 @@ mod tests {
             expected
         );
         Ok(())
+    }
+}
+
+pub(crate) mod recipes {
+    //! One service-owned registry feeds MCP instructions, installed skill references,
+    //! and the live contract suite without depending on a transport or another packaged file.
+
+    use serde::Deserialize;
+    use sha2::{Digest, Sha256};
+    use std::sync::LazyLock;
+
+    /// Turn off both recipe readers if the SDK's opt-in CDP bridge is held back.
+    pub(crate) const ENABLED: bool = true;
+
+    /// Executable examples use named inputs described by `when`; the contract suite supplies
+    /// those inputs and runs the same `code`, rather than maintaining a second set of examples.
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    pub(crate) struct Recipe {
+        pub(crate) id: String,
+        pub(crate) title: String,
+        pub(crate) when: String,
+        pub(crate) code: String,
+    }
+
+    static RECIPES: LazyLock<Vec<Recipe>> = LazyLock::new(|| {
+        serde_json::from_str(include_str!(
+            "../../../../resources/skills/browserclaw/recipes.json"
+        ))
+        .unwrap_or_else(|error| panic!("invalid embedded CDP recipes: {error}"))
+    });
+
+    pub(crate) fn all() -> &'static [Recipe] {
+        if ENABLED { &RECIPES } else { &[] }
+    }
+
+    /// Every agent receives the runnable call even when its harness has no skill reader.
+    pub(crate) fn instruction_lines() -> String {
+        all()
+            .iter()
+            .map(|recipe| {
+                format!(
+                    "- {}: `{}` {}",
+                    recipe.title,
+                    recipe.code.replace('\n', " "),
+                    recipe.when
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    pub(crate) fn markdown() -> String {
+        let mut content = String::from(
+            "# BrowserOS neo recipes\n\nRun these snippets inside MCP `run`. Set the named inputs from live browser results first. Prefer Playwright for page work.\n\nBrowser protocol errors return `script / cdp_error`; fix the method or parameters before retrying.\nCalls without a page can return `host / owner_has_control` while a human owns a tab. Wait for hand-back; do not bypass it.\nProtected tab or window closes return `script / unsupported`. Leave Neo's reserved blank tab and its window open.\n\n",
+        );
+        for recipe in all() {
+            content.push_str(&format!(
+                "<a id=\"{}\"></a>\n\n## {}\n\n{}\n\n```js\n{}\n```\n\n",
+                recipe.id, recipe.title, recipe.when, recipe.code
+            ));
+        }
+        format!("{}\n{content}", ownership_header(&content))
+    }
+
+    /// The guide owns only bytes it generated. A changed body loses that proof, even
+    /// when its surrounding SKILL.md still has a valid harness ownership marker.
+    pub(crate) fn is_generated_markdown(content: &str) -> bool {
+        let Some((header, body)) = content.split_once('\n') else {
+            return false;
+        };
+        header == ownership_header(body)
+    }
+
+    fn ownership_header(body: &str) -> String {
+        format!(
+            "<!-- browseros-neo generated recipes sha256:{:x} -->",
+            Sha256::digest(body.as_bytes())
+        )
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::collections::BTreeSet;
+
+        #[test]
+        fn each_recipe_is_unique_and_appears_in_both_readers() {
+            let instructions = instruction_lines();
+            let reference = markdown();
+            let mut ids = BTreeSet::new();
+            let mut titles = BTreeSet::new();
+            assert!(!ENABLED || !all().is_empty());
+            for recipe in all() {
+                assert!(ids.insert(&recipe.id), "duplicate recipe id");
+                assert!(titles.insert(&recipe.title), "duplicate recipe title");
+                assert!(!recipe.id.is_empty());
+                assert!(!recipe.when.is_empty());
+                assert!(recipe.code.contains("neo.cdp("));
+                assert!(instructions.contains(&recipe.title));
+                assert!(instructions.contains(&recipe.code.replace('\n', " ")));
+                assert!(reference.contains(&recipe.title));
+                assert!(reference.contains(&recipe.code));
+            }
+        }
+
+        #[test]
+        fn generated_guide_ownership_requires_an_unchanged_body() {
+            let reference = markdown();
+            assert!(is_generated_markdown(&reference));
+            assert!(!is_generated_markdown(&format!("{reference}my notes\n")));
+            assert!(!is_generated_markdown("# My own recipes\n"));
+            assert!(!is_generated_markdown(
+                "<!-- browseros-neo generated recipes sha256:wrong -->\nbody\n"
+            ));
+        }
     }
 }

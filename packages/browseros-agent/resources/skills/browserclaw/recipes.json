@@ -8,7 +8,7 @@
   {
     "id": "create-group",
     "title": "Create a tab group",
-    "when": "Group your current page. Replace research with your task label; keep the returned groupId.",
+    "when": "Group your current page. Replace research with your task label; keep the returned groupId. With automatic grouping, later session tabs in the same window join this group and do not get a second automatic group. The server never collapses or closes groups your script creates; your script owns cleanup.",
     "code": "return await neo.cdp('Browser.createTabGroup', { tabIds: [page.tabId], title: 'research' });"
   },
   {
@@ -32,7 +32,7 @@
   {
     "id": "close-group",
     "title": "Close a tab group",
-    "when": "Set groupId from the group list. This closes every tab in that group; inspect its tabIds first.",
+    "when": "Set groupId from the group list. This closes every tab in that group; inspect its tabIds first. The server never collapses or closes script-made groups. Your script owns tidying the group it created, including any later session tabs that joined it in this window. Never include Neo's reserved blank tab. Protected tab/window closes report script / unsupported; leave the reserved tab and window open rather than using group closure to bypass that refusal.",
     "code": "return await neo.cdp('Browser.closeTabGroup', { groupId });"
   },
   {
@@ -50,7 +50,7 @@
   {
     "id": "close-window",
     "title": "Close a window",
-    "when": "Set windowId from the window list. This closes all tabs in that window; inspect it first.",
+    "when": "Set windowId from the window list. This closes all tabs in that window; inspect it first. Neo keeps its own reserved blank tab open. A close that would remove that tab or its window is refused as script / unsupported; the close is not sent. Leave the reserved window open and close only your own pages with page.close(), or use a separate window. Do not bypass the refusal.",
     "code": "return await neo.cdp('Browser.closeWindow', { windowId });"
   },
   {

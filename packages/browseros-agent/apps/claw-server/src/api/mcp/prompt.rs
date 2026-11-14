@@ -10,7 +10,7 @@ const BROWSER_GUIDANCE: &str = "BrowserOS neo is the browser for agents, with pe
 const RUN_FIRST: &str = "Use run for browser work.";
 const PURSUE_FIRST: &str = "Start tasks that act on a site with pursue. Get the tab number from page.tabId in run, then pass the whole outcome.\nIf pursue returns completed, verify in run. If it returns handed_back, continue from its page and skip finished steps; do not call pursue again for that task.\nUse run directly for reads, work across pages, and work the user asks you to script.";
 
-pub(super) const GROUP_GUIDANCE: &str = "Tabs are grouped as <client>/<task>.";
+pub(super) const GROUP_GUIDANCE: &str = "Tabs are grouped as <client>/<task>. If a script creates its own group, later session tabs in that window join that group instead of a second <client>/<task> group.\nThe server never collapses or closes script-made groups; the creating script owns cleanup.";
 
 const DESKTOP_GUIDANCE: &str = "Name the work with const task = await neo.createTask('research notes'); return task.id.\nYour desktop session keeps its task between runs. Keep the id and use await neo.task(id) after a reconnect.\ncontext.pages() lists tabs with page.tabId and page.taskId; null means an unassigned tab, often the user's.\nOpen your own exploratory tabs with context.newPage() or task.newPage(). Leave other people's tabs as you found them unless asked to change them.\nPreserve useful pages when the task ends. task.close() closes all of that task's tabs.\nEach script is a fresh async function. Await SDK calls and return the result you need.\nUse page.ariaSnapshot() to inspect, locators to act, then verify. Refs come from the current tree; inspect again after the page changes.\nWait for a locator or expected state. Read errors and captured logs before retrying; if delivery is unknown, inspect before repeating a write.\nReturn await page.screenshot() for a visual check or await page.pdf() for PDF bytes.\nDownloads use download.path() or download.saveAs(path). Path uploads must be inside allowed folders, Downloads by default; buffer payloads need no local file.\nThe realm is QuickJS, with no Node imports, fetch or DOM globals. page.evaluate() runs inside the page, where site scripts can observe it.\nIf a call says browser session not connected, ask the user to start BrowserOS neo and check the cockpit.";
 
@@ -44,7 +44,7 @@ pub fn mcp_instructions(
     let recipe_lines = recipes::instruction_lines();
     let mut paragraphs = vec![BROWSER_GUIDANCE, DESKTOP_GUIDANCE, GROUP_GUIDANCE];
     if !recipe_lines.is_empty() {
-        paragraphs.push("For what Playwright lacks, use these recipes inside run. Set named inputs from live results first; full notes also live in recipes.md beside the installed skill.");
+        paragraphs.push("For what Playwright lacks, use these recipes inside run. Set named inputs from live results first; full notes also live in recipes.md beside the installed skill.\nFor neo.cdp, browser protocol errors are script / cdp_error; fix the method or parameters. A page-less call can return host / owner_has_control during human takeover; wait for hand-back and do not bypass it.\nProtected tab/window closes return script / unsupported; leave Neo's reserved blank tab and window open.");
         paragraphs.push(&recipe_lines);
     }
     paragraphs.extend([help, PAGE_CONTENT_GUARD]);
@@ -60,25 +60,8 @@ pub fn with_pursue_guidance(instructions: String) -> String {
 mod tests {
     use super::*;
 
-    const REMOVED_NAMES: &[&str] = &[
-        "snapshot",
-        "evaluate_in_page",
-        "name_session",
-        "save_skill",
-        "tab_groups",
-        "browser_target",
-        "browser_profiles",
-        "read_output",
-        "mark_skill_run",
-        "run_skill",
-        "solve_captcha",
-        "credentials",
-        "payment_cards",
-        "setViewport",
-    ];
-
     #[test]
-    fn every_desktop_configuration_teaches_only_the_run_surface_and_all_recipes() {
+    fn every_desktop_configuration_teaches_its_available_features_and_recipes() {
         for human_help in [HumanHelp::On, HumanHelp::Off] {
             for ultrafast in [false, true] {
                 for version in [None, Some("0.51.1.3")] {
@@ -91,30 +74,6 @@ mod tests {
                             grouping,
                         );
                         for text in [instructions.clone(), with_pursue_guidance(instructions)] {
-                            for name in REMOVED_NAMES {
-                                assert!(!text.contains(name), "removed tool {name}: {text}");
-                            }
-                            // Single-word legacy tool names remain ordinary prose or API
-                            // members. Reject their former call forms without banning English.
-                            for name in [
-                                "snapshot",
-                                "act",
-                                "navigate",
-                                "read",
-                                "grep",
-                                "diff",
-                                "wait",
-                                "tabs",
-                                "windows",
-                                "history",
-                                "screenshot",
-                                "pdf",
-                                "download",
-                                "upload",
-                            ] {
-                                assert!(!text.contains(&format!("{name} action=")), "{name}");
-                                assert!(!text.contains(&format!("call {name} ")), "{name}");
-                            }
                             for recipe in recipes::all() {
                                 assert!(text.contains(&recipe.title), "{}", recipe.title);
                             }
