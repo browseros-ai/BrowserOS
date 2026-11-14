@@ -6,7 +6,7 @@
 import { expect } from 'bun:test'
 import recipes from '../../../resources/skills/browserclaw/recipes.json'
 import type { CaseContext, ContractCase } from './cases'
-import { expectOk, waitUntil } from './helpers'
+import { expectError, expectOk, waitUntil } from './helpers'
 import { McpSession } from './mcp-client'
 import { startRustServer } from './rust-server'
 
@@ -95,8 +95,8 @@ async function withRecipeSession(
     return check(ctx.mcp)
   }
 
-  // The generic sidecar has no native identity. Only these profile examples
-  // require the native API supported by the suite's private BrowserOS binary.
+  // The generic sidecar has no native identity. Enable profile routing here,
+  // then probe the actual browser: older fixtures may lack the native methods.
   const server = await startRustServer(ctx.browser.cdpPort, {
     env: { CLAW_NATIVE_BROWSEROS_VERSION: '0.51.1.3' },
   })
@@ -122,6 +122,33 @@ export const recipeCases: ContractCase[] = recipes.map((recipe) => ({
   name: `recipes: ${recipe.title}`,
   async run(ctx) {
     return withRecipeSession(ctx, recipe.id, async (mcp) => {
+      if (recipe.id === 'list-profiles' || recipe.id === 'load-profile') {
+        const probe = await mcp.callTool('run', {
+          code: "return await neo.cdp('Browser.getProfiles')",
+        })
+        if (probe.isError) {
+          expect(expectError(probe)).toContain(
+            "script / cdp_error: CDP error: 'Browser.getProfiles' wasn't found",
+          )
+          // Without discovery there is no saved-profile handle. A sentinel lets
+          // the unchanged load recipe reach dispatch; only a missing method is accepted.
+          const unsupported = await mcp.callTool('run', {
+            code: `const browserProfileId = 'unsupported-profile-probe'; ${recipe.code}`,
+          })
+          const method =
+            recipe.id === 'list-profiles'
+              ? 'Browser.getProfiles'
+              : 'Browser.loadProfile'
+          expect(expectError(unsupported)).toContain(
+            `script / cdp_error: CDP error: '${method}' wasn't found`,
+          )
+          const next = await mcp.callTool('run', { code: 'return true' })
+          expectOk(next, 'a run after the unsupported profile method')
+          expect(next.structuredContent?.value).toBe(true)
+          return
+        }
+        expectOk(probe, 'profile command probe')
+      }
       if (recipe.id === 'open-tab-in-window') {
         const opened = await mcp.callTool('run', {
           code: `
