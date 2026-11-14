@@ -882,8 +882,9 @@ async fn fill_pictures_defaults_to_allowed_and_takes_never() -> TestResult {
 }
 
 /// `tabs.scope` is `task` unless a host sets `browser`, the value every run reads at its start.
-/// A value Neo does not have is skipped and named in `unknownValues`, as if left out, and a
-/// saved one Neo cannot read loads as the default, `task`.
+/// A value Neo does not have is skipped and named in `unknownValues`, as if left out: a `PATCH`
+/// keeps the value the setting had, a `PUT` puts back the default, `task`. A saved one Neo cannot
+/// read loads as the default.
 #[tokio::test]
 async fn the_tab_scope_is_task_unless_set_and_a_misspelt_value_is_skipped() -> TestResult {
     let harness = harness().await?;
@@ -899,6 +900,15 @@ async fn the_tab_scope_is_task_unless_set_and_a_misspelt_value_is_skipped() -> T
         harness.settings.tabs_scope(),
         TabsScope::Browser,
         "the next run reads it"
+    );
+    let patched = harness.patch(r#"{"tabs":{"scope":"Task"}}"#).await?;
+    assert_eq!(patched.status, StatusCode::OK, "{}", patched.body);
+    assert_eq!(patched.body["unknownValues"], json!(["tabs.scope"]));
+    assert_eq!(patched.body["settings"]["tabs"]["scope"], "browser");
+    assert_eq!(
+        harness.settings.tabs_scope(),
+        TabsScope::Browser,
+        "a PATCH that names only a value Neo does not have changes nothing, as for every setting"
     );
     let misspelt = harness.put(r#"{"tabs":{"scope":"Browser"}}"#).await?;
     assert_eq!(misspelt.status, StatusCode::OK, "{}", misspelt.body);

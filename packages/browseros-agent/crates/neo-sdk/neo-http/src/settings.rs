@@ -457,12 +457,12 @@ fn log_change(before: &SetValues, after: &SetValues, defaults: &SettingsDefaults
 
 #[cfg(test)]
 mod tests {
-    use super::Settings;
+    use super::{Settings, TabsScope};
     use neo_trace::{RecordPolicy, RetentionPolicy};
     use std::time::Duration;
 
     #[test]
-    fn every_default_keeps_todays_behaviour_but_fill_pictures() {
+    fn every_default_keeps_todays_behaviour_but_fill_pictures_and_tabs_scope() {
         let settings = Settings::defaults(Default::default());
         assert_eq!(
             settings.trace_retention(),
@@ -483,6 +483,12 @@ mod tests {
             !settings.fill_pictures_never(),
             "ruling R58: a tab that took a private fill is pictured by default, the owner's \
              decision, where before it never was"
+        );
+        assert_eq!(
+            settings.tabs_scope(),
+            TabsScope::Task,
+            "a run that carries a task sees only its task's tabs by default, where before it saw \
+             every tab"
         );
     }
     /// Ruling R58 with the saved settings file: a saved `fill.pictures: never` is honoured from

@@ -1127,7 +1127,8 @@ paths:
 
         A change takes effect at once, with no restart: each
         part reads the value when it acts. A run in flight follows the new values from its next
-        operation.
+        operation, except `tabs.scope`, which a run reads once at its start: a run in flight
+        keeps the scope it started with, and the next run takes the new one.
       requestBody:
         required: true
         content:

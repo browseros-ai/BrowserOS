@@ -90,7 +90,8 @@ pub(crate) const TAB_IDLE_CLOSE: Setting = Setting {
 
 /// Whether a run that carries a task sees only its task's tabs (`task`) or every tab, as any
 /// run without a task does (`browser`). Each run reads it once, at its start. A saved value Neo
-/// cannot read falls back to the default, `task`.
+/// cannot read falls back to the default, `task`, the narrow side. That holds only while the
+/// default is `task`: were it ever `browser`, this row would need `invalid_saved: task`.
 pub(crate) const TABS_SCOPE: Setting = Setting {
     name: "tabs.scope",
     invalid_saved: None,
