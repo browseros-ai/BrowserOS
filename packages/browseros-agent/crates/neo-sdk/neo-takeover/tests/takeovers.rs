@@ -1401,3 +1401,113 @@ async fn a_popup_keeps_its_opener_after_the_opener_closes() -> TestResult {
     );
     Ok(())
 }
+
+/// The owner opens `count` tabs from `first` on during the takeover.
+fn owner_opens_many(h: &Harness, first: i64, count: i64) {
+    for tab in first..first + count {
+        owner_opens(h, tab, &format!("https://opened.example/{tab}"));
+    }
+}
+
+/// The tab ids a release lists.
+fn listed_ids(takeover: &Takeover) -> Vec<i64> {
+    takeover
+        .opened_tabs
+        .iter()
+        .flatten()
+        .map(|opened| opened.tab.0)
+        .collect()
+}
+
+/// A page that opens tabs in a loop early must not hide the owner's last tabs: past 256 a
+/// takeover keeps the newest, counts them all, and says the list is cut, so a host treats a tab
+/// it does not list as unknown. A repeat release answers the same.
+#[tokio::test]
+async fn past_256_opens_a_release_keeps_the_newest_and_says_the_list_is_cut() -> TestResult {
+    let h = harness(&[3]).await?;
+    let takeover = h.takeovers.start(request(None)?).await?;
+    owner_opens_many(&h, 1000, 257);
+    let released = h
+        .takeovers
+        .release(takeover.id, ReleaseReason::Done)
+        .await?;
+    assert_eq!(
+        listed_ids(&released),
+        (1001..1257).collect::<Vec<_>>(),
+        "the newest 256"
+    );
+    assert_eq!(
+        (released.opened_tabs_noted, released.opened_tabs_truncated),
+        (Some(257), Some(true))
+    );
+    let again = h
+        .takeovers
+        .release(takeover.id, ReleaseReason::Host)
+        .await?;
+    assert_eq!(
+        again, released,
+        "a repeat answers the first release, its flag included"
+    );
+    Ok(())
+}
+
+/// Up to 256 opens, the list is whole and says so.
+#[tokio::test]
+async fn up_to_256_opens_the_list_is_whole() -> TestResult {
+    let h = harness(&[3]).await?;
+    let takeover = h.takeovers.start(request(None)?).await?;
+    owner_opens_many(&h, 1000, 256);
+    let released = h
+        .takeovers
+        .release(takeover.id, ReleaseReason::Done)
+        .await?;
+    assert_eq!(listed_ids(&released), (1000..1256).collect::<Vec<_>>());
+    assert_eq!(
+        (released.opened_tabs_noted, released.opened_tabs_truncated),
+        (Some(256), Some(false))
+    );
+    let none = h.takeovers.start(TakeoverRequest {
+        tab: TabId(3),
+        ..request(None)?
+    });
+    let none = none.await?;
+    let quiet = h.takeovers.release(none.id, ReleaseReason::Done).await?;
+    assert_eq!(
+        (
+            quiet.opened_tabs.as_ref().map(Vec::len),
+            quiet.opened_tabs_noted,
+            quiet.opened_tabs_truncated
+        ),
+        (Some(0), Some(0), Some(false)),
+        "a takeover with no open says so too"
+    );
+    Ok(())
+}
+
+/// The flag does not depend on the release's listing: when the browser's tabs cannot be listed,
+/// the kept tabs are listed with their url and front unknown, and the list still says it is cut.
+#[tokio::test]
+async fn a_cut_list_says_so_when_the_browsers_tabs_cannot_be_listed() -> TestResult {
+    let h = harness(&[3]).await?;
+    let takeover = h.takeovers.start(request(None)?).await?;
+    owner_opens_many(&h, 1000, 257);
+    h.browser.hang("Browser.getTabs");
+    let released = timeout(
+        WITHIN,
+        h.takeovers.release(takeover.id, ReleaseReason::Done),
+    )
+    .await??;
+    assert_eq!(listed_ids(&released), (1001..1257).collect::<Vec<_>>());
+    assert!(
+        released
+            .opened_tabs
+            .iter()
+            .flatten()
+            .all(|opened| opened.url.is_none() && opened.in_front.is_none())
+    );
+    assert_eq!(
+        (released.opened_tabs_noted, released.opened_tabs_truncated),
+        (Some(257), Some(true))
+    );
+    Ok(())
+}

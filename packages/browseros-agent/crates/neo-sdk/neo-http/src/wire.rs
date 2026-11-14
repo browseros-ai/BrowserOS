@@ -494,6 +494,10 @@ pub(crate) fn takeover(takeover: &Takeover) -> api::Takeover {
                 })
                 .collect()
         }),
+        opened_tabs_noted: takeover
+            .opened_tabs_noted
+            .map(|noted| i64::try_from(noted).unwrap_or(i64::MAX)),
+        opened_tabs_truncated: takeover.opened_tabs_truncated,
     }
 }
 
