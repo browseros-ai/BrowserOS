@@ -3,6 +3,8 @@ import { parseHTML } from 'linkedom'
 import { act, StrictMode } from 'react'
 import type { Root } from 'react-dom/client'
 import type { ReplayEvent, ReplayFrame } from '@/modules/api/replay.hooks'
+import { buildSessionReplayPlan } from './session-replay'
+import { type Playback, usePlayback } from './use-playback'
 
 interface ReplayerConfig {
   root: HTMLElement
@@ -12,13 +14,22 @@ type PlayerCall =
   | { kind: 'play' | 'pause'; ms: number | undefined }
   | { kind: 'speed'; speed: number }
 
+interface RecordedEvent {
+  timestamp: number
+  type: number
+  data: { adds?: { node: { textContent: string } }[] }
+}
+
 class FakeReplayer {
   readonly marker: HTMLElement
   readonly calls: PlayerCall[] = []
   destroyed = false
   currentTime = 0
 
-  constructor(_events: unknown[], config: ReplayerConfig) {
+  constructor(
+    readonly events: RecordedEvent[],
+    config: ReplayerConfig,
+  ) {
     this.marker = document.createElement('div')
     this.marker.dataset.fakeReplayer = String(fakeReplayers.length + 1)
     config.root.append(this.marker)
@@ -26,12 +37,12 @@ class FakeReplayer {
   }
 
   pause(ms?: number): void {
-    if (ms !== undefined) this.currentTime = ms
+    if (ms !== undefined) this.position(ms)
     this.calls.push({ kind: 'pause', ms })
   }
 
   play(ms?: number): void {
-    if (ms !== undefined) this.currentTime = ms
+    if (ms !== undefined) this.position(ms)
     this.calls.push({ kind: 'play', ms })
   }
 
@@ -41,6 +52,29 @@ class FakeReplayer {
 
   getCurrentTime(): number {
     return this.currentTime
+  }
+
+  getMetaData(): { totalTime: number } {
+    return {
+      totalTime:
+        (this.events.at(-1)?.timestamp ?? 0) - (this.events[0]?.timestamp ?? 0),
+    }
+  }
+
+  // rrweb rebuilds a seek from events strictly before its target timestamp.
+  // Reflect DOM additions so endpoint tests assert the rendered state.
+  private position(ms: number): void {
+    this.currentTime = ms
+    this.marker.replaceChildren()
+    const baseline = (this.events[0]?.timestamp ?? 0) + ms
+    for (const event of this.events) {
+      if (event.timestamp >= baseline || event.type !== 3) continue
+      for (const addition of event.data.adds ?? []) {
+        const node = document.createElement('span')
+        node.textContent = addition.node.textContent
+        this.marker.append(node)
+      }
+    }
   }
 
   destroy(): void {
@@ -79,6 +113,14 @@ function tabEvents(tabId: number, documentId: string): ReplayEvent[] {
       type: 2,
       data: {},
     },
+    {
+      sessionId: 'session-1',
+      documentId,
+      tabId,
+      ts: 11_000,
+      type: 3,
+      data: {},
+    },
   ]
 }
 
@@ -97,6 +139,63 @@ function action(caption: string, url: string | null = null): ReplayFrame {
 
 let root: Root | null
 let container: HTMLElement
+let playback: Playback
+let nextFrameId: number
+let animationFrames: Map<number, FrameRequestCallback>
+
+function mutation(ts: number, textContent: string): ReplayEvent {
+  return {
+    ...events[0],
+    ts,
+    type: 3,
+    data: { source: 0, adds: [{ node: { type: 3, textContent } }] },
+  }
+}
+
+const finalChangeEvents = [
+  ...events.slice(0, 2),
+  mutation(1_250, 'Filled'),
+  mutation(1_500, 'Middle'),
+  mutation(2_001, 'Submitted'),
+  mutation(2_001, 'Confirmed'),
+]
+const finalChangePlan = buildSessionReplayPlan({
+  startedAtMs: 1_000,
+  frames: [],
+  tabs: [{ tabId: 1, complete: true, segments: [] }],
+  eventsForTab: () => finalChangeEvents,
+})
+
+async function renderPlayback() {
+  const { ReplayViewport } = await import('./ReplayViewport')
+  function Harness() {
+    playback = usePlayback(finalChangePlan.durationSeconds)
+    return (
+      <ReplayViewport
+        site="example.com"
+        action={undefined}
+        url={null}
+        events={finalChangeEvents}
+        {...finalChangePlan.project(1, playback.time)}
+        isPlaying={playback.isPlaying}
+        speed={playback.speed}
+      />
+    )
+  }
+  await act(async () => root?.render(<Harness />))
+}
+
+async function advanceTo(wallMs: number) {
+  const pending = [...animationFrames.values()]
+  animationFrames.clear()
+  await act(async () => {
+    for (const callback of pending) callback(wallMs)
+  })
+}
+
+function renderedChanges(): (string | null)[] {
+  return Array.from(livePlayer().marker.children, (node) => node.textContent)
+}
 
 /** Live player, i.e. the one that survived Strict Mode's double invoke. */
 function livePlayer(): FakeReplayer {
@@ -138,6 +237,8 @@ async function render(props: ViewportProps = {}) {
 
 beforeEach(async () => {
   fakeReplayers.length = 0
+  nextFrameId = 1
+  animationFrames = new Map()
   const dom = parseHTML(
     '<!doctype html><html><body><div id="root"></div></body></html>',
   )
@@ -156,6 +257,14 @@ beforeEach(async () => {
       value,
     })
   }
+  Object.assign(dom.window, {
+    requestAnimationFrame: (callback: FrameRequestCallback) => {
+      const id = nextFrameId++
+      animationFrames.set(id, callback)
+      return id
+    },
+    cancelAnimationFrame: (id: number) => animationFrames.delete(id),
+  })
   Object.defineProperty(globalThis, 'IS_REACT_ACT_ENVIRONMENT', {
     configurable: true,
     writable: true,
@@ -177,6 +286,88 @@ afterEach(async () => {
 })
 
 describe('ReplayViewport', () => {
+  for (const speed of [1, 2, 4]) {
+    it(`applies the final DOM changes once when playing through and restarting at ${speed}x`, async () => {
+      await renderPlayback()
+      await act(async () => playback.setSpeed(speed))
+
+      for (let run = 0; run < 2; run++) {
+        await act(async () => playback.play())
+        expect(renderedChanges()).toEqual([])
+        await advanceTo(0)
+        await advanceTo(2_000 / speed)
+
+        expect(playback.isPlaying).toBe(false)
+        expect(playback.time).toBe(finalChangePlan.durationSeconds)
+        expect(renderedChanges()).toEqual([
+          'Filled',
+          'Middle',
+          'Submitted',
+          'Confirmed',
+        ])
+      }
+    })
+  }
+
+  it('keeps middle seeks strictly before the target event', async () => {
+    await renderPlayback()
+    await act(async () => playback.seek(0.5))
+    expect(renderedChanges()).toEqual(['Filled'])
+  })
+
+  it('includes the last DOM changes on an end seek and a return from the middle', async () => {
+    await renderPlayback()
+    await act(async () => playback.seek(finalChangePlan.durationSeconds))
+    expect(renderedChanges()).toEqual([
+      'Filled',
+      'Middle',
+      'Submitted',
+      'Confirmed',
+    ])
+
+    await act(async () => playback.seek(0.5))
+    expect(renderedChanges()).toEqual(['Filled'])
+
+    await act(async () => playback.seek(finalChangePlan.durationSeconds))
+    expect(renderedChanges()).toEqual([
+      'Filled',
+      'Middle',
+      'Submitted',
+      'Confirmed',
+    ])
+  })
+
+  it('holds the final DOM changes while later session activity keeps playing', async () => {
+    await render({
+      events: finalChangeEvents,
+      ...finalChangePlan.project(1, 10),
+      isPlaying: true,
+    })
+
+    expect(renderedChanges()).toEqual([
+      'Filled',
+      'Middle',
+      'Submitted',
+      'Confirmed',
+    ])
+  })
+
+  it('shows final DOM changes when mounting at the end of a zero-duration track', async () => {
+    await render({
+      events: finalChangeEvents.map((event) => ({ ...event, ts: 1_000 })),
+      trackTime: 0,
+      live: false,
+      isPlaying: false,
+    })
+
+    expect(renderedChanges()).toEqual([
+      'Filled',
+      'Middle',
+      'Submitted',
+      'Confirmed',
+    ])
+  })
+
   it('owns one live Replayer across Strict Mode setup, replacement, and unmount', async () => {
     await render()
 
