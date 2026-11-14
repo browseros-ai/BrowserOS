@@ -29,6 +29,66 @@ function processExists(pid: number): boolean {
   return result.exitCode === 0 && result.stdout.toString().trim() !== ''
 }
 
+async function pageTargetIds(cdpPort: number): Promise<Set<string>> {
+  const response = await fetch(`http://127.0.0.1:${cdpPort}/json/list`, {
+    signal: AbortSignal.timeout(2_000),
+  })
+  if (!response.ok) {
+    throw new Error(
+      `could not list private browser targets: ${response.status}`,
+    )
+  }
+  const targets: unknown = await response.json()
+  if (!Array.isArray(targets)) {
+    throw new Error('private browser target list was not an array')
+  }
+  const ids = new Set<string>()
+  targets.forEach((target: unknown) => {
+    if (
+      target !== null &&
+      typeof target === 'object' &&
+      'type' in target &&
+      target.type === 'page' &&
+      'id' in target &&
+      typeof target.id === 'string'
+    ) {
+      ids.add(target.id)
+    }
+  })
+  return ids
+}
+
+/** The serial case owns only page targets absent before its extra server started. */
+async function closeCreatedPages(
+  cdpPort: number,
+  existingTargets: ReadonlySet<string>,
+): Promise<void> {
+  const created = [...(await pageTargetIds(cdpPort))].filter(
+    (id) => !existingTargets.has(id),
+  )
+  for (const id of created) {
+    const response = await fetch(
+      `http://127.0.0.1:${cdpPort}/json/close/${encodeURIComponent(id)}`,
+      { signal: AbortSignal.timeout(2_000) },
+    )
+    if (!response.ok && response.status !== 404) {
+      throw new Error(`could not close case target ${id}: ${response.status}`)
+    }
+  }
+  await waitUntil(
+    async () => {
+      const remaining = await pageTargetIds(cdpPort)
+      return [...remaining].every((id) => existingTargets.has(id))
+    },
+    'the case-created browser targets to close',
+    { timeoutMs: 5_000, intervalMs: 25 },
+  )
+  const remaining = await pageTargetIds(cdpPort)
+  if ([...existingTargets].some((id) => !remaining.has(id))) {
+    throw new Error('the case removed a pre-existing browser page target')
+  }
+}
+
 /** Each modern request has no transport session; only the echoed tool handle joins runs. */
 async function statelessRun(
   baseUrl: string,
@@ -114,6 +174,19 @@ export const neoRunCases: ContractCase[] = [
     name: 'neo run: playwright drives a real tab',
     smoke: true,
     async run(ctx) {
+      await waitUntil(
+        async () =>
+          !(
+            await ctx.mcp.callTool('run', {
+              code: 'return context.pages().map(p => p.tabId)',
+            })
+          ).isError,
+        'the suite SDK to finish its initial tab census',
+        { timeoutMs: 30_000 },
+      )
+      // The suite's own SDK may already hold a blank tab. Preserve every target
+      // present after its read-only census, including that blank tab.
+      const existingTargets = await pageTargetIds(ctx.browser.cdpPort)
       // A separate parent lets this case exercise SIGKILL without poisoning the
       // suite's server. Its browser is still the launcher's private test browser.
       const root = await mkdtemp(join(tmpdir(), 'claw-mcp-neo-run-'))
@@ -153,6 +226,7 @@ export const neoRunCases: ContractCase[] = [
         stderr: 'inherit',
       })
       let enginePid: number | undefined
+      const failures: unknown[] = []
       try {
         const baseUrl = `http://127.0.0.1:${serverPort}`
         await waitUntil(
@@ -240,15 +314,43 @@ export const neoRunCases: ContractCase[] = [
           `SDK child ${recordedEngine} to exit after parent SIGKILL`,
           { timeoutMs: 2_000, intervalMs: 25 },
         )
-      } finally {
+      } catch (error) {
+        failures.push(error)
+      }
+      try {
         if (parent.exitCode === null) parent.kill(9)
         await parent.exited
         // A failed life-line assertion may leave our child alive. Clean up only
         // that recorded PID, never another server or the owner's browser.
         if (enginePid !== undefined && processExists(enginePid)) {
           process.kill(enginePid, 'SIGKILL')
+          const recordedEngine = enginePid
+          await waitUntil(
+            () => !processExists(recordedEngine),
+            `recorded SDK child ${recordedEngine} to exit during cleanup`,
+            { timeoutMs: 2_000, intervalMs: 25 },
+          )
         }
+      } catch (error) {
+        failures.push(error)
+      }
+      // Run after the parent-death assertion so closing tabs cannot make
+      // that lifecycle check pass. Include any SDK blank tab created here.
+      try {
+        if (await ctx.browser.isRunning()) {
+          await closeCreatedPages(ctx.browser.cdpPort, existingTargets)
+        }
+      } catch (error) {
+        failures.push(error)
+      }
+      try {
         await rm(root, { recursive: true, force: true })
+      } catch (error) {
+        failures.push(error)
+      }
+      if (failures.length === 1) throw failures[0]
+      if (failures.length > 1) {
+        throw new AggregateError(failures, 'Neo run case and cleanup failed')
       }
     },
   },

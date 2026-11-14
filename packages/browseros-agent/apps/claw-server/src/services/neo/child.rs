@@ -29,7 +29,7 @@ pub(super) async fn supervise(
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .tool = Some(tool);
     }
-    let (mut child, wire) = spawn(&launch).await.map_err(|error| {
+    let (mut child, wire, launch_file) = spawn(&launch).await.map_err(|error| {
         EngineUnavailable::new(format!("the Playwright engine could not start: {error}"))
     })?;
     // Child::wait closes child.stdin itself. Take the writer out first, or
@@ -44,6 +44,9 @@ pub(super) async fn supervise(
         status = child.wait() => return Err(exited(status)),
         result = wait_ready(&wire) => result?,
     };
+    // Health proves this child loaded its private launch file. A stdio parent
+    // can share the state directory without overwriting another child's port.
+    drop(launch_file);
     if let Err(error) = save_tool(&saved_tool, &tool).await {
         tracing::warn!(%error, "the Playwright run definition could not be cached");
     }
@@ -67,7 +70,7 @@ pub(super) async fn supervise(
     }
 }
 
-async fn spawn(launch: &EngineLaunch) -> io::Result<(Child, Wire)> {
+async fn spawn(launch: &EngineLaunch) -> io::Result<(Child, Wire, tempfile::TempPath)> {
     let state_dir = std::path::absolute(&launch.state_dir)?;
     let sdk_dir = state_dir.join("claw-sdk");
     fs::create_dir_all(&sdk_dir).await?;
@@ -93,14 +96,13 @@ async fn spawn(launch: &EngineLaunch) -> io::Result<(Child, Wire)> {
         config["directories"]["execution"] =
             json!(std::path::absolute(original_dir.join(execution))?);
     }
-    let config_path = sdk_dir.join("launch.json");
-    fs::write(&config_path, serde_json::to_vec_pretty(&config)?).await?;
+    let config_path = temporary_json(&sdk_dir, &config).await?;
     let wire = Wire::new(port).map_err(io::Error::other)?;
     let mut command = Command::new(std::env::current_exe()?);
     command
         .arg("__neo-sdk")
         .arg("--config")
-        .arg(config_path)
+        .arg(&config_path)
         .env("BROWSERCLAW_DIR", &state_dir)
         .env("BROWSERCLAW_HOSTED_MODE", "0")
         .env("CLAW_XVNC_ADDR", "127.0.0.1:9")
@@ -117,7 +119,7 @@ async fn spawn(launch: &EngineLaunch) -> io::Result<(Child, Wire)> {
     drop(reservation);
     let child = command.spawn()?;
     tracing::info!(pid = child.id(), "the Playwright engine was started");
-    Ok((child, wire))
+    Ok((child, wire, config_path))
 }
 
 /// Desktop owns these two settings even when an earlier SDK launch saved overrides.
@@ -145,9 +147,29 @@ async fn configure_settings(path: &Path) -> io::Result<()> {
         }
         section[key] = value;
     }
-    let temporary = path.with_extension("tmp");
-    fs::write(&temporary, serde_json::to_vec_pretty(&settings)?).await?;
-    fs::rename(temporary, path).await
+    save_json(path, &Value::Object(settings)).await
+}
+
+/// Each writer owns its temporary path until publication or child readiness.
+/// Reusing a fixed .tmp name would race across independent stdio server processes.
+async fn temporary_json(dir: &Path, value: &Value) -> io::Result<tempfile::TempPath> {
+    let temporary = tempfile::Builder::new()
+        .prefix("neo-")
+        .suffix(".json")
+        .tempfile_in(dir)?
+        .into_temp_path();
+    fs::write(&temporary, serde_json::to_vec_pretty(value)?).await?;
+    Ok(temporary)
+}
+
+async fn save_json(path: &Path, value: &Value) -> io::Result<()> {
+    let dir = path
+        .parent()
+        .ok_or_else(|| io::Error::other("SDK state file has no parent"))?;
+    temporary_json(dir, value)
+        .await?
+        .persist(path)
+        .map_err(|error| error.error)
 }
 
 async fn wait_ready(wire: &Wire) -> Result<RunTool, EngineUnavailable> {
@@ -185,17 +207,15 @@ fn exited(status: io::Result<std::process::ExitStatus>) -> EngineUnavailable {
 }
 
 async fn save_tool(path: &Path, tool: &RunTool) -> io::Result<()> {
-    let temporary = path.with_extension("tmp");
     let definition = json!({
         "name": "run", "description": tool.description, "inputSchema": tool.input_schema
     });
-    fs::write(&temporary, serde_json::to_vec_pretty(&definition)?).await?;
-    fs::rename(temporary, path).await
+    save_json(path, &definition).await
 }
 
 #[cfg(test)]
 mod tests {
-    use super::configure_settings;
+    use super::{configure_settings, temporary_json};
     use serde_json::{Value, json};
 
     #[tokio::test]
@@ -220,6 +240,37 @@ mod tests {
         }
         tokio::fs::write(&path, b"malformed JSON").await?;
         configure_settings(&path).await?;
+        let saved: Value = serde_json::from_slice(&tokio::fs::read(&path).await?)?;
+        assert_eq!(
+            saved,
+            json!({"tabs":{"idleCloseSeconds":86400},"trace":{"screenshots":"off"}})
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn concurrent_parents_keep_separate_launch_ports_and_can_publish_shared_settings()
+    -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let first_config = json!({"ports":{"server":12345}});
+        let second_config = json!({"ports":{"server":54321}});
+        let (first, second) = tokio::try_join!(
+            temporary_json(dir.path(), &first_config),
+            temporary_json(dir.path(), &second_config),
+        )?;
+        assert_ne!(&*first, &*second);
+        assert_eq!(
+            serde_json::from_slice::<Value>(&tokio::fs::read(&first).await?)?,
+            first_config
+        );
+        assert_eq!(
+            serde_json::from_slice::<Value>(&tokio::fs::read(&second).await?)?,
+            second_config
+        );
+        let path = dir.path().join("settings.json");
+        for _ in 0..10 {
+            tokio::try_join!(configure_settings(&path), configure_settings(&path))?;
+        }
         let saved: Value = serde_json::from_slice(&tokio::fs::read(&path).await?)?;
         assert_eq!(
             saved,
