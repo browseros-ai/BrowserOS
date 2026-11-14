@@ -21,9 +21,9 @@
  *
  * The reply is what you return, plus console lines and existing notes. Return `task.id`
  * to keep it. Lost it? `context.pages().find(p => p.url().includes('ycombinator'))?.taskId`
- * `context.pages()` lists the tabs this run may use. When the host runs you within a task,
- * those are that task's tabs: the ones its runs opened, their popups, and the tabs of tasks
- * you created. Any other tab is refused with `page_not_in_task`.
+ * `context.pages()` lists the tabs this run may use. When the host binds runs to their task,
+ * those are only this task's tabs: the ones its runs opened, their popups, and the tabs of
+ * tasks you created; any other tab is refused with `page_not_in_task`.
  * Tasks live in Neo's memory and end with `task.close()`. A task with open tabs comes back
  * after a restart of Neo's server; a browser restart ends them all.
  */
@@ -100,8 +100,8 @@ declare global {
    * unless this run already holds that tab's Page; otherwise it picks at its first action.
    * Once it has a tab, it keeps it for the run. */
   const page: Page
-  /** `pages()` lists the tabs this run may use (with a task: that task's tabs). `newPage()`
-   * opens in the picked task, or with no task. */
+  /** `pages()` lists the tabs this run may use (when the host binds runs to their task, only
+   * this task's tabs). `newPage()` opens in the picked task, or with no task. */
   const context: pw.BrowserContext
   const browser: pw.Browser
   const expect: Expect
