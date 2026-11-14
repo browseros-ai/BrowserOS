@@ -76,6 +76,7 @@ impl HostedStack {
         builtins::builtin_set(
             &mut methods,
             BuiltinDeps {
+                script_cdp: config.launch.script_cdp,
                 solver,
                 claims: Arc::clone(&claims),
                 playwright: Arc::clone(&playwright),

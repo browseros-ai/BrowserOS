@@ -4,7 +4,9 @@ use std::sync::Arc;
 
 use neo_captcha::CaptchaSolver;
 
-use super::{CaptchaClaims, PlaywrightFacade, host_fill, neo_tasks, playwright_ops, solve_captcha};
+use super::{
+    CaptchaClaims, PlaywrightFacade, host_fill, neo_cdp, neo_tasks, playwright_ops, solve_captcha,
+};
 use crate::dispatch::{Policy, RegistryBuilder, RegistryError};
 use crate::host::TakeoverLock;
 
@@ -17,6 +19,8 @@ pub(crate) struct BuiltinDeps {
     pub(crate) claims: Arc<CaptchaClaims>,
     /// neo-playwright's facade, which every Playwright op runs on.
     pub(crate) playwright: Arc<PlaywrightFacade>,
+    /// Launch-only permission for raw script CDP; the frozen registry controls its listing.
+    pub(crate) script_cdp: bool,
 }
 
 /// Adds every built-in to `builder`. Called once at startup; a duplicate name fails the start.
@@ -28,7 +32,9 @@ pub(crate) fn builtin_set(
         solver,
         claims,
         playwright,
+        script_cdp,
     } = deps;
+    neo_cdp::neo_cdp(builder, script_cdp)?;
     neo_tasks::neo_tasks(builder)?;
     playwright_ops::playwright_ops(builder, &playwright)?;
     host_fill::host_fill(builder, &playwright)?;
