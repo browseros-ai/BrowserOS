@@ -761,6 +761,18 @@ return await page.screenshot({clip: {x:0,y:0,width:900,height:700}})`,
       try {
         const primary = await McpSession.connect(server.baseUrl, 'neo-window')
         sessions.push(primary)
+        await waitUntil(
+          async () => {
+            const result = await primary.callTool('run', {
+              code: 'return (await context.pages()).map(p => p.tabId)',
+            })
+            return (
+              !result.isError && Array.isArray(result.structuredContent?.value)
+            )
+          },
+          'the private SDK to attach before closing its windows',
+          { timeoutMs: 30_000, intervalMs: 100 },
+        )
         await closeWindows()
         await openPage(primary)
         const reopened = await windows()
