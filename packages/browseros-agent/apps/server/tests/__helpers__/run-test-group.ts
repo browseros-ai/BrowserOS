@@ -137,7 +137,14 @@ function runAtomicGroup(group: string): number {
       `Unknown test group "${group}". Available groups: ${listAvailableGroupNames().join(', ')}`,
     )
   }
-  runCommand(['bash', cleanupScript], `Cleaning up test resources for ${group}`)
+  // Root tests own their subprocesses and temporary directories. Never kill
+  // unrelated port occupants before the isolated E2E suite.
+  if (group !== 'root') {
+    runCommand(
+      ['bash', cleanupScript],
+      `Cleaning up test resources for ${group}`,
+    )
+  }
   const junitPath = process.env.BROWSEROS_JUNIT_PATH?.trim()
   const cmd = buildTestCommand(targets, junitPath)
   return runCommand(cmd, `Running ${group} tests`)
