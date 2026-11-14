@@ -9,7 +9,7 @@ use crate::{
     db::audit_log::RecordToolDispatchInput,
     ids::DispatchId,
     services::{
-        audit::AuditEvent,
+        audit::{AuditEvent, RowStored},
         neo::{OperationOutcome, RunOperation, RunOutcome},
     },
 };
@@ -27,11 +27,11 @@ pub(in crate::api::mcp) struct PendingSteps {
 }
 
 impl PendingSteps {
-    /// The flush acknowledges the parent's database write, including failures.
-    /// FIFO admission alone would allow orphan children after a failed parent insert.
-    pub(in crate::api::mcp) async fn record(self, state: &AppState, session_id: &str) {
+    /// The parent acknowledgement gates child publication without waiting for its
+    /// picture. A failed insert must never leave children without their parent row.
+    pub(in crate::api::mcp) async fn record(self, state: &AppState, parent: RowStored) {
         let publish = async {
-            state.audit_worker.flush_session(session_id).await?;
+            parent.wait().await?;
             for event in self.events {
                 state.audit_worker.submit(event).await?;
             }
