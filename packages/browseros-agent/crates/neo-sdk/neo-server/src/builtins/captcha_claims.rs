@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use browseros_core::TabId;
 use neo_trace::{Effect, OperationId};
 
-use crate::dispatch::{ErrorCode, OperationError, Policy, PolicyCheck};
+use crate::dispatch::{ErrorCode, Listing, OperationError, Policy, PolicyCheck};
 
 /// The tabs `neo.solveCaptcha` ops hold, and the CAPTCHA busy rule (design D7 rule 4).
 ///
@@ -62,8 +62,17 @@ impl CaptchaClaims {
 }
 
 impl Policy for CaptchaClaims {
-    /// Refuses every write to a claimed tab except the claiming solve's own recheck.
+    /// Refuses writes that can reach another solve's tab, including raw CDP.
     fn check(&self, check: &PolicyCheck<'_>) -> Result<(), OperationError> {
+        // Browser and Target commands can reach every tab even on another page's session.
+        // Hidden CDP is disabled and must reach its own cdp_unavailable refusal.
+        if check.method.name == "neo.cdp" && check.method.listing != Listing::Hidden {
+            return self
+                .lock()
+                .values()
+                .find(|holder| **holder != check.operation)
+                .map_or(Ok(()), |holder| Err(busy(*holder)));
+        }
         let tab = match (check.method.effect, check.tab) {
             (Effect::Write, Some(tab)) => tab,
             (Effect::Read, _) | (Effect::Write, None) => return Ok(()),
