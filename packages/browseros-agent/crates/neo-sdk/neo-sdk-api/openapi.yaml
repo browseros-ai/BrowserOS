@@ -2910,11 +2910,12 @@ components:
             route: its box has a ref from a snapshot in Neo's own format, which has read the box's
             closed root, so Neo knows the box before anything is typed, and a box Neo typed into
             privately counts as private there. A root Neo found through the focus alone and cannot
-            read in time stays unknown, and is not asked again. A box in a closed root nested inside
-            another is reached through the focus, or through typing once Neo knows the outer root;
-            one more than four closed roots deep is read over more than one reading. Between its two
-            readings around a picture Neo counts typing and the owner's input, not a value a page's
-            own script sets itself: such a value shown and cleared again in between is not seen.
+            read in time stays unknown, and is not asked again unless typing then reaches it. A box
+            in a closed root nested inside another is reached through the focus, or through typing
+            once Neo knows the outer root; one more than four closed roots deep is read over more
+            than one reading. Between its two readings around a picture Neo counts typing and the
+            owner's input, not a value a page's own script sets itself: such a value shown and
+            cleared again in between is not seen.
         valueBytes:
           type: integer
           format: int64

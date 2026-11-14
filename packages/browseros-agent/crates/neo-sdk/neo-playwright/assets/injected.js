@@ -9774,7 +9774,7 @@ ${value.stack}`;
   var pointed = new WeakSet;
   var entries = new WeakMap;
   var certain = new WeakSet;
-  var handed = new WeakSet;
+  var done = new WeakSet;
   var tries = new WeakMap;
   var NAMED_TRIES = 5;
   var readings = 0;
@@ -9814,7 +9814,7 @@ ${value.stack}`;
           listen2(known);
         if (event.type === "input" && paintedInClear(first, view))
           inputs += 1;
-        if (!event.isTrusted || !unknownHost(first) || handed.has(first))
+        if (!event.isTrusted || !unknownHost(first) || done.has(first))
           return;
         inputs += 1;
         point(first, true);
@@ -9841,7 +9841,7 @@ ${value.stack}`;
         if (hosts.length >= request.limit)
           return hosts;
         const host = ref.deref();
-        if (!host || !host.isConnected) {
+        if (!host?.isConnected) {
           drop2(ref, host);
           continue;
         }
@@ -9853,7 +9853,7 @@ ${value.stack}`;
             continue;
           tries.set(host, { count: tried.count + 1, at: readings });
         } else {
-          drop2(ref, host);
+          waiting.delete(ref);
         }
         hosts.push(host);
       }
@@ -9864,14 +9864,14 @@ ${value.stack}`;
     for (const ref of waiting) {
       const host = ref.deref();
       const spent = host && (tries.get(host)?.count ?? 0) >= NAMED_TRIES;
-      if (!host || !host.isConnected || spent)
+      if (!host?.isConnected || spent)
         drop2(ref, host);
     }
   }
   function drop2(ref, host) {
     waiting.delete(ref);
     if (host)
-      handed.add(host);
+      done.add(host);
   }
   function namedWaiting() {
     for (const ref of waiting) {
@@ -9910,14 +9910,17 @@ ${value.stack}`;
   function point(host, byInput = false) {
     if (byInput)
       certain.add(host);
-    if (pointed.has(host))
+    const entry = entries.get(host);
+    if (entry && waiting.has(entry))
+      return;
+    if (pointed.has(host) && !byInput)
       return;
     if (!byInput && waiting.size >= WAITING_MOST)
       return;
     pointed.add(host);
-    const entry = new WeakRef(host);
-    entries.set(host, entry);
-    waiting.add(entry);
+    const fresh = new WeakRef(host);
+    entries.set(host, fresh);
+    waiting.add(fresh);
   }
   function listen2(root) {
     if (root.mode !== "closed" || listened.has(root) || !heard)

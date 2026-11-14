@@ -4729,6 +4729,68 @@ async fn tests_that_a_host_that_input_reached_is_tried_for_five_readings() -> Te
     bench.close(opened).await
 }
 
+/// The walk on demand, row 8b (the design keeper's finding on the third head): typing names its
+/// host for certain whatever the focus's one ask found before. The box in the closed root holds
+/// the focus at a reading whose description of the host is refused: that reading is as on main.
+/// Then a card number is typed: unknown while the description is still refused, private once it
+/// goes through. And a focusable div, asked once by the focus with no root, then given a closed
+/// root with a card box and typed into: read, private. Fails with a host the focus asked done
+/// with for good (both read clear).
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_typing_names_a_host_the_focus_asked_before() -> TestResult {
+    let bench = Bench::start().await?;
+    let playwright = &bench.live.playwright;
+    let opened = bench
+        .open("/private/closed-card.html", Place::Front)
+        .await?;
+    let tab = opened.page.tab;
+    clear(&playwright.picture_check(tab).await, "before")?;
+    bench.live.main_world(&opened.page, "focusCard()").await?;
+    bench.recording.fail(DESCRIBE, Failing::Refuse);
+    clear(
+        &playwright.picture_check(tab).await,
+        "the focus's one ask, refused",
+    )?;
+    type_keys(&bench, &opened, CARD).await?;
+    let refused = playwright.picture_check(tab).await;
+    bench.recording.stop_failing();
+    assert_eq!(
+        refused,
+        PictureCheck::Unknown,
+        "named by the typing, unread"
+    );
+    assert_eq!(
+        playwright.picture_check(tab).await,
+        PictureCheck::Private,
+        "read once the description goes through"
+    );
+    bench.close(opened).await?;
+    let opened = bench
+        .open("/private/closed-plain.html", Place::Front)
+        .await?;
+    let tab = opened.page.tab;
+    bench
+        .live
+        .main_world(&opened.page, "focusOn('pad')")
+        .await?;
+    bench.recording.reset_calls();
+    clear(&playwright.picture_check(tab).await, "the pad, asked")?;
+    assert_eq!(
+        bench.recording.calls(DESCRIBE),
+        1,
+        "the focus asked the pad once"
+    );
+    bench.live.main_world(&opened.page, "rootOnPad()").await?;
+    type_keys(&bench, &opened, CARD).await?;
+    assert_eq!(
+        playwright.picture_check(tab).await,
+        PictureCheck::Private,
+        "the root attached later, typed into"
+    );
+    bench.close(opened).await
+}
+
 /// The walk on demand, row 9 (the lead's rule): a host that left the document is gone, not
 /// unread. A card typed into a closed root whose host the page then removes, before the next
 /// reading: that reading is clear, not unknown, nothing is asked, and the next one is the same.

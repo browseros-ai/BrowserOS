@@ -5,7 +5,8 @@
      a details element (#d), whose roots the browser makes itself, an editable region (#editor,
      with an element inside it, #inside), and a select (#pick). focusOn(id) gives one the focus,
      caretInside() puts the caret in #inside, blurAll() takes the focus away, design() turns the
-     document's design mode on. The page records each input event's first target and whether the
+     document's design mode on, and rootOnPad() attaches a closed root with a card box to the pad
+     afterwards and gives that box the focus. The page records each input event's first target and whether the
      body counts as editable (seen()), so a row reports what it measured. The camera's walk on
      demand moves no reading for any of them. -->
 <div id=host></div>
@@ -30,6 +31,12 @@ window.caretInside = () => {
   range.collapse(false);
   getSelection().removeAllRanges();
   getSelection().addRange(range);
+  return true;
+};
+window.rootOnPad = () => {
+  const late = document.getElementById('pad').attachShadow({ mode: 'closed' });
+  late.innerHTML = '<label>Card number <input autocomplete=cc-number style="width:280px;height:30px"></label>';
+  late.querySelector('input').focus();
   return true;
 };
 window.design = () => { document.designMode = 'on'; document.body.focus(); return document.designMode; };

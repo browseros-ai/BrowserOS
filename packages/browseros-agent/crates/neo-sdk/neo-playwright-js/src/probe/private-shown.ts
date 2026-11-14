@@ -22,7 +22,7 @@
  *  typing reaches a closed root ─ a trusted input or beforeinput event whose first target takes
  *    no input itself: a closed boundary retargeted it to the host ─ counted at once, host waiting
  *  a reading finds the focus on such a host ─ host waiting
- *  the answer says `hosts` ─ Rust asks `privateHosts` (below) for them, each once,
+ *  the answer says `hosts` ─ Rust asks `privateHosts` (below) for them, the ones input reached first,
  *    reads each host's closed root from the browser (DOM.describeNode) and resolves it into this
  *    world ─ `privateShown` again with those roots (`walk`) ─ kept in `walkedRoots`, read by
  *    `look`, a listener on each, and the focus followed into them to a nested host
@@ -75,7 +75,7 @@ const walkedRoots = new WeakMap<Element, ShadowRoot>()
  * removes before the next reading goes; each is pointed at once (`pointed`).
  */
 const waiting = new Set<WeakRef<Element>>()
-/** Every host ever pointed at, waiting or handed over: each is pointed at once. */
+/** Every host ever pointed at, waiting or handed over: the focus points at each once. */
 const pointed = new WeakSet<Element>()
 /** Each waiting host's entry in `waiting`, so a host whose root is kept leaves it. */
 const entries = new WeakMap<Element, WeakRef<Element>>()
@@ -86,11 +86,13 @@ const entries = new WeakMap<Element, WeakRef<Element>>()
  */
 const certain = new WeakSet<Element>()
 /**
- * The hosts done with: handed to Rust and read, or handed and not readable (a host the focus
- * pointed at, at once; one an input event named, after `NAMED_TRIES` readings), or gone from the
- * document. Their events are no longer counted here and they are never asked again.
+ * The hosts done with: read (their root kept), spent (an input event named them and their
+ * `NAMED_TRIES` readings passed unread), or gone from the document. Their events are no longer
+ * counted here and they are never asked again. A host the focus pointed at and that was asked once
+ * with no root kept is not done: an input event there can only come out of a closed root, whatever
+ * that ask found, so it names the host, counts, and starts its readings.
  */
-const handed = new WeakSet<Element>()
+const done = new WeakSet<Element>()
 /**
  * For a host an input event named and not yet read: how many readings it was handed over at, and
  * the last one. Handed over again at each reading until its root is kept, the reading unknown
@@ -158,7 +160,7 @@ export function privateShown(
       // world does not know: counted at once, so the picture around it is dropped whether or not
       // the root is then found, until its host is handed over. beforeinput too, for a page that
       // cancels it and writes the value itself.
-      if (!event.isTrusted || !unknownHost(first) || handed.has(first)) return
+      if (!event.isTrusted || !unknownHost(first) || done.has(first)) return
       inputs += 1
       point(first, true)
     }
@@ -184,10 +186,10 @@ export function privateShown(
 
 /**
  * `privateHosts`: up to `limit` of the hosts waiting, the ones an input event named first, handed
- * to Rust by deep serialization (a by-handle request). A host the focus pointed at is done with as
- * it goes, so it is asked once whether or not a root comes back. One an input event named is
- * handed over once a reading and stays waiting until its root is kept (`keep`) or its tries run
- * out (`sweep`).
+ * to Rust by deep serialization (a by-handle request). A host the focus pointed at leaves the wait
+ * as it goes, so the focus asks it once whether or not a root comes back; typing that reaches it
+ * later names it again (`point`). One an input event named is handed over once a reading and stays
+ * waiting until its root is kept (`keep`) or its tries run out (`sweep`).
  */
 export function privateHosts(request: PrivateHostsRequest): Element[] {
   const hosts: Element[] = []
@@ -195,7 +197,7 @@ export function privateHosts(request: PrivateHostsRequest): Element[] {
     for (const ref of waiting) {
       if (hosts.length >= request.limit) return hosts
       const host = ref.deref()
-      if (!host || !host.isConnected) {
+      if (!host?.isConnected) {
         drop(ref, host)
         continue
       }
@@ -205,7 +207,7 @@ export function privateHosts(request: PrivateHostsRequest): Element[] {
         if (tried.at === readings) continue
         tries.set(host, { count: tried.count + 1, at: readings })
       } else {
-        drop(ref, host)
+        waiting.delete(ref)
       }
       hosts.push(host)
     }
@@ -221,14 +223,14 @@ function sweep(): void {
   for (const ref of waiting) {
     const host = ref.deref()
     const spent = host && (tries.get(host)?.count ?? 0) >= NAMED_TRIES
-    if (!host || !host.isConnected || spent) drop(ref, host)
+    if (!host?.isConnected || spent) drop(ref, host)
   }
 }
 
 /** Takes a host out of the wait, done with. */
 function drop(ref: WeakRef<Element>, host: Element | undefined): void {
   waiting.delete(ref)
-  if (host) handed.add(host)
+  if (host) done.add(host)
 }
 
 /** Whether a host an input event named waits unread, in the document. */
@@ -277,14 +279,20 @@ function unknownHost(element: Element): boolean {
   return knownRoot(element) === null
 }
 
+/**
+ * Puts `host` in the wait: once for the focus, and again for an input event after the focus's one
+ * ask, which then counts as the input event's own (its readings start from none).
+ */
 function point(host: Element, byInput = false): void {
   if (byInput) certain.add(host)
-  if (pointed.has(host)) return
+  const entry = entries.get(host)
+  if (entry && waiting.has(entry)) return
+  if (pointed.has(host) && !byInput) return
   if (!byInput && waiting.size >= WAITING_MOST) return
   pointed.add(host)
-  const entry = new WeakRef(host)
-  entries.set(host, entry)
-  waiting.add(entry)
+  const fresh = new WeakRef(host)
+  entries.set(host, fresh)
+  waiting.add(fresh)
 }
 
 /** Gives a closed root the input and beforeinput listener, once (`listened`). */
