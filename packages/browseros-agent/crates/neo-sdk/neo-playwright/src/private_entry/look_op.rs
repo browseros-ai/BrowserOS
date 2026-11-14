@@ -226,8 +226,9 @@ pub(crate) async fn look_at(
 /// What the pages above a box's frame say of its centre (ruling R60).
 #[derive(Debug, PartialEq, Eq)]
 enum Above {
-    /// Nothing above takes the pointer there, or there was nothing to ask: the box is in the
-    /// main frame, the page side already refused it, or it has no size and is reached by focus.
+    /// The box is in view in its own frame and nothing above takes the pointer there, or there
+    /// was nothing to ask: the page side already refused it, or it has no size and is reached by
+    /// focus.
     Clear,
     /// `box_covered` from a page above, or `cover_unread`.
     Refused(EntryCode),
@@ -235,15 +236,20 @@ enum Above {
     Gone,
 }
 
-/// Asks every page above the box's frame, from the top document down, what takes the pointer
-/// at the box's centre, out-of-process frames included. The page side's look sees only the
+/// First whether the box can be seen at all (ruling R62): after the look's instant scroll
+/// (ruling R61), a sized box whose centre is still outside its own frame's view is not typed,
+/// in the page's own document as in a frame. Nothing is at such a centre, and nothing used to
+/// read as no cover: a box 3000 pixels down a page that cannot scroll (a dialog's scroll lock by
+/// a fixed body) was entered under a sheet over the view. It answers `cover_unread`.
+///
+/// Then, for a box in a child frame, asks every page above the box's frame, from the top
+/// document down, what takes the pointer at the box's centre, out-of-process frames included. The page side's look sees only the
 /// documents its frame can reach (`frameElement` stops at an origin boundary), so before this a
 /// banner in a cross-origin parent over a sign-in frame was not seen, and a host reported a
 /// password typed under one. This reuses the click's projection (`frame_projection::project`,
 /// upstream's `_checkFrameIsHitTarget`) with the look's rules (`Asker::Look`):
 ///
-/// - the look first brought the box into view at once in every page (ruling R61); one out of
-///   view in its own frame is not asked above;
+/// - the look first brought the box into view at once in every page (ruling R61);
 /// - a parent's hit on the frame's owner element, or on what holds it, is clear; a parent that
 ///   still cannot show the point (it cannot scroll there, or clips the frame away) answers
 ///   `cover_unread`;
@@ -261,15 +267,12 @@ async fn pages_above(
     looked: &Looked,
 ) -> Result<Above, EntryCode> {
     let sized = looked.facts.as_ref().is_some_and(|facts| facts.sized);
-    if looked.refusal.is_some() || !sized || site.path().hops().is_empty() {
+    if looked.refusal.is_some() || !sized {
         return Ok(Above::Clear);
     }
     // Where the look's instant scroll (ruling R61) left the box: its centre in its own frame's
-    // view, or none when that centre is outside it. A box out of view in its own frame is not
-    // asked above, as before (a payment frame's helper box far off its view): a page above would
-    // be asked at a place outside the frame, where a neighbour of the frame would read as a
-    // cover. The click's own measure is not used here: it calls a box wholly above and left of
-    // the view in view.
+    // view, or none when that centre is outside it. The click's own measure is not used here: it
+    // called a box wholly above and left of the view in view.
     let read = ProbeRequest::Read {
         target: ProbeTarget::Pin(pin),
         strictness: Strictness::Strict,
@@ -286,8 +289,11 @@ async fn pages_above(
         Err(failure) => return Err(failure_code(failure)),
     };
     let Some(centre) = centre else {
-        return Ok(Above::Clear);
+        return Ok(Above::Refused(EntryCode::CoverUnread(Unread::Unreachable)));
     };
+    if site.path().hops().is_empty() {
+        return Ok(Above::Clear);
+    }
     let projected = within(
         scope,
         frame_projection::project(scope, page, site.path(), centre, true, Asker::Look),

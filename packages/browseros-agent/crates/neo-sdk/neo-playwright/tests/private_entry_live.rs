@@ -34,7 +34,7 @@ use input_recording::{InputCall, InputRecording};
 use live_browser::{LiveBrowser, TestPage, TestResult};
 use neo_playwright::{
     BoxSpec, CoverIn, Drawing, Entry, EntryCode, EntryOutcome, EntryRequest, Expect, Op,
-    PictureCheck, PrivateField, PrivateText, RunState,
+    PictureCheck, PrivateField, PrivateText, RunState, Unread,
 };
 use neo_trace::{Delivery, ErrorOwner};
 use private_host::HostEnv;
@@ -507,6 +507,49 @@ async fn tests_that_a_sign_in_frame_below_a_smooth_pages_fold_is_entered() -> Te
             assert_eq!(entry.outcome, EntryOutcome::Entered, "{case}: {entry:?}");
             assert_eq!(bench.value(&opened, &password).await?, PASSWORD, "{case}");
             bench.close(opened).await?;
+        }
+    }
+    Ok(())
+}
+
+/// Ruling R62's rows 1 and 2 for the fill: a password box 3000 pixels down a page that cannot
+/// scroll (a dialog's scroll lock by a fixed body), with a sheet over the view and without it.
+/// The look's scroll cannot bring it into view, so the entry is refused `cover_unread` with its
+/// sentence before any key: nothing typed, nothing sent. By one insertion and key by key, on a
+/// tab in front and a tab behind. Fails with the view test taken out of the look: the box is
+/// typed under the sheet, and without it.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_box_on_a_page_that_cannot_scroll_is_refused_before_any_key() -> TestResult {
+    let bench = Bench::start().await?;
+    let origin = &bench.page_origin;
+    let unreachable = EntryCode::CoverUnread(Unread::Unreachable);
+    for path in [
+        "/private/smooth-login.html?lock=1&sheet=1",
+        "/private/smooth-login.html?lock=1",
+    ] {
+        for place in PLACES {
+            for keys in [false, true] {
+                let case = format!("{path}, {place:?}, keys {keys}");
+                let opened = bench.open(path, place).await?;
+                let password = bench.r#ref(&opened, "textbox", "Password").await?;
+                let env = bench.host(&opened);
+                let field = Field::new(&password, origin);
+                let field = if keys { field.keys() } else { field };
+                let entry = bench
+                    .enter(&env, &opened, vec![field.with(PASSWORD)?])
+                    .await;
+                assert_eq!(entry.outcome, EntryOutcome::Refused, "{case}: {entry:?}");
+                assert_eq!(
+                    entry.error.as_ref().map(|error| error.message.as_str()),
+                    Some(unreachable.message()),
+                    "{case}"
+                );
+                assert_eq!(entry.typed, vec![0], "{case}");
+                assert_eq!(bench.value(&opened, &password).await?, "", "{case}");
+                assert!(!env.was_sent(), "{case}");
+                bench.close(opened).await?;
+            }
         }
     }
     Ok(())

@@ -116,6 +116,9 @@ pub enum Unread {
     /// After the box was brought into view at once, a page above still cannot show its place:
     /// the page cannot scroll there, or the frame is clipped away.
     OutOfView,
+    /// The box is not in view in its own frame after the look's instant scroll, and so could not
+    /// be brought into view: the page cannot scroll there (ruling R62).
+    Unreachable,
     /// A page above changes the frame's size or angle (a scale, a rotation, a skew, a 3D
     /// transform that is not a plain shift, the `scale` and `rotate` properties, a zoom), so
     /// the box's centre has no single place there. Neo never guesses a point.
@@ -316,6 +319,11 @@ impl EntryCode {
             Self::CoverUnread(Unread::OutOfView) => {
                 "Nothing was typed. The frame that holds this box is not in view in the page \
                  above it. Scroll the frame into view and try again."
+            }
+            Self::CoverUnread(Unread::Unreachable) => {
+                "Nothing was typed. This box is not in view and could not be brought into view. \
+                 Close what locks the page, such as a dialog, or scroll the box into view, and \
+                 try again."
             }
             Self::CoverUnread(Unread::SizeOrAngle) => {
                 "Nothing was typed. The page above this box's frame scales or rotates the frame, \

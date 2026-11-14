@@ -1270,12 +1270,13 @@ const ABOVE: &[AbovePage] = &[
         None,
     ),
     AbovePage {
+        // Passed until ruling R62: a box out of its own frame's view cannot be brought there.
         inner: "/private/parent-cover-box.html?away=1",
         ..above(
             "a box far off its own frame's viewport, as payment frames lay a helper box",
             "cover=none",
             &[Host::OtherSite],
-            None,
+            Some(EntryCode::CoverUnread(Unread::Unreachable)),
         )
     },
     above(
@@ -1435,4 +1436,52 @@ async fn tests_that_a_box_under_a_sticky_header_above_its_frame_passes_once_clea
         );
     }
     live.close(&page).await
+}
+
+/// Ruling R62's rows 1 to 4 and 6 for the look, which the host's check call makes: a sized box
+/// that the look's instant scroll cannot bring into its own frame's view answers `cover_unread`,
+/// by one insertion and key by key: a password box 3000 pixels down a page that cannot scroll,
+/// with a sheet over the view and without it, a helper box parked far off the page's left edge,
+/// and a 1 by 1 box just off its top-left corner. A box in view, and a box below the fold of a
+/// page that can scroll, pass as before. Fails with the view test taken out of the look: nothing
+/// is at an out-of-view box's centre, and nothing passes.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_box_that_cannot_be_brought_into_view_is_refused() -> TestResult {
+    let server = FixtureServer::start(private_host::pages()).await?;
+    let live = LiveBrowser::connect().await?;
+    let (page_origin, _) = private_host::origins(&server);
+    let unreachable = Some(EntryCode::CoverUnread(Unread::Unreachable));
+    let cases = [
+        (
+            "/private/smooth-login.html?lock=1&sheet=1",
+            "#pw",
+            unreachable,
+        ),
+        ("/private/smooth-login.html?lock=1", "#pw", unreachable),
+        ("/private/out-of-view.html", "#helper", unreachable),
+        ("/private/out-of-view.html", "#corner", unreachable),
+        ("/private/out-of-view.html", "#email", None),
+        ("/private/smooth-login.html?plain=1", "#pw", None),
+    ];
+    let mut failures = Vec::new();
+    for (path, css, wanted) in cases {
+        let page = live.open(&server.url("127.0.0.1", path)).await?;
+        let r#ref = mint_ref(&live, &page, css).await?;
+        let env = HostEnv::new(&live);
+        for keys in [false, true] {
+            let ask = LookField {
+                keys,
+                ..field(&r#ref, Some(expecting(&page_origin)))
+            };
+            let answer = look_one(&live, &env, &page, ask).await?;
+            if sentence(&answer) != wanted.map(EntryCode::message) {
+                failures.push(format!("{path} {css}, keys {keys}: {:?}", code(&answer)));
+            }
+        }
+        assert!(!env.was_sent(), "a look never marks itself sent");
+        live.close(&page).await?;
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+    Ok(())
 }
