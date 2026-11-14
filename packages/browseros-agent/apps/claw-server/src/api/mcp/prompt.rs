@@ -12,7 +12,7 @@ const PURSUE_FIRST: &str = "Start tasks that act on a site with pursue. Get the 
 
 pub(super) const GROUP_GUIDANCE: &str = "Tabs are grouped as <client>/<task>. A tab a script puts in its own group stays there; automatic grouping never moves it or retitles, collapses or closes that group.\nThe script owns its group's cleanup. Other session tabs still use the automatic <client>/<task> group, so both groups can appear in one window.";
 
-const DESKTOP_GUIDANCE: &str = "Name the work with const task = await neo.createTask('research notes'); return task.id.\nYour desktop session keeps its task between runs. Keep the id and use await neo.task(id) after a reconnect.\ncontext.pages() lists tabs with page.tabId and page.taskId; null means an unassigned tab, often the user's.\nOpen your own exploratory tabs with context.newPage() or task.newPage(). Leave other people's tabs as you found them unless asked to change them.\nPreserve useful pages when the task ends. task.close() closes all of that task's tabs.\nEach script is a fresh async function. Await SDK calls and return the result you need.\nUse page.ariaSnapshot() to inspect, locators to act, then verify. Refs come from the current tree; inspect again after the page changes.\nWait for a locator or expected state. Read errors and captured logs before retrying; if delivery is unknown, inspect before repeating a write.\nReturn await page.screenshot() for a visual check or await page.pdf() for PDF bytes.\nDownloads use download.path() or download.saveAs(path). Path uploads must be inside allowed folders, Downloads by default; buffer payloads need no local file.\nThe realm is QuickJS, with no Node imports, fetch or DOM globals. page.evaluate() runs inside the page, where site scripts can observe it.\nIf a call says browser session not connected, ask the user to start BrowserOS neo and check the cockpit.";
+const DESKTOP_GUIDANCE: &str = "Start with const task = await neo.createTask('research notes'); const page = await task.newPage(); await page.goto('https://example.com'); return { taskId: task.id, tabId: page.tabId };\nA run that uses one task continues in it next time. If your script switches tasks, pick its task explicitly at the top of each run with await neo.task(id). Keep task ids and select one again after a reconnect.\ncontext.pages() lists tabs with page.tabId and page.taskId; null means an unassigned tab, often the user's.\nOpen your own exploratory tabs with context.newPage() or task.newPage(). Leave other people's tabs as you found them unless asked to change them.\nPreserve useful pages when the task ends. task.close() closes all of that task's tabs.\nIf a call says browser session not connected, ask the user to start BrowserOS neo and check the cockpit.";
 
 const HUMAN_HELP_GUIDANCE: &str = "For a sign-in, one-time code, captcha, account choice or human approval, call request_human_help with page.tabId as page and a short reason.\nWhile its status is waiting, call await_human_help and leave the page alone. Resume only on resolved; stop on cancelled or timed_out.";
 const ASK_IN_CHAT_GUIDANCE: &str = "If a sign-in, one-time code, captcha, account choice or human approval blocks you, ask in chat and stop work on that page.";
@@ -44,7 +44,7 @@ pub fn mcp_instructions(
     let recipe_lines = recipes::instruction_lines();
     let mut paragraphs = vec![BROWSER_GUIDANCE, DESKTOP_GUIDANCE, GROUP_GUIDANCE];
     if !recipe_lines.is_empty() {
-        paragraphs.push("For what Playwright lacks, use these recipes inside run. Set named inputs from live results first; full notes also live in recipes.md beside the installed skill.\nFor neo.cdp, browser protocol errors are script / cdp_error; fix the method or parameters. Any neo.cdp call returns host / owner_has_control while a human takeover lock is held; wait for hand-back and do not bypass it.\nProtected tab/window closes return script / unsupported; leave Neo's reserved blank tab and window open.");
+        paragraphs.push("For what Playwright lacks, use these recipes inside run. Set named inputs from live results first.\nFor neo.cdp, browser protocol errors are script / cdp_error; fix the method or parameters. Any neo.cdp call returns host / owner_has_control while a human takeover lock is held; wait for hand-back and do not bypass it.\nProtected tab/window closes return script / unsupported; leave Neo's reserved blank tab and window open.");
         paragraphs.push(&recipe_lines);
     }
     paragraphs.extend([help, PAGE_CONTENT_GUARD]);
@@ -62,8 +62,8 @@ mod tests {
     use crate::api::mcp::surface::removed_tool_reference;
 
     #[test]
-    fn installed_guides_and_recipe_reference_use_the_current_tool_surface() {
-        let reference = crate::services::harness_skills::recipes::markdown();
+    fn installed_guides_and_recipe_reference_use_the_current_tool_surface() -> anyhow::Result<()> {
+        let reference = recipes::instruction_lines();
         for (name, content) in [
             (
                 "bundled skill",
@@ -73,10 +73,27 @@ mod tests {
                 "standalone skill",
                 include_str!("../../../../../../../skills/browseros-neo/SKILL.md"),
             ),
-            ("rendered recipes.md", reference.as_str()),
+            ("rendered recipe lines", reference.as_str()),
         ] {
             assert_eq!(removed_tool_reference(content), None, "{name}: {content}");
         }
+        // Services cannot import the API matcher. Check the actual loaded variants
+        // here so their grouping and pursue substitutions share the desktop contract.
+        let root = tempfile::tempdir()?;
+        for grouping in [TabGrouping::Automatic, TabGrouping::Explicit] {
+            let skill =
+                crate::services::harness_skills::load_browserclaw_skill(root.path(), grouping)?;
+            let ultrafast = crate::services::harness_skills::with_ultrafast(&skill)?;
+            for spec in [skill, ultrafast] {
+                assert_eq!(
+                    removed_tool_reference(spec.content()),
+                    None,
+                    "{}",
+                    spec.content()
+                );
+            }
+        }
+        Ok(())
     }
 
     #[test]

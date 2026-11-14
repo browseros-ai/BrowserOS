@@ -2,85 +2,85 @@
   {
     "id": "list-groups",
     "title": "List tab groups",
-    "when": "Find groupId, windowId and tabIds before changing an existing group.",
+    "when": "Use the returned groupId, windowId and tabIds before changing a group.",
     "code": "return await neo.cdp('Browser.getTabGroups');"
   },
   {
     "id": "create-group",
     "title": "Create a tab group",
-    "when": "Group your current page. Replace research with your task label; keep the returned groupId. The tab stays in the group your script creates; automatic grouping never moves it or retitles, collapses or closes that group. Your script owns cleanup. With automatic grouping, other session tabs still use the automatic group, so both groups can appear in one window.",
+    "when": "Use your page; replace research with your task label and keep the returned groupId.",
     "code": "return await neo.cdp('Browser.createTabGroup', { tabIds: [page.tabId], title: 'research' });"
   },
   {
     "id": "update-group",
     "title": "Retitle or recolour a tab group",
-    "when": "Set groupId from the group list. Change title, color or collapsed; omitted fields stay unchanged. Colors are grey, blue, red, yellow, green, pink, purple, cyan and orange.",
+    "when": "Set groupId from the group list; omitted fields stay unchanged.",
     "code": "return await neo.cdp('Browser.updateTabGroup', { groupId, title: 'research notes', color: 'blue', collapsed: false });"
   },
   {
     "id": "add-to-group",
     "title": "Add tabs to a group",
-    "when": "Set groupId from the group list and tabIds from page.tabId values. Adding moves those tabs into that group.",
+    "when": "Set groupId from the group list and tabIds from your page.tabId values.",
     "code": "return await neo.cdp('Browser.addTabsToGroup', { groupId, tabIds });"
   },
   {
     "id": "remove-from-group",
     "title": "Remove tabs from a group",
-    "when": "Set tabIds from page.tabId values. The tabs stay open; removing the last tab destroys the empty group.",
+    "when": "Set tabIds from your pages; they stay open, and an empty group disappears.",
     "code": "return await neo.cdp('Browser.removeTabsFromGroup', { tabIds });"
   },
   {
     "id": "close-group",
     "title": "Close a tab group",
-    "when": "Set groupId from the group list. This closes every tab in that group; inspect its tabIds first. The server never retitles, collapses or closes a group your script creates; your script owns cleanup. Other session tabs can be in a separate automatic group in the same window, so check which group you are closing. Never include Neo's reserved blank tab. Protected tab/window closes report script / unsupported; leave the reserved tab and window open rather than using group closure to bypass that refusal.",
+    "when": "Set groupId from the group list and inspect its tabIds: this closes every tab in the group. Never include Neo's reserved blank tab or use group closure to bypass a protected close refusal.",
     "code": "return await neo.cdp('Browser.closeTabGroup', { groupId });"
   },
   {
     "id": "list-windows",
     "title": "List windows",
-    "when": "Find windowId and the active tab. liveBrowserContextId identifies a loaded profile; browserContextId is only a legacy label.",
+    "when": "Use the returned windowId; liveBrowserContextId identifies a loaded profile.",
     "code": "return await neo.cdp('Browser.getWindows');"
   },
   {
     "id": "open-window",
     "title": "Open a window",
-    "when": "Open an inactive normal window. To choose a loaded profile, pass its browserContextId from the profile list.",
+    "when": "No input is required; to choose a loaded profile, pass its browserContextId from the profile list.",
     "code": "return await neo.cdp('Browser.createWindow', {});"
   },
   {
     "id": "close-window",
     "title": "Close a window",
-    "when": "Set windowId from the window list. This closes all tabs in that window; inspect it first. Neo keeps its own reserved blank tab open. A close that would remove that tab or its window is refused as script / unsupported; the close is not sent. Leave the reserved window open and close only your own pages with page.close(), or use a separate window. Do not bypass the refusal.",
+    "when": "Set windowId from the window list and inspect its tabs. Closing Neo's reserved blank tab or its window is refused as script / unsupported; leave it open and close only your own pages or use a separate window.",
     "code": "return await neo.cdp('Browser.closeWindow', { windowId });"
   },
   {
     "id": "open-tab-in-window",
     "title": "Open a tab in a chosen window",
-    "when": "Set windowId from the window list and url to the destination. In the next run, find the returned tabId in context.pages() to use Playwright on it. Placement is per call, with no saved window binding.",
+    "when": "Set windowId from the window list and url to the destination; find the returned tabId in context.pages() in the next run.",
     "code": "const { tab } = await neo.cdp('Browser.createTab', { windowId, url, background: true }); return { tabId: tab.tabId };"
   },
   {
     "id": "list-profiles",
     "title": "List profiles",
-    "when": "Discover saved regular profiles without loading them. browserProfileId is a saved-profile handle; browserContextId identifies a loaded profile and expires on browser restart.",
+    "when": "Use browserProfileId for a saved profile and browserContextId for a loaded profile; the latter expires on restart.",
     "code": "return await neo.cdp('Browser.getProfiles');"
   },
   {
     "id": "load-profile",
     "title": "Load a profile",
-    "when": "Set browserProfileId from the profile list. Loading opens no window and changes no task binding. Use the returned profile.browserContextId when creating a window in that profile.",
+    "when": "Set browserProfileId from the profile list; use the returned profile.browserContextId when creating a window.",
     "code": "return await neo.cdp('Browser.loadProfile', { browserProfileId });"
   },
   {
     "id": "recent-history",
     "title": "Read recent history",
-    "when": "Read up to 20 recent entries. To choose a loaded profile, pass its browserContextId from the profile list.",
+    "when": "No input is required; to choose a loaded profile, pass its browserContextId from the profile list.",
     "code": "return await neo.cdp('History.getRecent', { maxResults: 20 });"
   },
   {
     "id": "focus-tab",
     "title": "Bring a tab to the front",
-    "when": "Use the page you intend to show. This selects that tab in its window.",
+    "when": "Use the page you intend to select in its window.",
     "code": "return await neo.cdp('Browser.activateTab', { tabId: page.tabId });"
   }
 ]
