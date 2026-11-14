@@ -46,7 +46,7 @@ pub(crate) type TestError = Box<dyn Error + Send + Sync>;
 pub(crate) struct ManualClock {
     // Dropping the sender also releases the worker if the test panics.
     _release: std_mpsc::Sender<()>,
-    _worker: task::JoinHandle<()>,
+    _worker: JoinHandle<()>,
 }
 
 impl ManualClock {
