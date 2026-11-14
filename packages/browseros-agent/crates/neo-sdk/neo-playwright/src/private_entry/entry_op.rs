@@ -100,6 +100,7 @@ impl Playwright {
                         facts: Some(found.facts),
                         refusal: refusal.map(error),
                         compared,
+                        frame_gone: false,
                     }
                 }
                 // The tab, the connection or the deadline ends the call for every box.
@@ -109,8 +110,28 @@ impl Playwright {
                     facts: None,
                     refusal: Some(error(code)),
                     compared: None,
+                    frame_gone: false,
                 },
             });
+        }
+        // Ruling R63: a box whose ref is dead says whether its frame left the tab, from one read
+        // of the frame tree for all of them. `element_detached` itself stays as it is.
+        let dead: Vec<(&mut BoxLook, &str)> = looks
+            .iter_mut()
+            .zip(&request.fields)
+            .filter(|(look, _)| {
+                look.refusal
+                    .as_ref()
+                    .is_some_and(|refusal| refusal.code == EntryCode::ElementDetached.as_str())
+            })
+            .map(|(look, field)| (look, field.box_ref.as_str()))
+            .collect();
+        if !dead.is_empty() {
+            let refs: Vec<&str> = dead.iter().map(|(_, box_ref)| *box_ref).collect();
+            let gone = look_op::frames_gone(&page, &scope, &refs).await;
+            for ((look, _), gone) in dead.into_iter().zip(gone) {
+                look.frame_gone = gone;
+            }
         }
         Ok(looks)
     }

@@ -154,6 +154,10 @@ struct WorldsInner {
     live: HashMap<FrameSeq, WorldKey>,
     /// How each child document was last reached.
     parents: HashMap<FrameSeq, ParentLink>,
+    /// The frame each seq's world was installed in, kept after the seq retires (ruling R63): the
+    /// check call asks whether a dead ref's frame is still in the tab. A seq an earlier
+    /// `Playwright` handed out has none, as nothing here knows where it was.
+    frames: HashMap<FrameSeq, FrameId>,
     /// The page's first seq, kept for the main frame's first installed document: 0, so its
     /// refs print bare, or a random base for a page that was open before this `Playwright`.
     first: u32,
@@ -192,6 +196,7 @@ impl FrameWorlds {
                 cells: HashMap::new(),
                 live: HashMap::new(),
                 parents: HashMap::new(),
+                frames: HashMap::new(),
                 first: first.0,
                 next: first.0.saturating_add(1),
                 first_used: false,
@@ -318,6 +323,12 @@ impl FrameWorlds {
         if inner.live.get(&world.seq()) == Some(&key) {
             inner.live.remove(&world.seq());
         }
+    }
+
+    /// The frame `seq`'s world was installed in, live or retired; `None` for a seq this page never
+    /// installed a world for, as one an earlier `Playwright` handed out (ruling R63).
+    pub(crate) fn frame_of(&self, seq: FrameSeq) -> Option<FrameId> {
+        self.lock().frames.get(&seq).cloned()
     }
 
     /// What `seq` names, for a ref jump: its world and its parents, or why there is none.
@@ -497,6 +508,7 @@ impl WorldsInner {
     /// boot replaced.
     fn adopt(&mut self, key: &WorldKey, seq: FrameSeq, retired: Option<FrameSeq>) {
         self.foreign.extend(retired);
+        self.frames.insert(seq, key.frame.clone());
         if let Some(previous) = self.live.insert(seq, key.clone())
             && previous != *key
         {
@@ -935,6 +947,41 @@ mod tests {
         assert!(
             matches!(worlds.by_seq(FrameSeq(1)), SeqLookup::Live { .. }),
             "a late failure on the old install leaves the new one alone"
+        );
+        Ok(())
+    }
+
+    /// Ruling R63: a seq keeps the frame its world was installed in after it retires, and a seq
+    /// this page never installed a world for (an earlier `Playwright`'s) names no frame.
+    #[tokio::test]
+    async fn tests_that_a_retired_seq_keeps_its_frame_and_a_foreign_one_has_none() -> TestResult {
+        let worlds = FrameWorlds::new(FrameSeq(0));
+        let installs = AtomicU32::new(0);
+        let first = install(&worlds, ("S", "main"), Place::Main, &installs).await?;
+        worlds.invalidate(&first);
+        assert!(matches!(worlds.by_seq(FrameSeq(0)), SeqLookup::Retired));
+        assert_eq!(
+            worlds.frame_of(FrameSeq(0)),
+            Some(FrameId("main".to_owned()))
+        );
+        let rekeyed = worlds
+            .world_with(key("S", "card"), child_of(0, "#1"), |_| async {
+                Ok(Installed {
+                    retired: Some(FrameSeq(7)),
+                    ..installed(IsolatedWorld::for_tests(session("S"), "card", 2, "S.card"))
+                })
+            })
+            .await?;
+        assert_eq!(rekeyed.seq(), FrameSeq(2));
+        assert!(matches!(worlds.by_seq(FrameSeq(7)), SeqLookup::Retired));
+        assert_eq!(
+            worlds.frame_of(FrameSeq(7)),
+            None,
+            "an earlier process's seq"
+        );
+        assert_eq!(
+            worlds.frame_of(FrameSeq(2)),
+            Some(FrameId("card".to_owned()))
         );
         Ok(())
     }

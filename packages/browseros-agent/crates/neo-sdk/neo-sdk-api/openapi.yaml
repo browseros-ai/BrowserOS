@@ -643,13 +643,14 @@ paths:
           page-side engine's protocol loses them for the documents still open, so a plain box's
           value prints there again (under `fill.pictures: never` no picture of its tab is taken
           either way).
-        - Going back in history restores a plain box's value into a new document, which keeps no
-          digest, so its value prints. So does a copy in another document (a frame, a pop-up), a
-          copy the page reformats beyond whitespace, dashes and slashes, text the page prints
-          outside a box, and a copy that appears after its digest was forgotten. A box in a
-          closed shadow root Neo's walk has not seen does not hold a digest alive, so a later
-          copy can print. An entry that ends before its read-back keeps no digest: its box has
-          the mark alone.
+        - A reload, or going back in history into a new document, makes a new document that keeps no
+          mark and no digest, so a value that the page or the browser puts back there prints. A
+          document that returns whole from the back-forward cache keeps its marks. A copy in another
+          document (a frame, a pop-up) prints too, as do a copy the page reformats beyond
+          whitespace, dashes and slashes, text the page prints outside a box, and a copy that
+          appears after its digest was forgotten. A box in a closed shadow root Neo's walk has not
+          seen does not hold a digest alive, so a later copy can print. An entry that ends before
+          its read-back keeps no digest: its box has the mark alone.
         - A widget that spreads a code across several boxes shows the digits of the boxes Neo
           did not fill. Fill it one box at a time. The fill's `uncertain` outcome is the sign
           that a value given to one box did not stay there.
@@ -2565,11 +2566,31 @@ components:
             count of matches. When both are absent the refusal says why, and it is never "not
             held": `element_detached` means Neo no longer reaches the box by this ref (the box
             left its document, the document was replaced, the frame is gone, or the isolated
-            world the ref was made in is gone). It is not proof that the box left the page:
-            take a fresh snapshot to know. `run_timeout` or any other code means Neo could not
-            read the box now. A value the page reformats beyond whitespace, dashes and slashes
-            is neither held nor contained, and a copy of the value in another box is not
+            world the ref was made in is gone). On its own it is not proof that the box left the
+            page; `frameGone` says when it is. `run_timeout` or any other code means Neo could
+            not read the box now. A value the page reformats beyond whitespace, dashes and
+            slashes is neither held nor contained, and a copy of the value in another box is not
             seen.
+        frameGone:
+          type: boolean
+          description: >-
+            Present, and true, only when the ref is dead (`element_detached`) and the frame the box
+            was in is no longer in the tab: the box left the page with it, and nothing there holds
+            the value. A removed payment frame answers this, and so does a page that moved on, for
+            the frames it held. Neo reads the tab's frame tree for the check's dead refs, every
+            frame included, and true needs two reads in a row that agree: both whole, and neither
+            holds the frame. Never false. How the answers fit together, for a host that decides "the
+            box left the page": `frameGone` true, it did. `page_changed` is answered for a box Neo
+            still reaches: the tab is no longer at the address the host named, which says the
+            address changed, not that the box left, as a page can change its address and keep its
+            document; take a fresh snapshot. `element_detached` with no `frameGone` is unknown: the
+            box may have left a document whose frame is still there, its document may have been
+            replaced in place (the tab's main document after it moved on, or a frame that reloaded),
+            Neo may have lost its own world there, the ref may be from before a restart of Neo, the
+            frame tree could not be read whole, or frames in the browser, in any tab, were moving to
+            or from their own process while Neo read it; take a fresh snapshot. True says the frame
+            is gone now: a later Back can bring a page back, the fill route's own limit on history.
+            The fill's answer has no such field.
     BoxFacts:
       type: object
       required: [origin, type, autocomplete, inputMode, name, id, sized, empty]

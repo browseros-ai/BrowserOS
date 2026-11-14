@@ -45,6 +45,10 @@ pub struct BoxLook {
     /// absent when the box could not be read, and then the refusal says why. Never a `false`
     /// for a box that was not read.
     pub compared: Option<Compared>,
+    /// Ruling R63, for a box whose ref is dead (`element_detached`): true when the frame the ref's
+    /// world was installed in is no longer in the tab, read in a whole frame tree. False in every
+    /// other case, the route's absent: unknown, never "the frame is there".
+    pub frame_gone: bool,
 }
 
 /// What the check call's compare found in a box: booleans only, never the value, a position, a

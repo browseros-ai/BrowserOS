@@ -1,0 +1,21 @@
+<!doctype html><meta charset=utf-8><title>Frames gone</title>
+<!-- Boxes for ruling R63 (whether a dead ref's frame left the tab): one in the page's own
+     document, one in a same-site frame (`near`, which shares the page's session) and one in a
+     cross-site frame (`far`, the fixture server's other name, on its own session). The page's own
+     script removes or reloads them: removeNear() and removeFar() take a frame out of the tab,
+     reloadNear() and reloadFar() load a new document into the same frame, removePageBox() takes
+     the page's own box out of a document that stays. -->
+<input id=page aria-label="Page box">
+<iframe id=near title="Near" style="width:320px;height:60px;border:0"
+  srcdoc="<input aria-label='Near box'>"></iframe>
+<iframe id=far title="Far" style="width:420px;height:120px;border:0"></iframe>
+<script>
+  const byId = (id) => document.getElementById(id)
+  const other = location.protocol + '//' + (location.hostname === 'localhost' ? '127.0.0.1' : 'localhost') + ':' + location.port
+  byId('far').src = other + '/private/card-field.html?field=number'
+  window.removeNear = () => { byId('near').remove(); return true }
+  window.removeFar = () => { byId('far').remove(); return true }
+  window.reloadNear = () => { byId('near').srcdoc = "<input aria-label='Near box'>"; return true }
+  window.reloadFar = () => { byId('far').src = byId('far').src; return true }
+  window.removePageBox = () => { byId('page').remove(); return true }
+</script>

@@ -23,9 +23,12 @@ pub struct FillBoxCheck {
     /// Present exactly when the field sent a `value` and Neo read the box, whatever the look says of it (a covered, hidden or out-of-view box answers it beside its refusal). The value goes only where a fill would send it, so it never enters a site the host did not approve: a box on another origin than `expect.origin` answers `wrong_origin`, and a tab no longer at the request's `url` answers `page_changed`, both with no compare. True when the box holds the value by a fill's read-back rule: equal, or with `spaced` equal once whitespace, dashes and slashes are set aside, and with `cut` the part the box's `maxlength` keeps. True decides \"entered as typed\".
     #[serde(rename = "holds", skip_serializing_if = "Option::is_none")]
     pub holds: Option<bool>,
-    /// Present exactly when `holds` is. True when the box's text contains the value by the same rule of setting separators aside; true whenever `holds` is. False decides \"gone\": the value has left the box. Booleans only: no value, position, length or count of matches. When both are absent the refusal says why, and it is never \"not held\": `element_detached` means Neo no longer reaches the box by this ref (the box left its document, the document was replaced, the frame is gone, or the isolated world the ref was made in is gone). It is not proof that the box left the page: take a fresh snapshot to know. `run_timeout` or any other code means Neo could not read the box now. A value the page reformats beyond whitespace, dashes and slashes is neither held nor contained, and a copy of the value in another box is not seen.
+    /// Present exactly when `holds` is. True when the box's text contains the value by the same rule of setting separators aside; true whenever `holds` is. False decides \"gone\": the value has left the box. Booleans only: no value, position, length or count of matches. When both are absent the refusal says why, and it is never \"not held\": `element_detached` means Neo no longer reaches the box by this ref (the box left its document, the document was replaced, the frame is gone, or the isolated world the ref was made in is gone). On its own it is not proof that the box left the page; `frameGone` says when it is. `run_timeout` or any other code means Neo could not read the box now. A value the page reformats beyond whitespace, dashes and slashes is neither held nor contained, and a copy of the value in another box is not seen.
     #[serde(rename = "contains", skip_serializing_if = "Option::is_none")]
     pub contains: Option<bool>,
+    /// Present, and true, only when the ref is dead (`element_detached`) and the frame the box was in is no longer in the tab: the box left the page with it, and nothing there holds the value. A removed payment frame answers this, and so does a page that moved on, for the frames it held. Neo reads the tab's frame tree for the check's dead refs, every frame included, and true needs two reads in a row that agree: both whole, and neither holds the frame. Never false. How the answers fit together, for a host that decides \"the box left the page\": `frameGone` true, it did. `page_changed` is answered for a box Neo still reaches: the tab is no longer at the address the host named, which says the address changed, not that the box left, as a page can change its address and keep its document; take a fresh snapshot. `element_detached` with no `frameGone` is unknown: the box may have left a document whose frame is still there, its document may have been replaced in place (the tab's main document after it moved on, or a frame that reloaded), Neo may have lost its own world there, the ref may be from before a restart of Neo, the frame tree could not be read whole, or frames in the browser, in any tab, were moving to or from their own process while Neo read it; take a fresh snapshot. True says the frame is gone now: a later Back can bring a page back, the fill route's own limit on history. The fill's answer has no such field.
+    #[serde(rename = "frameGone", skip_serializing_if = "Option::is_none")]
+    pub frame_gone: Option<bool>,
 }
 
 impl FillBoxCheck {
@@ -36,6 +39,7 @@ impl FillBoxCheck {
             refusal: None,
             holds: None,
             contains: None,
+            frame_gone: None,
         }
     }
 }

@@ -11,7 +11,7 @@
 //!     (core's FrameRegistry) ── getFrameTree ──▶ its frames; repeat for OOPIFs inside OOPIFs
 //! ```
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::time::Duration;
 
 use browseros_core::{BrowserSession, CoreError, FrameId, PageId, ProtocolSession, TabId};
@@ -247,7 +247,9 @@ impl FrameTree {
         }
     }
 
-    fn contains(&self, id: &str) -> bool {
+    /// Whether the tree holds the frame `id`: the check call's dead refs ask it of a whole read
+    /// (ruling R63, `look_op::frames_gone`).
+    pub(crate) fn contains(&self, id: &str) -> bool {
         self.frames.iter().any(|frame| frame.id.as_str() == id)
     }
 
@@ -396,14 +398,66 @@ async fn read_frames(
 ) -> Result<FrameTree, CoreError> {
     let mut tree = FrameTree::default();
     tree.add_hosted(frame_tree(root).await?.frame_tree, None, root);
-    let iframes: Targets = browser
+    let iframes = list_iframes(browser).await?;
+    read_oopifs(browser, page, &mut tree, &iframes, subtrees).await?;
+    Ok(tree)
+}
+
+/// Ruling R63's read, for `look_op::frames_gone`: [`read_every`]'s, with one list of the
+/// browser's out-of-process frames taken right before the root's tree and compared with the list
+/// the read takes right after it. `None` when the two differ: a frame out of process at the root's
+/// read and in its parent's process at the list is in neither, and the read would come back whole
+/// without it. A frame that moves after the list needs no other check: a listed frame whose own
+/// tree cannot be read fails the read ([`Subtrees::Require`], after its tries). So the window is
+/// two adjacent calls. Only target ids are compared, as a target's address and title change with
+/// every navigation; the lists are the browser's, so frames moving in another tab answer `None`
+/// too, the safe side. The camera's read ([`read_every`]) stays as it is.
+pub(crate) async fn read_steady(
+    browser: &BrowserSession,
+    page: &PageId,
+    root: &ProtocolSession,
+) -> Result<Option<FrameTree>, CoreError> {
+    let before = list_iframes(browser).await?;
+    let mut tree = FrameTree::default();
+    tree.add_hosted(frame_tree(root).await?.frame_tree, None, root);
+    let iframes = list_iframes(browser).await?;
+    if target_ids(&iframes) != target_ids(&before) {
+        return Ok(None);
+    }
+    read_oopifs(browser, page, &mut tree, &iframes, Subtrees::Require).await?;
+    Ok(Some(tree))
+}
+
+/// The browser's out-of-process frames, of every tab (an OOPIF's target id is its frame id).
+async fn list_iframes(browser: &BrowserSession) -> Result<Targets, CoreError> {
+    browser
         .cdp(
             "Target.getTargets",
             json!({ "filter": [{ "type": "iframe" }] }),
             None,
         )
         .await
-        .and_then(decode)?;
+        .and_then(decode)
+}
+
+fn target_ids(targets: &Targets) -> BTreeSet<&str> {
+    targets
+        .target_infos
+        .iter()
+        .map(|target| target.target_id.as_str())
+        .collect()
+}
+
+/// Adds to `tree` the subtree of every out-of-process frame in `iframes` whose parent it holds,
+/// level by level. One that cannot be read fails the read under [`Subtrees::Require`], and is
+/// left out and noted (`FrameTree::unread`) under [`Subtrees::Skip`].
+async fn read_oopifs(
+    browser: &BrowserSession,
+    page: &PageId,
+    tree: &mut FrameTree,
+    iframes: &Targets,
+    subtrees: Subtrees,
+) -> Result<(), CoreError> {
     let mut read = HashSet::new();
     loop {
         let next: Vec<&IframeTarget> = iframes
@@ -443,7 +497,7 @@ async fn read_frames(
             }
         }
     }
-    Ok(tree)
+    Ok(())
 }
 
 /// `session`'s own frames: its root and the same-process frames under it.
