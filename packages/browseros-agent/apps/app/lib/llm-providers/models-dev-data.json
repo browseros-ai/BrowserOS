@@ -3924,6 +3924,24 @@
         "outputCost": 1.28
       },
       {
+        "id": "minimax/minimax-m3.1-flash:free",
+        "name": "MiniMax M3.1 Flash (free)",
+        "contextWindow": 1000000,
+        "maxOutput": 524288,
+        "supportsImages": true,
+        "supportsReasoning": true,
+        "supportsToolCall": true,
+        "supportsTemperature": true,
+        "reasoningControls": [
+          {
+            "type": "effort",
+            "values": ["low", "medium", "high", "xhigh", "max"]
+          }
+        ],
+        "inputCost": 0,
+        "outputCost": 0
+      },
+      {
         "id": "minimax/minimax-m3",
         "name": "MiniMax-M3",
         "contextWindow": 1048576,
