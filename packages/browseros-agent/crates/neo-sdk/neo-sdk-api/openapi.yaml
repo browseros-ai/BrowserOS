@@ -1114,7 +1114,9 @@ paths:
         `settings` holds every setting this server knows, each at its value: what the host set,
         or the default. Its shape is a body for `PUT`, so a host can read it, change it and send
         it back. `file` reports this process's startup file load and stays unchanged after API
-        changes. A server older than the settings answers 404. Only the host may call these
+        changes. A server older than this report answers `GET` without `file`, so a host reads
+        an absent `file` as not reported, never as `applied`. A server older than the settings
+        answers 404. Only the host may call these
         routes: a request a web page sends is refused with 403, so a script in the browser Neo
         drives cannot reach them even on the development TCP listener.
       responses:
