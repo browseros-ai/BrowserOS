@@ -132,6 +132,14 @@ export function buildSessionReplayPlan(
   const views = new Map<number, TabView>(
     input.tabs.map((tab) => [tab.tabId, buildTabView(input, tab.tabId)]),
   )
+  // Address lookup runs every playback frame. Index raw metadata once so it
+  // never walks DOM mutations or loses metadata omitted by checkpoint filtering.
+  const metaEventsByTab = new Map(
+    input.tabs.map((tab) => [
+      tab.tabId,
+      input.eventsForTab(tab.tabId).filter((event) => event.type === 4),
+    ]),
+  )
   const playable = [...views.entries()].flatMap(([tabId, view]) =>
     isPlayableTabView(view) && view.originMs !== null && view.endMs !== null
       ? [{ tabId, view, originMs: view.originMs, endMs: view.endMs }]
@@ -229,11 +237,12 @@ export function buildSessionReplayPlan(
       }
       // SDK audit rows can omit addresses. Read the already loaded recording
       // so a seek also restores the tab's address without a separate timeline.
-      const events = input.eventsForTab(tabId)
+      const events = metaEventsByTab.get(tabId)
+      if (!events) return null
       const atMs = originMs + time * 1000
       for (let i = events.length - 1; i >= 0; i--) {
         const event = events[i]
-        if (event.type !== 4 || event.ts > atMs) continue
+        if (event.ts > atMs) continue
         const { data } = event
         if (
           typeof data === 'object' &&
