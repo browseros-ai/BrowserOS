@@ -60,6 +60,8 @@ export interface ReplayTrack {
   view: TabView
   /** Activity seconds where this track's recording begins. */
   startAt: number
+  /** Activity seconds of the final event, derived from its recorded timestamp. */
+  endAt: number
   /** Length of the track's own rrweb stream. */
   durationSeconds: number
 }
@@ -162,10 +164,11 @@ export function buildSessionReplayPlan(
   const durationSeconds = first ? Math.max(lastVisualEnd, lastCompletion) : 0
 
   const tracks: ReplayTrack[] = playable.map(
-    ({ tabId, view, originMs: at }) => ({
+    ({ tabId, view, originMs: at, endMs }) => ({
       tabId,
       view,
       startAt: (at - originMs) / 1000,
+      endAt: (endMs - originMs) / 1000,
       durationSeconds: view.totalSeconds,
     }),
   )
@@ -207,6 +210,11 @@ export function buildSessionReplayPlan(
     project: (tabId, time) => {
       const track = trackFor(tabId)
       if (!track) return CLAMPED_AT_START
+      // Compare the recorded endpoint before subtracting decimal seconds.
+      // Otherwise 0.3 - 0.1 can stay just below a 0.2-second track's end.
+      if (time >= track.endAt) {
+        return { trackTime: track.durationSeconds, live: false }
+      }
       const elapsed = time - track.startAt
       return {
         trackTime: Math.min(Math.max(0, elapsed), track.durationSeconds),

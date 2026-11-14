@@ -261,6 +261,24 @@ describe('stateAt', () => {
 })
 
 describe('projection', () => {
+  it('clamps a later track at its recorded global end despite decimal subtraction', () => {
+    const latePlan = planFor(
+      [
+        ...track(1, SESSION_START_MS, SESSION_START_MS + 50),
+        ...track(2, SESSION_START_MS + 100, SESSION_START_MS + 300),
+      ],
+      [],
+      [1, 2],
+    )
+
+    expect(latePlan.durationSeconds).toBe(0.3)
+    expect(latePlan.project(2, latePlan.durationSeconds)).toEqual({
+      trackTime: 0.2,
+      live: false,
+    })
+    expect(latePlan.project(2, 0.299).live).toBe(true)
+  })
+
   const plan = planFor(
     [
       ...track(1, SESSION_START_MS, SESSION_START_MS + 10_000),

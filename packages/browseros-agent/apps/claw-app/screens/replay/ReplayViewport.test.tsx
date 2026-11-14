@@ -3,7 +3,10 @@ import { parseHTML } from 'linkedom'
 import { act, StrictMode } from 'react'
 import type { Root } from 'react-dom/client'
 import type { ReplayEvent, ReplayFrame } from '@/modules/api/replay.hooks'
-import { buildSessionReplayPlan } from './session-replay'
+import {
+  buildSessionReplayPlan,
+  type SessionReplayPlan,
+} from './session-replay'
 import { type Playback, usePlayback } from './use-playback'
 
 interface ReplayerConfig {
@@ -167,17 +170,20 @@ const finalChangePlan = buildSessionReplayPlan({
   eventsForTab: () => finalChangeEvents,
 })
 
-async function renderPlayback() {
+async function renderPlayback(
+  plan: SessionReplayPlan = finalChangePlan,
+  tabId = 1,
+) {
   const { ReplayViewport } = await import('./ReplayViewport')
   function Harness() {
-    playback = usePlayback(finalChangePlan.durationSeconds)
+    playback = usePlayback(plan.durationSeconds)
     return (
       <ReplayViewport
         site="example.com"
         action={undefined}
         url={null}
-        events={finalChangeEvents}
-        {...finalChangePlan.project(1, playback.time)}
+        events={plan.viewFor(tabId).events}
+        {...plan.project(tabId, playback.time)}
         isPlaying={playback.isPlaying}
         speed={playback.speed}
       />
@@ -287,6 +293,35 @@ afterEach(async () => {
 })
 
 describe('ReplayViewport', () => {
+  it('applies the final DOM change of a later-starting tab on play-through and end seek', async () => {
+    const lateEvents = [
+      { ...events[0], ts: 1_100 },
+      { ...events[1], ts: 1_101 },
+      mutation(1_150, 'Filled'),
+      mutation(1_300, 'Submitted'),
+    ].map((event) => ({ ...event, tabId: 2, documentId: 'document-b' }))
+    const latePlan = buildSessionReplayPlan({
+      startedAtMs: 1_000,
+      frames: [],
+      tabs: [1, 2].map((tabId) => ({ tabId, complete: true, segments: [] })),
+      eventsForTab: (tabId) => (tabId === 2 ? lateEvents : events.slice(0, 2)),
+    })
+    await renderPlayback(latePlan, 2)
+
+    await act(async () => playback.seek(latePlan.durationSeconds))
+    expect(renderedChanges()).toEqual(['Filled', 'Submitted'])
+
+    for (const speed of [1, 2, 4]) {
+      await act(async () => playback.setSpeed(speed))
+      await act(async () => playback.play())
+      expect(renderedChanges()).toEqual([])
+      await advanceTo(0)
+      await advanceTo(1_000 / speed)
+      expect(playback.isPlaying).toBe(false)
+      expect(renderedChanges()).toEqual(['Filled', 'Submitted'])
+    }
+  })
+
   for (const speed of [1, 2, 4]) {
     it(`applies the final DOM changes once when playing through and restarting at ${speed}x`, async () => {
       await renderPlayback()
