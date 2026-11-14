@@ -1,101 +1,202 @@
-//! One-shot child supervision. The host keeps the sole stdin writer as a life
-//! line; EOF also kills the SDK when the host dies without running cleanup.
+//! Restarting child supervision. One attempt owns the child, launch file and
+//! sole stdin writer. Closing that life line also kills the SDK after host SIGKILL.
 
 #![cfg(unix)]
 
-use std::{io, path::Path, process::Stdio, time::Duration};
+use std::{future::Future, io, net::TcpListener, path::Path, process::Stdio, time::Duration};
 
 use serde_json::{Value, json};
 use tokio::{
     fs,
     process::{Child, ChildStdin, Command},
+    time::Instant,
 };
 
 use super::{EngineLaunch, EngineState, EngineUnavailable, NeoEngine, RunTool, wire::Wire};
 
-pub(super) async fn supervise(
-    engine: &NeoEngine,
-    launch: EngineLaunch,
-) -> Result<(), EngineUnavailable> {
-    let sdk_dir = launch.state_dir.join("claw-sdk");
-    let saved_tool = sdk_dir.join("run-tool.json");
-    if let Ok(saved) = fs::read(&saved_tool).await
+/// Failed attempts move through this capped schedule. A minute of healthy
+/// service resets it, so a rapid crash loop cannot keep retrying once a second.
+#[derive(Default)]
+struct RestartBackoff {
+    step: usize,
+}
+
+impl RestartBackoff {
+    fn after_failure(&mut self, ready_for: Duration) -> Duration {
+        const DELAYS: [Duration; 3] = [
+            Duration::from_secs(1),
+            Duration::from_secs(5),
+            Duration::from_secs(30),
+        ];
+        if ready_for >= Duration::from_secs(60) {
+            self.step = 0;
+        }
+        let delay = DELAYS[self.step];
+        self.step = (self.step + 1).min(DELAYS.len() - 1);
+        delay
+    }
+}
+
+/// The attempt reports only lifecycle facts. The restart loop never owns a
+/// process, which lets tests drive this same loop with a fake child.
+enum AttemptExit {
+    Stopped,
+    Failed {
+        reason: String,
+        port: Option<u16>,
+        ready_for: Duration,
+    },
+}
+
+pub(super) async fn supervise(engine: &NeoEngine, launch: EngineLaunch) {
+    load_saved_tool(engine, &launch.state_dir.join("claw-sdk/run-tool.json")).await;
+    supervise_with(engine, launch, run_attempt).await;
+}
+
+async fn load_saved_tool(engine: &NeoEngine, path: &Path) {
+    if let Ok(saved) = fs::read(path).await
         && let Ok(tool) = serde_json::from_slice::<RunTool>(&saved)
     {
+        if !tool.has_compatible_schema() {
+            tracing::warn!("the saved Playwright run definition has an incompatible schema");
+            return;
+        }
         engine
             .inner
             .connection
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .tool = Some(tool);
-    }
-    let (mut child, wire, launch_file) = spawn(&launch).await.map_err(|error| {
-        EngineUnavailable::new(format!("the Playwright engine could not start: {error}"))
-    })?;
-    // Child::wait closes child.stdin itself. Take the writer out first, or
-    // simply monitoring an otherwise healthy child would tell it to exit.
-    let mut lifeline = child.stdin.take();
-    let tool = tokio::select! {
-        () = engine.inner.stop.cancelled() => {
-            stop_child(&mut child, &mut lifeline).await;
-            engine.unavailable("the Playwright engine was shut down".to_owned());
-            return Ok(());
-        }
-        status = child.wait() => return Err(exited(status)),
-        result = wait_ready(&wire) => result?,
-    };
-    // Health proves this child loaded its private launch file. A stdio parent
-    // can share the state directory without overwriting another child's port.
-    drop(launch_file);
-    if let Err(error) = save_tool(&saved_tool, &tool).await {
-        tracing::warn!(%error, "the Playwright run definition could not be cached");
-    }
-    {
-        let mut connection = engine
-            .inner
-            .connection
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        connection.wire = Some(wire);
-        connection.tool = Some(tool);
-    }
-    engine.inner.state.send_replace(EngineState::Ready);
-    tokio::select! {
-        () = engine.inner.stop.cancelled() => {
-            stop_child(&mut child, &mut lifeline).await;
-            engine.unavailable("the Playwright engine was shut down".to_owned());
-            Ok(())
-        }
-        status = child.wait() => Err(exited(status)),
+        // Discovery may have started before disk I/O completed. Wake watchers
+        // even though loading a cached description does not make the child ready.
+        engine.inner.state.send_modify(|_| {});
     }
 }
 
-async fn spawn(launch: &EngineLaunch) -> io::Result<(Child, Wire, tempfile::TempPath)> {
+async fn supervise_with<F, Fut>(engine: &NeoEngine, launch: EngineLaunch, mut attempt: F)
+where
+    F: FnMut(NeoEngine, EngineLaunch, Option<u16>) -> Fut,
+    Fut: Future<Output = AttemptExit>,
+{
+    let mut backoff = RestartBackoff::default();
+    let mut previous_port = None;
+    while !engine.inner.stop.is_cancelled() {
+        match attempt(engine.clone(), launch.clone(), previous_port).await {
+            AttemptExit::Stopped => break,
+            AttemptExit::Failed {
+                reason,
+                port,
+                ready_for,
+            } => {
+                previous_port = port.or(previous_port);
+                let delay = backoff.after_failure(ready_for);
+                tracing::warn!(%reason, retry_in_seconds = delay.as_secs(), "the Playwright engine is restarting");
+                engine.unavailable_until(reason, Some(std::time::Instant::now() + delay));
+                // Shutdown interrupts the wait and the loop condition prevents
+                // a final respawn when cancellation races with the deadline.
+                tokio::select! {
+                    biased;
+                    () = engine.inner.stop.cancelled() => break,
+                    () = tokio::time::sleep(delay) => {}
+                }
+            }
+        }
+    }
+    engine.unavailable("the Playwright engine was shut down".to_owned());
+}
+
+async fn run_attempt(
+    engine: NeoEngine,
+    launch: EngineLaunch,
+    previous_port: Option<u16>,
+) -> AttemptExit {
+    let spawned = tokio::select! {
+        biased;
+        () = engine.inner.stop.cancelled() => return AttemptExit::Stopped,
+        spawned = spawn(&launch, previous_port) => spawned,
+    };
+    let (mut child, wire, _launch_file, port) = match spawned {
+        Ok(spawned) => spawned,
+        Err(error) => {
+            return AttemptExit::Failed {
+                reason: format!("the Playwright engine could not start: {error}"),
+                port: previous_port,
+                ready_for: Duration::ZERO,
+            };
+        }
+    };
+    // Child::wait closes child.stdin itself. Take the writer out first, or
+    // simply monitoring an otherwise healthy child would tell it to exit.
+    let mut lifeline = child.stdin.take();
+    let mut ready_at = None;
+    let outcome = async {
+        let tool = tokio::select! {
+            biased;
+            () = engine.inner.stop.cancelled() => return None,
+            status = child.wait() => return Some(exited(status).reason),
+            result = wait_ready(&wire) => match result {
+                Ok(tool) => tool,
+                Err(error) => return Some(error.reason),
+            },
+        };
+        if !tool.has_compatible_schema() {
+            return Some("the Playwright engine returned an incompatible run schema".to_owned());
+        }
+        let saved_tool = launch.state_dir.join("claw-sdk/run-tool.json");
+        tokio::select! {
+            biased;
+            () = engine.inner.stop.cancelled() => return None,
+            result = save_tool(&saved_tool, &tool) => {
+                if let Err(error) = result {
+                    tracing::warn!(%error, "the Playwright run definition could not be cached");
+                }
+            }
+        }
+        {
+            let mut connection = engine
+                .inner
+                .connection
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            connection.wire = Some(wire);
+            connection.tool = Some(tool);
+        }
+        ready_at = Some(Instant::now());
+        tracing::info!(pid = child.id(), port, "the Playwright engine is ready");
+        engine.inner.state.send_replace(EngineState::Ready);
+        tokio::select! {
+            biased;
+            () = engine.inner.stop.cancelled() => None,
+            status = child.wait() => Some(exited(status).reason),
+        }
+    }
+    .await;
+    // Readiness failure must reap the child too. Merely dropping a kill_on_drop
+    // handle sends a signal without waiting, and a retry could overlap it.
+    stop_child(&mut child, &mut lifeline).await;
+    match outcome {
+        None => AttemptExit::Stopped,
+        Some(reason) => AttemptExit::Failed {
+            reason,
+            port: Some(port),
+            ready_for: ready_at.map_or(Duration::ZERO, |ready_at| ready_at.elapsed()),
+        },
+    }
+}
+
+async fn spawn(
+    launch: &EngineLaunch,
+    previous_port: Option<u16>,
+) -> io::Result<(Child, Wire, tempfile::TempPath, u16)> {
     let state_dir = std::path::absolute(&launch.state_dir)?;
     let sdk_dir = state_dir.join("claw-sdk");
     fs::create_dir_all(&sdk_dir).await?;
     configure_settings(&sdk_dir.join("settings.json")).await?;
-    // The SDK refuses port 0. Reserve a free port while preparing its files,
-    // then release it immediately before spawn. A race is a startup failure.
-    let reservation = std::net::TcpListener::bind("127.0.0.1:0")?;
+    // The SDK refuses port 0. Hold the reservation until spawn, and avoid the
+    // previous port even if the OS offers it again after an exit-code-2 clash.
+    let reservation = reserve_port(previous_port)?;
     let port = reservation.local_addr()?.port();
-    let original: Value = serde_json::from_slice(&fs::read(&launch.config_path).await?)?;
-    let mut config = json!({
-        "ports": {"cdp": launch.cdp_port, "server": port},
-        "directories": {"resources": std::path::absolute(&launch.resources_dir)?},
-        "flags": {"script_cdp": true}
-    });
-    if let Some(instance) = original.get("instance") {
-        config["instance"] = instance.clone();
-    }
-    if let Some(execution) = original["directories"]["execution"]
-        .as_str()
-        .filter(|value| !value.is_empty())
-    {
-        let original_dir = launch.config_path.parent().unwrap_or_else(|| Path::new(""));
-        config["directories"]["execution"] =
-            json!(std::path::absolute(original_dir.join(execution))?);
-    }
+    let config = launch_config(launch, port).await?;
     let config_path = temporary_json(&sdk_dir, &config).await?;
     let wire = Wire::new(port).map_err(io::Error::other)?;
     let mut command = Command::new(std::env::current_exe()?);
@@ -118,8 +219,48 @@ async fn spawn(launch: &EngineLaunch) -> io::Result<(Child, Wire, tempfile::Temp
         .kill_on_drop(true);
     drop(reservation);
     let child = command.spawn()?;
-    tracing::info!(pid = child.id(), "the Playwright engine was started");
-    Ok((child, wire, config_path))
+    tracing::info!(pid = child.id(), port, "the Playwright engine was started");
+    // Keep this private path for the whole attempt so an operator can inspect
+    // the actual version/flags/port used by this particular child.
+    Ok((child, wire, config_path, port))
+}
+
+fn reserve_port(previous_port: Option<u16>) -> io::Result<TcpListener> {
+    let reservation = TcpListener::bind("127.0.0.1:0")?;
+    if Some(reservation.local_addr()?.port()) == previous_port {
+        // Keep the rejected reservation bound while asking for another port.
+        return TcpListener::bind("127.0.0.1:0");
+    }
+    Ok(reservation)
+}
+
+async fn launch_config(launch: &EngineLaunch, port: u16) -> io::Result<Value> {
+    let original: Value = serde_json::from_slice(&fs::read(&launch.config_path).await?)?;
+    let mut instance = original
+        .get("instance")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    if let Some(version) = &launch.browseros_version {
+        // Use the identity the host resolved, including an explicit developer
+        // assertion. Never stamp the independently updated server's version.
+        instance.insert("browseros_version".to_owned(), json!(version));
+    }
+    let mut config = json!({
+        "ports": {"cdp": launch.cdp_port, "server": port},
+        "directories": {"resources": std::path::absolute(&launch.resources_dir)?},
+        "flags": {"script_cdp": true},
+        "instance": instance,
+    });
+    if let Some(execution) = original["directories"]["execution"]
+        .as_str()
+        .filter(|value| !value.is_empty())
+    {
+        let original_dir = launch.config_path.parent().unwrap_or_else(|| Path::new(""));
+        config["directories"]["execution"] =
+            json!(std::path::absolute(original_dir.join(execution))?);
+    }
+    Ok(config)
 }
 
 /// Desktop owns these two settings even when an earlier SDK launch saved overrides.
@@ -150,7 +291,7 @@ async fn configure_settings(path: &Path) -> io::Result<()> {
     save_json(path, &Value::Object(settings)).await
 }
 
-/// Each writer owns its temporary path until publication or child readiness.
+/// Each writer owns its temporary path until publication or child exit.
 /// Reusing a fixed .tmp name would race across independent stdio server processes.
 async fn temporary_json(dir: &Path, value: &Value) -> io::Result<tempfile::TempPath> {
     let temporary = tempfile::Builder::new()
@@ -215,8 +356,254 @@ async fn save_tool(path: &Path, tool: &RunTool) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{configure_settings, temporary_json};
+    use std::{
+        path::PathBuf,
+        sync::{Arc, Mutex},
+        time::Duration,
+    };
+
+    use super::{
+        AttemptExit, RestartBackoff, configure_settings, launch_config, load_saved_tool,
+        reserve_port, save_tool, supervise_with, temporary_json,
+    };
+    use crate::services::neo::{EngineLaunch, EngineState, NeoEngine, RunTool};
     use serde_json::{Value, json};
+
+    fn fake_launch() -> EngineLaunch {
+        EngineLaunch {
+            state_dir: PathBuf::new(),
+            resources_dir: PathBuf::new(),
+            config_path: PathBuf::new(),
+            cdp_port: 49337,
+            browseros_version: None,
+            hosted: false,
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn fake_child_restarts_with_capped_backoff_and_keeps_previous_ports() {
+        let engine = NeoEngine::disabled("fake child");
+        let attempts = Arc::new(Mutex::new(Vec::new()));
+        let observed = Arc::clone(&attempts);
+        let began = tokio::time::Instant::now();
+        let mut count = 0_u16;
+        supervise_with(&engine, fake_launch(), move |engine, _, previous_port| {
+            count += 1;
+            let count = count;
+            observed
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push((began.elapsed().as_secs(), previous_port));
+            async move {
+                if count == 5 {
+                    engine.inner.stop.cancel();
+                    return AttemptExit::Stopped;
+                }
+                AttemptExit::Failed {
+                    reason: "fake child exited with code 2".to_owned(),
+                    port: Some(count),
+                    ready_for: Duration::ZERO,
+                }
+            }
+        })
+        .await;
+        assert_eq!(
+            *attempts
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+            vec![
+                (0, None),
+                (1, Some(1)),
+                (6, Some(2)),
+                (36, Some(3)),
+                (66, Some(4))
+            ],
+        );
+        assert!(matches!(
+            engine.state(),
+            EngineState::Unavailable { retry_at: None, .. }
+        ));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn shutdown_during_backoff_preserves_failure_and_prevents_another_child()
+    -> anyhow::Result<()> {
+        let engine = NeoEngine::disabled("fake child");
+        let supervised = engine.clone();
+        let attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = Arc::clone(&attempts);
+        let mut states = engine.watch();
+        let task = tokio::spawn(async move {
+            supervise_with(&supervised, fake_launch(), move |_, _, _| {
+                count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                async {
+                    AttemptExit::Failed {
+                        reason: "permission denied at claw-sdk".to_owned(),
+                        port: None,
+                        ready_for: Duration::ZERO,
+                    }
+                }
+            })
+            .await;
+        });
+        states.changed().await?;
+        let reason = engine.not_ready().to_string();
+        assert!(reason.contains("permission denied at claw-sdk"));
+        assert!(reason.contains("restarting"));
+        assert!(matches!(
+            engine.state(),
+            EngineState::Unavailable {
+                retry_at: Some(_),
+                ..
+            }
+        ));
+        engine.shutdown().await;
+        task.await?;
+        tokio::time::advance(Duration::from_secs(60)).await;
+        assert_eq!(attempts.load(std::sync::atomic::Ordering::Relaxed), 1);
+        assert!(matches!(
+            engine.state(),
+            EngineState::Unavailable { retry_at: None, .. }
+        ));
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn fake_child_can_recover_and_shutdown_while_ready() -> anyhow::Result<()> {
+        let engine = NeoEngine::disabled("fake child");
+        let supervised = engine.clone();
+        let mut states = engine.watch();
+        let mut count = 0;
+        let task = tokio::spawn(async move {
+            supervise_with(&supervised, fake_launch(), move |engine, _, _| {
+                count += 1;
+                let first = count == 1;
+                async move {
+                    if first {
+                        return AttemptExit::Failed {
+                            reason: "fake child died".to_owned(),
+                            port: Some(1234),
+                            ready_for: Duration::ZERO,
+                        };
+                    }
+                    engine.inner.state.send_replace(EngineState::Ready);
+                    engine.inner.stop.cancelled().await;
+                    AttemptExit::Stopped
+                }
+            })
+            .await;
+        });
+        loop {
+            states.changed().await?;
+            if matches!(*states.borrow_and_update(), EngineState::Ready) {
+                break;
+            }
+        }
+        engine.shutdown().await;
+        task.await?;
+        assert!(engine.not_ready().reason.contains("shut down"));
+        Ok(())
+    }
+
+    #[test]
+    fn healthy_service_resets_backoff_but_rapid_ready_crashes_do_not() {
+        let mut backoff = RestartBackoff::default();
+        assert_eq!(
+            backoff.after_failure(Duration::ZERO),
+            Duration::from_secs(1)
+        );
+        assert_eq!(
+            backoff.after_failure(Duration::from_secs(1)),
+            Duration::from_secs(5)
+        );
+        assert_eq!(
+            backoff.after_failure(Duration::from_secs(59)),
+            Duration::from_secs(30)
+        );
+        assert_eq!(
+            backoff.after_failure(Duration::from_secs(60)),
+            Duration::from_secs(1)
+        );
+    }
+
+    #[tokio::test]
+    async fn saved_definition_is_used_only_for_the_current_argument_dialect() -> anyhow::Result<()>
+    {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("run-tool.json");
+        let mut expected = RunTool::fallback();
+        expected.description = "the exact SDK description".to_owned();
+        save_tool(&path, &expected).await?;
+        let engine = NeoEngine::disabled("fake child");
+        load_saved_tool(&engine, &path).await;
+        assert_eq!(engine.tool_snapshot().description, expected.description);
+        assert_eq!(engine.tool().await.description, expected.description);
+
+        for invalid_schema in [
+            json!({"type":"object","properties":{"script":{"type":"string"}},"required":["script"],"additionalProperties":false}),
+            json!({"type":"object","properties":{"code":{"type":"string"},"timeout":{"type":"string"}},"required":["code"],"additionalProperties":false}),
+            json!({"type":"object","properties":{"code":{"type":"string"},"timeout":{"type":"integer"},"session":{"type":"string"}},"required":["code"],"additionalProperties":false}),
+        ] {
+            let value = json!({"description":"stale dialect","inputSchema":invalid_schema});
+            tokio::fs::write(&path, serde_json::to_vec(&value)?).await?;
+            let engine = NeoEngine::disabled("fake child");
+            load_saved_tool(&engine, &path).await;
+            assert_ne!(engine.tool_snapshot().description, "stale dialect");
+            assert_eq!(
+                engine.tool_snapshot().input_schema,
+                RunTool::fallback().input_schema
+            );
+        }
+        tokio::fs::write(&path, b"{invalid JSON").await?;
+        let engine = NeoEngine::disabled("fake child");
+        load_saved_tool(&engine, &path).await;
+        assert_eq!(
+            engine.tool_snapshot().input_schema,
+            RunTool::fallback().input_schema
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn launch_file_carries_resolved_browser_version_and_script_cdp() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let config_path = dir.path().join("config.json");
+        tokio::fs::write(
+            &config_path,
+            serde_json::to_vec(&json!({
+                "instance":{"install_id":"installed-browser","browseros_version":"0.1.2.3"},
+                "directories":{"execution":"profile/.browseros"},
+            }))?,
+        )
+        .await?;
+        let launch = EngineLaunch {
+            config_path,
+            resources_dir: dir.path().join("resources"),
+            browseros_version: Some("0.51.2.7".to_owned()),
+            ..fake_launch()
+        };
+        let config = launch_config(&launch, 32001).await?;
+        assert_eq!(config["instance"]["browseros_version"], "0.51.2.7");
+        assert_eq!(config["instance"]["install_id"], "installed-browser");
+        assert_eq!(config["flags"]["script_cdp"], true);
+        assert_eq!(config["ports"]["server"], 32001);
+        assert_eq!(config["ports"]["cdp"], launch.cdp_port);
+        assert_eq!(
+            config["directories"]["execution"],
+            json!(dir.path().join("profile/.browseros"))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn new_reservation_avoids_the_previous_childs_port() -> anyhow::Result<()> {
+        let previous = reserve_port(None)?;
+        let port = previous.local_addr()?.port();
+        drop(previous);
+        let next = reserve_port(Some(port))?;
+        assert_ne!(next.local_addr()?.port(), port);
+        Ok(())
+    }
 
     #[tokio::test]
     async fn desktop_settings_override_existing_defaults_and_preserve_other_values()
