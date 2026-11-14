@@ -24,8 +24,12 @@ info:
     (`_meta["com.browseros.neo/run"] = {requestId?, taskId?, hostData?}`), each at most 128
     bytes. `requestId` names one call. Runs can be looked up by it, and a repeat of it never
     runs again (within its task when the run has a `taskId`, else across Neo; under the `task`
-    tab scope, a request without a `taskId` repeats only a run without one). `taskId` groups
-    the calls of one task, so its runs, events and trace can be listed together.
+    tab scope, a request without a `taskId` repeats only a run without one), as long as Neo's
+    trace remembers it: a `requestId` older than `trace.retentionSeconds`, or from before the
+    trace store was replaced (an older image meeting a newer trace file, or any start on a
+    fresh trace), is unknown, and a repeat of it runs again. A host that journals its request
+    ids and retries them across a rollback must not count on the replay. `taskId` groups the
+    calls of one task, so its runs, events and trace can be listed together.
 
     Task scope (`tabs.scope`, default `task`): a run that carries a `taskId` sees and acts on
     only its task family's tabs. A family starts at the task a host named; every task its runs
