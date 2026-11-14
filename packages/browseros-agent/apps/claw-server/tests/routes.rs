@@ -2265,9 +2265,19 @@ async fn initialize_mcp(app: &TestApp) -> anyhow::Result<String> {
     assert_eq!(body["result"]["serverInfo"]["name"], "browseros-neo");
     assert_eq!(body["result"]["serverInfo"]["title"], "BrowserOS neo");
     assert!(
-        body["result"]["instructions"].as_str().is_some_and(
-            |instructions| instructions.starts_with("BrowserOS neo — the browser for agents")
-        )
+        body["result"]["instructions"]
+            .as_str()
+            .is_some_and(|instructions| {
+                if app.state.config.mode.is_hosted() {
+                    instructions.starts_with("BrowserOS neo — the browser for agents")
+                } else {
+                    Some(instructions)
+                        == claw_server::api::mcp::ClawMcpService::new(app.state.clone())
+                            .get_info()
+                            .instructions
+                            .as_deref()
+                }
+            })
     );
     let session_id = headers
         .get("mcp-session-id")

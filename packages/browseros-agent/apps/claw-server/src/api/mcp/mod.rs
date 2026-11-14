@@ -12,6 +12,7 @@ mod neo_run;
 pub mod observers;
 mod prompt;
 pub mod pursue;
+pub(crate) mod recipes;
 pub mod script_hook;
 mod service;
 mod session_handle;

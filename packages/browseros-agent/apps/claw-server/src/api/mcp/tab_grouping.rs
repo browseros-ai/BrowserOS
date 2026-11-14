@@ -1,8 +1,9 @@
 //! What explicit tab grouping changes about the text an agent reads.
 //!
 //! Text written for automatic grouping promises the server's own tab groups in several
-//! places: the instructions, the `tabs`, `tab_groups` and `name_session` descriptions, the
-//! `session`, `taskName` and `groupId` argument descriptions, and the note about a page an
+//! places. Hosted retains its legacy instructions and descriptions; desktop adds one
+//! grouping sentence. The legacy spans include the `tabs`, `tab_groups` and `name_session`
+//! descriptions, the `session`, `taskName` and `groupId` argument descriptions, and the note about a page an
 //! earlier session of the same client opened. Under [`TabGrouping::Explicit`] each promise is
 //! rewritten here, matched by the exact span its owner defines next to the text it belongs
 //! to. Automatic grouping gets every text back untouched, so desktop reads the same bytes.
@@ -22,13 +23,14 @@ use std::{borrow::Cow, sync::Arc};
 
 /// Each promise of a server-made group, and what an agent reads instead under explicit
 /// grouping.
-pub(super) const EXPLICIT_REWRITES: [(&str, &str); 10] = [
+pub(super) const EXPLICIT_REWRITES: [(&str, &str); 11] = [
+    (prompt::GROUP_GUIDANCE, ""),
     (
-        prompt::RECONNECT_GROUP_GUIDANCE,
+        prompt::hosted_guidance::RECONNECT_GROUP_GUIDANCE,
         "anything. After a reconnect your earlier tabs read as another agent's;\n  continue in them by page id instead of opening them again.",
     ),
-    (prompt::CLOSE_GROUP_CLAUSE, "."),
-    (prompt::GROUP_TITLE_CLAUSE, "."),
+    (prompt::hosted_guidance::CLOSE_GROUP_CLAUSE, "."),
+    (prompt::hosted_guidance::GROUP_TITLE_CLAUSE, "."),
     (tabs::GROUP_RECOVERY_GUIDANCE, ""),
     (
         tabs::OWN_GROUP_FALLBACK,
