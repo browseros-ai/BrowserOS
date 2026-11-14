@@ -66,7 +66,11 @@ impl Policy for CaptchaClaims {
     fn check(&self, check: &PolicyCheck<'_>) -> Result<(), OperationError> {
         // Browser and Target commands can reach every tab even on another page's session.
         // Hidden CDP is disabled and must reach its own cdp_unavailable refusal.
-        if check.method.name == "neo.cdp" && check.method.listing != Listing::Hidden {
+        // Already-sent replies are rechecked as reads and must still be released.
+        if check.method.name == "neo.cdp"
+            && check.method.listing != Listing::Hidden
+            && check.method.effect == Effect::Write
+        {
             return self
                 .lock()
                 .values()
