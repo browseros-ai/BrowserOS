@@ -9757,22 +9757,54 @@ ${value.stack}`;
     };
   }
 
+  // crates/neo-sdk/neo-playwright-js/src/probe/browseros-ui.ts
+  var BROWSEROS_UI_HOSTS = new Set([
+    "browseros-neo-takeover"
+  ]);
+  function isBrowserOSUi(element) {
+    return BROWSEROS_UI_HOSTS.has(element.localName);
+  }
+
   // crates/neo-sdk/neo-playwright-js/src/probe/private-shown.ts
   var inputs = 0;
-  var counting = false;
-  function privateShown(world) {
+  var countInput;
+  var walkedRoots = new WeakMap;
+  var offered = false;
+  function privateShown(world, request, _root, nodes) {
     const { document: document2 } = world.injected;
     const view = document2.defaultView;
-    if (!counting) {
-      counting = true;
-      document2.addEventListener("input", (event) => {
+    if (!countInput) {
+      const counted = (event) => {
         const target = event.composedPath()[0];
         if (target instanceof Element && paintedInClear(target, view))
           inputs += 1;
-      }, true);
+      };
+      countInput = counted;
+      document2.addEventListener("input", counted, true);
     }
+    if (request.walk === true)
+      walk(nodes, countInput);
     const { shown, boxes } = look2(document2, view);
-    return { kind: "value", value: { shown, inputs, boxes } };
+    const offer = offered ? {} : {
+      walkable: true,
+      elements: document2.getElementsByTagName("*").length
+    };
+    offered = true;
+    return { kind: "value", value: { shown, inputs, boxes, ...offer } };
+  }
+  function walk(seeds, count) {
+    for (const seed of seeds) {
+      if (!(seed instanceof Node))
+        continue;
+      const root = seed.getRootNode();
+      if (!(root instanceof ShadowRoot))
+        continue;
+      const host = root.host;
+      if (isBrowserOSUi(host) || host.shadowRoot === root || walkedRoots.has(host))
+        continue;
+      walkedRoots.set(host, root);
+      root.addEventListener("input", count, true);
+    }
   }
   function look2(document2, view) {
     const roots = [document2];
@@ -9786,7 +9818,7 @@ ${value.stack}`;
           return { shown: true, boxes };
       }
       for (const host of root.querySelectorAll("*")) {
-        const shadow = host.shadowRoot;
+        const shadow = host.shadowRoot ?? walkedRoots.get(host);
         if (shadow)
           roots.push(shadow);
       }
@@ -9809,7 +9841,7 @@ ${value.stack}`;
   }
 
   // crates/neo-sdk/neo-playwright-js/src/probe/protocol.ts
-  var PROTOCOL = 43;
+  var PROTOCOL = 44;
 
   // crates/neo-sdk/neo-playwright-js/src/probe/read.ts
   var XHTML = "http://www.w3.org/1999/xhtml";
@@ -10017,14 +10049,6 @@ ${value.stack}`;
   function screenshotMaskCleanup(world) {
     world.injected.hideHighlight();
     return { kind: "value", value: null };
-  }
-
-  // crates/neo-sdk/neo-playwright-js/src/probe/browseros-ui.ts
-  var BROWSEROS_UI_HOSTS = new Set([
-    "browseros-neo-takeover"
-  ]);
-  function isBrowserOSUi(element) {
-    return BROWSEROS_UI_HOSTS.has(element.localName);
   }
 
   // crates/neo-sdk/neo-playwright-js/src/probe/shadow-roots.ts

@@ -8,7 +8,11 @@
 //!          ─ every frame asked at once, each within FRAME_STALL
 //!          ─ each frame's isolated world (installed on first use) ─ `privateShown`: shown?
 //!            does it hold a private box at all? how many inputs did one take since the first
-//!            reading?
+//!            reading? and, at a document's first reading only, may the camera walk it?
+//!          ─ that one walk, when offered and the document is small enough: a DOM capture of the
+//!            frame's session, shared by the frames of one check (CameraCaptures), the elements
+//!            inside its closed shadow roots resolved into the world, and `privateShown` again
+//!            with them (`walk`), so its answer sees the boxes inside those roots
 //!          ─ Clear { reading } when no frame shows one, else Private or Unknown
 //!  camera ─ captures ─ asks again ─ stores the picture only if both asks were Clear with the
 //!            same reading
@@ -26,6 +30,17 @@
 //! document that held no private box at the first look and is gone by the second, can be in a
 //! stored picture.
 //!
+//! A box inside a closed shadow root is out of reach of every script, so the camera walks a
+//! document's closed roots itself, once, at the first reading in that document: the page side
+//! offers the walk in that answer only (`walkable`), whether Rust takes it or not. Three rules
+//! keep the walk from costing the camera a picture main stores (the design keeper's conditions):
+//! it is offered once, so a walk that found nothing, failed or was skipped is not tried again at
+//! each reading; a document larger than [`WALK_ELEMENTS`] is not walked, as a capture once sent
+//! cannot be called back and the frame's next question would queue behind it; and anything short
+//! of a full second answer within [`WALK_BUDGET`] leaves the first answer as it was, so the walk
+//! never turns a clear reading into an unknown one. A closed root the page attaches after its
+//! document's walk is seen once a marked snapshot opens it, a limit as on main.
+//!
 //! A tab that took the host's private fill never reaches this question: the entry's tab-life
 //! set withholds it first. So what decides here is what the page itself declares private and a
 //! script typed, or the owner did. A frame that cannot be read answers `Unknown`, which the camera
@@ -37,18 +52,36 @@ use std::time::Duration;
 use browseros_core::{FrameId, TabId};
 use futures_util::future::join_all;
 use serde_json::Value;
-use tokio::time;
+use tokio::time::{self, Instant};
 
 use crate::Playwright;
+use crate::object_group::ObjectGroup;
 use crate::op_scope::AdmittedPage;
 use crate::page::PageState;
 use crate::page::frame_tree::{self, FrameDocument};
 use crate::probe::{self, ProbeFailure, ProbeReply};
-use crate::world::{Endpoint, Installer, Place};
+use crate::snapshot::{CameraCaptures, closed_root_seeds};
+use crate::world::{Endpoint, Installer, IsolatedWorld, Place};
 
 /// How long one frame may take to answer, its first install included. A frame that stalls is
 /// `Unknown`, so the picture is withheld rather than waited for.
 const FRAME_STALL: Duration = Duration::from_secs(2);
+
+/// How long the camera's walk of one document's closed shadow roots may take, its DOM capture,
+/// the seeds' resolves and its second question together. A walk not done by then is dropped and
+/// the frame's first answer stands. Well inside [`FRAME_STALL`], beside a capture that measured
+/// 85 ms on a 15,000-node page (`clickable_targets`' `MARK_BUDGET`).
+const WALK_BUDGET: Duration = Duration::from_millis(500);
+
+/// What a walk leaves of a frame's [`FRAME_STALL`] at least, so the walk never runs into it and
+/// turns the frame's answer into a stall.
+const WALK_RESERVE: Duration = Duration::from_millis(200);
+
+/// The largest document the camera walks, in elements outside shadow roots. A capture once sent
+/// cannot be called back: Chromium finishes it, and the frame's next question queues behind it in
+/// the page, so a document whose capture could outlast [`WALK_BUDGET`] is not walked, and its
+/// closed roots stay a limit as on main. A capture took 950 ms on a 75,000-element page.
+const WALK_ELEMENTS: u64 = 20_000;
 
 /// One frame's answer to the camera's question.
 enum Asked {
@@ -131,7 +164,9 @@ impl Playwright {
             return PictureCheck::Unknown;
         }
         // Every frame at once, each bounded on its own: one stalled frame costs FRAME_STALL, not
-        // the sum, and the camera serves one job at a time.
+        // the sum, and the camera serves one job at a time. The frames of one session share one
+        // DOM capture for their walks.
+        let captures = CameraCaptures::new();
         let mut asks = Vec::new();
         for frame in tree.ids() {
             let Some(session) = tree.endpoint(frame) else {
@@ -147,8 +182,14 @@ impl Playwright {
                 Place::Descendant
             };
             let state = &state;
+            let walk = Walk {
+                captures: &captures,
+                shares_parent_session: tree.shares_parent_session(frame),
+            };
             asks.push(async move {
-                let answer = time::timeout(FRAME_STALL, self.ask_frame(state, &endpoint, place))
+                let deadline = Instant::now() + FRAME_STALL;
+                let asked = self.ask_frame(state, &endpoint, place, walk, deadline);
+                let answer = time::timeout_at(deadline, asked)
                     .await
                     .unwrap_or(Asked::Failed);
                 (endpoint.frame, answer)
@@ -171,7 +212,15 @@ impl Playwright {
     /// another document with no op touching it (an ad frame, a payment frame after its step)
     /// would answer `Gone` at every later reading, and its tab would never be pictured again.
     /// A frame still gone after that, or whose install fails `Gone`, has left: `Asked::Gone`.
-    async fn ask_frame(&self, state: &PageState, endpoint: &Endpoint, place: Place) -> Asked {
+    /// An answer that offers its document's walk is walked before it stands ([`Self::walked`]).
+    async fn ask_frame(
+        &self,
+        state: &PageState,
+        endpoint: &Endpoint,
+        place: Place,
+        walk: Walk<'_>,
+        deadline: Instant,
+    ) -> Asked {
         if self
             .media()
             .ensure(&endpoint.session, state.media())
@@ -190,8 +239,8 @@ impl Playwright {
                 Err(ProbeFailure::Gone(_)) => return Asked::Gone,
                 Err(_failed) => return Asked::Failed,
             };
-            match probe::picture_question(&world).await {
-                Ok(reply) => return Asked::Answered(reply),
+            match probe::picture_question(&world, None).await {
+                Ok(reply) => return Asked::Answered(walked(&world, reply, walk, deadline).await),
                 Err(ProbeFailure::Gone(_)) if attempt == 0 => state.frames().invalidate(&world),
                 Err(ProbeFailure::Gone(_)) => return Asked::Gone,
                 Err(_failed) => return Asked::Failed,
@@ -205,6 +254,55 @@ impl Playwright {
             browser: self.browser(),
             epoch: self.epoch(),
         }
+    }
+}
+
+/// What one frame's ask needs for its document's walk: the check's shared captures, and where the
+/// frame's document sits in its session's capture.
+#[derive(Clone, Copy)]
+struct Walk<'a> {
+    captures: &'a CameraCaptures,
+    shares_parent_session: bool,
+}
+
+/// `first`, or, when it offers its document's one walk (`walkable`) and the document holds at most
+/// [`WALK_ELEMENTS`] elements, the answer to the same question asked with the elements inside the
+/// document's closed shadow roots, so it sees the boxes there. Everything short of that second
+/// answer within [`WALK_BUDGET`], and before `deadline` less [`WALK_RESERVE`], leaves `first`: a
+/// document too large, no closed root found, a capture or resolve that fails or runs out of time,
+/// a second question that fails. The walk is offered once, so none of those is tried again.
+///
+/// The capture, the resolves and the second question run outside any op, as the question itself
+/// does; the resolved nodes live in an object group of the walk's own, released when it ends. The
+/// world keeps the roots for this question alone and never opens them to its engine.
+async fn walked(
+    world: &IsolatedWorld,
+    first: ProbeReply,
+    walk: Walk<'_>,
+    deadline: Instant,
+) -> ProbeReply {
+    let ProbeReply::Value { value } = &first else {
+        return first;
+    };
+    let offered = value.as_value().get("walkable").and_then(Value::as_bool) == Some(true);
+    let elements = value.as_value().get("elements").and_then(Value::as_u64);
+    if !offered || elements.is_none_or(|elements| elements > WALK_ELEMENTS) {
+        return first;
+    }
+    let ends = (Instant::now() + WALK_BUDGET).min(deadline - WALK_RESERVE);
+    let group = ObjectGroup::new();
+    let name = group.on(world.session());
+    let Ok(seeds) =
+        closed_root_seeds(walk.captures, world, walk.shares_parent_session, name, ends).await
+    else {
+        return first;
+    };
+    if seeds.is_empty() {
+        return first;
+    }
+    match time::timeout_at(ends, probe::picture_question(world, Some(&seeds))).await {
+        Ok(Ok(second)) => second,
+        Ok(Err(_)) | Err(_) => first,
     }
 }
 

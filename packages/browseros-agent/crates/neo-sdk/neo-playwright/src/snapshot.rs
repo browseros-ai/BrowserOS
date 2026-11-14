@@ -22,6 +22,7 @@ mod snapshot_calls;
 pub(crate) mod snapshot_op;
 mod snapshot_rules;
 
+pub(crate) use clickable_targets::{CameraCaptures, closed_root_seeds};
 pub(crate) use pending_baselines::PendingBaselines;
 #[cfg(test)]
 pub(crate) use snapshot_baselines::TextForm;

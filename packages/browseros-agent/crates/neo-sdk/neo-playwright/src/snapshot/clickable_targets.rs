@@ -25,6 +25,13 @@
 //! only script is the engine's own snapshot in Neo's isolated world. No call here turns `Runtime`
 //! on. Desktop's rules are called, not copied, so both products pick the same elements.
 //!
+//! The camera uses the same capture and rules once per document, outside any op
+//! ([`closed_root_seeds`], protected-fill ruling R45's closed-root limit): it hands the seeds to
+//! its own `privateShown` question, which keeps the roots in a map of its own and never opens
+//! them to the engine, so a snapshot's marking and the camera's walk do not see each other. Its
+//! captures are shared by the frames of one camera check ([`CameraCaptures`]), its resolves live
+//! in an object group of the walk's own, and its budget is the camera's (`picture_check.rs`).
+//!
 //! Best effort, by design: a frame whose capture, document or nodes cannot be read is snapshotted
 //! without targets, and the op's call log says so; it never fails the snapshot. Each frame's read
 //! has its own budget ([`frame_budget`]), so a slow frame costs only its own marks, and never more
@@ -228,7 +235,9 @@ impl Marking {
         world: &IsolatedWorld,
         parent: Option<&IsolatedWorld>,
     ) -> Result<Feed, Skipped> {
-        let document = capture_document(world, parent).await;
+        let shares_parent_session =
+            parent.is_some_and(|parent| parent.session().same_session(world.session()));
+        let document = capture_document(world, shares_parent_session).await;
         let session = world.session();
         let hits = observer::find_clickables(&self.snapshots, session, document, &self.budget)
             .await
@@ -254,9 +263,10 @@ impl Marking {
             .into_iter()
             .map(|node| (Fed::Seed, node))
             .chain(targets);
+        let group = scope.object_group(world.session());
         let resolved: Vec<(Fed, Option<String>)> = stream::iter(nodes)
             .map(|(fed, node)| async move {
-                resolve(scope, world, node)
+                resolve(group, world, node)
                     .await
                     .map(|object| (fed, object))
             })
@@ -276,6 +286,59 @@ impl Marking {
         self.count_seeds(|count| count.sent += feed.seeds.len());
         Ok(feed)
     }
+}
+
+/// The DOM captures one camera check shares, one per CDP session, and core's bound on their
+/// reads in flight: frames of one renderer share a session, and its capture holds all their
+/// documents, so a check captures each session once however many of its frames it walks.
+pub(crate) struct CameraCaptures {
+    snapshots: DomSnapshots,
+    budget: SnapshotBudget,
+}
+
+impl CameraCaptures {
+    pub(crate) fn new() -> Self {
+        Self {
+            snapshots: DomSnapshots::default(),
+            budget: SnapshotBudget::new(),
+        }
+    }
+}
+
+/// The camera's walk of one document's closed shadow roots (protected-fill design, the camera's
+/// closed-root limit): the elements a marked snapshot would hand as seeds, from the same capture,
+/// the same rules (`find_closed_shadow_seeds`) and the same cap ([`SEED_CAP`]), resolved into
+/// `world` in the camera's object group `group`. No op runs, so nothing goes to a call log: an
+/// `Err` names why for the camera's own note. Bounded by `deadline` as marking's read is
+/// ([`within`]): a capture that comes back after it is dropped as it arrives.
+pub(crate) async fn closed_root_seeds(
+    captures: &CameraCaptures,
+    world: &IsolatedWorld,
+    shares_parent_session: bool,
+    group: &str,
+    deadline: Instant,
+) -> Result<Vec<String>, &'static str> {
+    let read = async {
+        let document = capture_document(world, shares_parent_session).await;
+        let mut seeds = observer::find_closed_shadow_seeds(
+            &captures.snapshots,
+            world.session(),
+            document,
+            &captures.budget,
+        )
+        .await
+        .map_err(Skipped::Read)?;
+        seeds.truncate(SEED_CAP);
+        let resolved: Vec<Option<String>> = stream::iter(seeds)
+            .map(|node| resolve(group, world, node))
+            .buffer_unordered(RESOLVES_IN_FLIGHT)
+            .try_collect()
+            .await?;
+        Ok(resolved.into_iter().flatten().collect())
+    };
+    within(deadline, read)
+        .await
+        .map_err(|skipped| skipped.words())
 }
 
 /// Which list of the [`Feed`] a resolved node goes to.
@@ -341,17 +404,12 @@ impl Skipped {
 }
 
 /// Which document of its session's capture is `world`'s. The main frame and an out-of-process
-/// iframe are their session's root document. A same-process child shares its parent's session,
-/// so its capture holds the parent's documents too, and its own is named by the document node
-/// inside its `<iframe>` (core's frame acquisition picks it the same way).
-async fn capture_document(
-    world: &IsolatedWorld,
-    parent: Option<&IsolatedWorld>,
-) -> ClickableDocument {
-    let Some(parent) = parent else {
-        return ClickableDocument::SessionDefault;
-    };
-    if !parent.session().same_session(world.session()) {
+/// iframe are their session's root document. A same-process child shares its parent's session
+/// (`shares_parent_session`), so its capture holds the parent's documents too, and its own is
+/// named by the document node inside its `<iframe>` (core's frame acquisition picks it the same
+/// way).
+async fn capture_document(world: &IsolatedWorld, shares_parent_session: bool) -> ClickableDocument {
+    if !shares_parent_session {
         return ClickableDocument::SessionDefault;
     }
     let session = world.session();
@@ -373,19 +431,15 @@ async fn capture_document(
     }
 }
 
-/// The node as a remote object in `world`, in the op's object group (released when the op
-/// ends), or `None` when the browser names no such node in that document any more (removed
-/// since the capture), as `HandleSite` reads the same answer. A context id a later document took
-/// over fails the snapshot call instead (`call_with_nodes`), before anything runs.
-async fn resolve(
-    scope: &OpScope<'_>,
-    world: &IsolatedWorld,
-    node: i64,
-) -> Result<Option<String>, Skipped> {
+/// The node as a remote object in `world`, in object group `group` (the op's, released when the
+/// op ends, or the camera's own), or `None` when the browser names no such node in that document
+/// any more (removed since the capture), as `HandleSite` reads the same answer. A context id a
+/// later document took over fails the probe call instead (`send`), before anything runs.
+async fn resolve(group: &str, world: &IsolatedWorld, node: i64) -> Result<Option<String>, Skipped> {
     let params = json!({
         "backendNodeId": node,
         "executionContextId": world.context(),
-        "objectGroup": scope.object_group(world.session()),
+        "objectGroup": group,
     });
     let resolved = world
         .session()

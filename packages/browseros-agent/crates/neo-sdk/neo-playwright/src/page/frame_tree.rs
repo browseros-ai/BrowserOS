@@ -170,6 +170,23 @@ impl FrameTree {
         self.hosts.get(frame)
     }
 
+    /// Whether `frame` is a same-process child, on its parent's session: its document is then
+    /// one of several in that session's DOM capture, not the capture's root.
+    pub(crate) fn shares_parent_session(&self, frame: &FrameId) -> bool {
+        let parent = self
+            .frames
+            .iter()
+            .find(|info| info.id == *frame)
+            .and_then(|info| info.parent_id.as_ref());
+        match (
+            parent.and_then(|parent| self.endpoint(parent)),
+            self.endpoint(frame),
+        ) {
+            (Some(parent), Some(own)) => parent.same_session(own),
+            _ => false,
+        }
+    }
+
     /// Keep endpoint hints only after a complete admitted discovery, stamped at its start.
     /// An incomplete read leaves the previous tree and journal position intact: advancing that
     /// position could hide the event that invalidates a cached "only frame" result.

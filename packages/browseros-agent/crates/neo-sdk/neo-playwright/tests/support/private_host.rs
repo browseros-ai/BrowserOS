@@ -155,6 +155,10 @@ pub(crate) fn pages() -> HashMap<String, Page> {
             include_str!("../data/private/frames-gone.html"),
         ),
         (
+            "closed-plain",
+            include_str!("../data/private/closed-plain.html"),
+        ),
+        (
             "pin-mirror",
             include_str!("../data/private/pin-mirror.html"),
         ),

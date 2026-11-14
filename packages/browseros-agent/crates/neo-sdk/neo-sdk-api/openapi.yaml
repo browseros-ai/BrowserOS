@@ -2887,19 +2887,21 @@ components:
             typed into privately counts as private there. A tab that took the host's private fill
             (`POST /v1/tabs/{tabId}/fill`) is pictured like any other, unless `fill.pictures` is
             `never`.
-            Measured on Stripe's card widgets. A widget that hides a complete number and shows
-            its last four digits keeps its pictures, and they show those four digits. Other
-            providers' widgets were not sampled. Limits: a private value that appears and
-            disappears inside one capture window, in a document that held no private box at the
-            first look and is gone by the second, can be in a stored picture. Until a snapshot of a
-            document has walked a closed shadow root, Neo does not know the boxes inside it, so a
-            picture taken then can show what one holds, whoever typed it. A `page.ariaSnapshot()`
-            in Neo's own format (no mode, `ai` or `full`) walks it and closes this for that
-            document; mode `default` and `ariaSnapshotJSON()` do not, and a closed root the page
-            attaches after the walk is unknown again until the next one. Between its two readings
-            around a picture Neo counts typing and the owner's input, not a value a page's own
-            script sets itself and not input inside a closed shadow root: such a value shown and
-            cleared again in between is not seen.
+            Measured on Stripe's card widgets. A widget that hides a complete number and shows its
+            last four digits keeps its pictures, and they show those four digits. Other providers'
+            widgets were not sampled. Limits: a private value that appears and disappears inside one
+            capture window, in a document that held no private box at the first look and is gone by
+            the second, can be in a stored picture. Neo walks a document's closed shadow roots
+            itself, once, at its first reading in that document, so it knows the boxes inside them.
+            A closed root the page attaches after that walk is unknown until a `page.ariaSnapshot()`
+            in Neo's own format (no mode, `ai` or `full`) walks it, so a picture taken meanwhile can
+            show what one of its boxes holds, whoever typed it; mode `default` and
+            `ariaSnapshotJSON()` do not walk. A document of more than 20,000 elements, and one whose
+            walk fails or runs out of time, is not walked and not tried again: its closed roots stay
+            unknown the same way, and its pictures are as they would be without the walk. Between
+            its two readings around a picture Neo counts typing and the owner's input, not a value a
+            page's own script sets itself and not input inside a closed shadow root Neo has not
+            walked: such a value shown and cleared again in between is not seen.
         valueBytes:
           type: integer
           format: int64

@@ -1,10 +1,21 @@
 <!doctype html><meta charset=utf-8><title>Closed card</title>
 <!-- A card box the page declares (cc-number), inside a CLOSED shadow root, with a button beside
      it so a marked snapshot's clickable read finds the root. The page's own script keeps the root
-     and fills the box, as the keyboard could: no snapshot or locator reaches it first. -->
+     and fills the box, as the keyboard could: no snapshot or locator reaches it first.
+     focusCard() gives the box the focus, so a script's keyboard alone can type into it.
+     attachSecond(value) attaches a second closed root with a card box holding `value` (the
+     camera's walk of closed roots: a root attached after a document's walk). -->
 <div id=host></div>
+<div id=later></div>
 <script>
 const root = document.getElementById('host').attachShadow({ mode: 'closed' });
 root.innerHTML = '<label>Card number <input id=card autocomplete=cc-number style="width:280px;height:30px"></label><div onclick="1" style="width:80px;height:24px;border:1px solid #888">Pay</div>';
 window.fillCard = (value) => { root.getElementById('card').value = value; return root.getElementById('card').value.length; };
+window.focusCard = () => { root.getElementById('card').focus(); return true; };
+window.attachSecond = (value) => {
+  const second = document.getElementById('later').attachShadow({ mode: 'closed' });
+  second.innerHTML = '<label>Second card <input id=second autocomplete=cc-number style="width:280px;height:30px"></label><div onclick="1" style="width:80px;height:24px;border:1px solid #888">Pay</div>';
+  second.getElementById('second').value = value;
+  return true;
+};
 </script>

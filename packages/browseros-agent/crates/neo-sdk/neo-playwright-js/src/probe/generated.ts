@@ -421,7 +421,14 @@ frameVisible: boolean, scroll: ScrollPlan, position?: Point, arm?: ArmPlan, } | 
  * R60): a frame that is only shifted is placed by its corner, and a point that hits
  * nothing, or hits what holds the frame, is clear. A click keeps upstream's answer.
  */
-look: boolean, } | { "op": "edit", pin: Pin, edit: Edit, } | { "op": "look", pin: Pin, look: BoxAsk, } | { "op": "private", pin: Pin, step: PrivateStep, } | { "op": "privateShown" } | { "op": "read", target: ProbeTarget, strictness: Strictness, frameVisible: boolean, read: Read, } | { "op": "readAll", target: ProbeTarget, read: ReadAll, } | { "op": "screenshotMask", target: ProbeTarget, color: string, } | { "op": "screenshotMaskCleanup" } | { "op": "selector", target: ProbeTarget, } | { "op": "snapshot", root: ProbeTarget, mode: SnapshotMode, 
+look: boolean, } | { "op": "edit", pin: Pin, edit: Edit, } | { "op": "look", pin: Pin, look: BoxAsk, } | { "op": "private", pin: Pin, step: PrivateStep, } | { "op": "privateShown", 
+/**
+ * The camera's walk of the document's closed shadow roots: the call's nodes are elements
+ * inside them, from a capture made because the answer said the document had none
+ * (`walked: false`). The world keeps those roots for this question alone, never for its
+ * engine (probe/private-shown.ts), and answers `walked: true` from then on.
+ */
+walk?: boolean, } | { "op": "read", target: ProbeTarget, strictness: Strictness, frameVisible: boolean, read: Read, } | { "op": "readAll", target: ProbeTarget, read: ReadAll, } | { "op": "screenshotMask", target: ProbeTarget, color: string, } | { "op": "screenshotMaskCleanup" } | { "op": "selector", target: ProbeTarget, } | { "op": "snapshot", root: ProbeTarget, mode: SnapshotMode, 
 /**
  * Any integer, as upstream passes it: a child frame's depth can come out zero or
  * negative, and the engine reads those differently from no depth.

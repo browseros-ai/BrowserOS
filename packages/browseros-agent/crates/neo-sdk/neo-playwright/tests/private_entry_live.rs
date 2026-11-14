@@ -4169,32 +4169,9 @@ async fn tests_that_a_value_typed_and_emptied_between_two_looks_changes_the_read
     Ok(())
 }
 
-/// Ruling R45's named limit: until a snapshot of the document has walked a closed shadow root,
-/// Neo does not know the boxes inside it, and a picture taken then can show what one holds,
-/// whoever typed it (here the page's own script; the keyboard would do the same). A marked
-/// snapshot that walks the root closes it for that document.
-#[tokio::test]
-#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
-async fn tests_that_a_box_in_a_closed_root_is_known_once_a_snapshot_walked_it() -> TestResult {
-    let bench = Bench::start().await?;
-    let opened = bench
-        .open("/private/closed-card.html", Place::Front)
-        .await?;
-    let typed = bench
-        .live
-        .main_world(&opened.page, "fillCard('4242424242424242')")
-        .await?;
-    assert_eq!(typed, json!(16));
-    let playwright = &bench.live.playwright;
-    assert!(
-        matches!(
-            playwright.picture_check(opened.page.tab).await,
-            PictureCheck::Clear { .. }
-        ),
-        "the limit: no snapshot walked the closed root yet"
-    );
-    // A marked snapshot: clickable marking reads the DOM capture and hands the closed root's
-    // seeds to the document's world.
+/// A marked snapshot of `opened`: clickable marking reads the DOM capture and hands the closed
+/// roots' seeds to the document's world, which opens them to its engine.
+async fn marked_snapshot(bench: &Bench, opened: &Opened) -> TestResult {
     bench
         .live
         .invoke(
@@ -4205,12 +4182,141 @@ async fn tests_that_a_box_in_a_closed_root_is_known_once_a_snapshot_walked_it() 
             }),
         )
         .await??;
+    Ok(())
+}
+
+/// The camera's own walk of closed shadow roots (ruling R45's closed-root limit), rows 1 and 2.
+/// Row 1: a card number typed into a box inside a closed root by a script's keyboard alone, no
+/// snapshot and no locator: the camera's first reading in the document walks its closed roots and
+/// reads private. Main reads clear, the box unknown until a snapshot walks the root. Row 2:
+/// emptied, the page reads clear; a second closed root the page attaches after that walk, its
+/// card box filled, reads clear, as the walk is offered once per document: only a marked
+/// snapshot, which opens the root to the document's world, or a new document with its own walk
+/// brings it. After a marked snapshot it reads private. Fails with the walk left out (row 1
+/// reads clear), and with the walk offered at every reading (row 2's second root reads private
+/// before the snapshot).
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_the_camera_walks_a_documents_closed_roots_once() -> TestResult {
+    let bench = Bench::start().await?;
+    let opened = bench
+        .open("/private/closed-card.html", Place::Front)
+        .await?;
+    bench.live.main_world(&opened.page, "focusCard()").await?;
+    bench
+        .live
+        .invoke(
+            "keyboard.type",
+            json!({
+                "call": { "api": "keyboard.type", "timeoutMs": 0 },
+                "page": opened.page.brand(), "text": CARD,
+            }),
+        )
+        .await??;
+    let playwright = &bench.live.playwright;
+    let tab = opened.page.tab;
     assert_eq!(
-        playwright.picture_check(opened.page.tab).await,
+        playwright.picture_check(tab).await,
         PictureCheck::Private,
-        "after a marked snapshot walked the root, its box is known"
+        "row 1: the camera walked the closed root at its first reading"
+    );
+    bench.live.main_world(&opened.page, "fillCard('')").await?;
+    let emptied = playwright.picture_check(tab).await;
+    assert!(matches!(emptied, PictureCheck::Clear { .. }), "{emptied:?}");
+    bench
+        .live
+        .main_world(&opened.page, &format!("attachSecond('{CARD}')"))
+        .await?;
+    let later = playwright.picture_check(tab).await;
+    assert!(
+        matches!(later, PictureCheck::Clear { .. }),
+        "row 2, the named limit: a root attached after the walk is not walked again: {later:?}"
+    );
+    marked_snapshot(&bench, &opened).await?;
+    assert_eq!(
+        playwright.picture_check(tab).await,
+        PictureCheck::Private,
+        "row 2: a marked snapshot opened the second root"
     );
     bench.close(opened).await
+}
+
+/// The camera's walk, row 3: a page with a closed root and no private box keeps its pictures,
+/// as on main. The walk runs at the document's first reading, one DOM capture, and the reading
+/// is clear; the second reading sends no capture and is clear too. Fails with a walk that turns
+/// its answer into an unknown one (the page reads unknown).
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_closed_root_with_no_private_box_keeps_its_pictures() -> TestResult {
+    let bench = Bench::start().await?;
+    let opened = bench
+        .open("/private/closed-plain.html", Place::Front)
+        .await?;
+    let playwright = &bench.live.playwright;
+    bench.recording.reset_calls();
+    let first = playwright.picture_check(opened.page.tab).await;
+    assert!(matches!(first, PictureCheck::Clear { .. }), "{first:?}");
+    assert_eq!(bench.recording.calls(CAPTURE), 1, "the walk ran");
+    bench.recording.reset_calls();
+    let second = playwright.picture_check(opened.page.tab).await;
+    assert!(matches!(second, PictureCheck::Clear { .. }), "{second:?}");
+    assert_eq!(
+        bench.recording.calls(CAPTURE),
+        0,
+        "the walk runs once for a document"
+    );
+    bench.close(opened).await
+}
+
+/// The DOM capture the camera's walk of closed shadow roots sends, once per document.
+const CAPTURE: &str = "DOMSnapshot.captureSnapshot";
+
+/// The camera's walk, row 4: a document whose walk fails keeps the answer it has without the
+/// walk, and its walk is not tried again at the next reading. The card box in the closed root
+/// holds a number the page's own script wrote, which main does not see: the reading is clear as
+/// on main, never unknown, whether the DOM capture is refused or never answers (the walk's
+/// budget then ends it). The next reading sends no capture and is clear too. Fails with a failed
+/// walk answered as unknown, and with the walk offered at every reading (the next reading
+/// captures again).
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_walk_that_fails_keeps_the_answer_and_is_not_tried_again() -> TestResult {
+    let bench = Bench::start().await?;
+    let playwright = &bench.live.playwright;
+    for how in [Failing::Refuse, Failing::Hang] {
+        let opened = bench
+            .open("/private/closed-card.html", Place::Front)
+            .await?;
+        bench
+            .live
+            .main_world(&opened.page, &format!("fillCard('{CARD}')"))
+            .await?;
+        bench.recording.reset_calls();
+        bench.recording.fail(CAPTURE, how);
+        let first = playwright.picture_check(opened.page.tab).await;
+        bench.recording.stop_failing();
+        assert!(
+            bench.recording.calls(CAPTURE) > 0,
+            "{how:?}: the walk was tried"
+        );
+        assert!(
+            matches!(first, PictureCheck::Clear { .. }),
+            "{how:?}: a failed walk leaves the answer as on main: {first:?}"
+        );
+        bench.recording.reset_calls();
+        let next = playwright.picture_check(opened.page.tab).await;
+        assert!(
+            matches!(next, PictureCheck::Clear { .. }),
+            "{how:?}: {next:?}"
+        );
+        assert_eq!(
+            bench.recording.calls(CAPTURE),
+            0,
+            "{how:?}: a failed walk is not tried again"
+        );
+        bench.close(opened).await?;
+    }
+    Ok(())
 }
 
 /// Ruling R45's cost: one reading of a tab of ten card frames, every other one cross-site, the

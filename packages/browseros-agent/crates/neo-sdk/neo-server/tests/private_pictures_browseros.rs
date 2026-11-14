@@ -493,13 +493,13 @@ await page.goto('data:text/html,' + encodeURIComponent(html));
 return { page };
 "#;
 
-/// Ruling R45's named limit, on the whole stack (measured by the design's author): until a
-/// snapshot of the document has walked a closed shadow root, Neo does not know the boxes inside
-/// it, so a picture taken then can show what one holds, whoever typed it. A snapshot that walks
-/// the root closes it for that document; a closed root attached after that walk is unknown
-/// again until the next one.
+/// Ruling R45's closed-root limit, on the whole stack: the camera walks a document's closed
+/// shadow roots itself at its first reading there, so a card number the page puts into a box
+/// inside one, with no snapshot, is withheld (main stored it). A closed root attached after that
+/// walk is the limit that stays: it is not walked again, and a picture can show what its box holds
+/// until a snapshot opens it.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_box_in_a_closed_root_is_known_once_a_snapshot_walked_it() -> TestResult {
+async fn a_box_in_a_closed_root_is_known_once_the_camera_walked_it() -> TestResult {
     let Some(browser) = browser_or_skip() else {
         return Ok(());
     };
@@ -518,9 +518,9 @@ async fn closed_root(rig: &Rig) -> TestResult {
             Picture::Stored,
         ),
         (
-            "the page puts a card number in, no snapshot yet: the limit",
+            "the page puts a card number in, no snapshot yet: the camera walked the root",
             "await page.click('#fill'); await page.click('#go'); return true;",
-            Picture::Stored,
+            Picture::Withheld,
         ),
         (
             "after the script's own snapshot walked the root",
@@ -533,7 +533,8 @@ async fn closed_root(rig: &Rig) -> TestResult {
             Picture::Stored,
         ),
         (
-            "a second closed root attached after that snapshot, its box filled: the limit again",
+            "a second closed root attached after the walk and that snapshot, its box filled: the \
+             limit that stays",
             "await page.click('#later'); await page.click('#go'); return true;",
             Picture::Stored,
         ),

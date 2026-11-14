@@ -1,0 +1,8 @@
+<!doctype html><meta charset=utf-8><title>Closed plain</title>
+<!-- A CLOSED shadow root that holds a search box and a button, and no private box: the camera's
+     walk of closed roots finds the root and must keep this page's pictures as main does. -->
+<div id=host></div>
+<script>
+const root = document.getElementById('host').attachShadow({ mode: 'closed' });
+root.innerHTML = '<label>Search <input id=search value="running shoes" style="width:280px;height:30px"></label><div onclick="1" style="width:80px;height:24px;border:1px solid #888">Go</div>';
+</script>

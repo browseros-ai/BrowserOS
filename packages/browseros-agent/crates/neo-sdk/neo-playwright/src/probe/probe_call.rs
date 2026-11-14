@@ -91,22 +91,32 @@ pub(crate) async fn cleanup(
 }
 
 /// Neo's camera's one question, asked outside any op (protected-fill ruling R45): only
-/// `privateShown`, which changes nothing and reads no value out of the page. It installs no
-/// mask and reads neither policy field; the policy is only the envelope every call carries, so
-/// it sends a fixed one. With [`cleanup`], the second sender that runs without an op.
-pub(crate) async fn picture_question(world: &IsolatedWorld) -> Result<ProbeReply, ProbeFailure> {
+/// `privateShown`, which changes nothing in the page and reads no value out of it. It installs
+/// no mask and reads neither policy field; the policy is only the envelope every call carries,
+/// so it sends a fixed one. With [`cleanup`], the second sender that runs without an op.
+///
+/// `walk` is the camera's one walk of the document's closed shadow roots, taken when the
+/// document's first answer offered it (`walkable`, `picture_check.rs`): elements inside them,
+/// resolved into `world` from a capture (`clickable_targets::closed_root_seeds`), which the
+/// world keeps for this question alone and never opens to its engine. That capture and those
+/// resolves are the other CDP traffic the camera sends outside an op; this call stays the one
+/// probe request it sends.
+pub(crate) async fn picture_question(
+    world: &IsolatedWorld,
+    walk: Option<&[String]>,
+) -> Result<ProbeReply, ProbeFailure> {
     let policy = ProbePolicy {
         conformance: false,
         may_have_other_frame: true,
     };
-    send(
-        world,
-        &ProbeRequest::PrivateShown,
-        policy,
-        Handed::NONE,
-        Gesture::None,
-    )
-    .await
+    let request = ProbeRequest::PrivateShown {
+        walk: walk.is_some(),
+    };
+    let handed = Handed {
+        root: None,
+        nodes: walk.unwrap_or_default(),
+    };
+    send(world, &request, policy, handed, Gesture::None).await
 }
 
 /// Why a probe call or an install produced no reply.

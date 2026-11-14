@@ -175,7 +175,15 @@ pub(crate) enum ProbeRequest {
     /// empty, and that the browser paints in clear (protected-fill ruling R45): `value` with a
     /// boolean. Neo's camera asks it in every frame before and after a picture. Reads no value
     /// out of the page.
-    PrivateShown,
+    PrivateShown {
+        /// The camera's walk of the document's closed shadow roots: the call's nodes are elements
+        /// inside them, from a capture made because the answer said the document had none
+        /// (`walked: false`). The world keeps those roots for this question alone, never for its
+        /// engine (probe/private-shown.ts), and answers `walked: true` from then on.
+        #[serde(default, skip_serializing_if = "is_false")]
+        #[ts(optional, as = "Option<bool>")]
+        walk: bool,
+    },
     /// One read of one element, resolved in the same call.
     Read {
         target: ProbeTarget,
@@ -595,6 +603,15 @@ pub(crate) enum UrlPattern {
 )]
 fn is_zero(count: &u32) -> bool {
     *count == 0
+}
+
+/// Serde's skip test for a flag that is absent from the wire when false.
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde's skip_serializing_if passes the field by reference"
+)]
+fn is_false(flag: &bool) -> bool {
+    !*flag
 }
 
 #[cfg(test)]
