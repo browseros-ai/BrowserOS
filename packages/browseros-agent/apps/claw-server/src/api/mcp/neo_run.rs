@@ -75,9 +75,25 @@ pub(super) async fn call(
             state
                 .neo
                 .observe_tasks(started.session.convo_id(), &outcome.tasks);
-            let mut notes = after_run::tabs::apply(state, started, &outcome).await;
+            // Ownership and audit projection share one bounded SDK snapshot.
+            // Resolve it before claim admission so a created tab's checkpoint
+            // remains inside its ownership window without reading page contents.
+            let operations = tokio::select! {
+                biased;
+                () = cancel.cancelled() => Vec::new(),
+                result = tokio::time::timeout(
+                    std::time::Duration::from_secs(3),
+                    state.neo.operations(&outcome.run_id),
+                ) => result.unwrap_or_else(|_| {
+                    tracing::warn!("SDK run metadata read timed out");
+                    Vec::new()
+                }),
+            };
+            let mut notes = after_run::tabs::apply(state, started, &operations, created_at).await;
             notes.extend(after_run::naming::apply(state, started, &outcome).await);
-            let mut steps = after_run::steps::prepare(state, started, &outcome, &dispatch_id).await;
+            let mut steps =
+                after_run::steps::prepare(state, started, &outcome, &operations, &dispatch_id)
+                    .await;
             notes.append(&mut steps.notes);
             pending_steps = Some(steps);
             sdk_run_id = Some(outcome.run_id.clone());

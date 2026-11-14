@@ -20,7 +20,7 @@ use crate::{
     AppState,
     services::{
         cockpit::RecordToolInput,
-        neo::{RunCall, RunOutcome, RunStatus, TaskKey},
+        neo::{RunCall, RunOperation, RunStatus, TaskKey},
         sessions::ClawTargetStore,
     },
 };
@@ -52,10 +52,23 @@ fn plan_claims(census: &[CensusTab], tasks: &[TaskKey], claimed: &HashSet<i64>) 
         .collect()
 }
 
+/// Only a successful opener proves the tab did not exist before this run.
+/// Keep replay's exact ownership filter by moving that tab's first claim to
+/// the opener's start, before its initial recorder checkpoint can be emitted.
+fn claim_start(tab_id: i64, operations: &[RunOperation], run_started_at: i64, now: i64) -> i64 {
+    operations
+        .iter()
+        .filter(|operation| operation.opened_tab() == Some(tab_id))
+        .map(|operation| operation.started_at)
+        .min()
+        .map_or(now, |started_at| started_at.max(run_started_at).min(now))
+}
+
 pub(in crate::api::mcp) async fn apply(
     state: &AppState,
     started: &StartedSession,
-    _outcome: &RunOutcome,
+    operations: &[RunOperation],
+    run_started_at: i64,
 ) -> Vec<String> {
     let cancel = started.session.child_token();
     let census = tokio::select! {
@@ -127,7 +140,12 @@ pub(in crate::api::mcp) async fn apply(
                     Some(&browser),
                     started.session.id().as_str(),
                     page.page_id.0,
-                    crate::clock::now_epoch_ms(),
+                    claim_start(
+                        page.tab_id.0,
+                        operations,
+                        run_started_at,
+                        crate::clock::now_epoch_ms(),
+                    ),
                 )
                 .await;
                 newly_claimed.push(page);
@@ -268,6 +286,102 @@ mod tests {
     use super::*;
     use crate::api::mcp::test_support::{ProfileConnection, current_session, tool_call};
     use crate::ids::ConvoId;
+
+    #[test]
+    fn first_claim_uses_only_proven_creation_within_the_host_run() -> anyhow::Result<()> {
+        let operation = |name: &str, outcome: &str, tab_id: i64, started_at: i64| {
+            json!({
+                "id": format!("{name}:{tab_id}:{started_at}"),
+                "name": name,
+                "outcome": outcome,
+                "page": {"tabId": tab_id},
+                "startedAt": started_at,
+                "effect": "write",
+                "delivery": "done"
+            })
+        };
+        let first = operation("context.newPage", "ok", 1, 120);
+        let second = operation("task.newPage", "ok", 2, 180);
+        let cases = [
+            ("created in this run", 1, vec![first.clone()], 120),
+            (
+                "each tab keeps its own creation",
+                2,
+                vec![first.clone(), second],
+                180,
+            ),
+            (
+                "failed open",
+                1,
+                vec![operation("context.newPage", "error", 1, 120)],
+                300,
+            ),
+            (
+                "cancelled open",
+                1,
+                vec![operation("context.newPage", "cancelled", 1, 120)],
+                300,
+            ),
+            (
+                "future outcome",
+                1,
+                vec![operation("context.newPage", "future_outcome", 1, 120)],
+                300,
+            ),
+            (
+                "existing tab result",
+                1,
+                vec![operation("page.goto", "ok", 1, 120)],
+                300,
+            ),
+            ("no creation proof", 1, vec![], 300),
+            ("another tab was created", 2, vec![first.clone()], 300),
+            (
+                "start predates this run",
+                1,
+                vec![operation("context.newPage", "ok", 1, 90)],
+                100,
+            ),
+            (
+                "start follows now",
+                1,
+                vec![operation("context.newPage", "ok", 1, 400)],
+                300,
+            ),
+            (
+                "nested task and context opens keep the earliest start",
+                1,
+                vec![first, operation("task.newPage", "ok", 1, 110)],
+                110,
+            ),
+            (
+                "an input tab is not creation proof",
+                1,
+                vec![json!({
+                    "id": "run:1",
+                    "name": "context.newPage",
+                    "outcome": "ok",
+                    "tabId": 1,
+                    "startedAt": 120,
+                    "effect": "write",
+                    "delivery": "done"
+                })],
+                300,
+            ),
+        ];
+        for (label, tab_id, records, expected) in cases {
+            let operations = records
+                .into_iter()
+                .map(serde_json::from_value)
+                .collect::<Result<Vec<RunOperation>, _>>()?;
+            assert_eq!(
+                claim_start(tab_id, &operations, 100, 300),
+                expected,
+                "{label}"
+            );
+        }
+        Ok(())
+    }
 
     #[tokio::test]
     async fn explicit_placement_during_first_group_handoff_survives() -> anyhow::Result<()> {

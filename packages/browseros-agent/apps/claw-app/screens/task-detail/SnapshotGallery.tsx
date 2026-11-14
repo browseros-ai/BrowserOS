@@ -174,8 +174,7 @@ export function SnapshotGallery({
               No pictures for this task
             </span>
             <span className="text-[14.5px] text-ink-2">
-              neo takes pictures as your AI agents work. This task stopped
-              before the first one.
+              No snapshots were saved for this task.
             </span>
           </span>
         </Card>
