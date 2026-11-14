@@ -4,7 +4,12 @@
 #![cfg(unix)]
 
 use std::{
-    future::Future, io, net::TcpListener, os::unix::fs::PermissionsExt, path::Path, process::Stdio,
+    future::Future,
+    io,
+    net::TcpListener,
+    os::unix::{fs::PermissionsExt, net::SocketAddr},
+    path::Path,
+    process::Stdio,
     time::Duration,
 };
 
@@ -221,9 +226,9 @@ async fn spawn(launch: &EngineLaunch, previous_port: Option<u16>) -> io::Result<
     let wire = Wire::new(port).map_err(io::Error::other)?;
     // Each attempt has its own 0700 directory and socket. Shared desktop state
     // can host several stdio parents, so fixed credential/socket paths would race.
-    // Unix sockets have a short path limit. Keep them outside the possibly deep
-    // state directory while the explicit token path still gets SDK protection.
-    let host_files = tempfile::Builder::new().prefix("neo-host-").tempdir()?;
+    // Keep sockets outside the possibly deep state directory while the explicit
+    // token path still gets SDK protection. The chooser also handles deep TMPDIRs.
+    let host_files = host_files_dir(&std::env::temp_dir())?;
     fs::set_permissions(host_files.path(), std::fs::Permissions::from_mode(0o700)).await?;
     let token = format!(
         "{}{}",
@@ -265,6 +270,40 @@ async fn spawn(launch: &EngineLaunch, previous_port: Option<u16>) -> io::Result<
         launch_file: config_path,
         host_files,
         port,
+    })
+}
+
+/// Keep attempt-owned credentials private and the SDK's mandatory Unix socket
+/// bindable, even when the inherited temporary root has a long byte path.
+fn host_files_dir(temp_root: &Path) -> io::Result<tempfile::TempDir> {
+    let mut builder = tempfile::Builder::new();
+    builder
+        .prefix("neo-host-")
+        .permissions(std::fs::Permissions::from_mode(0o700));
+    // Reject impossible roots before allocation can hit the filesystem path limit.
+    if validate_host_socket_path(&temp_root.join("host.sock")).is_ok() {
+        let inherited = builder.tempdir_in(temp_root)?;
+        if validate_host_socket_path(&inherited.path().join("host.sock")).is_ok() {
+            return Ok(inherited);
+        }
+    }
+    let fallback = builder.tempdir_in("/tmp")?;
+    validate_host_socket_path(&fallback.path().join("host.sock"))?;
+    Ok(fallback)
+}
+
+/// Use the same byte limit as the SDK's UnixListener::bind and retain the
+/// offending path in the startup error before the child's exit can obscure it.
+fn validate_host_socket_path(socket_path: &Path) -> io::Result<()> {
+    SocketAddr::from_pathname(socket_path).map(|_| ()).map_err(|error| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "host socket {} ({} bytes) exceeds the platform Unix socket pathname limit: {error}",
+                socket_path.display(),
+                socket_path.as_os_str().len(),
+            ),
+        )
     })
 }
 
@@ -400,17 +439,79 @@ async fn save_tool(path: &Path, tool: &RunTool) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use std::{
+        os::unix::{
+            fs::PermissionsExt,
+            net::{SocketAddr, UnixListener},
+        },
         path::PathBuf,
         sync::{Arc, Mutex},
         time::Duration,
     };
 
     use super::{
-        AttemptExit, RestartBackoff, configure_settings, launch_config, load_saved_tool,
-        reserve_port, save_tool, supervise_with, temporary_json,
+        AttemptExit, RestartBackoff, configure_settings, host_files_dir, launch_config,
+        load_saved_tool, reserve_port, save_tool, supervise_with, temporary_json,
     };
     use crate::services::neo::{EngineLaunch, EngineState, NeoEngine, RunTool};
     use serde_json::{Value, json};
+
+    #[test]
+    fn host_files_dir_keeps_short_temp_root() -> anyhow::Result<()> {
+        let root = tempfile::tempdir_in("/tmp")?;
+        let first = host_files_dir(root.path())?;
+        let second = host_files_dir(root.path())?;
+        assert_eq!(first.path().parent(), Some(root.path()));
+        assert_eq!(second.path().parent(), Some(root.path()));
+        assert_ne!(first.path(), second.path());
+        assert_eq!(first.path().metadata()?.permissions().mode() & 0o777, 0o700);
+        let socket = UnixListener::bind(first.path().join("host.sock"))?;
+        let path = first.path().to_owned();
+        drop(socket);
+        drop(first);
+        assert!(!path.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn host_files_dir_falls_back_when_temp_root_is_too_long() -> anyhow::Result<()> {
+        let root = tempfile::tempdir_in("/tmp")?;
+        let long_root = root.path().join("é".repeat(35));
+        std::fs::create_dir(&long_root)?;
+        // The root fits, but the generated suffix exceeds the limit in bytes.
+        assert!(SocketAddr::from_pathname(long_root.join("host.sock")).is_ok());
+        let first = host_files_dir(&long_root)?;
+        let second = host_files_dir(&long_root)?;
+        let socket = UnixListener::bind(first.path().join("host.sock"))?;
+        assert!(!first.path().starts_with(&long_root));
+        assert_ne!(first.path(), second.path());
+        assert_eq!(first.path().metadata()?.permissions().mode() & 0o777, 0o700);
+        assert_eq!(std::fs::read_dir(&long_root)?.count(), 0);
+        let path = first.path().to_owned();
+        drop(socket);
+        drop(first);
+        assert!(!path.exists());
+        Ok(())
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn host_files_dir_falls_back_before_directory_creation_exceeds_path_limit() -> anyhow::Result<()>
+    {
+        let root = tempfile::tempdir_in("/tmp")?;
+        let mut long_root = root.path().to_owned();
+        // This root fits macOS's filesystem limit, but adding neo-host-XXXXXX
+        // would exceed it before the generated socket path could be validated.
+        while long_root.as_os_str().len() + 201 < 1010 {
+            long_root.push("x".repeat(200));
+        }
+        long_root.push("x".repeat(1010 - long_root.as_os_str().len() - 1));
+        std::fs::create_dir_all(&long_root)?;
+        let files = host_files_dir(&long_root)?;
+        let _socket = UnixListener::bind(files.path().join("host.sock"))?;
+        assert!(!files.path().starts_with(&long_root));
+        assert_eq!(std::fs::read_dir(&long_root)?.count(), 0);
+        Ok(())
+    }
 
     fn fake_launch() -> EngineLaunch {
         EngineLaunch {
