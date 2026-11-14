@@ -16,17 +16,25 @@ pub(super) struct HostApi {
     token: String,
 }
 
-/// The safe subset of an SDK operation used by cockpit child rows.
+/// SDK metadata shared by replay ownership claims and redacted cockpit child rows.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RunOperation {
     pub name: OperationName,
     pub tab_id: Option<i64>,
+    page: Option<OperationPage>,
     pub started_at: i64,
     pub duration_ms: Option<i64>,
     pub outcome: Option<OperationOutcome>,
     effect: OperationEffect,
     delivery: Option<OperationDelivery>,
+}
+
+/// The result page identifies a newly opened tab without admitting its URL or title.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OperationPage {
+    tab_id: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -47,6 +55,19 @@ enum OperationDelivery {
 }
 
 impl RunOperation {
+    /// An opener has no input tab. Its successful result page is creation proof.
+    /// Other operations can report an existing page and must not backdate ownership.
+    #[must_use]
+    pub fn opened_tab(&self) -> Option<i64> {
+        if matches!(self.name, OperationName::NewPage)
+            && matches!(self.outcome, Some(OperationOutcome::Ok))
+        {
+            self.page.as_ref()?.tab_id
+        } else {
+            None
+        }
+    }
+
     /// A write sent without confirmation still needs the advisory label.
     /// Reads, unsent attempts and incomplete records cannot establish a write.
     #[must_use]
@@ -300,5 +321,34 @@ impl NeoEngine {
                 Vec::new()
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn summary_decodes_only_the_opened_tab_identity() -> anyhow::Result<()> {
+        let record: RunRecord = serde_json::from_value(json!({
+            "operations": [{
+                "name": "context.newPage",
+                "tabId": null,
+                "page": {
+                    "tabId": 42,
+                    "url": "https://example.com/private",
+                    "title": "Private page"
+                },
+                "startedAt": 123,
+                "outcome": "ok",
+                "effect": "write",
+                "delivery": "done"
+            }]
+        }))?;
+        assert_eq!(record.operations.len(), 1);
+        assert_eq!(record.operations[0].tab_id, None);
+        assert_eq!(record.operations[0].opened_tab(), Some(42));
+        Ok(())
     }
 }
