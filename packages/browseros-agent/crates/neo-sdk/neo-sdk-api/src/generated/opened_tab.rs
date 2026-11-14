@@ -16,12 +16,12 @@ use serde::{Deserialize, Serialize};
 pub struct OpenedTab {
     #[serde(rename = "tabId")]
     pub tab_id: i64,
-    /// Its address when the release began.
-    #[serde(rename = "url")]
-    pub url: String,
-    /// Whether the browser showed it in front when the release began, before the fit was restored or the screen let go: the owner's last focus. When no listed tab is in front, the owner left another tab in front, usually the takeover's own.
-    #[serde(rename = "inFront")]
-    pub in_front: bool,
+    /// Its address when the release began; `null` when the release could not list the browser's tabs.
+    #[serde(rename = "url", deserialize_with = "Option::deserialize")]
+    pub url: Option<String>,
+    /// Whether the browser showed it in front when the release began, before the fit was restored or the screen let go: the owner's last focus. When no listed tab is in front, the owner left another tab in front, usually the takeover's own. `null` when the release could not list the browser's tabs: unknown, not `false`.
+    #[serde(rename = "inFront", deserialize_with = "Option::deserialize")]
+    pub in_front: Option<bool>,
     /// The task holding it when the release began, or `null` when no task holds it. A popup of a task's tab already belongs to that task.
     #[serde(rename = "taskId", deserialize_with = "Option::deserialize")]
     pub task_id: Option<String>,
@@ -34,8 +34,8 @@ impl OpenedTab {
     /// A tab that first appeared while a takeover was active.
     pub fn new(
         tab_id: i64,
-        url: String,
-        in_front: bool,
+        url: Option<String>,
+        in_front: Option<bool>,
         task_id: Option<String>,
         opener_tab_id: Option<i64>,
     ) -> OpenedTab {

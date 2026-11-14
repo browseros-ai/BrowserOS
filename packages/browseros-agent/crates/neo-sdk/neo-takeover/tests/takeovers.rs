@@ -1144,12 +1144,12 @@ fn links(held: &[(i64, &str)], opened_by: &[(i64, i64)]) -> TabLinks {
     }
 }
 
-/// A tab the owner opened by hand, as a release lists it.
+/// A tab the owner opened by hand, as a release that listed the browser's tabs lists it.
 fn by_hand(tab: i64, url: &str, in_front: bool) -> OpenedTab {
     OpenedTab {
         tab: TabId(tab),
-        url: url.to_owned(),
-        in_front,
+        url: Some(url.to_owned()),
+        in_front: Some(in_front),
         task_id: None,
         opener: None,
     }
@@ -1205,8 +1205,8 @@ async fn a_popup_of_the_takeovers_tab_is_listed_with_its_task_and_opener() -> Te
         released.opened_tabs,
         Some(vec![OpenedTab {
             tab: TabId(8),
-            url: "https://card-check.example/".to_owned(),
-            in_front: false,
+            url: Some("https://card-check.example/".to_owned()),
+            in_front: Some(false),
             task_id: Some("session".to_owned()),
             opener: Some(TAB),
         }])
@@ -1325,19 +1325,31 @@ async fn the_ttl_release_lists_the_tabs_opened_during_it() -> TestResult {
 }
 
 /// A release whose listing of the browser's tabs does not answer still lists every tab it
-/// noted, with no address and none in front: it never misses one the owner opened.
+/// noted, with its address and front unknown, never guessed: a host never misses a tab the owner
+/// opened, and one that decides by the owner's last focus is not told the owner left another tab
+/// in front.
 #[tokio::test]
-async fn a_release_that_cannot_list_the_browsers_tabs_lists_every_tab_noted() -> TestResult {
+async fn a_release_that_cannot_list_the_browsers_tabs_lists_every_tab_noted_as_unknown()
+-> TestResult {
     let h = harness(&[3]).await?;
     let takeover = h.takeovers.start(request(None)?).await?;
     owner_opens(&h, 7, "https://opened.example/");
+    owner_opens(&h, 8, "https://front.example/");
+    h.browser.show_in_front(8);
     h.browser.hang("Browser.getTabs");
     let released = timeout(
         WITHIN,
         h.takeovers.release(takeover.id, ReleaseReason::Done),
     )
     .await??;
-    assert_eq!(released.opened_tabs, Some(vec![by_hand(7, "", false)]));
+    let unknown = |tab: i64| OpenedTab {
+        tab: TabId(tab),
+        url: None,
+        in_front: None,
+        task_id: None,
+        opener: None,
+    };
+    assert_eq!(released.opened_tabs, Some(vec![unknown(7), unknown(8)]));
     Ok(())
 }
 
@@ -1381,8 +1393,8 @@ async fn a_popup_keeps_its_opener_after_the_opener_closes() -> TestResult {
         released.opened_tabs,
         Some(vec![OpenedTab {
             tab: TabId(8),
-            url: "https://sign-in.example/".to_owned(),
-            in_front: false,
+            url: Some("https://sign-in.example/".to_owned()),
+            in_front: Some(false),
             task_id: None,
             opener: Some(TAB),
         }])

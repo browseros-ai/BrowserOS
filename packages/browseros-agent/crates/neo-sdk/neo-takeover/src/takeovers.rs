@@ -177,11 +177,13 @@ pub struct Takeover {
 pub struct OpenedTab {
     /// The tab.
     pub tab: TabId,
-    /// Its address when the release began.
-    pub url: String,
+    /// Its address when the release began; `None` when the release could not list the
+    /// browser's tabs.
+    pub url: Option<String>,
     /// Whether the browser showed it in front when the release began, before the fit was
-    /// restored or the screen let go: the owner's last focus.
-    pub in_front: bool,
+    /// restored or the screen let go: the owner's last focus. `None` when the release could not
+    /// list the browser's tabs: unknown, never a guess, since a host may decide by it.
+    pub in_front: Option<bool>,
     /// The task holding it then, or `None` when no task holds it.
     pub task_id: Option<String>,
     /// The tab that opened it, or `None` for one the owner opened by hand.
@@ -570,9 +572,9 @@ impl Takeovers {
 
     /// A release's `openedTabs`: each tab `opened` noted that is still open, as one listing of the
     /// browser's tabs shows it now, with the task holding it and the tab that opened it. A
-    /// listing that fails or takes over [`OPENED_LISTING`] lists every noted tab, with no address
-    /// and none in front: the host may then give a tab that closed meanwhile, which the give
-    /// refuses as not found, but it never misses one the owner opened.
+    /// listing that fails or takes over [`OPENED_LISTING`] lists every noted tab with its address
+    /// and front unknown (`None`): a host that treats these rows as private never misses one the
+    /// owner opened, and one that decides by the owner's last focus is not misled by a guess.
     async fn opened_tabs(&self, id: TakeoverId, opened: &[Opened]) -> Vec<OpenedTab> {
         if opened.is_empty() {
             return Vec::new();
@@ -580,11 +582,11 @@ impl Takeovers {
         let listed = match tokio::time::timeout(OPENED_LISTING, self.browser.listed_tabs()).await {
             Ok(Ok(listed)) => Some(listed),
             Ok(Err(error)) => {
-                tracing::warn!(takeover = %id, %error, "a release could not list the browser's tabs; its openedTabs name every tab it noted");
+                tracing::warn!(takeover = %id, %error, "a release could not list the browser's tabs; its openedTabs name every tab it noted, url and inFront unknown");
                 None
             }
             Err(_elapsed) => {
-                tracing::warn!(takeover = %id, "a release's listing of the browser's tabs took too long; its openedTabs name every tab it noted");
+                tracing::warn!(takeover = %id, "a release's listing of the browser's tabs took too long; its openedTabs name every tab it noted, url and inFront unknown");
                 None
             }
         };
@@ -594,9 +596,9 @@ impl Takeovers {
                 let (url, in_front) = match &listed {
                     Some(listed) => {
                         let found = listed.iter().find(|listed| listed.tab == tab)?;
-                        (found.url.clone(), found.active)
+                        (Some(found.url.clone()), Some(found.active))
                     }
-                    None => (String::new(), false),
+                    None => (None, None),
                 };
                 Some(OpenedTab {
                     tab,
