@@ -471,6 +471,22 @@ function sameTabAndRun(
   )
 }
 
+function hasScriptChildren(
+  dispatch: ToolDispatchRow,
+  next: ToolDispatchRow | undefined,
+  parentsWithChildren: ReadonlySet<string>,
+): boolean {
+  if (
+    dispatch.dispatchKey !== undefined &&
+    parentsWithChildren.has(dispatch.dispatchKey)
+  ) {
+    return true
+  }
+  // Concurrent runs can interleave. Adjacency only identifies older children
+  // without a parent id; correlated rows must belong to their actual parent.
+  return next?.parentDispatchId === undefined && isScriptCall(next)
+}
+
 /**
  * The visible steps of a task: behind-the-scenes calls are dropped,
  * consecutive calls for the same operation, run and known tab collapse into
@@ -481,6 +497,13 @@ export function describeSteps(
   dispatches: readonly ToolDispatchRow[],
   options: { includeHidden?: boolean } = {},
 ): DescribedSteps {
+  const parentsWithChildren = new Set(
+    dispatches.flatMap((dispatch) =>
+      dispatch.parentDispatchId === undefined
+        ? []
+        : [dispatch.parentDispatchId],
+    ),
+  )
   const steps: DescribedStep[] = []
   let hiddenCount = 0
   let runKey: StepContext['runKey']
@@ -500,7 +523,7 @@ export function describeSteps(
       isBehindTheScenes(dispatch) ||
       (dispatch.toolName === 'run' &&
         !isError &&
-        isScriptCall(dispatches[index + 1]))
+        hasScriptChildren(dispatch, dispatches[index + 1], parentsWithChildren))
     hiddenCount += Number(hidden)
     if (hidden && !options.includeHidden) continue
     const sentence = describeStep(dispatch)

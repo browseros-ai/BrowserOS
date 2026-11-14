@@ -510,6 +510,41 @@ describe('SDK run audit rows', () => {
     expect(steps[0]?.dispatchIds).toEqual([child.dispatchId])
   })
 
+  it('folds successful parents by identity when their children interleave', () => {
+    const parents = ['run-1', 'run-2'].map((dispatchKey) => ({
+      ...call('run', { args: { code: '[redacted]' } }),
+      dispatchKey,
+    }))
+    const children = parents.map((parent) =>
+      sdkChild('pages.newPage', { parentDispatchId: parent.dispatchKey }),
+    )
+    const { steps, hiddenCount } = describeSteps([...parents, ...children])
+    expect(hiddenCount).toBe(2)
+    expect(steps.map((step) => step.dispatchIds)).toEqual(
+      children.map((child) => [child.dispatchId]),
+    )
+  })
+
+  it('keeps a standalone run when the following child belongs to another run', () => {
+    const first = {
+      ...call('run', { args: { code: '[redacted]' } }),
+      dispatchKey: 'run-1',
+    }
+    const standalone = {
+      ...call('run', { args: { code: '[redacted]' } }),
+      dispatchKey: 'run-2',
+    }
+    const child = sdkChild('pages.newPage', {
+      parentDispatchId: first.dispatchKey,
+    })
+    const { steps, hiddenCount } = describeSteps([first, standalone, child])
+    expect(hiddenCount).toBe(1)
+    expect(steps.map((step) => step.dispatchIds)).toEqual([
+      [standalone.dispatchId],
+      [child.dispatchId],
+    ])
+  })
+
   it('describes a redacted run without child rows', () => {
     const run = call('run', { args: { code: '[redacted]' } })
     expect(describeStep(run)).toBe('Ran a browser script')
@@ -590,16 +625,14 @@ describe('SDK run audit rows', () => {
       }),
     )
     const { steps, hiddenCount } = describeSteps([run, ...children])
-    expect(hiddenCount).toBe(0)
+    expect(hiddenCount).toBe(1)
     expect(steps.map((step) => step.sentence)).toEqual([
-      'Ran a browser script',
       'Worked on San Francisco to New York | Google Flights',
       'Worked on San Francisco to New York | Google Flights',
     ])
-    expect(steps.flatMap((step) => step.dispatchIds)).toEqual([
-      run.dispatchId,
-      ...children.map((child) => child.dispatchId),
-    ])
+    expect(steps.flatMap((step) => step.dispatchIds)).toEqual(
+      children.map((child) => child.dispatchId),
+    )
   })
 })
 
