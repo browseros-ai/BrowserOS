@@ -66,7 +66,10 @@ export class Application {
     try {
       await createHttpServer({
         port: this.config.serverPort,
-        host: '0.0.0.0',
+        // Loopback by default. Chromium passes a wildcard host only when the
+        // user explicitly opted into remote MCP access, so the default launch
+        // does not expose the agent API to the LAN or trip the firewall.
+        host: this.config.host,
         version: VERSION,
         browser,
         browserSession,

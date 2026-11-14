@@ -43,7 +43,7 @@ async function assertPortAvailable(port: number): Promise<void> {
 
 /** Creates the Hono app and Bun server after wiring process-level dependencies. */
 export async function createHttpServer(config: HttpServerConfig) {
-  const { port, host = '0.0.0.0', browserosId } = config
+  const { port, host = '127.0.0.1', browserosId } = config
   const { onShutdown } = config
 
   const tokenManager = browserosId
