@@ -930,7 +930,18 @@ return await page.screenshot({clip: {x:0,y:0,width:900,height:700}})`,
       }
       try {
         await mcp?.close()
-        const children = engineChildren(parent.pid)
+      } catch (error) {
+        failures.push(error)
+      }
+      // Neither a failed session close nor child inspection may skip stopping
+      // the private host before its browser targets and state are reclaimed.
+      let children: number[] = []
+      try {
+        children = engineChildren(parent.pid)
+      } catch (error) {
+        failures.push(error)
+      }
+      try {
         if (parent.exitCode === null) parent.kill(9)
         await parent.exited
         for (const enginePid of children) {
