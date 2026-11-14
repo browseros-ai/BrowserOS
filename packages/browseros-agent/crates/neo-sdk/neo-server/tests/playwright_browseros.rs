@@ -1104,9 +1104,10 @@ return { heard: heard.tabId === opened.tabId, listed: listed.length === 1 && lis
 }
 
 /// The default's two walls, as the image's `task-scope` check drives them: a run of another task
-/// that names a task's tab by its id is refused `page_not_in_task` before anything is sent, and
-/// a run without a task that asks for a host's task gets `task_not_found`. The run without a
-/// task still reads the tab, and its own task's later run still has it.
+/// neither lists nor may name (`page_not_in_task`, nothing sent) a task's tab, a tab no task
+/// holds, or the tab of a task the first task's run created; and a run without a task that asks
+/// for a host's task gets `task_not_found`. The run without a task still reads the tab, and the
+/// owner task's later run has its own tab and its created task's, not the loose one.
 async fn bound_walls(rig: &Rig) -> TestResult {
     rig.until_ready().await?;
     let client = rig.client().await?;
@@ -1122,6 +1123,13 @@ async fn bound_walls(rig: &Rig) -> TestResult {
         .and_then(|reply| reply.get("value"))
         .and_then(Value::as_i64)
         .ok_or("the owner task's tab")?;
+    let value_of = |result: &CallToolResult| {
+        result
+            .structured_content
+            .as_ref()
+            .and_then(|reply| reply.get("value"))
+            .cloned()
+    };
     let code_of = |result: &CallToolResult| {
         result
             .structured_content
@@ -1129,18 +1137,60 @@ async fn bound_walls(rig: &Rig) -> TestResult {
             .and_then(|reply| reply.pointer("/error/code"))
             .cloned()
     };
-    let named = run(
+    let loose = run(
         &client,
-        &format!(
-            "return await __neo.invoke('page.title', {{ page: {{ '$neo': 'page', tab: {tab} }} }});"
-        ),
+        "await page.goto('data:text/html,<title>loose</title>'); return page.tabId;",
+        &json!({}),
+    )
+    .await?;
+    let loose = value_of(&loose)
+        .and_then(|value| value.as_i64())
+        .ok_or("a tab no task holds")?;
+    let created = run(
+        &client,
+        "const t = await neo.createTask(); const p = await t.newPage(); \
+         await p.goto('data:text/html,<title>created</title>'); return p.tabId;",
+        &json!({ "taskId": "wall-owner" }),
+    )
+    .await?;
+    let created = value_of(&created)
+        .and_then(|value| value.as_i64())
+        .ok_or("the created task's tab")?;
+    let listed = run(
+        &client,
+        "return context.pages().map((q) => q.tabId);",
         &json!({ "taskId": "wall-other" }),
     )
     .await?;
+    assert_eq!(value_of(&listed), Some(json!([])), "{listed:?}");
+    for target in [tab, loose, created] {
+        let named = run(
+            &client,
+            &format!(
+                "return await __neo.invoke('page.title', {{ page: {{ '$neo': 'page', tab: {target} }} }});"
+            ),
+            &json!({ "taskId": "wall-other" }),
+        )
+        .await?;
+        assert_eq!(
+            code_of(&named),
+            Some(json!("page_not_in_task")),
+            "{target}: {named:?}"
+        );
+    }
+    let mine = run(
+        &client,
+        &format!(
+            "const t = (id) => context.pages().find((q) => q.tabId === id);\n\
+             return {{ own: (await t({tab})?.title()) ?? null, created: (await t({created})?.title()) ?? null, loose: !!t({loose}) }};"
+        ),
+        &json!({ "taskId": "wall-owner" }),
+    )
+    .await?;
     assert_eq!(
-        code_of(&named),
-        Some(json!("page_not_in_task")),
-        "{named:?}"
+        value_of(&mine),
+        Some(json!({ "own": "walled", "created": "created", "loose": false })),
+        "{mine:?}"
     );
     let fetched = run(
         &client,

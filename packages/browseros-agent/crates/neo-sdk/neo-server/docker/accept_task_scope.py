@@ -2,22 +2,28 @@
 """The default tab scope, on the image: accept.sh's `task-scope` check.
 
 The rule under `tabs.scope: task`, the image's default, which this check reads and never
-changes: a run that carries a task sees and acts on only its task family's tabs; a run without a
-task sees every tab but cannot use a task a host named. This is the shape a host meets when it
-takes the image as it ships, so the image proves it, not only the server's own tests.
+changes: a run that carries a task sees and acts on only its task family's tabs (the tabs its
+family's runs opened, the tasks those runs created included); a run without a task sees every
+tab but cannot use a task a host named. This is the shape a host meets when it takes the image
+as it ships, so the image proves it, not only the server's own tests.
 
   accept_task_scope.py <mcp-url> <host-socket> <host-token-file>
 
-In fresh tasks A and B:
+With fresh host tasks A and B, a tab A opened, a tab a run without a task opened (held by no
+task), and a tab of a task A's run created:
 
   scope      GET /v1/settings says tabs.scope is task
-  opened     A's run opens a tab; its result says tabsScope task
-  listed     B's run does not list A's tab in context.pages(); its result says tabsScope task
-  refused    B's run that names A's tab by its id is refused page_not_in_task
-  holder     GET /v1/tabs still names A as that tab's taskId
+  opened     A's run opens its tab; its result says tabsScope task
+  loose      a run without a task opens a tab; its result says tabsScope browser
+  created    A's run creates a task and opens a tab in it
+  listed     B's run lists none of the three tabs; its result says tabsScope task
+  refused-*  B's run that names each of the three by its id is refused page_not_in_task
+  own        A's next run lists and reads its own tab and its created task's tab, not the loose one
+  holder     GET /v1/tabs names A, and the created task, as their tabs' taskId
+  trace      once B's refused runs are complete, no operation of theirs names a tab, and no tab's
+             taskIds lists B; A's tab lists A, so the trace links tabs at all
   task-api   a run without a task asking for A (neo.task) gets task_not_found, tabsScope browser
   untasked   a run without a task still lists A's tab and reads its title
-  own        A's later run still lists and reads its own tab
 
 Prints one JSON object: ok, detail, the first problems. Standard library only.
 """
@@ -28,8 +34,9 @@ import uuid
 
 from accept_client import call_run, connect, host
 
-TITLE = "scoped"
-URL = f"data:text/html,<title>{TITLE}</title><h1>{TITLE}</h1>"
+
+def page_url(title: str) -> str:
+    return f"data:text/html,<title>{title}</title><h1>{title}</h1>"
 
 
 class Scope:
@@ -41,11 +48,12 @@ class Scope:
         self.problems: list[str] = []
 
     def run(self, task: str | None, code: str):
-        """The script's value, its error code, and the result's tabsScope."""
+        """The script's value, its error code, the result's tabsScope, and the run's id."""
         reply = call_run(self.client, code, {"taskId": task} if task is not None else {})
         content = reply.get("value") or {}
         error = content.get("error") or {}
-        return content.get("value"), error.get("code"), reply.get("meta", {}).get("tabsScope")
+        meta = reply.get("meta", {})
+        return content.get("value"), error.get("code"), meta.get("tabsScope"), meta.get("id")
 
     def get(self, path: str) -> dict:
         reply = host(self.socket_path, self.token_file, path)
@@ -61,35 +69,85 @@ def lookup(tab: int) -> str:
     return f"const p = context.pages().find((q) => q.tabId === {tab});\n"
 
 
+def named(tab: int) -> str:
+    """The page reference a script's own `page.title()` sends, naming `tab` directly."""
+    return f"return await __neo.invoke('page.title', {{ page: {{ '$neo': 'page', tab: {tab} }} }});"
+
+
 def check(scope: Scope) -> None:
     setting = scope.get("/v1/settings").get("settings", {}).get("tabs", {}).get("scope")
     if not scope.expect("scope", setting == "task", setting):
         return
     owner, other = (f"accept-scope-{name}-{uuid.uuid4().hex[:6]}" for name in ("a", "b"))
-    tab, error, tabs_scope = scope.run(owner, f"await page.goto({json.dumps(URL)}); return page.tabId;")
+    opened = f"await page.goto({json.dumps(page_url('own'))}); return page.tabId;"
+    tab, error, tabs_scope, owner_run = scope.run(owner, opened)
     if not isinstance(tab, int) or tabs_scope != "task":
         scope.expect("opened", False, (tab, error, tabs_scope))
         return
+    loose: int | None = None
     try:
-        listed, error, tabs_scope = scope.run(other, f"return context.pages().some((q) => q.tabId === {tab});")
-        scope.expect("listed", listed is False and tabs_scope == "task", (listed, error, tabs_scope))
-        # The page reference a script's own `page.title()` sends, naming A's tab directly.
-        named = f"return await __neo.invoke('page.title', {{ page: {{ '$neo': 'page', tab: {tab} }} }});"
-        value, error, _ = scope.run(other, named)
-        scope.expect("refused", error == "page_not_in_task", (value, error))
-        items = scope.get("/v1/tabs").get("items", [])
-        holder = next((item.get("taskId") for item in items if item.get("tabId") == tab), None)
-        scope.expect("holder", holder == owner, holder)
-        value, error, tabs_scope = scope.run(None, f"return (await neo.task({json.dumps(owner)})).id;")
+        value, error, tabs_scope, _ = scope.run(None, f"await page.goto({json.dumps(page_url('loose'))}); return page.tabId;")
+        if scope.expect("loose", isinstance(value, int) and tabs_scope == "browser", (value, error, tabs_scope)):
+            loose = value
+        value, error, _, _ = scope.run(
+            owner,
+            "const t = await neo.createTask(); const p = await t.newPage(); "
+            f"await p.goto({json.dumps(page_url('created'))}); return {{ tab: p.tabId, task: t.id }};",
+        )
+        created = value if isinstance(value, dict) and isinstance(value.get("tab"), int) else None
+        if not scope.expect("created", created is not None, (value, error)) or loose is None or created is None:
+            return
+        tabs = {"own": tab, "loose": loose, "created": created["tab"]}
+
+        listed, error, tabs_scope, _ = scope.run(other, "return context.pages().map((q) => q.tabId);")
+        scope.expect(
+            "listed",
+            isinstance(listed, list) and tabs_scope == "task" and not set(tabs.values()) & set(listed),
+            (listed, error, tabs_scope),
+        )
+        refused_runs = []
+        for name, target in tabs.items():
+            value, error, _, run_id = scope.run(other, named(target))
+            scope.expect(f"refused-{name}", error == "page_not_in_task", (value, error))
+            refused_runs.append(run_id)
+
+        mine = (
+            "const t = (id) => context.pages().find((q) => q.tabId === id);\n"
+            f"return {{ own: (await t({tab})?.title()) ?? null, created: (await t({tabs['created']})?.title()) ?? null, "
+            f"loose: !!t({loose}) }};"
+        )
+        value, error, _, _ = scope.run(owner, mine)
+        scope.expect("own", value == {"own": "own", "created": "created", "loose": False}, (value, error))
+
+        # Each run's record is complete before the trace is read, so a link it would add is there.
+        for run_id in [owner_run, *refused_runs]:
+            record = scope.get(f"/v1/runs/{run_id}?wait=10")
+            if not scope.expect("trace-complete", record.get("complete") is True, (run_id, record.get("complete"))):
+                continue
+            if run_id != owner_run:
+                tabbed = [
+                    op.get("id")
+                    for op in record.get("operations", [])
+                    if op.get("tabId") is not None or op.get("page") is not None
+                ]
+                scope.expect("trace-op", not tabbed, (run_id, tabbed))
+        items = {item.get("tabId"): item for item in scope.get("/v1/tabs").get("items", [])}
+        holders = {name: items.get(target, {}).get("taskId") for name, target in tabs.items()}
+        scope.expect("holder", holders == {"own": owner, "loose": None, "created": created["task"]}, holders)
+        task_ids = {name: items.get(target, {}).get("taskIds", []) for name, target in tabs.items()}
+        scope.expect("trace-own", owner in task_ids["own"], task_ids)
+        scope.expect("trace", all(other not in ids for ids in task_ids.values()), task_ids)
+
+        value, error, tabs_scope, _ = scope.run(None, f"return (await neo.task({json.dumps(owner)})).id;")
         scope.expect(
             "task-api", error == "task_not_found" and tabs_scope == "browser", (value, error, tabs_scope)
         )
-        value, error, _ = scope.run(None, lookup(tab) + "return p ? await p.title() : null;")
-        scope.expect("untasked", value == TITLE, (value, error))
-        value, error, _ = scope.run(owner, lookup(tab) + "return p ? { title: await p.title(), task: p.taskId } : null;")
-        scope.expect("own", value == {"title": TITLE, "task": owner}, (value, error))
+        value, error, _, _ = scope.run(None, lookup(tab) + "return p ? await p.title() : null;")
+        scope.expect("untasked", value == "own", (value, error))
     finally:
         scope.run(owner, "for (const q of context.pages()) await q.close(); return 1;")
+        if loose is not None:
+            scope.run(None, lookup(loose) + "if (p) await p.close(); return 1;")
 
 
 def main() -> None:
@@ -98,9 +156,10 @@ def main() -> None:
     check(scope)
     ok = not scope.problems
     detail = (
-        "under tabs.scope task: another task's tab unlisted and refused page_not_in_task, its "
-        "holder kept; a run without a task gets task_not_found for a host's task and still reads "
-        "the tab; the owner task still has it"
+        "under tabs.scope task: another task's tab, a tab no task holds and a created task's tab "
+        "are unlisted and refused page_not_in_task by another task's run, with no trace link; "
+        "the owner keeps its own and its created task's tabs; a run without a task gets "
+        "task_not_found for a host's task and still reads the tab"
         if ok
         else "task scope wrong"
     )
