@@ -84,7 +84,12 @@ fn start(
         request_id: request_id.map(request).transpose()?,
         task_id: task_id.map(task).transpose()?,
         host_data: None,
-        tabs_scope: RunTabsScope::Browser,
+        // As under the default scope: a run that carries a task is bound to it.
+        tabs_scope: if task_id.is_some() {
+            RunTabsScope::Task
+        } else {
+            RunTabsScope::Browser
+        },
         at: at(millis),
     });
     Ok(run)
@@ -353,6 +358,11 @@ async fn a_readable_trace_carries_its_request_history_into_the_fresh_store() -> 
         (RunStatus::Ok, Some(RunEffects::None))
     );
     assert_eq!(detail.code_withheld.as_deref(), Some("unavailable"));
+    assert_eq!(
+        detail.summary.tabs_scope,
+        Some(RunTabsScope::Task),
+        "a bound run lists as bound after recovery"
+    );
 
     let crashed = store
         .run_by_request(&request("call-2")?, None)
@@ -367,6 +377,7 @@ async fn a_readable_trace_carries_its_request_history_into_the_fresh_store() -> 
         ),
         "a run the old Neo never ended ended with it"
     );
+    assert_eq!(crashed.tabs_scope, Some(RunTabsScope::Browser));
     assert_eq!(store.run(old.untracked).await?, None);
 
     assert_eq!(

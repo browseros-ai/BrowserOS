@@ -104,6 +104,8 @@ pub(crate) struct SalvagedRun {
     pub(crate) effects: RunEffects,
     pub(crate) replay: Option<String>,
     pub(crate) replay_until: Option<EpochMillis>,
+    /// Which tabs the run saw, when the broken store recorded it.
+    pub(crate) tabs_scope: Option<RunTabsScope>,
 }
 
 /// Owns a write batch, so a failed/cancelled caller cannot leave a partial update committed.
@@ -526,6 +528,7 @@ impl TraceBatch {
             code_withheld: Set(Some("unavailable".to_owned())),
             replay: Set(run.replay.clone()),
             replay_until: Set(run.replay_until.map(EpochMillis::millis)),
+            tabs_scope: Set(run.tabs_scope.map(|scope| scope.as_str().to_owned())),
             complete: Set(true),
             ..Default::default()
         })
