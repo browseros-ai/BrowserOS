@@ -274,11 +274,20 @@ mod tests {
     use super::*;
     use crate::db::audit_log::ListDispatchesQuery;
     use base64::{Engine as _, engine::general_purpose::STANDARD};
+    use browseros_core::{BrowserSession, CdpConnection};
     use browseros_mcp::token_estimate::{
         TOKEN_ESTIMATOR_VERSION, estimate_tool_input_tokens, estimate_tool_output_tokens,
     };
     use rmcp::model::ContentBlock;
     use serde_json::json;
+    use std::sync::{
+        Mutex as StdMutex,
+        atomic::{AtomicBool, Ordering},
+    };
+    use tokio::{
+        sync::Semaphore,
+        time::{Duration, timeout},
+    };
 
     fn png_header(width: u32, height: u32) -> String {
         let mut bytes = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
@@ -650,6 +659,595 @@ mod tests {
         // No hints: the ledger is unchanged and the screenshot is still attached.
         assert!(event.input.args_json.contains("london"));
         assert!(event.preview.is_some());
+        Ok(())
+    }
+
+    /// A controllable browser boundary for the real preview, actor, ledger and file path.
+    /// Screenshot bytes and loader identity change independently so a stale image is observable.
+    struct PreviewConnection {
+        inner: Arc<crate::api::mcp::test_support::ProfileConnection>,
+        image: StdMutex<Vec<u8>>,
+        document: StdMutex<String>,
+        returned_images: StdMutex<Vec<Vec<u8>>>,
+        pause_capture: AtomicBool,
+        capture_entered: Semaphore,
+        capture_release: Semaphore,
+        pause_frame: AtomicBool,
+        frame_entered: Semaphore,
+        frame_release: Semaphore,
+        frame_reads: Semaphore,
+        inventories: Semaphore,
+    }
+
+    impl PreviewConnection {
+        fn new() -> Arc<Self> {
+            let inner = crate::api::mcp::test_support::ProfileConnection::new();
+            inner
+                .tabs
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .retain(|tab| tab["tabId"] == 101 || tab["tabId"] == 102);
+            Arc::new(Self {
+                inner,
+                image: StdMutex::new(b"\xff\xd8clean-page".to_vec()),
+                document: StdMutex::new("document-one".into()),
+                returned_images: StdMutex::new(Vec::new()),
+                pause_capture: AtomicBool::new(false),
+                capture_entered: Semaphore::new(0),
+                capture_release: Semaphore::new(0),
+                pause_frame: AtomicBool::new(false),
+                frame_entered: Semaphore::new(0),
+                frame_release: Semaphore::new(0),
+                frame_reads: Semaphore::new(0),
+                inventories: Semaphore::new(0),
+            })
+        }
+
+        fn sensitive(&self) {
+            *self.image.lock().unwrap_or_else(|p| p.into_inner()) =
+                b"\xff\xd8later-secret".to_vec();
+        }
+
+        fn navigate(&self) {
+            *self.document.lock().unwrap_or_else(|p| p.into_inner()) = "document-two".into();
+            *self.image.lock().unwrap_or_else(|p| p.into_inner()) =
+                b"\xff\xd8new-document".to_vec();
+        }
+
+        fn drain(semaphore: &Semaphore) {
+            while let Ok(permit) = semaphore.try_acquire() {
+                permit.forget();
+            }
+        }
+
+        async fn signal(semaphore: &Semaphore, permits: u32) -> anyhow::Result<()> {
+            timeout(Duration::from_secs(2), semaphore.acquire_many(permits))
+                .await??
+                .forget();
+            Ok(())
+        }
+    }
+
+    impl CdpConnection for PreviewConnection {
+        fn send<'a>(
+            &'a self,
+            method: &'a str,
+            params: Value,
+            session: Option<&'a browseros_core::SessionId>,
+        ) -> BoxFuture<'a, Result<Value, browseros_cdp::CdpError>> {
+            self.send_at_epoch(self.connection_epoch(), method, params, session)
+        }
+
+        fn send_at_epoch<'a>(
+            &'a self,
+            epoch: u64,
+            method: &'a str,
+            params: Value,
+            session: Option<&'a browseros_core::SessionId>,
+        ) -> BoxFuture<'a, Result<Value, browseros_cdp::CdpError>> {
+            Box::pin(async move {
+                let actual = self.connection_epoch();
+                if epoch != actual {
+                    return Err(browseros_cdp::CdpError::ConnectionEpochChanged {
+                        expected: epoch,
+                        actual,
+                    });
+                }
+                match method {
+                    "Page.getFrameTree" => {
+                        if self.pause_frame.swap(false, Ordering::SeqCst) {
+                            self.frame_entered.add_permits(1);
+                            self.frame_release
+                                .acquire()
+                                .await
+                                .map_err(|error| browseros_cdp::CdpError::Protocol {
+                                    code: -1,
+                                    message: error.to_string(),
+                                })?
+                                .forget();
+                        }
+                        let document = self
+                            .document
+                            .lock()
+                            .unwrap_or_else(|p| p.into_inner())
+                            .clone();
+                        self.frame_reads.add_permits(1);
+                        Ok(json!({"frameTree":{"frame":{
+                            "id":"main-frame", "loaderId":document,
+                            "url":"https://synthetic.test/form", "securityOrigin":"https://synthetic.test",
+                            "mimeType":"text/html"
+                        }}}))
+                    }
+                    "Page.captureScreenshot" => {
+                        self.capture_entered.add_permits(1);
+                        if self.pause_capture.swap(false, Ordering::SeqCst) {
+                            self.capture_release
+                                .acquire()
+                                .await
+                                .map_err(|error| browseros_cdp::CdpError::Protocol {
+                                    code: -1,
+                                    message: error.to_string(),
+                                })?
+                                .forget();
+                        }
+                        let image = self.image.lock().unwrap_or_else(|p| p.into_inner()).clone();
+                        self.returned_images
+                            .lock()
+                            .unwrap_or_else(|p| p.into_inner())
+                            .push(image.clone());
+                        Ok(json!({"data":STANDARD.encode(image)}))
+                    }
+                    "Browser.getTabs" => {
+                        let result = self
+                            .inner
+                            .send_at_epoch(epoch, method, params, session)
+                            .await;
+                        self.inventories.add_permits(1);
+                        result
+                    }
+                    _ => {
+                        self.inner
+                            .send_at_epoch(epoch, method, params, session)
+                            .await
+                    }
+                }
+            })
+        }
+
+        fn send_raw_json<'a>(
+            &'a self,
+            method: &'a str,
+            params: &'a str,
+            session: Option<&'a browseros_core::SessionId>,
+        ) -> BoxFuture<'a, Result<String, browseros_cdp::CdpError>> {
+            self.send_raw_json_at_epoch(self.connection_epoch(), method, params, session)
+        }
+
+        fn send_raw_json_at_epoch<'a>(
+            &'a self,
+            epoch: u64,
+            method: &'a str,
+            params: &'a str,
+            session: Option<&'a browseros_core::SessionId>,
+        ) -> BoxFuture<'a, Result<String, browseros_cdp::CdpError>> {
+            Box::pin(async move {
+                let params = serde_json::from_str(params).map_err(|error| {
+                    browseros_cdp::CdpError::Protocol {
+                        code: -1,
+                        message: error.to_string(),
+                    }
+                })?;
+                Ok(self
+                    .send_at_epoch(epoch, method, params, session)
+                    .await?
+                    .to_string())
+            })
+        }
+
+        fn events(&self) -> tokio::sync::broadcast::Receiver<browseros_cdp::CdpEvent> {
+            self.inner.events()
+        }
+        fn events_targeted(
+            &self,
+            method: &str,
+        ) -> tokio::sync::mpsc::UnboundedReceiver<browseros_cdp::CdpEvent> {
+            self.inner.events_targeted(method)
+        }
+        fn is_connected(&self) -> bool {
+            self.inner.is_connected()
+        }
+        fn connection_epoch(&self) -> u64 {
+            self.inner.connection_epoch()
+        }
+    }
+
+    struct PreviewFixture {
+        state: AppState,
+        session: Arc<Session>,
+        other: Arc<Session>,
+        connection: Arc<PreviewConnection>,
+    }
+
+    impl PreviewFixture {
+        async fn new() -> anyhow::Result<Self> {
+            use crate::{
+                identity::{ClientIdentity, ConversationIdentity},
+                ids::SessionId,
+            };
+            let call =
+                crate::api::mcp::test_support::tool_call("tabs", json!({"action":"list"})).await?;
+            let session = call
+                .identity
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("session missing"))?
+                .session
+                .clone();
+            let other = Session::new(
+                SessionId::new("s2"),
+                ClientIdentity::Ephemeral {
+                    slug: "codex".into(),
+                    label: "Codex".into(),
+                },
+                ConversationIdentity::new("codex", "other-preview".into()),
+                "Codex".into(),
+                tokio::time::Instant::now(),
+            );
+            call.state.sessions.insert_for_testing(other.clone()).await;
+            let connection = PreviewConnection::new();
+            let browser: Arc<BrowserSession> =
+                crate::api::mcp::test_support::current_session(connection.clone());
+            let pages = browser.pages.list().await?;
+            call.state.browser.set_session_for_testing(browser).await;
+            for (session, tab) in [(&session, 101), (&other, 102)] {
+                call.state
+                    .audit_log
+                    .record_session_start(
+                        session.id().as_str(),
+                        session.convo_id().as_str(),
+                        "codex",
+                        "Codex",
+                        "codex",
+                        "1",
+                    )
+                    .await?;
+                let page = pages
+                    .iter()
+                    .find(|page| page.tab_id.0 == tab)
+                    .ok_or_else(|| anyhow::anyhow!("owned page missing"))?;
+                call.state.session_tabs.enqueue_claim_tab_for_session(
+                    tab,
+                    Some(page.target_id.as_str().into()),
+                    session.id().as_str().into(),
+                    session.convo_id().as_str().into(),
+                    1,
+                );
+                call.state
+                    .tab_activity
+                    .record_tool(crate::services::cockpit::RecordToolInput {
+                        target_id: page.target_id.clone(),
+                        tab_id: tab,
+                        page_id: page.page_id.0,
+                        session_id: session.id().as_str().into(),
+                        agent_id: session.convo_id().as_str().into(),
+                        slug: "codex".into(),
+                        tool_name: "run".into(),
+                    })
+                    .await;
+            }
+            call.state.session_tabs.drain_writes().await;
+            Ok(Self {
+                state: call.state,
+                session,
+                other,
+                connection,
+            })
+        }
+
+        fn event(
+            &self,
+            session: &Arc<Session>,
+            tool: &str,
+            preview: Option<AuditPreview>,
+        ) -> AuditEvent {
+            AuditEvent {
+                input: RecordToolDispatchInput {
+                    agent_id: session.convo_id().as_str().into(),
+                    slug: "codex".into(),
+                    agent_label: "Codex".into(),
+                    session_id: session.id().as_str().into(),
+                    tool_name: tool.into(),
+                    page_id: None,
+                    tab_id: None,
+                    target_id: None,
+                    url: None,
+                    title: None,
+                    args_json: "{}".into(),
+                    result_meta: "{}".into(),
+                    duration_ms: 1,
+                    created_at: None,
+                    dispatch_id: DispatchId::new(),
+                    parent_dispatch_id: None,
+                    tool_input_token_estimate: 0,
+                    tool_output_token_estimate: 0,
+                    token_estimator_version: TOKEN_ESTIMATOR_VERSION,
+                },
+                preview,
+            }
+        }
+
+        async fn submit(
+            &self,
+            session: &Arc<Session>,
+            tool: &str,
+            preview: Option<AuditPreview>,
+        ) -> anyhow::Result<DispatchId> {
+            let event = self.event(session, tool, preview);
+            let id = event.input.dispatch_id.clone();
+            self.state
+                .audit_worker
+                .submit_tracked(event)
+                .await?
+                .wait()
+                .await?;
+            Ok(id)
+        }
+
+        async fn preview(&self, tool: &str) -> anyhow::Result<DispatchId> {
+            self.submit(
+                &self.session,
+                tool,
+                Some(preview_callback(&self.state, &self.session)),
+            )
+            .await
+        }
+
+        async fn assert_picture(
+            &self,
+            dispatch: &DispatchId,
+            expected: Option<&[u8]>,
+        ) -> anyhow::Result<()> {
+            self.state
+                .audit_worker
+                .flush_session(self.session.id().as_str())
+                .await?;
+            let row = self
+                .state
+                .audit_log
+                .list_dispatches(ListDispatchesQuery {
+                    session_id: Some(self.session.id().as_str().into()),
+                    ..Default::default()
+                })
+                .await?
+                .rows
+                .into_iter()
+                .find(|row| row.dispatch_id.as_deref() == Some(dispatch.as_str()))
+                .ok_or_else(|| anyhow::anyhow!("preview parent missing"))?;
+            assert_eq!(row.has_screenshot, expected.is_some());
+            let pictures = self
+                .state
+                .screenshots
+                .list(self.session.id().as_str())
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("screenshot session missing"))?;
+            assert_eq!(
+                pictures
+                    .iter()
+                    .any(|picture| picture.screenshot_id == row.id),
+                expected.is_some()
+            );
+            assert_eq!(
+                tokio::fs::try_exists(
+                    self.state
+                        .screenshots
+                        .path_for(self.session.id().as_str(), row.id)
+                )
+                .await?,
+                expected.is_some()
+            );
+            if let Some(expected) = expected {
+                assert_eq!(
+                    self.state
+                        .screenshots
+                        .read(self.session.id().as_str(), row.id)
+                        .await?,
+                    expected
+                );
+            }
+            Ok(())
+        }
+
+        async fn unsafe_run(&self, session: &Arc<Session>) -> anyhow::Result<()> {
+            PreviewConnection::drain(&self.connection.frame_reads);
+            let run = self.state.visuals.begin_script_run();
+            self.connection.sensitive();
+            self.submit(session, "neo.cdp", None).await?;
+            drop(run);
+            PreviewConnection::signal(&self.connection.frame_reads, 2).await
+        }
+    }
+
+    #[tokio::test]
+    async fn queued_preview_never_stores_later_cdp_pixels_from_either_session() -> anyhow::Result<()>
+    {
+        for another_session in [false, true] {
+            let fixture = PreviewFixture::new().await?;
+            let entered = Arc::new(Semaphore::new(0));
+            let release = Arc::new(Semaphore::new(0));
+            let blocker: AuditPreview = Arc::new({
+                let entered = entered.clone();
+                let release = release.clone();
+                move |_, _| {
+                    let entered = entered.clone();
+                    let release = release.clone();
+                    Box::pin(async move {
+                        entered.add_permits(1);
+                        release
+                            .acquire()
+                            .await
+                            .map_err(|error| crate::error::AppError::Internal(error.to_string()))?
+                            .forget();
+                        Ok(false)
+                    })
+                }
+            });
+            fixture
+                .submit(&fixture.session, "block-first-slot", Some(blocker.clone()))
+                .await?;
+            fixture
+                .submit(&fixture.other, "block-second-slot", Some(blocker))
+                .await?;
+            PreviewConnection::signal(&entered, 2).await?;
+            let parent = fixture.preview("queued-clean-run").await?;
+            fixture
+                .submit(&fixture.session, "queue-admitted", None)
+                .await?;
+            let later = if another_session {
+                &fixture.other
+            } else {
+                &fixture.session
+            };
+            fixture.unsafe_run(later).await?;
+            release.add_permits(2);
+            fixture.assert_picture(&parent, None).await?;
+            assert!(
+                fixture
+                    .connection
+                    .returned_images
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .is_empty()
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn in_flight_preview_discards_later_cdp_pixels_from_either_session() -> anyhow::Result<()>
+    {
+        for another_session in [false, true] {
+            let fixture = PreviewFixture::new().await?;
+            fixture
+                .connection
+                .pause_capture
+                .store(true, Ordering::SeqCst);
+            let parent = fixture.preview("in-flight-clean-run").await?;
+            PreviewConnection::signal(&fixture.connection.capture_entered, 1).await?;
+            let later = if another_session {
+                &fixture.other
+            } else {
+                &fixture.session
+            };
+            fixture.unsafe_run(later).await?;
+            fixture.connection.capture_release.add_permits(1);
+            fixture.assert_picture(&parent, None).await?;
+            assert_eq!(
+                *fixture
+                    .connection
+                    .returned_images
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner()),
+                [b"\xff\xd8later-secret".to_vec()]
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn earlier_cdp_hold_survives_clean_work_and_navigation_restores_pictures()
+    -> anyhow::Result<()> {
+        let fixture = PreviewFixture::new().await?;
+        fixture.unsafe_run(&fixture.other).await?;
+        fixture.state.visuals.begin_script_run().clean();
+        let held = fixture.preview("clean-on-held-document").await?;
+        fixture.assert_picture(&held, None).await?;
+        fixture.connection.navigate();
+        fixture.state.visuals.begin_script_run().clean();
+        let navigated = fixture.preview("clean-new-document").await?;
+        fixture
+            .assert_picture(&navigated, Some(b"\xff\xd8new-document"))
+            .await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn another_sessions_active_clean_run_suppresses_only_overlapping_capture()
+    -> anyhow::Result<()> {
+        let fixture = PreviewFixture::new().await?;
+        fixture
+            .submit(&fixture.other, "active-clean-run", None)
+            .await?;
+        let run = fixture.state.visuals.begin_script_run();
+        let overlapping = fixture.preview("overlapping-preview").await?;
+        fixture.assert_picture(&overlapping, None).await?;
+        run.clean();
+        let after = fixture.preview("after-clean-completion").await?;
+        fixture
+            .assert_picture(&after, Some(b"\xff\xd8clean-page"))
+            .await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn unsafe_drop_blocks_captures_until_document_holds_are_applied() -> anyhow::Result<()> {
+        let fixture = PreviewFixture::new().await?;
+        fixture.connection.pause_frame.store(true, Ordering::SeqCst);
+        let run = fixture.state.visuals.begin_script_run();
+        fixture.connection.sensitive();
+        drop(run);
+        PreviewConnection::signal(&fixture.connection.frame_entered, 1).await?;
+        let applying = fixture.preview("while-hold-is-being-applied").await?;
+        fixture.assert_picture(&applying, None).await?;
+        fixture.connection.frame_release.add_permits(1);
+        PreviewConnection::signal(&fixture.connection.frame_reads, 2).await?;
+        let held = fixture.preview("after-hold-applied").await?;
+        fixture.assert_picture(&held, None).await?;
+        fixture.connection.navigate();
+        let recovered = fixture.preview("after-new-document").await?;
+        fixture
+            .assert_picture(&recovered, Some(b"\xff\xd8new-document"))
+            .await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn failed_unsafe_inventory_blocks_until_recovery_applies_document_holds()
+    -> anyhow::Result<()> {
+        let fixture = PreviewFixture::new().await?;
+        PreviewConnection::drain(&fixture.connection.inventories);
+        PreviewConnection::drain(&fixture.connection.frame_reads);
+        fixture
+            .connection
+            .inner
+            .fail_inventory
+            .store(true, Ordering::SeqCst);
+        drop(fixture.state.visuals.begin_script_run());
+        PreviewConnection::signal(&fixture.connection.inventories, 1).await?;
+        let unavailable = fixture.preview("while-inventory-unavailable").await?;
+        fixture.assert_picture(&unavailable, None).await?;
+        fixture
+            .connection
+            .inner
+            .fail_inventory
+            .store(false, Ordering::SeqCst);
+        PreviewConnection::signal(&fixture.connection.frame_reads, 2).await?;
+        fixture.state.visuals.begin_script_run().clean();
+        let held = fixture.preview("after-inventory-recovery").await?;
+        fixture.assert_picture(&held, None).await?;
+        assert!(
+            fixture
+                .connection
+                .returned_images
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .is_empty()
+        );
+        fixture.connection.navigate();
+        let recovered = fixture
+            .preview("new-document-after-inventory-recovery")
+            .await?;
+        fixture
+            .assert_picture(&recovered, Some(b"\xff\xd8new-document"))
+            .await?;
         Ok(())
     }
 }

@@ -37,6 +37,29 @@ pub struct NeoEngine {
     inner: Arc<Inner>,
 }
 
+/// Admission fixes the wire before callers establish their own run lifetime.
+/// No script is sent until this permit is consumed, so callers never need a
+/// second readiness read that could race the supervisor.
+#[must_use]
+pub struct RunPermit {
+    engine: NeoEngine,
+    wire: wire::Wire,
+}
+
+impl RunPermit {
+    /// Dropping the response future retains the SDK's existing disconnect cancellation.
+    pub async fn run(self, call: RunCall) -> Result<RunOutcome, EngineUnavailable> {
+        let mut result = self.wire.run(call).await;
+        if result.is_err() && !matches!(self.engine.state(), EngineState::Ready) {
+            return Err(self.engine.not_ready());
+        }
+        if let Ok(outcome) = &mut result {
+            self.engine.hydrate_blobs(outcome).await;
+        }
+        result
+    }
+}
+
 struct Inner {
     state: watch::Sender<EngineState>,
     connection: Mutex<Connection>,
@@ -326,9 +349,9 @@ impl NeoEngine {
         tool
     }
 
-    /// Dropping this future drops the response stream. Without requestId the
-    /// SDK cancels immediately when its stateless HTTP caller disappears.
-    pub async fn run(&self, call: RunCall) -> Result<RunOutcome, EngineUnavailable> {
+    /// Selects a ready wire without sending anything. A refused admission cannot
+    /// become a forwarded run if the supervisor changes state afterward.
+    pub fn admit(&self) -> Result<RunPermit, EngineUnavailable> {
         if self.inner.stop.is_cancelled() || !matches!(self.state(), EngineState::Ready) {
             return Err(self.not_ready());
         }
@@ -340,14 +363,16 @@ impl NeoEngine {
             .wire
             .clone()
             .ok_or_else(|| self.not_ready())?;
-        let mut result = wire.run(call).await;
-        if result.is_err() && !matches!(self.state(), EngineState::Ready) {
-            return Err(self.not_ready());
-        }
-        if let Ok(outcome) = &mut result {
-            self.hydrate_blobs(outcome).await;
-        }
-        result
+        Ok(RunPermit {
+            engine: self.clone(),
+            wire,
+        })
+    }
+
+    /// Dropping this future drops the response stream. Without requestId the
+    /// SDK cancels immediately when its stateless HTTP caller disappears.
+    pub async fn run(&self, call: RunCall) -> Result<RunOutcome, EngineUnavailable> {
+        self.admit()?.run(call).await
     }
 
     #[must_use]
@@ -520,6 +545,67 @@ mod tests {
             anyhow::bail!("a stopped engine accepted a run");
         };
         assert!(error.reason.contains("shut down"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn refused_admission_stays_refused_after_the_engine_becomes_ready() -> anyhow::Result<()>
+    {
+        let engine = NeoEngine::for_test_endpoint(9)?;
+        for state in [
+            EngineState::Disabled("test engine"),
+            EngineState::Starting,
+            EngineState::Unavailable {
+                reason: "test unavailable".to_owned(),
+                retry_at: None,
+            },
+        ] {
+            engine.inner.state.send_replace(state);
+            let refused = engine.admit();
+            engine.inner.state.send_replace(EngineState::Ready);
+            assert!(refused.is_err());
+        }
+        engine
+            .inner
+            .connection
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .wire = None;
+        assert!(engine.admit().is_err());
+        engine.inner.stop.cancel();
+        assert!(engine.admit().is_err());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn admitted_send_failure_keeps_the_engine_failure_reply() -> anyhow::Result<()> {
+        use tokio::io::AsyncWriteExt;
+
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
+        let engine = NeoEngine::for_test_endpoint(listener.local_addr()?.port())?;
+        let permit = engine.admit()?;
+        engine.inner.state.send_replace(EngineState::Unavailable {
+            reason: "test engine failed".to_owned(),
+            retry_at: None,
+        });
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await?;
+            socket
+                .write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\n\r\n")
+                .await
+        });
+        let result = permit
+            .run(RunCall {
+                args: serde_json::from_value(serde_json::json!({"code": "return 1"}))?,
+                task: None,
+                host_data: serde_json::Value::Null,
+            })
+            .await;
+        server.await??;
+        let Err(error) = result else {
+            anyhow::bail!("an admitted failed send unexpectedly succeeded");
+        };
+        assert!(error.reason.contains("test engine failed"));
         Ok(())
     }
 }

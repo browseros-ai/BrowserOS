@@ -173,7 +173,7 @@ pub enum OperationOutcome {
 }
 
 /// A bounded metadata read can contain useful partial operations without proving
-/// that every call was observed. Only settled records can permit a screenshot.
+/// that every call was observed. Only settled records can clear a script run's capture guard.
 #[derive(Deserialize)]
 #[serde(from = "RunRecord")]
 pub struct RunRecordRead {
@@ -193,9 +193,8 @@ impl RunRecordRead {
     /// Summary reads hide CDP arguments, so every CDP call suppresses the image
     /// under the sensitive-data policy. Only complete, gap-free records prove its absence.
     #[must_use]
-    pub fn proves_no_raw_cdp(&self) -> bool {
+    pub fn rules_out_raw_cdp(&self) -> bool {
         self.settled
-            && !self.operations.is_empty()
             && !self
                 .operations
                 .iter()
@@ -422,9 +421,9 @@ mod tests {
                 false,
             ),
             (
-                "empty record",
+                "empty record is a clean verdict",
                 json!({"complete": true, "operations": []}),
-                false,
+                true,
             ),
             (
                 "raw CDP",
@@ -439,9 +438,9 @@ mod tests {
         ];
         for (label, value, expected) in cases {
             let record: RunRecordRead = serde_json::from_value(value)?;
-            assert_eq!(record.proves_no_raw_cdp(), expected, "{label}");
+            assert_eq!(record.rules_out_raw_cdp(), expected, "{label}");
         }
-        assert!(!RunRecordRead::unread().proves_no_raw_cdp());
+        assert!(!RunRecordRead::unread().rules_out_raw_cdp());
         let cdp: RunOperation = serde_json::from_value(operation("neo.cdp"))?;
         assert_eq!(cdp.name.audit_name(), "sdk.operation");
         Ok(())
@@ -451,7 +450,7 @@ mod tests {
     async fn missing_host_connection_is_unread_metadata() {
         let record = NeoEngine::disabled("test").operations("run").await;
         assert!(record.operations.is_empty());
-        assert!(!record.proves_no_raw_cdp());
+        assert!(!record.rules_out_raw_cdp());
     }
 
     #[test]

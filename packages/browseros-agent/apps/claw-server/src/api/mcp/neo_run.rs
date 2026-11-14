@@ -57,12 +57,17 @@ pub(super) async fn call(
         }),
     };
     let mut window_note = None;
+    let mut script_run = None;
     let outcome = tokio::select! {
         biased;
         () = cancel.cancelled() => None,
         outcome = async {
             window_note = before_run::ensure_window(state).await;
-            state.neo.run(call).await
+            let permit = state.neo.admit()?;
+            // Admission sends nothing. Count the run before consuming its wire
+            // permit, so no agent script can overlap an unguarded capture.
+            script_run = Some(state.visuals.begin_script_run());
+            permit.run(call).await
         } => Some(outcome),
     };
     let cancelled = match &outcome {
@@ -111,6 +116,15 @@ pub(super) async fn call(
         Some(Err(error)) => CallToolResult::error(vec![ContentBlock::text(error.to_string())]),
         None => CallToolResult::error(vec![ContentBlock::text("run was cancelled")]),
     };
+    if let Some(script_run) = script_run {
+        if record.rules_out_raw_cdp() {
+            script_run.clean();
+        } else {
+            // Unsafe cleanup is detached. It keeps captures blocked until every
+            // open document is held, without delaying the agent's reply.
+            drop(script_run);
+        }
+    }
     result.content.extend(window_note.map(ContentBlock::text));
     let duration_ms = i64::try_from(began.elapsed().as_millis()).unwrap_or(i64::MAX);
     // A script and its return value can both contain secrets. Keep the audit row's
@@ -170,8 +184,7 @@ fn run_preview(
     session: &Arc<Session>,
     record: &RunRecordRead,
 ) -> Option<AuditPreview> {
-    record
-        .proves_no_raw_cdp()
+    (record.rules_out_raw_cdp() && !record.operations.is_empty())
         .then(|| preview_callback(state, session))
 }
 
