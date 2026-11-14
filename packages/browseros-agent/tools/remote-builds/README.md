@@ -41,6 +41,12 @@ remains protected by the existing two-minute client lease and independent reaper
 RPC recovery, execution, lease renewal, cleanup and artifact transfers keep their existing
 budgets. `fetch-image` uses its saved guest endpoint without requiring the coordinator.
 
+The five-second deadline also ends an already connected but slow reply:
+`pool did not answer within 5s` does not prove a connection or allowlist failure.
+An admission whose reply is lost can hold an undispatched slot for about two minutes before
+reaping (longer if cleanup cannot run or be proved); if you then see `already has two jobs`,
+wait for recovery and try again.
+
 `image` builds the SDK's amd64 image on Linux and runs its native acceptance suite.
 `viewer-image` uses the same builder for your local Docker architecture, then streams and loads
 that image into local Docker. The Rust build cross-compiles with Zig; QEMU runs the arm64
