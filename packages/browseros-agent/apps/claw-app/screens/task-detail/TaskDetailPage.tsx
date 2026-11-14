@@ -24,6 +24,7 @@ import { NeoSteps } from './NeoSteps'
 import { PagesVisited } from './PagesVisited'
 import { ReplayTheater } from './ReplayTheater'
 import { SnapshotGallery } from './SnapshotGallery'
+import { TaskHelpRequest } from './TaskHelpRequest'
 import { TaskPageHeader } from './TaskPageHeader'
 import { TaskPlayer } from './TaskPlayer'
 import { TaskSteps } from './TaskSteps'
@@ -120,6 +121,7 @@ export function TaskDetailPage({ focus }: { focus?: 'player' } = {}) {
   return (
     <Page>
       <TaskPageHeader session={session} lastPageUrl={data.lastPageUrl} />
+      <TaskHelpRequest session={session} />
       {session.status === 'failed' && !data.humanHelpEnabled ? (
         <AskForHelpTip />
       ) : null}
