@@ -60,6 +60,7 @@ import { frameRefCases } from './cases-frame-refs'
 import { isolationCases } from './cases-isolation'
 import { labelCases } from './cases-labels'
 import { navigateSnapshotCases } from './cases-navigate-snapshot'
+import { neoRunCases } from './cases-neo-run'
 import { outputCases } from './cases-outputs'
 import { readEvalCases } from './cases-read-eval'
 import { runBudgetCases } from './cases-run-budget'
@@ -76,6 +77,7 @@ import { ultrafastCases } from './cases-ultrafast'
 // which must be the final case per server run — it poisons the browser.
 export const contractCases: ContractCase[] = [
   ...transportCases,
+  ...neoRunCases,
   ...tabsCases,
   ...navigateSnapshotCases,
   ...labelCases,

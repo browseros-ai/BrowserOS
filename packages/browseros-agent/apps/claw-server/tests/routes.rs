@@ -1047,34 +1047,27 @@ async fn mcp_declared_product_survives_profile_resolution_and_reuse() -> anyhow:
     Ok(())
 }
 
-/// Claude Code hands the model only `structuredContent` for a tool that declares an
-/// outputSchema, so the handle line in `content` never reached it: an agent opening with
-/// `run` calls sent no `session`, and each call started another empty cockpit session.
+/// Even an unavailable SDK run must return the model's task handle. The live
+/// contract covers structured SDK values; this route stays independent of a child process.
 #[tokio::test]
-async fn mcp_stateless_structured_results_carry_the_session_handle() -> anyhow::Result<()> {
-    let mock = MockCdp::start().await?;
-    let app = mock_native_app(&mock).await?;
-    app.state.browser.connect_once_for_testing().await?;
-    wait_for_cdp_connected(&app).await?;
+async fn mcp_stateless_disabled_run_keeps_the_session_handle() -> anyhow::Result<()> {
+    let app = test_app().await?;
     let listed =
         stateless_mcp_request(&app.router, "tools/list", json!({}), Some("claude-code")).await?;
-    let tools = listed["result"]["tools"]
+    let run = listed["result"]["tools"]
         .as_array()
-        .ok_or_else(|| anyhow::anyhow!("missing tools: {listed}"))?;
-    let with_output: Vec<&Value> = tools
-        .iter()
-        .filter(|tool| tool["outputSchema"].is_object())
-        .collect();
-    assert!(
-        with_output.iter().any(|tool| tool["name"] == "run"),
-        "{listed}"
-    );
-    for tool in with_output {
-        assert_eq!(
-            tool["outputSchema"]["properties"]["session"]["type"], "string",
-            "{tool}"
-        );
+        .and_then(|tools| tools.iter().find(|tool| tool["name"] == "run"))
+        .ok_or_else(|| anyhow::anyhow!("run missing"))?;
+    for (field, kind) in [
+        ("code", "string"),
+        ("timeout", "integer"),
+        ("session", "string"),
+        ("agentName", "string"),
+    ] {
+        assert_eq!(run["inputSchema"]["properties"][field]["type"], kind);
     }
+    assert_eq!(run["inputSchema"]["additionalProperties"], false);
+    assert_eq!(run["outputSchema"], Value::Null);
 
     let first = stateless_mcp_request(
         &app.router,
@@ -1083,36 +1076,30 @@ async fn mcp_stateless_structured_results_carry_the_session_handle() -> anyhow::
         Some("claude-code"),
     )
     .await?;
+    assert_eq!(first["result"]["isError"], true);
     let handle = first["result"]["_meta"]["com.browseros.neo/session"].clone();
-    assert!(handle.is_string(), "{first}");
-    assert_eq!(handle.as_str().map(str::len), Some(8), "{first}");
-    let structured = &first["result"]["structuredContent"];
-    assert_eq!(structured["session"], handle, "{first}");
-    assert_eq!(structured["value"], 1, "{first}");
-    assert!(
-        first["result"]["content"]
-            .to_string()
-            .contains("Pass this exact value"),
-        "{first}"
-    );
+    assert!(handle.is_string());
+    assert_eq!(handle.as_str().map(str::len), Some(8));
+    let first_text = first["result"]["content"].to_string();
+    assert!(first_text.contains("Playwright engine has not been started"));
+    assert!(first_text.contains("Pass this exact value"));
+    assert!(first_text.contains(handle.as_str().unwrap_or_default()));
 
-    // What the model saw is enough to stay in the same session.
     let second = stateless_mcp_request(
         &app.router,
         "tools/call",
         json!({
             "name": "run",
-            "arguments": { "code": "return 2", "session": structured["session"] }
+            "arguments": { "code": "return 2", "session": handle }
         }),
         Some("claude-code"),
     )
     .await?;
+    assert_eq!(second["result"]["isError"], true);
     assert_eq!(
-        second["result"]["_meta"]["com.browseros.neo/session"], handle,
-        "{second}"
+        second["result"]["_meta"]["com.browseros.neo/session"],
+        handle
     );
-    assert_eq!(second["result"]["structuredContent"]["session"], handle);
-    assert_eq!(second["result"]["structuredContent"]["value"], 2);
     let compact = format!(
         "[browseros-neo session: {}]",
         handle.as_str().unwrap_or_default()
@@ -1120,15 +1107,14 @@ async fn mcp_stateless_structured_results_carry_the_session_handle() -> anyhow::
     assert!(
         second["result"]["content"]
             .as_array()
-            .is_some_and(|blocks| blocks.iter().any(|block| block["text"] == compact)),
-        "{second}"
+            .is_some_and(|blocks| blocks.iter().any(|block| block["text"] == compact))
     );
     assert!(
         !second["result"]["content"]
             .to_string()
-            .contains("Pass this exact value"),
-        "{second}"
+            .contains("Pass this exact value")
     );
+    assert_eq!(app.state.sessions.count().await, 1);
     Ok(())
 }
 

@@ -61,6 +61,10 @@ ulid.workspace = true
 url.workspace = true
 uuid.workspace = true
 
+[target.'cfg(unix)'.dependencies]
+# The SDK owns Unix signal and socket handling. Windows retains the disabled engine.
+neo-server.workspace = true
+
 [features]
 # Points billing at the staging gateway. Never enabled for a shipped build.
 billing-staging = []

@@ -34,6 +34,7 @@ neo-http = { path = "crates/neo-sdk/neo-http" }
 neo-takeover = { path = "crates/neo-sdk/neo-takeover" }
 neo-playwright = { path = "crates/neo-sdk/neo-playwright" }
 neo-trace = { path = "crates/neo-sdk/neo-trace" }
+neo-server = { path = "crates/neo-sdk/neo-server" }
 claw-api = { path = "crates/claw-api" }
 neo-sdk-api = { path = "crates/neo-sdk/neo-sdk-api" }
 hosted-api = { path = "crates/hosted-api" }
