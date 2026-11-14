@@ -16,6 +16,7 @@ pub mod harness;
 pub mod harness_skills;
 pub mod help;
 pub mod helpers;
+pub mod neo;
 pub mod plan_offer;
 pub mod profiles;
 pub mod recordings;

@@ -49,7 +49,8 @@ export const TOOL_TO_VERB: Record<string, ReplayVerb> = {
 }
 
 export function verbForTool(toolName: string): ReplayVerb {
-  return TOOL_TO_VERB[toolName] ?? 'read'
+  // SDK operation names are open-ended; prototype properties are not tool entries.
+  return Object.hasOwn(TOOL_TO_VERB, toolName) ? TOOL_TO_VERB[toolName] : 'read'
 }
 
 /** Calls that only set up or check the agent's own state. */
@@ -124,7 +125,7 @@ function normalizeCall(
   const tool = dispatch.toolName
   const raw = parseJson(dispatch.argsJson)
   if (!Array.isArray(raw)) return { tool, args: isArgs(raw) ? raw : {} }
-  const kind = INPUT_KINDS[tool]
+  const kind = Object.hasOwn(INPUT_KINDS, tool) ? INPUT_KINDS[tool] : undefined
   if (kind === 'press') return { tool: 'act', args: { kind, key: raw[1] } }
   if (kind === 'scroll') {
     return { tool: 'act', args: { kind, direction: raw[1] } }
@@ -187,6 +188,14 @@ function describePursue(args: Args): string {
   return goal
     ? `neo took over the clicking: “${truncate(goal)}”`
     : 'neo took over the clicking'
+}
+
+/** A redacted run can stand alone, with a task name only when its audit row carries one. */
+function describeRun(args: Args): string {
+  const taskName = stringArg(args, 'taskName')
+  return taskName
+    ? `Ran a browser script for ${truncate(taskName)}`
+    : 'Ran a browser script'
 }
 
 function stringArg(args: Args, key: string): string | undefined {
@@ -390,6 +399,8 @@ export function describeStep(dispatch: ToolDispatchRow): string {
       return describeSkillSave(args)
     case 'pursue':
       return describePursue(args)
+    case 'run':
+      return describeRun(args)
     case 'run_skill': {
       const name = stringArg(args, 'name')
       return name ? `Ran ${name} the fast way` : 'Ran a skill the fast way'
@@ -427,50 +438,127 @@ export interface DescribedSteps {
   hiddenCount: number
 }
 
+/** Correlation retained even when a successful parent is omitted from the rail. */
+interface StepContext {
+  runKey: ToolDispatchRow['dispatchKey'] | number
+  tabKey: string | undefined
+  toolName: string
+}
+
+function tabKeyOf(
+  dispatch: ToolDispatchRow,
+  runKey: StepContext['runKey'],
+  pageKey: string | undefined,
+): string | undefined {
+  if (dispatch.tabId !== undefined) return `tab:${dispatch.tabId}`
+  if (dispatch.pageId !== undefined) return `page:${dispatch.pageId}`
+  // SDK arguments and page labels are redacted. Missing ids must not collapse
+  // page openings. Unparented legacy tools retain their page-label fallback.
+  if (dispatch.parentDispatchId === undefined && runKey === undefined) {
+    return pageKey
+  }
+  return undefined
+}
+
+function sameTabAndRun(
+  previous: StepContext | undefined,
+  current: StepContext,
+): boolean {
+  return (
+    previous?.runKey === current.runKey &&
+    current.tabKey !== undefined &&
+    previous?.tabKey === current.tabKey
+  )
+}
+
+function hasScriptChildren(
+  dispatch: ToolDispatchRow,
+  next: ToolDispatchRow | undefined,
+  parentsWithChildren: ReadonlySet<string>,
+): boolean {
+  if (
+    dispatch.dispatchKey !== undefined &&
+    parentsWithChildren.has(dispatch.dispatchKey)
+  ) {
+    return true
+  }
+  // Concurrent runs can interleave. Adjacency only identifies older children
+  // without a parent id; correlated rows must belong to their actual parent.
+  return next?.parentDispatchId === undefined && isScriptCall(next)
+}
+
 /**
  * The visible steps of a task: behind-the-scenes calls are dropped,
- * consecutive calls that read the same ("Read Google Flights" five times)
- * collapse into one step, and a read of the page the previous step worked on
- * folds into that step.
+ * consecutive calls for the same operation, run and known tab collapse into
+ * one step, and a read of the page the previous step worked on folds into
+ * that step within the same run and tab.
  */
 export function describeSteps(
   dispatches: readonly ToolDispatchRow[],
   options: { includeHidden?: boolean } = {},
 ): DescribedSteps {
+  const parentsWithChildren = new Set(
+    dispatches.flatMap((dispatch) =>
+      dispatch.parentDispatchId === undefined
+        ? []
+        : [dispatch.parentDispatchId],
+    ),
+  )
   const steps: DescribedStep[] = []
   let hiddenCount = 0
+  let runKey: StepContext['runKey']
+  let previousContext: StepContext | undefined
   // When the latest hand back ended; the next visible step is where the agent carries on.
   let handBackEndedAt: number | undefined
   for (const [index, dispatch] of dispatches.entries()) {
-    // A script whose own calls were recorded is told through those calls.
+    const meta = parseMeta(dispatch.resultMeta)
+    const isError = meta.isError === true
+    const cancelled = meta.cancellationKind === 'cockpit.operator-cancelled'
+    if (dispatch.toolName === 'run') {
+      runKey = dispatch.dispatchKey ?? dispatch.dispatchId
+    }
+    // Successful scripts are told through their calls. A failed parent carries
+    // the script's outcome even when every child operation succeeded.
     const hidden =
       isBehindTheScenes(dispatch) ||
-      (dispatch.toolName === 'run' && isScriptCall(dispatches[index + 1]))
-    if (hidden) {
-      hiddenCount += 1
-      if (!options.includeHidden) continue
-    }
+      (dispatch.toolName === 'run' &&
+        !isError &&
+        hasScriptChildren(dispatch, dispatches[index + 1], parentsWithChildren))
+    hiddenCount += Number(hidden)
+    if (hidden && !options.includeHidden) continue
     const sentence = describeStep(dispatch)
     const verb = verbForCall(dispatch)
     // pursue is stamped with its start, so the calls it made sort after it.
     const afterHandBack =
       handBackEndedAt !== undefined && dispatch.createdAt >= handBackEndedAt
     const pageKey = pageKeyOf(dispatch, normalizeCall(dispatch))
-    const meta = parseMeta(dispatch.resultMeta)
-    const isError = meta.isError === true
-    const cancelled = meta.cancellationKind === 'cockpit.operator-cancelled'
+    const context: StepContext = {
+      runKey: dispatch.parentDispatchId ?? runKey,
+      tabKey: tabKeyOf(dispatch, runKey, pageKey),
+      toolName: dispatch.toolName,
+    }
+    const sameContext = sameTabAndRun(previousContext, context)
     const previous = steps.at(-1)
     const repeats =
-      previous?.sentence === sentence && previous.hidden === hidden
+      sameContext &&
+      previousContext?.toolName === dispatch.toolName &&
+      previous?.sentence === sentence &&
+      previous.hidden === hidden &&
+      previous.isError === isError &&
+      previous.cancelled === cancelled
     // Reading the page it just worked on is the agent checking its own work,
     // not a step of its own.
     const checksPrevious =
+      sameContext &&
       verb === 'read' &&
       !hidden &&
       !isError &&
       !cancelled &&
       previous !== undefined &&
       !previous.hidden &&
+      !previous.isError &&
+      !previous.cancelled &&
+      previous.sentence !== sentence &&
       pageKey !== undefined &&
       previous.pageKey === pageKey
     if (afterHandBack) handBackEndedAt = undefined
@@ -482,6 +570,7 @@ export function describeSteps(
     if (previous && !afterHandBack && (repeats || checksPrevious)) {
       previous.dispatchIds.push(dispatch.dispatchId)
       if (handsBack) previous.handedBack = true
+      previousContext = context
       continue
     }
     steps.push({
@@ -496,6 +585,7 @@ export function describeSteps(
       ...(handsBack ? { handedBack: true } : {}),
       ...(afterHandBack ? { afterHandBack: true } : {}),
     })
+    previousContext = context
   }
   return { steps, hiddenCount }
 }

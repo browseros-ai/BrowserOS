@@ -1,3 +1,5 @@
+mod after_run;
+mod before_run;
 pub mod captcha;
 pub mod dispatch;
 pub mod distill;
@@ -6,13 +8,17 @@ pub mod guards;
 pub mod helper_runtime;
 pub mod hosted;
 pub mod naming;
+mod neo_run;
 pub mod observers;
 mod prompt;
 pub mod pursue;
+pub(crate) mod recipes;
 pub mod script_hook;
 mod service;
 mod session_handle;
+mod surface;
 mod tab_grouping;
+pub mod tab_ref;
 mod timeouts;
 
 #[cfg(test)]

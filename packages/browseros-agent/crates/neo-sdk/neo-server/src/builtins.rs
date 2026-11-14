@@ -5,6 +5,7 @@
 //!              │  process's one Playwright, built on the browser link's session
 //!              │  ─ op_marks: each op's marks, and whether it is held, from its capabilities
 //!              │  ─ event_release: an event pull's events through the rules, tab by tab
+//!              ├▶ neo_cdp: launch-gated request/reply CDP, traced as writes through the door
 //!              ├▶ neo_tasks: named task records, tab lists, and child opens/closes
 //!              ├▶ host_fill: host.fill and host.fillCheck, internal: the host's private typing,
 //!              │  which the run service submits in a run of its own for the host's fill route
@@ -30,6 +31,7 @@ mod captcha_claims;
 mod event_release;
 mod host_fill;
 mod keep_downloads;
+mod neo_cdp;
 mod neo_tasks;
 mod op_marks;
 mod playwright_facade;

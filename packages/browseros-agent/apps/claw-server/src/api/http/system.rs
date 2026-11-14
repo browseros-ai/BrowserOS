@@ -1,5 +1,5 @@
 use crate::db::MigrationOutcome;
-use crate::{AppState, VERSION};
+use crate::{AppState, VERSION, services::neo::EngineState};
 use axum::{Json, extract::State, http::StatusCode};
 use claw_api::models::{
     BrowserLink, HealthResponse, SchemaStatus, ShutdownResponse, SystemCapabilities,
@@ -28,12 +28,23 @@ pub(super) async fn ready(State(state): State<AppState>) -> (StatusCode, Json<He
         .browser
         .as_ref()
         .is_some_and(|browser| browser.connected);
-    let status = if connected {
+    let engine = state.neo.watch();
+    let status = readiness_status(connected, &engine.borrow());
+    (status, Json(report))
+}
+
+fn readiness_status(browser_connected: bool, engine: &EngineState) -> StatusCode {
+    // Hosted servers and unsupported platforms disable the engine deliberately.
+    // Their readiness still depends only on the browser link; health remains liveness.
+    let engine_available = match engine {
+        EngineState::Ready | EngineState::Disabled(_) => true,
+        EngineState::Starting | EngineState::Unavailable { .. } => false,
+    };
+    if browser_connected && engine_available {
         StatusCode::OK
     } else {
         StatusCode::SERVICE_UNAVAILABLE
-    };
-    (status, Json(report))
+    }
 }
 
 async fn health_report(state: &AppState) -> HealthResponse {
@@ -104,6 +115,40 @@ pub(super) async fn diagnostics() -> Json<SystemDiagnostics> {
             SystemDiagnostics::new(VERSION.to_string(), std::env::consts::OS.to_string(), None)
         });
     Json(details)
+}
+
+#[cfg(test)]
+mod readiness_tests {
+    use super::readiness_status;
+    use crate::services::neo::EngineState;
+    use axum::http::StatusCode;
+
+    #[test]
+    fn readiness_requires_a_browser_and_an_available_or_disabled_engine() {
+        for (engine, expected_connected) in [
+            (EngineState::Ready, StatusCode::OK),
+            (EngineState::Disabled("hosted mode"), StatusCode::OK),
+            (EngineState::Starting, StatusCode::SERVICE_UNAVAILABLE),
+            (
+                EngineState::Unavailable {
+                    reason: "the engine exited".to_string(),
+                    retry_at: None,
+                },
+                StatusCode::SERVICE_UNAVAILABLE,
+            ),
+        ] {
+            assert_eq!(
+                readiness_status(true, &engine),
+                expected_connected,
+                "{engine:?}"
+            );
+            assert_eq!(
+                readiness_status(false, &engine),
+                StatusCode::SERVICE_UNAVAILABLE,
+                "{engine:?}"
+            );
+        }
+    }
 }
 
 #[cfg(test)]

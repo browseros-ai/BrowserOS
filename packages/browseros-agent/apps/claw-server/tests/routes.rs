@@ -14,6 +14,7 @@ use claw_server::{
     services::{cockpit::RecordToolInput, sessions::PageOwnership},
 };
 use futures_util::{SinkExt, StreamExt};
+use rmcp::handler::server::ServerHandler;
 use serde_json::{Value, json};
 use std::{sync::Arc, time::Duration};
 use tempfile::TempDir;
@@ -50,12 +51,15 @@ async fn test_app_with_cdp_port(cdp_port: u16, start_browser: bool) -> anyhow::R
 
 /// `MockCdp` serves tabs but no profile catalog, windows or identity sidecars, which is what
 /// a native without profile targeting (before BrowserOS 0.51.1.3) offers. Saying so keeps
-/// these session/tab tests on that native's unbound routing instead of the Default profile.
+/// these hosted session/tab tests on that native's unbound routing instead of the Default
+/// profile. Desktop no longer offers the catalog tools these dispatch tests exercise.
 async fn mock_native_app(mock: &MockCdp) -> anyhow::Result<TestApp> {
-    test_app_with_native(
+    test_app_with_behavior(
         mock.cdp_port,
         false,
         NativeCapabilities::from_browseros_version(Some("0.51.1.2")),
+        ServerMode::Hosted,
+        claw_server::config::Behavior::default(),
     )
     .await
 }
@@ -451,9 +455,13 @@ async fn older_native_lists_and_teaches_no_profile_surface() -> anyhow::Result<(
             request_json_with_headers(&app.router, "POST", "/mcp", Some(initialize), &[]).await?;
         assert_eq!(status, StatusCode::OK, "{body:?}");
         let instructions = body["result"]["instructions"].as_str().unwrap_or_default();
-        assert!(instructions.starts_with("BrowserOS neo — the browser for agents"));
-        assert!(!instructions.contains("browser_profiles"), "{native}");
-        assert!(!instructions.contains("browser_target"), "{native}");
+        assert_eq!(
+            Some(instructions),
+            claw_server::api::mcp::ClawMcpService::new(app.state.clone())
+                .get_info()
+                .instructions
+                .as_deref()
+        );
         let session_id = headers
             .get("mcp-session-id")
             .and_then(|value| value.to_str().ok())
@@ -481,7 +489,7 @@ async fn older_native_lists_and_teaches_no_profile_surface() -> anyhow::Result<(
             .collect::<Vec<_>>();
         assert!(!names.contains(&"browser_profiles"), "{native}: {names:?}");
         assert!(!names.contains(&"browser_target"), "{native}: {names:?}");
-        assert!(names.contains(&"run") && names.contains(&"tabs"));
+        assert_eq!(names, ["run", "request_human_help", "await_human_help"]);
         for tool in tools {
             let description = tool["description"].as_str().unwrap_or_default();
             assert!(
@@ -521,33 +529,7 @@ async fn mcp_initialize_list_guard_audit_and_delete() -> anyhow::Result<()> {
         .iter()
         .filter_map(|tool| tool["name"].as_str())
         .collect();
-    let expected = vec![
-        "browser_profiles",
-        "browser_target",
-        "tabs",
-        "tab_groups",
-        "history",
-        "navigate",
-        "snapshot",
-        "diff",
-        "act",
-        "download",
-        "upload",
-        "read",
-        "read_output",
-        "grep",
-        "screenshot",
-        "pdf",
-        "wait",
-        "windows",
-        "evaluate_in_page",
-        "run",
-        "name_session",
-        "save_skill",
-        "mark_skill_run",
-        "request_human_help",
-        "await_human_help",
-    ];
+    let expected = vec!["run", "request_human_help", "await_human_help"];
     assert_eq!(listed, expected);
 
     let blocked = json!({
@@ -573,7 +555,7 @@ async fn mcp_initialize_list_guard_audit_and_delete() -> anyhow::Result<()> {
         body["result"]["content"][0]["text"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("missing text"))?
-            .contains("javascript")
+            .contains("run")
     );
 
     let dispatches = app
@@ -583,7 +565,7 @@ async fn mcp_initialize_list_guard_audit_and_delete() -> anyhow::Result<()> {
         .await?;
     assert!(
         dispatches.rows.is_empty(),
-        "guard rejections must skip audit effects"
+        "removed tools must skip audit effects"
     );
 
     let (status, _headers, _body) = request_json_with_headers(
@@ -646,8 +628,13 @@ async fn tests_that_turning_human_help_off_over_http_reaches_mcp_agents() -> any
     let instructions = body["result"]["instructions"]
         .as_str()
         .ok_or_else(|| anyhow::anyhow!("missing instructions"))?;
-    assert!(instructions.contains("stop and tell\nthe user in your chat what you need"));
-    assert!(!instructions.contains("request_human_help"));
+    assert_eq!(
+        Some(instructions),
+        claw_server::api::mcp::ClawMcpService::new(app.state.clone())
+            .get_info()
+            .instructions
+            .as_deref()
+    );
     let session_id = headers
         .get("mcp-session-id")
         .and_then(|value| value.to_str().ok())
@@ -743,8 +730,13 @@ async fn run_skill_is_refused_even_for_a_skill_with_a_verified_flow() -> anyhow:
     )
     .await?;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["error"]["code"], -32601, "{body}");
-    assert!(body["result"].is_null(), "{body}");
+    assert_eq!(body["result"]["isError"], true, "{body}");
+    assert!(
+        body["result"]["content"][0]["text"]
+            .as_str()
+            .is_some_and(|text| text.contains("run")),
+        "{body}"
+    );
 
     let runs = app.state.skills.get("neo-shop-add").await?.runs;
     assert!(runs.is_empty());
@@ -790,56 +782,55 @@ async fn stateless_mcp_request(
 #[tokio::test]
 async fn tests_that_cleanup_tip_is_included_only_when_enabled() -> anyhow::Result<()> {
     const TIP: &str = "Tip: When you finish this task, close your task’s tab group.";
-    let app = test_app().await?;
+    let mock = MockCdp::start().await?;
+    let app = mock_native_app(&mock).await?;
+    app.state.browser.connect_once_for_testing().await?;
     let session_id = initialize_mcp(&app).await?;
     let mut modern_handle = Value::Null;
-
     for (index, enabled) in [false, true, true, false, true].into_iter().enumerate() {
         let (status, _) = request_json(
             &app.router,
             "PUT",
             "/api/v1/settings/agent",
-            Some(json!({ "humanHelpEnabled": true, "taskCleanupTipEnabled": enabled })),
+            Some(json!({ "taskCleanupTipEnabled": enabled })),
         )
         .await?;
         assert_eq!(status, StatusCode::OK);
-        for name in ["cleanup-test", "!!!"] {
+        for action in ["list", "invalid"] {
             let (_, _, legacy) = request_json_with_headers(
                 &app.router,
                 "POST",
                 "/mcp",
-                Some(name_session_request(index as u64 + 10, name)),
+                Some(
+                    json!({"jsonrpc":"2.0","id":index as u64 + 10,"method":"tools/call",
+                    "params":{"name":"tabs","arguments":{"action":action}}}),
+                ),
                 &[("mcp-session-id", &session_id)],
             )
             .await?;
             let modern = stateless_mcp_request(
                 &app.router,
                 "tools/call",
-                json!({
-                    "name": "name_session",
-                    "arguments": { "name": name, "session": modern_handle }
-                }),
+                json!({"name":"tabs","arguments":{"action":action,"session":modern_handle}}),
                 Some("Codex"),
             )
             .await?;
             modern_handle = modern["result"]["_meta"]["com.browseros.neo/session"].clone();
             for reply in [legacy, modern] {
-                assert_eq!(reply["result"]["isError"], name == "!!!", "{reply}");
+                assert_eq!(reply["result"]["isError"], action == "invalid", "{reply}");
                 let tips = reply["result"]["content"]
                     .as_array()
                     .ok_or_else(|| anyhow::anyhow!("missing content: {reply}"))?
                     .iter()
                     .filter(|block| block["text"] == TIP)
                     .count();
-                assert_eq!(tips, usize::from(enabled && name != "!!!"), "{reply}");
+                assert_eq!(tips, usize::from(enabled && action == "list"), "{reply}");
             }
         }
     }
     Ok(())
 }
 
-/// The tip asks the agent to close the group the server made for it, so a server that makes
-/// none never sends it, even with the setting on.
 #[tokio::test]
 async fn tests_that_explicit_grouping_never_sends_the_cleanup_tip() -> anyhow::Result<()> {
     use claw_server::config::{Behavior, TabGrouping};
@@ -865,7 +856,7 @@ async fn tests_that_explicit_grouping_never_sends_the_cleanup_tip() -> anyhow::R
     let reply = stateless_mcp_request(
         &app.router,
         "tools/call",
-        json!({ "name": "name_session", "arguments": { "name": "cleanup-test" } }),
+        json!({ "name": "await_human_help", "arguments": {} }),
         Some("Codex"),
     )
     .await?;
@@ -879,21 +870,15 @@ async fn tests_that_explicit_grouping_never_sends_the_cleanup_tip() -> anyhow::R
 async fn mcp_tool_calls_are_counted_for_the_day() -> anyhow::Result<()> {
     let app = test_app().await?;
     let started_ms = epoch_ms()?;
-    for arguments in [
-        json!({ "name": "first" }),
-        json!({ "name": "second" }),
-        json!({ "name": 5 }),
-    ] {
+    for name in ["await_human_help", "await_human_help", "request_human_help"] {
         stateless_mcp_request(
             &app.router,
             "tools/call",
-            json!({ "name": "name_session", "arguments": arguments }),
+            json!({ "name": name, "arguments": {} }),
             Some("Codex"),
         )
         .await?;
     }
-
-    // The calls may straddle UTC midnight, so add up every day the test spanned.
     let mut days = vec![
         claw_server::db::run_error_budget::utc_day(started_ms),
         claw_server::db::run_error_budget::utc_day(epoch_ms()?),
@@ -902,7 +887,7 @@ async fn mcp_tool_calls_are_counted_for_the_day() -> anyhow::Result<()> {
     let (mut calls, mut error_calls) = (0, 0);
     for day in days {
         for count in app.state.tool_calls_daily.counts(&day).await? {
-            assert_eq!(count.tool_name, "name_session");
+            assert!(["await_human_help", "request_human_help"].contains(&count.tool_name.as_str()));
             calls += count.calls;
             error_calls += count.error_calls;
         }
@@ -931,48 +916,38 @@ async fn mcp_stateless_product_precedence_fallback_and_reuse() -> anyhow::Result
         (Some("custom-mcp-proxy"), None, "custom-mcp-proxy/task"),
         (None, None, "agent/task"),
     ] {
-        let mut arguments = json!({ "name": "task" });
+        let mut arguments = json!({});
         if let Some(name) = declared {
             arguments["agentName"] = json!(name);
         }
         let body = stateless_mcp_request(
             &app.router,
             "tools/call",
-            json!({ "name": "name_session", "arguments": arguments }),
+            json!({ "name": "await_human_help", "arguments": arguments }),
             reported,
         )
         .await?;
-        let text = body["result"]["content"][0]["text"]
-            .as_str()
-            .unwrap_or_default();
-        assert!(
-            text.starts_with(&format!("renamed to {expected} ")),
-            "{body}"
+        let session = session_from_result(&app, &body).await?;
+        assert_eq!(
+            claw_server::api::mcp::naming::session_group_title(&session, "task"),
+            expected
         );
     }
-
-    let first = stateless_mcp_request(&app.router, "tools/call",
-        json!({ "name": "name_session", "arguments": { "name": "first task", "agentName": "cld-messaging" } }),
-        Some("Claude Code")).await?;
-    let handle = first["result"]["_meta"]["com.browseros.neo/session"]
-        .as_str()
-        .ok_or_else(|| anyhow::anyhow!("missing application session handle: {first}"))?;
+    let first = stateless_mcp_request(
+        &app.router,
+        "tools/call",
+        json!({ "name": "await_human_help", "arguments": { "agentName": "cld-messaging" } }),
+        Some("Claude Code"),
+    )
+    .await?;
+    let handle = first["result"]["_meta"]["com.browseros.neo/session"].clone();
     for reported in [None, Some("codex-mcp-client")] {
-        let reused = stateless_mcp_request(
-            &app.router,
-            "tools/call",
-            json!({ "name": "name_session", "arguments": {
-                "session": handle, "name": "second task", "agentName": "different-worker"
-            } }),
-            reported,
-        )
-        .await?;
-        let text = reused["result"]["content"][0]["text"]
-            .as_str()
-            .unwrap_or_default();
-        assert!(
-            text.starts_with("renamed to claude/second-task"),
-            "{reused}"
+        let reused = stateless_mcp_request(&app.router, "tools/call",
+            json!({ "name": "await_human_help", "arguments": { "session": handle, "agentName": "different-worker" } }), reported).await?;
+        let session = session_from_result(&app, &reused).await?;
+        assert_eq!(
+            claw_server::api::mcp::naming::session_group_title(&session, "task"),
+            "claude/task"
         );
         assert_eq!(
             reused["result"]["_meta"]["com.browseros.neo/session"],
@@ -980,6 +955,17 @@ async fn mcp_stateless_product_precedence_fallback_and_reuse() -> anyhow::Result
         );
     }
     Ok(())
+}
+
+async fn session_from_result(app: &TestApp, result: &Value) -> anyhow::Result<Arc<Session>> {
+    let handle = result["result"]["_meta"]["com.browseros.neo/session"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("missing session handle: {result}"))?;
+    app.state
+        .sessions
+        .lookup(&SessionId::new(handle))
+        .await
+        .ok_or_else(|| anyhow::anyhow!("missing session {handle}"))
 }
 
 #[tokio::test]
@@ -1003,13 +989,11 @@ async fn mcp_declared_product_survives_profile_resolution_and_reuse() -> anyhow:
     let first = stateless_mcp_request(
         &app.router,
         "tools/call",
-        json!({ "name": "name_session", "arguments": { "name": "profile task", "agentName": "Codex" } }),
+        json!({ "name": "await_human_help", "arguments": { "agentName": "Codex" } }),
         Some("unknown-proxy"),
-    ).await?;
-    let text = first["result"]["content"][0]["text"]
-        .as_str()
-        .unwrap_or_default();
-    assert!(text.starts_with("renamed to codex/profile-task"), "{first}");
+    )
+    .await?;
+
     let handle = first["result"]["_meta"]["com.browseros.neo/session"]
         .as_str()
         .ok_or_else(|| anyhow::anyhow!("missing session handle: {first}"))?;
@@ -1030,51 +1014,41 @@ async fn mcp_declared_product_survives_profile_resolution_and_reuse() -> anyhow:
     let reused = stateless_mcp_request(
         &app.router,
         "tools/call",
-        json!({ "name": "name_session", "arguments": { "name": "continued task", "session": handle, "agentName": "claude" } }),
+        json!({ "name": "await_human_help", "arguments": { "session": handle, "agentName": "claude" } }),
         None,
     ).await?;
     assert_eq!(
         reused["result"]["_meta"]["com.browseros.neo/session"],
         handle
     );
-    let text = reused["result"]["content"][0]["text"]
-        .as_str()
-        .unwrap_or_default();
-    assert!(
-        text.starts_with("renamed to codex/continued-task"),
-        "{reused}"
+    assert_eq!(
+        claw_server::api::mcp::naming::session_group_title(&session, "continued-task"),
+        "codex/continued-task"
     );
     Ok(())
 }
 
-/// Claude Code hands the model only `structuredContent` for a tool that declares an
-/// outputSchema, so the handle line in `content` never reached it: an agent opening with
-/// `run` calls sent no `session`, and each call started another empty cockpit session.
+/// Even an unavailable SDK run must return the model's task handle. The live
+/// contract covers structured SDK values; this route stays independent of a child process.
 #[tokio::test]
-async fn mcp_stateless_structured_results_carry_the_session_handle() -> anyhow::Result<()> {
-    let mock = MockCdp::start().await?;
-    let app = mock_native_app(&mock).await?;
-    app.state.browser.connect_once_for_testing().await?;
-    wait_for_cdp_connected(&app).await?;
+async fn mcp_stateless_disabled_run_keeps_the_session_handle() -> anyhow::Result<()> {
+    let app = test_app().await?;
     let listed =
         stateless_mcp_request(&app.router, "tools/list", json!({}), Some("claude-code")).await?;
-    let tools = listed["result"]["tools"]
+    let run = listed["result"]["tools"]
         .as_array()
-        .ok_or_else(|| anyhow::anyhow!("missing tools: {listed}"))?;
-    let with_output: Vec<&Value> = tools
-        .iter()
-        .filter(|tool| tool["outputSchema"].is_object())
-        .collect();
-    assert!(
-        with_output.iter().any(|tool| tool["name"] == "run"),
-        "{listed}"
-    );
-    for tool in with_output {
-        assert_eq!(
-            tool["outputSchema"]["properties"]["session"]["type"], "string",
-            "{tool}"
-        );
+        .and_then(|tools| tools.iter().find(|tool| tool["name"] == "run"))
+        .ok_or_else(|| anyhow::anyhow!("run missing"))?;
+    for (field, kind) in [
+        ("code", "string"),
+        ("timeout", "integer"),
+        ("session", "string"),
+        ("agentName", "string"),
+    ] {
+        assert_eq!(run["inputSchema"]["properties"][field]["type"], kind);
     }
+    assert_eq!(run["inputSchema"]["additionalProperties"], false);
+    assert_eq!(run["outputSchema"], Value::Null);
 
     let first = stateless_mcp_request(
         &app.router,
@@ -1083,36 +1057,30 @@ async fn mcp_stateless_structured_results_carry_the_session_handle() -> anyhow::
         Some("claude-code"),
     )
     .await?;
+    assert_eq!(first["result"]["isError"], true);
     let handle = first["result"]["_meta"]["com.browseros.neo/session"].clone();
-    assert!(handle.is_string(), "{first}");
-    assert_eq!(handle.as_str().map(str::len), Some(8), "{first}");
-    let structured = &first["result"]["structuredContent"];
-    assert_eq!(structured["session"], handle, "{first}");
-    assert_eq!(structured["value"], 1, "{first}");
-    assert!(
-        first["result"]["content"]
-            .to_string()
-            .contains("Pass this exact value"),
-        "{first}"
-    );
+    assert!(handle.is_string());
+    assert_eq!(handle.as_str().map(str::len), Some(8));
+    let first_text = first["result"]["content"].to_string();
+    assert!(first_text.contains("Playwright engine has not been started"));
+    assert!(first_text.contains("Pass this exact value"));
+    assert!(first_text.contains(handle.as_str().unwrap_or_default()));
 
-    // What the model saw is enough to stay in the same session.
     let second = stateless_mcp_request(
         &app.router,
         "tools/call",
         json!({
             "name": "run",
-            "arguments": { "code": "return 2", "session": structured["session"] }
+            "arguments": { "code": "return 2", "session": handle }
         }),
         Some("claude-code"),
     )
     .await?;
+    assert_eq!(second["result"]["isError"], true);
     assert_eq!(
-        second["result"]["_meta"]["com.browseros.neo/session"], handle,
-        "{second}"
+        second["result"]["_meta"]["com.browseros.neo/session"],
+        handle
     );
-    assert_eq!(second["result"]["structuredContent"]["session"], handle);
-    assert_eq!(second["result"]["structuredContent"]["value"], 2);
     let compact = format!(
         "[browseros-neo session: {}]",
         handle.as_str().unwrap_or_default()
@@ -1120,15 +1088,14 @@ async fn mcp_stateless_structured_results_carry_the_session_handle() -> anyhow::
     assert!(
         second["result"]["content"]
             .as_array()
-            .is_some_and(|blocks| blocks.iter().any(|block| block["text"] == compact)),
-        "{second}"
+            .is_some_and(|blocks| blocks.iter().any(|block| block["text"] == compact))
     );
     assert!(
         !second["result"]["content"]
             .to_string()
-            .contains("Pass this exact value"),
-        "{second}"
+            .contains("Pass this exact value")
     );
+    assert_eq!(app.state.sessions.count().await, 1);
     Ok(())
 }
 
@@ -1156,10 +1123,7 @@ async fn mcp_stateless_tool_schema_has_one_optional_product_fallback() -> anyhow
             .as_str()
             .unwrap_or_default();
         assert!(description.contains("client application"), "{description}");
-        assert!(
-            description.contains("Put your task name in name_session"),
-            "{description}"
-        );
+        assert!(description.contains("neo.createTask"), "{description}");
     }
     Ok(())
 }
@@ -1183,107 +1147,61 @@ async fn mcp_stateless_metadata_names_session_without_agent_argument() -> anyhow
                         "name": "codex-mcp-client", "version": "1.0"
                     }
                 },
-                "name": "name_session",
-                "arguments": { "name": "metadata check" }
+                "name": "await_human_help",
+                "arguments": {}
             }
         })),
         &[
             ("mcp-protocol-version", "2026-07-28"),
             ("mcp-method", "tools/call"),
-            ("mcp-name", "name_session"),
+            ("mcp-name", "await_human_help"),
         ],
     )
     .await?;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert!(!headers.contains_key("mcp-session-id"));
-    let text = body["result"]["content"][0]["text"]
-        .as_str()
-        .ok_or_else(|| anyhow::anyhow!("missing tool text: {body}"))?;
-    assert!(
-        text.starts_with("renamed to codex/metadata-check"),
-        "{text}"
+    let session = session_from_result(&app, &body).await?;
+    assert_eq!(session.client_name(), "codex-mcp-client");
+    assert_eq!(
+        claw_server::api::mcp::naming::session_group_title(&session, "metadata-check"),
+        "codex/metadata-check"
     );
     Ok(())
 }
 
 #[tokio::test]
-async fn mcp_name_session_lists_and_renames_while_disconnected() -> anyhow::Result<()> {
+async fn desktop_cached_tools_are_refused_before_a_stateless_session_starts() -> anyhow::Result<()>
+{
     let app = test_app().await?;
-    let session_id = initialize_mcp(&app).await?;
-    let headers = [("mcp-session-id", session_id.as_str())];
-
-    let (status, _headers, body) = request_json_with_headers(
-        &app.router,
-        "POST",
-        "/mcp",
-        Some(json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {} })),
-        &headers,
-    )
-    .await?;
-    assert_eq!(status, StatusCode::OK);
-    // SEP-2549 ttlMs/cacheScope are 2026-07-28-only; a legacy (2025-06-18) peer must
-    // not receive them (they are emitted only when the negotiated revision is 2026-07-28).
-    assert!(
-        body["result"]["ttlMs"].is_null(),
-        "ttlMs leaked to legacy peer"
-    );
-    assert!(
-        body["result"]["cacheScope"].is_null(),
-        "cacheScope leaked to legacy peer"
-    );
-    let tool = body["result"]["tools"]
-        .as_array()
-        .and_then(|tools| tools.iter().find(|tool| tool["name"] == "name_session"))
-        .ok_or_else(|| anyhow::anyhow!("name_session missing"))?;
-    assert_eq!(
-        tool["description"],
-        "Name this browser session at the start of a task: a small lowercase 2-3 word label for what it is doing, e.g. \"invoice processing\", a `category` for the kind of task, and a short `summary`. Tabs are grouped as <client>/<name>; the label stays on this machine, the summary powers audit search and is also recorded for analytics, and the category is used for anonymous aggregate analytics. Call again to update."
-    );
-    assert_eq!(
-        tool["inputSchema"],
-        json!({
-            "type": "object",
-            "properties": {
-                "name": { "type": "string", "maxLength": 64 },
-                "category": {
-                    "type": "string",
-                    "enum": [
-                        "shopping",
-                        "research",
-                        "email-and-messaging",
-                        "form-filling",
-                        "data-extraction",
-                        "testing-and-qa",
-                        "dev-tools",
-                        "social-media",
-                        "finance-and-admin",
-                        "internal-tools",
-                        "other"
-                    ],
-                    "description": "The kind of task, for anonymous aggregate analytics only; the free-form name is never sent. Pick the closest fit from the list."
-                },
-                "summary": {
-                    "type": "string",
-                    "maxLength": 200,
-                    "description": "One or two short lines saying what this task is, phrased so you can find it again by searching later. No names, emails, URLs, file paths, or account numbers."
-                },
-                "session": {
-                    "type": "string",
-                    "description": claw_server::api::mcp::SESSION_ARG_DESCRIPTION
-                }
-            },
-            "required": ["name"]
-        })
-    );
-    assert_eq!(
-        tool["annotations"],
-        json!({
-            "title": "Name session",
-            "readOnlyHint": false,
-            "destructiveHint": false,
-            "idempotentHint": true
-        })
-    );
+    for name in [
+        "name_session",
+        "tabs",
+        "snapshot",
+        "save_skill",
+        "mark_skill_run",
+        "run_skill",
+        "solve_captcha",
+    ] {
+        let body = stateless_mcp_request(
+            &app.router,
+            "tools/call",
+            json!({"name":name,"arguments":{}}),
+            Some("Codex"),
+        )
+        .await?;
+        assert_eq!(body["result"]["isError"], true, "{body}");
+        assert!(
+            body["result"]["content"][0]["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("run")),
+            "{body}"
+        );
+        assert!(
+            body["result"]["_meta"]["com.browseros.neo/session"].is_null(),
+            "{body}"
+        );
+    }
+    assert_eq!(app.state.sessions.count().await, 0);
     assert!(
         app.state
             .audit_log
@@ -1291,104 +1209,6 @@ async fn mcp_name_session_lists_and_renames_while_disconnected() -> anyhow::Resu
             .await?
             .tasks
             .is_empty()
-    );
-
-    let session = app
-        .state
-        .sessions
-        .lookup(&SessionId::new(session_id.clone()))
-        .await
-        .ok_or_else(|| anyhow::anyhow!("session not minted"))?;
-    let generated = session.generated_label().to_string();
-    let (status, _headers, body) = request_json_with_headers(
-        &app.router,
-        "POST",
-        "/mcp",
-        Some(name_session_request(3, "  Invoice Processing!!!  ")),
-        &headers,
-    )
-    .await?;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["result"]["isError"], false);
-    assert_eq!(
-        body["result"]["content"][0]["text"],
-        format!("renamed to codex/invoice-processing (was codex/{generated})")
-    );
-    assert_eq!(session.label().await, "invoice-processing");
-    app.state.audit_worker.flush_session(&session_id).await?;
-    let first_task = app
-        .state
-        .audit_log
-        .get_task(session_id.as_str())
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("name_session dispatch missing"))?;
-    assert_eq!(first_task.summary.dispatch_count, 1);
-    assert_eq!(first_task.summary.tool_sequence, ["name_session"]);
-    assert_eq!(first_task.dispatches[0].tool_name, "name_session");
-    assert_eq!(
-        first_task.dispatches[0].args_json.as_deref(),
-        Some(r#"{"name":"  Invoice Processing!!!  "}"#)
-    );
-    let (status, live) =
-        request_json(&app.router, "GET", "/api/v1/sessions?status=live", None).await?;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(live["items"].as_array().map(Vec::len), Some(1));
-    assert_eq!(live["items"][0]["sessionId"], session_id);
-    assert_eq!(live["items"][0]["dispatchCount"], 1);
-    assert_eq!(live["items"][0]["toolSequence"], json!(["name_session"]));
-
-    let (_status, _headers, body) = request_json_with_headers(
-        &app.router,
-        "POST",
-        "/mcp",
-        Some(name_session_request(4, "Quarterly Reporting")),
-        &headers,
-    )
-    .await?;
-    assert_eq!(
-        body["result"]["content"][0]["text"],
-        "renamed to codex/quarterly-reporting (was codex/invoice-processing)"
-    );
-    app.state.audit_worker.flush_session(&session_id).await?;
-    assert_eq!(
-        app.state
-            .audit_log
-            .get_task_summary(session_id.as_str())
-            .await?
-            .map(|task| (task.dispatch_count, task.tool_sequence)),
-        Some((
-            2,
-            vec!["name_session".to_string(), "name_session".to_string()]
-        ))
-    );
-
-    for (id, invalid, message) in [
-        (
-            5,
-            "!!!".to_string(),
-            "name must contain a usable session name",
-        ),
-        (6, "x".repeat(65), "name must be at most 64 characters"),
-    ] {
-        let (_status, _headers, body) = request_json_with_headers(
-            &app.router,
-            "POST",
-            "/mcp",
-            Some(name_session_request(id, &invalid)),
-            &headers,
-        )
-        .await?;
-        assert_eq!(body["result"]["isError"], true);
-        assert_eq!(body["result"]["content"][0]["text"], message);
-        assert_eq!(session.label().await, "quarterly-reporting");
-    }
-    assert_eq!(
-        app.state
-            .audit_log
-            .get_task_summary(session_id.as_str())
-            .await?
-            .map(|task| task.dispatch_count),
-        Some(2)
     );
     Ok(())
 }
@@ -1440,7 +1260,7 @@ async fn mcp_session_naming_appends_five_tips_without_elicitation() -> anyhow::R
 
     let mut stream = McpSseStream::open(&app.router, &session_id).await?;
     let tip = format!(
-        "Tip: this session is \"claude/{generated}\" — rename it with name_session name=\"<2-3 word task label>\""
+        "Tip: this session is \"claude/{generated}\" — name it by passing taskName=\"<2-3 word task label>\" on your next call"
     );
     for id in 3..=7 {
         let (status, _headers, body) = request_json_with_headers(
@@ -2445,9 +2265,19 @@ async fn initialize_mcp(app: &TestApp) -> anyhow::Result<String> {
     assert_eq!(body["result"]["serverInfo"]["name"], "browseros-neo");
     assert_eq!(body["result"]["serverInfo"]["title"], "BrowserOS neo");
     assert!(
-        body["result"]["instructions"].as_str().is_some_and(
-            |instructions| instructions.starts_with("BrowserOS neo — the browser for agents")
-        )
+        body["result"]["instructions"]
+            .as_str()
+            .is_some_and(|instructions| {
+                if app.state.config.mode.is_hosted() {
+                    instructions.starts_with("BrowserOS neo — the browser for agents")
+                } else {
+                    Some(instructions)
+                        == claw_server::api::mcp::ClawMcpService::new(app.state.clone())
+                            .get_info()
+                            .instructions
+                            .as_deref()
+                }
+            })
     );
     let session_id = headers
         .get("mcp-session-id")
@@ -2471,20 +2301,8 @@ fn tabs_new_request(id: u64) -> Value {
     })
 }
 
-fn name_session_request(id: u64, name: &str) -> Value {
-    json!({
-        "jsonrpc": "2.0",
-        "id": id,
-        "method": "tools/call",
-        "params": {
-            "name": "name_session",
-            "arguments": { "name": name }
-        }
-    })
-}
-
-/// The initialized notification is acknowledged before the service finishes
-/// registering the session, so an immediate tool call can race the registry.
+// The initialized acknowledgment can precede async session registration. Tests
+// wait on the session store before asserting lifecycle state.
 async fn wait_for_session_registration(app: &TestApp, session_id: &str) -> anyhow::Result<()> {
     for _ in 0..50 {
         if app
@@ -2956,13 +2774,18 @@ async fn hosted_mode_refuses_hidden_tools_with_the_alternative() -> anyhow::Resu
 /// become a label fails the call without touching the name. Desktop accepts it too, though
 /// only hosted advertises it.
 #[tokio::test]
-async fn task_name_on_any_call_names_the_session() -> anyhow::Result<()> {
+async fn task_name_names_only_hosted_sessions() -> anyhow::Result<()> {
     for app in [hosted_test_app().await?, test_app().await?] {
         let mode = app.state.config.mode;
+        let tool = if mode.is_hosted() {
+            "tabs"
+        } else {
+            "await_human_help"
+        };
         let first = stateless_mcp_request(
             &app.router,
             "tools/call",
-            json!({ "name": "tabs", "arguments": {
+            json!({ "name": tool, "arguments": {
                 "action": "list", "taskName": "Invoice Processing"
             } }),
             Some("Claude Code"),
@@ -2977,12 +2800,13 @@ async fn task_name_on_any_call_names_the_session() -> anyhow::Result<()> {
             .lookup(&SessionId::new(handle))
             .await
             .ok_or_else(|| anyhow::anyhow!("{mode:?}: missing session"))?;
-        assert_eq!(session.label().await, "invoice-processing", "{mode:?}");
+        let label = session.label().await;
+        assert_eq!(label == "invoice-processing", mode.is_hosted(), "{mode:?}");
 
         let rejected = stateless_mcp_request(
             &app.router,
             "tools/call",
-            json!({ "name": "tabs", "arguments": {
+            json!({ "name": tool, "arguments": {
                 "action": "list", "session": handle, "taskName": "!!!"
             } }),
             Some("Claude Code"),
@@ -2993,7 +2817,7 @@ async fn task_name_on_any_call_names_the_session() -> anyhow::Result<()> {
             .as_str()
             .unwrap_or_default();
         assert!(text.contains("taskName"), "{mode:?}: {text}");
-        assert_eq!(session.label().await, "invoice-processing", "{mode:?}");
+        assert_eq!(session.label().await, label, "{mode:?}");
     }
     Ok(())
 }

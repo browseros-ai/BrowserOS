@@ -57,6 +57,33 @@ async fn connect_stack(
 }
 
 #[tokio::test]
+async fn hosted_composition_registers_script_cdp_disabled() -> Result<(), Box<dyn Error>> {
+    let dir = tempfile::tempdir()?;
+    let fake = FakeCdp::new();
+    let runtime = connect(&dir, Arc::clone(&fake)).await?;
+    let run = runtime.open_run(Duration::from_secs(10)).await?;
+    let reply: Value = serde_json::from_str(
+        &run.invoke(
+            "neo.cdp".to_owned(),
+            r#"{"method":"Browser.getWindows"}"#,
+            "run:1:1",
+        )
+        .await,
+    )?;
+    assert_eq!(reply["err"]["owner"], "host");
+    assert_eq!(reply["err"]["code"], "cdp_unavailable");
+    assert_eq!(reply["err"]["delivery"], "not_sent");
+    assert_eq!(
+        fake.count("Browser.getWindows"),
+        0,
+        "the embedded composition never opts into raw CDP"
+    );
+    run.finish().await?;
+    runtime.close().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn open_invoke_finish_records_the_real_run() -> Result<(), Box<dyn Error>> {
     let dir = tempfile::tempdir()?;
     let fake = FakeCdp::new();

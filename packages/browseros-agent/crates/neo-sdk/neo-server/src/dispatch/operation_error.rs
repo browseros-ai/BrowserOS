@@ -234,6 +234,8 @@ error_codes! {
     /// This Neo has no CAPTCHA provider key, so `neo.solveCaptcha` is off. The deployment adds
     /// one; the script cannot.
     CAPTCHA_UNAVAILABLE = "captcha_unavailable";
+    /// The host did not enable raw CDP in its launch file.
+    CDP_UNAVAILABLE = "cdp_unavailable";
 
     // neo-playwright's codes. The crate's own error table picks each one's owner, whether
     // it is a timeout and whether Neo can vouch for what happened; builtins/playwright_ops.rs

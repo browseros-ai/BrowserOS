@@ -228,13 +228,14 @@ fn normalize_token(value: &Value, accepted: &[&str]) -> Option<Value> {
 
 /// Tools the server registers next to the shared browser catalog. Daily counts keep their names;
 /// anything else is reported as `other`.
-const SERVER_TOOL_NAMES: [&str; 6] = [
+const SERVER_TOOL_NAMES: [&str; 7] = [
     "save_skill",
     "mark_skill_run",
     "run_skill",
     "request_human_help",
     "await_human_help",
     "solve_captcha",
+    "pursue",
 ];
 
 fn known_tool_names() -> &'static HashSet<&'static str> {
@@ -996,6 +997,29 @@ mod tests {
                 "by_client": { "Codex": 1 }
             })),
             None
+        );
+    }
+
+    #[test]
+    fn daily_tool_calls_keep_pursue_named_and_unknown_tools_bucketed() {
+        let sanitized = TOOL_CALLS_DAILY.sanitize(&json!({
+            "day": "2026-11-10",
+            "total_calls": 3,
+            "error_calls": 0,
+            "distinct_tools": 2,
+            "by_tool": { "pursue": 2, "unknown_tool": 1 },
+            "by_client": { "Codex": 3 }
+        }));
+        assert_eq!(
+            sanitized,
+            Some(json!({
+                "day": "2026-11-10",
+                "total_calls": 3,
+                "error_calls": 0,
+                "distinct_tools": 2,
+                "by_tool": { "pursue": 2, "other": 1 },
+                "by_client": { "codex": 3 }
+            }))
         );
     }
 
