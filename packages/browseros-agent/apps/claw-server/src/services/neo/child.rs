@@ -223,8 +223,7 @@ async fn spawn(launch: &EngineLaunch, previous_port: Option<u16>) -> io::Result<
     // can host several stdio parents, so fixed credential/socket paths would race.
     // Unix sockets have a short path limit. Keep them outside the possibly deep
     // state directory while the explicit token path still gets SDK protection.
-    let host_files = tempfile::Builder::new().prefix("neo-host-").tempdir()?;
-    fs::set_permissions(host_files.path(), std::fs::Permissions::from_mode(0o700)).await?;
+    let host_files = host_files_dir(&std::env::temp_dir())?;
     let token = format!(
         "{}{}",
         uuid::Uuid::new_v4().simple(),
@@ -266,6 +265,13 @@ async fn spawn(launch: &EngineLaunch, previous_port: Option<u16>) -> io::Result<
         host_files,
         port,
     })
+}
+
+fn host_files_dir(temp_root: &Path) -> io::Result<tempfile::TempDir> {
+    tempfile::Builder::new()
+        .prefix("neo-host-")
+        .permissions(std::fs::Permissions::from_mode(0o700))
+        .tempdir_in(temp_root)
 }
 
 fn reserve_port(previous_port: Option<u16>) -> io::Result<TcpListener> {
@@ -400,17 +406,60 @@ async fn save_tool(path: &Path, tool: &RunTool) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use std::{
+        os::unix::{fs::PermissionsExt, net::UnixListener},
         path::PathBuf,
         sync::{Arc, Mutex},
         time::Duration,
     };
 
     use super::{
-        AttemptExit, RestartBackoff, configure_settings, launch_config, load_saved_tool,
+        AttemptExit, RestartBackoff, configure_settings, host_files_dir, launch_config, load_saved_tool,
         reserve_port, save_tool, supervise_with, temporary_json,
     };
     use crate::services::neo::{EngineLaunch, EngineState, NeoEngine, RunTool};
     use serde_json::{Value, json};
+
+    #[test]
+    fn host_files_dir_keeps_short_temp_root() -> anyhow::Result<()> {
+        let root = tempfile::tempdir_in("/tmp")?;
+        let first = host_files_dir(root.path())?;
+        let second = host_files_dir(root.path())?;
+        assert_eq!(first.path().parent(), Some(root.path()));
+        assert_eq!(second.path().parent(), Some(root.path()));
+        assert_ne!(first.path(), second.path());
+        assert_eq!(
+            first.path().metadata()?.permissions().mode() & 0o777,
+            0o700
+        );
+        let socket = UnixListener::bind(first.path().join("host.sock"))?;
+        let path = first.path().to_owned();
+        drop(socket);
+        drop(first);
+        assert!(!path.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn host_files_dir_falls_back_when_temp_root_is_too_long() -> anyhow::Result<()> {
+        let root = tempfile::tempdir_in("/tmp")?;
+        let long_root = root.path().join("x".repeat(120));
+        std::fs::create_dir(&long_root)?;
+        let first = host_files_dir(&long_root)?;
+        let second = host_files_dir(&long_root)?;
+        let socket = UnixListener::bind(first.path().join("host.sock"))?;
+        assert!(!first.path().starts_with(&long_root));
+        assert_ne!(first.path(), second.path());
+        assert_eq!(
+            first.path().metadata()?.permissions().mode() & 0o777,
+            0o700
+        );
+        assert_eq!(std::fs::read_dir(&long_root)?.count(), 0);
+        let path = first.path().to_owned();
+        drop(socket);
+        drop(first);
+        assert!(!path.exists());
+        Ok(())
+    }
 
     fn fake_launch() -> EngineLaunch {
         EngineLaunch {
