@@ -52,6 +52,10 @@ fn pages() -> HashMap<String, Page> {
         ("far-top", include_str!("data/actions/far-top.html")),
         ("far-b", include_str!("data/actions/far-b.html")),
         ("far-c", include_str!("data/actions/far-c.html")),
+        (
+            "click-viewport",
+            include_str!("data/actions/click-viewport.html"),
+        ),
     ] {
         pages.insert(format!("/actions/{name}.html"), Page::html(body));
     }
@@ -686,6 +690,123 @@ async fn tests_that_a_refused_click_leaves_the_mouse_where_it_was() -> TestResul
         "the press went where the mouse was before the refused click planned its move"
     );
     run.close_page(&page).await;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+#[expect(
+    clippy::too_many_lines,
+    clippy::print_stdout,
+    reason = "all viewport cases print their caller outcomes before one final assertion"
+)]
+async fn tests_that_click_clips_each_corner_before_dispatching_viewport_input() -> TestResult {
+    let run = LiveRun::connect().await?;
+    let server = FixtureServer::start(pages()).await?;
+    let page = agent_tab(
+        &run,
+        &server.url("127.0.0.1", "/actions/click-viewport.html"),
+    )
+    .await?;
+    let viewport: [i32; 2] =
+        serde_json::from_value(run.eval(&page, "[innerWidth, innerHeight]").await?)?;
+    let [width, height] = viewport;
+    let mut failures = Vec::new();
+    for (name, x, y, point) in [
+        ("above-left", -30, -30, None),
+        ("below-right", width + 10, height + 10, None),
+        ("left-only", -30, 10, None),
+        ("partial", -10, -10, Some((5, 5))),
+        ("inside", 10, 10, Some((20, 20))),
+    ] {
+        for force in [false, true] {
+            run.eval(
+                &page,
+                &format!(
+                    "(() => {{ const target = document.getElementById('target'); \
+                     target.style.left = '{x}px'; target.style.top = '{y}px'; \
+                     window.__pointerEvents = []; }})()"
+                ),
+            )
+            .await?;
+            run.record_input();
+            // Freeze the box so this exercises clipping rather than scroll recovery. Forced
+            // actions skip the hit interceptor, exposing a bad measure's actual CDP point.
+            let result = run
+                .invoke(
+                    "locator.click",
+                    action(
+                        "locator.click",
+                        &at(&page, "#target"),
+                        json!({ "force": force, "scroll": "none" }),
+                        1500,
+                    ),
+                )
+                .await;
+            let sent = run.recorded_input();
+            let observed = run
+                .eval(
+                    &page,
+                    "({ events: window.__pointerEvents, scroll: [scrollX, scrollY], \
+                     viewport: [innerWidth, innerHeight] })",
+                )
+                .await?;
+            let outcome = match &result {
+                Ok(value) => json!({ "ok": value }),
+                Err(error) => json!({ "code": error.code(), "message": error.message() }),
+            };
+            println!(
+                "click viewport {name} force={force}: outcome={outcome} sent={sent:?} observed={observed}"
+            );
+            let events = observed["events"]
+                .as_array()
+                .ok_or("the fixture records events")?;
+            let expected = match point {
+                Some((expected_x, expected_y)) => {
+                    result.is_ok()
+                        && events.iter().any(|event| {
+                            event["type"] == "click"
+                                && event["target"] == "target"
+                                && event["trusted"] == true
+                                && event["x"] == expected_x
+                                && event["y"] == expected_y
+                        })
+                }
+                None => {
+                    result
+                        .as_ref()
+                        .is_err_and(|error| error.message().contains("outside of the viewport"))
+                        && sent.is_empty()
+                        && events.is_empty()
+                }
+            };
+            let nonnegative = |value: &Value| {
+                ["x", "y"].iter().all(|&axis| {
+                    value[axis]
+                        .as_f64()
+                        .is_some_and(|coordinate| coordinate >= 0.0)
+                })
+            };
+            let valid_coordinates = sent.iter().all(|input| {
+                input["method"] != "Input.dispatchMouseEvent" || nonnegative(&input["params"])
+            }) && events.iter().all(nonnegative);
+            if !expected
+                || !valid_coordinates
+                || observed["scroll"] != json!([0, 0])
+                || observed["viewport"] != json!(viewport)
+            {
+                failures.push(format!(
+                    "{name} force={force}: {outcome}, {observed}, sent={sent:?}"
+                ));
+            }
+        }
+    }
+    run.close_page(&page).await;
+    assert!(
+        failures.is_empty(),
+        "offscreen boxes must send nothing; visible boxes must click their clipped center: \
+         {failures:#?}"
+    );
     Ok(())
 }
 
