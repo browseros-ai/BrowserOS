@@ -3,7 +3,11 @@
 use crate::config::Defaults;
 use crate::dispatch::{Listing, Registry};
 
-/// How a script is written and what it gets, true of every build.
+/// How a script is written and what it gets, true of every build and every caller. It is one
+/// static text, never built from `tabs.scope` or the call: whether a run is bound to its task is
+/// the host's setting and the call's `taskId`, so the text says what binding does only as a
+/// condition ("when the host binds runs to their task"), and stays true under either scope and
+/// for a run without a task.
 const USAGE: &str = "Runs JavaScript against the user's browser and returns what the script \
 returns. `code` is the body of an async function: `await` each SDK call and `return` a JSON \
 value. Each run starts with fresh JavaScript. With no task, built-in `page` opens a new tab \
@@ -14,9 +18,9 @@ To keep tabs across runs, create a task and return its id. First run: \
 tab, else a new one), and `context.newPage()` opens in the task. The latest task pick wins. \
 Use `task.pages()` (oldest first), `task.page(tabId)` or `task.newPage()` as needed. \
 When finished: `await task.close()`. Popups join their opener's task. `context.pages()` \
-lists the tabs this run may use (with a task: that task's tabs, not the browser's tab count), \
-with `page.tabId` and `page.taskId` (null without a task); use it to recover a lost task id. \
-Another task's tab is refused with `page_not_in_task`.\n\n\
+lists the tabs this run may use, with `page.tabId` and `page.taskId` (null without a task); use \
+it to recover a lost task id. When the host binds runs to their task, that is only this task's \
+tabs (not the browser's tab count), and any other tab is refused with `page_not_in_task`.\n\n\
 The function's parameters are the SDK: Playwright's `page`, `context`, `browser`, `expect` and \
 `playwright` (`selectors.setTestIdAttribute`, `errors.TimeoutError`), Node's `Buffer` \
 (`screenshot` and `pdf` resolve to one, and a `setInputFiles` payload takes one), then `neo` \
@@ -209,9 +213,8 @@ mod tests {
             "The latest task pick wins.",
             "When finished: `await task.close()`.",
             "Popups join their opener's task.",
-            "`context.pages()` lists the tabs this run may use (with a task: that task's tabs, not the browser's tab count)",
-            "with `page.tabId` and `page.taskId` (null without a task)",
-            "Another task's tab is refused with `page_not_in_task`.",
+            "`context.pages()` lists the tabs this run may use, with `page.tabId` and `page.taskId` (null without a task); use it to recover a lost task id.",
+            "When the host binds runs to their task, that is only this task's tabs (not the browser's tab count), and any other tab is refused with `page_not_in_task`.",
         ] {
             assert!(
                 description.contains(sentence),
