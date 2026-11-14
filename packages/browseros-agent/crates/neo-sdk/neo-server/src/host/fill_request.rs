@@ -95,6 +95,9 @@ pub(crate) struct CheckRequest {
     pub(crate) url: Option<String>,
     /// The boxes, with no length.
     pub(crate) boxes: Vec<RecordedBox>,
+    /// The value each box is compared with (ruling R48), in the boxes' order, `None` for a box
+    /// sent without one. Never in a record: it goes to the run's slot beside the op.
+    pub(crate) values: Vec<Option<PrivateText>>,
 }
 
 #[derive(Deserialize)]
@@ -150,6 +153,9 @@ struct WireCheck {
 struct WireCheckField {
     #[serde(rename = "ref")]
     box_ref: String,
+    /// The value to compare the box with (ruling R48), the fill's own private text.
+    #[serde(default, deserialize_with = "optional_private_value")]
+    value: Option<PrivateText>,
     #[serde(default)]
     expect: Option<Expect>,
     #[serde(default)]
@@ -213,18 +219,34 @@ impl CheckRequest {
         for expect in fields.iter().filter_map(|field| field.expect.as_ref()) {
             origin_named(expect)?;
         }
-        let boxes = fields
+        // Ruling R48: a value goes only to a box on an origin the host approved, so a field that
+        // carries one names that origin, as a fill's field does. Refused before anything is
+        // sent, and the message names the field, never its value.
+        if let Some(index) = fields
+            .iter()
+            .position(|field| field.value.is_some() && field.expect.is_none())
+        {
+            return Err(format!(
+                "body.fields[{index}].expect: a field that carries a value carries expect with \
+                 the origin of the box's own frame"
+            ));
+        }
+        let (boxes, values) = fields
             .into_iter()
-            .map(|field| RecordedBox {
-                box_ref: field.box_ref,
-                // Absent: the look checks no origin and no fact, and reports the facts.
-                expect: field.expect,
-                cut: field.cut,
-                spaced: field.spaced,
-                keys: field.keys,
-                characters: None,
+            .map(|field| {
+                let recorded = RecordedBox {
+                    box_ref: field.box_ref,
+                    // Absent: the look checks no origin and no fact, and reports the facts.
+                    expect: field.expect,
+                    cut: field.cut,
+                    spaced: field.spaced,
+                    keys: field.keys,
+                    // A check's record names no value and no length, compared or not.
+                    characters: None,
+                };
+                (recorded, field.value)
             })
-            .collect();
+            .unzip();
         Ok(Self {
             tab,
             task_id: task_id.as_deref().map(task_id_of).transpose()?,
@@ -232,6 +254,7 @@ impl CheckRequest {
             timeout: timeout_of(timeout_ms)?,
             url,
             boxes,
+            values,
         })
     }
 }
@@ -262,8 +285,6 @@ fn refusal(error: &PathError<serde_json::Error>) -> String {
         NOT_TEXT
     } else if starts("unknown field `requestId`") {
         "a check types nothing, so it takes no requestId; send it with the fill"
-    } else if starts("unknown field `value`") {
-        "a check takes no value; send values with the fill alone"
     } else if starts("unknown field") {
         "this key is not part of the request"
     } else if let Some(missing) = KNOWN_KEYS
@@ -291,6 +312,14 @@ const NOT_TEXT: &str = "a value is a JSON string";
 /// Reads a field's `value` straight into `PrivateText`. serde's own refusal of a number sent as
 /// `value` formats the number into the error it builds; this visitor takes any JSON type, so it
 /// is handed the number and refuses it with a fixed sentence before anything formats it.
+/// [`private_value`] for an optional field: absent is `None`, and a value, once present, is
+/// checked as the fill's is.
+fn optional_private_value<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<PrivateText>, D::Error> {
+    private_value(deserializer).map(Some)
+}
+
 fn private_value<'de, D: Deserializer<'de>>(deserializer: D) -> Result<PrivateText, D::Error> {
     struct Value;
     impl<'de> Visitor<'de> for Value {
@@ -579,15 +608,38 @@ mod tests {
     }
 
     #[test]
-    fn a_check_takes_no_value_and_no_request_id() {
+    fn a_check_takes_a_value_to_compare_and_no_request_id() {
         let check = |body: &str| CheckRequest::parse(TabId(7), body.as_bytes());
+        // Ruling R48: a value to compare, beside the box it names and its approved origin, never
+        // in its record.
         let with_value = check(&format!(
-            r#"{{"fields":[{{"ref":"e1","value":"{SECRET}","expect":{{"origin":"x"}}}}]}}"#
+            r#"{{"fields":[{{"ref":"e1","value":"{SECRET}","expect":{{"origin":"x"}}}},{{"ref":"e2"}}]}}"#
+        ));
+        let parsed = with_value.as_ref().map_err(String::clone);
+        assert_eq!(
+            parsed.map(|check| check.values.iter().map(Option::is_some).collect::<Vec<_>>()),
+            Ok(vec![true, false])
+        );
+        let boxes = format!(
+            "{:?}",
+            with_value.map(|check| check.boxes).unwrap_or_default()
+        );
+        assert!(!boxes.contains("CANARY"), "{boxes}");
+        // A value with no `expect` names no approved origin: malformed, and not quoted.
+        let unapproved = check(&format!(
+            r#"{{"fields":[{{"ref":"e1"}},{{"ref":"e2","value":"{SECRET}"}}]}}"#
         ))
         .err()
         .unwrap_or_default();
-        assert!(with_value.contains("takes no value"), "{with_value}");
-        assert!(!with_value.contains("CANARY"), "{with_value}");
+        assert!(
+            unapproved.starts_with("body.fields[1].expect: a field that carries a value"),
+            "{unapproved}"
+        );
+        assert!(!unapproved.contains("CANARY"), "{unapproved}");
+        let control = check(r#"{"fields":[{"ref":"e1","value":"a\nb"}]}"#)
+            .err()
+            .unwrap_or_default();
+        assert!(control.contains("no control character"), "{control}");
         let with_id = check(r#"{"requestId":"r","fields":[{"ref":"e1","expect":{"origin":"x"}}]}"#)
             .err()
             .unwrap_or_default();

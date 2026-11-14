@@ -1,5 +1,5 @@
 {
-  "protocol": 41,
+  "protocol": 42,
   "callFunction": "function (call, root, ...nodes) { const probe = globalThis.__neoProbe; return probe ? probe.call(call, root ?? this, nodes) : { kind: \"uninstalled\" }; }",
   "replyKinds": {
     "describe": [
@@ -590,6 +590,15 @@
       "pin": 3,
       "step": {
         "kind": "holds",
+        "text": "4242 4242",
+        "spaced": true
+      }
+    },
+    {
+      "op": "private",
+      "pin": 3,
+      "step": {
+        "kind": "compare",
         "text": "4242 4242",
         "spaced": true
       }
@@ -1271,19 +1280,19 @@
   "replies": [
     {
       "kind": "described",
-      "protocol": 41,
+      "protocol": 42,
       "seq": 0,
       "url": "https://example.com/"
     },
     {
       "kind": "described",
-      "protocol": 41,
+      "protocol": 42,
       "seq": 347,
       "url": "https://pay.example/frame"
     },
     {
       "kind": "described",
-      "protocol": 41,
+      "protocol": 42,
       "seq": 512340,
       "url": "https://example.com/",
       "retired": 0
@@ -1568,6 +1577,14 @@
       "value": {
         "kind": "holds",
         "holds": true
+      }
+    },
+    {
+      "kind": "value",
+      "value": {
+        "kind": "compared",
+        "holds": false,
+        "contains": true
       }
     },
     {

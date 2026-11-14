@@ -156,7 +156,12 @@ function changedFact(facts: BoxFacts, expect: BoxExpect): BoxFact | undefined {
     expect.autocomplete !== facts.autocomplete
   )
     return 'autocomplete'
-  if (expect.maxLength !== undefined && expect.maxLength !== facts.maxLength)
+  // -1 is the DOM's own word for a box with no maxlength (ruling R49): a host sends it to pin
+  // that the box has none, and the facts, which leave it out, compare as -1.
+  if (
+    expect.maxLength !== undefined &&
+    expect.maxLength !== (facts.maxLength ?? -1)
+  )
     return 'maxLength'
   if (expect.inputMode !== undefined && expect.inputMode !== facts.inputMode)
     return 'inputMode'

@@ -20,6 +20,12 @@ pub struct FillBoxCheck {
     /// The first rule a fill would be refused by now; absent when none.
     #[serde(rename = "refusal", skip_serializing_if = "Option::is_none")]
     pub refusal: Option<Box<models::OperationError>>,
+    /// Present exactly when the field sent a `value` and Neo read the box, whatever the look says of it (a covered, hidden or out-of-view box answers it beside its refusal). The value goes only where a fill would send it, so it never enters a site the host did not approve: a box on another origin than `expect.origin` answers `wrong_origin`, and a tab no longer at the request's `url` answers `page_changed`, both with no compare. True when the box holds the value by a fill's read-back rule: equal, or with `spaced` equal once whitespace, dashes and slashes are set aside, and with `cut` the part the box's `maxlength` keeps. True decides \"entered as typed\".
+    #[serde(rename = "holds", skip_serializing_if = "Option::is_none")]
+    pub holds: Option<bool>,
+    /// Present exactly when `holds` is. True when the box's text contains the value by the same rule of setting separators aside; true whenever `holds` is. False decides \"gone\": the value has left the box. Booleans only: no value, position, length or count of matches. When both are absent the refusal says why, and it is never \"not held\": `element_detached` means Neo no longer reaches the box by this ref (the box left its document, the document was replaced, the frame is gone, or the isolated world the ref was made in is gone). It is not proof that the box left the page: take a fresh snapshot to know. `run_timeout` or any other code means Neo could not read the box now. A value the page reformats beyond whitespace, dashes and slashes is neither held nor contained, and a copy of the value in another box is not seen.
+    #[serde(rename = "contains", skip_serializing_if = "Option::is_none")]
+    pub contains: Option<bool>,
 }
 
 impl FillBoxCheck {
@@ -28,6 +34,8 @@ impl FillBoxCheck {
         FillBoxCheck {
             facts: None,
             refusal: None,
+            holds: None,
+            contains: None,
         }
     }
 }

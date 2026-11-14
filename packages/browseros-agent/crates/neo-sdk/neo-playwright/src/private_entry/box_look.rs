@@ -41,4 +41,18 @@ pub struct BoxLook {
     pub facts: Option<BoxFacts>,
     /// The first check an entry would be refused by now; `None` when every check passed.
     pub refusal: Option<EntryError>,
+    /// The check call's compare (ruling R48), whenever it sent a value and Neo read the box:
+    /// absent when the box could not be read, and then the refusal says why. Never a `false`
+    /// for a box that was not read.
+    pub compared: Option<Compared>,
+}
+
+/// What the check call's compare found in a box: booleans only, never the value, a position, a
+/// length or a count.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Compared {
+    /// The box holds the value by the fill's read-back rule.
+    pub holds: bool,
+    /// The box's text contains the value by the same rule; true whenever `holds` is.
+    pub contains: bool,
 }

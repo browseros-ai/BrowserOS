@@ -1,0 +1,29 @@
+<!doctype html><meta charset=utf-8><title>Pin mirror</title>
+<style>
+  body { margin: 24px; font: 15px sans-serif; }
+  .pin { width: 32px; margin-right: 6px; text-align: center; }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+</style>
+<!-- A four-box code widget modelled on a real pin input (ruling R50's row 13c). Text given to
+     the first box is spread one character to each box, and the whole code is mirrored into an
+     input the widget submits, hidden only visually, so a snapshot reads it. The page's own
+     input handler does it inside the first box's input event, so one insertion always finds
+     the code spread before Neo reads the box back. -->
+<div role=group aria-label="Code">
+  <input class=pin aria-label="Digit 1">
+  <input class=pin aria-label="Digit 2">
+  <input class=pin aria-label="Digit 3">
+  <input class=pin aria-label="Digit 4">
+</div>
+<input class=sr id=whole name=code aria-label="Whole code" tabindex=-1>
+<script>
+  const boxes = [...document.querySelectorAll('.pin')]
+  boxes[0].addEventListener('input', (event) => {
+    const text = event.target.value
+    if (text.length < 2) return
+    boxes.forEach((box, index) => {
+      box.value = text[index] ?? ''
+    })
+    document.getElementById('whole').value = text
+  })
+</script>

@@ -4,6 +4,10 @@
 //!
 //! It keeps the session, the method, the event's `type` and a named key (`Shift`, `Delete`),
 //! never a character key or inserted text, so a recording holds no part of a value typed.
+//!
+//! While a test names a text ([`InputRecording::watch_for`]), it also keeps the session of every
+//! command, of any method, whose params carry that text: where a host's value went, and where it
+//! never went (ruling R48). Only the session is kept, never the params.
 
 use std::mem;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -28,6 +32,8 @@ pub(crate) struct InputCall {
 pub(crate) struct InputRecording {
     inner: Arc<dyn CdpConnection>,
     calls: Mutex<Vec<InputCall>>,
+    /// The text a test watches for, and the session of each command that carried it since.
+    watched: Mutex<Option<(String, Vec<Option<String>>)>>,
 }
 
 impl InputRecording {
@@ -35,7 +41,34 @@ impl InputRecording {
         Arc::new(Self {
             inner,
             calls: Mutex::new(Vec::new()),
+            watched: Mutex::new(None),
         })
+    }
+
+    /// From now on, keeps the session of every command whose params carry `text`.
+    pub(crate) fn watch_for(&self, text: &str) {
+        *self.watched.lock().unwrap_or_else(PoisonError::into_inner) =
+            Some((text.to_owned(), Vec::new()));
+    }
+
+    /// The session of each command that carried the watched text since the last call (`None`:
+    /// the browser's own), in the order they went out.
+    pub(crate) fn take_carriers(&self) -> Vec<Option<String>> {
+        self.watched
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_mut()
+            .map(|(_, carriers)| mem::take(carriers))
+            .unwrap_or_default()
+    }
+
+    fn spot(&self, params: impl FnOnce() -> String, session: Option<&SessionId>) {
+        let mut watched = self.watched.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some((text, carriers)) = watched.as_mut()
+            && params().contains(text.as_str())
+        {
+            carriers.push(session.map(|session| session.as_str().to_owned()));
+        }
     }
 
     /// The `Input.*` calls since the last take, in the order they went out.
@@ -44,6 +77,11 @@ impl InputRecording {
     }
 
     fn keep(&self, method: &str, params: &Value, session: Option<&SessionId>) {
+        self.spot(|| params.to_string(), session);
+        self.keep_input(method, params, session);
+    }
+
+    fn keep_input(&self, method: &str, params: &Value, session: Option<&SessionId>) {
         if !method.starts_with("Input.") {
             return;
         }
@@ -61,9 +99,10 @@ impl InputRecording {
     }
 
     fn keep_raw(&self, method: &str, params_json: &str, session: Option<&SessionId>) {
+        self.spot(|| params_json.to_owned(), session);
         if method.starts_with("Input.") {
             let params = serde_json::from_str(params_json).unwrap_or(Value::Null);
-            self.keep(method, &params, session);
+            self.keep_input(method, &params, session);
         }
     }
 }

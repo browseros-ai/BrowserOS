@@ -80,7 +80,9 @@ type?: string,
  */
 autocomplete?: string, 
 /**
- * The box's `maxlength`.
+ * The box's `maxlength`, or `-1` for a box that must have none (ruling R49), the DOM's own
+ * word for a box without one. Absent, it is not checked; `0` is a limit of zero. Any other
+ * negative number is refused as a malformed body.
  */
 maxLength?: number, 
 /**
@@ -347,12 +349,12 @@ export type Point = { x: number, y: number, };
 /**
  * The answer to one step (`value` payload of the `private` request).
  */
-export type PrivateAnswer = { "kind": "focus", focus: FocusState, } | { "kind": "holds", holds: boolean, } | { "kind": "readBack", state: BoxState, heldAtLastInput: boolean, moving: boolean, drawing: Drawing, } | { "kind": "forgot" } | { "kind": "markedFocused", marked: boolean, } | { "kind": "drawn", drawn: boolean, };
+export type PrivateAnswer = { "kind": "focus", focus: FocusState, } | { "kind": "holds", holds: boolean, } | { "kind": "compared", holds: boolean, contains: boolean, } | { "kind": "readBack", state: BoxState, heldAtLastInput: boolean, moving: boolean, drawing: Drawing, } | { "kind": "forgot" } | { "kind": "markedFocused", marked: boolean, } | { "kind": "drawn", drawn: boolean, };
 
 /**
  * One step of the entry on a pinned box.
  */
-export type PrivateStep = { "kind": "focus", text: PageSecret, spaced: boolean, } | { "kind": "focused" } | { "kind": "holds", text: PageSecret, spaced: boolean, } | { "kind": "readBack" } | { "kind": "forget" } | { "kind": "markFocused" } | { "kind": "drawn", text: PageSecret, };
+export type PrivateStep = { "kind": "focus", text: PageSecret, spaced: boolean, } | { "kind": "focused" } | { "kind": "holds", text: PageSecret, spaced: boolean, } | { "kind": "compare", text: PageSecret, spaced: boolean, } | { "kind": "readBack" } | { "kind": "forget" } | { "kind": "markFocused" } | { "kind": "drawn", text: PageSecret, };
 
 /**
  * The common private call envelope. Keeping the policy outside request variants prevents a

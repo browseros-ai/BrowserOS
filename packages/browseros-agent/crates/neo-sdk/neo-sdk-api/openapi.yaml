@@ -622,6 +622,18 @@ paths:
           assertion (the received value and aria tree, the preview and the failure's snapshot),
           so `toHaveValue` compares against the bullets. A name built from the box reads the
           same.
+        - The mark follows the value. At each read-back Neo keeps, in the box's own isolated world,
+          a keyed digest of what the box holds and of the value it was given, with whitespace,
+          dashes and slashes set aside (the key is 128 random bits made there; neither leaves it).
+          Any text control of that document that holds a kept value reads as bullets to the same
+          reads: a box the page re-creates (a re-render, `cloneNode`), a clone, and a copy in
+          another box, grouped with spaces or not. While the page still holds the value this is no
+          new power, for `evaluate` reads it. A digest is forgotten at the start of the first
+          request Neo makes into the document at which no connected text control there holds its
+          value, so once the value has left the page a script that sets a box to guesses gets at
+          most one answer in bullets. The same scan, at every request, lets an element preview in
+          any error (`locator resolved to <input …>`, a strict mode violation) show such a box's
+          `value` attribute as `<N characters>`, as for a box Neo typed into.
 
         What it does not cover:
 
@@ -631,9 +643,25 @@ paths:
           page-side engine's protocol loses them for the documents still open, so a plain box's
           value prints there again (under `fill.pictures: never` no picture of its tab is taken
           either way).
-        - Going back in history restores a plain box's value into a new document, and a page that
-          re-creates the box (a re-render, `cloneNode`) makes a new element. Neither carries the
-          mark, so their value prints.
+        - Going back in history restores a plain box's value into a new document, which keeps no
+          digest, so its value prints. So does a copy in another document (a frame, a pop-up), a
+          copy the page reformats beyond whitespace, dashes and slashes, text the page prints
+          outside a box, and a copy that appears after its digest was forgotten. A box in a
+          closed shadow root Neo's walk has not seen does not hold a digest alive, so a later
+          copy can print. An entry that ends before its read-back keeps no digest: its box has
+          the mark alone.
+        - A widget that spreads a code across several boxes shows the digits of the boxes Neo
+          did not fill. Fill it one box at a time. The fill's `uncertain` outcome is the sign
+          that a value given to one box did not stay there.
+        - A box that receives a longer text that contains the value prints it, since the mark
+          follows the value by equality. A page that echoes "card ending 4242" is not this
+          case: that text does not contain the value. A page that copies the whole number into
+          a longer field is. A host's means are its own withholding of pictures
+          (`fill.pictures`) and the check call's `contains` on the box it knows.
+        - A copy of the whole value that the page writes a moment after the fill, when no box
+          held the value in between, prints. A host meets it on a widget that spreads a code
+          across boxes and mirrors it late. Fill such a widget one box at a time. The fill's
+          `uncertain` outcome is the sign.
         - `neo.solveCaptcha` photographs the challenge's own rectangle and sends it to the
           provider, on such a tab too.
         - An element preview in a call log or an error (`locator resolved to <input …>`) prints
@@ -2355,6 +2383,10 @@ components:
         maxLength:
           type: integer
           format: int32
+          description: >-
+            The box's `maxlength`. Send -1 to pin that the box has none, the DOM's own word for
+            it: the box facts leave `maxLength` out for such a box. Absent, it is not checked; 0
+            is a limit of zero; any other negative number is a malformed body.
         inputMode:
           type: string
         name:
@@ -2456,10 +2488,26 @@ components:
     FillCheckField:
       type: object
       required: [ref]
-      description: A fill's field without its value. `expect` may be left out.
+      description: >-
+        A fill's field, its value optional. `expect` may be left out, except beside a `value`.
+        With `value`, Neo also compares the box with it (`holds`, `contains`).
       properties:
         ref:
           type: string
+        value:
+          type: string
+          writeOnly: true
+          minLength: 1
+          maxLength: 256
+          description: >-
+            A value to compare the box with, as a fill's value: 1 to 256 characters, no control
+            character. Compared in the box's own isolated world and nowhere else, and never
+            recorded, echoed or quoted: no trace row, run or operation field, event, log line
+            or error message holds it. The check's run keeps the shape it has without one.
+            `spaced` and `cut` apply to the compare as they do to a fill's read-back. A field
+            that carries a value carries `expect` with the origin of the box's own frame, as a
+            fill does; without it the request is a malformed body (`invalid_request`), refused
+            before anything is sent.
         expect:
           $ref: '#/components/schemas/FillExpect'
         cut:
@@ -2497,6 +2545,31 @@ components:
           description: The first rule a fill would be refused by now; absent when none.
           allOf:
             - $ref: '#/components/schemas/OperationError'
+        holds:
+          type: boolean
+          description: >-
+            Present exactly when the field sent a `value` and Neo read the box, whatever the
+            look says of it (a covered, hidden or out-of-view box answers it beside its
+            refusal). The value goes only where a fill would send it, so it never enters a site
+            the host did not approve: a box on another origin than `expect.origin` answers
+            `wrong_origin`, and a tab no longer at the request's `url` answers `page_changed`,
+            both with no compare. True when the box holds the value by a fill's read-back rule:
+            equal, or with `spaced` equal once whitespace, dashes and slashes are set aside, and
+            with `cut` the part the box's `maxlength` keeps. True decides "entered as typed".
+        contains:
+          type: boolean
+          description: >-
+            Present exactly when `holds` is. True when the box's text contains the value by the
+            same rule of setting separators aside; true whenever `holds` is. False decides
+            "gone": the value has left the box. Booleans only: no value, position, length or
+            count of matches. When both are absent the refusal says why, and it is never "not
+            held": `element_detached` means Neo no longer reaches the box by this ref (the box
+            left its document, the document was replaced, the frame is gone, or the isolated
+            world the ref was made in is gone). It is not proof that the box left the page:
+            take a fresh snapshot to know. `run_timeout` or any other code means Neo could not
+            read the box now. A value the page reformats beyond whitespace, dashes and slashes
+            is neither held nor contained, and a copy of the value in another box is not
+            seen.
     BoxFacts:
       type: object
       required: [origin, type, autocomplete, inputMode, name, id, sized, empty]

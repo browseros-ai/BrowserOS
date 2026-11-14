@@ -20,6 +20,7 @@ import { edit } from './edit'
 import { expect } from './expect'
 import { FailureOutput } from './failure-output'
 import { armInput, inputArrived } from './files'
+import { noteHolders } from './private-digest'
 import { privateStep } from './private-entry'
 import { look } from './private-look'
 import { privateShown } from './private-shown'
@@ -179,6 +180,12 @@ function dispatch<O extends Routed>(
   nodes: readonly unknown[],
   output: FailureOutput,
 ): ReplyTo<O> | Promise<ReplyTo<O>> {
+  // Ruling R50: at the start of every request, note which text controls of this document hold
+  // a value the world keeps a digest of, and forget every digest none holds. Every request, not
+  // a list of reads: any request's failure output asks the mask for an element's preview
+  // (`isPrivateField`), and so does the camera (`privateShown`); a list is what a new request
+  // would miss. With no digest kept the scan returns at once.
+  noteHolders(document)
   const handler: Handler<O> = HANDLERS[op]
   return handler(world, request, root, nodes, output)
 }

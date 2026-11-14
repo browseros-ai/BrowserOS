@@ -95,6 +95,10 @@ pub(crate) enum PrivateStep {
     Focused,
     /// Whether the box holds exactly `text` now.
     Holds { text: PageSecret, spaced: bool },
+    /// The check call's compare (ruling R48), on a box no entry is under: whether the box holds
+    /// `text` by the read-back's rule, and whether its text contains `text` by the same rule of
+    /// setting separators aside. Keeps nothing of `text`, and answers booleans only.
+    Compare { text: PageSecret, spaced: bool },
     /// The read-back; it also forgets the text.
     ReadBack,
     /// Forgets the text and stops the listener.
@@ -154,6 +158,11 @@ pub(crate) enum PrivateAnswer {
     },
     Holds {
         holds: bool,
+    },
+    /// The check call's compare: `contains` is true whenever `holds` is.
+    Compared {
+        holds: bool,
+        contains: bool,
     },
     /// `moving`: a submit no handler prevented, or the document unloading, since the focus step.
     /// `drawing`: whether the box was entered under its field's own drawing, and whether that

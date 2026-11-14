@@ -42,9 +42,9 @@ mod tests;
 pub(crate) use builtin_set::{BuiltinDeps, builtin_set, door_rules};
 pub(crate) use captcha_claims::CaptchaClaims;
 pub(crate) use host_fill::{
-    CHECK as HOST_FILL_CHECK, CHECK_CODE as HOST_FILL_CHECK_CODE, ENTRY_BACKSTOP,
-    FILL as HOST_FILL, FILL_CODE as HOST_FILL_CODE, FillProgress, FillValues, RecordedBox,
-    boxes_args,
+    CHECK as HOST_FILL_CHECK, CHECK_CODE as HOST_FILL_CHECK_CODE, CheckCompared, CheckValues,
+    ENTRY_BACKSTOP, FILL as HOST_FILL, FILL_CODE as HOST_FILL_CODE, FillProgress, FillValues,
+    RecordedBox, boxes_args,
 };
 #[cfg(test)]
 pub(crate) use host_fill::{EntryParts, PrivateEntry, register as register_host_fill};

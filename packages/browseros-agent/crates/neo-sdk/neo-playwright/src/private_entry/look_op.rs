@@ -25,8 +25,9 @@ use crate::action::requested_navigations::RequestedNavigations;
 use crate::op_scope::OpScope;
 use crate::page::OpPage;
 use crate::private_entry::{
-    BoxAsk, BoxFacts, CoverIn, EntryCode, EntryError, LookField, LookRefusal, LookRefused,
-    LookScroll, Looked, Sending, Unread,
+    BoxAsk, BoxFacts, Compared, CoverIn, EntryCode, EntryError, LookCompare, LookField,
+    LookRefusal, LookRefused, LookScroll, Looked, PageSecret, PrivateAnswer, PrivateStep, Sending,
+    Unread, entry_run,
 };
 use crate::probe::{
     ParsedSelector, Point, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget, Read, Want,
@@ -389,6 +390,44 @@ fn above_of(projected: Result<Projection, PlaywrightError>) -> Result<Above, Ent
             _ => Above::Refused(EntryCode::CoverUnread(Unread::NotAsked)),
         },
     })
+}
+
+/// The check call's compare in a box the look found (ruling R48): the host's value goes to the
+/// box's isolated world in one private step, cut to the part the box's `maxlength` keeps when the
+/// field allows a cut, and comes back as two booleans. `None` when the box or its world went
+/// away under the call: the box was not read.
+pub(crate) async fn compare(
+    page: &OpPage<'_>,
+    scope: &OpScope<'_>,
+    found: &LookedBox,
+    compare: &LookCompare,
+) -> Result<Option<Compared>, EntryCode> {
+    let fits = found
+        .facts
+        .max_length
+        .filter(|_| compare.cut && entry_run::cuts(&found.facts.kind))
+        .and_then(|max| usize::try_from(max).ok());
+    let step = PrivateStep::Compare {
+        text: PageSecret::fitting(&compare.value, fits),
+        spaced: compare.spaced,
+    };
+    let request = ProbeRequest::Private {
+        pin: found.pin,
+        step,
+    };
+    match within(scope, found.site.call(scope, page, &request)).await? {
+        Ok(ProbeReply::Value { value }) => {
+            match serde_json::from_value::<PrivateAnswer>(value.into_value()) {
+                Ok(PrivateAnswer::Compared { holds, contains }) => {
+                    Ok(Some(Compared { holds, contains }))
+                }
+                _ => Err(EntryCode::Internal),
+            }
+        }
+        Ok(ProbeReply::Detached) | Err(ProbeFailure::Gone(_)) => Ok(None),
+        Ok(_) => Err(EntryCode::Internal),
+        Err(failure) => Err(failure_code(failure)),
+    }
 }
 
 /// The page side's answer, with the tab's address checked in its place: right after the

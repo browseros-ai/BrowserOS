@@ -33,14 +33,14 @@ mod picture_check;
 mod private_text;
 
 pub(crate) use box_ask::{BoxAsk, LookRefusal, LookRefused, LookScroll, Looked};
-pub use box_look::{BoxFacts, BoxLook};
+pub use box_look::{BoxFacts, BoxLook, Compared};
 pub use box_spec::{BoxSpec, Expect};
 pub use entry::{
     BoxFact, CoverIn, Drawing, Entry, EntryCode, EntryError, EntryOutcome, Sending, Unread,
     delivery_of,
 };
 pub(crate) use entry_ask::{BoxState, FocusState, PageSecret, PrivateAnswer, PrivateStep};
-pub use entry_request::{EntryRequest, LookField, LookRequest, PrivateField};
+pub use entry_request::{EntryRequest, LookCompare, LookField, LookRequest, PrivateField};
 pub(crate) use entry_run::PrivateTabs;
 pub use picture_check::PictureCheck;
 pub use private_text::{MAX_PRIVATE_CHARS, PrivateText, PrivateTextRefused};
