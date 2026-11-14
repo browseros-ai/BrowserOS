@@ -285,6 +285,11 @@ async fn a_bound_runs_first_statement_lists_only_its_tasks_tabs() -> TestResult 
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_bound_run_hears_the_tab_it_opens_while_it_waits_for_one() -> TestResult {
+    on_browseros(|rig| Box::pin(bound_hears_its_new_tab(rig))).await
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_script_fills_and_clicks_a_form_and_expects_the_answer() -> TestResult {
     on_browseros(|rig| Box::pin(fill_and_click(rig))).await
 }
@@ -1059,6 +1064,37 @@ async fn bound_tabs_first(rig: &Rig) -> TestResult {
         "a run without a task sees the owner's tab: {free:?}"
     );
     client.cancel().await?;
+    Ok(())
+}
+
+/// Under the `task` tab scope, a bound run's own new tab is its own the moment the browser names
+/// it: a `page` wait raced with `context.newPage()`, the usual Playwright idiom, hears that tab,
+/// and the run lists it and nothing of the owner's.
+async fn bound_hears_its_new_tab(rig: &Rig) -> TestResult {
+    open_owner_tab(rig, OWNER_TAB).await?;
+    let client = rig.client().await?;
+    let script = r"
+const [heard, opened] = await Promise.all([
+  context.waitForEvent('page', { timeout: 10000 }),
+  context.newPage(),
+]);
+const listed = context.pages().map((tab) => tab.tabId);
+await opened.close();
+return { heard: heard.tabId === opened.tabId, listed: listed.length === 1 && listed[0] === opened.tabId };
+";
+    let result = run(&client, script, &json!({ "taskId": "bound-new-page" })).await?;
+    client.cancel().await?;
+    let meta = outcome(&result)?;
+    assert_eq!(meta.get("status"), Some(&json!("ok")), "{result:?}");
+    assert_eq!(meta.get("tabsScope"), Some(&json!("task")), "{result:?}");
+    assert_eq!(
+        result
+            .structured_content
+            .as_ref()
+            .and_then(|reply| reply.get("value")),
+        Some(&json!({ "heard": true, "listed": true })),
+        "{result:?}"
+    );
     Ok(())
 }
 
