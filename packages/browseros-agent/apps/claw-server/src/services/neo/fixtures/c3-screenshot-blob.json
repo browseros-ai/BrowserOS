@@ -1,0 +1,41 @@
+{
+  "jsonrpc": "2.0",
+  "id": 21,
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "{\"$neo\":\"blob\",\"id\":\"b0\",\"size\":675537}"
+      }
+    ],
+    "structuredContent": {
+      "value": {
+        "$neo": "blob",
+        "id": "b0",
+        "size": 675537
+      }
+    },
+    "isError": false,
+    "_meta": {
+      "com.browseros.neo/run": {
+        "effects": "done",
+        "id": "01a1d7d1-c15a-7d42-9bf3-810a73883870",
+        "status": "ok",
+        "tasks": [
+          {
+            "id": "probe-main-7d53",
+            "kind": "fetched",
+            "name": "probe main",
+            "tabs": [
+              {
+                "tabId": 302790716,
+                "url": "http://127.0.0.1:62441/clicks"
+              }
+            ]
+          }
+        ],
+        "unknown": []
+      }
+    }
+  }
+}
