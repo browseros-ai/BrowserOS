@@ -32,8 +32,12 @@ info:
     create (`neo.createTask`, at any depth) joins it; its tabs are the ones its tasks' runs
     opened and their popups, sibling tasks' included. Any other tab is refused with
     `page_not_in_task`, and nothing is sent to it. A run without a `taskId` sees every tab, as
-    before. Every result says which applied, in `_meta["com.browseros.neo/run"].tabsScope`:
-    `task` when the run was bound to its task, `browser` when it was not. An older Neo sends no
+    before, but under `task` it cannot use a task a host named (`neo.task(id)` answers
+    `task_not_found`), and its `requestId` repeats only an earlier run that had no task either.
+    The server README's Task scope section lists every difference such a run meets, new fields
+    and the trace's schema 6 included. Every result says which applied, in
+    `_meta["com.browseros.neo/run"].tabsScope`: `task` when the run was bound to its task,
+    `browser` when it was not. An older Neo sends no
     `tabsScope`, which means `browser`. A host whose own scripts must reach every tab sends them
     without a `taskId`, or sets `tabs.scope` to `browser`.
 

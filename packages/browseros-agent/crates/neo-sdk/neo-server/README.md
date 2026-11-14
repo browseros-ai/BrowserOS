@@ -211,6 +211,22 @@ Under `tabs.scope: "task"`, the default, a run whose host sent a `taskId` sees a
 
 A run without a `taskId` is not bound. It sees every tab, as before, and may pick, open in and close tasks agents created, but never a task a host named. Under `tabs.scope: "browser"` no run is bound: every script may use any tab or task. Every result says which applied in `_meta["com.browseros.neo/run"].tabsScope`.
 
+What a run without a `taskId` meets under the default, against a Neo before task scope. Its tabs are as before: it lists and acts on every tab but Neo's own blank one. The rest differs:
+
+| What | Before | Now |
+| --- | --- | --- |
+| A task a host named: `neo.task(id)`, then opening a tab in it or closing it | Picked, opened in and closed | Answers `task_not_found`. Tasks agents created stay reachable. |
+| A `requestId` that a run with a task already used | Repeated that run's reply, or was refused as a duplicate | Matches only earlier runs without a task, so the call runs again as a new run, with its effects. Under `tabs.scope: "browser"`, as before. |
+| Each result's `_meta["com.browseros.neo/run"]` | | Gains `tabsScope: "browser"`. A reply stored by an older Neo reads `browser` too. |
+| `GET /v1/runs`, a run's record, the trace tail | | Each new run gains `tabsScope`; older runs have none. |
+| `GET /v1/tabs` | | Each tab a task holds gains `taskId`, its holder now. |
+| `GET /v1/settings` | | `tabs.scope` in `settings` and `defaults`. A `PUT` that leaves it out sets it back to `task`. |
+| `GET /system/health` | | Gains `tabHolders.state`, how the restore of which task holds which tab ended at start (see [The `run` contract](#the-run-contract)). |
+| The run tool's description | | Says how a run's tabs are scoped. |
+| The trace file, `claw-sdk/trace.db` | Schema 5 | Schema 6 (`m0006` adds `runs.tabs_scope`), upgraded in place at start. An older image cannot open it: it moves it aside and starts a fresh trace, without the runs and request ids from before (see the trace store above). |
+
+So a host's own scripts sent without a `taskId` keep today's tabs, but must not use a task a host named, and a `requestId` first sent with a task does not repeat without one.
+
 A host whose own scripts must reach every tab (resetting tabs, reading a kept tab, closing one after a fill) sends them without a `taskId`, or sets `tabs.scope` to `browser`. The scope is a wall in Neo's API, not web isolation: every task shares one browser profile, with its cookies, storage and downloads.
 
 ## Module map
