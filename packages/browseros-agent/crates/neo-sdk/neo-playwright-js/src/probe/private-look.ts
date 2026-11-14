@@ -72,6 +72,15 @@ export function lookAt(world: World, element: Element, ask: BoxAsk): Looked {
   // focus and never hit-tested, so a wrapper from a look when it had a size must not carry over.
   coverWrappers.delete(element)
   if (!isTextInput(element)) return { refusal: { code: 'notAnInput' } }
+  // The second step of the look's scroll (ruling R62): a box larger than its view, which the
+  // browser's scroll shows by its nearest edge, has its centre brought to the middle of its view
+  // at once, whatever the page's scroll-behavior, before the covered check asks there.
+  if (ask.scroll === 'centre')
+    element.scrollIntoView({
+      block: 'center',
+      inline: 'center',
+      behavior: 'instant',
+    })
   const facts = factsOf(element)
   const refusal = firstRefusal(world, element, facts, ask)
   return refusal ? { facts, refusal } : { facts }

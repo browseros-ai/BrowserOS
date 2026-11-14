@@ -536,7 +536,8 @@
         "length": 16,
         "cut": false,
         "keys": false,
-        "frameVisible": true
+        "frameVisible": true,
+        "scroll": "asItIs"
       }
     },
     {
@@ -554,7 +555,8 @@
         },
         "cut": true,
         "keys": false,
-        "frameVisible": true
+        "frameVisible": true,
+        "scroll": "centre"
       }
     },
     {
@@ -563,7 +565,8 @@
       "look": {
         "cut": false,
         "keys": true,
-        "frameVisible": true
+        "frameVisible": true,
+        "scroll": "asItIs"
       }
     },
     {

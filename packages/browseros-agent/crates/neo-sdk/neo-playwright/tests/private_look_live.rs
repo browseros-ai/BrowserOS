@@ -1501,7 +1501,10 @@ async fn tests_that_a_box_that_cannot_be_brought_into_view_is_refused() -> TestR
 /// in a small frame of another site: clear, they pass and end with their centre in view; under
 /// a sheet, laid in their own document or by the page above over the frame, `box_covered`. The
 /// tall box on a page that cannot scroll, and a fixed box with its centre off the view's edge,
-/// still answer `cover_unread`. Fails with the centre scroll taken out: the tall and filling
+/// still answer `cover_unread`. Row 14: a box two views wide whose centre lies under a scrollbar
+/// the page draws itself, 16 pixels on every platform, is centred and looked at there: passed
+/// clear, `box_covered` under a sheet (main typed it under the sheet; so does a view test that
+/// counts the scrollbar in). Fails with the centre scroll taken out: the tall and filling
 /// boxes answer `cover_unread`; with the second look taken out, their sheet rows in the own
 /// document pass.
 #[tokio::test]
@@ -1531,6 +1534,16 @@ async fn tests_that_a_box_larger_than_its_view_is_looked_at_by_its_centre() -> T
         ),
         (
             sites.url(Host::Page, &inner("shape=fills&sheet=1")),
+            Host::Page,
+            own,
+        ),
+        (
+            sites.url(Host::Page, &inner("shape=strip&bar=1")),
+            Host::Page,
+            None,
+        ),
+        (
+            sites.url(Host::Page, &inner("shape=strip&bar=1&sheet=1")),
             Host::Page,
             own,
         ),

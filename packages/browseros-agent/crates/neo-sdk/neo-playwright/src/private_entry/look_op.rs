@@ -25,8 +25,8 @@ use crate::action::requested_navigations::RequestedNavigations;
 use crate::op_scope::OpScope;
 use crate::page::OpPage;
 use crate::private_entry::{
-    BoxAsk, BoxFacts, CoverIn, EntryCode, EntryError, LookField, LookRefusal, LookRefused, Looked,
-    Sending, Unread,
+    BoxAsk, BoxFacts, CoverIn, EntryCode, EntryError, LookField, LookRefusal, LookRefused,
+    LookScroll, Looked, Sending, Unread,
 };
 use crate::probe::{
     ParsedSelector, Point, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget, Read, Want,
@@ -198,6 +198,7 @@ pub(crate) async fn look_at(
             cut,
             keys: field.keys,
             frame_visible: site.frame_visible(),
+            scroll: LookScroll::AsItIs,
         };
         let Some((looked, above)) = look_in_view(scope, page, &site, pin, &ask).await? else {
             return Ok(Look::Unfound(EntryCode::ElementDetached));
@@ -214,9 +215,11 @@ pub(crate) async fn look_at(
 /// The look's scroll has two steps. Step 1, R61's, brought the whole box into view before this.
 /// A box larger than its view is shown by its nearest edge, so its centre can stay out of view
 /// though the page could show it. Step 2 runs only then, for a sized box the page side passed:
-/// it brings the centre itself into view at once, runs the page side's look again so that its
-/// own hit is asked at a centre in view, and reads the centre again. Once for each look. Only a
-/// centre still out of view answers `cover_unread`: the page cannot scroll there. The page is
+/// the page side's look runs again with `LookScroll::Centre`, which first brings the box's
+/// centre to the middle of its view at once (`scrollIntoView` in Neo's isolated world, never the
+/// page's), so that its own hit is asked at a centre in view; then the centre is read again.
+/// Once for each look. Only a centre still out of view answers `cover_unread`: the page cannot
+/// scroll there. The page is
 /// left where step 2 put it. A box in view after step 1 never reaches step 2, so nothing changes
 /// for it: not its answer, not the page's place, not the number of messages.
 async fn look_in_view(
@@ -231,10 +234,11 @@ async fn look_in_view(
     };
     let mut place = place_of(scope, page, site, pin, &looked).await?;
     if matches!(place, Standing::Out) {
-        if !centre_into_view(scope, page, site, pin).await? {
-            return Ok(None);
-        }
-        let Some(again) = look_once(scope, page, site, pin, ask).await? else {
+        let centred = BoxAsk {
+            scroll: LookScroll::Centre,
+            ..ask.clone()
+        };
+        let Some(again) = look_once(scope, page, site, pin, &centred).await? else {
             return Ok(None);
         };
         looked = again;
@@ -317,23 +321,6 @@ async fn place_of(
         }
         Ok(ProbeReply::Detached) | Err(ProbeFailure::Gone(_)) => Ok(Standing::Gone),
         Ok(_) => Err(EntryCode::Internal),
-        Err(failure) => Err(failure_code(failure)),
-    }
-}
-
-/// Step 2 of the look's scroll: the box's centre into the middle of its view at once, in its own
-/// frame and every frame above (`protocol_scroll::centre_into_view`). `false` when the box went
-/// away.
-async fn centre_into_view(
-    scope: &OpScope<'_>,
-    page: &OpPage<'_>,
-    site: &Resolved,
-    pin: Pin,
-) -> Result<bool, EntryCode> {
-    let centred = protocol_scroll::centre_into_view(scope, page, site.world(), pin);
-    match within(scope, centred).await? {
-        Ok(()) => Ok(true),
-        Err(ProbeFailure::Gone(_)) => Ok(false),
         Err(failure) => Err(failure_code(failure)),
     }
 }

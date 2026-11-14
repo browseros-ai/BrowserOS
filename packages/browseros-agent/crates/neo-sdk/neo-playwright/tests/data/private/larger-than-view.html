@@ -8,6 +8,7 @@
   .tall { left: 20px; top: calc(100vh - 40px); width: min(300px, calc(100vw - 40px)); height: 300vh; }
   .fills { left: 0; top: 20px; width: 200vw; height: 400vh; }
   .fixed { position: fixed; left: 20px; top: calc(100vh - 20px); width: 200px; height: 80px; }
+  .strip { left: 0; top: 100px; width: calc(200vw - 16px); height: 34px; }
 </style>
 <!-- A text box partly in view with its centre outside the view (ruling R62, second writing).
      The browser's "scroll into view if needed" shows a box larger than the view by its nearest
@@ -17,11 +18,43 @@
      ?shape=tall   three views tall, its top 40 pixels showing at the bottom of the view
      ?shape=fills  four views tall and two wide, the page scrolled so the box fills the view
      ?shape=fixed  position: fixed, its centre off the bottom edge, where no scroll moves it
+     ?shape=strip  two views wide less 16 pixels from the left edge: the browser leaves it where
+                   it is, and with ?bar=1 its centre lies under the view's own scrollbar
+     ?bar=1        the page draws its own 16 pixel scrollbars, which take room in the view on
+                   every platform, as classic scrollbars do
      ?lock=1       the page cannot scroll at all (a fixed body)
-     ?sheet=1      a sheet over the whole view, as a consent dialog lays one -->
+     ?sheet=1      a sheet over the whole view, as a consent dialog lays one
+     ?spy=1        the page replaces scrollIntoView, scrollIntoViewIfNeeded, scrollTo, scrollBy
+                   and focus in its own world and counts each call (window.scrollCalls); Neo
+                   scrolls and focuses where the page cannot see it, so the count stays at zero -->
 <div class=room></div>
 <script>
   const q = new URLSearchParams(location.search)
+  window.scrollCalls = 0
+  if (q.get('bar')) {
+    const bars = document.createElement('style')
+    bars.textContent =
+      'html::-webkit-scrollbar { width: 16px; height: 16px } html::-webkit-scrollbar-thumb { background: #888 }'
+    document.head.appendChild(bars)
+  }
+  if (q.get('spy')) {
+    const methods = [
+      [Element.prototype, 'scrollIntoView'],
+      [Element.prototype, 'scrollIntoViewIfNeeded'],
+      [Element.prototype, 'scrollTo'],
+      [Element.prototype, 'scrollBy'],
+      [HTMLElement.prototype, 'focus'],
+      [window, 'scrollTo'],
+      [window, 'scrollBy'],
+    ]
+    for (const [owner, name] of methods) {
+      const own = owner[name]
+      owner[name] = function (...args) {
+        window.scrollCalls += 1
+        return own.apply(this, args)
+      }
+    }
+  }
   document.write('<input class="box ' + q.get('shape') + '" aria-label="Secret">')
   if (q.get('lock')) document.body.className = 'locked'
   if (q.get('sheet')) document.write('<div id=sheet>Accept all</div>')

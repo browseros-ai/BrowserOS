@@ -600,7 +600,11 @@ async fn tests_that_a_box_on_a_quirks_page_with_no_scroller_is_entered() -> Test
 /// again there. In the page's own document, by one insertion and key by key, on a tab in front
 /// and a tab behind: clear, entered and read back, the box's centre in view when the fill ends;
 /// under a sheet over the view, refused `box_covered` before any key. In a small frame of
-/// another site: clear, entered; a sheet laid by the page above over the frame, refused. Fails
+/// another site: clear, entered; a sheet laid by the page above over the frame, refused. Row 14:
+/// a box two views wide whose centre lies under a scrollbar the page draws itself, the same two
+/// answers. Row 15: on a page that replaces `scrollIntoView`, `scrollIntoViewIfNeeded`,
+/// `scrollTo`, `scrollBy` and `focus` in its own world, the tall box is entered and the page
+/// counts no call: Neo scrolls and focuses outside the page's world. Fails
 /// with the centre scroll taken out: each is refused `cover_unread`.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
@@ -608,7 +612,7 @@ async fn tests_that_a_box_larger_than_its_view_is_entered_by_its_centre() -> Tes
     const SECRET: &str = "CANARY-larger-than-view-8";
     let bench = Bench::start().await?;
     let shapes = ["shape=tall", "shape=fills"];
-    for shape in shapes {
+    for shape in shapes.into_iter().chain(["shape=strip&bar=1"]) {
         for sheet in [false, true] {
             let path = format!(
                 "/private/larger-than-view.html?{shape}{}",
@@ -644,6 +648,36 @@ async fn tests_that_a_box_larger_than_its_view_is_entered_by_its_centre() -> Tes
                 }
             }
         }
+    }
+    // Both scrolls run where the page cannot see them: R61's is the browser's own call, and the
+    // second step's runs in Neo's isolated world. A page that replaces both scroll methods in
+    // its own world counts no call while its tall box is entered.
+    let path = "/private/larger-than-view.html?shape=tall&spy=1";
+    for place in PLACES {
+        let opened = bench.open(path, place).await?;
+        let secret = bench.r#ref(&opened, "textbox", "Secret").await?;
+        let env = bench.host(&opened);
+        let field = Field::new(&secret, &bench.page_origin).with(SECRET)?;
+        let entry = bench.enter(&env, &opened, vec![field]).await;
+        assert_eq!(
+            entry.outcome,
+            EntryOutcome::Entered,
+            "{place:?} spy: {entry:?}"
+        );
+        assert_eq!(
+            bench
+                .live
+                .main_world(&opened.page, "centreInView()")
+                .await?,
+            json!(true),
+            "{place:?} spy: the centre in view at the end"
+        );
+        assert_eq!(
+            bench.live.main_world(&opened.page, "scrollCalls").await?,
+            json!(0),
+            "{place:?}: the page's own scroll methods were called"
+        );
+        bench.close(opened).await?;
     }
     for shape in shapes {
         let inner = bench.server.url(

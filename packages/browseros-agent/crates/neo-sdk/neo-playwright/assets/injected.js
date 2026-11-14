@@ -8848,6 +8848,12 @@ ${value.stack}`;
     coverWrappers.delete(element);
     if (!isTextInput(element))
       return { refusal: { code: "notAnInput" } };
+    if (ask.scroll === "centre")
+      element.scrollIntoView({
+        block: "center",
+        inline: "center",
+        behavior: "instant"
+      });
     const facts = factsOf(element);
     const refusal = firstRefusal(world, element, facts, ask);
     return refusal ? { facts, refusal } : { facts };
