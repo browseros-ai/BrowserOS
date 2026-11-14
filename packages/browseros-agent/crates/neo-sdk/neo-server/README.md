@@ -75,7 +75,7 @@ Chromium starts the binary with its launch JSON and reads the exit code.
 | The agent port is taken | Exits 2, and Chromium relaunches Neo on the next port. Nothing else exits 2. |
 | Any other failure | Exits 1, bad arguments included. |
 
-From the launch JSON it reads `ports.server` (default 9200), `ports.cdp` (default 49337), `directories.resources`, `directories.execution` (Chromium's `<user-data-dir>/.browseros`), and `instance.browseros_version`. It ignores every other key. claw-sdk has no config file of its own, so it logs and ignores `BROWSERCLAW_CONFIG_FILE`.
+From the launch JSON it reads `ports.server` (default 9200), `ports.cdp` (default 49337), `directories.resources`, `directories.execution` (Chromium's `<user-data-dir>/.browseros`), `instance.browseros_version`, and `flags.script_cdp` (default false). It ignores every other key. claw-sdk has no config file of its own, so it logs and ignores `BROWSERCLAW_CONFIG_FILE`.
 
 `src/config/env_config.rs` reads the environment once, at start. A blank value counts as unset. A malformed address or screen size fails the start with exit 1.
 
@@ -152,6 +152,38 @@ The Node embedding accepts `HostedOptions.read_dirs`; omission uses the same dow
 The realm provides `URL`, `URLSearchParams`, `atob`, `btoa` and `DOMException`. Known URL differences: `url` 2.5.8 retains the older opaque-path trailing-space rules; `URL.createObjectURL` and `URL.revokeObjectURL` are absent.
 
 The model sends `run { code, timeout? }`. `code` is the body of an async function whose parameters are the SDK: Playwright's `page`, `context`, `browser`, `expect` and `playwright` (its `selectors` and `errors`), and Node's `Buffer` (neo-playwright's prelude), `neo`, `console`, the timers, and the error classes. `timeout` is in milliseconds, from 1 to 900000, and defaults to 300000. Unknown fields are refused. Each run gets a fresh QuickJS realm. `src/mcp/run_description.rs` builds the text the model reads about all of this.
+
+A host may opt scripts into request/reply CDP by writing `"flags": { "script_cdp": true }` in the launch JSON before startup. `neo.cdp(method, params?, { page }?)` then appears in the `run` description. It returns the CDP result unchanged. Omitted params become `{}`. With `page`, the command uses that tab's attached session and the dispatcher's page rules. Without it, the command uses the browser connection. For example:
+
+```js
+const { windows } = await neo.cdp('Browser.getWindows')
+await page.goto('about:blank')
+const { group } = await neo.cdp('Browser.createTabGroup', {
+  tabIds: [page.tabId],
+  title: 'Research',
+})
+await neo.cdp('Page.bringToFront', {}, { page })
+```
+
+This call bypasses Neo's page model. Prefer Playwright pages and locators whenever they support the action. It provides no session object or event subscription. Every call is registered as a write, traced with its method and params, and raced with run cancellation and the deadline. A successful command reports `effects: "done"`, including a command that only reads.
+
+Page-scoped replies also pass the dispatcher's read-release check, so a takeover that blocks reads before the browser answers withholds that page data. Native commands that the host's browser version does not support fail `host / unsupported` before being marked sent. A browser response rejecting an unknown method or invalid parameters fails `script / cdp_error` with definite delivery.
+
+When `flags.script_cdp` is absent or false, `neo.cdp` stays registered but is hidden from the `run` description. Calling it fails `host / cdp_unavailable` with nothing sent, even when the call supplies the unopened default `page`. The embedded `hosted-run` composition leaves it off too. Playwright's `context.newCDPSession` and `browser.newBrowserCDPSession` remain unsupported with the flag on or off.
+
+These commands fail `script / unsupported` before any send, even when enabled:
+
+| Command | Why Neo refuses it |
+|---|---|
+| `Browser.close` | Would close the browser that Neo serves. |
+| `Target.setAutoAttach` | Would replace the link's target attachment policy. |
+| `Target.attachToTarget` | Would create sessions outside the link's target bookkeeping. |
+| `Target.detachFromTarget` | Could detach sessions owned by the link. |
+| `Target.setDiscoverTargets` | Would change the target event feed the link uses. |
+| `Target.exposeDevToolsProtocol` | Would expose another protocol path outside Neo's request/reply call. |
+| `Target.autoAttachRelated` | Cancels the previous auto-attach configuration and attaches targets outside the link's bookkeeping. |
+| `Target.attachToBrowserTarget` | Would create an unmanaged browser session. |
+| `Target.sendMessageToTarget` | Tunnels arbitrary commands around the refusals above. |
 
 The host sends its ids in `_meta["com.browseros.neo/run"]` as `{ requestId?, taskId?, hostData? }`. Neo refuses unknown keys as `host / invalid_meta`. `hostData` is up to 2048 bytes of JSON that Neo stores with the run and never reads.
 

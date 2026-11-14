@@ -70,6 +70,13 @@ declare global {
   type Page = pw.Page
 
   interface Neo {
+    /** Send one CDP request. Off unless the host launch file sets flags.script_cdp.
+     * With page, use its tab session. Bypasses Neo's page model; prefer Playwright when possible. */
+    cdp(
+      method: string,
+      params?: Record<string, unknown>,
+      options?: { page?: Page },
+    ): Promise<unknown>
     /** Create and pick a task. `name` is an optional label. Return `task.id`. */
     createTask(name?: string): Promise<Task>
     /** Pick a task. An unknown id throws `task_not_found`; recover with

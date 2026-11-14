@@ -27,6 +27,8 @@ pub(crate) struct LaunchConfig {
     /// native capabilities. `None` when missing, blank or not a string, because an unknown
     /// version only hides gated features and must never fail the start.
     pub(crate) browseros_version: Option<String>,
+    /// Raw script CDP is a host launch decision, never a live setting. Absent is off.
+    pub(crate) script_cdp: bool,
 }
 
 impl LaunchConfig {
@@ -75,6 +77,7 @@ impl LaunchConfig {
             resources_dir,
             execution_dir,
             browseros_version,
+            script_cdp: file.flags.script_cdp,
         })
     }
 }
@@ -87,10 +90,18 @@ struct LaunchFile {
     ports: Ports,
     #[serde(default)]
     directories: Directories,
+    #[serde(default)]
+    flags: Flags,
     /// Untyped on purpose: a missing, malformed or wrong-typed identity leaves the version
     /// unknown instead of failing the parse.
     #[serde(default)]
     instance: Option<Value>,
+}
+
+#[derive(Default, Deserialize)]
+struct Flags {
+    #[serde(default)]
+    script_cdp: bool,
 }
 
 #[derive(Default, Deserialize)]
@@ -138,6 +149,7 @@ mod tests {
                 resources_dir: Path::new("/opt/neo/resources").to_path_buf(),
                 execution_dir: Some(Path::new("/srv/exec").to_path_buf()),
                 browseros_version: Some("0.51.1.3".to_owned()),
+                script_cdp: false,
             },
             "Chromium adds launch keys freely, so unknown ones must not fail the start"
         );
@@ -163,6 +175,30 @@ mod tests {
             "resources sit beside the launch file by default"
         );
         assert_eq!(config.browseros_version, None, "no instance, no version");
+        Ok(())
+    }
+
+    #[test]
+    fn script_cdp_requires_an_explicit_boolean_launch_flag() -> Result<(), Box<dyn Error>> {
+        for (text, enabled) in [
+            ("{}", false),
+            (r#"{"flags": {}}"#, false),
+            (r#"{"flags": {"script_cdp": false}}"#, false),
+            (r#"{"flags": {"script_cdp": true}}"#, true),
+        ] {
+            assert_eq!(
+                LaunchConfig::parse(text, Path::new(""))?.script_cdp,
+                enabled,
+                "only an explicit true grants scripts raw CDP"
+            );
+        }
+        for value in ["null", "1", r#""true""#, "[]", "{}"] {
+            let text = format!(r#"{{"flags": {{"script_cdp": {value}}}}}"#);
+            assert!(
+                LaunchConfig::parse(&text, Path::new("")).is_err(),
+                "a malformed permission flag must fail startup: {text}"
+            );
+        }
         Ok(())
     }
 
