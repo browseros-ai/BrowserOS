@@ -224,19 +224,29 @@ SHAPES = {
 
 def shape_runs(runs: Runs, shape: str, reps: int, problems: list) -> int:
     """How many of `shape`'s repetitions went wrong. `other-tab` runs under the `browser` tab
-    scope, set for its repetitions alone and then put back."""
+    scope, set for its repetitions alone and then put back. Every later check assumes the
+    server's own scope, so a scope that cannot be read first, cannot be set, or is not put back
+    fails every repetition, whatever they found, and its problem is listed first."""
     check = SHAPES[shape]
     if shape != "other-tab":
         return sum(0 if check(runs, i, problems) else 1 for i in range(1, reps + 1))
     before = runs.tab_scope()
-    if runs.tab_scope("browser") != "browser":
-        problems.append(f"other-tab: tabs.scope did not become browser (was {before})")
+    if before is None:
+        problems.insert(0, "other-tab: tabs.scope could not be read, so it was left alone")
         return reps
+    if runs.tab_scope("browser") != "browser":
+        restored = runs.tab_scope(before) == before
+        problems.insert(0, f"other-tab: tabs.scope did not become browser (was {before}, put back: {restored})")
+        return reps
+    wrong = reps
     try:
-        return sum(0 if check(runs, i, problems) else 1 for i in range(1, reps + 1))
+        wrong = sum(0 if check(runs, i, problems) else 1 for i in range(1, reps + 1))
     finally:
-        if before is not None and runs.tab_scope(before) != before:
-            problems.append(f"other-tab: tabs.scope was not put back to {before}")
+        restored = runs.tab_scope(before) == before
+    if not restored:
+        problems.insert(0, f"other-tab: tabs.scope was not put back to {before}")
+        return reps
+    return wrong
 
 
 def main() -> None:
