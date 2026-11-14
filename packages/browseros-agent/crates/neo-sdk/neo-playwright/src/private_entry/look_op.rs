@@ -6,6 +6,8 @@
 //!      ─ resolve { want: element } ─ pin            none, detached: element_detached
 //!      ─ look { pin, ask } in that world ─ facts and the first refusal
 //!  tab address (main frame's `describe`) ─ page_changed, after the page side's origin check
+//!  dead refs, at a check (ruling R63) ─ the frame each ref's world was installed in, from the
+//!      frame table ─ one whole read of the tab's frame tree ─ frame_gone when it is not there
 //! ```
 //!
 //! The look never logs a resolution or a preview: a preview prints every attribute, `value`
@@ -23,7 +25,7 @@ use crate::action::frame_projection::{self, Asker, Projection};
 use crate::action::protocol_scroll;
 use crate::action::requested_navigations::RequestedNavigations;
 use crate::op_scope::OpScope;
-use crate::page::OpPage;
+use crate::page::{OpPage, frame_tree};
 use crate::private_entry::{
     BoxAsk, BoxFacts, Compared, CoverIn, EntryCode, EntryError, LookCompare, LookField,
     LookRefusal, LookRefused, LookScroll, Looked, PageSecret, PrivateAnswer, PrivateStep, Sending,
@@ -496,6 +498,49 @@ pub(crate) fn ref_target(tab: TabId, box_ref: &str) -> Option<LocatorTarget> {
         "display": format!("getByRef('{box_ref}')"),
     });
     serde_json::from_value(target).ok()
+}
+
+/// Ruling R63: for each of `refs`, the texts of the check's dead refs, whether the frame its
+/// world was installed in is no longer in the tab. Only what Neo knows for certain: true when the
+/// frame table recorded that frame (`FrameWorlds::frame_of`) and one whole read of the tab's frame
+/// tree, every session and out-of-process frames included, does not hold it. False otherwise: a
+/// ref whose world this page never installed (one from before a restart), a frame still there
+/// (its document replaced in place, Neo's world lost over it, the box gone from a live
+/// document), and a tree read that fails, is not whole or runs past the look's deadline. One read
+/// for all the refs, and none when no ref names a recorded frame.
+///
+/// A frame id is Chromium's own, kept by a frame across its navigations and reloads, so it
+/// leaves the tree only with the frame: removed by its page, or with a parent document that was
+/// replaced. A page the tab left for its back/forward cache is not in the tree either, and Back
+/// can bring it again; the contract says the answer is about now.
+pub(crate) async fn frames_gone(
+    page: &OpPage<'_>,
+    scope: &OpScope<'_>,
+    refs: &[&str],
+) -> Vec<bool> {
+    let frames: Vec<Option<FrameId>> = refs
+        .iter()
+        .map(|box_ref| {
+            AriaRefJump::parse(box_ref).and_then(|jump| page.frames().frame_of(jump.seq))
+        })
+        .collect();
+    if frames.iter().all(Option::is_none) {
+        return vec![false; refs.len()];
+    }
+    let root = page.root_session();
+    let read = frame_tree::read_every(page.browser(), page.core_page(), &root);
+    let tree = match within(scope, read).await {
+        Ok(Ok(tree)) if tree.is_whole() => tree,
+        Ok(Ok(_) | Err(_)) | Err(_) => return vec![false; refs.len()],
+    };
+    frames
+        .iter()
+        .map(|frame| {
+            frame
+                .as_ref()
+                .is_some_and(|frame| !tree.contains(frame.as_str()))
+        })
+        .collect()
 }
 
 /// `future`, unless the look's deadline passes first (`run_timeout`).

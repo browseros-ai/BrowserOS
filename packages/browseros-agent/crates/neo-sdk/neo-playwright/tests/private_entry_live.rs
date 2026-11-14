@@ -30,7 +30,7 @@ use std::time::Duration;
 
 use browseros_core::{ProtocolSession, TabId};
 use fixture_server::{FixtureServer, Page};
-use input_recording::{InputCall, InputRecording};
+use input_recording::{Failing, InputCall, InputRecording};
 use live_browser::{LiveBrowser, TestPage, TestResult};
 use neo_playwright::{
     BoxLook, BoxSpec, CoverIn, Drawing, Entry, EntryCode, EntryOutcome, EntryRequest, Expect,
@@ -1328,6 +1328,243 @@ async fn tests_that_a_box_whose_frame_does_not_answer_gets_no_boolean() -> TestR
     }
     // The frame's loop ends a second later: let it, so the browser is idle for the next test.
     time::sleep(Duration::from_millis(1500)).await;
+    bench.close(opened).await
+}
+
+/// A plain check call on `opened` for the box `r#ref` names, with no expectation and no
+/// compare, ending by `within` from now.
+fn plain_look(opened: &Opened, r#ref: &str, within: Duration) -> LookRequest {
+    LookRequest {
+        tab: opened.page.tab,
+        url: None,
+        fields: vec![LookField {
+            box_ref: r#ref.to_owned(),
+            expect: None,
+            keys: false,
+        }],
+        compares: vec![None],
+        deadline: Instant::now() + within,
+    }
+}
+
+/// The refusal code and `frame_gone` of the check call's answer for `r#ref`.
+async fn gone_of(
+    bench: &Bench,
+    opened: &Opened,
+    r#ref: &str,
+) -> TestResult<(Option<String>, bool)> {
+    let look = look_one(
+        bench,
+        opened,
+        &plain_look(opened, r#ref, Duration::from_secs(10)),
+    )
+    .await?;
+    Ok((look.refusal.map(|error| error.code), look.frame_gone))
+}
+
+/// The code a dead ref answers.
+const DETACHED: &str = "element_detached";
+
+/// Ruling R63, rows 1, 3, 7 and 8: whether a dead ref's frame left the tab, in a same-site frame
+/// (on the page's session) and a cross-site one (on its own). A live box answers no refusal and
+/// no `frame_gone` (row 8). A box the page removed from a document that stays answers
+/// `element_detached` and no `frame_gone` (row 7). A frame that loads a new document in place
+/// keeps its frame: its old box answers `element_detached` and no `frame_gone` (row 3). A frame
+/// the page removed takes its box out of the tab: `element_detached` and `frame_gone` (row 1).
+/// Fails with the field never set (row 1 answers false), and with every dead ref read as gone
+/// (rows 3 and 7 answer true).
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_dead_ref_says_frame_gone_only_when_its_frame_left() -> TestResult {
+    let bench = Bench::start().await?;
+    let opened = bench
+        .open("/private/frames-gone.html", Place::Front)
+        .await?;
+    let named = |name: &'static str| bench.r#ref(&opened, "textbox", name);
+    let (page, near, far) = (
+        named("Page box").await?,
+        named("Near box").await?,
+        named("Card number").await?,
+    );
+    for r#ref in [&page, &near, &far] {
+        assert_eq!(
+            gone_of(&bench, &opened, r#ref).await?,
+            (None, false),
+            "row 8: {ref}"
+        );
+    }
+    bench
+        .live
+        .main_world(&opened.page, "removePageBox()")
+        .await?;
+    assert_eq!(
+        gone_of(&bench, &opened, &page).await?,
+        (Some(DETACHED.to_owned()), false),
+        "row 7"
+    );
+    bench
+        .live
+        .main_world(&opened.page, "reloadNear() && reloadFar()")
+        .await?;
+    time::sleep(Duration::from_millis(800)).await;
+    for r#ref in [&near, &far] {
+        assert_eq!(
+            gone_of(&bench, &opened, r#ref).await?,
+            (Some(DETACHED.to_owned()), false),
+            "row 3: {ref}"
+        );
+    }
+    let (near, far) = (named("Near box").await?, named("Card number").await?);
+    bench
+        .live
+        .main_world(&opened.page, "removeNear() && removeFar()")
+        .await?;
+    for r#ref in [&near, &far] {
+        assert_eq!(
+            gone_of(&bench, &opened, r#ref).await?,
+            (Some(DETACHED.to_owned()), true),
+            "row 1: {ref}"
+        );
+    }
+    bench.close(opened).await
+}
+
+/// Ruling R63, row 2: the tab moves on to another document and takes its frames with it. A box
+/// of the old page's frames answers `element_detached` and `frame_gone`; a box of the old main
+/// document answers `element_detached` and no `frame_gone`, as the main frame stays. Fails with
+/// the field never set (the framed boxes answer false), and with every dead ref read as gone
+/// (the main document's box answers true).
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_top_navigation_takes_its_frames_with_it() -> TestResult {
+    let bench = Bench::start().await?;
+    let opened = bench
+        .open("/private/frames-gone.html", Place::Front)
+        .await?;
+    let named = |name: &'static str| bench.r#ref(&opened, "textbox", name);
+    let (page, near, far) = (
+        named("Page box").await?,
+        named("Near box").await?,
+        named("Card number").await?,
+    );
+    bench
+        .live
+        .main_world(&opened.page, "location.href = '/private/look.html'")
+        .await?;
+    time::sleep(Duration::from_millis(1000)).await;
+    assert_eq!(
+        gone_of(&bench, &opened, &page).await?,
+        (Some(DETACHED.to_owned()), false),
+        "the main document"
+    );
+    for r#ref in [&near, &far] {
+        assert_eq!(
+            gone_of(&bench, &opened, r#ref).await?,
+            (Some(DETACHED.to_owned()), true),
+            "a frame: {ref}"
+        );
+    }
+    bench.close(opened).await
+}
+
+/// Ruling R63, row 5: a ref from before a restart of Neo, here a second `Playwright` on the same
+/// browser, into a frame that is in fact gone: what it answers today (`element_detached`), and no
+/// `frame_gone`, as nothing records where that ref's world was. Fails with every dead ref read as
+/// gone.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_ref_from_before_a_restart_says_no_frame_gone() -> TestResult {
+    let bench = Bench::start().await?;
+    let opened = bench
+        .open("/private/frames-gone.html", Place::Front)
+        .await?;
+    let near = bench.r#ref(&opened, "textbox", "Near box").await?;
+    bench.live.main_world(&opened.page, "removeNear()").await?;
+    let restarted = LiveBrowser::connect().await?;
+    let env = HostEnv::new(&restarted);
+    let looks = restarted
+        .playwright
+        .look_boxes(&env, &plain_look(&opened, &near, Duration::from_secs(10)))
+        .await
+        .map_err(|error| format!("the check failed: {error:?}"))?;
+    let look = looks.first().ok_or("an answer for the box")?;
+    let code = look.refusal.as_ref().map(|error| error.code.clone());
+    assert_eq!(
+        (code, look.frame_gone),
+        (Some(DETACHED.to_owned()), false),
+        "{look:?}"
+    );
+    bench.close(opened).await
+}
+
+/// Ruling R63, row 6: a frame-tree read that fails, refused or never answered, gives no
+/// `frame_gone` for a ref whose frame is in fact gone; the same ref answers it once the read goes
+/// through. A read that is not whole cannot come back: the read requires every cross-site frame's
+/// tree and fails without one (`frame_tree::read_every`). Fails with a failed read taken as
+/// "the frame is not there".
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_failed_frame_tree_read_says_no_frame_gone() -> TestResult {
+    let bench = Bench::start().await?;
+    let opened = bench
+        .open("/private/frames-gone.html", Place::Front)
+        .await?;
+    let near = bench.r#ref(&opened, "textbox", "Near box").await?;
+    bench.live.main_world(&opened.page, "removeNear()").await?;
+    for (method, how) in [
+        ("Page.getFrameTree", Failing::Refuse),
+        ("Target.getTargets", Failing::Hang),
+    ] {
+        bench.recording.fail(method, how);
+        let look = look_one(
+            &bench,
+            &opened,
+            &plain_look(&opened, &near, Duration::from_secs(2)),
+        )
+        .await;
+        bench.recording.stop_failing();
+        let look = look?;
+        let code = look.refusal.as_ref().map(|error| error.code.clone());
+        assert_eq!(
+            (code, look.frame_gone),
+            (Some(DETACHED.to_owned()), false),
+            "{method} {how:?}: {look:?}"
+        );
+    }
+    assert_eq!(
+        gone_of(&bench, &opened, &near).await?,
+        (Some(DETACHED.to_owned()), true),
+        "the read goes through"
+    );
+    bench.close(opened).await
+}
+
+/// Ruling R63, rows 9 and 10: a field that carries a value, on a frame that left the tab, answers
+/// no `holds` and no `contains`, and `frame_gone`. A fill on that ref answers as on main: refused
+/// `element_detached`, nothing typed; the fill's answer has no such field. Fails with the field
+/// never set.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_value_on_a_gone_frame_is_not_compared_and_says_so() -> TestResult {
+    let bench = Bench::start().await?;
+    let opened = bench
+        .open("/private/frames-gone.html", Place::Front)
+        .await?;
+    let far = bench.r#ref(&opened, "textbox", "Card number").await?;
+    bench.live.main_world(&opened.page, "removeFar()").await?;
+    let request = compare_request(&opened, &far, CARD, false, &bench.other_origin)?;
+    let look = look_one(&bench, &opened, &request).await?;
+    let refused = look.refusal.as_ref().map(|error| error.code.clone());
+    assert_eq!(
+        (refused, look.compared, look.frame_gone),
+        (Some(DETACHED.to_owned()), None, true),
+        "{look:?}"
+    );
+    let env = bench.host(&opened);
+    let field = Field::new(&far, &bench.other_origin).with(CARD)?;
+    let entry = bench.enter(&env, &opened, vec![field]).await;
+    assert_eq!(entry.outcome, EntryOutcome::Refused, "{entry:?}");
+    assert_eq!(code(&entry), Some("element_detached"), "{entry:?}");
     bench.close(opened).await
 }
 

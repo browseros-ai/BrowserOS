@@ -429,6 +429,9 @@ fn checked_box(look: BoxLook) -> api::FillBoxCheck {
         // The compare's booleans join the answer at the route only (`CheckCompared`).
         holds: None,
         contains: None,
+        // Ruling R63: true or absent, never false. It carries nothing of a value, so it is in
+        // the op's recorded result as in the reply.
+        frame_gone: look.frame_gone.then_some(true),
     }
 }
 

@@ -328,6 +328,8 @@ impl PrivateEntry for ScriptedEntry {
                             holds: true,
                             contains: true,
                         }),
+                    // The fake's one ref into a frame that left the tab (ruling R63).
+                    frame_gone: field.box_ref == GONE_FRAME_REF,
                 })
                 .collect())
         })
@@ -1415,6 +1417,44 @@ fn shape(object: &Value) -> Vec<String> {
         .unwrap_or_default();
     keys.sort();
     keys
+}
+
+/// The fake entry's ref into a frame that is no longer in the tab (ruling R63).
+const GONE_FRAME_REF: &str = "f9e1";
+
+/// Ruling R63 at the route: a dead ref whose frame left the tab answers `frameGone: true` beside
+/// its `element_detached`, in the reply and in the op's recorded result; every other box has no
+/// such key, and no answer carries `false`. A fill's answer has no such field.
+#[tokio::test]
+async fn the_check_says_frame_gone_only_when_it_is_true() -> TestResult {
+    let (host, tab) = ready().await?;
+    host.entry.script(Script::Refuse {
+        at: 1,
+        code: EntryCode::ElementDetached,
+    });
+    let checked = request(
+        &host.socket,
+        "POST",
+        &format!("/v1/tabs/{}/fill/check", tab.0),
+        Some(TOKEN),
+        Some(&json!({ "fields": [{ "ref": "e5" }, { "ref": GONE_FRAME_REF }] })),
+    )
+    .await?;
+    assert_eq!(checked.status, 200, "{checked:?}");
+    let fields = checked.body["fields"].as_array().ok_or("fields")?;
+    assert!(fields[0].get("frameGone").is_none(), "{checked:?}");
+    assert_eq!(fields[1]["refusal"]["code"], "element_detached");
+    assert_eq!(fields[1]["frameGone"], true, "{checked:?}");
+    assert!(!checked.body.to_string().contains("\"frameGone\":false"));
+    let run = checked.body["runId"].as_str().ok_or("a runId")?;
+    let record = get(&host, &format!("/v1/runs/{run}?wait=10")).await?;
+    assert!(
+        record.body.to_string().contains("\"frameGone\":true"),
+        "the record holds it: {record:?}"
+    );
+    let filled = fill(&host, tab, &canary_body(&json!({}))).await?;
+    assert!(!filled.body.to_string().contains("frameGone"), "{filled:?}");
+    Ok(())
 }
 
 /// The check (design section 4.8): each box its facts and its refusal, typed nothing, recorded
