@@ -322,7 +322,7 @@ impl App {
             shutdown: shutdown.clone(),
             orphan_grace: Defaults::ORPHAN_GRACE,
             blank_tab: Some(Arc::clone(&blank_tab)),
-            holders: Some(holders),
+            holders: Some(Arc::clone(&holders)),
         });
         let mcp = McpServer::new(runs, dispatcher.registry());
         // Armed by the host API with its locks and fits, for the janitor.
@@ -363,7 +363,7 @@ impl App {
         ));
         Ok(Self {
             agent,
-            router: agent_router(mcp, browser),
+            router: agent_router(mcp, browser, Some(holders)),
             shutdown,
             trace,
             holders: holder_feed,

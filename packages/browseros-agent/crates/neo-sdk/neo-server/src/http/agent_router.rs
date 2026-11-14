@@ -8,6 +8,7 @@ use super::request_hygiene::request_hygiene;
 use super::system_routes::system_routes;
 use crate::browser::BrowserLink;
 use crate::config::Defaults;
+use crate::host::TabHolders;
 use crate::mcp::McpServer;
 
 /// Every route on the agent listener: `/mcp` behind the request hygiene, and `/system/*` for
@@ -18,7 +19,11 @@ use crate::mcp::McpServer;
 /// false`, and a session manager that refuses sessions). Its SSE keep-alive is lowered to
 /// `Defaults::SSE_KEEP_ALIVE`, because a gone client is noticed only on the next write, and
 /// noticing it is what stops its run.
-pub(crate) fn agent_router(mcp: McpServer, browser: Arc<BrowserLink>) -> Router {
+pub(crate) fn agent_router(
+    mcp: McpServer,
+    browser: Arc<BrowserLink>,
+    holders: Option<Arc<TabHolders>>,
+) -> Router {
     let config = StreamableHttpServerConfig::default()
         .with_legacy_session_mode(false)
         .with_sse_keep_alive(Some(Defaults::SSE_KEEP_ALIVE));
@@ -34,5 +39,5 @@ pub(crate) fn agent_router(mcp: McpServer, browser: Arc<BrowserLink>) -> Router 
                 .fallback_service(service)
                 .layer(middleware::from_fn(request_hygiene)),
         )
-        .merge(system_routes(browser))
+        .merge(system_routes(browser, holders))
 }
