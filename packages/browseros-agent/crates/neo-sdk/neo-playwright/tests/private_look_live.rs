@@ -1444,8 +1444,9 @@ async fn tests_that_a_box_under_a_sticky_header_above_its_frame_passes_once_clea
 /// with a sheet over the view and without it, a helper box parked far off the page's left edge,
 /// and a 1 by 1 box just off its top-left corner. A box in view, a box below the fold of a page
 /// that can scroll, and a box in view on a page in quirks mode with no scrolling element (its
-/// view is the window's), pass as before; the last answers `box_covered` under a sheet. Fails with the view test taken out of the look: nothing
-/// is at an out-of-view box's centre, and nothing passes.
+/// view is the window's), pass as before; the last answers `box_covered` under a sheet. Fails
+/// with the view test taken out of the look: nothing is at an out-of-view box's centre, and
+/// nothing passes.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_a_box_that_cannot_be_brought_into_view_is_refused() -> TestResult {

@@ -147,10 +147,12 @@ function borderBox(element: Element): Rect | null {
 }
 
 /**
- * The private look's point for the pages above the box's frame (ruling R60): its border box's
- * centre, only when that lies inside this frame's viewport, its scrollbars left out. A box whose centre is outside is not
- * asked above, as before: a page above would be asked at a place outside the frame, where a
- * neighbour of the frame would read as a cover.
+ * The private look's in-view test for every sized box it passed (ruling R62), and its point for
+ * the pages above the box's frame (ruling R60): the border box's centre, only when that lies
+ * inside this frame's view, its scrollbars left out, or the window's view on a page with no
+ * scrolling element. A centre outside the view is brought into view by the look's second scroll
+ * step, or the box answers `cover_unread`; the pages above are asked only at a centre in view,
+ * since outside the frame a neighbour of the frame would read as a cover.
  */
 function viewCentre(element: Element): { x: number; y: number } | null {
   const box = borderBox(element)

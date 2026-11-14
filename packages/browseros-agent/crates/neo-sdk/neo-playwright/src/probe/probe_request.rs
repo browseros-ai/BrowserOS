@@ -509,9 +509,10 @@ pub(crate) enum Read {
     Ref,
     /// The border box in the element's own frame's viewport, or null with no layout box.
     BoundingBox,
-    /// The private look's (ruling R60): the centre of the element's border box in its own
-    /// frame's viewport, or null when that centre lies outside the viewport or there is no
-    /// layout box. Pages above the frame are asked at this point, and only when it is in view.
+    /// The private look's in-view test (ruling R62) and its point for the pages above the frame
+    /// (ruling R60): the centre of the element's border box in its own frame's view, its
+    /// scrollbars left out (the window's view on a page with no scrolling element), or null when
+    /// that centre lies outside the view or there is no layout box.
     ViewCentre,
     Attribute {
         name: String,
