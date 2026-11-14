@@ -1613,6 +1613,149 @@ return page.tabId;`,
       }
     },
   },
+  {
+    name: 'neo run: CDP document holds suppress pictures until navigation',
+    async run(ctx) {
+      const session = await ctx.openSession('neo-document-hold')
+      const sessionId = session.sessionId
+      assert(sessionId !== undefined)
+      const sessionPath = `/api/v1/sessions/${sessionId}`
+      const screenshotPath = `${sessionPath}/screenshots`
+      const screenshots = async () => {
+        const response = await apiGet(ctx.server, screenshotPath)
+        assert(response.ok)
+        const payload: unknown = await response.json()
+        assert(payload !== null && typeof payload === 'object')
+        assert('items' in payload && Array.isArray(payload.items))
+        return payload.items.map((item: unknown) => {
+          assert(item !== null && typeof item === 'object')
+          assert(
+            'screenshotId' in item && typeof item.screenshotId === 'number',
+          )
+          return item.screenshotId
+        })
+      }
+      const marker = 'synthetic-private-marker'
+      const insertMarker = `const node = document.createElement('div'); node.id = 'private-marker'; node.textContent = ${JSON.stringify(marker)}; document.body.append(node)`
+      const steps: {
+        kind: 'picture' | 'held'
+        label: string
+        code: string
+        value: string
+      }[] = [
+        {
+          kind: 'picture',
+          label: 'the first clean document',
+          code: `await neo.createTask('Document hold contract');
+await page.goto(${JSON.stringify(ctx.fixture('/form.html'))});
+await page.locator('#name').fill('Clean first');
+return await page.locator('#name').inputValue();`,
+          value: 'Clean first',
+        },
+        {
+          kind: 'held',
+          label: 'the document changed through raw CDP',
+          code: `await neo.cdp('Runtime.evaluate', {expression: ${JSON.stringify(insertMarker)}, returnByValue: true}, {page});
+return await page.locator('#private-marker').innerText();`,
+          value: marker,
+        },
+        {
+          kind: 'held',
+          label: 'a later clean run on the same document',
+          code: `await page.locator('#name').fill('Clean held document');
+return await page.locator('#private-marker').innerText();`,
+          value: marker,
+        },
+        {
+          kind: 'picture',
+          label: 'a clean document after navigation',
+          code: `await page.goto(${JSON.stringify(`${ctx.fixture('/form.html')}?fresh-document=${crypto.randomUUID()}`)});
+await page.locator('#name').fill('Clean after navigation');
+return await page.locator('#name').inputValue();`,
+          value: 'Clean after navigation',
+        },
+      ]
+      const database = new Database(
+        resolve(ctx.server.homeDir, '../browserclaw/browserclaw.sqlite'),
+        { readonly: true },
+      )
+      try {
+        let expectedPictures = 0
+        for (const step of steps) {
+          const result = await session.callTool('run', { code: step.code })
+          expectOk(result, step.label)
+          assert.equal(result.structuredContent?.value, step.value)
+          if (step.kind === 'picture') {
+            expectedPictures += 1
+            await waitUntil(
+              async () => (await screenshots()).length === expectedPictures,
+              `the picture of ${step.label}`,
+            )
+          } else {
+            const preview = await apiGet(ctx.server, `${sessionPath}/preview`)
+            assert.equal(
+              preview.status,
+              404,
+              `${step.label} exposed an HTTP preview`,
+            )
+            const error: unknown = await preview.json()
+            assert(error !== null && typeof error === 'object')
+            assert('code' in error && error.code === 'preview_not_found')
+            assert.equal((await screenshots()).length, expectedPictures)
+          }
+        }
+        const rows = database
+          .query<{ id: number; has_screenshot: number }, [string]>(
+            "SELECT id, has_screenshot FROM tool_dispatches WHERE session_id = ? AND tool_name = 'run' AND parent_dispatch_id IS NULL ORDER BY id",
+          )
+          .all(sessionId)
+        assert.equal(rows.length, 4)
+        const first = rows[0]
+        const last = rows[3]
+        assert(first !== undefined && last !== undefined)
+        assert.deepEqual(await screenshots(), [first.id, last.id])
+        const sessionKey = `s-${Buffer.from(sessionId).toString('base64url')}`
+        for (const row of rows.slice(1, 3)) {
+          assert.equal(
+            row.has_screenshot,
+            0,
+            'a held document stored a picture',
+          )
+          for (const path of [
+            resolve(
+              ctx.server.homeDir,
+              '../browserclaw/screenshots',
+              sessionKey,
+              `${row.id}.jpg`,
+            ),
+            resolve(
+              ctx.server.homeDir,
+              '../browserclaw/screenshots',
+              `${row.id}.jpg`,
+            ),
+          ]) {
+            assert.equal(await Bun.file(path).exists(), false)
+          }
+        }
+        const response = await apiGet(ctx.server, sessionPath)
+        assert(response.ok)
+        const detail: unknown = await response.json()
+        assert(detail !== null && typeof detail === 'object')
+        assert('session' in detail && detail.session !== null)
+        assert(typeof detail.session === 'object')
+        assert('latestScreenshotId' in detail.session)
+        assert.equal(detail.session.latestScreenshotId, last.id)
+        const picture = await apiGet(ctx.server, `${screenshotPath}/${last.id}`)
+        assert.equal(picture.headers.get('content-type'), 'image/jpeg')
+        assert.deepEqual(
+          [...new Uint8Array(await picture.arrayBuffer()).slice(0, 3)],
+          [0xff, 0xd8, 0xff],
+        )
+      } finally {
+        database.close()
+      }
+    },
+  },
 ]
 
 /** Reads the launcher's private browser independently of the server under test. */
