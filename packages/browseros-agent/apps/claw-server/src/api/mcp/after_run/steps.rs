@@ -53,20 +53,20 @@ pub(in crate::api::mcp) async fn prepare(
     state: &AppState,
     started: &StartedSession,
     outcome: &RunOutcome,
+    operations: &[RunOperation],
     parent: &DispatchId,
 ) -> PendingSteps {
     let began = std::time::Instant::now();
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
     let cancel = started.session.child_token();
     let mut notes = Vec::new();
-    // Bound the entire projection as well as each HTTP read. A congested audit
-    // queue or session shutdown must not hold a completed SDK reply indefinitely.
+    // Bound projection and publication together. A congested audit queue or
+    // session shutdown must not hold a completed SDK reply indefinitely.
     let projection = async {
         let mut events = Vec::new();
-        let operations = state.neo.operations(&outcome.run_id).await;
         // Tab claims have already reconciled the SDK's holders. Only execution
         // metadata selects affected tabs; the ownership lookup never gates access.
-        notes = foreign_write_notice(state, started, &operations)
+        notes = foreign_write_notice(state, started, operations)
             .await
             .into_iter()
             .collect();
