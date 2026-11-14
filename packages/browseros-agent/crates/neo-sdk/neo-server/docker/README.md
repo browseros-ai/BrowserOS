@@ -324,7 +324,15 @@ No file means normal defaults. An unreadable or malformed file uses defaults wit
 off; an invalid `trace` group turns both off. Invalid retention keeps its default, and unknown
 names are skipped with a warning. The settings and ranges are in [the server's README](../README.md#settings).
 
+`GET /v1/settings` includes a `file` report of this server start. Its `state` is `absent`,
+`applied`, `partial` or `unreadable`. Its sorted `unknown`, `unknownValues` and `invalid`
+arrays always appear and contain names only, never unusable input values. They name what
+startup skipped or replaced with a fallback. An unusable `tabs.scope` falls back to `task`;
+an unusable `fill.pictures` falls back to `allowed`.
+
 After startup, Neo owns the file. Use `PUT` or `PATCH /v1/settings` for running changes.
+Those responses omit `file`, and later `GET` responses keep the original startup report.
+The next server start reports the new load.
 API changes survive a server or browser restart. When the entrypoint starts again, a fixed
 file replaces those changes. Without a fixed file, the saved changes remain.
 

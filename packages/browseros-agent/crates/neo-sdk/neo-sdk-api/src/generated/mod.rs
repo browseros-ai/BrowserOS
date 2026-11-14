@@ -62,6 +62,8 @@ pub mod screenshot;
 pub use self::screenshot::Screenshot;
 pub mod settings;
 pub use self::settings::Settings;
+pub mod settings_file;
+pub use self::settings_file::SettingsFile;
 pub mod settings_state;
 pub use self::settings_state::SettingsState;
 pub mod tab;

@@ -2,7 +2,7 @@
 //! values refused with nothing applied or saved, and the saved file loaded again key by key. And
 //! `Service::tab_hold`, the locks and fits the idle-tab janitor counts as the host's use.
 
-use crate::support::{BoxError, Harness, Reply, TestResult, harness};
+use crate::support::{self, BoxError, Harness, Reply, TestResult, harness};
 use axum::body::Body;
 use axum::http::{Method, StatusCode};
 use browseros_core::TabId;
@@ -58,12 +58,171 @@ async fn get_on_a_new_folder_answers_the_defaults() -> TestResult {
     assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
     assert_eq!(reply.body["settings"], defaults(), "nothing set yet");
     assert_eq!(reply.body["defaults"], defaults());
+    assert_eq!(reply.body["file"], empty_file_report("absent"));
     assert!(
         reply.body.get("unknown").is_none(),
         "`unknown` belongs to a change: {}",
         reply.body
     );
     assert!(!harness.settings_file().exists(), "a read saves nothing");
+    Ok(())
+}
+
+fn empty_file_report(state: &str) -> Value {
+    json!({ "state": state, "unknown": [], "unknownValues": [], "invalid": [] })
+}
+
+#[tokio::test]
+async fn a_clean_startup_file_is_applied_even_when_empty() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let file = dir.path().join("settings.json");
+    for body in ["{}", r#"{"tabs":{"idleCloseSeconds":300}}"#] {
+        std::fs::write(&file, body)?;
+        let settings = Settings::load(file.clone(), Default::default()).await;
+        let harness = support::harness_with_settings(settings).await?;
+        let reply = harness.get("/v1/settings").await?;
+        assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+        assert_eq!(reply.body["file"], empty_file_report("applied"), "{body}");
+        assert_eq!(std::fs::read_to_string(&file)?, body, "GET never saves");
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn unreadable_startup_files_report_no_names_and_keep_recording_off() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let file = dir.path().join("settings.json");
+    for body in [r#"{"trace":"#, "[1, 2]", "null", "false"] {
+        std::fs::write(&file, body)?;
+        let settings = Settings::load(file.clone(), Default::default()).await;
+        let harness = support::harness_with_settings(settings).await?;
+        let reply = harness.get("/v1/settings").await?;
+        assert_eq!(
+            reply.body["file"],
+            empty_file_report("unreadable"),
+            "{body}"
+        );
+        assert_eq!(
+            reply.body["settings"],
+            with_trace(&json!({ "screenshots": "off", "values": "off" })),
+            "a whole-file failure preserves the existing recording fallback"
+        );
+    }
+    std::fs::remove_file(&file)?;
+    // A directory fails fs::read even when the tests run as root.
+    std::fs::create_dir(&file)?;
+    let settings = Settings::load(file, Default::default()).await;
+    let harness = support::harness_with_settings(settings).await?;
+    let reply = harness.get("/v1/settings").await?;
+    assert_eq!(reply.body["file"], empty_file_report("unreadable"));
+    assert_eq!(harness.settings.trace_policy(), recording_off());
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_partial_startup_file_reports_sorted_names_without_echoing_values() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let file = dir.path().join("settings.json");
+    std::fs::write(
+        &file,
+        r#"{
+            "zFuture": "private-unknown-group",
+            "trace": {"values": false, "valueBytes": "private-wrong-type",
+                      "screenshots": "private-shot-mode", "retentionSeconds": 12,
+                      "future": "private-unknown-setting"},
+            "tabs": {"zUnknown": true, "scope": "private-scope-mode",
+                     "idleCloseSeconds": 300, "aUnknown": false},
+            "fill": {"pictures": "private-picture-mode"},
+            "files": "private-malformed-group",
+            "aFuture": "private-other-group"
+        }"#,
+    )?;
+    let settings = Settings::load(file, Default::default()).await;
+    let harness = support::harness_with_settings(settings).await?;
+    let reply = harness.get("/v1/settings").await?;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+    assert_eq!(
+        reply.body["file"],
+        json!({
+            "state": "partial",
+            "unknown": ["aFuture", "tabs.aUnknown", "tabs.zUnknown", "trace.future", "zFuture"],
+            "unknownValues": ["fill.pictures", "tabs.scope", "trace.screenshots"],
+            "invalid": ["files", "trace.retentionSeconds", "trace.valueBytes", "trace.values"]
+        })
+    );
+    assert_eq!(
+        reply.body["settings"],
+        json!({
+            "tabs": { "idleCloseSeconds": 300, "scope": "task" },
+            "trace": { "retentionSeconds": 604_800, "screenshots": "off", "valueBytes": 0, "values": "off" },
+            "files": { "readDirs": [] },
+            "fill": { "pictures": "allowed" }
+        }),
+        "good siblings apply and every unusable setting keeps its existing fallback"
+    );
+    assert_eq!(harness.settings.tabs_scope(), TabsScope::Task);
+    assert!(!harness.settings.fill_pictures_never());
+    assert!(
+        !reply.body.to_string().contains("private-"),
+        "the host response contains names, never an unusable input value"
+    );
+    assert!(reply.body.get("unknown").is_none());
+    assert!(reply.body.get("unknownValues").is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_startup_report_survives_put_and_patch_until_the_next_load() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let file = dir.path().join("settings.json");
+    std::fs::write(&file, r#"{"tabs":{"scope":"future-scope"}}"#)?;
+    let settings = Settings::load(file.clone(), Default::default()).await;
+    let harness = support::harness_with_settings(settings).await?;
+    let original = harness.get("/v1/settings").await?.body["file"].clone();
+    assert_eq!(
+        original,
+        json!({ "state": "partial", "unknown": [], "unknownValues": ["tabs.scope"], "invalid": [] })
+    );
+    for (method, idle, unknown, skipped) in [
+        (Method::PUT, 300, "futurePut", "fill.pictures"),
+        (Method::PATCH, 600, "futurePatch", "trace.screenshots"),
+    ] {
+        let body = if method == Method::PUT {
+            json!({ "tabs": {"idleCloseSeconds": idle}, "futurePut": true,
+                    "fill": {"pictures": "future-picture-mode"} })
+        } else {
+            json!({ "tabs": {"idleCloseSeconds": idle}, "futurePatch": true,
+                    "trace": {"screenshots": "future-shot-mode"} })
+        };
+        let reply = harness
+            .call(method.clone(), "/v1/settings", Body::from(body.to_string()))
+            .await?;
+        assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+        assert!(
+            reply.body.get("file").is_none(),
+            "{method} reports its request only"
+        );
+        assert_eq!(reply.body["settings"]["tabs"]["idleCloseSeconds"], idle);
+        assert_eq!(reply.body["unknown"], json!([unknown]));
+        assert_eq!(reply.body["unknownValues"], json!([skipped]));
+        assert_eq!(harness.get("/v1/settings").await?.body["file"], original);
+    }
+    let reloaded = Settings::load(file, Default::default()).await;
+    let restarted = support::harness_with_settings(reloaded).await?;
+    assert_eq!(
+        restarted.get("/v1/settings").await?.body["file"],
+        empty_file_report("applied"),
+        "a new load describes the clean saved file"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn in_memory_settings_have_no_startup_file_report() -> TestResult {
+    let harness = support::harness_with_settings(Settings::defaults(Default::default())).await?;
+    let reply = harness.get("/v1/settings").await?;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+    assert!(reply.body.get("file").is_none(), "no file load took place");
     Ok(())
 }
 

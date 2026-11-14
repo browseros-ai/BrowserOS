@@ -7,7 +7,7 @@ use crate::event_log::EventKind;
 use crate::limits::{KEEP_SECONDS, MAX_NAVIGATE_INPUT, VIEWER_SIDE};
 use crate::query::Fields;
 use crate::setting::{Checked, SETTINGS, Setting, SettingValue};
-use crate::settings::{SetValues, Settings};
+use crate::settings::{FileLoadState, SetValues, Settings};
 use crate::tab_keeps::Keep;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
@@ -775,7 +775,8 @@ pub(crate) fn settings_object(
 }
 
 /// The settings as a host reads them: each at its value, and each default. `skipped` is what a
-/// `PUT` or `PATCH` skipped, both lists always present then; a `GET` has neither.
+/// `PUT` or `PATCH` skipped, both lists always present then; only a `GET` carries the startup
+/// file report, which is independent of changes to the live values.
 pub(crate) fn settings_state(
     settings: &Settings,
     skipped: Option<SettingsBody>,
@@ -800,7 +801,7 @@ pub(crate) fn settings_state(
             ))
         })
     };
-    let (unknown, unknown_values) = match skipped {
+    let (unknown, unknown_values, file) = match skipped {
         Some(SettingsBody {
             unknown,
             unknown_values,
@@ -808,12 +809,31 @@ pub(crate) fn settings_state(
         }) => (
             Some(unknown),
             Some(unknown_values.into_iter().map(str::to_owned).collect()),
+            None,
         ),
-        None => (None, None),
+        None => (
+            None,
+            None,
+            settings.file_report().map(|report| {
+                let state = match report.state {
+                    FileLoadState::Absent => "absent",
+                    FileLoadState::Applied => "applied",
+                    FileLoadState::Partial => "partial",
+                    FileLoadState::Unreadable => "unreadable",
+                };
+                Box::new(api::SettingsFile::new(
+                    state.to_owned(),
+                    report.unknown.clone(),
+                    report.unknown_values.clone(),
+                    report.invalid.clone(),
+                ))
+            }),
+        ),
     };
     Ok(api::SettingsState {
         unknown,
         unknown_values,
+        file,
         ..api::SettingsState::new(typed(current)?, typed(defaults)?)
     })
 }

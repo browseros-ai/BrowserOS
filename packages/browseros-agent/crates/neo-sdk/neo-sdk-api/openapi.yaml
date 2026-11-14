@@ -1108,7 +1108,8 @@ paths:
       description: |
         `settings` holds every setting this server knows, each at its value: what the host set,
         or the default. Its shape is a body for `PUT`, so a host can read it, change it and send
-        it back. A server older than the settings answers 404. Only the host may call these
+        it back. `file` reports this process's startup file load and stays unchanged after API
+        changes. A server older than the settings answers 404. Only the host may call these
         routes: a request a web page sends is refused with 403, so a script in the browser Neo
         drives cannot reach them even on the development TCP listener.
       responses:
@@ -2551,20 +2552,58 @@ components:
           $ref: '#/components/schemas/Settings'
         defaults:
           $ref: '#/components/schemas/Settings'
+        file:
+          $ref: '#/components/schemas/SettingsFile'
         unknown:
           type: array
           description: >-
-            On a `PUT` or `PATCH` answer only: the names the server skipped because it does not
-            know them, such as `tabs.idleCloseMinutes`. Empty when it knew every name.
+            On a `PUT` or `PATCH` answer only: the names skipped in that request because the
+            server does not know them, such as `tabs.idleCloseMinutes`. Empty when it knew every
+            name. The startup file's skipped names belong to `file.unknown` on `GET`.
           items:
             type: string
         unknownValues:
           type: array
           description: >-
-            On a `PUT` or `PATCH` answer only: the settings the server has that were sent with a
+            On a `PUT` or `PATCH` answer only: the settings in that request sent with a
             name of an open list it does not have yet, such as a new `trace.screenshots` mode.
             Each is skipped as if it were left out (`PUT`: its default; `PATCH`: its value
-            stays). The value is never repeated. Empty when it knew every value.
+            stays). The value is never repeated. Empty when it knew every value. The startup
+            file's skipped values belong to `file.unknownValues` on `GET`.
+          items:
+            type: string
+    SettingsFile:
+      type: object
+      description: >-
+        The startup settings-file load for this process, present only on `GET /v1/settings`
+        when startup attempted to load the settings file. Later API changes never alter it. A new process
+        reports its own load. Every list contains sorted names only, never input values or
+        validation rules, and is present even when empty.
+      required: [state, unknown, unknownValues, invalid]
+      properties:
+        state:
+          type: string
+          x-extensible-enum: [absent, applied, partial, unreadable]
+          description: >-
+            `absent` when no file existed; `applied` for a clean JSON object, including an empty
+            one; `partial` when an object contained anything skipped or refused; `unreadable`
+            for any other read failure, malformed JSON or a nonobject value. `absent`, `applied`
+            and `unreadable` have empty lists. An open string; clients ignore unknown states.
+        unknown:
+          type: array
+          description: Names skipped as unknown, as a `PUT` of the same object would list them.
+          items:
+            type: string
+        unknownValues:
+          type: array
+          description: Settings with unknown open-list values, as a `PUT` would list them.
+          items:
+            type: string
+        invalid:
+          type: array
+          description: >-
+            Names a `PUT` would refuse, for which startup used a fallback. A malformed group
+            is named by its group, such as `trace`, rather than by its child settings.
           items:
             type: string
     Settings:

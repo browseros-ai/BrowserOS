@@ -158,6 +158,8 @@ pub(crate) const HOME_SCREEN: ScreenSize = ScreenSize {
 struct Boot {
     camera: bool,
     writer: WriterConfig,
+    /// A caller-owned settings load, so route tests observe the same startup as the app.
+    settings: Option<Settings>,
     /// The screen's size when the service starts.
     screen: ScreenSize,
     /// The window's state when the service starts.
@@ -170,6 +172,15 @@ struct Boot {
 /// complete when it ends.
 pub(crate) async fn harness() -> Result<Harness, BoxError> {
     start(Boot::default()).await
+}
+
+/// A started service over settings the caller loaded before handing them to the routes.
+pub(crate) async fn harness_with_settings(settings: Settings) -> Result<Harness, BoxError> {
+    start(Boot {
+        settings: Some(settings),
+        ..Boot::default()
+    })
+    .await
 }
 
 /// A started service whose camera takes the writer's screenshots on the scripted browser.
@@ -234,6 +245,7 @@ impl Default for Boot {
         Self {
             camera: false,
             writer: WriterConfig::default(),
+            settings: None,
             screen: HOME_SCREEN,
             window: "maximized",
             capture_transport: None,
@@ -245,6 +257,7 @@ async fn start(
     Boot {
         camera,
         writer,
+        settings,
         screen,
         window,
         capture_transport,
@@ -261,7 +274,10 @@ async fn start(
         writer,
         camera.then_some(queue),
     );
-    let settings = Settings::load(dir.path().join("settings.json"), Default::default()).await;
+    let settings = match settings {
+        Some(settings) => settings,
+        None => Settings::load(dir.path().join("settings.json"), Default::default()).await,
+    };
     let neo_tab: Arc<Mutex<Option<i64>>> = Arc::default();
     let tab_tasks: Arc<Mutex<HashMap<i64, String>>> = Arc::default();
     let browser = ScriptedBrowser::new();
