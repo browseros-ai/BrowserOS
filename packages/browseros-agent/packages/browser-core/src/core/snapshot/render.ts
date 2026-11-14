@@ -136,7 +136,13 @@ function formatLine(
   if (cursorReasons !== undefined) line += ' [cursor=pointer]'
 
   if (VALUE_ROLES.has(role)) {
-    const value = strVal(node.value)
+    const raw = node.value?.value
+    const value =
+      typeof raw === 'string'
+        ? raw
+        : typeof raw === 'number' && Number.isFinite(raw)
+          ? String(raw)
+          : ''
     if (value) line += `: ${JSON.stringify(value)}`
   }
 
