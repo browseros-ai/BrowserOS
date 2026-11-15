@@ -9231,7 +9231,7 @@ ${value.stack}`;
   var LEAVES = ["beforeunload", "pagehide"];
   var watched = new WeakMap;
   var active = new Map;
-  var drawnWrappers = new Map;
+  var drawnSlot;
   function privatelyTyped(element) {
     return Object.hasOwn(element, MARK) || holdsKeptValue(element);
   }
@@ -9246,8 +9246,8 @@ ${value.stack}`;
   function privateStep(world, request) {
     const { step, pin } = request;
     if (step.kind === "drawn") {
-      const wrapper = drawnWrappers.get(pin);
-      drawnWrappers.delete(pin);
+      const wrapper = drawnSlot?.pin === pin ? drawnSlot.wrapper : undefined;
+      drawnSlot = undefined;
       return reply({
         kind: "drawn",
         drawn: wrapper ? draws(wrapper, step.text) : true
@@ -9396,7 +9396,7 @@ ${value.stack}`;
     const cover = entry?.cover;
     const drawn = cover !== undefined && !cover.drewBefore && draws(cover.wrapper, cover.text);
     if (cover && drawn)
-      drawnWrappers.set(pin, cover.wrapper);
+      drawnSlot = { pin, wrapper: cover.wrapper };
     forget(pin, box);
     const drawing = !cover ? "none" : drawn ? "drawn" : "under";
     return { kind: "readBack", state, heldAtLastInput, moving: leaving, drawing };

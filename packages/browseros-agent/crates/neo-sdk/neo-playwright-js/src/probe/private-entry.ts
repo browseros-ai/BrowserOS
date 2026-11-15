@@ -100,11 +100,24 @@ const watched = new WeakMap<Element, Watched>()
 const active = new Map<Pin, Element>()
 
 /**
- * The wrapper whose text drew the value at a box's read-back (ruling R55), by pin, until the
- * `drawn` step asks whether it still does after Rust emptied the box. Kept apart from the box's
- * entry, which the read-back ends and the emptying's focus step starts again.
+ * The wrapper whose text drew the value at the last read-back that found it drawn (ruling R55),
+ * with that box's pin, until the `drawn` step asks whether it still draws after Rust emptied the
+ * box. Kept apart from the box's entry, which the read-back ends and the emptying's focus step
+ * starts again.
+ *
+ * One slot, not a map: a drawn long value ends its entry, and Rust empties that box and asks
+ * `drawn` for that pin before any other read-back in this world; in between the page hears only
+ * that pin's focus, focused, holds and forget steps, and one fill at a time holds a tab's input.
+ * A map kept a wrapper alive for the document's life for every code filled under a field's own
+ * drawing, since Rust asks `drawn` only for a long value (`DRAWN_CODE_MAX`).
+ *
+ * Not emptied by `forget`: the read-back that fills the slot forgets that pin's box right after,
+ * so every drawn value would answer that it still draws. Nor at the `forget` step: the emptying's
+ * guard sends one for that pin from a spawned task, and its order against the `drawn` step is not
+ * fixed. The last such wrapper of a document stays until the next read-back that finds a value
+ * drawn, the next `drawn` step, or the document's end.
  */
-const drawnWrappers = new Map<Pin, Element>()
+let drawnSlot: { pin: Pin; wrapper: Element } | undefined
 
 /**
  * Whether the mask treats `element` as a box Neo typed a private value into (pull request 4):
@@ -136,8 +149,8 @@ export function privateStep(
   // no wrapper kept answers that it still draws, so Neo never says the page was cleared when it
   // cannot tell.
   if (step.kind === 'drawn') {
-    const wrapper = drawnWrappers.get(pin)
-    drawnWrappers.delete(pin)
+    const wrapper = drawnSlot?.pin === pin ? drawnSlot.wrapper : undefined
+    drawnSlot = undefined
     return reply({
       kind: 'drawn',
       drawn: wrapper ? draws(wrapper, step.text) : true,
@@ -348,7 +361,7 @@ function readBack(pin: Pin, box: Element): PrivateAnswer {
   const cover = entry?.cover
   const drawn =
     cover !== undefined && !cover.drewBefore && draws(cover.wrapper, cover.text)
-  if (cover && drawn) drawnWrappers.set(pin, cover.wrapper)
+  if (cover && drawn) drawnSlot = { pin, wrapper: cover.wrapper }
   forget(pin, box)
   const drawing = !cover ? 'none' : drawn ? 'drawn' : 'under'
   return { kind: 'readBack', state, heldAtLastInput, moving: leaving, drawing }
