@@ -14,6 +14,15 @@ if (shape === 'inert-image') {
   background.innerHTML = '<a href="#article"><img alt="Article image" style="pointer-events:none;width:80px;height:30px" src="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2280%22 height=%2230%22/%3E"></a>';
 }
 if (shape === 'native') dlg.showModal();
+if (shape === 'modal-inert-section') {
+  dlg.innerHTML = '<section inert><button id="blocked">Blocked modal action</button></section><button id="live">Live modal action</button>';
+  dlg.showModal();
+}
+if (shape === 'modal-inert-self') { dlg.inert = true; dlg.showModal(); }
+if (shape === 'modal-inert-nested') {
+  dlg.innerHTML = '<section inert><button id="blocked">Blocked modal action</button><dialog id="inner"><button id="live">Inner modal action</button></dialog></section>';
+  dlg.showModal(); document.getElementById('inner').showModal();
+}
 if (shape === 'stacked') {
   const lower = dlg.cloneNode(true); lower.id = 'lower';
   const button = lower.querySelector('button'); button.textContent = 'Lower modal action';
@@ -71,6 +80,14 @@ if (shape === 'delta') {
 if (shape === 'aria-modal') { dlg.setAttribute('role','dialog'); dlg.setAttribute('aria-modal','true'); dlg.show(); }
 if (shape === 'aria-hidden') background.setAttribute('aria-hidden','true');
 if (shape === 'overlay') document.body.insertAdjacentHTML('beforeend','<div style="position:fixed;inset:0;background:white">Overlay</div>');
+// Ask the browser directly, before the snapshot: SDK actionability must not decide this row.
+if (shape.startsWith('modal-inert-') || ['nested', 'slotted-modal', 'slotted-inert'].includes(shape)) {
+  const focus = {};
+  for (const button of document.querySelectorAll('button')) {
+    button.focus(); focus[button.textContent] = document.activeElement === button;
+  }
+  document.body.dataset.focusVerdicts = JSON.stringify(focus);
+}
 </script>`
 const server = http.createServer((_req, res) => {
   res.setHeader('content-type', 'text/html')
@@ -85,6 +102,9 @@ const sdk = await openClaw(
 try {
   for (const shape of [
     'native',
+    'modal-inert-section',
+    'modal-inert-self',
+    'modal-inert-nested',
     'stacked',
     'inert',
     'inert-image',
@@ -128,6 +148,40 @@ try {
       ].includes(shape)
       const original = await page.ariaSnapshot({ inert: true })
       const full = await page.ariaSnapshot({ mode: 'full' })
+      if (['nested', 'slotted-modal', 'slotted-inert'].includes(shape)) {
+        const focus = JSON.parse(
+          await page.locator('body').getAttribute('data-focus-verdicts'),
+        )
+        assert.equal(focus['Background action'], false, shape)
+        assert.equal(focus['Modal action'], shape !== 'slotted-inert', shape)
+        console.log(JSON.stringify({ shape, focus }))
+      }
+      if (shape.startsWith('modal-inert-')) {
+        const focus = JSON.parse(
+          await page.locator('body').getAttribute('data-focus-verdicts'),
+        )
+        assert.equal(focus['Background action'], false, shape)
+        if (shape === 'modal-inert-self') {
+          assert.equal(focus['Modal action'], false, shape)
+          assert.doesNotMatch(text, /Modal action/, shape)
+        } else {
+          assert.equal(focus['Blocked modal action'], false, shape)
+          const live =
+            shape === 'modal-inert-section'
+              ? 'Live modal action'
+              : 'Inner modal action'
+          assert.equal(focus[live], true, shape)
+          assert.match(text, new RegExp(`${live}.*ref=`), shape)
+          assert.doesNotMatch(text, /Blocked modal action/, shape)
+        }
+        assert.match(
+          text,
+          /^# not listed: \d+ lines \([1-9]\d* with refs\)/,
+          shape,
+        )
+        assert.doesNotMatch(text, /Background action/, shape)
+        console.log(JSON.stringify({ shape, focus, text }))
+      }
       if (shape === 'stacked') {
         // Chromium refuses focus in the lower modal. PR1 deliberately lists either modal:
         // it has no top-layer ordering test, so the conservative rule retains this control.
@@ -151,6 +205,10 @@ try {
             /^# not listed:/,
             shape,
           )
+      } else if (shape.startsWith('modal-inert-')) {
+        // Browser focus verdicts, omission counts and live refs were checked above.
+        assert.match(full, /^# inert:/, shape)
+        assert.match(original, /Background action/, shape)
       } else if (shape === 'inert-image') {
         assert.match(text, /^# not listed:/, shape)
         assert.doesNotMatch(text, /Article image|link/, shape)
