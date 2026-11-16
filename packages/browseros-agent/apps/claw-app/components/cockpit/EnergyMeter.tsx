@@ -121,83 +121,88 @@ function Meter({
   const week = weekRuns(meter.runTimes, Date.now())
 
   return (
-    <section
-      aria-label="ultrafast"
-      className={cn(
-        'em @container grid grid-cols-1 justify-items-center gap-[22px] px-5 pt-6 pb-5',
-        '@2xl:grid-cols-[auto_1fr] @2xl:items-center @2xl:justify-items-stretch @2xl:gap-[34px] @2xl:px-8 @2xl:pt-[30px] @2xl:pb-6',
-        className,
-      )}
-    >
-      <span aria-hidden className="em-grain" />
-      <Ring tokens={meter.tokensSaved} />
-      <div className="flex w-full min-w-0 flex-col gap-[18px]">
-        <div className="flex flex-wrap items-center justify-between gap-2.5">
-          <span
-            className={cn(
-              'em-chip inline-flex h-[26px] items-center rounded-full px-2.5 font-semibold text-[12.5px]',
-              INK_2,
-            )}
+    // A container query sizes the children of `@container`, so the panel's own columns need it on a wrapper.
+    <div className={cn('@container', className)}>
+      <section
+        aria-label="ultrafast"
+        className={cn(
+          'em grid grid-cols-1 justify-items-center gap-[22px] px-5 pt-6 pb-5',
+          '@2xl:grid-cols-[auto_1fr] @2xl:items-center @2xl:justify-items-stretch @2xl:gap-[34px] @2xl:px-8 @2xl:pt-[30px] @2xl:pb-6',
+        )}
+      >
+        <span aria-hidden className="em-grain" />
+        <Ring tokens={meter.tokensSaved} />
+        <div className="flex w-full min-w-0 flex-col gap-[18px]">
+          <div className="flex flex-wrap items-center justify-between gap-2.5">
+            <span
+              className={cn(
+                'em-chip inline-flex h-[26px] items-center rounded-full px-2.5 font-semibold text-[12.5px]',
+                INK_2,
+              )}
+            >
+              since you got ultrafast
+            </span>
+          </div>
+          <Milestone card={card} />
+          <div className="grid @2xl:grid-cols-4 grid-cols-2 gap-2.5">
+            <Tile
+              value={<CountUp to={pages} />}
+              label="pages neo accelerated"
+            />
+            <Tile value={<CountUp to={runs} />} label="ultrafast runs" />
+            <Tile
+              value={
+                meter.neoStepShare == null ? (
+                  'None yet'
+                ) : (
+                  <>
+                    <CountUp to={meter.neoStepShare} />%
+                  </>
+                )
+              }
+              label="of the steps, done by neo"
+            />
+            <Tile
+              value={
+                meter.fastestRunMs == null
+                  ? 'None yet'
+                  : ultrafastTime(meter.fastestRunMs)
+              }
+              label="your fastest ultrafast run"
+            />
+          </div>
+          <div
+            role="img"
+            aria-label={`ultrafast runs this week: ${week.map((day) => `${day.label} ${day.runs}`).join(', ')}`}
+            className="flex flex-col gap-1.5"
           >
-            since you got ultrafast
-          </span>
-        </div>
-        <Milestone card={card} />
-        <div className="grid @2xl:grid-cols-4 grid-cols-2 gap-2.5">
-          <Tile value={<CountUp to={pages} />} label="pages neo accelerated" />
-          <Tile value={<CountUp to={runs} />} label="ultrafast runs" />
-          <Tile
-            value={
-              meter.neoStepShare == null ? (
-                'None yet'
-              ) : (
-                <>
-                  <CountUp to={meter.neoStepShare} />%
-                </>
-              )
-            }
-            label="of the steps, done by neo"
-          />
-          <Tile
-            value={
-              meter.fastestRunMs == null
-                ? 'None yet'
-                : ultrafastTime(meter.fastestRunMs)
-            }
-            label="your fastest ultrafast run"
-          />
-        </div>
-        <div
-          role="img"
-          aria-label={`ultrafast runs this week: ${week.map((day) => `${day.label} ${day.runs}`).join(', ')}`}
-          className="flex flex-col gap-1.5"
-        >
-          <div className="flex h-[34px] items-end gap-1.5">
-            {week.map((day, index) => (
-              <span
-                key={day.label}
-                data-hit={day.runs > 0 ? '' : undefined}
-                className="em-bar flex-1"
-                style={
-                  {
-                    height: barHeight(day.runs),
-                    '--i': index,
-                  } as React.CSSProperties
-                }
-              />
-            ))}
-          </div>
-          <div className={cn('flex gap-1.5 text-[11px]', INK_3)}>
-            {week.map((day) => (
-              <span key={day.label} className="flex-1 text-center">
-                {day.label}
-              </span>
-            ))}
+            <div className="flex h-[34px] items-end gap-1.5">
+              {week.map((day, index) => (
+                <span
+                  key={day.label}
+                  data-hit={day.runs > 0 ? '' : undefined}
+                  className="em-bar flex-1"
+                  style={
+                    {
+                      height: barHeight(day.runs),
+                      '--i': index,
+                    } as React.CSSProperties
+                  }
+                />
+              ))}
+            </div>
+            <div className={cn('flex gap-1.5 text-[11px]', INK_3)}>
+              {week.map((day) => (
+                <span key={day.label} className="flex-1 text-center">
+                  {day.label}
+                </span>
+              ))}
+            </div>
           </div>
         </div>
-      </div>
-      <Fold stats={stats} className="col-span-full w-full" />
-    </section>
+        <Fold stats={stats} className="col-span-full w-full" />
+      </section>
+    </div>
   )
 }
 
@@ -222,56 +227,58 @@ function FirstRun({
   }
 
   return (
-    <section
-      aria-label="ultrafast"
-      className={cn(
-        'em @container grid @2xl:grid-cols-[1.1fr_1fr] grid-cols-1',
-        className,
-      )}
-    >
-      <span aria-hidden className="em-grain" />
-      <div className="flex flex-col gap-4 @2xl:px-[30px] px-5 @2xl:py-7 py-[22px]">
-        <Mark />
-        <h3 className="m-0 font-extrabold @2xl:text-[30px] text-[25px] text-white leading-[1.1] tracking-[-0.03em]">
-          Let neo take the clicks.
-        </h3>
-        <p
-          className={cn('m-0 max-w-[46ch] text-[14.5px] leading-normal', INK_2)}
-        >
-          Give your AI agent a task on a website. neo takes the clicks and
-          typing itself, so the pages never fill your agent's context. Your
-          first one lights this up.
-        </p>
-        <div className="em-prompt flex items-center gap-2.5 rounded-xl py-3 pr-3 pl-3.5">
-          <span className="flex-1 text-[13.5px] text-white leading-[1.45]">
-            {TRY_TASK}
-          </span>
-          <button
-            type="button"
-            onClick={copy}
-            className="inline-flex h-[34px] shrink-0 items-center gap-1.5 rounded-[10px] bg-white px-3.5 font-semibold text-[#01123f] text-[13.5px] hover:bg-[#eaf1ff]"
+    <div className={cn('@container', className)}>
+      <section
+        aria-label="ultrafast"
+        className="em grid @2xl:grid-cols-[1.1fr_1fr] grid-cols-1"
+      >
+        <span aria-hidden className="em-grain" />
+        <div className="flex flex-col gap-4 @2xl:px-[30px] px-5 @2xl:py-7 py-[22px]">
+          <Mark />
+          <h3 className="m-0 font-extrabold @2xl:text-[30px] text-[25px] text-white leading-[1.1] tracking-[-0.03em]">
+            Let neo take the clicks.
+          </h3>
+          <p
+            className={cn(
+              'm-0 max-w-[46ch] text-[14.5px] leading-normal',
+              INK_2,
+            )}
           >
-            <Copy aria-hidden className="size-3.5" />
-            {copied ? 'Copied' : 'Copy'}
-          </button>
+            Give your AI agent a task on a website. neo takes the clicks and
+            typing itself, so the pages never fill your agent's context. Your
+            first one lights this up.
+          </p>
+          <div className="em-prompt flex items-center gap-2.5 rounded-xl py-3 pr-3 pl-3.5">
+            <span className="flex-1 text-[13.5px] text-white leading-[1.45]">
+              {TRY_TASK}
+            </span>
+            <button
+              type="button"
+              onClick={copy}
+              className="inline-flex h-[34px] shrink-0 items-center gap-1.5 rounded-[10px] bg-white px-3.5 font-semibold text-[#01123f] text-[13.5px] hover:bg-[#eaf1ff]"
+            >
+              <Copy aria-hidden className="size-3.5" />
+              {copied ? 'Copied' : 'Copy'}
+            </button>
+          </div>
+          <p className={cn('m-0 text-[13px]', INK_3)}>
+            Paste it into Claude Code, Codex or Cursor, then come back here.
+          </p>
         </div>
-        <p className={cn('m-0 text-[13px]', INK_3)}>
-          Paste it into Claude Code, Codex or Cursor, then come back here.
-        </p>
-      </div>
-      <div className="em-aside flex flex-col items-center justify-center gap-3 border-t @2xl:border-t-0 @2xl:border-l @2xl:px-[30px] px-5 @2xl:py-7 py-[22px]">
-        <Ring tokens={meter.tokensSaved} size="small" />
-        <span className={cn('text-center text-[13px]', INK_3)}>
-          {next === 10_000
-            ? 'First milestone: 10k. The ring fills as neo saves tokens for you.'
-            : `Next milestone: ${meterTokens(next)}. The ring fills as neo saves tokens for you.`}
-        </span>
-      </div>
-      <Fold
-        stats={stats}
-        className="col-span-full @2xl:px-[30px] px-5 pb-[22px]"
-      />
-    </section>
+        <div className="em-aside flex flex-col items-center justify-center gap-3 border-t @2xl:border-t-0 @2xl:border-l @2xl:px-[30px] px-5 @2xl:py-7 py-[22px]">
+          <Ring tokens={meter.tokensSaved} size="small" />
+          <span className={cn('text-center text-[13px]', INK_3)}>
+            {next === 10_000
+              ? 'First milestone: 10k. The ring fills as neo saves tokens for you.'
+              : `Next milestone: ${meterTokens(next)}. The ring fills as neo saves tokens for you.`}
+          </span>
+        </div>
+        <Fold
+          stats={stats}
+          className="col-span-full @2xl:px-[30px] px-5 pb-[22px]"
+        />
+      </section>
+    </div>
   )
 }
 

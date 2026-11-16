@@ -160,6 +160,15 @@ describe('the ultrafast meter', () => {
     expect(text()).toContain('You passed 250k tokens saved')
   })
 
+  it('lays the panel out with container queries from a wrapper', async () => {
+    await render(query({}))
+    const panel = body.querySelector('section[aria-label="ultrafast"]')
+    // A container query can't size the element that declares the container.
+    expect(panel?.parentElement?.className).toContain('@container')
+    expect(panel?.className).not.toContain('@container')
+    expect(panel?.className).toContain('@2xl:grid-cols-[auto_1fr]')
+  })
+
   it('counts the numbers up when motion is allowed', async () => {
     reducedMotion = false
     await render(query({}))

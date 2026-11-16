@@ -338,7 +338,9 @@ describe('Cockpit', () => {
       stats: 'measured',
       ultrafast: true,
     })
-    expect(customer).toMatch(/<\/header><section aria-label="ultrafast"/)
+    expect(customer).toMatch(
+      /<\/header><div class="@container"><section aria-label="ultrafast"/,
+    )
     expect(customer).toContain('since you got ultrafast')
     expect(customer).toContain('pages neo accelerated')
     expect(customer).not.toContain('aria-label="Savings"')
