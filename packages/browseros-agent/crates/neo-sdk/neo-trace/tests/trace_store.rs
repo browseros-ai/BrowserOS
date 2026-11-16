@@ -353,6 +353,7 @@ async fn effects_roll_up_from_write_operations() {
             host_code: None,
             retryable: false,
             operation_id: Some(click),
+            cover: None,
         }),
     );
     flushed(&h).await;

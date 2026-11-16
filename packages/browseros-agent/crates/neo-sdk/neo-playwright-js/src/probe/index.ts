@@ -15,6 +15,7 @@
 import { isInvalidSelectorError } from '../../../neo-playwright/third_party/playwright/packages/isomorphic/selectorParser'
 import { act, disarm, frameBox, listenForMoves, moves, verdict } from './act'
 import { RefMap } from './aria-ref'
+import { cover } from './cover'
 import { documentText, replaceDocument } from './document'
 import { edit } from './edit'
 import { expect } from './expect'
@@ -78,6 +79,7 @@ const HANDLERS: Handlers = {
   moves,
   disarm,
   frameBox,
+  cover,
   edit,
   look,
   private: privateStep,

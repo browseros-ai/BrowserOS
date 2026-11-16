@@ -1,5 +1,9 @@
 pub mod box_facts;
 pub use self::box_facts::BoxFacts;
+pub mod cover;
+pub use self::cover::Cover;
+pub mod cover_control;
+pub use self::cover_control::CoverControl;
 pub mod error;
 pub use self::error::Error;
 pub mod event;

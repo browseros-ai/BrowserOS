@@ -284,7 +284,7 @@ function unknownHost(element: Element): boolean {
  * BrowserOS's own UI, a tag `attachShadow` accepts, and no root of it known here. What the focus
  * asks, an editing host included.
  */
-function mayCarryRoot(element: Element): boolean {
+export function mayCarryRoot(element: Element): boolean {
   if (element.namespaceURI !== XHTML || isBrowserOSUi(element)) return false
   const name = element.localName
   if (!SHADOW_HOSTS.has(name) && !name.includes('-')) return false

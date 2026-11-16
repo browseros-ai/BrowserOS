@@ -189,6 +189,7 @@ fn wire_error(failure: &OpFailure) -> api::OperationError {
         retryable: failure.retryable,
         host_code: None,
         operation_id: Some(failure.operation.to_string()),
+        cover: None,
     }
 }
 
@@ -200,6 +201,7 @@ fn neo_error(code: ErrorCode, message: &str) -> api::OperationError {
         retryable: false,
         host_code: None,
         operation_id: None,
+        cover: None,
     }
 }
 

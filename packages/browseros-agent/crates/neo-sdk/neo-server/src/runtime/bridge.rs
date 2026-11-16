@@ -206,6 +206,11 @@ pub(crate) struct ErrBody<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional, type = "unknown")]
     matcher: Option<&'a Value>,
+    /// A `covered` pointer action's cover (`{ ref, role, name, kind, controls, snapshot }`): the
+    /// bootstrap renders its snapshot into the message and puts the rest on the error as `cover`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "unknown")]
+    cover: Option<&'a Value>,
 }
 
 /// The tab of the run's own page, once the call that needed it opened it. Plain ids rather
@@ -475,6 +480,7 @@ impl<'a> From<&'a OpFailure> for ErrBody<'a> {
             timeout: failure.error.is_timeout(),
             message: failure.error.message(),
             matcher: failure.error.matcher(),
+            cover: failure.error.cover(),
         }
     }
 }

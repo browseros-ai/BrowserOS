@@ -812,6 +812,10 @@ pub(super) fn leaf_error(error: &PlaywrightError) -> LeafError {
         Some(facts) => failure.with_matcher(facts.clone()),
         None => failure,
     };
+    let failure = match error.cover_details() {
+        Some(cover) => failure.with_cover(cover.clone()),
+        None => failure,
+    };
     match error.answer() {
         Answer::Definite => LeafError::definite(failure),
         Answer::Ambiguous => LeafError::ambiguous(failure),
@@ -825,6 +829,7 @@ fn error_code(code: PlaywrightCode) -> ErrorCode {
         PlaywrightCode::StrictModeViolation => ErrorCode::STRICT_MODE_VIOLATION,
         PlaywrightCode::NoMatch => ErrorCode::NO_MATCH,
         PlaywrightCode::NotActionable => ErrorCode::NOT_ACTIONABLE,
+        PlaywrightCode::Covered => ErrorCode::COVERED,
         PlaywrightCode::AssertionFailed => ErrorCode::ASSERTION_FAILED,
         PlaywrightCode::ElementDetached => ErrorCode::ELEMENT_DETACHED,
         PlaywrightCode::NotFocused => ErrorCode::NOT_FOCUSED,

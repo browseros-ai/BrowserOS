@@ -162,6 +162,21 @@ pub(crate) enum ProbeRequest {
         #[serde(default)]
         look: bool,
     },
+    /// The facts of a pointer action that ended covered (covered-click spec section 2), sent
+    /// once to the world whose hit test found cover number `cover`: `target` is the action's
+    /// element, or in a page above its frame that page's iframe, and `point` the click point in
+    /// this frame's pixels. It hit-tests `point` again and answers facts only when the same
+    /// cover is still on top there.
+    Cover {
+        target: ProbeTarget,
+        point: Point,
+        cover: u32,
+        /// The cover is in a page above the element's frame, and `target` is that page's
+        /// iframe, tested as it is. Otherwise `target` is the element, retargeted as the
+        /// interceptor retargets it.
+        #[serde(default)]
+        above: bool,
+    },
     /// `fill`, `selectOptions`, `selectText`, `focus`, `focusToType`, `blur` or
     /// `dispatchEvent` on a pin.
     Edit { pin: Pin, edit: Edit },

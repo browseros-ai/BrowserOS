@@ -38,8 +38,14 @@ listed_enum! {
         StrictModeViolation,
         /// Nothing matched for the op's whole timeout; also `expect` with no element.
         NoMatch,
-        /// Matched, but stayed hidden, disabled, unstable, not editable or covered.
+        /// Matched, but stayed hidden, disabled, unstable or not editable; or covered, under the
+        /// conformance switch, where the answer stays upstream's.
         NotActionable,
+        /// A pointer action's element stayed under a cover until its timeout: another element
+        /// takes the pointer at its point. The error names the cover and what to do about it
+        /// (covered-click spec section 2), and the prelude throws `TimeoutError`, as for
+        /// `not_actionable`.
+        Covered,
         /// An `expect` matcher failed with its element present.
         AssertionFailed,
         /// A ref whose element or document is gone, or a detached element handle. Never waits.
@@ -124,6 +130,7 @@ impl ErrorCode {
             Self::StrictModeViolation => row("strict_mode_violation", Script, No, Definite),
             Self::NoMatch => row("no_match", Script, Yes, Ambiguous),
             Self::NotActionable => row("not_actionable", Website, Yes, Ambiguous),
+            Self::Covered => row("covered", Website, Yes, Ambiguous),
             Self::AssertionFailed => row("assertion_failed", Website, Yes, Ambiguous),
             Self::ElementDetached => row("element_detached", Website, No, Definite),
             Self::NotFocused => row("not_focused", Website, No, Definite),
@@ -225,6 +232,10 @@ pub struct PlaywrightError {
     /// the expect prelude completes into Playwright's `error.matcherResult`. Hosts pass it to
     /// the script as it is; boxed, so every other error stays small.
     matcher: Option<Box<Value>>,
+    /// A `covered` pointer action's cover (`{ ref, role, name, kind, controls, snapshot }`,
+    /// action/cover.rs): the prelude renders its snapshot under the message's "On top" line
+    /// and gives the script the rest as `error.cover`. Hosts pass it as they pass `matcher`.
+    cover: Option<Box<Value>>,
 }
 
 /// What failed: one of the crate's codes, or a host policy that refused.
@@ -249,6 +260,7 @@ impl PlaywrightError {
             message,
             outcome_lost: false,
             matcher: None,
+            cover: None,
         }
     }
 
@@ -327,6 +339,20 @@ impl PlaywrightError {
         self
     }
 
+    /// A `covered` pointer action's cover for the prelude and the script; `None` for every other
+    /// failure. Opaque to hosts, which pass it on and keep it in the operation's record.
+    #[must_use]
+    pub fn cover_details(&self) -> Option<&Value> {
+        self.cover.as_deref()
+    }
+
+    /// The same failure, carrying a cover's facts (see [`Self::cover_details`]).
+    #[must_use]
+    pub(crate) fn with_cover(mut self, details: Value) -> Self {
+        self.cover = Some(Box::new(details));
+        self
+    }
+
     /// The same failure, raised after the op sent input it can no longer account for, such as
     /// a click whose verdict came back unreadable: the answer becomes ambiguous.
     #[must_use]
@@ -353,6 +379,7 @@ impl From<Refusal> for PlaywrightError {
             message: refusal.message,
             outcome_lost: false,
             matcher: None,
+            cover: None,
         }
     }
 }
@@ -378,7 +405,7 @@ mod tests {
 
     /// The error table as the sdk-playwright design states it, plus `wait_timeout`, written
     /// out apart from the code so a wrong row there fails here.
-    const TABLE: [(&str, ErrorOwner, TimedOut, Answer); 17] = [
+    const TABLE: [(&str, ErrorOwner, TimedOut, Answer); 18] = [
         (
             "strict_mode_violation",
             ErrorOwner::Script,
@@ -393,6 +420,12 @@ mod tests {
         ),
         (
             "not_actionable",
+            ErrorOwner::Website,
+            TimedOut::Yes,
+            Answer::Ambiguous,
+        ),
+        (
+            "covered",
             ErrorOwner::Website,
             TimedOut::Yes,
             Answer::Ambiguous,

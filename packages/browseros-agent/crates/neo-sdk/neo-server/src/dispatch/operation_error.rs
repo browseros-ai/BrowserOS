@@ -38,6 +38,10 @@ pub(crate) struct OperationError {
     /// as `matcherResult` for the expect prelude to complete. The door never reads them, and the
     /// trace does not store them.
     matcher: Option<Box<Value>>,
+    /// A `covered` pointer action's cover from neo-playwright (action/cover.rs): the script's
+    /// error carries it as `cover`, the prelude renders its snapshot into the message, and the
+    /// operation's record keeps it without that snapshot.
+    cover: Option<Box<Value>>,
 }
 
 impl OperationError {
@@ -68,6 +72,7 @@ impl OperationError {
             message: message.to_string(),
             timed_out: false,
             matcher: None,
+            cover: None,
         }
     }
 
@@ -91,6 +96,19 @@ impl OperationError {
     pub(crate) fn without_matcher(mut self) -> Self {
         self.matcher = None;
         self
+    }
+
+    /// The same failure, carrying a covered action's cover for the script's error and the record.
+    #[must_use]
+    pub(crate) fn with_cover(mut self, cover: Value) -> Self {
+        self.cover = Some(Box::new(cover));
+        self
+    }
+
+    /// A covered action's cover, for the script's error; `None` for every other failure.
+    #[must_use]
+    pub(crate) fn cover(&self) -> Option<&Value> {
+        self.cover.as_deref()
     }
 
     /// A failed matcher's facts, for the script's error; `None` for every other failure.
@@ -132,8 +150,19 @@ impl OperationError {
             host_code: None,
             retryable,
             operation_id: operation,
+            cover: self.cover.as_deref().map(recorded_cover),
         }
     }
+}
+
+/// A cover as the record keeps it: what the error named, without the cover's own snapshot,
+/// which only the script's prelude renders.
+fn recorded_cover(cover: &Value) -> Value {
+    let mut kept = cover.clone();
+    if let Value::Object(fields) = &mut kept {
+        fields.remove("snapshot");
+    }
+    kept
 }
 
 impl fmt::Display for OperationError {
@@ -245,8 +274,12 @@ error_codes! {
     STRICT_MODE_VIOLATION = "strict_mode_violation";
     /// Nothing matched for the op's whole timeout; also `expect` with no element.
     NO_MATCH = "no_match";
-    /// An element matched, but stayed hidden, disabled, unstable, not editable or covered.
+    /// An element matched, but stayed hidden, disabled, unstable or not editable; or covered,
+    /// under the spec harness's conformance switch.
     NOT_ACTIONABLE = "not_actionable";
+    /// A pointer action's element stayed under a cover until its timeout; the error names the
+    /// cover and what to do about it, and carries it as the `cover` field.
+    COVERED = "covered";
     /// An `expect` matcher failed with its element present.
     ASSERTION_FAILED = "assertion_failed";
     /// A ref or element handle whose element or document is gone. Never waits.

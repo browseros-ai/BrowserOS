@@ -20,6 +20,7 @@
  * expiry past the last event its op can still send, so an expiry never lets an event of the
  * action through.
  */
+import { coverMark } from './cover'
 import type { FailureOutput } from './failure-output'
 import { lookFrameBox } from './private-frame'
 import type {
@@ -175,8 +176,19 @@ export function act(
     arm.blockAll,
   )
   if (interception === 'error:notconnected') return { kind: 'detached' }
-  if (typeof interception === 'string')
-    return { kind: 'covered', by: interception }
+  if (typeof interception === 'string') {
+    // Which cover this is, for the runner's count: the interceptor tests the element it
+    // retargets to, so the mark does too.
+    const mark = coverMark(
+      injected.retarget(element, 'button-link') ?? element,
+      place.point,
+    )
+    return {
+      kind: 'covered',
+      by: interception,
+      ...(mark ? { cover: mark } : {}),
+    }
+  }
   const slot = slotOf(world)
   slot.stopped = undefined
   slot.armed = {
@@ -255,16 +267,23 @@ export function frameBox(
   const style = world.injected.describeIFrameStyle(iframe)
   if (style === 'error:notconnected') return { kind: 'detached' }
   const box = iframe.getBoundingClientRect()
+  const hit = request.point
+    ? world.injected.expectHitTarget(request.point, iframe)
+    : null
+  // A click's miss names its cover, for the runner's count, as the element's own frame does.
+  const mark =
+    request.point && hit !== null && hit !== 'done'
+      ? coverMark(iframe, request.point)
+      : undefined
   return {
     kind: 'frameBox',
     origin:
       style === 'transformed'
         ? null
         : { x: box.x + style.left, y: box.y + style.top },
-    hit: request.point
-      ? world.injected.expectHitTarget(request.point, iframe)
-      : null,
+    hit,
     unseen: false,
+    ...(mark ? { cover: mark } : {}),
   }
 }
 

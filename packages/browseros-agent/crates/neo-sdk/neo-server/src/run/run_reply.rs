@@ -389,6 +389,7 @@ impl ReplyError {
             host_code: None,
             retryable: self.retryable,
             operation_id: self.operation_id,
+            cover: None,
         }
     }
 }

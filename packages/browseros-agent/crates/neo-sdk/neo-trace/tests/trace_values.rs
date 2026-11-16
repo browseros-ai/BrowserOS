@@ -153,6 +153,7 @@ fn error(message: &str, operation_id: Option<OperationId>) -> ErrorRecord {
         host_code: Some("requires_owner".to_owned()),
         retryable: true,
         operation_id,
+        cover: None,
     }
 }
 

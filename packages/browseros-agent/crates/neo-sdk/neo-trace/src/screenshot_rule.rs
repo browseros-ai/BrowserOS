@@ -127,6 +127,7 @@ mod tests {
             host_code: None,
             retryable: false,
             operation_id: None,
+            cover: None,
         }
     }
 
