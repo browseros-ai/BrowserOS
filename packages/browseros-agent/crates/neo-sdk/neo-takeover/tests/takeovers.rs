@@ -172,6 +172,7 @@ impl Harness {
             task_id: Some(task.clone()),
             host_data: None,
             tabs_scope: RunTabsScope::Browser,
+            access: None,
             at: EpochMillis::now(),
         });
         self.sink.op_started(OperationStarted {

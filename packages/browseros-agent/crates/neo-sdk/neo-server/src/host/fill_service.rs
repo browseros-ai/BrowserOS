@@ -307,6 +307,7 @@ impl Fill {
                 // door does not count as a script's use (ruling R27).
                 default_page: Some(PageRef { tab }),
                 tabs_scope: TabsScope::Browser,
+                access: None,
             },
         );
         if let Some(lock) = lock {
@@ -378,6 +379,7 @@ impl Fill {
                 deadline: Instant::now() + timeout + ENTRY_BACKSTOP,
                 default_page: Some(PageRef { tab }),
                 tabs_scope: TabsScope::Browser,
+                access: None,
             },
         );
         if let Some(lock) = lock {

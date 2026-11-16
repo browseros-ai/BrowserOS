@@ -1,8 +1,8 @@
 //! What one `run` call answers.
 
 use neo_trace::{
-    Delivery, ErrorOwner, ErrorRecord, OperationId, RequestId, RunEffects, RunId, RunStatus,
-    RunTabsScope,
+    Delivery, ErrorOwner, ErrorRecord, OperationId, RequestId, RunAccess, RunEffects, RunId,
+    RunStatus, RunTabsScope,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -59,6 +59,9 @@ pub(crate) struct RunReply {
     /// reads `browser`, which is what its run saw.
     #[serde(default)]
     pub(crate) tabs_scope: RunTabsScope,
+    /// The original run's restriction, retained in replay; normal and older replies omit it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) access: Option<RunAccess>,
 }
 
 /// How a run ended, as the caller sees it: the trace's `RunStatus` without the states a reply
@@ -186,6 +189,7 @@ impl RunReply {
             not_awaited: report.not_awaited.iter().map(OpNote::from).collect(),
             tasks: Vec::new(),
             tabs_scope: run.scope().record(),
+            access: run.access(),
             tips: Vec::new(),
         }
     }
@@ -213,6 +217,13 @@ impl RunReply {
     #[must_use]
     pub(crate) fn with_tabs_scope(mut self, scope: RunTabsScope) -> Self {
         self.tabs_scope = scope;
+        self
+    }
+
+    /// Retains validated access on replies created before execution or after a crash.
+    #[must_use]
+    pub(crate) fn with_access(mut self, access: Option<RunAccess>) -> Self {
+        self.access = access;
         self
     }
 
@@ -284,6 +295,7 @@ impl RunReply {
             not_awaited: Vec::new(),
             tasks: Vec::new(),
             tabs_scope: RunTabsScope::default(),
+            access: None,
             tips: Vec::new(),
         }
     }
@@ -432,6 +444,27 @@ mod tests {
             serde_json::from_value::<RunReply>(stored)?,
             reply,
             "a repeat of the requestId renders exactly what the first call got"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn ordinary_replay_bytes_stay_identical_and_older_replies_have_no_access()
+    -> Result<(), Box<dyn Error>> {
+        let original = r#"{"id":"019a82c0-7b20-7000-8000-000000000001","status":"ok","effects":"none","value":42,"tasks":[],"tabsScope":"browser"}"#;
+        let reply: RunReply = serde_json::from_str(original)?;
+        assert_eq!(reply.access, None);
+        assert_eq!(
+            serde_json::to_string(&reply)?,
+            original,
+            "an absent optional restriction must not change an ordinary stored reply by a byte"
+        );
+        let old: RunReply = serde_json::from_value(serde_json::json!({
+            "id": reply.id, "status": "ok", "effects": "none", "value": 42,
+        }))?;
+        assert_eq!(
+            old.access, None,
+            "pre-access stored replies remain readable"
         );
         Ok(())
     }

@@ -487,6 +487,7 @@ impl Harness {
                 task_id: None,
                 host_data: None,
                 tabs_scope: RunTabsScope::Browser,
+                access: None,
                 at: EpochMillis::now(),
             });
         }
@@ -555,6 +556,7 @@ fn run_of(run: RunId, task: &TaskId, at: EpochMillis) -> RunStarted {
         task_id: Some(task.clone()),
         host_data: None,
         tabs_scope: RunTabsScope::Browser,
+        access: None,
         at,
     }
 }

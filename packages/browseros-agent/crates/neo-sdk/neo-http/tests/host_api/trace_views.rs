@@ -71,6 +71,7 @@ async fn summary_omits_values_everywhere_and_keeps_audit_metadata() -> TestResul
         task_id: Some(TaskId::parse("summary-canary")?),
         host_data: Some(json!({"value": value})),
         tabs_scope: RunTabsScope::Browser,
+        access: None,
         at: at(0),
     });
     h.sink.op_started(OperationStarted {

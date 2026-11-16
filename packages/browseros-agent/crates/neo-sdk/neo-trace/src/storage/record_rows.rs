@@ -10,8 +10,8 @@ use serde::de::DeserializeOwned;
 use super::entities::operations;
 use crate::{
     Delivery, Effect, EpochMillis, IdError, OperationId, OperationKind, OperationRow, Outcome,
-    PageState, RequestId, RunDetail, RunEffects, RunId, RunStatus, RunSummary, RunTabsScope,
-    ShotState, TaskId, TraceError,
+    PageState, RequestId, RunAccess, RunDetail, RunEffects, RunId, RunStatus, RunSummary,
+    RunTabsScope, ShotState, TaskId, TraceError,
 };
 
 /// A list projection: deliberately excludes code, host data, results and replay bodies.
@@ -19,6 +19,7 @@ use crate::{
 pub(crate) struct RunSummaryRow {
     pub(crate) values: Option<String>,
     pub(crate) tabs_scope: Option<String>,
+    pub(crate) access: Option<String>,
     pub(crate) id: String,
     pub(crate) task_id: Option<String>,
     pub(crate) status: String,
@@ -55,6 +56,11 @@ pub(crate) fn run_summary(row: RunSummaryRow) -> Result<RunSummary, TraceError> 
             .tabs_scope
             .as_deref()
             .map(|text| RunTabsScope::parse(text).ok_or_else(|| corrupt("tabs_scope", text)))
+            .transpose()?,
+        access: row
+            .access
+            .as_deref()
+            .map(|text| RunAccess::parse(text).ok_or_else(|| corrupt("access", text)))
             .transpose()?,
         tabs: tabs(row.tabs.as_deref())?,
         status: RunStatus::parse(&row.status).ok_or_else(|| corrupt("status", &row.status))?,

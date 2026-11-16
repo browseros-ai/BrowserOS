@@ -13,6 +13,7 @@ use std::{panic, process};
 use browseros_core::NativeCapabilities;
 use browseros_core::pages::NewPageOptions;
 use neo_http::{Settings, SettingsDefaults};
+use neo_playwright::FileAccess;
 use neo_trace::{
     Effect, RedactionLimits, Redactor, RunId, TaskId, TraceSink, TraceStore, WriterConfig,
     spawn_writer,
@@ -130,6 +131,36 @@ pub(crate) async fn within<T>(
 }
 
 impl TestRig {
+    /// The production builtin registry over this rig's browser and trace, for permission pins.
+    /// Ordinary lifecycle tests retain their synthetic methods and deterministic synchronization.
+    pub(crate) fn builtin_dispatcher(&self) -> Result<Arc<Dispatcher>, RegistryError> {
+        let file_access = Arc::new(FileAccess::new(Vec::new, Vec::new()));
+        let playwright = builtins::PlaywrightFacade::start(
+            Arc::clone(&self.link),
+            false,
+            Arc::default(),
+            file_access,
+            None,
+        );
+        let mut registry = RegistryBuilder::default();
+        builtins::builtin_set(
+            &mut registry,
+            builtins::BuiltinDeps {
+                solver: None,
+                claims: Arc::default(),
+                playwright: Arc::clone(&playwright),
+            },
+        )?;
+        Ok(Arc::new(Dispatcher::new(
+            registry.build(),
+            Vec::new(),
+            self.sink.clone(),
+            Arc::clone(&self.link),
+            Arc::clone(&self.tabs),
+            Observer::new(playwright as _),
+        )))
+    }
+
     /// A linked browser with target discovery on, a fresh store, and the test methods.
     pub(crate) async fn new() -> Result<Self, TestError> {
         Self::with_writer(WriterConfig::default()).await
@@ -314,6 +345,7 @@ impl TestRig {
             deadline: Instant::now() + budget,
             default_page: None,
             tabs_scope: scope,
+            access: None,
         };
         Ok(RunCtx::start(&self.dispatcher, start))
     }

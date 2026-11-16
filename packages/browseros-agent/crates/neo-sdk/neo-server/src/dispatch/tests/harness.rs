@@ -136,6 +136,7 @@ impl Harness {
             deadline: Instant::now() + Duration::from_secs(300),
             default_page: None,
             tabs_scope: TabsScope::Browser,
+            access: None,
         };
         Ok(RunCtx::start(&self.dispatcher, start))
     }
@@ -157,6 +158,7 @@ impl Harness {
             deadline: Instant::now() + Duration::from_secs(300),
             default_page: None,
             tabs_scope: scope,
+            access: None,
         };
         Ok(RunCtx::start(&self.dispatcher, start))
     }

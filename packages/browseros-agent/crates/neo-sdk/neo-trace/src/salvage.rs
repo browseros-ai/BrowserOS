@@ -35,8 +35,8 @@
 
 use crate::storage::{SalvagedRun, TraceBatch};
 use crate::{
-    EpochMillis, RequestId, RunEffects, RunId, RunStatus, RunTabsScope, TaskId, TraceError,
-    TraceStore,
+    EpochMillis, RequestId, RunAccess, RunEffects, RunId, RunStatus, RunTabsScope, TaskId,
+    TraceError, TraceStore,
 };
 use sea_orm::sqlx::sqlite::{SqliteConnectOptions, SqliteRow};
 use sea_orm::sqlx::{self, Row, SqliteConnection};
@@ -205,6 +205,7 @@ const REQUESTS: Part = Part {
         "replay",
         "replay_until",
         "tabs_scope",
+        "access",
     ],
     filter: "WHERE request_id IS NOT NULL",
 };
@@ -586,6 +587,7 @@ fn request_run(row: &SqliteRow) -> Option<(RunId, SalvagedRun)> {
         // Absent before m0006, and for a name this build does not have: the listing then says
         // nothing, as for any run that predates the column.
         tabs_scope: text("tabs_scope").as_deref().and_then(RunTabsScope::parse),
+        access: text("access").as_deref().and_then(RunAccess::parse),
     };
     Some((id, run))
 }

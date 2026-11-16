@@ -197,6 +197,8 @@ error_codes! {
     /// Task scope: the tab is not one of the run's task's tabs (another task's, no task's, or
     /// none at all, answered alike). Nothing was sent.
     PAGE_NOT_IN_TASK = "page_not_in_task";
+    /// The host selected read-only access and this operation was not sent.
+    READ_ONLY_RUN = "read_only_run";
     /// A bug in Neo.
     INTERNAL_ERROR = "internal_error";
     /// A CDP call got no answer in time.

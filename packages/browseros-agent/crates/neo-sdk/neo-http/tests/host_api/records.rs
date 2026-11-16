@@ -339,6 +339,7 @@ async fn record_values_read_back_as_given_in_every_channel() -> TestResult {
         task_id: Some(TaskId::parse("checkout")?),
         host_data: Some(json!({"for": value})),
         tabs_scope: RunTabsScope::Browser,
+        access: None,
         at: at(0),
     });
     let read = OperationId::new(run, 1);
@@ -446,6 +447,7 @@ async fn starts_defer_input_and_ends_publish_the_original_values() -> TestResult
         task_id: Some(TaskId::parse("checkout")?),
         host_data: Some(json!({"for": found})),
         tabs_scope: RunTabsScope::Browser,
+        access: None,
         at: at(0),
     });
     let fill = OperationId::new(run, 1);
@@ -703,5 +705,68 @@ async fn operation_routes_say_which_operations_ran_in_the_main_world() -> TestRe
         .map(|op| op.get("mainWorld").cloned())
         .collect();
     assert_eq!(in_tail, [Some(json!(true)), Some(json!(false)), None]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn access_projects_into_lists_details_audits_and_trace_without_changing_ordinary_bytes()
+-> TestResult {
+    use neo_trace::RunAccess;
+
+    let h = harness().await?;
+    let normal: RunId = "019a82c0-7b20-7000-8000-000000000001".parse()?;
+    crate::support::start_known_run(&h.sink, normal, Start::default());
+    h.flushed().await?;
+    let (_, _, summary) = h.get_bytes("/v1/runs").await?;
+    assert_eq!(
+        String::from_utf8(summary)?,
+        r#"{"items":[{"id":"019a82c0-7b20-7000-8000-000000000001","tabsScope":"browser","tabs":[],"status":"running","startedAt":1700000000000,"operationCount":0,"complete":false}]}"#,
+        "an ordinary list keeps exactly its old bytes, without access:null"
+    );
+    let (_, _, detail) = h.get_bytes(&format!("/v1/runs/{normal}")).await?;
+    assert_eq!(
+        String::from_utf8(detail)?,
+        r#"{"id":"019a82c0-7b20-7000-8000-000000000001","tabsScope":"browser","tabs":[],"status":"running","startedAt":1700000000000,"operationCount":0,"complete":false,"operations":[]}"#,
+        "an ordinary detail keeps exactly its old bytes"
+    );
+    let read = RunId::new();
+    h.sink.run_started(RunStarted {
+        id: read,
+        code: "return 1".to_owned(),
+        request_id: None,
+        task_id: None,
+        host_data: None,
+        tabs_scope: RunTabsScope::Browser,
+        access: Some(RunAccess::Read),
+        at: at(10),
+    });
+    op_started(
+        &h.sink,
+        OperationId::new(read, 1),
+        Op {
+            name: "page.title",
+            effect: Effect::Read,
+            tab: None,
+            at: 11,
+        },
+    );
+    h.flushed().await?;
+    for uri in ["/v1/runs".to_owned(), "/v1/runs?fields=summary".to_owned()] {
+        let reply = h.get(&uri).await?;
+        let row = reply.body["items"]
+            .as_array()
+            .and_then(|rows| rows.iter().find(|row| row["id"] == read.to_string()))
+            .ok_or("read run")?;
+        assert_eq!(row["access"], "read", "{uri}");
+    }
+    assert_eq!(
+        h.get(&format!("/v1/runs/{read}")).await?.body["access"],
+        "read"
+    );
+    let tail = h.get("/v1/trace?tail=10").await?;
+    assert_eq!(
+        tail.body["runs"][0]["access"], "read",
+        "trace events reuse the stored access projection"
+    );
     Ok(())
 }

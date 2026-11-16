@@ -55,6 +55,7 @@ fn start_run(sink: &TraceSink, millis: i64) -> RunId {
         task_id: None,
         host_data: None,
         tabs_scope: RunTabsScope::Browser,
+        access: None,
         at: at(millis),
     });
     run

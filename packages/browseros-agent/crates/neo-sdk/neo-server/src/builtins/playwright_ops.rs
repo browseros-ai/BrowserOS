@@ -39,6 +39,7 @@ use crate::dispatch::{
     RegistryBuilder, RegistryError, RunCtx,
 };
 use crate::host::AgentFront;
+use crate::url_scheme;
 
 /// neo-playwright's prelude, which the agent realm evaluates after its bootstrap: the
 /// `page`, `context`, `browser` and `expect` parameters of the agent's function, over these ops.
@@ -316,12 +317,7 @@ impl OpInput {
     /// the entry it opens ([`refused_page`]).
     fn refused_navigation(&self) -> Option<OperationError> {
         let url = self.json.get("url")?.as_str()?;
-        // The engine's completeUserURL supplies http:// for bare local addresses.
-        // Validate that completed scheme rather than mistaking localhost:port for a scheme.
-        if url.starts_with("localhost") || url.starts_with("127.0.0.1") {
-            return None;
-        }
-        let which = match url_scheme(url) {
+        let which = match url_scheme::navigation_scheme(url) {
             Some(scheme) if scheme == "file" => {
                 return Some(file_page("Neo does not open this URL, a `file:` one"));
             }
@@ -384,7 +380,7 @@ async fn refused_page<M>(
     let Some(url) = shown_url(op).await? else {
         return Ok(None);
     };
-    let scheme = url_scheme(&url);
+    let scheme = url_scheme::url_scheme(&url);
     if scheme.as_deref() == Some("file") {
         return Ok(Some(file_page(
             "Neo does not act on this tab, which shows a `file:` page",
@@ -425,7 +421,7 @@ async fn refused_page<M>(
         .and_then(|index| usize::try_from(index).ok())
         .and_then(|index| history.entries.get(index));
     Ok(opens
-        .filter(|entry| url_scheme(&entry.url).as_deref() == Some("file"))
+        .filter(|entry| url_scheme::url_scheme(&entry.url).as_deref() == Some("file"))
         .map(|_| file_page("Neo does not take this step, whose history entry is a `file:` page")))
 }
 
@@ -451,7 +447,7 @@ async fn shown_url<M>(op: &OpCtx<M>) -> Result<Option<String>, LeafError> {
 async fn moved_to_file<M>(op: &OpCtx<M>) -> Result<bool, LeafError> {
     Ok(shown_url(op)
         .await?
-        .is_some_and(|url| url_scheme(&url).as_deref() == Some("file")))
+        .is_some_and(|url| url_scheme::url_scheme(&url).as_deref() == Some("file")))
 }
 
 /// `Page.getNavigationHistory`'s reply, as much of it as [`refused_page`] reads: the crate's own
@@ -511,28 +507,6 @@ fn replace_lazy_brands(value: &mut Value, resolved: &Value) {
         }
         Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
     }
-}
-
-/// The scheme of `url` as the URL Standard reads it: leading and trailing C0 controls and spaces
-/// dropped, tabs and newlines removed wherever they are, then an ASCII letter and letters,
-/// digits, `+`, `-` or `.` up to the first `:`, lowercased. `None` when there is none. Chromium
-/// trims, strips and lowercases the same way, so ` JavaScript:` and `java\tscript:` are
-/// `javascript:` to it too; a scheme with any other character is no URL it navigates to.
-fn url_scheme(url: &str) -> Option<String> {
-    let mut scheme = String::new();
-    let chars = url
-        .trim_matches(|c: char| c <= ' ')
-        .chars()
-        .filter(|c| !matches!(c, '\t' | '\n' | '\r'));
-    for c in chars {
-        match c {
-            ':' if !scheme.is_empty() => return Some(scheme),
-            'a'..='z' | 'A'..='Z' => scheme.push(c.to_ascii_lowercase()),
-            '0'..='9' | '+' | '-' | '.' if !scheme.is_empty() => scheme.push(c),
-            _ => return None,
-        }
-    }
-    None
 }
 
 /// What an op does to a page that the door keeps books on (`PageChange`): agent-opened marks

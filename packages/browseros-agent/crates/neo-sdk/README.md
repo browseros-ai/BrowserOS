@@ -27,6 +27,12 @@ neo-viewer proxy keep their existing behavior. Tasks live in memory (at most 409
 of Neo's server gives each task back the tabs it held, as long as the browser kept them; a browser
 restart forgets every task. The janitor closes agent-opened tabs nobody used for the host's `tabs.idleCloseSeconds`, 30 minutes by default.
 
+A host may select `access: "read"` for one run in `_meta["com.browseros.neo/run"]`. Neo refuses
+other page changes before sending them, while allowing reads, new pages, HTTP(S) navigation on
+tabs an agent opened or a task holds, and closing tabs the same run opened. Replies and run records retain
+the access marker. [Read-only access](neo-server/README.md#read-only-access) defines the boundary,
+including site scripts, cookies, dialogs, screenshots and native downloads.
+
 ```text
 host / MCP run
       |
