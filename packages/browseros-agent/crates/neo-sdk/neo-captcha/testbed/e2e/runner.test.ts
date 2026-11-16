@@ -316,6 +316,7 @@ for (const server of ['sdk', 'claw-server'] as const) {
       type: 'unknown',
       reason: 'unsupported_type',
       check: 'detect',
+      site: 'rejected',
       outcome: 'PASS',
     })
     expect(records.find((r) => r.id === 'perimeterx-waiting')).toMatchObject({

@@ -7,7 +7,9 @@ use url::Url;
 
 use super::{
     page::CaptchaPage,
-    types::{CaptchaKind, Challenge, ChallengeState, Detection, FrameRef, PageError, ScanOutcome},
+    types::{
+        CaptchaKind, Challenge, ChallengeState, Detection, FrameRef, PageError, Rect, ScanOutcome,
+    },
 };
 
 /// Detection's DOM pass over one document, in the adapter's DOM world. `scope`, `vendor`,
@@ -779,7 +781,13 @@ async fn scan(
         .map(|(frame, _)| frame.frame_id.as_str());
     let mut widgets =
         fold_vendor_widgets(widgets, &frames, &parents, top, &visibility, &mut complete);
-    one_perimeterx(&mut widgets);
+    // Frame rects are in the top document's viewport, whose own rect is that viewport.
+    let viewport = frames
+        .iter()
+        .zip(&probes)
+        .find(|(frame, probe)| is_top(frame, probe.as_ref()))
+        .and_then(|(frame, _)| frame.rect);
+    one_perimeterx(&mut widgets, viewport);
     // Only now are the widgets in frames and closed shadow roots known, so only here can the
     // marker yield to a CAPTCHA the page actually shows. A provider script that is only loaded
     // (`widget_only`) shows nothing, so the marker's challenge stands beside it.
@@ -793,20 +801,32 @@ async fn scan(
 }
 
 /// `PerimeterX`'s frame over the page and the `#px-captcha` inside it are one challenge, and the
-/// top document's mark is scanned first, so the first one stands. A `#px-captcha` whose frame
-/// shows no box (a `display: none` frame has none) blocks nothing: the frame can wait hidden.
-fn one_perimeterx(widgets: &mut Vec<Widget>) {
+/// top document's mark is scanned first, so the first one stands. A `#px-captcha` inside a frame
+/// blocks the page only while that frame's box is on the top `viewport`: the frame can wait
+/// hidden (`display: none` gives it no box) or off-screen, and its document still reads the
+/// challenge as shown, since it sees only its own viewport. Counting such a frame would refuse a
+/// solve the page does not need, before any widget the page shows.
+fn one_perimeterx(widgets: &mut Vec<Widget>, viewport: Option<Rect>) {
+    let on_screen = |rect: Rect| {
+        rect.width > 0.0
+            && rect.height > 0.0
+            && viewport.is_none_or(|view| {
+                rect.x < view.x + view.width
+                    && rect.y < view.y + view.height
+                    && rect.x + rect.width > view.x
+                    && rect.y + rect.height > view.y
+            })
+    };
     let mut seen = false;
     widgets.retain(|w| {
         let challenge = &w.challenge;
         if challenge.kind != CaptchaKind::PerimeterX {
             return true;
         }
-        let shown = challenge.host_frame.as_ref().is_none_or(|frame| {
-            frame
-                .rect
-                .is_some_and(|rect| rect.width > 0.0 && rect.height > 0.0)
-        });
+        let shown = challenge
+            .host_frame
+            .as_ref()
+            .is_none_or(|frame| frame.rect.is_some_and(on_screen));
         shown && !std::mem::replace(&mut seen, true)
     });
 }
@@ -1291,6 +1311,41 @@ mod tests {
             } else {
                 assert_eq!(result.outcome, ScanOutcome::None);
             }
+        }
+        Ok(())
+    }
+
+    /// A frame wholly off the top viewport blocks nothing, though its own document reads its
+    /// `#px-captcha` as shown; one that overlaps the viewport counts.
+    #[tokio::test]
+    async fn tests_that_perimeterx_in_a_frame_off_the_viewport_counts_nothing()
+    -> Result<(), PageError> {
+        let viewport = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 1280.0,
+            height: 800.0,
+        };
+        for (x, challenges) in [(-3000.0, 0), (1280.0, 0), (-500.0, 1)] {
+            let mut page = FakePage::new(json!([]));
+            page.main = Mutex::new(VecDeque::from([json!({
+                "widgets": [], "frames": [], "checked": null, "expired": false,
+                "complete": true, "url": "https://fixture.test/", "top": true
+            })]));
+            let mut top = frame("top", "https://fixture.test/");
+            top.rect = Some(viewport);
+            let mut modal = frame("modal", "https://fixture.test/product");
+            modal.rect = Some(Rect {
+                x,
+                y: 0.0,
+                width: 1040.0,
+                height: 819.0,
+            });
+            page.frames = vec![top, modal];
+            page.frame_result = Ok(probe(json!([widget("perimeterx", "active")])));
+            let result = scan(&page).await?;
+            assert!(result.complete, "{x}");
+            assert_eq!(result.challenges.len(), challenges, "{x}");
         }
         Ok(())
     }
