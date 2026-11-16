@@ -57,7 +57,7 @@ mod trace_writer;
 
 pub use blob_id::{BlobId, NotABlobId};
 pub use epoch_millis::EpochMillis;
-pub use error_record::{ErrorOwner, ErrorRecord};
+pub use error_record::{DiagnosticCode, ErrorOwner, ErrorRecord};
 pub use ids::{IdError, OperationId, RequestId, RunId, TaskId};
 pub use operation_record::{
     Delivery, Effect, OperationEnded, OperationKind, OperationReached, OperationSite,

@@ -10,8 +10,8 @@ use std::time::Duration;
 
 use browseros_core::TabId;
 use neo_trace::{
-    BlobId, Delivery, EpochMillis, ErrorOwner, OperationId, Outcome, RequestId, RunAccess,
-    RunEnded, RunId, RunQuery, RunStarted, RunStatus, RunSummary, RunTabsScope, TaskId,
+    BlobId, Delivery, DiagnosticCode, EpochMillis, ErrorOwner, OperationId, Outcome, RequestId,
+    RunAccess, RunEnded, RunId, RunQuery, RunStarted, RunStatus, RunSummary, RunTabsScope, TaskId,
     WriterConfig,
 };
 use serde_json::{Value, json};
@@ -31,6 +31,86 @@ use crate::test_rig::{ManualClock, TestError, TestRig, on_neo_runtime, within};
 
 /// Long enough that only the tests about orphans ever see it run out.
 const GRACE: Duration = Duration::from_secs(30);
+
+#[test]
+fn target_crashed_diagnostic_survives_caught_uncaught_and_stored_errors() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let service = rig.run_service(GRACE);
+        for (sent, uncertain, delivery, reply_delivery, trace_delivery) in [
+            (
+                false,
+                false,
+                "not_sent",
+                ReplyDelivery::NotSent,
+                Delivery::NotSent,
+            ),
+            (true, false, "done", ReplyDelivery::Done, Delivery::Done),
+            (
+                true,
+                true,
+                "unknown",
+                ReplyDelivery::Unknown,
+                Delivery::Unknown,
+            ),
+        ] {
+            let input = json!({ "sent": sent, "uncertain": uncertain });
+            let code = format!(
+                "try {{ await __neo.invoke('test.crashed', {input}); }} \
+                 catch (error) {{ return {{ code: error.code, diagnosticCode: error.diagnosticCode, \
+                 delivery: error.delivery, retryable: error.retryable }}; }}"
+            );
+            let caught = service.run(request(&code, RunMeta::default())?).await;
+            assert_eq!(caught.status, ReplyStatus::Ok);
+            assert_eq!(
+                caught.value,
+                json!({
+                    "code": "internal_error", "diagnosticCode": "target_crashed",
+                    "delivery": delivery, "retryable": !sent,
+                })
+            );
+
+            let failed = service
+                .run(request(
+                    &format!("await __neo.invoke('test.crashed', {input});"),
+                    RunMeta::default(),
+                )?)
+                .await;
+            let error = error_of(&failed)?;
+            assert_eq!(error.code, "internal_error");
+            assert_eq!(error.diagnostic_code, Some(DiagnosticCode::TargetCrashed));
+            assert_eq!(error.delivery, Some(reply_delivery));
+            assert_eq!(error.retryable, !sent);
+            assert_eq!(
+                error.message,
+                "The tab's page crashed. Close or reload the tab before retrying."
+            );
+
+            rig.sink.flush().await?;
+            let stored = rig.store.run(failed.id).await?.ok_or("stored failed run")?;
+            let run_error = stored.summary.error.as_ref().ok_or("stored run error")?;
+            assert_eq!(run_error.code, "internal_error");
+            assert_eq!(
+                run_error.diagnostic_code,
+                Some(DiagnosticCode::TargetCrashed)
+            );
+            let operation = stored
+                .operations
+                .iter()
+                .find(|operation| operation.name == "test.crashed")
+                .ok_or("stored failed op")?;
+            assert_eq!(operation.delivery, Some(trace_delivery));
+            let stored_error = operation.error.as_ref().ok_or("operation error")?;
+            assert_eq!(stored_error.code, "internal_error");
+            assert_eq!(
+                stored_error.diagnostic_code,
+                Some(DiagnosticCode::TargetCrashed)
+            );
+            assert_eq!(stored_error.retryable, !sent);
+        }
+        Ok(())
+    })
+}
 
 fn meta(request: Option<&str>, task: Option<&str>) -> Result<RunMeta, TestError> {
     Ok(RunMeta {

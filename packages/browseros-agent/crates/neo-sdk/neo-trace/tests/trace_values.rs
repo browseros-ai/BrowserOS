@@ -147,6 +147,7 @@ fn run_ended(id: RunId) -> RunEnded {
 
 fn error(message: &str, operation_id: Option<OperationId>) -> ErrorRecord {
     ErrorRecord {
+        diagnostic_code: None,
         owner: ErrorOwner::Host,
         code: "host_error".to_owned(),
         message: message.to_owned(),

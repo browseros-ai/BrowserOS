@@ -26,7 +26,7 @@ use neo_playwright::{
     Answer, ErrorCode as PlaywrightCode, FileAccess, Op, OpEnv, OpTarget, PlaywrightError, Refusal,
     RunState, TimedOut,
 };
-use neo_trace::ErrorOwner;
+use neo_trace::{DiagnosticCode, ErrorOwner};
 use serde::{Deserialize, Deserializer};
 use serde_json::{Map, Value, json};
 
@@ -804,6 +804,10 @@ pub(super) fn leaf_error(error: &PlaywrightError) -> LeafError {
         // Neo and its crate disagree on the codes, whoever the refusal named.
         None => OperationError::neo(ErrorCode::INTERNAL_ERROR, message),
     };
+    let failure = failure.with_diagnostic(
+        (error.error_code() == Some(PlaywrightCode::TargetCrashed))
+            .then_some(DiagnosticCode::TargetCrashed),
+    );
     let failure = match error.timed_out() {
         TimedOut::Yes => failure.timed_out(),
         TimedOut::No => failure,
@@ -822,8 +826,8 @@ pub(super) fn leaf_error(error: &PlaywrightError) -> LeafError {
     }
 }
 
-/// The crate's codes in claw-sdk's one list. Every name carries over as it is, except
-/// `internal`: a bug in Neo reads `internal_error` wherever it happens.
+/// The crate's codes in claw-sdk's one list. Internal failures and crash diagnostics keep
+/// the compatible primary `internal_error` code; the diagnostic is projected separately.
 fn error_code(code: PlaywrightCode) -> ErrorCode {
     match code {
         PlaywrightCode::StrictModeViolation => ErrorCode::STRICT_MODE_VIOLATION,
@@ -843,7 +847,7 @@ fn error_code(code: PlaywrightCode) -> ErrorCode {
         PlaywrightCode::TargetClosed => ErrorCode::TARGET_CLOSED,
         PlaywrightCode::BrowserDisconnected => ErrorCode::BROWSER_DISCONNECTED,
         PlaywrightCode::Aborted => ErrorCode::ABORTED,
-        PlaywrightCode::Internal => ErrorCode::INTERNAL_ERROR,
+        PlaywrightCode::Internal | PlaywrightCode::TargetCrashed => ErrorCode::INTERNAL_ERROR,
     }
 }
 
@@ -862,7 +866,7 @@ mod tests {
 
     use browseros_core::TabId;
     use neo_playwright::{ErrorCode as PlaywrightCode, Op, OpWire, PlaywrightError, Refusal};
-    use neo_trace::ErrorOwner;
+    use neo_trace::{DiagnosticCode, ErrorOwner};
     use serde_json::{Value, json};
 
     use super::{Hold, OpInput, PLAYWRIGHT_LINE, PageEffect, error_code, leaf_error, op_marks};
@@ -1224,11 +1228,25 @@ mod tests {
     fn every_crate_code_keeps_its_name_but_internal() {
         for &code in PlaywrightCode::ALL {
             let expected = match code {
-                PlaywrightCode::Internal => "internal_error",
+                PlaywrightCode::Internal | PlaywrightCode::TargetCrashed => "internal_error",
                 other => other.as_str(),
             };
             assert_eq!(error_code(code).as_str(), expected, "{code:?}");
         }
+    }
+
+    #[test]
+    fn target_crashed_leaf_retains_legacy_code_and_typed_detail() {
+        let leaf = leaf_error(&PlaywrightError::new(
+            PlaywrightCode::TargetCrashed,
+            "renderer crashed".to_owned(),
+        ));
+        assert_eq!(leaf.error().code(), ErrorCode::INTERNAL_ERROR);
+        assert_eq!(
+            leaf.error().diagnostic_code(),
+            Some(DiagnosticCode::TargetCrashed)
+        );
+        assert!(!leaf.error().is_timeout());
     }
 
     #[test]

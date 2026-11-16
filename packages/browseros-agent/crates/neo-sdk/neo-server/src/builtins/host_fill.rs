@@ -420,6 +420,7 @@ fn checked_box(look: BoxLook) -> api::FillBoxCheck {
             Box::new(api::OperationError {
                 owner: owner_name(refusal.owner),
                 code: refusal.code,
+                diagnostic_code: refusal.diagnostic_code.map(|code| code.as_str().to_owned()),
                 message: refusal.message,
                 retryable: true,
                 host_code: refusal.host_code,
@@ -522,5 +523,25 @@ fn operation_error(error: &EntryError) -> OperationError {
         ErrorOwner::Script => OperationError::script(code, &error.message),
         ErrorOwner::Website => OperationError::website(code, &error.message),
         ErrorOwner::Host => OperationError::host(code, &error.message),
+    }
+    .with_diagnostic(error.diagnostic_code)
+}
+
+#[cfg(test)]
+mod diagnostic_tests {
+    use neo_playwright::{Answer, EntryCode, EntryError, Sending};
+    use neo_trace::DiagnosticCode;
+
+    #[test]
+    fn target_crashed_private_entry_retains_its_typed_diagnostic() {
+        let entry = EntryError::of(EntryCode::TargetCrashed, Sending::Sent);
+        let error = super::operation_error(&entry);
+        assert_eq!(entry.answer(), Answer::Definite);
+        assert_eq!(error.code().as_str(), "internal_error");
+        assert_eq!(error.diagnostic_code(), Some(DiagnosticCode::TargetCrashed));
+        assert_eq!(
+            error.message(),
+            "The tab's page crashed. Close or reload the tab before retrying."
+        );
     }
 }

@@ -53,6 +53,7 @@ use crate::call_log::CallLog;
 use crate::object_group::ObjectGroup;
 use crate::op::Op;
 use crate::op_spec::{Capability, OpSpec};
+use crate::playwright_error::TARGET_CRASH_MESSAGE;
 use crate::target::CallHeader;
 use crate::{ErrorCode, OpEnv, PlaywrightError, ReadPath, RunState, WritePath};
 
@@ -560,10 +561,12 @@ impl<'env> OpScope<'env> {
     /// A core or CDP failure the leaf could not recover from, as one of the crate's codes.
     pub(crate) fn core_error(&self, error: &CoreError) -> PlaywrightError {
         let code = ErrorCode::from_core(error);
-        if code == ErrorCode::TargetClosed {
-            self.fail(code, "Target page, context or browser has been closed")
-        } else {
-            self.fail(code, &error.to_string())
+        match code {
+            ErrorCode::TargetCrashed => self.fail(code, TARGET_CRASH_MESSAGE),
+            ErrorCode::TargetClosed => {
+                self.fail(code, "Target page, context or browser has been closed")
+            }
+            _ => self.fail(code, &error.to_string()),
         }
     }
 

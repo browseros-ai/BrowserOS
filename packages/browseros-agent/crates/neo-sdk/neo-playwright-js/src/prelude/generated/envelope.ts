@@ -22,6 +22,11 @@ export type DefaultPage = { tab: number, };
 export type Delivery = "not_sent" | "done" | "unknown";
 
 /**
+ * Additive machine-readable detail; the primary error code remains backward compatible.
+ */
+export type DiagnosticCode = "target_crashed";
+
+/**
  * The JS wire form of an `OpReply`: `{"ok": value, "pages": […]}` or `{"err": {…}, "pages":
  * […]}`, plus `defaultPage` once the call opened the run's own page, `pickedPage` once a task
  * pick bound it, and `pumped` once an op ordered its answer after event-pump replies. Protocol translation only: the door decided
@@ -108,6 +113,10 @@ export type ErrBody = {
  * The stable code (`wait_timeout`, `invalid_input`, …).
  */
 code: string, 
+/**
+ * Optional diagnostic; the primary code remains compatible with older callers.
+ */
+diagnosticCode?: DiagnosticCode, 
 /**
  * Who must change to fix it.
  */

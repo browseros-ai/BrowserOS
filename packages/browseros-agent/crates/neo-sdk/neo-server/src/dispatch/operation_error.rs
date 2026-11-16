@@ -3,7 +3,7 @@
 use std::error::Error;
 use std::fmt;
 
-use neo_trace::{Delivery, ErrorOwner, ErrorRecord, OperationId};
+use neo_trace::{Delivery, DiagnosticCode, ErrorOwner, ErrorRecord, OperationId};
 use serde_json::Value;
 
 use crate::browser::TaskError;
@@ -32,6 +32,8 @@ pub(crate) fn clip(mut text: String, chars: usize) -> String {
 pub(crate) struct OperationError {
     owner: ErrorOwner,
     code: ErrorCode,
+    /// Additive detail carried independently of the primary code and delivery decision.
+    diagnostic_code: Option<DiagnosticCode>,
     message: String,
     timed_out: bool,
     /// A failed `expect` matcher's facts from neo-playwright, which the script's error carries
@@ -69,6 +71,7 @@ impl OperationError {
         Self {
             owner,
             code,
+            diagnostic_code: None,
             message: message.to_string(),
             timed_out: false,
             matcher: None,
@@ -82,6 +85,19 @@ impl OperationError {
     pub(crate) fn timed_out(mut self) -> Self {
         self.timed_out = true;
         self
+    }
+
+    /// Compatibility keeps the primary code; this detail survives scripts and stored traces.
+    #[must_use]
+    pub(crate) fn with_diagnostic(mut self, diagnostic: Option<DiagnosticCode>) -> Self {
+        self.diagnostic_code = diagnostic;
+        self
+    }
+
+    /// Optional machine-readable detail for scripts and stored traces.
+    #[must_use]
+    pub(crate) fn diagnostic_code(&self) -> Option<DiagnosticCode> {
+        self.diagnostic_code
     }
 
     /// The same failure, carrying a failed matcher's facts for the script's error.
@@ -144,6 +160,7 @@ impl OperationError {
     /// The error as the trace stores it. The writer bounds the message.
     pub(super) fn record(&self, retryable: bool, operation: Option<OperationId>) -> ErrorRecord {
         ErrorRecord {
+            diagnostic_code: self.diagnostic_code,
             owner: self.owner,
             code: self.code.as_str().to_owned(),
             message: self.message.clone(),

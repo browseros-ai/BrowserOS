@@ -347,6 +347,7 @@ async fn effects_roll_up_from_write_operations() {
         unsure,
         RunStatus::Timeout,
         Some(ErrorRecord {
+            diagnostic_code: None,
             owner: ErrorOwner::Neo,
             code: "run_timeout".into(),
             message: "the run hit its 120 s budget".into(),

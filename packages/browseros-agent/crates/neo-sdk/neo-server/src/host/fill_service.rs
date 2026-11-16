@@ -466,6 +466,7 @@ fn checked(value: Value, boxes: usize) -> Vec<api::FillBoxCheck> {
             let refusal = api::OperationError {
                 owner: owner_name(ErrorOwner::Neo),
                 code: ErrorCode::INTERNAL_ERROR.as_str().to_owned(),
+                diagnostic_code: None,
                 message: "Neo could not read the look's answer".to_owned(),
                 retryable: true,
                 host_code: None,
@@ -493,6 +494,10 @@ fn refused_box(failure: &OpFailure) -> api::FillBoxCheck {
         refusal: Some(Box::new(api::OperationError {
             owner: owner_name(failure.error.owner()),
             code: failure.error.code().as_str().to_owned(),
+            diagnostic_code: failure
+                .error
+                .diagnostic_code()
+                .map(|code| code.as_str().to_owned()),
             message: failure.error.message().to_owned(),
             retryable: failure.retryable,
             host_code: None,

@@ -102,6 +102,7 @@ fn operation(
         sent_at: None,
         result: None,
         error: owner.map(|owner| ErrorRecord {
+            diagnostic_code: None,
             owner,
             code: "no_match".into(),
             message: "nothing matched".into(),
@@ -838,6 +839,7 @@ async fn a_protected_operation_and_its_tab_get_no_picture() -> TestResult {
             sent_at: None,
             result: None,
             error: owner.map(|owner| ErrorRecord {
+                diagnostic_code: None,
                 owner,
                 code: "focus_lost".into(),
                 message: "The focus left the box during the entry.".into(),

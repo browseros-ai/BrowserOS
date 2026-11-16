@@ -902,6 +902,7 @@ async fn values_off_reaches_records_and_events_without_payloads() -> TestResult 
     assert_eq!(patched.status, StatusCode::OK);
     h.sink.op_notes(op, vec!["note-canary-host-api".into()]);
     let error = ErrorRecord {
+        diagnostic_code: None,
         owner: ErrorOwner::Website,
         code: "timeout".into(),
         message: "error-canary-host-api".into(),

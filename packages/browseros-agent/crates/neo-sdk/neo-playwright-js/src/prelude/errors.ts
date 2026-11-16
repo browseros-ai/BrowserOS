@@ -34,9 +34,10 @@ import type { OpName } from './generated/ops'
 import { localTimeout, type RefusalCode, refuser } from './host'
 import type { SignalLike } from './signal'
 
-/** The fields of claw-sdk's error envelope (runtime/bridge.rs `ErrBody`) every error carries. */
+/** Envelope metadata copied when present, matching runtime/bridge.rs `ErrBody`. */
 const FIELDS = [
   'code',
+  'diagnosticCode',
   'owner',
   'delivery',
   'retryable',

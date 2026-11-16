@@ -19,6 +19,9 @@ pub struct OperationError {
     /// Stable snake_case, e.g. `owner_has_control`, `strict_mode_violation`, `target_closed`. `host / private_tab` refuses a script's own picture of a tab that took a private fill (`POST /v1/tabs/{tabId}/fill`) while the host's `fill.pictures` is `never`. A repeat fails the same way while that setting stands. `website / covered`: a pointer action's element stayed under something else that takes the pointer until its timeout ran out; the message names it, says what it shows and what to do, and `cover` holds it. Under the spec harness's conformance switch the same wait answers `not_actionable`, with Playwright's own message.
     #[serde(rename = "code")]
     pub code: String,
+    /// Optional typed detail. A crashed renderer retains primary code internal_error and adds target_crashed. Present in full and summary views; clients ignore unknown values.
+    #[serde(rename = "diagnosticCode", skip_serializing_if = "Option::is_none")]
+    pub diagnostic_code: Option<String>,
     /// The host's own code when `code` is `host_error`, e.g. `needs_owner`.
     #[serde(rename = "hostCode", skip_serializing_if = "Option::is_none")]
     pub host_code: Option<String>,
@@ -40,6 +43,7 @@ impl OperationError {
         OperationError {
             owner,
             code,
+            diagnostic_code: None,
             host_code: None,
             message,
             retryable,

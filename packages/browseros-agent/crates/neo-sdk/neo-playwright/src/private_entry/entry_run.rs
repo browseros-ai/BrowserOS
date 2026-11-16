@@ -811,6 +811,7 @@ fn burst_code(failure: &input::BurstFailure) -> EntryCode {
         input::BurstFailure::Expired => EntryCode::RunTimeout,
         input::BurstFailure::Cdp(error) => match ErrorCode::from_core(error) {
             ErrorCode::TargetClosed => EntryCode::TargetClosed,
+            ErrorCode::TargetCrashed => EntryCode::TargetCrashed,
             ErrorCode::BrowserDisconnected => EntryCode::BrowserDisconnected,
             _ => EntryCode::Internal,
         },
@@ -953,11 +954,23 @@ const PRIVATE_TAB_MESSAGE: &str = "This tab took a private fill, and the host se
 mod tests {
     use std::error::Error;
 
-    use browseros_core::TabId;
+    use browseros_cdp::CdpError;
+    use browseros_core::{CoreError, TabId};
     use neo_trace::ErrorOwner;
 
     use super::{PRIVATE_TAB_MESSAGE, PrivateTabs};
+    use crate::input::BurstFailure;
+    use crate::private_entry::EntryCode;
     use crate::{Playwright, test_env};
+
+    #[test]
+    fn target_crashed_input_burst_retains_the_private_entry_diagnostic() {
+        let failure = BurstFailure::Cdp(CoreError::Cdp(CdpError::Protocol {
+            code: -32000,
+            message: "Target crashed".to_owned(),
+        }));
+        assert_eq!(super::burst_code(&failure), EntryCode::TargetCrashed);
+    }
 
     #[tokio::test]
     async fn restored_private_entry_history_outlives_tab_pruning_without_changing_picture_rules()
