@@ -8,7 +8,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use neo_trace::{Delivery, Effect, ErrorOwner, OperationId, Outcome};
-use rquickjs::{AsyncContext, AsyncRuntime, Context, Runtime};
+use rquickjs::function::{Async, Func};
+use rquickjs::{AsyncContext, AsyncRuntime, Context, Promise, Runtime};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -960,8 +961,8 @@ fn lone_surrogates_in_returned_strings_become_replacement_characters() -> Result
 }
 
 #[test]
-fn lone_surrogates_in_nested_returned_data_become_replacement_characters()
--> Result<(), TestError> {
+fn lone_surrogates_in_nested_returned_data_become_replacement_characters() -> Result<(), TestError>
+{
     on_neo_runtime(async {
         let rig = TestRig::new().await?;
         let code = r"
@@ -1021,15 +1022,250 @@ fn well_formed_surrogate_pairs_and_other_strings_cross_unchanged() -> Result<(),
             const echoed = await __neo.invoke('test.echo', { values });
             return { direct: values, echoed: echoed.values };"#;
         let expected = json!([
-            "", "ASCII / \"quoted\" 'single' \\ slash",
-            "\0\x08\t\n\x0c\r\u{001f}\u{007f}", "e\u{0301}",
+            "",
+            "ASCII / \"quoted\" 'single' \\ slash",
+            "\0\x08\t\n\x0c\r\u{001f}\u{007f}",
+            "e\u{0301}",
             "\u{007f}\u{0080}\u{d7ff}\u{e000}�\u{fffe}\u{ffff}",
-            "🦊", "😀", "\u{10000}", "\u{10ffff}", r"\ud83d\udc00",
+            "🦊",
+            "😀",
+            "\u{10000}",
+            "\u{10ffff}",
+            r"\ud83d\udc00",
         ]);
         assert_eq!(
             returned(script(&rig, code).await?)?,
             json!({ "direct": &expected, "echoed": &expected }),
             "controls, combining marks, Unicode boundaries and valid pairs retain their exact value"
+        );
+        Ok(())
+    })
+}
+
+#[test]
+fn lone_surrogates_in_logs_are_repaired_without_decoding_opaque_text() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let end = script(
+            &rig,
+            r"
+                console.log('high\ud800', '\\ud800');
+                const error = new Error('message\udc00');
+                error.name = 'Name\ud800';
+                console.error(error);
+                console.log({ value: '\ud800' });
+                __neo_log('warn\ud800', 'native\udc00');
+                return 1;",
+        )
+        .await?;
+        assert!(
+            matches!(end.outcome, ScriptOutcome::Returned(value) if value == json!(1)),
+            "all console and direct native calls complete through the scalar text boundary"
+        );
+        let (lines, dropped) = end.logs.into_parts();
+        assert_eq!(
+            lines,
+            vec![
+                LogLine {
+                    level: LogLevel::Log,
+                    text: r"high� \ud800".to_owned(),
+                },
+                LogLine {
+                    level: LogLevel::Error,
+                    text: "Name�: message�".to_owned(),
+                },
+                LogLine {
+                    level: LogLevel::Log,
+                    text: r#"{"value":"\ud800"}"#.to_owned(),
+                },
+                LogLine {
+                    level: LogLevel::Log,
+                    text: "native�".to_owned(),
+                },
+            ],
+            "raw console/native text is scalar text, while a formatted object's escapes stay literal"
+        );
+        assert_eq!(dropped, 0);
+        Ok(())
+    })
+}
+
+#[test]
+fn surrogate_wrappers_preserve_native_non_string_type_errors() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let code = r"
+            const rejected = [];
+            for (const call of [
+              () => __neo_invoke(1, '{}', ''),
+              () => __neo_invoke('test.echo', 1, ''),
+              () => __neo_invoke('test.echo', '{}', 1),
+              () => __neo_log(1, ''),
+              () => __neo_log('log', 1),
+            ]) {
+              try { await call(); rejected.push(false); }
+              catch (error) { rejected.push(error instanceof TypeError); }
+            }
+            return rejected;";
+        assert_eq!(
+            returned(script(&rig, code).await?)?,
+            json!([true, true, true, true, true]),
+            "normalization cannot coerce native arguments that the Rust bindings reject"
+        );
+        Ok(())
+    })
+}
+
+#[test]
+fn lone_surrogates_in_thrown_values_keep_the_script_s_error() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        for (code, expected) in [
+            (r"throw 'high\ud800-low\udc00';", "high�-low�"),
+            (
+                r"
+                    const error = new Error('message\udc00');
+                    error.name = 'Name\ud800';
+                    error.stack = 'stack\ud800';
+                    throw error;",
+                "Name�: message�",
+            ),
+        ] {
+            let error = failed(script(&rig, code).await?)?;
+            assert_eq!(
+                (error.owner(), error.code(), error.message()),
+                (ErrorOwner::Script, ErrorCode::SCRIPT_ERROR, expected),
+                "settling a malformed thrown string must preserve its original error ownership"
+            );
+        }
+        Ok(())
+    })
+}
+
+#[test]
+fn surrogate_repair_keeps_json_grammar_strict_and_key_order() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let code = r#"
+            const malformed = [
+              String.raw`{"value":"\ud800\q"}`,
+              String.raw`{"value":"\ud800\u12"}`,
+              String.raw`{"value":"\ud800\u12xz"}`,
+              String.raw`{"value":"\ud800\Udc00"}`,
+              String.raw`{"value":"\ud800"} trailing`,
+              String.raw`{"value":\ud800}`,
+              String.raw`{"value":"\ud800`,
+            ];
+            const errors = [];
+            for (const input of malformed) {
+              const reply = JSON.parse(await __neo_invoke('test.echo', input, ''));
+              errors.push(reply.err?.code);
+            }
+            const reply = JSON.parse(await __neo_invoke('test.echo',
+              String.raw`{"\ud800":1,"\udc00":2,"__proto__":{"value":"\ud800"}}`, ''));
+            return { errors, keys: reply.ok };"#;
+        assert_eq!(
+            returned(script(&rig, code).await?)?,
+            json!({
+                "errors": vec!["invalid_input"; 7],
+                "keys": { "�": 2, "__proto__": { "value": "�" } },
+            }),
+            "only complete surrogate tokens are repaired; key collisions keep the parser's last value"
+        );
+        Ok(())
+    })
+}
+
+/// Rust String/Value senders already contain scalar text. This raw native fixture injects
+/// malformed JSON defensively and observes numeric code units before the result boundary can
+/// repair anything, so a broken incoming reader cannot pass through outgoing normalization.
+#[test]
+fn surrogate_wire_readers_repair_before_script_observation() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let runtime = AsyncRuntime::new()?;
+        let context = AsyncContext::full(&runtime).await?;
+        let result: Result<String, String> = context
+            .async_with(async |ctx| {
+                let result = async {
+                    let invoke = |name: String, input: String, site: String| {
+                        let reply = match name.as_str() {
+                            "fixture.raw�" => {
+                                assert_eq!(site, "site�");
+                                assert_eq!(
+                                    input,
+                                    r#" {"\uD83d\uDE00":"\ud83D\ude00","literal":"\\ud800","key�":"�\uD800\uDc00�"} "#,
+                                    "unchanged tokens retain hex spelling, whitespace and literal escapes"
+                                );
+                                "{}"
+                            }
+                            "fixture.reply" => {
+                                r#"{"ok":{"\ud800":"\udc00","pair":"\uD83d\uDe00","literal":"\\ud800"}}"#
+                            }
+                            "fixture.refuse" => {
+                                r#"{"err":{"code":"\ud800","owner":"script","delivery":"not_sent","retryable":true,"operationId":"fixture.1"}}"#
+                            }
+                            _ => panic!("unexpected fixture call: {name}"),
+                        };
+                        async move { reply.to_owned() }
+                    };
+                    ctx.globals()
+                        .set("__neo_invoke", Func::from(Async(invoke)))?;
+                    ctx.globals()
+                        .set("__neo_log", Func::from(|_level: String, _text: String| {}))?;
+                    ctx.eval::<(), _>(include_str!("js/bootstrap.js"))?;
+                    let promise: Promise<'_> = ctx.eval(
+                        r#"
+                        (async () => {
+                          const apply = Reflect.apply;
+                          const charCodeAt = String.prototype.charCodeAt;
+                          const codes = text => {
+                            const units = [];
+                            for (let i = 0; i < text.length; i++)
+                              units[units.length] = apply(charCodeAt, text, [i]);
+                            return units;
+                          };
+                          const raw = String.raw` {"\uD83d\uDE00":"\ud83D\ude00","literal":"\\ud800","key\ud800":"\uD800\uD800\uDc00\udc00"} `;
+                          const init = String.raw`{"value":"\ud800"}`;
+                          const seen = {};
+                          __neo.provide('fixtureInit', init => init.value);
+                          __neo.onReply(reply => {
+                            if (reply.err) seen.refusal = codes(reply.err.code);
+                          });
+                          String.prototype.toWellFormed = () => 'bypassed';
+                          String.prototype.charCodeAt = () => 0;
+                          String.prototype.includes = () => false;
+                          String.prototype.slice = () => '';
+                          Array.prototype.join = () => 'bypassed';
+                          Reflect.apply = () => 'bypassed';
+                          JSON.parse = () => ({ bypassed: true });
+                          return await __neo.run(async (...args) => {
+                            seen.init = codes(args[args.length - 1]);
+                            await __neo_invoke('fixture.raw\ud800', raw, 'site\udc00');
+                            const reply = await __neo.invoke('fixture.reply', {});
+                            const key = Object.keys(reply)[0];
+                            seen.key = codes(key);
+                            seen.value = codes(reply[key]);
+                            seen.pair = codes(reply.pair);
+                            seen.literal = codes(reply.literal);
+                            __neo.refuse('fixture.refuse', 'unused', 'unused');
+                            return seen;
+                          }, init);
+                        })()"#,
+                    )?;
+                    promise.into_future::<String>().await
+                }
+                .await;
+                result.map_err(|error| error.to_string())
+            })
+            .await;
+        assert_eq!(
+            serde_json::from_str::<Value>(&result?)?,
+            json!({ "ok": {
+                "init": [65533], "key": [65533], "value": [65533],
+                "pair": [55357, 56832], "literal": [92, 117, 100, 56, 48, 48],
+                "refusal": [65533],
+            }}),
+            "init, op and refusal readers repair before JS observes them, despite mutated intrinsics"
         );
         Ok(())
     })

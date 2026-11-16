@@ -414,7 +414,7 @@ function quote(text) {
         at++;
         continue;
       }
-      escaped = unicodeEscape(code);
+      escaped = "�";
     } else
       continue;
     out += text.slice(start, at) + escaped;

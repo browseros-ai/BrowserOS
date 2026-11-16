@@ -33,6 +33,8 @@ mod read_only_live;
 mod run;
 mod runtime;
 #[cfg(test)]
+mod surrogate_live;
+#[cfg(test)]
 mod test_rig;
 #[cfg(feature = "test-support")]
 pub mod test_support;
