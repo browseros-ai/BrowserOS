@@ -103,9 +103,10 @@ async fn tests_that_a_miss_takes_the_next_mark_and_counts_a_stopped_press() {
         Some((2, Some(mark(2, 0.0, 1.0)), false))
     );
     assert_eq!(watch.stopped, 1);
+    let at = Point { x: 40.0, y: 12.0 };
     assert!(!same_cover(
-        Some(mark(2, 0.0, 1.0)),
-        Some(mark(3, 0.0, 1.0))
+        (at, Some(mark(2, 0.0, 1.0))),
+        (at, Some(mark(3, 0.0, 1.0)))
     ));
 }
 
@@ -421,4 +422,68 @@ async fn tests_that_a_wrapper_takes_the_press_after_four_checks_unless_it_is_loa
         None,
         "a cover that says it is loading"
     );
+
+    let mut late = CoverWatch::new();
+    for _ in 0..4 {
+        late.saw(seat(None), Some(mark(9, 0.0, 1.0)));
+    }
+    late.saw(seat(None), Some(loading));
+    assert_eq!(
+        late.wrapper_allowed(),
+        None,
+        "a standing cover that starts saying it is loading"
+    );
+}
+
+/// One standing cover's mark at `x`, `y` with a 200 by 40 box.
+fn placed(x: f64, y: f64, width: f64) -> Option<CoverMark> {
+    Some(CoverMark {
+        id: 7,
+        rect: Rect {
+            x,
+            y,
+            width,
+            height: 40.0,
+        },
+        opacity: 1.0,
+        busy: false,
+    })
+}
+
+/// The watch's test of one standing cover between two sightings, each with the control's click
+/// point: the same place in the view, or the same place over the control.
+#[test]
+fn tests_that_a_cover_stands_in_the_view_or_over_its_control() {
+    let point = |x, y| Point { x, y };
+    // (1) The page scrolls: the cover and the control's point shift together.
+    assert!(same_cover(
+        (point(132.0, 20.0), placed(120.0, 8.0, 200.0)),
+        (point(0.0, 20.0), placed(-12.0, 8.0, 200.0))
+    ));
+    // (2) A nested scroller scrolls, the document does not: the same shift, which a box in the
+    // document's coordinates would read as a move.
+    assert!(same_cover(
+        (point(132.0, 300.0), placed(120.0, 288.0, 200.0)),
+        (point(132.0, 140.0), placed(120.0, 128.0, 200.0))
+    ));
+    // (3) A fixed cover: its box stays in the view while the control's point moves under it.
+    assert!(same_cover(
+        (point(132.0, 300.0), placed(0.0, 0.0, 200.0)),
+        (point(132.0, 140.0), placed(0.0, 0.0, 200.0))
+    ));
+    // (4) A cover that really moves: its view box and its place over the point both change.
+    assert!(!same_cover(
+        (point(132.0, 20.0), placed(120.0, 8.0, 200.0)),
+        (point(132.0, 20.0), placed(160.0, 8.0, 200.0))
+    ));
+    // (5) The same place, another size.
+    assert!(!same_cover(
+        (point(132.0, 20.0), placed(120.0, 8.0, 200.0)),
+        (point(132.0, 20.0), placed(120.0, 8.0, 240.0))
+    ));
+    // (6) Differences under half a pixel.
+    assert!(same_cover(
+        (point(132.0, 20.0), placed(120.0, 8.0, 200.0)),
+        (point(0.3, 20.0), placed(-11.4, 8.2, 200.3))
+    ));
 }

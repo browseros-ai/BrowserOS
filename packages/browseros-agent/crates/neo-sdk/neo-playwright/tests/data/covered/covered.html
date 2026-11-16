@@ -88,6 +88,18 @@ const shapes = {
     widget.setAttribute('style', 'position: absolute; z-index: 5; left: 110px; top: 0; width: 80px; height: 48px; background: #ffe')
     stage.append(widget)
   },
+  partialslider() {
+    // A slider half under the same widget: a press at whatever point is clear would move its
+    // value, so no clear point of it is pressed for the agent.
+    stage.innerHTML = '<input type="range" id="target" min="0" max="100" value="50" style="margin: 0; width: 300px; height: 48px">'
+    const target = document.getElementById('target')
+    for (const type of ['pointerdown', 'click', 'input']) target.addEventListener(type, log(type))
+    const widget = document.createElement('div')
+    widget.id = 'widget'
+    widget.textContent = 'EN'
+    widget.setAttribute('style', 'position: absolute; z-index: 5; left: 110px; top: 0; width: 80px; height: 48px; background: #ffe')
+    stage.append(widget)
+  },
   label() {
     stage.innerHTML = `<label id="own" style="position: relative; display: inline-block; padding: 8px">
       <input type="checkbox" id="target" style="position: absolute; left: 8px; top: 8px; margin: 0; width: 13px; height: 13px">

@@ -286,6 +286,14 @@ async fn tests_that_each_kind_says_what_to_do() -> TestResult {
             .map_err(|error| format!("{name}: {error}"))?;
             assert_eq!(text(&cover, "kind"), kind, "{name}: {message}");
             assert!(message.contains(line), "{name}: {message}");
+            // These covers lie in the page's flow: the retries' scrolls move them in the view
+            // with their control, and they still stand from the click's first check.
+            if matches!(name, "partial" | "label" | "wrapper") {
+                assert!(
+                    message.contains("\n  It has been there since this click began."),
+                    "{name}: {message}"
+                );
+            }
             assert!(shape.resolves(text(&cover, "ref")).await?, "{name}");
             assert!(
                 shape.log().await?.is_empty(),
@@ -403,6 +411,39 @@ async fn tests_that_a_dead_wrapper_says_the_state_did_not_change() -> TestResult
                 .message()
                 .contains("did not change its state: its own wrapper took the press"),
             "{checked}"
+        );
+        TestResult::Ok(())
+    }
+    .await;
+    shape.close().await;
+    result
+}
+
+/// A slider half under a widget: a clear point of it would take a press for a button, but a
+/// slider pressed anywhere moves its value, so only the point roles go through a clear point.
+/// The covered answer comes, with the kind and the clear point to act on; nothing is pressed.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_target_with_no_point_role_is_not_pressed_at_a_clear_point() -> TestResult {
+    let shape = Shape::shape("partialslider").await?;
+    let result = async {
+        let (message, cover) = covered(shape.click("#target").await)?;
+        assert_eq!(text(&cover, "kind"), "partial", "{message}");
+        assert!(
+            message.contains("Act on it at a clear point: { position: { x: "),
+            "{message}"
+        );
+        assert!(
+            !noted(&shape, "  a clear point of it takes the press"),
+            "{message}"
+        );
+        assert!(shape.log().await?.is_empty(), "the slider saw no press");
+        assert_eq!(
+            shape
+                .run
+                .eval(&shape.page, "document.getElementById('target').value")
+                .await?,
+            json!("50")
         );
         TestResult::Ok(())
     }
