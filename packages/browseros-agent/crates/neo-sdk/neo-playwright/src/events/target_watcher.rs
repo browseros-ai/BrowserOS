@@ -2999,10 +2999,6 @@ mod worker_observation_tests {
     #[tokio::test]
     async fn a_same_process_iframe_download_waits_for_its_attachment_and_keeps_completion()
     -> Result<(), Box<dyn Error>> {
-        use std::path::PathBuf;
-
-        use crate::DownloadState;
-
         let connection = TestConnection::new([]);
         let (hub, mut watcher) = scripted(&connection);
         watcher.progress.start(0, 0);
@@ -3072,6 +3068,20 @@ mod worker_observation_tests {
             } } })),
         });
         watcher.advance_lines().await;
+        assert!(
+            !published_before_tree,
+            "the download must wait until its held frame attachment is published"
+        );
+        check_child_download(&hub, &page)
+    }
+
+    /// Checks the published order and final file together: a page event without its later
+    /// completion would still leave the host waiting for bytes that the browser saved.
+    fn check_child_download(hub: &EventHub, page: &TargetId) -> Result<(), Box<dyn Error>> {
+        use std::path::PathBuf;
+
+        use crate::DownloadState;
+
         let records = hub.read_after(0).records;
         let attached = records
             .iter()
@@ -3080,7 +3090,7 @@ mod worker_observation_tests {
                     &record.event,
                     PageEvent::FrameLifecycle(event)
                         if event.kind == PageEventKind::FrameAttached
-                            && event.target == page
+                            && &event.target == page
                             && event.frame.id.0 == "child"
                 )
             })
@@ -3094,12 +3104,12 @@ mod worker_observation_tests {
             })
             .ok_or("the browser's download must be published")?;
         assert!(
-            !published_before_tree && attached < began,
-            "the download must wait until its held frame attachment is published"
+            attached < began,
+            "the download must follow its held frame attachment"
         );
         assert_eq!(
             download.page.as_ref(),
-            Some(&page),
+            Some(page),
             "the same-process child's download belongs to its page"
         );
         let tracked = hub

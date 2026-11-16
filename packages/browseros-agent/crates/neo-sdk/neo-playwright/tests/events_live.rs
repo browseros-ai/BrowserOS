@@ -43,6 +43,7 @@ use neo_playwright::{ErrorCode, PlaywrightError};
 use neo_trace::ErrorOwner;
 use page_server::PageServer;
 use serde_json::{Value, json};
+use tokio::fs::{read_to_string, remove_file};
 use tokio::sync::{Notify, broadcast, mpsc};
 use tokio::time;
 
@@ -108,7 +109,7 @@ async fn tests_that_a_hidden_iframe_download_reaches_its_page_and_finishes() -> 
             open(&run, &page, &server.url("/child.html")).await?;
             run.eval(
                 &page,
-                r#"(() => {
+                r"(() => {
                     const button = document.createElement('button');
                     button.id = 'download';
                     button.textContent = 'Download attachment';
@@ -120,7 +121,7 @@ async fn tests_that_a_hidden_iframe_download_reaches_its_page_and_finishes() -> 
                         document.body.append(frame);
                     });
                     document.body.append(button);
-                })()"#,
+                })()",
             )
             .await?;
             let since = now_ms()?;
@@ -161,11 +162,8 @@ async fn tests_that_a_hidden_iframe_download_reaches_its_page_and_finishes() -> 
                 Some("iframe-attachment.txt"),
                 "the completed file keeps the attachment's filename"
             );
-            assert_eq!(
-                tokio::fs::read_to_string(path).await?,
-                "iframe attachment\n"
-            );
-            tokio::fs::remove_file(path).await?;
+            assert_eq!(read_to_string(path).await?, "iframe attachment\n");
+            remove_file(path).await?;
             Ok(())
         }
         .await;
