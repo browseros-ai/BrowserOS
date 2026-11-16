@@ -203,6 +203,44 @@ const shapes = {
     })
     document.body.append(backdrop, host)
   },
+  signinsheet() {
+    // A real sign-in sheet's first shape: a blank fixed layer on top at the click point, beside
+    // its dialog, named by a span with tabindex -1 inside its h2, and holding a focus target with
+    // tabindex -1 parked off screen, a Close button and the form's frame.
+    button()
+    const layer = document.createElement('div')
+    layer.style.cssText = 'position: fixed; inset: 0; z-index: 10'
+    const sheet = document.createElement('div')
+    sheet.setAttribute('role', 'dialog')
+    sheet.setAttribute('aria-modal', 'true')
+    sheet.setAttribute('tabindex', '-1')
+    sheet.setAttribute('aria-labelledby', 'sheet-title')
+    sheet.style.cssText = 'position: fixed; left: 300px; top: 60px; width: 200px; padding: 8px; z-index: 11; background: #fff'
+    sheet.innerHTML = `<span tabindex="-1" style="position: absolute; left: -9640px">Start of the sheet</span>
+      <h2 style="font-size: 16px; margin: 0"><span id="sheet-title" tabindex="-1">Sign in or Sign up</span></h2>
+      <button id="close" aria-label="Close Sign in or Sign up">x</button>
+      <iframe title="Login/Signup" srcdoc="<p>Sign in</p>" style="display: block; width: 180px; height: 150px; border: 0"></iframe>`
+    sheet.querySelector('#close').addEventListener('click', () => {
+      layer.remove()
+      sheet.remove()
+    })
+    document.body.append(layer, sheet)
+  },
+  portalsheet() {
+    // A real sign-in sheet's second shape: a fixed carrier that takes no pointer, and in it a
+    // nameless portal that does, holding a dark fixed backdrop on top at the click point, two
+    // focus guards and a labelled dialog that holds only its frame.
+    button()
+    const carrier = document.createElement('div')
+    carrier.style.cssText = 'position: fixed; inset: 0; z-index: 10; pointer-events: none'
+    carrier.innerHTML = `<div id="portal" style="pointer-events: auto">
+      <div style="position: fixed; inset: 0; background: rgba(0, 0, 0, 0.5)"></div>
+      <span tabindex="0" aria-hidden="true" style="position: fixed; left: -100px; top: 0; width: 1px; height: 1px"></span>
+      <div role="dialog" aria-label="Log in or sign up" tabindex="-1" style="position: fixed; left: 300px; top: 60px; width: 200px; height: 300px; background: #fff">
+        <iframe title="Log in or sign up" srcdoc="<p>Log in</p>" style="display: block; width: 180px; height: 280px; border: 0"></iframe></div>
+      <span tabindex="0" aria-hidden="true" style="position: fixed; left: -100px; top: 4px; width: 1px; height: 1px"></span></div>`
+    document.body.append(carrier)
+  },
   shadowpair() {
     // A consent widget that draws its fixed backdrop and its fixed dialog as two siblings in one
     // open shadow root, under a host that is not itself fixed.

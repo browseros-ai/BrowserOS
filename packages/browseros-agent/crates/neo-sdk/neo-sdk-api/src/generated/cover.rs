@@ -17,7 +17,7 @@ pub struct Cover {
     /// The cover's ref: the one a snapshot printed for it, else one minted for it (`n4`, `f3n4` in a frame), which `page.getByRef` resolves the same way.
     #[serde(rename = "ref")]
     pub r#ref: String,
-    /// Its ARIA role, `generic` when it has none.
+    /// Its ARIA role, `generic` when it has none; a frame's is `iframe`.
     #[serde(rename = "role")]
     pub role: String,
     /// Its accessible name, read as a snapshot reads it; may be empty.

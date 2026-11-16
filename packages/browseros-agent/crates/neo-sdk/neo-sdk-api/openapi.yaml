@@ -1514,7 +1514,7 @@ components:
             (`n4`, `f3n4` in a frame), which `page.getByRef` resolves the same way.
         role:
           type: string
-          description: Its ARIA role, `generic` when it has none.
+          description: Its ARIA role, `generic` when it has none; a frame's is `iframe`.
         name:
           type: string
           description: Its accessible name, read as a snapshot reads it; may be empty.
@@ -1541,6 +1541,7 @@ components:
           type: string
         role:
           type: string
+          description: Its ARIA role, `generic` when it has none; a frame's is `iframe`.
         name:
           type: string
     TabList:

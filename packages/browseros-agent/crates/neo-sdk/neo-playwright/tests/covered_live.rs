@@ -859,16 +859,24 @@ async fn tests_that_a_cover_in_a_closed_part_is_not_blank() -> TestResult {
     result
 }
 
-/// A consent tool's host whose open shadow root draws a backdrop and a dialog, the target under
-/// the backdrop: the host is not blank, its snapshot shows the dialog, and the dialog's buttons are
-/// its controls, with refs that resolve and press.
+/// A consent tool's nameless host whose open shadow root draws a backdrop and a dialog, the target
+/// under the backdrop: the host holds that one dialog, so the answer shows the dialog, read
+/// through the root, and the dialog's buttons are its controls, with refs that resolve and press.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_a_dialog_in_an_open_shadow_root_is_named_with_its_buttons() -> TestResult {
     let shape = Shape::shape("shadowopen").await?;
     let result = async {
         let (message, cover) = covered(shape.click("#target").await)?;
-        assert!(message.contains("<div id=\"consent\""), "{message}");
+        assert_eq!(
+            (text(&cover, "role"), text(&cover, "name")),
+            ("dialog", "Privacy choices"),
+            "{message}"
+        );
+        assert!(
+            message.contains("\n  On top: dialog \"Privacy choices\" [ref="),
+            "{message}"
+        );
         let snapshot = cover
             .get("snapshot")
             .map(Value::to_string)
@@ -1023,6 +1031,98 @@ async fn tests_that_a_backdrop_is_named_after_a_dialog_in_a_shadow_root() -> Tes
             ["target"],
             "the way out pressed, the click lands"
         );
+        TestResult::Ok(())
+    }
+    .await;
+    shape.close().await;
+    result
+}
+
+/// The roles and names of a cover's controls, in the answer's order.
+fn control_names(cover: &Value) -> TestResult<Vec<(String, String)>> {
+    Ok(cover
+        .get("controls")
+        .and_then(Value::as_array)
+        .ok_or("the cover lists its controls")?
+        .iter()
+        .map(|control| {
+            (
+                text(control, "role").to_owned(),
+                text(control, "name").to_owned(),
+            )
+        })
+        .collect())
+}
+
+/// A real sign-in sheet's first shape: a blank fixed layer on top at the click point, beside a
+/// dialog named by a span with `tabindex="-1"` in its h2, holding a focus target with
+/// `tabindex="-1"` off screen, its Close button and its frame. The answer names the dialog behind
+/// the layer, its controls are exactly the button and the frame (role `iframe`), and the button's
+/// ref closes it.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_sign_in_sheet_lists_only_its_ways_out() -> TestResult {
+    let shape = Shape::shape("signinsheet").await?;
+    let result = async {
+        let (message, cover) = covered(shape.click("#target").await)?;
+        assert!(
+            message.contains(". Open over it: dialog \"Sign in or Sign up\" [ref="),
+            "{message}"
+        );
+        assert_eq!(
+            control_names(&cover)?,
+            [
+                ("button".to_owned(), "Close Sign in or Sign up".to_owned()),
+                ("iframe".to_owned(), "Login/Signup".to_owned()),
+            ],
+            "{message}"
+        );
+        let close = control_ref(&cover, "Close Sign in or Sign up")?;
+        let by_ref = locator(&shape.page, &[aria_ref(&close)], &close);
+        shape.act("locator.click", &by_ref, json!({})).await?;
+        shape.click("#target").await?;
+        assert_eq!(
+            shape.log().await?,
+            ["target"],
+            "the sheet closed, the click lands"
+        );
+        TestResult::Ok(())
+    }
+    .await;
+    shape.close().await;
+    result
+}
+
+/// A real sign-in sheet's second shape: a nameless portal in a carrier that takes no pointer,
+/// holding a dark backdrop on top at the click point, two focus guards and a dialog labelled
+/// "Log in or sign up" that holds only its frame. The answer shows that dialog: its role, name
+/// and ref, exactly one control (the frame), kind `page` and the ordinary line.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_nameless_portal_is_shown_as_its_dialog() -> TestResult {
+    let shape = Shape::shape("portalsheet").await?;
+    let result = async {
+        let (message, cover) = covered(shape.click("#target").await)?;
+        assert_eq!(
+            (text(&cover, "role"), text(&cover, "name")),
+            ("dialog", "Log in or sign up"),
+            "{message}"
+        );
+        assert!(
+            message.contains("\n  On top: dialog \"Log in or sign up\" [ref="),
+            "{message}"
+        );
+        assert_eq!(
+            control_names(&cover)?,
+            [("iframe".to_owned(), "Log in or sign up".to_owned())],
+            "{message}"
+        );
+        assert_eq!(text(&cover, "kind"), "page", "{message}");
+        assert!(
+            message.contains("\n  Do: answer or close it with one of its controls"),
+            "{message}"
+        );
+        assert!(shape.resolves(text(&cover, "ref")).await?, "{message}");
         TestResult::Ok(())
     }
     .await;

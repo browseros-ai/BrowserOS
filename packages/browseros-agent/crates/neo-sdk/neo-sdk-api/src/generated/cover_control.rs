@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 pub struct CoverControl {
     #[serde(rename = "ref")]
     pub r#ref: String,
+    /// Its ARIA role, `generic` when it has none; a frame's is `iframe`.
     #[serde(rename = "role")]
     pub role: String,
     #[serde(rename = "name")]
