@@ -714,3 +714,246 @@ body {
   --ledger-ink-2: #c7c6c6;
   --ledger-ink-3: #a3a5a5;
 }
+
+/* ultrafast energy meter on Home (components/cockpit/EnergyMeter.tsx): the ink panel's
+   gradients, glow, grain, light sweep, ring strokes and motion, which utilities can't express. */
+.em {
+  --em-base: #020d33;
+  --em-base-2: #06205f;
+  --em-glow-1: rgb(2 84 236 / 0.55);
+  --em-glow-2: rgb(82 144 255 / 0.38);
+  --em-glow-3: rgb(47 224 140 / 0.16);
+  --em-line: rgb(160 190 255 / 0.18);
+  --em-edge: rgb(255 255 255 / 0.22);
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  border-radius: 20px;
+  color: #f4f7ff;
+  background: linear-gradient(150deg, var(--em-base-2) 0%, var(--em-base) 62%);
+  box-shadow:
+    0 30px 60px -28px rgb(1 18 63 / 0.55),
+    0 2px 6px rgb(1 18 63 / 0.18),
+    inset 0 1px 0 var(--em-edge);
+}
+.dark .em {
+  --em-base: #050b1f;
+  --em-base-2: #0b1d4d;
+  --em-glow-1: rgb(82 144 255 / 0.42);
+  --em-glow-2: rgb(26 63 168 / 0.55);
+  --em-edge: rgb(160 190 255 / 0.22);
+}
+.em::before {
+  content: "";
+  position: absolute;
+  inset: -40%;
+  z-index: -2;
+  pointer-events: none;
+  background:
+    radial-gradient(40% 35% at 25% 30%, var(--em-glow-1), transparent 70%),
+    radial-gradient(35% 30% at 75% 20%, var(--em-glow-2), transparent 70%),
+    radial-gradient(30% 30% at 60% 85%, var(--em-glow-3), transparent 70%);
+  filter: blur(18px);
+}
+.em::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  border-radius: inherit;
+  background: linear-gradient(
+      115deg,
+      transparent 30%,
+      rgb(255 255 255 / 0.09) 45%,
+      transparent 60%
+    )
+    no-repeat;
+  background-size: 250% 100%;
+  background-position: 120% 0;
+  box-shadow: inset 0 0 0 1px var(--em-edge);
+}
+.em-grain {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  opacity: 0.5;
+  background-image: radial-gradient(
+    rgb(255 255 255 / 0.05) 1px,
+    transparent 1px
+  );
+  background-size: 3px 3px;
+}
+.em-mark svg {
+  color: #8fb4ff;
+  filter: drop-shadow(0 0 8px rgb(82 144 255 / 0.9));
+}
+.em-chip {
+  background: rgb(255 255 255 / 0.08);
+  box-shadow: inset 0 0 0 1px var(--em-line);
+}
+.em-big {
+  background: linear-gradient(180deg, #ffffff 30%, #a9c6ff 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+.em-ring .em-track,
+.em-ring .em-ticks,
+.em-ring .em-fill {
+  fill: none;
+  stroke-width: 16;
+}
+.em-ring .em-track {
+  stroke: rgb(255 255 255 / 0.08);
+}
+.em-ring .em-ticks {
+  stroke: rgb(255 255 255 / 0.18);
+  stroke-dasharray: 1.2 35.8;
+}
+.em-ring .em-fill {
+  stroke: url(#em-ring-gradient);
+  stroke-linecap: round;
+  filter: drop-shadow(0 0 10px rgb(82 144 255 / 0.8));
+}
+.em-milestone {
+  background: linear-gradient(
+    100deg,
+    rgb(82 144 255 / 0.22),
+    rgb(47 224 140 / 0.12)
+  );
+  box-shadow: inset 0 0 0 1px rgb(143 180 255 / 0.35);
+}
+.em-milestone[data-quiet] {
+  background: rgb(255 255 255 / 0.05);
+  box-shadow: inset 0 0 0 1px var(--em-line);
+}
+.em-medal {
+  background: radial-gradient(circle at 35% 30%, #ffffff, #9cc0ff 55%, #2f6fe0);
+  box-shadow: 0 0 18px rgb(82 144 255 / 0.7);
+  color: #01123f;
+}
+.em-milestone[data-quiet] .em-medal {
+  background: rgb(82 144 255 / 0.18);
+  box-shadow: inset 0 0 0 1px rgb(143 180 255 / 0.45);
+  color: #9cc0ff;
+}
+.em-sparks i {
+  position: absolute;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #9cc0ff;
+  opacity: 0;
+}
+.em-sparks i:nth-child(3n) {
+  background: #2fe08c;
+}
+.em-sparks i:nth-child(4n) {
+  background: #fff;
+}
+.em-tile {
+  background: rgb(255 255 255 / 0.08);
+  box-shadow: inset 0 0 0 1px var(--em-line);
+}
+.em-bar {
+  border-radius: 3px 3px 1px 1px;
+  background: rgb(255 255 255 / 0.1);
+  transform-origin: bottom;
+}
+.em-bar[data-hit] {
+  background: linear-gradient(180deg, #9cc0ff, #2f6fe0);
+  box-shadow: 0 0 10px rgb(82 144 255 / 0.45);
+}
+.em-fold {
+  border-top: 1px solid var(--em-line);
+}
+.em-prompt {
+  background: rgb(0 0 0 / 0.25);
+  box-shadow: inset 0 0 0 1px var(--em-line);
+}
+.em-aside {
+  border-color: var(--em-line);
+  background: rgb(255 255 255 / 0.03);
+}
+
+/* Motion only for readers who allow it; everyone else gets the still meter. */
+@media (prefers-reduced-motion: no-preference) {
+  .em::before {
+    animation: em-aurora 14s ease-in-out infinite alternate;
+  }
+  .em::after {
+    animation: em-sweep 1.6s cubic-bezier(0.16, 1, 0.3, 1) 0.2s both;
+  }
+  .em-mark svg {
+    animation: em-zap 3.2s ease-in-out infinite;
+  }
+  .em-ring .em-fill {
+    animation: em-fill 1.8s cubic-bezier(0.16, 1, 0.3, 1) 0.12s both;
+  }
+  .em-milestone {
+    animation: em-rise 0.6s cubic-bezier(0.16, 1, 0.3, 1) 1.9s both;
+  }
+  .em-sparks[data-burst] i {
+    animation: em-spark 0.9s cubic-bezier(0.16, 1, 0.3, 1) 1.9s both;
+  }
+  .em-bar {
+    animation: em-grow 0.8s cubic-bezier(0.16, 1, 0.3, 1) both;
+    animation-delay: calc(var(--i) * 70ms + 0.4s);
+  }
+}
+@keyframes em-aurora {
+  0% {
+    transform: translate3d(-4%, -2%, 0) rotate(0deg);
+  }
+  50% {
+    transform: translate3d(4%, 3%, 0) rotate(8deg);
+  }
+  100% {
+    transform: translate3d(-2%, 4%, 0) rotate(-6deg);
+  }
+}
+@keyframes em-sweep {
+  from {
+    background-position: 120% 0;
+  }
+  to {
+    background-position: -40% 0;
+  }
+}
+@keyframes em-zap {
+  0%,
+  100% {
+    filter: drop-shadow(0 0 6px rgb(82 144 255 / 0.7));
+  }
+  50% {
+    filter: drop-shadow(0 0 14px rgb(156 192 255 / 1));
+  }
+}
+@keyframes em-fill {
+  from {
+    stroke-dashoffset: var(--em-circumference);
+  }
+}
+@keyframes em-rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+  }
+}
+@keyframes em-spark {
+  0% {
+    opacity: 1;
+    transform: translate(0, 0) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(var(--dx), var(--dy)) scale(0.4);
+  }
+}
+@keyframes em-grow {
+  from {
+    transform: scaleY(0);
+  }
+}
