@@ -7,8 +7,8 @@
 
 use crate::browser;
 use crate::support::{
-    ClockedHarness, Harness, Op, Start, TestResult, end_run, harness_with_camera,
-    harness_with_manual_clock, op_ended, op_started, start_run,
+    self, ClockedHarness, Harness, Op, PROGRESS_WATCHDOG, Start, TestResult, end_run,
+    harness_with_camera, harness_with_manual_clock, op_ended, op_started, start_run,
 };
 use axum::http::StatusCode;
 use axum::http::header::CONTENT_TYPE;
@@ -242,11 +242,15 @@ async fn a_run_end_shot_is_still_taken_once_the_writes_picture_is_in() -> TestRe
     let run = start_run(&h.sink, Start::default());
     let (click, title) = (OperationId::new(run, 1), OperationId::new(run, 2));
     write(&h, click, 3);
-    tokio::time::timeout(Duration::from_secs(5), async {
-        while served(&h, click).await.ok().flatten().is_none() {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
+    support::watchdog(
+        "first JPEG stored after a write",
+        PROGRESS_WATCHDOG,
+        async {
+            while served(&h, click).await.ok().flatten().is_none() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        },
+    )
     .await?;
     read(&h, title, 3);
     end_run(&h.sink, run, None);
