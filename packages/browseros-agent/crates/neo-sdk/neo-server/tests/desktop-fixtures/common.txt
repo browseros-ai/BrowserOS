@@ -1,0 +1,40 @@
+// Scripts share assertion helpers, not browser actions. Every case still names its
+// fixture, drives the SDK and returns the page state that justified its verdict.
+function assert(condition, message, actual) {
+  if (!condition) throw new Error(message + (actual === undefined ? '' : '; actual=' + JSON.stringify(actual)));
+}
+function equal(actual, expected, message = 'values differ') {
+  const normalize = value => {
+    if (Array.isArray(value)) return value.map(normalize);
+    if (value && typeof value === 'object') return Object.fromEntries(Object.keys(value).sort().map(key => [key, normalize(value[key])]));
+    return value;
+  };
+  assert(JSON.stringify(normalize(actual)) === JSON.stringify(normalize(expected)), message + '; expected=' + JSON.stringify(expected), actual);
+}
+function includes(actual, expected, message = 'missing expected text') {
+  assert(String(actual).includes(expected), message + '; expected=' + JSON.stringify(expected), actual);
+}
+async function rejected(operation, pattern) {
+  try { await operation(); }
+  catch (error) {
+    const result = {message: String(error.message || error), code: error.code, owner: error.owner, delivery: error.delivery};
+    if (pattern) assert(pattern.test(result.message + ' ' + result.code), 'unexpected rejection', result);
+    return result;
+  }
+  throw new Error('Expected operation to reject');
+}
+async function refFor(p, needle) {
+  const snapshot = await p.ariaSnapshot({mode: 'ai', text: true});
+  const line = snapshot.split('\n').find(line => line.includes(needle) && /\[ref=[^\]]+\]/.test(line));
+  const ref = line && line.match(/\[ref=([^\]]+)\]/)[1];
+  assert(ref, 'No ref for ' + needle, snapshot);
+  return ref;
+}
+async function poll(condition, message, timeout = 5000) {
+  const end = Date.now() + timeout;
+  do {
+    if (await condition()) return;
+    await page.waitForTimeout(50);
+  } while (Date.now() < end);
+  throw new Error(message);
+}

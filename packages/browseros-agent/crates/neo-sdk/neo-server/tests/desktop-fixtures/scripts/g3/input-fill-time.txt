@@ -1,0 +1,6 @@
+await page.goto(args.base + '/sdk-fill.html');
+await page.getByRef(await refFor(page, "Time field")).fill("14:30");
+const state = await page.evaluate(id => ({ value: document.getElementById(id).value, events: window.nativeEvents.filter(event => event.id === id) }), "time");
+equal(state.value, "14:30", 'fill reads back the native value');
+equal(state.events, [{ id: "time", kind: 'input', value: "14:30" }, { id: "time", kind: 'change', value: "14:30" }], 'fill emits input and change with the stored value');
+return state;

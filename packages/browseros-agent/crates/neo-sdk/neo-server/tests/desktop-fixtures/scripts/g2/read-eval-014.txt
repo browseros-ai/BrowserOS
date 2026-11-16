@@ -1,0 +1,3 @@
+await page.goto(args.base + '/form.html');
+const error = await rejected(async () => await page.evaluate(() => { throw new Error('evaluate-boom'); }), /evaluate-boom/);
+return {error};

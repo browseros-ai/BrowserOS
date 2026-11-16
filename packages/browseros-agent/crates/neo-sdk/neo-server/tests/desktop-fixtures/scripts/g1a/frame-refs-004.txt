@@ -1,0 +1,100 @@
+// Source port of frame-refs-004 at a7e536e152a4835abe9974498b27a5c927dd2e0d. Execution is owned by the coordinator.
+
+// A ref is opaque. SDK child-frame refs include a document prefix, unlike desktop eN refs.
+const g1aRef = (snapshot, needle) => {
+  const row = snapshot.split('\n').find(line =>
+    line.replace(/\s+"/g, '"').includes(needle) && /\[ref=([^\]\s]+)\]/.test(line));
+  assert(row, 'snapshot has a ref for ' + needle, snapshot);
+  return row.match(/\[ref=([^\]\s]+)\]/)[1];
+};
+// The unchanged fixture reports events to its root. Never use DOM click to act on a target.
+const g1aLabs = {
+  top: { level: 0, site: 'A' }, 'single-same': { level: 1, site: 'A' },
+  'nested-same': { level: 2, site: 'A' }, 'single-cross': { level: 1, site: 'B' },
+  'nested-cross': { level: 2, site: 'B' }, 'nested-mixed': { level: 2, site: 'A' }
+};
+const g1aLabState = () => page.evaluate(() => JSON.parse(JSON.stringify(window.frameLab)));
+const g1aOpenLab = async (id, scroll = false) => {
+  await page.goto(args.base + '/frame-lab.html?case=' + id + (scroll ? '&scroll=1' : ''));
+  await poll(async () => (await g1aLabState()).ready, 'every level of frame lab ' + id + ' loads', 30000);
+};
+const g1aOrigin = id => {
+  const origin = new URL(args.base);
+  if (g1aLabs[id].site === 'B') origin.hostname = origin.hostname === 'localhost' ? '127.0.0.1' : 'localhost';
+  return origin.origin;
+};
+const g1aSnapshotRef = async label => {
+  let snapshot = '';
+  let ref;
+  await poll(async () => {
+    snapshot = await page.ariaSnapshot({ mode: 'full' });
+    const row = snapshot.split('\n').find(line => line.includes(label) && /\[ref=([^\]\s]+)\]/.test(line));
+    ref = row && row.match(/\[ref=([^\]\s]+)\]/)[1];
+    return typeof ref === 'string';
+  }, 'a full snapshot ref for ' + label, 20000);
+  return ref;
+};
+const g1aTrustedClick = async (id, control, seen) => {
+  await poll(async () => (await g1aLabState()).events.length > seen, 'a ' + control + ' click in ' + id);
+  const events = (await g1aLabState()).events.slice(seen);
+  const event = events[0];
+  assert(events.length === 1 && event.control === control && event.trusted === true &&
+    event.level === g1aLabs[id].level && event.origin === g1aOrigin(id),
+    'exactly one trusted ' + control + ' click reaches the correct frame level and origin', { id, events, expectedOrigin: g1aOrigin(id), expectedLevel: g1aLabs[id].level });
+  return event;
+};
+const g1aCommand = async (level, action) => {
+  await page.evaluate(({ level, action }) => window.frameLab.command(level, action), { level, action });
+  await poll(async () => (await g1aLabState()).done.includes(level + ':' + action), 'the frame command ' + action + ' completes');
+};
+const g1aNewDocument = async oldDoc => {
+  let doc;
+  await poll(async () => {
+    doc = (await g1aLabState()).targetDoc;
+    return typeof doc === 'string' && doc !== oldDoc;
+  }, 'the replacement target document loads', 30000);
+  return doc;
+};
+const g1aRefusedClick = async ref => {
+  const before = (await g1aLabState()).events.length;
+  const error = await rejected(() => page.getByRef(ref).click({ timeout: 1500 }), /./s);
+  const events = (await g1aLabState()).events;
+  equal(events.length, before, 'a refused old frame ref delivers no click anywhere');
+  return { ref, error, before, after: events.length };
+};
+
+const id = "single-cross";
+
+await g1aOpenLab(id);
+const buttonLabel = 'Click target ' + id;
+const checkboxLabel = 'Check target ' + id;
+const buttonRef = await g1aSnapshotRef(buttonLabel);
+const interactive = await page.ariaSnapshot({ text: false });
+equal(g1aRef(interactive, buttonLabel), buttonRef, 'interactive snapshot retains the full button ref');
+g1aRef(interactive, checkboxLabel);
+await page.getByRef(buttonRef).click();
+const buttonEvent = await g1aTrustedClick(id, 'button', 0);
+const full = await page.ariaSnapshot({ mode: 'full' });
+const compact = await page.ariaSnapshot({ text: false });
+const tree = await page.ariaSnapshotJSON({ mode: 'ai' });
+const pending = [...tree];
+let entry;
+for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+  if (typeof node !== 'object' || node === null) continue;
+  if (node.name === checkboxLabel && typeof node.ref === 'string') { entry = node; break; }
+  if (node.children) pending.push(...node.children);
+}
+assert(entry, 'the structured snapshot contains a checkbox ref by name', { tree, full });
+includes(compact, '[ref=' + entry.ref + ']', 'the interactive run snapshot retains the structured checkbox ref');
+await page.getByRef(entry.ref).click();
+const checkboxEvent = await g1aTrustedClick(id, 'checkbox', 1);
+equal(checkboxEvent.checked, true, 'the trusted checkbox click checks the box');
+// SDK structured snapshots name frame ownership in the ref prefix, not desktop refs[].frameId.
+// Check actual frame membership too, so string parsing alone can never prove provenance.
+const inChild = await page.getByRef(entry.ref).evaluate(() => window !== window.top);
+const framed = /^f\d+(?:e|n)\d+$/.test(entry.ref);
+equal(framed, g1aLabs[id].level > 0, 'the ref carries the expected child-document provenance');
+equal(inChild, g1aLabs[id].level > 0, 'the structured ref resolves in the expected root or child document');
+return { id, buttonRef, buttonEvent, checkboxEvent, structuredEntry: entry,
+  legacyFrameId: entry.frameId === undefined ? null : entry.frameId,
+  sdkFrameProvenance: { framed, inChild }, full, compact };

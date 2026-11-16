@@ -14,6 +14,14 @@ pub enum CaptchaKind {
     Geetest,
     AwsWaf,
     Arkose,
+    /// `PerimeterX` (HUMAN)'s press-and-hold human check, which Neo detects and never solves: only
+    /// a person can pass it. Its wire `type` is `unknown` on purpose. claw-server's MCP output
+    /// schema lists `type` as a closed enum without it, and an MCP client rejects a whole answer
+    /// holding a value its schema does not list, so this name stays inside the crate (the scan
+    /// reports it as `perimeterx`; messages and events name the family). Once that enum lists
+    /// `perimeterx`, naming it is this attribute and its `as_str` arm, which a test keeps equal.
+    #[serde(rename(serialize = "unknown", deserialize = "perimeterx"))]
+    PerimeterX,
     Unknown,
 }
 impl CaptchaKind {
@@ -36,6 +44,8 @@ impl CaptchaKind {
             Self::Geetest => "geetest",
             Self::AwsWaf => "aws_waf",
             Self::Arkose => "arkose",
+            // Its wire name, as the variant's attribute says.
+            Self::PerimeterX => "unknown",
             Self::Unknown => "unknown",
         }
     }
@@ -760,6 +770,22 @@ mod tests {
             );
             assert_eq!(serde_json::from_value::<SolveOutcome>(wire)?, outcome);
         }
+        Ok(())
+    }
+
+    /// The scan names `PerimeterX`; the wire says `unknown` until claw-server's closed `type` enum
+    /// lists it (see the variant), and `as_str` keeps the wire's spelling.
+    #[test]
+    fn tests_that_perimeterx_reads_by_name_and_travels_as_unknown() -> anyhow::Result<()> {
+        let kind: CaptchaKind = serde_json::from_value(json!("perimeterx"))?;
+        assert_eq!(kind, CaptchaKind::PerimeterX);
+        assert_eq!(to_value(kind)?, "unknown");
+        assert_eq!(kind.as_str(), "unknown");
+        assert!(!kind.is_supported());
+        assert_eq!(
+            serde_json::from_value::<CaptchaKind>(json!("unknown"))?,
+            CaptchaKind::Unknown
+        );
         Ok(())
     }
 

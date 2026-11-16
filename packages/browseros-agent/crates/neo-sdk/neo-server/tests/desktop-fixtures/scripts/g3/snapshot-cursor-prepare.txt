@@ -1,0 +1,5 @@
+await page.goto(args.base + '/snapshot-cursor-concurrency.html');
+await poll(async () => (await page.evaluate(() => window.snapshotCursorFixture.state())).candidateCount === 64, 'all 64 cursor candidates are ready');
+
+await page.evaluate(() => window.snapshotCursorFixture.resetProbe());
+return { tabId: page.tabId };

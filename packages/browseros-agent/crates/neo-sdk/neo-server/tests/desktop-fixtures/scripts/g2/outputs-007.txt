@@ -1,0 +1,4 @@
+await page.goto(args.base + '/media.html');
+const value = await page.evaluate(() => ({count:7,text:'line\n🦀 '.repeat(2000)}));
+equal(value,{count:7,text:'line\n🦀 '.repeat(2000)},'large page evaluation preserves the typed JSON object');
+return value;

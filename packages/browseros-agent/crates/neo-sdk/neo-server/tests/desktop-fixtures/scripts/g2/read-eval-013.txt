@@ -1,0 +1,4 @@
+await page.goto(args.base + '/form.html');
+const value = await page.evaluate(async () => await Promise.resolve('awaited-value'));
+equal(value, 'awaited-value', 'page evaluation awaits the returned promise');
+return {value};

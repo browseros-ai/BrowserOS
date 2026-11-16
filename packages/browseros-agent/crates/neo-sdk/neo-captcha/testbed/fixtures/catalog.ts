@@ -5,6 +5,7 @@ export type CaptchaFamily =
   | 'geetest'
   | 'aws_waf'
   | 'arkose'
+  | 'perimeterx'
   | 'none'
 /** neo-captcha's `CaptchaKind`: the `type` that `neo.solveCaptcha` reports. */
 export type CaptchaType =
@@ -212,6 +213,26 @@ export const FIXTURE_PAGES: readonly CaptchaPage[] = [
     ),
     ...unsupported('hcaptcha'),
   },
+  {
+    ...fixture(
+      'perimeterx-modal',
+      'PerimeterX press-and-hold check over a page',
+      'perimeterx',
+      '/perimeterx-modal.html',
+    ),
+    // Its `type` is `unknown` on purpose: claw-server's closed schema does not list it yet.
+    ...unsupported('unknown'),
+    notes:
+      'Detected by its frame over the page and its #px-captcha; the message and events name PerimeterX.',
+  },
+  fixture(
+    'perimeterx-waiting',
+    'PerimeterX frame inserted, not shown',
+    'none',
+    '/perimeterx-waiting.html',
+    undefined,
+    ['already_clear'],
+  ),
 ]
 
 export const DEMO_PAGES: readonly CaptchaPage[] = [

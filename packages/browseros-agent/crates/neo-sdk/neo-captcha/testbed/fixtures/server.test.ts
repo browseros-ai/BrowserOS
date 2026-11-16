@@ -116,6 +116,14 @@ test('tests that no-captcha always accepts without calling a verifier', async ()
   expect(requests).toHaveLength(count)
 })
 
+test('tests that the PerimeterX page rejects without calling a verifier', async () => {
+  const count = requests.length
+  expect(await (await submit('perimeterx-modal')).text()).toContain(
+    'REJECTED: human-check-not-passed',
+  )
+  expect(requests).toHaveLength(count)
+})
+
 test.each(cases)(
   'tests that %s rejects a missing or wrong response field',
   async (id) => {

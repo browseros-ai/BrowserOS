@@ -1,0 +1,4 @@
+await page.goto(args.base + '/links.html');
+const listed = context.pages().map(candidate => ({ tabId: candidate.tabId, url: candidate.url() }));
+assert(listed.some(candidate => candidate.tabId === page.tabId && candidate.url.includes('/links.html')), 'the task page is listed with its URL', { tabId: page.tabId, listed });
+return { tabId: page.tabId, listed };

@@ -16,11 +16,12 @@ use crate::dispatch::{
 };
 
 /// The method's own line in the `run` description, shown only when this Neo has a provider key.
+/// Its time limit is neo-captcha's [`neo_captcha::SOLVE_DEADLINE`], which a test checks.
 const LISTED: &str = "neo.solveCaptcha(page) → { verdict, type, reason, message, durationMs, \
-    paidTasks }: solves the CAPTCHA on the page, in up to 120 s. verdict is solved | \
-    token_applied | already_clear | unsolved | cancelled | unknown; branch on it, and look at \
-    the page again after cancelled or unknown. Await it before any other action on that page: a \
-    write there meanwhile fails page_busy.";
+    paidTasks }: solves the CAPTCHA on the page, in up to 120 s. Branch on `verdict`: solved | \
+    token_applied | already_clear | unsolved | cancelled | unknown. After cancelled or unknown, \
+    look at the page again. Await it before any other action on that page: a write there \
+    meanwhile fails `page_busy`.";
 /// Why every call fails without a key: the deployment's to fix, not the script's (decision 7).
 const NO_KEY: &str = "this Neo has no CAPTCHA provider key, so neo.solveCaptcha is off; the \
     deployment must configure one";
@@ -147,7 +148,7 @@ fn verdict_value(outcome: &SolveOutcome) -> Option<SolveOutput> {
         verdict,
         kind: outcome.kind,
         reason: outcome.reason,
-        message: message(verdict, outcome.reason),
+        message: message_for(verdict, outcome.reason, outcome.kind),
         duration_ms: outcome.duration_ms,
         paid_tasks: outcome.paid_tasks,
     })
@@ -191,6 +192,32 @@ fn event_line(event: &CaptchaEvent) -> String {
 /// the script branches on. Exhaustive on both enums, so a new verdict or reason does not
 /// compile until someone words it.
 fn message(verdict: Verdict, reason: SolveReason) -> String {
+    // The solver detects only the families it knows, so finding none is not proof that nothing
+    // blocks the page: an unknown human check that covers it reads the same. The line says what
+    // was found, and what such a check means for the script.
+    if verdict == Verdict::AlreadyClear && reason == SolveReason::NoCaptcha {
+        return NONE_FOUND.to_owned();
+    }
+    worded(verdict, cause(reason))
+}
+
+/// The line for `already_clear` with no CAPTCHA found.
+const NONE_FOUND: &str = "Neo found no CAPTCHA it knows on the page; carry on with the task. If \
+    a human check still covers the page, stop and tell the user it needs their help.";
+
+/// [`message`], naming the family when the answer's `type` cannot: `PerimeterX`'s is `unknown`
+/// (see neo-captcha's `CaptchaKind::PerimeterX`), so its refusal says what blocks the page.
+fn message_for(verdict: Verdict, reason: SolveReason, kind: Option<CaptchaKind>) -> String {
+    if kind == Some(CaptchaKind::PerimeterX) && reason == SolveReason::UnsupportedType {
+        return worded(
+            verdict,
+            "it is PerimeterX's press-and-hold human check, which only a person can pass",
+        );
+    }
+    message(verdict, reason)
+}
+
+fn worded(verdict: Verdict, why: &str) -> String {
     let (said, next) = match verdict {
         Verdict::Solved => ("The CAPTCHA is solved", "carry on with the task."),
         Verdict::TokenApplied => (
@@ -211,7 +238,7 @@ fn message(verdict: Verdict, reason: SolveReason) -> String {
             "look at the page again before acting.",
         ),
     };
-    format!("{said} ({}); {next}", cause(reason))
+    format!("{said} ({why}); {next}")
 }
 
 /// Why, in a few words.
@@ -248,7 +275,7 @@ mod tests {
         Attempts, CaptchaKind, SolveMethod, SolveOutcome, SolveReason, SolveStatus, Verdict,
     };
 
-    use super::{message, verdict_value};
+    use super::{LISTED, cause, message, verdict_value};
 
     const VERDICTS: [Verdict; 6] = [
         Verdict::Solved,
@@ -318,7 +345,13 @@ mod tests {
             (
                 Verdict::AlreadyClear,
                 SolveReason::NoCaptcha,
-                "No CAPTCHA blocks the page (no CAPTCHA was found); carry on with the task.",
+                "Neo found no CAPTCHA it knows on the page; carry on with the task. If a human \
+                 check still covers the page, stop and tell the user it needs their help.",
+            ),
+            (
+                Verdict::AlreadyClear,
+                SolveReason::AlreadyPassed,
+                "No CAPTCHA blocks the page (it had already passed); carry on with the task.",
             ),
             (
                 Verdict::Unsolved,
@@ -342,6 +375,43 @@ mod tests {
         for (verdict, reason, line) in table {
             assert_eq!(message(verdict, reason), line, "{verdict:?} / {reason:?}");
         }
+    }
+
+    /// The listed time limit and the deadline reason's words are the solver's own deadline.
+    #[test]
+    fn the_listed_time_limit_is_the_solvers_deadline() {
+        let said = format!("in up to {} s", neo_captcha::SOLVE_DEADLINE.as_secs());
+        assert!(LISTED.contains(&said), "the line says: {said}");
+        let deadline = format!("its {} s limit", neo_captcha::SOLVE_DEADLINE.as_secs());
+        assert!(cause(SolveReason::DeadlineExceeded).contains(&deadline));
+    }
+
+    /// `PerimeterX`'s `type` stays `unknown` (claw-server's closed schema does not list it), so its
+    /// refusal names the family in the line, and every other answer reads as before.
+    #[test]
+    fn a_perimeterx_refusal_names_the_family_and_a_person() {
+        let mut refused = outcome(SolveStatus::Unsupported, SolveReason::UnsupportedType);
+        refused.kind = Some(CaptchaKind::PerimeterX);
+        let value = verdict_value(&refused).and_then(|value| serde_json::to_value(value).ok());
+        assert_eq!(
+            value,
+            Some(serde_json::json!({
+                "verdict": "unsolved",
+                "type": "unknown",
+                "reason": "unsupported_type",
+                "message": "The CAPTCHA still blocks the page (it is PerimeterX's press-and-hold \
+                            human check, which only a person can pass); stop and tell the user it \
+                            needs their help.",
+                "durationMs": 1840,
+                "paidTasks": 0,
+            }))
+        );
+        refused.kind = Some(CaptchaKind::Hcaptcha);
+        let value = verdict_value(&refused).map(|value| value.message);
+        assert_eq!(
+            value.as_deref(),
+            Some(message(Verdict::Unsolved, SolveReason::UnsupportedType).as_str())
+        );
     }
 
     #[test]

@@ -1,0 +1,16 @@
+/** Native chooser handles retain the exact input; event registration precedes the activating input. */
+function file(name, text) { return {name, mimeType:'text/plain', buffer:Buffer.from(text)}; }
+async function choose(p, action) {
+  const waiting = p.waitForEvent('filechooser', {timeout:5000});
+  await action();
+  const chooser = await waiting;
+  assert(chooser.page() === p, 'chooser belongs to the initiating page');
+  return chooser;
+}
+
+await page.goto(args.base + '/upload.html');
+const chooser = await choose(page, () => page.getByRole('button',{name:'Attach document',exact:true}).click());
+await chooser.setFiles(file('chooser-fixture.txt','selected through the intercepted chooser'));
+const selected = await page.locator('#hidden-names').textContent();
+includes(selected,'chooser-fixture.txt','the page reports the hidden-input file name');
+return {selected,multiple:chooser.isMultiple()};

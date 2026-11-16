@@ -1,0 +1,41 @@
+/**
+ * Hosted port of desktop fill contracts at a7e536e152a4835abe9974498b27a5c927dd2e0d.
+ * The root runner owns this task and its cleanup. This body only uses its page.
+ */
+
+// locator.ref pins the same node for every action and read. Unlike an AI snapshot,
+// it can also name a covered field, so that the original refusal can be measured.
+async function g1cField(label, scope = page) {
+  const ref = await scope.getByLabel(label, { exact: true }).ref({ timeout: 5000 });
+  return { label, ref, target: page.getByRef(ref) };
+}
+
+/** Read the SDK's YAML field line without imposing desktop's JSON quoting. */
+function g1cShown(snapshot, label) {
+  const name = JSON.stringify(label);
+  const line = snapshot.split('\n').find(row => row.includes(name));
+  assert(line !== undefined, 'snapshot contains the filled field', { label, snapshot });
+  const afterName = line.slice(line.indexOf(name) + name.length).trim();
+  const tail = afterName.replace(/^(?:\[[^\]]+\]\s*)*/, '');
+  assert(tail === '' || tail === ':' || tail.startsWith(': '),
+    'field line has a scalar readback', { label, line });
+  const scalar = tail === '' || tail === ':' ? '' : tail.slice(2);
+  const value = scalar.startsWith('"') ? JSON.parse(scalar)
+    : scalar.startsWith("'") ? scalar.slice(1, -1).replace(/''/g, "'") : scalar;
+  return { label, line, value, snapshotRef: line.match(/\[ref=([^\]]+)\]/)?.[1] ?? null };
+}
+
+await page.goto(args.base + '/fill.html');
+const field = await g1cField("Rejecting field");
+const result = await field.target.fill('replacement', { timeout: 8000 });
+const actual = await page.evaluate(() => ({
+  value: document.getElementById("reject").value,
+  other: document.getElementById('other').value,
+}));
+equal(actual, { value: 'original', other: 'untouched' },
+  'the page keeps its value without changing the other field');
+equal(await field.target.inputValue(), 'original', 'the original ref reads the kept value');
+const snapshot = await page.ariaSnapshot({ mode: 'ai' });
+const shown = g1cShown(snapshot, field.label);
+equal(shown.value, 'original', 'the fields readback exposes what the page kept');
+return { ...actual, ref: field.ref, fillReturnType: typeof result, shown };

@@ -1,0 +1,6 @@
+await page.goto(args.base + '/script-isolation.html');
+const ref = await refFor(page, 'Card delete control');
+await page.getByRef(ref).click();
+const result = await page.evaluate(() => document.getElementById('result').textContent);
+equal(result, 'card delete clicked', 'the child control receives the click instead of its pointer card');
+return { ref, result };
