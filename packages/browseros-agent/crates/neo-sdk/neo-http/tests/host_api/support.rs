@@ -35,6 +35,27 @@ use tower::ServiceExt;
 pub(crate) type BoxError = Box<dyn std::error::Error + Send + Sync>;
 pub(crate) type TestResult = Result<(), BoxError>;
 
+/// Service startup still uses wall time, before a screenshot fixture freezes Tokio's clock.
+/// This is a readiness watchdog, independent of the camera's eight-second capture budget.
+pub(crate) const READINESS_WATCHDOG: Duration = Duration::from_secs(30);
+/// Progress witnesses keep their existing bound; their errors identify the stalled stage.
+pub(crate) const PROGRESS_WATCHDOG: Duration = Duration::from_secs(5);
+
+/// Bounds fixture progress without turning an operational stall into an anonymous `Elapsed`.
+pub(crate) async fn watchdog<T>(
+    stage: &str,
+    limit: Duration,
+    progress: impl Future<Output = T>,
+) -> Result<T, BoxError> {
+    tokio::time::timeout(limit, progress).await.map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::TimedOut,
+            format!("host_api {stage} did not complete within {limit:?}"),
+        )
+        .into()
+    })
+}
+
 /// Keeps paused Tokio time fixed across real SQLite and filesystem work. Pinned Tokio 1.52.3
 /// inhibits auto-advance synchronously when a blocking task is scheduled.
 #[must_use = "retain the guard while test deadlines must remain frozen"]
@@ -318,7 +339,7 @@ async fn start(
     );
     // The service puts the screen home in the background as it starts. Waiting for that keeps
     // a test's own resizes, and its scripted refusals, the only ones after it.
-    tokio::time::timeout(Duration::from_secs(5), async {
+    watchdog("initial Xvnc resize readiness", READINESS_WATCHDOG, async {
         while xvnc.resizes().is_empty() {
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
@@ -604,9 +625,13 @@ impl EventStream {
                 }
                 continue;
             }
-            let chunk = tokio::time::timeout(Duration::from_secs(5), self.body.next())
-                .await?
-                .ok_or("the event stream ended")??;
+            let chunk = watchdog(
+                "event-stream chunk progress",
+                PROGRESS_WATCHDOG,
+                self.body.next(),
+            )
+            .await?
+            .ok_or("the event stream ended")??;
             self.buffer.push_str(std::str::from_utf8(&chunk)?);
         }
     }
