@@ -283,6 +283,7 @@ async fn page_snapshot(
     // baseline, so a run that ends later cannot hand the new document the old one's text.
     let document = pw.snapshot_baselines().generation(page.target_id());
     let request = ProbeRequest::Snapshot {
+        survey_covers: marks(input.mode, input.clickable),
         mark_inert: marks(input.mode, input.clickable),
         root: ProbeTarget::Document,
         mode: input.mode,
@@ -505,6 +506,7 @@ struct Snapshotter<'op> {
 struct FrameReply {
     json: Vec<AriaNode>,
     iframes: Vec<SnapshotIframe>,
+    on_top: Vec<aria_snapshot::SnapshotTop>,
 }
 
 impl FrameReply {
@@ -514,6 +516,7 @@ impl FrameReply {
         Self {
             json: Vec::new(),
             iframes: Vec::new(),
+            on_top: Vec::new(),
         }
     }
 }
@@ -554,6 +557,7 @@ impl Snapshotter<'_> {
     /// common probe sender carries the scope's output policy independently of these options.
     fn request(&self, root: ProbeTarget, depth: Option<i64>) -> ProbeRequest {
         ProbeRequest::Snapshot {
+            survey_covers: false,
             mark_inert: self.marking.is_some(),
             root,
             mode: self.mode,
@@ -618,6 +622,12 @@ impl Snapshotter<'_> {
         }
         let reply = probe::call_with_nodes(self.scope, self.page, world, &request, &nodes).await;
         if main {
+            if let Ok(ProbeReply::Snapshot { on_top_skipped: true, .. }) = &reply {
+                self.scope.log("  cover content move skipped (engine shape)".to_owned());
+            }
+            if let Ok(ProbeReply::Snapshot { survey_tested: Some(tested), survey_ms: Some(elapsed), .. }) = &reply {
+                self.scope.log(format!("  cover survey: {tested} controls tested in {elapsed:.3} ms"));
+            }
             if let Ok(ProbeReply::Snapshot {
                 inert_marking_ms: Some(elapsed),
                 ..
@@ -694,8 +704,8 @@ impl Snapshotter<'_> {
             Err(failure) => return Err(resolve::failed(self.scope, failure)),
         };
         match self.call(&world, None, None, request).await {
-            Ok(ProbeReply::Snapshot { json, iframes, .. }) => frame_reply(json, iframes)
-                .map(Some)
+            Ok(ProbeReply::Snapshot { json, iframes, on_top, .. }) => frame_reply(json, iframes)
+                .map(|mut frame| { frame.on_top = on_top.iter().map(top_note).collect(); Some(frame) })
                 .map_err(|why| self.scope.fail(ErrorCode::Internal, why)),
             Ok(ProbeReply::None { stale_ref: None }) => Ok(None),
             Ok(other) => Err(resolve::refused(self.scope, other)),
@@ -712,10 +722,12 @@ impl Snapshotter<'_> {
     /// closed-root seeds marking found but could not send.
     async fn stitched(
         &self,
-        root: FrameReply,
+        mut root: FrameReply,
         depth: Option<i64>,
     ) -> Result<aria_snapshot::SnapshotResult, PlaywrightError> {
+        let on_top = std::mem::take(&mut root.on_top);
         let mut result = aria_snapshot::stitch(self.below(root, depth).await?);
+        result.on_top = on_top;
         let count = |seeds: usize| u32::try_from(seeds).unwrap_or(u32::MAX);
         result.closed_roots = self
             .marking
@@ -737,7 +749,7 @@ impl Snapshotter<'_> {
         depth: Option<i64>,
     ) -> BoxFuture<'_, Result<FrameSnapshot, PlaywrightError>> {
         Box::pin(async move {
-            let FrameReply { json, iframes } = frame;
+            let FrameReply { json, iframes, .. } = frame;
             let children =
                 future::try_join_all(iframes.into_iter().map(|iframe| self.child(iframe, depth)))
                     .await?;
@@ -849,7 +861,7 @@ fn frame_reply(json: Value, iframes: Vec<SnapshotIframe>) -> Result<FrameReply, 
         "the probe's snapshot has a node this build cannot read; rebuild \
          crates/neo-sdk/neo-playwright-js"
     })?;
-    Ok(FrameReply { json, iframes })
+    Ok(FrameReply { json, iframes, on_top: Vec::new() })
 }
 
 /// A child frame's depth, as upstream computes it: the parent's minus the iframe's own depth
@@ -944,4 +956,15 @@ mod tests {
         }
         Ok(())
     }
+}
+
+/// Names are already masked page facts; this is the same wording the covered answer owns.
+fn top_note(layer: &crate::probe::SurveyLayer) -> aria_snapshot::SnapshotTop {
+    let controls: Vec<_> = layer.controls.iter().map(|control| (control.role.as_str(), control.name.as_value(), control.r#ref.as_str())).collect();
+    let note = crate::action::OnTopNote {
+        role: &layer.role, name: layer.name.as_value(), reference: &layer.r#ref,
+        blank: layer.blank, loading: layer.loading, whole_view: layer.whole_view,
+        controls: &controls, first_words: layer.first_words.as_ref().and_then(|words| words.as_value().as_str()),
+    };
+    aria_snapshot::SnapshotTop { r#ref: layer.r#ref.clone(), line: crate::action::on_top_line(&note), removed: crate::action::on_top_removed(&note), first_refs: layer.first_refs.clone() }
 }

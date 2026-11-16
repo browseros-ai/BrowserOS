@@ -30,7 +30,7 @@ pub(crate) use probe_call::{
 };
 pub(crate) use probe_reply::{
     CoverFacts, CoverKind, CoverMark, ErrorClass, Hit, PROBE_PROTOCOL, PageText, Point, ProbeReply,
-    Rect, Resolution, SnapshotIframe,
+    Rect, Resolution, SnapshotIframe, SurveyLayer,
 };
 pub(crate) use probe_request::{
     ArmPlan, BootOptions, DocumentPart, DropEntry, Edit, ElementState, ExpectParams, FilePayload,

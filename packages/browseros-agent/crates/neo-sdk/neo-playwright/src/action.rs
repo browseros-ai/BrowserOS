@@ -74,6 +74,7 @@ pub(crate) mod requested_navigations;
 mod subject;
 
 pub(crate) use action_op::ActionOp;
+pub(crate) use cover::{OnTopNote, on_top_line, on_top_removed};
 pub(crate) use element_action::ElementRunner;
 pub(crate) use focus_lease::{FocusLease, lease};
 // Runners own these probe value payloads; the generator shares their canonical declarations.

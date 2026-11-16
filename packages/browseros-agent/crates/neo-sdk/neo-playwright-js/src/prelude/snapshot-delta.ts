@@ -22,6 +22,7 @@
  * prints lines the caller has seen or is seeing now. The notice line and the cut line are left
  * out of the comparison and of the result: they describe the snapshot's size, not the page.
  */
+import { isOnTopLine, onTopDelta, onTopHead } from './snapshot-on-top'
 import {
   type PassedV1Options,
   type RenderedV1,
@@ -79,14 +80,24 @@ export function renderDelta(
 ): DeltaResult {
   if (stored === null) {
     const whole = renderSnapshotV1(result, withDefaults(passed))
-    return { returned: `${NO_BASELINE}\n${whole.text}`, baseline: whole }
+    return {
+      returned: [
+        ...onTopHead(result),
+        NO_BASELINE,
+        withoutTop(whole.text),
+      ].join('\n'),
+      baseline: whole,
+    }
   }
   const { form } = stored
   if (agrees(passed, form)) {
     const current = renderSnapshotV1As(result, form)
     const changes = listChanges(stored.text, current)
     if (changes !== null)
-      return { returned: changes, baseline: { text: current, form } }
+      return {
+        returned: [...onTopDelta(stored.text, result), changes].join('\n'),
+        baseline: { text: current, form },
+      }
   }
   // The whole page: what the call passed, the rest from the baseline's form. A `text` neither
   // call passed goes back to the length rule, since a whole page is a new snapshot and that rule
@@ -97,7 +108,14 @@ export function renderDelta(
     maxTokens: passed.maxTokens ?? form.maxTokens,
     inert: passed.inert ?? form.inert ?? false,
   })
-  return { returned: `${TOO_MUCH}\n${whole.text}`, baseline: whole }
+  return {
+    returned: [
+      ...onTopDelta(stored.text, result),
+      TOO_MUCH,
+      withoutTop(whole.text),
+    ].join('\n'),
+    baseline: whole,
+  }
 }
 
 /**
@@ -109,7 +127,11 @@ export function renderUncompared(
   result: SnapshotResult,
   passed: PassedV1Options,
 ): string {
-  return `${NO_TIME}\n${renderSnapshotV1(result, withDefaults(passed)).text}`
+  return [
+    ...onTopHead(result),
+    NO_TIME,
+    withoutTop(renderSnapshotV1(result, withDefaults(passed)).text),
+  ].join('\n')
 }
 
 /**
@@ -140,6 +162,7 @@ function passedText(text: TextForm): boolean | undefined {
 /** The lines that describe the snapshot's size: the notice and the cut line (snapshot-cap.ts). */
 function sizeLine(line: string): boolean {
   return (
+    isOnTopLine(line) ||
     line.startsWith('# text left out: ') ||
     line.startsWith('# cut: ') ||
     line.startsWith('# not listed: ')
@@ -404,4 +427,12 @@ function blockLine(
 
 function indentOf(line: string): number {
   return line.length - line.trimStart().length
+}
+
+/** The pinned survey head is attached once, before a delta's own status line. */
+function withoutTop(text: string): string {
+  return text
+    .split('\n')
+    .filter((line) => !isOnTopLine(line))
+    .join('\n')
 }

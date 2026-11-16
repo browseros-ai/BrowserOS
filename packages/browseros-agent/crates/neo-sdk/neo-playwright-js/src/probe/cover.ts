@@ -76,7 +76,7 @@ function coverNumber(element: Element): number {
 }
 
 /** The composed tree's parent: the parent element, or a shadow root's host. */
-function parentOrHost(element: Element): Element | undefined {
+export function parentOrHost(element: Element): Element | undefined {
   if (element.parentElement) return element.parentElement
   const root = element.parentNode
   return root && root.nodeType === 11 ? (root as ShadowRoot).host : undefined
@@ -97,6 +97,17 @@ export function hitChain(target: Element, point: Point): Element[] | null {
     if (root.nodeType === 9) break
     at = (root as ShadowRoot).host
   }
+  let hit = hitAtRoots(roots, point)
+  const chain: Element[] = []
+  while (hit && hit !== target) {
+    chain.push(hit)
+    hit = hit.assignedSlot ?? parentOrHost(hit)
+  }
+  return hit === target ? null : chain
+}
+
+/** The click's one walk through its roots; the survey supplies only its main document. */
+export function hitAtRoots(roots: readonly (Document | ShadowRoot)[], point: Point): Element | undefined {
   let hit: Element | undefined
   for (let index = roots.length - 1; index >= 0; index--) {
     const root = roots[index]
@@ -116,12 +127,7 @@ export function hitChain(target: Element, point: Point): Element[] | null {
     const next = roots[index - 1]
     if (index && next && inner !== (next as ShadowRoot).host) break
   }
-  const chain: Element[] = []
-  while (hit && hit !== target) {
-    chain.push(hit)
-    hit = hit.assignedSlot ?? parentOrHost(hit)
-  }
-  return hit === target ? null : chain
+  return hit
 }
 
 /**
@@ -149,7 +155,7 @@ function shownOpacity(element: Element): number {
 }
 
 /** It says it is loading: `aria-busy="true"` on it or around it, or a progress bar in it. */
-function saysLoading(element: Element): boolean {
+export function saysLoading(element: Element): boolean {
   return (
     element.closest('[aria-busy="true"]') !== null ||
     element.querySelector('[role="progressbar"], progress') !== null
@@ -218,23 +224,10 @@ function factsOf(
 ): CoverFacts {
   const kind = kindOf(world, subject, chain, request.point, request.above)
   const layer = whichDialog(world, chain, top, request.point)
-  let shown = layer
-  let behind = false
-  const aroundIt = layer.contains(subject) || layer === document.body
-  // A cover whose content sits in a closed root this world does not know is not blank.
   const closed = !layer.contains(subject) && inClosedPart(layer)
-  if (!closed && !aroundIt) {
-    // A backdrop rendered beside its dialog is blank: the answer names the dialog open over
-    // it. A nameless layer that holds one dialog, as a portal holds the backdrop and the dialog
-    // side by side, is shown as that dialog. The cover, for the same-layer line and the
-    // runner's count, stays the layer either way.
-    const blank = isBlank(world, output, layer)
-    const dialog = blank
-      ? dialogBehind(world, layer, request.point)
-      : soleDialog(world, layer)
-    behind = blank && dialog !== undefined
-    shown = dialog ?? layer
-  }
+  const shown = shownAs(world, output, layer, request.point, subject)
+  // Only a blank face names a sibling behind it; a sole child dialog is the layer's content.
+  const behind = shown !== layer && isBlank(world, output, layer)
   // A cover that holds the control (its wrapper, its label, the page's root) is the control's
   // own surroundings: its snapshot would be the page, so it is left out.
   const surrounds = shown.contains(subject) || shown === document.body
@@ -262,12 +255,24 @@ function factsOf(
       ? { text: drawn.slice(0, MAX_TEXT).join('') }
       : {}),
     controls,
-    blank: !closed && controls.length === 0 && !words && !drawn?.length,
+    blank: !isFrame(shown) && !closed && controls.length === 0 && !words && !drawn?.length,
     behind,
     closed,
     notice: !surrounds && inLiveRegion(world, shown),
     kind: frameInCover(world, shown, kind) ? { is: 'page' } : kind,
   }
+}
+
+/** One naming decision for a click and the survey; the latter has no clicked subject. */
+export function shownAs(world: World, output: FailureOutput, layer: Element, point: Point, subject?: Element): Element {
+  const holds = subject ? (layer.contains(subject) || layer === world.injected.document.body) : pageElement(layer)
+  if (holds || inClosedPart(layer)) return layer
+  return (isBlank(world, output, layer) ? dialogBehind(world, layer, point) : soleDialog(world, layer)) ?? layer
+}
+
+/** A frame contains a separate document, never an empty backdrop in this world. */
+function isFrame(element: Element): boolean {
+  return element.localName === 'iframe' || element.localName === 'frame'
 }
 
 /**
@@ -278,10 +283,8 @@ function factsOf(
  */
 function frameInCover(world: World, shown: Element, kind: CoverKind): boolean {
   if (kind.is !== 'frame') return false
-  const frame = (element: Element) =>
-    element.localName === 'iframe' || element.localName === 'frame'
-  if (frame(shown)) return false
-  return takingControls(world, shown).some((control) => !frame(control))
+  if (isFrame(shown)) return false
+  return takingControls(world, shown).some((control) => !isFrame(control))
 }
 
 /**
@@ -319,6 +322,28 @@ export function whichDialog(
   top: Element,
   point: Point,
 ): Element {
+  const path = coverPath(chain, top, point)
+  const main = top.ownerDocument.querySelector('main, [role="main"]')
+  const named = path.filter((at) => !pageElement(at, main))
+  const roleOf = (element: Element) => world.injected.utils.getAriaRole(element)
+  const face = coverFace(named)
+  return (
+    named.find((at) => {
+      const role = roleOf(at) ?? ''
+      return DIALOG_ROLES.has(role) || NOTICE_ROLES.has(role)
+    }) ??
+    face ??
+    named.find((at) => SECTION_ROLES.has(roleOf(at) ?? '')) ??
+    (pageElement(top, main) ? (path[0] ?? top) : top)
+  )
+}
+
+/** The click's shadow-aware hit path, shared before naming and face selection. */
+export function coverPath(
+  chain: readonly Element[],
+  top: Element,
+  point: Point,
+): Element[] {
   const [hit] = chain
   let deepest: Element | undefined = hit
   for (let depth = 0; deepest?.shadowRoot && depth < MAX_DEPTH; depth++) {
@@ -337,32 +362,31 @@ export function whichDialog(
     path.push(at)
     if (at === top) break
   }
-  const document = top.ownerDocument
-  const main = document.querySelector('main, [role="main"]')
-  const page = (at: Element) =>
+  return path
+}
+
+/** The page carriers the click never names; the survey adds its whole-document majority guard. */
+export function pageElement(
+  at: Element,
+  main = at.ownerDocument.querySelector('main, [role="main"]'),
+): boolean {
+  const document = at.ownerDocument
+  return (
     at === document.documentElement ||
     at === document.body ||
     (main !== null && at.contains(main))
-  const named = path.filter((at) => !page(at))
-  const roleOf = (element: Element) => world.injected.utils.getAriaRole(element)
+  )
+}
+
+/** The outermost pointer-taking element carried by the path's fixed or top-layer element. */
+export function coverFace(named: readonly Element[]): Element | undefined {
   const outermostFixed = named.findLastIndex(
     (at) => getComputedStyle(at).position === 'fixed' || inTopLayer(at),
   )
-  // `named` runs from what is on top outwards: up to the outermost fixed element, the outermost
-  // that takes the pointer is that element, or else what it carries.
-  const face =
-    outermostFixed < 0
-      ? undefined
-      : named.slice(0, outermostFixed + 1).findLast(takesPointer)
-  return (
-    named.find((at) => {
-      const role = roleOf(at) ?? ''
-      return DIALOG_ROLES.has(role) || NOTICE_ROLES.has(role)
-    }) ??
-    face ??
-    named.find((at) => SECTION_ROLES.has(roleOf(at) ?? '')) ??
-    (page(top) ? (path[0] ?? top) : top)
-  )
+  // The path runs outwards: a pointer-free fixed carrier delegates its face to what it carries.
+  return outermostFixed < 0
+    ? undefined
+    : named.slice(0, outermostFixed + 1).findLast(takesPointer)
 }
 
 /**
@@ -370,12 +394,13 @@ export function whichDialog(
  * layer. Both read the composed tree (the engine's snapshot walks the roots it can read), so a
  * dialog drawn in a shadow root is not blank.
  */
-function isBlank(
+export function isBlank(
   world: World,
   output: FailureOutput,
   element: Element,
 ): boolean {
   return (
+    !isFrame(element) &&
     takingControls(world, element).length === 0 &&
     !holdsWords(output.tree(element, () => quietSnapshot(world, element)))
   )
@@ -422,7 +447,7 @@ export function dialogBehind(
 }
 
 /** Its own `pointer-events` lets the pointer take it. */
-function takesPointer(element: Element): boolean {
+export function takesPointer(element: Element): boolean {
   return getComputedStyle(element).pointerEvents !== 'none'
 }
 
@@ -550,7 +575,7 @@ function inShadowRoots(document: Document): Element[] {
  * not know (`mayCarryRoot`): its content is there, unread, and a new snapshot shows it. A plain
  * `div` or `span` host looks the same as a blank layer from here and stays blank.
  */
-function inClosedPart(cover: Element): boolean {
+export function inClosedPart(cover: Element): boolean {
   const elements = [cover, ...composedDescendants(cover)]
   return elements.some(
     (element) => element.localName.includes('-') && mayCarryRoot(element),
@@ -558,7 +583,7 @@ function inClosedPart(cover: Element): boolean {
 }
 
 /** A modal `<dialog>` or an open popover: the browser draws it above every other layer. */
-function inTopLayer(element: Element): boolean {
+export function inTopLayer(element: Element): boolean {
   try {
     return element.matches(':modal') || element.matches(':popover-open')
   } catch {
@@ -577,7 +602,7 @@ function holdsWords(node: unknown): boolean {
 }
 
 /** The accessible name, read under the mask. */
-function nameOf(world: World, output: FailureOutput, element: Element): string {
+export function nameOf(world: World, output: FailureOutput, element: Element): string {
   return output.tree(element, () =>
     world.injected.utils.getElementAccessibleNameText(element, false),
   )
@@ -640,7 +665,7 @@ const NATIVE_CONTROLS =
  * target and its title span are not. A dialog or alertdialog is never a control: it is what the
  * controls are in, and an answer that lists it hides the way out.
  */
-function coverControl(world: World, element: Element): boolean {
+export function coverControl(world: World, element: Element): boolean {
   const { utils } = world.injected
   const role = utils.getAriaRole(element)
   if (role === 'dialog' || role === 'alertdialog') return false
@@ -653,8 +678,8 @@ function coverControl(world: World, element: Element): boolean {
 }
 
 /** A control's role as an answer prints it: a frame is an `iframe`, as a snapshot prints one. */
-function controlRole(world: World, control: Element): string {
-  if (control.localName === 'iframe' || control.localName === 'frame')
+export function controlRole(world: World, control: Element): string {
+  if (isFrame(control))
     return 'iframe'
   return world.injected.utils.getAriaRole(control) ?? 'generic'
 }

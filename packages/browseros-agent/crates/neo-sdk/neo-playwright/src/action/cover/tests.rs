@@ -321,6 +321,7 @@ fn tests_that_the_on_top_lines_say_the_layer_and_four_controls() {
         loading: false,
         whole_view: true,
         controls: &controls,
+        first_words: None,
     };
     assert_eq!(
         on_top_line(&note),
@@ -338,6 +339,7 @@ fn tests_that_the_on_top_lines_say_the_layer_and_four_controls() {
         loading: true,
         whole_view: false,
         controls: &[],
+        first_words: Some("not words on a blank layer"),
     };
     assert_eq!(
         on_top_line(&blank),

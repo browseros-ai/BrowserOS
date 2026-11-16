@@ -9,7 +9,9 @@
  * map. The map accumulates, so a ref printed by an earlier or a scoped snapshot still names its
  * element; iframe refs are in it too, which is how Rust's hop finds each iframe again.
  */
+
 import { parseSelector } from '../../../neo-playwright/third_party/playwright/packages/isomorphic/selectorParser'
+import { surveyCovers } from './cover-survey'
 import type { FailureOutput } from './failure-output'
 import {
   asPointerTargets,
@@ -81,6 +83,13 @@ export function snapshot(
     markInert(world, json)
     inertMarkingMs = performance.now() - started
   }
+  // Survey only the whole main page, after the engine's walk and inside this same read.
+  // Remember before diagnostics take any quiet subtree snapshots, so the printed refs win.
+  if (request.mode === 'ai') world.refs.remember(lastSnapshotRefs(injected))
+  const survey =
+    request.surveyCovers && request.mode === 'ai' && output.neoSnapshot
+      ? surveyCovers(world, output, json)
+      : undefined
   const iframes: SnapshotIframe[] = []
   if (request.mode === 'ai') {
     const minted = lastSnapshotRefs(injected)
@@ -95,6 +104,14 @@ export function snapshot(
   }
   return {
     kind: 'snapshot',
+    ...(survey
+      ? {
+          onTop: survey.layers,
+          surveyTested: survey.tested,
+          surveyMs: survey.elapsed,
+          onTopSkipped: survey.marksSkipped,
+        }
+      : {}),
     ...(inertMarkingMs === undefined ? {} : { inertMarkingMs }),
     json,
     iframes,

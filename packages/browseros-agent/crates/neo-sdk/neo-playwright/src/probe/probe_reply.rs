@@ -175,6 +175,19 @@ pub(crate) enum ProbeReply {
     },
     /// One frame's `ariaSnapshotJSON` and its rendered iframes.
     Snapshot {
+        /// The main page's same-request cover survey; absent outside Neo's two text formats.
+        #[serde(default)]
+        #[ts(optional)]
+        on_top: Vec<SurveyLayer>,
+        #[serde(default)]
+        #[ts(optional)]
+        survey_tested: Option<u32>,
+        #[serde(default)]
+        #[ts(optional)]
+        survey_ms: Option<f64>,
+        #[serde(default)]
+        #[ts(optional, as = "Option<bool>")]
+        on_top_skipped: bool,
         /// Isolated-world inert annotation time, for the operation trace only.
         #[serde(default)]
         #[ts(optional)]
@@ -415,6 +428,24 @@ pub(crate) struct CoverFacts {
     #[serde(default)]
     pub(crate) notice: bool,
     pub(crate) kind: CoverKind,
+}
+
+/// A layer the main frame found in the snapshot's own request. The action module words it.
+#[derive(Debug, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct SurveyLayer {
+    pub(crate) role: String,
+    #[ts(type = "string")]
+    pub(crate) name: PageText,
+    pub(crate) r#ref: String,
+    pub(crate) blank: bool,
+    pub(crate) loading: bool,
+    pub(crate) whole_view: bool,
+    pub(crate) controls: Vec<CoverControl>,
+    #[serde(default)]
+    #[ts(optional, type = "string")]
+    pub(crate) first_words: Option<PageText>,
+    pub(crate) first_refs: Vec<String>,
 }
 
 /// One control of a cover that takes the pointer.

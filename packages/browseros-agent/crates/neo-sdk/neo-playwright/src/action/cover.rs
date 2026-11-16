@@ -283,13 +283,6 @@ const ON_TOP_CONTROLS: usize = 4;
 
 /// What a page snapshot's first lines, and a run's reply, say about one layer that takes the
 /// pointer from controls (snapshot design section 21.10).
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the snapshot's `# on top:` lines and the run reply's are built on this module"
-    )
-)]
 pub(crate) struct OnTopNote<'a> {
     pub(crate) role: &'a str,
     pub(crate) name: &'a Value,
@@ -302,6 +295,8 @@ pub(crate) struct OnTopNote<'a> {
     pub(crate) whole_view: bool,
     /// Its own controls that take the pointer, buttons first: role, name and ref.
     pub(crate) controls: &'a [(&'a str, &'a Value, &'a str)],
+    /// First drawn words, only for an unnamed nonblank layer with no controls.
+    pub(crate) first_words: Option<&'a str>,
 }
 
 /// The one place Neo words a layer on top, for a page snapshot (section 21.10):
@@ -314,13 +309,6 @@ pub(crate) struct OnTopNote<'a> {
 /// A run's reply prints the same words after `[on top] tab <id>: `, the second line joined to
 /// the first with `; its controls: `; the covered answer names its cover with the same
 /// [`node_named`]. No counts and no advice: those are the covered answer's.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the snapshot's `# on top:` lines and the run reply's are built on this module"
-    )
-)]
 pub(crate) fn on_top_line(note: &OnTopNote<'_>) -> String {
     let mut line = format!(
         "# on top: {}",
@@ -332,6 +320,12 @@ pub(crate) fn on_top_line(note: &OnTopNote<'_>) -> String {
     if note.loading {
         line.push_str(", loading");
     }
+    if !note.blank && note.controls.is_empty() && note.name.as_str().is_none_or(str::is_empty)
+        && let Some(words) = note.first_words.filter(|words| !words.is_empty())
+    {
+        let words: String = words.chars().take(60).collect();
+        let _ = write!(line, ", says {}", Value::from(words));
+    }
     line.push_str(if note.whole_view {
         " over the whole view"
     } else {
@@ -341,12 +335,19 @@ pub(crate) fn on_top_line(note: &OnTopNote<'_>) -> String {
         let controls: Vec<String> = note
             .controls
             .iter()
+            .filter(|(role, _, _)| *role == "button")
+            .chain(note.controls.iter().filter(|(role, _, _)| *role != "button"))
             .take(ON_TOP_CONTROLS)
             .map(|(role, name, reference)| node_named(role, name, reference, CONTROL_NAME_CHARS))
             .collect();
         let _ = write!(line, "\n#   its controls: {}", controls.join(", "));
     }
     line
+}
+
+/// The identity line kept in a delta baseline when this layer later disappears.
+pub(crate) fn on_top_removed(note: &OnTopNote<'_>) -> String {
+    format!("# no longer on top: {}", node_named(note.role, note.name, note.reference, NAME_CHARS))
 }
 
 /// A node as a snapshot line names it: its role, its name quoted as a snapshot quotes one and
