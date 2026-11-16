@@ -77,9 +77,19 @@ export function TaskRow({ task, now, timeOnly = false }: TaskRowProps) {
             ) : null}
           </>
         ) : task.site ? (
-          <SiteChip site={task.site} size="lg" />
+          <SiteChip
+            site={task.site}
+            size="lg"
+            className={cn(ultrafast && 'max-sm:-translate-x-2.5')}
+          />
         ) : (
-          <Globe aria-hidden className="size-5 text-ink-3" />
+          <Globe
+            aria-hidden
+            className={cn(
+              'size-5 text-ink-3',
+              ultrafast && 'max-sm:-translate-x-2.5',
+            )}
+          />
         )}
         {ultrafast ? (
           <UltrafastMark className="absolute right-1.5 bottom-1.5" />

@@ -35,11 +35,12 @@ export function UltrafastMark({
       data-ultrafast-mark
       className={cn(
         'grid shrink-0 place-items-center rounded-full bg-[radial-gradient(circle_at_35%_30%,#2f6fe0,#06205f_70%)] text-white shadow-[0_0_0_1.5px_rgb(255_255_255/0.85),0_0_14px_rgb(82_144_255/0.9)]',
-        size === 'md' ? 'size-6' : 'size-5',
+        // Under sm the card's picture is 72px wide; a smaller mark keeps clear of the site icon.
+        size === 'md' ? 'size-6' : 'size-4 sm:size-5',
         className,
       )}
     >
-      <Zap className={size === 'md' ? 'size-3' : 'size-2.5'} />
+      <Zap className={size === 'md' ? 'size-3' : 'size-2 sm:size-2.5'} />
     </span>
   )
 }

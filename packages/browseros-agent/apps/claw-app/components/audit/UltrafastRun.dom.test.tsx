@@ -306,3 +306,28 @@ describe('the ink rail on ultrafast tasks', () => {
     expect(body.querySelectorAll('li').length).toBe(3)
   })
 })
+
+describe('the lightning mark on narrow screens', () => {
+  const classes = (selector: string) =>
+    (body.querySelector(selector)?.getAttribute('class') ?? '').split(/\s+/)
+
+  it('shrinks the mark below sm and keeps it full size from sm up', async () => {
+    await render(<TaskRow task={session()} now={Date.now()} />)
+    const mark = classes('[data-ultrafast-mark]')
+    expect(mark).toContain('size-4')
+    expect(mark).toContain('sm:size-5')
+  })
+
+  it('nudges the centred site icon left below sm only on ultrafast tasks', async () => {
+    const noPicture = { site: 'amazon.in', latestScreenshotId: undefined }
+    await render(<TaskRow task={session(noPicture)} now={Date.now()} />)
+    expect(body.innerHTML).toContain('max-sm:-translate-x-2.5')
+    await render(
+      <TaskRow
+        task={session({ ...noPicture, ultrafast: undefined })}
+        now={Date.now()}
+      />,
+    )
+    expect(body.innerHTML).not.toContain('max-sm:-translate-x-2.5')
+  })
+})
