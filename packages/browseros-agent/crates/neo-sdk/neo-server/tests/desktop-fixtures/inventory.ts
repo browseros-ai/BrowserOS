@@ -30,10 +30,16 @@ import {
 } from './cases/serialization'
 import { snapshotConcurrencyCases } from './cases/snapshot-concurrency'
 import { tabsCases } from './cases/tabs'
-import type { CaseSpec } from './model'
+import type { CaseSpec, ExecutableCase } from './model'
+import { ruledCases } from './ruled/cases'
+import {
+  requireRuledBodyPath,
+  validateRuledBodies,
+  validateRuledCases,
+} from './ruled/requirements'
 
-/** Each desktop alias remains a separate case even when bodies are shared across entry points. */
-export const cases: readonly CaseSpec[] = [
+/** Frozen import ownership: serialization and raw bytes are checked independently of authored rules. */
+export const baselineCases: readonly CaseSpec[] = [
   ...actCases,
   ...captureIoCases,
   ...clickRecoveryCases,
@@ -52,6 +58,19 @@ export const cases: readonly CaseSpec[] = [
   ...tabsCases,
 ]
 
+/** Compose owners once; every ordinary case thereafter follows the same strict Harness. */
+export const cases: readonly ExecutableCase[] = [
+  ...baselineCases.map(
+    (spec) =>
+      ({
+        ...spec,
+        execution:
+          spec.hostSetup?.kind === 'device-scale' ? 'density' : 'ordinary',
+      }) satisfies ExecutableCase,
+  ),
+  ...ruledCases,
+].sort((a, b) => a.file.localeCompare(b.file) || a.id.localeCompare(b.id))
+
 export interface BodyInventory {
   commonSha256: string
   bodies: { path: string; sha256: string }[]
@@ -60,7 +79,8 @@ export interface BodyInventory {
 const suiteRoot = import.meta.dir
 
 export async function loadBody(script: string): Promise<string> {
-  requireBodyPath(script)
+  if (script.startsWith('ruled/')) requireRuledBodyPath(script)
+  else requireBodyPath(script)
   return readFile(join(suiteRoot, script), 'utf8')
 }
 
@@ -128,7 +148,9 @@ async function readContained(path: string): Promise<Buffer> {
 
 /** Validates committed files only. Parsing AsyncFunction bodies never evaluates fixture code. */
 export async function validateInventory(): Promise<void> {
-  validateCaseContract(cases)
+  validateCaseContract(baselineCases)
+  validateRuledCases(ruledCases, baselineCases)
+  await validateRuledBodies(ruledCases, suiteRoot)
   for (const file of Object.keys(expectedFamilyCounts)) {
     const content = await readFile(
       join(suiteRoot, familyModule(file).path),
@@ -138,7 +160,7 @@ export async function validateInventory(): Promise<void> {
       content ===
         serializeFamily(
           file,
-          cases.filter((entry) => entry.file === file),
+          baselineCases.filter((entry) => entry.file === file),
         ),
       `Generated registry differs for ${file}; rerun the explicit importer`,
     )
@@ -157,7 +179,9 @@ export async function validateInventory(): Promise<void> {
     'Every imported body must have a distinct raw hash',
   )
   const referenced = [
-    ...new Set(cases.flatMap((entry) => entry.steps.flatMap(bodyPaths))),
+    ...new Set(
+      baselineCases.flatMap((entry) => entry.steps.flatMap(bodyPaths)),
+    ),
   ].sort()
   requireCondition(
     JSON.stringify(inventory.bodies.map((entry) => entry.path)) ===

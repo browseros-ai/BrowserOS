@@ -1,0 +1,5 @@
+// The harness supplies values from successful earlier MCP replies, not in-realm producer variables.
+assert(Array.isArray(args.prior) && args.prior.length === 1, 'exactly one evaluated return reached the caller');
+const value = args.prior[0];
+equal(value, 'z'.repeat(20000), 'the caller received the exact complete evaluated string');
+return { length: value.length, allZ: true };

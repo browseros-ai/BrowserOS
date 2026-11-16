@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test'
+import { expect, spyOn, test } from 'bun:test'
 import { randomUUID } from 'node:crypto'
 import { jsonObject, stringField } from './json'
 import { createRunClient, parseRunReply } from './mcp'
@@ -221,3 +221,205 @@ test('separate simultaneous runs initialize four fresh clients and distinct repl
     await server.stop(true)
   }
 })
+
+test('a short independent driver deadline preserves the actual 600000ms SDK argument', async () => {
+  const received: number[] = []
+  const server = Bun.serve({
+    port: 0,
+    hostname: '127.0.0.1',
+    async fetch(request) {
+      const message = jsonObject(await request.json(), 'Driver request')
+      if (message.method === 'notifications/initialized')
+        return new Response(null, { status: 202 })
+      if (message.method === 'initialize')
+        return Response.json({
+          jsonrpc: '2.0',
+          id: message.id,
+          result: {
+            protocolVersion: '2025-03-26',
+            capabilities: {},
+            serverInfo: { name: 'test', version: '1' },
+          },
+        })
+      const params = jsonObject(message.params, 'Run parameters')
+      const args = jsonObject(params.arguments, 'Run arguments')
+      if (typeof args.timeout !== 'number')
+        throw new Error('Missing SDK timeout')
+      received.push(args.timeout)
+      return Response.json({
+        jsonrpc: '2.0',
+        id: message.id,
+        result: success({ accepted: true }),
+      })
+    },
+  })
+  try {
+    const reply = await createRunClient(`http://127.0.0.1:${server.port}`)({
+      code: 'return {accepted:true};',
+      timeoutMs: 600_000,
+      driverTimeoutMs: 1_000,
+      taskId: 'same-task',
+      requestId: 'bounded-budget',
+    })
+    expect(reply).toMatchObject({ kind: 'ok', value: { accepted: true } })
+    expect(received).toEqual([600_000])
+  } finally {
+    await server.stop(true)
+  }
+})
+
+for (const stalled of [
+  'initialize',
+  'notifications/initialized',
+  'tools/call',
+]) {
+  test(`the driver deadline bounds ${stalled} and late initialization cannot send a run`, async () => {
+    const release = Promise.withResolvers<void>()
+    const stalledStarted = Promise.withResolvers<void>()
+    const released = Promise.withResolvers<void>()
+    let runs = 0
+    const server = Bun.serve({
+      port: 0,
+      hostname: '127.0.0.1',
+      async fetch(request) {
+        const message = jsonObject(await request.json(), 'Driver request')
+        if (message.method === 'tools/call') runs += 1
+        if (message.method === stalled) {
+          stalledStarted.resolve()
+          await release.promise
+          released.resolve()
+        }
+        if (message.method === 'notifications/initialized')
+          return new Response(null, { status: 202 })
+        return Response.json({
+          jsonrpc: '2.0',
+          id: message.id,
+          result:
+            message.method === 'initialize'
+              ? {
+                  protocolVersion: '2025-03-26',
+                  capabilities: {},
+                  serverInfo: { name: 'test', version: '1' },
+                }
+              : success(true),
+        })
+      },
+    })
+    try {
+      const pending = createRunClient(`http://127.0.0.1:${server.port}`)({
+        code: 'return true;',
+        timeoutMs: 600_000,
+        driverTimeoutMs: 500,
+        taskId: 'deadline-task',
+        requestId: `bounded-${stalled}`,
+      })
+      await stalledStarted.promise
+      await expect(pending).rejects.toThrow(
+        'Independent driver deadline expired',
+      )
+      // Rejection joins the cancelled client attempt, so releasing the server cannot
+      // resume an initialization or notification and submit a late tools/call.
+      release.resolve()
+      await released.promise
+      expect(runs).toBe(stalled === 'tools/call' ? 1 : 0)
+    } finally {
+      release.resolve()
+      await server.stop(true)
+    }
+  })
+}
+
+test('driver expiry joins session cleanup and retains its failure', async () => {
+  const expired = Promise.withResolvers<void>()
+  const cleanup = Promise.withResolvers<Response>()
+  let posts = 0
+  let deletes = 0
+  const mockFetch: typeof fetch = Object.assign(
+    async (
+      _input: Parameters<typeof fetch>[0],
+      init?: Parameters<typeof fetch>[1],
+    ) => {
+      if (init?.method === 'DELETE') {
+        deletes += 1
+        return await cleanup.promise
+      }
+      posts += 1
+      init?.signal?.addEventListener('abort', () => expired.resolve(), {
+        once: true,
+      })
+      return Response.json(
+        { jsonrpc: '2.0', id: 1, result: {} },
+        {
+          headers: { 'mcp-session-id': 'deadline-cleanup-session' },
+        },
+      )
+    },
+    { preconnect: globalThis.fetch.preconnect },
+  )
+  const mock = spyOn(globalThis, 'fetch').mockImplementation(mockFetch)
+  const pending = createRunClient('http://bounded-driver.invalid')({
+    code: 'return true;',
+    timeoutMs: 600_000,
+    driverTimeoutMs: 500,
+    taskId: 'deadline-task',
+    requestId: 'bounded-cleanup-failure',
+  })
+  try {
+    await expired.promise
+    cleanup.resolve(new Response(null, { status: 500 }))
+    await expect(pending).rejects.toThrow('Independent driver deadline expired')
+    await expect(pending).rejects.toThrow(
+      'Unexpected session cleanup failed: 500',
+    )
+    expect({ posts, deletes }).toEqual({ posts: 1, deletes: 1 })
+  } finally {
+    cleanup.resolve(new Response(null, { status: 204 }))
+    await pending.catch(() => {})
+    mock.mockRestore()
+  }
+})
+
+for (const cleanupStatus of [204, 500]) {
+  test(`the bounded driver closes stateful initialization with HTTP ${cleanupStatus} and never submits a run`, async () => {
+    let closed = 0
+    let runs = 0
+    const server = Bun.serve({
+      port: 0,
+      hostname: '127.0.0.1',
+      async fetch(request) {
+        if (request.method === 'DELETE') {
+          expect(request.headers.get('mcp-session-id')).toBe(
+            'unexpected-test-session',
+          )
+          closed += 1
+          return new Response(null, { status: cleanupStatus })
+        }
+        const message = jsonObject(await request.json(), 'Driver request')
+        if (message.method === 'tools/call') runs += 1
+        return Response.json(
+          { jsonrpc: '2.0', id: message.id, result: {} },
+          { headers: { 'mcp-session-id': 'unexpected-test-session' } },
+        )
+      },
+    })
+    try {
+      const pending = createRunClient(`http://127.0.0.1:${server.port}`)({
+        code: 'return true;',
+        timeoutMs: 600_000,
+        driverTimeoutMs: 1_000,
+        taskId: 'deadline-task',
+        requestId: 'bounded-stateful',
+      })
+      await expect(pending).rejects.toThrow('stateful MCP session')
+      if (cleanupStatus === 500) {
+        await expect(pending).rejects.toBeInstanceOf(AggregateError)
+        await expect(pending).rejects.toThrow(
+          'Unexpected session cleanup failed: 500',
+        )
+      }
+      expect({ closed, runs }).toEqual({ closed: 1, runs: 0 })
+    } finally {
+      await server.stop(true)
+    }
+  })
+}

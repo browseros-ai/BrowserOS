@@ -1,4 +1,4 @@
-/** Builds this checkout, then gives each native-density partition its own launcher-owned browser. */
+/** Builds this checkout, then isolates density and terminal observations in launcher-owned browsers. */
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { constants, createReadStream } from 'node:fs'
@@ -23,12 +23,13 @@ import {
 import { createInterface } from 'node:readline'
 import { cases, validateInventory } from './inventory'
 import { jsonObject, numberField, stringField } from './json'
-import type { CaseSpec, JsonObject } from './model'
+import type { CaseResult, CaseSpec, ExecutableCase, JsonObject } from './model'
+import { junit, type Partition, type PartitionReceipt } from './receipt'
+import { readPendingSelect } from './terminal-select'
 
 const AGENT_ROOT = resolve(import.meta.dir, '../../../../..')
 const ADAPTER = join(import.meta.dir, 'browser-adapter.ts')
 const SUITE = join(import.meta.dir, 'suite.ts')
-type Partition = 'ordinary' | 'density'
 
 interface RunOptions {
   check: boolean
@@ -72,13 +73,10 @@ export function parseOptions(args: string[]): RunOptions {
 }
 
 export function partitionCases(
-  selected: readonly CaseSpec[],
+  selected: readonly ExecutableCase[],
   partition: Partition,
-): readonly CaseSpec[] {
-  return selected.filter(
-    (entry) =>
-      (entry.hostSetup?.kind === 'device-scale') === (partition === 'density'),
-  )
+): readonly ExecutableCase[] {
+  return selected.filter((entry) => entry.execution === partition)
 }
 
 /** Resolve the real browser before NEO_E2E_BROWSER is replaced with the executable adapter. */
@@ -256,7 +254,11 @@ function duration(object: JsonObject, key: string): number {
 function partitionOutcome(value: unknown): PartitionOutcome {
   const object = jsonObject(value, 'partition receipt')
   const partition = stringField(object, 'partition')
-  if (partition !== 'ordinary' && partition !== 'density')
+  if (
+    partition !== 'ordinary' &&
+    partition !== 'density' &&
+    partition !== 'terminal-select'
+  )
     throw new Error('Invalid receipt partition')
   if (!Array.isArray(object.results))
     throw new Error('Missing partition results')
@@ -338,6 +340,238 @@ async function launcherCleanup(runDir: string, code: number): Promise<void> {
   }
 }
 
+/**
+ * This is the terminal case's only pass-producing boundary. The child can only submit
+ * pending evidence; the parent checks actual launcher artifacts and removed private paths
+ * before recording its named pass. Missing proof or any cleanup failure fails act-017 itself.
+ */
+export async function finalizeTerminalPartition(options: {
+  out: string
+  runDir?: string
+  code: number
+  launcherFailure?: string
+}): Promise<void> {
+  const spec = cases.find((entry) => entry.execution === 'terminal-select')
+  if (!spec || spec.execution !== 'terminal-select')
+    throw new Error('Missing terminal select catalog entry')
+  let result: CaseResult = {
+    id: spec.id,
+    file: spec.file,
+    name: spec.name,
+    durationMs: 0,
+    cleanupMs: 0,
+    runIds: [],
+    status: 'fail',
+    failure: 'Terminal select has no cleanup proof',
+  }
+  let receiptInput: JsonObject = {
+    startedAt: Date.now(),
+    startupMs: 0,
+    casesMs: 0,
+    cleanupMs: 0,
+  }
+  let receiptFailure: string | undefined
+  try {
+    receiptInput = await readJson(join(options.out, 'receipt.json'))
+  } catch (error) {
+    receiptFailure = `Terminal suite receipt: ${error instanceof Error ? error.message : String(error)}`
+  }
+  try {
+    if (receiptFailure) throw new Error(receiptFailure)
+    if (options.launcherFailure) throw new Error(options.launcherFailure)
+    if (!options.runDir)
+      throw new Error('Terminal select launcher omitted cleanup artifacts')
+    await launcherCleanup(options.runDir, options.code)
+    await requireTerminalBrowserStopped(options.out, options.runDir)
+    if (options.code !== 0)
+      throw new Error(`Terminal select launcher failed (${options.code})`)
+    if (
+      receiptInput.partition !== 'terminal-select' ||
+      receiptInput.complete !== false ||
+      receiptInput.failure !== undefined ||
+      !Array.isArray(receiptInput.results) ||
+      receiptInput.results.length !== 0 ||
+      JSON.stringify(receiptInput.expectedIds) !== JSON.stringify(['act-017'])
+    )
+      throw new Error(
+        'Terminal child receipt must contain only pending coverage',
+      )
+    for (const key of [
+      'startedAt',
+      'startupMs',
+      'casesMs',
+      'cleanupMs',
+      'finishedAt',
+    ])
+      duration(receiptInput, key)
+    const pending = await readJson(join(options.out, 'pending-select.json'))
+    if (
+      pending.sdkStopped !== true ||
+      pending.fixturesStopped !== true ||
+      pending.failure !== null
+    )
+      throw new Error('Terminal select SDK/fixture cleanup was not proven')
+    const sdk = await readJson(join(options.out, 'server.log.lifecycle.json'))
+    if (
+      sdk.cleaned !== true ||
+      sdk.forced !== false ||
+      sdk.exitCode !== 0 ||
+      sdk.cleanupError !== undefined
+    )
+      throw new Error(
+        'Terminal select SDK lifecycle receipt did not prove clean shutdown',
+      )
+    requireStoppedPid(sdk.pid, 'SDK')
+    for (const key of ['root', 'socketPath']) {
+      try {
+        await access(stringField(sdk, key))
+      } catch (error) {
+        if (
+          error instanceof Error &&
+          'code' in error &&
+          error.code === 'ENOENT'
+        )
+          continue
+        throw error
+      }
+      throw new Error(`Terminal select SDK left its ${key} behind`)
+    }
+    const observation = readPendingSelect(pending.observation, spec)
+    const passed: CaseResult = {
+      id: spec.id,
+      file: spec.file,
+      name: spec.name,
+      durationMs: observation.durationMs,
+      cleanupMs: observation.cleanupMs,
+      runIds: observation.runIds,
+      status: 'pass',
+    }
+    await mkdir(join(options.out, 'cases'), { recursive: true })
+    await writeFile(
+      join(options.out, 'cases', 'act-017.json'),
+      `${JSON.stringify(
+        {
+          id: spec.id,
+          taskId: observation.taskId,
+          requestId: observation.requestId,
+          steps: [
+            {
+              scripts: spec.steps.flatMap((step) =>
+                step.kind === 'script' ? [step.script] : step.scripts,
+              ),
+              replies: [observation.raw],
+            },
+          ],
+          cleanup: observation.taskCleanup,
+          launcherCleanupVerified: true,
+          result: passed,
+        },
+        null,
+        2,
+      )}\n`,
+      { mode: 0o600 },
+    )
+    result = passed
+  } catch (error) {
+    // Retain an already named child failure when the observation failed before pending state.
+    const childFailures = Array.isArray(receiptInput.results)
+      ? receiptInput.results
+      : []
+    const childFailure = childFailures.find(
+      (entry) => jsonObject(entry, 'Terminal result').id === spec.id,
+    )
+    const detail = childFailure
+      ? jsonObject(childFailure, 'Terminal result').failure
+      : undefined
+    result = {
+      ...result,
+      status: 'fail',
+      failure: [
+        typeof detail === 'string' ? detail : undefined,
+        error instanceof Error ? error.message : String(error),
+      ]
+        .filter(Boolean)
+        .join('; '),
+    }
+  }
+  const receipt: PartitionReceipt = {
+    partition: 'terminal-select',
+    startedAt: safeDuration(receiptInput, 'startedAt'),
+    startupMs: safeDuration(receiptInput, 'startupMs'),
+    casesMs: safeDuration(receiptInput, 'casesMs'),
+    caseCleanupMs: result.cleanupMs,
+    cleanupMs: safeDuration(receiptInput, 'cleanupMs'),
+    finishedAt: safeDuration(receiptInput, 'finishedAt'),
+    finalizedAt: Date.now(),
+    expectedIds: [spec.id],
+    results: [result],
+    complete: result.status === 'pass',
+  }
+  await writeFile(
+    join(options.out, 'receipt.json'),
+    `${JSON.stringify(receipt, null, 2)}\n`,
+    { mode: 0o600 },
+  )
+  await writeFile(join(options.out, 'junit.xml'), junit(receipt), {
+    mode: 0o600,
+  })
+}
+
+/** Launcher receipts must describe this browser, not merely some removed directory. */
+async function requireTerminalBrowserStopped(
+  out: string,
+  runDir: string,
+): Promise<void> {
+  const [browser, owner, cleanup, result] = await Promise.all([
+    readJson(join(out, 'browser.json')),
+    readJson(join(runDir, 'owner.json')),
+    readJson(join(runDir, 'cleanup.json')),
+    readJson(join(runDir, 'result.json')),
+  ])
+  for (const key of ['profile', 'home']) {
+    const path = stringField(browser, key)
+    if (owner[key] !== path || cleanup[key] !== path)
+      throw new Error(`Terminal launcher ${key} belongs to another browser`)
+  }
+  if (cleanup.temp !== owner.temp || cleanup.pid !== owner.pid)
+    throw new Error(
+      'Terminal browser cleanup owner differs from its launch record',
+    )
+  requireStoppedPid(owner.pid, 'browser', true)
+  requireStoppedPid(
+    jsonObject(result.command, 'Launcher command').pid,
+    'command',
+    true,
+  )
+}
+
+function requireStoppedPid(value: unknown, label: string, group = false): void {
+  if (
+    typeof value !== 'number' ||
+    !Number.isSafeInteger(value) ||
+    value <= 1 ||
+    value > 2_147_483_647
+  )
+    throw new Error(`Terminal cleanup omitted a valid ${label} PID`)
+  try {
+    process.kill(group ? -value : value, 0)
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ESRCH')
+      return
+    throw error
+  }
+  throw new Error(
+    `Terminal ${label} ${group ? 'process group' : 'process'} survived cleanup`,
+  )
+}
+
+function safeDuration(object: JsonObject, key: string): number {
+  const value = object[key]
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+    ? value
+    : 0
+}
+
 async function runPartition(
   partition: Partition,
   selected: readonly CaseSpec[],
@@ -411,6 +645,22 @@ async function runPartition(
     )}\n`,
     { mode: 0o600 },
   )
+  const validRunDir =
+    runDir !== undefined &&
+    dirname(runDir) === join(AGENT_ROOT, '.llm/test-browser') &&
+    basename(runDir).startsWith('run-')
+  if (partition === 'terminal-select') {
+    await finalizeTerminalPartition({
+      out,
+      code,
+      ...(validRunDir
+        ? { runDir }
+        : {
+            launcherFailure:
+              'Launcher did not publish its private artifact directory',
+          }),
+    })
+  }
   if (
     !runDir ||
     dirname(runDir) !== join(AGENT_ROOT, '.llm/test-browser') ||
@@ -418,7 +668,7 @@ async function runPartition(
   )
     throw new Error('Launcher did not publish its private artifact directory')
   // A successful test command is insufficient when a browser group or private profile survived.
-  await launcherCleanup(runDir, code)
+  if (partition !== 'terminal-select') await launcherCleanup(runDir, code)
   if (code !== 0)
     throw new Error(`${partition} launcher failed (${code}); see ${runDir}`)
   const receipt = partitionOutcome(await readJson(join(out, 'receipt.json')))
@@ -516,7 +766,13 @@ async function main(): Promise<void> {
       : cases
     if (selected.length === 0) throw new Error(`Unknown case ${options.caseId}`)
     const browser = await resolveBrowser(process.env)
-    for (const partition of ['ordinary', 'density'] satisfies Partition[]) {
+    // The unknown-select contract always gets the final fresh launcher. No later case can
+    // reuse it, regardless of whether observing the contract or its cleanup succeeds.
+    for (const partition of [
+      'ordinary',
+      'density',
+      'terminal-select',
+    ] satisfies Partition[]) {
       const entries = partitionCases(selected, partition)
       if (entries.length === 0) continue
       partitions.push(partition)

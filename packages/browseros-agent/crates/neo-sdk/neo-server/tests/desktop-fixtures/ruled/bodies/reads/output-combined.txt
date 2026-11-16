@@ -1,0 +1,3 @@
+// Console and value have independent budgets. The host checks this same reply's exact log and value.
+console.log('L'.repeat(13000) + 'SDK_CAP_LOG_TAIL');
+return 'R'.repeat(20000) + 'SDK_CAP_VALUE_TAIL';

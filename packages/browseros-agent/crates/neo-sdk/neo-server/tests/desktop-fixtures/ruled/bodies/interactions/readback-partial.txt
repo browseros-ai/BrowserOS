@@ -1,0 +1,51 @@
+/** Snapshot scalars are explicit caller readback, independent of fill's void return. */
+function shownField(snapshot, label) {
+  const name = JSON.stringify(label);
+  const line = snapshot.split('\n').find(row => row.includes(name));
+  assert(line !== undefined, 'snapshot contains the requested field', {label, snapshot});
+  const afterName = line.slice(line.indexOf(name) + name.length).trim();
+  const tail = afterName.replace(/^(?:\[[^\]]+\]\s*)*/, '');
+  assert(tail === '' || tail === ':' || tail.startsWith(': '),
+    'field line has a scalar readback', {label, line});
+  const scalar = tail === '' || tail === ':' ? '' : tail.slice(2);
+  const value = scalar.startsWith('"') ? JSON.parse(scalar)
+    : scalar.startsWith("'") ? scalar.slice(1, -1).replace(/''/g, "'") : scalar;
+  return {label, line, value, snapshotRef: line.match(/\[ref=([^\]]+)\]/)?.[1] ?? null};
+}
+
+await page.goto(args.base + '/fill.html');
+const fields = [];
+for (const [label, value] of [['Text field', 'typed first'], ['Read only', 'refused'], ['Other field', 'never reached']]) {
+  const ref = await page.getByLabel(label, {exact: true}).ref({timeout: 5000});
+  fields.push({label, value, ref});
+}
+const attempted = [];
+const fillReturnTypes = [];
+// One refusal stops this caller's serial recipe. Later readback is a separate read,
+// so it can describe all three fields without delivering the unattempted write.
+const failure = await rejected(async () => {
+  for (const field of fields) {
+    attempted.push(field.label);
+    const result = await page.getByRef(field.ref).fill(field.value, {timeout: 2500});
+    assert(result === undefined, 'a successful fill resolves without a value', result);
+    fillReturnTypes.push(typeof result);
+  }
+}, /not editable/i);
+equal({owner: failure.owner, code: failure.code, delivery: failure.delivery},
+  {owner: 'website', code: 'not_actionable', delivery: 'not_sent'},
+  'the read-only refusal is a required unsent actionability error');
+equal(attempted, ['Text field', 'Read only'], 'the third fill is never invoked');
+equal(fillReturnTypes, ['undefined'], 'the first fill succeeded with a void return');
+const state = await page.evaluate(() => ({
+  text: document.getElementById('text').value,
+  readonly: document.getElementById('readonly').value,
+  other: document.getElementById('other').value,
+}));
+equal(state, {text: 'typed first', readonly: 'original', other: 'untouched'}, 'the refusal preserves all final page values');
+const snapshot = await page.ariaSnapshot({mode: 'ai', delta: false});
+const shown = fields.map(field => shownField(snapshot, field.label));
+equal(shown.map(field => field.value), [state.text, state.readonly, state.other], 'explicit snapshot readback describes every field after the refusal');
+for (let i = 0; i < fields.length; i++) {
+  equal(await page.getByRef(fields[i].ref).inputValue(), shown[i].value, 'the original ref agrees with explicit snapshot readback');
+}
+return {attempted, fillReturnTypes, failure, state, shown};

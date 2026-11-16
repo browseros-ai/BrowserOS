@@ -1,0 +1,15 @@
+await page.goto(args.base + '/sdk-fill.html');
+const ref = await refFor(page, "Range field");
+const field = page.getByRef(ref);
+// Upstream assigns the native value before checking exact equality. Normalization
+// therefore leaves a changed field but throws before dispatching input/change events.
+const failure = await rejected(() => field.fill("150", {timeout: 8000}), /^locator\.fill: Error: Malformed value/);
+equal({owner: failure.owner, code: failure.code, delivery: failure.delivery},
+  {owner: 'script', code: 'invalid_input', delivery: 'done'},
+  'native normalization rejects only after the value has been delivered');
+const inputValue = await field.inputValue();
+equal(inputValue, "100", 'the original field ref reads the browser-stored value');
+const state = await page.evaluate(id => ({value: document.getElementById(id).value, events: window.nativeEvents}), "range");
+equal(state.value, "100", 'the page stores the normalized or clamped native value');
+equal(state.events, [], 'the rejected native fill emits no input or change events');
+return {ref, failure, inputValue, ...state};

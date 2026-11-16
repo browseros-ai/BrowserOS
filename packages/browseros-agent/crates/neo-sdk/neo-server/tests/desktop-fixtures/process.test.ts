@@ -16,6 +16,7 @@ import {
   SUITES,
 } from '../../../../../ci/affected-suites'
 import { browserRecord } from './browser-adapter'
+import { strictFailures } from './cases/requirements'
 import { cases } from './inventory'
 import { jsonObject, numberField, stringField } from './json'
 import type { BrowserRecord, CaseSpec } from './model'
@@ -124,20 +125,26 @@ test('CI runs the offline guards and strict typecheck before the source-built br
   expect(full).toEqual(Object.values(SUITES))
 })
 
-test('native density executes one dedicated case and retains every ordinary desktop alias', () => {
+test('native density and terminal observation execute in dedicated fresh browsers', () => {
   const ordinary = partitionCases(cases, 'ordinary')
   const density = partitionCases(cases, 'density')
-  expect(ordinary).toHaveLength(211)
-  expect(density.map((entry) => entry.id)).toEqual(['screenshot-scale-002'])
-  expect(new Set([...ordinary, ...density].map((entry) => entry.id)).size).toBe(
-    212,
-  )
+  const terminal = partitionCases(cases, 'terminal-select')
+  expect(ordinary).toHaveLength(253)
+  expect(density.map((entry) => entry.id)).toEqual([
+    'screenshot-scale-001',
+    'screenshot-scale-002',
+  ])
+  expect(terminal.map((entry) => entry.id)).toEqual(['act-017'])
+  expect(
+    new Set([...ordinary, ...density, ...terminal].map((entry) => entry.id))
+      .size,
+  ).toBe(256)
   expect(() => verifyCoverage(ordinary, receipt(ordinary))).not.toThrow()
 })
 
 test('aggregate coverage rejects duplicated aliases, unexecuted rows and XPASS', () => {
   const selected = cases.filter((entry) => entry.expectation.kind === 'xfail')
-  expect(selected).toHaveLength(5)
+  expect(selected).toHaveLength(strictFailures.size)
   const duplicate = receipt(selected)
   const first = duplicate.results[0]
   if (!first) throw new Error('Expected strict failure cases')

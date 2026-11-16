@@ -170,11 +170,16 @@ export class Harness {
       status: 'pass',
     }
 
-    const run = async (code: string, timeoutMs: number): Promise<RunReply> => {
+    const run = async (
+      code: string,
+      timeoutMs: number,
+      driverTimeoutMs?: number,
+    ): Promise<RunReply> => {
       try {
         return await this.options.run({
           code,
           timeoutMs,
+          ...(driverTimeoutMs === undefined ? {} : { driverTimeoutMs }),
           taskId,
           requestId: `desktop-${randomUUID()}`,
         })
@@ -192,9 +197,12 @@ export class Harness {
         prior,
       })
       const body = await this.options.loadBody(path)
+      // The acceptance probe's driver patience is independent of the SDK budget sent on
+      // the wire. Cleanup calls below omit that override and retain their ordinary budget.
       return await run(
         `const args = ${args};\n${this.options.common}\n${body}`,
         spec.timeoutMs,
+        spec.driverTimeoutMs,
       )
     }
 

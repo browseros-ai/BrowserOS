@@ -126,6 +126,12 @@ export function validateCaseContract(cases: readonly CaseSpec[]): void {
     sha256(`${[...ids].sort().join('\n')}\n`) === selectedIdDigest,
     'Selected case ID digest differs from the approved first suite',
   )
+  requireCondition(
+    sha256(
+      `${cases.map(({ file, id, name }) => JSON.stringify([file, id, name])).join('\n')}\n`,
+    ) === '980fcaf5fff6c013611566988d8c7bfadf0f5015d3006f82c3137eaf36685efb',
+    'Historical file, ID and original title identities differ',
+  )
   requireCounts(countBy(cases.map((entry) => entry.file)), expectedFamilyCounts)
   requireCounts(countBy(cases.map((entry) => String(entry.timeoutMs))), {
     '20000': 189,
@@ -238,7 +244,8 @@ export function validateCaseContract(cases: readonly CaseSpec[]): void {
     'read-eval-021',
   ])
   requireCondition(
-    cases.filter((entry) => entry.expectation.kind === 'pass').length === 207,
-    'Expected 207 ordinary passing contracts',
+    cases.filter((entry) => entry.expectation.kind === 'pass').length ===
+      cases.length - strictFailures.size,
+    'Live passing contracts must follow the current strict failure policy',
   )
 }

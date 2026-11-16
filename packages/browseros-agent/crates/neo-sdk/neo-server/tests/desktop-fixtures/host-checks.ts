@@ -364,6 +364,13 @@ async function downloadFiles(
       disk.includes(Buffer.from(spec.contentIncludes)),
       'Download omitted expected fixture contents',
     )
+    if (spec.kind === 'download-file' && spec.contentEquals !== undefined) {
+      sameBytes(
+        disk,
+        Buffer.from(spec.contentEquals),
+        'Download differs from exact fixture bytes',
+      )
+    }
   }
 }
 

@@ -1,0 +1,38 @@
+/** newPage owns a separate tab; its complete context is an explicit snapshot returned by this script. */
+const labels = ['Parent action ready', 'Frame A action ready', 'Frame A cursor ready', 'Grandchild action ready', 'Grandchild cursor ready', 'Frame B action ready', 'Frame B cursor ready'];
+function selectedRefs(snapshot) {
+  let previous = -1;
+  return Object.fromEntries(labels.map(label => {
+    const position = snapshot.indexOf(label);
+    assert(position > previous, 'stitched labels retain parent, frame A, grandchild, frame B order', { label, position, previous, snapshot });
+    previous = position;
+    const line = snapshot.split('\n').find(line => line.includes(label));
+    const ref = line?.match(/\[ref=([^\]\s]+)\]/)?.[1];
+    assert(typeof ref === 'string', 'every original frame label retains a ref: ' + label, snapshot);
+    return [label, ref];
+  }));
+}
+
+const url = new URL(args.base + '/snapshot-frame-tree.html');
+const child = new URL(args.base2);
+child.hostname = url.hostname === 'localhost' ? '127.0.0.1' : 'localhost';
+url.searchParams.set('childOrigin', child.origin);
+const created = await context.newPage();
+try {
+  await created.goto(url.toString());
+  let snapshot = '';
+  await poll(async () => {
+    if (!await created.evaluate(() => window.snapshotFrameFixture.state().ready)) return false;
+    snapshot = await created.ariaSnapshot();
+    return labels.every(label => snapshot.includes(label));
+  }, 'the created page has complete mixed-frame snapshot context', 30000);
+  const readiness = await created.evaluate(() => window.snapshotFrameFixture.state());
+  for (const name of ['parent', 'frame-a', 'frame-b', 'grandchild']) assert(readiness.frames.includes(name), 'the created fixture reports readiness for ' + name, readiness);
+  const refs = selectedRefs(snapshot);
+  const tabId = created.tabId;
+  assert(typeof tabId === 'number', 'the newly created page has a dynamic tab id', tabId);
+  return { tabId, snapshot, refs };
+} finally {
+  // The task owns outer cleanup; this script closes the tab it explicitly created even on failure.
+  await created.close();
+}
