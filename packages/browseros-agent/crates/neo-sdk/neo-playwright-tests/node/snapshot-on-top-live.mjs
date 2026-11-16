@@ -106,6 +106,18 @@ try {
         )
         assert.equal(initial.split(row.firstText).length - 1, 1, initial)
       }
+      if (row.longPortal) {
+        assert.ok(
+          initial.startsWith('# on top: dialog "Log in or sign up"'),
+          initial,
+        )
+        assert.ok(initial.slice(0, 400).includes('button "Close"'), initial)
+        assert.ok(
+          initial.indexOf('- dialog "Log in or sign up"') <
+            initial.indexOf('Reserve Tickets'),
+          initial,
+        )
+      }
       const full = await snap(row.expectedControls, { mode: 'full' })
       checkNotes(full, row.expectedNotes)
       const json = await page.ariaSnapshotJSON({ mode: 'ai' })

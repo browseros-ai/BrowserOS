@@ -774,13 +774,13 @@
   },
   {
     "id": "e14-portal-frame",
-    "title": "e14-portal-frame",
+    "title": "An aria-modal portal after a long page and its footer",
     "file": "pages/e14-portal-frame.html",
     "viewport": {
       "width": 1280,
       "height": 800
     },
-    "expectedControls": 6,
+    "expectedControls": 21,
     "expectedNotes": [
       {
         "selector": "#portal",
@@ -791,7 +791,8 @@
         "flags": []
       }
     ],
-    "why": "A nameless portal is shown as its sole dialog; the main-frame controls line keeps the frame and the close."
+    "why": "The dialog is last in DOM order but its content leads the default body, with Close offered in the pinned head.",
+    "longPortal": true
   },
   {
     "id": "e15-ref-less-holder",
