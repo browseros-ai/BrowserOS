@@ -33,8 +33,8 @@ Each run starts with fresh JavaScript; tabs stay open between runs.";
 /// A ref resolves from `page` in any frame: the resolver jumps to the document that printed it
 /// (`neo-playwright/src/resolve/resolver.rs`). A model that knows Playwright doubts that for a
 /// frame's content, and in a real run guessed a locator beside a printed frame ref, so the text
-/// says it. SNAPSHOT_ON_TOP adds the separate pinned head that names layers over the page
-/// before its ordinary content.
+/// says it. SNAPSHOT_ON_TOP, right after this paragraph, says what the snapshot's `# on top:`
+/// lines mean.
 const LOOP: &str = r#"Work in a loop: look, act, look again.
 - Look: `return await page.ariaSnapshot()` lists what you can act on, each with a ref, such as `- button "Add to cart" [ref=e41]`.
   It includes the page's text while the whole stays under about 3,000 tokens, and a line at its top says when it left the text out; `{ text: true }` always includes it.
@@ -49,7 +49,11 @@ const LOOP: &str = r#"Work in a loop: look, act, look again.
   When its `# cut:` line says more was left out, snapshot the section it offers (`page.getByRef('e12').ariaSnapshot()`), or reach what you know is there with a locator.
   Pages often list a popup last, where a slice, a line filter or a small `maxTokens` can cut it off; only a block with a dialog or alert role survives the cut."#;
 
-/// The snapshot's pinned cover head keeps a portal after the footer visible before an agent's cut.
+/// What the snapshot's `# on top:` lines mean. The snapshot prints them above everything else
+/// when a layer takes the pointer from controls (`neo-playwright/src/snapshot/snapshot_op.rs`,
+/// worded by `on_top_line` in `cover.rs`), and they ask the agent to act on that layer first, so
+/// they earn a sentence on every call; the inert rule's `# not listed:` line explains itself
+/// and has none.
 const SNAPSHOT_ON_TOP: &str = r"A line `# on top: …` at the snapshot's top names a layer that takes the pointer from the controls under it, with that layer's own controls: deal with it first.";
 
 /// The wait times, which a test reads from the prelude's `timeouts.ts` so the two cannot drift
