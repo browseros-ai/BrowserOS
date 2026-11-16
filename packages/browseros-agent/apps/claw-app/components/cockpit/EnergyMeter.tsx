@@ -27,6 +27,7 @@ import { ultrafastTime } from '@/screens/audit/audit.helpers'
 import { roundTimeSaved } from '@/screens/cockpit/cockpit.helpers'
 import {
   barHeight,
+  HOW_WE_COUNT,
   type MilestoneCard,
   meterTokens,
   milestoneCard,
@@ -34,6 +35,7 @@ import {
   nextMilestone,
   rememberSpark,
   sparkSeen,
+  tokensSavedSinceUltrafast,
   weekRuns,
 } from './energy-meter.helpers'
 import { SavingsDialog } from './SavingsCard'
@@ -46,9 +48,6 @@ const INK_3 = 'text-[rgb(190_205_245/0.58)]'
 
 export const TRY_TASK =
   'On google.com/travel/flights, search one-way flights from Chennai to Singapore on 20 December and sort by price.'
-
-const HOW_WE_COUNT =
-  'Tokens saved adds up everything neo kept off your agent since you got ultrafast: short page descriptions instead of screenshots, and pages neo read itself. The two are measured differently, so the total is an estimate.'
 
 export function EnergyMeter({
   savings,
@@ -68,7 +67,8 @@ export function EnergyMeter({
     )
   }
   const meter = savings.data?.meter
-  if (savings.isError || !meter) {
+  const tokens = savings.data ? tokensSavedSinceUltrafast(savings.data) : null
+  if (savings.isError || !meter || tokens === null) {
     return (
       <section
         aria-label="ultrafast"
@@ -91,11 +91,12 @@ export function EnergyMeter({
   }
   const plan = savings.data
   if (plan.tasks === 0) {
-    return <FirstRun meter={meter} stats={stats} className={className} />
+    return <FirstRun tokens={tokens} stats={stats} className={className} />
   }
   return (
     <Meter
       meter={meter}
+      tokens={tokens}
       pages={plan.totals.pagesRead}
       runs={plan.tasks}
       stats={stats}
@@ -106,18 +107,20 @@ export function EnergyMeter({
 
 function Meter({
   meter,
+  tokens,
   pages,
   runs,
   stats,
   className,
 }: {
   meter: PlanSavingsMeter
+  tokens: number
   pages: number
   runs: number
   stats: CockpitStats | undefined
   className?: string
 }) {
-  const card = milestoneCard(meter.tokensSaved, runs)
+  const card = milestoneCard(tokens, runs)
   const week = weekRuns(meter.runTimes, Date.now())
 
   return (
@@ -131,7 +134,7 @@ function Meter({
         )}
       >
         <span aria-hidden className="em-grain" />
-        <Ring tokens={meter.tokensSaved} />
+        <Ring tokens={tokens} />
         <div className="flex w-full min-w-0 flex-col gap-[18px]">
           <div className="flex flex-wrap items-center justify-between gap-2.5">
             <span
@@ -211,16 +214,16 @@ function Meter({
 }
 
 function FirstRun({
-  meter,
+  tokens,
   stats,
   className,
 }: {
-  meter: PlanSavingsMeter
+  tokens: number
   stats: CockpitStats | undefined
   className?: string
 }) {
   const [copied, setCopied] = useState(false)
-  const next = nextMilestone(meter.tokensSaved)
+  const next = nextMilestone(tokens)
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(TRY_TASK)
@@ -270,7 +273,7 @@ function FirstRun({
           </p>
         </div>
         <div className="em-aside flex flex-col items-center justify-center gap-3 border-t @2xl:border-t-0 @2xl:border-l @2xl:px-[30px] px-5 @2xl:py-7 py-[22px]">
-          <Ring tokens={meter.tokensSaved} size="small" />
+          <Ring tokens={tokens} size="small" />
           <span className={cn('text-center text-[13px]', INK_3)}>
             {next === 10_000
               ? 'First milestone: 10k. The ring fills as neo saves tokens for you.'

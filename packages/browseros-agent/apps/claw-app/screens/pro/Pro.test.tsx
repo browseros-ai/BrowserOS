@@ -161,6 +161,13 @@ const SAVINGS: PlanSavings = {
       tokensSaved: 61_942,
     }),
   ],
+  meter: {
+    since: 1,
+    tokensSaved: 3_240_000,
+    runTimes: [],
+    neoStepShare: 64,
+    fastestRunMs: 3_095,
+  },
 }
 
 function apiError(status: number, body: Record<string, unknown>) {
@@ -737,14 +744,12 @@ describe('what ultrafast has saved', () => {
     server.savings = async () => SAVINGS
     await mount()
 
-    expect(text()).toContain('973ktokens saved')
-    expect(
-      button(
-        'Page text neo read itself that never went to your AI agent, in tokens, which is what your agent’s plan charges for. Browsing tasks from before neo counted pages add their time only.',
-      ),
-    ).toBeTruthy()
-    expect(text()).toContain('pages read141')
-    expect(text()).toContain('tasks23')
+    // The same figure as Home's meter: everything neo saved since ultrafast, not ultrafast alone.
+    expect(text()).toContain('3.2Mtokens saved since you got ultrafast')
+    expect(text()).not.toContain('973k')
+    expect(button('How tokens saved is counted')).toBeTruthy()
+    expect(text()).toContain('pages neo accelerated141')
+    expect(text()).toContain('ultrafast runs23')
     expect(text()).toContain('neo working8 min')
     expect(text()).toContain('Latest')
     expect(text()).toContain('Search flights to Singapore')
@@ -779,6 +784,15 @@ describe('what ultrafast has saved', () => {
     expect(dialog().getAttribute('aria-label')).toBe('ultrafast browsing')
   })
 
+  it('tests that without a meter yet the page keeps its empty state', async () => {
+    server.plan = async () => PRO
+    server.savings = async () => ({ ...SAVINGS, meter: undefined })
+    await mount()
+
+    expect(text()).toContain('0tokens saved so far')
+    expect(text()).toContain('Run a task with ultrafast to start.')
+  })
+
   it('tests that savings it can’t load say so and Try again asks again', async () => {
     server.plan = async () => PRO
     server.savings = async () => {
@@ -792,7 +806,7 @@ describe('what ultrafast has saved', () => {
     expect(text()).toContain('You’re on ultrafast')
     server.savings = async () => SAVINGS
     await click('Try again')
-    expect(text()).toContain('973ktokens saved')
+    expect(text()).toContain('3.2Mtokens saved')
     expect(callsTo('getPlanSavings')).toHaveLength(2)
   })
 

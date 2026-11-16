@@ -65,6 +65,11 @@ describe('meter numbers', () => {
     expect(meterTokens(253_678)).toBe('254k')
     expect(meterTokens(1_004_000)).toBe('1M')
     expect(meterTokens(3_240_000)).toBe('3.2M')
+    expect(meterTokens(4_180)).toBe('4.2k')
+    expect(meterTokens(9_960)).toBe('10k')
+    expect(meterTokens(972_900)).toBe('973k')
+    expect(meterTokens(999_600)).toBe('1M')
+    expect(meterTokens(1_240_000)).toBe('1.2M')
   })
 
   it('buckets the week by local day, today last', () => {

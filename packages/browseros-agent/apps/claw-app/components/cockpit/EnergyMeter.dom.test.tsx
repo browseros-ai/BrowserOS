@@ -32,6 +32,8 @@ const globalDescriptors = new Map(
 )
 
 const { EnergyMeter } = await import('./EnergyMeter')
+const { SavingsHero } = await import('@/screens/pro/SavingsHero')
+const { MemoryRouter } = await import('react-router')
 
 const SAVINGS: PlanSavings = {
   totals: { durationMs: 80_000, pagesRead: 38, tokensSaved: 253_678 },
@@ -209,6 +211,37 @@ describe('the ultrafast meter', () => {
     expect(shown).toContain('0tokens saved')
     expect(shown).toContain('First milestone: 10k.')
     expect(shown).not.toContain('pages neo accelerated')
+  })
+
+  it('shows the same tokens saved figure as the ultrafast page', async () => {
+    const data: PlanSavings = {
+      ...SAVINGS,
+      totals: { ...SAVINGS.totals, tokensSaved: 9_000 },
+      meter: {
+        ...SAVINGS.meter,
+        since: 1,
+        runTimes: [],
+        tokensSaved: 3_240_000,
+      },
+    }
+    await act(async () =>
+      root.render(
+        <MemoryRouter>
+          <div id="meter">
+            <EnergyMeter savings={query({ data })} stats={undefined} />
+          </div>
+          <div id="page">
+            <SavingsHero savings={query({ data })} onShowMe={() => {}} />
+          </div>
+        </MemoryRouter>,
+      ),
+    )
+    const figure = (id: string) =>
+      (body.querySelector(`#${id}`)?.textContent ?? '').match(
+        /([\d.]+[kM]?)tokens saved/,
+      )?.[1]
+    expect(figure('meter')).toBe('3.2M')
+    expect(figure('page')).toBe(figure('meter'))
   })
 
   it('shows a placeholder while loading and a retry when loading failed', async () => {

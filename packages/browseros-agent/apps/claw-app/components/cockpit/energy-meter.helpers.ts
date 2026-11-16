@@ -4,6 +4,21 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+import type { PlanSavings } from '@browseros/claw-api'
+
+/** How the meter and the ultrafast page count tokens saved, word for word. */
+export const HOW_WE_COUNT =
+  'Tokens saved adds up everything neo kept off your agent since you got ultrafast: short page descriptions instead of screenshots, and pages neo read itself. The two are measured differently, so the total is an estimate.'
+
+/**
+ * The one tokens saved figure: everything neo kept off the agent since this computer got
+ * ultrafast. Home's meter and the ultrafast page both read it here, so they never differ.
+ * Null until ultrafast has been on for this computer.
+ */
+export function tokensSavedSinceUltrafast(savings: PlanSavings): number | null {
+  return savings.meter?.tokensSaved ?? null
+}
+
 /** Total tokens saved since ultrafast that earn a trophy. Past the last, every 2.5M does. */
 export const MILESTONES = [
   10_000, 100_000, 250_000, 500_000, 1_000_000, 2_500_000,
@@ -15,8 +30,9 @@ const MILESTONE_STEP = 2_500_000
 export function meterTokens(tokens: number): string {
   const value = Math.max(0, Math.round(tokens))
   if (value < 1_000) return String(value)
-  if (value < 10_000) return `${(value / 1_000).toFixed(1)}k`
-  if (value < 1_000_000) return `${Math.round(value / 1_000)}k`
+  // Cut over where rounding would reach the next unit, so 9,960 reads "10k" and 999,600 "1M".
+  if (value < 9_950) return `${(value / 1_000).toFixed(1)}k`
+  if (value < 999_500) return `${Math.round(value / 1_000)}k`
   return `${(value / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`
 }
 
