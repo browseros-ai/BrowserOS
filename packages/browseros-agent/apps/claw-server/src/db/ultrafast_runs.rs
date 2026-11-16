@@ -65,17 +65,29 @@ pub fn ultrafast_run_stats(dispatches: &[ToolDispatchRow]) -> Option<UltrafastRu
     stats
 }
 
-/// How long each ultrafast run in the session took: every `run_skill` that finished without the
-/// agent, and every `pursue` that finished or handed back.
+/// One ultrafast run in a session: when it started and how long it took.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UltrafastRun {
+    pub at: i64,
+    pub duration_ms: i64,
+}
+
+/// Each ultrafast run in the session, in recorded order: every `run_skill` that finished without
+/// the agent, and every `pursue` that finished, handed back or read a page. The agent's own calls
+/// around them are not runs, so a task's run times are neo's and not the agent's.
 #[must_use]
-pub fn ultrafast_run_durations(dispatches: &[ToolDispatchRow]) -> Vec<i64> {
+pub fn ultrafast_runs(dispatches: &[ToolDispatchRow]) -> Vec<UltrafastRun> {
     dispatches
         .iter()
         .filter(|row| {
             (row.tool_name == "run_skill" && finished_without_agent(row))
                 || pursue_outcome(row).is_some()
+                || pursue_reads(row).is_some()
         })
-        .map(|row| row.duration_ms.unwrap_or(0).max(0))
+        .map(|row| UltrafastRun {
+            at: row.created_at,
+            duration_ms: row.duration_ms.unwrap_or(0).max(0),
+        })
         .collect()
 }
 
@@ -383,7 +395,11 @@ mod tests {
             800,
             r#"{"isError":true,"outcome":"completed","structuredKeys":[]}"#,
         ));
-        assert_eq!(ultrafast_run_durations(&rows), vec![15_354, 6_000]);
-        assert!(ultrafast_run_durations(&phone_deals_run(HANDED_BACK)).is_empty());
+        let durations = ultrafast_runs(&rows)
+            .iter()
+            .map(|run| (run.at, run.duration_ms))
+            .collect::<Vec<_>>();
+        assert_eq!(durations, vec![(1_000, 15_354), (90_000, 6_000)]);
+        assert!(ultrafast_runs(&phone_deals_run(HANDED_BACK)).is_empty());
     }
 }

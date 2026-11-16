@@ -947,7 +947,8 @@ async fn the_meter_counts_from_the_day_ultrafast_was_first_on() -> anyhow::Resul
     // The computer used ultrafast before the date was recorded, so it counts from that first run.
     assert_eq!(meter["since"], first_run);
     assert_eq!(meter["tokensSaved"], 10_000);
-    assert_eq!(meter["runTimes"], json!([now - day + 20_000]));
+    // The week counts when neo's run started, not the agent's later click.
+    assert_eq!(meter["runTimes"], json!([now - day]));
     // Two of the three clicks fell inside pursue.
     assert_eq!(meter["neoStepShare"], 67);
     assert_eq!(meter["fastestRunMs"], 6_000);
@@ -956,6 +957,44 @@ async fn the_meter_counts_from_the_day_ultrafast_was_first_on() -> anyhow::Resul
     app.state.ultrafast.set(false);
     let savings = get_json(&app, "/api/v1/plan/savings").await?;
     assert_eq!(savings["meter"]["since"], first_run);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_task_over_several_days_dates_the_meter_by_neos_run() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_millis() as i64;
+    let day = 24 * 60 * 60 * 1000;
+    let pursued = json!({ "outcome": "completed", "pagesRead": 2, "pageTokens": 4_000 });
+    let agent = |at: i64| RecordToolDispatchInput {
+        args_json: bounded_args_json(&json!({ "kind": "click" })),
+        ..ultrafast_dispatch("act", at, 200, &json!({}), DispatchId::new(), None, 10)
+    };
+    let run_at = now - 3 * day;
+    for row in [
+        // The agent works on its own for a day before handing neo the goal...
+        agent(now - 4 * day),
+        ultrafast_dispatch(
+            "pursue",
+            run_at,
+            5_000,
+            &pursued,
+            DispatchId::new(),
+            None,
+            100,
+        ),
+        // ...and keeps going in the same task two days later.
+        agent(now - day),
+    ] {
+        app.state.audit_log.record_tool_dispatch(row).await?;
+    }
+
+    app.state.ultrafast.set(true);
+    let meter = get_json(&app, "/api/v1/plan/savings").await?["meter"].clone();
+    assert_eq!(meter["since"], run_at);
+    assert_eq!(meter["runTimes"], json!([run_at]));
     Ok(())
 }
 
