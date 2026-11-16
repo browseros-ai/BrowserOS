@@ -56,13 +56,16 @@ function inertNodes(world: World, json: AriaSnapshotJSON) {
       pending.push(ancestor)
     }
     for (const ancestor of pending.reverse()) {
+      const modal = ancestor.matches('dialog:modal')
       state = {
-        modal: state.modal || ancestor.matches('dialog:modal'),
-        attribute: state.attribute || ancestor.hasAttribute('inert'),
+        modal: state.modal || modal,
+        // A modal escapes inherited inertness, but its own attribute still applies.
+        attribute:
+          (!modal && state.attribute) || ancestor.hasAttribute('inert'),
       }
       ancestry.set(ancestor, state)
     }
-    return !state.modal && (state.attribute || modals.length > 0)
+    return state.attribute || (!state.modal && modals.length > 0)
   }
   const protectedNodes = liveAncestors(json, refs, isInert)
   const marked: AriaNodeJSON[] = []

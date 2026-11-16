@@ -10684,7 +10684,7 @@ ${value.stack}`;
   }
 
   // crates/neo-sdk/neo-playwright-js/src/probe/protocol.ts
-  var PROTOCOL = 47;
+  var PROTOCOL = 48;
 
   // crates/neo-sdk/neo-playwright-js/src/probe/read.ts
   var XHTML2 = "http://www.w3.org/1999/xhtml";
@@ -11021,13 +11021,14 @@ ${value.stack}`;
         pending.push(ancestor);
       }
       for (const ancestor of pending.reverse()) {
+        const modal = ancestor.matches("dialog:modal");
         state = {
-          modal: state.modal || ancestor.matches("dialog:modal"),
-          attribute: state.attribute || ancestor.hasAttribute("inert")
+          modal: state.modal || modal,
+          attribute: !modal && state.attribute || ancestor.hasAttribute("inert")
         };
         ancestry.set(ancestor, state);
       }
-      return !state.modal && (state.attribute || modals.length > 0);
+      return state.attribute || !state.modal && modals.length > 0;
     };
     const protectedNodes = liveAncestors(json, refs, isInert);
     const marked = [];
