@@ -28,11 +28,11 @@ const TRACE_READINESS_WATCHDOG: Duration = Duration::from_secs(30);
 async fn finish_fixture(runtime: HostedRuntime, stage: &str) -> Result<(), Box<dyn Error>> {
     time::timeout(TRACE_READINESS_WATCHDOG, runtime.settle_fixture_trace())
         .await
-        .map_err(|_| {
+        .map_err(|error| {
             io::Error::new(
                 io::ErrorKind::TimedOut,
                 format!(
-                    "hosted {stage}: trace persistence was not ready within {TRACE_READINESS_WATCHDOG:?}"
+                    "hosted {stage}: trace flush exceeded {TRACE_READINESS_WATCHDOG:?}: {error}"
                 ),
             )
         })??;
