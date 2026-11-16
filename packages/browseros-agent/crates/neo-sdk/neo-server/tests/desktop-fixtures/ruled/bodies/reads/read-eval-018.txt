@@ -1,0 +1,14 @@
+await page.goto(args.base + '/form.html');
+// Observe the page's input boundary so a selector timeout cannot hide an accidental click.
+await page.evaluate(() => {
+  window.sdkRuledClickEvents = [];
+  document.addEventListener('click', event => window.sdkRuledClickEvents.push({ trusted: event.isTrusted, target: event.target.id }), true);
+});
+const error = await rejected(() => page.click('.apply', { timeout: 800 }));
+equal({ owner: error.owner, code: error.code, delivery: error.delivery }, { owner: 'script', code: 'no_match', delivery: 'not_sent' }, 'a valid absent CSS selector times out before input');
+includes(error.message, 'page.click', 'the error identifies the public API');
+includes(error.message, 'Timeout 800ms exceeded', 'the error preserves the original locator timeout');
+includes(error.message, "locator('.apply')", 'the error identifies the original selector');
+const events = await page.evaluate(() => window.sdkRuledClickEvents);
+equal(events, [], 'the absent selector delivers no click event');
+return { error, events };

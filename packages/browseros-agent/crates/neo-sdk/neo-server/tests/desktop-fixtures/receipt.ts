@@ -1,6 +1,6 @@
 import type { CaseResult } from './model'
 
-export type Partition = 'ordinary' | 'density'
+export type Partition = 'ordinary' | 'density' | 'terminal-select'
 
 /** Runtime evidence distinguishes actual expanded execution from shared source-body reuse. */
 export interface PartitionReceipt {
@@ -11,6 +11,8 @@ export interface PartitionReceipt {
   caseCleanupMs: number
   cleanupMs: number
   finishedAt: number
+  /** Parent finalization follows launcher cleanup; finishedAt remains the child's completion. */
+  finalizedAt?: number
   expectedIds: readonly string[]
   results: readonly CaseResult[]
   complete: boolean

@@ -1,0 +1,13 @@
+await page.goto(args.base + '/form.html');
+const ref = await refFor(page, '"Name"');
+const field = page.getByRef(ref);
+equal(await field.inputValue(), '', 'the original Name field starts empty');
+// Cmd is deliberately left untranslated: validation must reject before sending any key burst.
+const failure = await rejected(() => field.press('Cmd+c'), /^locator\.press: Unknown key: "Cmd"/);
+equal({owner: failure.owner, code: failure.code, delivery: failure.delivery},
+  {owner: 'script', code: 'invalid_input', delivery: 'not_sent'},
+  'the unsupported Cmd alias is rejected before delivery');
+const value = await field.inputValue();
+equal(value, '', 'Cmd+c leaves the pinned input untouched');
+equal(await page.evaluate(() => document.getElementById('name').value), '', 'the page received no typed value');
+return {ref, failure, value};

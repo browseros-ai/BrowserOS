@@ -48,6 +48,7 @@ export type HostCheck =
       kind: 'download-file'
       pathField: string
       contentIncludes: string
+      contentEquals?: string
       requireExists: true
     }
   | {
@@ -82,6 +83,8 @@ export interface CaseSpec {
   proves: string
   steps: readonly [Step, ...Step[]]
   timeoutMs: number
+  /** An independent caller deadline; omitted requests retain the legacy transport budget. */
+  driverTimeoutMs?: number
   expectation: Expectation
   settings?: SettingsPatch
   hostSetup?: HostSetup
@@ -122,11 +125,43 @@ export type RunReply =
   | (ReplyBase & { kind: 'ok'; isError: false; value: JsonValue })
   | (ReplyBase & { kind: 'error'; isError: true; error: RunError })
 
+/** Public rulings are pinned to code or documentation that a clean checkout can inspect. */
+export interface PublicCitation {
+  path: string
+  commit: string
+  lines: string
+  claim: string
+}
+
+export interface SdkRuling {
+  sdkBehavior: string
+  citations: readonly [PublicCitation, ...PublicCitation[]]
+}
+
+/** Authored contracts own their assertions; imported body bytes keep their historical owner. */
+export type RuledCaseSpec = CaseSpec & {
+  expectation: { kind: 'pass' }
+  ruling: SdkRuling
+} & (
+    | { execution: 'ordinary' }
+    | {
+        execution: 'density'
+        hostSetup: { kind: 'device-scale'; deviceScaleFactor: 2 }
+      }
+    | { execution: 'terminal-select'; id: 'act-017'; file: 'cases-act.ts' }
+  )
+
+/** The composed registry has one execution policy, independent of historical/authored provenance. */
+export type ExecutableCase =
+  | (CaseSpec & { execution: 'ordinary' | 'density' })
+  | Extract<RuledCaseSpec, { execution: 'terminal-select' }>
+
 export interface RunRequest {
   code: string
   taskId: string
   requestId: string
   timeoutMs: number
+  driverTimeoutMs?: number
 }
 
 export interface RunDownload {

@@ -1,6 +1,7 @@
 import { mkdir, readFile, realpath, writeFile } from 'node:fs/promises'
 import { hostname } from 'node:os'
 import { dirname, join, resolve, sep } from 'node:path'
+import { historicalFailures } from './cases/history'
 import {
   parseManifestCases,
   parseOriginalCases,
@@ -12,7 +13,6 @@ import {
   expectedFamilyCounts,
   requireCondition,
   sha256,
-  strictFailures,
   validateCaseContract,
 } from './cases/requirements'
 import {
@@ -82,7 +82,7 @@ export async function prepareImport(
       `Saved ${status} count differs from ${count}`,
     )
   }
-  const failedIds = [...strictFailures.keys(), 'capture-io-017'].sort()
+  const failedIds = [...historicalFailures].sort()
   requireCondition(
     JSON.stringify(
       [...statuses]

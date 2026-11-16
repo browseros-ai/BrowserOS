@@ -1,0 +1,38 @@
+/** Frame refs belong to documents; stitch order follows fixture DOM order, not numeric ref suffixes. */
+const labels = ['Parent action ready', 'Frame A action ready', 'Frame A cursor ready', 'Grandchild action ready', 'Grandchild cursor ready', 'Frame B action ready', 'Frame B cursor ready'];
+function selectedRefs(snapshot) {
+  let previous = -1;
+  return Object.fromEntries(labels.map(label => {
+    const position = snapshot.indexOf(label);
+    assert(position > previous, 'stitched labels retain parent, frame A, grandchild, frame B order', { label, position, previous, snapshot });
+    previous = position;
+    const line = snapshot.split('\n').find(line => line.includes(label));
+    const ref = line?.match(/\[ref=([^\]\s]+)\]/)?.[1];
+    assert(typeof ref === 'string', 'every original frame label retains a ref: ' + label, snapshot);
+    return [label, ref];
+  }));
+}
+async function settledSnapshot() {
+  let snapshot = '';
+  await poll(async () => {
+    if (!await page.evaluate(() => window.snapshotFrameFixture.state().ready)) return false;
+    snapshot = await page.ariaSnapshot();
+    return labels.every(label => snapshot.includes(label));
+  }, 'the snapshot includes all seven settled mixed-frame labels', 30000);
+  return snapshot;
+}
+
+const url = new URL(args.base + '/snapshot-frame-tree.html');
+const child = new URL(args.base2);
+// Distinct ports alone do not force a site boundary; preserve the fixture's loopback-host split.
+child.hostname = url.hostname === 'localhost' ? '127.0.0.1' : 'localhost';
+url.searchParams.set('childOrigin', child.origin);
+await page.goto(url.toString());
+await poll(async () => await page.evaluate(() => window.snapshotFrameFixture.state().ready), 'all mixed-frame documents are ready', 30000);
+const readiness = await page.evaluate(() => window.snapshotFrameFixture.state());
+for (const name of ['parent', 'frame-a', 'frame-b', 'grandchild']) assert(readiness.frames.includes(name), 'the fixture reports readiness for ' + name, readiness);
+const first = await settledSnapshot();
+const refs = selectedRefs(first);
+const second = await settledSnapshot();
+equal(selectedRefs(second), refs, 'every complete opaque ref remains stable across settled snapshots');
+return { first, second, refs };

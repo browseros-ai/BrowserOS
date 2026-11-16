@@ -596,6 +596,49 @@ describe('console and intentional errors', () => {
 })
 
 describe('downloads retain disk and same-run service evidence', () => {
+  test('exact ruled fixture bytes reject extra bytes even when every same-run copy agrees', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'neo-download-exact-'))
+    const path = join(root, 'report.txt')
+    const expected = 'fixture report contents\n'
+    const bytes = Buffer.from(`${expected}extra`)
+    try {
+      await writeFile(path, bytes)
+      const reply = success({ path })
+      const host = hostWith(
+        recordFor(reply, {
+          downloads: [
+            {
+              index: 0,
+              path,
+              size: bytes.length,
+              state: 'completed',
+              suggestedFilename: 'report.txt',
+            },
+          ],
+        }),
+        {
+          async download() {
+            return { bytes }
+          },
+        },
+      )
+      await expect(
+        checkHost({
+          spec: {
+            kind: 'download-file',
+            pathField: 'path',
+            contentIncludes: 'fixture report',
+            contentEquals: expected,
+            requireExists: true,
+          },
+          replies: [reply],
+          host,
+        }),
+      ).rejects.toThrow('exact fixture bytes')
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
   test('reads each distinct completed download and compares every byte', async () => {
     const root = await mkdtemp(join(tmpdir(), 'neo-download-'))
     const bytes = Buffer.from('fixture report\nexact downloaded bytes\n')

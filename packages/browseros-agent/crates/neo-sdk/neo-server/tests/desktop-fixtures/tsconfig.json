@@ -12,5 +12,5 @@
     "noEmit": true,
     "types": ["bun", "node"]
   },
-  "include": ["*.ts", "cases/*.ts"]
+  "include": ["*.ts", "cases/*.ts", "ruled/*.ts"]
 }

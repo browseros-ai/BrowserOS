@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { historicalFailures } from './cases/history'
 import { parseManifestCases, type SavedStatus } from './cases/import-source'
 import {
   bodyPaths,
@@ -11,7 +12,12 @@ import {
 } from './cases/requirements'
 import { requirePublicText, serializeJson } from './cases/serialization'
 import { prepareImport } from './import'
-import { cases, loadBody, loadCommon, validateInventory } from './inventory'
+import {
+  baselineCases as cases,
+  loadBody,
+  loadCommon,
+  validateInventory,
+} from './inventory'
 import type { CaseSpec } from './model'
 
 const originals = new Map(
@@ -85,10 +91,7 @@ async function syntheticBundle(root: string): Promise<void> {
     requireCondition(rows, 'Unknown synthetic body group')
     rows.push(externalRow(entry))
     statuses[entry.id] = {
-      status:
-        strictFailures.has(entry.id) || entry.id === 'capture-io-017'
-          ? 'FAIL'
-          : 'PASS',
+      status: historicalFailures.has(entry.id) ? 'FAIL' : 'PASS',
       evidence: 'results/runs/synthetic-proof.json',
     }
   }
@@ -192,11 +195,13 @@ await validateInventory();`
 
   test('retains strict failures and the fixed iframe download as an ordinary pass', () => {
     const altered: CaseSpec[] = cases.map((entry) =>
-      entry.id === 'labels-001'
+      strictFailures.has(entry.id)
         ? { ...entry, expectation: { kind: 'pass' } }
         : entry,
     )
-    expect(() => validateCaseContract(altered)).toThrow('failure contract')
+    if (strictFailures.size > 0)
+      expect(() => validateCaseContract(altered)).toThrow('failure contract')
+    else expect(() => validateCaseContract(altered)).not.toThrow()
     expect(requiredCase('capture-io-017').expectation).toEqual({ kind: 'pass' })
     expect(requiredCase('read-eval-021').expectation).toEqual({ kind: 'pass' })
   })

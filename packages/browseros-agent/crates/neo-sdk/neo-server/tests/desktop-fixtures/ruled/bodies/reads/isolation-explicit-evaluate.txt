@@ -1,0 +1,5 @@
+await page.goto(args.base + '/script-isolation.html');
+equal(typeof window, 'undefined', 'the SDK run realm has no page window');
+const value = await page.evaluate(() => window.pageSecret);
+equal(value, 'main-world-only', 'explicit evaluation reads the page main world');
+return { value };
