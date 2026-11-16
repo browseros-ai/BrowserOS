@@ -1,9 +1,48 @@
 import { CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js'
 import { McpSession } from '../../../../../contracts/claw-mcp/tests/mcp-client'
 import { jsonObject, jsonValue, stringField } from './json'
-import { isRunId, type RunReply, type RunRequest } from './model'
+import {
+  isRunId,
+  type JsonObject,
+  type RunReply,
+  type RunRequest,
+} from './model'
 
 const RUN_META_KEY = 'com.browseros.neo/run'
+
+function requireCompletedRun(meta: JsonObject, text: string): void {
+  // Script status and write delivery are independent: a script may catch an operation
+  // error and return normally even though the page never confirmed the write.
+  if (meta.effects === 'unknown')
+    throw new Error('SDK reply has uncertain write effects')
+  if (
+    meta.effects !== undefined &&
+    meta.effects !== 'none' &&
+    meta.effects !== 'done'
+  ) {
+    throw new Error('SDK run metadata effects must be none, done, or unknown')
+  }
+  if (meta.unknown !== undefined) {
+    if (!Array.isArray(meta.unknown))
+      throw new Error('SDK run metadata unknown must be an array')
+    if (meta.unknown.length > 0)
+      throw new Error('SDK reply lists uncertain write operations')
+  }
+
+  // RunTool keeps unknown writes in _meta, but exposes not_awaited only through these
+  // rendered lines. Match its complete operation label and cancellation sentence after
+  // the first value/error line; JSON strings and ordinary console markers remain data.
+  const unfinished =
+    /^\[not awaited\] \S+(?: at run:\d+:\d+)? \(op \d+\) was still running when the script returned; it was cancelled\.$/
+  if (
+    text
+      .split('\n')
+      .slice(1)
+      .some((line) => unfinished.test(line))
+  ) {
+    throw new Error('SDK reply reports unfinished operations')
+  }
+}
 
 /** Decode the standard MCP result first, then the SDK-specific run envelope. */
 export function parseRunReply(input: unknown): RunReply {
@@ -23,6 +62,7 @@ export function parseRunReply(input: unknown): RunReply {
   const images = result.content
     .filter((block) => block.type === 'image')
     .map((block) => ({ data: block.data, mimeType: block.mimeType }))
+  requireCompletedRun(meta, text)
   const base = { runId, status, text, images, raw: jsonValue(input) }
   if (result.isError === true) {
     if (status === 'ok') throw new Error('Error MCP reply reported status ok')

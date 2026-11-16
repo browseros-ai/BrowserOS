@@ -17,6 +17,7 @@ import type { CaseSpec } from './model'
 const originals = new Map(
   cases.map(({ id, file, name }) => [id, { id, file, name }]),
 )
+const importContext = { importingHost: 'synthetic-import-host' }
 
 function requiredCase(id: string): CaseSpec {
   const entry = cases.find((entry) => entry.id === id)
@@ -148,6 +149,29 @@ describe('committed desktop fixture inventory', () => {
     await validateInventory()
   })
 
+  test('committed validation is independent of the executing hostname', async () => {
+    for (const host of ['runner', 'localhost']) {
+      // A child isolates the host mock from the other process and importer checks. These
+      // names legitimately occur in committed comments and fixture URLs, not host evidence.
+      const source = `import { spyOn } from 'bun:test';
+import * as os from 'node:os';
+spyOn(os, 'hostname').mockReturnValue(${JSON.stringify(host)});
+if (os.hostname() !== ${JSON.stringify(host)}) throw new Error('Hostname fixture did not take effect');
+const { validateInventory } = await import(${JSON.stringify(join(import.meta.dir, 'inventory.ts'))});
+await validateInventory();`
+      const child = Bun.spawn({
+        cmd: [process.execPath, '--eval', source],
+        stdout: 'ignore',
+        stderr: 'pipe',
+      })
+      const [code, stderr] = await Promise.all([
+        child.exited,
+        new Response(child.stderr).text(),
+      ])
+      expect({ code, stderr }).toEqual({ code: 0, stderr: '' })
+    }
+  })
+
   test('does not allow a missing, duplicated, or renamed expanded case', () => {
     expect(() => validateCaseContract(cases.slice(1))).toThrow('212')
     expect(() =>
@@ -222,7 +246,7 @@ describe('committed desktop fixture inventory', () => {
     ).toThrow('modeled')
   })
 
-  test('rejects private paths, importing host identities, and key material in public data', () => {
+  test('rejects private paths and key material in public data', () => {
     expect(() =>
       requirePublicText('/Users/synthetic/private/report.json'),
     ).toThrow('private')
@@ -232,6 +256,14 @@ describe('committed desktop fixture inventory', () => {
     expect(() => requirePublicText("apiKey='secret-value'")).toThrow(
       'credential',
     )
+  })
+
+  test('explicit import context rejects importing-host identity leaks only during import', () => {
+    const content = 'Recorded on synthetic-import-host'
+    expect(() => requirePublicText(content)).not.toThrow()
+    expect(() =>
+      requirePublicText(content, { importingHost: 'synthetic-import-host' }),
+    ).toThrow('importing host identity')
   })
 })
 
@@ -254,15 +286,15 @@ describe('deterministic explicit importer', () => {
     const original = await readFile(absolute, 'utf8')
     try {
       await writeFile(absolute, change(original))
-      await expect(prepareImport(root)).rejects.toThrow(message)
+      await expect(prepareImport(root, importContext)).rejects.toThrow(message)
     } finally {
       await writeFile(absolute, original)
     }
   }
 
   test('two imports reproduce every committed byte and never emit excluded bodies or proofs', async () => {
-    const first = await prepareImport(root)
-    const second = await prepareImport(root)
+    const first = await prepareImport(root, importContext)
+    const second = await prepareImport(root, importContext)
     expect(first.size).toBe(173)
     expect([...first.keys()]).toEqual([...second.keys()])
     for (const [path, bytes] of first) {
@@ -275,6 +307,14 @@ describe('deterministic explicit importer', () => {
     }
     expect([...first.keys()].some((path) => path.includes('results'))).toBe(
       false,
+    )
+  })
+
+  test('rejects the importing host identity before emitting imported content', async () => {
+    await rejectChangedSource(
+      'common.js',
+      (text) => `${text}\n// Recorded on ${importContext.importingHost}\n`,
+      'importing host identity',
     )
   })
 

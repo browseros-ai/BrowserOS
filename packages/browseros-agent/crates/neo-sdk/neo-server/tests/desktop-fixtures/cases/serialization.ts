@@ -1,4 +1,3 @@
-import { hostname } from 'node:os'
 import type { CaseSpec } from '../model'
 import { expectedFamilyCounts, requireCondition } from './requirements'
 
@@ -35,13 +34,19 @@ export function serializeJson(value: unknown): string {
   return `${JSON.stringify(value, null, 2)}\n`
 }
 
-export function requirePublicText(content: string, privateRoot?: string): void {
+/** Committed validation is machine-independent; only an explicit import supplies host identity. */
+export function requirePublicText(
+  content: string,
+  context: { privateRoot?: string; importingHost?: string } = {},
+): void {
   requireCondition(
-    !privateRoot || !content.includes(privateRoot),
+    !context.privateRoot || !content.includes(context.privateRoot),
     'Emitted data contains the external input root',
   )
   requireCondition(
-    !content.includes(hostname()),
+    context.importingHost === undefined ||
+      (context.importingHost.length > 0 &&
+        !content.includes(context.importingHost)),
     'Emitted data contains the importing host identity',
   )
   requireCondition(

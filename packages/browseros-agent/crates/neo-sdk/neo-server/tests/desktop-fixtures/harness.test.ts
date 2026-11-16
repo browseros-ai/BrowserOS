@@ -298,3 +298,109 @@ test('uncertain borrowed-target creation stops reuse after named-task cleanup', 
     'prevents further browser state reuse',
   )
 })
+
+const invalidDateFailure =
+  'Error: invalid fill leaves the field and application event record unchanged; expected={"value":"2020-01-02","events":[]}; actual={"value":"","events":[]} (run:5:7)'
+const uncertainReplies: { name: string; spec: CaseSpec; raw: JsonObject }[] = [
+  {
+    name: 'caught write error with status ok and unknown effects',
+    spec: basic,
+    raw: {
+      content: [{ type: 'text', text: '{"caught":true}' }],
+      structuredContent: { value: { caught: true } },
+      _meta: {
+        'com.browseros.neo/run': {
+          id: randomUUID(),
+          status: 'ok',
+          effects: 'unknown',
+          unknown: [],
+        },
+      },
+    },
+  },
+  {
+    name: 'caught write error with status ok and an unconfirmed operation',
+    spec: basic,
+    raw: {
+      content: [{ type: 'text', text: '{"caught":true}' }],
+      structuredContent: { value: { caught: true } },
+      _meta: {
+        'com.browseros.neo/run': {
+          id: randomUUID(),
+          status: 'ok',
+          effects: 'done',
+          unknown: [
+            { operationId: `${randomUUID()}.1`, name: 'locator.click' },
+          ],
+        },
+      },
+    },
+  },
+  {
+    name: 'known xfail followed by a rendered unfinished operation',
+    spec: {
+      ...basic,
+      expectation: {
+        kind: 'xfail',
+        reason: 'known date reset',
+        signature: 'invalid-date-reset',
+      },
+    },
+    raw: {
+      content: [
+        {
+          type: 'text',
+          text: `script / script_error: ${invalidDateFailure}\n[not awaited] locator.click (op 1) was still running when the script returned; it was cancelled.`,
+        },
+      ],
+      structuredContent: {
+        error: {
+          owner: 'script',
+          code: 'script_error',
+          message: invalidDateFailure,
+        },
+      },
+      isError: true,
+      _meta: {
+        'com.browseros.neo/run': {
+          id: randomUUID(),
+          status: 'error',
+          effects: 'done',
+          unknown: [],
+        },
+      },
+    },
+  },
+]
+
+for (const scenario of uncertainReplies) {
+  test(`parser uncertainty poisons reuse after named cleanup: ${scenario.name}`, async () => {
+    const state = hostClient()
+    const calls: RunRequest[] = []
+    const harness = new Harness({
+      ...environment,
+      host: state.host,
+      async run(request) {
+        calls.push(request)
+        if (request.code.startsWith('await (await neo.task(')) return ok(true)
+        return parseRunReply(scenario.raw)
+      },
+    })
+    const result = await harness.check(scenario.spec)
+    expect(result.status).toBe('fail')
+    expect(harness.poisoned).toBe(true)
+    expect(calls).toHaveLength(2)
+    const [body, cleanup] = calls
+    if (!body || !cleanup)
+      throw new Error('The case must attempt body and cleanup')
+    expect(cleanup.code).toBe(
+      `await (await neo.task(${JSON.stringify(body.taskId)})).close(); return true;`,
+    )
+    expect(cleanup.taskId).toBe(body.taskId)
+    expect(cleanup.requestId).not.toBe(body.requestId)
+    await expect(harness.check(basic)).rejects.toThrow(
+      'prevents further browser state reuse',
+    )
+    expect(calls).toHaveLength(2)
+  })
+}

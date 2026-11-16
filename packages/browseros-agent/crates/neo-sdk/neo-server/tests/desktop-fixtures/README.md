@@ -36,6 +36,8 @@ This is the same offline preflight CI runs before the live suite. It validates t
 
 Offline checks need only committed files. They verify the exact expanded membership, typed registry serialization, 155 raw body hashes, shared helper hash, source syntax, strict failure signatures, request ordering, and lifecycle guards. The fixture server serves pages directly from `contracts/claw-mcp/fixtures/pages`.
 
+Function bodies preserve the measured adapter scripts byte for byte as test inputs. Some retain shared support declarations unused by that particular case; coverage comes from the assertions actually invoked by its body. The hashes preserve this provenance independently of the runner.
+
 To regenerate the registry and function bodies from a compatible external bundle, supply its path explicitly:
 
 ```sh

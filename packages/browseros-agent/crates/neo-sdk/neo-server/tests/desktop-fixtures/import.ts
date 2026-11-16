@@ -1,4 +1,5 @@
 import { mkdir, readFile, realpath, writeFile } from 'node:fs/promises'
+import { hostname } from 'node:os'
 import { dirname, join, resolve, sep } from 'node:path'
 import {
   parseManifestCases,
@@ -53,9 +54,10 @@ async function readJson(root: string, path: string): Promise<unknown> {
   return JSON.parse((await readInput(root, path)).toString('utf8'))
 }
 
-/** An explicit external bundle is import evidence only; output never includes saved proofs or hosts. */
+/** Import callers supply host identity explicitly; committed offline checks never consult that host. */
 export async function prepareImport(
   input: string,
+  context: { importingHost: string },
 ): Promise<ReadonlyMap<string, Uint8Array>> {
   const root = await realpath(resolve(input))
   const originals = parseOriginalCases(await readJson(root, 'inventory.json'))
@@ -131,7 +133,10 @@ export async function prepareImport(
   const output = new Map<string, Uint8Array>()
   const emit = (path: string, content: string | Uint8Array) => {
     const bytes = typeof content === 'string' ? Buffer.from(content) : content
-    requirePublicText(Buffer.from(bytes).toString('utf8'), root)
+    requirePublicText(Buffer.from(bytes).toString('utf8'), {
+      privateRoot: root,
+      importingHost: context.importingHost,
+    })
     output.set(path, bytes)
   }
   for (const file of Object.keys(expectedFamilyCounts)) {
@@ -182,7 +187,8 @@ async function main(args: string[]): Promise<void> {
     args.length === 1 && input && !input.startsWith('-'),
     'Usage: bun import.ts <explicit-external-bundle> | --check',
   )
-  const output = await prepareImport(input)
+  // Machine identity is import evidence, never an input to committed offline validation.
+  const output = await prepareImport(input, { importingHost: hostname() })
   for (const [path, bytes] of output) {
     const destination = join(import.meta.dir, path)
     await mkdir(dirname(destination), { recursive: true })

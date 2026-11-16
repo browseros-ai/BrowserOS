@@ -8,7 +8,14 @@ function success(value: JsonValue) {
   return {
     content: [{ type: 'text', text: JSON.stringify(value) }],
     structuredContent: { value },
-    _meta: { 'com.browseros.neo/run': { id: randomUUID(), status: 'ok' } },
+    _meta: {
+      'com.browseros.neo/run': {
+        id: randomUUID(),
+        status: 'ok',
+        effects: 'done',
+        unknown: [],
+      },
+    },
   }
 }
 
@@ -54,6 +61,102 @@ test('script failures retain owner, code, status and full numeric source suffix'
       message: 'Error: run-boom (run:2:5)',
     },
   })
+})
+
+for (const { name, facts } of [
+  {
+    name: 'unknown effects after a caught write error',
+    facts: { effects: 'unknown', unknown: [] },
+  },
+  {
+    name: 'unconfirmed writes even if effects says done',
+    facts: {
+      effects: 'done',
+      unknown: [{ operationId: `${randomUUID()}.1`, name: 'locator.click' }],
+    },
+  },
+]) {
+  test(`run parser rejects ${name} despite status ok`, () => {
+    const reply = success({ caught: true })
+    expect(() =>
+      parseRunReply({
+        ...reply,
+        _meta: {
+          'com.browseros.neo/run': {
+            ...reply._meta['com.browseros.neo/run'],
+            ...facts,
+          },
+        },
+      }),
+    ).toThrow('uncertain')
+  })
+}
+
+for (const unknown of [null, {}, 'pending', 1]) {
+  test(`run parser rejects malformed supplied unknown list ${JSON.stringify(unknown)}`, () => {
+    const reply = success(true)
+    expect(() =>
+      parseRunReply({
+        ...reply,
+        _meta: {
+          'com.browseros.neo/run': {
+            ...reply._meta['com.browseros.neo/run'],
+            unknown,
+          },
+        },
+      }),
+    ).toThrow('unknown must be an array')
+  })
+}
+
+test('run parser accepts absent or empty operation lists and completed effects', () => {
+  for (const facts of [
+    {},
+    { effects: 'none' },
+    { effects: 'done', unknown: [] },
+  ]) {
+    expect(
+      parseRunReply({
+        ...success(true),
+        _meta: {
+          'com.browseros.neo/run': { id: randomUUID(), status: 'ok', ...facts },
+        },
+      }).kind,
+    ).toBe('ok')
+  }
+})
+
+const notAwaited =
+  '[not awaited] locator.click at run:3:7 (op 9) was still running when the script returned; it was cancelled.'
+
+test('run parser rejects the actual rendered unfinished-operation warning', () => {
+  const reply = success(true)
+  expect(() =>
+    parseRunReply({
+      ...reply,
+      content: [{ type: 'text', text: `true\n${notAwaited}` }],
+    }),
+  ).toThrow('unfinished')
+})
+
+test('warning markers inside returned JSON or ordinary console entries are data', () => {
+  const value = { note: notAwaited }
+  expect(parseRunReply(success(value))).toMatchObject({ kind: 'ok', value })
+  expect(parseRunReply(success(notAwaited))).toMatchObject({
+    kind: 'ok',
+    value: notAwaited,
+  })
+  expect(
+    parseRunReply({
+      ...success(true),
+      content: [
+        {
+          type: 'text',
+          text: 'true\nconsole:\nThe [not awaited] marker is ordinary console text.\n[not awaited] is also ordinary console text.',
+        },
+      ],
+    }).kind,
+  ).toBe('ok')
 })
 
 test('separate simultaneous runs initialize four fresh clients and distinct replay keys', async () => {
