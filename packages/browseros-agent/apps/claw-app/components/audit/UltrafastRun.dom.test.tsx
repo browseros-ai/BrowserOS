@@ -261,3 +261,48 @@ describe('a task neo drove with pursue', () => {
     expect(text()).not.toContain('handed')
   })
 })
+
+describe('the ink rail on ultrafast tasks', () => {
+  const rail = () => body.querySelectorAll('[data-ultrafast-rail]').length
+  const mark = () => body.querySelectorAll('[data-ultrafast-mark]').length
+
+  it('marks a skill run card with the rail, the lightning mark and its pill', async () => {
+    await render(<TaskRow task={session()} now={Date.now()} />)
+    expect(rail()).toBe(1)
+    expect(mark()).toBe(1)
+    expect(text()).toContain('ultrafast · 15 sec')
+  })
+
+  it('marks a pursue card the same way', async () => {
+    await render(
+      <TaskRow
+        task={session({ ultrafast: undefined, pursue: flights })}
+        now={Date.now()}
+      />,
+    )
+    expect(rail()).toBe(1)
+    expect(mark()).toBe(1)
+    expect(text()).toContain('ultrafast · neo did 3 steps')
+  })
+
+  it('leaves a task that ran the normal way as it was', async () => {
+    await render(
+      <TaskRow task={session({ ultrafast: undefined })} now={Date.now()} />,
+    )
+    expect(rail()).toBe(0)
+    expect(mark()).toBe(0)
+  })
+
+  it('puts the lightning mark beside the pill on an ultrafast task page only', async () => {
+    await render(<TaskPageHeader session={session()} />)
+    expect(mark()).toBe(1)
+    await render(<TaskPageHeader session={session({ ultrafast: undefined })} />)
+    expect(mark()).toBe(0)
+  })
+
+  it('draws the rail on the list of steps neo took', async () => {
+    await render(<NeoSteps pursue={flights} />)
+    expect(rail()).toBe(1)
+    expect(body.querySelectorAll('li').length).toBe(3)
+  })
+})

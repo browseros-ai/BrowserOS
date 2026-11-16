@@ -2,6 +2,7 @@ import type { SessionSummary } from '@browseros/claw-api'
 import { ExternalLink } from 'lucide-react'
 import { useLocation } from 'react-router'
 import { SessionStatusBadge } from '@/components/audit/SessionStatusBadge'
+import { UltrafastMark } from '@/components/audit/UltrafastMarks'
 import { UltrafastRunBadge } from '@/components/audit/UltrafastRunBadge'
 import { AgentMark } from '@/components/harness/AgentMark'
 import { PageHeader } from '@/components/layout/PageHeader'
@@ -45,6 +46,9 @@ export function TaskPageHeader({ session, lastPageUrl }: TaskPageHeaderProps) {
             sessionId={session.sessionId}
             size="md"
           />
+          {session.pursue || session.ultrafast ? (
+            <UltrafastMark size="md" />
+          ) : null}
           {session.pursue ? (
             <UltrafastRunBadge size="md">
               {pursueHeader(session.pursue, session.ultrafast)}
