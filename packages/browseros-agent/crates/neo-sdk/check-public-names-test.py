@@ -35,10 +35,14 @@ class PublicNamesTest(unittest.TestCase):
         subprocess.run(["git", "-C", str(self.root), *args], check=True, capture_output=True)
 
     def write(self, relative, data):
+        path = self.put(relative, data)
+        self.git("add", "--", relative)
+        return path
+
+    def put(self, relative, data):
         path = self.root / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(data)
-        self.git("add", "--", relative)
         return path
 
     def check(self, expected, env=None):
@@ -46,6 +50,7 @@ class PublicNamesTest(unittest.TestCase):
             ["python3", str(CHECK), str(self.root)], capture_output=True, env=env,
         )
         self.assertEqual(result.returncode, expected, result.stderr.decode())
+        return result
 
     def test_tracked_bytes_and_filenames_reject_private_references(self):
         for name in NAMES + FILES:
@@ -66,6 +71,12 @@ class PublicNamesTest(unittest.TestCase):
         self.write("probe.txt", b"a host")
         (self.root / "untracked.txt").write_bytes(NAMES[0])
         self.check(0)
+
+    def test_indexed_files_stay_scanned_even_in_an_ignored_directory(self):
+        self.write(".gitignore", b"generated/\n")
+        self.put("generated/probe.txt", NAMES[0])
+        self.git("add", "--force", "--", "generated/probe.txt")
+        self.check(1)
 
     def test_product_lines_allow_only_reviewed_content_at_the_reviewed_paths(self):
         for relative in PRODUCT_PATHS:
@@ -99,6 +110,69 @@ class PublicNamesTest(unittest.TestCase):
         self.check(1, env)
         env.pop("NEO_SDK_SOURCE_ROOT")
         self.check(2, env)
+
+    def test_snapshot_skips_dependency_and_cache_directories_from_ignore_files(self):
+        (self.root / ".git").rename(self.root / "metadata")
+        self.write_snapshot()
+        agent = self.root / "packages/browseros-agent"
+        (agent / ".gitignore").write_bytes(b"node_modules/\n.cache/\n")
+        for relative in ("node_modules/vendor/index.js", "tools/node_modules/vendor/index.js",
+                         "tools/.cache/cache.bin"):
+            path = agent / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(NAMES[0])
+        self.check(0, {**os.environ, "NEO_SDK_SOURCE_ROOT": str(self.root)})
+
+    def snapshot_env(self):
+        (self.root / ".git").rename(self.root / "metadata")
+        self.write_snapshot()
+        for relative in (".gitignore", "packages/browseros-agent/.gitignore"):
+            self.put(relative, (REPO / relative).read_bytes())
+        return {**os.environ, "NEO_SDK_SOURCE_ROOT": str(self.root)}
+
+    def test_snapshot_uses_workspace_rules_for_tool_caches(self):
+        env = self.snapshot_env()
+        for relative in ("node_modules/vendor/index.js", "target/debug/output", ".fallow/cache.bin",
+                         "tools/.cache/cache.bin", "tools/__pycache__/probe.pyc"):
+            self.put("packages/browseros-agent/" + relative, b"\0" + NAMES[0])
+        self.check(0, env)
+
+    def test_snapshot_keeps_authored_directories_and_ignored_individual_files(self):
+        env = self.snapshot_env()
+        for relative in ("crates/browseros-core/src/target/probe.rs", "packages/shared/src/env/probe.ts",
+                         "scripts/env/probe.ts", ".vscode/launch.json", "src/fixture.log", "AGENTS.md",
+                         "crates/neo-sdk/neo-playwright/third_party/yaml/browser/dist/probe.js"):
+            with self.subTest(relative=relative):
+                path = self.put("packages/browseros-agent/" + relative, NAMES[0])
+                self.check(1, env)
+                path.unlink()
+
+    def test_snapshot_scans_source_next_to_ignored_directories_and_honors_nested_anchors(self):
+        env = self.snapshot_env()
+        self.put("packages/browseros-agent/apps/server/.gitignore", b"/db/\n")
+        self.put("packages/browseros-agent/apps/server/db/cache.bin", NAMES[0])
+        self.put("packages/browseros-agent/src/.cache/cache.bin", NAMES[0])
+        self.check(0, env)
+        for relative in ("src/.cache-reader/probe.py", "src/target.rs", "apps/server/src/lib/db/schema.rs"):
+            with self.subTest(relative=relative):
+                path = self.put("packages/browseros-agent/" + relative, NAMES[0])
+                result = self.check(1, env)
+                self.assertIn(relative.encode(), result.stderr)
+                self.assertNotIn(b"cache.bin", result.stderr)
+                path.unlink()
+
+    def test_personal_ignore_rules_cannot_hide_snapshot_source(self):
+        env = self.snapshot_env()
+        excludes = self.put("personal-excludes", b"src/\n")
+        config = self.put("personal-config", b"[core]\nexcludesFile = " + os.fsencode(excludes) + b"\n")
+        self.put("packages/browseros-agent/src/probe.py", NAMES[0])
+        self.check(1, {**env, "GIT_CONFIG_GLOBAL": str(config), "GIT_CONFIG_COUNT": "1",
+                       "GIT_CONFIG_KEY_0": "core.excludesFile", "GIT_CONFIG_VALUE_0": str(excludes)})
+
+    def test_snapshot_scans_root_ignore_policy_itself(self):
+        env = self.snapshot_env()
+        self.put(".gitignore", b"# " + NAMES[0] + b"\n")
+        self.check(1, env)
 
     def write_snapshot(self):
         for relative in ("packages/browseros-agent/probe.txt", ".github/workflows/test.yml"):

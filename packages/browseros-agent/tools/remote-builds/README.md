@@ -199,7 +199,8 @@ addresses and profiles do not belong in the repository.
 ## Source and result boundaries
 
 `remote.py` asks the pinned Crabbox to enumerate Git-tracked and nonignored working files
-under `packages/browseros-agent` plus `.github/workflows/test.yml`. Images from older checkouts
+under `packages/browseros-agent` plus `.github/workflows/test.yml` and the root `.gitignore`
+policy used by snapshot checks. Images from older checkouts
 also select exactly the five supervisor inputs named in `remote.py:LEGACY_SUPERVISOR` when their
 Dockerfile references that named context. Its `EXCLUDE` constant
 removes Git metadata, agent state, environment files and credential/key files. Tracked relative file links are materialized only when every target is also explicitly
