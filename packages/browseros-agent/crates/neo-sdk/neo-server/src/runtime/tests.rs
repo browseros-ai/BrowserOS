@@ -938,6 +938,191 @@ fn input_the_codec_refuses_is_refused_and_recorded_by_the_door() -> Result<(), T
     })
 }
 
+/// Each JS escape has one backslash, so QuickJS creates an unpaired UTF-16 unit rather than
+/// literal backslash-u text. Rust must receive replacement characters at the JSON boundary.
+#[test]
+fn lone_surrogates_in_returned_strings_become_replacement_characters() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        for (code, expected) in [
+            (r"return 'a\ud83d';", "a�"),
+            (r"return '\udc00b';", "�b"),
+            (r"return '\ud83d\ud83d\ude00\udc00';", "�😀�"),
+        ] {
+            assert_eq!(
+                returned(script(&rig, code).await?)?,
+                json!(expected),
+                "only unpaired units become replacement characters: {code}"
+            );
+        }
+        Ok(())
+    })
+}
+
+#[test]
+fn lone_surrogates_in_nested_returned_data_become_replacement_characters()
+-> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let code = r"
+            return {
+              object: { ['key\ud83d']: '\udc00' },
+              array: ['a\ud83d', { ['key\udc00']: ['\ud83dX\udc00'] }],
+              literal: '\\ud83d',
+            };";
+        assert_eq!(
+            returned(script(&rig, code).await?)?,
+            json!({
+                "object": { "key�": "�" },
+                "array": ["a�", { "key�": ["�X�"] }],
+                "literal": r"\ud83d",
+            }),
+            "nested values and property names cross whole, while literal escape text stays literal"
+        );
+        Ok(())
+    })
+}
+
+#[test]
+fn lone_surrogates_in_operation_inputs_become_replacement_characters() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let code = r"
+            return await __neo.invoke('test.echo', {
+              high: 'a\ud83d', low: '\udc00b',
+              nested: { ['key\ud83d']: ['\ud83dX\udc00'] },
+              literal: '\\ud83d',
+            });";
+        assert_eq!(
+            returned(script(&rig, code).await?)?,
+            json!({
+                "high": "a�", "low": "�b",
+                "nested": { "key�": ["�X�"] },
+                "literal": r"\ud83d",
+            }),
+            "the real echo method receives decoded input instead of an invalid-input refusal"
+        );
+        Ok(())
+    })
+}
+
+#[test]
+fn well_formed_surrogate_pairs_and_other_strings_cross_unchanged() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let code = r#"
+            const values = [
+              '', 'ASCII / "quoted" \'single\' \\ slash',
+              '\u0000\b\t\n\f\r\u001f\u007f', 'e\u0301',
+              '\u007f\u0080\ud7ff\ue000\ufffd\ufffe\uffff',
+              '🦊', '\ud83d\ude00', '\ud800\udc00', '\udbff\udfff',
+              '\\ud83d\\udc00',
+            ];
+            const echoed = await __neo.invoke('test.echo', { values });
+            return { direct: values, echoed: echoed.values };"#;
+        let expected = json!([
+            "", "ASCII / \"quoted\" 'single' \\ slash",
+            "\0\x08\t\n\x0c\r\u{001f}\u{007f}", "e\u{0301}",
+            "\u{007f}\u{0080}\u{d7ff}\u{e000}�\u{fffe}\u{ffff}",
+            "🦊", "😀", "\u{10000}", "\u{10ffff}", r"\ud83d\udc00",
+        ]);
+        assert_eq!(
+            returned(script(&rig, code).await?)?,
+            json!({ "direct": &expected, "echoed": &expected }),
+            "controls, combining marks, Unicode boundaries and valid pairs retain their exact value"
+        );
+        Ok(())
+    })
+}
+
+/// Only the browser-facing leaves are doubles: locator construction, the bootstrap, QuickJS,
+/// JSON decoding and dispatch remain real. The leaves assert what a Rust operation receives.
+#[test]
+fn lone_surrogates_in_fill_values_and_locator_text_reach_rust() -> Result<(), TestError> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct FillInput {
+        #[serde(rename = "call")]
+        _call: Value,
+        target: Value,
+        strict: String,
+        value: String,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct CountInput {
+        #[serde(rename = "call")]
+        _call: Value,
+        target: Value,
+    }
+
+    on_neo_runtime(async {
+        let mut rig = TestRig::new().await?;
+        let page = rig.owner_tab("https://strings.example/").await?;
+        let mut registry = RegistryBuilder::default();
+        registry.define(TaskOp {
+            name: "locator.fill",
+            effect: Effect::Write,
+            answer: |input: FillInput| {
+                assert_eq!(input.value, "value�-low�");
+                assert_eq!(input.strict, "strict");
+                assert_eq!(
+                    input.target.pointer("/chunks/0/parts"),
+                    Some(&json!([{
+                        "name": "text", "body": "selector�-low�", "source": "selector�-low�",
+                    }])),
+                    "raw selector text is normalized inside the decoded locator too"
+                );
+                Ok(Value::Null)
+            },
+        })?;
+        registry.define(TaskOp {
+            name: "locator.count",
+            effect: Effect::Read,
+            answer: |input: CountInput| {
+                // getByText JSON-quotes its argument before crossing the bridge. These are
+                // already well-formed strings of escape characters, so decoding them again
+                // here would change the selector's meaning rather than repair the transport.
+                assert_eq!(
+                    input.target.pointer("/chunks/0/parts"),
+                    Some(&json!([{
+                        "name": "internal:text",
+                        "body": r#""label\ud83d-low\udc00"i"#,
+                        "source": r#""label\ud83d-low\udc00"i"#,
+                    }])),
+                    "the prelude's existing selector escapes remain literal at the Rust boundary"
+                );
+                Ok(json!(1))
+            },
+        })?;
+        rig.dispatcher = Arc::new(Dispatcher::new(
+            registry.build(),
+            Vec::new(),
+            rig.sink.clone(),
+            Arc::clone(&rig.link),
+            Arc::clone(&rig.tabs),
+            Observer::unrecorded(),
+        ));
+        let (run, _guard) = rig.run(BUDGET, None)?;
+        let script = Script {
+            code: r"
+                await page.locator('text=selector\ud83d-low\udc00').fill('value\ud83d-low\udc00');
+                return await page.getByText('label\ud83d-low\udc00').count();"
+                .to_owned(),
+            page: Some(page),
+            pages: Vec::new(),
+            observed: None,
+        };
+        assert_eq!(
+            returned(run_script(&run, &rig.dispatcher, script).await)?,
+            json!(1),
+            "both public prelude calls reach their Rust operation with the contracted input"
+        );
+        Ok(())
+    })
+}
+
 #[test]
 fn the_return_value_is_made_json_safe() -> Result<(), TestError> {
     on_neo_runtime(async {
@@ -2099,8 +2284,8 @@ fn listener_registration_keeps_its_site_while_internal_event_work_has_none() -> 
     })
 }
 
-/// Contract doubles for the five task ops. Production task storage is outside the runtime;
-/// these tests keep the real QuickJS preludes, dispatcher and trace writer.
+/// Contract doubles for operation boundaries outside the runtime. These tests keep the real
+/// QuickJS preludes, dispatcher and trace writer while observing decoded input.
 struct TaskOp<I> {
     name: &'static str,
     effect: Effect,
