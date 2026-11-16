@@ -33,10 +33,15 @@ import uuid
 
 VERSION = "0.83.0"
 CONNECT_SECONDS = 5
+REPLY_SECONDS = 20
 POOL_UNREACHABLE = (
     f"pool did not answer within {CONNECT_SECONDS}s; usual cause: this machine's outside IPv4 is not admitted; "
     "check: curl --noproxy '*' -4fsS --connect-timeout 3 --max-time 5 https://api.ipify.org; "
     "ask the pool operator to admit it; retrying will not help until pool access is fixed"
+)
+POOL_NO_REPLY = (
+    f"pool returned no reply in {REPLY_SECONDS}s; coordinator may be busy; check: bun run remote queue; "
+    "an admission may still hold a slot until lease cleanup; do not resubmit automatically"
 )
 HELPER = "/usr/local/lib/browseros-remote-builds/"
 INCLUDE = ["packages/browseros-agent", ".github/workflows/test.yml"]
@@ -55,7 +60,11 @@ class Failure(RuntimeError):
 
 
 class PoolUnreachable(Failure):
-    """Read/admission got no reply; an unseen reservation remains lease-fenced."""
+    """SSH could not connect within its short handshake budget."""
+
+
+class PoolNoReply(Failure):
+    """The RPC deadline elapsed; an unseen admission remains lease-fenced."""
 
 
 def job_kind(action: str, arguments: list[str]) -> str:
@@ -415,8 +424,9 @@ class PoolClient:
     def control(self, operation: str, job: str = "") -> dict:
         # UUID-addressed operations are idempotent. A Mac scheduling stall or lost
         # reply can be retried without reserving a second VM or releasing another job.
-        # One bounded read/admission RPC per poll preserves the ten-second waiter
-        # refresh window even on slow SSH links. No guest command is dispatched
+        # Keep one SSH/RPC per poll: connect failures stay prompt, while a connected
+        # coordinator gets time for its durable writes. The pool's 60s waiter window
+        # covers two neighboring 20s calls plus polling/jitter. No guest is dispatched
         # until admission replies; a lost reservation reply stays lease-fenced for
         # the independent reaper. Running-job RPC retries/budgets remain unchanged.
         admission = operation in {"status", "queue", "acquire"}
@@ -426,7 +436,7 @@ class PoolClient:
                                                      connect_timeout=CONNECT_SECONDS if admission else 30),
                                         input=json.dumps({"operation": operation, "job": job, "lease": True,
                                                           "submission": self.submission}),
-                                        capture_output=True, text=True, timeout=CONNECT_SECONDS if admission else 100)
+                                        capture_output=True, text=True, timeout=REPLY_SECONDS if admission else 100)
                 # Application refusals are definitive, not a reason to retry admission.
                 # Parse stdout even on exit 2 so the caller sees its two existing jobs.
                 if result.stdout.strip():
@@ -439,7 +449,7 @@ class PoolClient:
             except (Failure, ValueError, subprocess.TimeoutExpired) as error:
                 if admission:
                     if isinstance(error, subprocess.TimeoutExpired):
-                        raise PoolUnreachable(POOL_UNREACHABLE) from None
+                        raise PoolNoReply(POOL_NO_REPLY) from None
                     raise
                 if attempt == 2:
                     raise
@@ -468,7 +478,7 @@ class PoolClient:
         finally:
             watcher.stdin.close()
         # Join only after healthy admission. On error, the independent observer
-        # and ten-second expiry own withdrawal, so foreground failure stays prompt.
+        # and waiter expiry own withdrawal, so foreground failure stays prompt.
         with contextlib.suppress(subprocess.TimeoutExpired):
             watcher.wait(timeout=2)
 
