@@ -64,12 +64,13 @@ Answer or close it with one of those controls (in a script: `error.cover.control
 /// the trusted ways that work today, as the cover rules' author measured them on a real browser:
 /// Space on a rendered control (a 1 px clipped one included) is one trusted press that no cover
 /// delays; on a control that is not rendered it returns without error and changes nothing, hence
-/// the read-back; a click at a label's centre followed the link inside it, a click at its
-/// top-left corner did not. The text names no untrusted way (`dispatchEvent`): a model would read
-/// it as leave to press through any cover. Removed by the pull request that makes such a click
-/// land through its label; its pinning test fails until then.
+/// the read-back; on a box that is already checked it unchecks it (a host measured this), hence
+/// "only when `isChecked()` differs"; a click at a label's centre followed the link inside it, a
+/// click at its top-left corner did not. The text names no untrusted way (`dispatchEvent`): a
+/// model would read it as leave to press through any cover. Removed by the pull request that
+/// makes such a click land through its label; its pinning test fails until then.
 const OWN_LABEL_CLICK: &str = r"When a checkbox's or radio's own label covers it (`<label …> intercepts pointer events`), press Space on the control: `await page.getByRef('e5').press('Space')` is one trusted press and waits for no cover.
-Space toggles, so read the state first if the box may already be checked.
+Space toggles: press it only when `isChecked()` differs from the state you want.
 If the control is not rendered (only its label shows), click the label at its top-left corner, `click({ position: { x: 5, y: 5 } })`, and only when the label starts with plain words: a click at the centre of a label that holds a link can follow the link and lose the page.
 Read the state back with `isChecked()` either way: Space on a control that is not rendered changes nothing and says nothing.";
 
@@ -292,6 +293,7 @@ mod tests {
             "when you are not sure an element is there and free, pass `{ timeout: 5000 }`.",
             "if the message says the same layer covered your last click, closing it again will not help.",
             "press Space on the control: `await page.getByRef('e5').press('Space')` is one trusted press and waits for no cover.",
+            "Space toggles: press it only when `isChecked()` differs from the state you want.",
             "Read the state back with `isChecked()` either way:",
         ] {
             assert!(description.contains(sentence), "{sentence}: {description}");

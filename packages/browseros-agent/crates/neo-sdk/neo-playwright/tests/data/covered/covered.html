@@ -162,6 +162,24 @@ const shapes = {
     modal.innerHTML = '<button id="later">No thanks</button> <button id="join">Sign up</button>'
     document.body.append(backdrop, modal)
   },
+  rolebutton() {
+    // A backdrop beside a dialog whose only control is a div with role="button" and no tabindex,
+    // as many custom close buttons are.
+    button()
+    const backdrop = document.createElement('div')
+    backdrop.id = 'backdrop'
+    backdrop.style.cssText = 'position: fixed; inset: 0; z-index: 10; background: rgba(0, 0, 0, 0.4)'
+    const modal = document.createElement('div')
+    modal.setAttribute('role', 'dialog')
+    modal.setAttribute('aria-label', 'Rate your visit')
+    modal.style.cssText = 'position: fixed; left: 360px; top: 260px; width: 240px; padding: 16px; z-index: 11; background: #fff'
+    modal.innerHTML = '<div role="button" id="dismiss">Close</div>'
+    modal.querySelector('#dismiss').addEventListener('click', () => {
+      backdrop.remove()
+      modal.remove()
+    })
+    document.body.append(backdrop, modal)
+  },
   siblingsdeep() {
     // The same pair after 20,000 plain elements, the dialog the last child of <body>, as a portal
     // renders it on a real page: a search capped at the first elements never meets it.

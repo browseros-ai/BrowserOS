@@ -119,6 +119,25 @@ impl Redactor {
         clip(text, self.limits.text).0
     }
 
+    /// Page text with a shape, such as a covered error's cover: each string in it clipped to the
+    /// text budget, as a message is, with its keys, arrays and other values kept.
+    #[must_use]
+    pub fn texts(&self, value: &Value) -> Value {
+        match value {
+            Value::String(text) => Value::String(self.text(text)),
+            Value::Array(items) => {
+                Value::Array(items.iter().map(|item| self.texts(item)).collect())
+            }
+            Value::Object(fields) => Value::Object(
+                fields
+                    .iter()
+                    .map(|(key, item)| (key.clone(), self.texts(item)))
+                    .collect(),
+            ),
+            other => other.clone(),
+        }
+    }
+
     /// An operation's notes, oldest first: keep `note_lines` lines, each clipped to `note`
     /// bytes. Count any remaining lines in one final `…[+N lines]` marker.
     #[must_use]
@@ -376,6 +395,28 @@ mod tests {
             RedactionLimits::default()
         );
         Ok(())
+    }
+
+    #[test]
+    fn a_covers_strings_are_each_clipped_and_its_shape_is_kept() {
+        let long = "n".repeat(10_000);
+        let cover = json!({
+            "ref": "e7",
+            "role": "dialog",
+            "name": long,
+            "kind": {"is": "page"},
+            "controls": [{"ref": "e9", "role": "button", "name": long}],
+        });
+        let kept = redactor(RedactionLimits::default()).texts(&cover);
+        assert_eq!(kept["ref"], "e7");
+        assert_eq!(kept["kind"], json!({"is": "page"}));
+        assert_eq!(kept["controls"].as_array().map(Vec::len), Some(1));
+        assert_eq!(kept["controls"][0]["ref"], "e9");
+        for name in [&kept["name"], &kept["controls"][0]["name"]] {
+            let name = name.as_str().unwrap_or_default();
+            assert!(name.starts_with("nnn"), "{name}");
+            assert!(name.len() <= 2048 + 64, "{} bytes", name.len());
+        }
     }
 
     #[test]

@@ -526,15 +526,40 @@ function nameOf(world: World, output: FailureOutput, element: Element): string {
   )
 }
 
+/** The roles that make an element a control, written in its `role` attribute. */
+const CONTROL_ROLES: ReadonlySet<string> = new Set([
+  'button',
+  'link',
+  'checkbox',
+  'radio',
+  'switch',
+  'tab',
+  'menuitem',
+  'option',
+])
+
+/**
+ * A control by the role written in its `role` attribute, whatever its tabindex: a custom close
+ * button is often a `div` with `role="button"` and nothing else. The attribute, not a computed
+ * role, so only what the page declares counts. A role attribute lists fallbacks; the first is the
+ * one a browser tries first.
+ */
+function explicitControl(element: Element): boolean {
+  const [role] = (element.getAttribute('role') ?? '').trim().split(/\s+/)
+  return CONTROL_ROLES.has(role ?? '')
+}
+
 /**
  * The cover's controls that take the pointer at their middle, in the composed tree's order, so a
  * dialog drawn in its host's shadow root has its buttons. One out of view counts, since the agent
- * can scroll to it: a long dialog's button below the fold is the one an answer must not lose.
+ * can scroll to it: a long dialog's button below the fold is the one an answer must not lose. This
+ * list also decides whether a cover is blank and which dialog a backdrop dims, so a control it
+ * misses can turn a dialog into "a blank layer", whose advice ends in a reload.
  */
 export function takingControls(world: World, shown: Element): Element[] {
   const { injected } = world
   return composedDescendants(shown).filter((control) => {
-    if (!control.matches(CONTROLS)) return false
+    if (!control.matches(CONTROLS) && !explicitControl(control)) return false
     if (!injected.utils.isElementVisible(control)) return false
     const box = control.getBoundingClientRect()
     const middle = { x: box.x + box.width / 2, y: box.y + box.height / 2 }

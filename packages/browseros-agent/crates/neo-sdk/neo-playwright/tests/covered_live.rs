@@ -406,6 +406,40 @@ async fn tests_that_a_backdrop_beside_its_dialog_is_named_after_the_dialog() -> 
     result
 }
 
+/// A backdrop beside a dialog whose only control is a `div` with `role="button"` and no
+/// tabindex: the answer names the dialog, not a blank layer, and lists that control, whose ref
+/// presses it.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_role_button_dialog_is_named_after_its_backdrop() -> TestResult {
+    let shape = Shape::shape("rolebutton").await?;
+    let result = async {
+        let (message, cover) = covered(shape.click("#target").await)?;
+        assert!(
+            message.contains(". Open over it: dialog \"Rate your visit\" [ref="),
+            "{message}"
+        );
+        assert!(
+            message.contains("\n    - button \"Close\" [ref="),
+            "{message}"
+        );
+        assert!(!message.contains("Do: a blank layer"), "{message}");
+        let close = control_ref(&cover, "Close")?;
+        let by_ref = locator(&shape.page, &[aria_ref(&close)], &close);
+        shape.act("locator.click", &by_ref, json!({})).await?;
+        shape.click("#target").await?;
+        assert_eq!(
+            shape.log().await?,
+            ["target"],
+            "the control pressed, the click lands"
+        );
+        TestResult::Ok(())
+    }
+    .await;
+    shape.close().await;
+    result
+}
+
 /// The same pair on a page of more than 20,000 elements, the dialog the last child of `<body>`
 /// as a portal renders it: the backdrop is named after it, with its controls.
 #[tokio::test]

@@ -908,7 +908,14 @@ async fn values_off_reaches_records_and_events_without_payloads() -> TestResult 
         host_code: None,
         retryable: false,
         operation_id: Some(op),
-        cover: None,
+        // A covered error's cover is page text: under values off no read shows any of it.
+        cover: Some(json!({
+            "ref": "e7",
+            "role": "dialog",
+            "name": "cover-canary-host-api",
+            "kind": {"is": "page"},
+            "controls": [{"ref": "e9", "role": "button", "name": "control-canary-host-api"}],
+        })),
     };
     h.sink.op_ended(OperationEnded {
         id: op,
@@ -942,6 +949,16 @@ async fn values_off_reaches_records_and_events_without_payloads() -> TestResult 
     assert_eq!(record.body["values"], "off");
     assert_eq!(record.body["error"]["message"], "");
     assert_eq!(record.body["error"]["owner"], "website");
+    assert!(
+        record.body["error"].get("cover").is_none(),
+        "{}",
+        record.body
+    );
+    assert!(
+        record.body["operations"][0]["error"].get("cover").is_none(),
+        "{}",
+        record.body
+    );
     assert_eq!(
         record.body["operations"][0]["page"]["url"],
         "https://example.test/form"
