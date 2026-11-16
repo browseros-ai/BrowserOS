@@ -20,7 +20,7 @@ use neo_takeover::{Lock, LockBinding, LockTtl, Locks, Reads, TabHold};
 use neo_trace::{
     Delivery, Effect, EpochMillis, ErrorOwner, OperationId, OperationKind, OperationRow,
     OperationStarted, Outcome, RedactionLimits, Redactor, RunEnded, RunId, RunStarted, RunStatus,
-    TaskId, TraceSink, TraceStore, WriterConfig, spawn_writer,
+    RunTabsScope, TaskId, TraceSink, TraceStore, WriterConfig, spawn_writer,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -34,13 +34,13 @@ use super::event_release::EventRelease;
 use super::op_marks::{Hold, OpMarks};
 use super::playwright_ops::{self, FILE_PAGES, OpCtxEnv, leaf_error};
 use super::{BuiltinDeps, CaptchaClaims, PlaywrightFacade, TabJanitor};
-use crate::browser::{Adopt, BrowserLink, NeoTab, PageRef, TabRegistry};
+use crate::browser::{Adopt, BrowserLink, NeoTab, PageRef, TabRegistry, TabsScope};
 use crate::config::Defaults;
 use crate::dispatch::{
-    Call, CallSite, Dispatcher, ErrorCode, EventLog, LeafError, Lifetime, Listing, Method,
-    MethodSpec, Observer, OpCtx, OpFailure, OpReply, OperationError, PageChange, PageScript,
-    PageTarget, PendingReply, Policy, PolicyCheck, RegistryBuilder, RegistryError, RunCtx, RunEnd,
-    RunGuard, RunStart, StopReason, Visibility,
+    Call, CallSite, Dispatcher, ErrorCode, EventLog, FrameVersion, LeafError, Lifetime, Listing,
+    Method, MethodSpec, Observer, OpCtx, OpFailure, OpReply, OperationError, PageChange, PageFact,
+    PageScript, PageTarget, PendingReply, Policy, PolicyCheck, RegistryBuilder, RegistryError,
+    RunCtx, RunEnd, RunGuard, RunStart, StopReason, Visibility,
 };
 use crate::host::{FilledTabs, HostHolds, TakeoverLock};
 use crate::runtime::{Script, ScriptOutcome, run_script};
@@ -207,6 +207,7 @@ impl Harness {
             view,
             deadline: Instant::now() + Defaults::RUN_TIMEOUT,
             default_page: None,
+            tabs_scope: TabsScope::Browser,
         };
         Ok(RunCtx::start(&self.dispatcher, start))
     }
@@ -1330,7 +1331,7 @@ async fn the_janitor_closes_idle_agent_tabs_through_the_door() -> Result<(), Box
     Ok(())
 }
 
-/// The owner's 5 minutes for zuzu (the settings design, section 2): the idle time a host sets
+/// A host's five-minute idle setting
 /// applies at the next pass, and a tab in use stays open however long the use lasts. A tab is
 /// in use while a run that used it is in flight, a lock holds it, or a fit is on it, and its
 /// clock restarts when the last of them ends. A popup an agent's tab opened is the agent's.
@@ -1428,7 +1429,7 @@ async fn the_janitor_follows_the_idle_time_and_leaves_tabs_in_use() -> Result<()
 }
 
 /// Closing the browser's last tab ends the browser, and Neo's server with it; both come back a
-/// few seconds later with a new browser id (zuzu's last-tab probe, 2026-11-12). A host that keeps
+/// few seconds later with a new browser id. A host that keeps
 /// one tab of its own would see that every idle time. "Last" counts every tab the browser
 /// lists, the owner's included.
 #[tokio::test]
@@ -2865,6 +2866,116 @@ impl EventLog for RecordedClose {
     fn closed(&self, target: &TargetId) -> Option<u64> {
         (target == &self.0).then_some(7)
     }
+}
+
+/// A watcher holding a frame-tree version for each of the given tabs.
+struct Versions(Vec<TabId>);
+impl EventLog for Versions {
+    fn head(&self) -> u64 {
+        0
+    }
+    fn closed(&self, _target: &TargetId) -> Option<u64> {
+        None
+    }
+    fn frame_versions(&self) -> Vec<(TabId, u64)> {
+        self.0.iter().map(|tab| (*tab, 3)).collect()
+    }
+}
+
+/// A page read that answers at once.
+struct Peek;
+#[derive(Deserialize)]
+struct PeekInput {
+    page: PageTarget,
+}
+impl Method for Peek {
+    type Input = PeekInput;
+    type Output = Value;
+    fn spec(&self) -> MethodSpec {
+        MethodSpec::new("page.title", Effect::Read)
+    }
+    fn target(input: &PeekInput) -> Option<&PageTarget> {
+        Some(&input.page)
+    }
+    fn call(
+        &self,
+        _op: &OpCtx<Self>,
+        _input: PeekInput,
+    ) -> impl Future<Output = Result<Value, LeafError>> + Send {
+        future::ready(Ok(json!("title")))
+    }
+}
+
+/// A run's frame versions cross the boundary its page facts do. The raw reply, which a script
+/// can read through `__neo.onReply`, names the frame activity of no tab the run was not given
+/// a fact of, never Neo's own tab, and none of a tab whose reads the owner's lock blocks.
+#[tokio::test]
+async fn a_reply_carries_frame_versions_only_of_the_runs_readable_listed_tabs()
+-> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let listed = harness.owner_tab("https://a.example/").await?;
+    let locked = harness.owner_tab("https://b.example/").await?;
+    let unlisted = harness.owner_tab("https://c.example/").await?;
+    let neo = within(blank_tab(&harness).ensure(Adopt::Allowed))
+        .await?
+        .ok_or("Neo's tab opened")?;
+    let mut registry = RegistryBuilder::default();
+    registry.define(Peek)?;
+    let claims = Arc::new(CaptchaClaims::default());
+    let door = Arc::new(Dispatcher::new(
+        registry.build(),
+        super::door_rules(&harness.takeover, &claims),
+        harness.sink.clone(),
+        Arc::clone(&harness.link),
+        Arc::clone(&harness.tabs),
+        Observer::new(Arc::new(Versions(vec![
+            listed.tab,
+            locked.tab,
+            unlisted.tab,
+            neo,
+        ]))),
+    ));
+    let (run, _guard) = harness.run()?;
+    let fact = |tab: TabId| PageFact {
+        tab,
+        task_id: None,
+        url: Some("https://a.example/".to_owned()),
+        title: None,
+        closed: false,
+        viewport_size: None,
+        workers: None,
+    };
+    let tabs = |versions: &[FrameVersion]| {
+        versions
+            .iter()
+            .map(|version| version.tab)
+            .collect::<Vec<_>>()
+    };
+    let start = door.listed_frame_versions(&run, &[fact(listed.tab), fact(locked.tab), fact(neo)]);
+    assert_eq!(
+        tabs(&start),
+        [listed.tab, locked.tab],
+        "the init names the listed tabs, never Neo's, and no tab it does not list"
+    );
+    let _lock = harness.lock(locked.tab, Reads::Block).await?;
+    let reply = door
+        .submit(
+            &run,
+            Call::script(
+                "page.title".into(),
+                json!({ "page": handle(&listed) }),
+                None,
+            ),
+        )
+        .wait()
+        .await;
+    assert!(reply.outcome.is_ok(), "{:?}", reply.outcome);
+    assert_eq!(
+        tabs(&reply.frames),
+        [listed.tab],
+        "the owner's lock blocks reads of the locked tab: its activity is not named either"
+    );
+    Ok(())
 }
 
 /// An already-delivered event entering the door's normal post-operation fact observation.
@@ -5051,6 +5162,7 @@ async fn neo_adopts_a_free_blank_tab_only_at_a_watch_start() -> Result<(), Box<d
         request_id: None,
         task_id: Some(TaskId::parse("mail")?),
         host_data: None,
+        tabs_scope: RunTabsScope::Browser,
         at: EpochMillis::now(),
     });
     harness.sink.op_started(OperationStarted {
@@ -5496,13 +5608,477 @@ async fn a_start_that_cannot_list_the_tabs_treats_every_tab_as_filled() -> Resul
             file_access,
             Some(filled),
         );
-        within(facade.get()).await?;
+        let playwright = within(facade.get()).await?;
         assert_eq!(
-            facade.took_private_text(tab),
+            playwright.took_private_text(tab),
             !listed,
-            "listed: {listed}: a tab the record does not name is withheld only when the list \
-             could not be had"
+            "listed: {listed}: a tab the record does not name counts only when the list could \
+             not be had"
+        );
+        assert!(
+            !facade.withholds_picture(tab),
+            "pictured under the default (ruling R58)"
+        );
+        facade.set_fill_pictures_never(true);
+        assert_eq!(
+            facade.withholds_picture(tab),
+            !listed,
+            "listed: {listed}: under `never`, withheld only when the list could not be had"
         );
     }
+    Ok(())
+}
+
+/// A recorded script run whose host task is `task`.
+fn run_for(harness: &Harness, task: &TaskId) -> Result<(Arc<RunCtx>, RunGuard), Box<dyn Error>> {
+    let view = harness.link.view().ok_or("the link is up")?;
+    let start = RunStart {
+        id: RunId::new(),
+        code: String::new(),
+        request_id: None,
+        task_id: Some(task.clone()),
+        host_data: None,
+        view,
+        deadline: Instant::now() + Defaults::RUN_TIMEOUT,
+        default_page: None,
+        tabs_scope: TabsScope::Browser,
+    };
+    Ok(RunCtx::start(&harness.dispatcher, start))
+}
+
+/// A recorded script run that read `scope` at its start, for host task `task`.
+fn run_scoped(
+    harness: &Harness,
+    scope: TabsScope,
+    task: Option<&TaskId>,
+) -> Result<(Arc<RunCtx>, RunGuard), Box<dyn Error>> {
+    let view = harness.link.view().ok_or("the link is up")?;
+    let start = RunStart {
+        id: RunId::new(),
+        code: String::new(),
+        request_id: None,
+        task_id: task.cloned(),
+        host_data: None,
+        view,
+        deadline: Instant::now() + Defaults::RUN_TIMEOUT,
+        default_page: None,
+        tabs_scope: scope,
+    };
+    Ok(RunCtx::start(&harness.dispatcher, start))
+}
+
+/// The id of a task `run`'s script creates.
+async fn created_in(harness: &Harness, run: &Arc<RunCtx>) -> Result<TaskId, Box<dyn Error>> {
+    let created = value(harness.submit(run, "neo.createTask", json!({})).await)?;
+    Ok(TaskId::parse(created["id"].as_str().ok_or("task id")?)?)
+}
+
+/// A task counts as its creating run's own: it joins the family of the run's host task as the run
+/// started, whose root a run naming a created task keeps. A run with no host task makes a family
+/// root, even after it picked another task.
+#[tokio::test]
+async fn a_created_task_joins_the_family_of_its_runs_host_task() -> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let host = TaskId::parse("host-s")?;
+    let (hosted, _hosted_guard) = run_for(&harness, &host)?;
+    let child = created_in(&harness, &hosted).await?;
+    assert_eq!(
+        harness.tabs.task(&child)?.family,
+        host,
+        "created in the host task's run"
+    );
+    let (naming, _naming_guard) = run_for(&harness, &child)?;
+    let grandchild = created_in(&harness, &naming).await?;
+    assert_eq!(
+        harness.tabs.task(&grandchild)?.family,
+        host,
+        "created in a run that names the created task: still the host task's family"
+    );
+    value(
+        harness
+            .submit(&naming, "task.close", json!({ "task": child.as_str() }))
+            .await,
+    )?;
+    assert!(
+        harness.tabs.task(&child).is_err(),
+        "the run closed its own empty host task"
+    );
+    let late = created_in(&harness, &naming).await?;
+    assert_eq!(
+        harness.tabs.task(&late)?.family,
+        host,
+        "the run's family was fixed at its start"
+    );
+
+    let (free, _free_guard) = harness.run()?;
+    value(
+        harness
+            .submit(&free, "neo.task", json!({ "id": grandchild.as_str() }))
+            .await,
+    )?;
+    let root = created_in(&harness, &free).await?;
+    assert_eq!(
+        harness.tabs.task(&root)?.family,
+        root,
+        "a run with no host task makes a family root, though it picked another task first"
+    );
+    Ok(())
+}
+
+/// Under task scope a run picks, opens in and closes only the tasks its scope allows. One it may
+/// not use answers exactly as a missing task, so the refusal reveals nothing about it.
+#[tokio::test]
+async fn a_task_a_run_may_not_use_answers_as_a_missing_one() -> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let host = TaskId::parse("host-s")?;
+    let other = TaskId::parse("host-r")?;
+    let (bound, _bound_guard) = run_scoped(&harness, TabsScope::Task, Some(&host))?;
+    let (theirs_run, _theirs_guard) = run_scoped(&harness, TabsScope::Task, Some(&other))?;
+    let mine = created_in(&harness, &bound).await?;
+    let theirs = created_in(&harness, &theirs_run).await?;
+    let answer = |reply: OpReply, id: &TaskId| -> Result<_, Box<dyn Error>> {
+        let refused = failure(reply)?;
+        Ok((
+            refused.error.owner(),
+            refused.error.code(),
+            refused.error.message().replace(id.as_str(), "<id>"),
+        ))
+    };
+    let missing = TaskId::parse("never-made")?;
+    let expected = answer(
+        harness
+            .submit(&bound, "neo.task", json!({ "id": missing.as_str() }))
+            .await,
+        &missing,
+    )?;
+    assert_eq!(
+        (expected.0, expected.1),
+        (ErrorOwner::Script, ErrorCode::TASK_NOT_FOUND)
+    );
+    let uses = |id: &TaskId| {
+        [
+            ("neo.task", json!({ "id": id.as_str() })),
+            ("task.newPage", json!({ "task": id.as_str() })),
+            ("task.close", json!({ "task": id.as_str() })),
+        ]
+    };
+    for id in [&other, &theirs] {
+        for (method, input) in uses(id) {
+            assert_eq!(
+                answer(harness.submit(&bound, method, input).await, id)?,
+                expected,
+                "{method} on another family's task answers as a missing one"
+            );
+        }
+    }
+    value(
+        harness
+            .submit(&bound, "neo.task", json!({ "id": mine.as_str() }))
+            .await,
+    )?;
+
+    let (taskless, _taskless_guard) = run_scoped(&harness, TabsScope::Task, None)?;
+    for (method, input) in uses(&host) {
+        assert_eq!(
+            answer(harness.submit(&taskless, method, input).await, &host)?,
+            expected,
+            "{method}: a run with no task never takes over a host's task"
+        );
+    }
+    value(
+        harness
+            .submit(&taskless, "neo.task", json!({ "id": theirs.as_str() }))
+            .await,
+    )?;
+
+    let (unbound, _unbound_guard) = run_scoped(&harness, TabsScope::Browser, None)?;
+    value(
+        harness
+            .submit(&unbound, "neo.task", json!({ "id": host.as_str() }))
+            .await,
+    )?;
+    Ok(())
+}
+
+/// The engine leaves out what a bound run may not see, so its `context.pages()` lists only its
+/// family's tabs, and the listing is never withheld by the door's backstop.
+#[tokio::test]
+async fn a_bound_runs_context_pages_lists_only_its_familys_tabs() -> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let host = TaskId::parse("host-s")?;
+    let other = TaskId::parse("host-r")?;
+    let mine = harness.owner_tab("https://mine.example/").await?;
+    let theirs = harness.owner_tab("https://theirs.example/").await?;
+    let free = harness.owner_tab("https://free.example/").await?;
+    for (page, task) in [(&mine, &host), (&theirs, &other)] {
+        harness.tabs.ensure_task(task)?;
+        harness.tabs.touched(page, harness.tabs.seen());
+        harness.tabs.own(page, task)?;
+    }
+    let (bound, _bound_guard) = run_scoped(&harness, TabsScope::Task, Some(&host))?;
+    let pages = value(harness.submit(&bound, "context.pages", json!({})).await)?;
+    assert_eq!(
+        listed_tabs(&pages),
+        vec![mine.tab.0],
+        "only its family's tab, and the listing is not withheld"
+    );
+    let (taskless, _taskless_guard) = run_scoped(&harness, TabsScope::Task, None)?;
+    let pages = value(harness.submit(&taskless, "context.pages", json!({})).await)?;
+    let listed = listed_tabs(&pages);
+    for page in [&mine, &theirs, &free] {
+        assert!(
+            listed.contains(&page.tab.0),
+            "a run with no task lists every tab, as before task scope"
+        );
+    }
+    Ok(())
+}
+
+/// A bound run's own open is its own from the moment the browser names it, though no task may
+/// hold it: here the run closed its host task first, so the new tab joins none.
+#[tokio::test]
+async fn a_bound_runs_own_open_is_its_own_though_no_task_holds_it() -> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let host = TaskId::parse("host-s")?;
+    let (bound, _bound_guard) = run_scoped(&harness, TabsScope::Task, Some(&host))?;
+    value(
+        harness
+            .submit(&bound, "task.close", json!({ "task": host.as_str() }))
+            .await,
+    )?;
+    let opened = page_of(&value(
+        harness.submit(&bound, "context.newPage", json!({})).await,
+    )?)?;
+    assert_eq!(harness.tabs.owner(opened.tab), None, "no task holds it");
+    value(
+        harness
+            .submit(&bound, "page.opener", json!({ "page": handle(&opened) }))
+            .await,
+    )?;
+    let (other, _other_guard) = run_scoped(&harness, TabsScope::Task, Some(&host))?;
+    assert_eq!(
+        failure(
+            harness
+                .submit(&other, "page.opener", json!({ "page": handle(&opened) }))
+                .await
+        )?
+        .error
+        .code(),
+        ErrorCode::PAGE_NOT_IN_TASK,
+        "another run of the family never opened it, and no task holds it"
+    );
+    Ok(())
+}
+
+/// A bound run's own new tab is its own from the moment the browser names it, while `newPage`
+/// still waits for the tab's first answer: the run's other ops list it meanwhile.
+#[tokio::test]
+async fn a_bound_runs_new_tab_is_its_own_while_new_page_readies_it() -> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let host = TaskId::parse("host-s")?;
+    let (bound, _guard) = run_scoped(&harness, TabsScope::Task, Some(&host))?;
+    harness.fake.hold_next("Page.setLifecycleEventsEnabled");
+    let opening = harness.dispatcher.submit(
+        &bound,
+        Call::script("context.newPage".to_owned(), json!({}), None),
+    );
+    within(async {
+        while harness.fake.count("Page.setLifecycleEventsEnabled") == 0 {
+            time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await?;
+    let pages = value(harness.submit(&bound, "context.pages", json!({})).await)?;
+    harness.fake.release_held();
+    let opened = page_of(&value(within(opening.wait()).await?)?)?;
+    assert_eq!(
+        listed_tabs(&pages),
+        vec![opened.tab.0],
+        "listed while newPage readied it, though no task holds it yet"
+    );
+    Ok(())
+}
+
+/// `Promise.all([context.waitForEvent('page'), context.newPage()])` in a run bound to its task:
+/// the browser announces the new tab before the open's reply names it to Neo, and the wait judges
+/// the tab only once the run's open is named, so it hears the run's own tab.
+#[tokio::test]
+async fn a_bound_runs_page_wait_hears_its_own_new_tab() -> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let host = TaskId::parse("host-s")?;
+    let (bound, _guard) = run_scoped(&harness, TabsScope::Task, Some(&host))?;
+    let wait = json!({
+        "call": { "api": "browserContext.waitForEvent", "timeoutMs": 10000 },
+        "page": null,
+        "event": "page",
+        "since": 0,
+    });
+    let waiting = harness
+        .dispatcher
+        .submit(&bound, Call::script("events.wait".to_owned(), wait, None));
+    within(async {
+        while harness.fake.count("Target.getTargets") == 0 {
+            time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await?;
+    // The browser makes the tab and announces it at once; the reply naming it waits.
+    harness.fake.hold_next("Browser.createTab");
+    let opening = harness.dispatcher.submit(
+        &bound,
+        Call::script("context.newPage".to_owned(), json!({}), None),
+    );
+    within(async {
+        while harness.fake.count("Browser.createTab") == 0 {
+            time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await?;
+    // Long enough for the wait to read the announcement (recorded about a second after it, with
+    // no URL), while the open is still in flight.
+    time::sleep(Duration::from_secs(2)).await;
+    harness.fake.release_held();
+    let opened = page_of(&value(within(opening.wait()).await?)?)?;
+    let heard = value(within(waiting.wait()).await?)?;
+    assert!(
+        heard
+            .to_string()
+            .contains(&format!("\"tab\":{}", opened.tab.0)),
+        "the wait heard the run's own new tab {}: {heard}",
+        opened.tab.0
+    );
+    Ok(())
+}
+
+/// A host may name an agent's task while a close by a run with no task waits for the task's
+/// turn: the close asks again once it holds the turn, and leaves the host's task as it is.
+#[tokio::test]
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "the test holds the task's turn on purpose, so the close waits for it"
+)]
+async fn a_taskless_close_asks_again_once_it_holds_the_turn() -> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let (taskless, _taskless_guard) = run_scoped(&harness, TabsScope::Task, None)?;
+    let created = created_in(&harness, &taskless).await?;
+    let record = harness.tabs.task(&created)?;
+    let held = record.turn.lock().await;
+    let base = Arc::strong_count(&record.turn);
+    let pending = harness.dispatcher.submit(
+        &taskless,
+        Call::script(
+            "task.close".to_owned(),
+            json!({ "task": created.as_str() }),
+            None,
+        ),
+    );
+    // The close has its copy of the task and waits for the turn.
+    within(async {
+        while Arc::strong_count(&record.turn) == base {
+            task::yield_now().await;
+        }
+    })
+    .await?;
+    harness.tabs.ensure_task(&created)?;
+    drop(held);
+    assert_eq!(
+        failure(pending.wait().await)?.error.code(),
+        ErrorCode::TASK_NOT_FOUND,
+        "the task is a host's now"
+    );
+    assert!(harness.tabs.task(&created).is_ok(), "and it stays open");
+    Ok(())
+}
+
+/// A run with no task keeps opening in the agent's task it picked, until a host names that task:
+/// from then on its opens, its lazy page and `task.newPage` leave the host's task alone.
+#[tokio::test]
+async fn a_taskless_run_stops_opening_in_a_task_a_host_named() -> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let (taskless, _taskless_guard) = run_scoped(&harness, TabsScope::Task, None)?;
+    let created = created_in(&harness, &taskless).await?;
+    let before = page_of(&value(
+        harness
+            .submit(&taskless, "context.newPage", json!({}))
+            .await,
+    )?)?;
+    assert_eq!(
+        harness.tabs.owner(before.tab),
+        Some(created.clone()),
+        "its open joins the agent's task it picked"
+    );
+
+    harness.tabs.ensure_task(&created)?;
+    let after = page_of(&value(
+        harness
+            .submit(&taskless, "context.newPage", json!({}))
+            .await,
+    )?)?;
+    assert_eq!(harness.tabs.owner(after.tab), None, "the host's task now");
+    value(
+        harness
+            .submit(
+                &taskless,
+                "page.opener",
+                json!({ "page": { "$neo": "page", "tab": null } }),
+            )
+            .await,
+    )?;
+    assert_eq!(
+        harness.tabs.task(&created)?.tabs,
+        vec![before.tab],
+        "neither its lazy page nor a later open joined the host's task"
+    );
+    assert_eq!(
+        failure(
+            harness
+                .submit(
+                    &taskless,
+                    "task.newPage",
+                    json!({ "task": created.as_str() })
+                )
+                .await
+        )?
+        .error
+        .code(),
+        ErrorCode::TASK_NOT_FOUND
+    );
+    Ok(())
+}
+
+/// `task.newPage` asks again once its tab opened: a host that names the task while the tab opens
+/// leaves the new tab in no task, and the run with no task hears the task is gone.
+#[tokio::test]
+async fn a_taskless_task_new_page_asks_again_after_its_open() -> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let (taskless, _taskless_guard) = run_scoped(&harness, TabsScope::Task, None)?;
+    let created = created_in(&harness, &taskless).await?;
+    let opens = harness.fake.count("Browser.createTab");
+    harness.fake.hold_next("Browser.createTab");
+    let opening = harness.dispatcher.submit(
+        &taskless,
+        Call::script(
+            "task.newPage".to_owned(),
+            json!({ "task": created.as_str() }),
+            None,
+        ),
+    );
+    within(async {
+        while harness.fake.count("Browser.createTab") == opens {
+            time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await?;
+    harness.tabs.ensure_task(&created)?;
+    harness.fake.release_held();
+    assert_eq!(
+        failure(opening.wait().await)?.error.code(),
+        ErrorCode::TASK_NOT_FOUND,
+        "a host named the task while the tab opened"
+    );
+    assert!(
+        harness.tabs.task(&created)?.tabs.is_empty(),
+        "the host's task gained no tab"
+    );
     Ok(())
 }

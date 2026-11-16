@@ -38,15 +38,19 @@ use super::fill_answer::{self, Refused, owner_name};
 use super::fill_ledger::{Admission, FillLedger, FillTicket};
 use super::fill_request::{CheckRequest, FillRequest};
 use super::{FilledTabs, TakeoverLock};
-use crate::browser::{BrowserLink, PageRef};
+use crate::browser::{BrowserLink, PageRef, TabsScope};
 use crate::builtins::{
-    ENTRY_BACKSTOP, FillProgress, FillValues, HOST_FILL, HOST_FILL_CHECK, HOST_FILL_CHECK_CODE,
-    HOST_FILL_CODE, boxes_args,
+    CheckCompared, CheckValues, ENTRY_BACKSTOP, FillProgress, FillValues, HOST_FILL,
+    HOST_FILL_CHECK, HOST_FILL_CHECK_CODE, HOST_FILL_CODE, boxes_args,
 };
 use crate::dispatch::{
     Call, Caller, Dispatcher, ErrorCode, OpFailure, OpReply, PendingReply, RunCtx, RunEnd,
     RunStart, StopReason,
 };
+
+/// Whether the host's `fill.pictures` is `never` now (ruling R58): the settings' own answer,
+/// read as each fill starts.
+pub(crate) type PicturesNever = Arc<dyn Fn() -> bool + Send + Sync>;
 
 /// Runs the host's fills and checks. One per process, armed into the host API.
 pub(crate) struct FillService {
@@ -54,11 +58,15 @@ pub(crate) struct FillService {
     browser: Arc<BrowserLink>,
     takeover: Arc<TakeoverLock>,
     ledger: Arc<FillLedger>,
-    /// The tabs that took a fill, on disk for a restart (ruling R45).
+    /// The tabs that took a fill, on disk for a restart (ruling R45), written only under
+    /// `fill.pictures: never` (ruling R58).
     filled: Arc<FilledTabs>,
+    /// Whether the host's `fill.pictures` is `never`, read when a fill starts (ruling R58).
+    pictures_never: PicturesNever,
     /// Cancelled on SIGTERM: a fill stops as `neo / shutting_down` and records its end.
     shutdown: CancellationToken,
-    /// Which tabs the entry typed into, for the host API's camera.
+    /// Which tabs the host API's camera withholds: a tab that took a fill while the host's
+    /// `fill.pictures` is `never`.
     took: TookPrivateText,
     /// The app's reading of what a tab shows, for the host API's camera (ruling R45).
     checks: ChecksPicture,
@@ -74,12 +82,16 @@ pub(crate) struct FillServiceParts {
     pub(crate) takeover: Arc<TakeoverLock>,
     /// The fill's own record of request ids.
     pub(crate) ledger: Arc<FillLedger>,
-    /// The tabs that took a fill, kept on disk so a Neo restart still takes no picture of them.
+    /// The tabs that took a fill, kept on disk under `fill.pictures: never` so a Neo restart
+    /// still takes no picture of them (rulings R45, R58).
     pub(crate) filled: Arc<FilledTabs>,
+    /// Whether the host's `fill.pictures` is `never` now (ruling R58).
+    pub(crate) pictures_never: PicturesNever,
     /// Fires on SIGTERM.
     pub(crate) shutdown: CancellationToken,
-    /// Whether a tab took a private entry: the entry's own answer
-    /// (`Playwright::took_private_text`), true for the tab's life once its first character went.
+    /// Whether the camera withholds a picture of a tab: the entry's own answer
+    /// (`Playwright::withholds_picture`), true once the tab took a fill while the host's
+    /// `fill.pictures` is `never`.
     pub(crate) took: TookPrivateText,
     /// What a tab shows now, read in every frame (`Playwright::picture_check`, ruling R45).
     pub(crate) checks: ChecksPicture,
@@ -101,6 +113,7 @@ impl FillService {
             takeover,
             ledger,
             filled,
+            pictures_never,
             shutdown,
             took,
             checks,
@@ -111,6 +124,7 @@ impl FillService {
             takeover,
             ledger,
             filled,
+            pictures_never,
             shutdown,
             took,
             checks,
@@ -123,8 +137,8 @@ impl FillService {
         Arc::clone(&self.checks)
     }
 
-    /// What the host API arms its camera with, so a tab this service typed into is never
-    /// pictured (design section 10.3).
+    /// What the host API arms its camera with, so a tab this service typed into is not pictured
+    /// while the host's `fill.pictures` is `never` (design section 10.3, ruling R58).
     #[must_use]
     pub(crate) fn took_private_text(&self) -> TookPrivateText {
         Arc::clone(&self.took)
@@ -181,6 +195,7 @@ impl FillService {
             browser: Arc::clone(&self.browser),
             takeover: Arc::clone(&self.takeover),
             filled: Arc::clone(&self.filled),
+            pictures_never: Arc::clone(&self.pictures_never),
             shutdown: self.shutdown.clone(),
         };
         match tokio::spawn(work.run(run, request, ticket)).await {
@@ -202,6 +217,7 @@ impl FillService {
             browser: Arc::clone(&self.browser),
             takeover: Arc::clone(&self.takeover),
             filled: Arc::clone(&self.filled),
+            pictures_never: Arc::clone(&self.pictures_never),
             shutdown: self.shutdown.clone(),
         };
         tokio::spawn(work.check(request))
@@ -216,6 +232,7 @@ struct Fill {
     browser: Arc<BrowserLink>,
     takeover: Arc<TakeoverLock>,
     filled: Arc<FilledTabs>,
+    pictures_never: PicturesNever,
     shutdown: CancellationToken,
 }
 
@@ -256,12 +273,16 @@ impl Fill {
         {
             return refuse(ticket, Refused::LockReleased);
         }
-        // The tab's target is on disk before the first character, so a Neo restart while the
-        // browser keeps the tab still takes no picture of it (ruling R45). A write that fails
-        // refuses the fill before it starts: nothing typed, the id unused.
-        if let Err(error) = self.filled.remember(tab, page.target_id).await {
+        // Under `fill.pictures: never`, read as the fill starts (ruling R58), the tab's target is
+        // on disk before the first character, so a Neo restart while the browser keeps the tab
+        // still takes no picture of it (ruling R45). A write that fails refuses the fill before it
+        // starts: nothing typed, the id unused. Under the default no record is written, so none
+        // can refuse the fill.
+        if (self.pictures_never)()
+            && let Err(error) = self.filled.remember(tab, page.target_id).await
+        {
             tracing::error!(%error, run = %id, "cannot record the tab that takes the fill; it types nothing");
-            return refuse(ticket, Refused::RecordUnavailable);
+            return refuse(ticket, Refused::FilledTabsUnavailable);
         }
         let recorded = match ticket.as_mut() {
             Some(ticket) => ticket.started().await,
@@ -285,6 +306,7 @@ impl Fill {
                 // run ends and restarts its idle clock then: `host.fill` is Neo's op, which the
                 // door does not count as a script's use (ruling R27).
                 default_page: Some(PageRef { tab }),
+                tabs_scope: TabsScope::Browser,
             },
         );
         if let Some(lock) = lock {
@@ -329,6 +351,7 @@ impl Fill {
             timeout,
             url,
             boxes,
+            values,
         } = request;
         let Some(view) = self.browser.view() else {
             return Err(Refused::BrowserUnavailable);
@@ -354,11 +377,14 @@ impl Fill {
                 view,
                 deadline: Instant::now() + timeout + ENTRY_BACKSTOP,
                 default_page: Some(PageRef { tab }),
+                tabs_scope: TabsScope::Browser,
             },
         );
         if let Some(lock) = lock {
             run.pass_lock(lock);
         }
+        // Ruling R48: the values wait in the run's slot beside the op, never in its input.
+        run.slot::<CheckValues>().put(values);
         let call = Call {
             name: HOST_FILL_CHECK.to_owned(),
             input: boxes_args(tab, url.as_deref(), &boxes),
@@ -373,14 +399,24 @@ impl Fill {
             // every box answers that refusal, with no facts.
             Err(failure) => vec![refused_box(&failure); boxes.len()],
         };
-        let answer = api::FillCheckResult {
+        let recorded = api::FillCheckResult {
             run_id: run.id().to_string(),
             fields,
         };
+        // The run records the answer without the compare's booleans, so a check that compared
+        // keeps the shape every check's run has (ruling R48); the host alone gets them.
+        let compared = run.slot::<CheckCompared>().take().unwrap_or_default();
+        let mut answer = recorded.clone();
+        for (field, compared) in answer.fields.iter_mut().zip(compared) {
+            if let Some(compared) = compared {
+                field.holds = Some(compared.holds);
+                field.contains = Some(compared.contains);
+            }
+        }
         guard.finish(RunEnd {
             status: status_of(&run),
             error: None,
-            result: serde_json::to_value(&answer).ok(),
+            result: serde_json::to_value(&recorded).ok(),
             replay: None,
         });
         Ok(answer)
@@ -437,6 +473,10 @@ fn checked(value: Value, boxes: usize) -> Vec<api::FillBoxCheck> {
                 api::FillBoxCheck {
                     facts: None,
                     refusal: Some(Box::new(refusal)),
+                    holds: None,
+                    contains: None,
+                    frame_gone: None,
+                    max_length_moved: None,
                 };
                 boxes
             ]
@@ -455,5 +495,9 @@ fn refused_box(failure: &OpFailure) -> api::FillBoxCheck {
             host_code: None,
             operation_id: Some(failure.operation.to_string()),
         })),
+        holds: None,
+        contains: None,
+        frame_gone: None,
+        max_length_moved: None,
     }
 }

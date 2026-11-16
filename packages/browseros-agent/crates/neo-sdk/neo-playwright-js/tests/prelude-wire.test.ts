@@ -946,6 +946,8 @@ describe('synchronous state', () => {
     expect(runtime.calls.map((call) => [call.name, call.input.page])).toEqual([
       ['page.frames', unopened],
       ['events.wait', opened],
+      // The popup, first seen mid-run, has its tree read at once (Neo's own read).
+      ['page.frames', { $neo: 'page', tab: 1013 }],
     ])
   })
 

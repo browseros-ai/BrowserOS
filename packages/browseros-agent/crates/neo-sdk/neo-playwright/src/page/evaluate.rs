@@ -193,7 +193,7 @@ async fn evaluated(
         .flatten();
     Ok(Evaluated {
         value: SerializedValue(value),
-        frames: frames.map(FrameTree::into_frames),
+        frames: frames.and_then(FrameTree::into_whole_frames),
     })
 }
 

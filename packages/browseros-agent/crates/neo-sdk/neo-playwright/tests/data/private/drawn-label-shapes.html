@@ -1,0 +1,66 @@
+<!doctype html><meta charset=utf-8><title>Drawn label shapes</title>
+<style>
+  body { font: 15px sans-serif; margin: 32px 260px; }
+  .field { position: relative; width: 280px; height: 44px; margin: 0 0 28px; }
+  .field input { width: 100%; height: 100%; box-sizing: border-box; padding: 18px 10px 4px; }
+  .float { position: absolute; inset: 0; display: flex; align-items: center; padding: 0 10px; }
+  .banner { position: absolute; top: 0; bottom: 0; left: -220px; right: -220px; background: #ffd; }
+  fieldset.outline { position: absolute; inset: -6px 0 0 0; margin: 0; padding: 0 8px;
+                     border: 1px solid #888; }
+  legend { font-size: 12px; padding: 0 4px; }
+  .outer { position: relative; }
+  .outer > .far { position: absolute; top: 0; left: 0; width: 280px; height: 44px;
+                  display: flex; align-items: center; padding: 0 10px; box-sizing: border-box; }
+</style>
+<!-- One box per shape of a site's own drawing over a box (ruling R55), each box named by its
+     own aria-label unless said otherwise. Every drawing takes the pointer at its box's centre, so
+     main's covered rule refuses every box here. Under the host's flag the first four let their
+     box through; the rest still cover it. -->
+
+<!-- Pass: a sibling span that draws the name. -->
+<div class=field><input id=span-box aria-label="Card name"><span class=float>Card name</span></div>
+<!-- Pass: a sibling div, whose wrapper focuses the box on a click. -->
+<div class=field id=focusing><input id=focus-box aria-label="Phone"><div class=float>Phone</div></div>
+<!-- Pass: a span the box takes its name from, by aria-labelledby. -->
+<div class=field><input id=named-box aria-labelledby=named-label><span id=named-label class=float>Account number</span></div>
+<!-- Pass: an outline fieldset whose legend is the name. -->
+<div class=field><input id=outline-box aria-label="Postcode"><fieldset class=outline><legend>Postcode</legend></fieldset></div>
+
+<!-- Passes: a <label> that labels no control, drawing the name, as floating-label kits draw it. -->
+<div class=field><input id=label-box aria-label="Email"><label class=float>Email</label></div>
+<!-- Key by key only: a field-sized SVG drawing whose one text is a <title> that never shows. -->
+<div class=field><input id=svg-box aria-label="Email"><svg class=float width=280 height=44><title>Email</title></svg></div>
+<!-- Passes: a drawing that shows the name, and what the box holds after it. shrink() takes the
+     box's size away, so a later look reaches it by focus and never hit-tests it. -->
+<div class=field id=mirrored><input id=shrink-box aria-label="Nickname"><div class=float data-name="Nickname">Nickname</div></div>
+
+<!-- Refused: a banner over the box that reaches far beyond it. -->
+<div class=field><input id=banner-box aria-label="Email"><div class=banner>Email</div></div>
+<!-- Refused: a field-sized overlay that draws nothing (the name it holds is hidden). -->
+<div class=field><input id=blank-box aria-label="Email"><div class=float><span hidden>Email</span></div></div>
+<!-- Refused: a drawing whose text is not the box's name. -->
+<div class=field><input id=other-box aria-label="Email"><div class=float>Enter here</div></div>
+<!-- Refused: a drawing that holds a control of its own. -->
+<div class=field><input id=button-box aria-label="Email"><div class=float>Email <button type=button>?</button></div></div>
+<!-- Refused: a <label> for another field over the box, though it draws this box's name: a
+     person's click there goes to that field. -->
+<div class=field><input id=for-box aria-label="Email"><label class=float for=elsewhere>Email</label></div>
+<!-- Refused: a drawing that is not inside the box's parent or that parent's parent. -->
+<div class=outer><div><div class=field><input id=far-box aria-label="Email"></div></div><div class=far>Email</div></div>
+
+<p><input id=elsewhere aria-label="Elsewhere"></p>
+
+<script>
+  const focusing = document.getElementById('focusing');
+  focusing.addEventListener('click', () => focusing.querySelector('input').focus());
+  const mirrored = document.getElementById('mirrored');
+  const shrinking = mirrored.querySelector('input');
+  const drawing = mirrored.querySelector('.float');
+  shrinking.addEventListener('input', () => {
+    drawing.textContent = drawing.dataset.name + (shrinking.value ? ' ' + shrinking.value : '');
+  });
+  window.shrink = () => {
+    Object.assign(shrinking.style, { width: '0', height: '0', padding: '0', border: '0' });
+    return 1;
+  };
+</script>

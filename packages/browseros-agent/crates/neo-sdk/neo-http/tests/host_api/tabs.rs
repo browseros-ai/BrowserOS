@@ -74,6 +74,7 @@ async fn all_open_native_tabs_include_distinct_task_history_and_current_metadata
             title: None,
         }),
         main_world: false,
+        frames_incomplete: false,
         at: support::at(3),
     });
     h.flushed().await?;
@@ -184,5 +185,31 @@ async fn the_tab_neo_keeps_for_itself_is_listed_with_its_owner() -> TestResult {
         Some(None),
         "every other tab has no owner field"
     );
+    Ok(())
+}
+
+/// Each tab names the task holding it now, the one whose runs see it under task scope; a tab no
+/// task holds has no `taskId`. The trace's history stays apart, in `taskIds`.
+#[tokio::test]
+async fn each_tab_names_the_task_holding_it_now() -> TestResult {
+    let h = harness().await?;
+    for tab in [3, 4] {
+        h.browser.open_tab(tab);
+    }
+    h.tab_tasks
+        .lock()
+        .map_err(|_| "poisoned")?
+        .insert(3, "host-s".to_owned());
+    let reply = h.get("/v1/tabs").await?;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+    let items = reply.body["items"].as_array().ok_or("items")?;
+    let task_of = |tab: i64| {
+        items
+            .iter()
+            .find(|item| item["tabId"] == tab)
+            .map(|item| item.get("taskId").cloned())
+    };
+    assert_eq!(task_of(3), Some(Some(json!("host-s"))), "held by its task");
+    assert_eq!(task_of(4), Some(None), "a tab no task holds has no taskId");
     Ok(())
 }

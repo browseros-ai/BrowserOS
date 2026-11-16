@@ -94,6 +94,89 @@ async fn click_soon(run: &LiveRun, page: &TestPage, selector: &str) -> TestResul
     run.click(page, selector).await
 }
 
+/// A run that sees only its family's tabs (as neo-server binds a run to its task) still hears
+/// every popup its page opens, noopener ones included: the engine says each popup's opener
+/// (`OpEnv::popup_opened`) before it judges the popup, so a host that lets a popup follow its
+/// opener shows it. Its own new tab is its own at once (`OpEnv::opened_tab`), and a tab opened
+/// outside the run stays out of its listing.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_bound_run_hears_its_pages_popups_and_lists_only_its_family() -> TestResult {
+    with_page(|run, server, page| async move {
+        let result = async {
+            open(&run, &page, &server.url("/popups.html")).await?;
+            run.bind(&[page.tab]);
+            for (kind, path) in [
+                ("#tab", "/child.html?tab"),
+                ("#noopener", "/child.html?noopener"),
+                ("#blanknoopener", "/child.html?blank-noopener"),
+            ] {
+                let since = now_ms()?;
+                let (popup, clicked) = tokio::join!(
+                    wait_for(&run, Some(&page), "popup", since),
+                    click_soon(&run, &page, kind)
+                );
+                clicked?;
+                let popup = popup?;
+                assert_eq!(
+                    popup["popup"]["url"],
+                    json!(server.url(path)),
+                    "{kind}: {popup}"
+                );
+                run.close_page(&test_page(&popup["popup"]["page"])?).await;
+            }
+            // An opener outside the run's family reads as none.
+            let since = now_ms()?;
+            let (popup, clicked) = tokio::join!(
+                wait_for(&run, Some(&page), "popup", since),
+                click_soon(&run, &page, "#tab")
+            );
+            clicked?;
+            let popup = test_page(&popup?["popup"]["page"])?;
+            run.bind(&[popup.tab]);
+            let opener = run
+                .invoke("page.opener", json!({ "page": brand(&popup) }))
+                .await;
+            run.close_page(&popup).await;
+            assert_eq!(
+                opener?["opener"],
+                Value::Null,
+                "the opener is not the run's"
+            );
+            run.bind(&[page.tab]);
+            // A tab opened outside the run never reaches its context's `page` wait.
+            let since = now_ms()?;
+            let (heard, outside) = tokio::join!(wait_for(&run, None, "page", since), async {
+                time::sleep(Duration::from_millis(50)).await;
+                run.open_adopted(&server.url("/child.html?unheard")).await
+            });
+            run.close_page(&outside?).await;
+            assert!(
+                heard.is_err(),
+                "the wait heard a tab outside the run: {heard:?}"
+            );
+            let own = run.new_page().await?;
+            let outside = run.open_adopted(&server.url("/child.html?outside")).await?;
+            let listed = run.invoke("context.pages", json!({})).await;
+            run.close_page(&own).await;
+            run.close_page(&outside).await;
+            let listed = listed?.to_string();
+            for (tab, shown) in [(&page, true), (&own, true), (&outside, false)] {
+                assert_eq!(
+                    listed.contains(&format!("\"tab\":{}", tab.tab.0)),
+                    shown,
+                    "tab {} listed: {shown}: {listed}",
+                    tab.tab.0
+                );
+            }
+            Ok(())
+        }
+        .await;
+        (run, result)
+    })
+    .await
+}
+
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_every_popup_kind_names_its_opener_and_a_window_is_refused() -> TestResult {
@@ -1008,6 +1091,121 @@ async fn tests_that_a_click_that_logs_completes_under_a_console_listener_and_is_
         .await?;
         assert_eq!(heard, json!(1), "the handler's message, exactly once");
         Ok(())
+    }
+    .await;
+    run.close_page(&page).await;
+    result
+}
+
+/// One `page.waitForFunction` that times out while its predicate logs at every 1 ms poll
+/// (upstream's "should avoid side effects after timeout", WA-005), with a console listener on:
+/// how many polls ran after its timeout reply (page stamps later than the reply's wall clock), and
+/// how many of their console events reached the pump only after it.
+async fn timed_out_wait(run: &LiveRun, page: &TestPage) -> TestResult<(bool, usize, usize)> {
+    let evaluate = |expression: &str| {
+        json!({ "page": brand(page), "expression": expression, "isFunction": true,
+                "arg": { "value": r#"{"v":"undefined"}"#, "handles": [] } })
+    };
+    run.invoke(
+        "page.evaluate",
+        evaluate("() => { window.__n = 0; window.__t = []; }"),
+    )
+    .await?;
+    let pump = async {
+        let mut pumped: Vec<(Instant, String)> = Vec::new();
+        loop {
+            let reply = time::timeout(
+                Duration::from_secs(10),
+                run.invoke("events.next", json!({})),
+            )
+            .await
+            .map_err(|_elapsed| "no event in 10 s")??;
+            let at = Instant::now();
+            let mut ended = false;
+            for event in reply
+                .get("events")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default()
+            {
+                let text = event
+                    .pointer("/message/text")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned();
+                ended |= text == "end-marker";
+                pumped.push((at, text));
+            }
+            if ended {
+                return TestResult::Ok(pumped);
+            }
+        }
+    };
+    let waited = async {
+        let input = json!({
+            "call": { "timeoutMs": 1000 }, "page": brand(page), "isFunction": true,
+            "expression": "() => { window.__n += 1; window.__t.push(Date.now()); \
+                           console.log('poll ' + window.__n); }",
+            "arg": { "value": r#"{"v":"undefined"}"#, "handles": [] }, "pollingInterval": 1,
+        });
+        let waited = run.invoke("page.waitForFunction", input).await;
+        let (replied, replied_ms) = (Instant::now(), now_ms()?);
+        // Upstream's test gives the page two seconds to log more.
+        time::sleep(Duration::from_secs(2)).await;
+        run.invoke("page.evaluate", evaluate("() => console.log('end-marker')"))
+            .await?;
+        TestResult::Ok((waited.is_err(), replied, replied_ms))
+    };
+    let (pumped, waited) = tokio::join!(pump, waited);
+    let (pumped, (timed_out, replied, replied_ms)) = (pumped?, waited?);
+    let stamps = run
+        .invoke(
+            "page.evaluate",
+            evaluate("() => JSON.stringify(window.__t)"),
+        )
+        .await?;
+    let stamps: Vec<u64> = serde_json::from_str(stamps.as_str().unwrap_or("[]"))?;
+    let ran_after = stamps.iter().filter(|stamp| **stamp > replied_ms).count();
+    let heard_after = pumped
+        .iter()
+        .filter(|(at, text)| text.starts_with("poll ") && *at > replied)
+        .count();
+    Ok((timed_out, ran_after, heard_after))
+}
+
+/// WA-005: a `waitForFunction` that times out has no side effect a listener sees after its error.
+/// No poll runs after it (Neo releases the poller before the reply), and the console events of
+/// the polls that ran before it reach the listener before it, as upstream's do: its timeout awaits
+/// the poller's cancel, and protocol messages arrive in order. Here the watcher reads each event
+/// [`WATCHER_LAG`] behind the wire, as a loaded runner can: the timed-out reply must still wait
+/// for the events before it. Fails on main every round: a timed-out op answered at once, and the
+/// last polls' events came after the error.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_timed_out_wait_for_function_logs_nothing_after_its_error() -> TestResult {
+    if env::var("BROWSERCLAW_HOSTED_MODE").is_ok_and(|mode| mode == "1") {
+        return Ok(());
+    }
+    let run = LiveRun::connect_through(|client| {
+        Arc::new(SlowWatcher { client }) as Arc<dyn CdpConnection>
+    })
+    .await?;
+    let server = PageServer::start().await?;
+    let page = run.new_page().await?;
+    let result = async {
+        open(&run, &page, &server.url("/popups.html")).await?;
+        run.invoke(
+            "events.listen",
+            json!({ "page": brand(&page), "event": "console", "enabled": true, "since": now_ms()? }),
+        )
+        .await?;
+        for round in 0..3 {
+            let (timed_out, ran_after, heard_after) = Box::pin(timed_out_wait(&run, &page)).await?;
+            assert!(timed_out, "round {round}: the wait timed out");
+            assert_eq!(ran_after, 0, "round {round}: no poll ran after the error");
+            assert_eq!(heard_after, 0, "round {round}: no console event after the error");
+        }
+        TestResult::Ok(())
     }
     .await;
     run.close_page(&page).await;

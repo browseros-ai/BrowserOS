@@ -34,6 +34,9 @@ pub enum PartError {
     /// No page fits a screen this small: a side is under 100 px.
     #[error("no page fits a {0} screen")]
     UnusableViewer(ScreenSize),
+    /// A logical viewer or its resolved preview scale cannot fit the supported framebuffer.
+    #[error("{0}")]
+    InvalidViewer(&'static str),
     /// The takeover's release has begun, so no display can bind to it any more.
     #[error("the takeover was released")]
     TakeoverReleased,

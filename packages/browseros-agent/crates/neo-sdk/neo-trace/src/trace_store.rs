@@ -47,8 +47,8 @@ use crate::storage::record_rows::{self, RunDetailRow, RunSummaryRow};
 use crate::storage::{TraceBatch, trace_migrator};
 use crate::{
     EpochMillis, OperationFilter, OperationId, OperationRow, Page, RequestId, RunDetail, RunId,
-    RunQuery, RunSummary, ShotRead, ShotState, TailQuery, TaskAct, TaskId, TaskTabs, TraceError,
-    TraceTail, salvage,
+    RunQuery, RunSummary, ShotRead, ShotState, TailQuery, TaskAct, TaskId, TraceError, TraceTail,
+    salvage,
 };
 
 /// Operations that only subscribe to or deliver a page's events: the prelude's `page.on` and
@@ -63,15 +63,16 @@ pub(crate) const SUBSCRIPTIONS: [&str; 3] = [
     "events.next",
 ];
 
+/// Neo's own reads of a tab for a script's caches, sent with no call site: the prelude's frame-tree
+/// read (`page.frames`), made for every listed tab before a run's first statement and at a wait.
+/// Like a subscription, one names a tab without acting on it, so it never makes a tab a run's or a
+/// task's, moves no view that follows the task, and keeps no tab in use. A script never sends
+/// one: its `frames()` reads the cache.
+pub(crate) const NEO_READS: [&str; 1] = ["page.frames"];
+
 /// Operations that open a tab, which arrives on their end (`page_after`) rather than as their
 /// target: the run opened it, so it is the run's even before the script acts on it.
 pub(crate) const OPENERS: [&str; 1] = ["context.newPage"];
-
-/// Operations that make another task the run's current one: after one, an open may be that
-/// task's, so the run no longer proves which task its opens belong to. (`task.newPage` opens for
-/// the task it names without a pick; its open is a child operation, which
-/// [`TraceStore::task_tabs`] leaves out on its own.)
-pub(crate) const TASK_PICKS: [&str; 2] = ["neo.createTask", "neo.task"];
 
 /// Whether the operation `name` only subscribes (see [`SUBSCRIPTIONS`]), so it makes no tab its
 /// run's or its task's. The door asks too, for the task's default page it keeps in memory.
@@ -80,13 +81,29 @@ pub fn is_subscription(name: &str) -> bool {
     SUBSCRIPTIONS.contains(&name)
 }
 
-/// The tab an operation `name` on `tab` touches: its target, unless it only subscribes. The one
-/// rule for "the run touched this tab": the run record's tabs (`TraceBatch::link_tab`), its
-/// run-end screenshots (`TouchedTabs`) and a task's follower (`TraceRecordEvent::OperationStarted`
-/// `touched`) all take it, so Neo's own listeners on every known tab move none of them.
+/// Whether the operation `name`, sent with a call site or without (`sited`), is one of Neo's own
+/// reads (see [`NEO_READS`]). The door asks too, for the tab uses it keeps in memory.
 #[must_use]
-pub(crate) fn touched_tab(name: &str, tab: Option<TabId>) -> Option<TabId> {
-    tab.filter(|_| !is_subscription(name))
+pub fn is_neo_read(name: &str, sited: bool) -> bool {
+    !sited && NEO_READS.contains(&name)
+}
+
+/// The tab an operation `name` on `tab` touches: its target, unless it only subscribes or is one
+/// of Neo's own reads. The one rule for "the run touched this tab": the run record's tabs
+/// (`TraceBatch::link_tab`), its run-end screenshots (`TouchedTabs`) and a task's follower
+/// (`TraceRecordEvent::OperationStarted` `touched`) all take it, so Neo's own listeners and frame
+/// reads on every known tab move none of them.
+#[must_use]
+pub(crate) fn touched_tab(name: &str, sited: bool, tab: Option<TabId>) -> Option<TabId> {
+    tab.filter(|_| !is_subscription(name) && !is_neo_read(name, sited))
+}
+
+/// The SQL form of "not one of Neo's own reads" ([`is_neo_read`]), for the reads of what a task
+/// or a tab acted on.
+fn not_neo_read() -> Condition {
+    Condition::any()
+        .add(operations::Column::Name.is_not_in(NEO_READS))
+        .add(operations::Column::Site.is_not_null())
 }
 
 /// The most screenshot bytes kept on disk (D5): about 7,000 JPEGs of 150 KB.
@@ -450,6 +467,29 @@ impl TraceStore {
         if let Some(task) = task {
             select = select.filter(runs::Column::TaskId.eq(task.as_str()));
         }
+        self.earliest(select).await
+    }
+
+    /// [`TraceStore::run_by_request`] for a request that carries no task under the `task` tab
+    /// scope: the earliest run started with `request` and no task. Such a request never repeats
+    /// a run that was bound to a task's tabs, so it can never replay that run's reply.
+    ///
+    /// # Errors
+    /// When the file cannot be read or the row is corrupt.
+    pub async fn run_by_untasked_request(
+        &self,
+        request: &RequestId,
+    ) -> Result<Option<RunSummary>, TraceError> {
+        let select = summary_select()
+            .filter(runs::Column::RequestId.eq(request.as_str()))
+            .filter(runs::Column::TaskId.is_null());
+        self.earliest(select).await
+    }
+
+    async fn earliest(
+        &self,
+        select: Select<runs::Entity>,
+    ) -> Result<Option<RunSummary>, TraceError> {
         select
             .order_by_asc(runs::Column::StartedAt)
             .order_by_asc(runs::Column::Id)
@@ -479,7 +519,7 @@ impl TraceStore {
     }
 
     /// The latest operations that match `query`, oldest first, with the summaries of their
-    /// runs. zuzu's audit reads this.
+    /// runs, for a host's audit timeline.
     ///
     /// # Errors
     /// When the file cannot be read or a row is corrupt.
@@ -539,6 +579,7 @@ impl TraceStore {
             ])
             .filter(operations::Column::RunId.in_subquery(task_runs(task)))
             .filter(operations::Column::Name.is_not_in(SUBSCRIPTIONS))
+            .filter(not_neo_read())
             .filter(
                 Condition::any()
                     .add(operations::Column::TargetTabId.is_not_null())
@@ -569,97 +610,6 @@ impl TraceStore {
         .transpose()
     }
 
-    /// The task's own tabs as the trace can still tell them, for claw-sdk after a restart (its
-    /// memory of tasks and tab owners is gone), and among them its built-in `page`.
-    ///
-    /// The trace keeps no owners, so a tab counts as the task's only where its owner is certain:
-    /// it was opened ([`OPENERS`]) at the top of one of the task's runs that picked no task
-    /// ([`TASK_PICKS`]), by the script's own `context.newPage` or Neo's open of the lazy page,
-    /// neither of which has a parent. Those go to the run's own task. After a pick an open may be
-    /// the picked task's, so those runs are left out, and an open that is a child of another
-    /// operation may be some other task's (`task.newPage` names the task it opens for), so those
-    /// are left out too. A popup is not an opener, so a task left only with one starts on a new
-    /// tab.
-    ///
-    /// The page is the tab among those its own script last acted on: an operation stored with a
-    /// call site. Neo's own reads (the prelude's frame refresh after `waitForTimeout` on every
-    /// tab the run knows, its listeners) have none, and a tab the script reached through
-    /// `context.pages()` without opening it, another task's or the browser's New Tab, is never
-    /// one. When it opened a tab after its last act, that tab. Unlike
-    /// [`task_last_act`](Self::task_last_act), which a follow view reads to show where the task
-    /// is working, this names where its next run starts.
-    ///
-    /// # Errors
-    /// When the file cannot be read.
-    pub async fn task_tabs(&self, task: &TaskId) -> Result<TaskTabs, TraceError> {
-        let picking = Query::select()
-            .column(operations::Column::RunId)
-            .from(operations::Entity)
-            .and_where(Expr::col(operations::Column::Name).is_in(TASK_PICKS))
-            .to_owned();
-        let unpicked_runs = task_runs(task)
-            .and_where(Expr::col(runs::Column::Id).not_in_subquery(picking))
-            .to_owned();
-        // An opener's tab arrives on its end, as the page it ended on (`tab_id`).
-        let opens: Vec<(i64, i64, String, i64)> = operations::Entity::find()
-            .select_only()
-            .columns([
-                operations::Column::TabId,
-                operations::Column::StartedAt,
-                operations::Column::RunId,
-                operations::Column::Seq,
-            ])
-            .filter(operations::Column::RunId.in_subquery(unpicked_runs))
-            .filter(operations::Column::ParentId.is_null())
-            .filter(operations::Column::Name.is_in(OPENERS))
-            .filter(operations::Column::TabId.is_not_null())
-            .order_by_asc(operations::Column::StartedAt)
-            .order_by_asc(operations::Column::RunId)
-            .order_by_asc(operations::Column::Seq)
-            .into_tuple()
-            .all(&self.db)
-            .await?;
-        let mut opened: Vec<TabId> = Vec::new();
-        for (tab, ..) in &opens {
-            if !opened.contains(&TabId(*tab)) {
-                opened.push(TabId(*tab));
-            }
-        }
-        let last_act: Option<(i64, i64, String, i64)> = operations::Entity::find()
-            .select_only()
-            .columns([
-                operations::Column::TargetTabId,
-                operations::Column::StartedAt,
-                operations::Column::RunId,
-                operations::Column::Seq,
-            ])
-            .filter(operations::Column::RunId.in_subquery(task_runs(task)))
-            .filter(operations::Column::Site.is_not_null())
-            .filter(operations::Column::Name.is_not_in(SUBSCRIPTIONS))
-            .filter(operations::Column::TargetTabId.is_in(opened.iter().map(|tab| tab.0)))
-            .order_by_desc(operations::Column::StartedAt)
-            .order_by_desc(operations::Column::RunId)
-            .order_by_desc(operations::Column::Seq)
-            .limit(1)
-            .into_tuple()
-            .one(&self.db)
-            .await?;
-        // The later of the last act and the last open, in the order the trace keeps operations.
-        let order = |row: &(i64, i64, String, i64)| (row.1, row.2.clone(), row.3);
-        let latest = match (last_act, opens.last().cloned()) {
-            (Some(act), Some(open)) => Some(if order(&act) >= order(&open) {
-                act
-            } else {
-                open
-            }),
-            (act, open) => act.or(open),
-        };
-        Ok(TaskTabs {
-            opened,
-            page: latest.map(|(tab, ..)| TabId(tab)),
-        })
-    }
-
     /// The distinct tasks whose retained, committed runs touched each requested tab, sorted
     /// by task id. Untasked runs add no association; retention removes links with their runs.
     /// This is historical trace data, not an exclusive ownership claim over a live tab id.
@@ -685,6 +635,7 @@ impl TraceStore {
             .inner_join(runs::Entity)
             .filter(tab.is_in(tabs.iter().map(|tab| tab.0)))
             .filter(operations::Column::Name.is_not_in(SUBSCRIPTIONS))
+            .filter(not_neo_read())
             .filter(runs::Column::TaskId.is_not_null())
             .distinct()
             .order_by_asc(runs::Column::TaskId)
@@ -727,11 +678,13 @@ fn filtered_operations(
     if filter == OperationFilter::All {
         return select;
     }
-    select.filter(
-        Condition::any()
-            .add(operations::Column::Name.is_not_in(SUBSCRIPTIONS))
-            .add(operations::Column::Site.is_not_null()),
-    )
+    select
+        .filter(
+            Condition::any()
+                .add(operations::Column::Name.is_not_in(SUBSCRIPTIONS))
+                .add(operations::Column::Site.is_not_null()),
+        )
+        .filter(not_neo_read())
 }
 
 /// One correlated statement supplies tabs to every summary, including detail and tail reads.
@@ -763,6 +716,7 @@ fn summary_select() -> Select<runs::Entity> {
             runs::Column::TraceGaps,
             runs::Column::Complete,
             runs::Column::Values,
+            runs::Column::TabsScope,
         ])
         .column_as(SimpleExpr::SubQuery(None, Box::new(tabs)), "tabs")
 }

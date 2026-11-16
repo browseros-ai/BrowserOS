@@ -2,6 +2,7 @@
 
 use neo_trace::{
     Delivery, ErrorOwner, ErrorRecord, OperationId, RequestId, RunEffects, RunId, RunStatus,
+    RunTabsScope,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -53,6 +54,11 @@ pub(crate) struct RunReply {
     /// renders them as the first reply did.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) tips: Vec<ReplyTip>,
+    /// Which tabs the run saw (`task` when bound to its task's tabs, `browser` otherwise), or for
+    /// a call refused before it ran, would have seen. A reply an older Neo stored has none and
+    /// reads `browser`, which is what its run saw.
+    #[serde(default)]
+    pub(crate) tabs_scope: RunTabsScope,
 }
 
 /// How a run ended, as the caller sees it: the trace's `RunStatus` without the states a reply
@@ -179,6 +185,7 @@ impl RunReply {
             unknown: report.unknown.iter().map(OpNote::from).collect(),
             not_awaited: report.not_awaited.iter().map(OpNote::from).collect(),
             tasks: Vec::new(),
+            tabs_scope: run.scope().record(),
             tips: Vec::new(),
         }
     }
@@ -199,6 +206,14 @@ impl RunReply {
             }
         }
         within(&self.value, text) || self.logs.iter().any(|line| line.text.contains(text))
+    }
+
+    /// This reply, saying `scope` for the tabs its run saw or would have seen: a call refused
+    /// before it ran, or a run whose task ended without a reply, has no run to read it from.
+    #[must_use]
+    pub(crate) fn with_tabs_scope(mut self, scope: RunTabsScope) -> Self {
+        self.tabs_scope = scope;
+        self
     }
 
     /// A call refused before it ran: nothing happened, so repeating it is safe.
@@ -268,6 +283,7 @@ impl RunReply {
             unknown: Vec::new(),
             not_awaited: Vec::new(),
             tasks: Vec::new(),
+            tabs_scope: RunTabsScope::default(),
             tips: Vec::new(),
         }
     }

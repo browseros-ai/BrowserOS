@@ -34,7 +34,10 @@
 //!   indexes: a page cut short reads as zeros, which SQLite can return as rows without an error.
 
 use crate::storage::{SalvagedRun, TraceBatch};
-use crate::{EpochMillis, RequestId, RunEffects, RunId, RunStatus, TaskId, TraceError, TraceStore};
+use crate::{
+    EpochMillis, RequestId, RunEffects, RunId, RunStatus, RunTabsScope, TaskId, TraceError,
+    TraceStore,
+};
 use sea_orm::sqlx::sqlite::{SqliteConnectOptions, SqliteRow};
 use sea_orm::sqlx::{self, Row, SqliteConnection};
 use serde_json::Value;
@@ -201,6 +204,7 @@ const REQUESTS: Part = Part {
         "effects",
         "replay",
         "replay_until",
+        "tabs_scope",
     ],
     filter: "WHERE request_id IS NOT NULL",
 };
@@ -579,6 +583,9 @@ fn request_run(row: &SqliteRow) -> Option<(RunId, SalvagedRun)> {
         effects,
         replay,
         replay_until: time("replay_until"),
+        // Absent before m0006, and for a name this build does not have: the listing then says
+        // nothing, as for any run that predates the column.
+        tabs_scope: text("tabs_scope").as_deref().and_then(RunTabsScope::parse),
     };
     Some((id, run))
 }

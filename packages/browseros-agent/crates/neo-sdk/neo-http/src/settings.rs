@@ -2,8 +2,8 @@
 //! file that keeps them across restarts of the server.
 //!
 //! ```text
-//!  start ─▶ Settings::load(settings.json) ─ key by key: an unknown name or a bad value
-//!             │                               falls back to its default, with a warning
+//!  start ─▶ Settings::load(settings.json) ─ unknown names skipped; bad values use defaults,
+//!             │                               except recording switches, which use off
 //!             ▼
 //!  PUT / PATCH ─▶ settings_routes ─▶ Settings::change ─ save (temp file, rename) ─▶ switch ─▶ 200
 //!                                                        └ fails: 500, nothing switched
@@ -19,8 +19,9 @@
 //! aside, and the settings must not vanish with it.
 
 use crate::setting::{
-    Checked, FILE_READ_DIRS, SCREENSHOTS_OFF, SETTINGS, Setting, SettingValue, TAB_IDLE_CLOSE,
-    TRACE_RETENTION, TRACE_SCREENSHOTS, TRACE_VALUE_BYTES, TRACE_VALUES,
+    Checked, FILE_READ_DIRS, FILL_PICTURES, FILL_PICTURES_NEVER, SCREENSHOTS_OFF, SETTINGS,
+    Setting, SettingValue, TAB_IDLE_CLOSE, TABS_SCOPE, TABS_SCOPE_BROWSER, TRACE_RETENTION,
+    TRACE_SCREENSHOTS, TRACE_VALUE_BYTES, TRACE_VALUES,
 };
 use crate::wire;
 use neo_trace::{RecordPolicy, Screenshots, Values};
@@ -34,6 +35,41 @@ use tokio::io::AsyncWriteExt;
 
 /// The settings the host set, by name. A setting absent here is at its default.
 pub(crate) type SetValues = BTreeMap<&'static str, SettingValue>;
+
+/// The startup file's omissions, retained for this settings instance. Only names belong here,
+/// never input values or the validation rules used in logs.
+pub(crate) struct FileLoadReport {
+    pub(crate) state: FileLoadState,
+    pub(crate) unknown: Vec<String>,
+    pub(crate) unknown_values: Vec<String>,
+    pub(crate) invalid: Vec<String>,
+}
+
+/// The outcome of one startup load, before any API changes can replace the saved file.
+#[derive(Clone, Copy)]
+pub(crate) enum FileLoadState {
+    Absent,
+    Applied,
+    Partial,
+    Unreadable,
+}
+
+/// Keeps the effective startup values and the report of that same load together.
+struct SavedSettings {
+    values: SetValues,
+    report: FileLoadReport,
+}
+
+/// `tabs.scope` as a run reads it at its start ([`Settings::tabs_scope`]). With the run's task it
+/// decides what the run may reach: under `Task`, a run that carries a task sees only its task
+/// family's tabs, and a run with none sees every tab but never takes over a host's task.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TabsScope {
+    /// No run is bound, whatever task it carries: every tab, as before task scope.
+    Browser,
+    /// A run that carries a task is bound to its task's family.
+    Task,
+}
 
 /// The host's settings, live. Cheap to clone: every clone reads and changes the same values.
 ///
@@ -68,9 +104,11 @@ impl SettingsDefaults {
 
 struct Inner {
     defaults: SettingsDefaults,
-    /// Where a change is saved; `None` keeps changes in memory (no host API, the Node-hosted
-    /// embedding, tests).
+    /// Where a change is saved; `None` keeps changes in memory (the Node-hosted embedding,
+    /// tests).
     file: Option<PathBuf>,
+    /// Written once before sharing `Inner`; later saves never rewrite the startup result.
+    file_report: Option<FileLoadReport>,
     /// What the host set. Read on every pass of every reader, written only by `change`.
     set: RwLock<SetValues>,
     /// One change at a time, from its save to its switch, so two calls cannot interleave a
@@ -93,33 +131,43 @@ pub(crate) enum ChangeMode {
 }
 
 impl Settings {
-    /// Every setting at its default, kept in memory only. For a Neo with no host API: nothing
-    /// could change them, and a file saved by an earlier run with a host API is ignored.
+    /// Every setting at its default, kept in memory only for embeddings that supply settings
+    /// in code rather than reading a server state folder.
     #[must_use]
     pub fn defaults(defaults: SettingsDefaults) -> Self {
-        Self::new(None, SetValues::new(), defaults)
+        Self::new(None, SetValues::new(), defaults, None)
     }
 
     /// The settings saved in `file`, which later changes are saved to. A missing file means
-    /// the defaults. A file that cannot be read or is not a JSON object means the defaults and
-    /// an error in the log. A name this build does not know, or a value it cannot use, falls
-    /// back to its default with a warning, and the other settings still apply: the server never
-    /// fails to start over this file.
+    /// the defaults. Unreadable or malformed input uses defaults with recording switches off.
+    /// Unknown names are skipped; invalid known values use their saved-input fallback or normal
+    /// default, with a warning. Good siblings still apply, and this file never prevents startup.
     pub async fn load(file: PathBuf, defaults: SettingsDefaults) -> Self {
-        let set = read_saved(&file).await;
-        Self::new(Some(file), set, defaults)
+        let SavedSettings { values, report } = read_saved(&file).await;
+        Self::new(Some(file), values, defaults, Some(report))
     }
 
-    fn new(file: Option<PathBuf>, set: SetValues, defaults: SettingsDefaults) -> Self {
+    fn new(
+        file: Option<PathBuf>,
+        set: SetValues,
+        defaults: SettingsDefaults,
+        file_report: Option<FileLoadReport>,
+    ) -> Self {
         Self {
             inner: Arc::new(Inner {
                 defaults,
                 file,
+                file_report,
                 set: RwLock::new(set),
                 changing: tokio::sync::Mutex::new(()),
                 watchers: Mutex::default(),
             }),
         }
+    }
+
+    /// The load this instance started with, shared unchanged across settings clones and saves.
+    pub(crate) fn file_report(&self) -> Option<&FileLoadReport> {
+        self.inner.file_report.as_ref()
     }
 
     /// `tabs.idleCloseSeconds`: the idle-tab janitor closes an agent's tab nobody used for this
@@ -129,11 +177,36 @@ impl Settings {
         Duration::from_secs(self.whole(&TAB_IDLE_CLOSE))
     }
 
+    /// `tabs.scope`: whether a run that carries a task is bound to its task's tabs. A run reads it
+    /// once, at its start, so a change applies to the runs admitted after it answers, never to
+    /// one already running.
+    #[must_use]
+    pub fn tabs_scope(&self) -> TabsScope {
+        match self.value(&TABS_SCOPE) {
+            SettingValue::Choice(TABS_SCOPE_BROWSER) => TabsScope::Browser,
+            SettingValue::Choice(_) | SettingValue::Whole(_) | SettingValue::Dirs(_) => {
+                TabsScope::Task
+            }
+        }
+    }
+
     /// `trace.retentionSeconds`: the retention sweep deletes runs older than this. Read at each
     /// sweep.
     #[must_use]
     pub fn trace_retention(&self) -> Duration {
         Duration::from_secs(self.whole(&TRACE_RETENTION))
+    }
+
+    /// `fill.pictures` is `never`: no picture of a tab that took a host's private fill, by a script
+    /// or by Neo, and each fill writes its tab into the record of filled tabs first (ruling R58).
+    /// Read when a picture is asked for and when a fill starts, so a change takes effect from the
+    /// next one.
+    #[must_use]
+    pub fn fill_pictures_never(&self) -> bool {
+        matches!(
+            self.value(&FILL_PICTURES),
+            SettingValue::Choice(FILL_PICTURES_NEVER)
+        )
     }
 
     /// `trace.screenshots`, `trace.valueBytes` and `trace.values`: what the trace writer records. It gets them
@@ -291,38 +364,60 @@ fn value_of(set: &SetValues, setting: &Setting, defaults: &SettingsDefaults) -> 
         .unwrap_or_else(|| setting.default_value(defaults))
 }
 
-/// What the last run saved, key by key (`Settings::load`).
-async fn read_saved(file: &Path) -> SetValues {
+/// Loads what the last run saved key by key, keeping the load's report with its fallbacks.
+async fn read_saved(file: &Path) -> SavedSettings {
+    let mut loaded = SavedSettings {
+        values: SetValues::new(),
+        report: FileLoadReport {
+            state: FileLoadState::Unreadable,
+            unknown: Vec::new(),
+            unknown_values: Vec::new(),
+            invalid: Vec::new(),
+        },
+    };
     let bytes = match fs::read(file).await {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             tracing::info!(file = %file.display(), "no saved settings; every setting is at its default");
-            return SetValues::new();
+            loaded.report.state = FileLoadState::Absent;
+            return loaded;
         }
         Err(error) => {
-            tracing::error!(%error, file = %file.display(), "the saved settings cannot be read; every setting is at its default");
-            return SetValues::new();
+            tracing::error!(%error, file = %file.display(), "the saved settings cannot be read; recording switches are off, other settings use defaults");
+            saved_fallbacks("", &mut loaded.values);
+            return loaded;
         }
     };
     let saved = match serde_json::from_slice(&bytes) {
         Ok(json) => wire::settings_body(&json),
         Err(_) => None,
     };
-    let Some(saved) = saved else {
-        tracing::error!(file = %file.display(), "the saved settings are not a JSON object; every setting is at its default");
-        return SetValues::new();
+    let Some(mut saved) = saved else {
+        tracing::error!(file = %file.display(), "the saved settings are not a JSON object; recording switches are off, other settings use defaults");
+        saved_fallbacks("", &mut loaded.values);
+        return loaded;
     };
     for name in &saved.unknown {
         tracing::warn!(file = %file.display(), name, "a saved setting this build does not know is skipped");
     }
     for fault in &saved.faults {
-        tracing::warn!(file = %file.display(), fault, "a saved setting falls back to its default");
+        let fallback = if saved_fallbacks(&fault.name, &mut saved.values) {
+            "off"
+        } else {
+            "default"
+        };
+        tracing::warn!(file = %file.display(), %fault, fallback, "a saved setting cannot be used");
     }
     for name in &saved.unknown_values {
         let known = Setting::find(name)
             .map(Setting::values_text)
             .unwrap_or_default();
-        tracing::warn!(file = %file.display(), name, known, "a saved setting has a value this build does not have; it falls back to its default");
+        let fallback = if saved_fallbacks(name, &mut saved.values) {
+            "off"
+        } else {
+            "default"
+        };
+        tracing::warn!(file = %file.display(), name, known, fallback, "a saved setting has a value this build does not have");
     }
     let applied: Vec<String> = saved
         .values
@@ -330,11 +425,53 @@ async fn read_saved(file: &Path) -> SetValues {
         .map(|(name, value)| format!("{name}={}", Setting::json(value)))
         .collect();
     tracing::info!(file = %file.display(), applied = %applied.join(" "), "saved settings loaded");
-    saved.values
+    // Keep the report independent of the fallback values and log wording. Ordering is part
+    // of the host contract even if the request parser's traversal order changes.
+    let mut invalid: Vec<String> = saved.faults.into_iter().map(|fault| fault.name).collect();
+    saved.unknown.sort_unstable();
+    saved.unknown_values.sort_unstable();
+    invalid.sort_unstable();
+    loaded.report = FileLoadReport {
+        state: if saved.unknown.is_empty() && saved.unknown_values.is_empty() && invalid.is_empty()
+        {
+            FileLoadState::Applied
+        } else {
+            FileLoadState::Partial
+        },
+        unknown: saved.unknown,
+        unknown_values: saved
+            .unknown_values
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+        invalid,
+    };
+    loaded.values = saved.values;
+    loaded
+}
+
+/// A fault belongs to a setting or a dotted ancestor group; an empty name covers the whole
+/// file. Insert fallbacks into the explicit set so GET and the next API save preserve them.
+fn saved_fallbacks(name: &str, set: &mut SetValues) -> bool {
+    let mut applied = false;
+    for setting in SETTINGS {
+        if (name.is_empty()
+            || setting.name == name
+            || setting
+                .name
+                .strip_prefix(name)
+                .is_some_and(|rest| rest.starts_with('.')))
+            && let Some(value) = &setting.invalid_saved
+        {
+            set.insert(setting.name, value.clone());
+            applied = true;
+        }
+    }
+    applied
 }
 
 /// Writes `set` to a temporary file and renames it over `file`, so the file is never half
-/// written: a crash leaves the old one or the new one. Mode 0600: it is the host's.
+/// written: a crash leaves the old one or the new one. Mode 0600 keeps it private to Neo.
 async fn save(file: &Path, set: &SetValues) -> io::Result<()> {
     let mut bytes = serde_json::to_vec(&wire::settings_object(
         set.iter().map(|(name, value)| (*name, value.clone())),
@@ -388,12 +525,12 @@ fn log_change(before: &SetValues, after: &SetValues, defaults: &SettingsDefaults
 
 #[cfg(test)]
 mod tests {
-    use super::Settings;
+    use super::{Settings, TabsScope};
     use neo_trace::{RecordPolicy, RetentionPolicy};
     use std::time::Duration;
 
     #[test]
-    fn every_default_is_todays_behaviour() {
+    fn every_default_keeps_todays_behaviour_but_fill_pictures_and_tabs_scope() {
         let settings = Settings::defaults(Default::default());
         assert_eq!(
             settings.trace_retention(),
@@ -410,7 +547,54 @@ mod tests {
             RecordPolicy::default(),
             "Neo's own screenshots on, and the trace's default value limits"
         );
+        assert!(
+            !settings.fill_pictures_never(),
+            "ruling R58: a tab that took a private fill is pictured by default, the owner's \
+             decision, where before it never was"
+        );
+        assert_eq!(
+            settings.tabs_scope(),
+            TabsScope::Task,
+            "a run that carries a task sees only its task's tabs by default, where before it saw \
+             every tab"
+        );
     }
+    /// Ruling R58 with the saved settings file: a saved `fill.pictures: never` is honoured from
+    /// the start, before any fill; a saved value this build cannot use (an unknown name, a value
+    /// of the wrong type) reads as `allowed`, the default, while the file's other settings still
+    /// apply. Fails with `never` as the row's saved fallback (the unusable one reads `never`).
+    #[tokio::test]
+    async fn a_saved_fill_pictures_is_honoured_and_an_unusable_one_reads_allowed()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use super::SettingsDefaults;
+
+        let dir = tempfile::tempdir()?;
+        let file = dir.path().join("settings.json");
+        tokio::fs::write(&file, br#"{"fill":{"pictures":"never"}}"#).await?;
+        let saved = Settings::load(file.clone(), SettingsDefaults::default()).await;
+        assert!(
+            saved.fill_pictures_never(),
+            "a saved never holds from the start"
+        );
+        for unusable in [
+            &br#"{"fill":{"pictures":"sometimes"},"trace":{"retentionSeconds":7200}}"#[..],
+            &br#"{"fill":{"pictures":false},"trace":{"retentionSeconds":7200}}"#[..],
+        ] {
+            tokio::fs::write(&file, unusable).await?;
+            let loaded = Settings::load(file.clone(), SettingsDefaults::default()).await;
+            assert!(
+                !loaded.fill_pictures_never(),
+                "an unusable value reads allowed"
+            );
+            assert_eq!(
+                loaded.trace_retention(),
+                Duration::from_secs(7200),
+                "the file's other settings still apply"
+            );
+        }
+        Ok(())
+    }
+
     #[tokio::test]
     async fn application_defaults_drive_answers_reset_and_saved_fallback()
     -> Result<(), Box<dyn std::error::Error>> {

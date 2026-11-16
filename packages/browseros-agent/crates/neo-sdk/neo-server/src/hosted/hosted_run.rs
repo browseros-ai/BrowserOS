@@ -11,7 +11,7 @@ use tokio::time::{self, Instant};
 use tokio_util::sync::CancellationToken;
 
 use super::HostedError;
-use crate::browser::BrowserLink;
+use crate::browser::{BrowserLink, TabsScope};
 use crate::config::Defaults;
 use crate::dispatch::{Dispatcher, RunCtx, RunGuard, RunStart, StopReason};
 use crate::run::{RunReply, RunService};
@@ -56,6 +56,7 @@ impl HostedRun {
         browser: &BrowserLink,
         shutdown: CancellationToken,
         timeout: Duration,
+        tabs_scope: TabsScope,
     ) -> Result<Self, HostedError> {
         let view = browser.view().ok_or_else(|| {
             HostedError("the browser is not connected; retry once it reconnects".to_owned())
@@ -74,6 +75,7 @@ impl HostedRun {
                 view,
                 deadline,
                 default_page: None,
+                tabs_scope,
             },
         );
         let bridge = Arc::new(Bridge::new(Arc::clone(&context), Arc::clone(dispatcher)));
@@ -100,7 +102,8 @@ impl HostedRun {
     /// Initializes the product's page facts; a hosted run always opens its default on first use.
     pub(super) async fn initialize(&mut self, service: &RunService) {
         let facts = service.hosted_open_pages(&self.context).await;
-        self.init = RunInit::new(None, &facts.pages, facts.observed.as_ref()).to_json();
+        let frames = service.frame_versions_of(&self.context, &facts.pages);
+        self.init = RunInit::new(None, &facts.pages, facts.observed.as_ref(), &frames).to_json();
     }
 
     /// The run's trace identity.

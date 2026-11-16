@@ -1,7 +1,7 @@
 //! The host API of hosted BrowserOS Neo (claw-sdk): the `/v1` routes of the `neo-sdk-api`
 //! contract, the host auth in front of them, and the event stream behind `GET /v1/events`.
 //!
-//! zuzu (mirrord) is the only client. It reaches Neo over a Unix socket that the app binds;
+//! A host reaches Neo over a Unix socket that the app binds;
 //! the app builds one [`Service`] from values it already holds (the trace store and sink, the
 //! host's [`Settings`],
 //! the agent's browser session and viewports, the writer's screenshot jobs, Xvnc's
@@ -90,6 +90,6 @@ pub use fill_route::{FillAsk, FillDoor, FillRefusal, FillReply, FillVerb};
 pub use host_auth::{HostAuth, HostToken, PeerRule, TokenError};
 pub use host_service::{PeerInfo, host_router, host_service};
 pub use private_tabs::{ChecksPicture, PictureVerdict, TookPrivateText};
-pub use service::{Service, ServiceInputs, TabOwner};
-pub use settings::{Settings, SettingsDefaults};
+pub use service::{Service, ServiceInputs, TabOpener, TabOwner, TabTask};
+pub use settings::{Settings, SettingsDefaults, TabsScope};
 pub use tab_stamps::TabFence;

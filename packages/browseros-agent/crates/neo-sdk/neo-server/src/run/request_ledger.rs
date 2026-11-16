@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
+use neo_http::TabsScope;
 use neo_trace::{EpochMillis, RequestId, RunId, TaskId, TraceError, TraceSink, TraceStore};
 use tokio::runtime::Handle;
 #[cfg(test)]
@@ -30,7 +31,9 @@ use crate::dispatch::{ErrorCode, OperationError};
 /// `LedgerLimits::max_unrecorded` of them stop new request ids rather than grow without bound.
 ///
 /// The match is D14's: with a `taskId`, an earlier run of that task with the same `requestId`;
-/// without one, any run with that `requestId`.
+/// without one, any run with that `requestId`, except under the `task` tab scope, where only an
+/// earlier run without a task matches, so a request with no task never replays the reply of a
+/// run that was bound to a task's tabs ([`TaskMatch`]).
 pub(crate) struct RequestLedger {
     store: TraceStore,
     trace: TraceSink,
@@ -188,29 +191,39 @@ impl RequestLedger {
         }
     }
 
-    /// Admits one call, which becomes run `handle` if it runs.
+    /// Admits one call, which becomes run `handle` if it runs. `scope` is the tab scope setting
+    /// as this call read it: it decides what a request without a task may repeat.
     pub(crate) async fn admit(
         self: &Arc<Self>,
         meta: &RunMeta,
         handle: &Arc<RunHandle>,
+        scope: TabsScope,
     ) -> Admission {
         let Some(request) = meta.request_id.as_ref() else {
             return Admission::Fresh(RunTicket::untracked(handle));
         };
         let task = meta.task_id.as_ref();
+        let matched = TaskMatch::of(task, scope);
         // 1. Memory, for running and recent runs.
-        if let Some(found) = self.find(request, task) {
+        if let Some(found) = self.find(request, matched) {
             return self.answer(found).await;
         }
         #[cfg(test)]
         self.pause_if_asked().await;
         // 2. The store, with no lock held: runs past memory's window, or from before a restart.
-        match self.store.run_by_request(request, task).await {
+        let stored = match matched {
+            TaskMatch::Of(task) => self.store.run_by_request(request, Some(task)).await,
+            TaskMatch::Untasked => self.store.run_by_untasked_request(request).await,
+            TaskMatch::Any => self.store.run_by_request(request, None).await,
+        };
+        match stored {
             Ok(Some(first)) => {
                 // The row may be a run admitted after step 1 whose start committed during the
                 // lookup. Memory still has it, running (the repeat joins it) or just ended (it
                 // replays); the store answers only for a run memory has let go of.
-                let found = self.find(request, task).unwrap_or(Found::Stored(first.id));
+                let found = self
+                    .find(request, matched)
+                    .unwrap_or(Found::Stored(first.id));
                 return self.answer(found).await;
             }
             Ok(None) => {}
@@ -218,16 +231,16 @@ impl RequestLedger {
         }
         // 3. Memory again, under the lock that claims the id: two concurrent first calls both
         //    passed step 2, and the second to get here finds the first one running.
-        match self.claim(request, task, handle) {
+        match self.claim(request, task, matched, handle) {
             Ok(ticket) => Admission::Fresh(ticket),
             Err(found) => self.answer(found).await,
         }
     }
 
-    fn find(&self, request: &RequestId, task: Option<&TaskId>) -> Option<Found> {
+    fn find(&self, request: &RequestId, matched: TaskMatch<'_>) -> Option<Found> {
         let mut entries = self.lock();
         prune(&mut entries, Instant::now());
-        find_in(&entries, request, task)
+        find_in(&entries, request, matched)
     }
 
     /// Records `handle` as running `request`, unless a match got there first.
@@ -235,11 +248,12 @@ impl RequestLedger {
         self: &Arc<Self>,
         request: &RequestId,
         task: Option<&TaskId>,
+        matched: TaskMatch<'_>,
         handle: &Arc<RunHandle>,
     ) -> Result<RunTicket, Found> {
         let mut entries = self.lock();
         let unrecorded = prune(&mut entries, Instant::now());
-        if let Some(found) = find_in(&entries, request, task) {
+        if let Some(found) = find_in(&entries, request, matched) {
             return Err(found);
         }
         if unrecorded >= self.limits.max_unrecorded {
@@ -402,7 +416,7 @@ impl Drop for RunTicket {
         }
         // The run task unwound (its guard has recorded the run's end as a crash). Its ops may
         // have sent anything, so the request id answers with the crash, never with a new run.
-        let crashed = Arc::new(RunReply::crashed(self.handle.id()));
+        let crashed = Arc::new(self.handle.crashed());
         self.handle.finish(Arc::clone(&crashed));
         if let Some(place) = self.place.take() {
             place
@@ -412,16 +426,46 @@ impl Drop for RunTicket {
     }
 }
 
+/// Which earlier runs with the same `requestId` a call may repeat.
+#[derive(Clone, Copy, Debug)]
+enum TaskMatch<'a> {
+    /// The call carries this task: only that task's runs.
+    Of(&'a TaskId),
+    /// The call carries no task under the `task` tab scope: only runs without a task, so it
+    /// never replays a reply a run bound to a task's tabs gave.
+    Untasked,
+    /// The call carries no task under the `browser` tab scope: any run, as before task scope.
+    Any,
+}
+
+impl<'a> TaskMatch<'a> {
+    fn of(task: Option<&'a TaskId>, scope: TabsScope) -> Self {
+        match (task, scope) {
+            (Some(task), _) => Self::Of(task),
+            (None, TabsScope::Task) => Self::Untasked,
+            (None, TabsScope::Browser) => Self::Any,
+        }
+    }
+
+    fn admits(self, run_task: Option<&TaskId>) -> bool {
+        match self {
+            Self::Of(task) => run_task == Some(task),
+            Self::Untasked => run_task.is_none(),
+            Self::Any => true,
+        }
+    }
+}
+
 fn find_in(
     entries: &HashMap<RequestId, Vec<Entry>>,
     request: &RequestId,
-    task: Option<&TaskId>,
+    matched: TaskMatch<'_>,
 ) -> Option<Found> {
     // The earliest match, as the store's lookup returns the earliest run.
     let entry = entries
         .get(request)?
         .iter()
-        .find(|entry| task.is_none_or(|task| entry.task.as_ref() == Some(task)))?;
+        .find(|entry| matched.admits(entry.task.as_ref()))?;
     Some(match &entry.state {
         EntryState::Running(handle) => Found::Answer(Admission::Join(handle.waiter())),
         EntryState::Finished { reply, .. } => Found::Answer(Admission::Replay(Arc::clone(reply))),

@@ -11,7 +11,7 @@ use std::time::Duration;
 use browseros_core::TabId;
 use neo_trace::{
     BlobId, Delivery, EpochMillis, ErrorOwner, OperationId, Outcome, RequestId, RunEnded, RunId,
-    RunQuery, RunStarted, RunStatus, RunSummary, TaskId, WriterConfig,
+    RunQuery, RunStarted, RunStatus, RunSummary, RunTabsScope, TaskId, WriterConfig,
 };
 use serde_json::{Value, json};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
@@ -23,10 +23,10 @@ use super::run_reply::{ReplyDelivery, ReplyEffects, ReplyStatus};
 use super::{
     ReplyError, RequestLedger, RunHandle, RunMeta, RunReply, RunRequest, RunService, RunTimeout,
 };
-use crate::browser::TaskPage;
+use crate::browser::{TabsScope, TaskPage};
 use crate::config::Defaults;
 use crate::dispatch::{ErrorCode, OperationError, TEXT_CHARS, TaskKind};
-use crate::test_rig::{TestError, TestRig, on_neo_runtime, within};
+use crate::test_rig::{ManualClock, TestError, TestRig, on_neo_runtime, within};
 
 /// Long enough that only the tests about orphans ever see it run out.
 const GRACE: Duration = Duration::from_secs(30);
@@ -130,7 +130,29 @@ const SHORT_WINDOW: Duration = Duration::from_millis(200);
 /// Admits one call of `request` on `ledger` alone, as the run service would.
 async fn admit(ledger: &Arc<RequestLedger>, request: &str) -> Result<Admission, TestError> {
     let handle = RunHandle::new(RunId::new(), Duration::ZERO);
-    Ok(ledger.admit(&meta(Some(request), None)?, &handle).await)
+    Ok(ledger
+        .admit(&meta(Some(request), None)?, &handle, TabsScope::Task)
+        .await)
+}
+
+/// After memory expiry, replay proves the asynchronous confirmation has found the stored row.
+/// A flush alone cannot prove its later SQL lookup and memory update have finished.
+async fn stored_replay(
+    ledger: &Arc<RequestLedger>,
+    request: &str,
+    run: RunId,
+) -> Result<(), TestError> {
+    loop {
+        match admit(ledger, request).await? {
+            Admission::Replay(reply) => {
+                assert_eq!(reply.id, run);
+                return Ok(());
+            }
+            Admission::Duplicate(duplicate) => assert_eq!(duplicate, run),
+            _ => return Err("the completed request must replay once its row is confirmed".into()),
+        }
+        task::yield_now().await;
+    }
 }
 
 /// Admits `request` as a new run and ends it the way the run service does: start and end
@@ -142,7 +164,10 @@ async fn run_once(
 ) -> Result<Arc<RunReply>, TestError> {
     let handle = RunHandle::new(RunId::new(), Duration::ZERO);
     let request_id = RequestId::parse(request)?;
-    let Admission::Fresh(ticket) = ledger.admit(&meta(Some(request), None)?, &handle).await else {
+    let Admission::Fresh(ticket) = ledger
+        .admit(&meta(Some(request), None)?, &handle, TabsScope::Task)
+        .await
+    else {
         return Err(format!("{request} is new, so it runs").into());
     };
     rig.sink.run_started(RunStarted {
@@ -151,6 +176,7 @@ async fn run_once(
         request_id: Some(request_id.clone()),
         task_id: None,
         host_data: None,
+        tabs_scope: RunTabsScope::Browser,
         at: EpochMillis::now(),
     });
     let reply = Arc::new(RunReply {
@@ -165,6 +191,7 @@ async fn run_once(
         unknown: Vec::new(),
         not_awaited: Vec::new(),
         tips: Vec::new(),
+        tabs_scope: RunTabsScope::Browser,
     });
     let end = reply.trace_end(Some(&request_id));
     rig.sink.run_ended(RunEnded {
@@ -205,7 +232,7 @@ fn a_repeated_request_id_replays_the_first_reply_and_never_runs_twice() -> Resul
 
         // A restart follows SIGTERM, which flushes the writer.
         rig.sink.flush().await?;
-        let restarted = rig.restarted_service(GRACE)?;
+        let restarted = rig.restarted_service(GRACE).await?;
         let after_restart = restarted
             .run(request(code, meta(Some("call-1"), None)?)?)
             .await;
@@ -254,7 +281,8 @@ fn after_the_replay_window_a_repeat_is_a_duplicate_naming_the_first_run() -> Res
             .await;
         rig.sink.flush().await?;
         let repeat = rig
-            .restarted_service(GRACE)?
+            .restarted_service(GRACE)
+            .await?
             .run(request("return 1;", meta(Some("call-3"), None)?)?)
             .await;
         assert_ne!(
@@ -293,6 +321,11 @@ fn after_the_replay_window_a_repeat_is_a_duplicate_naming_the_first_run() -> Res
 fn replay_is_scoped_by_task_when_the_call_has_one() -> Result<(), TestError> {
     on_neo_runtime(async {
         let rig = TestRig::new().await?;
+        // The browser tab scope, as before task scope: a request without a task may repeat a run
+        // of any task (`under_task_scope_a_request_without_a_task_repeats_only_a_run_without_one`).
+        rig.settings
+            .patch(br#"{"tabs":{"scope":"browser"}}"#)
+            .await?;
         let service = rig.run_service(GRACE);
         let code = "return Math.random();";
         let first = service
@@ -483,74 +516,84 @@ fn an_unreadable_trace_refuses_a_request_id_rather_than_risk_a_second_run() -> R
     })
 }
 
-#[test]
-fn a_request_the_trace_lost_is_refused_after_the_window_never_run_again() -> Result<(), TestError> {
-    on_neo_runtime(async {
-        let rig = TestRig::new().await?;
-        lose_lost_starts(&rig).await?;
-        let limits = LedgerLimits {
-            replay_window: SHORT_WINDOW,
-            ..LedgerLimits::default()
-        };
-        let ledger = RequestLedger::new(rig.store.clone(), rig.sink.clone(), limits);
-        let first = run_once(&rig, &ledger, "lost-1").await?;
-        // Whichever flush runs first is told of the loss; the store shows what landed.
-        let _lost = rig.sink.flush().await;
-        assert_eq!(
-            rig.store.run(first.id).await?.map(|run| run.summary.id),
-            None,
-            "the writer lost the run's records"
-        );
-        match admit(&ledger, "lost-1").await? {
-            Admission::Replay(reply) => assert_eq!(reply.id, first.id),
-            _ => return Err("within the window a repeat replays the first reply".into()),
-        }
-        time::sleep(SHORT_WINDOW * 2).await;
-        match admit(&ledger, "lost-1").await? {
-            Admission::Duplicate(run) => assert_eq!(run, first.id, "the refusal names the run"),
-            _ => {
-                return Err(
-                    "memory is the only proof the request ran, so a late repeat is refused".into(),
-                );
-            }
-        }
-        Ok(())
+#[tokio::test]
+async fn a_request_the_trace_lost_is_refused_after_the_window_never_run_again()
+-> Result<(), TestError> {
+    let rig = TestRig::with_writer(WriterConfig {
+        batch_max: 1,
+        ..WriterConfig::default()
     })
+    .await?;
+    lose_lost_starts(&rig).await?;
+    let _clock = ManualClock::pause();
+    let limits = LedgerLimits {
+        replay_window: SHORT_WINDOW,
+        ..LedgerLimits::default()
+    };
+    let ledger = RequestLedger::new(rig.store.clone(), rig.sink.clone(), limits);
+    let first = run_once(&rig, &ledger, "lost-1").await?;
+    // Whichever flush runs first is told of the loss; the store shows what landed.
+    let _lost = rig.sink.flush().await;
+    assert_eq!(
+        rig.store.run(first.id).await?.map(|run| run.summary.id),
+        None,
+        "the writer lost the run's records"
+    );
+    match admit(&ledger, "lost-1").await? {
+        Admission::Replay(reply) => assert_eq!(reply.id, first.id),
+        _ => return Err("within the window a repeat replays the first reply".into()),
+    }
+    time::advance(SHORT_WINDOW * 2).await;
+    match admit(&ledger, "lost-1").await? {
+        Admission::Duplicate(run) => assert_eq!(run, first.id, "the refusal names the run"),
+        _ => {
+            return Err(
+                "memory is the only proof the request ran, so a late repeat is refused".into(),
+            );
+        }
+    }
+    Ok(())
 }
 
-#[test]
-fn once_too_many_requests_are_unrecorded_a_new_request_id_is_refused() -> Result<(), TestError> {
-    on_neo_runtime(async {
-        let rig = TestRig::new().await?;
-        lose_lost_starts(&rig).await?;
-        let limits = LedgerLimits {
-            replay_window: SHORT_WINDOW,
-            max_unrecorded: 1,
-        };
-        let ledger = RequestLedger::new(rig.store.clone(), rig.sink.clone(), limits);
-        run_once(&rig, &ledger, "kept-1").await?;
-        time::sleep(SHORT_WINDOW * 2).await;
-        run_once(&rig, &ledger, "kept-2").await.map_err(|error| {
-            format!("a request the trace stored leaves memory and holds no place: {error}")
-        })?;
-        run_once(&rig, &ledger, "lost-2").await?;
-        time::sleep(SHORT_WINDOW * 2).await;
-        match admit(&ledger, "fresh-1").await? {
-            Admission::Unavailable(error) => {
-                assert_eq!(error.code(), ErrorCode::TRACE_UNAVAILABLE);
-            }
-            _ => {
-                return Err(
-                    "memory is full of unrecorded requests, so a new one is refused".into(),
-                );
-            }
-        }
-        assert!(
-            matches!(admit(&ledger, "lost-2").await?, Admission::Duplicate(_)),
-            "the unrecorded request is still refused"
-        );
-        Ok(())
+#[tokio::test]
+async fn once_too_many_requests_are_unrecorded_a_new_request_id_is_refused() -> Result<(), TestError>
+{
+    let rig = TestRig::with_writer(WriterConfig {
+        batch_max: 1,
+        ..WriterConfig::default()
     })
+    .await?;
+    lose_lost_starts(&rig).await?;
+    let _clock = ManualClock::pause();
+    let limits = LedgerLimits {
+        replay_window: SHORT_WINDOW,
+        max_unrecorded: 1,
+    };
+    let ledger = RequestLedger::new(rig.store.clone(), rig.sink.clone(), limits);
+    let first = run_once(&rig, &ledger, "kept-1").await?;
+    rig.sink.flush().await?;
+    time::advance(SHORT_WINDOW * 2).await;
+    stored_replay(&ledger, "kept-1", first.id).await?;
+    let second = run_once(&rig, &ledger, "kept-2").await.map_err(|error| {
+        format!("a request the trace stored leaves memory and holds no place: {error}")
+    })?;
+    rig.sink.flush().await?;
+    run_once(&rig, &ledger, "lost-2").await?;
+    time::advance(SHORT_WINDOW * 2).await;
+    stored_replay(&ledger, "kept-2", second.id).await?;
+    match admit(&ledger, "fresh-1").await? {
+        Admission::Unavailable(error) => {
+            assert_eq!(error.code(), ErrorCode::TRACE_UNAVAILABLE);
+        }
+        _ => {
+            return Err("memory is full of unrecorded requests, so a new one is refused".into());
+        }
+    }
+    assert!(
+        matches!(admit(&ledger, "lost-2").await?, Admission::Duplicate(_)),
+        "the unrecorded request is still refused"
+    );
+    Ok(())
 }
 
 #[test]
@@ -566,7 +609,9 @@ fn a_repeat_that_races_the_first_runs_commit_joins_it() -> Result<(), TestError>
         let repeat = tokio::spawn(async move { admit(&racing, "race-1").await });
         held.await?;
         let handle = RunHandle::new(RunId::new(), Duration::ZERO);
-        let Admission::Fresh(ticket) = ledger.admit(&meta(Some("race-1"), None)?, &handle).await
+        let Admission::Fresh(ticket) = ledger
+            .admit(&meta(Some("race-1"), None)?, &handle, TabsScope::Task)
+            .await
         else {
             return Err("the first call to reach the ledger's claim runs".into());
         };
@@ -576,6 +621,7 @@ fn a_repeat_that_races_the_first_runs_commit_joins_it() -> Result<(), TestError>
             request_id: Some(RequestId::parse("race-1")?),
             task_id: None,
             host_data: None,
+            tabs_scope: RunTabsScope::Browser,
             at: EpochMillis::now(),
         });
         rig.sink.flush().await?;
@@ -640,8 +686,6 @@ fn a_new_task_gets_a_fresh_tab_and_a_known_task_keeps_its_tab_across_a_restart()
     on_neo_runtime(async {
         let rig = TestRig::new().await?;
         let owner = rig.owner_tab("https://owner.example/").await?;
-        // Two ops: the first one on a fresh page opens it, so only later ones record its tab
-        // when they start, and the trace's `task_tabs` reads the start records.
         let touch = "await __neo.invoke('test.touch', { page });\nreturn (await __neo.invoke('test.touch', { page })).tab;";
         let first = rig
             .run_service(GRACE)
@@ -654,7 +698,7 @@ fn a_new_task_gets_a_fresh_tab_and_a_known_task_keeps_its_tab_across_a_restart()
         );
         rig.sink.flush().await?;
 
-        let restarted = rig.restarted_service(GRACE)?;
+        let restarted = rig.restarted_service(GRACE).await?;
         let page_tab = "return page.toJSON().tab;";
         let again = restarted
             .run(request(page_tab, meta(None, Some("task-t"))?)?)
@@ -662,7 +706,7 @@ fn a_new_task_gets_a_fresh_tab_and_a_known_task_keeps_its_tab_across_a_restart()
         assert_eq!(
             again.value,
             json!(tab),
-            "the trace remembers the task's tab across a restart"
+            "the tab-holders file keeps the task's tab across a restart of Neo's server"
         );
         let other = restarted
             .run(request(
@@ -816,7 +860,7 @@ fn a_refused_call_is_recorded_without_its_request_id() -> Result<(), TestError> 
     })
 }
 
-/// zuzu gap G3: a reply too large to carry its bytes names them, and they are on disk beside
+/// A reply too large to carry its bytes names them, and they are on disk beside
 /// the trace by the time the caller has the reply.
 #[test]
 fn a_reply_over_the_limit_names_blobs_already_kept_with_the_run() -> Result<(), TestError> {
@@ -909,7 +953,8 @@ fn unhosted_runs_have_fresh_unowned_defaults_and_replay_without_tasks() -> Resul
         assert_eq!(rig.fake.tabs().len(), 6, "earlier runs' tabs remain open");
         rig.sink.flush().await?;
         let replay = rig
-            .restarted_service(GRACE)?
+            .restarted_service(GRACE)
+            .await?
             .run(request(code, meta(Some("plain-one"), None)?)?)
             .await;
         assert_eq!(*replay, *first, "replay never opens another tab");
@@ -1032,6 +1077,11 @@ fn failed_scripts_keep_created_and_fetched_tasks_in_first_touch_order() -> Resul
 fn host_defaults_keep_their_own_tab_and_only_report_explicit_fetches() -> Result<(), TestError> {
     on_neo_runtime(async {
         let rig = TestRig::new().await?;
+        // The browser tab scope: a run without a task fetches a host's task, and a host task's
+        // run reaches the user's tab (`under_task_scope_a_host_task_keeps_to_its_own_tabs`).
+        rig.settings
+            .patch(br#"{"tabs":{"scope":"browser"}}"#)
+            .await?;
         let service = rig.run_service(GRACE);
         let first = service
             .run(request(
@@ -1191,7 +1241,8 @@ fn values_off_preserves_the_reply_blobs_and_memory_replay_but_not_restart_replay
             "same-process memory replays the complete reply"
         );
         let after_restart = rig
-            .restarted_service(GRACE)?
+            .restarted_service(GRACE)
+            .await?
             .run(request(code, meta(Some("off-reply"), None)?)?)
             .await;
         assert_eq!(error_of(&after_restart)?.code, "duplicate_request");
@@ -1215,34 +1266,38 @@ fn values_off_preserves_the_reply_blobs_and_memory_replay_but_not_restart_replay
 }
 
 /// An off record remains the request-id authority after its in-memory reply expires.
-#[test]
-fn values_off_does_not_execute_a_request_again_after_the_memory_window() -> Result<(), TestError> {
-    on_neo_runtime(async {
-        let rig = TestRig::new().await?;
-        rig.settings.patch(br#"{"trace":{"values":"off"}}"#).await?;
-        let ledger = RequestLedger::new(
-            rig.store.clone(),
-            rig.sink.clone(),
-            LedgerLimits {
-                replay_window: SHORT_WINDOW,
-                ..LedgerLimits::default()
-            },
-        );
-        let first = run_once(&rig, &ledger, "off-expired").await?;
-        rig.sink.flush().await?;
-        assert!(
-            rig.store
-                .replay(first.id, EpochMillis::now())
-                .await?
-                .is_none()
-        );
-        time::sleep(SHORT_WINDOW + Duration::from_millis(20)).await;
-        assert!(
-            matches!(admit(&ledger, "off-expired").await?, Admission::Duplicate(run) if run == first.id)
-        );
-        assert_eq!(runs_of(&rig, "off-expired").await?.len(), 1);
-        Ok(())
+#[tokio::test]
+async fn values_off_does_not_execute_a_request_again_after_the_memory_window()
+-> Result<(), TestError> {
+    let rig = TestRig::with_writer(WriterConfig {
+        batch_max: 1,
+        ..WriterConfig::default()
     })
+    .await?;
+    rig.settings.patch(br#"{"trace":{"values":"off"}}"#).await?;
+    let _clock = ManualClock::pause();
+    let ledger = RequestLedger::new(
+        rig.store.clone(),
+        rig.sink.clone(),
+        LedgerLimits {
+            replay_window: SHORT_WINDOW,
+            ..LedgerLimits::default()
+        },
+    );
+    let first = run_once(&rig, &ledger, "off-expired").await?;
+    rig.sink.flush().await?;
+    assert!(
+        rig.store
+            .replay(first.id, EpochMillis::now())
+            .await?
+            .is_none()
+    );
+    time::advance(SHORT_WINDOW + Duration::from_millis(20)).await;
+    assert!(
+        matches!(admit(&ledger, "off-expired").await?, Admission::Duplicate(run) if run == first.id)
+    );
+    assert_eq!(runs_of(&rig, "off-expired").await?.len(), 1);
+    Ok(())
 }
 
 /// The default debug-note path must not grow a stored payload in either recording mode.
@@ -1546,7 +1601,7 @@ fn after_a_restart_a_task_never_takes_a_tab_a_task_it_picked_opened() -> Result<
         assert_ne!(picked.value["owner"], json!("task-a"), "{picked:?}");
         rig.sink.flush().await?;
 
-        let restarted = rig.restarted_service(GRACE)?;
+        let restarted = rig.restarted_service(GRACE).await?;
         assert_eq!(
             next_page(&restarted, "task-a").await?,
             mine,
@@ -1572,7 +1627,7 @@ fn after_a_restart_every_surviving_tab_of_a_task_is_its_own_again() -> Result<()
             .clone();
         rig.sink.flush().await?;
 
-        let restarted = rig.restarted_service(GRACE)?;
+        let restarted = rig.restarted_service(GRACE).await?;
         assert_eq!(
             next_page(&restarted, "task-a").await?,
             second,
@@ -1606,9 +1661,11 @@ fn after_a_restart_a_task_never_takes_a_tab_a_task_it_named_opened() -> Result<(
             .await?
             .value
             .clone();
+        // Created in the host task's own runs, so the task is in its family and, under task
+        // scope, its runs may open in it.
         let created = run_in(
             &service,
-            "task-other",
+            "task-a",
             "return (await neo.createTask('named')).id;",
         )
         .await?;
@@ -1638,12 +1695,194 @@ fn after_a_restart_a_task_never_takes_a_tab_a_task_it_named_opened() -> Result<(
         );
         rig.sink.flush().await?;
 
-        let restarted = rig.restarted_service(GRACE)?;
+        let restarted = rig.restarted_service(GRACE).await?;
         assert_eq!(
             next_page(&restarted, "task-a").await?,
             mine,
             "after a restart too: not {}, which the task it named opened",
             opened.value["tab"]
+        );
+        Ok(())
+    })
+}
+
+#[test]
+fn after_a_restart_a_tasks_popups_and_the_tasks_it_created_keep_their_tabs() -> Result<(), TestError>
+{
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let service = rig.run_service(GRACE);
+        let mine = run_in(&service, "task-a", OPEN_OWN_TAB)
+            .await?
+            .value
+            .clone();
+        let opener = TabId(mine.as_i64().ok_or("a tab id")?);
+        let task_a = TaskId::parse("task-a")?;
+        // The task's page opens a popup, which joins the opener's task.
+        let popup = rig.fake.open_popup(opener, "https://popup.example/");
+        within(Duration::from_secs(5), async {
+            while rig.tabs.owner(popup).as_ref() != Some(&task_a) {
+                time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await?;
+        // The task's run creates a task and opens a tab in it.
+        let created = run_in(
+            &service,
+            "task-a",
+            r"
+            const child = await __neo.invoke('neo.createTask', { name: 'child' });
+            const { page: tab } = await __neo.invoke('task.newPage', { task: child.id });
+            await __neo.invoke('test.touch', { page: tab });
+            return { id: child.id, tab: tab.tabId };",
+        )
+        .await?;
+        assert_eq!(created.status, ReplyStatus::Ok, "{created:?}");
+        let child = created.value["id"].as_str().ok_or("a task id")?.to_owned();
+
+        let restarted = rig.restarted_service(GRACE).await?;
+        let listed = run_in(
+            &restarted,
+            "task-a",
+            "return context.pages().map((tab) => [tab.tabId, tab.taskId]);",
+        )
+        .await?;
+        assert_eq!(listed.status, ReplyStatus::Ok, "{listed:?}");
+        let listed = listed.value.as_array().ok_or("a listing")?;
+        for (tab, task) in [
+            (mine.clone(), json!("task-a")),
+            (json!(popup.0), json!("task-a")),
+            (created.value["tab"].clone(), json!(child)),
+        ] {
+            assert!(
+                listed.contains(&json!([tab, task])),
+                "{tab} is {task}'s again: {listed:?}"
+            );
+        }
+        let fetched = run_in(
+            &restarted,
+            "task-a",
+            &format!("return (await __neo.invoke('neo.task', {{ id: {child:?} }})).id;"),
+        )
+        .await?;
+        assert_eq!(
+            fetched.value,
+            json!(child),
+            "the task a run created is still there to continue: {fetched:?}"
+        );
+        assert_eq!(
+            next_page(&restarted, "task-a").await?,
+            mine,
+            "and the host's task starts on its own page, not its popup"
+        );
+        Ok(())
+    })
+}
+
+/// Under the `task` tab scope, the default, a request without a task never repeats a run that
+/// was bound to a task: it replays only a run without one. Each reply says which tabs its run saw.
+#[test]
+fn under_task_scope_a_request_without_a_task_repeats_only_a_run_without_one()
+-> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let service = rig.run_service(GRACE);
+        let code = "return Math.random();";
+        let tasked = service
+            .run(request(code, meta(Some("call-9"), Some("task-a"))?)?)
+            .await;
+        assert_eq!(tasked.tabs_scope, RunTabsScope::Task, "bound to its task");
+        let untasked = service
+            .run(request(code, meta(Some("call-9"), None)?)?)
+            .await;
+        assert_ne!(
+            untasked.id, tasked.id,
+            "it never replays the reply of a run bound to a task"
+        );
+        assert_eq!(untasked.tabs_scope, RunTabsScope::Browser, "not bound");
+        let again = service
+            .run(request(code, meta(Some("call-9"), None)?)?)
+            .await;
+        assert_eq!(again.id, untasked.id, "it repeats the run without a task");
+        assert_eq!(runs_of(&rig, "call-9").await?.len(), 2);
+        Ok(())
+    })
+}
+
+#[test]
+fn a_run_after_a_restart_starts_once_its_task_has_its_tabs_back() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let service = rig.run_service(GRACE);
+        let mine = run_in(&service, "task-a", OPEN_OWN_TAB)
+            .await?
+            .value
+            .clone();
+        let (restarted, restore) = rig.restart(GRACE).await?;
+        let waiting = tokio::spawn({
+            let restarted = Arc::clone(&restarted);
+            async move { next_page(&restarted, "task-a").await }
+        });
+        time::sleep(Duration::from_millis(300)).await;
+        assert!(
+            !waiting.is_finished(),
+            "the run waits for the book to take its tabs back"
+        );
+        restore.begin();
+        let page = within(Duration::from_secs(10), waiting).await???;
+        assert_eq!(page, mine, "its own tab, not a fresh one");
+        Ok(())
+    })
+}
+
+/// Under the `task` tab scope, the default, a host task's run keeps to its own tabs: the user's
+/// tab is refused with `page_not_in_task`, and never taken. A run without a task cannot fetch
+/// the host's task: it answers as a missing one. A refused call says the tabs it would have seen.
+#[test]
+fn under_task_scope_a_host_task_keeps_to_its_own_tabs() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let service = rig.run_service(GRACE);
+        let first = service
+            .run(request(
+                "return (await __neo.invoke('test.touch', { page })).tab;",
+                meta(None, Some("host-task"))?,
+            )?)
+            .await;
+        assert_eq!(first.status, ReplyStatus::Ok, "{first:?}");
+        assert_eq!(first.tabs_scope, RunTabsScope::Task);
+        let fetched = service
+            .run(request(
+                "return await __neo.invoke('neo.task', { id: 'host-task' });",
+                meta(None, None)?,
+            )?)
+            .await;
+        assert_eq!(
+            fetched.error.as_ref().map(|error| error.code.as_str()),
+            Some("task_not_found"),
+            "a run without a task never takes over a host's task: {fetched:?}"
+        );
+        assert_eq!(fetched.tabs_scope, RunTabsScope::Browser);
+        let other = rig.owner_tab("https://other.example/").await?;
+        let touched = service.run(request(
+            &format!("return await __neo.invoke('test.touch', {{ page: {{ '$neo': 'page', tab: {} }} }});", other.tab.0),
+            meta(None, Some("host-task"))?,
+        )?).await;
+        assert_eq!(
+            touched.error.as_ref().map(|error| error.code.as_str()),
+            Some("page_not_in_task"),
+            "{touched:?}"
+        );
+        assert_eq!(rig.tabs.owner(other.tab), None, "never taken");
+        let refused = service.refuse(
+            String::new(),
+            meta(None, Some("host-task"))?,
+            &OperationError::host(ErrorCode::INVALID_META, "refused for the test"),
+        );
+        assert_eq!(
+            refused.tabs_scope,
+            RunTabsScope::Task,
+            "a refused call says what its run would have seen"
         );
         Ok(())
     })

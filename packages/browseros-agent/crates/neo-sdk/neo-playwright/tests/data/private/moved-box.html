@@ -1,0 +1,24 @@
+<!doctype html><meta charset=utf-8><title>Moved box</title>
+<style>input { width: 240px; height: 28px; } iframe { width: 420px; height: 160px; }</style>
+<!-- A box and a button named from it (aria-labelledby walks into the box and takes its value),
+     which the page moves between its own document and a same-origin frame with no op (ruling
+     R53). ?inside=1: the kit is born inside the frame's document, so the box's prototype is the
+     frame's. A second box, Plain, the entry never types into. -->
+<input id=plain aria-label="Plain">
+<iframe id=inner></iframe>
+<script>
+const KIT = '<div id=kit><label>Code <input id=code type=text></label>' +
+  '<div><button id=go aria-labelledby="pre code">Go</button> <span id=pre>Send</span></div></div>';
+const inside = new URLSearchParams(location.search).get('inside');
+const inner = document.getElementById('inner');
+inner.srcdoc = '<!doctype html><meta charset=utf-8><body><h2>Inner</h2>' + (inside ? KIT : '') + '</body>';
+if (!inside) document.body.insertAdjacentHTML('afterbegin', KIT);
+const frameDoc = () => inner.isConnected ? inner.contentDocument : null;
+// Each answers 1 once done, 0 while the frame's document is not there yet.
+window.moveIn = () => { const d = frameDoc(); if (!d || !d.querySelector('h2')) return 0; d.body.appendChild(document.getElementById('kit')); return 1; };
+window.moveOut = () => { const d = frameDoc(); const kit = d && d.getElementById('kit'); if (!kit) return 0; document.body.insertBefore(kit, inner); return 1; };
+window.dropFrame = () => { inner.remove(); return 1; };
+// The page alone holds the kit while it is out of the document; restore() puts it back.
+window.stash = () => { window.keptKit = document.getElementById('kit'); window.keptKit.remove(); return 1; };
+window.restore = () => { document.body.insertBefore(window.keptKit, inner); return 1; };
+</script>

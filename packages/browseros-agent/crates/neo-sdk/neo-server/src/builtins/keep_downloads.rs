@@ -1,4 +1,4 @@
-//! A run's downloads, kept with its record when it ends (zuzu gap G2).
+//! A run's downloads, kept with its record when it ends.
 //!
 //! ```text
 //!  run ends ─ ops drained ─ RunState::downloads(): what its `download` events handed the script

@@ -80,8 +80,9 @@ struct NoArgs {}
 options!(NoArgs);
 
 /// `context.pages()`: every tab the run's view admits, the owner's and other sessions' tabs
-/// included (D8, the owner's decision: no ownership filter), except a tab the host keeps for
-/// itself (`OpEnv::is_reserved_tab`).
+/// included (D8, the owner's decision: no ownership filter), except a tab the host hides from
+/// this run (`OpEnv::hides_tab`): its own blank tab, and for a run bound to a task, every tab
+/// outside that task's family.
 #[derive(Debug, Serialize, TS)]
 #[ts(rename = "ContextPages")]
 struct Pages {
@@ -156,13 +157,13 @@ async fn pages(
         .list_pages()
         .await
         .map_err(|error| scope.core_error(&error))?;
-    // The host's own tab (its blank tab) is no page of the script's; one the owner browsed in
-    // is handed back first, and listed.
-    scope.reserved_tabs_settled(&listing.pages).await;
+    // A tab the host hides from this run is no page of the script's; a blank tab of the host's
+    // that the owner browsed in is handed back first, and listed.
+    scope.tabs_settled(&listing.pages).await;
     let pages = listing
         .pages
         .into_iter()
-        .filter(|page| !scope.is_reserved_tab(page.tab_id))
+        .filter(|page| !scope.hides_tab(page.tab_id))
         .map(|page| PageEntry {
             page: PageHandle::new(page.tab_id),
             url: page.url,
@@ -195,6 +196,10 @@ async fn new_page(
         )
         .await
         .map_err(|error| scope.core_error(&error))?;
+    // The run's own from the moment the browser names it, before the wait below, which can
+    // take long: a host that hides tabs from the run must not hide this one from its listings
+    // and events meanwhile (`OpEnv::opened_tab`).
+    scope.opened_tab(opened.tab_id);
     // No ref printed before this run can be this tab's (run_state/opened_tabs.rs).
     scope.run_state().opened_tabs.opened(opened.tab_id);
     ready(pw, scope, &opened).await;

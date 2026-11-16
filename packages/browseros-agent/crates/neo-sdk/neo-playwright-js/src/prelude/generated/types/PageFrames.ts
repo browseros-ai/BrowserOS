@@ -6,4 +6,10 @@ import type { FrameInfo } from "./FrameInfo";
  * children. Absent when the bounded read did not finish, so the prelude keeps the frames it
  * has.
  */
-export type PageFrames = { frames?: Array<FrameInfo>, };
+export type PageFrames = { frames?: Array<FrameInfo>, 
+/**
+ * `true` when an out-of-process frame under the tree could not be read: `frames` then lacks
+ * it (and what it holds). The operation's record is marked `framesIncomplete` for the host,
+ * and the server's warn line names each such frame and its error.
+ */
+incomplete?: boolean, };

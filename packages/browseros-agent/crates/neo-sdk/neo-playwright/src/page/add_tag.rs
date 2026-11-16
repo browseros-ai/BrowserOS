@@ -366,7 +366,7 @@ async fn tagged(
     .flatten();
     Ok(Tagged {
         element,
-        frames: frames.map(FrameTree::into_frames),
+        frames: frames.and_then(FrameTree::into_whole_frames),
     })
 }
 

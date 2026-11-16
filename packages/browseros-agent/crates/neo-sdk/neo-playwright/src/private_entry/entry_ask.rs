@@ -6,7 +6,7 @@ use std::{fmt, hint, mem};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::private_entry::PrivateText;
+use crate::private_entry::{Drawing, PrivateText};
 
 /// A private value on its way to Neo's isolated world, where the box's listener and the
 /// read-back compare with it: the whole value, or the part a `maxlength` lets in. It prints
@@ -95,6 +95,10 @@ pub(crate) enum PrivateStep {
     Focused,
     /// Whether the box holds exactly `text` now.
     Holds { text: PageSecret, spaced: bool },
+    /// The check call's compare (ruling R48), on a box no entry is under: whether the box holds
+    /// `text` by the read-back's rule, and whether its text contains `text` by the same rule of
+    /// setting separators aside. Keeps nothing of `text`, and answers booleans only.
+    Compare { text: PageSecret, spaced: bool },
     /// The read-back; it also forgets the text.
     ReadBack,
     /// Forgets the text and stops the listener.
@@ -103,6 +107,11 @@ pub(crate) enum PrivateStep {
     /// box (ruling R26): what an entry that stopped at `focus_lost` or `value_not_taken` may
     /// have typed into.
     MarkFocused,
+    /// After a box whose read-back found the value drawn was emptied (ruling R55): whether the
+    /// wrapper that drew it still draws `text`. Reads only that wrapper, whatever became of the
+    /// box, and keeps nothing of `text`. Compared with white space, dashes and slashes set
+    /// aside, whatever the field's `spaced`.
+    Drawn { text: PageSecret },
 }
 
 /// Where the focus is, as Playwright's focused rule reads it.
@@ -150,16 +159,28 @@ pub(crate) enum PrivateAnswer {
     Holds {
         holds: bool,
     },
+    /// The check call's compare: `contains` is true whenever `holds` is.
+    Compared {
+        holds: bool,
+        contains: bool,
+    },
     /// `moving`: a submit no handler prevented, or the document unloading, since the focus step.
+    /// `drawing`: whether the box was entered under its field's own drawing, and whether that
+    /// drawing now shows the value (rulings R55, R56).
     ReadBack {
         state: BoxState,
         held_at_last_input: bool,
         moving: bool,
+        drawing: Drawing,
     },
     Forgot,
     /// Whether a text control other than the box held the focus and is now marked.
     MarkedFocused {
         marked: bool,
+    },
+    /// Whether the wrapper still draws the value, or `true` when the page side cannot tell.
+    Drawn {
+        drawn: bool,
     },
 }
 

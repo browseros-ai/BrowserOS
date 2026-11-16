@@ -22,7 +22,7 @@
 //! | none | the viewer left |
 //!
 //! Browsers cannot set `Authorization` on a WebSocket, and a token in the URL is refused, so a
-//! browser's noVNC reaches this route through zuzu's relay, which sends the header.
+//! browser's noVNC reaches this route through the host's relay, which sends the header.
 
 use crate::api_error::ApiError;
 use crate::limits::{CLOSE_FRAME_WAIT, DISPLAY_MESSAGE_MAX};

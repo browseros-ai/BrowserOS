@@ -6,7 +6,7 @@
 
 use crate::{
     Delivery, Effect, EpochMillis, ErrorRecord, OperationId, OperationKind, OperationSite, Outcome,
-    PageState, RequestId, RunDownload, RunEffects, RunId, RunStatus, TaskId,
+    PageState, RequestId, RunDownload, RunEffects, RunId, RunStatus, RunTabsScope, TaskId,
 };
 use browseros_core::TabId;
 use serde_json::Value;
@@ -62,16 +62,24 @@ pub struct OperationRow {
     ///
     /// [`OperationEnded::main_world`]: crate::OperationEnded::main_world
     pub main_world: Option<bool>,
+    /// Whether it read a tab's frame tree that was not whole
+    /// ([`OperationEnded::frames_incomplete`]). `None` while it runs, when its end never
+    /// arrived, and for rows stored before the column.
+    ///
+    /// [`OperationEnded::frames_incomplete`]: crate::OperationEnded::frames_incomplete
+    pub frames_incomplete: Option<bool>,
 }
 
 impl OperationRow {
-    /// Whether Neo owns this subscription rather than an explicit script listener.
+    /// Whether Neo owns this operation rather than the script: one of its subscriptions, not an
+    /// explicit script listener, or one of its own frame reads (`trace_store::NEO_READS`).
     /// Subscription names are shared with tab ownership and run-end screenshots; the script
     /// site distinguishes public listener calls from the prelude's background maintenance.
     /// Historical listener rows without a recorded site are indistinguishable from Neo's work.
     #[must_use]
     pub fn is_internal(&self) -> bool {
-        crate::is_subscription(&self.name) && self.site.is_none()
+        (crate::is_subscription(&self.name) && self.site.is_none())
+            || crate::is_neo_read(&self.name, self.site.is_some())
     }
 }
 
@@ -81,7 +89,8 @@ pub enum OperationFilter {
     /// Every stored operation.
     #[default]
     All,
-    /// Omit subscriptions without a recorded script site. Historical listeners may lack sites.
+    /// Omit Neo's own operations: subscriptions without a recorded script site, and its frame
+    /// reads (`OperationRow::is_internal`). Historical listeners may lack sites.
     Script,
 }
 
@@ -149,6 +158,8 @@ pub struct RunSummary {
     pub id: RunId,
     /// The host's task it belongs to.
     pub task_id: Option<TaskId>,
+    /// Which tabs it saw; absent for runs recorded before Neo kept it, which saw every tab.
+    pub tabs_scope: Option<RunTabsScope>,
     /// The tabs its operations targeted, ascending.
     pub tabs: Vec<TabId>,
     /// How it ended, or `Running`.
@@ -205,17 +216,6 @@ pub struct TraceTail {
     pub operations: Vec<OperationRow>,
     /// Whether the tail cut older matching operations.
     pub truncated: bool,
-}
-
-/// A task's own tabs as the trace can still tell them after a restart, and its built-in `page`
-/// among them, as [`TraceStore::task_tabs`](crate::TraceStore::task_tabs) reads them.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct TaskTabs {
-    /// The tabs the task surely opened: top-level opens in its runs that picked no task, in
-    /// the order it opened them.
-    pub opened: Vec<TabId>,
-    /// Among `opened`, the one its own script last acted on, or one it opened after that.
-    pub page: Option<TabId>,
 }
 
 /// The tab a task's latest operation acted on, and when, as

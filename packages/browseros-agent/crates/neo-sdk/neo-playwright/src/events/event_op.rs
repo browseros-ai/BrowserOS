@@ -563,12 +563,12 @@ async fn lease_runtime(
 async fn observe_context(scope: &OpScope<'_>) -> Result<(), PlaywrightError> {
     let setup = async {
         let listing = scope.view().list_pages().await?;
-        // Not the host's own tab: no script ever hears of it.
-        scope.reserved_tabs_settled(&listing.pages).await;
+        // Not a tab the host hides from this run: the run never hears of it.
+        scope.tabs_settled(&listing.pages).await;
         for page in listing
             .pages
             .into_iter()
-            .filter(|page| !scope.is_reserved_tab(page.tab_id))
+            .filter(|page| !scope.hides_tab(page.tab_id))
         {
             scope
                 .run_state()

@@ -268,6 +268,24 @@ impl BrowserTabs {
             })
     }
 
+    /// Every tab the browser lists, with its address and whether it is its window's active tab,
+    /// in one `Browser.getTabs`. A released takeover's `openedTabs` read it.
+    pub(crate) async fn listed_tabs(&self) -> Result<Vec<ListedTab>, PartError> {
+        let reply = self.call("Browser.getTabs", json!({})).await?;
+        Ok(reply["tabs"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|listed| {
+                Some(ListedTab {
+                    tab: TabId(listed["tabId"].as_i64()?),
+                    url: listed["url"].as_str().unwrap_or_default().to_owned(),
+                    active: listed["isActive"] == true,
+                })
+            })
+            .collect())
+    }
+
     /// Whether `tab` is its window's active tab now, as Chromium's tab listing says.
     pub(crate) async fn is_active(&self, tab: TabId) -> Result<bool, PartError> {
         let reply = self.call("Browser.getTabs", json!({})).await?;
@@ -634,6 +652,14 @@ impl Bounds {
 /// The browser answered, but not as the protocol says it would.
 fn browser_error(message: String) -> PartError {
     PartError::Browser(CoreError::Message(message))
+}
+
+/// One tab of [`BrowserTabs::listed_tabs`].
+pub(crate) struct ListedTab {
+    pub(crate) tab: TabId,
+    pub(crate) url: String,
+    /// Its window's active tab: the one the browser shows in front.
+    pub(crate) active: bool,
 }
 
 #[cfg(test)]

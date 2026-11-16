@@ -74,6 +74,7 @@ async fn a_host_types_a_sign_in_privately_on_a_real_browseros() -> TestResult {
 
 async fn drive(rig: &mut Rig) -> TestResult {
     rig.until_ready().await?;
+    no_pictures_of_filled_tabs(rig).await?;
     let client = rig.client().await?;
     let form = run(&client, FORM, &json!({ "taskId": TASK })).await?;
     let form = value(&form)?;
@@ -136,23 +137,9 @@ async fn drive(rig: &mut Rig) -> TestResult {
     );
 
     no_picture_after_the_fill(rig, &client).await?;
+    let compared = compared_after_the_fill(rig, tab, &origin, [user, pw]).await?;
 
-    // The record: one protected op, the counts, no picture, no page address.
-    let run_id = at(&answer, "/runId").as_str().ok_or("a runId")?;
-    let record = rig
-        .host(
-            "GET",
-            &format!("/v1/runs/{run_id}?wait=10"),
-            Some(HOST_TOKEN),
-            None,
-        )
-        .await?
-        .json()?;
-    let operation = at(&record, "/operations/0");
-    assert_eq!(at(operation, "/name"), "host.fill", "{record}");
-    assert_eq!(at(operation, "/kind"), "protected");
-    assert_eq!(at(operation, "/hasScreenshot"), false);
-    assert!(at(operation, "/page/url").is_null(), "{operation}");
+    let record = fill_record(rig, &answer).await?;
 
     client.cancel().await?;
     assert_eq!(rig.stop_neo().await?, Some(0), "SIGTERM is a normal stop");
@@ -171,18 +158,93 @@ async fn drive(rig: &mut Rig) -> TestResult {
             .any(|text| text.contains("TRACE")),
         "Neo ran at trace level, so the scan below covers every line it can write"
     );
-    for canary in [USER, PASSWORD] {
+    for canary in [USER, PASSWORD, CHECKED] {
         let files = files_holding(&state, canary)?;
         assert!(files.is_empty(), "{canary} is in {files:?}");
         assert!(!log.contains(canary), "{canary} is in Neo's log");
-        for text in [answer.to_string(), record.to_string(), checked.to_string()] {
+        for text in [&answer, &record, &checked, &compared].map(Value::to_string) {
             assert!(!text.contains(canary), "{canary} is in {text}");
         }
     }
     Ok(())
 }
 
-/// After the fill, no picture of its tab (rulings R15 and R46): a script's later click there
+/// The fill's record: one protected op, the counts, no picture, no page address.
+async fn fill_record(rig: &Rig, answer: &Value) -> Result<Value, Box<dyn Error>> {
+    let run_id = at(answer, "/runId").as_str().ok_or("a runId")?;
+    let record = rig
+        .host(
+            "GET",
+            &format!("/v1/runs/{run_id}?wait=10"),
+            Some(HOST_TOKEN),
+            None,
+        )
+        .await?
+        .json()?;
+    let operation = at(&record, "/operations/0");
+    assert_eq!(at(operation, "/name"), "host.fill", "{record}");
+    assert_eq!(at(operation, "/kind"), "protected");
+    assert_eq!(at(operation, "/hasScreenshot"), false);
+    assert!(at(operation, "/page/url").is_null(), "{operation}");
+    Ok(record)
+}
+
+/// A value the check call compares and nothing else ever sends: it must be in no record.
+const CHECKED: &str = "CANARY-check-only-8D";
+
+/// Ruling R48 after the fill: the check call compares the password box with the password and the
+/// user box with a value nothing else sends, and answers booleans only. The run's record keeps
+/// the shape a check's run has, with neither the values nor the booleans; the caller scans the
+/// answer, the record, the state folder and the log for both values.
+async fn compared_after_the_fill(
+    rig: &Rig,
+    tab: i64,
+    origin: &str,
+    [user, pw]: [&str; 2],
+) -> Result<Value, Box<dyn Error>> {
+    let compare = json!({ "taskId": TASK, "fields": [
+        { "ref": pw, "value": PASSWORD, "expect": { "origin": origin } },
+        { "ref": user, "value": CHECKED, "expect": { "origin": origin } }
+    ] });
+    let compared = host(rig, &format!("/v1/tabs/{tab}/fill/check"), &compare).await?;
+    assert_eq!(
+        (
+            at(&compared, "/fields/0/holds"),
+            at(&compared, "/fields/0/contains")
+        ),
+        (&json!(true), &json!(true)),
+        "{compared}"
+    );
+    assert_eq!(
+        (
+            at(&compared, "/fields/1/holds"),
+            at(&compared, "/fields/1/contains")
+        ),
+        (&json!(false), &json!(false)),
+        "{compared}"
+    );
+    let run_id = at(&compared, "/runId")
+        .as_str()
+        .ok_or("the check's runId")?;
+    let record = rig
+        .host(
+            "GET",
+            &format!("/v1/runs/{run_id}?wait=10"),
+            Some(HOST_TOKEN),
+            None,
+        )
+        .await?
+        .json()?;
+    let recorded = record.to_string();
+    assert!(
+        !recorded.contains("\"holds\"") && !recorded.contains("\"contains\""),
+        "the check's run keeps its shape: {recorded}"
+    );
+    Ok(json!([compared, record]))
+}
+
+/// After the fill, under the host's `fill.pictures: never` (ruling R58), no picture of its tab
+/// (rulings R15 and R46): a script's later click there
 /// records none, and its screenshot answers 404 for that reason; a script's own screenshot of
 /// the tab is refused. Both ask the entry's real mark of the tab, through the app's wiring.
 async fn no_picture_after_the_fill(rig: &Rig, client: &Client) -> TestResult {
@@ -260,6 +322,118 @@ async fn no_picture_after_the_fill(rig: &Rig, client: &Client) -> TestResult {
         "a script's own screenshot of the tab is refused: {shot:?}"
     );
 
+    Ok(())
+}
+
+/// A sign-in whose boxes each sit under a sibling div that draws the field's name and takes the
+/// pointer, which is no `<label>` (ruling R55). Built in the script; its title is a hash of what
+/// both boxes hold after each input.
+const DRAWN_FORM: &str = r#"
+const field = (id, name, type) => '<div style="position:relative;width:260px;height:40px;margin:0 0 16px">'
+  + '<input id="' + id + '" type="' + type + '" aria-label="' + name + '" style="width:100%;height:100%;box-sizing:border-box">'
+  + '<div style="position:absolute;inset:0;display:flex;align-items:center;padding:0 8px">' + name + '</div></div>';
+const html = '<title>sign in</title><form>' + field('user', 'User', 'text') + field('pw', 'Password', 'password') + '</form>'
+  + '<script>'
+  + 'const hash = (text) => { let x = 5381; for (const c of text) { x = ((x * 33) ^ c.codePointAt(0)) >>> 0; } return x; };'
+  + 'const show = () => { document.title = "h:" + hash(user.value + "|" + pw.value); };'
+  + 'user.addEventListener("input", show); pw.addEventListener("input", show);'
+  + '</script>';
+await page.goto('data:text/html,' + encodeURIComponent(html));
+const snapshot = await page.ariaSnapshot();
+const user = /textbox "User" \[ref=(e\d+)\]/.exec(snapshot)?.[1];
+const pw = /textbox "Password" \[ref=(e\d+)\]/.exec(snapshot)?.[1];
+return { page, user, pw, snapshot };
+"#;
+
+/// Rulings R55 and R56 through the route on a real BrowserOS, with nothing set by the host: the
+/// check call passes both boxes under their fields' drawn names, the fill enters both, the page
+/// holds exactly the values, and the record notes both fields as entered under their drawing,
+/// with no value drawn. Fails with the drawing's branch left out of the look (`box_covered`).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_host_types_into_boxes_under_drawn_labels() -> TestResult {
+    let Some(browser) = browser_or_skip() else {
+        return Ok(());
+    };
+    let mut rig = Rig::start_with(&browser, CaptchaKey::Absent, &[])?;
+    let failure = match time::timeout(TEST_BUDGET, drive_drawn(&mut rig)).await {
+        Ok(Ok(())) => return Ok(()),
+        Ok(Err(error)) => error.to_string(),
+        Err(_elapsed) => format!("the drive did not finish within {TEST_BUDGET:?}"),
+    };
+    Err(format!("{failure}\n{}", rig.logs()).into())
+}
+
+async fn drive_drawn(rig: &mut Rig) -> TestResult {
+    rig.until_ready().await?;
+    let client = rig.client().await?;
+    let form = run(&client, DRAWN_FORM, &json!({ "taskId": TASK })).await?;
+    let form = value(&form)?;
+    let tab = form
+        .pointer("/page/tab")
+        .and_then(Value::as_i64)
+        .ok_or_else(|| format!("the form's tab: {form}"))?;
+    let (Some(user), Some(pw)) = (at(form, "/user").as_str(), at(form, "/pw").as_str()) else {
+        return Err(format!("the snapshot names both boxes: {form}").into());
+    };
+    let check = json!({ "taskId": TASK, "fields": [{ "ref": user }, { "ref": pw }] });
+    let checked = host(rig, &format!("/v1/tabs/{tab}/fill/check"), &check).await?;
+    for at_box in ["/fields/0/refusal", "/fields/1/refusal"] {
+        assert!(at(&checked, at_box).is_null(), "{checked}");
+    }
+    let origin = at(&checked, "/fields/0/facts/origin")
+        .as_str()
+        .ok_or_else(|| format!("the check reads the box's origin: {checked}"))?
+        .to_owned();
+    let body = json!({
+        "taskId": TASK,
+        "fields": [
+            { "ref": user, "value": USER, "expect": { "origin": origin } },
+            { "ref": pw, "value": PASSWORD, "expect": { "origin": origin, "type": "password" } }
+        ]
+    });
+    let answer = host(rig, &format!("/v1/tabs/{tab}/fill"), &body).await?;
+    assert_eq!(at(&answer, "/outcome"), "entered", "{answer}");
+    let read = run(
+        &client,
+        "return await page.title();",
+        &json!({ "taskId": TASK }),
+    )
+    .await?;
+    assert_eq!(
+        value(&read)?,
+        &json!(format!("h:{}", page_hash(&format!("{USER}|{PASSWORD}")))),
+        "the boxes hold the host's values"
+    );
+    let run_id = at(&answer, "/runId").as_str().ok_or("a runId")?;
+    let record = rig
+        .host(
+            "GET",
+            &format!("/v1/runs/{run_id}?wait=10"),
+            Some(HOST_TOKEN),
+            None,
+        )
+        .await?
+        .json()?;
+    assert_eq!(
+        at(&record, "/operations/0/result/drawings"),
+        &json!([{ "field": 0, "drawn": false }, { "field": 1, "drawn": false }]),
+        "{record}"
+    );
+    client.cancel().await?;
+    Ok(())
+}
+/// The host wants no picture of a filled tab (ruling R58): `fill.pictures: never`, set before its
+/// first fill.
+async fn no_pictures_of_filled_tabs(rig: &Rig) -> TestResult {
+    let never = rig
+        .host(
+            "PATCH",
+            "/v1/settings",
+            Some(HOST_TOKEN),
+            Some(&json!({ "fill": { "pictures": "never" } })),
+        )
+        .await?;
+    assert_eq!(never.status, 200, "fill.pictures: never");
     Ok(())
 }
 

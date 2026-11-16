@@ -1,4 +1,4 @@
-//! The host API as zuzu sees it: requests through `Service::router` over a real trace store and a
+//! The host API as the host sees it: requests through `Service::router` over a real trace store and a
 //! scripted browser, and through `host_service` on a real Unix socket.
 
 mod browser;

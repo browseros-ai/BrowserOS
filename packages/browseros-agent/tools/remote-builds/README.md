@@ -23,6 +23,30 @@ bun run remote queue
 bun run remote fetch-image IMAGE_JOB_UUID
 ```
 
+New jobs check the coordinator before preparing source. Each status, queue and admission request
+has a five-second budget, including SSH setup. If it does not answer, the client prints one line
+explaining that the usual cause is this machine's outside IPv4 not being admitted. Check that address:
+
+```sh
+curl --noproxy '*' -4fsS --connect-timeout 3 --max-time 5 https://api.ipify.org
+```
+
+Ask the pool operator to compare it with the SSH allowlist and admit it if needed; retrying
+will not help until access is fixed. A timeout can also mean a down VM or a network problem,
+so the hint is not proof of an allowlist mismatch. A reachable but full pool still waits for
+a slot. The five seconds bound each read/admission request, not total time in the queue.
+Each poll uses one SSH connection so a slow link does not double the waiter refresh interval.
+If an admission reply is lost, no guest command has been dispatched; an unseen reservation
+remains protected by the existing two-minute client lease and independent reaper. Running-job
+RPC recovery, execution, lease renewal, cleanup and artifact transfers keep their existing
+budgets. `fetch-image` uses its saved guest endpoint without requiring the coordinator.
+
+The five-second deadline also ends an already connected but slow reply:
+`pool did not answer within 5s` does not prove a connection or allowlist failure.
+An admission whose reply is lost can hold an undispatched slot for about two minutes before
+reaping (longer if cleanup cannot run or be proved); if you then see `already has two jobs`,
+wait for recovery and try again.
+
 `image` builds the SDK's amd64 image on Linux and runs its native acceptance suite.
 `viewer-image` uses the same builder for your local Docker architecture, then streams and loads
 that image into local Docker. The Rust build cross-compiles with Zig; QEMU runs the arm64
@@ -44,6 +68,7 @@ locks until a complete current-main remote run passes; the wrapper preserves its
 
 ```text
 agent in its worktree
+  | check coordinator connection (five seconds)
   | capture commit + dirty flag; freeze approved working files
   | ask the shared slot file for the first free VM
   | Crabbox uploads the frozen files, then runs the command

@@ -31,6 +31,7 @@ mod method;
 mod observation;
 mod op_abort;
 mod op_ctx;
+mod opens_in_flight;
 mod operation_error;
 mod operation_guard;
 mod page_target;
@@ -39,6 +40,7 @@ mod refusal_brand;
 mod registry;
 mod run_ctx;
 mod run_tasks;
+mod tabs_named;
 #[cfg(test)]
 mod tests;
 
@@ -47,7 +49,7 @@ pub(crate) use dispatcher::{
 };
 pub(crate) use method::{Lifetime, Listing, Method, MethodSpec, PageScript, Visibility};
 pub(crate) use observation::{
-    ActedTarget, ApprovedClose, Claim, EventLog, Observation, Observer, WorkerFact,
+    ActedTarget, ApprovedClose, Claim, EventLog, FrameVersion, Observation, Observer, WorkerFact,
 };
 pub(crate) use op_abort::OpAbort;
 pub(crate) use op_ctx::{OpCtx, PageChange};
@@ -60,3 +62,4 @@ pub(crate) use registry::{Registry, RegistryBuilder, RegistryError};
 pub(crate) use run_ctx::{OpLine, OpsReport, RunCtx, RunEnd, RunGuard, RunStart, StopReason};
 
 pub(crate) use run_tasks::{TabNote, TaskKind, TaskNote};
+pub(crate) use tabs_named::tabs_named;

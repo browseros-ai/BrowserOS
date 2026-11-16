@@ -54,8 +54,8 @@ pub(crate) enum BindError {
 impl HostListener {
     /// Binds the socket, and TCP when configured.
     ///
-    /// The socket is mode 0660, so a host in the socket's group (zuzu's shared
-    /// `/run/mirror-neo/`) can connect; the service's auth decides the rest.
+    /// The socket is mode 0660, so a host in the socket's group can connect; the service's
+    /// auth decides the rest.
     pub(crate) async fn bind(config: &HostApiConfig) -> Result<Self, BindError> {
         let socket = &config.socket;
         if let Some(parent) = socket.parent() {

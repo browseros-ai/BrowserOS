@@ -1461,6 +1461,257 @@
     return result;
   }
 
+  // crates/neo-sdk/neo-playwright/third_party/playwright/packages/injected/src/domUtils.ts
+  var globalOptions = {};
+  function setGlobalOptions(options) {
+    globalOptions = options;
+  }
+  function isInsideScope(scope, element) {
+    while (element) {
+      if (scope.contains(element))
+        return true;
+      element = enclosingShadowHost(element);
+    }
+    return false;
+  }
+  function parentElementOrShadowHost(element) {
+    if (element.parentElement)
+      return element.parentElement;
+    if (!element.parentNode)
+      return;
+    if (element.parentNode.nodeType === 11 && element.parentNode.host)
+      return element.parentNode.host;
+  }
+  function enclosingShadowRootOrDocument(element) {
+    let node = element;
+    while (node.parentNode)
+      node = node.parentNode;
+    if (node.nodeType === 11 || node.nodeType === 9)
+      return node;
+  }
+  function enclosingShadowHost(element) {
+    while (element.parentElement)
+      element = element.parentElement;
+    return parentElementOrShadowHost(element);
+  }
+  function closestCrossShadow(element, css, scope) {
+    while (element) {
+      const closest = element.closest(css);
+      if (scope && closest !== scope && closest?.contains(scope))
+        return;
+      if (closest)
+        return closest;
+      element = enclosingShadowHost(element);
+    }
+  }
+  function getElementComputedStyle(element, pseudo) {
+    const cache = pseudo === "::before" ? cacheStyleBefore : pseudo === "::after" ? cacheStyleAfter : cacheStyle;
+    if (cache && cache.has(element))
+      return cache.get(element);
+    const style = element.ownerDocument && element.ownerDocument.defaultView ? element.ownerDocument.defaultView.getComputedStyle(element, pseudo) : undefined;
+    cache?.set(element, style);
+    return style;
+  }
+  function isElementStyleVisibilityVisible(element, style) {
+    const cached = cacheStyleVisibility?.get(element);
+    if (cached !== undefined)
+      return cached;
+    const result = computeElementStyleVisibilityVisible(element, style);
+    cacheStyleVisibility?.set(element, result);
+    return result;
+  }
+  function computeElementStyleVisibilityVisible(element, style) {
+    style = style ?? getElementComputedStyle(element);
+    if (!style)
+      return true;
+    if (!element.checkVisibility() && !isWebKitListBoxOptionVisible(element, style))
+      return false;
+    if (style.visibility !== "visible")
+      return false;
+    return true;
+  }
+  function isListBoxSelect(select) {
+    return select.multiple || select.size > 1;
+  }
+  function isWebKitListBoxOptionVisible(element, style) {
+    if (globalOptions.browserNameForWorkarounds !== "webkit" || element.nodeName !== "OPTION" || style.display === "none")
+      return false;
+    const select = element.closest("select");
+    if (!select || !isListBoxSelect(select))
+      return false;
+    for (let e = element.parentElement;e && e !== select; e = e.parentElement) {
+      if (getElementComputedStyle(e)?.display === "none")
+        return false;
+    }
+    return isElementStyleVisibilityVisible(select);
+  }
+  function computeBox(element) {
+    const style = getElementComputedStyle(element);
+    if (!style)
+      return { visible: true, inline: false };
+    const cursor = style.cursor;
+    if (style.display === "contents") {
+      for (let child = element.firstChild;child; child = child.nextSibling) {
+        if (child.nodeType === 1 && isElementVisible(child))
+          return { visible: true, inline: false, cursor };
+        if (child.nodeType === 3 && isVisibleTextNode(child))
+          return { visible: true, inline: true, cursor };
+      }
+      return { visible: false, inline: false, cursor };
+    }
+    if (!isElementStyleVisibilityVisible(element, style))
+      return { cursor, visible: false, inline: false };
+    const rect = element.getBoundingClientRect();
+    return { cursor, visible: rect.width > 0 && rect.height > 0, inline: style.display === "inline" };
+  }
+  function isElementVisible(element) {
+    return computeBox(element).visible;
+  }
+  var kTextNodeRange = Symbol("playwrightTextNodeRange");
+  function isVisibleTextNode(node) {
+    const document2 = node.ownerDocument;
+    const range = document2[kTextNodeRange] ??= document2.createRange();
+    range.selectNode(node);
+    const rect = range.getBoundingClientRect();
+    const result = rect.width > 0 && rect.height > 0;
+    range.setStart(document2, 0);
+    range.collapse(true);
+    return result;
+  }
+  function elementSafeTagName(element) {
+    const tagName = element.tagName;
+    if (typeof tagName === "string") {
+      const firstCharCode = tagName.charCodeAt(0);
+      if (firstCharCode >= 97 && firstCharCode <= 122)
+        return tagName.toUpperCase();
+      return tagName;
+    }
+    if (element instanceof HTMLFormElement)
+      return "FORM";
+    return element.tagName.toUpperCase();
+  }
+  var cacheStyle;
+  var cacheStyleBefore;
+  var cacheStyleAfter;
+  var cacheStyleVisibility;
+  var cachesCounter = 0;
+  function beginDOMCaches() {
+    ++cachesCounter;
+    cacheStyle ??= new Map;
+    cacheStyleBefore ??= new Map;
+    cacheStyleAfter ??= new Map;
+    cacheStyleVisibility ??= new Map;
+  }
+  function endDOMCaches() {
+    if (!--cachesCounter) {
+      cacheStyle = undefined;
+      cacheStyleBefore = undefined;
+      cacheStyleAfter = undefined;
+      cacheStyleVisibility = undefined;
+    }
+  }
+
+  // crates/neo-sdk/neo-playwright-js/src/probe/private-frame.ts
+  var EPSILON = 0.000001;
+  function lookFrameBox(world, iframe, point) {
+    const view = iframe.ownerDocument.defaultView;
+    if (!iframe.isConnected || !view)
+      return { kind: "detached" };
+    const looked = point ? lookHit(world, iframe, point) : undefined;
+    return {
+      kind: "frameBox",
+      origin: shiftedOrigin(view, iframe),
+      hit: looked?.hit ?? null,
+      unseen: looked?.unseen ?? false
+    };
+  }
+  function shiftedOrigin(view, iframe) {
+    for (let at = iframe;at; at = flatParent(at)) {
+      if (!onlyShifts(view.getComputedStyle(at)))
+        return null;
+    }
+    const drawn = iframe.getBoundingClientRect();
+    if (!(iframe instanceof HTMLElement) || Math.abs(drawn.width - iframe.offsetWidth) > 1 || Math.abs(drawn.height - iframe.offsetHeight) > 1)
+      return null;
+    const style = view.getComputedStyle(iframe);
+    return {
+      x: drawn.x + parseInt(style.borderLeftWidth || "", 10) + parseInt(style.paddingLeft || "", 10),
+      y: drawn.y + parseInt(style.borderTopWidth || "", 10) + parseInt(style.paddingTop || "", 10)
+    };
+  }
+  function onlyShifts(style) {
+    if (style.scale !== "none" && style.scale !== "")
+      return false;
+    if (style.rotate !== "none" && style.rotate !== "")
+      return false;
+    if (style.zoom !== "1" && style.zoom !== "" && style.zoom !== "normal")
+      return false;
+    if (style.offsetPath !== "none" && style.offsetPath !== "")
+      return false;
+    if (style.transform === "none" || style.transform === "")
+      return true;
+    let matrix;
+    try {
+      matrix = new DOMMatrixReadOnly(style.transform);
+    } catch {
+      return false;
+    }
+    const near = (value, wanted) => Math.abs(value - wanted) < EPSILON;
+    return near(matrix.m11, 1) && near(matrix.m12, 0) && near(matrix.m13, 0) && near(matrix.m14, 0) && near(matrix.m21, 0) && near(matrix.m22, 1) && near(matrix.m23, 0) && near(matrix.m24, 0) && near(matrix.m31, 0) && near(matrix.m32, 0) && near(matrix.m33, 1) && near(matrix.m34, 0) && near(matrix.m43, 0) && near(matrix.m44, 1);
+  }
+  function lookHit(world, iframe, point) {
+    const verdict = world.injected.expectHitTarget(point, iframe);
+    if (verdict === "done")
+      return { hit: verdict, unseen: false };
+    const top = topmostAt(iframe, point);
+    if (top === undefined)
+      return { hit: verdict, unseen: true };
+    if (!holds(top, iframe))
+      return { hit: verdict, unseen: false };
+    const view = iframe.ownerDocument.defaultView;
+    const through = view?.getComputedStyle(iframe).pointerEvents === "none";
+    const root = iframe.getRootNode();
+    const drawn = (root instanceof Document || root instanceof ShadowRoot) && root.elementsFromPoint(point.x, point.y).includes(iframe);
+    if (through || drawn)
+      return { hit: "done", unseen: false };
+    return { hit: verdict, unseen: true };
+  }
+  function topmostAt(iframe, point) {
+    const roots = [];
+    for (let at = iframe;at; ) {
+      const root = at.getRootNode();
+      if (root instanceof Document) {
+        roots.push(root);
+        break;
+      }
+      if (!(root instanceof ShadowRoot))
+        break;
+      roots.push(root);
+      at = root.host;
+    }
+    let top;
+    for (let index = roots.length - 1;index >= 0; index--) {
+      const inner = roots[index].elementsFromPoint(point.x, point.y)[0];
+      if (!inner)
+        break;
+      top = inner;
+      const next = roots[index - 1];
+      if (index && next instanceof ShadowRoot && inner !== next.host)
+        break;
+    }
+    return top;
+  }
+  function holds(element, iframe) {
+    for (let at = iframe;at; at = flatParent(at)) {
+      if (at === element)
+        return true;
+    }
+    return false;
+  }
+  function flatParent(element) {
+    return element.assignedSlot ?? parentElementOrShadowHost(element) ?? null;
+  }
+
   // crates/neo-sdk/neo-playwright/third_party/playwright/packages/isomorphic/ariaSnapshot.ts
   function hasPointerCursor(ariaNode) {
     return ariaNode.box.cursor === "pointer";
@@ -3009,156 +3260,6 @@
     removeNameRepeatingChild,
     unwrapSingleChildGenerics
   ];
-
-  // crates/neo-sdk/neo-playwright/third_party/playwright/packages/injected/src/domUtils.ts
-  var globalOptions = {};
-  function setGlobalOptions(options) {
-    globalOptions = options;
-  }
-  function isInsideScope(scope, element) {
-    while (element) {
-      if (scope.contains(element))
-        return true;
-      element = enclosingShadowHost(element);
-    }
-    return false;
-  }
-  function parentElementOrShadowHost(element) {
-    if (element.parentElement)
-      return element.parentElement;
-    if (!element.parentNode)
-      return;
-    if (element.parentNode.nodeType === 11 && element.parentNode.host)
-      return element.parentNode.host;
-  }
-  function enclosingShadowRootOrDocument(element) {
-    let node = element;
-    while (node.parentNode)
-      node = node.parentNode;
-    if (node.nodeType === 11 || node.nodeType === 9)
-      return node;
-  }
-  function enclosingShadowHost(element) {
-    while (element.parentElement)
-      element = element.parentElement;
-    return parentElementOrShadowHost(element);
-  }
-  function closestCrossShadow(element, css, scope) {
-    while (element) {
-      const closest = element.closest(css);
-      if (scope && closest !== scope && closest?.contains(scope))
-        return;
-      if (closest)
-        return closest;
-      element = enclosingShadowHost(element);
-    }
-  }
-  function getElementComputedStyle(element, pseudo) {
-    const cache = pseudo === "::before" ? cacheStyleBefore : pseudo === "::after" ? cacheStyleAfter : cacheStyle;
-    if (cache && cache.has(element))
-      return cache.get(element);
-    const style = element.ownerDocument && element.ownerDocument.defaultView ? element.ownerDocument.defaultView.getComputedStyle(element, pseudo) : undefined;
-    cache?.set(element, style);
-    return style;
-  }
-  function isElementStyleVisibilityVisible(element, style) {
-    const cached = cacheStyleVisibility?.get(element);
-    if (cached !== undefined)
-      return cached;
-    const result = computeElementStyleVisibilityVisible(element, style);
-    cacheStyleVisibility?.set(element, result);
-    return result;
-  }
-  function computeElementStyleVisibilityVisible(element, style) {
-    style = style ?? getElementComputedStyle(element);
-    if (!style)
-      return true;
-    if (!element.checkVisibility() && !isWebKitListBoxOptionVisible(element, style))
-      return false;
-    if (style.visibility !== "visible")
-      return false;
-    return true;
-  }
-  function isListBoxSelect(select) {
-    return select.multiple || select.size > 1;
-  }
-  function isWebKitListBoxOptionVisible(element, style) {
-    if (globalOptions.browserNameForWorkarounds !== "webkit" || element.nodeName !== "OPTION" || style.display === "none")
-      return false;
-    const select = element.closest("select");
-    if (!select || !isListBoxSelect(select))
-      return false;
-    for (let e = element.parentElement;e && e !== select; e = e.parentElement) {
-      if (getElementComputedStyle(e)?.display === "none")
-        return false;
-    }
-    return isElementStyleVisibilityVisible(select);
-  }
-  function computeBox(element) {
-    const style = getElementComputedStyle(element);
-    if (!style)
-      return { visible: true, inline: false };
-    const cursor = style.cursor;
-    if (style.display === "contents") {
-      for (let child = element.firstChild;child; child = child.nextSibling) {
-        if (child.nodeType === 1 && isElementVisible(child))
-          return { visible: true, inline: false, cursor };
-        if (child.nodeType === 3 && isVisibleTextNode(child))
-          return { visible: true, inline: true, cursor };
-      }
-      return { visible: false, inline: false, cursor };
-    }
-    if (!isElementStyleVisibilityVisible(element, style))
-      return { cursor, visible: false, inline: false };
-    const rect = element.getBoundingClientRect();
-    return { cursor, visible: rect.width > 0 && rect.height > 0, inline: style.display === "inline" };
-  }
-  function isElementVisible(element) {
-    return computeBox(element).visible;
-  }
-  var kTextNodeRange = Symbol("playwrightTextNodeRange");
-  function isVisibleTextNode(node) {
-    const document2 = node.ownerDocument;
-    const range = document2[kTextNodeRange] ??= document2.createRange();
-    range.selectNode(node);
-    const rect = range.getBoundingClientRect();
-    const result = rect.width > 0 && rect.height > 0;
-    range.setStart(document2, 0);
-    range.collapse(true);
-    return result;
-  }
-  function elementSafeTagName(element) {
-    const tagName = element.tagName;
-    if (typeof tagName === "string") {
-      const firstCharCode = tagName.charCodeAt(0);
-      if (firstCharCode >= 97 && firstCharCode <= 122)
-        return tagName.toUpperCase();
-      return tagName;
-    }
-    if (element instanceof HTMLFormElement)
-      return "FORM";
-    return element.tagName.toUpperCase();
-  }
-  var cacheStyle;
-  var cacheStyleBefore;
-  var cacheStyleAfter;
-  var cacheStyleVisibility;
-  var cachesCounter = 0;
-  function beginDOMCaches() {
-    ++cachesCounter;
-    cacheStyle ??= new Map;
-    cacheStyleBefore ??= new Map;
-    cacheStyleAfter ??= new Map;
-    cacheStyleVisibility ??= new Map;
-  }
-  function endDOMCaches() {
-    if (!--cachesCounter) {
-      cacheStyle = undefined;
-      cacheStyleBefore = undefined;
-      cacheStyleAfter = undefined;
-      cacheStyleVisibility = undefined;
-    }
-  }
 
   // crates/neo-sdk/neo-playwright/third_party/playwright/packages/injected/src/roleUtils.ts
   function hasExplicitAccessibleName(e) {
@@ -8343,6 +8444,8 @@ ${value.stack}`;
     if (found.kind !== "one")
       return found;
     const iframe = found.element;
+    if (request.look)
+      return lookFrameBox(world, iframe, request.point);
     const style = world.injected.describeIFrameStyle(iframe);
     if (style === "error:notconnected")
       return { kind: "detached" };
@@ -8350,7 +8453,8 @@ ${value.stack}`;
     return {
       kind: "frameBox",
       origin: style === "transformed" ? null : { x: box.x + style.left, y: box.y + style.top },
-      hit: request.point ? world.injected.expectHitTarget(request.point, iframe) : null
+      hit: request.point ? world.injected.expectHitTarget(request.point, iframe) : null,
+      unseen: false
     };
   }
   function scroll(element, plan) {
@@ -8385,10 +8489,10 @@ ${value.stack}`;
     const width = innerWidth;
     const height = innerHeight;
     for (const box of boxes) {
-      const left = Math.max(box.left, 0);
-      const right = Math.min(box.right, width);
-      const top = Math.max(box.top, 0);
-      const bottom = Math.min(box.bottom, height);
+      const left = Math.min(Math.max(box.left, 0), width);
+      const right = Math.min(Math.max(box.right, 0), width);
+      const top = Math.min(Math.max(box.top, 0), height);
+      const bottom = Math.min(Math.max(box.bottom, 0), height);
       if ((right - left) * (bottom - top) > 0.99)
         return {
           point: { x: (left + right) / 2, y: (top + bottom) / 2 },
@@ -8716,25 +8820,440 @@ ${value.stack}`;
     };
   }
 
+  // crates/neo-sdk/neo-playwright-js/src/probe/private-digest.ts
+  var key;
+  var kept = new Map;
+  var holders = new WeakSet;
+  function setAside(text) {
+    return text.replace(/[\s\-/]/g, "");
+  }
+  function keepDigest(text) {
+    const bare = setAside(text);
+    if (!bare)
+      return;
+    key ??= crypto.getRandomValues(new Uint32Array(4));
+    kept.set(digest(key, bare), bare.length);
+  }
+  function keepsDigests() {
+    return kept.size > 0;
+  }
+  function noteHolders(document2) {
+    holders = new WeakSet;
+    if (!key || kept.size === 0)
+      return;
+    const lengths = new Set(kept.values());
+    const held = new Set;
+    for (const control of textControls(document2)) {
+      const bare = setAside(control.value);
+      if (!lengths.has(bare.length))
+        continue;
+      const found = digest(key, bare);
+      if (!kept.has(found))
+        continue;
+      held.add(found);
+      holders.add(control);
+    }
+    for (const known of kept.keys())
+      if (!held.has(known))
+        kept.delete(known);
+  }
+  function holdsKeptValue(element) {
+    return holders.has(element);
+  }
+  var NOT_TEXT = new Set([
+    "button",
+    "checkbox",
+    "color",
+    "file",
+    "image",
+    "radio",
+    "range",
+    "reset",
+    "submit"
+  ]);
+  function* textControls(document2) {
+    const roots = [document2];
+    for (const root of roots) {
+      for (const element of root.querySelectorAll("*")) {
+        if (element instanceof HTMLTextAreaElement)
+          yield element;
+        else if (element instanceof HTMLInputElement && !NOT_TEXT.has(element.type))
+          yield element;
+        const shadow = element.shadowRoot;
+        if (shadow)
+          roots.push(shadow);
+      }
+    }
+  }
+  function digest(secret, text) {
+    const bytes = new Uint8Array(text.length * 2);
+    for (let index = 0;index < text.length; index++) {
+      const unit = text.charCodeAt(index);
+      bytes[index * 2] = unit & 255;
+      bytes[index * 2 + 1] = unit >>> 8;
+    }
+    const [hash0, hash1] = sipHash24(secret, bytes);
+    return `${hash1.toString(16)}:${hash0.toString(16)}`;
+  }
+  function sipHash24(secret, bytes) {
+    const k0lo = secret[0] ?? 0;
+    const k0hi = secret[1] ?? 0;
+    const k1lo = secret[2] ?? 0;
+    const k1hi = secret[3] ?? 0;
+    const v = new Uint32Array([
+      (k0lo ^ 1886610805) >>> 0,
+      (k0hi ^ 1936682341) >>> 0,
+      (k1lo ^ 1852075885) >>> 0,
+      (k1hi ^ 1685025377) >>> 0,
+      (k0lo ^ 1852142177) >>> 0,
+      (k0hi ^ 1819895653) >>> 0,
+      (k1lo ^ 2037671283) >>> 0,
+      (k1hi ^ 1952801890) >>> 0
+    ]);
+    const word = (at) => ((bytes[at] ?? 0) | (bytes[at + 1] ?? 0) << 8 | (bytes[at + 2] ?? 0) << 16 | (bytes[at + 3] ?? 0) << 24) >>> 0;
+    const absorb = (lo, hi) => {
+      v[6] = (v[6] ?? 0) ^ lo;
+      v[7] = (v[7] ?? 0) ^ hi;
+      round(v);
+      round(v);
+      v[0] = (v[0] ?? 0) ^ lo;
+      v[1] = (v[1] ?? 0) ^ hi;
+    };
+    const whole = bytes.length - bytes.length % 8;
+    for (let at = 0;at < whole; at += 8)
+      absorb(word(at), word(at + 4));
+    const last = new Uint8Array(8);
+    last.set(bytes.subarray(whole));
+    last[7] = bytes.length & 255;
+    const lastLo = ((last[0] ?? 0) | (last[1] ?? 0) << 8 | (last[2] ?? 0) << 16 | (last[3] ?? 0) << 24) >>> 0;
+    const lastHi = ((last[4] ?? 0) | (last[5] ?? 0) << 8 | (last[6] ?? 0) << 16 | (last[7] ?? 0) << 24) >>> 0;
+    absorb(lastLo, lastHi);
+    v[4] = (v[4] ?? 0) ^ 255;
+    round(v);
+    round(v);
+    round(v);
+    round(v);
+    const lo = ((v[0] ?? 0) ^ (v[2] ?? 0) ^ (v[4] ?? 0) ^ (v[6] ?? 0)) >>> 0;
+    const hi = ((v[1] ?? 0) ^ (v[3] ?? 0) ^ (v[5] ?? 0) ^ (v[7] ?? 0)) >>> 0;
+    return [lo, hi];
+  }
+  function round(v) {
+    add(v, 0, 2);
+    rotate(v, 2, 13);
+    xor(v, 2, 0);
+    rotate(v, 0, 32);
+    add(v, 4, 6);
+    rotate(v, 6, 16);
+    xor(v, 6, 4);
+    add(v, 0, 6);
+    rotate(v, 6, 21);
+    xor(v, 6, 0);
+    add(v, 4, 2);
+    rotate(v, 2, 17);
+    xor(v, 2, 4);
+    rotate(v, 4, 32);
+  }
+  function add(v, into, from) {
+    const lo = (v[into] ?? 0) + (v[from] ?? 0);
+    const carry = lo > 4294967295 ? 1 : 0;
+    v[into] = lo >>> 0;
+    v[into + 1] = (v[into + 1] ?? 0) + (v[from + 1] ?? 0) + carry >>> 0;
+  }
+  function xor(v, into, from) {
+    v[into] = ((v[into] ?? 0) ^ (v[from] ?? 0)) >>> 0;
+    v[into + 1] = ((v[into + 1] ?? 0) ^ (v[from + 1] ?? 0)) >>> 0;
+  }
+  function rotate(v, at, bits) {
+    const lo = v[at] ?? 0;
+    const hi = v[at + 1] ?? 0;
+    if (bits === 32) {
+      v[at] = hi;
+      v[at + 1] = lo;
+      return;
+    }
+    v[at] = (lo << bits | hi >>> 32 - bits) >>> 0;
+    v[at + 1] = (hi << bits | lo >>> 32 - bits) >>> 0;
+  }
+
+  // crates/neo-sdk/neo-playwright-js/src/probe/private-look.ts
+  var TEXT_TYPES = new Set([
+    "text",
+    "password",
+    "tel",
+    "email",
+    "search",
+    "url",
+    "number"
+  ]);
+  var MAXLENGTH_TYPES = new Set([
+    "text",
+    "search",
+    "url",
+    "tel",
+    "email",
+    "password"
+  ]);
+  function look(world, request) {
+    const element = world.pins.live(request.pin);
+    if (!element)
+      return { kind: "detached" };
+    return { kind: "value", value: lookAt(world, element, request.look) };
+  }
+  function lookAt(world, element, ask) {
+    coverWrappers.delete(element);
+    if (!isTextInput(element))
+      return { refusal: { code: "notAnInput" } };
+    if (ask.scroll === "centre")
+      element.scrollIntoView({
+        block: "center",
+        inline: "center",
+        behavior: "instant"
+      });
+    const facts = factsOf(element);
+    const refusal = firstRefusal(world, element, facts, ask);
+    const moved = ask.expect !== undefined && limitMove(facts, ask.expect, ask) === "fits";
+    return {
+      facts,
+      ...refusal ? { refusal } : {},
+      ...moved ? { maxLengthMoved: true } : {}
+    };
+  }
+  function firstRefusal(world, element, facts, ask) {
+    const { expect } = ask;
+    if (expect && facts.origin !== expect.origin)
+      return { code: "wrongOrigin" };
+    if (expect?.type !== undefined && expect.type !== facts.type)
+      return { code: "wrongType" };
+    const fact = expect && changedFact(facts, expect, ask);
+    if (fact)
+      return { code: "boxChanged", fact };
+    if (element.disabled || element.readOnly || element.matches(":disabled"))
+      return { code: "boxNotEditable" };
+    if (!facts.sized) {
+      if (!ask.keys)
+        return { code: "boxHidden" };
+    } else if (!world.injected.elementState(element, "visible", ask.frameVisible).matches)
+      return { code: "boxHidden" };
+    else if (blocked(world, element, ask.keys))
+      return { code: "boxCovered" };
+    if (ask.length !== undefined && !ask.cut && facts.maxLength !== null && MAXLENGTH_TYPES.has(facts.type) && ask.length > facts.maxLength)
+      return { code: "valueTooLong" };
+    return;
+  }
+  function factsOf(input) {
+    const rect = input.getBoundingClientRect();
+    return {
+      origin: originOf(input.ownerDocument),
+      type: input.type,
+      autocomplete: input.getAttribute("autocomplete") ?? "",
+      maxLength: input.maxLength >= 0 ? input.maxLength : null,
+      inputMode: input.getAttribute("inputmode") ?? "",
+      name: input.getAttribute("name") ?? "",
+      id: input.getAttribute("id") ?? "",
+      sized: rect.width > 0 && rect.height > 0,
+      empty: input.value === ""
+    };
+  }
+  function originOf(document2) {
+    const origin = document2.defaultView ? Reflect.get(document2.defaultView, "origin") : undefined;
+    return typeof origin === "string" ? origin : document2.location.origin;
+  }
+  function changedFact(facts, expect, ask) {
+    if (expect.autocomplete !== undefined && expect.autocomplete !== facts.autocomplete)
+      return "autocomplete";
+    if (limitMove(facts, expect, ask) === "cuts")
+      return "maxLength";
+    if (expect.inputMode !== undefined && expect.inputMode !== facts.inputMode)
+      return "inputMode";
+    if (expect.name !== undefined && expect.name !== facts.name)
+      return "name";
+    if (expect.id !== undefined && expect.id !== facts.id)
+      return "id";
+    return;
+  }
+  function limitMove(facts, expect, ask) {
+    const approved = expect.maxLength;
+    if (approved === undefined)
+      return "same";
+    const now = facts.maxLength ?? -1;
+    if (approved === now)
+      return "same";
+    const { length } = ask;
+    if (length === undefined)
+      return "fits";
+    const fits = (limit) => limit === -1 || !MAXLENGTH_TYPES.has(facts.type) || length <= limit;
+    return fits(approved) && fits(now) ? "fits" : "cuts";
+  }
+  function isTextInput(element) {
+    return element.localName === "input" && element.namespaceURI === "http://www.w3.org/1999/xhtml" && TEXT_TYPES.has(String(Reflect.get(element, "type")));
+  }
+  function blockerOf(box) {
+    try {
+      scrollIntoViewIfNeeded(box);
+      const rect = box.getBoundingClientRect();
+      let document2 = box.ownerDocument;
+      let x = rect.left + rect.width / 2;
+      let y = rect.top + rect.height / 2;
+      for (let frame = document2.defaultView?.frameElement;frame; frame = document2.defaultView?.frameElement) {
+        const frameRect = frame.getBoundingClientRect();
+        x += frameRect.x + frame.clientLeft;
+        y += frameRect.y + frame.clientTop;
+        document2 = frame.ownerDocument;
+      }
+      return blockerAt(document2, box, x, y);
+    } catch {
+      return "unread";
+    }
+  }
+  var coverWrappers = new WeakMap;
+  function coverWrapper(box) {
+    return coverWrappers.get(box);
+  }
+  function blocked(world, box, keys) {
+    const blocker = blockerOf(box);
+    if (blocker === null)
+      return false;
+    if (blocker === "unread")
+      return true;
+    const wrapper = drawingOf(world, box, blocker, keys);
+    if (!wrapper)
+      return true;
+    coverWrappers.set(box, wrapper);
+    return false;
+  }
+  var CONTROLS = "input, textarea, select, button, a[href], iframe, frame, [contenteditable], [tabindex]";
+  function drawingOf(world, box, blocker, keys) {
+    if (blocker.ownerDocument !== box.ownerDocument)
+      return null;
+    const parent = box.parentElement;
+    const grand = parent?.parentElement;
+    const wrapper = parent?.contains(blocker) ? parent : grand?.contains(blocker) ? grand : null;
+    if (!wrapper)
+      return null;
+    let cover = blocker;
+    while (cover.parentElement && cover.parentElement !== wrapper && !cover.parentElement.contains(box))
+      cover = cover.parentElement;
+    if (cover.contains(box) || cover.matches(CONTROLS) || cover.querySelector(CONTROLS) || labelsAnother(cover, box))
+      return null;
+    const own = box.getBoundingClientRect();
+    const drawn = cover.getBoundingClientRect();
+    const dx = own.width / 2;
+    const dy = own.height / 2;
+    if (drawn.left < own.left - dx || drawn.right > own.right + dx || drawn.top < own.top - dy || drawn.bottom > own.bottom + dy)
+      return null;
+    const text = renderedText(cover);
+    if (fold(text) === "")
+      return keys ? wrapper : null;
+    const name = world.injected.utils.getElementAccessibleNameText(box, false);
+    return sameName(text, name) ? wrapper : null;
+  }
+  function labelsAnother(cover, box) {
+    const labels = [cover, ...cover.querySelectorAll("label")];
+    return labels.some((label) => {
+      if (label.localName !== "label")
+        return false;
+      const control = Reflect.get(label, "control");
+      return isNode(control) && control !== box;
+    });
+  }
+  function renderedText(element) {
+    const text = Reflect.get(element, "innerText");
+    return typeof text === "string" ? text : "";
+  }
+  function sameName(drawn, name) {
+    const a = fold(drawn);
+    const b = fold(name);
+    if (!a || !b)
+      return false;
+    if (a === b)
+      return true;
+    const [shorter, longer] = a.length < b.length ? [a, b] : [b, a];
+    return shorter.length >= 3 && longer.includes(shorter);
+  }
+  function fold(text) {
+    return text.replace(/\s+/g, " ").trim().toLowerCase().replace(/[\s*:]+$/, "");
+  }
+  function scrollIntoViewIfNeeded(box) {
+    const scroll = Reflect.get(box, "scrollIntoViewIfNeeded");
+    if (typeof scroll === "function")
+      Reflect.apply(scroll, box, [true]);
+    else
+      box.scrollIntoView({ block: "center", inline: "center" });
+  }
+  function blockerAt(document2, box, pointX, pointY) {
+    let currentDocument = document2;
+    let x = pointX;
+    let y = pointY;
+    let hit = currentDocument.elementFromPoint(x, y);
+    while (hit && (hit.tagName === "IFRAME" || hit.tagName === "FRAME") && hit !== box) {
+      let child = null;
+      try {
+        child = Reflect.get(hit, "contentDocument");
+      } catch {
+        child = null;
+      }
+      if (!isDocument(child))
+        break;
+      const frameRect = hit.getBoundingClientRect();
+      x -= frameRect.x + hit.clientLeft;
+      y -= frameRect.y + hit.clientTop;
+      currentDocument = child;
+      hit = currentDocument.elementFromPoint(x, y);
+    }
+    if (!hit || hit === box || reaches(hit, box) || reaches(box, hit))
+      return null;
+    const hitLabel = hit.closest("label");
+    if (hitLabel && (hitLabel.control === box || hitLabel.contains(box)))
+      return null;
+    const boxLabel = box.closest("label");
+    return boxLabel?.contains(hit) ?? false ? null : hit;
+  }
+  function up(node) {
+    const next = node.parentNode ?? Reflect.get(node, "host") ?? Reflect.get(node.getRootNode(), "host");
+    return isNode(next) ? next : null;
+  }
+  function isNode(value) {
+    return typeof value === "object" && value !== null && typeof Reflect.get(value, "nodeType") === "number";
+  }
+  function isDocument(value) {
+    return isNode(value) && value.nodeType === Node.DOCUMENT_NODE;
+  }
+  function reaches(from, to) {
+    for (let node = from;node; node = up(node))
+      if (node === to)
+        return true;
+    return false;
+  }
+
   // crates/neo-sdk/neo-playwright-js/src/probe/private-entry.ts
-  var marked = new WeakSet;
+  var MARK = Symbol.for("neo.privatelyTyped");
   var anyMarked = false;
   var LEAVES = ["beforeunload", "pagehide"];
   var watched = new WeakMap;
   var active = new Map;
+  var drawnSlot;
   function privatelyTyped(element) {
-    return marked.has(element);
+    return Object.hasOwn(element, MARK) || holdsKeptValue(element);
   }
   function anyPrivatelyTyped() {
-    return anyMarked;
+    return anyMarked || keepsDigests();
   }
   function mark(element) {
-    marked.add(element);
+    if (!Object.hasOwn(element, MARK))
+      Object.defineProperty(element, MARK, { value: true });
     anyMarked = true;
   }
   function privateStep(world, request) {
     const { step, pin } = request;
-    const box = active.get(pin) ?? (step.kind === "focus" ? world.pins.live(pin) : undefined);
+    if (step.kind === "drawn") {
+      const wrapper = drawnSlot?.pin === pin ? drawnSlot.wrapper : undefined;
+      drawnSlot = undefined;
+      return reply({
+        kind: "drawn",
+        drawn: wrapper ? draws(wrapper, step.text) : true
+      });
+    }
+    const box = active.get(pin) ?? (step.kind === "focus" || step.kind === "compare" ? world.pins.live(pin) : undefined);
     if (!box)
       return { kind: "detached" };
     const answered = answer(world, pin, box, step);
@@ -8754,6 +9273,14 @@ ${value.stack}`;
           kind: "holds",
           holds: same(heldText(box), step.text, step.spaced)
         };
+      case "compare": {
+        const held = heldText(box);
+        return {
+          kind: "compared",
+          holds: same(held, step.text, step.spaced),
+          contains: contains(held, step.text, step.spaced)
+        };
+      }
       case "readBack":
         return readBack(pin, box);
       case "forget":
@@ -8773,6 +9300,7 @@ ${value.stack}`;
     if (name !== "input" && name !== "textarea")
       return false;
     mark(holder);
+    keepDigest(heldText(holder));
     return true;
   }
   async function focus(world, pin, box, text, spaced) {
@@ -8804,9 +9332,17 @@ ${value.stack}`;
   }
   function listen(pin, box, text, spaced) {
     forget(pin, box);
+    const wrapper = coverWrapper(box);
     const entry = {
       text,
       spaced,
+      ...wrapper && {
+        cover: {
+          wrapper,
+          drewBefore: draws(wrapper, text),
+          text
+        }
+      },
       heldAtLastInput: false,
       submits: [],
       leaving: false,
@@ -8850,15 +9386,37 @@ ${value.stack}`;
       state = "holds";
     else
       state = "other";
+    if (state !== "left")
+      keepDigest(heldText(box));
+    if (entry)
+      keepDigest(entry.text);
     if (state === "other")
       markFocused(box);
     const leaving = moving(entry);
+    const cover = entry?.cover;
+    const drawn = cover !== undefined && !cover.drewBefore && draws(cover.wrapper, cover.text);
+    if (cover && drawn)
+      drawnSlot = { pin, wrapper: cover.wrapper };
     forget(pin, box);
-    return { kind: "readBack", state, heldAtLastInput, moving: leaving };
+    const drawing = !cover ? "none" : drawn ? "drawn" : "under";
+    return { kind: "readBack", state, heldAtLastInput, moving: leaving, drawing };
+  }
+  function draws(wrapper, text) {
+    const bare = (value) => value.replace(/[\s\-/]/g, "").toLowerCase();
+    const value = bare(text);
+    return value !== "" && bare(renderedText(wrapper)).includes(value);
   }
   function heldText(box) {
     const value = Reflect.get(box, "value");
     return typeof value === "string" ? value : "";
+  }
+  function contains(held, text, spaced) {
+    if (held.includes(text))
+      return true;
+    if (!spaced)
+      return false;
+    const bare = (value) => value.replace(/[\s\-/]/g, "");
+    return bare(held).includes(bare(text));
   }
   function same(held, text, spaced) {
     if (held === text)
@@ -9072,7 +9630,7 @@ ${value.stack}`;
       });
   }
   function withMarkedFieldsMasked(walk, root = document.documentElement) {
-    return anyPrivatelyTyped() ? withMaskedFieldValues({ root, mayHaveOtherFrame: true }, walk, {
+    return anyPrivatelyTyped() || root !== null && privatelyTyped(root) ? withMaskedFieldValues({ root, mayHaveOtherFrame: true }, walk, {
       declared: false
     }) : walk();
   }
@@ -9156,9 +9714,10 @@ ${value.stack}`;
       return this.run(() => withMaskedFieldValues({ root, mayHaveOtherFrame: this.policy.mayHaveOtherFrame }, read, { declared: !this.policy.conformance }));
     }
     async check(element, params, frameVisible) {
-      const mode = this.checkMode(element, params);
+      const field = this.world.injected.retarget(element, "follow-label") ?? element;
+      const mode = this.checkMode(element, field, params);
       const compare = () => this.checks.single(element, params, frameVisible);
-      const check = await (mode.kind === "guardedTree" ? this.tree(element, compare) : this.run(() => withMarkedFieldsMasked(compare, element)));
+      const check = await (mode.kind === "guardedTree" ? this.tree(element, compare) : this.run(() => withMarkedFieldsMasked(compare, field)));
       return mode.kind === "realValue" && typeof check.received === "string" ? { ...check, received: characterMarker(check.received) } : check;
     }
     checkMany(elements, params) {
@@ -9168,15 +9727,13 @@ ${value.stack}`;
     arm(...args) {
       return this.engine.arm(this.previewNode, ...args);
     }
-    checkMode(element, params) {
+    checkMode(element, field, params) {
       if (this.policy.conformance)
         return { kind: "native" };
       if (guardedComparison(params))
         return { kind: "guardedTree" };
-      if (params.expression === "to.have.value") {
-        const effective = this.world.injected.retarget(element, "follow-label");
-        return effective && isPrivateField(effective) ? { kind: "realValue" } : { kind: "native" };
-      }
+      if (params.expression === "to.have.value")
+        return isPrivateField(field) ? { kind: "realValue" } : { kind: "native" };
       if (!isPrivateField(element))
         return { kind: "native" };
       const property = params.expressionArg;
@@ -9200,184 +9757,203 @@ ${value.stack}`;
     };
   }
 
-  // crates/neo-sdk/neo-playwright-js/src/probe/private-look.ts
-  var TEXT_TYPES = new Set([
-    "text",
-    "password",
-    "tel",
-    "email",
-    "search",
-    "url",
-    "number"
+  // crates/neo-sdk/neo-playwright-js/src/probe/browseros-ui.ts
+  var BROWSEROS_UI_HOSTS = new Set([
+    "browseros-neo-takeover"
   ]);
-  var MAXLENGTH_TYPES = new Set([
-    "text",
-    "search",
-    "url",
-    "tel",
-    "email",
-    "password"
-  ]);
-  function look(world, request) {
-    const element = world.pins.live(request.pin);
-    if (!element)
-      return { kind: "detached" };
-    return { kind: "value", value: lookAt(world, element, request.look) };
-  }
-  function lookAt(world, element, ask) {
-    if (!isTextInput(element))
-      return { refusal: { code: "notAnInput" } };
-    const facts = factsOf(element);
-    const refusal = firstRefusal(world, element, facts, ask);
-    return refusal ? { facts, refusal } : { facts };
-  }
-  function firstRefusal(world, element, facts, ask) {
-    const { expect } = ask;
-    if (expect && facts.origin !== expect.origin)
-      return { code: "wrongOrigin" };
-    if (expect?.type !== undefined && expect.type !== facts.type)
-      return { code: "wrongType" };
-    const fact = expect && changedFact(facts, expect);
-    if (fact)
-      return { code: "boxChanged", fact };
-    if (element.disabled || element.readOnly || element.matches(":disabled"))
-      return { code: "boxNotEditable" };
-    if (!facts.sized) {
-      if (!ask.keys)
-        return { code: "boxHidden" };
-    } else if (!world.injected.elementState(element, "visible", ask.frameVisible).matches)
-      return { code: "boxHidden" };
-    else if (covered(element))
-      return { code: "boxCovered" };
-    if (ask.length !== undefined && !ask.cut && facts.maxLength !== null && MAXLENGTH_TYPES.has(facts.type) && ask.length > facts.maxLength)
-      return { code: "valueTooLong" };
-    return;
-  }
-  function factsOf(input) {
-    const rect = input.getBoundingClientRect();
-    return {
-      origin: originOf(input.ownerDocument),
-      type: input.type,
-      autocomplete: input.getAttribute("autocomplete") ?? "",
-      maxLength: input.maxLength >= 0 ? input.maxLength : null,
-      inputMode: input.getAttribute("inputmode") ?? "",
-      name: input.getAttribute("name") ?? "",
-      id: input.getAttribute("id") ?? "",
-      sized: rect.width > 0 && rect.height > 0,
-      empty: input.value === ""
-    };
-  }
-  function originOf(document2) {
-    const origin = document2.defaultView ? Reflect.get(document2.defaultView, "origin") : undefined;
-    return typeof origin === "string" ? origin : document2.location.origin;
-  }
-  function changedFact(facts, expect) {
-    if (expect.autocomplete !== undefined && expect.autocomplete !== facts.autocomplete)
-      return "autocomplete";
-    if (expect.maxLength !== undefined && expect.maxLength !== facts.maxLength)
-      return "maxLength";
-    if (expect.inputMode !== undefined && expect.inputMode !== facts.inputMode)
-      return "inputMode";
-    if (expect.name !== undefined && expect.name !== facts.name)
-      return "name";
-    if (expect.id !== undefined && expect.id !== facts.id)
-      return "id";
-    return;
-  }
-  function isTextInput(element) {
-    return element.localName === "input" && element.namespaceURI === "http://www.w3.org/1999/xhtml" && TEXT_TYPES.has(String(Reflect.get(element, "type")));
-  }
-  function covered(box) {
-    try {
-      scrollIntoViewIfNeeded(box);
-      const rect = box.getBoundingClientRect();
-      let document2 = box.ownerDocument;
-      let x = rect.left + rect.width / 2;
-      let y = rect.top + rect.height / 2;
-      for (let frame = document2.defaultView?.frameElement;frame; frame = document2.defaultView?.frameElement) {
-        const frameRect = frame.getBoundingClientRect();
-        x += frameRect.x + frame.clientLeft;
-        y += frameRect.y + frame.clientTop;
-        document2 = frame.ownerDocument;
-      }
-      return blockerAt(document2, box, x, y);
-    } catch {
-      return true;
-    }
-  }
-  function scrollIntoViewIfNeeded(box) {
-    const scroll = Reflect.get(box, "scrollIntoViewIfNeeded");
-    if (typeof scroll === "function")
-      Reflect.apply(scroll, box, [true]);
-    else
-      box.scrollIntoView({ block: "center", inline: "center" });
-  }
-  function blockerAt(document2, box, pointX, pointY) {
-    let currentDocument = document2;
-    let x = pointX;
-    let y = pointY;
-    let hit = currentDocument.elementFromPoint(x, y);
-    while (hit && (hit.tagName === "IFRAME" || hit.tagName === "FRAME") && hit !== box) {
-      let child = null;
-      try {
-        child = Reflect.get(hit, "contentDocument");
-      } catch {
-        child = null;
-      }
-      if (!isDocument(child))
-        break;
-      const frameRect = hit.getBoundingClientRect();
-      x -= frameRect.x + hit.clientLeft;
-      y -= frameRect.y + hit.clientTop;
-      currentDocument = child;
-      hit = currentDocument.elementFromPoint(x, y);
-    }
-    if (!hit || hit === box || reaches(hit, box) || reaches(box, hit))
-      return false;
-    const hitLabel = hit.closest("label");
-    if (hitLabel && (hitLabel.control === box || hitLabel.contains(box)))
-      return false;
-    const boxLabel = box.closest("label");
-    return !(boxLabel?.contains(hit) ?? false);
-  }
-  function up(node) {
-    const next = node.parentNode ?? Reflect.get(node, "host") ?? Reflect.get(node.getRootNode(), "host");
-    return isNode(next) ? next : null;
-  }
-  function isNode(value) {
-    return typeof value === "object" && value !== null && typeof Reflect.get(value, "nodeType") === "number";
-  }
-  function isDocument(value) {
-    return isNode(value) && value.nodeType === Node.DOCUMENT_NODE;
-  }
-  function reaches(from, to) {
-    for (let node = from;node; node = up(node))
-      if (node === to)
-        return true;
-    return false;
+  function isBrowserOSUi(element) {
+    return BROWSEROS_UI_HOSTS.has(element.localName);
   }
 
   // crates/neo-sdk/neo-playwright-js/src/probe/private-shown.ts
   var inputs = 0;
-  var counting = false;
-  function privateShown(world) {
+  var heard;
+  var listened = new WeakSet;
+  var walkedRoots = new WeakMap;
+  var waiting = new Set;
+  var pointed = new WeakSet;
+  var entries = new WeakMap;
+  var certain = new WeakSet;
+  var done = new WeakSet;
+  var tries = new WeakMap;
+  var NAMED_TRIES = 5;
+  var readings = 0;
+  var WAITING_MOST = 64;
+  var FOCUS_DEPTH = 32;
+  var SHADOW_HOSTS = new Set([
+    "article",
+    "aside",
+    "blockquote",
+    "body",
+    "div",
+    "footer",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "header",
+    "main",
+    "nav",
+    "p",
+    "section",
+    "span"
+  ]);
+  var XHTML = "http://www.w3.org/1999/xhtml";
+  function privateShown(world, request, _root, nodes) {
     const { document: document2 } = world.injected;
     const view = document2.defaultView;
-    if (!counting) {
-      counting = true;
-      document2.addEventListener("input", (event) => {
-        const target = event.composedPath()[0];
-        if (target instanceof Element && paintedInClear(target, view))
+    if (!heard) {
+      heard = (event) => {
+        const first = event.composedPath()[0];
+        if (!(first instanceof Element))
+          return;
+        const known = knownRoot(first);
+        if (known)
+          listen2(known);
+        if (event.type === "input" && paintedInClear(first, view))
           inputs += 1;
-      }, true);
+        if (!event.isTrusted || !unknownHost(first) || done.has(first))
+          return;
+        inputs += 1;
+        point(first, true);
+      };
+      document2.addEventListener("beforeinput", heard, true);
+      document2.addEventListener("input", heard, true);
     }
-    const { shown, boxes } = look2(document2, view);
-    return { kind: "value", value: { shown, inputs, boxes } };
+    if (request.walk === true)
+      keep(nodes);
+    else {
+      readings += 1;
+      sweep();
+    }
+    pointFocus(document2);
+    const { shown, boxes } = look2(document2);
+    const hosts = waiting.size > 0 ? { hosts: true } : {};
+    const named = namedWaiting() ? { named: true } : {};
+    return { kind: "value", value: { shown, inputs, boxes, ...hosts, ...named } };
   }
-  function look2(document2, view) {
+  function privateHosts(request) {
+    const hosts = [];
+    for (const first of [true, false]) {
+      for (const ref of waiting) {
+        if (hosts.length >= request.limit)
+          return hosts;
+        const host = ref.deref();
+        if (!host?.isConnected) {
+          drop2(ref, host);
+          continue;
+        }
+        if (certain.has(host) !== first)
+          continue;
+        if (first) {
+          const tried = tries.get(host) ?? { count: 0, at: 0 };
+          if (tried.at === readings)
+            continue;
+          tries.set(host, { count: tried.count + 1, at: readings });
+        } else {
+          waiting.delete(ref);
+        }
+        hosts.push(host);
+      }
+    }
+    return hosts;
+  }
+  function sweep() {
+    for (const ref of waiting) {
+      const host = ref.deref();
+      const spent = host && (tries.get(host)?.count ?? 0) >= NAMED_TRIES;
+      if (!host?.isConnected || spent)
+        drop2(ref, host);
+    }
+  }
+  function drop2(ref, host) {
+    waiting.delete(ref);
+    if (host)
+      done.add(host);
+  }
+  function namedWaiting() {
+    for (const ref of waiting) {
+      const host = ref.deref();
+      if (host?.isConnected && certain.has(host))
+        return true;
+    }
+    return false;
+  }
+  function keep(roots) {
+    for (const root of roots) {
+      if (!(root instanceof ShadowRoot) || root.mode !== "closed")
+        continue;
+      const host = root.host;
+      if (isBrowserOSUi(host) || walkedRoots.has(host))
+        continue;
+      walkedRoots.set(host, root);
+      const entry = entries.get(host);
+      if (entry)
+        drop2(entry, host);
+    }
+  }
+  function knownRoot(host) {
+    return walkedRoots.get(host) ?? host.shadowRoot;
+  }
+  function unknownHost(element) {
+    return mayCarryRoot(element) && !editable(element);
+  }
+  function mayCarryRoot(element) {
+    if (element.namespaceURI !== XHTML || isBrowserOSUi(element))
+      return false;
+    const name = element.localName;
+    if (!SHADOW_HOSTS.has(name) && !name.includes("-"))
+      return false;
+    return knownRoot(element) === null;
+  }
+  function editable(element) {
+    if (Reflect.get(element, "isContentEditable") === true)
+      return true;
+    const modify = element.ownerDocument.defaultView?.getComputedStyle(element).getPropertyValue("-webkit-user-modify");
+    return modify?.startsWith("read-write") === true;
+  }
+  function point(host, byInput = false) {
+    if (byInput)
+      certain.add(host);
+    const entry = entries.get(host);
+    if (entry && waiting.has(entry))
+      return;
+    if (pointed.has(host) && !byInput)
+      return;
+    if (!byInput && waiting.size >= WAITING_MOST)
+      return;
+    pointed.add(host);
+    const fresh = new WeakRef(host);
+    entries.set(host, fresh);
+    waiting.add(fresh);
+  }
+  function listen2(root) {
+    if (root.mode !== "closed" || listened.has(root) || !heard)
+      return;
+    listened.add(root);
+    root.addEventListener("beforeinput", heard, true);
+    root.addEventListener("input", heard, true);
+  }
+  function pointFocus(document2) {
+    let holder = document2.activeElement;
+    for (let depth = 0;holder && depth < FOCUS_DEPTH; depth += 1) {
+      const inner = knownRoot(holder)?.activeElement;
+      if (!inner)
+        break;
+      holder = inner;
+    }
+    if (holder?.matches(":focus") && mayCarryRoot(holder))
+      point(holder);
+  }
+  function look2(document2) {
+    const view = document2.defaultView;
     const roots = [document2];
     let boxes = false;
     for (const root of roots) {
+      if (root instanceof ShadowRoot)
+        listen2(root);
       for (const field of root.querySelectorAll("input, textarea")) {
         if (!isPrivateField(field, { declared: true }))
           continue;
@@ -9386,7 +9962,7 @@ ${value.stack}`;
           return { shown: true, boxes };
       }
       for (const host of root.querySelectorAll("*")) {
-        const shadow = host.shadowRoot;
+        const shadow = knownRoot(host);
         if (shadow)
           roots.push(shadow);
       }
@@ -9409,10 +9985,10 @@ ${value.stack}`;
   }
 
   // crates/neo-sdk/neo-playwright-js/src/probe/protocol.ts
-  var PROTOCOL = 38;
+  var PROTOCOL = 44;
 
   // crates/neo-sdk/neo-playwright-js/src/probe/read.ts
-  var XHTML = "http://www.w3.org/1999/xhtml";
+  var XHTML2 = "http://www.w3.org/1999/xhtml";
   function readerFor(request, root) {
     const { read, frameVisible } = request;
     switch (read.kind) {
@@ -9420,7 +9996,7 @@ ${value.stack}`;
         return (_world, element) => element.textContent;
       case "innerText":
         return (world, element) => {
-          if (element.namespaceURI !== XHTML)
+          if (element.namespaceURI !== XHTML2)
             throw world.injected.createStacklessError("Node is not an HTMLElement");
           return element.innerText;
         };
@@ -9436,6 +10012,8 @@ ${value.stack}`;
         return (world, element) => world.injected.elementState(element, read.state, frameVisible).matches;
       case "boundingBox":
         return (_world, element) => borderBox(element);
+      case "viewCentre":
+        return (_world, element) => viewCentre(element);
       case "frameOrigin":
         return (_world, element) => frameOrigin(element);
       case "located":
@@ -9481,6 +10059,20 @@ ${value.stack}`;
       return null;
     const { x, y, width, height } = element.getBoundingClientRect();
     return { x, y, width, height };
+  }
+  function viewCentre(element) {
+    const box = borderBox(element);
+    if (!box)
+      return null;
+    const x = box.x + box.width / 2;
+    const y = box.y + box.height / 2;
+    const view = element.ownerDocument.defaultView;
+    const port = element.ownerDocument.scrollingElement;
+    const width = port ? port.clientWidth : view?.innerWidth ?? 0;
+    const height = port ? port.clientHeight : view?.innerHeight ?? 0;
+    if (x < 0 || y < 0 || x >= width || y >= height)
+      return null;
+    return { x, y };
   }
   function frameOrigin(element) {
     if (frameSource(element) === undefined)
@@ -9601,14 +10193,6 @@ ${value.stack}`;
   function screenshotMaskCleanup(world) {
     world.injected.hideHighlight();
     return { kind: "value", value: null };
-  }
-
-  // crates/neo-sdk/neo-playwright-js/src/probe/browseros-ui.ts
-  var BROWSEROS_UI_HOSTS = new Set([
-    "browseros-neo-takeover"
-  ]);
-  function isBrowserOSUi(element) {
-    return BROWSEROS_UI_HOSTS.has(element.localName);
   }
 
   // crates/neo-sdk/neo-playwright-js/src/probe/shadow-roots.ts
@@ -9899,7 +10483,7 @@ ${value.stack}`;
       roleOf: (of) => injected.utils.getAriaRole(of),
       isVisible: (of) => injected.utils.isElementVisible(of)
     };
-    const take = () => marked2(targets, engine, plain);
+    const take = () => marked(targets, engine, plain);
     const { result, skipped } = output.tree(element, take);
     const { json, iframeRefs, iframeDepths } = result;
     const iframes = [];
@@ -9921,7 +10505,7 @@ ${value.stack}`;
       ...skipped ? { marksSkipped: true } : {}
     };
   }
-  function marked2(targets, engine, snapshot) {
+  function marked(targets, engine, snapshot) {
     const elements = targets.filter((node) => node instanceof Element);
     if (elements.length === 0)
       return { result: snapshot(), skipped: false };
@@ -10191,6 +10775,8 @@ ${value.stack}`;
         const { request, policy } = call;
         if (request.op === "pinned")
           return pinned(booted, request);
+        if (request.op === "privateHosts")
+          return privateHosts(request);
         const output = new FailureOutput(booted, policy);
         const reply = output.run(() => dispatch(booted, request.op, request, scope, nodes, output));
         return reply instanceof Promise ? reply.catch(thrownReply) : reply;
@@ -10227,6 +10813,7 @@ ${value.stack}`;
     };
   }
   function dispatch(world, op, request, root, nodes, output) {
+    noteHolders(document);
     const handler = HANDLERS[op];
     return handler(world, request, root, nodes, output);
   }
@@ -10241,7 +10828,7 @@ ${value.stack}`;
     if (typeof request !== "object" || request === null)
       return false;
     const op = Reflect.get(request, "op");
-    return typeof op === "string" && (op === "pinned" || Object.hasOwn(HANDLERS, op));
+    return typeof op === "string" && (op === "pinned" || op === "privateHosts" || Object.hasOwn(HANDLERS, op));
   }
   function parseBootOptions(options) {
     const frameSeq = typeof options === "object" && options !== null ? Reflect.get(options, "frameSeq") : undefined;

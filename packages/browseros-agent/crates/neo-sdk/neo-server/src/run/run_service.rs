@@ -12,7 +12,8 @@ use browseros_core::TabId;
 use neo_http::Settings;
 use neo_playwright::RunState;
 use neo_trace::{
-    EpochMillis, RunEnded, RunId, RunOutputs, RunStarted, TaskId, TraceSink, TraceStore, Values,
+    EpochMillis, RunEnded, RunId, RunOutputs, RunStarted, RunTabsScope, TaskId, TraceSink,
+    TraceStore, Values,
 };
 use tokio::task::JoinSet;
 use tokio::time::{self, Instant};
@@ -21,12 +22,17 @@ use tokio_util::sync::CancellationToken;
 use super::request_ledger::{Admission, LedgerLimits, RunTicket};
 use super::snapshot_tips::SnapshotTips;
 use super::{HostData, RequestLedger, RunHandle, RunMeta, RunReply, RunRequest};
-use crate::browser::{BrowserLink, NeoTab, PageRef, RunView, TabRegistry, TaskPage};
+use crate::browser::{
+    BrowserLink, NeoTab, PageRef, RunScope, Sight, TabRegistry, TabsScope, TaskPage,
+};
 use crate::builtins;
 use crate::config::Defaults;
+#[cfg(feature = "hosted-run")]
+use crate::dispatch::FrameVersion;
 use crate::dispatch::{
     Dispatcher, ErrorCode, OperationError, PageFact, PageFacts, RunCtx, RunStart, StopReason,
 };
+use crate::host::TabHolders;
 use crate::runtime::{Script, ScriptEnd, ScriptOutcome, run_script};
 
 /// Runs `run` calls. One per process, shared by every request. There is no concurrency limit
@@ -48,6 +54,9 @@ pub(crate) struct RunService {
     snapshot_tips: SnapshotTips,
     /// Neo's blank tab, left out of a run's initial pages; `None` in the hosted embedding.
     blank_tab: Option<Arc<NeoTab>>,
+    /// Which task held which tab before a restart of Neo's server; a run starts once the book
+    /// took them back. `None` in the hosted embedding, which keeps no file and never waits.
+    holders: Option<Arc<TabHolders>>,
     /// Makes the next run's task panic right after its start record, so tests can watch the
     /// panic boundary hold.
     #[cfg(test)]
@@ -62,7 +71,7 @@ pub(crate) struct RunServiceParts {
     pub(crate) browser: Arc<BrowserLink>,
     /// Each task's last tab, for the `page` default.
     pub(crate) tabs: Arc<TabRegistry>,
-    /// The trace store: `requestId` lookups and a task's last tab after a restart.
+    /// The trace store: `requestId` lookups.
     pub(crate) store: TraceStore,
     /// The trace writer.
     pub(crate) trace: TraceSink,
@@ -74,6 +83,9 @@ pub(crate) struct RunServiceParts {
     pub(crate) orphan_grace: Duration,
     /// Neo's blank tab (`NeoTab`), which the sidecar keeps; `None` in the hosted embedding.
     pub(crate) blank_tab: Option<Arc<NeoTab>>,
+    /// The tab-holders file the sidecar restores the task book from; `None` in the hosted
+    /// embedding.
+    pub(crate) holders: Option<Arc<TabHolders>>,
 }
 
 impl RunService {
@@ -82,6 +94,13 @@ impl RunService {
     #[cfg(feature = "hosted-run")]
     pub(crate) async fn hosted_open_pages(&self, run: &RunCtx) -> PageFacts {
         self.open_pages(run).await
+    }
+
+    /// The frame-tree versions a hosted run's init carries (`RunInit` `frames`), of the tabs it
+    /// lists, past the read rules ([`Dispatcher::listed_frame_versions`]).
+    #[cfg(feature = "hosted-run")]
+    pub(crate) fn frame_versions_of(&self, run: &RunCtx, pages: &[PageFact]) -> Vec<FrameVersion> {
+        self.dispatcher.listed_frame_versions(run, pages)
     }
 
     /// The service.
@@ -97,6 +116,7 @@ impl RunService {
             shutdown,
             orphan_grace,
             blank_tab,
+            holders,
         } = parts;
         Arc::new(Self {
             ledger: RequestLedger::new(store.clone(), trace.clone(), LedgerLimits::default()),
@@ -110,6 +130,7 @@ impl RunService {
             orphan_grace,
             snapshot_tips: SnapshotTips::default(),
             blank_tab,
+            holders,
             #[cfg(test)]
             crash_next_run: AtomicBool::new(false),
         })
@@ -127,21 +148,26 @@ impl RunService {
         };
         let handle = RunHandle::new(RunId::new(), grace);
         let waiter = handle.waiter();
-        match self.ledger.admit(&request.meta, &handle).await {
+        // Read once, here: the same setting decides what this call may repeat and, if it runs,
+        // which tabs it sees. A change answered later applies to the next call, never this one.
+        let setting = self.settings.tabs_scope();
+        let would_be = RunScope::would_be(setting, request.meta.task_id.as_ref());
+        handle.set_tabs_scope(would_be);
+        match self.ledger.admit(&request.meta, &handle, setting).await {
             Admission::Fresh(ticket) => {
                 // No await between the claim and the spawn, so a caller that leaves now still
                 // leaves a run that publishes through its ticket.
-                tokio::spawn(Arc::clone(self).execute(request, handle, ticket));
+                tokio::spawn(Arc::clone(self).execute(request, handle, ticket, setting));
                 waiter.reply().await
             }
             Admission::Join(first) => first.reply().await,
             Admission::Replay(reply) => reply,
             Admission::Duplicate(first) => {
-                let reply = RunReply::duplicate(handle.id(), first);
+                let reply = RunReply::duplicate(handle.id(), first).with_tabs_scope(would_be);
                 self.record_refused(request.code, request.meta, reply)
             }
             Admission::Unavailable(error) => {
-                self.refuse_as(handle.id(), request.code, request.meta, &error)
+                self.refuse_as(handle.id(), request.code, request.meta, &error, would_be)
             }
         }
     }
@@ -153,18 +179,24 @@ impl RunService {
         meta: RunMeta,
         error: &OperationError,
     ) -> Arc<RunReply> {
-        self.refuse_as(RunId::new(), code, meta, error)
+        let would_be = RunScope::would_be(self.settings.tabs_scope(), meta.task_id.as_ref());
+        self.refuse_as(RunId::new(), code, meta, error, would_be)
     }
 
-    /// Refuses a call as run `id`, recorded.
+    /// Refuses a call as run `id`, recorded, saying the tabs it would have seen (`scope`).
     fn refuse_as(
         &self,
         id: RunId,
         code: String,
         meta: RunMeta,
         error: &OperationError,
+        scope: RunTabsScope,
     ) -> Arc<RunReply> {
-        self.record_refused(code, meta, RunReply::refused(id, error))
+        self.record_refused(
+            code,
+            meta,
+            RunReply::refused(id, error).with_tabs_scope(scope),
+        )
     }
 
     /// Records a refused call as a run that ended at once, so the reply's `id` resolves in the
@@ -179,6 +211,7 @@ impl RunService {
             request_id: None,
             task_id: meta.task_id,
             host_data: meta.host_data.map(HostData::into_value),
+            tabs_scope: reply.tabs_scope,
             at: EpochMillis::now(),
         });
         let end = reply.trace_end(None);
@@ -201,6 +234,7 @@ impl RunService {
         request: RunRequest,
         handle: Arc<RunHandle>,
         ticket: RunTicket,
+        setting: TabsScope,
     ) {
         let RunRequest {
             code,
@@ -212,10 +246,17 @@ impl RunService {
                 ErrorCode::BROWSER_UNAVAILABLE,
                 "the browser is not connected yet; retry in a few seconds",
             );
-            ticket.release(self.refuse_as(handle.id(), code, meta, &error));
+            let would_be = RunScope::would_be(setting, meta.task_id.as_ref());
+            ticket.release(self.refuse_as(handle.id(), code, meta, &error, would_be));
             return;
         };
-        let page = self.default_page(meta.task_id.as_ref(), &view).await;
+        // The book must hold what it held before a restart of Neo's server before a task's page
+        // is chosen: otherwise the task's first run after it would open a fresh tab beside its
+        // own. Bounded by the restore's listing budget.
+        if let Some(holders) = &self.holders {
+            holders.ready().await;
+        }
+        let page = self.default_page(meta.task_id.as_ref());
         if let Some(page) = &page {
             // In use from now on, so the idle-tab janitor leaves it. Starting on a tab is no act:
             // the task's page is already this tab.
@@ -240,6 +281,7 @@ impl RunService {
                 view,
                 deadline: Instant::now() + timeout.get(),
                 default_page: page.clone(),
+                tabs_scope: setting,
             },
         );
         #[cfg(test)]
@@ -323,9 +365,10 @@ impl RunService {
         };
         match listing {
             Ok(listing) => {
-                // Not Neo's blank tab: the prelude listens on every page it names, and no script
-                // sees that tab (`NeoTab`). One the owner browsed in is handed back first, so the
-                // run starts with their page.
+                // Only the tabs the run may reach: never Neo's blank tab, since the prelude listens
+                // on every page it names and no script sees that tab (`NeoTab`), and for a run
+                // bound to its task, only its family's tabs. One the owner browsed in is handed
+                // back first, so the run starts with their page.
                 if let Some(blank_tab) = &self.blank_tab {
                     let listed: Vec<(TabId, &str)> = listing
                         .pages
@@ -338,7 +381,7 @@ impl RunService {
                     .pages
                     .iter()
                     .map(PageRef::from)
-                    .filter(|page| !self.tabs.is_neo(page.tab))
+                    .filter(|page| run.sight(page.tab) == Sight::Shown)
                     .collect();
                 if pages.is_empty() {
                     return PageFacts {
@@ -401,54 +444,12 @@ impl RunService {
     /// Neo's own operations ([`TabRegistry::acted_on`]). A task with no open tab gets `None`, and
     /// the run opens a new tab for it on first use, so parallel tasks never share one.
     ///
-    /// Memory decides for every task it knows. A task it does not know (Neo restarted) gets its
-    /// tabs back from the trace first ([`TraceStore::task_tabs`]): the ones it surely opened that
-    /// are still open and that no task here owns rejoin it, so its script's acts on any of them
-    /// count again, and the trace's page among them is its page. Without a `taskId`, a fresh tab
-    /// opens on first use.
-    async fn default_page(&self, task: Option<&TaskId>, view: &RunView) -> Option<PageRef> {
-        let task = task?;
-        match self.tabs.task_page(task) {
-            TaskPage::Tab(page) => return Some(page),
-            TaskPage::NoTab => return None,
-            TaskPage::Unknown => {}
-        }
-        let tabs = match self.store.task_tabs(task).await {
-            Ok(tabs) => tabs,
-            Err(error) => {
-                tracing::warn!(%error, %task, "cannot read the task's tabs; the run opens a fresh one");
-                return None;
-            }
-        };
-        if tabs.opened.is_empty() {
-            return None;
-        }
-        let live = match view.view.resolve_tab_ids(&tabs.opened).await {
-            Ok(live) => live,
-            Err(error) => {
-                tracing::debug!(%error, %task, "the task's tabs are gone; the run opens a fresh one");
-                return None;
-            }
-        };
-        let mut mine = Vec::new();
-        for tab in tabs.opened {
-            // A tab number may be reused after a browser restart; a task here may already own it.
-            // Neo may also have taken a blank one as its own tab (`NeoTab`), which no task has.
-            if !live.contains_key(&tab) || self.tabs.owner(tab).is_some() || self.tabs.is_neo(tab) {
-                continue;
-            }
-            // Registered first: only a tab with an entry can have an owner.
-            let seen = self.tabs.seen();
-            if self.browser.page(tab).await.is_some() {
-                self.tabs.touched(&PageRef { tab }, seen);
-                mine.push(tab);
-            }
-        }
-        if let Err(error) = self.tabs.restore(task, &mine, tabs.page) {
-            tracing::warn!(%error, %task, "cannot restore the task's tabs; the run opens a fresh one");
-            return None;
-        }
-        match self.tabs.task_page(task) {
+    /// Memory decides alone. After a restart of Neo's server the book already took back each
+    /// task's saved tabs that the browser still has ([`TabHolders`]), with the one that was its
+    /// page; a task it does not know has no tab. Without a `taskId`, a fresh tab opens on first
+    /// use.
+    fn default_page(&self, task: Option<&TaskId>) -> Option<PageRef> {
+        match self.tabs.task_page(task?) {
             TaskPage::Tab(page) => Some(page),
             TaskPage::NoTab | TaskPage::Unknown => None,
         }
@@ -521,7 +522,9 @@ async fn drain(ops: &mut JoinSet<()>) {
 
 #[cfg(test)]
 mod observation_tests {
+    use crate::browser::TabsScope;
     use crate::test_rig::{TestError, TestRig, on_neo_runtime, within};
+    use neo_trace::TaskId;
     use serde_json::Value;
     use std::sync::Arc;
     use std::time::Duration;
@@ -625,6 +628,50 @@ mod observation_tests {
                 Some(&Value::Null),
                 "null must be serialized, not omitted"
             );
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn a_bound_runs_init_lists_only_its_familys_tabs() -> Result<(), TestError> {
+        on_neo_runtime(async {
+            let rig = TestRig::new().await?;
+            let mine = rig.owner_tab("https://mine.example/").await?;
+            let theirs = rig.owner_tab("https://theirs.example/").await?;
+            let free = rig.owner_tab("https://free.example/").await?;
+            let host = TaskId::parse("host-s")?;
+            let other = TaskId::parse("host-r")?;
+            for (page, task) in [(&mine, &host), (&theirs, &other)] {
+                rig.tabs.ensure_task(task)?;
+                rig.tabs.touched(page, rig.tabs.seen());
+                rig.tabs.own(page, task)?;
+            }
+            let service = rig.run_service(Duration::ZERO);
+            let (bound, _bound_guard) =
+                rig.run_in(Duration::from_secs(30), TabsScope::Task, Some(host))?;
+            let listed: Vec<_> = service
+                .open_pages(&bound)
+                .await
+                .pages
+                .iter()
+                .map(|fact| fact.tab)
+                .collect();
+            assert_eq!(listed, vec![mine.tab], "only its family's tab");
+            let (taskless, _taskless_guard) =
+                rig.run_in(Duration::from_secs(30), TabsScope::Task, None)?;
+            let listed: Vec<_> = service
+                .open_pages(&taskless)
+                .await
+                .pages
+                .iter()
+                .map(|fact| fact.tab)
+                .collect();
+            for page in [&mine, &theirs, &free] {
+                assert!(
+                    listed.contains(&page.tab),
+                    "a run with no task lists every tab, as before task scope"
+                );
+            }
             Ok(())
         })
     }

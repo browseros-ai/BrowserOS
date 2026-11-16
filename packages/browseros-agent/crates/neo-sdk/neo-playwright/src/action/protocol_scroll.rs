@@ -28,7 +28,7 @@ use crate::world::{IsolatedWorld, Pin};
 /// Scrolls the element `pin` names into view if it is not, at once. An element that left its
 /// document or has no box is not scrolled, and that is not an error: the measurement that
 /// follows reports the detach or the missing box, as it would without the scroll.
-pub(super) async fn scroll_if_needed(
+pub(crate) async fn scroll_if_needed(
     scope: &OpScope<'_>,
     page: &OpPage<'_>,
     world: &IsolatedWorld,

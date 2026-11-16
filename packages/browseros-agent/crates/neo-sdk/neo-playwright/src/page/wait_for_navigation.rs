@@ -49,7 +49,11 @@ pub(crate) struct NavigationReply {
     response: Option<Response>,
     url: Option<String>,
     frame_snapshot_attempted: bool,
-    frames: Vec<FrameInfo>,
+    /// Absent when an out-of-process frame could not be read: the prelude then reads the tree
+    /// again itself (`page.frames`), rather than take a partial one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    frames: Option<Vec<FrameInfo>>,
     navigation_seq: u64,
 }
 
@@ -227,11 +231,12 @@ async fn navigation_reply(
     frames.remember(pw, scope, page.tab(), &page.main_endpoint().session, since);
     // The wait's own result never carries frames (`NavigationResult::observed`); the tree just
     // read is the reply's.
+    let whole = frames.is_whole();
     Ok(NavigationReply {
         response: navigation.response,
         url: navigation.url,
-        frame_snapshot_attempted: navigation.frame_snapshot_attempted,
-        frames: frames.into_frames(),
+        frame_snapshot_attempted: navigation.frame_snapshot_attempted && whole,
+        frames: frames.into_whole_frames(),
         navigation_seq,
     })
 }
@@ -297,7 +302,7 @@ mod tests {
                 response: answered.then(Response::sample),
                 url: Some(url.clone()),
                 frame_snapshot_attempted: true,
-                frames: sample_tree()?.into_frames(),
+                frames: Some(sample_tree()?.into_frames()),
                 navigation_seq: 7,
             };
             let json = serde_json::to_string(&reply)?;

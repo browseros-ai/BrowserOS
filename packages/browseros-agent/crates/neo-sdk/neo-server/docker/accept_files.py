@@ -634,16 +634,57 @@ def policy(proof, places):
     return proof.result()
 
 
+def image_keys(proof, places):
+    """The CAPTCHA key files a keyed image carries, at the paths the server reads them from: even
+    with `/` listed, every file door a script has refuses each as one of Neo's own files
+    (`captcha_key_files`, as for a host's key path), and a screenshot cannot overwrite it. Nothing
+    of a key is read, hashed or kept: only its size, time and mode are compared. The host's
+    settings are restored."""
+    settings = proof.api('GET').get('body', {}).get('settings', {})
+    # The keys the image says it carries (provenance.json captchaKeys): a one-provider image
+    # leaves the other provider's default path empty, so the count comes from the image.
+    recorded = json.loads(Path('/usr/share/neo-sdk/provenance.json').read_text()).get('captchaKeys')
+    try:
+        proof.patch(['/'])
+        keys = [path for path in places['captcha'] if path.is_file()]
+        expected = len(recorded) if isinstance(recorded, list) else len(keys)
+        proof.check('the image holds the CAPTCHA key files it records', len(keys) == expected > 0)
+        for index, path in enumerate(keys):
+            before = path.stat()
+            spelled = json.dumps(str(path))
+            doors = [('setInputFiles', upload(path)),
+                     ('drop', f"await page.locator('#zone').drop({{files:{spelled}}})"),
+                     ('addScriptTag', f'await page.addScriptTag({{path:{spelled}}})'),
+                     ('addStyleTag', f'await page.addStyleTag({{path:{spelled}}})'),
+                     ('page.addInitScript', f'await page.addInitScript({{path:{spelled}}})'),
+                     ('context.addInitScript', f'await context.addInitScript({{path:{spelled}}})'),
+                     ('screenshot over it', f"await page.screenshot({{path:{spelled},type:'png'}})")]
+            for door, operation in doors:
+                proof.denied(f'image CAPTCHA key {index}: {door}', operation, path, own=True)
+            after = path.stat()
+            proof.check(f'image CAPTCHA key {index} unchanged',
+                        (before.st_size, before.st_mtime_ns, before.st_mode) ==
+                        (after.st_size, after.st_mtime_ns, after.st_mode))
+    finally:
+        proof.api('PUT', settings)
+    return proof.result()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('mcp_url')
     parser.add_argument('socket')
     parser.add_argument('token_file')
     parser.add_argument('--baseline', action='store_true')
+    parser.add_argument('--image-keys', action='store_true',
+                        help="only the keyed image's own CAPTCHA key files (accept.sh captcha-keys)")
     args = parser.parse_args()
     proof = Proof(args.mcp_url, args.socket, args.token_file)
     places = process_places(args.token_file)
-    out = baseline(proof, places) if args.baseline else policy(proof, places)
+    if args.image_keys:
+        out = image_keys(proof, places)
+    else:
+        out = baseline(proof, places) if args.baseline else policy(proof, places)
     print(json.dumps(out))
     raise SystemExit(0 if out['ok'] else 1)
 

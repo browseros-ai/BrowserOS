@@ -2,8 +2,8 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Instant;
 
 use crate::browser::Seen;
@@ -23,12 +23,13 @@ use super::operation_guard::{Ending, OpStart, OperationGuard, StartTab};
 use super::page_target::TargetHandle;
 use super::refusal_brand::RefusalBrand;
 use super::registry::DecodedCall;
+use super::tabs_named::tabs_named;
 use super::{
-    ActedTarget, Answer, Claim, ErrorCode, LeafError, MethodSpec, Observation, Observer, OpAbort,
-    OpFailure, OperationError, PageScript, PageTarget, Policy, PolicyCheck, Registry, RunCtx,
-    TabNote, TaskKind, TaskNote, Visibility, operation_error,
+    ActedTarget, Answer, Claim, ErrorCode, FrameVersion, LeafError, MethodSpec, Observation,
+    Observer, OpAbort, OpFailure, OperationError, PageScript, PageTarget, Policy, PolicyCheck,
+    Registry, RunCtx, TabNote, TaskKind, TaskNote, Visibility, operation_error,
 };
-use crate::browser::{BrowserLink, PageRef, TabRegistry, TaskRecord};
+use crate::browser::{BrowserLink, PageRef, Sight, TabRegistry, TaskRecord};
 use crate::config::Defaults;
 
 /// A tab's refresh bookkeeping, a per-tab slot dropped with the tab: the event seq through which
@@ -53,6 +54,36 @@ const NAME_CHARS: usize = 128;
 /// The spec recorded for a name with no method. `Write`, so an unknown call is never recorded
 /// as a harmless read.
 const UNKNOWN_METHOD: MethodSpec = MethodSpec::new("unknown", Effect::Write);
+
+/// What the run's init reads, for the read rules its frame versions cross.
+const START_READ: MethodSpec = MethodSpec::new("page.frames", Effect::Read);
+
+/// The tabs a run was given a page fact of: its init's listing and every reply's facts, each
+/// through the run's own view. A reply's frame versions name only these, so a run learns no
+/// tab's frame activity that its listing and facts did not first give it.
+#[derive(Default)]
+struct FactTabs(Mutex<HashSet<TabId>>);
+
+impl FactTabs {
+    /// Learns `pages`' tabs; a fact that reports its tab closed forgets it.
+    fn admit(&self, pages: &[PageFact]) {
+        let mut tabs = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        for fact in pages {
+            if fact.closed {
+                tabs.remove(&fact.tab);
+            } else {
+                tabs.insert(fact.tab);
+            }
+        }
+    }
+
+    fn has(&self, tab: TabId) -> bool {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .contains(&tab)
+    }
+}
 
 /// The one door every SDK operation walks through (skeleton D7). Built once at startup and
 /// shared by every run.
@@ -139,6 +170,8 @@ pub(crate) struct OpReply {
     pub(crate) pumped: u64,
     /// Completion facts supplied by the registered method, opaque to the door and runtime.
     pub(crate) completed_publications: Vec<u64>,
+    /// Every tab's frame-tree version the run may see ([`Dispatcher::visible_frame_versions`]).
+    pub(crate) frames: Vec<FrameVersion>,
 }
 
 /// One page as a reply reports it. Deliberately not a page brand (no `$neo`), so the
@@ -341,7 +374,7 @@ impl Dispatcher {
         self: &Arc<Self>,
         run: &Arc<RunCtx>,
     ) -> Result<PageRef, OperationError> {
-        let task = run.current_task().and_then(|id| self.tabs.task(&id).ok());
+        let task = self.usable_current_task(run);
         if let Some(tab) = task
             .as_ref()
             .and_then(|task| task.page_tab(|tab| !run.closed_it(tab) && self.tabs.is_open(tab)))
@@ -359,7 +392,7 @@ impl Dispatcher {
                 let page = PageRef { tab };
                 if let Some(task) = task {
                     // A concurrent close wins ownership, but cannot fail an already-open tab.
-                    let _ = self.tabs.own(&page, &task.id);
+                    let _ = self.tabs.own_in_scope(&page, &task.id, run.scope());
                 }
                 Ok(page)
             }
@@ -384,7 +417,7 @@ impl Dispatcher {
         if !self.browser.is_current(op.run.epoch()) {
             return Err(disconnected());
         }
-        self.check(&op.policy_check())
+        self.check(&op.run, &op.policy_check())
     }
 
     pub(super) fn browser(&self) -> &BrowserLink {
@@ -481,6 +514,21 @@ impl Dispatcher {
                 ))
             }
         };
+        // A bound run reaches only its family's tabs. Every page brand in the input is asked
+        // before the start record, the target's and any deep in the arguments alike, so a
+        // refused op's record names no tab: no run link, no picture, no follower move. Every
+        // other run skips the walk and takes the path it took before task scope.
+        let decoded = match decoded {
+            Ok(decoded) if run.scope().is_bound() => {
+                let mut named = Vec::new();
+                tabs_named(&input, &mut named);
+                named
+                    .into_iter()
+                    .try_for_each(|tab| reach(run, tab))
+                    .map(|()| decoded)
+            }
+            decided => decided,
+        };
         let spec = registered.map_or(UNKNOWN_METHOD, super::registry::Registered::spec);
         let target = decoded.as_ref().ok().and_then(|decoded| decoded.target());
         // The tab the call names, unchecked: the record lists what the script asked for, even
@@ -517,7 +565,8 @@ impl Dispatcher {
                 (pending, Some(admitted))
             }
             Err(refusal) => {
-                guard.finish(Ending::Refused(refusal), Vec::new(), None, None);
+                let frames = self.visible_frame_versions(run, &spec, caller, state.id());
+                guard.end_early(Ending::Refused(refusal), None, frames);
                 (pending, None)
             }
         }
@@ -538,17 +587,20 @@ impl Dispatcher {
         // A stopped run admits nothing. A replaced connection means the browser may have
         // restarted, so the run's view no longer describes it: refuse, never retarget.
         if let Some(reason) = run.stop_reason() {
-            return guard.finish(Ending::Stopped(reason), Vec::new(), None, None);
+            return guard.end_early(Ending::Stopped(reason), None, Vec::new());
         }
         if !self.browser.is_current(run.epoch()) {
-            return guard.finish(Ending::Refused(disconnected()), Vec::new(), None, None);
+            return guard.end_early(Ending::Refused(disconnected()), None, Vec::new());
         }
         let Resolved {
             target,
             default_page,
         } = match self.resolve_target(&run, target.as_ref()).await {
             Ok(resolved) => resolved,
-            Err(ending) => return guard.finish(ending, Vec::new(), None, None),
+            Err(ending) => {
+                let frames = self.visible_frame_versions(&run, &spec, caller, state.id());
+                return guard.end_early(ending, None, frames);
+            }
         };
         let page = target.as_ref().map(|target| &target.page);
         guard.started_on(page.map(|page| page.tab));
@@ -562,8 +614,9 @@ impl Dispatcher {
             operation: state.id(),
             lock_pass: run.lock_pass(),
         };
-        if let Err(refusal) = self.check(&check) {
-            return guard.finish(Ending::Refused(refusal), Vec::new(), default_page, None);
+        if let Err(refusal) = self.check(&run, &check) {
+            let frames = self.visible_frame_versions(&run, &spec, caller, state.id());
+            return guard.end_early(Ending::Refused(refusal), default_page, frames);
         }
         let opening_task = self.opening_task(&run, &spec, caller);
         let op = OpCore {
@@ -601,13 +654,16 @@ impl Dispatcher {
                 method: &read,
                 ..check
             };
-            match self.check(&release) {
+            match self.check(&run, &release) {
                 Ok(()) => ending,
                 Err(refusal) => Ending::Refused(refusal),
             }
         } else {
             ending
         };
+        if let Some(refusal) = hidden_in_result(&run, &ending) {
+            ending = Ending::Refused(refusal);
+        }
         let facts = self
             .page_facts(
                 &run,
@@ -629,16 +685,74 @@ impl Dispatcher {
             facts_ms = started.elapsed().saturating_sub(handled).as_millis(),
             "operation timing"
         );
-        guard.finish(ending, facts.pages, default_page, facts.observed);
+        run.slot::<FactTabs>().admit(&facts.pages);
+        let frames = self.visible_frame_versions(&run, &spec, caller, state.id());
+        guard.finish(ending, facts.pages, default_page, facts.observed, frames);
+    }
+
+    /// The frame versions a run's init carries (`RunInit` `frames`): of the tabs it lists,
+    /// `pages`, past the read rules as of the run's start. They become the run's known tabs
+    /// ([`FactTabs`]), so its replies name them too.
+    pub(crate) fn listed_frame_versions(
+        &self,
+        run: &RunCtx,
+        pages: &[PageFact],
+    ) -> Vec<FrameVersion> {
+        run.slot::<FactTabs>().admit(pages);
+        // Seq 0 is no op's: admission numbers a run's ops from 1.
+        let start = OperationId::new(run.id(), 0);
+        self.visible_frame_versions(run, &START_READ, Caller::Script, start)
+    }
+
+    /// Every tab's frame-tree version that the op's run may see, for its reply (`OpReply`
+    /// `frames`), behind the same boundary as its page facts: a tab the run was given a fact
+    /// of and no fact since reported closed ([`FactTabs`], so through its own view), not Neo's
+    /// own, and which no lock or policy keeps from the run's reads. The watcher drops a closed
+    /// tab's version itself. A tab the script may not read never shows even that
+    /// its frames changed. A refused op's reply carries them too, so the prelude's settle step
+    /// after it sees what changed.
+    fn visible_frame_versions(
+        &self,
+        run: &RunCtx,
+        spec: &MethodSpec,
+        caller: Caller,
+        operation: OperationId,
+    ) -> Vec<FrameVersion> {
+        let read = MethodSpec {
+            effect: Effect::Read,
+            ..*spec
+        };
+        let known = run.slot::<FactTabs>();
+        self.observer
+            .frame_versions()
+            .into_iter()
+            .filter(|version| {
+                known.has(version.tab)
+                    && !self.tabs.is_neo(version.tab)
+                    && self
+                        .check(
+                            run,
+                            &PolicyCheck {
+                                method: &read,
+                                caller,
+                                tab: Some(version.tab),
+                                operation,
+                                lock_pass: run.lock_pass(),
+                            },
+                        )
+                        .is_ok()
+            })
+            .collect()
     }
 
     /// An op from the script's realm keeps its tab in use (the idle clock, the janitor), but
     /// only the script's own call acts on it, and only an act moves a task's built-in `page`,
     /// among that task's own tabs ([`TabRegistry::acted_on`]). A subscription (`page.on` on
-    /// every tab the run knows) names a tab without acting on it. The prelude's own reads are not
-    /// acts either: `waitForTimeout` refreshes the frames of every tab the run lists, and counting
-    /// those moved the task's next `page` to whichever tab answered last. Neo's own ops (`caller`
-    /// Neo) touch nothing here.
+    /// every tab the run knows) names a tab without using it, and so does one of the prelude's
+    /// frame reads ([`neo_trace::is_neo_read`]), which it makes of every open tab before a run's
+    /// first statement: neither keeps a tab in use. The prelude's other unsited reads are not
+    /// acts either: counting those moved the task's next `page` to whichever tab answered last.
+    /// Neo's own ops (`caller` Neo) touch nothing here.
     fn note_use(
         &self,
         run: &RunCtx,
@@ -650,7 +764,9 @@ impl Dispatcher {
         let (Caller::Script, Some(target)) = (caller, target) else {
             return;
         };
-        if neo_trace::is_subscription(spec.name) {
+        // Neo's own listeners and frame reads name a tab without using it: a run's start reads
+        // every open tab's frames, which must keep none of them from going idle.
+        if neo_trace::is_subscription(spec.name) || neo_trace::is_neo_read(spec.name, scripted) {
             return;
         }
         if scripted {
@@ -666,9 +782,18 @@ impl Dispatcher {
 
     /// Capture the latest pick before a script's opener sends. Its record pins an empty task
     /// until ownership is assigned; a missing task simply leaves the tab unowned.
+    /// The run's current task (its host's, or the one it picked) while its scope may still use
+    /// it: its opens go there and its lazy page is that task's. A run with no task under task
+    /// scope that picked an agent's task loses it once a host names it.
+    fn usable_current_task(&self, run: &RunCtx) -> Option<TaskRecord> {
+        run.current_task()
+            .and_then(|id| self.tabs.task(&id).ok())
+            .filter(|task| run.scope().may_use(task))
+    }
+
     fn opening_task(&self, run: &RunCtx, spec: &MethodSpec, caller: Caller) -> Option<TaskRecord> {
         if caller == Caller::Script && spec.name == DEFAULT_PAGE_OPENER {
-            return run.current_task().and_then(|id| self.tabs.task(&id).ok());
+            return self.usable_current_task(run);
         }
         None
     }
@@ -700,6 +825,9 @@ impl Dispatcher {
                             .map_or(Ending::Refused(error), Ending::Stopped));
                     }
                 };
+                // The default page has no tab until it resolves, so the admission walk could not
+                // ask about it: asked here, before the record names it.
+                reach(run, default.tab).map_err(Ending::Refused)?;
                 // Checked like any handle, so a default page closed earlier in the run is
                 // `page_closed` too.
                 let target = self
@@ -720,10 +848,7 @@ impl Dispatcher {
         // Neo's blank tab keeps the browser open (`NeoTab`): no listing gives it to a script, and
         // a handle a script built for it itself is refused here, before anything reaches it.
         if self.tabs.is_neo(tab) {
-            return Err(OperationError::script(
-                ErrorCode::INVALID_INPUT,
-                "this tab is Neo's own blank tab, which keeps the browser open; a script cannot use it",
-            ));
+            return Err(neo_tab());
         }
         // Sample immediately before the cache read. A detach after this read invalidates the
         // registry write even if its close record was evicted before the write resumes.
@@ -734,19 +859,22 @@ impl Dispatcher {
                 core_page: info.page_id,
                 seen,
             }),
-            None if run.closed_it(tab) => Err(OperationError::script(
-                ErrorCode::PAGE_CLOSED,
-                "this script closed the page",
-            )),
-            None => Err(OperationError::neo(
-                ErrorCode::PAGE_CLOSED,
-                "the page was closed",
-            )),
+            None => Err(page_closed(run, tab)),
         }
     }
 
-    /// Runs every rule in order; the first refusal wins.
-    pub(super) fn check(&self, check: &PolicyCheck<'_>) -> Result<(), OperationError> {
+    /// Whether the run sees the tab ([`sees`]), then every rule in order; the first
+    /// refusal wins. Every seam asks here (admission, the recheck before a send, a read's
+    /// release, each page fact, each frame version, each tab an event names), so a door built
+    /// with any list of rules still keeps a bound run to its family's tabs.
+    pub(super) fn check(
+        &self,
+        run: &RunCtx,
+        check: &PolicyCheck<'_>,
+    ) -> Result<(), OperationError> {
+        if let Some(tab) = check.tab {
+            sees(run, tab)?;
+        }
         for policy in &self.policies {
             policy.check(check)?;
         }
@@ -783,7 +911,7 @@ impl Dispatcher {
                         self.tabs.used_in_run(page.tab, run.id());
                         if let Some(task) = opening_task {
                             // The selected task can close while the browser opens this tab.
-                            let _ = self.tabs.own(page, task);
+                            let _ = self.tabs.own_in_scope(page, task, run.scope());
                         }
                     }
                 }
@@ -869,6 +997,7 @@ impl Dispatcher {
             facts.push(fact);
         }
         let mut released = self.release_facts(
+            run,
             PageFacts {
                 pages: facts,
                 observed: Some(observation.observed),
@@ -957,6 +1086,7 @@ impl Dispatcher {
     /// observation. A close cannot outlive the withheld cutoff that made its delivery safe.
     fn release_facts(
         &self,
+        run: &RunCtx,
         mut facts: PageFacts,
         withheld: &[TabId],
         check: PolicyCheck<'_>,
@@ -965,10 +1095,13 @@ impl Dispatcher {
     ) -> PageFacts {
         let mut refusals = HashMap::new();
         facts.pages.retain(|page| {
-            match self.check(&PolicyCheck {
-                tab: Some(page.tab),
-                ..check
-            }) {
+            match self.check(
+                run,
+                &PolicyCheck {
+                    tab: Some(page.tab),
+                    ..check
+                },
+            ) {
                 Ok(()) => !withheld.contains(&page.tab),
                 Err(error) => {
                     refusals.insert(page.tab, error);
@@ -1077,6 +1210,7 @@ impl PendingReply {
                 picked_page: None,
                 pumped: 0,
                 completed_publications: Vec::new(),
+                frames: Vec::new(),
             }
         })
     }
@@ -1141,6 +1275,88 @@ fn disconnected() -> OperationError {
         ErrorCode::BROWSER_DISCONNECTED,
         "the browser connection dropped or was replaced since this run began",
     )
+}
+
+/// Whether `run` may reach `tab`, as the door answers a script. A run that is not bound is
+/// never refused here: its handles meet the door's own checks, as before task scope. A bound
+/// run gets `page_not_in_task` for a tab outside its family, whether another task's, no
+/// task's or no tab at all, so the answer reveals nothing about which tabs exist;
+/// `page_closed` for its family's tab that closed; and Neo's blank tab's own refusal. The
+/// refusal is the script's, and nothing was sent, so it is retryable.
+fn reach(run: &RunCtx, tab: TabId) -> Result<(), OperationError> {
+    if !run.scope().is_bound() {
+        return Ok(());
+    }
+    match run.sight(tab) {
+        Sight::Shown => Ok(()),
+        Sight::Closed => Err(page_closed(run, tab)),
+        Sight::Reserved => Err(neo_tab()),
+        Sight::Foreign => Err(not_in_task()),
+    }
+}
+
+/// [`reach`] for the rules' seams, which release what the run hears as much as
+/// they admit what it does: a tab of its family that closed passes, so its close reaches the
+/// run (the closed page's fact, its close event). Naming that tab in an op is still refused,
+/// at admission, with `page_closed`.
+fn sees(run: &RunCtx, tab: TabId) -> Result<(), OperationError> {
+    if !run.scope().is_bound() {
+        return Ok(());
+    }
+    match run.sight(tab) {
+        Sight::Shown | Sight::Closed => Ok(()),
+        Sight::Reserved => Err(neo_tab()),
+        Sight::Foreign => Err(not_in_task()),
+    }
+}
+
+/// A backstop: a bound run's result never names a tab the run may not reach. The engine and
+/// the rules keep such tabs out of what a method returns, so one that slips through is Neo's
+/// bug, and the result is withheld rather than shown. A tab of the family that closed may be
+/// named: it was the run's to know. Every other run's result passes unread.
+fn hidden_in_result(run: &RunCtx, ending: &Ending) -> Option<OperationError> {
+    let Ending::Returned(value) = ending else {
+        return None;
+    };
+    if !run.scope().is_bound() {
+        return None;
+    }
+    let mut named = Vec::new();
+    tabs_named(value, &mut named);
+    named
+        .into_iter()
+        .any(|tab| matches!(run.sight(tab), Sight::Foreign | Sight::Reserved))
+        .then(|| {
+            OperationError::neo(
+                ErrorCode::INTERNAL_ERROR,
+                "Neo withheld this result: it named a tab outside your task's tabs",
+            )
+        })
+}
+
+/// A handle to Neo's blank tab, which keeps the browser open and which no script may use.
+fn neo_tab() -> OperationError {
+    OperationError::script(
+        ErrorCode::INVALID_INPUT,
+        "this tab is Neo's own blank tab, which keeps the browser open; a script cannot use it",
+    )
+}
+
+/// A tab outside a bound run's family: another task's, no task's, or none at all, answered alike.
+fn not_in_task() -> OperationError {
+    OperationError::script(
+        ErrorCode::PAGE_NOT_IN_TASK,
+        "this tab is not one of your task's tabs; context.pages() lists them",
+    )
+}
+
+/// A dead handle's answer, owned by this script if it closed the page itself, by Neo otherwise.
+fn page_closed(run: &RunCtx, tab: TabId) -> OperationError {
+    if run.closed_it(tab) {
+        OperationError::script(ErrorCode::PAGE_CLOSED, "this script closed the page")
+    } else {
+        OperationError::neo(ErrorCode::PAGE_CLOSED, "the page was closed")
+    }
 }
 
 #[cfg(test)]

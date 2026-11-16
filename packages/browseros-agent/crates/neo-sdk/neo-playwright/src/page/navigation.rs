@@ -314,11 +314,13 @@ pub(crate) async fn navigate(
         .and_then(Result::ok)
         .and_then(Result::ok)
         .flatten();
+    // A partial tree is no snapshot: the prelude reads the tree again itself (`page.frames`).
+    let whole = frames.as_ref().is_none_or(FrameTree::is_whole);
     Ok(NavigationResult {
         response,
         url: watch.url().map(str::to_owned),
-        frames: frames.map(FrameTree::into_frames),
-        frame_snapshot_attempted: true,
+        frames: frames.and_then(FrameTree::into_whole_frames),
+        frame_snapshot_attempted: whole,
     })
 }
 

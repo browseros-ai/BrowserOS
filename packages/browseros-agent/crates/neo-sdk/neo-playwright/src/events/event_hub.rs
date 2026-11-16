@@ -3,7 +3,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 
-use browseros_core::TargetId;
+use browseros_core::{TabId, TargetId};
 use neo_trace::EpochMillis;
 use serde::Deserialize;
 use tokio::sync::Notify;
@@ -53,6 +53,18 @@ struct EventLog {
     /// ring cannot evict one the host has not refreshed its URL facts for. The watcher marks
     /// them (`EventWriter::main_frame_navigated`); a tab's entry goes with its recorded close.
     navigated: HashMap<TargetId, u64>,
+    /// Each open tab's frame-tree version: it moves when a child frame attaches, detaches or
+    /// navigates, when an out-of-process frame's session comes or goes, and when the main frame
+    /// commits a new document, so a run that holds the tab's tree knows it changed (every reply
+    /// carries them, `EventHub::frame_versions`). Only the browser's own events move it, never a
+    /// read of the tree. Kept apart from `records`, as `navigated` is; a tab's entry goes with
+    /// its close.
+    frames: HashMap<TargetId, u64>,
+    /// The last version handed out: versions grow across tabs, so a tab's never repeats.
+    last_frames: u64,
+    /// Each target's tab id, as the watcher learned it, for the per-tab versions every reply
+    /// carries (`EventHub::frame_versions`).
+    tab_ids: HashMap<TargetId, TabId>,
 }
 
 /// One event, numbered and stamped when the watcher recorded it.
@@ -249,6 +261,16 @@ impl EventHub {
         self.lock_log().navigated.get(target).copied()
     }
 
+    /// Every tab's frame-tree version whose tab id the watcher knows: every reply carries them,
+    /// so a run learns that a tab's frames changed even from a reply about another tab.
+    pub(crate) fn frame_versions(&self) -> Vec<(TabId, u64)> {
+        let log = self.lock_log();
+        log.frames
+            .iter()
+            .filter_map(|(target, version)| log.tab_ids.get(target).map(|tab| (*tab, *version)))
+            .collect()
+    }
+
     /// The type of a dialog recorded on `target` after seq `after` that is still open, if
     /// any. An action whose input such a dialog blocks names it when it times out: Chromium
     /// acknowledges no input and answers no page call until the dialog closes (measured).
@@ -306,6 +328,8 @@ impl EventWriter {
             let seq = log.last_seq;
             if let PageEvent::Closed(target) = &event {
                 log.navigated.remove(target);
+                log.frames.remove(target);
+                log.tab_ids.remove(target);
             }
             log.records.push_back(EventRecord {
                 seq,
@@ -362,6 +386,20 @@ impl EventWriter {
     /// navigation is never kept, so the map holds one entry per open tab.
     pub(crate) fn main_frame_navigated(&mut self, tab: TargetId, seq: u64) {
         self.hub.lock_log().navigated.insert(tab, seq);
+    }
+
+    /// Records that `tab`'s frame tree changed (see `EventLog::frames`). The watcher calls it, as
+    /// only the watcher knows which tab a frame's session belongs to.
+    /// Records `target`'s tab id, which the per-tab versions are keyed by on the wire.
+    pub(crate) fn tab_id(&mut self, target: TargetId, tab: TabId) {
+        self.hub.lock_log().tab_ids.insert(target, tab);
+    }
+
+    pub(crate) fn frames_changed(&mut self, tab: TargetId) {
+        let mut log = self.hub.lock_log();
+        log.last_frames += 1;
+        let version = log.last_frames;
+        log.frames.insert(tab, version);
     }
 
     /// The hub this writer appends to.
@@ -480,6 +518,29 @@ mod tests {
     }
 
     /// claw-sdk compares `at_ms` with takeover lock times, which `EpochMillis::now` stamps.
+    #[test]
+    fn tests_that_each_tabs_frame_version_grows_with_its_changes_and_leaves_with_its_close() {
+        let (hub, mut writer) = EventHub::new();
+        let (a, b) = (TargetId("A".to_owned()), TargetId("B".to_owned()));
+        writer.tab_id(a.clone(), TabId(1));
+        writer.tab_id(b.clone(), TabId(2));
+        assert!(hub.frame_versions().is_empty(), "no change yet");
+        writer.frames_changed(a.clone());
+        writer.frames_changed(b.clone());
+        writer.frames_changed(a);
+        let mut versions = hub.frame_versions();
+        versions.sort_unstable();
+        assert_eq!(versions, [(TabId(1), 3), (TabId(2), 2)]);
+        writer.frames_changed(TargetId("unknown-tab".to_owned()));
+        assert_eq!(
+            hub.frame_versions().len(),
+            2,
+            "a target whose tab id is unknown is not listed"
+        );
+        writer.record(closed("B"));
+        assert_eq!(hub.frame_versions(), [(TabId(1), 3)]);
+    }
+
     #[test]
     fn tests_that_a_record_is_stamped_on_the_lock_clock() {
         let (hub, mut writer) = EventHub::new();

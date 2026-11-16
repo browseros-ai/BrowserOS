@@ -272,27 +272,43 @@ impl Quad {
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error;
+
     use super::{Quad, Viewport};
     use crate::probe::Point;
 
     #[test]
-    fn clips_before_choosing_the_point_and_rejects_an_offscreen_quad() {
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "the SDK test contract requires Result even for infallible geometry"
+    )]
+    fn clips_each_corner_before_choosing_a_viewport_point() -> Result<(), Box<dyn Error>> {
         let viewport = Viewport {
             client_width: 100.0,
             client_height: 100.0,
         };
-        assert_eq!(
-            Quad::from([-10.0, 10.0, 10.0, 10.0, 10.0, 30.0, -10.0, 30.0])
+        for (name, x, y, expected) in [
+            ("above-left", -30.0, -30.0, None),
+            ("below-right", 110.0, 110.0, None),
+            ("left-only", -30.0, 10.0, None),
+            ("partial", -10.0, -10.0, Some(Point { x: 5.0, y: 5.0 })),
+            ("inside", 10.0, 10.0, Some(Point { x: 20.0, y: 20.0 })),
+        ] {
+            let point = Quad::from([x, y, x + 20.0, y, x + 20.0, y + 20.0, x, y + 20.0])
                 .clipped(viewport)
-                .middle(),
-            Some(Point { x: 5.0, y: 20.0 })
-        );
-        assert_eq!(
-            Quad::from([-20.0, 10.0, -10.0, 10.0, -10.0, 30.0, -20.0, 30.0])
-                .clipped(viewport)
-                .middle(),
-            None
-        );
+                .middle();
+            assert_eq!(
+                point, expected,
+                "{name} must use only the viewport intersection"
+            );
+            if let Some(point) = point {
+                assert!(
+                    point.x >= 0.0 && point.y >= 0.0,
+                    "{name} must not dispatch outside the viewport: {point:?}"
+                );
+            }
+        }
+        Ok(())
     }
 
     #[test]

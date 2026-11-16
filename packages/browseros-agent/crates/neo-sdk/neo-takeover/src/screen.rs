@@ -1,5 +1,4 @@
-//! Neo's one screen as an RFB client sees it: zuzu's `resizeNeoScreen` and `watchNeoScreen`,
-//! ported. A resize is one short connection of its own; the watcher is one long connection for
+//! Neo's one screen as an RFB client sees it. A resize is one short connection of its own; the watcher is one long connection for
 //! the whole process, alive only while a fit is active. Xvnc logs five lines per connection,
 //! which is why there is one watcher and not one per fit.
 //!

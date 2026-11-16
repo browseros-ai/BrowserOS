@@ -865,25 +865,25 @@
       "file": "tests/page/page-goto.spec.ts",
       "ids": ["NA-002"],
       "reason": "decided-deviation",
-      "decision": "Owner decision (2026-11-12, zuzu design): a script cannot open file: pages, so Neo refuses this test's goto to a file: URL."
+      "decision": "Owner decision (2026-11-12): a script cannot open file: pages, so Neo refuses this test's goto to a file: URL."
     },
     {
       "file": "tests/page/page-goto.spec.ts",
       "ids": ["NA-003"],
       "reason": "decided-deviation",
-      "decision": "Owner decision (2026-11-12, zuzu design): a script cannot open file: pages, so Neo refuses this test's goto to a file: URL."
+      "decision": "Owner decision (2026-11-12): a script cannot open file: pages, so Neo refuses this test's goto to a file: URL."
     },
     {
       "file": "tests/page/page-goto.spec.ts",
       "ids": ["NA-004"],
       "reason": "decided-deviation",
-      "decision": "Owner decision (2026-11-12, zuzu design): a script cannot open file: pages, so Neo refuses this test's goto to a file: URL."
+      "decision": "Owner decision (2026-11-12): a script cannot open file: pages, so Neo refuses this test's goto to a file: URL."
     },
     {
       "file": "tests/page/page-history.spec.ts",
       "ids": ["NA-073"],
       "reason": "decided-deviation",
-      "decision": "Owner decision (2026-11-12, zuzu design): a script cannot open file: pages, so Neo refuses this test's goto to a file: URL."
+      "decision": "Owner decision (2026-11-12): a script cannot open file: pages, so Neo refuses this test's goto to a file: URL."
     },
     {
       "file": "tests/page/page-keyboard.spec.ts",
@@ -943,7 +943,7 @@
       "file": "tests/page/page-network-response.spec.ts",
       "ids": ["NE-046"],
       "reason": "decided-deviation",
-      "decision": "Owner decision (2026-11-12, zuzu design): a script cannot open file: pages, so Neo refuses this test's goto to a file: URL."
+      "decision": "Owner decision (2026-11-12): a script cannot open file: pages, so Neo refuses this test's goto to a file: URL."
     },
     {
       "file": "tests/page/page-route.spec.ts",

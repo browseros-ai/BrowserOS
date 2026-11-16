@@ -325,12 +325,17 @@ function restoreOverrides(installed: PropertyOverride[]): void {
     })
 }
 
-/** Mark-only reads install no guards until this world has privately typed a box (R44/R47). */
+/**
+ * Mark-only reads install no guards until this world has privately typed a box (R44/R47), or
+ * until `root` is itself a marked box: one marked in another same-origin frame's copy of the
+ * probe and moved here, which this world's flag never saw (R53). `root`'s own prototype, made in
+ * the frame it came from, is guarded with this document's.
+ */
 export function withMarkedFieldsMasked<T>(
   walk: () => T,
   root: Element | null = document.documentElement,
 ): T {
-  return anyPrivatelyTyped()
+  return anyPrivatelyTyped() || (root !== null && privatelyTyped(root))
     ? withMaskedFieldValues({ root, mayHaveOtherFrame: true }, walk, {
         declared: false,
       })

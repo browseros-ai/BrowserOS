@@ -108,13 +108,19 @@ export class FailureOutput {
     params: FrameExpectParams,
     frameVisible: boolean,
   ): Promise<ExpectCheck> {
-    const mode = this.checkMode(element, params)
+    // A check on a label reads the field the label leads to, so that field is the one asked
+    // whether it is marked and the one the mask guards (ruling R53). A box the page moved here
+    // from another same-origin frame keeps its mark and that frame's prototype, though this
+    // world may never have marked a box: guarding the label would compare its real value.
+    const field =
+      this.world.injected.retarget(element, 'follow-label') ?? element
+    const mode = this.checkMode(element, field, params)
     const compare = () => this.checks.single(element, params, frameVisible)
     // The guarded branches perform their reads before the async vendor method returns.
     // Restore getters now, then await its result; viewport's later read is never guarded.
     const check = await (mode.kind === 'guardedTree'
       ? this.tree(element, compare)
-      : this.run(() => withMarkedFieldsMasked(compare, element)))
+      : this.run(() => withMarkedFieldsMasked(compare, field)))
     return mode.kind === 'realValue' && typeof check.received === 'string'
       ? { ...check, received: characterMarker(check.received) }
       : check
@@ -135,15 +141,16 @@ export class FailureOutput {
     return this.engine.arm(this.previewNode, ...args)
   }
 
-  private checkMode(element: Element, params: FrameExpectParams): CheckMode {
+  /** `field` is the control a label leads to, which a value check reads; else `element`. */
+  private checkMode(
+    element: Element,
+    field: Element,
+    params: FrameExpectParams,
+  ): CheckMode {
     if (this.policy.conformance) return { kind: 'native' }
     if (guardedComparison(params)) return { kind: 'guardedTree' }
-    if (params.expression === 'to.have.value') {
-      const effective = this.world.injected.retarget(element, 'follow-label')
-      return effective && isPrivateField(effective)
-        ? { kind: 'realValue' }
-        : { kind: 'native' }
-    }
+    if (params.expression === 'to.have.value')
+      return isPrivateField(field) ? { kind: 'realValue' } : { kind: 'native' }
     if (!isPrivateField(element)) return { kind: 'native' }
     const property: unknown = params.expressionArg
     const sensitive =

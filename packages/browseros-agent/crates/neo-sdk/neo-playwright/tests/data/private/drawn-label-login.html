@@ -1,0 +1,48 @@
+<!doctype html><meta charset=utf-8><title>Drawn labels</title>
+<style>
+  body { font: 15px sans-serif; margin: 32px; }
+  .field { position: relative; width: 280px; height: 44px; margin: 0 0 24px; }
+  .field input { width: 100%; height: 100%; box-sizing: border-box; padding: 18px 10px 4px; }
+  /* The site's own label, drawn over the box: no <label>, and it takes the pointer. */
+  .float { position: absolute; inset: 0; display: flex; align-items: center; padding: 0 10px;
+           color: #555; cursor: text; }
+</style>
+<!-- A sign-in form whose boxes each sit under a sibling div that draws the field's name, as
+     floating-label kits draw it (ruling R55). Main's covered rule refuses both boxes. A click on
+     a drawing focuses its box, as such kits do. ?mirror= draws what is typed outside the box:
+     1, each drawing shows what its box holds, and nothing once it is empty again; sticky, it shows
+     what was typed and keeps it when the box is emptied; moves, it takes each character out of
+     the box into the drawing and leaves the box empty, as a hand-made field does; upper, as 1, but
+     the drawing shows it in capitals through text-transform, while its text holds it as typed. -->
+<form onsubmit="return false">
+  <div class=field>
+    <input id=user name=username autocomplete=username aria-label="Email">
+    <div class=float data-name="Email">Email</div>
+  </div>
+  <div class=field>
+    <input id=pw name=password type=password autocomplete=current-password aria-label="Password">
+    <div class=float data-name="Password">Password</div>
+  </div>
+  <button type=submit>Sign in</button>
+</form>
+<script>
+  const mirror = new URLSearchParams(location.search).get('mirror');
+  for (const field of document.querySelectorAll('.field')) {
+    const box = field.querySelector('input');
+    const drawing = field.querySelector('.float');
+    const name = drawing.dataset.name;
+    let moved = '';
+    drawing.addEventListener('click', () => box.focus());
+    if (mirror === 'upper') drawing.style.textTransform = 'uppercase';
+    box.addEventListener('input', () => {
+      if (mirror === '1' || mirror === 'upper')
+        drawing.textContent = name + (box.value ? ' ' + box.value : '');
+      if (mirror === 'sticky' && box.value) drawing.textContent = name + ' ' + box.value;
+      if (mirror === 'moves') {
+        moved += box.value;
+        box.value = '';
+        drawing.textContent = name + ' ' + moved;
+      }
+    });
+  }
+</script>

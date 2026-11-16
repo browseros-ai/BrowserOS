@@ -1,6 +1,6 @@
 //! Milestones M1 and M2 on a real browser: the built binary, launched the way Chromium launches
 //! it, against a headless BrowserOS, driven over MCP by an rmcp client, and read back over the
-//! host socket the way zuzu reads it, including a host's lock on a tab that is then closed from
+//! host socket the way the host reads it, including a host's lock on a tab that is then closed from
 //! outside Neo.
 //!
 //! ```text
@@ -470,7 +470,7 @@ async fn a_hosts_lock_ends_when_its_tab_closes(
     Ok((run_id, tab))
 }
 
-/// The run as zuzu reads it over the host socket: refused without the bearer token, and with it
+/// The run as the host reads it over the host socket: refused without the bearer token, and with it
 /// the run the trace recorded, including its four script ops and automatic monitoring reads.
 async fn read_back_over_the_host_socket(rig: &Rig, id: RunId) -> TestResult {
     let refused = rig.host_get(&format!("/v1/runs/{id}"), None).await?;

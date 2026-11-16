@@ -469,6 +469,9 @@ impl OpenRun {
 
 struct OpenOperation {
     tab: Option<TabId>,
+    /// Whether it acted on `tab` (`trace_store::touched_tab`). Neo's own listeners and frame
+    /// reads name a tab without acting on it, so even when one fails it takes no picture of it.
+    touches: bool,
     /// The operation opens a tab (`trace_store::OPENERS`), whose end names it.
     opens: bool,
     /// Its place in the tree; the host's private typing is never pictured.
@@ -661,6 +664,7 @@ impl Writer {
                     task: event.task_id.as_ref(),
                     at: event.at,
                     request_id: event.request_id.as_ref(),
+                    tabs_scope: Some(event.tabs_scope),
                 })
                 .await?;
                 self.runs.insert(
@@ -703,6 +707,7 @@ impl Writer {
                 task: None,
                 at: event.at,
                 request_id: None,
+                tabs_scope: None,
             })
             .await?;
         }
@@ -724,9 +729,10 @@ impl Writer {
             .entry(event.id.run)
             .or_insert_with(|| OpenRun::unseen(None));
         // The run-end shots go to the run's tabs as its record names them (`link_tab`): Neo's
-        // own subscriptions (`trace_store::SUBSCRIPTIONS`, its listeners and event pump) name a
+        // own subscriptions (`trace_store::SUBSCRIPTIONS`, its listeners and event pump) and frame
+        // reads (`trace_store::NEO_READS`) name a
         // tab without acting on it, so they make no tab the run's, nor a tab's last operation.
-        let touched = trace_store::touched_tab(&event.name, event.tab);
+        let touched = trace_store::touched_tab(&event.name, event.site.is_some(), event.tab);
         if let Some(tab) = touched {
             run.tabs.admitted(tab, event.id.seq);
             if !screenshot_rule::pictured(event.kind) {
@@ -737,6 +743,7 @@ impl Writer {
             event.id.seq,
             OpenOperation {
                 tab: event.tab,
+                touches: touched.is_some(),
                 opens: trace_store::OPENERS.contains(&event.name.as_str()),
                 kind: event.kind,
                 effect: event.effect,
@@ -810,6 +817,7 @@ impl Writer {
                 notes: &notes,
                 page: page.as_ref(),
                 main_world: event.main_world,
+                frames_incomplete: event.frames_incomplete,
             })
             .await?;
         if !matched {
@@ -829,7 +837,7 @@ impl Writer {
                 run.tabs.admitted(tab, event.id.seq);
             }
         }
-        let shot_tab = open.as_ref().and_then(|open| {
+        let shot_tab = open.as_ref().filter(|open| open.touches).and_then(|open| {
             screenshot_rule::after_op(
                 open.kind,
                 open.effect,
@@ -1028,8 +1036,8 @@ mod tests {
     use crate::{
         Delivery, Effect, EpochMillis, OperationEnded, OperationId, OperationKind,
         OperationStarted, Outcome, RecordPolicy, RedactionLimits, Redactor, RetentionPolicy,
-        RunEnded, RunId, RunStarted, RunStatus, Shot, ShotRead, TraceError, TraceStore,
-        screenshot_queue,
+        RunEnded, RunId, RunStarted, RunStatus, RunTabsScope, Shot, ShotRead, TraceError,
+        TraceStore, screenshot_queue,
     };
     use browseros_core::TabId;
     use std::time::Duration;
@@ -1098,6 +1106,7 @@ mod tests {
             error: None,
             page_after: None,
             main_world: false,
+            frames_incomplete: false,
             at: EpochMillis::from_millis(3),
         });
         sink.flush().await?;
@@ -1123,6 +1132,7 @@ mod tests {
                 request_id: None,
                 task_id: None,
                 host_data: None,
+                tabs_scope: RunTabsScope::Browser,
                 at: EpochMillis::from_millis(started),
             });
             sink.op_started(OperationStarted {
@@ -1178,6 +1188,7 @@ mod tests {
                 request_id: None,
                 task_id: None,
                 host_data: None,
+                tabs_scope: RunTabsScope::Browser,
                 at: EpochMillis::from_millis(started),
             });
             sink.run_ended(RunEnded {
@@ -1238,6 +1249,7 @@ mod tests {
             request_id: None,
             task_id: None,
             host_data: None,
+            tabs_scope: RunTabsScope::Browser,
             at: EpochMillis::from_millis(1),
         });
         assert!(sink.flush().await.is_ok());
@@ -1265,6 +1277,7 @@ mod tests {
             error: None,
             page_after: None,
             main_world: false,
+            frames_incomplete: false,
             at: EpochMillis::from_millis(3),
         });
         let lost = sink.flush().await;
@@ -1319,6 +1332,7 @@ mod tests {
             request_id: None,
             task_id: None,
             host_data: None,
+            tabs_scope: RunTabsScope::Browser,
             at: EpochMillis::from_millis(1),
         });
         let (first, second) = (OperationId::new(run, 1), OperationId::new(run, 2));
@@ -1343,6 +1357,7 @@ mod tests {
                 error: None,
                 page_after: None,
                 main_world: false,
+                frames_incomplete: false,
                 at: EpochMillis::from_millis(3),
             });
         }
@@ -1446,6 +1461,7 @@ mod tests {
             request_id: None,
             task_id: None,
             host_data: None,
+            tabs_scope: RunTabsScope::Browser,
             at: EpochMillis::from_millis(1),
         });
         let first = sink.flush().await;

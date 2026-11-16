@@ -3995,7 +3995,8 @@ class DockerImageWorkflowTest(unittest.TestCase):
 
 class NeoSdkImageWorkflowTest(unittest.TestCase):
     """The Neo SDK image's workflow: build and accept on every input change, publish only when
-    asked, and only to the SDK's own image, never production's (ghcr.io/browseros-ai/neo)."""
+    asked on a protected branch, with the CAPTCHA keys, and only to the SDK's own image, never
+    production's (ghcr.io/browseros-ai/neo)."""
 
     def setUp(self):
         self.path = WORKFLOW_DIR / "neo-sdk-image.yml"
@@ -4011,7 +4012,15 @@ class NeoSdkImageWorkflowTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             output = Path(tmp) / "output"
             output.touch()
-            values = {"EVENT": "", "REF": "", "PUBLISH": "", "CONFIRM": "", **env}
+            values = {
+                "EVENT": "",
+                "REF": "",
+                "REF_TYPE": "branch",
+                "REF_PROTECTED": "false",
+                "PUBLISH": "",
+                "CONFIRM": "",
+                **env,
+            }
             result = subprocess.run(
                 [git_bash_path(), "-c", step["run"]],
                 env={**os.environ, **values, "GITHUB_OUTPUT": str(output)},
@@ -4033,29 +4042,79 @@ class NeoSdkImageWorkflowTest(unittest.TestCase):
         }
         self.assertEqual(set(self.on["pull_request"]["paths"]), expected)
         self.assertEqual(set(self.on["push"]["paths"]), expected)
-        self.assertEqual(self.on["push"]["tags"], ["neo-sdk-v*"])
+        # The CAPTCHA keys' environment admits protected branches only, never a tag: no tag path.
+        self.assertNotIn("tags", self.on["push"])
 
-    def test_publishes_only_on_a_confirmed_manual_run_or_a_neo_sdk_tag(self):
+    def test_publishes_only_on_a_confirmed_manual_run_on_a_protected_branch(self):
+        main = {"REF": "refs/heads/main", "REF_TYPE": "branch", "REF_PROTECTED": "true"}
         cases = [
             ({"EVENT": "pull_request", "REF": "refs/pull/1/merge"}, "publish=false"),
-            ({"EVENT": "push", "REF": "refs/heads/main"}, "publish=false"),
+            ({"EVENT": "push", **main}, "publish=false"),
             ({"EVENT": "push", "REF": "refs/heads/feat/claw-sdk"}, "publish=false"),
-            ({"EVENT": "push", "REF": "refs/tags/v0.52.1"}, "publish=false"),
-            ({"EVENT": "workflow_dispatch", "REF": "refs/heads/main", "PUBLISH": "false"}, "publish=false"),
-            ({"EVENT": "push", "REF": "refs/tags/neo-sdk-v0.1.0"}, "publish=true"),
-            (
-                {"EVENT": "workflow_dispatch", "REF": "refs/heads/main", "PUBLISH": "true", "CONFIRM": "neo-sdk"},
-                "publish=true",
-            ),
+            ({"EVENT": "push", "REF": "refs/tags/neo-sdk-v0.1.0", "REF_TYPE": "tag"}, "publish=false"),
+            ({"EVENT": "workflow_dispatch", **main, "PUBLISH": "false"}, "publish=false"),
+            ({"EVENT": "workflow_dispatch", **main, "PUBLISH": "true", "CONFIRM": "neo-sdk"}, "publish=true"),
         ]
         for env, expected in cases:
             with self.subTest(env=env):
                 result = self.decide(**env)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(result.stdout.strip(), expected)
-        refused = self.decide(EVENT="workflow_dispatch", REF="refs/heads/main", PUBLISH="true", CONFIRM="yes")
-        self.assertNotEqual(refused.returncode, 0)
-        self.assertEqual(refused.stdout.strip(), "")
+        refusals = [
+            {"EVENT": "workflow_dispatch", **main, "PUBLISH": "true", "CONFIRM": "yes"},
+            # The keys' environment would not admit these refs: refused before anything is built.
+            {"EVENT": "workflow_dispatch", "REF": "refs/heads/publish/x", "PUBLISH": "true", "CONFIRM": "neo-sdk"},
+            {
+                "EVENT": "workflow_dispatch",
+                "REF": "refs/tags/neo-sdk-v0.1.0",
+                "REF_TYPE": "tag",
+                "REF_PROTECTED": "true",
+                "PUBLISH": "true",
+                "CONFIRM": "neo-sdk",
+            },
+        ]
+        for env in refusals:
+            with self.subTest(refused=env):
+                refused = self.decide(**env)
+                self.assertNotEqual(refused.returncode, 0)
+                self.assertEqual(refused.stdout.strip(), "")
+
+    def test_the_keys_environment_is_named_only_by_a_publishing_run(self):
+        image = self.jobs["image"]
+        self.assertEqual(
+            image["environment"], "${{ needs.preflight.outputs.publish == 'true' && 'neo-captcha' || '' }}"
+        )
+        self.assertEqual([name for name, job in self.jobs.items() if "environment" in job], ["image"])
+        keys = next(step for step in image["steps"] if step.get("id") == "keys")
+        self.assertEqual(keys["if"], "needs.preflight.outputs.publish == 'true'")
+        self.assertEqual(
+            keys["env"],
+            {
+                "CAPSOLVER_API_KEY": "${{ secrets.CAPSOLVER_API_KEY }}",
+                "TWOCAPTCHA_API_KEY": "${{ secrets.TWOCAPTCHA_API_KEY }}",
+            },
+        )
+        # No other step reads the keys; their files stay out of the uploaded log folder and are
+        # removed whatever happens; an image without both keys is never pushed.
+        self.assertEqual(self.text.count("secrets.CAPSOLVER_API_KEY"), 1)
+        self.assertEqual(self.text.count("secrets.TWOCAPTCHA_API_KEY"), 1)
+        self.assertIn("umask 077", keys["run"])
+        self.assertIn('keys="$RUNNER_TEMP/neo-sdk-keys"', keys["run"])
+        cleanup = next(step for step in image["steps"] if step.get("name") == "Remove the CAPTCHA key files")
+        self.assertEqual(cleanup["if"], "always()")
+        self.assertIn('rm -rf "$RUNNER_TEMP/neo-sdk-keys"', cleanup["run"])
+        push = next(step for step in image["steps"] if step.get("name") == "Push the accepted image")
+        self.assertIn('.captchaKeys == ["capsolver", "2captcha"]', push["run"])
+
+    def test_publishing_runs_have_their_own_concurrency_group(self):
+        self.assertEqual(
+            self.workflow["concurrency"]["group"],
+            "${{ github.event_name == 'workflow_dispatch' && inputs.publish && 'neo-sdk-image-publish' || "
+            "format('neo-sdk-image-{0}', github.ref) }}",
+        )
+        self.assertEqual(
+            self.workflow["concurrency"]["cancel-in-progress"], "${{ github.event_name == 'pull_request' }}"
+        )
 
     def test_nothing_is_pushed_before_every_check_passed(self):
         self.assertEqual(set(self.jobs["image"]["needs"]), {"preflight", "scripts"})

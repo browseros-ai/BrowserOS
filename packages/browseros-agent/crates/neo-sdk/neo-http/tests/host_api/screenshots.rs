@@ -2,11 +2,13 @@
 //! host reads them through (`wait=` until `complete`, the JPEG route, `hasScreenshot`, inlined
 //! images).
 //!
-//! Real time, like `waiting`: paused Tokio time cannot drive a real store.
+//! Tests that hold or time out captures freeze Tokio time across real store I/O. Only the
+//! camera's timer-only retry phases may auto-advance.
 
 use crate::browser;
 use crate::support::{
-    Harness, Op, Start, TestResult, end_run, harness_with_camera, op_ended, op_started, start_run,
+    ClockedHarness, Harness, Op, Start, TestResult, end_run, harness_with_camera,
+    harness_with_manual_clock, op_ended, op_started, start_run,
 };
 use axum::http::StatusCode;
 use axum::http::header::CONTENT_TYPE;
@@ -171,7 +173,10 @@ async fn wait_answers_once_the_run_is_complete_not_when_it_ends() -> TestResult 
 
 #[tokio::test]
 async fn two_writes_on_a_tab_each_keep_their_own_capture_in_order() -> TestResult {
-    let h = harness_with_camera().await?;
+    let ClockedHarness {
+        harness: h,
+        clock: _clock,
+    } = harness_with_manual_clock().await?;
     h.browser.open_tab(3);
     let busy = busy_camera(&h).await?;
 
@@ -201,7 +206,10 @@ async fn two_writes_on_a_tab_each_keep_their_own_capture_in_order() -> TestResul
 
 #[tokio::test]
 async fn a_run_end_shot_folds_into_the_write_job_still_waiting_on_its_tab() -> TestResult {
-    let h = harness_with_camera().await?;
+    let ClockedHarness {
+        harness: h,
+        clock: _clock,
+    } = harness_with_manual_clock().await?;
     h.browser.open_tab(3);
     let busy = busy_camera(&h).await?;
 
@@ -255,7 +263,10 @@ async fn a_run_end_shot_is_still_taken_once_the_writes_picture_is_in() -> TestRe
 
 #[tokio::test]
 async fn past_four_jobs_waiting_on_a_tab_the_oldest_is_dropped() -> TestResult {
-    let h = harness_with_camera().await?;
+    let ClockedHarness {
+        harness: h,
+        clock: _clock,
+    } = harness_with_manual_clock().await?;
     h.browser.open_tab(3);
     let busy = busy_camera(&h).await?;
 
@@ -330,11 +341,20 @@ async fn a_legacy_withheld_row_reads_as_an_operation_without_a_jpeg() -> TestRes
 
 #[tokio::test]
 async fn a_capture_that_times_out_once_is_retried_and_taken() -> TestResult {
-    let h = harness_with_camera().await?;
+    let ClockedHarness {
+        harness: h,
+        mut clock,
+    } = harness_with_manual_clock().await?;
     h.browser.open_tab(3);
     h.browser.hang_capture(1);
-    let started = Instant::now();
+    let started = tokio::time::Instant::now();
     let (run, op) = write_run(&h, 3);
+    // The camera registers its timeout before polling the spawned capture on this runtime.
+    h.browser.captures_started(1).await?;
+    h.flushed().await?;
+    clock
+        .run_timers_until(h.browser.captures_started(2))
+        .await?;
     let body = complete(&h, run).await?;
     let waited = started.elapsed();
     assert!(waited >= Duration::from_millis(2500), "{waited:?}");
@@ -350,21 +370,33 @@ async fn a_capture_that_times_out_once_is_retried_and_taken() -> TestResult {
 
 #[tokio::test]
 async fn a_capture_that_times_out_every_time_is_dropped_within_its_budget() -> TestResult {
-    let h = harness_with_camera().await?;
+    let ClockedHarness {
+        harness: h,
+        mut clock,
+    } = harness_with_manual_clock().await?;
     h.browser.open_tab(3);
     h.browser.hang_captures();
-    let started = Instant::now();
+    let started = tokio::time::Instant::now();
     let (run, op) = write_run(&h, 3);
+    h.browser.captures_started(1).await?;
+    h.flushed().await?;
+    clock
+        .run_timers_until(h.browser.captures_started(2))
+        .await?;
+    clock
+        .run_timers_until(h.browser.captures_started(3))
+        .await?;
+    // Native JPEG capture can cancel early when core starts its screencast fallback.
+    // Cross the camera timeout's rounded millisecond before freezing for the final commit.
+    tokio::time::advance(Duration::from_millis(2001)).await;
     let body = complete(&h, run).await?;
     let waited = started.elapsed();
     assert!(
         waited >= Duration::from_secs(7),
         "three 2 s attempts and two 0.5 s pauses: {waited:?}"
     );
-    // Real time on a real store (see the file's header), so a loaded machine runs long. The
-    // bound only catches a capture retried without end; `complete` waits 30 s for the run.
     assert!(
-        waited < CAPTURE_BUDGET + Duration::from_secs(20),
+        waited <= CAPTURE_BUDGET,
         "dropped once its budget is spent: {waited:?}"
     );
     assert_eq!(body["operations"][0]["hasScreenshot"], false);
@@ -376,8 +408,53 @@ async fn a_capture_that_times_out_every_time_is_dropped_within_its_budget() -> T
 }
 
 #[tokio::test]
+async fn a_delayed_capture_timeout_still_caps_the_next_attempt_at_the_job_budget() -> TestResult {
+    let ClockedHarness {
+        harness: h,
+        mut clock,
+    } = harness_with_manual_clock().await?;
+    h.browser.open_tab(3);
+    h.browser.hang_captures();
+    let started = tokio::time::Instant::now();
+    let (run, op) = write_run(&h, 3);
+    h.browser.captures_started(1).await?;
+    h.flushed().await?;
+
+    // Model a late executor poll without spending real time. The retry starts at 7.9 s and
+    // must receive only the 100 ms left in the job budget, rather than a fresh 2 s timeout.
+    tokio::time::advance(Duration::from_millis(7400)).await;
+    clock
+        .run_timers_until(h.browser.captures_started(2))
+        .await?;
+    let retry_started = started.elapsed();
+    assert!(retry_started >= Duration::from_millis(7900) && retry_started < CAPTURE_BUDGET);
+    let deadline = started + CAPTURE_BUDGET;
+    tokio::time::advance(deadline.saturating_duration_since(tokio::time::Instant::now())).await;
+    clock
+        .run_timers_until(tokio::time::timeout_at(
+            deadline + Duration::from_millis(2),
+            h.browser.captures_cancelled(2),
+        ))
+        .await??;
+    // Tokio rounds deadlines to the end of a millisecond; the test paused after real startup,
+    // so its frozen instant need not share the timer wheel's millisecond boundary.
+    assert!(started.elapsed() <= CAPTURE_BUDGET + Duration::from_millis(1));
+
+    let body = complete(&h, run).await?;
+    assert_eq!(body["operations"][0]["hasScreenshot"], false);
+    h.get(&format!("/v1/operations/{op}/screenshot"))
+        .await?
+        .assert_error(StatusCode::NOT_FOUND, "not_found");
+    assert_eq!(h.browser.captures(), 2);
+    Ok(())
+}
+
+#[tokio::test]
 async fn a_run_waits_for_every_answer_while_one_capture_is_retried() -> TestResult {
-    let h = harness_with_camera().await?;
+    let ClockedHarness {
+        harness: h,
+        mut clock,
+    } = harness_with_manual_clock().await?;
     h.browser.open_tab(3);
     h.browser.hang_capture(2);
     let run = start_run(&h.sink, Start::default());
@@ -394,6 +471,9 @@ async fn a_run_waits_for_every_answer_while_one_capture_is_retried() -> TestResu
     assert_eq!(midway.body["operations"][0]["hasScreenshot"], true);
     assert_eq!(midway.body["operations"][1]["hasScreenshot"], false);
 
+    clock
+        .run_timers_until(h.browser.captures_started(3))
+        .await?;
     let body = complete(&h, run).await?;
     assert_eq!(body["operations"][1]["hasScreenshot"], true, "{body}");
     assert_eq!(served(&h, first).await?, Some(browser::jpeg(1)));

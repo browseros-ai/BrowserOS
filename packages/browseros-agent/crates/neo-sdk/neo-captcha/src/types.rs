@@ -344,8 +344,8 @@ pub enum SolveStatus {
 
 impl SolveStatus {
     /// The match has no wildcard on purpose: a new status must not compile until someone decides
-    /// whether it is definitely unsolved, because hosts spend money on `Unsolved` (zuzu's wrap
-    /// switches to a residential proxy and solves again).
+    /// whether it is definitely unsolved, because a host may spend money on `Unsolved`
+    /// by switching to a residential proxy and solving again.
     pub const fn verdict(self) -> Verdict {
         match self {
             Self::Solved => Verdict::Solved,

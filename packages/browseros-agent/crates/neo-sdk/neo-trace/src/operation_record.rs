@@ -187,6 +187,11 @@ pub struct OperationEnded {
     /// than Neo's isolated world: the work a site can notice. The host sets it where the op
     /// reaches that world, so an op refused or failed before its script went out stays false.
     pub main_world: bool,
+    /// Whether it read a tab's frame tree that was not whole: an out-of-process frame's subtree
+    /// could not be read, or no tree came back (`page.frames`). Its answer then lists the frames
+    /// that were read, and the script reads the tree again before its next operation settles; a
+    /// host reads this to find the runs whose script was handed a short tree.
+    pub frames_incomplete: bool,
     /// When it ended.
     pub at: EpochMillis,
 }

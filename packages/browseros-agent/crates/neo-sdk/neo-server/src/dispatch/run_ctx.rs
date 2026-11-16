@@ -19,12 +19,13 @@ use tokio::task::JoinSet;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
+use super::opens_in_flight::{OpenInFlight, OpensInFlight};
 use super::operation_guard::Settlement;
 use super::run_tasks::RunTasks;
 use super::{
     CallSite, Dispatcher, ErrorCode, Lifetime, MethodSpec, OperationError, TaskKind, TaskNote,
 };
-use crate::browser::{PageRef, RunView, TabRegistry, TaskRecord};
+use crate::browser::{PageRef, RunScope, RunView, Sight, TabRegistry, TabsScope, TaskRecord};
 
 /// One `run` call as the door sees it: its identity, the browser view it captured, its budget,
 /// why it stopped, the ops it started, what they changed, and the state features keep per run.
@@ -35,6 +36,12 @@ use crate::browser::{PageRef, RunView, TabRegistry, TaskRecord};
 pub(crate) struct RunCtx {
     id: RunId,
     task_id: Option<TaskId>,
+    /// The family of the host's task, read once at the run's start ([`RunCtx::family`]).
+    family: Option<TaskId>,
+    /// What the run may reach, fixed at its start ([`RunCtx::sight`]).
+    scope: RunScope,
+    /// Read for the run's sight of each tab, live: the scope is fixed, which tabs it covers is not.
+    tabs: Arc<TabRegistry>,
     view: BrowserView,
     /// The CDP epoch the view was taken at. The unbound view would silently follow a new
     /// socket, so the door refuses once the link's epoch differs.
@@ -52,6 +59,8 @@ pub(crate) struct RunCtx {
     tasks: Mutex<RunTasks>,
     /// The host lock this run's ops pass ([`RunCtx::pass_lock`]). Write-once.
     lock_pass: OnceLock<LockId>,
+    /// A bound run's opens whose tab the browser has not named yet ([`RunCtx::opening`]).
+    opens: OpensInFlight,
 }
 
 /// Why a run stopped. Each reason decides who owns the ops it cut short.
@@ -87,6 +96,10 @@ pub(crate) struct RunStart {
     pub(crate) deadline: Instant,
     /// The task's tab when the run service knows it; otherwise resolved on first use.
     pub(crate) default_page: Option<PageRef>,
+    /// The tab scope setting as the run read it at its start. With the run's task it decides
+    /// what the run may reach ([`RunScope::decide`]). Neo's own runs (the janitor, private
+    /// typing) read `Browser` always: they reach every tab.
+    pub(crate) tabs_scope: TabsScope,
 }
 
 /// The run's end record. A plain data bag.
@@ -151,6 +164,8 @@ struct RunLedger {
     not_awaited: Vec<OpLine>,
     /// Pages this run closed, so a later use is the script's mistake, not Neo's.
     closed_by_run: HashSet<TabId>,
+    /// Tabs this bound run's own opens named ([`RunCtx::opened`]). Bounded by the run's opens.
+    opened_by_run: HashSet<TabId>,
 }
 
 /// The run's op tasks. Closed at teardown; a closed set admits nothing.
@@ -187,6 +202,7 @@ impl RunCtx {
             view,
             deadline,
             default_page,
+            tabs_scope,
         } = start;
         let trace = door.trace();
         if let Some(task) = &task_id {
@@ -194,6 +210,14 @@ impl RunCtx {
             // and a task closed later in this run must not be silently recreated.
             let _ = door.tabs().ensure_task(task);
         }
+        // Fixed now, so a task this run creates joins the host task's family even after the run
+        // closed that task. A task the full book could not register roots its own family.
+        let family = task_id.as_ref().map(|task| {
+            door.tabs()
+                .task_family(task)
+                .unwrap_or_else(|| task.clone())
+        });
+        let scope = RunScope::decide(tabs_scope, family.as_ref());
         let tasks = Mutex::new(RunTasks::new(task_id.clone()));
         // In use from the start: the janitor must not close the task's tab between the run's
         // start and its first op.
@@ -205,11 +229,15 @@ impl RunCtx {
             request_id,
             task_id: task_id.clone(),
             host_data,
+            tabs_scope: scope.record(),
             at: EpochMillis::now(),
         });
         let run = Arc::new(Self {
             id,
             task_id,
+            family,
+            scope,
+            tabs: Arc::clone(door.tabs()),
             view: view.view,
             epoch: view.epoch,
             deadline,
@@ -223,6 +251,7 @@ impl RunCtx {
             slots: Mutex::default(),
             tasks,
             lock_pass: OnceLock::new(),
+            opens: OpensInFlight::default(),
         });
         let guard = RunGuard {
             run: Some(Arc::clone(&run)),
@@ -256,6 +285,63 @@ impl RunCtx {
     #[must_use]
     pub(crate) fn task_id(&self) -> Option<&TaskId> {
         self.task_id.as_ref()
+    }
+
+    /// The family of the host's task as the run started: tasks this run creates join it. `None`
+    /// for a run with no host task, whose created tasks each root their own family, even after
+    /// it picked another task.
+    #[must_use]
+    pub(crate) fn family(&self) -> Option<&TaskId> {
+        self.family.as_ref()
+    }
+
+    /// What this run may reach, fixed at its start.
+    #[must_use]
+    pub(crate) fn scope(&self) -> &RunScope {
+        &self.scope
+    }
+
+    /// Whether this run may reach `tab` now: the registry's answer for its scope, except that a
+    /// bound run's own open is shown from the moment the browser names it, before its task
+    /// holds it ([`RunCtx::opened`]).
+    #[must_use]
+    pub(crate) fn sight(&self, tab: TabId) -> Sight {
+        if self.scope.is_bound() && self.lock_ledger().opened_by_run.contains(&tab) {
+            return match self.tabs.sight(&RunScope::Browser, tab) {
+                Sight::Reserved => Sight::Reserved,
+                Sight::Shown | Sight::Closed | Sight::Foreign => Sight::Shown,
+            };
+        }
+        self.tabs.sight(&self.scope, tab)
+    }
+
+    /// This run's own open named `tab`. Its task takes it once the open returns; until then the
+    /// run sees it all the same, and after that its task holds it.
+    pub(crate) fn opened(&self, tab: TabId) {
+        if self.scope.is_bound() {
+            self.lock_ledger().opened_by_run.insert(tab);
+        }
+    }
+
+    /// The run's op `op` starts an open. Until the browser names its tab ([`RunCtx::named`]) or
+    /// the op ends, the run's other ops wait before they judge a tab they do not know
+    /// ([`RunCtx::others_opened`]). `None` for a run that is not bound: it sees every tab, so
+    /// nothing waits.
+    pub(crate) fn opening(&self, op: OperationId) -> Option<OpenInFlight<'_>> {
+        self.scope.is_bound().then(|| self.opens.begin(op))
+    }
+
+    /// `op`'s open named `tab`, as soon as the browser did: the run's own from now on
+    /// ([`RunCtx::opened`]), and no longer an open its other ops wait for.
+    pub(crate) fn named(&self, op: OperationId, tab: TabId) {
+        self.opened(tab);
+        self.opens.named(op);
+    }
+
+    /// Resolves once no op of this run but `op` has an open in flight: a tab that op is opening
+    /// is then the run's own, or not the run's at all.
+    pub(crate) async fn others_opened(&self, op: OperationId) {
+        self.opens.others_named(op).await;
     }
 
     /// Sets the task used by subsequent opens and the unresolved built-in page.

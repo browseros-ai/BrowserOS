@@ -34,8 +34,8 @@ use crate::op_scope::{OpScope, Sent};
 use crate::page::OpPage;
 use crate::private_entry::look_op::{self, Look, LookedBox, MainNavigation, TabAddress};
 use crate::private_entry::{
-    BoxState, Entry, EntryCode, EntryError, EntryOutcome, FocusState, LookField, PageSecret,
-    PrivateAnswer, PrivateField, PrivateStep, Sending, entry,
+    BoxState, Drawing, Entry, EntryCode, EntryError, EntryOutcome, FocusState, LookField,
+    PageSecret, PrivateAnswer, PrivateField, PrivateStep, Sending, entry,
 };
 use crate::probe::{self, Control, ProbeFailure, ProbePolicy, ProbeReply, ProbeRequest};
 use crate::world::{IsolatedWorld, Pin};
@@ -56,6 +56,13 @@ enum BoxEnd {
     Entered,
     /// Neo saw the value go into the box, then the box or its document went.
     Moved,
+}
+
+/// What the read-back found: how the box ended, or that the site draws the value outside the box
+/// it holds it in (ruling R55), which `type_box` answers by emptying the box.
+enum ReadBack {
+    Ended(BoxEnd),
+    Drawn,
 }
 
 /// Why the entry stopped.
@@ -92,12 +99,21 @@ struct Emptied {
     focus: FocusState,
 }
 
+/// The longest value a field's own drawing may show and keep (ruling R56): a code's digits, which
+/// a site draws as they are typed. A longer value drawn there is a password or a card number,
+/// which Neo empties from the box.
+const DRAWN_CODE_MAX: usize = 10;
+
 /// One entry's running state: what it sent, and how many characters each box got.
 pub(crate) struct EntryRun<'a> {
     pw: &'a Playwright,
     scope: &'a OpScope<'a>,
     sending: Sending,
     typed: Vec<usize>,
+    /// How each box's field drawing figured in its entry, from its read-back (rulings R55, R56).
+    drawings: Vec<Drawing>,
+    /// The fields whose box Neo typed into after a look that found its limit moved (ruling R64).
+    max_length_moved: Vec<usize>,
     /// The main frame's navigations since admission, raced with every look and the read-back.
     navigation: Option<MainNavigation>,
 }
@@ -109,6 +125,8 @@ impl<'a> EntryRun<'a> {
             scope,
             sending: Sending::NotYet,
             typed: vec![0; fields],
+            drawings: vec![Drawing::None; fields],
+            max_length_moved: Vec::new(),
             navigation: None,
         }
     }
@@ -180,6 +198,11 @@ impl<'a> EntryRun<'a> {
                 .look(&page, field, url, moved)
                 .await
                 .map_err(Stopped::at(at))?;
+            // Ruling R64: this look, right before the box, says whether its limit moved; a move
+            // during the box's own typing is the read-back's to decide.
+            if looked.max_length_moved {
+                self.max_length_moved.push(at);
+            }
             match self
                 .type_box(&sent, &page, &mut input, at, field, looked)
                 .await
@@ -290,7 +313,7 @@ impl<'a> EntryRun<'a> {
         // its maxlength, so with a full box the first key empties it and its own character is
         // dropped (measured: 246813 left 46813). A sized box and an empty one need no key: the
         // focus step's selection is replaced by the first character, and a page that submits on
-        // its first input event must never see an empty box (B11v).
+        // its first input event must never see an empty box.
         if !looked.facts.sized && !looked.facts.empty {
             self.empty_box(page, sent, input, &box_at, &text, spaced)
                 .await?;
@@ -304,7 +327,72 @@ impl<'a> EntryRun<'a> {
             // The box held the focus in the check right before the one insertion.
             true
         };
-        self.read_back(page, &world, pin, seen, guard).await
+        match self
+            .read_back(page, &world, (pin, at), seen, &text, guard)
+            .await?
+        {
+            ReadBack::Ended(end) => Ok(end),
+            ReadBack::Drawn => Err(self.drawn(page, sent, input, &box_at, &text, spaced).await),
+        }
+    }
+
+    /// The stop for a box whose site drew the value outside it (ruling R55): the box is emptied
+    /// again, then the wrapper is read once more. Neo cannot take text off a page, so a wrapper
+    /// that still draws the value answers `value_still_drawn`, which tells the host to reload or
+    /// close the page; one that no longer does, `value_drawn`. A box that cannot be emptied
+    /// answers as such a box does; one whose focus step failed (it left its document, say) keeps
+    /// that stop unless the page still draws the value.
+    async fn drawn(
+        &self,
+        page: &OpPage<'_>,
+        sent: &Sent<'_>,
+        input: &mut PageInput,
+        box_at: &BoxAt<'_>,
+        text: &PageSecret,
+        spaced: bool,
+    ) -> Stop {
+        let failed = match self
+            .empty_drawn(page, sent, input, box_at, text, spaced)
+            .await
+        {
+            Ok(()) => None,
+            Err(stop) if stop.error.code == EntryCode::BoxNotCleared.as_str() => return stop,
+            Err(stop) => Some(stop),
+        };
+        if self.still_drawn(page, box_at, text).await {
+            return self.stop(EntryCode::ValueStillDrawn);
+        }
+        failed.unwrap_or_else(|| self.stop(EntryCode::ValueDrawn))
+    }
+
+    /// Whether the wrapper that drew the value still draws it. `true` unless the page side
+    /// answers that it does not: Neo never says the page was cleared when it cannot tell.
+    async fn still_drawn(&self, page: &OpPage<'_>, box_at: &BoxAt<'_>, text: &PageSecret) -> bool {
+        let step = PrivateStep::Drawn { text: text.clone() };
+        !matches!(
+            self.step(page, box_at.world, box_at.pin, step).await,
+            Ok(Some(PrivateAnswer::Drawn { drawn: false }))
+        )
+    }
+
+    /// Empties a box entered under a cover whose site drew the value outside it (ruling R55),
+    /// as a full box with no size is emptied ([`Self::empty_box`]). The read-back forgot the
+    /// box, so a fresh focus step arms it again, and a new guard forgets the value once more
+    /// whatever happens. A box that cannot be emptied answers as such a box does there.
+    async fn empty_drawn(
+        &self,
+        page: &OpPage<'_>,
+        sent: &Sent<'_>,
+        input: &mut PageInput,
+        box_at: &BoxAt<'_>,
+        text: &PageSecret,
+        spaced: bool,
+    ) -> Result<(), Stop> {
+        let _forget = ForgetGuard::new(self.scope, box_at.world, box_at.pin);
+        self.focus_step(page, sent, input, box_at, text, spaced)
+            .await?;
+        self.empty_box(page, sent, input, box_at, text, spaced)
+            .await
     }
 
     /// The focus step (design section 5.4): marks the box, arms its listener, focuses it and
@@ -485,10 +573,14 @@ impl<'a> EntryRun<'a> {
         &mut self,
         page: &OpPage<'_>,
         world: &IsolatedWorld,
-        pin: Pin,
+        (pin, at): (Pin, usize),
         seen: bool,
+        text: &PageSecret,
         guard: ForgetGuard,
-    ) -> Result<BoxEnd, Stop> {
+    ) -> Result<ReadBack, Stop> {
+        // A drawn value of at most ten characters is a code the site draws, which stays; a
+        // longer one is a password or a card number, which the site must not show (ruling R56).
+        let long = text.char_count() > DRAWN_CODE_MAX;
         let request = private(pin, PrivateStep::ReadBack);
         let reading = look_op::within(self.scope, probe::call(self.scope, page, world, &request));
         let read = match self.navigation.as_mut() {
@@ -499,7 +591,7 @@ impl<'a> EntryRun<'a> {
         // as when it was replaced. The guard forgets the value if the page still answers.
         let Some(called) = read else {
             return if seen {
-                Ok(BoxEnd::Moved)
+                Ok(ReadBack::Ended(BoxEnd::Moved))
             } else {
                 Err(self.stop(EntryCode::PageMoved))
             };
@@ -509,19 +601,28 @@ impl<'a> EntryRun<'a> {
             guard.disarm();
         }
         match called {
-            Ok(ProbeReply::Value { value }) => match decode(value.into_value()) {
+            Ok(ProbeReply::Value { value }) => match self.noted(at, decode(value.into_value())) {
+                // The site draws a long value outside the box (rulings R55, R56), whatever the
+                // box holds now (a field may move what is typed into its own drawing and empty
+                // the box), unless its page is moving on, which the arms below answer as before.
+                // A short one is a code the site draws, and the box answers as it otherwise would.
+                Some(PrivateAnswer::ReadBack {
+                    moving: false,
+                    drawing: Drawing::Drawn,
+                    ..
+                }) if long => Ok(ReadBack::Drawn),
                 // The box holds the value, and its page already submitted or is unloading: the
                 // value went out with the form (ruling R38).
                 Some(PrivateAnswer::ReadBack {
                     state: BoxState::Holds,
                     moving: true,
                     ..
-                }) => Ok(BoxEnd::Moved),
+                }) => Ok(ReadBack::Ended(BoxEnd::Moved)),
                 Some(PrivateAnswer::ReadBack {
                     state: BoxState::Holds,
                     moving: false,
                     ..
-                }) => Ok(BoxEnd::Entered),
+                }) => Ok(ReadBack::Ended(BoxEnd::Entered)),
                 // The page side marked the text control holding the focus, if it is not the box,
                 // before it forgot the box (ruling R26).
                 Some(PrivateAnswer::ReadBack {
@@ -534,12 +635,12 @@ impl<'a> EntryRun<'a> {
                     state: BoxState::Left,
                     held_at_last_input,
                     ..
-                }) if seen && held_at_last_input => Ok(BoxEnd::Moved),
+                }) if seen && held_at_last_input => Ok(ReadBack::Ended(BoxEnd::Moved)),
                 Some(PrivateAnswer::ReadBack { .. }) => Err(self.stop(EntryCode::PageMoved)),
                 _ => Err(self.stop(EntryCode::Internal)),
             },
             // The document itself was replaced: a form that submitted.
-            Err(ProbeFailure::Gone(_)) if seen => Ok(BoxEnd::Moved),
+            Err(ProbeFailure::Gone(_)) if seen => Ok(ReadBack::Ended(BoxEnd::Moved)),
             // No document change Neo can vouch for: the box was never under entry in this
             // world, so nothing says what it held.
             Err(ProbeFailure::Gone(_)) | Ok(ProbeReply::Detached) => {
@@ -631,6 +732,16 @@ impl<'a> EntryRun<'a> {
         }
     }
 
+    /// `answer`, with a read-back's drawing kept for the record of box `at`.
+    fn noted(&mut self, at: usize, answer: Option<PrivateAnswer>) -> Option<PrivateAnswer> {
+        if let Some(PrivateAnswer::ReadBack { drawing, .. }) = &answer
+            && let Some(slot) = self.drawings.get_mut(at)
+        {
+            *slot = *drawing;
+        }
+        answer
+    }
+
     /// The answer of an entry that did not stop.
     fn ended(self, ended: Ended) -> Entry {
         let outcome = match ended {
@@ -643,13 +754,21 @@ impl<'a> EntryRun<'a> {
             at: None,
             typed: self.typed,
             error: None,
+            drawings: self.drawings,
+            max_length_moved: self.max_length_moved,
         }
     }
 
     /// The answer of an entry that stopped at box `at`: `uncertain` when that box got
     /// characters or the page moved under it, `refused` when no box got any, else `partial`.
     fn stopped(self, at: usize, stop: Stop) -> Entry {
-        let Self { sending, typed, .. } = self;
+        let Self {
+            sending,
+            typed,
+            drawings,
+            max_length_moved,
+            ..
+        } = self;
         let Stop { error } = stop;
         let in_box = typed.get(at).copied().unwrap_or(0);
         let outcome = if in_box > 0 || error.code == EntryCode::PageMoved.as_str() {
@@ -665,12 +784,14 @@ impl<'a> EntryRun<'a> {
             at: Some(at),
             typed,
             error: Some(error),
+            drawings,
+            max_length_moved,
         }
     }
 }
 
 /// The input types a browser applies `maxlength` to (ruling R23): a cut applies to these only.
-fn cuts(kind: &str) -> bool {
+pub(crate) fn cuts(kind: &str) -> bool {
     matches!(
         kind,
         "text" | "search" | "url" | "tel" | "email" | "password"
@@ -734,9 +855,11 @@ impl Drop for ForgetGuard {
     }
 }
 
-/// The tabs whose documents took a private entry, for the host's camera (design section
-/// 10.3) and a script's own pictures (ruling R46): marked before the first character, and kept
-/// for the tab's life, because going back in history restores a text box. Kept in memory; the
+/// The tabs whose documents took a private entry: marked before the first character, and kept
+/// for the tab's life, because going back in history restores a text box. Under either value of
+/// the host's `fill.pictures` (ruling R58): the mask's search for a moved box needs them (R53). A
+/// picture of such a tab is refused only while that setting is `never` ([`Self::withholds_picture`]),
+/// by the host's camera (design section 10.3) and a script's own pictures (R46). Kept in memory; the
 /// host's synced record of the tabs' targets (neo-server's `FilledTabs`, ruling R45) seeds this
 /// set when Neo starts again with the browser and its tabs kept (`keep_private_tab`), or marks
 /// every tab when the browser's tabs cannot be listed (`keep_every_tab`). The boxes' marks live
@@ -748,14 +871,29 @@ pub(crate) struct PrivateTabs {
     /// Every tab counts, for this instance's life: the host's record could not be read back
     /// (`Playwright::keep_every_tab`).
     every: AtomicBool,
+    /// A marked box can move into a different tab before its source closes. Keep the history
+    /// used by adopted-field discovery separate from the set, so future closed-tab pruning
+    /// cannot disable the scan in the receiving tab (ruling R59).
+    any_entry: AtomicBool,
+    /// The host's `fill.pictures` is `never` (ruling R58): no picture of a tab that took a
+    /// private entry. `false`, the default, pictures it like any other tab. The host sets it from
+    /// its settings and again on every change, so a picture reads it as it is asked for.
+    pictures_never: AtomicBool,
 }
 
 impl PrivateTabs {
     pub(crate) fn mark(&self, tab: TabId) {
+        self.any_entry.store(true, Ordering::Release);
         self.tabs
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .insert(tab);
+    }
+
+    /// Whether private-entry history requires browser-wide discovery, including restored or
+    /// unknown history. Sticky for this instance's life, even after the source tab closes.
+    pub(crate) fn any(&self) -> bool {
+        self.any_entry.load(Ordering::Acquire)
     }
 
     pub(crate) fn took(&self, tab: TabId) -> bool {
@@ -768,15 +906,27 @@ impl PrivateTabs {
     }
 
     pub(crate) fn mark_every(&self) {
+        self.any_entry.store(true, Ordering::Release);
         self.every.store(true, Ordering::Release);
     }
 
+    pub(crate) fn set_pictures_never(&self, never: bool) {
+        self.pictures_never.store(never, Ordering::Release);
+    }
+
+    /// Whether a picture of `tab` is refused or withheld now: the host's `fill.pictures` is
+    /// `never` and the tab took a private entry (ruling R58). Never true under the default.
+    pub(crate) fn withholds_picture(&self, tab: TabId) -> bool {
+        self.pictures_never.load(Ordering::Acquire) && self.took(tab)
+    }
+
     /// A script's own picture of `tab` (`page.screenshot`, `locator.screenshot`, `page.pdf`):
-    /// refused for the tab's life once it took a private fill, asked before the capture and
-    /// again after it, as the host's camera asks, so a capture the fill's start straddles is
-    /// thrown away (ruling R46). One host-owned refusal with a fixed sentence.
+    /// refused while the host's `fill.pictures` is `never` once the tab took a private fill,
+    /// asked before the capture and again after it, as the host's camera asks, so a capture the
+    /// fill's start straddles is thrown away (rulings R46, R58). One host-owned refusal with a
+    /// fixed sentence.
     pub(crate) fn refuse_picture(&self, tab: TabId) -> Result<(), PlaywrightError> {
-        if !self.took(tab) {
+        if !self.withholds_picture(tab) {
             return Ok(());
         }
         Err(Refusal {
@@ -795,21 +945,79 @@ const PRIVATE_TAB: &str = "private_tab";
 /// The refusal's sentence, which reaches the agent's model unchanged: it says the refusal is
 /// permanent for the tab and what to read instead, because a model that reads
 /// `retryable: true` (nothing was sent, so a repeat is safe) may otherwise try again in a loop.
-const PRIVATE_TAB_MESSAGE: &str = "This tab took a private fill, so Neo takes no \
-    picture of it for the rest of the tab's life. Trying again will not succeed. Read the page \
-    with page.ariaSnapshot() instead.";
+const PRIVATE_TAB_MESSAGE: &str = "This tab took a private fill, and the host set Neo to take \
+    no picture of such a tab for the rest of its life. Trying again will not succeed. Read the \
+    page with page.ariaSnapshot() instead.";
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error;
+
     use browseros_core::TabId;
     use neo_trace::ErrorOwner;
 
     use super::{PRIVATE_TAB_MESSAGE, PrivateTabs};
+    use crate::{Playwright, test_env};
 
+    #[tokio::test]
+    async fn restored_private_entry_history_outlives_tab_pruning_without_changing_picture_rules()
+    -> Result<(), Box<dyn Error>> {
+        let pw = Playwright::new(test_env::offline_session());
+        let tabs = pw.private_tabs();
+        assert!(
+            !tabs.any(),
+            "an instance that never entered privately has no extra scan"
+        );
+        pw.keep_private_tab(TabId(3));
+        assert!(tabs.any());
+        assert!(tabs.took(TabId(3)));
+        assert!(!tabs.took(TabId(4)));
+        assert!(
+            tabs.refuse_picture(TabId(4)).is_ok(),
+            "other tabs remain picturable"
+        );
+
+        // Simulate future pruning after the source tab closed; its box may live in another tab.
+        tabs.tabs
+            .lock()
+            .map_err(|poison| format!("private tab set poisoned: {poison}"))?
+            .clear();
+        assert!(
+            tabs.any(),
+            "browser-wide discovery must outlive the source tab"
+        );
+        assert!(
+            !tabs.took(TabId(3)),
+            "per-tab decisions still follow the tab record"
+        );
+
+        let unknown = Playwright::new(test_env::offline_session());
+        unknown.keep_every_tab();
+        assert!(
+            unknown.private_tabs().any(),
+            "an unknown filled-tab history also enables discovery"
+        );
+        assert!(
+            unknown.took_private_text(TabId(4)),
+            "camera policy still fails closed"
+        );
+        Ok(())
+    }
+
+    /// Ruling R58: a tab that took a fill is pictured by default, and refused, every time, only
+    /// while the host's `fill.pictures` is `never`; switching back pictures it again. The set
+    /// keeps the tab under either value (the mask's search reads it). Fails with the setting left
+    /// out of `withholds_picture` (refused by default).
     #[test]
-    fn tests_that_a_picture_of_a_tab_that_took_a_fill_is_refused_for_good() {
+    fn tests_that_a_picture_of_a_tab_that_took_a_fill_is_refused_only_under_never() {
         let tabs = PrivateTabs::default();
         tabs.mark(TabId(3));
+        assert!(tabs.refuse_picture(TabId(3)).is_ok(), "pictured by default");
+        assert!(
+            tabs.took(TabId(3)) && tabs.any(),
+            "the tab is kept under either value"
+        );
+        tabs.set_pictures_never(true);
         for _repeat in 0..2 {
             let refused = tabs.refuse_picture(TabId(3)).err();
             assert_eq!(
@@ -828,6 +1036,11 @@ mod tests {
         assert!(
             tabs.refuse_picture(TabId(4)).is_ok(),
             "another tab is pictured"
+        );
+        tabs.set_pictures_never(false);
+        assert!(
+            tabs.refuse_picture(TabId(3)).is_ok(),
+            "pictured again at once"
         );
     }
 }

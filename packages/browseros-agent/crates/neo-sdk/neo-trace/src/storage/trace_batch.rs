@@ -18,8 +18,8 @@ use crate::run_outputs::RunOutputs;
 use crate::screenshot_files::ShotFiles;
 use crate::{
     Delivery, Effect, EpochMillis, ErrorRecord, OperationId, OperationKind, OperationSite, Outcome,
-    PageState, RequestId, RetentionPolicy, RunEffects, RunId, RunStatus, Shot, ShotState, Swept,
-    TaskId, TraceError, trace_store,
+    PageState, RequestId, RetentionPolicy, RunEffects, RunId, RunStatus, RunTabsScope, Shot,
+    ShotState, Swept, TaskId, TraceError, trace_store,
 };
 
 /// A run's start row, containing only identity and state. Code and host data arrive with the
@@ -29,6 +29,8 @@ pub(crate) struct RunStartRow<'a> {
     pub(crate) task: Option<&'a TaskId>,
     pub(crate) at: EpochMillis,
     pub(crate) request_id: Option<&'a RequestId>,
+    /// `None` for a run whose start the writer never saw.
+    pub(crate) tabs_scope: Option<RunTabsScope>,
 }
 
 /// What a run's end stores of its code.
@@ -89,6 +91,7 @@ pub(crate) struct OperationEndRow<'a> {
     pub(crate) notes: &'a [String],
     pub(crate) page: Option<&'a PageState>,
     pub(crate) main_world: bool,
+    pub(crate) frames_incomplete: bool,
 }
 
 /// The recoverable request-id portion of a damaged run; salvage has already validated it.
@@ -101,6 +104,8 @@ pub(crate) struct SalvagedRun {
     pub(crate) effects: RunEffects,
     pub(crate) replay: Option<String>,
     pub(crate) replay_until: Option<EpochMillis>,
+    /// Which tabs the run saw, when the broken store recorded it.
+    pub(crate) tabs_scope: Option<RunTabsScope>,
 }
 
 /// Owns a write batch, so a failed/cancelled caller cannot leave a partial update committed.
@@ -153,6 +158,7 @@ impl TraceBatch {
             started_at: Set(run.at.millis()),
             status: Set("running".to_owned()),
             request_id: Set(run.request_id.map(ToString::to_string)),
+            tabs_scope: Set(run.tabs_scope.map(|scope| scope.as_str().to_owned())),
             ..Default::default()
         })
         .on_conflict(OnConflict::column(runs::Column::Id).do_nothing().to_owned())
@@ -297,8 +303,9 @@ impl TraceBatch {
                 .exec(&self.txn)
                 .await?;
         }
-        // A subscription names a tab without acting on it, so it links no tab to the run.
-        if let Some(tab) = trace_store::touched_tab(op.name, op.tab) {
+        // A subscription or one of Neo's own reads names a tab without acting on it, so it links
+        // no tab to the run.
+        if let Some(tab) = trace_store::touched_tab(op.name, op.site.is_some(), op.tab) {
             self.link_tab(op.id.run, tab).await?;
         }
         Ok(())
@@ -345,6 +352,7 @@ impl TraceBatch {
             url: Set(page.url),
             title: Set(page.title),
             main_world: Set(Some(op.main_world)),
+            frames_incomplete: Set(Some(op.frames_incomplete)),
             ..Default::default()
         };
         if let Some((args, cut)) = op.args {
@@ -520,6 +528,7 @@ impl TraceBatch {
             code_withheld: Set(Some("unavailable".to_owned())),
             replay: Set(run.replay.clone()),
             replay_until: Set(run.replay_until.map(EpochMillis::millis)),
+            tabs_scope: Set(run.tabs_scope.map(|scope| scope.as_str().to_owned())),
             complete: Set(true),
             ..Default::default()
         })

@@ -2,13 +2,13 @@
 //! values refused with nothing applied or saved, and the saved file loaded again key by key. And
 //! `Service::tab_hold`, the locks and fits the idle-tab janitor counts as the host's use.
 
-use crate::support::{BoxError, Harness, Reply, TestResult, harness};
+use crate::support::{self, BoxError, Harness, Reply, TestResult, harness};
 use axum::body::Body;
 use axum::http::{Method, StatusCode};
 use browseros_core::TabId;
-use neo_http::Settings;
+use neo_http::{Settings, TabsScope};
 use neo_takeover::TabHold;
-use neo_trace::{RecordPolicy, Screenshots};
+use neo_trace::{RecordPolicy, Screenshots, Values};
 use serde_json::{Value, json};
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
@@ -18,9 +18,10 @@ use tokio::time::Instant;
 /// Every setting at its default, as `GET` answers on a new folder.
 fn defaults() -> Value {
     json!({
-        "tabs": { "idleCloseSeconds": 1800 },
+        "tabs": { "idleCloseSeconds": 1800, "scope": "task" },
         "trace": { "retentionSeconds": 604_800, "screenshots": "perOperation", "valueBytes": 0, "values": "on" },
         "files": { "readDirs": [] },
+        "fill": { "pictures": "allowed" },
     })
 }
 
@@ -57,12 +58,171 @@ async fn get_on_a_new_folder_answers_the_defaults() -> TestResult {
     assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
     assert_eq!(reply.body["settings"], defaults(), "nothing set yet");
     assert_eq!(reply.body["defaults"], defaults());
+    assert_eq!(reply.body["file"], empty_file_report("absent"));
     assert!(
         reply.body.get("unknown").is_none(),
         "`unknown` belongs to a change: {}",
         reply.body
     );
     assert!(!harness.settings_file().exists(), "a read saves nothing");
+    Ok(())
+}
+
+fn empty_file_report(state: &str) -> Value {
+    json!({ "state": state, "unknown": [], "unknownValues": [], "invalid": [] })
+}
+
+#[tokio::test]
+async fn a_clean_startup_file_is_applied_even_when_empty() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let file = dir.path().join("settings.json");
+    for body in ["{}", r#"{"tabs":{"idleCloseSeconds":300}}"#] {
+        std::fs::write(&file, body)?;
+        let settings = Settings::load(file.clone(), Default::default()).await;
+        let harness = support::harness_with_settings(settings).await?;
+        let reply = harness.get("/v1/settings").await?;
+        assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+        assert_eq!(reply.body["file"], empty_file_report("applied"), "{body}");
+        assert_eq!(std::fs::read_to_string(&file)?, body, "GET never saves");
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn unreadable_startup_files_report_no_names_and_keep_recording_off() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let file = dir.path().join("settings.json");
+    for body in [r#"{"trace":"#, "[1, 2]", "null", "false"] {
+        std::fs::write(&file, body)?;
+        let settings = Settings::load(file.clone(), Default::default()).await;
+        let harness = support::harness_with_settings(settings).await?;
+        let reply = harness.get("/v1/settings").await?;
+        assert_eq!(
+            reply.body["file"],
+            empty_file_report("unreadable"),
+            "{body}"
+        );
+        assert_eq!(
+            reply.body["settings"],
+            with_trace(&json!({ "screenshots": "off", "values": "off" })),
+            "a whole-file failure preserves the existing recording fallback"
+        );
+    }
+    std::fs::remove_file(&file)?;
+    // A directory fails fs::read even when the tests run as root.
+    std::fs::create_dir(&file)?;
+    let settings = Settings::load(file, Default::default()).await;
+    let harness = support::harness_with_settings(settings).await?;
+    let reply = harness.get("/v1/settings").await?;
+    assert_eq!(reply.body["file"], empty_file_report("unreadable"));
+    assert_eq!(harness.settings.trace_policy(), recording_off());
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_partial_startup_file_reports_sorted_names_without_echoing_values() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let file = dir.path().join("settings.json");
+    std::fs::write(
+        &file,
+        r#"{
+            "zFuture": "private-unknown-group",
+            "trace": {"values": false, "valueBytes": "private-wrong-type",
+                      "screenshots": "private-shot-mode", "retentionSeconds": 12,
+                      "future": "private-unknown-setting"},
+            "tabs": {"zUnknown": true, "scope": "private-scope-mode",
+                     "idleCloseSeconds": 300, "aUnknown": false},
+            "fill": {"pictures": "private-picture-mode"},
+            "files": "private-malformed-group",
+            "aFuture": "private-other-group"
+        }"#,
+    )?;
+    let settings = Settings::load(file, Default::default()).await;
+    let harness = support::harness_with_settings(settings).await?;
+    let reply = harness.get("/v1/settings").await?;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+    assert_eq!(
+        reply.body["file"],
+        json!({
+            "state": "partial",
+            "unknown": ["aFuture", "tabs.aUnknown", "tabs.zUnknown", "trace.future", "zFuture"],
+            "unknownValues": ["fill.pictures", "tabs.scope", "trace.screenshots"],
+            "invalid": ["files", "trace.retentionSeconds", "trace.valueBytes", "trace.values"]
+        })
+    );
+    assert_eq!(
+        reply.body["settings"],
+        json!({
+            "tabs": { "idleCloseSeconds": 300, "scope": "task" },
+            "trace": { "retentionSeconds": 604_800, "screenshots": "off", "valueBytes": 0, "values": "off" },
+            "files": { "readDirs": [] },
+            "fill": { "pictures": "allowed" }
+        }),
+        "good siblings apply and every unusable setting keeps its existing fallback"
+    );
+    assert_eq!(harness.settings.tabs_scope(), TabsScope::Task);
+    assert!(!harness.settings.fill_pictures_never());
+    assert!(
+        !reply.body.to_string().contains("private-"),
+        "the host response contains names, never an unusable input value"
+    );
+    assert!(reply.body.get("unknown").is_none());
+    assert!(reply.body.get("unknownValues").is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_startup_report_survives_put_and_patch_until_the_next_load() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let file = dir.path().join("settings.json");
+    std::fs::write(&file, r#"{"tabs":{"scope":"future-scope"}}"#)?;
+    let settings = Settings::load(file.clone(), Default::default()).await;
+    let harness = support::harness_with_settings(settings).await?;
+    let original = harness.get("/v1/settings").await?.body["file"].clone();
+    assert_eq!(
+        original,
+        json!({ "state": "partial", "unknown": [], "unknownValues": ["tabs.scope"], "invalid": [] })
+    );
+    for (method, idle, unknown, skipped) in [
+        (Method::PUT, 300, "futurePut", "fill.pictures"),
+        (Method::PATCH, 600, "futurePatch", "trace.screenshots"),
+    ] {
+        let body = if method == Method::PUT {
+            json!({ "tabs": {"idleCloseSeconds": idle}, "futurePut": true,
+                    "fill": {"pictures": "future-picture-mode"} })
+        } else {
+            json!({ "tabs": {"idleCloseSeconds": idle}, "futurePatch": true,
+                    "trace": {"screenshots": "future-shot-mode"} })
+        };
+        let reply = harness
+            .call(method.clone(), "/v1/settings", Body::from(body.to_string()))
+            .await?;
+        assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+        assert!(
+            reply.body.get("file").is_none(),
+            "{method} reports its request only"
+        );
+        assert_eq!(reply.body["settings"]["tabs"]["idleCloseSeconds"], idle);
+        assert_eq!(reply.body["unknown"], json!([unknown]));
+        assert_eq!(reply.body["unknownValues"], json!([skipped]));
+        assert_eq!(harness.get("/v1/settings").await?.body["file"], original);
+    }
+    let reloaded = Settings::load(file, Default::default()).await;
+    let restarted = support::harness_with_settings(reloaded).await?;
+    assert_eq!(
+        restarted.get("/v1/settings").await?.body["file"],
+        empty_file_report("applied"),
+        "a new load describes the clean saved file"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn in_memory_settings_have_no_startup_file_report() -> TestResult {
+    let harness = support::harness_with_settings(Settings::defaults(Default::default())).await?;
+    let reply = harness.get("/v1/settings").await?;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+    assert!(reply.body.get("file").is_none(), "no file load took place");
     Ok(())
 }
 
@@ -73,9 +233,10 @@ async fn put_replaces_everything_and_patch_changes_only_what_it_names() -> TestR
         .put(r#"{"tabs":{"idleCloseSeconds":300},"trace":{"retentionSeconds":86400}}"#)
         .await?;
     let set = json!({
-        "tabs": { "idleCloseSeconds": 300 },
+        "tabs": { "idleCloseSeconds": 300, "scope": "task" },
         "trace": { "retentionSeconds": 86_400, "screenshots": "perOperation", "valueBytes": 0, "values": "on" },
         "files": { "readDirs": [] },
+        "fill": { "pictures": "allowed" },
     });
     assert_eq!(put.status, StatusCode::OK, "{}", put.body);
     assert_eq!(put.body["settings"], set);
@@ -95,9 +256,10 @@ async fn put_replaces_everything_and_patch_changes_only_what_it_names() -> TestR
     assert_eq!(
         patched.body["settings"],
         json!({
-            "tabs": { "idleCloseSeconds": 600 },
+            "tabs": { "idleCloseSeconds": 600, "scope": "task" },
             "trace": { "retentionSeconds": 86_400, "screenshots": "perOperation", "valueBytes": 0, "values": "on" },
             "files": { "readDirs": [] },
+            "fill": { "pictures": "allowed" },
         }),
         "PATCH keeps what it does not name"
     );
@@ -137,9 +299,10 @@ async fn an_unknown_name_is_skipped_listed_and_never_stops_the_known_ones() -> T
     assert_eq!(
         reply.body["settings"],
         json!({
-            "tabs": { "idleCloseSeconds": 300 },
+            "tabs": { "idleCloseSeconds": 300, "scope": "task" },
             "trace": { "retentionSeconds": 7200, "screenshots": "perOperation", "valueBytes": 0, "values": "on" },
             "files": { "readDirs": [] },
+            "fill": { "pictures": "allowed" },
         }),
         "the known settings in the same call still apply"
     );
@@ -204,6 +367,10 @@ async fn a_wrong_value_is_refused_by_name_and_nothing_is_applied_or_saved() -> T
         (
             r#"{"trace":{"screenshots":null}}"#,
             "`trace.screenshots` must be one of perOperation, off",
+        ),
+        (
+            r#"{"trace":{"values":false}}"#,
+            "`trace.values` must be one of on, off",
         ),
         (r#"{"tabs":300}"#, "`tabs` must be an object of settings"),
         ("[1]", "the body must be JSON"),
@@ -359,18 +526,21 @@ async fn a_saved_file_loads_key_by_key_and_never_stops_a_start() -> TestResult {
         Duration::from_mins(30),
         "no file is every default"
     );
+    assert_eq!(missing.trace_policy(), RecordPolicy::default());
 
-    std::fs::write(&file, "{ this is not json")?;
+    std::fs::write(&file, r#"{"trace":"#)?;
     let corrupt = Settings::load(file.clone(), Default::default()).await;
     assert_eq!(
         corrupt.trace_retention(),
         Duration::from_hours(168),
-        "a file that does not parse is every default"
+        "bad recording input must not shorten retention"
     );
+    assert_eq!(corrupt.trace_policy(), recording_off());
 
     std::fs::write(&file, "[1, 2]")?;
     let not_an_object = Settings::load(file.clone(), Default::default()).await;
     assert_eq!(not_an_object.tab_idle_close(), Duration::from_mins(30));
+    assert_eq!(not_an_object.trace_policy(), recording_off());
 
     // A newer build's setting, a value this build refuses, and one good value.
     std::fs::write(
@@ -383,7 +553,14 @@ async fn a_saved_file_loads_key_by_key_and_never_stops_a_start() -> TestResult {
         Duration::from_mins(30),
         "a value out of range falls back to its default"
     );
-    assert_eq!(mixed.trace_policy(), RecordPolicy::default());
+    assert_eq!(
+        mixed.trace_policy(),
+        RecordPolicy {
+            screenshots: Screenshots::Off,
+            ..RecordPolicy::default()
+        },
+        "an unknown saved recording mode is off; an omitted switch keeps its default"
+    );
     assert_eq!(
         mixed.trace_retention(),
         Duration::from_secs(7200),
@@ -393,12 +570,79 @@ async fn a_saved_file_loads_key_by_key_and_never_stops_a_start() -> TestResult {
     std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o000))?;
     let unreadable = Settings::load(file.clone(), Default::default()).await;
     std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600))?;
-    // Root reads any file; then the good value applies, which is also no failure.
+    // Root can read mode 000; the directory case below covers read failure on every uid.
     assert!(
         [Duration::from_secs(7200), Duration::from_hours(168)]
             .contains(&unreadable.trace_retention()),
-        "a file that cannot be read starts on the defaults"
+        "an unreadable file never prevents startup or shortens retention"
     );
+    if unreadable.trace_retention() == Duration::from_hours(168) {
+        assert_eq!(unreadable.trace_policy(), recording_off());
+    }
+    std::fs::remove_file(&file)?;
+    std::fs::create_dir(&file)?;
+    let directory = Settings::load(file, Default::default()).await;
+    assert_eq!(directory.trace_policy(), recording_off());
+    assert_eq!(directory.trace_retention(), Duration::from_hours(168));
+    assert_eq!(directory.tab_idle_close(), Duration::from_mins(30));
+    Ok(())
+}
+
+fn recording_off() -> RecordPolicy {
+    RecordPolicy {
+        values: Values::Off,
+        screenshots: Screenshots::Off,
+        ..RecordPolicy::default()
+    }
+}
+
+#[tokio::test]
+async fn bad_saved_recording_switches_are_off_and_good_siblings_still_apply() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let file = dir.path().join("settings.json");
+    for (body, expected, retention) in [
+        (
+            r#"{"trace":{"values":false,"screenshots":"perOperation","retentionSeconds":7200}}"#,
+            RecordPolicy {
+                values: Values::Off,
+                ..RecordPolicy::default()
+            },
+            7200,
+        ),
+        (
+            r#"{"trace":{"screenshots":"blurred","values":"on"}}"#,
+            RecordPolicy {
+                screenshots: Screenshots::Off,
+                ..RecordPolicy::default()
+            },
+            604_800,
+        ),
+        (r#"{"trace":"x"}"#, recording_off(), 604_800),
+        (
+            r#"{"trace":{"values":false,"screenshots":"blurred","retentionSeconds":5},"tabs":"x"}"#,
+            recording_off(),
+            604_800,
+        ),
+    ] {
+        std::fs::write(&file, body)?;
+        let loaded = Settings::load(file.clone(), Default::default()).await;
+        assert_eq!(loaded.trace_policy(), expected, "{body}");
+        assert_eq!(
+            loaded.trace_retention(),
+            Duration::from_secs(retention),
+            "{body}"
+        );
+        assert_eq!(loaded.tab_idle_close(), Duration::from_mins(30), "{body}");
+    }
+    for body in ["{}", r#"{"trace":{"vaules":"off"},"futureGroup":false}"#] {
+        std::fs::write(&file, body)?;
+        let loaded = Settings::load(file.clone(), Default::default()).await;
+        assert_eq!(
+            loaded.trace_policy(),
+            RecordPolicy::default(),
+            "unknown names are skipped: {body}"
+        );
+    }
     Ok(())
 }
 
@@ -486,7 +730,7 @@ async fn tab_hold_reports_a_lock_and_a_fit_now_and_until_they_let_go() -> TestRe
     assert_eq!(
         harness.service.tab_hold(fitted),
         Some(TabHold::Now),
-        "a fit with no lock still holds the tab: zuzu's handoff"
+        "a fit with no lock still holds the tab: the host's handoff"
     );
     let id = fit.body["id"].as_str().ok_or("a fit id")?;
     let before = Instant::now();
@@ -622,7 +866,7 @@ async fn values_off_reaches_records_and_events_without_payloads() -> TestResult 
     use crate::support::{EventStream, at};
     use neo_trace::{
         Delivery, Effect, ErrorOwner, ErrorRecord, OperationEnded, OperationId, OperationKind,
-        OperationStarted, Outcome, PageState, RunEnded, RunId, RunStarted, RunStatus,
+        OperationStarted, Outcome, PageState, RunEnded, RunId, RunStarted, RunStatus, RunTabsScope,
     };
 
     let h = harness().await?;
@@ -639,6 +883,7 @@ async fn values_off_reaches_records_and_events_without_payloads() -> TestResult 
         request_id: None,
         task_id: None,
         host_data: Some(json!({"data":"host-canary-host-api"})),
+        tabs_scope: RunTabsScope::Browser,
         at: at(0),
     });
     h.sink.op_started(OperationStarted {
@@ -676,6 +921,7 @@ async fn values_off_reaches_records_and_events_without_payloads() -> TestResult 
             title: Some("Form".into()),
         }),
         main_world: false,
+        frames_incomplete: false,
         at: at(3),
     });
     h.sink.run_ended(RunEnded {
@@ -741,6 +987,108 @@ async fn values_off_reaches_records_and_events_without_payloads() -> TestResult 
     assert!(
         !all.contains("canary-host-api"),
         "no trace read or event carries a canary"
+    );
+    Ok(())
+}
+
+/// Ruling R58: `fill.pictures` is `allowed` by default, takes `never`, skips a name this server
+/// does not have and names its setting in `unknownValues` (never quoting it), and refuses a value
+/// that is not a name, applying nothing. Fails with the row left out of the table (the group
+/// missing from the answer).
+#[tokio::test]
+async fn fill_pictures_defaults_to_allowed_and_takes_never() -> TestResult {
+    let harness = harness().await?;
+    let got = harness.get("/v1/settings").await?;
+    assert_eq!(
+        got.body["settings"]["fill"]["pictures"], "allowed",
+        "{}",
+        got.body
+    );
+    assert_eq!(got.body["defaults"]["fill"]["pictures"], "allowed");
+
+    let never = harness.patch(r#"{"fill":{"pictures":"never"}}"#).await?;
+    assert_eq!(never.status, StatusCode::OK, "{}", never.body);
+    assert_eq!(never.body["settings"]["fill"]["pictures"], "never");
+
+    let unknown = harness
+        .patch(r#"{"fill":{"pictures":"sometimes"}}"#)
+        .await?;
+    assert_eq!(unknown.status, StatusCode::OK, "{}", unknown.body);
+    assert_eq!(unknown.body["unknownValues"], json!(["fill.pictures"]));
+    assert_eq!(
+        unknown.body["settings"]["fill"]["pictures"], "never",
+        "the setting keeps its value"
+    );
+    assert!(
+        !unknown.body.to_string().contains("sometimes"),
+        "the value sent is never repeated: {}",
+        unknown.body
+    );
+
+    let wrong = harness.patch(r#"{"fill":{"pictures":false}}"#).await?;
+    assert_eq!(wrong.status, StatusCode::BAD_REQUEST, "{}", wrong.body);
+    assert!(
+        wrong.body.to_string().contains("fill.pictures"),
+        "the refusal names the setting: {}",
+        wrong.body
+    );
+    let after = harness.get("/v1/settings").await?;
+    assert_eq!(
+        after.body["settings"]["fill"]["pictures"], "never",
+        "nothing applied"
+    );
+    Ok(())
+}
+
+/// `tabs.scope` is `task` unless a host sets `browser`, the value every run reads at its start.
+/// A value Neo does not have is skipped and named in `unknownValues`, as if left out: a `PATCH`
+/// keeps the value the setting had, a `PUT` puts back the default, `task`. A saved one Neo cannot
+/// read loads as the default.
+#[tokio::test]
+async fn the_tab_scope_is_task_unless_set_and_a_misspelt_value_is_skipped() -> TestResult {
+    let harness = harness().await?;
+    assert_eq!(
+        harness.settings.tabs_scope(),
+        TabsScope::Task,
+        "the default"
+    );
+    let browser = harness.patch(r#"{"tabs":{"scope":"browser"}}"#).await?;
+    assert_eq!(browser.status, StatusCode::OK, "{}", browser.body);
+    assert_eq!(browser.body["settings"]["tabs"]["scope"], "browser");
+    assert_eq!(
+        harness.settings.tabs_scope(),
+        TabsScope::Browser,
+        "the next run reads it"
+    );
+    let patched = harness.patch(r#"{"tabs":{"scope":"Task"}}"#).await?;
+    assert_eq!(patched.status, StatusCode::OK, "{}", patched.body);
+    assert_eq!(patched.body["unknownValues"], json!(["tabs.scope"]));
+    assert_eq!(patched.body["settings"]["tabs"]["scope"], "browser");
+    assert_eq!(
+        harness.settings.tabs_scope(),
+        TabsScope::Browser,
+        "a PATCH that names only a value Neo does not have changes nothing, as for every setting"
+    );
+    let misspelt = harness.put(r#"{"tabs":{"scope":"Browser"}}"#).await?;
+    assert_eq!(misspelt.status, StatusCode::OK, "{}", misspelt.body);
+    assert_eq!(misspelt.body["unknownValues"], json!(["tabs.scope"]));
+    assert_eq!(misspelt.body["settings"]["tabs"]["scope"], "task");
+    assert_eq!(
+        harness.settings.tabs_scope(),
+        TabsScope::Task,
+        "a PUT that leaves it out puts it back to its default"
+    );
+
+    let file = harness.settings_file();
+    std::fs::write(&file, r#"{"tabs":{"scope":"none"}}"#)?;
+    let loaded = Settings::load(file.clone(), Default::default()).await;
+    assert_eq!(loaded.tabs_scope(), TabsScope::Task, "a bad saved value");
+    std::fs::write(&file, r#"{"tabs":{"scope":"browser"}}"#)?;
+    let loaded = Settings::load(file, Default::default()).await;
+    assert_eq!(
+        loaded.tabs_scope(),
+        TabsScope::Browser,
+        "a saved value, as the settings file at start or a fixed file copied over it gives"
     );
     Ok(())
 }

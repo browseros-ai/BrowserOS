@@ -15,8 +15,8 @@ use ts_rs::TS;
 use super::{LogLevel, RunLogs};
 use crate::browser::PageRef;
 use crate::dispatch::{
-    Call, CallSite, Dispatcher, Observation, OpAbort, OpFailure, OpReply, PageFact, PendingReply,
-    RunCtx, StopReason,
+    Call, CallSite, Dispatcher, FrameVersion, Observation, OpAbort, OpFailure, OpReply, PageFact,
+    PendingReply, RunCtx, StopReason,
 };
 
 /// How many failed ops a run remembers for its own error. A script's uncaught `NeoError` is
@@ -138,6 +138,13 @@ pub(crate) enum Envelope<'a> {
         )]
         #[ts(optional = nullable)]
         completed_navigations: &'a [u64],
+        /// Every tab's frame-tree version (`Observer::frame_versions`): a version moves when the
+        /// tab's frames change, never on a read of the tree. The prelude reads a tab's tree again
+        /// before the script's operation resolves once its version passes the one it read at,
+        /// whichever tab the op touched. Absent before any change.
+        #[serde(skip_serializing_if = "<[FrameVersion]>::is_empty")]
+        #[ts(optional = nullable)]
+        frames: &'a [FrameVersion],
     },
     /// The op failed; the bootstrap rejects with a `NeoError` carrying `err`'s fields.
     Err {
@@ -168,6 +175,10 @@ pub(crate) enum Envelope<'a> {
         )]
         #[ts(optional = nullable)]
         completed_navigations: &'a [u64],
+        /// As for `Ok`.
+        #[serde(skip_serializing_if = "<[FrameVersion]>::is_empty")]
+        #[ts(optional = nullable)]
+        frames: &'a [FrameVersion],
     },
 }
 
@@ -294,7 +305,13 @@ impl Bridge {
         completed.extend(reply.completed_publications.iter().copied());
         completed.sort_unstable();
         completed.dedup();
-        envelope(&reply, &completed)
+        envelope(&reply, &completed, &reply.frames)
+    }
+
+    /// The frame-tree versions a run's init carries, of the tabs it lists (`pages`), past the
+    /// read rules ([`Dispatcher::listed_frame_versions`]).
+    pub(crate) fn frame_versions_of(&self, pages: &[PageFact]) -> Vec<FrameVersion> {
+        self.dispatcher.listed_frame_versions(&self.run, pages)
     }
 
     /// The bootstrap's abort of the op it keyed `key`: `{"key", "reason"}`. An op that already
@@ -403,7 +420,11 @@ fn navigation_publication(name: &str, input: &Value) -> Option<NavigationPublica
 }
 
 /// The text `__neo_invoke` resolves with for `reply`: [`Envelope`] as JSON, never a failure.
-pub(crate) fn envelope(reply: &OpReply, completed_navigations: &[u64]) -> String {
+pub(crate) fn envelope(
+    reply: &OpReply,
+    completed_navigations: &[u64],
+    frames: &[FrameVersion],
+) -> String {
     let pumped = reply.pumped;
     let default_page = reply.default_page.as_ref().map(DefaultPage::from);
     let picked_page = reply.picked_page.as_ref().map(DefaultPage::from);
@@ -416,6 +437,7 @@ pub(crate) fn envelope(reply: &OpReply, completed_navigations: &[u64]) -> String
             picked_page,
             pumped,
             completed_navigations,
+            frames,
         },
         Err(failure) => Envelope::Err {
             err: ErrBody::from(failure),
@@ -425,6 +447,7 @@ pub(crate) fn envelope(reply: &OpReply, completed_navigations: &[u64]) -> String
             picked_page,
             pumped,
             completed_navigations,
+            frames,
         },
     };
     serde_json::to_string(&envelope).unwrap_or_else(|error| {

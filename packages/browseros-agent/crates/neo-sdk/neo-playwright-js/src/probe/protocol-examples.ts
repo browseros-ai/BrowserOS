@@ -29,7 +29,8 @@ export const REQUEST_EXAMPLES: { [O in Op]: AtLeastOne<RequestOf<O>> } = {
   describe: [{ op: 'describe' }],
   screenshotMask: [{ op: 'screenshotMask', target: GO_BUTTON, color: '#F0F' }],
   screenshotMaskCleanup: [{ op: 'screenshotMaskCleanup' }],
-  privateShown: [{ op: 'privateShown' }],
+  privateShown: [{ op: 'privateShown' }, { op: 'privateShown', walk: true }],
+  privateHosts: [{ op: 'privateHosts', limit: 16 }],
   webStorage: [
     { op: 'webStorage', kind: 'local', action: 'items' },
     { op: 'webStorage', kind: 'session', action: 'getItem', name: 'token' },
@@ -109,8 +110,13 @@ export const REQUEST_EXAMPLES: { [O in Op]: AtLeastOne<RequestOf<O>> } = {
   moves: [{ op: 'moves' }],
   disarm: [{ op: 'disarm' }],
   frameBox: [
-    { op: 'frameBox', iframe: chunk('aria-ref=#1') },
-    { op: 'frameBox', iframe: { pin: 4 }, point: { x: 40.5, y: 12 } },
+    { op: 'frameBox', iframe: chunk('aria-ref=#1'), look: false },
+    {
+      op: 'frameBox',
+      iframe: { pin: 4 },
+      point: { x: 40.5, y: 12 },
+      look: true,
+    },
   ],
   edit: [
     { op: 'edit', pin: 3, edit: { kind: 'fill', value: 'hello' } },
@@ -168,6 +174,7 @@ export const REQUEST_EXAMPLES: { [O in Op]: AtLeastOne<RequestOf<O>> } = {
         cut: false,
         keys: false,
         frameVisible: true,
+        scroll: 'asItIs',
       },
     },
     {
@@ -186,12 +193,13 @@ export const REQUEST_EXAMPLES: { [O in Op]: AtLeastOne<RequestOf<O>> } = {
         cut: true,
         keys: false,
         frameVisible: true,
+        scroll: 'centre',
       },
     },
     {
       op: 'look',
       pin: 5,
-      look: { cut: false, keys: true, frameVisible: true },
+      look: { cut: false, keys: true, frameVisible: true, scroll: 'asItIs' },
     },
   ],
   private: [
@@ -206,9 +214,19 @@ export const REQUEST_EXAMPLES: { [O in Op]: AtLeastOne<RequestOf<O>> } = {
       pin: 3,
       step: { kind: 'holds', text: '4242 4242', spaced: true },
     },
+    {
+      op: 'private',
+      pin: 3,
+      step: { kind: 'compare', text: '4242 4242', spaced: true },
+    },
     { op: 'private', pin: 3, step: { kind: 'readBack' } },
     { op: 'private', pin: 3, step: { kind: 'forget' } },
     { op: 'private', pin: 3, step: { kind: 'markFocused' } },
+    {
+      op: 'private',
+      pin: 6,
+      step: { kind: 'drawn', text: 'CANARY-example' },
+    },
   ],
   read: [
     {
@@ -273,6 +291,13 @@ export const REQUEST_EXAMPLES: { [O in Op]: AtLeastOne<RequestOf<O>> } = {
       strictness: 'strict',
       frameVisible: false,
       read: { kind: 'boundingBox' },
+    },
+    {
+      op: 'read',
+      target: { pin: 3 },
+      strictness: 'strict',
+      frameVisible: true,
+      read: { kind: 'viewCentre' },
     },
     {
       op: 'read',
@@ -512,8 +537,14 @@ const REPLY_EXAMPLES: {
   ],
   moves: [{ kind: 'moves', moves: 3 }],
   frameBox: [
-    { kind: 'frameBox', origin: { x: 8, y: 120 }, hit: null },
-    { kind: 'frameBox', origin: null, hit: 'done' },
+    { kind: 'frameBox', origin: { x: 8, y: 120 }, hit: null, unseen: false },
+    { kind: 'frameBox', origin: null, hit: 'done', unseen: false },
+    {
+      kind: 'frameBox',
+      origin: { x: 8, y: 120 },
+      hit: { hitTargetDescription: '<html></html>' },
+      unseen: true,
+    },
   ],
   value: [
     { kind: 'value', value: 'Welcome' },
@@ -546,6 +577,23 @@ const REPLY_EXAMPLES: {
       kind: 'value',
       value: {
         facts: {
+          origin: 'https://pay.example',
+          type: 'text',
+          autocomplete: 'cc-csc',
+          maxLength: 3,
+          inputMode: 'numeric',
+          name: 'cvc',
+          id: '',
+          sized: true,
+          empty: true,
+        },
+        maxLengthMoved: true,
+      },
+    },
+    {
+      kind: 'value',
+      value: {
+        facts: {
           origin: 'https://bank.example',
           type: 'password',
           autocomplete: 'current-password',
@@ -569,15 +617,31 @@ const REPLY_EXAMPLES: {
     { kind: 'value', value: { kind: 'holds', holds: true } },
     {
       kind: 'value',
+      value: { kind: 'compared', holds: false, contains: true },
+    },
+    {
+      kind: 'value',
       value: {
         kind: 'readBack',
         state: 'left',
         heldAtLastInput: true,
         moving: false,
+        drawing: 'none',
+      },
+    },
+    {
+      kind: 'value',
+      value: {
+        kind: 'readBack',
+        state: 'holds',
+        heldAtLastInput: true,
+        moving: false,
+        drawing: 'drawn',
       },
     },
     { kind: 'value', value: { kind: 'forgot' } },
     { kind: 'value', value: { kind: 'markedFocused', marked: true } },
+    { kind: 'value', value: { kind: 'drawn', drawn: false } },
   ],
   read: [
     { kind: 'read', value: 'Welcome' },
@@ -732,7 +796,7 @@ export function protocolDocument() {
     protocol: PROTOCOL,
     callFunction: CALL_FUNCTION,
     replyKinds: REPLY_KINDS,
-    byHandle: ['pinned'],
+    byHandle: ['pinned', 'privateHosts'],
     anyRequest: ['error', 'uninstalled'],
     calls: CALL_EXAMPLES,
     requests: Object.values(REQUEST_EXAMPLES).flat(),

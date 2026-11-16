@@ -52,7 +52,11 @@ keys: boolean,
  * Every `<iframe>` on the way down to the box's frame is visible: a box in a hidden frame
  * does not show either.
  */
-frameVisible: boolean, };
+frameVisible: boolean, 
+/**
+ * Where the page side leaves the page before its checks (ruling R62).
+ */
+scroll: LookScroll, };
 
 /**
  * What the host approved about a box. The look refuses the box when a fact the host sent no
@@ -76,7 +80,9 @@ type?: string,
  */
 autocomplete?: string, 
 /**
- * The box's `maxlength`.
+ * The box's `maxlength`, or `-1` for a box that must have none (ruling R49), the DOM's own
+ * word for a box without one. Absent, it is not checked; `0` is a limit of zero. Any other
+ * negative number is refused as a malformed body.
  */
 maxLength?: number, 
 /**
@@ -157,6 +163,12 @@ export type Checkable = { checked: boolean, radio: boolean, };
  * Which text of the document a `document` request reads.
  */
 export type DocumentPart = "title" | "content" | "expectSnapshot";
+
+/**
+ * How a box's field drawing figured in its entry (rulings R55, R56): the read-back answers it,
+ * and the operation's record notes every box entered under one.
+ */
+export type Drawing = "none" | "under" | "drawn";
 
 /**
  * MIME data in the caller's insertion order, matching DataTransfer.types ordering.
@@ -281,11 +293,23 @@ export type LookRefusal = "notAnInput" | "wrongOrigin" | "wrongType" | "boxChang
 export type LookRefused = { code: LookRefusal, fact?: BoxFact, };
 
 /**
+ * The page side's own part of the look's scroll. Rust's first step, the browser's own instant
+ * scroll of the whole box (ruling R61), always runs before the look.
+ */
+export type LookScroll = "asItIs" | "centre";
+
+/**
  * The look's answer for one box (`value` payload of the `look` request): its facts whenever it
  * is a text input, and the first check it fails. A covered box answers both. A box whose pin
  * is gone answers the protocol's `detached` instead.
  */
-export type Looked = { facts?: BoxFacts, refusal?: LookRefused, };
+export type Looked = { facts?: BoxFacts, refusal?: LookRefused, 
+/**
+ * Ruling R64: the box's `maxlength` is another than the approved one (`expect.maxLength`),
+ * and the value fits both, or the look carries no length (the check call's): no refusal for
+ * the limit. Absent otherwise; a moved limit the value does not fit is `boxChanged`.
+ */
+maxLengthMoved?: boolean, };
 
 /**
  * A private value on its way to Neo's isolated world, where the box's listener and the
@@ -331,12 +355,12 @@ export type Point = { x: number, y: number, };
 /**
  * The answer to one step (`value` payload of the `private` request).
  */
-export type PrivateAnswer = { "kind": "focus", focus: FocusState, } | { "kind": "holds", holds: boolean, } | { "kind": "readBack", state: BoxState, heldAtLastInput: boolean, moving: boolean, } | { "kind": "forgot" } | { "kind": "markedFocused", marked: boolean, };
+export type PrivateAnswer = { "kind": "focus", focus: FocusState, } | { "kind": "holds", holds: boolean, } | { "kind": "compared", holds: boolean, contains: boolean, } | { "kind": "readBack", state: BoxState, heldAtLastInput: boolean, moving: boolean, drawing: Drawing, } | { "kind": "forgot" } | { "kind": "markedFocused", marked: boolean, } | { "kind": "drawn", drawn: boolean, };
 
 /**
  * One step of the entry on a pinned box.
  */
-export type PrivateStep = { "kind": "focus", text: PageSecret, spaced: boolean, } | { "kind": "focused" } | { "kind": "holds", text: PageSecret, spaced: boolean, } | { "kind": "readBack" } | { "kind": "forget" } | { "kind": "markFocused" };
+export type PrivateStep = { "kind": "focus", text: PageSecret, spaced: boolean, } | { "kind": "focused" } | { "kind": "holds", text: PageSecret, spaced: boolean, } | { "kind": "compare", text: PageSecret, spaced: boolean, } | { "kind": "readBack" } | { "kind": "forget" } | { "kind": "markFocused" } | { "kind": "drawn", text: PageSecret, };
 
 /**
  * The common private call envelope. Keeping the policy outside request variants prevents a
@@ -367,7 +391,13 @@ retired?: FrameSeq, } | { "kind": "none", staleRef?: string, } | { "kind": "stri
 /**
  * The original element's border width plus explicit position, not a retarget's rect.
  */
-borderOffset?: Point, resolved?: Resolution, } | { "kind": "covered", by: string, } | { "kind": "armed", rect: Rect, point: Point, token: number, } | { "kind": "verdict", hit: Hit, } | { "kind": "moves", moves: number, } | { "kind": "frameBox", origin: Point | null, hit: Hit | null, } | { "kind": "value", value: PageText, } | { "kind": "notFocused", holder?: string, } | { "kind": "read", value: PageText, resolved?: Resolution, } | { "kind": "values", count: number, values: Array<PageText>, } | { "kind": "selector", selector: string, } | { "kind": "snapshot", json: import('../../../neo-playwright/third_party/playwright/packages/isomorphic/ariaSnapshot').AriaSnapshotJSON, iframes: Array<SnapshotIframe>, 
+borderOffset?: Point, resolved?: Resolution, } | { "kind": "covered", by: string, } | { "kind": "armed", rect: Rect, point: Point, token: number, } | { "kind": "verdict", hit: Hit, } | { "kind": "moves", moves: number, } | { "kind": "frameBox", origin: Point | null, hit: Hit | null, 
+/**
+ * Only for the private look (ruling R60): this page cannot show `point`, which lies
+ * outside its viewport, or where the iframe is clipped away though it takes the
+ * pointer. A click's `frameBox` always answers false.
+ */
+unseen: boolean, } | { "kind": "value", value: PageText, } | { "kind": "notFocused", holder?: string, } | { "kind": "read", value: PageText, resolved?: Resolution, } | { "kind": "values", count: number, values: Array<PageText>, } | { "kind": "selector", selector: string, } | { "kind": "snapshot", json: import('../../../neo-playwright/third_party/playwright/packages/isomorphic/ariaSnapshot').AriaSnapshotJSON, iframes: Array<SnapshotIframe>, 
 /**
  * Clickable marking threw on this page and the snapshot was taken again without it;
  * the op's call log says so.
@@ -385,7 +415,20 @@ export type ProbeRequest = { "op": "describe" } | { "op": "resolve", target: Pro
 /**
  * Every `<iframe>` on the way down is visible (the resolver's hops).
  */
-frameVisible: boolean, scroll: ScrollPlan, position?: Point, arm?: ArmPlan, } | { "op": "verdict", token: number, } | { "op": "moves" } | { "op": "disarm" } | { "op": "frameBox", iframe: ProbeTarget, point?: Point, } | { "op": "edit", pin: Pin, edit: Edit, } | { "op": "look", pin: Pin, look: BoxAsk, } | { "op": "private", pin: Pin, step: PrivateStep, } | { "op": "privateShown" } | { "op": "read", target: ProbeTarget, strictness: Strictness, frameVisible: boolean, read: Read, } | { "op": "readAll", target: ProbeTarget, read: ReadAll, } | { "op": "screenshotMask", target: ProbeTarget, color: string, } | { "op": "screenshotMaskCleanup" } | { "op": "selector", target: ProbeTarget, } | { "op": "snapshot", root: ProbeTarget, mode: SnapshotMode, 
+frameVisible: boolean, scroll: ScrollPlan, position?: Point, arm?: ArmPlan, } | { "op": "verdict", token: number, } | { "op": "moves" } | { "op": "disarm" } | { "op": "frameBox", iframe: ProbeTarget, point?: Point, 
+/**
+ * Set only by the private look's cover check of a page above the box's frame (ruling
+ * R60): a frame that is only shifted is placed by its corner, and a point that hits
+ * nothing, or hits what holds the frame, is clear. A click keeps upstream's answer.
+ */
+look: boolean, } | { "op": "edit", pin: Pin, edit: Edit, } | { "op": "look", pin: Pin, look: BoxAsk, } | { "op": "private", pin: Pin, step: PrivateStep, } | { "op": "privateShown", 
+/**
+ * The camera's walk of closed shadow roots on demand (ruling R65): the call's nodes are
+ * closed roots Rust resolved into this world from the hosts `PrivateHosts` handed over.
+ * The world keeps them for this question alone, never for its engine
+ * (probe/private-shown.ts).
+ */
+walk?: boolean, } | { "op": "privateHosts", limit: number, } | { "op": "read", target: ProbeTarget, strictness: Strictness, frameVisible: boolean, read: Read, } | { "op": "readAll", target: ProbeTarget, read: ReadAll, } | { "op": "screenshotMask", target: ProbeTarget, color: string, } | { "op": "screenshotMaskCleanup" } | { "op": "selector", target: ProbeTarget, } | { "op": "snapshot", root: ProbeTarget, mode: SnapshotMode, 
 /**
  * Any integer, as upstream passes it: a child frame's depth can come out zero or
  * negative, and the engine reads those differently from no depth.
@@ -414,7 +457,7 @@ export type QueryState = "visible" | "hidden" | "enabled" | "disabled" | "editab
 /**
  * What a `read` reads from its element.
  */
-export type Read = { "kind": "textContent" } | { "kind": "innerText" } | { "kind": "innerHtml" } | { "kind": "inputValue" } | { "kind": "ref" } | { "kind": "boundingBox" } | { "kind": "attribute", name: string, } | { "kind": "state", state: QueryState, } | { "kind": "frameOrigin" } | { "kind": "located" } | { "kind": "checkable" } | { "kind": "fileInput", multiple: boolean, directory: boolean, };
+export type Read = { "kind": "textContent" } | { "kind": "innerText" } | { "kind": "innerHtml" } | { "kind": "inputValue" } | { "kind": "ref" } | { "kind": "boundingBox" } | { "kind": "viewCentre" } | { "kind": "attribute", name: string, } | { "kind": "state", state: QueryState, } | { "kind": "frameOrigin" } | { "kind": "located" } | { "kind": "checkable" } | { "kind": "fileInput", multiple: boolean, directory: boolean, };
 
 /**
  * What a `readAll` reads from every match.

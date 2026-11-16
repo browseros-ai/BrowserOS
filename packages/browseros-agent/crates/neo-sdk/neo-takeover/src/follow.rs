@@ -1,6 +1,5 @@
 //! Keeps a tab, or a task's current tab, in front of Neo's one screen while a view display
-//! watches (D12's follow). It replaces zuzu's `watch`, `follow` and `toFront` and the observer
-//! task they ran in: Neo already sees every operation, so a host only names what to follow.
+//! watches. Neo already sees every operation, so a host only names what to follow.
 //!
 //! ```text
 //!  admission ─ subscribe: T's ops, Neo's moves ─ look up the target ─ bring it forward

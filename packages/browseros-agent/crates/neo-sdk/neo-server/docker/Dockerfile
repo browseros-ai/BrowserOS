@@ -1,8 +1,8 @@
 # syntax=docker/dockerfile:1
 #
 # The BrowserOS Neo SDK image: the released neo browser plus this commit's SDK server
-# (browseros-claw-sdk, one MCP tool: `run`), for hosts that build on it (zuzu's cell image) or
-# run it alone. README.md beside this file is the host contract. Build it with build.sh, from one
+# (browseros-claw-sdk, one MCP tool: `run`), for hosts that build on it or run it alone.
+# README.md beside this file is the host contract. Build it with build.sh, from one
 # context, packages/browseros-agent, filtered by Dockerfile.dockerignore. The image owns its
 # browser supervisor (supervisor/ beside this file); the default Neo image, packages/browseros/
 # docker/neo with claw-server, is production's and shares nothing with it.
@@ -65,7 +65,9 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 # The browser is pinned by version and per-architecture sha256 in browser.lock, so a bump is a
-# reviewed one-file diff and a changed download fails the build.
+# reviewed one-file diff and a changed download fails the build. The download retries every
+# failure (a CDN reset or a stream cut off mid-file failed image jobs before), each try from the
+# start into the same file; the checksum after it still fails a short or wrong file, retried or not.
 COPY crates/neo-sdk/neo-server/docker/browser.lock /usr/share/neo-sdk/browser.lock
 RUN set -eu; . /usr/share/neo-sdk/browser.lock; \
     case "$TARGETARCH" in \
@@ -73,7 +75,7 @@ RUN set -eu; . /usr/share/neo-sdk/browser.lock; \
       arm64) url=$NEO_BROWSER_URL_ARM64 sha=$NEO_BROWSER_SHA256_ARM64 ;; \
       *) echo "no browser for $TARGETARCH" >&2; exit 1 ;; \
     esac; \
-    curl -fsSL -o /tmp/neo.deb "$url"; \
+    curl -fsSL --connect-timeout 30 --retry 5 --retry-delay 5 --retry-all-errors -o /tmp/neo.deb "$url"; \
     echo "$sha  /tmp/neo.deb" | sha256sum -c -; \
     apt-get update; apt-get install -y --no-install-recommends /tmp/neo.deb; \
     rm -rf /tmp/neo.deb /var/lib/apt/lists/*
@@ -100,7 +102,9 @@ COPY crates/neo-sdk/neo-playwright/THIRD_PARTY_NOTICES.md crates/neo-sdk/neo-pla
 # What this image is made of, for hosts and for accept.sh: the source commit, the browser, and
 # the server binary as installed (its sha256, the version compiled into it, and the digest of the
 # sources it was compiled from, which must equal the digest of the sources this build copied;
-# build.sh checks the binary against it before it tags the image). The commit's ARGs
+# build.sh checks the binary against it before it tags the image), and the CAPTCHA keys it carries
+# (`captchaKeys`: provider names only, never a value or a hash of one; empty here, filled in by the
+# keyed target). The commit's ARGs
 # are declared here, not at the top: every RUN after an ARG misses the cache when its value
 # changes, which would reinstall the packages and download the browser for every commit.
 ARG NEO_SDK_REVISION=unknown
@@ -113,7 +117,7 @@ RUN set -eu; . /usr/share/neo-sdk/browser.lock; server=$(neo-server-info path); 
       --arg marker "$(LC_ALL=C grep -aoE 'browseros-claw-sdk-version=[^;]*' "$server" | head -1 | cut -d= -f2)" \
       --arg sources "$(cat /usr/share/neo-sdk/source-digest)" --arg path "$server" \
       --arg built_from "$(LC_ALL=C grep -aoE 'browseros-claw-sdk-source=[0-9a-f]{64}' "$server" | head -1 | cut -d= -f2)" \
-      '{version: $version, revision: $revision, dirty: $dirty, arch: $arch, source_digest: $sources, browser: {version: $browser, deb: $deb}, server: {binary: "browseros-claw-sdk", path: $path, version: $marker, sha256: $server_sha256, source_digest: $built_from, toolchain: "rust 1.98.0, ziglang 0.15.2, cargo-zigbuild 0.23.0, glibc 2.17"}}' \
+      '{version: $version, revision: $revision, dirty: $dirty, arch: $arch, source_digest: $sources, browser: {version: $browser, deb: $deb}, server: {binary: "browseros-claw-sdk", path: $path, version: $marker, sha256: $server_sha256, source_digest: $built_from, toolchain: "rust 1.98.0, ziglang 0.15.2, cargo-zigbuild 0.23.0, glibc 2.17"}, captchaKeys: []}' \
       > /usr/share/neo-sdk/provenance.json; \
     [ "$(jq -r '.server.source_digest == .source_digest' /usr/share/neo-sdk/provenance.json)" = true ] \
       || { echo "the installed server was not compiled from this build's sources" >&2; exit 1; }
@@ -148,22 +152,31 @@ HEALTHCHECK --interval=5s --timeout=5s --start-period=90s --retries=3 CMD ["/usr
 # tini reaps orphans and forwards SIGTERM to the entrypoint, which quits the browser cleanly.
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/neo-entrypoint"]
 
-# Keys baked in, only when build.sh is given key files. They are part of the image and readable
-# by anyone who has it; BuildKit keeps them out of build arguments and logs only. build.sh
-# rebuilds this stage without its cache every time, so a rotated or removed key never survives
-# in a cached layer.
+# Keys baked in, only when build.sh is given key files: the published image, built by
+# neo-sdk-image.yml from the neo-captcha environment's secrets. They are part of the image and
+# readable by anyone who has it; BuildKit keeps them out of build arguments and logs only.
+# provenance.json's captchaKeys names the keys this stage installed, so accept.sh checks the
+# files against what the image says it carries. build.sh rebuilds this stage without its cache
+# every time, so a rotated or removed key never survives in a cached layer.
 FROM neo-sdk-runtime AS neo-sdk-keyed
 RUN --mount=type=secret,id=capsolver_api_key,required=false \
     --mount=type=secret,id=twocaptcha_api_key,required=false \
     set -eu; \
     destination=/home/neo/.config/browseros/captcha; \
     install -d -m 0700 -o neo -g neo "$destination"; \
+    keys=""; \
     if [ -s /run/secrets/capsolver_api_key ]; then \
       install -m 0400 -o neo -g neo /run/secrets/capsolver_api_key "$destination/capsolver-api-key"; \
+      keys="$keys capsolver"; \
     fi; \
     if [ -s /run/secrets/twocaptcha_api_key ]; then \
       install -m 0400 -o neo -g neo /run/secrets/twocaptcha_api_key "$destination/2captcha-api-key"; \
-    fi
+      keys="$keys 2captcha"; \
+    fi; \
+    jq --arg keys "$keys" '.captchaKeys = ($keys | split(" ") | map(select(. != "")))' \
+      /usr/share/neo-sdk/provenance.json > /tmp/provenance.json; \
+    install -m 0644 /tmp/provenance.json /usr/share/neo-sdk/provenance.json; \
+    rm /tmp/provenance.json
 LABEL com.browseros.neo-sdk.captcha-keys="baked"
 
 # The default target. It never mounts a secret, so no key can reach it from any cache.

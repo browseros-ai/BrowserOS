@@ -3,7 +3,7 @@
 //! Two gates guard the socket. The OS is the first: the app binds the socket with mode 0660,
 //! so only its owner and its group can connect at all. The second runs on every request
 //! (`host_service`): the peer rule re-checks who connected (decision 28), then the bearer
-//! token, the one secret zuzu and Neo share. On TCP, which the app binds only by explicit
+//! token, the one secret the host and Neo share. On TCP, which the app binds only by explicit
 //! opt-in, the token is the only check.
 //!
 //! The peer rule admits a peer whose uid is the socket owner's (Neo's own, since Neo created
@@ -207,11 +207,11 @@ mod tests {
 
     #[test]
     fn supplementary_groups_come_from_the_groups_line() {
-        let status = "Name:\tmirrord\nUid:\t1001\t1001\t1001\t1001\n\
+        let status = "Name:\thost\nUid:\t1001\t1001\t1001\t1001\n\
                       Gid:\t1001\t1001\t1001\t1001\nGroups:\t27 999 1001 \nVmPeak:\t0 kB\n";
         assert_eq!(supplementary_groups(status), vec![27, 999, 1001]);
         assert!(supplementary_groups("Groups:\t\n").is_empty());
-        assert!(supplementary_groups("Name:\tmirrord\n").is_empty());
+        assert!(supplementary_groups("Name:\thost\n").is_empty());
     }
 
     #[test]

@@ -33,6 +33,9 @@ pub(crate) enum Refused {
     BrowserUnavailable,
     /// 503: the fill's request record cannot be written, so Neo cannot promise one typing.
     RecordUnavailable,
+    /// 503: the record of the tabs that took a fill cannot be written (ruling R45), so a Neo
+    /// restart could picture this tab again: any fill is refused, with a `requestId` or not.
+    FilledTabsUnavailable,
     /// 500: a failure inside Neo, with its cause for the log.
     Internal(String),
 }
@@ -55,9 +58,19 @@ impl From<Refused> for FillRefusal {
                  requestId types once; nothing was typed"
                     .to_owned(),
             ),
+            Refused::FilledTabsUnavailable => Self::TraceUnavailable(
+                "Neo cannot write its record of the tabs that took a fill, so it types nothing"
+                    .to_owned(),
+            ),
             Refused::Internal(cause) => Self::Internal(cause),
         }
     }
+}
+
+/// Ruling R64: the fields typed after a look that found their limit moved, or absent; never an
+/// empty list.
+fn moved(entry: &Entry) -> Option<Vec<i32>> {
+    (!entry.max_length_moved.is_empty()).then(|| counts(&entry.max_length_moved))
 }
 
 /// The fill's answer from its op's end. `entry` is what the entry answered; `None` when the door
@@ -74,6 +87,7 @@ pub(crate) fn fill_answer(
         (Ok(_), Some(entry)) => api::FillResult {
             at: entry.at.map(wire_count),
             typed: Some(counts(&entry.typed)),
+            max_length_moved: moved(&entry),
             ..api::FillResult::new(
                 run,
                 entry.outcome.as_str().to_owned(),
@@ -88,6 +102,7 @@ pub(crate) fn fill_answer(
             api::FillResult {
                 at: entry.at.map(wire_count),
                 typed: Some(counts(&entry.typed)),
+                max_length_moved: moved(&entry),
                 error: Some(Box::new(wire_error(failure))),
                 ..api::FillResult::new(
                     run,

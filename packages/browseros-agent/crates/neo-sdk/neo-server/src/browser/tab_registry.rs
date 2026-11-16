@@ -2,7 +2,7 @@
 
 use std::any::{Any, TypeId};
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
 use browseros_core::{TabId, TargetId};
 use neo_takeover::TabHold;
@@ -10,15 +10,25 @@ use neo_trace::{RunId, TaskId};
 use tokio::time::{Duration, Instant};
 
 use super::task_book::TaskBook;
-use super::{PageRef, TaskError, TaskRecord};
+use super::{BookSink, Holder, PageRef, RunScope, SavedTask, Sight, TaskError, TaskRecord};
 
 /// Retained close history. Evicted history advances `forgotten`, so bounded memory never
 /// turns an old admission into proof that a tab is still open.
 const TOMBSTONES: usize = 256;
 
+/// Popups announced and not yet closed, remembered for sight. An evicted one follows its
+/// opener's family only once a listing or an op registers it: until then a bound run is refused
+/// it, never wrongly shown it.
+const ANNOUNCED: usize = 1024;
+
+/// How far sight follows a popup's openers to a held tab. A longer chain belongs to no family,
+/// which refuses rather than grants, and the bound also ends a loop a bad announcement could make.
+const OPENER_HOPS: usize = 16;
+
 /// What Neo keeps in memory per tab: who opened it, when it was last in use (its idle clock),
-/// which runs in flight used it, its feature state, and which task owns it ([`TaskBook`], whose
-/// record of each task's last acted-on tab is the task's built-in `page`).
+/// which runs in flight used it, its feature state, and which task holds it ([`TaskBook`], whose
+/// record of each task's last acted-on tab is the task's built-in `page`). From the holders and
+/// the popups' openers it answers whether a run reaches a tab ([`TabRegistry::sight`]).
 ///
 /// One owner, one lock, never held across an await. There is one way out: core's detach hook
 /// calls [`TabRegistry::closed`], and a tab's entry and its slots leave together, so no
@@ -26,7 +36,15 @@ const TOMBSTONES: usize = 256;
 /// else closes the tab.
 pub(crate) struct TabRegistry {
     state: Mutex<TabState>,
+    /// Where the tab watch reports each tab it sees open, with its opener, as it sees it: the
+    /// host's takeovers, which list the tabs opened during each (`openedTabs`). Set once by the
+    /// host API; until then opens go nowhere.
+    opens: OnceLock<OpenSink>,
 }
+
+/// Takes each tab the tab watch sees open and the tab that opened it, synchronously, before the
+/// watch sends any close from the same listing. It must not wait.
+pub(crate) type OpenSink = Arc<dyn Fn(TabId, Option<TabId>) + Send + Sync>;
 
 /// Who opened a tab. Core has no public `is_agent_created`, so Neo's own page opener marks its
 /// tabs here. A popup an agent's tab opened is the agent's too (the settings design, decision
@@ -53,6 +71,8 @@ struct TabState {
     tasks: TaskBook,
     /// Popup relationships survive an opener whose creating op has not assigned its task yet.
     popups: HashMap<TabId, TabId>,
+    /// Popups as the browser announced them, before any listing registered them.
+    announced: Announced,
     /// The tabs each run in flight used, from its start to its end record. The janitor never
     /// closes a tab a run in flight used, and the tab's idle clock restarts when the run ends,
     /// so a run longer than the idle time keeps its tabs. Bounded by the runs in flight.
@@ -78,6 +98,7 @@ impl TabRegistry {
     pub(crate) fn new() -> Self {
         Self {
             state: Mutex::default(),
+            opens: OnceLock::new(),
         }
     }
 
@@ -179,10 +200,11 @@ impl TabRegistry {
                 state.forgotten = evicted;
             }
             state.gone.remove(&tab);
-            state.tasks.detach(tab);
+            state.tasks.closed(tab);
             state
                 .popups
                 .retain(|popup, opener| *popup != tab && *opener != tab);
+            state.announced.forget(tab);
             // A tab number may be reused after a browser restart; a run's old use must not
             // keep the new tab.
             for used in state.runs.values_mut() {
@@ -253,8 +275,8 @@ impl TabRegistry {
     }
 
     /// Whether `tab` may become Neo's blank tab by adoption: it is not the agent's and no task
-    /// Neo remembers owns it. The trace's own task links are the caller's to check, since the
-    /// registry starts empty after a server restart.
+    /// Neo remembers owns it. The trace's own task links are the caller's to check: after a
+    /// server restart the book holds its saved tabs only once the tab-holders file is restored.
     #[must_use]
     pub(crate) fn adoptable(&self, tab: TabId) -> bool {
         let state = self.lock();
@@ -322,38 +344,173 @@ impl TabRegistry {
         self.lock().tasks.owner(tab).cloned()
     }
 
-    /// Assigns a registered tab synchronously after its child opener returns. A close that
-    /// already removed its entry wins, so assignment cannot revive a closed tab.
+    /// The family root of task `id`, while the book has it.
+    #[must_use]
+    pub(crate) fn task_family(&self, id: &TaskId) -> Option<TaskId> {
+        self.lock()
+            .tasks
+            .get(id)
+            .ok()
+            .map(|task| task.family.clone())
+    }
+
+    /// Who holds `tab` now: its task and that task's family.
+    #[must_use]
+    pub(crate) fn holder(&self, tab: TabId) -> Option<Holder> {
+        self.lock().tasks.holder(tab).cloned()
+    }
+
+    /// The tab that opened `tab`, as a registered popup or as the browser announced it, or
+    /// `None` for a tab opened by hand. A released takeover's `openedTabs` read it, so a host can
+    /// tell a tab the owner opened from one a page opened.
+    pub(crate) fn opener(&self, tab: TabId) -> Option<TabId> {
+        let state = self.lock();
+        state
+            .popups
+            .get(&tab)
+            .copied()
+            .or_else(|| state.announced.opener(tab))
+    }
+
+    /// Starts an agent-named task in `family`: one created in a run whose host task is of that
+    /// family, so it counts as that run's own.
+    pub(crate) fn create_task_in(
+        &self,
+        name: Option<String>,
+        family: &TaskId,
+    ) -> Result<TaskRecord, TaskError> {
+        self.lock().tasks.create_in(name, family)
+    }
+
+    /// Whether a run of `scope` may reach `tab` now: the one check every door seam asks.
+    ///
+    /// Neo's blank tab is [`Sight::Reserved`] in every scope. A [`RunScope::Browser`] run is
+    /// shown every other tab, as before task scope. A [`RunScope::Family`] run is shown a tab its
+    /// family holds, or a popup no task holds yet whose opener's family is the run's (through
+    /// popups of popups); a tab that closed while its family held it is [`Sight::Closed`];
+    /// anything else is [`Sight::Foreign`]. The run's own opens in flight are the run's to
+    /// admit: the registry learns of a tab only once core names it.
+    #[must_use]
+    pub(crate) fn sight(&self, scope: &RunScope, tab: TabId) -> Sight {
+        let state = self.lock();
+        if state
+            .open
+            .get(&tab)
+            .is_some_and(|entry| entry.origin == TabOrigin::Neo)
+        {
+            return Sight::Reserved;
+        }
+        let RunScope::Family(family) = scope else {
+            return Sight::Shown;
+        };
+        if state.family_of(tab) == Some(family) {
+            Sight::Shown
+        } else if state.tasks.was_closed(tab, family) {
+            Sight::Closed
+        } else {
+            Sight::Foreign
+        }
+    }
+
+    /// The browser announced `popup` with `opener` as its opener (`Target.targetCreated`), before
+    /// any listing showed it. From now on sight follows the opener's family for it, so a bound
+    /// run's popup is its own from its first moment. Only sight reads this: the popup joins a
+    /// task, and becomes the agent's, only when a listing or an op registers it
+    /// ([`TabRegistry::popup`]). A note can come after a close core already reported: one
+    /// socket's events are ordered, so the popup's own destroy follows and the watch's confirmed
+    /// close drops the note ([`TabRegistry::forget_announced`]), and a closed opener holds
+    /// nothing for a note to follow.
+    pub(crate) fn note_opener(&self, popup: TabId, opener: TabId) {
+        if popup != opener {
+            self.lock().announced.note(popup, opener);
+        }
+    }
+
+    /// The tab watch confirmed `tab` closed. Its announced links go now: a popup that opened and
+    /// closed between two listings never entered core's cache, so its close never reaches
+    /// [`TabRegistry::removing`].
+    pub(crate) fn forget_announced(&self, tab: TabId) {
+        self.lock().announced.forget(tab);
+    }
+
+    /// The tab watch follows a new socket. Announced openers go: a restarted browser numbers
+    /// its tabs anew, so an old note could tie a new tab to an old family. The new socket's
+    /// discovery announces every live popup again.
+    pub(crate) fn forget_openers(&self) {
+        self.lock().announced.clear();
+    }
+
+    /// Where the tab watch reports each tab it sees open ([`OpenSink`]), once: false when one is
+    /// already set, which stays.
+    pub(crate) fn set_open_sink(&self, sink: OpenSink) -> bool {
+        self.opens.set(sink).is_ok()
+    }
+
+    /// The tab watch saw `tab` open, opened by `opener` as the browser announced it. Reported at
+    /// once, outside the registry's lock, so no reader waits behind another (a takeover's
+    /// release) to hear of it.
+    pub(crate) fn opened(&self, tab: TabId, opener: Option<TabId>) {
+        if let Some(sink) = self.opens.get() {
+            sink(tab, opener);
+        }
+    }
+
+    /// Where the task book's changes go from now on ([`BookSink`]), once: false when a sink is
+    /// already set, which stays. Until one is set, changes go nowhere.
+    pub(crate) fn set_book_sink(&self, sink: Arc<dyn BookSink>) -> bool {
+        self.lock().tasks.set_sink(sink)
+    }
+
+    /// Rebuilds the task book from a saved record, once, at start, before the first run is
+    /// admitted. Each task keeps its saved family and origin unless the book already has it.
+    /// A tab joins only if this registry has it open (not Neo's blank tab) and no task holds it,
+    /// so the caller registers each live tab first, as a run's start does for a task's tabs it
+    /// restores ([`TabRegistry::touched`] after core resolved the tab). Emits no change for the
+    /// tabs it restores, since the saved record already holds them all. A popup the tab watch
+    /// named before the restore, whose opener the restore gave back (one opened while Neo's
+    /// server was down), then joins the opener's task, and that join is reported as any is.
+    pub(crate) fn restore_book(&self, tasks: Vec<SavedTask>) -> Result<(), TaskError> {
+        let mut guard = self.lock();
+        let state = &mut *guard;
+        for task in tasks {
+            state.tasks.restore_saved(task, |tab| {
+                state
+                    .open
+                    .get(&tab)
+                    .is_some_and(|entry| entry.origin != TabOrigin::Neo)
+            })?;
+        }
+        state.inherit_popups();
+        Ok(())
+    }
+
+    /// Gives a registered tab to task `id`, as a run that may use every task opens in it
+    /// ([`TabRegistry::own_in_scope`]): tests set ownership up through here.
+    #[cfg(test)]
     pub(crate) fn own(&self, page: &PageRef, id: &TaskId) -> Result<(), TaskError> {
+        self.own_in_scope(page, id, &RunScope::Browser).map(|_| ())
+    }
+
+    /// Assigns a registered tab to task `id` after a run's open of it returns, only while the
+    /// run's `scope` may still use the task, asked under the same lock as the join. A close that
+    /// already removed the tab's entry wins, so assignment cannot revive a closed tab. A host may name an agent's task while a run
+    /// with no task opens a tab in it, and such a run never adds a tab to a host's task. False
+    /// when the task is no longer the run's to open in; the tab then joins no task.
+    pub(crate) fn own_in_scope(
+        &self,
+        page: &PageRef,
+        id: &TaskId,
+        scope: &RunScope,
+    ) -> Result<bool, TaskError> {
         let mut state = self.lock();
+        if !scope.may_use(state.tasks.get(id)?) {
+            return Ok(false);
+        }
         if state.open.contains_key(&page.tab) {
             state.tasks.attach(page.tab, id)?;
             state.inherit_popups();
         }
-        Ok(())
-    }
-
-    /// After a restart, the task's own tabs as the trace proves them join it again, those still
-    /// open, registered and owned by no task here; `page`, when one of them, is its page again,
-    /// and otherwise its newest. A tab that has an owner keeps it.
-    pub(crate) fn restore(
-        &self,
-        task: &TaskId,
-        tabs: &[TabId],
-        page: Option<TabId>,
-    ) -> Result<(), TaskError> {
-        let mut state = self.lock();
-        state.tasks.ensure(task)?;
-        for tab in tabs {
-            if state.open.contains_key(tab) {
-                state.tasks.join(*tab, task)?;
-            }
-        }
-        if let Some(page) = page {
-            state.tasks.acted(page, task);
-        }
-        state.inherit_popups();
-        Ok(())
+        Ok(true)
     }
 
     /// A popup inherits its opener, even if its event preceded the opener's task assignment.
@@ -444,6 +601,23 @@ impl TabRegistry {
 }
 
 impl TabState {
+    /// The family `tab` belongs to: its holder's, else, for a popup no task holds yet, its
+    /// opener's, through popups of popups.
+    fn family_of(&self, tab: TabId) -> Option<&TaskId> {
+        let mut tab = tab;
+        for _ in 0..OPENER_HOPS {
+            if let Some(holder) = self.tasks.holder(tab) {
+                return Some(&holder.family);
+            }
+            tab = self
+                .popups
+                .get(&tab)
+                .copied()
+                .or_else(|| self.announced.opener(tab))?;
+        }
+        None
+    }
+
     fn inherit_popups(&mut self) {
         loop {
             let inherited: Vec<_> = self
@@ -532,6 +706,47 @@ impl TabEntry {
     }
 }
 
+/// Popup → opener as the browser announced each popup, oldest first, bounded by [`ANNOUNCED`].
+/// A link goes when either tab closes, as `TabState::popups`' do, through core's removal or, for
+/// a popup core never cached, the watch's confirmed close; every link goes at a new socket.
+#[derive(Default)]
+struct Announced {
+    openers: HashMap<TabId, TabId>,
+    order: VecDeque<TabId>,
+}
+
+impl Announced {
+    fn note(&mut self, popup: TabId, opener: TabId) {
+        if self.openers.insert(popup, opener).is_some() {
+            return;
+        }
+        self.order.push_back(popup);
+        if self.order.len() > ANNOUNCED
+            && let Some(oldest) = self.order.pop_front()
+        {
+            self.openers.remove(&oldest);
+        }
+    }
+
+    fn opener(&self, popup: TabId) -> Option<TabId> {
+        self.openers.get(&popup).copied()
+    }
+
+    fn forget(&mut self, tab: TabId) {
+        let Self { openers, order } = self;
+        let before = openers.len();
+        openers.retain(|popup, opener| *popup != tab && *opener != tab);
+        if openers.len() != before {
+            order.retain(|popup| openers.contains_key(popup));
+        }
+    }
+
+    fn clear(&mut self) {
+        self.openers.clear();
+        self.order.clear();
+    }
+}
+
 /// A host task's page as memory knows it at a run's start ([`TabRegistry::task_page`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum TaskPage {
@@ -539,8 +754,8 @@ pub(crate) enum TaskPage {
     Tab(PageRef),
     /// Neo knows the task and none of its tabs is open: the run opens a new tab for it.
     NoTab,
-    /// Neo does not know the task: it never ran in this process, or Neo restarted since. Only
-    /// then is the trace asked (`TraceStore::task_tabs`).
+    /// Neo does not know the task: it never ran in this process, or Neo restarted since and the
+    /// task had no open tab to give back. The run opens a new tab for it.
     Unknown,
 }
 
@@ -559,8 +774,9 @@ mod tests {
     use neo_trace::{RunId, TaskId};
     use tokio::time::{Duration, Instant};
 
-    use super::{Seen, TOMBSTONES, TabOrigin, TabRegistry, TaskPage};
-    use crate::browser::PageRef;
+    use super::{ANNOUNCED, Seen, TOMBSTONES, TabOrigin, TabRegistry, TaskPage};
+    use crate::browser::book_change::BookLog;
+    use crate::browser::{Holder, PageRef, RunScope, SavedTask, Sight, TaskOrigin};
 
     #[derive(Default)]
     struct Marker;
@@ -1050,5 +1266,311 @@ mod tests {
         );
         assert_eq!(tabs.gone_target(page.tab), None);
         assert!(tabs.lock().gone.is_empty());
+    }
+
+    #[test]
+    fn a_family_run_sees_only_its_familys_tabs_and_a_browser_run_every_tab_but_neos()
+    -> Result<(), Box<dyn Error>> {
+        let tabs = TabRegistry::new();
+        let mine = TaskId::parse("host-s")?;
+        let theirs = TaskId::parse("host-r")?;
+        tabs.ensure_task(&mine)?;
+        tabs.ensure_task(&theirs)?;
+        let created = tabs.create_task_in(None, &mine)?;
+        let (held, sibling, their_tab, no_task, neo, closed, taken) = (
+            page(1, 101),
+            page(2, 102),
+            page(3, 103),
+            page(4, 104),
+            page(5, 105),
+            page(6, 106),
+            page(7, 107),
+        );
+        for tab in [&held, &sibling, &their_tab, &no_task, &neo, &closed, &taken] {
+            tabs.touched(tab, tabs.seen());
+        }
+        tabs.own(&held, &mine)?;
+        tabs.own(&sibling, &created.id)?;
+        tabs.own(&their_tab, &theirs)?;
+        tabs.own(&closed, &mine)?;
+        tabs.own(&taken, &theirs)?;
+        tabs.make_neo(neo.tab);
+        tabs.removing(closed.tab)();
+        // Announced only: no listing has registered these popups.
+        let (popup, nested, their_popup) = (TabId(111), TabId(112), TabId(113));
+        tabs.note_opener(popup, held.tab);
+        tabs.note_opener(nested, popup);
+        tabs.note_opener(their_popup, their_tab.tab);
+        tabs.note_opener(taken.tab, held.tab);
+
+        let family = RunScope::Family(mine.clone());
+        for (tab, sight, why) in [
+            (held.tab, Sight::Shown, "its host task holds it"),
+            (
+                sibling.tab,
+                Sight::Shown,
+                "a task created in its family holds it",
+            ),
+            (popup, Sight::Shown, "an unheld popup follows its opener"),
+            (nested, Sight::Shown, "and so does that popup's own popup"),
+            (their_tab.tab, Sight::Foreign, "another family holds it"),
+            (
+                their_popup,
+                Sight::Foreign,
+                "an unheld popup of another family's tab",
+            ),
+            (taken.tab, Sight::Foreign, "a holder outranks the opener"),
+            (no_task.tab, Sight::Foreign, "no task holds it"),
+            (
+                closed.tab,
+                Sight::Closed,
+                "it closed while its family held it",
+            ),
+            (neo.tab, Sight::Reserved, "Neo's blank tab"),
+            (
+                TabId(999),
+                Sight::Foreign,
+                "a tab that never existed answers as another's",
+            ),
+        ] {
+            assert_eq!(tabs.sight(&family, tab), sight, "{why}");
+        }
+        let other = RunScope::Family(theirs);
+        assert_eq!(tabs.sight(&other, their_tab.tab), Sight::Shown);
+        assert_eq!(
+            tabs.sight(&other, closed.tab),
+            Sight::Foreign,
+            "another family's closed tab is not the run's to know about"
+        );
+        for tab in [
+            held.tab,
+            sibling.tab,
+            popup,
+            nested,
+            their_tab.tab,
+            their_popup,
+            no_task.tab,
+            closed.tab,
+            TabId(999),
+        ] {
+            assert_eq!(
+                tabs.sight(&RunScope::Browser, tab),
+                Sight::Shown,
+                "a browser-scoped run reaches every tab, as before task scope"
+            );
+        }
+        assert_eq!(
+            tabs.sight(&RunScope::Browser, neo.tab),
+            Sight::Reserved,
+            "but never Neo's blank tab"
+        );
+        Ok(())
+    }
+
+    /// A released takeover's `openedTabs` name each tab's opener: a popup's, from the browser's
+    /// announcement or from its registration, and none for a tab opened by hand.
+    #[test]
+    fn a_tab_names_its_opener_as_announced_or_registered_and_a_hand_opened_one_none() {
+        let tabs = TabRegistry::new();
+        let opener = page(1, 101);
+        tabs.opened_by_agent(&opener, tabs.seen());
+        let announced = TabId(102);
+        tabs.note_opener(announced, opener.tab);
+        let registered = PageRef { tab: TabId(103) };
+        tabs.popup(&registered, opener.tab, tabs.seen());
+        let by_hand = page(4, 104);
+        tabs.touched(&by_hand, tabs.seen());
+        assert_eq!(tabs.opener(announced), Some(opener.tab), "announced");
+        assert_eq!(tabs.opener(registered.tab), Some(opener.tab), "registered");
+        assert_eq!(tabs.opener(by_hand.tab), None, "opened by hand");
+        assert_eq!(tabs.opener(opener.tab), None, "the opener itself");
+    }
+
+    #[test]
+    fn an_announced_popup_is_its_openers_before_any_listing_and_moves_nothing()
+    -> Result<(), Box<dyn Error>> {
+        let tabs = TabRegistry::new();
+        let task = TaskId::parse("host-s")?;
+        tabs.ensure_task(&task)?;
+        let family = RunScope::Family(task.clone());
+        let opener = page(1, 101);
+        tabs.opened_by_agent(&opener, tabs.seen());
+        tabs.own(&opener, &task)?;
+        let popup = TabId(102);
+        tabs.note_opener(popup, opener.tab);
+        assert_eq!(
+            tabs.sight(&family, popup),
+            Sight::Shown,
+            "the family's from its announcement"
+        );
+        assert_eq!(
+            tabs.owner(popup),
+            None,
+            "it joins the task only once a listing or an op registers it"
+        );
+        assert!(
+            !tabs.agent_tabs().contains(&popup),
+            "nor does it become the agent's before that"
+        );
+        tabs.popup(&PageRef { tab: popup }, opener.tab, tabs.seen());
+        assert_eq!(
+            tabs.owner(popup),
+            Some(task.clone()),
+            "the listing's notice joins it"
+        );
+
+        let late = TabId(103);
+        tabs.note_opener(late, opener.tab);
+        tabs.removing(opener.tab)();
+        assert_eq!(
+            tabs.sight(&family, late),
+            Sight::Foreign,
+            "an opener's close drops its unregistered popups, as it does registered ones"
+        );
+        tabs.note_opener(TabId(104), opener.tab);
+        assert_eq!(
+            tabs.sight(&family, TabId(104)),
+            Sight::Foreign,
+            "a closed opener holds nothing, so a late announcement naming it shows nothing"
+        );
+        let quick = TabId(108);
+        tabs.note_opener(quick, popup);
+        assert_eq!(
+            tabs.sight(&family, quick),
+            Sight::Shown,
+            "a popup of the family's held popup"
+        );
+        tabs.forget_announced(quick);
+        assert_eq!(
+            tabs.sight(&family, quick),
+            Sight::Foreign,
+            "the watch's confirmed close drops a popup core never cached"
+        );
+
+        let other = page(5, 105);
+        tabs.touched(&other, tabs.seen());
+        tabs.own(&other, &task)?;
+        tabs.note_opener(TabId(106), other.tab);
+        tabs.forget_openers();
+        assert_eq!(
+            tabs.sight(&family, TabId(106)),
+            Sight::Foreign,
+            "a new socket forgets every announcement: a restarted browser numbers tabs anew"
+        );
+        let reused = page(1, 101);
+        tabs.touched(&reused, tabs.seen());
+        tabs.own(&reused, &task)?;
+        tabs.note_opener(TabId(107), reused.tab);
+        assert_eq!(
+            tabs.sight(&family, TabId(107)),
+            Sight::Shown,
+            "a restarted browser's tab may reuse a closed tab's number and still be announced"
+        );
+        for index in 0..=ANNOUNCED {
+            tabs.note_opener(TabId(1000 + i64::try_from(index)?), other.tab);
+        }
+        assert_eq!(
+            tabs.sight(&family, TabId(1000)),
+            Sight::Foreign,
+            "the oldest announcement goes at the bound"
+        );
+        assert_eq!(
+            tabs.sight(&family, TabId(1000 + i64::try_from(ANNOUNCED)?)),
+            Sight::Shown
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_saved_book_comes_back_on_open_unheld_tabs_and_emits_nothing() -> Result<(), Box<dyn Error>>
+    {
+        let tabs = TabRegistry::new();
+        let log = Arc::new(BookLog::default());
+        let sink: Arc<BookLog> = Arc::clone(&log);
+        assert!(tabs.set_book_sink(sink));
+        let (first, second, neo, kept, sibling, newest) = (
+            page(1, 101),
+            page(2, 102),
+            page(3, 103),
+            page(4, 104),
+            page(5, 105),
+            page(6, 106),
+        );
+        for tab in [&first, &second, &neo, &kept, &sibling, &newest] {
+            tabs.touched(tab, tabs.seen());
+        }
+        tabs.make_neo(neo.tab);
+        let theirs = TaskId::parse("host-r")?;
+        tabs.ensure_task(&theirs)?;
+        tabs.own(&kept, &theirs)?;
+        log.take();
+
+        let mine = TaskId::parse("host-s")?;
+        let created = TaskId::parse("made-0001")?;
+        tabs.restore_book(vec![
+            SavedTask {
+                id: mine.clone(),
+                family: mine.clone(),
+                origin: TaskOrigin::Host,
+                tabs: vec![second.tab, first.tab, neo.tab, kept.tab, TabId(199)],
+                page: Some(second.tab),
+            },
+            SavedTask {
+                id: created.clone(),
+                family: mine.clone(),
+                origin: TaskOrigin::Agent,
+                tabs: vec![sibling.tab, newest.tab],
+                page: Some(kept.tab),
+            },
+        ])?;
+
+        assert_eq!(
+            tabs.task(&mine)?.tabs,
+            vec![second.tab, first.tab],
+            "open tabs no task holds join in saved order; never Neo's blank tab or an unknown one"
+        );
+        assert_eq!(
+            tabs.task_page(&mine),
+            TaskPage::Tab(second),
+            "its saved page"
+        );
+        assert_eq!(
+            tabs.owner(neo.tab),
+            None,
+            "Neo's blank tab, taken before the restore, is never held after it"
+        );
+        assert_eq!(
+            tabs.owner(kept.tab),
+            Some(theirs),
+            "a held tab keeps its holder"
+        );
+        let record = tabs.task(&created)?;
+        assert_eq!(
+            (&record.family, record.origin),
+            (&mine, TaskOrigin::Agent),
+            "a created task keeps its saved family and origin"
+        );
+        assert_eq!(
+            tabs.holder(sibling.tab),
+            Some(Holder {
+                task: created.clone(),
+                family: mine.clone(),
+            })
+        );
+        assert_eq!(
+            tabs.task_page(&created),
+            TaskPage::Tab(newest),
+            "a saved page that is not the task's own leaves the newest as its page"
+        );
+        assert_eq!(
+            tabs.sight(&RunScope::Family(mine), sibling.tab),
+            Sight::Shown,
+            "the family sees its restored tabs"
+        );
+        assert!(
+            log.take().is_empty(),
+            "a restore emits nothing: the saved record already holds it"
+        );
+        Ok(())
     }
 }

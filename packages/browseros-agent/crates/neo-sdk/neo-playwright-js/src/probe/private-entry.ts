@@ -26,7 +26,19 @@
  * bound, and an entry must always reach its box to read it back and to forget the value. Nothing
  * here writes to the page's markup (ruling R22): the mark and the listener live in Neo's isolated
  * world.
+ *
+ * The mark is kept on the box itself (ruling R53): a non-enumerable property on the box's
+ * wrapper in this isolated world, under a registered symbol. A frame's copy of this probe is a
+ * module of its own, so a set held here would not follow a box the page moves into another
+ * same-origin frame; the wrapper does, and the other frame's probe reads the same property
+ * there. The page's own world holds a wrapper of its own and never sees it. A named limit: under
+ * the spec harness's conformance switch a world masks only once it marked a box itself
+ * (`anyPrivatelyTyped`), so a marked box moved into another frame's document is not masked in
+ * that frame's tree walk there; no host fill happens under the switch.
  */
+
+import { holdsKeptValue, keepDigest, keepsDigests } from './private-digest'
+import { coverWrapper, renderedText } from './private-look'
 import type {
   BoxState,
   FocusState,
@@ -38,8 +50,12 @@ import type {
 } from './protocol'
 import type { World } from './world'
 
-/** Boxes Neo typed a private value into, in this document (design section 10.4). */
-const marked = new WeakSet<Element>()
+/**
+ * The key of the mark on a box Neo typed a private value into (design section 10.4). Registered
+ * (`Symbol.for`), so every frame's probe in this renderer names the same key: a symbol made with
+ * `Symbol()` would be one per frame's module and miss a box marked in another frame.
+ */
+const MARK = Symbol.for('neo.privatelyTyped')
 
 /**
  * Whether this world ever marked a box. Until it has, a snapshot under the spec harness's
@@ -57,6 +73,16 @@ let anyMarked = false
 type Watched = {
   readonly text: string
   readonly spaced: boolean
+  /**
+   * For a box its look let through under its field's own drawing (rulings R55, R56): the
+   * drawing's wrapper, whether its text already held the value before the first character, and
+   * the value it is compared with.
+   */
+  readonly cover?: {
+    readonly wrapper: Element
+    readonly drewBefore: boolean
+    readonly text: string
+  }
   heldAtLastInput: boolean
   readonly submits: Event[]
   leaving: boolean
@@ -73,18 +99,44 @@ const watched = new WeakMap<Element, Watched>()
 /** The boxes under entry, by pin: kept until `readBack` or `forget`, never evicted. */
 const active = new Map<Pin, Element>()
 
-/** Whether Neo typed a private value into `element` (the mask reads it, pull request 4). */
+/**
+ * The wrapper whose text drew the value at the last read-back that found it drawn (ruling R55),
+ * with that box's pin, until the `drawn` step asks whether it still draws after Rust emptied the
+ * box. Kept apart from the box's entry, which the read-back ends and the emptying's focus step
+ * starts again.
+ *
+ * One slot, not a map: a drawn long value ends its entry, and Rust empties that box and asks
+ * `drawn` for that pin before any other read-back in this world; in between the page hears only
+ * that pin's focus, focused, holds and forget steps, and one fill at a time holds a tab's input.
+ * A map kept a wrapper alive for the document's life for every code filled under a field's own
+ * drawing, since Rust asks `drawn` only for a long value (`DRAWN_CODE_MAX`).
+ *
+ * Not emptied by `forget`: the read-back that fills the slot forgets that pin's box right after,
+ * so every drawn value would answer that it still draws. Nor at the `forget` step: the emptying's
+ * guard sends one for that pin from a spawned task, and its order against the `drawn` step is not
+ * fixed. The last such wrapper of a document stays until the next read-back that finds a value
+ * drawn, the next `drawn` step, or the document's end.
+ */
+let drawnSlot: { pin: Pin; wrapper: Element } | undefined
+
+/**
+ * Whether the mask treats `element` as a box Neo typed a private value into (pull request 4):
+ * it carries the mark, or it held a value this world keeps a digest of when the current read
+ * through the mask began (ruling R50, `private-digest.ts`).
+ */
 export function privatelyTyped(element: Element): boolean {
-  return marked.has(element)
+  return Object.hasOwn(element, MARK) || holdsKeptValue(element)
 }
 
-/** Whether this world marked any box yet (`anyMarked`). */
+/** Whether this world marked any box or keeps any digest (`anyMarked`). */
 export function anyPrivatelyTyped(): boolean {
-  return anyMarked
+  return anyMarked || keepsDigests()
 }
 
 function mark(element: Element): void {
-  marked.add(element)
+  // Neither enumerable, writable nor configurable: no walk lists it, and nothing unmarks a box.
+  if (!Object.hasOwn(element, MARK))
+    Object.defineProperty(element, MARK, { value: true })
   anyMarked = true
 }
 
@@ -93,12 +145,26 @@ export function privateStep(
   request: PrivateRequest,
 ): ReplyTo<'private'> | Promise<ReplyTo<'private'>> {
   const { step, pin } = request
+  // Asked after the emptying, whatever became of the box: only the wrapper is read. A pin with
+  // no wrapper kept answers that it still draws, so Neo never says the page was cleared when it
+  // cannot tell.
+  if (step.kind === 'drawn') {
+    const wrapper = drawnSlot?.pin === pin ? drawnSlot.wrapper : undefined
+    drawnSlot = undefined
+    return reply({
+      kind: 'drawn',
+      drawn: wrapper ? draws(wrapper, step.text) : true,
+    })
+  }
   // After `focus`, the box is reached through `active`, connected or not: a read-back must
   // reach a box that left its document, whose listener still knows what it held at its last
   // input. Before it, the box must be in its document.
+  // The check call's compare (ruling R48) reads a box no entry is under, as `focus` starts one.
   const box =
     active.get(pin) ??
-    (step.kind === 'focus' ? world.pins.live(pin) : undefined)
+    (step.kind === 'focus' || step.kind === 'compare'
+      ? world.pins.live(pin)
+      : undefined)
   if (!box) return { kind: 'detached' }
   const answered = answer(world, pin, box, step)
   return answered instanceof Promise ? answered.then(reply) : reply(answered)
@@ -112,7 +178,7 @@ function answer(
   world: World,
   pin: Pin,
   box: Element,
-  step: PrivateStep,
+  step: Exclude<PrivateStep, { kind: 'drawn' }>,
 ): PrivateAnswer | Promise<PrivateAnswer> {
   switch (step.kind) {
     case 'focus':
@@ -124,6 +190,15 @@ function answer(
         kind: 'holds',
         holds: same(heldText(box), step.text, step.spaced),
       }
+    case 'compare': {
+      // Booleans only: nothing of the value, its place or its count leaves this world.
+      const held = heldText(box)
+      return {
+        kind: 'compared',
+        holds: same(held, step.text, step.spaced),
+        contains: contains(held, step.text, step.spaced),
+      }
+    }
     case 'readBack':
       return readBack(pin, box)
     case 'forget':
@@ -134,7 +209,10 @@ function answer(
   }
 }
 
-/** Marks the text control holding the focus in `box`'s document, down open shadow roots. */
+/**
+ * Marks the text control holding the focus in `box`'s document, down open shadow roots, and
+ * keeps a digest of what it holds (ruling R50): the text may have gone there.
+ */
 function markFocused(box: Element): boolean {
   let holder = box.ownerDocument.activeElement
   while (holder?.shadowRoot?.activeElement)
@@ -143,6 +221,7 @@ function markFocused(box: Element): boolean {
   const name = holder.localName
   if (name !== 'input' && name !== 'textarea') return false
   mark(holder)
+  keepDigest(heldText(holder))
   return true
 }
 
@@ -204,9 +283,17 @@ function moving(entry: Watched | undefined): boolean {
 
 function listen(pin: Pin, box: Element, text: string, spaced: boolean): void {
   forget(pin, box)
+  const wrapper = coverWrapper(box)
   const entry: Watched = {
     text,
     spaced,
+    ...(wrapper && {
+      cover: {
+        wrapper,
+        drewBefore: draws(wrapper, text),
+        text,
+      },
+    }),
     heldAtLastInput: false,
     submits: [],
     leaving: false,
@@ -246,7 +333,11 @@ function forget(pin: Pin, box: Element): void {
  * The read-back: what the box holds, whether it held the whole value at its last input event,
  * and whether its page is moving on (a submit not prevented, or the document unloading): a box
  * that still holds its value on a page that already submitted went out with the form, and Rust
- * answers it as moved, never as entered (ruling R38).
+ * answers it as moved, never as entered (ruling R38). Also how the box's field drawing figured
+ * (`drawing`, rulings R55 and R56): `none` without one, `under` for a box entered under it, and
+ * `drawn` when its wrapper now draws the value outside the box, where it did not before the first
+ * character. Rust empties the box of a long drawn value and keeps a short one, a code's digits.
+ * The value is compared here and nothing of it leaves this world.
  */
 function readBack(pin: Pin, box: Element): PrivateAnswer {
   const entry = watched.get(box)
@@ -256,17 +347,56 @@ function readBack(pin: Pin, box: Element): PrivateAnswer {
   else if (entry && same(heldText(box), entry.text, entry.spaced))
     state = 'holds'
   else state = 'other'
+  // The mark follows the value (ruling R50): a digest of what the box holds now, whether that is
+  // the value it was given or another form or part of it, and of the value it was given,
+  // whatever it holds. A widget that splits a code across its boxes may mirror the whole of it
+  // into another control (a hidden input), and a box that left may come back re-created with
+  // it. The scan at the next request forgets whichever no control holds.
+  if (state !== 'left') keepDigest(heldText(box))
+  if (entry) keepDigest(entry.text)
   // The text may have gone to the control that holds the focus now: it is marked before the
   // box is forgotten, which ends this entry's reach to the box (ruling R26).
   if (state === 'other') markFocused(box)
   const leaving = moving(entry)
+  const cover = entry?.cover
+  const drawn =
+    cover !== undefined && !cover.drewBefore && draws(cover.wrapper, cover.text)
+  if (cover && drawn) drawnSlot = { pin, wrapper: cover.wrapper }
   forget(pin, box)
-  return { kind: 'readBack', state, heldAtLastInput, moving: leaving }
+  const drawing = !cover ? 'none' : drawn ? 'drawn' : 'under'
+  return { kind: 'readBack', state, heldAtLastInput, moving: leaving, drawing }
+}
+
+/**
+ * Whether `wrapper` draws `text` as text outside its box: its rendered text, which holds no
+ * box's value, contains it once whitespace, dashes and slashes are set aside on both sides and
+ * both are lowered, whatever the field's `spaced` says: a site draws a code one digit to a cell,
+ * which its text separates by line breaks, a card number in its own groups (`4242 4242 …`), and
+ * a value through `text-transform`, which the rendered text gives as shown while the page's text
+ * holds it as typed. A false alarm would need the drawing to gain the same characters in order
+ * after the typing, which is the value. Text it held before the first character does not count
+ * (`drewBefore`). `spaced` stays the box's own read-back's (`same`).
+ */
+function draws(wrapper: Element, text: string): boolean {
+  const bare = (value: string) => value.replace(/[\s\-/]/g, '').toLowerCase()
+  const value = bare(text)
+  return value !== '' && bare(renderedText(wrapper)).includes(value)
 }
 
 function heldText(box: Element): string {
   const value: unknown = Reflect.get(box, 'value')
   return typeof value === 'string' ? value : ''
+}
+
+/**
+ * Whether `held` contains `text`, or with `spaced` contains it once spaces, dashes and slashes
+ * are set aside in both, the rule `same` uses for equality: true whenever `same` is (ruling R48).
+ */
+function contains(held: string, text: string, spaced: boolean): boolean {
+  if (held.includes(text)) return true
+  if (!spaced) return false
+  const bare = (value: string) => value.replace(/[\s\-/]/g, '')
+  return bare(held).includes(bare(text))
 }
 
 /** Equal, or with `spaced` equal once spaces, dashes and slashes are set aside (`12 / 29`). */

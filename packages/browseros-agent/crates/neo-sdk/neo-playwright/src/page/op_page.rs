@@ -119,7 +119,14 @@ impl<'op> OpPage<'op> {
     /// against the run's existing admitted tree. A cache only proves absence with live,
     /// gap-free observation while checking it; uncertainty enables the scan rather than
     /// fetching topology or changing frame storage.
+    ///
+    /// Private-entry history in any tab always answers true (ruling R59). A marked box keeps
+    /// its original prototype when the page moves it into another frame or window; even after
+    /// the source closes, only a document-wide scan finds that foreign prototype to guard it.
     pub(crate) fn may_have_other_frame(&self, scope: &OpScope<'_>, world: &IsolatedWorld) -> bool {
+        if self.pw.private_tabs().any() {
+            return true;
+        }
         let fence = self.pw.event_fence();
         if self.frames().lifecycle_has_gaps() || !self.pw.events_live_through(fence) {
             return true;

@@ -7,10 +7,11 @@ use neo_trace::{
     Delivery, Effect, EpochMillis, ErrorOwner, ErrorRecord, OperationEnded, OperationId,
     OperationKind, OperationSite, OperationStarted, Outcome, PageState, RedactionLimits, Redactor,
     RequestId, RetentionPolicy, RunEffects, RunEnded, RunId, RunQuery, RunStarted, RunStatus,
-    TailQuery, TaskAct, TaskId, TaskTabs, TraceRecordEvent, TraceSink, TraceStore, WriterConfig,
-    spawn_writer,
+    RunTabsScope, TailQuery, TaskAct, TaskId, TraceRecordEvent, TraceSink, TraceStore,
+    WriterConfig, spawn_writer,
 };
 use serde_json::{Value, json};
+use std::error::Error;
 use std::time::Duration;
 use std::{fs, io};
 use tempfile::TempDir;
@@ -88,6 +89,7 @@ fn start_run(sink: &TraceSink, start: Start<'_>) -> RunId {
         request_id: start.request.map(request),
         task_id: start.task.map(task),
         host_data: Some(json!({"ownerRun": "r1"})),
+        tabs_scope: RunTabsScope::Browser,
         at: at(start.at),
     });
     run
@@ -134,6 +136,7 @@ fn op_ended(sink: &TraceSink, id: OperationId, delivery: Delivery, result: Optio
             title: Some("Done".into()),
         }),
         main_world: false,
+        frames_incomplete: false,
         at: at(i64::from(id.seq) * 10 + 5),
     });
 }
@@ -192,6 +195,7 @@ fn answered(
         error: None,
         page_after,
         main_world: false,
+        frames_incomplete: false,
         at: at(millis + 5),
     }
 }
@@ -262,7 +266,7 @@ async fn a_run_reads_back_as_a_tree_with_owners_and_deliveries() {
         &h.sink,
         Op {
             kind: OperationKind::Defined,
-            ..simple(fill, "zuzu.auth.fill", Effect::Write)
+            ..simple(fill, "host.fill", Effect::Write)
         },
     );
     op_started(
@@ -677,6 +681,7 @@ async fn host_data_of_4_kib_is_stored_whole_and_a_larger_one_is_cut()
             request_id: None,
             task_id: None,
             host_data: Some(host_data_of(bytes)),
+            tabs_scope: RunTabsScope::Browser,
             at: at(0),
         });
         // Host data reaches disk with the run's end.
@@ -820,6 +825,7 @@ async fn an_operations_main_world_flag_reads_back_as_its_end_gave_it()
     op_started(&h.sink, simple(goto, "page.goto", Effect::Write));
     h.sink.op_ended(OperationEnded {
         main_world: true,
+        frames_incomplete: false,
         ..answered(evaluate, 10, None, None)
     });
     h.sink.op_ended(answered(click, 20, None, None));
@@ -1174,109 +1180,6 @@ async fn a_tasks_last_tab_falls_back_to_the_tab_an_operation_ended_on() {
     assert_eq!(last_tab().await, Some(TabId(3)));
 }
 
-/// What survives a restart of a task's tabs: the tabs its runs opened, and its page among them,
-/// the one its own script last acted on, else one it opened since. Neo's own reads (stored with
-/// no call site, as the prelude's frame refresh after `waitForTimeout` is), another task's tab and
-/// a tab the script reached without opening it never count. A run that picked another task
-/// proves no owner for its opens, so its tabs are left out.
-#[tokio::test]
-async fn a_tasks_tabs_after_a_restart_are_the_ones_it_surely_opened() {
-    let h = harness(WriterConfig::default()).await;
-    let theirs = start_in(&h.sink, Some("search"), 0);
-    new_page(&h.sink, OperationId::new(theirs, 1), TabId(4), 1);
-    let run = start_in(&h.sink, Some("checkout"), 10);
-    new_page(&h.sink, OperationId::new(run, 1), TabId(5), 10);
-    new_page(&h.sink, OperationId::new(run, 2), TabId(6), 20);
-    scripted_read(&h.sink, OperationId::new(run, 3), TabId(5), 30);
-    read_on(&h.sink, OperationId::new(run, 4), Some(TabId(6)), 40);
-    scripted_read(&h.sink, OperationId::new(run, 5), TabId(4), 50);
-    scripted_read(&h.sink, OperationId::new(run, 6), TabId(9), 60);
-    // A later run of the same host task picks another task and opens a tab, which is that
-    // task's, then acts on it.
-    let picking = start_in(&h.sink, Some("checkout"), 70);
-    op_started(
-        &h.sink,
-        simple(OperationId::new(picking, 1), "neo.createTask", Effect::Read),
-    );
-    new_page(&h.sink, OperationId::new(picking, 2), TabId(8), 80);
-    scripted_read(&h.sink, OperationId::new(picking, 3), TabId(8), 90);
-    flushed(&h).await;
-    let tabs = |name: &'static str| {
-        let store = h.store.clone();
-        async move {
-            store
-                .task_tabs(&task(name))
-                .await
-                .unwrap_or_else(|error| panic!("task_tabs: {error}"))
-        }
-    };
-    assert_eq!(
-        tabs("checkout").await,
-        TaskTabs {
-            opened: vec![TabId(5), TabId(6)],
-            page: Some(TabId(5)),
-        },
-        "its script's last act on a tab it opened: not Neo's read of 6, another task's 4, the \
-         New Tab 9, or 8, opened after a pick"
-    );
-    assert_eq!(
-        tabs("search").await,
-        TaskTabs {
-            opened: vec![TabId(4)],
-            page: Some(TabId(4)),
-        },
-        "the tab it opened"
-    );
-    assert_eq!(tabs("unknown").await, TaskTabs::default());
-
-    let later = start_in(&h.sink, Some("checkout"), 100);
-    new_page(&h.sink, OperationId::new(later, 1), TabId(7), 100);
-    // An open that is a child operation proves no owner: `task.newPage`'s is for the task it
-    // names, which need not be this run's.
-    let parent = OperationId::new(later, 2);
-    op_started(&h.sink, simple(parent, "task.newPage", Effect::Write));
-    let child = OperationId::new(later, 3);
-    op_started(
-        &h.sink,
-        Op {
-            parent: Some(parent),
-            tab: None,
-            at: at(110),
-            ..simple(child, "context.newPage", Effect::Write)
-        },
-    );
-    let opened_page = PageState {
-        tab_id: Some(TabId(10)),
-        url: Some("about:blank".into()),
-        title: None,
-    };
-    h.sink
-        .op_ended(answered(child, 110, Some(at(111)), Some(opened_page)));
-    scripted_read(&h.sink, OperationId::new(later, 4), TabId(10), 120);
-    flushed(&h).await;
-    assert_eq!(
-        tabs("checkout").await,
-        TaskTabs {
-            opened: vec![TabId(5), TabId(6), TabId(7)],
-            page: Some(TabId(7)),
-        },
-        "a tab it opened since its script last acted, and not 10, a child's open"
-    );
-}
-
-/// A read of `tab` the script itself made (it carries a call site), admitted at `millis`.
-fn scripted_read(sink: &TraceSink, id: OperationId, tab: TabId, millis: i64) {
-    sink.op_started(OperationStarted {
-        site: Some(OperationSite { line: 1, column: 1 }),
-        ..started(Op {
-            tab: Some(tab),
-            at: at(millis),
-            ..simple(id, "page.title", Effect::Read)
-        })
-    });
-    sink.op_ended(answered(id, millis, None, None));
-}
-
 /// When a task last acted on its last tab, for a follow view that lost the task's live events:
 /// a target counts from its operation's start, and the page an operation ended on from its end.
 #[tokio::test]
@@ -1627,6 +1530,7 @@ fn ended(id: OperationId) -> OperationEnded {
         error: None,
         page_after: None,
         main_world: false,
+        frames_incomplete: false,
         at: at(i64::from(id.seq) * 10 + 5),
     }
 }
@@ -1646,6 +1550,7 @@ async fn a_start_keeps_input_code_and_host_data_off_disk_until_the_end()
         request_id: None,
         task_id: None,
         host_data: Some(json!({"note": format!("for {found}")})),
+        tabs_scope: RunTabsScope::Browser,
         at: at(0),
     });
     let fill = OperationId::new(run, 1);
@@ -1759,7 +1664,7 @@ fn on_tab(sink: &TraceSink, id: OperationId, name: &str, tab: i64, millis: i64) 
 /// acting on it, so each task's run record, its `/v1/tabs` association and its last tab are its
 /// own pages only.
 #[tokio::test]
-async fn a_subscription_makes_no_tab_a_runs_or_a_tasks() -> Result<(), Box<dyn std::error::Error>> {
+async fn a_subscription_makes_no_tab_a_runs_or_a_tasks() -> Result<(), Box<dyn Error>> {
     let h = harness(WriterConfig::default()).await;
     let alpha = start_in(&h.sink, Some("alpha"), 0);
     let beta = start_in(&h.sink, Some("beta"), 0);
@@ -1835,7 +1740,86 @@ async fn a_subscription_makes_no_tab_a_runs_or_a_tasks() -> Result<(), Box<dyn s
     Ok(())
 }
 
-/// zuzu shortens retention to get what a run typed off the disk, so a swept run's bytes must not
+/// Before a run's first statement the prelude reads the frame tree of every listed tab, another
+/// task's included, and again at a wait (`page.frames`, with no call site). Like a subscription,
+/// Neo's own read names a tab without acting on it: the run's tabs, each tab's tasks and the
+/// task's last tab stay its own pages. Sent with a call site, the same name counts as any of the
+/// script's operations does.
+#[tokio::test]
+async fn neos_own_frame_reads_make_no_tab_a_runs_or_a_tasks() -> Result<(), Box<dyn Error>> {
+    let h = harness(WriterConfig::default()).await;
+    let alpha = start_in(&h.sink, Some("alpha"), 0);
+    let beta = start_in(&h.sink, Some("beta"), 0);
+    on_tab(&h.sink, OperationId::new(beta, 1), "page.goto", 3, 10);
+    on_tab(&h.sink, OperationId::new(alpha, 1), "page.goto", 2, 20);
+    // alpha's next run reads the trees of the new tab page (1), its own page and beta's.
+    let later = start_in(&h.sink, Some("alpha"), 25);
+    for (seq, tab) in [(1, 1), (2, 2), (3, 3)] {
+        on_tab(
+            &h.sink,
+            OperationId::new(later, seq),
+            "page.frames",
+            tab,
+            30 + i64::from(seq),
+        );
+    }
+    flushed(&h).await;
+
+    let store = &h.store;
+    let tabs = |run| async move {
+        store
+            .run(run)
+            .await
+            .map(|detail| detail.map(|detail| detail.summary.tabs))
+    };
+    assert_eq!(
+        tabs(later).await?,
+        Some(Vec::new()),
+        "the reads link no tab to the run"
+    );
+    let tasks = h.store.tasks_for_tabs(&[TabId(1), TabId(3)]).await?;
+    assert_eq!(tasks.get(&TabId(1)), None, "the new tab page is no task's");
+    assert_eq!(
+        tasks.get(&TabId(3)),
+        Some(&vec![task("beta")]),
+        "beta's alone"
+    );
+    assert_eq!(
+        h.store.task_last_act(&task("alpha")).await?,
+        act(2, 20),
+        "alpha's last act is its own goto, not the read of beta's page"
+    );
+
+    scripted(
+        &h.sink,
+        OperationId::new(later, 4),
+        "page.frames",
+        TabId(3),
+        40,
+    );
+    flushed(&h).await;
+    assert_eq!(
+        h.store.task_last_act(&task("alpha")).await?,
+        act(3, 40),
+        "with a call site it is the script's"
+    );
+    Ok(())
+}
+
+/// An operation `name` on `tab` the script itself made (it carries a call site), at `millis`.
+fn scripted(sink: &TraceSink, id: OperationId, name: &str, tab: TabId, millis: i64) {
+    sink.op_started(OperationStarted {
+        site: Some(OperationSite { line: 1, column: 1 }),
+        ..started(Op {
+            tab: Some(tab),
+            at: at(millis),
+            ..simple(id, name, Effect::Read)
+        })
+    });
+    sink.op_ended(answered(id, millis, None, None));
+}
+
+/// Retention can remove what a run typed from disk, so a swept run's bytes must not
 /// stay readable in the file or its log once the sweep answers. Secure delete zeroes the freed
 /// cells, and the sweep then checkpoints the log, which holds the older copies under WAL.
 #[tokio::test]
@@ -1936,4 +1920,60 @@ async fn a_raised_value_size_keeps_the_next_operations_result_whole()
 
 fn long_text() -> String {
     "x".repeat(10_000)
+}
+
+/// Each run keeps which tabs it saw, `task` or `browser`; a run whose start the writer never saw
+/// keeps none, as runs from before the field do. A request without a task under the `task` tab
+/// scope finds only a run without one, so it never replays a reply a bound run gave.
+#[tokio::test]
+async fn a_run_keeps_the_tabs_it_saw_and_a_taskless_request_finds_only_taskless_runs()
+-> Result<(), Box<dyn Error>> {
+    let h = harness(WriterConfig::default()).await;
+    let bound = RunId::new();
+    h.sink.run_started(RunStarted {
+        id: bound,
+        code: "x".to_owned(),
+        request_id: Some(request("same")),
+        task_id: Some(task("host-s")),
+        host_data: None,
+        tabs_scope: RunTabsScope::Task,
+        at: at(10),
+    });
+    let unbound = start_run(
+        &h.sink,
+        Start {
+            request: Some("same"),
+            at: 20,
+            ..Start::default()
+        },
+    );
+    let unseen = RunId::new();
+    read_on(&h.sink, OperationId::new(unseen, 1), None, 30);
+    flushed(&h).await;
+
+    let scope = async |run: RunId| -> Result<Option<RunTabsScope>, Box<dyn Error>> {
+        let summary = h
+            .store
+            .run_summary(run)
+            .await?
+            .ok_or("the run is recorded")?;
+        Ok(summary.tabs_scope)
+    };
+    assert_eq!(scope(bound).await?, Some(RunTabsScope::Task));
+    assert_eq!(scope(unbound).await?, Some(RunTabsScope::Browser));
+    assert_eq!(scope(unseen).await?, None, "no start record, no scope");
+
+    let any = h.store.run_by_request(&request("same"), None).await?;
+    assert_eq!(
+        any.map(|run| run.id),
+        Some(bound),
+        "under the browser scope, the earliest run with the request id, tasked or not"
+    );
+    let untasked = h.store.run_by_untasked_request(&request("same")).await?;
+    assert_eq!(
+        untasked.map(|run| run.id),
+        Some(unbound),
+        "under the task scope, only a run without a task"
+    );
+    Ok(())
 }

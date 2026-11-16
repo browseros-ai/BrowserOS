@@ -4,10 +4,11 @@
 
 use std::error::Error;
 use std::future::{self, Future};
-use std::panic;
+use std::io::{self, Write};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError, mpsc as std_mpsc};
 use std::time::Duration;
+use std::{panic, process};
 
 use browseros_core::NativeCapabilities;
 use browseros_core::pages::NewPageOptions;
@@ -20,24 +21,64 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 use tokio::runtime::Handle;
-use tokio::sync::Barrier;
-use tokio::task;
+use tokio::sync::{Barrier, mpsc};
+use tokio::task::{self, JoinHandle};
 use tokio::time::{self, Instant};
 use tokio_util::sync::CancellationToken;
 
 use crate::app::App;
-use crate::browser::{BrowserLink, PageRef, TabRegistry};
+use crate::browser::{BrowserLink, PageRef, TabRegistry, TabsScope};
 use crate::builtins;
 use crate::dispatch::{
     Dispatcher, ErrorCode, LeafError, Lifetime, Method, MethodSpec, Observer, OpCtx,
     OperationError, PageChange, PageTarget, RegistryBuilder, RegistryError, RunCtx, RunGuard,
     RunStart,
 };
+use crate::host::{HolderFeed, Note, TabHolders};
 use crate::run::{RunService, RunServiceParts};
 use crate::test_support::FakeCdp;
 
 /// A test's error. `Send`, so a test body can run as a task on Neo's runtime.
 pub(crate) type TestError = Box<dyn Error + Send + Sync>;
+
+/// Keeps Tokio deadlines fixed while the real SQLite worker settles. In pinned Tokio 1.52.3,
+/// scheduling a blocking task inhibits auto-advance synchronously, before its thread starts.
+#[must_use = "retain the guard while test deadlines must remain frozen"]
+pub(crate) struct ManualClock {
+    // Dropping the sender also releases the worker if the test panics.
+    _release: std_mpsc::Sender<()>,
+    _worker: JoinHandle<()>,
+}
+
+impl ManualClock {
+    pub(crate) fn pause() -> Self {
+        let (release, held) = std_mpsc::channel();
+        let worker = task::spawn_blocking(move || {
+            // Frozen Tokio time also freezes its hang guards. A blocking-task panic would
+            // not reach the waiting test, so use a wall-clock watchdog and fail the binary.
+            if let Err(std_mpsc::RecvTimeoutError::Timeout) =
+                held.recv_timeout(Duration::from_secs(120))
+            {
+                let _ = io::stderr()
+                    .lock()
+                    .write_all(b"test stalled for 120 seconds with the manual clock frozen\n");
+                process::abort();
+            }
+        });
+        time::pause();
+        Self {
+            _release: release,
+            _worker: worker,
+        }
+    }
+}
+
+impl Drop for ManualClock {
+    fn drop(&mut self) {
+        // Shutdown may flush a writer with its ordinary batching timer.
+        time::resume();
+    }
+}
 
 /// The parts of one Neo process, minus HTTP. A plain data bag.
 pub(crate) struct TestRig {
@@ -52,6 +93,11 @@ pub(crate) struct TestRig {
     pub(crate) dispatcher: Arc<Dispatcher>,
     /// What SIGTERM would cancel.
     pub(crate) shutdown: CancellationToken,
+    /// The task book's changes on their way to the tab-holders file beside the trace, as the
+    /// sidecar saves them, so a restart (`restarted_service`) gives each task its tabs back.
+    pub(crate) holders: Mutex<Arc<HolderFeed>>,
+    /// The writer of the book in use now; a restart stops it, as the old process's ends.
+    holder_writer: Arc<Mutex<Option<JoinHandle<()>>>>,
     /// Holds the store's file for the rig's life.
     pub(crate) dir: TempDir,
 }
@@ -117,6 +163,7 @@ impl TestRig {
         });
         let gate = Arc::new(Barrier::new(2));
         let dispatcher = dispatcher(&link, &tabs, &sink, &gate)?;
+        let (holders, holder_writer) = save_book(&link, &tabs, &dir).await;
         Ok(Self {
             fake,
             link,
@@ -127,6 +174,8 @@ impl TestRig {
             gate,
             dispatcher,
             shutdown: CancellationToken::new(),
+            holders: Mutex::new(holders),
+            holder_writer: Arc::new(Mutex::new(Some(holder_writer))),
             dir,
         })
     }
@@ -140,15 +189,51 @@ impl TestRig {
         )
     }
 
-    /// A run service as Neo has it after a restart: no memory of tasks or requests, over the
-    /// same browser and the same trace.
-    pub(crate) fn restarted_service(
+    /// A run service as Neo has it after a restart of its server, the browser kept: no memory of
+    /// requests, and a task book restored from the tab-holders file, over the same browser and
+    /// the same trace. (The link's close hook and tab watch still feed the rig's first registry.)
+    pub(crate) async fn restarted_service(
         &self,
         orphan_grace: Duration,
     ) -> Result<Arc<RunService>, TestError> {
+        let (service, restore) = self.restart(orphan_grace).await?;
+        restore.begin();
+        Ok(service)
+    }
+
+    /// As [`TestRig::restarted_service`], with the book's restore not begun: the service's runs
+    /// wait at their start until [`PendingRestore::begin`]. Every change of the old book is
+    /// written first, and its writer stops, as the old process's would.
+    pub(crate) async fn restart(
+        &self,
+        orphan_grace: Duration,
+    ) -> Result<(Arc<RunService>, PendingRestore), TestError> {
+        let old = Arc::clone(&*self.holders.lock().unwrap_or_else(PoisonError::into_inner));
+        old.flush().await;
+        if let Some(writer) = self
+            .holder_writer
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
+        {
+            writer.abort();
+        }
         let tabs = Arc::new(TabRegistry::new());
+        let holders = TabHolders::open(self.dir.path()).await;
+        let (feed, notes) = HolderFeed::channel();
+        tabs.set_book_sink(Arc::clone(&feed) as _);
+        *self.holders.lock().unwrap_or_else(PoisonError::into_inner) = feed;
         let dispatcher = dispatcher(&self.link, &tabs, &self.sink, &self.gate)?;
-        Ok(self.service_over(dispatcher, tabs, orphan_grace))
+        let mut parts = self.service_parts(dispatcher, Arc::clone(&tabs), orphan_grace);
+        parts.holders = Some(Arc::clone(&holders));
+        let restore = PendingRestore {
+            holders,
+            link: Arc::clone(&self.link),
+            tabs,
+            notes,
+            writer: Arc::clone(&self.holder_writer),
+        };
+        Ok((RunService::new(parts), restore))
     }
 
     fn service_over(
@@ -157,7 +242,16 @@ impl TestRig {
         tabs: Arc<TabRegistry>,
         orphan_grace: Duration,
     ) -> Arc<RunService> {
-        RunService::new(RunServiceParts {
+        RunService::new(self.service_parts(dispatcher, tabs, orphan_grace))
+    }
+
+    fn service_parts(
+        &self,
+        dispatcher: Arc<Dispatcher>,
+        tabs: Arc<TabRegistry>,
+        orphan_grace: Duration,
+    ) -> RunServiceParts {
+        RunServiceParts {
             settings: self.settings.clone(),
             dispatcher,
             browser: Arc::clone(&self.link),
@@ -167,7 +261,8 @@ impl TestRig {
             shutdown: self.shutdown.clone(),
             orphan_grace,
             blank_tab: None,
-        })
+            holders: None,
+        }
     }
 
     /// A tab the owner opened, as core names it.
@@ -198,6 +293,16 @@ impl TestRig {
         budget: Duration,
         task_id: Option<TaskId>,
     ) -> Result<(Arc<RunCtx>, RunGuard), TestError> {
+        self.run_in(budget, TabsScope::Browser, task_id)
+    }
+
+    /// As [`TestRig::run`], for a run that read `scope` at its start.
+    pub(crate) fn run_in(
+        &self,
+        budget: Duration,
+        scope: TabsScope,
+        task_id: Option<TaskId>,
+    ) -> Result<(Arc<RunCtx>, RunGuard), TestError> {
         let view = self.link.view().ok_or("the link is up")?;
         let start = RunStart {
             id: RunId::new(),
@@ -208,9 +313,42 @@ impl TestRig {
             view,
             deadline: Instant::now() + budget,
             default_page: None,
+            tabs_scope: scope,
         };
         Ok(RunCtx::start(&self.dispatcher, start))
     }
+}
+
+/// A restarted service's book, not restored yet ([`TestRig::restart`]).
+pub(crate) struct PendingRestore {
+    holders: Arc<TabHolders>,
+    link: Arc<BrowserLink>,
+    tabs: Arc<TabRegistry>,
+    notes: mpsc::UnboundedReceiver<Note>,
+    writer: Arc<Mutex<Option<JoinHandle<()>>>>,
+}
+
+impl PendingRestore {
+    /// Starts the book's writer, which restores the book first, as the sidecar's does once its
+    /// link connects.
+    pub(crate) fn begin(self) {
+        let writer = tokio::spawn(self.holders.keep(self.link, self.tabs, self.notes));
+        *self.writer.lock().unwrap_or_else(PoisonError::into_inner) = Some(writer);
+    }
+}
+
+/// Saves `tabs`' task book to the tab-holders file in `dir` from now on, as the sidecar does: the
+/// feed, and its writer's task.
+async fn save_book(
+    link: &Arc<BrowserLink>,
+    tabs: &Arc<TabRegistry>,
+    dir: &TempDir,
+) -> (Arc<HolderFeed>, JoinHandle<()>) {
+    let holders = TabHolders::open(dir.path()).await;
+    let (feed, notes) = HolderFeed::channel();
+    tabs.set_book_sink(Arc::clone(&feed) as _);
+    let writer = tokio::spawn(holders.keep(Arc::clone(link), Arc::clone(tabs), notes));
+    (feed, writer)
 }
 
 /// Opens the store on a blocking thread. `TraceStore::open` runs sqlx transactions whose futures

@@ -150,7 +150,7 @@ describe('an export', () => {
       {
         text: '{"title":"Example"}',
         neo: twoLineRecord(),
-        agentTaskId: 'zuzu-7',
+        agentTaskId: 'host-7',
       },
       { text: FAILED_TEXT, isError: true, neo: twoLineRecord(true) },
       { code: 'return big', text: HUGE, neo: twoLineRecord() },

@@ -214,6 +214,7 @@ impl From<PartError> for ApiError {
             PartError::UnusableViewer(_) => {
                 Self::invalid("`width` and `height` must each be at least 100")
             }
+            PartError::InvalidViewer(message) => Self::invalid(message),
             PartError::TakeoverReleased => Self::new(
                 StatusCode::CONFLICT,
                 ErrorCode::TakeoverReleased,

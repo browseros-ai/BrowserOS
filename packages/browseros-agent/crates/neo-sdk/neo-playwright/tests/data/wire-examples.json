@@ -3537,6 +3537,16 @@
           "$neo": "page",
           "tab": 1007
         }
+      },
+      {
+        "call": {
+          "api": "page.frames",
+          "timeoutMs": 1000
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1008
+        }
       }
     ],
     "page.goBack": [

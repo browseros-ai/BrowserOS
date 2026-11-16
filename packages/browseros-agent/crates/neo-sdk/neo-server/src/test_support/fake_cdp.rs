@@ -8,7 +8,8 @@ use browseros_cdp::{CdpError, CdpEvent, TargetedEvents};
 use browseros_core::{CdpConnection, SessionId, TabId};
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
-use tokio::sync::{broadcast, mpsc, oneshot};
+use tokio::sync::watch::error::RecvError;
+use tokio::sync::{broadcast, mpsc, oneshot, watch};
 
 /// The one window every fake tab lives in.
 const WINDOW_ID: i64 = 1;
@@ -39,6 +40,7 @@ const EVENT_BACKLOG: usize = 1024;
 #[derive(Debug)]
 pub struct FakeCdp {
     state: Mutex<FakeState>,
+    received: watch::Sender<()>,
     events: broadcast::Sender<CdpEvent>,
     targeted: TargetedEvents,
 }
@@ -74,6 +76,8 @@ struct FakeState {
     served: HashMap<String, String>,
     /// Methods whose next call is answered only on [`FakeCdp::release_held`].
     hold_next: HashSet<String>,
+    /// Methods whose call after this many more is held as [`FakeCdp::hold_next`] holds one.
+    hold_after: HashMap<String, usize>,
     /// One gate per held reply, opened by [`FakeCdp::release_held`].
     held_replies: Vec<oneshot::Sender<()>>,
     /// Target events waiting for [`FakeCdp::release_events`]; `None` while events flow.
@@ -121,11 +125,13 @@ impl FakeCdp {
                 answers: HashMap::new(),
                 served: HashMap::new(),
                 hold_next: HashSet::new(),
+                hold_after: HashMap::new(),
                 held_replies: Vec::new(),
                 held_events: None,
                 lingering: None,
                 linger_listings: None,
             }),
+            received: watch::channel(()).0,
             events: broadcast::channel(EVENT_BACKLOG).0,
             targeted: TargetedEvents::default(),
         })
@@ -303,6 +309,12 @@ impl FakeCdp {
         self.lock().hold_next.insert(method.to_owned());
     }
 
+    /// Like [`FakeCdp::hold_next`], for the call to `method` that comes after `skip` more are
+    /// answered: a later caller held while earlier ones (a tab listing) go through.
+    pub fn hold_after(&self, method: &str, skip: usize) {
+        self.lock().hold_after.insert(method.to_owned(), skip);
+    }
+
     /// Delivers every reply [`FakeCdp::hold_next`] held back.
     pub fn release_held(&self) {
         let gates = mem::take(&mut self.lock().held_replies);
@@ -375,6 +387,15 @@ impl FakeCdp {
             .count()
     }
 
+    /// Waits for browser receipt, including calls logged before this waiter subscribed.
+    pub async fn received(&self, method: &str) -> Result<(), RecvError> {
+        let mut received = self.received.subscribe();
+        while self.count(method) == 0 {
+            received.changed().await?;
+        }
+        Ok(())
+    }
+
     /// Answers one call. `None` means it never will. `expected` is the caller's epoch for an
     /// epoch-bound send, checked under the same lock that a reconnect takes, as the real
     /// client checks it under its socket lock.
@@ -389,6 +410,8 @@ impl FakeCdp {
             let mut state = self.lock();
             state.reply(expected, method, params, session)
         };
+        // Publish after the call log is visible, even when its reply will hang.
+        self.received.send_replace(());
         match reply {
             Reply::Now(result, events) => {
                 self.emit(events);
@@ -468,7 +491,15 @@ impl FakeState {
             params,
             epoch: self.epoch,
         });
-        let gate = self.hold_next.remove(method).then(|| {
+        let later = match self.hold_after.get_mut(method) {
+            Some(0) => self.hold_after.remove(method).is_some(),
+            Some(skip) => {
+                *skip -= 1;
+                false
+            }
+            None => false,
+        };
+        let gate = (self.hold_next.remove(method) || later).then(|| {
             let (open, gate) = oneshot::channel();
             self.held_replies.push(open);
             gate

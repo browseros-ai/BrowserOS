@@ -66,7 +66,8 @@ use neo_takeover::{Front, FrontError, LockTarget, Locks, ScreenSize, Xvnc};
 use neo_trace::{
     Delivery, Effect, EpochMillis, OperationEnded, OperationId, OperationKind, OperationStarted,
     Outcome, PageState, RedactionLimits, Redactor, RunEnded, RunId, RunStarted, RunStatus,
-    ShotRead, TaskId, TraceSink, TraceStore, WriterConfig, screenshot_queue, spawn_writer,
+    RunTabsScope, ShotRead, TaskId, TraceSink, TraceStore, WriterConfig, screenshot_queue,
+    spawn_writer,
 };
 use serde_json::{Value, json};
 use std::convert::Infallible;
@@ -215,6 +216,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         settings: Settings::load(dir.join("settings.json"), Default::default()).await,
         // This harness keeps no tab of its own.
         tab_owner: Arc::new(|_| None),
+        tab_task: Arc::new(|_| None),
+        tab_opener: Arc::new(|_| None),
     });
     let surface = SurfaceCalls {
         sink: sink.clone(),
@@ -316,6 +319,7 @@ impl SurfaceCalls {
             request_id: None,
             task_id: TaskId::parse("surface").ok(),
             host_data: None,
+            tabs_scope: RunTabsScope::Browser,
             at: EpochMillis::now(),
         });
         calls.sink.run_ended(RunEnded {
@@ -400,6 +404,7 @@ impl SurfaceCalls {
             request_id: None,
             task_id: TaskId::parse("surface").ok(),
             host_data: None,
+            tabs_scope: RunTabsScope::Browser,
             at: EpochMillis::now(),
         });
         let last = colors.len();
@@ -490,6 +495,7 @@ impl SurfaceCalls {
             error: None,
             page_after: None,
             main_world: false,
+            frames_incomplete: false,
             at: EpochMillis::now(),
         });
     }
@@ -620,6 +626,7 @@ async fn record_fake_writes(sink: TraceSink, tab: TabId) {
             request_id: None,
             task_id: TaskId::parse("surface").ok(),
             host_data: None,
+            tabs_scope: RunTabsScope::Browser,
             at: EpochMillis::now(),
         });
         sink.op_started(OperationStarted {
@@ -646,6 +653,7 @@ async fn record_fake_writes(sink: TraceSink, tab: TabId) {
                 title: None,
             }),
             main_world: false,
+            frames_incomplete: false,
             at: EpochMillis::now(),
         });
         sink.run_ended(RunEnded {
@@ -690,6 +698,7 @@ async fn record_fake_runs(sink: TraceSink) {
             request_id: None,
             task_id: TaskId::parse("demo").ok(),
             host_data: None,
+            tabs_scope: RunTabsScope::Browser,
             at: EpochMillis::now(),
         });
         for (seq, name, effect) in [
@@ -722,6 +731,7 @@ async fn record_fake_runs(sink: TraceSink) {
                     title: Some("Example Domain".into()),
                 }),
                 main_world: false,
+                frames_incomplete: false,
                 at: EpochMillis::now(),
             });
         }

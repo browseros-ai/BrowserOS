@@ -20,9 +20,10 @@ import { edit } from './edit'
 import { expect } from './expect'
 import { FailureOutput } from './failure-output'
 import { armInput, inputArrived } from './files'
+import { noteHolders } from './private-digest'
 import { privateStep } from './private-entry'
 import { look } from './private-look'
-import { privateShown } from './private-shown'
+import { privateHosts, privateShown } from './private-shown'
 import {
   type BootOptions,
   type Described,
@@ -122,6 +123,8 @@ function createProbe() {
     try {
       const { request, policy } = call
       if (request.op === 'pinned') return pinned(booted, request)
+      // By handle too: the camera's waiting hosts, read by Rust through deep serialization.
+      if (request.op === 'privateHosts') return privateHosts(request)
       const output = new FailureOutput(booted, policy)
       // Only synchronous engine work owns these hooks. Async handlers retain output for
       // later diagnostics, through its formatter or tree scope; no mutable mode survives here.
@@ -179,6 +182,12 @@ function dispatch<O extends Routed>(
   nodes: readonly unknown[],
   output: FailureOutput,
 ): ReplyTo<O> | Promise<ReplyTo<O>> {
+  // Ruling R50: at the start of every request, note which text controls of this document hold
+  // a value the world keeps a digest of, and forget every digest none holds. Every request, not
+  // a list of reads: any request's failure output asks the mask for an element's preview
+  // (`isPrivateField`), and so does the camera (`privateShown`); a list is what a new request
+  // would miss. With no digest kept the scan returns at once.
+  noteHolders(document)
   const handler: Handler<O> = HANDLERS[op]
   return handler(world, request, root, nodes, output)
 }
@@ -206,7 +215,8 @@ function hasKnownOp(request: unknown): request is ProbeRequest {
   if (typeof request !== 'object' || request === null) return false
   const op: unknown = Reflect.get(request, 'op')
   return (
-    typeof op === 'string' && (op === 'pinned' || Object.hasOwn(HANDLERS, op))
+    typeof op === 'string' &&
+    (op === 'pinned' || op === 'privateHosts' || Object.hasOwn(HANDLERS, op))
   )
 }
 

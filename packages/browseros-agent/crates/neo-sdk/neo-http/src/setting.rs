@@ -24,6 +24,9 @@ pub(crate) struct Setting {
     pub(crate) name: &'static str,
     /// What the value may be, and its default.
     pub(crate) rule: Rule,
+    /// A saved value that cannot be used takes this value instead of the normal default.
+    /// Only recording switches opt in, so malformed input cannot start recording or shorten retention.
+    pub(crate) invalid_saved: Option<SettingValue>,
 }
 
 /// What one setting's value may be.
@@ -39,7 +42,7 @@ pub(crate) enum Rule {
     /// One name from an open list: a later server may know more names than `values`. A name
     /// this server does not know is skipped, as an unknown setting is, and never refused.
     Choice {
-        /// Used when the host set nothing: today's behaviour.
+        /// Used when the host set nothing: today's behaviour, unless the row says otherwise.
         default: &'static str,
         /// The names this server knows.
         values: &'static [&'static str],
@@ -78,16 +81,35 @@ pub(crate) enum Checked {
 /// Neo closes an agent's tab once nothing used it for this long (the idle-tab janitor).
 pub(crate) const TAB_IDLE_CLOSE: Setting = Setting {
     name: "tabs.idleCloseSeconds",
+    invalid_saved: None,
     rule: Rule::Whole {
         default: 30 * 60,
         range: IDLE_CLOSE_SECONDS,
     },
 };
 
+/// Whether a run that carries a task sees only its task's tabs (`task`) or every tab, as any
+/// run without a task does (`browser`). Each run reads it once, at its start. A saved value Neo
+/// cannot read falls back to the default, `task`, the narrow side. That holds only while the
+/// default is `task`: were it ever `browser`, this row would need `invalid_saved: task`.
+pub(crate) const TABS_SCOPE: Setting = Setting {
+    name: "tabs.scope",
+    invalid_saved: None,
+    rule: Rule::Choice {
+        default: TABS_SCOPE_TASK,
+        values: &[TABS_SCOPE_TASK, TABS_SCOPE_BROWSER],
+    },
+};
+
+/// `tabs.scope`'s names.
+pub(crate) const TABS_SCOPE_TASK: &str = "task";
+pub(crate) const TABS_SCOPE_BROWSER: &str = "browser";
+
 /// Runs older than this are deleted from the trace (the retention sweep). The default is
 /// `neo_trace::RetentionPolicy`'s own `max_age`, which a test keeps equal.
 pub(crate) const TRACE_RETENTION: Setting = Setting {
     name: "trace.retentionSeconds",
+    invalid_saved: None,
     rule: Rule::Whole {
         default: 7 * 24 * 60 * 60,
         range: RETENTION_SECONDS,
@@ -97,6 +119,7 @@ pub(crate) const TRACE_RETENTION: Setting = Setting {
 /// Neo's own screenshots: `perOperation`, or `off` (the trace writer's `RecordPolicy`).
 pub(crate) const TRACE_SCREENSHOTS: Setting = Setting {
     name: "trace.screenshots",
+    invalid_saved: Some(SettingValue::Choice(SCREENSHOTS_OFF)),
     rule: Rule::Choice {
         default: SCREENSHOTS_PER_OPERATION,
         values: &[SCREENSHOTS_PER_OPERATION, SCREENSHOTS_OFF],
@@ -106,6 +129,7 @@ pub(crate) const TRACE_SCREENSHOTS: Setting = Setting {
 /// The size up to which the trace keeps values whole; `0` keeps the trace writer's defaults.
 pub(crate) const TRACE_VALUE_BYTES: Setting = Setting {
     name: "trace.valueBytes",
+    invalid_saved: None,
     rule: Rule::Whole {
         default: 0,
         range: VALUE_BYTES,
@@ -119,26 +143,54 @@ pub(crate) const SCREENSHOTS_OFF: &str = "off";
 /// Whether the trace keeps script and host values.
 pub(crate) const TRACE_VALUES: Setting = Setting {
     name: "trace.values",
+    invalid_saved: Some(SettingValue::Choice("off")),
     rule: Rule::Choice {
         default: "on",
         values: &["on", "off"],
     },
 };
 
+/// Whether a tab that took a host's private fill may be pictured (protected-fill ruling R58):
+/// `allowed`, like any other tab; `never`, no picture of it for the tab's life, by a script or by
+/// Neo, kept across a restart by the record of filled tabs. The default is `allowed`, the owner's
+/// decision of 2026-11-13, which changes what the server did before it: a host that wants the old
+/// rule sets `never` before its first fill.
+pub(crate) const FILL_PICTURES: Setting = Setting {
+    name: "fill.pictures",
+    // A saved value this build cannot use reads as the default, `allowed`, with the load's loud
+    // warning (the lead's decision, protected-fill spec R58, "A saved settings file at start"). A
+    // bad settings file never costs the product a function: a recording switch falls to `off`
+    // because that loses nothing a run does, and this one falls to `allowed` because `never`
+    // refuses pictures, and refuses a fill when its record cannot be written. A host that needs
+    // `never` reads `GET /v1/settings` after start.
+    invalid_saved: None,
+    rule: Rule::Choice {
+        default: FILL_PICTURES_ALLOWED,
+        values: &[FILL_PICTURES_ALLOWED, FILL_PICTURES_NEVER],
+    },
+};
+
+/// `fill.pictures`'s names.
+pub(crate) const FILL_PICTURES_ALLOWED: &str = "allowed";
+pub(crate) const FILL_PICTURES_NEVER: &str = "never";
+
 /// The live folders scripts may read by path, with the application-supplied downloads default.
 pub(crate) const FILE_READ_DIRS: Setting = Setting {
     name: "files.readDirs",
+    invalid_saved: None,
     rule: Rule::AbsoluteDirs { max: 16 },
 };
 
 /// Every setting this server knows, in the order the README lists them.
 pub(crate) const SETTINGS: &[Setting] = &[
     TAB_IDLE_CLOSE,
+    TABS_SCOPE,
     TRACE_RETENTION,
     TRACE_SCREENSHOTS,
     TRACE_VALUE_BYTES,
     TRACE_VALUES,
     FILE_READ_DIRS,
+    FILL_PICTURES,
 ];
 
 impl Setting {

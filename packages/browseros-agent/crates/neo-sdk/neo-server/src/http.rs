@@ -1,8 +1,8 @@
 //! The HTTP listeners Neo binds (design D1) and their routes.
 //!
 //! ```text
-//!  agent listener  127.0.0.1:<ports.server>, behind Chromium's proxy, no auth: in the cell only
-//!                  mirrord reaches it. Serves /mcp (stateless rmcp, behind request_hygiene,
+//!  agent listener  127.0.0.1:<ports.server>, behind Chromium's proxy, no auth. The host
+//!                  controls access to the container's network namespace. Serves /mcp (stateless rmcp, behind request_hygiene,
 //!                  which keeps web pages out) and /system/* for Chromium's supervisor.
 //!  host listener   a Unix socket ($BROWSERCLAW_DIR/host.sock), TCP only by CLAW_HOST_TCP, none
 //!                  without a usable CLAW_HOST_TOKEN_FILE (host::HostApi decides). Serves

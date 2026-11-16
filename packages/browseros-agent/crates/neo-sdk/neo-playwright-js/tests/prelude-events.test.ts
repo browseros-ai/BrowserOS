@@ -96,10 +96,14 @@ describe('waitForEvent', () => {
   it('tests that the wait is stamped when the script calls it, and its deadline counts from then', async () => {
     const runtime = loadPrelude({
       seed: SEED,
+      // The run's page reads its whole tree at the start; the popup's own read gets none.
       answer: (call) =>
         call.name === 'events.wait'
           ? popup(4, 8, 'https://login.example/')
-          : null,
+          : call.name === 'page.frames' &&
+              Reflect.get(Object(call.input.page), 'tab') === 1007
+            ? { frames: [{ id: 'main', parentId: null, name: '', url: '' }] }
+            : null,
     })
     const url = await runtime.run(`
       Date.now = () => 111
@@ -109,10 +113,12 @@ describe('waitForEvent', () => {
       return (await popup).url()
     `)
     expect(url).toBe('https://login.example/')
-    expect(runtime.calls.map((call) => call.name).sort()).toEqual([
-      'events.wait',
-      'locator.click',
-    ])
+    expect(
+      runtime.calls
+        .map((call) => call.name)
+        .filter((name) => name !== 'page.frames')
+        .sort(),
+    ).toEqual(['events.wait', 'locator.click'])
     expect(runtime.sent('events.wait')[0]?.input).toEqual({
       call: { api: 'page.waitForEvent', timeoutMs: 111 + 30000 - 999 },
       page: { $neo: 'page', tab: 1007 },

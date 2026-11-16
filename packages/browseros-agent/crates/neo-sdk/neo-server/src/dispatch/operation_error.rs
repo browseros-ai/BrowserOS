@@ -194,6 +194,9 @@ error_codes! {
     BROWSER_DISCONNECTED = "browser_disconnected";
     /// The target tab is gone.
     PAGE_CLOSED = "page_closed";
+    /// Task scope: the tab is not one of the run's task's tabs (another task's, no task's, or
+    /// none at all, answered alike). Nothing was sent.
+    PAGE_NOT_IN_TASK = "page_not_in_task";
     /// A bug in Neo.
     INTERNAL_ERROR = "internal_error";
     /// A CDP call got no answer in time.
@@ -286,8 +289,13 @@ error_codes! {
     BOX_NOT_EDITABLE = "box_not_editable";
     /// The box has a size and does not show.
     BOX_HIDDEN = "box_hidden";
-    /// Something else on the page takes the pointer at the box (main's covered rule).
+    /// Something else takes the pointer at the box: in its own document (main's covered rule),
+    /// or in any page above its frame (ruling R60).
     BOX_COVERED = "box_covered";
+    /// The box could not be brought into view (ruling R62), or a page above the box's frame
+    /// could not be asked what takes the pointer at the box, cannot show the frame, or changes
+    /// the frame's size or angle (ruling R60). Nothing was typed.
+    COVER_UNREAD = "cover_unread";
     /// The value is longer than the box's `maxlength`, and the host did not accept a cut.
     VALUE_TOO_LONG = "value_too_long";
     /// The focus left the box after some characters went in.
@@ -297,6 +305,12 @@ error_codes! {
     /// A box with no size still held text after Neo tried to empty it before the first
     /// character; nothing of the value was typed.
     BOX_NOT_CLEARED = "box_not_cleared";
+    /// A box entered under a cover (ruling R55): after the typing, the site drew the value
+    /// outside the box. Neo emptied the box, and the page no longer shows the value.
+    VALUE_DRAWN = "value_drawn";
+    /// As `value_drawn`, but the page still shows the value after Neo emptied the box: reload or
+    /// close the page before anything reads it.
+    VALUE_STILL_DRAWN = "value_still_drawn";
     /// The page moved before Neo saw all but the last character in the box.
     PAGE_MOVED = "page_moved";
     /// A repeat of a fill's `requestId` whose first call Neo started and never finished: Neo

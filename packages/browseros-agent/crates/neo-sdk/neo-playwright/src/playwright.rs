@@ -4,7 +4,7 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
 
-use browseros_core::{BrowserSession, TargetId};
+use browseros_core::{BrowserSession, TabId, TargetId};
 use serde_json::Value;
 use tokio::time;
 
@@ -29,6 +29,13 @@ use crate::{OpEnv, PlaywrightError, TimedOut, locator_handler};
 /// ([`Playwright::events_before_reply`]). Both steps are usually immediate; this only bounds a
 /// watcher or a pump that fell far behind.
 const EVENTS_BEFORE_REPLY: Duration = Duration::from_secs(2);
+
+/// How long a `waitForFunction` that timed out waits for its polls' events to reach the run's
+/// listeners first (WA-005). Upstream's wait awaits its poller's `cancel` before it throws, and its
+/// protocol messages arrive in order, so a poll that logged before the timeout has its console
+/// event delivered before the error. Short: the caller's timeout has already passed, and the
+/// fence is usually immediate.
+const POLLED_EVENTS_BEFORE_TIMEOUT: Duration = Duration::from_millis(500);
 
 /// One per browser connection; runs every Playwright operation. The host builds it once at
 /// startup (claw-sdk: next to its browser link) and calls [`Playwright::invoke`] from each
@@ -132,8 +139,9 @@ impl Playwright {
         self.watcher.synchronize(None, fence).await
     }
 
-    /// The host stopped keeping `target`'s tab for itself (`OpEnv::is_reserved_tab` reads false
-    /// for it from now on): the owner browsed in it, at `url`. Scripts hear of it as of a tab
+    /// The host stopped keeping `target`'s tab for itself (`OpEnv::hides_tab` reads false
+    /// for it from now on, unless the run's own scope hides it): the owner browsed in it, at
+    /// `url`. Scripts hear of it as of a tab
     /// the owner just opened, a context's `page` event, after every event received until now.
     /// Whether the watcher answered within 2 s.
     pub async fn hand_back(&self, target: TargetId, url: String) -> bool {
@@ -182,6 +190,13 @@ impl Playwright {
     #[must_use]
     pub fn navigated_target(&self, target: &TargetId) -> Option<u64> {
         self.events.navigated_at(target)
+    }
+
+    /// Every tab's frame-tree version, for every reply: a run learns that a tab's frames changed
+    /// even from a reply about another tab.
+    #[must_use]
+    pub fn frame_versions(&self) -> Vec<(TabId, u64)> {
+        self.events.frame_versions()
     }
 
     /// The browser connection, for what an op does after it admitted its page: raw sessions,
@@ -249,8 +264,8 @@ impl Playwright {
                 return scope.settle(event_op::invoke(self, &scope, op, args).await);
             }
         };
-        if waits_for_ordering(&answered) {
-            self.events_before_reply(&scope).await;
+        if let Some(bound) = ordering_wait(op, &answered) {
+            self.events_before_reply(&scope, bound).await;
         }
         scope.settle(answered)
     }
@@ -273,9 +288,9 @@ impl Playwright {
     /// it has dispatched that many pump replies. So the listeners run before the script continues
     /// past this op, whatever order the host's promises settle in (the Node add-on settles each
     /// on a threadsafe function of its own, in no fixed order). A run with no listener has
-    /// nothing to order and does not wait. An op that timed out does not wait either
-    /// ([`waits_for_ordering`]).
-    async fn events_before_reply(&self, scope: &OpScope<'_>) {
+    /// nothing to order and does not wait. An op that timed out does not wait either, except a
+    /// `waitForFunction`, whose polls ran page script up to its deadline ([`ordering_wait`]).
+    async fn events_before_reply(&self, scope: &OpScope<'_>, bound: Duration) {
         let run = scope.run_state();
         if !run.events.has_listeners() {
             return;
@@ -288,18 +303,31 @@ impl Playwright {
             self.progress.reached(fence).await;
             run.events.taken_through(self.events.head()).await;
         };
-        let _bounded = time::timeout(EVENTS_BEFORE_REPLY, ordered).await;
+        let _bounded = time::timeout(bound, ordered).await;
     }
 }
 
-/// Whether an op that `answered` waits for event ordering before its reply leaves. Every op
-/// does, except one whose own timeout passed: the caller's timeout is how long its call takes,
-/// so a timed-out op answers at once. Its listeners still run, only maybe after the script has
-/// its error. A slow watcher held a timed-out 5 s snapshot here for up to 2 s in the owner's
-/// run. An op that succeeds keeps the whole wait, even near its deadline, so code after it never
-/// runs before the listeners for what it did.
-fn waits_for_ordering(answered: &Result<Value, PlaywrightError>) -> bool {
-    !matches!(answered, Err(error) if error.timed_out() == TimedOut::Yes)
+/// How long an op that `answered` may wait for event ordering before its reply leaves, if at
+/// all. Every op waits up to [`EVENTS_BEFORE_REPLY`], except one whose own timeout passed: the
+/// caller's timeout is how long its call takes, so a timed-out op answers at once. Its listeners
+/// still run, only maybe after the script has its error. A slow watcher held a timed-out 5 s
+/// snapshot here for up to 2 s in the owner's run. An op that succeeds keeps the whole wait, even
+/// near its deadline, so code after it never runs before the listeners for what it did.
+///
+/// A `waitForFunction` that timed out waits too, up to [`POLLED_EVENTS_BEFORE_TIMEOUT`]: its
+/// predicate ran in the page at every poll up to the deadline, and a listener must hear what those
+/// polls logged before the error, as upstream's does (WA-005). No poll runs after it: the wait
+/// releases its poller before it answers (`page::evaluate`).
+fn ordering_wait(op: Op, answered: &Result<Value, PlaywrightError>) -> Option<Duration> {
+    let timed_out = matches!(answered, Err(error) if error.timed_out() == TimedOut::Yes);
+    if !timed_out {
+        return Some(EVENTS_BEFORE_REPLY);
+    }
+    matches!(
+        op.kind(),
+        OpKind::Page(page_op::PageOp::WaitForFunction | page_op::PageOp::WaitForFunctionOnElement)
+    )
+    .then_some(POLLED_EVENTS_BEFORE_TIMEOUT)
 }
 
 #[cfg(test)]
@@ -384,27 +412,40 @@ mod tests {
     const WIRE_EXAMPLES: &str = include_str!("../tests/data/wire-examples.json");
 
     #[test]
-    fn tests_that_only_an_op_that_timed_out_skips_the_ordering_wait() {
+    fn tests_that_only_an_op_that_timed_out_skips_the_ordering_wait() -> Result<(), String> {
+        use super::{EVENTS_BEFORE_REPLY, POLLED_EVENTS_BEFORE_TIMEOUT, ordering_wait};
+        let op = |name: &str| Op::from_name(name).ok_or(format!("no op {name}"));
         let timed_out = Err(PlaywrightError::new(
             ErrorCode::WaitTimeout,
             "page.ariaSnapshot: Timeout 2000ms exceeded.".to_owned(),
         ));
-        assert!(
-            !super::waits_for_ordering(&timed_out),
+        assert_eq!(
+            ordering_wait(op("page.ariaSnapshot")?, &timed_out),
+            None,
             "a timed-out op answers at its timeout"
         );
-        assert!(
-            super::waits_for_ordering(&Ok(json!(null))),
+        for wait in ["page.waitForFunction", "locator.waitForFunction"] {
+            assert_eq!(
+                ordering_wait(op(wait)?, &timed_out),
+                Some(POLLED_EVENTS_BEFORE_TIMEOUT),
+                "{wait}: its polls' events come before its timeout (WA-005)"
+            );
+        }
+        assert_eq!(
+            ordering_wait(op("page.ariaSnapshot")?, &Ok(json!(null))),
+            Some(EVENTS_BEFORE_REPLY),
             "a successful op keeps its listeners ahead of the script, even near its deadline"
         );
         let refused = Err(PlaywrightError::new(
             ErrorCode::ElementDetached,
             "e17 is not on the page any more".to_owned(),
         ));
-        assert!(
-            super::waits_for_ordering(&refused),
+        assert_eq!(
+            ordering_wait(op("locator.click")?, &refused),
+            Some(EVENTS_BEFORE_REPLY),
             "any other failure still orders its events"
         );
+        Ok(())
     }
 
     /// Ops whose recorded input Rust refuses today. Each commit that makes one agree deletes

@@ -12,7 +12,7 @@ use neo_trace::{RunId, RunStatus};
 use serde_json::json;
 use tokio::time::{self, Instant};
 
-use crate::browser::{BrowserLink, PageRef, TabRegistry};
+use crate::browser::{BrowserLink, PageRef, TabRegistry, TabsScope};
 use crate::dispatch::{Call, Caller, Dispatcher, OpReply, RunCtx, RunEnd, RunStart, StopReason};
 use crate::host::HostHolds;
 
@@ -39,7 +39,7 @@ const SWEEP_BUDGET: Duration = Duration::from_secs(30);
 ///
 /// - a run that used it is still in flight (`TabRegistry::run_started` to `run_ended`);
 /// - a lock holds it, which is how a host keeps the agent off a tab the owner is using;
-/// - a fit is on it, which is how zuzu's handoff shows the tab to the owner, with no lock;
+/// - a fit is on it, which is how the host's handoff shows the tab to the owner, with no lock;
 /// - a host keep protects it while it waits, without blocking any agent operation.
 ///
 /// Its idle clock restarts when the last of them ends, so "idle" means that both the agent and
@@ -140,6 +140,7 @@ impl TabJanitor {
                 view,
                 deadline,
                 default_page: None,
+                tabs_scope: TabsScope::Browser,
             },
         );
         let Swept { closed, kept } = self.close_each(&run, &idle, idle_time, now, deadline).await;
@@ -254,8 +255,8 @@ impl TabJanitor {
 
     /// Whether closing `tab` leaves the browser another tab. The browser quits when its last tab
     /// closes, and Neo's server with it: the browser restarts both a few seconds later with a
-    /// new browser id, and a host that keeps one tab of its own, as zuzu does, would see that
-    /// every idle time (zuzu's last-tab probe, 2026-11-12). So another tab must be in `open`, a
+    /// new browser id. A host that keeps one tab of its own would see that
+    /// every idle time. So another tab must be in `open`, a
     /// listing taken just now, and must not be one this sweep closed (`closed`) or one Neo saw
     /// close: Chromium answers a close before the tab leaves its listing, so a listing can
     /// still show a tab that is already gone.

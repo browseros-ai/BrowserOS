@@ -24,7 +24,7 @@ use crate::world::{FrameSeq, Pin};
 /// contract: a world keeps the probe an earlier build installed, and the install replaces that
 /// probe only when its number differs (`engine_source`), so a shape changed under the same
 /// number reaches this build in the old shape. The lock's test catches a change without a bump.
-pub(crate) const PROBE_PROTOCOL: u32 = 38;
+pub(crate) const PROBE_PROTOCOL: u32 = 44;
 
 /// One reply; `kind` is the tag. Any request may also answer `error`, and `uninstalled` when
 /// the world has no booted probe.
@@ -124,6 +124,11 @@ pub(crate) enum ProbeReply {
     FrameBox {
         origin: Option<Point>,
         hit: Option<Hit>,
+        /// Only for the private look (ruling R60): this page cannot show `point`, which lies
+        /// outside its viewport, or where the iframe is clipped away though it takes the
+        /// pointer. A click's `frameBox` always answers false.
+        #[serde(default)]
+        unseen: bool,
     },
     /// An edit's result: the probe's own words for most edits, and the options' values for
     /// `selectOptions`.
@@ -349,6 +354,12 @@ impl PageText {
     /// The value, for the op's output.
     pub(crate) fn into_value(self) -> Value {
         self.0
+    }
+
+    /// The value, read in place: the camera reads whether a reply names hosts waiting for its walk
+    /// and keeps the reply.
+    pub(crate) fn as_value(&self) -> &Value {
+        &self.0
     }
 
     /// The value as one line for a message or the call log: a string as it is, anything else

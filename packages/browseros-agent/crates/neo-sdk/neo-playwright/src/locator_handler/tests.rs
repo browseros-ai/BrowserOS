@@ -136,7 +136,7 @@ fn uids(handlers: &LocatorHandlers, tab: i64) -> Option<Vec<u64>> {
         .map(|ready| ready.iter().map(|handler| handler.uid).collect())
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn tests_that_the_pull_answers_each_trigger_once_and_none_once_no_handler_is_left()
 -> Result<(), Box<dyn Error>> {
     let handlers = LocatorHandlers::default();
@@ -173,7 +173,7 @@ async fn tests_that_removing_the_last_handler_wakes_a_waiting_pull() -> Result<(
     Ok(())
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn tests_that_a_checkpoint_waits_until_the_script_resolves_or_removes_the_handler()
 -> Result<(), Box<dyn Error>> {
     let handlers = LocatorHandlers::default();

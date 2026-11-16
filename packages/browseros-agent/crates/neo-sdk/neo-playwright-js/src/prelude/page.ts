@@ -99,6 +99,16 @@ import type {
 } from './wire'
 import { Worker } from './worker'
 
+/**
+ * The pause before Neo reads once more a tab whose first read came back partial or empty: long
+ * enough for an out-of-process frame's session to finish attaching, short enough to keep the
+ * run's start quick.
+ */
+const FRAMES_RETRY_MS = 100
+
+/** The read a navigation's reply still owes once its facts are applied (`Page._navigationReplied`). */
+export type NavigationRead = 'none' | 'read' | 'reread'
+
 /** Page-scoped preferences; omitted values are retained and null clears just that override. */
 export type MediaOptions = {
   media?: 'screen' | 'print' | null
@@ -149,6 +159,25 @@ export class Page extends EventEmitter {
    * would send that view across all of them after each wait.
    */
   _working = false
+  /**
+   * Whether the script read this page's frames (`frames()`, `frame()`, a frame's
+   * `childFrames()`), or Neo's first read of them failed or answered no tree. `waitForTimeout` then reads the
+   * tree again, as for a working page, so a frame added later to a tab the script only watches
+   * (another task's, say) shows after the script's next wait. Page facts carry no frame tree,
+   * and an ordinary op's reply none either: only Neo's `page.frames` read, a navigation's or
+   * load wait's reply, or an evaluate's reply update it.
+   */
+  _framesWatched = false
+  /** The newest frame-tree version a reply gave this tab (`Envelope.frames`). */
+  _framesChanged = 0
+  /** The version the cached tree was read at; the tree is stale once `_framesChanged` passes it. */
+  #framesReadAt = 0
+  /** Whether the last read answered a partial tree, no tree, or failed. */
+  #framesIncomplete = false
+  /** Neo's read of this tab's tree in flight, which a settle step joins rather than repeats. */
+  #framesRead: Promise<boolean> | null = null
+  /** This tab's first read, its retry included, which a settle step waits for whole. */
+  #firstRead: Promise<void> | null = null
   /**
    * Navigation ops (goto, reload, goBack, goForward) in flight on this page. While Chromium has
    * not answered a `Page.navigate` (or history or reload command) for a tab, it holds every
@@ -206,6 +235,7 @@ export class Page extends EventEmitter {
   }
 
   frames(): Frame[] {
+    this._framesWatched = true
     return [this._mainFrame, ...this.#childFrames.values()]
   }
 
@@ -1162,11 +1192,23 @@ export class Page extends EventEmitter {
   ): Promise<T> {
     this._navigationsInFlight++
     return this.#publications.track(async (ready, publication) => {
+      let outcome: { value: T } | { error: unknown }
       try {
-        return await work(ready, publication)
+        outcome = { value: await work(ready, publication) }
+      } catch (error) {
+        outcome = { error }
       } finally {
         this._navigationsInFlight--
       }
+      // The settle steps skip a page while its navigation is in flight (Chromium answers no
+      // command for it), so the navigating page itself is read here, once the counter dropped,
+      // before the navigation, answered or failed, reaches the script. It stays inside the
+      // tracked work on purpose: an evaluate that publishes this navigation (`publishReady`)
+      // waits for it, so the navigation still resolves before that evaluate returns (upstream's
+      // order, spec WA-104). The read is Neo's own and bounded (`LISTED_FRAMES_TIMEOUT_MS`).
+      await this._context._settleFrames().catch(() => {})
+      if ('error' in outcome) throw outcome.error
+      return outcome.value
     })
   }
 
@@ -1192,7 +1234,41 @@ export class Page extends EventEmitter {
     result: Partial<NavigationResult> | null,
     at: Observation | null,
     ready?: () => void,
+    replied: NavigationRead = this._navigationReplied(frame, result, at),
   ): Promise<Response | null> {
+    if (replied === 'read') await this._refreshFrames(api)
+    else if (replied === 'reread')
+      // Keep the original operation's return value even if a fresh read of the replacement
+      // binding fails. The stale payload never becomes the replacement's cached state.
+      await this._refreshFrames(api).catch(() => undefined)
+    // A modern native reply already attempted its bounded snapshot. If superseded, discard
+    // those facts instead of reading a replacement renderer on an older op's completion.
+    // After this mark a later evaluate may publish this navigation's public promise before
+    // returning its own observation, so it waits for the rest of the tracked work. The only
+    // browser await left is `_navigating`'s bounded settle read of the trees this navigation
+    // left stale, which that evaluate joins so the navigation still resolves first.
+    ready?.()
+    // The navigation's frames were applied after its operation's settle step: a tree its reply
+    // or its own read left stale is read once more before the navigation returns to the
+    // script. Inside a tracked navigation (`ready` given) `_navigating` does that, once the
+    // navigation is no longer in flight and its publication finished.
+    if (!ready) await this._context._settleFrames().catch(() => {})
+    return navigationResponse(frame, result)
+  }
+
+  /**
+   * The facts a navigation's reply carries, applied to the cache: its URL, and its tree when its
+   * bounded snapshot got one. A wait outside a tracked navigation applies them through
+   * `invokeObserved`'s `apply`, before its settle step can read this tab again (bridge.ts); a
+   * tracked one's tab is in flight, which the settle step leaves alone, so `_navigated` applies
+   * them itself. Says which read is still owed: `read` when the reply attempted no snapshot,
+   * `reread` when a newer fact replaced this reply's binding and it attempted none, else `none`.
+   */
+  _navigationReplied(
+    frame: Frame,
+    result: Partial<NavigationResult> | null,
+    at: Observation | null,
+  ): NavigationRead {
     if (this.#payloadCurrent(at)) {
       if (typeof result?.url === 'string') {
         if (frame === this._mainFrame) {
@@ -1200,19 +1276,17 @@ export class Page extends EventEmitter {
           this.#urlKnown = true
         } else frame._url = result.url
       }
+      // A supplemental tree is whole (the native side sends no partial one), but it does not
+      // count as a read at the reply's version: that version was taken after the tree was, so
+      // a frame that changed in between would be lost. A moved version is read once more.
       if (Array.isArray(result?.frames)) this._applyFrames(result.frames, at)
-      else if (!result?.frameSnapshotAttempted) await this._refreshFrames(api)
-    } else if (!this._closed && !result?.frameSnapshotAttempted) {
-      // Keep the original operation's return value even if a fresh read of the replacement
-      // binding fails. The stale payload never becomes the replacement's cached state.
-      await this._refreshFrames(api).catch(() => undefined)
+      else if (!result?.frameSnapshotAttempted) return 'read'
+      // A bounded snapshot that got no tree (it ran out of time, or a navigation started):
+      // the tree is read once the navigation ended (`_navigating`), or at the settle step.
+      else this._framesUnknown()
+      return 'none'
     }
-    // A modern native reply already attempted its bounded snapshot. If superseded, discard
-    // those facts instead of reading a replacement renderer on an older op's completion.
-    // No browser await remains after this mark. A later evaluate may now publish this
-    // navigation's public promise before returning its own observation.
-    ready?.()
-    return navigationResponse(frame, result)
+    return !this._closed && !result?.frameSnapshotAttempted ? 'reread' : 'none'
   }
 
   /** Both the payload's admitted binding and this Page's newest fact must agree. */
@@ -1226,29 +1300,127 @@ export class Page extends EventEmitter {
   }
 
   /**
-   * The run's page tree, read once before the agent's first statement (FR-1), so a script that
-   * starts on a tab with iframes finds them in `frames()`, as upstream's does. A page with no
-   * tab yet reads nothing, so a run that never touches `page` opens no tab. A refused or failed
-   * read, as under the owner's takeover, keeps the main frame alone and the run starts: the
-   * script's own first op meets the same refusal (sdk-skeleton's A4).
+   * This page's tree, read once before the agent's first statement (FR-1,
+   * `BrowserContext._readInitialFrames`), so a script finds its iframes in `frames()` as upstream's
+   * does. A page with no tab yet reads nothing, so a run that never touches `page` opens no tab.
+   * A refused or failed read, as under the owner's takeover, keeps the main frame alone and the
+   * run starts; the page is then read again at the script's next wait (`_framesWatched`).
    */
-  async _readInitialFrames(): Promise<void> {
-    if (this._tab === null) return
-    await this._refreshFrames('page.frames').catch(() => undefined)
+  _readInitialFrames(timeoutMs = 0): Promise<void> {
+    if (this._tab === null || this._closed) return Promise.resolve()
+    if (this.#firstRead) return this.#firstRead
+    // A read that answers no tree or a partial one (an out-of-process frame's session was still
+    // attaching, the tab was loading) is read once more before the tree is handed to the script.
+    // One still not whole, or refused, stays marked (`#framesIncomplete`) and is read again
+    // before the script's next operation settles.
+    const first = (async () => {
+      if (await this._readFrames(timeoutMs)) return
+      if (this.#framesIncomplete && !this._closed) {
+        await sleep('page.frames', FRAMES_RETRY_MS).catch(() => {})
+        await this._readFrames(timeoutMs)
+      }
+    })().finally(() => {
+      if (this.#firstRead === first) this.#firstRead = null
+    })
+    this.#firstRead = first
+    return first
   }
 
-  async _refreshFrames(api: string, timeoutMs = 0): Promise<void> {
+  /**
+   * This tab's part of a settle step (`BrowserContext._settleFrames`): its first read, retry and
+   * all, if one is in flight, then one read if its tree is still stale.
+   */
+  async _settle(timeoutMs: number): Promise<void> {
+    if (this.#firstRead) await this.#firstRead
+    if (this._framesStale()) await this._readFrames(timeoutMs)
+  }
+
+  /**
+   * Neo's read of this tab's tree, or the one already in flight: two settle steps, or a start
+   * read and a settle step, never read one tab twice at once. Says whether the whole tree was
+   * applied; a failed read marks the tree unknown and says no.
+   */
+  _readFrames(timeoutMs: number): Promise<boolean> {
+    if (this.#framesRead) return this.#framesRead
+    const read = this._refreshFrames('page.frames', timeoutMs)
+      .catch(() => {
+        this._framesUnknown()
+        return false
+      })
+      .finally(() => {
+        if (this.#framesRead === read) this.#framesRead = null
+      })
+    this.#framesRead = read
+    return read
+  }
+
+  /**
+   * One `page.frames` read of this tab. It is Neo's own (no call site, `working: false`): it makes
+   * no page working, no tab the run's or its task's, and moves no view that follows the task
+   * (neo-trace `NEO_READS`).
+   */
+  async _refreshFrames(api: string, timeoutMs = 0): Promise<boolean> {
     const site = INTERNAL_SITE
+    // Taken before the read: a change of this tab's frames that the read races is newer than
+    // this, and every reply carries the tab's version, so the next settle step reads again.
+    const version = this._framesChanged
     const { value: tree, observed } = await invokeObserved(
       'page.frames',
       site,
       { api, timeoutMs },
-      { page: await this._brand(api) },
+      { page: await this._brand(api, { working: false }) },
     )
     // A reply without a tree leaves the caches as they were rather than failing the
-    // navigation that already succeeded. The main frame's entry refreshes `url()`.
-    if (this.#payloadCurrent(observed) && Array.isArray(tree?.frames))
+    // navigation that already succeeded. The main frame's entry refreshes `url()`. A partial
+    // tree (`incomplete`) is applied, as the frames it holds are real, and read again before the
+    // script's next operation resolves. Says whether the whole tree was applied.
+    if (this.#payloadCurrent(observed) && Array.isArray(tree?.frames)) {
       this._applyFrames(tree.frames, observed)
+      this.#framesReadAt = version
+      this.#framesIncomplete = tree.incomplete === true
+      return !this.#framesIncomplete
+    }
+    // The host answers an object, `{}` when its bounded read got no tree; `null` is no answer at
+    // all (a host without frame reads), which leaves nothing to read again.
+    if (
+      tree !== null &&
+      typeof tree === 'object' &&
+      this.#payloadCurrent(observed)
+    )
+      this._framesUnknown()
+    return false
+  }
+
+  /**
+   * The tree could not be read whole: a read failed, or answered no tree (the native read ran out
+   * of its own time, or the tab began a navigation). It is read again before the script's next
+   * operation resolves, and at its next wait.
+   */
+  _framesUnknown(): void {
+    this.#framesIncomplete = true
+    this._framesWatched = true
+  }
+
+  /** Records `version`, this tab's frame-tree version from a reply (`Envelope.frames`). */
+  _frameVersion(version: number): void {
+    this._framesChanged = Math.max(this._framesChanged, version)
+  }
+
+  /**
+   * Whether a settle step must have this tab's tree read before the script's operation settles
+   * (`BrowserContext._settleFrames`): a read of it is in flight (a page first seen mid-run, a
+   * start read), its version moved since its tree was read, or its last read was not whole. A
+   * tab with a navigation op in flight is left to that navigation's own reply.
+   */
+  _framesStale(): boolean {
+    if (this._tab === null || this._closed || this._navigationsInFlight > 0)
+      return false
+    return (
+      this.#framesRead !== null ||
+      this.#firstRead !== null ||
+      this.#framesIncomplete ||
+      this._framesChanged > this.#framesReadAt
+    )
   }
 
   /**
@@ -1558,17 +1730,23 @@ export class Page extends EventEmitter {
         throw error
       }
     }
+    // Each wait's reply facts are applied before its settle step (`_navigationReplied`).
     const wait = (pattern: UrlPattern, until: LoadState, budget: number) =>
-      nativeWait(() =>
-        invokeObserved(
+      nativeWait(async () => {
+        let replied: NavigationRead | undefined
+        const reply = await invokeObserved(
           'page.waitForURL',
           site,
           frame._call(api, budget),
           { ...args, url: pattern, waitUntil: until },
           undefined,
           signal,
-        ),
-      )
+          (value, at) => {
+            replied = this._navigationReplied(frame, value, at)
+          },
+        )
+        return { ...reply, replied }
+      })
 
     if (typeof url !== 'function') {
       const pattern =
@@ -1579,12 +1757,12 @@ export class Page extends EventEmitter {
             : undefined
       if (!pattern)
         throw clientError(api, 'url: expected a string, a RegExp or a function')
-      const { value: result, observed } = await wait(
-        pattern,
-        waitUntil,
-        timeout,
-      )
-      await this._navigated(api, frame, result, observed)
+      const {
+        value: result,
+        observed,
+        replied,
+      } = await wait(pattern, waitUntil, timeout)
+      await this._navigated(api, frame, result, observed, undefined, replied)
       return
     }
     const started = Date.now()
@@ -1607,12 +1785,16 @@ export class Page extends EventEmitter {
         )
         return
       }
-      const { value: result, observed } = await wait(
+      const {
+        value: result,
+        observed,
+        replied,
+      } = await wait(
         { regexSource: `^(?!${escapeRegExp(current)}$)`, regexFlags: '' },
         'commit',
         remaining,
       )
-      await this._navigated(api, frame, result, observed)
+      await this._navigated(api, frame, result, observed, undefined, replied)
     }
   }
 
@@ -1666,6 +1848,7 @@ export class Page extends EventEmitter {
     // deadline check follows it (event-deadline.ts): the frame-cache refresh after a navigation
     // or a load-state wait is bounded by the deadline but never fails the call.
     for (;;) {
+      let replied: NavigationRead | undefined
       const { value: result, observed } = await deadline
         .race(
           invokeObserved(
@@ -1681,10 +1864,20 @@ export class Page extends EventEmitter {
             },
             undefined,
             signal,
+            (value, at) => {
+              replied = this._navigationReplied(frame, value, at)
+            },
           ),
         )
         .catch(rethrow)
-      const navigated = this._navigated(api, frame, result, observed)
+      const navigated = this._navigated(
+        api,
+        frame,
+        result,
+        observed,
+        undefined,
+        replied,
+      )
       const settled = await deadline.within(navigated)
       const response = settled
         ? settled.value

@@ -7,7 +7,7 @@ use crate::event_log::EventKind;
 use crate::limits::{KEEP_SECONDS, MAX_NAVIGATE_INPUT, VIEWER_SIDE};
 use crate::query::Fields;
 use crate::setting::{Checked, SETTINGS, Setting, SettingValue};
-use crate::settings::{SetValues, Settings};
+use crate::settings::{FileLoadState, SetValues, Settings};
 use crate::tab_keeps::Keep;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
@@ -15,13 +15,14 @@ use browseros_core::TabId;
 use neo_sdk_api as api;
 use neo_takeover::{
     BarAction, BarOutcome, Fit, FitMode, FitState, Fitted, Lock, LockTtl, Reads, ReleaseReason,
-    ScreenSize, Takeover, TakeoverRequest, TakeoverState, TakeoverTtl,
+    ScreenSize, Takeover, TakeoverRequest, TakeoverState, TakeoverTtl, Viewer, ViewerScale,
 };
 use neo_trace::{
     Delivery, Effect, EpochMillis, ErrorRecord, OperationId, OperationRow, Page, PageState,
     RunDetail, RunDownload, RunSummary, ShotState, TaskId, TraceTail,
 };
 use std::collections::HashMap;
+use std::fmt;
 use std::time::Duration;
 
 /// The screenshots a read inlines, base64 JPEGs by operation. Empty unless the request asked
@@ -60,6 +61,7 @@ fn run_summary_fields(run: &RunSummary, fields: Fields) -> api::RunSummary {
         values: run.values.clone(),
         id: run.id.to_string(),
         task_id: run.task_id.as_ref().map(ToString::to_string),
+        tabs_scope: run.tabs_scope.map(|scope| scope.as_str().to_owned()),
         tabs: run.tabs.iter().map(|tab| tab.0).collect(),
         status: run.status.as_str().to_string(),
         effects: run.effects.map(|effects| effects.as_str().to_string()),
@@ -103,6 +105,7 @@ pub(crate) fn run(run: &RunDetail, inlined: &Inlined, fields: Fields) -> api::Ru
         values,
         id,
         task_id,
+        tabs_scope,
         tabs,
         status,
         effects,
@@ -128,6 +131,7 @@ pub(crate) fn run(run: &RunDetail, inlined: &Inlined, fields: Fields) -> api::Ru
         values,
         id,
         task_id,
+        tabs_scope,
         tabs,
         status,
         effects,
@@ -233,6 +237,7 @@ fn operation_fields(op: &OperationRow, inlined: &Inlined, fields: Fields) -> api
             .then(|| inlined.screenshot(op.id).map(Box::new))
             .flatten(),
         main_world: op.main_world,
+        frames_incomplete: op.frames_incomplete,
         internal: op.is_internal(),
     }
 }
@@ -388,6 +393,16 @@ pub(crate) fn fit(fit: &Fit) -> api::Fit {
             fit.screen.width.into(),
             fit.screen.height.into(),
         )),
+        // Pure 1x sessions keep their existing wire shape. At 2x the host needs both units
+        // to fit locally and to send physical dimensions in a remote framebuffer resize.
+        viewer: (fit.viewer.scale == ViewerScale::Two).then(|| {
+            let mut viewer = api::ViewerRequest::new(
+                fit.viewer.size.width.into(),
+                fit.viewer.size.height.into(),
+            );
+            viewer.scale = Some(fit.viewer.scale.factor().into());
+            Box::new(viewer)
+        }),
         mode: Some(
             match fit.mode {
                 FitMode::Mobile => "mobile",
@@ -428,10 +443,13 @@ pub(crate) fn fit(fit: &Fit) -> api::Fit {
     }
 }
 
-/// `POST /v1/tabs/{tabId}/fit`: the viewer's `{width, height}`, each 100 to 4096 px.
-pub(crate) fn viewer_request(body: &[u8]) -> Result<ScreenSize, ApiError> {
-    let viewer = serde_json::from_slice(body)
-        .map_err(|_| not_the_body(r#"{"width": integer, "height": integer}"#))?;
+/// The fit's logical dimensions and optional 1x or 2x preview scale.
+pub(crate) fn viewer_request(body: &[u8]) -> Result<Viewer, ApiError> {
+    let input: serde_json::Value = serde_json::from_slice(body)
+        .map_err(|_| not_the_body(r#"{"width": integer, "height": integer, "scale"?: 1 | 2}"#))?;
+    check_scale(&input)?;
+    let viewer = serde_json::from_value(input)
+        .map_err(|_| not_the_body(r#"{"width": integer, "height": integer, "scale"?: 1 | 2}"#))?;
     viewer_size(viewer)
 }
 
@@ -464,6 +482,22 @@ pub(crate) fn takeover(takeover: &Takeover) -> api::Takeover {
         released_at,
         expires_at: takeover.expires_at.millis(),
         input_drained: takeover.input_drained,
+        opened_tabs: takeover.opened_tabs.as_ref().map(|opened| {
+            opened
+                .iter()
+                .map(|tab| api::OpenedTab {
+                    tab_id: tab.tab.0,
+                    url: tab.url.clone(),
+                    in_front: tab.in_front,
+                    task_id: tab.task_id.clone(),
+                    opener_tab_id: tab.opener.map(|opener| opener.0),
+                })
+                .collect()
+        }),
+        opened_tabs_noted: takeover
+            .opened_tabs_noted
+            .map(|noted| i64::try_from(noted).unwrap_or(i64::MAX)),
+        opened_tabs_truncated: takeover.opened_tabs_truncated,
     }
 }
 
@@ -483,14 +517,20 @@ pub(crate) fn takeover_event(takeover: &Takeover) -> api::Event {
 /// `POST /v1/takeovers`: the tab, an optional viewer (each side 100 to 4096 px), `reads`
 /// (`block` when absent) and a TTL of 60 s to 20 minutes (20 minutes when absent).
 pub(crate) fn takeover_request(body: &[u8]) -> Result<TakeoverRequest, ApiError> {
+    let input: serde_json::Value = serde_json::from_slice(body).map_err(|_| {
+        not_the_body(r#"{"tabId": integer, "viewer"?: {"width": integer, "height": integer, "scale"?: 1 | 2}}"#)
+    })?;
+    if let Some(viewer) = input.get("viewer") {
+        check_scale(viewer)?;
+    }
     let api::TakeoverRequest {
         tab_id,
         viewer,
         reads,
         ttl_seconds,
-    } = serde_json::from_slice(body).map_err(|_| {
+    } = serde_json::from_value(input).map_err(|_| {
         not_the_body(
-            r#"{"tabId": integer, "viewer"?: {"width": integer, "height": integer}, "reads"?: "block" | "allow", "ttlSeconds"?: integer}"#,
+            r#"{"tabId": integer, "viewer"?: {"width": integer, "height": integer, "scale"?: 1 | 2}, "reads"?: "block" | "allow", "ttlSeconds"?: integer}"#,
         )
     })?;
     let ttl = match ttl_seconds {
@@ -538,16 +578,37 @@ fn reads(text: Option<&str>) -> Result<Reads, ApiError> {
     }
 }
 
-/// A viewer's size, each side 100 to 4096 px, as a fit and a takeover take it.
-fn viewer_size(viewer: api::ViewerSize) -> Result<ScreenSize, ApiError> {
-    let api::ViewerSize { width, height } = viewer;
+/// Generated optional fields treat explicit null as absence. Preserve scale omission for
+/// refit inheritance, but reject null before decoding into the generated request model.
+fn check_scale(viewer: &serde_json::Value) -> Result<(), ApiError> {
+    if viewer.get("scale").is_some_and(serde_json::Value::is_null) {
+        return Err(ApiError::invalid("`scale` must be the integer 1 or 2"));
+    }
+    Ok(())
+}
+
+/// Validates the request once at the host boundary; Surface resolves omitted-scale inheritance.
+fn viewer_size(viewer: api::ViewerRequest) -> Result<Viewer, ApiError> {
+    let api::ViewerRequest {
+        width,
+        height,
+        scale,
+    } = viewer;
+    let scale = match scale {
+        None => None,
+        Some(1) => Some(ViewerScale::One),
+        Some(2) => Some(ViewerScale::Two),
+        Some(_) => return Err(ApiError::invalid("`scale` must be the integer 1 or 2")),
+    };
     let side = |side: i32| {
         u16::try_from(side)
             .ok()
             .filter(|side| VIEWER_SIDE.contains(side))
     };
     match (side(width), side(height)) {
-        (Some(width), Some(height)) => Ok(ScreenSize { width, height }),
+        (Some(width), Some(height)) => {
+            Viewer::new(ScreenSize { width, height }, scale).map_err(ApiError::from)
+        }
         _ => Err(ApiError::invalid(format!(
             "`width` and `height` must each be from {} to {}",
             VIEWER_SIDE.start(),
@@ -609,7 +670,21 @@ pub(crate) struct SettingsBody {
     /// is named, never the value.
     pub(crate) unknown_values: Vec<&'static str>,
     /// One per setting at fault: its name and the rule it broke, never the value.
-    pub(crate) faults: Vec<String>,
+    pub(crate) faults: Vec<SettingFault>,
+}
+
+/// Keeps validation identity separate from its wording. Saved-file loading also handles a
+/// fault on an ancestor group, while HTTP renders the same setting-and-rule refusal.
+#[derive(Debug)]
+pub(crate) struct SettingFault {
+    pub(crate) name: String,
+    pub(crate) rule: String,
+}
+
+impl fmt::Display for SettingFault {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "`{}` {}", self.name, self.rule)
+    }
 }
 
 /// `PUT` and `PATCH /v1/settings`: the values to apply, and what was skipped; `faults` is empty.
@@ -617,11 +692,12 @@ pub(crate) struct SettingsBody {
 /// unknown name without a word; the host is told what was skipped instead. A refusal names
 /// every setting at fault, and then nothing is applied.
 pub(crate) fn settings_request(body: &[u8]) -> Result<SettingsBody, ApiError> {
-    let shape = r#"{"tabs"?: {"idleCloseSeconds"?: integer}, "trace"?: {…}}"#;
+    let shape = r#"{"tabs"?: {"idleCloseSeconds"?: integer}, "trace"?: {…}, "fill"?: {…}}"#;
     let json: serde_json::Value = serde_json::from_slice(body).map_err(|_| not_the_body(shape))?;
     let checked = settings_body(&json).ok_or_else(|| not_the_body(shape))?;
     if !checked.faults.is_empty() {
-        return Err(ApiError::invalid(checked.faults.join("; ")));
+        let faults: Vec<String> = checked.faults.iter().map(ToString::to_string).collect();
+        return Err(ApiError::invalid(faults.join("; ")));
     }
     Ok(checked)
 }
@@ -654,14 +730,18 @@ fn check_settings(
                     checked.values.insert(setting.name, value);
                 }
                 Checked::UnknownValue => checked.unknown_values.push(setting.name),
-                Checked::Refused(rule) => checked.faults.push(format!("`{}` {rule}", setting.name)),
+                Checked::Refused(rule) => checked.faults.push(SettingFault {
+                    name: setting.name.to_owned(),
+                    rule,
+                }),
             }
         } else if Setting::is_group(&name) {
             match value.as_object() {
                 Some(inner) => check_settings(&name, inner, checked),
-                None => checked
-                    .faults
-                    .push(format!("`{name}` must be an object of settings")),
+                None => checked.faults.push(SettingFault {
+                    name,
+                    rule: "must be an object of settings".to_owned(),
+                }),
             }
         } else {
             checked.unknown.push(name);
@@ -699,7 +779,8 @@ pub(crate) fn settings_object(
 }
 
 /// The settings as a host reads them: each at its value, and each default. `skipped` is what a
-/// `PUT` or `PATCH` skipped, both lists always present then; a `GET` has neither.
+/// `PUT` or `PATCH` skipped, both lists always present then; only a `GET` carries the startup
+/// file report, which is independent of changes to the live values.
 pub(crate) fn settings_state(
     settings: &Settings,
     skipped: Option<SettingsBody>,
@@ -724,7 +805,7 @@ pub(crate) fn settings_state(
             ))
         })
     };
-    let (unknown, unknown_values) = match skipped {
+    let (unknown, unknown_values, file) = match skipped {
         Some(SettingsBody {
             unknown,
             unknown_values,
@@ -732,12 +813,31 @@ pub(crate) fn settings_state(
         }) => (
             Some(unknown),
             Some(unknown_values.into_iter().map(str::to_owned).collect()),
+            None,
         ),
-        None => (None, None),
+        None => (
+            None,
+            None,
+            settings.file_report().map(|report| {
+                let state = match report.state {
+                    FileLoadState::Absent => "absent",
+                    FileLoadState::Applied => "applied",
+                    FileLoadState::Partial => "partial",
+                    FileLoadState::Unreadable => "unreadable",
+                };
+                Box::new(api::SettingsFile::new(
+                    state.to_owned(),
+                    report.unknown.clone(),
+                    report.unknown_values.clone(),
+                    report.invalid.clone(),
+                ))
+            }),
+        ),
     };
     Ok(api::SettingsState {
         unknown,
         unknown_values,
+        file,
         ..api::SettingsState::new(typed(current)?, typed(defaults)?)
     })
 }

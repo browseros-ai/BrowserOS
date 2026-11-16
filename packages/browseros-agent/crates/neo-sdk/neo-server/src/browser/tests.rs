@@ -8,11 +8,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use browseros_core::{NativeCapabilities, TabId, page_js};
+use neo_trace::TaskId;
 use tokio::sync::broadcast;
 use tokio::time;
 
 use crate::browser::{
-    BrowserLink, LinkStatus, PageRef, TabEvent, TabListing, TabRegistry, Watched,
+    BrowserLink, LinkStatus, PageRef, RunScope, Sight, TabEvent, TabListing, TabRegistry, Watched,
 };
 use crate::test_support::FakeCdp;
 
@@ -203,6 +204,39 @@ async fn next_event(
     Ok(time::timeout(Duration::from_secs(5), events.recv()).await??)
 }
 
+/// One listing that finds a tab gone and another new reports the open first: a takeover released
+/// by its tab's close must have noted a tab the owner opened in the same moment.
+#[tokio::test(start_paused = true)]
+async fn a_listing_reports_its_opens_before_its_closes() -> Result<(), Box<dyn Error>> {
+    let fake = FakeCdp::new();
+    let first = fake.open_tab("https://example.com/", "Example");
+    let link = start(&fake, &Arc::new(TabRegistry::new()));
+    let mut events = link.tab_events();
+    assert!(matches!(
+        next_event(&mut events).await?,
+        TabEvent::Watching(_)
+    ));
+    assert!(fake.close_tab(first), "the fake had the tab");
+    let second = fake.open_tab("https://example.org/", "Other");
+    assert_eq!(
+        (
+            next_event(&mut events).await?,
+            next_event(&mut events).await?
+        ),
+        (
+            TabEvent::Opened {
+                epoch: 1,
+                tab: second,
+            },
+            TabEvent::Closed {
+                epoch: 1,
+                tab: first,
+            },
+        )
+    );
+    Ok(())
+}
+
 #[tokio::test(start_paused = true)]
 async fn every_open_and_close_is_reported_in_order_under_its_socket() -> Result<(), Box<dyn Error>>
 {
@@ -302,6 +336,86 @@ async fn only_a_listing_without_the_tab_turns_a_destroyed_target_into_a_close()
     assert!(
         link.watched_listing().await.open.contains(&kept),
         "and it is still open"
+    );
+    Ok(())
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_popup_is_its_openers_family_from_its_announcement_before_any_listing()
+-> Result<(), Box<dyn Error>> {
+    let fake = FakeCdp::new();
+    let opener_tab = fake.open_tab("https://example.com/", "Example");
+    let tabs = Arc::new(TabRegistry::new());
+    let link = start(&fake, &tabs);
+    let mut events = link.tab_events();
+    assert!(matches!(
+        next_event(&mut events).await?,
+        TabEvent::Watching(_)
+    ));
+    // The watch reads one thing at a time: once it reports this tab, its listings are done and
+    // it waits on the next target event, so the listing hung below is the popup's own.
+    let marker = fake.open_tab("https://example.org/", "Other");
+    assert!(matches!(
+        next_event(&mut events).await?,
+        TabEvent::Opened { tab, .. } if tab == marker
+    ));
+    let opener = page_for(&link, opener_tab).await?;
+    let task = TaskId::parse("host-s")?;
+    tabs.ensure_task(&task)?;
+    tabs.touched(&opener, tabs.seen());
+    tabs.own(&opener, &task)?;
+
+    fake.hang("Browser.getTabs");
+    let popup = fake.open_popup(opener_tab, "https://example.net/");
+    let family = RunScope::Family(task);
+    eventually(Duration::from_secs(5), || {
+        tabs.sight(&family, popup) == Sight::Shown
+    })
+    .await?;
+    assert_eq!(
+        tabs.owner(popup),
+        None,
+        "no listing registered the popup: its announcement alone made it the family's"
+    );
+    assert!(
+        fake.count("Browser.getTabs") > 0,
+        "the watch's listing hangs"
+    );
+    Ok(())
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_popup_that_opened_and_closed_between_two_listings_leaves_no_announcement()
+-> Result<(), Box<dyn Error>> {
+    let fake = FakeCdp::new();
+    let opener_tab = fake.open_tab("https://example.com/", "Example");
+    let tabs = Arc::new(TabRegistry::new());
+    let link = start(&fake, &tabs);
+    let mut events = link.tab_events();
+    assert!(matches!(
+        next_event(&mut events).await?,
+        TabEvent::Watching(_)
+    ));
+    let opener = page_for(&link, opener_tab).await?;
+    let task = TaskId::parse("host-s")?;
+    tabs.ensure_task(&task)?;
+    tabs.touched(&opener, tabs.seen());
+    tabs.own(&opener, &task)?;
+
+    // One burst: no listing between the popup's announcement and its close, so core never
+    // caches it and its close never reaches the registry's removal.
+    fake.hold_events();
+    let popup = fake.open_popup(opener_tab, "https://example.net/");
+    assert!(fake.close_tab(popup), "the fake had the popup");
+    fake.release_events();
+    assert!(matches!(
+        next_event(&mut events).await?,
+        TabEvent::Closed { tab, .. } if tab == popup
+    ));
+    assert_eq!(
+        tabs.sight(&RunScope::Family(task), popup),
+        Sight::Foreign,
+        "the watch's confirmed close dropped the announcement"
     );
     Ok(())
 }

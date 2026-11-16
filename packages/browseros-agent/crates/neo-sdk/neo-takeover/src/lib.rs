@@ -1,4 +1,4 @@
-//! The owner's side of hosted BrowserOS Neo (claw-sdk): the takeover parts that let zuzu's
+//! The owner's side of hosted BrowserOS Neo (claw-sdk): the takeover parts that let the host's
 //! owner take a tab from the agent and give it back.
 //!
 //! Each part is small, useful alone, and owns only its own state (design D13). A host composes
@@ -19,7 +19,7 @@
 //!   through the same front turn as fits and follow. Every activation Neo makes takes
 //!   one front turn in [`BrowserTabs`], one at a time: the agent's, follow's and a fit's.
 //!
-//! [`Takeovers`] is the v1 flow over them, zuzu's two moments: the owner opens the link (agent
+//! [`Takeovers`] is the v1 flow over them, the host's two moments: the owner opens the link (agent
 //! actions on the tab stop, the screen is held against agent moves, and the tab is fitted),
 //! and the owner is done (all of it given back, the lock last).
 //! It holds nothing but what it took from the parts, so a new flow replaces it without touching them (D13).
@@ -78,6 +78,7 @@ mod tab_hold;
 mod takeovers;
 #[doc(hidden)]
 pub mod testing;
+mod viewer;
 
 pub use browser_tabs::BrowserTabs;
 pub use displays::{Admitted, DisplayBinding, DisplayEnd, DisplayRequest, Displays, Follow};
@@ -94,5 +95,7 @@ pub use screen_rule::{OwnerHasScreen, ScreenHolder};
 pub use screen_size::{NotAScreenSize, ScreenSize, Xvnc};
 pub use tab_hold::TabHold;
 pub use takeovers::{
-    ReleaseReason, Takeover, TakeoverRequest, TakeoverState, TakeoverTtl, Takeovers,
+    OpenedTab, ReleaseReason, TabLinks, Takeover, TakeoverRequest, TakeoverState, TakeoverTtl,
+    Takeovers,
 };
+pub use viewer::{Viewer, ViewerGeometry, ViewerScale};

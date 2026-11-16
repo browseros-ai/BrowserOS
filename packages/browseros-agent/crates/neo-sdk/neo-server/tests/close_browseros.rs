@@ -1,7 +1,7 @@
 //! Neo's default close of a page that asks to stay ("Leave site?"), on a real browser through
 //! the built server, as the first host measured it on the published image: a payment page whose
 //! beforeunload prevents leaving, its card number set by a script, then closed by the next run
-//! the way the host closes it (zuzu's `close_tab.js`). Closed must mean gone from the browser's
+//! the way the host closes it. Closed must mean gone from the browser's
 //! own tab list, and the run after it must not stall. Runs only when `CLAW_SDK_E2E_BROWSER`
 //! names a BrowserOS binary (`browseros_rig`).
 

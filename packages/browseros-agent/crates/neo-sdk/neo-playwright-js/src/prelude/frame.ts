@@ -37,7 +37,7 @@ import {
 import type { OpName } from './generated/ops'
 import { FrameLocator, Locator, testIdAttributeName } from './locator'
 import { markHandle, pick, selectOptionValues } from './options'
-import type { Page } from './page'
+import type { NavigationRead, Page } from './page'
 import type { Response } from './response'
 import { saveScreenshot, screenshotType } from './screenshot'
 import {
@@ -1658,6 +1658,8 @@ export class Frame extends EventEmitter {
       signal,
       () => abortedError(api, signal as SignalLike),
       async () => {
+        // The reply's facts are applied before its settle step (`Page._navigationReplied`).
+        let replied: NavigationRead | undefined
         const wait = invokeObserved(
           'page.waitForLoadState',
           site,
@@ -1665,11 +1667,21 @@ export class Frame extends EventEmitter {
           { ...(await this._frameArgs(api)), state: verified },
           undefined,
           signal,
+          (value, at) => {
+            replied = this._page._navigationReplied(this, value, at)
+          },
         )
         const { value: result, observed } = await (deadline
           ? deadline.race(wait)
           : wait)
-        const navigated = this._page._navigated(api, this, result, observed)
+        const navigated = this._page._navigated(
+          api,
+          this,
+          result,
+          observed,
+          undefined,
+          replied,
+        )
         await (deadline ? deadline.within(navigated) : navigated)
       },
     )
@@ -1712,7 +1724,7 @@ export class Frame extends EventEmitter {
     let handle: ElementHandle | null
     try {
       const { page, frame } = await this._frameArgs(api)
-      const { value: result, observed } = await invokeObserved(
+      const { value: result } = await invokeObserved(
         op,
         site,
         this._call(api, 0),
@@ -1724,8 +1736,10 @@ export class Frame extends EventEmitter {
           content: input.content,
           type: op === 'page.addScriptTag' ? input.type : undefined,
         },
+        undefined,
+        undefined,
+        (value, at) => this._page._evaluated(value.frames, at),
       )
-      this._page._evaluated(result.frames, observed)
       handle = this._page._handle(result.element)
     } catch (error) {
       // File reads are upstream client work, whose errors carry no API prefix.
@@ -1752,6 +1766,7 @@ export class Frame extends EventEmitter {
     const site = captureSite()
     const waitUntil = loadState(api, 'waitUntil', options.waitUntil ?? 'load')
     const signal = signalOf(api, options)
+    let replied: NavigationRead | undefined
     const { value: result, observed } = await invokeObserved(
       'page.setContent',
       site,
@@ -1759,8 +1774,11 @@ export class Frame extends EventEmitter {
       { ...(await this._frameArgs(api)), html, waitUntil },
       undefined,
       signal,
+      (value, at) => {
+        replied = this._page._navigationReplied(this, value, at)
+      },
     )
-    await this._page._navigated(api, this, result, observed)
+    await this._page._navigated(api, this, result, observed, undefined, replied)
   }
 
   /** upstream's `Frame.evaluate` after its argument count: the client's checks, then the op. */
@@ -1780,13 +1798,15 @@ export class Frame extends EventEmitter {
       options,
     )
     const { page, frame } = await this._frameArgs(api)
-    const { value: result, observed } = await invokeObserved(
+    const { value: result } = await invokeObserved(
       'page.evaluate',
       site,
       this._call(api, 0),
       { page, frame, ...script },
+      undefined,
+      undefined,
+      (value, at) => this._page._evaluated(value.frames, at),
     )
-    this._page._evaluated(result.frames, observed)
     await this._page._publishCompleted()
     return fromPageValue(api, result.value)
   }

@@ -36,10 +36,10 @@ import zipfile
 RUN_META = "com.browseros.neo/run"
 TITLE = "neo-sdk-accept"
 # A data: page in the task's own tab, filled and read back through Playwright locators: the
-# shape of call a migrated zuzu mirrord sends. The image under test has no network.
+# shape of call a host sends. The image under test has no network.
 CODE = f"""\
 await page.goto('data:text/html,<title>{TITLE}</title><h1 id=h>hello</h1><input aria-label=Name>');
-await page.getByLabel('Name').fill('zuzu');
+await page.getByLabel('Name').fill('host');
 return {{ title: await page.title(), heading: await page.locator('#h').textContent(),
          value: await page.getByLabel('Name').inputValue() }};
 """
@@ -536,7 +536,7 @@ return { png, pdf, small: Buffer.from('inline'), sizes: { png: png.length, pdf: 
 
 
 def blobs(url: str, socket_path: str, token_file: str) -> dict:
-    """zuzu's full-page screenshot and PDF, which no longer fit in a reply, read back as blobs."""
+    """Read a host's full-page screenshot and PDF as blobs when they exceed the reply limit."""
     client = connect(url)
     problems = []
     got = call_run(client, BLOBS_CODE, {"taskId": "accept-blobs"})

@@ -3,6 +3,7 @@
 use std::error::Error;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::task::Poll;
 use std::time::Duration;
 use std::{fs, future};
 
@@ -11,9 +12,11 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 use tokio::time;
 
+use super::hosted_stack::HostedStack;
 use super::{HostedOptions, HostedRuntime};
 use crate::browser::BrowserLink;
 use crate::config::HostedMode;
+use crate::test_rig::ManualClock;
 use crate::test_support::FakeCdp;
 
 async fn connect(dir: &TempDir, fake: Arc<FakeCdp>) -> Result<HostedRuntime, Box<dyn Error>> {
@@ -32,14 +35,25 @@ async fn connect(dir: &TempDir, fake: Arc<FakeCdp>) -> Result<HostedRuntime, Box
     .await?)
 }
 
-async fn sent(fake: &FakeCdp, method: &str) -> Result<(), Box<dyn Error>> {
-    time::timeout(Duration::from_secs(5), async {
-        while fake.count(method) == 0 {
-            time::sleep(Duration::from_millis(5)).await;
-        }
-    })
-    .await?;
-    Ok(())
+/// Uses the production stack on the caller's clock; other lifecycle tests retain the owned
+/// executor. These tests must freeze the run deadline while observing an unpolled call.
+async fn connect_stack(
+    dir: &TempDir,
+    fake: Arc<FakeCdp>,
+) -> Result<Arc<HostedStack>, Box<dyn Error>> {
+    Ok(HostedStack::start(
+        HostedOptions {
+            state_dir: dir.path().join("state"),
+            read_dirs: None,
+            execution_dir: Some(dir.path().join("profile/.browseros")),
+            browseros_version: Some("0.52.1.1".to_owned()),
+            hosted_mode: false,
+        },
+        move |native, tabs| {
+            BrowserLink::start_with(native, tabs, move || future::ready(fake.connect()))
+        },
+    )
+    .await?)
 }
 
 #[tokio::test]
@@ -144,20 +158,25 @@ async fn admission_precedes_poll_and_finish_drains_a_call_in_flight() -> Result<
     let dir = tempfile::tempdir()?;
     let fake = FakeCdp::new();
     fake.hang("Browser.createTab");
-    let runtime = connect(&dir, Arc::clone(&fake)).await?;
-    let run = runtime.open_run(Duration::from_secs(10)).await?;
+    let stack = connect_stack(&dir, Arc::clone(&fake)).await?;
+    let clock = ManualClock::pause();
+    let run = stack.open_run(Duration::from_secs(10)).await?;
     // Do not poll the returned future: the bridge must have already admitted and spawned it.
-    let call = run.invoke("context.newPage".to_owned(), "{}", "run:1:1");
-    sent(&fake, "Browser.createTab").await?;
+    let mut call = Box::pin(run.invoke("context.newPage".to_owned(), "{}", "run:1:1"));
+    fake.received("Browser.createTab").await?;
     let reply: Value = serde_json::from_str(&run.finish().await?)?;
-    let envelope: Value = serde_json::from_str(&call.await)?;
+    let Poll::Ready(answer) = futures_util::poll!(call.as_mut()) else {
+        return Err("finish returned before the call's answer settled".into());
+    };
+    let envelope: Value = serde_json::from_str(&answer)?;
     assert_eq!(envelope["err"]["code"], "not_awaited");
     assert_eq!(
         reply["notAwaited"].as_array().map(Vec::len),
         Some(1),
         "the pending call is accounted for before the end"
     );
-    runtime.close().await?;
+    drop(clock);
+    stack.close().await?;
     Ok(())
 }
 
@@ -166,15 +185,16 @@ async fn dropping_the_run_cancels_its_pending_call() -> Result<(), Box<dyn Error
     let dir = tempfile::tempdir()?;
     let fake = FakeCdp::new();
     fake.hang("Browser.createTab");
-    let runtime = connect(&dir, Arc::clone(&fake)).await?;
-    let run = runtime.open_run(Duration::from_secs(10)).await?;
+    let stack = connect_stack(&dir, Arc::clone(&fake)).await?;
+    let clock = ManualClock::pause();
+    let run = stack.open_run(Duration::from_secs(10)).await?;
     let call = run.invoke("context.newPage".to_owned(), "{}", "");
-    sent(&fake, "Browser.createTab").await?;
+    fake.received("Browser.createTab").await?;
     drop(run);
-    let envelope: Value =
-        serde_json::from_str(&time::timeout(Duration::from_secs(5), call).await?)?;
+    let envelope: Value = serde_json::from_str(&call.await)?;
     assert_eq!(envelope["err"]["code"], "cancelled");
-    runtime.close().await?;
+    drop(clock);
+    stack.close().await?;
     Ok(())
 }
 

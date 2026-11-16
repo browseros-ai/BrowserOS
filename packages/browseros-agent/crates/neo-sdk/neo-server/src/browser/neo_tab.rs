@@ -62,7 +62,7 @@ pub(crate) enum Adopt {
 }
 
 /// Neo's blank tab (the owner, 2026-11-12: "keep a blank tab open always"). Closing the browser's
-/// last tab quits the browser and Neo's server with it (zuzu's last-tab probe), so Neo keeps one
+/// last tab quits the browser and Neo's server with it, so Neo keeps one
 /// blank tab of its own open at all times: the janitor may then close every idle agent tab, a
 /// script may close its last one, and a host's tab reset needs no keeper tab of its own.
 ///

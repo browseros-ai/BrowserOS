@@ -1,4 +1,4 @@
-//! The lock routes and `lock.state`, as zuzu sees them. The app's side is called on the
+//! The lock routes and `lock.state`, as the host sees them. The app's side is called on the
 //! `Service` directly: its lock policy (`locks().check`) and the browser link's tab events.
 
 use crate::support::{BoxError, EventStream, Harness, Sse, TestResult, harness};

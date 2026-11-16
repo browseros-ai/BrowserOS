@@ -16,8 +16,8 @@
 //!   preview's zoom-out (decision 24).
 
 use crate::browser_tabs::WindowState;
-use crate::fit_rule::Layout;
-use crate::{FitId, ScreenSize};
+use crate::fit_rule::{self, Layout};
+use crate::{FitId, PartError, ScreenSize, Viewer, ViewerScale};
 use browseros_core::viewport::ViewportRequest;
 use browseros_core::{TabId, WindowId};
 
@@ -83,6 +83,23 @@ pub(crate) struct Surface {
 }
 
 impl Surface {
+    /// Resolve omission where the active scale lives, under the same lock as the claim.
+    /// A new fit defaults to 1 even when another fit currently shows a scaled phone.
+    pub(crate) fn resolve_request(&self, fit: FitId, viewer: Viewer) -> Result<Layout, PartError> {
+        let inherited = self
+            .shown
+            .filter(|_| self.claims.iter().any(|claim| claim.fit == fit))
+            .map_or(ViewerScale::One, |layout| layout.viewer.scale);
+        let viewer = viewer.resolve(inherited)?;
+        fit_rule::requested_layout(viewer).ok_or(PartError::UnusableViewer(viewer.size))
+    }
+
+    /// Interpret the watcher's physical observation using the latest shared preview scale.
+    pub(crate) fn observed_layout(&self, screen: ScreenSize) -> Option<Layout> {
+        let shown = self.shown?;
+        fit_rule::observed_layout(screen, shown.viewer.scale)
+    }
+
     /// `fit` claims the surface for its tab at `layout`'s screen size; a fit already here
     /// claims it again. Records the window's home when nothing held the surface, and the
     /// tab's viewport when the fit is new. When the layout changes, every other claimed tab

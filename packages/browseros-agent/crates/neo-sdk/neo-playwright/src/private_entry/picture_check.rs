@@ -8,7 +8,11 @@
 //!          ─ every frame asked at once, each within FRAME_STALL
 //!          ─ each frame's isolated world (installed on first use) ─ `privateShown`: shown?
 //!            does it hold a private box at all? how many inputs did one take since the first
-//!            reading?
+//!            reading? does a host wait, which may carry a closed root the world does not know?
+//!          ─ a frame with hosts waiting: its walk on demand ([`walked`]): the hosts handed over
+//!            (`privateHosts`), each one's closed root named by DOM.describeNode and resolved
+//!            into the world, and `privateShown` again with those roots (`walk`), so its answer
+//!            sees the boxes inside them
 //!          ─ Clear { reading } when no frame shows one, else Private or Unknown
 //!  camera ─ captures ─ asks again ─ stores the picture only if both asks were Clear with the
 //!            same reading
@@ -26,6 +30,23 @@
 //! document that held no private box at the first look and is gone by the second, can be in a
 //! stored picture.
 //!
+//! A box inside a closed shadow root is out of reach of every script, so the camera reaches such
+//! a root from its host, on demand (ruling R65). Typing that reaches the root arrives at the
+//! world's listener as a trusted input or beforeinput event whose first target is the host, which
+//! takes no input itself; a box that holds the focus makes its host the document's active
+//! element. The page side counts such an event as input at once and keeps the host until the
+//! camera asks for it. A key is not listened for: one that types nothing fires no input event and
+//! never moves a reading. No DOM capture: a host costs one description and one resolve, about 2
+//! ms for a chain of two roots on a page of 75,000 elements, whose capture would take 930 ms.
+//!
+//! What a failed read costs depends on what pointed at the host (the design keeper's rulings). A
+//! host the focus pointed at is asked once, and a read that fails or runs out of time leaves the
+//! answer as main gives it, so for such a host the walk never turns a clear reading into an
+//! unknown one. A host that typing reached is certain to hold a box someone typed into: while it
+//! is unread the reading is unknown, and it is handed over again at each reading, five at most,
+//! after which it reads as on main. A root nothing typed into and whose box never held the focus
+//! stays unknown until a marked snapshot opens it to the world, a named limit.
+//!
 //! A tab that took the host's private fill never reaches this question: the entry's tab-life
 //! set withholds it first. So what decides here is what the page itself declares private and a
 //! script typed, or the owner did. A frame that cannot be read answers `Unknown`, which the camera
@@ -36,19 +57,41 @@ use std::time::Duration;
 
 use browseros_core::{FrameId, TabId};
 use futures_util::future::join_all;
-use serde_json::Value;
-use tokio::time;
+use serde::Deserialize;
+use serde_json::{Value, json};
+use tokio::time::{self, Instant};
 
 use crate::Playwright;
+use crate::object_group::ObjectGroup;
 use crate::op_scope::AdmittedPage;
 use crate::page::PageState;
 use crate::page::frame_tree::{self, FrameDocument};
 use crate::probe::{self, ProbeFailure, ProbeReply};
-use crate::world::{Endpoint, Installer, Place};
+use crate::world::{BackendNodeId, Endpoint, Installer, IsolatedWorld, Place};
 
 /// How long one frame may take to answer, its first install included. A frame that stalls is
 /// `Unknown`, so the picture is withheld rather than waited for.
 const FRAME_STALL: Duration = Duration::from_secs(2);
+
+/// How long one frame's walk on demand may take at one reading: every round's hand-over,
+/// descriptions, resolves and second question together. A chain of two roots measured about 2 ms
+/// on a page of 75,000 elements; the bound is for a renderer that answers late. A walk not done by
+/// then is dropped, and the frame's first answer stands.
+const WALK_BUDGET: Duration = Duration::from_millis(500);
+
+/// What a walk leaves of a frame's [`FRAME_STALL`] at least, so the walk never runs into it and
+/// turns the frame's answer into a stall.
+const WALK_RESERVE: Duration = Duration::from_millis(200);
+
+/// How many rounds one frame's walk takes at one reading. A root found in one round may hold the
+/// focus on a nested host, which the second answer points at, and the next round reads its root;
+/// while hosts wait the walk goes on. A chain deeper than this goes on at the next reading, whose
+/// answer still names its host.
+const WALK_ROUNDS: usize = 4;
+
+/// How many hosts one round takes. The page hands over first the hosts a trusted input event
+/// named (real closed hosts), then the one the focus pointed at.
+const HOSTS_PER_ROUND: u32 = 16;
 
 /// One frame's answer to the camera's question.
 enum Asked {
@@ -148,13 +191,23 @@ impl Playwright {
             };
             let state = &state;
             asks.push(async move {
-                let answer = time::timeout(FRAME_STALL, self.ask_frame(state, &endpoint, place))
+                let deadline = Instant::now() + FRAME_STALL;
+                let asked = self.ask_frame(state, &endpoint, place);
+                let (asked, world) = time::timeout_at(deadline, asked)
                     .await
-                    .unwrap_or(Asked::Failed);
-                (endpoint.frame, answer)
+                    .unwrap_or((Asked::Failed, None));
+                let asked = match (asked, world) {
+                    (Asked::Answered(reply), Some(world)) if walk_wanted(&reply) => {
+                        let ends = (Instant::now() + WALK_BUDGET).min(deadline - WALK_RESERVE);
+                        walked(&world, reply, ends).await
+                    }
+                    (asked, _) => asked,
+                };
+                (endpoint.frame, asked)
             });
         }
-        match listed(join_all(asks).await) {
+        let answers = join_all(asks).await;
+        match listed(answers) {
             Ok(listed) => PictureCheck::Clear {
                 reading: reading(&documents, &listed),
             },
@@ -171,14 +224,20 @@ impl Playwright {
     /// another document with no op touching it (an ad frame, a payment frame after its step)
     /// would answer `Gone` at every later reading, and its tab would never be pictured again.
     /// A frame still gone after that, or whose install fails `Gone`, has left: `Asked::Gone`.
-    async fn ask_frame(&self, state: &PageState, endpoint: &Endpoint, place: Place) -> Asked {
+    /// An answer comes with the world that gave it, for the frame's walk on demand ([`walked`]).
+    async fn ask_frame(
+        &self,
+        state: &PageState,
+        endpoint: &Endpoint,
+        place: Place,
+    ) -> (Asked, Option<IsolatedWorld>) {
         if self
             .media()
             .ensure(&endpoint.session, state.media())
             .await
             .is_err()
         {
-            return Asked::Failed;
+            return (Asked::Failed, None);
         }
         for attempt in 0..2 {
             let world = match state
@@ -187,17 +246,17 @@ impl Playwright {
                 .await
             {
                 Ok(world) => world,
-                Err(ProbeFailure::Gone(_)) => return Asked::Gone,
-                Err(_failed) => return Asked::Failed,
+                Err(ProbeFailure::Gone(_)) => return (Asked::Gone, None),
+                Err(_failed) => return (Asked::Failed, None),
             };
-            match probe::picture_question(&world).await {
-                Ok(reply) => return Asked::Answered(reply),
+            match probe::picture_question(&world, None).await {
+                Ok(reply) => return (Asked::Answered(reply), Some(world)),
                 Err(ProbeFailure::Gone(_)) if attempt == 0 => state.frames().invalidate(&world),
-                Err(ProbeFailure::Gone(_)) => return Asked::Gone,
-                Err(_failed) => return Asked::Failed,
+                Err(ProbeFailure::Gone(_)) => return (Asked::Gone, None),
+                Err(_failed) => return (Asked::Failed, None),
             }
         }
-        Asked::Gone
+        (Asked::Gone, None)
     }
 
     fn installer(&self) -> Installer<'_> {
@@ -206,6 +265,231 @@ impl Playwright {
             epoch: self.epoch(),
         }
     }
+}
+
+/// Whether a frame's first answer calls for the walk: hosts wait, and no private value shows yet.
+/// An answer that shows one already makes the reading private, and a walk after it could only
+/// put a later clear answer in its place (a value the page cleared meanwhile, with no event): the
+/// hosts wait for the next reading instead, unasked.
+fn walk_wanted(reply: &ProbeReply) -> bool {
+    waiting(reply) && !flag(reply, "shown")
+}
+
+/// Whether `reply` names hosts waiting for the camera's walk on demand (`hosts`).
+fn waiting(reply: &ProbeReply) -> bool {
+    flag(reply, "hosts")
+}
+
+/// Whether `reply` names a host waiting that a trusted input event named (`named`): typing
+/// reached a closed root there, so the reading is not clear until that host is asked.
+fn named(reply: &ProbeReply) -> bool {
+    flag(reply, "named")
+}
+
+fn flag(reply: &ProbeReply, name: &str) -> bool {
+    matches!(reply, ProbeReply::Value { value }
+        if value.as_value().get(name).and_then(Value::as_bool) == Some(true))
+}
+
+/// The frame's answer once the closed roots of the hosts it has waiting are read (ruling R65):
+/// round by round, the hosts handed over, each one's closed root from the browser, and the
+/// question again with the roots found, while hosts wait, up to [`WALK_ROUNDS`] and by `ends`.
+///
+/// The page keeps the rules of who waits (`private-shown.ts`): a host the focus pointed at is
+/// asked once, and a failed read leaves it as on main; one that a trusted input event named is
+/// handed over again at each reading until its root is kept, five readings at most. While such a
+/// host waits unread, whatever stopped the walk (a failed read, no time left, a hand-over that
+/// failed, more hosts than the rounds take), the reading is unknown, never clear: typing reached a
+/// closed root there and its box is unread (the design keeper's ruling B). Debug lines name the
+/// step and never what a host or its description holds.
+///
+/// It runs outside any op, as the question itself does: the hand-over's remote array and the
+/// resolved roots live in an object group of the walk's own, released when it ends on every path,
+/// a timeout that drops it included. The world keeps the roots for this question alone and never
+/// opens them to its engine.
+async fn walked(world: &IsolatedWorld, first: ProbeReply, ends: Instant) -> Asked {
+    let group = ObjectGroup::new();
+    let name = group.on(world.session());
+    let mut unread = named(&first);
+    let mut reply = first;
+    for _ in 0..WALK_ROUNDS {
+        // A round started late would still hand its hosts over before the timeout is asked
+        // (tokio polls the future first), spending them with nothing read: they wait instead.
+        if Instant::now() >= ends {
+            ended(world, "no time left");
+            break;
+        }
+        match time::timeout_at(ends, round(world, name)).await {
+            Ok(Ok(Round::Idle)) => break,
+            // An answer that shows a private value is the reading: no later round may replace it.
+            Ok(Ok(Round::Answered(second))) if flag(&second, "shown") => {
+                return Asked::Answered(second);
+            }
+            Ok(Ok(Round::Answered(second))) => {
+                unread = named(&second);
+                let more = waiting(&second);
+                reply = second;
+                if !more {
+                    break;
+                }
+            }
+            Ok(Ok(Round::Unanswered(why)) | Err(why)) => {
+                ended(world, why);
+                break;
+            }
+            Err(_late) => {
+                ended(world, "timeout");
+                break;
+            }
+        }
+    }
+    if unread {
+        ended(world, "typing reached a closed root that is not read yet");
+        return Asked::Failed;
+    }
+    Asked::Answered(reply)
+}
+
+/// One debug line where the walk stops short: the step only.
+fn ended(world: &IsolatedWorld, why: &str) {
+    tracing::debug!(
+        frame = world.frame().as_str(),
+        why,
+        "the camera's walk of a closed shadow root ended early"
+    );
+}
+
+/// What one round of the walk came to.
+enum Round {
+    /// No host waited to be handed over at this reading.
+    Idle,
+    /// The question asked again with the roots found, perhaps none, answered whole: its flags say
+    /// what still waits.
+    Answered(ProbeReply),
+    /// Hosts were handed over, and the question asked again failed or answered in part.
+    Unanswered(&'static str),
+}
+
+/// One round of the walk: up to [`HOSTS_PER_ROUND`] of the hosts waiting, each one's closed root,
+/// and the question again with the roots found. It is asked even when none came back, so the
+/// page's answer says whether a host that input reached is still unread. `Err` when the
+/// hand-over itself failed.
+async fn round(world: &IsolatedWorld, group: &str) -> Result<Round, &'static str> {
+    let hosts = probe::private_hosts(world, group, HOSTS_PER_ROUND)
+        .await
+        .map_err(|_failed| "the hand-over failed")?;
+    if hosts.is_empty() {
+        return Ok(Round::Idle);
+    }
+    let roots: Vec<String> = join_all(
+        hosts
+            .into_iter()
+            .map(|host| closed_root(world, group, host)),
+    )
+    .await
+    .into_iter()
+    .flatten()
+    .collect();
+    Ok(match probe::picture_question(world, Some(&roots)).await {
+        Ok(second) if complete(&second) => Round::Answered(second),
+        Ok(_) => Round::Unanswered("an answer in part"),
+        Err(_failed) => Round::Unanswered("the second question failed"),
+    })
+}
+
+/// `DOM.describeNode`'s answer: the host and the shadow roots it carries.
+#[derive(Deserialize)]
+struct Described {
+    node: DescribedNode,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DescribedNode {
+    #[serde(default)]
+    shadow_roots: Vec<DescribedRoot>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DescribedRoot {
+    backend_node_id: BackendNodeId,
+    #[serde(default)]
+    shadow_root_type: Option<String>,
+}
+
+/// The closed shadow root a host's description lists, if any: only the type `closed`, never
+/// `user-agent` (a root the browser made itself) nor `open` (which the world reads already).
+fn closed_of(host: DescribedNode) -> Option<BackendNodeId> {
+    host.shadow_roots
+        .into_iter()
+        .find(|root| root.shadow_root_type.as_deref() == Some("closed"))
+        .map(|root| root.backend_node_id)
+}
+
+/// `DOM.resolveNode`'s answer.
+#[derive(Deserialize)]
+struct Resolved {
+    object: ResolvedObject,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ResolvedObject {
+    object_id: String,
+}
+
+/// `host`'s closed shadow root as a remote object in `world`, in `group`, or `None`: the host
+/// carries none, or a call fails (a debug line says which). The type comes from the browser's own
+/// description of the host only: a script, and deep serialization's `mode`, call a root the
+/// browser made itself (a video's controls, a `details` element) `closed` too, where the
+/// description says `user-agent`. Depth 0 lists the host's shadow roots without its children,
+/// which on a container of 20,000 elements measured 4.2 MB and 244 ms at depth 1.
+async fn closed_root(world: &IsolatedWorld, group: &str, host: BackendNodeId) -> Option<String> {
+    // The step only: an error can carry what the browser answered, and a description the host's
+    // attributes, which a component may mirror its box's value into.
+    let failed = |step: &str| {
+        tracing::debug!(
+            frame = world.frame().as_str(),
+            step,
+            "the camera could not read a host's closed shadow root"
+        );
+    };
+    let described = world
+        .session()
+        .send::<_, Described>(
+            "DOM.describeNode",
+            json!({ "backendNodeId": host, "depth": 0 }),
+        )
+        .await
+        .map_err(|_error| failed("describe"))
+        .ok()?;
+    let root = closed_of(described.node)?;
+    let params = json!({
+        "backendNodeId": root,
+        "executionContextId": world.context(),
+        "objectGroup": group,
+    });
+    let resolved = world
+        .session()
+        .send::<_, Resolved>("DOM.resolveNode", params)
+        .await
+        .map_err(|_error| failed("resolve"))
+        .ok()?;
+    Some(resolved.object.object_id)
+}
+
+/// Whether `reply` is a whole answer to the camera's question (`shown`, `inputs` and `boxes`). A
+/// probe's error reply arrives as `Ok` too, and taking it would turn the frame's clear first
+/// answer into an unknown reading.
+fn complete(reply: &ProbeReply) -> bool {
+    let ProbeReply::Value { value } = reply else {
+        return false;
+    };
+    let value = value.as_value();
+    value.get("shown").is_some_and(Value::is_boolean)
+        && value.get("inputs").is_some_and(Value::is_u64)
+        && value.get("boxes").is_some_and(Value::is_boolean)
 }
 
 /// The documents a reading lists, with their input counts: each frame that answered it holds a
@@ -276,6 +560,74 @@ mod tests {
     fn answered(value: &Value) -> Result<Asked, Box<dyn Error>> {
         let reply = serde_json::from_value(json!({ "kind": "value", "value": value }))?;
         Ok(Asked::Answered(reply))
+    }
+
+    /// The walk on demand reads a host's root type from its description only (the snapshot
+    /// design's reviewer's runs): a closed root is taken, and a video's or a `details` element's
+    /// root, which deep serialization also calls `closed`, is not, nor an open one.
+    #[test]
+    fn tests_that_only_a_root_the_browser_calls_closed_is_taken() -> Result<(), Box<dyn Error>> {
+        use super::{Described, closed_of};
+        use crate::world::BackendNodeId;
+        let host = |roots: Value| -> Result<_, Box<dyn Error>> {
+            let described: Described =
+                serde_json::from_value(json!({ "node": { "nodeType": 1, "shadowRoots": roots } }))?;
+            Ok(closed_of(described.node))
+        };
+        let root = |id: i64, kind: &str| json!({ "backendNodeId": id, "shadowRootType": kind });
+        assert_eq!(host(json!([root(4, "closed")]))?, Some(BackendNodeId(4)));
+        assert_eq!(host(json!([root(6, "user-agent")]))?, None, "a video");
+        assert_eq!(host(json!([root(13, "open")]))?, None, "an open root");
+        assert_eq!(host(json!([]))?, None, "no root");
+        let bare: Described = serde_json::from_value(json!({ "node": { "nodeType": 1 } }))?;
+        assert_eq!(closed_of(bare.node), None, "no shadowRoots listed");
+        Ok(())
+    }
+
+    /// A walk's second reply stands only when it is a whole answer: an error reply, or a value
+    /// missing a field, keeps the frame's first answer.
+    /// Greptile's finding on #3661: the walk never starts after an answer that shows a private
+    /// value, so no later clear answer can take its place; hosts alone call for it.
+    #[test]
+    fn tests_that_a_private_answer_is_never_walked_over() -> Result<(), Box<dyn Error>> {
+        use super::walk_wanted;
+
+        let reply = |value: Value| -> Result<ProbeReply, Box<dyn Error>> {
+            Ok(serde_json::from_value(
+                json!({ "kind": "value", "value": value }),
+            )?)
+        };
+        let shown = json!({ "shown": true, "inputs": 0, "boxes": true, "hosts": true });
+        let waiting = json!({ "shown": false, "inputs": 1, "boxes": false, "hosts": true });
+        let idle = json!({ "shown": false, "inputs": 0, "boxes": false });
+        assert!(!walk_wanted(&reply(shown)?), "a value shows: no walk");
+        assert!(
+            walk_wanted(&reply(waiting)?),
+            "hosts wait, nothing shows: walk"
+        );
+        assert!(!walk_wanted(&reply(idle)?), "no host waits: no walk");
+        Ok(())
+    }
+
+    #[test]
+    fn tests_that_only_a_whole_second_answer_replaces_the_first() -> Result<(), Box<dyn Error>> {
+        use super::complete;
+
+        let reply = |value: &Value| -> Result<ProbeReply, Box<dyn Error>> {
+            Ok(serde_json::from_value(
+                json!({ "kind": "value", "value": value }),
+            )?)
+        };
+        let whole = json!({ "shown": false, "inputs": 0, "boxes": true });
+        assert!(complete(&reply(&whole)?));
+        assert!(!complete(&reply(
+            &json!({ "shown": false, "boxes": true })
+        )?));
+        let error: ProbeReply = serde_json::from_value(
+            json!({ "kind": "error", "message": "the probe threw", "class": "script" }),
+        )?;
+        assert!(!complete(&error), "an error reply arrives as Ok");
+        Ok(())
     }
 
     /// Ruling R54's sorting of the frames' answers: a frame that shows a private value is

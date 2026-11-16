@@ -1,8 +1,11 @@
 //! Which tabs the camera must not picture: those that took a host's private typing (claw-sdk's
-//! `POST /v1/tabs/{tabId}/fill`, protected-fill design section 10.3, rulings R15 and R28).
+//! `POST /v1/tabs/{tabId}/fill`, protected-fill design section 10.3, rulings R15 and R28), while
+//! the host's `fill.pictures` is `never` (ruling R58). Under the default, `allowed`, the app's
+//! answer is `false` for every tab, and only the second question below withholds a picture.
 //!
 //! ```text
-//!  the app's entry ─ marks a tab before its first private character, for the tab's life
+//!  the app's entry ─ marks a tab before its first private character, for the tab's life;
+//!                    the app answers it withheld only under `fill.pictures: never`
 //!        └─ Service::arm_private_tabs(took) ─▶ PrivateTabs
 //!  camera: a job ─ PrivateTabs::withholds(tab)? ─ yes ─▶ Shot::Withheld, no capture
 //!                └ no ─ capture ─ withholds(tab)? ─ yes ─▶ Shot::Withheld, pixels dropped

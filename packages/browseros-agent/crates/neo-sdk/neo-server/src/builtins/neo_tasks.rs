@@ -8,7 +8,7 @@ use neo_trace::{Delivery, Effect, TaskId};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, json};
 
-use crate::browser::PageRef;
+use crate::browser::{PageRef, TaskError, TaskRecord};
 use crate::dispatch::{
     ErrorCode, LeafError, Listing, Method, MethodSpec, OpCtx, OpFailure, OperationError,
     PageChange, PageTarget, RegistryBuilder, RegistryError, TaskKind,
@@ -85,9 +85,15 @@ impl Method for CreateTask {
                 "a task name must have at most 200 characters after trimming",
             ))));
         }
+        // A task counts as its creating run's own: it joins the family of the run's host task,
+        // whatever the tab scope, so turning task scope on later still shows the run's task
+        // what its runs created. A run with no host task makes a family root.
+        let created = match op.run().family() {
+            Some(family) => op.tabs().create_task_in(name, family),
+            None => op.tabs().create_task(name),
+        };
         future::ready(
-            op.tabs()
-                .create_task(name)
+            created
                 .map(|task| {
                     op.run().picked_task(&task, TaskKind::Created);
                     TaskPages {
@@ -121,9 +127,9 @@ impl Method for FetchTask {
 
     async fn call(&self, op: &OpCtx<Self>, input: FetchInput) -> Result<TaskPages, LeafError> {
         // A listing reconciles tabs closed outside Neo before returning task membership.
-        op.tabs().task(&input.id).map_err(OperationError::from)?;
+        usable_task(op, &input.id)?;
         let listing = op.race(op.run().view().list_pages()).await?;
-        let task = op.tabs().task(&input.id).map_err(OperationError::from)?;
+        let task = usable_task(op, &input.id)?;
         let pages: Vec<PageRef> = task
             .tabs
             .iter()
@@ -180,9 +186,9 @@ impl Method for NewPage {
         reason = "the task turn serializes opens against closes through child operations"
     )]
     async fn call(&self, op: &OpCtx<Self>, input: TaskInput) -> Result<Value, LeafError> {
-        let task = op.tabs().task(&input.task).map_err(OperationError::from)?;
+        let task = usable_task(op, &input.task)?;
         let _turn = op.race_classified(task.turn.lock()).await?;
-        op.tabs().task(&input.task).map_err(OperationError::from)?;
+        usable_task(op, &input.task)?;
         let value = op
             .invoke("context.newPage", json!({}))
             .await
@@ -192,9 +198,15 @@ impl Method for NewPage {
         let page = PageRef {
             tab: opened.page.tab,
         };
-        op.tabs()
-            .own(&page, &input.task)
-            .map_err(OperationError::from)?;
+        // A host may have named the task while the tab opened: then it joins no task, and the
+        // run is told the task is gone, as for a missing one.
+        if !op
+            .tabs()
+            .own_in_scope(&page, &input.task, op.run().scope())
+            .map_err(OperationError::from)?
+        {
+            return Err(OperationError::from(TaskError::NotFound(input.task)).into());
+        }
         op.report_page(&page, PageChange::Linked);
         Ok(value)
     }
@@ -222,14 +234,17 @@ impl Method for CloseTask {
         reason = "the task turn keeps a concurrent open from racing the final close"
     )]
     async fn call(&self, op: &OpCtx<Self>, input: TaskInput) -> Result<Value, LeafError> {
-        let task = op.tabs().task(&input.task).map_err(OperationError::from)?;
+        let task = usable_task(op, &input.task)?;
         let _turn = op.race_classified(task.turn.lock()).await?;
+        // Asked again with the turn held, and before each close: a host may name the task
+        // while this close waits, and a run with no task never closes a host's task.
+        usable_task(op, &input.task)?;
         let mut closed = Vec::new();
         let mut attempted = HashSet::new();
         let mut failure: Option<OpFailure> = None;
         let mut uncertain = false;
         loop {
-            let current = op.tabs().task(&input.task).map_err(OperationError::from)?;
+            let current = usable_task(op, &input.task)?;
             let Some(tab) = current
                 .tabs
                 .into_iter()
@@ -262,6 +277,18 @@ impl Method for CloseTask {
                 }
             }
         }
+    }
+}
+
+/// Task `id`, when this run's scope may use it. One it may not pick, open in or close is answered
+/// as a missing one, word for word, so the refusal reveals nothing about another task: a bound run
+/// uses only its family's tasks, and a run with no task under task scope never a host's.
+fn usable_task<M>(op: &OpCtx<M>, id: &TaskId) -> Result<TaskRecord, OperationError> {
+    let task = op.tabs().task(id)?;
+    if op.run().scope().may_use(&task) {
+        Ok(task)
+    } else {
+        Err(TaskError::NotFound(id.clone()).into())
     }
 }
 

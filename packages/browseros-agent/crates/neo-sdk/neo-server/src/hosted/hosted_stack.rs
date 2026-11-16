@@ -24,6 +24,9 @@ pub(super) struct HostedStack {
     service: Arc<RunService>,
     browser: Arc<BrowserLink>,
     trace: TraceSink,
+    /// The embedding's own settings: no host API changes them, so each holds its default
+    /// (`tabs.scope` is `task`). Its runs carry no task, so task scope binds none of them.
+    settings: Settings,
     shutdown: CancellationToken,
     completions: Mutex<Vec<Completion>>,
 }
@@ -104,6 +107,8 @@ impl HostedStack {
             orphan_grace: Defaults::ORPHAN_GRACE,
             // The host launched its own browser and keeps its own tabs.
             blank_tab: None,
+            // Its runs start as they always did: no tab-holders file, no wait for one.
+            holders: None,
         });
         tokio::spawn(App::hosted_housekeeping(
             TabJanitor::new(
@@ -115,7 +120,7 @@ impl HostedStack {
             ),
             trace.clone(),
             store.outputs().clone(),
-            settings,
+            settings.clone(),
             shutdown.clone(),
         ));
         time::timeout(Duration::from_secs(30), async {
@@ -129,6 +134,7 @@ impl HostedStack {
             service,
             browser,
             trace,
+            settings,
             shutdown,
             completions: Mutex::default(),
         }))
@@ -150,6 +156,7 @@ impl HostedStack {
                 &self.browser,
                 self.shutdown.clone(),
                 timeout,
+                self.settings.tabs_scope(),
             )?;
             completions.push(run.completion());
             run

@@ -30,9 +30,9 @@ pub struct OperationId {
     pub seq: u32,
 }
 
-/// The host's own id for one `run` call (`requestId`, e.g. zuzu's tool-call id). A repeat of it
-/// never runs again: admission replays the first run instead, per task when the run has one,
-/// else across Neo.
+/// The host's own id for one `run` call (`requestId`, e.g. the host's tool-call id), scoped to
+/// its task when present, otherwise across Neo. While its request history is retained,
+/// admission replays or refuses a repeat without executing it.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct RequestId(String);
 

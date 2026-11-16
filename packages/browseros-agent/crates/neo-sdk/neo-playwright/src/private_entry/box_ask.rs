@@ -28,6 +28,24 @@ pub(crate) struct BoxAsk {
     /// Every `<iframe>` on the way down to the box's frame is visible: a box in a hidden frame
     /// does not show either.
     pub(crate) frame_visible: bool,
+    /// Where the page side leaves the page before its checks (ruling R62).
+    #[serde(default)]
+    pub(crate) scroll: LookScroll,
+}
+
+/// The page side's own part of the look's scroll. Rust's first step, the browser's own instant
+/// scroll of the whole box (ruling R61), always runs before the look.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum LookScroll {
+    /// Where the first step left it.
+    #[default]
+    AsItIs,
+    /// The second step: the box's centre brought to the middle of its view at once, in its frame
+    /// and every frame above, before the checks. Rust asks for it only when the centre is still
+    /// out of view after the first step, which shows a box larger than its view by its nearest
+    /// edge.
+    Centre,
 }
 
 /// The look's answer for one box (`value` payload of the `look` request): its facts whenever it
@@ -42,6 +60,21 @@ pub(crate) struct Looked {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub(crate) refusal: Option<LookRefused>,
+    /// Ruling R64: the box's `maxlength` is another than the approved one (`expect.maxLength`),
+    /// and the value fits both, or the look carries no length (the check call's): no refusal for
+    /// the limit. Absent otherwise; a moved limit the value does not fit is `boxChanged`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    #[ts(optional, as = "Option<bool>")]
+    pub(crate) max_length_moved: bool,
+}
+
+/// Serde's skip test for a flag that is absent from the wire when false.
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde's skip_serializing_if passes the field by reference"
+)]
+fn is_false(flag: &bool) -> bool {
+    !*flag
 }
 
 /// The first check a box fails, and for `boxChanged` the fact that differs.

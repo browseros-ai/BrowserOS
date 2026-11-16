@@ -1,10 +1,12 @@
 //! The tabs that took a host's private fill, kept by target id in a file beside the trace, so a
 //! Neo restart while the browser keeps those tabs still takes no picture of them (protected-fill
-//! ruling R45; design section 10.3).
+//! ruling R45; design section 10.3). Written only by a fill made under the host's
+//! `fill.pictures: never` (ruling R58); read back at every start whatever the setting, since the
+//! mask's search for a moved box needs it too (ruling R59).
 //!
 //! ```text
-//!  a fill, before its first character ─ remember(tab, target) ─ one line, synced; a write that
-//!                                        fails refuses the fill, nothing typed
+//!  a fill under `never`, before its first character ─ remember(tab, target) ─ one line,
+//!                                        synced; a write that fails refuses the fill, nothing typed
 //!  Neo starts, the browser connects ─ live(the browser's own tab list, unfiltered) ─ the tabs
 //!                                     whose targets it names are marked in the entry's own
 //!                                     set, the rest dropped from the file

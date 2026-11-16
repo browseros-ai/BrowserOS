@@ -75,7 +75,7 @@ pub(crate) enum NeoHome {
     NotNeos,
 }
 
-/// Where the host listener binds (design D1). zuzu points these at its shared `/run/mirror-neo/`.
+/// Where the host listener binds. A host can place the socket and token in a shared directory.
 /// A plain data bag.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct HostApiConfig {
@@ -381,8 +381,8 @@ mod tests {
             ("CLAW_LOG", "debug"),
             ("CLAW_NATIVE_BROWSEROS_VERSION", " 0.52.0.1 "),
             ("BROWSERCLAW_CONFIG_FILE", "/etc/neo.toml"),
-            ("CLAW_HOST_SOCKET", "/run/mirror-neo/host.sock"),
-            ("CLAW_HOST_TOKEN_FILE", "/run/mirror-neo/token"),
+            ("CLAW_HOST_SOCKET", "/run/host-neo/host.sock"),
+            ("CLAW_HOST_TOKEN_FILE", "/run/host-neo/token"),
             ("CLAW_HOST_TCP", "127.0.0.1:9300"),
             ("CLAW_XVNC_ADDR", " 127.0.0.1:5901 "),
             ("NEO_SCREEN", "1280x800"),
@@ -402,11 +402,11 @@ mod tests {
         assert_eq!(
             config.host_api,
             HostApiConfig {
-                socket: PathBuf::from("/run/mirror-neo/host.sock"),
-                token_file: Some(PathBuf::from("/run/mirror-neo/token")),
+                socket: PathBuf::from("/run/host-neo/host.sock"),
+                token_file: Some(PathBuf::from("/run/host-neo/token")),
                 tcp: Some(tcp),
             },
-            "zuzu's shared directory layout"
+            "the host's shared directory layout"
         );
         let xvnc: SocketAddr = "127.0.0.1:5901".parse()?;
         assert_eq!(

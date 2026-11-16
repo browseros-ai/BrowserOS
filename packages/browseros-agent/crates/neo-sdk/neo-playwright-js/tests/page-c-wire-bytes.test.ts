@@ -10,12 +10,20 @@ for (const scenario of fixture.scenarios) {
     const actual = await recordPointerWire(scenario.script, (call) => {
       // The idle binding pump has no reply in the recording; disposal runs beside it.
       if (call.name === 'events.next') return new Promise(() => {})
+      // Neo's own read of a page first seen mid-run (the new page's tree) is not in this
+      // recording, which predates it; none of its scenarios reads frames itself.
+      if (call.name === 'page.frames') return null
       const exchange = scenario.exchanges[next++]
       if (!exchange) throw new Error('the prelude sent an extra engine call')
       return JSON.parse(exchange.reply)
     })
     expect(next).toBe(scenario.exchanges.length)
-    expect(actual).toEqual({
+    expect({
+      ...actual,
+      exchanges: actual.exchanges.filter(
+        (exchange) => exchange.op !== 'page.frames',
+      ),
+    }).toEqual({
       exchanges: scenario.exchanges,
       result: scenario.result,
     })

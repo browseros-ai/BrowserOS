@@ -1,5 +1,5 @@
 {
-  "protocol": 38,
+  "protocol": 44,
   "callFunction": "function (call, root, ...nodes) { const probe = globalThis.__neoProbe; return probe ? probe.call(call, root ?? this, nodes) : { kind: \"uninstalled\" }; }",
   "replyKinds": {
     "describe": [
@@ -107,7 +107,8 @@
     ]
   },
   "byHandle": [
-    "pinned"
+    "pinned",
+    "privateHosts"
   ],
   "anyRequest": [
     "error",
@@ -196,6 +197,14 @@
     },
     {
       "op": "privateShown"
+    },
+    {
+      "op": "privateShown",
+      "walk": true
+    },
+    {
+      "op": "privateHosts",
+      "limit": 16
     },
     {
       "op": "webStorage",
@@ -403,7 +412,8 @@
             }
           ]
         }
-      }
+      },
+      "look": false
     },
     {
       "op": "frameBox",
@@ -413,7 +423,8 @@
       "point": {
         "x": 40.5,
         "y": 12
-      }
+      },
+      "look": true
     },
     {
       "op": "edit",
@@ -534,7 +545,8 @@
         "length": 16,
         "cut": false,
         "keys": false,
-        "frameVisible": true
+        "frameVisible": true,
+        "scroll": "asItIs"
       }
     },
     {
@@ -552,7 +564,8 @@
         },
         "cut": true,
         "keys": false,
-        "frameVisible": true
+        "frameVisible": true,
+        "scroll": "centre"
       }
     },
     {
@@ -561,7 +574,8 @@
       "look": {
         "cut": false,
         "keys": true,
-        "frameVisible": true
+        "frameVisible": true,
+        "scroll": "asItIs"
       }
     },
     {
@@ -593,6 +607,15 @@
       "op": "private",
       "pin": 3,
       "step": {
+        "kind": "compare",
+        "text": "4242 4242",
+        "spaced": true
+      }
+    },
+    {
+      "op": "private",
+      "pin": 3,
+      "step": {
         "kind": "readBack"
       }
     },
@@ -608,6 +631,14 @@
       "pin": 3,
       "step": {
         "kind": "markFocused"
+      }
+    },
+    {
+      "op": "private",
+      "pin": 6,
+      "step": {
+        "kind": "drawn",
+        "text": "CANARY-example"
       }
     },
     {
@@ -783,6 +814,17 @@
       "frameVisible": false,
       "read": {
         "kind": "boundingBox"
+      }
+    },
+    {
+      "op": "read",
+      "target": {
+        "pin": 3
+      },
+      "strictness": "strict",
+      "frameVisible": true,
+      "read": {
+        "kind": "viewCentre"
       }
     },
     {
@@ -1247,19 +1289,19 @@
   "replies": [
     {
       "kind": "described",
-      "protocol": 38,
+      "protocol": 44,
       "seq": 0,
       "url": "https://example.com/"
     },
     {
       "kind": "described",
-      "protocol": 38,
+      "protocol": 44,
       "seq": 347,
       "url": "https://pay.example/frame"
     },
     {
       "kind": "described",
-      "protocol": 38,
+      "protocol": 44,
       "seq": 512340,
       "url": "https://example.com/",
       "retired": 0
@@ -1400,12 +1442,25 @@
         "x": 8,
         "y": 120
       },
-      "hit": null
+      "hit": null,
+      "unseen": false
     },
     {
       "kind": "frameBox",
       "origin": null,
-      "hit": "done"
+      "hit": "done",
+      "unseen": false
+    },
+    {
+      "kind": "frameBox",
+      "origin": {
+        "x": 8,
+        "y": 120
+      },
+      "hit": {
+        "hitTargetDescription": "<html></html>"
+      },
+      "unseen": true
     },
     {
       "kind": "value",
@@ -1482,6 +1537,23 @@
       "kind": "value",
       "value": {
         "facts": {
+          "origin": "https://pay.example",
+          "type": "text",
+          "autocomplete": "cc-csc",
+          "maxLength": 3,
+          "inputMode": "numeric",
+          "name": "cvc",
+          "id": "",
+          "sized": true,
+          "empty": true
+        },
+        "maxLengthMoved": true
+      }
+    },
+    {
+      "kind": "value",
+      "value": {
+        "facts": {
           "origin": "https://bank.example",
           "type": "password",
           "autocomplete": "current-password",
@@ -1536,10 +1608,29 @@
     {
       "kind": "value",
       "value": {
+        "kind": "compared",
+        "holds": false,
+        "contains": true
+      }
+    },
+    {
+      "kind": "value",
+      "value": {
         "kind": "readBack",
         "state": "left",
         "heldAtLastInput": true,
-        "moving": false
+        "moving": false,
+        "drawing": "none"
+      }
+    },
+    {
+      "kind": "value",
+      "value": {
+        "kind": "readBack",
+        "state": "holds",
+        "heldAtLastInput": true,
+        "moving": false,
+        "drawing": "drawn"
       }
     },
     {
@@ -1553,6 +1644,13 @@
       "value": {
         "kind": "markedFocused",
         "marked": true
+      }
+    },
+    {
+      "kind": "value",
+      "value": {
+        "kind": "drawn",
+        "drawn": false
       }
     },
     {

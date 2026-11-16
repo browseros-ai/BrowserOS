@@ -1,4 +1,4 @@
-//! The host side as zuzu and the door meet it: the real neo-http behind the real
+//! The host side as the host and the door meet it: the real neo-http behind the real
 //! `host_service` auth on a temp Unix socket, over the fake browser and a real trace store.
 
 use std::error::Error;
@@ -9,7 +9,10 @@ use std::time::Duration;
 
 use browseros_core::{NativeCapabilities, TabId};
 use neo_http::{ChecksPicture, Settings, SettingsDefaults, TookPrivateText};
-use neo_trace::{Effect, OperationId, RedactionLimits, Redactor, RunId, TraceStore, WriterConfig};
+use neo_trace::{
+    Effect, EpochMillis, OperationId, RedactionLimits, Redactor, RunEnded, RunId, RunStarted,
+    RunStatus, RunTabsScope, Screenshots, TraceStore, Values, WriterConfig,
+};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -33,6 +36,7 @@ use neo_playwright::FileAccess;
 use neo_trace::TraceSink;
 
 mod fill;
+mod hand_back;
 
 use self::fill::{ScriptedEntry, register_controls};
 
@@ -73,9 +77,18 @@ struct Host {
 }
 
 /// The scripted entry's answer to which tabs took a fill, as the app wires the real entry's.
-fn entry_took(entry: &Arc<ScriptedEntry>) -> TookPrivateText {
+/// The host's `fill.pictures` as the app wires it for the fill's start (ruling R58).
+fn settings_pictures_never(settings: &Settings) -> super::fill_service::PicturesNever {
+    let settings = settings.clone();
+    Arc::new(move || settings.fill_pictures_never())
+}
+
+/// The scripted entry's tabs as the app wires the camera's answer (ruling R58): withheld only
+/// while the host's `fill.pictures` is `never`.
+fn entry_took(entry: &Arc<ScriptedEntry>, settings: &Settings) -> TookPrivateText {
     let entry = Arc::clone(entry);
-    Arc::new(move |tab| entry.took(tab))
+    let settings = settings.clone();
+    Arc::new(move |tab| settings.fill_pictures_never() && entry.took(tab))
 }
 
 /// The scripted entry's reading of what a tab shows, as the app wires `picture_check`.
@@ -135,10 +148,16 @@ impl Host {
             cdp_port: 0,
             settings_file: dir.path().join("settings.json"),
             settings_defaults: SettingsDefaults::default(),
+            tabs: Arc::clone(&tabs),
         };
         let sink = inputs.sink.clone();
         let host = HostApi::bind(&config, inputs).await?;
         let settings = host.settings().clone();
+        // Mirror App's initial policy handoff so tokenless starts exercise real persisted records.
+        settings.watch({
+            let sink = sink.clone();
+            move |settings| sink.record_policy(settings.trace_policy())
+        });
         let takeover = Arc::new(TakeoverLock::default());
         let shutdown = CancellationToken::new();
         // The door as app.rs builds it for the fill: the takeover rule, the two internal
@@ -170,8 +189,9 @@ impl Host {
             takeover: Arc::clone(&takeover),
             ledger: FillLedger::open(dir.path(), || Duration::from_hours(7 * 24)).await,
             filled: FilledTabs::open(dir.path()).await,
+            pictures_never: settings_pictures_never(&settings),
             shutdown: shutdown.clone(),
-            took: entry_took(&entry),
+            took: entry_took(&entry, &settings),
             checks: entry_checks(&entry),
         });
         let serving = tokio::spawn(host.with_fill(fill).serve(
@@ -382,7 +402,7 @@ async fn without_a_usable_token_there_is_no_host_socket() -> TestResult {
 /// The browser restarts a killed server on its own, and no host notices: what the host set must
 /// come back from the file before anything reads it.
 #[tokio::test]
-async fn a_setting_survives_a_restart_and_needs_the_host_api() -> TestResult {
+async fn a_setting_survives_a_restart_with_or_without_the_host_api() -> TestResult {
     let host = Host::start(Some(TOKEN)).await?;
     host.until_serving().await?;
     let patch = json!({ "tabs": { "idleCloseSeconds": 300 } });
@@ -426,14 +446,89 @@ async fn a_setting_survives_a_restart_and_needs_the_host_api() -> TestResult {
     let without = Host::start_on(FakeCdp::new(), dir, None).await?;
     assert_eq!(
         without.settings.tab_idle_close(),
-        Duration::from_mins(30),
-        "with no host API nobody could see or change a saved value, so the defaults apply"
+        Duration::from_secs(300),
+        "saved settings apply even when the host API is disabled"
     );
     let dir = without.stop().await?;
     assert!(
         dir.path().join("settings.json").exists(),
         "a start without a host API leaves the host's file alone"
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn saved_recording_settings_reach_the_writer_without_a_usable_token() -> TestResult {
+    for token in [None, Some("too-short")] {
+        let dir = tempfile::tempdir()?;
+        fs::write(
+            dir.path().join("settings.json"),
+            r#"{"trace":{"values":"off","screenshots":"off"}}"#,
+        )
+        .await?;
+        let host = Host::start_on(FakeCdp::new(), dir, token).await?;
+        assert!(!host.socket.exists(), "no usable token means no host API");
+        assert_eq!(host.settings.trace_policy().values, Values::Off);
+        assert_eq!(host.settings.trace_policy().screenshots, Screenshots::Off);
+        let run = RunId::new();
+        host.sink.run_started(RunStarted {
+            id: run,
+            code: "startup-settings-canary".into(),
+            request_id: None,
+            task_id: None,
+            host_data: None,
+            tabs_scope: RunTabsScope::Browser,
+            at: EpochMillis::now(),
+        });
+        host.sink.run_ended(RunEnded {
+            id: run,
+            status: RunStatus::Ok,
+            error: None,
+            result: None,
+            replay: None,
+            at: EpochMillis::now(),
+        });
+        host.sink.flush().await?;
+        let store = TraceStore::open(&host.dir.path().join("trace.db")).await?;
+        let record = store.run(run).await?.ok_or("recorded run")?;
+        assert_eq!(
+            record.summary.values.as_deref(),
+            Some("off"),
+            "the first run follows the loaded policy"
+        );
+        assert!(record.code.is_none(), "the writer never stored the canary");
+        host.stop().await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn recording_fallbacks_from_a_bad_file_survive_an_unrelated_patch() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    fs::write(dir.path().join("settings.json"), r#"{"trace":"#).await?;
+    let host = Host::start_on(FakeCdp::new(), dir, Some(TOKEN)).await?;
+    host.until_serving().await?;
+    let before = request(&host.socket, "GET", "/v1/settings", Some(TOKEN), None).await?;
+    assert_eq!(before.body["settings"]["trace"]["values"], "off");
+    assert_eq!(before.body["settings"]["trace"]["screenshots"], "off");
+    let changed = request(
+        &host.socket,
+        "PATCH",
+        "/v1/settings",
+        Some(TOKEN),
+        Some(&json!({"tabs":{"idleCloseSeconds":300}})),
+    )
+    .await?;
+    assert_eq!(changed.status, 200, "{changed:?}");
+    let saved: Value =
+        serde_json::from_slice(&fs::read(host.dir.path().join("settings.json")).await?)?;
+    assert_eq!(saved["trace"], json!({"values":"off","screenshots":"off"}));
+    let dir = host.stop().await?;
+    let again = Host::start_on(FakeCdp::new(), dir, Some(TOKEN)).await?;
+    assert_eq!(again.settings.trace_policy().values, Values::Off);
+    assert_eq!(again.settings.trace_policy().screenshots, Screenshots::Off);
+    assert_eq!(again.settings.tab_idle_close(), Duration::from_secs(300));
+    again.stop().await?;
     Ok(())
 }
 
