@@ -252,13 +252,19 @@ export const neoRunCases: ContractCase[] = [
           { timeoutMs: 30_000 },
         )
         const mcp = await McpSession.connect(baseUrl, 'neo-run-contract')
+        // Until its engine answers, claw-server lists its own fallback, "run is unavailable: …".
+        // Wait for that to go rather than for the SDK's opening words: the SDK owns its
+        // description and rewords it, and this suite pins claw-server's text only.
         await waitUntil(
-          async () =>
-            (await mcp.listTools())
-              .find((tool) => tool.name === 'run')
-              ?.description?.startsWith(
-                "Runs JavaScript against the user's browser",
-              ) ?? false,
+          async () => {
+            const description = (await mcp.listTools()).find(
+              (tool) => tool.name === 'run',
+            )?.description
+            return (
+              description !== undefined &&
+              !description.startsWith('run is unavailable')
+            )
+          },
           'the SDK run definition',
           { timeoutMs: 30_000 },
         )

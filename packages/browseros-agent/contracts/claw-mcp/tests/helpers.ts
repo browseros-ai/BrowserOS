@@ -25,6 +25,24 @@ export function expectError(
   return textOf(result)
 }
 
+/**
+ * The page id from a `tabs` reply. Desktop no longer lists `tabs`, so no contract case here
+ * calls this; the CAPTCHA test bed's hosted claw-server driver
+ * (`crates/neo-sdk/neo-captcha/testbed/e2e/claw-server-page.ts`) imports it, and the SDK gate
+ * loads that file.
+ */
+export function parsePageId(result: McpToolResult): number {
+  const structured = result.structuredContent as { page?: number } | undefined
+  if (typeof structured?.page === 'number') return structured.page
+  const match = textOf(result).match(/opened page (\d+)/)
+  if (!match) {
+    throw new Error(
+      `could not find a page id in: ${textOf(result).slice(0, 200)}`,
+    )
+  }
+  return Number(match[1])
+}
+
 /** Condition-based waiting — the suite never sleeps blind. */
 export async function waitUntil(
   condition: () => Promise<boolean> | boolean,

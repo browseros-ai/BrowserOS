@@ -149,6 +149,7 @@ impl TestRig {
                 solver: None,
                 claims: Arc::default(),
                 playwright: Arc::clone(&playwright),
+                script_cdp: false,
             },
         )?;
         Ok(Arc::new(Dispatcher::new(
