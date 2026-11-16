@@ -878,6 +878,38 @@ body {
   background: rgb(255 255 255 / 0.03);
 }
 
+/* The meter's Details dialog (components/cockpit/UltrafastDetailsDialog.tsx). */
+.em.em-dialog {
+  border-radius: 12px;
+}
+.em-tabs {
+  background: rgb(255 255 255 / 0.06);
+  box-shadow: inset 0 0 0 1px var(--em-line);
+}
+.em-site-bar {
+  background: rgb(255 255 255 / 0.1);
+}
+.em-site-bar i {
+  background: linear-gradient(90deg, #2f6fe0, #ffffff);
+  box-shadow: 0 0 10px rgb(156 192 255 / 0.8);
+}
+.em-tile[data-glow] {
+  box-shadow:
+    inset 0 0 0 1px rgb(143 180 255 / 0.45),
+    0 0 22px -8px rgb(82 144 255 / 0.8);
+}
+.em-bar[data-purchase] {
+  box-shadow: inset 0 0 0 1.5px #c8ffe3;
+}
+.em-pill {
+  background: rgb(82 144 255 / 0.16);
+  border-color: rgb(143 180 255 / 0.35);
+  color: #cfe0ff;
+}
+.em-pill svg {
+  color: #9cc0ff;
+}
+
 /* Motion only for readers who allow it; everyone else gets the still meter. */
 @media (prefers-reduced-motion: no-preference) {
   .em::before {

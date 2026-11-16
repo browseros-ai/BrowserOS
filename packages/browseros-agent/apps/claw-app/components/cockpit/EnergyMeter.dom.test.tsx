@@ -5,7 +5,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
-import type { PlanSavings } from '@browseros/claw-api'
+import type { PlanSavings, PlanSavingsPeriod } from '@browseros/claw-api'
 import type { UseQueryResult } from '@tanstack/react-query'
 import { parseHTML } from 'linkedom'
 import { act } from 'react'
@@ -35,6 +35,28 @@ const { EnergyMeter } = await import('./EnergyMeter')
 const { SavingsHero } = await import('@/screens/pro/SavingsHero')
 const { MemoryRouter } = await import('react-router')
 
+function period(over: Partial<PlanSavingsPeriod> = {}): PlanSavingsPeriod {
+  return {
+    tokensSaved: 0,
+    runs: 0,
+    pagesRead: 0,
+    durationMs: 0,
+    siteTasks: 0,
+    siteTasksFinished: 0,
+    topSites: [],
+    timeSavedMs: 0,
+    tasksFinished: 0,
+    runTimes: [],
+    ...over,
+  }
+}
+
+const PERIODS = {
+  since: period({ tokensSaved: 253_678, runs: 5, pagesRead: 38 }),
+  last30Days: period({ tokensSaved: 253_678, runs: 5, pagesRead: 38 }),
+  last7Days: period({ tokensSaved: 68_000, runs: 4, pagesRead: 11 }),
+}
+
 const SAVINGS: PlanSavings = {
   totals: { durationMs: 80_000, pagesRead: 38, tokensSaved: 253_678 },
   tasks: 5,
@@ -45,6 +67,7 @@ const SAVINGS: PlanSavings = {
     runTimes: [],
     neoStepShare: 64,
     fastestRunMs: 3_095,
+    periods: PERIODS,
   },
 }
 
@@ -165,7 +188,13 @@ describe('the ultrafast meter', () => {
   it('plays the burst for a milestone crossed while Home is open', async () => {
     const at = (tokensSaved: number): PlanSavings => ({
       ...SAVINGS,
-      meter: { ...SAVINGS.meter, since: 1, runTimes: [], tokensSaved },
+      meter: {
+        ...SAVINGS.meter,
+        since: 1,
+        runTimes: [],
+        tokensSaved,
+        periods: PERIODS,
+      },
     })
     await render(query({ data: at(61_000) }))
     expect(text()).toContain('39k to go to 100k')
@@ -202,7 +231,7 @@ describe('the ultrafast meter', () => {
           ...SAVINGS,
           tasks: 0,
           totals: { durationMs: 0, pagesRead: 0, tokensSaved: 0 },
-          meter: { since: 1, tokensSaved: 0, runTimes: [] },
+          meter: { since: 1, tokensSaved: 0, runTimes: [], periods: PERIODS },
         },
       }),
     )
@@ -222,6 +251,7 @@ describe('the ultrafast meter', () => {
         since: 1,
         runTimes: [],
         tokensSaved: 3_240_000,
+        periods: PERIODS,
       },
     }
     await act(async () =>

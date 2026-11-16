@@ -136,6 +136,19 @@ const ranOn = (
     pursue,
   }) as SessionSummary
 
+const emptyPeriod = {
+  tokensSaved: 0,
+  runs: 0,
+  pagesRead: 0,
+  durationMs: 0,
+  siteTasks: 0,
+  siteTasksFinished: 0,
+  topSites: [],
+  timeSavedMs: 0,
+  tasksFinished: 0,
+  runTimes: [],
+}
+
 const SAVINGS: PlanSavings = {
   totals: { durationMs: 468_000, pagesRead: 141, tokensSaved: 972_900 },
   tasks: 23,
@@ -167,6 +180,11 @@ const SAVINGS: PlanSavings = {
     runTimes: [],
     neoStepShare: 64,
     fastestRunMs: 3_095,
+    periods: {
+      since: emptyPeriod,
+      last30Days: emptyPeriod,
+      last7Days: emptyPeriod,
+    },
   },
 }
 

@@ -38,13 +38,13 @@ import {
   tokensSavedSinceUltrafast,
   weekRuns,
 } from './energy-meter.helpers'
-import { SavingsDialog } from './SavingsCard'
 import { timeSavedAmount } from './savings.helpers'
+import { UltrafastDetailsDialog } from './UltrafastDetailsDialog'
 
 const RADIUS = 104
 const CIRCUMFERENCE = 2 * Math.PI * RADIUS
-const INK_2 = 'text-[rgb(214_225_255/0.78)]'
-const INK_3 = 'text-[rgb(190_205_245/0.58)]'
+export const INK_2 = 'text-[rgb(214_225_255/0.78)]'
+export const INK_3 = 'text-[rgb(190_205_245/0.58)]'
 
 export const TRY_TASK =
   'On google.com/travel/flights, search one-way flights from Chennai to Singapore on 20 December and sort by price.'
@@ -91,10 +91,18 @@ export function EnergyMeter({
   }
   const plan = savings.data
   if (plan.tasks === 0) {
-    return <FirstRun tokens={tokens} stats={stats} className={className} />
+    return (
+      <FirstRun
+        savings={plan}
+        tokens={tokens}
+        stats={stats}
+        className={className}
+      />
+    )
   }
   return (
     <Meter
+      savings={plan}
       meter={meter}
       tokens={tokens}
       pages={plan.totals.pagesRead}
@@ -106,6 +114,7 @@ export function EnergyMeter({
 }
 
 function Meter({
+  savings,
   meter,
   tokens,
   pages,
@@ -113,6 +122,7 @@ function Meter({
   stats,
   className,
 }: {
+  savings: PlanSavings
   meter: PlanSavingsMeter
   tokens: number
   pages: number
@@ -207,17 +217,23 @@ function Meter({
             </div>
           </div>
         </div>
-        <Fold stats={stats} className="col-span-full w-full" />
+        <Fold
+          savings={savings}
+          stats={stats}
+          className="col-span-full w-full"
+        />
       </section>
     </div>
   )
 }
 
 function FirstRun({
+  savings,
   tokens,
   stats,
   className,
 }: {
+  savings: PlanSavings
   tokens: number
   stats: CockpitStats | undefined
   className?: string
@@ -281,6 +297,7 @@ function FirstRun({
           </span>
         </div>
         <Fold
+          savings={savings}
           stats={stats}
           className="col-span-full @2xl:px-[30px] px-5 pb-[22px]"
         />
@@ -291,7 +308,7 @@ function FirstRun({
 
 // ---------------------------------------------------------------------------
 
-function Mark() {
+export function Mark() {
   return (
     <span className="em-mark inline-flex items-center gap-2 font-extrabold text-[15px] text-white italic tracking-[-0.01em]">
       <Zap aria-hidden className="size-[18px]" />
@@ -300,21 +317,22 @@ function Mark() {
   )
 }
 
-function Ring({
+const RING_SIZES = {
+  large: { box: '@2xl:size-[240px] size-[220px]', number: 'text-[56px]' },
+  small: { box: 'size-[200px]', number: 'text-[48px]' },
+  dialog: { box: 'size-[168px]', number: 'text-[40px]' },
+} as const
+
+export function Ring({
   tokens,
   size = 'large',
 }: {
   tokens: number
-  size?: 'large' | 'small'
+  size?: keyof typeof RING_SIZES
 }) {
   const fraction = Math.min(1, tokens / nextMilestone(tokens))
   return (
-    <div
-      className={cn(
-        'relative',
-        size === 'small' ? 'size-[200px]' : '@2xl:size-[240px] size-[220px]',
-      )}
-    >
+    <div className={cn('relative', RING_SIZES[size].box)}>
       <svg
         aria-hidden
         viewBox="0 0 240 240"
@@ -348,7 +366,7 @@ function Ring({
         <span
           className={cn(
             'em-big font-extrabold leading-[0.92] tracking-[-0.045em]',
-            size === 'small' ? 'text-[48px]' : 'text-[56px]',
+            RING_SIZES[size].number,
           )}
         >
           <CountUp to={tokens} format={meterTokens} />
@@ -430,9 +448,11 @@ function Tile({ value, label }: { value: ReactNode; label: string }) {
 }
 
 function Fold({
+  savings,
   stats,
   className,
 }: {
+  savings: PlanSavings
   stats: CockpitStats | undefined
   className?: string
 }) {
@@ -473,29 +493,27 @@ function Fold({
         </TooltipTrigger>
         <TooltipContent>{HOW_WE_COUNT}</TooltipContent>
       </Tooltip>
-      {stats ? (
-        <SavingsDialog
-          stats={stats}
-          trigger={
-            <button
-              type="button"
-              className={cn(
-                'inline-flex items-center gap-1.5 font-semibold text-[13px]',
-                INK_2,
-              )}
-            >
-              Details
-              <ArrowRight aria-hidden className="size-3.5" />
-            </button>
-          }
-        />
-      ) : null}
+      <UltrafastDetailsDialog
+        savings={savings}
+        trigger={
+          <button
+            type="button"
+            className={cn(
+              'inline-flex items-center gap-1.5 font-semibold text-[13px]',
+              INK_2,
+            )}
+          >
+            Details
+            <ArrowRight aria-hidden className="size-3.5" />
+          </button>
+        }
+      />
     </div>
   )
 }
 
 /** Counts up to the number once on mount; readers who prefer less motion see it at once. */
-function CountUp({
+export function CountUp({
   to,
   format = (value: number) => String(Math.round(value)),
 }: {
