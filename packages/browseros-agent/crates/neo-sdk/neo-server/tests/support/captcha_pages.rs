@@ -103,6 +103,14 @@ impl Drop for CaptchaPages {
     }
 }
 
+/// neo-captcha's own `PerimeterX` pages, poisoned after their setup like every page here.
+/// The poison goes before the document's last `</body>`.
+fn testbed(page: &str) -> String {
+    let end = page.rfind("</body>").unwrap_or(page.len());
+    let (head, tail) = page.split_at(end);
+    format!("{head}<script>{POISON}</script>{tail}")
+}
+
 fn html(title: &str, body: &str, setup: &str) -> String {
     format!(
         "<!doctype html><title>{title}</title><body>{body}<script>{setup}\n{POISON}</script></body>"
@@ -169,6 +177,13 @@ document.getElementById('gate').attachShadow({mode: 'closed'}).innerHTML =
             r#"document.getElementById('host').attachShadow({mode: 'open'}).innerHTML =
   '<div class="h-captcha" data-sitekey="10000000-ffff-ffff-ffff-000000000001" style="width:300px;height:100px">hCaptcha</div>';"#,
         ),
+        // PerimeterX's press-and-hold check over the page, and its frame waiting hidden.
+        "/perimeterx" => testbed(include_str!(
+            "../../../neo-captcha/testbed/fixtures/pages/perimeterx-modal.html"
+        )),
+        "/perimeterx-waiting" => testbed(include_str!(
+            "../../../neo-captcha/testbed/fixtures/pages/perimeterx-waiting.html"
+        )),
         _ => return None,
     })
 }

@@ -17,10 +17,9 @@
 //! a read or a delete outside the directory.
 
 use std::collections::HashMap;
-use std::io;
 use std::path::{Path, PathBuf};
-use std::str;
 use std::sync::Arc;
+use std::{io, str};
 
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;

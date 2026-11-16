@@ -1,0 +1,4 @@
+await page.goto(args.base + '/links.html');
+const links = await page.locator('a').evaluateAll(anchors => anchors.map(a => ({text:a.textContent,href:a.getAttribute('href')})));
+assert(links.some(link => link.href === '/form.html'), 'anchor read includes the fixture form link', {links});
+return {links};

@@ -76,4 +76,4 @@ pub(crate) use op_page::OpPage;
 pub(crate) use page_handle::PageHandle;
 pub(crate) use page_op::PageOp;
 pub(crate) use page_registry::PageRegistry;
-pub(crate) use page_state::PageState;
+pub(crate) use page_state::{LastCover, PageState};

@@ -112,6 +112,8 @@ pub(crate) struct EntryRun<'a> {
     typed: Vec<usize>,
     /// How each box's field drawing figured in its entry, from its read-back (rulings R55, R56).
     drawings: Vec<Drawing>,
+    /// The fields whose box Neo typed into after a look that found its limit moved (ruling R64).
+    max_length_moved: Vec<usize>,
     /// The main frame's navigations since admission, raced with every look and the read-back.
     navigation: Option<MainNavigation>,
 }
@@ -124,6 +126,7 @@ impl<'a> EntryRun<'a> {
             sending: Sending::NotYet,
             typed: vec![0; fields],
             drawings: vec![Drawing::None; fields],
+            max_length_moved: Vec::new(),
             navigation: None,
         }
     }
@@ -195,6 +198,11 @@ impl<'a> EntryRun<'a> {
                 .look(&page, field, url, moved)
                 .await
                 .map_err(Stopped::at(at))?;
+            // Ruling R64: this look, right before the box, says whether its limit moved; a move
+            // during the box's own typing is the read-back's to decide.
+            if looked.max_length_moved {
+                self.max_length_moved.push(at);
+            }
             match self
                 .type_box(&sent, &page, &mut input, at, field, looked)
                 .await
@@ -747,6 +755,7 @@ impl<'a> EntryRun<'a> {
             typed: self.typed,
             error: None,
             drawings: self.drawings,
+            max_length_moved: self.max_length_moved,
         }
     }
 
@@ -757,6 +766,7 @@ impl<'a> EntryRun<'a> {
             sending,
             typed,
             drawings,
+            max_length_moved,
             ..
         } = self;
         let Stop { error } = stop;
@@ -775,12 +785,13 @@ impl<'a> EntryRun<'a> {
             typed,
             error: Some(error),
             drawings,
+            max_length_moved,
         }
     }
 }
 
 /// The input types a browser applies `maxlength` to (ruling R23): a cut applies to these only.
-fn cuts(kind: &str) -> bool {
+pub(crate) fn cuts(kind: &str) -> bool {
     matches!(
         kind,
         "text" | "search" | "url" | "tel" | "email" | "password"
@@ -800,6 +811,7 @@ fn burst_code(failure: &input::BurstFailure) -> EntryCode {
         input::BurstFailure::Expired => EntryCode::RunTimeout,
         input::BurstFailure::Cdp(error) => match ErrorCode::from_core(error) {
             ErrorCode::TargetClosed => EntryCode::TargetClosed,
+            ErrorCode::TargetCrashed => EntryCode::TargetCrashed,
             ErrorCode::BrowserDisconnected => EntryCode::BrowserDisconnected,
             _ => EntryCode::Internal,
         },
@@ -942,11 +954,23 @@ const PRIVATE_TAB_MESSAGE: &str = "This tab took a private fill, and the host se
 mod tests {
     use std::error::Error;
 
-    use browseros_core::TabId;
+    use browseros_cdp::CdpError;
+    use browseros_core::{CoreError, TabId};
     use neo_trace::ErrorOwner;
 
     use super::{PRIVATE_TAB_MESSAGE, PrivateTabs};
+    use crate::input::BurstFailure;
+    use crate::private_entry::EntryCode;
     use crate::{Playwright, test_env};
+
+    #[test]
+    fn target_crashed_input_burst_retains_the_private_entry_diagnostic() {
+        let failure = BurstFailure::Cdp(CoreError::Cdp(CdpError::Protocol {
+            code: -32000,
+            message: "Target crashed".to_owned(),
+        }));
+        assert_eq!(super::burst_code(&failure), EntryCode::TargetCrashed);
+    }
 
     #[tokio::test]
     async fn restored_private_entry_history_outlives_tab_pruning_without_changing_picture_rules()

@@ -203,6 +203,19 @@ returns bytes. Returning those bytes from `run` yields an inline result or a hos
 large. It does not create a download or accept a `path` option. For an actual download, await
 `download.path()` before importing its host endpoint.
 
+### Trace-store upgrades and rollback
+
+This image advances the trace-store fence from 6 to 7 for the nullable `runs.access` column.
+Opening a store at fence 6 upgrades it in place and preserves its runs and recorded request ids.
+Existing runs have no access value; the upgrade does not mark them read-only.
+
+An older image cannot read a store this image has written. At startup it moves that store to
+`trace.db.broken-<ms>` and starts a fresh, empty one. Request ids from before that replacement
+are forgotten, so retrying one can execute the script again. The old store remains beside the
+new one for inspection. This is the existing rollback rule for the stored trace, separate from
+the MCP protocol: no new wire protocol version is used, and older servers refuse the unknown
+`access` metadata key before executing a script.
+
 ### Stop and restart
 
 `tini` forwards SIGTERM to the entrypoint, which quits the browser over CDP (`neo-quit 9110`); the browser
@@ -324,7 +337,15 @@ No file means normal defaults. An unreadable or malformed file uses defaults wit
 off; an invalid `trace` group turns both off. Invalid retention keeps its default, and unknown
 names are skipped with a warning. The settings and ranges are in [the server's README](../README.md#settings).
 
+`GET /v1/settings` includes a `file` report of this server start. Its `state` is `absent`,
+`applied`, `partial` or `unreadable`. Its sorted `unknown`, `unknownValues` and `invalid`
+arrays always appear and contain names only, never unusable input values. They name what
+startup skipped or replaced with a fallback. An unusable `tabs.scope` falls back to `task`;
+an unusable `fill.pictures` falls back to `allowed`.
+
 After startup, Neo owns the file. Use `PUT` or `PATCH /v1/settings` for running changes.
+Those responses omit `file`, and later `GET` responses keep the original startup report.
+The next server start reports the new load.
 API changes survive a server or browser restart. When the entrypoint starts again, a fixed
 file replaces those changes. Without a fixed file, the saved changes remain.
 
@@ -338,11 +359,11 @@ The SDK host API describes runs, operations, and browser tabs. It does not serve
 
 A Go host can dial the Unix socket through `http.Transport.DialContext`. The URL host is ignored on that connection, so a URL such as `http://neo/v1/runs` works.
 
-Send optional `requestId`, `taskId`, and `hostData` in `_meta["com.browseros.neo/run"]`. Neo returns its own run id in that key's `.id`. A request id scopes replay to its task when a task id is present, or across Neo otherwise. The guarantee lasts while Neo retains the request history. Retention removes that history and permits the id to run again.
+Send optional `requestId`, `taskId`, and `hostData` in `_meta["com.browseros.neo/run"]`. Neo returns its own run id in that key's `.id`. A request id scopes replay to its task when a task id is present, or across Neo otherwise; under `tabs.scope: "task"`, a request without a task id repeats only a run without one. The guarantee lasts while Neo retains the request history. Retention removes that history and permits the id to run again.
 
 For MCP runs with ordinary value recording, a repeated request gets the exact reply for ten minutes after the run ends, including across a server restart. Later repeats receive `duplicate_request` while the history remains. With `trace.values: "off"`, the exact reply survives in memory for ten minutes, but a repeat after a server restart receives `duplicate_request`. The [server's run contract](../README.md#the-run-contract) describes joins, client disconnects, and task selection.
 
-Tasks group a piece of work across runs. They do not create Chromium tab groups or restrict which tabs a script may use. A run without a host or script task opens a new tab when its built-in `page` is first used. Give agents [agent.d.ts](../../agent.d.ts) for task selection and the walkthrough across runs.
+Tasks group a piece of work across runs. They do not create Chromium tab groups. Under `tabs.scope: "task"`, the default, a run that carries a task id sees and acts on only its task's tabs, and every result says so in `_meta["com.browseros.neo/run"].tabsScope`. A host's own scripts that must reach every tab run without a task id, or the host sets `tabs.scope` to `browser` ([task scope](../README.md#task-scope)). A run without a host or script task opens a new tab when its built-in `page` is first used. Give agents [agent.d.ts](../../agent.d.ts) for task selection and the walkthrough across runs.
 
 Choose the host read for the question you need to answer.
 

@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Banner</title></head>
+<body style="margin: 0; font: 16px sans-serif">
+<!-- A fixed banner that sits inside the page's own main, over a link outside main and a button
+     inside it. For the link outside, the cover's root is main itself; its face is the banner.
+     A plain div placed absolutely inside main covers a second link outside main: no dialog, no
+     face and no section role of its own, so only the page skip keeps main from being named. -->
+<header style="position: relative; padding: 120px 0 0 120px"><a id="outside" href="#a">Log in</a><a id="outside2" href="#b" style="position: absolute; left: 420px; top: 130px">Help</a></header>
+<main>
+  <p style="padding: 0 120px"><button id="inside">Edit</button></p>
+  <div id="promo" style="position: absolute; left: 360px; top: 100px; width: 200px; height: 80px; background: #eef">Read our story</div>
+  <div id="portalBanner" role="region" aria-label="Support us"
+       style="position: fixed; left: 0; top: 0; width: 300px; height: 400px; background: #ffd; z-index: 10">
+    <p>Please support us.</p><button id="donate">Donate</button> <button id="close">Close</button>
+  </div>
+</main>
+</body>
+</html>

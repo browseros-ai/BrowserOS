@@ -95,6 +95,7 @@ pub use screen_rule::{OwnerHasScreen, ScreenHolder};
 pub use screen_size::{NotAScreenSize, ScreenSize, Xvnc};
 pub use tab_hold::TabHold;
 pub use takeovers::{
-    ReleaseReason, Takeover, TakeoverRequest, TakeoverState, TakeoverTtl, Takeovers,
+    OpenedTab, ReleaseReason, TabLinks, Takeover, TakeoverRequest, TakeoverState, TakeoverTtl,
+    Takeovers,
 };
 pub use viewer::{Viewer, ViewerGeometry, ViewerScale};

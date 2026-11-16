@@ -15,7 +15,11 @@ const files = [
   'neo-server/src/runtime/js/neo_prelude.js',
 ]
 
-export async function openClaw(cdpPort, options = {}, { onUncaught } = {}) {
+export async function openClaw(
+  cdpPort,
+  options = {},
+  { onUncaught, upstreamSnapshots = true } = {},
+) {
   const require = createRequire(import.meta.url)
   const addon = require(
     process.env.CLAW_NODE_ADDON || './claw-addon/claw_node.node',
@@ -69,7 +73,7 @@ export async function openClaw(cdpPort, options = {}, { onUncaught } = {}) {
       // The prelude's conformance switch (src/prelude/snapshot.ts): Playwright's spec tests pin
       // its exact snapshot text, so here `ariaSnapshot()` keeps upstream's modes and output
       // instead of Neo's condensed v1 format. Production hosts never set it.
-      __neo_upstream_snapshots: true,
+      __neo_upstream_snapshots: upstreamSnapshots,
     }
     const sources = {}
     for (const file of files) {

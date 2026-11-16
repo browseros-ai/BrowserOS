@@ -1,14 +1,28 @@
 //! What the crate keeps about one tab between operations.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
+
+use browseros_core::FrameId;
+use tokio::time::Instant;
 
 use tokio::sync::Mutex as AsyncMutex;
 
 use crate::action::FocusLease;
 use crate::input::{Platform, TabInput};
 use crate::page::MediaState;
-use crate::world::FrameWorlds;
+use crate::world::{FrameSeq, FrameWorlds};
+
+/// The cover of a tab's last covered answer (covered-click spec, "The same layer again"): the
+/// document it stood in, its root's number there, the action that met it and when.
+#[derive(Clone, Debug)]
+pub(crate) struct LastCover {
+    pub(crate) frame: FrameId,
+    pub(crate) seq: FrameSeq,
+    pub(crate) cover: u32,
+    pub(crate) action: String,
+    pub(crate) at: Instant,
+}
 
 /// One tab's state, shared by every op on it. Created on the first op that admits the tab,
 /// and kept while the `Playwright` lives: a second one for the same tab would restart its seq
@@ -36,6 +50,9 @@ pub(crate) struct PageState {
     tokens: AtomicU32,
     /// Page lifetime, including gaps between runs; root and iframe renderers share one setting.
     media: Arc<AsyncMutex<MediaState>>,
+    /// The cover of the tab's last covered answer, across ops and runs: an agent that closed
+    /// something and met the same layer again is told so.
+    last_cover: Mutex<Option<LastCover>>,
 }
 
 impl PageState {
@@ -48,7 +65,21 @@ impl PageState {
             screenshots: Arc::default(),
             tokens: AtomicU32::new(1),
             media: Arc::default(),
+            last_cover: Mutex::default(),
         }
+    }
+
+    /// Keeps `now` as the tab's last covered answer, and returns the one before it when that
+    /// named the same cover in the same document.
+    pub(crate) fn covered_again(&self, now: LastCover) -> Option<LastCover> {
+        let mut last = self
+            .last_cover
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let same = last.as_ref().is_some_and(|before| {
+            before.frame == now.frame && before.seq == now.seq && before.cover == now.cover
+        });
+        last.replace(now).filter(|_| same)
     }
 
     /// The tab's isolated worlds.

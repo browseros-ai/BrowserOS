@@ -1,0 +1,10 @@
+await page.goto(args.base + '/links.html');
+await page.ariaSnapshot({mode:'ai'});
+let downloads = 0;
+const listener = () => downloads++;
+page.on('download',listener);
+try {
+  const error = await rejected(async () => await page.getByRef('e999').click({timeout:1000}), /./s);
+  equal(downloads,0,'a bad download ref does not start a download');
+  return {error,downloads};
+} finally { page.off('download',listener); }

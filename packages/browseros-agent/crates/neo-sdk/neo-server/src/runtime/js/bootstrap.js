@@ -38,6 +38,8 @@
       super(String(err.message))
       this.name = 'NeoError'
       this.code = err.code // e.g. "page_closed"
+      if (err.diagnosticCode !== undefined)
+        this.diagnosticCode = err.diagnosticCode
       this.owner = err.owner // "neo" | "script" | "website" | "host"
       this.delivery = err.delivery // "not_sent" | "done" | "unknown"
       this.retryable = err.retryable
@@ -45,6 +47,9 @@
       // A failed `expect` matcher's facts (neo-playwright's expect op); the expect prelude
       // completes them into Playwright's `matcherResult` before the script can catch the error.
       if (err.matcher !== undefined) this.matcherResult = err.matcher
+      // A covered pointer action's cover (neo-playwright's action/cover.rs); the prelude renders
+      // its snapshot into the message and leaves the script the rest as `cover`.
+      if (err.cover !== undefined) this.cover = err.cover
     }
   }
 

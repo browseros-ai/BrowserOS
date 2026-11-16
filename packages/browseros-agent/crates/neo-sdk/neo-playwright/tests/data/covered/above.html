@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Above</title></head>
+<body style="margin: 0">
+<iframe id="inner" src="covered.html#plain" style="width: 900px; height: 500px; border: 0"></iframe>
+<script>
+// A dialog of this page over the frame that holds the target: the cover is in the page above
+// the target's frame, and its ref is this page's.
+const layer = document.createElement('div')
+layer.style.cssText = 'position: fixed; inset: 0; background: rgba(0, 0, 0, 0.4)'
+layer.innerHTML = '<div role="dialog" aria-label="Your location" style="position: absolute; left: 60px; top: 60px; width: 360px; height: 220px; padding: 16px; background: #fff"><button id="later">Not now</button></div>'
+document.body.append(layer)
+</script>
+</body>
+</html>

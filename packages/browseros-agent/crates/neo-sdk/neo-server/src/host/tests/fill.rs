@@ -23,8 +23,8 @@ use browseros_core::TabId;
 use futures_util::future::BoxFuture;
 use neo_http::PictureVerdict;
 use neo_playwright::{
-    BoxFacts, BoxLook, Drawing, Entry, EntryCode, EntryError, EntryOutcome, EntryRequest,
-    LookRequest, OpEnv, Sending,
+    BoxFacts, BoxLook, Compared, CoverIn, Drawing, Entry, EntryCode, EntryError, EntryOutcome,
+    EntryRequest, LookRequest, OpEnv, Sending,
 };
 use neo_trace::{Delivery, Effect, RunId};
 use serde::Deserialize;
@@ -225,6 +225,7 @@ impl PrivateEntry for ScriptedEntry {
                         typed: lengths,
                         error: None,
                         drawings: drawings_of(script, fields),
+                        max_length_moved: moved_fields(&request),
                     }
                 }
                 Script::Uncertain { at, code } => {
@@ -250,6 +251,7 @@ impl PrivateEntry for ScriptedEntry {
                         typed,
                         error: Some(error),
                         drawings: vec![Drawing::None; fields],
+                        max_length_moved: Vec::new(),
                     }
                 }
                 Script::Hold => {
@@ -269,6 +271,7 @@ impl PrivateEntry for ScriptedEntry {
                             typed: vec![0; fields],
                             error: Some(error),
                             drawings: vec![Drawing::None; fields],
+                            max_length_moved: Vec::new(),
                         };
                     }
                     self.typed(&lengths);
@@ -279,6 +282,7 @@ impl PrivateEntry for ScriptedEntry {
                         typed: lengths,
                         error: None,
                         drawings: vec![Drawing::None; fields],
+                        max_length_moved: Vec::new(),
                     }
                 }
             }
@@ -319,6 +323,19 @@ impl PrivateEntry for ScriptedEntry {
                         }
                         _ => None,
                     },
+                    // The fake reads every box it is asked to compare: both booleans true.
+                    compared: request
+                        .compares
+                        .get(index)
+                        .and_then(Option::as_ref)
+                        .map(|_| Compared {
+                            holds: true,
+                            contains: true,
+                        }),
+                    // The fake's one ref into a frame that left the tab (ruling R63).
+                    frame_gone: field.box_ref == GONE_FRAME_REF,
+                    // The fake's one box whose limit moved (ruling R64).
+                    max_length_moved: field.box_ref == MOVED_LIMIT_REF,
                 })
                 .collect())
         })
@@ -513,6 +530,7 @@ async fn script_call(
             deadline: Instant::now() + Duration::from_secs(10),
             default_page: None,
             tabs_scope: TabsScope::Browser,
+            access: None,
         },
     );
     let reply = host
@@ -645,7 +663,7 @@ async fn the_value_is_in_no_answer_record_file_or_log_on_any_path() -> TestResul
         Script::EnterPageMoved,
         Script::Refuse {
             at: 0,
-            code: EntryCode::BoxCovered,
+            code: EntryCode::BoxCovered(CoverIn::OwnDocument),
         },
         Script::Refuse {
             at: 1,
@@ -875,7 +893,7 @@ async fn a_refusal_types_nothing_and_spends_its_request_id() -> TestResult {
     let (host, tab) = ready().await?;
     host.entry.script(Script::Refuse {
         at: 1,
-        code: EntryCode::BoxCovered,
+        code: EntryCode::BoxCovered(CoverIn::OwnDocument),
     });
     let body = canary_body(&json!({ "requestId": "card-1" }));
     let refused = fill(&host, tab, &body).await?;
@@ -1186,6 +1204,22 @@ async fn only_the_host_reaches_the_fill() -> TestResult {
         );
         assert_eq!(refused.delivery, Delivery::NotSent);
     }
+    // Ruling R48: nor can a script hand the check a value to compare, in any shape.
+    let looks = host.entry.looks.load(Ordering::SeqCst);
+    let with_value = json!({ "page": { "$neo": "page", "tab": tab.0 },
+        "fields": [{ "ref": "e5", "value": PASSWORD }] });
+    let refused = script_call(&host, "x", HOST_FILL_CHECK, with_value)
+        .await?
+        .1
+        .err()
+        .ok_or("refused")?;
+    assert_eq!(refused.error.code(), ErrorCode::METHOD_UNAVAILABLE);
+    assert!(!holds_any(refused.error.message().as_bytes(), PASSWORD));
+    assert_eq!(
+        host.entry.looks.load(Ordering::SeqCst),
+        looks,
+        "nothing was looked at"
+    );
     assert!(host.entry.entered().is_empty());
     Ok(())
 }
@@ -1239,9 +1273,88 @@ async fn request_errors_type_nothing_and_quote_nothing() -> TestResult {
         "{message}"
     );
     assert!(!holds_any(message.as_bytes(), PASSWORD), "{message}");
+    // Ruling R48: the check's value is refused the same way, without being quoted.
+    let checked = request(
+        &host.socket,
+        "POST",
+        &format!("/v1/tabs/{}/fill/check", tab.0),
+        Some(TOKEN),
+        Some(
+            &json!({ "fields": [{ "ref": "e1", "value": format!("{PASSWORD}\u{7}"),
+            "expect": { "origin": "https://pay.example" } }] }),
+        ),
+    )
+    .await?;
+    assert_eq!(checked.status, 400, "{checked:?}");
+    let message = checked.body["message"].as_str().ok_or("a message")?;
+    assert!(
+        message.starts_with("body.fields[0].value: a private value holds no control character"),
+        "{message}"
+    );
+    assert!(
+        !holds_any(checked.body.to_string().as_bytes(), PASSWORD),
+        "{checked:?}"
+    );
+    // Ruling R48's row 8b: a value with no `expect` names no approved origin. A malformed body,
+    // refused before anything is sent, the value not quoted.
+    let looks = host.entry.looks.load(Ordering::SeqCst);
+    let unapproved = request(
+        &host.socket,
+        "POST",
+        &format!("/v1/tabs/{}/fill/check", tab.0),
+        Some(TOKEN),
+        Some(&json!({ "fields": [{ "ref": "e5", "value": PASSWORD }] })),
+    )
+    .await?;
+    assert_eq!(unapproved.status, 400, "{unapproved:?}");
+    assert_eq!(unapproved.body["code"], "invalid_request");
+    let message = unapproved.body["message"].as_str().ok_or("a message")?;
+    assert!(
+        message.starts_with("body.fields[0].expect: a field that carries a value carries expect"),
+        "{message}"
+    );
+    assert!(!holds_any(unapproved.body.to_string().as_bytes(), PASSWORD));
+    assert_eq!(
+        host.entry.looks.load(Ordering::SeqCst),
+        looks,
+        "nothing was sent"
+    );
     assert!(host.entry.entered().is_empty());
     // The 404 left the id unused.
     let typed = fill(&host, tab, &canary_body(&json!({ "requestId": "gone" }))).await?;
+    assert_eq!(typed.body["outcome"], "entered", "{typed:?}");
+    Ok(())
+}
+
+/// Ruling R49 at the route: `expect.maxLength` takes -1 (a box with none), 0 and any limit; -2
+/// is a malformed body, refused before anything is typed, on the fill and on the check call.
+#[tokio::test]
+async fn max_length_below_minus_one_is_a_malformed_body() -> TestResult {
+    let (host, tab) = ready().await?;
+    let body = |max_length: i64| {
+        json!({ "fields": [{ "ref": "e1", "value": PASSWORD,
+            "expect": { "origin": "https://a.example", "maxLength": max_length } }] })
+    };
+    let bad = fill(&host, tab, &body(-2)).await?;
+    assert_eq!(bad.status, 400, "{bad:?}");
+    assert_eq!(bad.body["code"], "invalid_request");
+    let message = bad.body["message"].as_str().ok_or("a message")?;
+    assert!(
+        message.starts_with("body.fields[0].expect.maxLength:"),
+        "{message}"
+    );
+    assert!(host.entry.entered().is_empty());
+    let check = request(
+        &host.socket,
+        "POST",
+        &format!("/v1/tabs/{}/fill/check", tab.0),
+        Some(TOKEN),
+        Some(&json!({ "fields": [{ "ref": "e1",
+            "expect": { "origin": "https://a.example", "maxLength": -2 } }] })),
+    )
+    .await?;
+    assert_eq!(check.status, 400, "{check:?}");
+    let typed = fill(&host, tab, &body(-1)).await?;
     assert_eq!(typed.body["outcome"], "entered", "{typed:?}");
     Ok(())
 }
@@ -1303,14 +1416,133 @@ async fn a_drawn_value_answers_its_code() -> TestResult {
     Ok(())
 }
 
+/// The keys of a JSON object, sorted.
+fn shape(object: &Value) -> Vec<String> {
+    let mut keys: Vec<String> = object
+        .as_object()
+        .map(|object| object.keys().cloned().collect())
+        .unwrap_or_default();
+    keys.sort();
+    keys
+}
+
+/// The fake entry's ref into a frame that is no longer in the tab (ruling R63).
+const GONE_FRAME_REF: &str = "f9e1";
+
+/// The fake entry's ref to a box whose limit moved from the approved one and still fits (ruling
+/// R64).
+const MOVED_LIMIT_REF: &str = "e8";
+
+/// The fields of `request` the fake entry lists as typed after their limit moved (ruling R64).
+fn moved_fields(request: &EntryRequest) -> Vec<usize> {
+    request
+        .fields
+        .iter()
+        .enumerate()
+        .filter(|(_, field)| field.spec.box_ref == MOVED_LIMIT_REF)
+        .map(|(index, _)| index)
+        .collect()
+}
+
+/// Ruling R63 at the route: a dead ref whose frame left the tab answers `frameGone: true` beside
+/// its `element_detached`, in the reply and in the op's recorded result; every other box has no
+/// such key, and no answer carries `false`. A fill's answer has no such field.
+#[tokio::test]
+async fn the_check_says_frame_gone_only_when_it_is_true() -> TestResult {
+    let (host, tab) = ready().await?;
+    host.entry.script(Script::Refuse {
+        at: 1,
+        code: EntryCode::ElementDetached,
+    });
+    let checked = request(
+        &host.socket,
+        "POST",
+        &format!("/v1/tabs/{}/fill/check", tab.0),
+        Some(TOKEN),
+        Some(&json!({ "fields": [{ "ref": "e5" }, { "ref": GONE_FRAME_REF }] })),
+    )
+    .await?;
+    assert_eq!(checked.status, 200, "{checked:?}");
+    let fields = checked.body["fields"].as_array().ok_or("fields")?;
+    assert!(fields[0].get("frameGone").is_none(), "{checked:?}");
+    assert_eq!(fields[1]["refusal"]["code"], "element_detached");
+    assert_eq!(fields[1]["frameGone"], true, "{checked:?}");
+    assert!(!checked.body.to_string().contains("\"frameGone\":false"));
+    let run = checked.body["runId"].as_str().ok_or("a runId")?;
+    let record = get(&host, &format!("/v1/runs/{run}?wait=10")).await?;
+    assert!(
+        record.body.to_string().contains("\"frameGone\":true"),
+        "the record holds it: {record:?}"
+    );
+    let filled = fill(&host, tab, &canary_body(&json!({}))).await?;
+    assert!(!filled.body.to_string().contains("frameGone"), "{filled:?}");
+    Ok(())
+}
+
+/// Ruling R64 at the route: a fill lists the fields typed after their limit moved in
+/// `maxLengthMoved`, and a check answers `maxLengthMoved: true` for such a box, each in the reply
+/// and in the op's recorded result. A fill with no such field has no such key, never an empty
+/// list, and no check answer carries `false`.
+#[tokio::test]
+async fn the_fill_and_the_check_say_when_a_limit_moved() -> TestResult {
+    let (host, tab) = ready().await?;
+    let moved = fill(
+        &host,
+        tab,
+        &json!({ "fields": [
+            { "ref": "e5", "value": PASSWORD, "expect": { "origin": "https://shop.example" } },
+            { "ref": MOVED_LIMIT_REF, "value": "123",
+              "expect": { "origin": "https://pay.example", "maxLength": 4 } }
+        ] }),
+    )
+    .await?;
+    assert_eq!(moved.body["outcome"], "entered", "{moved:?}");
+    assert_eq!(moved.body["maxLengthMoved"], json!([1]), "{moved:?}");
+    let run = moved.body["runId"].as_str().ok_or("a runId")?;
+    let record = get(&host, &format!("/v1/runs/{run}?wait=10")).await?;
+    assert!(
+        record.body.to_string().contains("\"maxLengthMoved\":[1]"),
+        "the record holds it: {record:?}"
+    );
+    let plain = fill(&host, tab, &canary_body(&json!({}))).await?;
+    assert_eq!(plain.body["outcome"], "entered", "{plain:?}");
+    assert!(plain.body.get("maxLengthMoved").is_none(), "{plain:?}");
+    let checked = request(
+        &host.socket,
+        "POST",
+        &format!("/v1/tabs/{}/fill/check", tab.0),
+        Some(TOKEN),
+        Some(&json!({ "fields": [{ "ref": "e5" }, { "ref": MOVED_LIMIT_REF }] })),
+    )
+    .await?;
+    let fields = checked.body["fields"].as_array().ok_or("fields")?;
+    assert!(fields[0].get("maxLengthMoved").is_none(), "{checked:?}");
+    assert_eq!(fields[1]["maxLengthMoved"], true, "{checked:?}");
+    assert!(
+        !checked
+            .body
+            .to_string()
+            .contains("\"maxLengthMoved\":false")
+    );
+    let run = checked.body["runId"].as_str().ok_or("the check's runId")?;
+    let record = get(&host, &format!("/v1/runs/{run}?wait=10")).await?;
+    assert!(
+        record.body.to_string().contains("\"maxLengthMoved\":true"),
+        "the check's record holds it: {record:?}"
+    );
+    Ok(())
+}
+
 /// The check (design section 4.8): each box its facts and its refusal, typed nothing, recorded
-/// as one protected read with no picture; `expect` may be left out; a value is refused.
+/// as one protected read with no picture; `expect` may be left out. With a value (ruling R48),
+/// the box also answers `holds` and `contains` to the host, and neither the value nor the
+/// booleans are in the run's or the operation's record.
 #[tokio::test]
 async fn the_check_answers_facts_and_refusals_and_types_nothing() -> TestResult {
     let (host, tab) = ready().await?;
     host.entry.script(Script::Refuse {
         at: 1,
-        code: EntryCode::BoxCovered,
+        code: EntryCode::BoxCovered(CoverIn::OwnDocument),
     });
     let body = json!({ "taskId": "task-42", "fields": [
         { "ref": "e5", "expect": { "origin": "https://pay.example" } },
@@ -1335,6 +1567,10 @@ async fn the_check_answers_facts_and_refusals_and_types_nothing() -> TestResult 
     );
     assert_eq!(fields[1]["refusal"]["code"], "box_covered");
     assert_eq!(fields[1]["refusal"]["retryable"], true);
+    // Ruling R48's row 8: a check without values answers as before, with no boolean.
+    for field in fields {
+        assert!(field.get("holds").is_none() && field.get("contains").is_none());
+    }
     assert!(host.entry.entered().is_empty());
     assert_eq!(host.entry.looks.load(Ordering::SeqCst), 1);
     let run = checked.body["runId"].as_str().ok_or("a runId")?;
@@ -1344,16 +1580,41 @@ async fn the_check_answers_facts_and_refusals_and_types_nothing() -> TestResult 
     assert_eq!(operation["kind"], "protected");
     assert_eq!(operation["effect"], "read");
     assert_eq!(operation["hasScreenshot"], false);
+    let plain_shape = shape(operation);
     let with_value = request(
         &host.socket,
         "POST",
         &format!("/v1/tabs/{}/fill/check", tab.0),
         Some(TOKEN),
-        Some(&json!({ "fields": [{ "ref": "e5", "value": PASSWORD }] })),
+        Some(&json!({ "fields": [
+            { "ref": "e5", "value": PASSWORD, "expect": { "origin": "https://pay.example" } },
+            { "ref": "f2e4" }
+        ] })),
     )
     .await?;
-    assert_eq!(with_value.status, 400, "{with_value:?}");
+    assert_eq!(with_value.status, 200, "{with_value:?}");
+    let fields = with_value.body["fields"].as_array().ok_or("fields")?;
+    assert_eq!(
+        (&fields[0]["holds"], &fields[0]["contains"]),
+        (&json!(true), &json!(true))
+    );
+    assert!(fields[1].get("holds").is_none() && fields[1].get("contains").is_none());
+    // Booleans only: no length, no position, no count.
+    assert_eq!(shape(&fields[0]), ["contains", "facts", "holds"]);
     assert!(!holds_any(with_value.body.to_string().as_bytes(), PASSWORD));
+    let run = with_value.body["runId"].as_str().ok_or("a runId")?;
+    let record = get(&host, &format!("/v1/runs/{run}?wait=10")).await?;
+    assert_eq!(
+        shape(&record.body["operations"][0]),
+        plain_shape,
+        "the operation keeps a check's shape"
+    );
+    let recorded = record.body.to_string();
+    assert!(!holds_any(recorded.as_bytes(), PASSWORD), "{recorded}");
+    assert!(
+        !recorded.contains("\"holds\"") && !recorded.contains("\"contains\""),
+        "the run keeps its shape: {recorded}"
+    );
     Ok(())
 }
 
@@ -1581,11 +1842,24 @@ async fn the_check_passes_its_hosts_own_lock_as_the_fill_does() -> TestResult {
             LockBinding::Takeover(TakeoverId::new()),
         )
         .await;
-    let takeover = check(json!({ "lockId": owners.id.to_string(), "fields": boxes })).await?;
+    // Ruling R48: a value to compare changes none of it, and the box is not read.
+    let looks = host.entry.looks.load(Ordering::SeqCst);
+    let with_value = json!([
+        { "ref": "e5", "value": PASSWORD, "expect": { "origin": "https://pay.example" } },
+        { "ref": "f2e4" }
+    ]);
+    let takeover = check(json!({ "lockId": owners.id.to_string(), "fields": with_value })).await?;
     assert_eq!(takeover.status, 200, "{takeover:?}");
+    for field in 0..2 {
+        let answer = &takeover.body["fields"][field];
+        assert_eq!(answer["refusal"]["code"], "owner_has_control", "{answer}");
+        assert!(answer.get("holds").is_none() && answer.get("contains").is_none());
+    }
+    assert!(!holds_any(takeover.body.to_string().as_bytes(), PASSWORD));
     assert_eq!(
-        takeover.body["fields"][1]["refusal"]["code"],
-        "owner_has_control"
+        host.entry.looks.load(Ordering::SeqCst),
+        looks,
+        "no box was read"
     );
     assert_eq!(host.entry.calls(), 0, "a check never types");
     Ok(())

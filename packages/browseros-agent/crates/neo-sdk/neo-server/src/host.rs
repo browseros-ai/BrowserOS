@@ -53,5 +53,5 @@ pub(crate) use host_api::{HostApi, HostInputs};
 pub(crate) use host_holds::HostHolds;
 #[cfg(test)]
 pub(crate) use tab_holders::Note;
-pub(crate) use tab_holders::{HolderFeed, TabHolders};
+pub(crate) use tab_holders::{HolderFeed, RestoreState, TabHolders};
 pub(crate) use takeover_lock::TakeoverLock;

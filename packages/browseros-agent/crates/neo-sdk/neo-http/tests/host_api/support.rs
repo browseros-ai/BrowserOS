@@ -20,16 +20,103 @@ use neo_takeover::ScreenSize;
 use neo_takeover::testing::FakeXvnc;
 use neo_trace::{
     Delivery, Effect, EpochMillis, OperationEnded, OperationId, OperationKind, OperationStarted,
-    Outcome, RedactionLimits, Redactor, RequestId, RunEnded, RunId, RunStarted, RunStatus, TaskId,
-    TraceSink, TraceStore, WriterConfig, screenshot_queue, spawn_writer,
+    Outcome, RedactionLimits, Redactor, RequestId, RunEnded, RunId, RunStarted, RunStatus,
+    RunTabsScope, TaskId, TraceSink, TraceStore, WriterConfig, screenshot_queue, spawn_writer,
 };
 use serde_json::Value;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::collections::HashMap;
+use std::future::Future;
+use std::io::{self, Write};
+use std::process;
+use std::sync::{Arc, Mutex, PoisonError, mpsc};
 use std::time::Duration;
 use tower::ServiceExt;
 
 pub(crate) type BoxError = Box<dyn std::error::Error + Send + Sync>;
 pub(crate) type TestResult = Result<(), BoxError>;
+
+/// Service startup still uses wall time, before a screenshot fixture freezes Tokio's clock.
+/// This is a readiness watchdog, independent of the camera's eight-second capture budget.
+pub(crate) const READINESS_WATCHDOG: Duration = Duration::from_secs(30);
+/// Progress witnesses keep their existing bound; their errors identify the stalled stage.
+pub(crate) const PROGRESS_WATCHDOG: Duration = Duration::from_secs(5);
+
+/// Bounds fixture progress without turning an operational stall into an anonymous `Elapsed`.
+pub(crate) async fn watchdog<T>(
+    stage: &str,
+    limit: Duration,
+    progress: impl Future<Output = T>,
+) -> Result<T, BoxError> {
+    tokio::time::timeout(limit, progress).await.map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::TimedOut,
+            format!("host_api {stage} did not complete within {limit:?}"),
+        )
+        .into()
+    })
+}
+
+/// Keeps paused Tokio time fixed across real SQLite and filesystem work. Pinned Tokio 1.52.3
+/// inhibits auto-advance synchronously when a blocking task is scheduled.
+#[must_use = "retain the guard while test deadlines must remain frozen"]
+pub(crate) struct ManualClock {
+    release: Option<mpsc::Sender<()>>,
+    worker: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl ManualClock {
+    fn pause() -> Self {
+        let mut clock = Self {
+            release: None,
+            worker: None,
+        };
+        clock.hold();
+        tokio::time::pause();
+        clock
+    }
+
+    fn hold(&mut self) {
+        let (release, held) = mpsc::channel();
+        self.worker = Some(tokio::task::spawn_blocking(move || {
+            // Tokio hang guards cannot expire while this worker holds virtual time fixed.
+            // A panic here would stay in an unobserved JoinHandle, so abort the test binary
+            // on a wall-clock stall instead of leaving the ordinary SDK gate hung.
+            if let Err(mpsc::RecvTimeoutError::Timeout) =
+                held.recv_timeout(Duration::from_secs(120))
+            {
+                let _ = io::stderr()
+                    .lock()
+                    .write_all(b"test stalled for 120 seconds with the manual clock frozen\n");
+                process::abort();
+            }
+        }));
+        self.release = Some(release);
+    }
+
+    /// Allows natural timer registration and auto-advance only until a latched milestone.
+    /// Callers use this for hung captures and retries, never while waiting on real storage.
+    pub(crate) async fn run_timers_until<F: Future>(&mut self, milestone: F) -> F::Output {
+        let worker = self.worker.take();
+        drop(self.release.take());
+        // Poll the milestone before yielding so its watch and timeout are registered before
+        // the released worker permits any automatic jump.
+        let result = milestone.await;
+        // Acquire in this poll, before an external I/O wait can make Tokio jump ahead.
+        self.hold();
+        if let Some(worker) = worker {
+            let _ = worker.await;
+        }
+        result
+    }
+}
+
+impl Drop for ManualClock {
+    fn drop(&mut self) {
+        tokio::time::resume();
+        // Unconditional release keeps a panic from stranding runtime shutdown.
+        drop(self.release.take());
+    }
+}
 
 /// The token every harness request carries. The router refuses requests that did not pass the
 /// host auth, so the harness serves it the way production does: behind `host_router`.
@@ -73,6 +160,9 @@ pub(crate) struct Harness {
     /// The tab the app keeps for itself (its blank tab), as `ServiceInputs::tab_owner` reports
     /// it; `None` until a test sets one.
     pub(crate) neo_tab: Arc<Mutex<Option<i64>>>,
+    /// The task holding each tab, as `ServiceInputs::tab_task` reports it; empty until a test
+    /// gives a tab to a task.
+    pub(crate) tab_tasks: Arc<Mutex<HashMap<i64, String>>>,
     /// The routes behind the host auth, as a host reaches them.
     pub(crate) router: Router,
     /// `Service::router()` alone, for tests that serve it themselves.
@@ -88,6 +178,9 @@ pub(crate) const HOME_SCREEN: ScreenSize = ScreenSize {
 /// How the harness starts.
 struct Boot {
     camera: bool,
+    writer: WriterConfig,
+    /// A caller-owned settings load, so route tests observe the same startup as the app.
+    settings: Option<Settings>,
     /// The screen's size when the service starts.
     screen: ScreenSize,
     /// The window's state when the service starts.
@@ -102,6 +195,15 @@ pub(crate) async fn harness() -> Result<Harness, BoxError> {
     start(Boot::default()).await
 }
 
+/// A started service over settings the caller loaded before handing them to the routes.
+pub(crate) async fn harness_with_settings(settings: Settings) -> Result<Harness, BoxError> {
+    start(Boot {
+        settings: Some(settings),
+        ..Boot::default()
+    })
+    .await
+}
+
 /// A started service whose camera takes the writer's screenshots on the scripted browser.
 pub(crate) async fn harness_with_camera() -> Result<Harness, BoxError> {
     let boot = Boot {
@@ -109,6 +211,31 @@ pub(crate) async fn harness_with_camera() -> Result<Harness, BoxError> {
         ..Boot::default()
     };
     start(boot).await
+}
+
+/// A camera fixture and the guard that owns its semantic clock. The clock field drops first
+/// so an intact fixture resumes time before releasing its service.
+pub(crate) struct ClockedHarness {
+    pub(crate) clock: ManualClock,
+    pub(crate) harness: Harness,
+}
+
+/// A camera fixture whose deadlines advance only when the test requests it. Single-record
+/// batches bypass the writer's batching timer, which cannot fire while the clock is frozen.
+pub(crate) async fn harness_with_manual_clock() -> Result<ClockedHarness, BoxError> {
+    let harness = start(Boot {
+        camera: true,
+        writer: WriterConfig {
+            batch_max: 1,
+            ..WriterConfig::default()
+        },
+        ..Boot::default()
+    })
+    .await?;
+    Ok(ClockedHarness {
+        clock: ManualClock::pause(),
+        harness,
+    })
 }
 
 /// A service started over what a Neo restart in the middle of a fit leaves: the screen at the
@@ -138,6 +265,8 @@ impl Default for Boot {
     fn default() -> Self {
         Self {
             camera: false,
+            writer: WriterConfig::default(),
+            settings: None,
             screen: HOME_SCREEN,
             window: "maximized",
             capture_transport: None,
@@ -148,6 +277,8 @@ impl Default for Boot {
 async fn start(
     Boot {
         camera,
+        writer,
+        settings,
         screen,
         window,
         capture_transport,
@@ -161,11 +292,15 @@ async fn start(
     let sink = spawn_writer(
         &store,
         Redactor::new(RedactionLimits::default()),
-        WriterConfig::default(),
+        writer,
         camera.then_some(queue),
     );
-    let settings = Settings::load(dir.path().join("settings.json"), Default::default()).await;
+    let settings = match settings {
+        Some(settings) => settings,
+        None => Settings::load(dir.path().join("settings.json"), Default::default()).await,
+    };
     let neo_tab: Arc<Mutex<Option<i64>>> = Arc::default();
+    let tab_tasks: Arc<Mutex<HashMap<i64, String>>> = Arc::default();
     let browser = ScriptedBrowser::new();
     browser.set_window(window);
     let xvnc = FakeXvnc::start(screen).await?;
@@ -188,12 +323,23 @@ async fn start(
                     (held == Some(tab.0)).then_some("neo")
                 })
             },
+            tab_task: {
+                let tab_tasks = Arc::clone(&tab_tasks);
+                Arc::new(move |tab: TabId| {
+                    tab_tasks
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .get(&tab.0)
+                        .cloned()
+                })
+            },
+            tab_opener: Arc::new(|_| None),
         },
         capture_transport.unwrap_or_else(|| Arc::new(ScriptedTransport(Arc::clone(&capture)))),
     );
     // The service puts the screen home in the background as it starts. Waiting for that keeps
     // a test's own resizes, and its scripted refusals, the only ones after it.
-    tokio::time::timeout(Duration::from_secs(5), async {
+    watchdog("initial Xvnc resize readiness", READINESS_WATCHDOG, async {
         while xvnc.resizes().is_empty() {
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
@@ -210,6 +356,7 @@ async fn start(
         service,
         settings,
         neo_tab,
+        tab_tasks,
     })
 }
 
@@ -342,6 +489,8 @@ pub(crate) fn start_known_run(sink: &TraceSink, run: RunId, start: Start<'_>) {
         request_id: start.request.and_then(|id| RequestId::parse(id).ok()),
         task_id: start.task.and_then(|id| TaskId::parse(id).ok()),
         host_data: None,
+        tabs_scope: RunTabsScope::Browser,
+        access: None,
         at: at(start.at),
     });
 }
@@ -477,9 +626,13 @@ impl EventStream {
                 }
                 continue;
             }
-            let chunk = tokio::time::timeout(Duration::from_secs(5), self.body.next())
-                .await?
-                .ok_or("the event stream ended")??;
+            let chunk = watchdog(
+                "event-stream chunk progress",
+                PROGRESS_WATCHDOG,
+                self.body.next(),
+            )
+            .await?
+            .ok_or("the event stream ended")??;
             self.buffer.push_str(std::str::from_utf8(&chunk)?);
         }
     }

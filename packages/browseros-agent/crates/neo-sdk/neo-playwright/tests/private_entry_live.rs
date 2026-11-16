@@ -30,11 +30,12 @@ use std::time::Duration;
 
 use browseros_core::{ProtocolSession, TabId};
 use fixture_server::{FixtureServer, Page};
-use input_recording::{InputCall, InputRecording};
+use input_recording::{Failing, InputCall, InputRecording};
 use live_browser::{LiveBrowser, TestPage, TestResult};
 use neo_playwright::{
-    BoxSpec, Drawing, Entry, EntryOutcome, EntryRequest, Expect, Op, PictureCheck, PrivateField,
-    PrivateText, RunState,
+    BoxLook, BoxSpec, CoverIn, Drawing, Entry, EntryCode, EntryOutcome, EntryRequest, Expect,
+    LookCompare, LookField, LookRequest, Op, PictureCheck, PrivateField, PrivateText, RunState,
+    Unread,
 };
 use neo_trace::{Delivery, ErrorOwner};
 use private_host::HostEnv;
@@ -43,6 +44,7 @@ use tokio::io::AsyncReadExt;
 use tokio::net::TcpListener;
 use tokio::sync::{Semaphore, SemaphorePermit, oneshot};
 use tokio::time::{self, Instant};
+use url::form_urlencoded::byte_serialize;
 
 /// A tab in front of the window, or behind another tab.
 #[derive(Clone, Copy, Debug)]
@@ -214,6 +216,8 @@ impl Bench {
 struct Field {
     r#ref: String,
     origin: String,
+    max_length: Option<i32>,
+    name: Option<String>,
     cut: bool,
     spaced: bool,
     keys: bool,
@@ -224,10 +228,17 @@ impl Field {
         Self {
             r#ref: r#ref.to_owned(),
             origin: origin.to_owned(),
+            max_length: None,
+            name: None,
             cut: false,
             spaced: false,
             keys: false,
         }
+    }
+
+    fn named(mut self, name: &str) -> Self {
+        self.name = Some(name.to_owned());
+        self
     }
 
     fn keys(mut self) -> Self {
@@ -237,6 +248,11 @@ impl Field {
 
     fn cut(mut self) -> Self {
         self.cut = true;
+        self
+    }
+
+    fn max_length(mut self, max_length: i32) -> Self {
+        self.max_length = Some(max_length);
         self
     }
 
@@ -251,6 +267,8 @@ impl Field {
                 box_ref: self.r#ref,
                 expect: Expect {
                     origin: self.origin,
+                    max_length: self.max_length,
+                    name: self.name,
                     ..Expect::default()
                 },
                 cut: self.cut,
@@ -399,6 +417,1529 @@ async fn tests_that_a_box_below_the_fold_of_a_smooth_page_is_entered_only_in_vie
         }
     }
     Ok(())
+}
+
+/// Ruling R60's rows 1 and 2: a banner in the top page over a sign-in frame's password box, the
+/// frame on another origin of the same site (sharing the page's process) and on another site.
+/// Refused `box_covered` with the page above's own sentence before any character, by one
+/// insertion and key by key, on a tab in front and a tab behind: nothing typed, nothing marked
+/// sent. Fails with the pages above left unasked (the password is typed).
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_banner_above_a_sign_in_frame_refuses_before_any_key() -> TestResult {
+    let bench = Bench::start().await?;
+    let second = FixtureServer::start(private_host::pages()).await?;
+    let inner = "/private/parent-cover-box.html";
+    let same_site = second
+        .url("127.0.0.1", "/")
+        .trim_end_matches('/')
+        .to_owned();
+    let frames = [
+        (second.url("127.0.0.1", inner), same_site),
+        (
+            bench.server.url("localhost", inner),
+            bench.other_origin.clone(),
+        ),
+    ];
+    let above = EntryCode::BoxCovered(CoverIn::PageAbove);
+    // Each frame near the top under a banner, and far below the fold of a smooth-scrolling page
+    // under a sheet over the whole view (ruling R61 for pages above).
+    for (frame, origin) in &frames {
+        let frame: String = byte_serialize(frame.as_bytes()).collect();
+        for (query, place) in [
+            ("cover=banner", Place::Front),
+            ("cover=banner", Place::Behind),
+            ("cover=sheet&place=smooth", Place::Front),
+            ("cover=sheet&place=smooth", Place::Behind),
+        ] {
+            let path = format!("/private/parent-cover.html?{query}&frame={frame}");
+            for keys in [false, true] {
+                let case = format!("{origin}, {query}, {place:?}, keys {keys}");
+                let opened = bench.open(&path, place).await?;
+                let password = bench.r#ref(&opened, "textbox", "Password").await?;
+                let env = bench.host(&opened);
+                let field = Field::new(&password, origin);
+                let field = if keys { field.keys() } else { field };
+                let entry = bench
+                    .enter(&env, &opened, vec![field.with(PASSWORD)?])
+                    .await;
+                assert_eq!(entry.outcome, EntryOutcome::Refused, "{case}: {entry:?}");
+                assert_eq!(
+                    (entry.at, code(&entry)),
+                    (Some(0), Some(above.as_str())),
+                    "{case}"
+                );
+                assert_eq!(
+                    entry.error.as_ref().map(|error| error.message.as_str()),
+                    Some(above.message()),
+                    "{case}"
+                );
+                assert_eq!(entry.delivery, Delivery::NotSent, "{case}");
+                assert_eq!(entry.typed, vec![0], "{case}");
+                assert_eq!(bench.value(&opened, &password).await?, "", "{case}");
+                assert!(!env.was_sent(), "{case}");
+                assert!(
+                    !bench.live.playwright.took_private_text(opened.page.tab),
+                    "{case}"
+                );
+                bench.close(opened).await?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Ruling R60 with R61: a sign-in frame far below the fold of a page whose root scrolls smoothly,
+/// nothing over it, on another origin of the same site and on another site. The box is brought
+/// into view at once in the frame and in the page above, the page above is asked, and the box is
+/// entered and read back, on a tab in front and a tab behind. Fails when a page above that has
+/// not scrolled the frame into view counts as unseen (`cover_unread`).
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_sign_in_frame_below_a_smooth_pages_fold_is_entered() -> TestResult {
+    let bench = Bench::start().await?;
+    let second = FixtureServer::start(private_host::pages()).await?;
+    let inner = "/private/parent-cover-box.html";
+    let same_site = second
+        .url("127.0.0.1", "/")
+        .trim_end_matches('/')
+        .to_owned();
+    let frames = [
+        (second.url("127.0.0.1", inner), same_site),
+        (
+            bench.server.url("localhost", inner),
+            bench.other_origin.clone(),
+        ),
+    ];
+    for (frame, origin) in &frames {
+        let frame: String = byte_serialize(frame.as_bytes()).collect();
+        let path = format!("/private/parent-cover.html?cover=none&place=smooth&frame={frame}");
+        for place in PLACES {
+            let case = format!("{origin}, {place:?}");
+            let opened = bench.open(&path, place).await?;
+            let password = bench.r#ref(&opened, "textbox", "Password").await?;
+            let env = bench.host(&opened);
+            let field = Field::new(&password, origin).with(PASSWORD)?;
+            let entry = bench.enter(&env, &opened, vec![field]).await;
+            assert_eq!(entry.outcome, EntryOutcome::Entered, "{case}: {entry:?}");
+            assert_eq!(bench.value(&opened, &password).await?, PASSWORD, "{case}");
+            bench.close(opened).await?;
+        }
+    }
+    Ok(())
+}
+
+/// Ruling R62's rows 1 and 2 for the fill: a password box 3000 pixels down a page that cannot
+/// scroll (a dialog's scroll lock by a fixed body), with a sheet over the view and without it.
+/// The look's scroll cannot bring it into view, so the entry is refused `cover_unread` with its
+/// sentence before any key: nothing typed, nothing sent. By one insertion and key by key, on a
+/// tab in front and a tab behind. Fails with the view test taken out of the look: the box is
+/// typed under the sheet, and without it.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_box_on_a_page_that_cannot_scroll_is_refused_before_any_key() -> TestResult {
+    let bench = Bench::start().await?;
+    let origin = &bench.page_origin;
+    let unreachable = EntryCode::CoverUnread(Unread::Unreachable);
+    for path in [
+        "/private/smooth-login.html?lock=1&sheet=1",
+        "/private/smooth-login.html?lock=1",
+    ] {
+        for place in PLACES {
+            for keys in [false, true] {
+                let case = format!("{path}, {place:?}, keys {keys}");
+                let opened = bench.open(path, place).await?;
+                let password = bench.r#ref(&opened, "textbox", "Password").await?;
+                let env = bench.host(&opened);
+                let field = Field::new(&password, origin);
+                let field = if keys { field.keys() } else { field };
+                let entry = bench
+                    .enter(&env, &opened, vec![field.with(PASSWORD)?])
+                    .await;
+                assert_eq!(entry.outcome, EntryOutcome::Refused, "{case}: {entry:?}");
+                assert_eq!(
+                    entry.error.as_ref().map(|error| error.message.as_str()),
+                    Some(unreachable.message()),
+                    "{case}"
+                );
+                assert_eq!(entry.typed, vec![0], "{case}");
+                assert_eq!(bench.value(&opened, &password).await?, "", "{case}");
+                assert!(!env.was_sent(), "{case}");
+                bench.close(opened).await?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Ruling R62 on a page in quirks mode whose html and body both set overflow, so it has no
+/// scrolling element: a password box in view is entered, by one insertion and key by key, front
+/// and behind, and under a sheet over the view refused `box_covered` before any key. Fails when
+/// the view test reads only the scrolling element: every sized box on such a page answers
+/// `cover_unread`.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_box_on_a_quirks_page_with_no_scroller_is_entered() -> TestResult {
+    let bench = Bench::start().await?;
+    let origin = &bench.page_origin;
+    for (path, sheet) in [
+        ("/private/quirks-login.html", false),
+        ("/private/quirks-login.html?sheet=1", true),
+    ] {
+        for place in PLACES {
+            for keys in [false, true] {
+                let case = format!("{path}, {place:?}, keys {keys}");
+                let opened = bench.open(path, place).await?;
+                let password = bench.r#ref(&opened, "textbox", "Password").await?;
+                let env = bench.host(&opened);
+                let field = Field::new(&password, origin);
+                let field = if keys { field.keys() } else { field };
+                let entry = bench
+                    .enter(&env, &opened, vec![field.with(PASSWORD)?])
+                    .await;
+                if sheet {
+                    assert_eq!(entry.outcome, EntryOutcome::Refused, "{case}: {entry:?}");
+                    assert_eq!(code(&entry), Some("box_covered"), "{case}");
+                    assert_eq!(bench.value(&opened, &password).await?, "", "{case}");
+                } else {
+                    assert_eq!(entry.outcome, EntryOutcome::Entered, "{case}: {entry:?}");
+                    assert_eq!(bench.value(&opened, &password).await?, PASSWORD, "{case}");
+                }
+                bench.close(opened).await?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Ruling R62's second writing, rows 8 to 11 for the fill: a text box three views tall with its
+/// top showing, and one that fills the view, are brought into view by their centre and looked at
+/// again there. In the page's own document, by one insertion and key by key, on a tab in front
+/// and a tab behind: clear, entered and read back, the box's centre in view when the fill ends;
+/// under a sheet over the view, refused `box_covered` before any key. In a small frame of
+/// another site: clear, entered; a sheet laid by the page above over the frame, refused. Row 14:
+/// a box two views wide whose centre lies under a scrollbar the page draws itself, the same two
+/// answers. Row 15: on a page that replaces `scrollIntoView`, `scrollIntoViewIfNeeded`,
+/// `scrollTo`, `scrollBy` and `focus` in its own world, the tall box is entered and the page
+/// counts no call: Neo scrolls and focuses outside the page's world. Fails
+/// with the centre scroll taken out: each is refused `cover_unread`.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_box_larger_than_its_view_is_entered_by_its_centre() -> TestResult {
+    const SECRET: &str = "CANARY-larger-than-view-8";
+    let bench = Bench::start().await?;
+    let shapes = ["shape=tall", "shape=fills"];
+    for shape in shapes.into_iter().chain(["shape=strip&bar=1"]) {
+        for sheet in [false, true] {
+            let path = format!(
+                "/private/larger-than-view.html?{shape}{}",
+                if sheet { "&sheet=1" } else { "" }
+            );
+            for place in PLACES {
+                for keys in [false, true] {
+                    let case = format!("{path}, {place:?}, keys {keys}");
+                    let opened = bench.open(&path, place).await?;
+                    let secret = bench.r#ref(&opened, "textbox", "Secret").await?;
+                    let env = bench.host(&opened);
+                    let field = Field::new(&secret, &bench.page_origin);
+                    let field = if keys { field.keys() } else { field };
+                    let entry = bench.enter(&env, &opened, vec![field.with(SECRET)?]).await;
+                    if sheet {
+                        assert_eq!(entry.outcome, EntryOutcome::Refused, "{case}: {entry:?}");
+                        assert_eq!(code(&entry), Some("box_covered"), "{case}");
+                        assert_eq!(bench.value(&opened, &secret).await?, "", "{case}");
+                    } else {
+                        assert_eq!(entry.outcome, EntryOutcome::Entered, "{case}: {entry:?}");
+                        assert_eq!(bench.value(&opened, &secret).await?, SECRET, "{case}");
+                        let centred = bench
+                            .live
+                            .main_world(&opened.page, "centreInView()")
+                            .await?;
+                        assert_eq!(
+                            centred,
+                            json!(true),
+                            "{case}: the centre in view at the end"
+                        );
+                    }
+                    bench.close(opened).await?;
+                }
+            }
+        }
+    }
+    // Both scrolls run where the page cannot see them: R61's is the browser's own call, and the
+    // second step's runs in Neo's isolated world. A page that replaces both scroll methods in
+    // its own world counts no call while its tall box is entered.
+    let path = "/private/larger-than-view.html?shape=tall&spy=1";
+    for place in PLACES {
+        let opened = bench.open(path, place).await?;
+        let secret = bench.r#ref(&opened, "textbox", "Secret").await?;
+        let env = bench.host(&opened);
+        let field = Field::new(&secret, &bench.page_origin).with(SECRET)?;
+        let entry = bench.enter(&env, &opened, vec![field]).await;
+        assert_eq!(
+            entry.outcome,
+            EntryOutcome::Entered,
+            "{place:?} spy: {entry:?}"
+        );
+        assert_eq!(
+            bench
+                .live
+                .main_world(&opened.page, "centreInView()")
+                .await?,
+            json!(true),
+            "{place:?} spy: the centre in view at the end"
+        );
+        assert_eq!(
+            bench.live.main_world(&opened.page, "scrollCalls").await?,
+            json!(0),
+            "{place:?}: the page's own scroll methods were called"
+        );
+        bench.close(opened).await?;
+    }
+    for shape in shapes {
+        let inner = bench.server.url(
+            "localhost",
+            &format!("/private/larger-than-view.html?{shape}"),
+        );
+        let frame: String = byte_serialize(inner.as_bytes()).collect();
+        for (cover, entered) in [("none", true), ("sheet", false)] {
+            let path = format!("/private/parent-cover.html?cover={cover}&frame={frame}");
+            for place in PLACES {
+                let case = format!("{shape} in a frame, cover {cover}, {place:?}");
+                let opened = bench.open(&path, place).await?;
+                let secret = bench.r#ref(&opened, "textbox", "Secret").await?;
+                let env = bench.host(&opened);
+                let field = Field::new(&secret, &bench.other_origin).with(SECRET)?;
+                let entry = bench.enter(&env, &opened, vec![field]).await;
+                if entered {
+                    assert_eq!(entry.outcome, EntryOutcome::Entered, "{case}: {entry:?}");
+                    assert_eq!(bench.value(&opened, &secret).await?, SECRET, "{case}");
+                } else {
+                    assert_eq!(entry.outcome, EntryOutcome::Refused, "{case}: {entry:?}");
+                    assert_eq!(code(&entry), Some("box_covered"), "{case}");
+                    assert_eq!(bench.value(&opened, &secret).await?, "", "{case}");
+                }
+                bench.close(opened).await?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Ruling R49's row 9 for the fill: with `expect.maxLength` of -1, a box with no `maxlength` is
+/// entered and read back, and a box with one is refused `box_changed` before any key, nothing
+/// typed. Fails with the -1 case taken out of the page side's compare.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_max_length_minus_one_fills_only_a_box_with_none() -> TestResult {
+    let bench = Bench::start().await?;
+    let origin = &bench.page_origin;
+    for (name, entered) in [("Note", true), ("Code", false)] {
+        let opened = bench.open("/private/maxlength.html", Place::Front).await?;
+        let r#ref = bench.r#ref(&opened, "textbox", name).await?;
+        let env = bench.host(&opened);
+        let field = Field::new(&r#ref, origin).max_length(-1);
+        let entry = bench
+            .enter(&env, &opened, vec![field.with("CANARY-49")?])
+            .await;
+        if entered {
+            assert_eq!(entry.outcome, EntryOutcome::Entered, "{name}: {entry:?}");
+            assert_eq!(bench.value(&opened, &r#ref).await?, "CANARY-49", "{name}");
+        } else {
+            assert_eq!(entry.outcome, EntryOutcome::Refused, "{name}: {entry:?}");
+            assert_eq!(code(&entry), Some("box_changed"), "{name}");
+            assert_eq!(bench.value(&opened, &r#ref).await?, "", "{name}");
+        }
+        bench.close(opened).await?;
+    }
+    Ok(())
+}
+
+/// The card value of ruling R50's rows, and its bullets.
+const FOLLOWED: &str = "4242424242424242";
+
+/// What Neo's `inputValue()` answers for the box `r#ref` names: a read through the mask.
+async fn masked_value(bench: &Bench, opened: &Opened, r#ref: &str) -> TestResult<String> {
+    let target = ref_target(&opened.page.brand(), r#ref);
+    let read = bench
+        .live
+        .invoke("locator.inputValue", input_value(&target))
+        .await??;
+    Ok(read.as_str().unwrap_or_default().to_owned())
+}
+
+/// Ruling R50's row 18: after a private fill the page puts two new elements in the box's place,
+/// each holding the value and mirroring it into its `value` attribute, as a framework does for a
+/// controlled input. A click on a locator that finds both fails strict mode, with no read through
+/// the mask before it: its message and call log preview both as `value="<16 characters>"`, never
+/// the value. Main prints the value there, with or without a snapshot between (measured by the
+/// design's keeper on main 579b45ccf). Fails with the scan run before the five reads alone: no
+/// read came between, so the preview prints the value.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_an_error_preview_masks_a_box_the_page_re_created() -> TestResult {
+    let bench = Bench::start().await?;
+    let marker = format!("value=\"<{} characters>\"", FOLLOWED.len());
+    for conformance in [false, true] {
+        let opened = bench
+            .open("/private/mark-follows.html", Place::Front)
+            .await?;
+        let card = bench.r#ref(&opened, "textbox", "Card").await?;
+        let env = bench.host(&opened);
+        let field = Field::new(&card, &bench.page_origin).with(FOLLOWED)?;
+        let entry = bench.enter(&env, &opened, vec![field]).await;
+        assert_eq!(entry.outcome, EntryOutcome::Entered, "{entry:?}");
+        bench
+            .live
+            .main_world(&opened.page, "recreateMirrored()")
+            .await?;
+        let mirrors = json!({
+            "$neo": "locator", "page": opened.page.brand(),
+            "chunks": [{ "parts": [{ "name": "css", "body": [{ "simples": [{ "selector": { "css": "input.mirror", "functions": [] }, "combinator": "" }] }], "source": "input.mirror" }] }],
+            "display": "locator('input.mirror')",
+        });
+        let input = json!({
+            "call": { "api": "locator.click", "timeoutMs": 700, "conformance": conformance },
+            "target": mirrors, "strict": "strict",
+        });
+        let failure = preview_failure(&bench, &opened, "locator.click", input).await?;
+        assert!(
+            failure.message.contains("strict mode violation"),
+            "{}",
+            failure.message
+        );
+        assert!(failure.message.contains(&marker), "{}", failure.message);
+        for text in iter::once(&failure.message).chain(&failure.notes) {
+            assert!(
+                !text.contains(FOLLOWED),
+                "the preview printed the value: {text}"
+            );
+        }
+        bench.close(opened).await?;
+    }
+    Ok(())
+}
+
+/// Ruling R50's row 13c, modelled on a real pin widget: a code given to its first box is spread
+/// one character to each of four boxes, and the whole code is mirrored into an input the widget
+/// submits. The read-back finds the box holding one character, so the fill is not entered; the
+/// digest of the value the box was given masks the mirror, in an element's read and in the
+/// whole-page snapshot. Another box prints its one character: a named limit, and the contract
+/// tells a host to fill such a widget one box at a time. Fails with no digest kept of what the
+/// box was given: the mirror prints the code.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_the_mark_follows_a_code_a_widget_mirrors() -> TestResult {
+    const CODE: &str = "7391";
+    let bench = Bench::start().await?;
+    let opened = bench.open("/private/pin-mirror.html", Place::Front).await?;
+    let first = bench.r#ref(&opened, "textbox", "Digit 1").await?;
+    let env = bench.host(&opened);
+    let field = Field::new(&first, &bench.page_origin).with(CODE)?;
+    let entry = bench.enter(&env, &opened, vec![field]).await;
+    assert_ne!(
+        entry.outcome,
+        EntryOutcome::Entered,
+        "the widget spread it: {entry:?}"
+    );
+    let whole = bench.r#ref(&opened, "textbox", "Whole code").await?;
+    assert_eq!(
+        masked_value(&bench, &opened, &whole).await?,
+        "••••",
+        "the mirror"
+    );
+    assert_eq!(
+        masked_value(&bench, &opened, &first).await?,
+        "•",
+        "the box the code was given to"
+    );
+    let second = bench.r#ref(&opened, "textbox", "Digit 2").await?;
+    assert_eq!(
+        masked_value(&bench, &opened, &second).await?,
+        "3",
+        "the named limit: one character in another box"
+    );
+    let page = &opened.page;
+    let printed = bench
+        .live
+        .invoke("page.ariaSnapshot", page_snapshot(&page.brand(), false))
+        .await??
+        .to_string();
+    assert!(
+        !printed.contains(CODE),
+        "the snapshot prints no code: {printed}"
+    );
+    bench.close(opened).await
+}
+
+/// Ruling R50's row 13b: the page moves a part of the text, all but its first character, into
+/// another box and focuses it, inside the box's input event, so the read-back finds the box empty
+/// and marks the control that holds the focus (markFocused). That control reads as bullets, as on
+/// main, and so does a clone the page makes of it afterwards: markFocused keeps a digest of what
+/// the control holds. The part is not the value the box was given, so that digest alone masks
+/// the clone. Fails with the digest left out of markFocused (the clone prints the part).
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_the_mark_follows_the_value_into_a_clone_of_the_focused_control() -> TestResult {
+    let bench = Bench::start().await?;
+    // The page moves all but the first character.
+    let bullets = "•".repeat(FOLLOWED.len() - 1);
+    let opened = bench.open("/private/mark-moves.html", Place::Front).await?;
+    let mover = bench.r#ref(&opened, "textbox", "Mover").await?;
+    let catch = bench.r#ref(&opened, "textbox", "Catch").await?;
+    let env = bench.host(&opened);
+    let field = Field::new(&mover, &bench.page_origin).with(FOLLOWED)?;
+    let entry = bench.enter(&env, &opened, vec![field]).await;
+    assert_ne!(
+        entry.outcome,
+        EntryOutcome::Entered,
+        "the text moved: {entry:?}"
+    );
+    assert_eq!(
+        masked_value(&bench, &opened, &catch).await?,
+        bullets,
+        "the control that holds the focus"
+    );
+    bench.live.main_world(&opened.page, "cloneCatch()").await?;
+    let twin = bench.r#ref(&opened, "textbox", "Caught twin").await?;
+    assert_eq!(
+        masked_value(&bench, &opened, &twin).await?,
+        bullets,
+        "a clone of it"
+    );
+    bench.close(opened).await
+}
+
+/// Ruling R50's rows 11, 12, 13, 15 and 16: the mark follows the value. After a private fill of
+/// the Card box, every text control of the document that holds the value reads as bullets
+/// through Neo's reads, though only the Card box carries the mark: a second box the page copies
+/// it into while the Card box still holds it (no new power: the page holds it), a clone, a copy
+/// the page groups with spaces, and a new element the page puts in the Card box's place, also in
+/// a whole-page snapshot, and `toHaveValue` compares it against the bullets. After a reload, a
+/// new document keeps no digest: a box set to the value reads it. Fails with the digest compare
+/// taken out of the mask: each copy reads the value.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_the_mark_follows_the_value_into_copies() -> TestResult {
+    let bench = Bench::start().await?;
+    let bullets = "•".repeat(FOLLOWED.len());
+    let opened = bench
+        .open("/private/mark-follows.html", Place::Front)
+        .await?;
+    let card = bench.r#ref(&opened, "textbox", "Card").await?;
+    let copy = bench.r#ref(&opened, "textbox", "Copy").await?;
+    let env = bench.host(&opened);
+    let field = Field::new(&card, &bench.page_origin).with(FOLLOWED)?;
+    let entry = bench.enter(&env, &opened, vec![field]).await;
+    assert_eq!(entry.outcome, EntryOutcome::Entered, "{entry:?}");
+    let page = &opened.page;
+    // Row 15: a second box set to the value while the filled box still holds it.
+    bench.live.main_world(page, "copyCard(false)").await?;
+    assert_eq!(
+        masked_value(&bench, &opened, &copy).await?,
+        bullets,
+        "the copy"
+    );
+    // Row 13: a copy the page groups with spaces.
+    bench.live.main_world(page, "copyCard(true)").await?;
+    let grouped = "•".repeat(FOLLOWED.len() + 3);
+    assert_eq!(
+        masked_value(&bench, &opened, &copy).await?,
+        grouped,
+        "the grouped copy"
+    );
+    // Row 12: a clone.
+    bench.live.main_world(page, "cloneCard()").await?;
+    let twin = bench.r#ref(&opened, "textbox", "Twin").await?;
+    assert_eq!(
+        masked_value(&bench, &opened, &twin).await?,
+        bullets,
+        "the clone"
+    );
+    // Row 11: a new element in the box's place, also in a whole-page snapshot, and toHaveValue.
+    bench.live.main_world(page, "recreate()").await?;
+    let fresh = bench.r#ref(&opened, "textbox", "Fresh").await?;
+    assert_eq!(
+        masked_value(&bench, &opened, &fresh).await?,
+        bullets,
+        "the new box"
+    );
+    let printed = bench
+        .live
+        .invoke("page.ariaSnapshot", page_snapshot(&page.brand(), false))
+        .await??
+        .to_string();
+    assert!(
+        !printed.contains(FOLLOWED),
+        "the snapshot prints no value: {printed}"
+    );
+    let same_as_bullets = expectation(
+        ("target", ref_target(&page.brand(), &fresh)),
+        "toHaveValue",
+        &json!({ "expression": "to.have.value", "isNot": false,
+            "expectedText": [{ "string": bullets }] }),
+    );
+    bench
+        .live
+        .invoke("expect.locator", same_as_bullets)
+        .await??;
+    // Row 16: a new document keeps no digest.
+    bench.live.main_world(page, "location.reload()").await?;
+    time::sleep(Duration::from_millis(500)).await;
+    bench
+        .live
+        .main_world(
+            page,
+            &format!("document.getElementById('copy').value = '{FOLLOWED}'"),
+        )
+        .await?;
+    let copy = bench.r#ref(&opened, "textbox", "Copy").await?;
+    assert_eq!(
+        masked_value(&bench, &opened, &copy).await?,
+        FOLLOWED,
+        "after a reload"
+    );
+    bench.close(opened).await
+}
+
+/// Ruling R50's row 14, one guess at most: after a private fill the page empties every box that
+/// held the value, and a script makes ten guesses, each by setting the Guess box and reading it
+/// with `inputValue()`, with no whole-page snapshot between. With the right value fifth, none of
+/// the ten reads bullets: the first wrong guess's read forgot the digest. With the right value
+/// first, that one read is bullets (the value is on the page again), and no later read can be,
+/// the right value again included. Fails with forgetting taken out, or done only at a whole-page
+/// snapshot: the fifth guess reads bullets.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_value_that_left_can_be_guessed_once_at_most() -> TestResult {
+    let bench = Bench::start().await?;
+    for right_at in [5, 1] {
+        let opened = bench
+            .open("/private/mark-follows.html", Place::Front)
+            .await?;
+        let card = bench.r#ref(&opened, "textbox", "Card").await?;
+        let guess = bench.r#ref(&opened, "textbox", "Guess").await?;
+        let env = bench.host(&opened);
+        let field = Field::new(&card, &bench.page_origin).with(FOLLOWED)?;
+        let entry = bench.enter(&env, &opened, vec![field]).await;
+        assert_eq!(entry.outcome, EntryOutcome::Entered, "{entry:?}");
+        bench.live.main_world(&opened.page, "emptyAll()").await?;
+        let mut masked = Vec::new();
+        for attempt in 1..=10 {
+            let text = if attempt == right_at || (right_at == 1 && attempt == 6) {
+                FOLLOWED.to_owned()
+            } else {
+                format!("42424242424242{attempt:02}")
+            };
+            bench
+                .live
+                .main_world(&opened.page, &format!("guess('{text}')"))
+                .await?;
+            if masked_value(&bench, &opened, &guess)
+                .await?
+                .starts_with('•')
+            {
+                masked.push(attempt);
+            }
+        }
+        let wanted: Vec<i32> = if right_at == 1 { vec![1] } else { Vec::new() };
+        assert_eq!(
+            masked, wanted,
+            "right value at guess {right_at}: the guesses read as bullets"
+        );
+        bench.close(opened).await?;
+    }
+    Ok(())
+}
+
+/// Ruling R50's row 13a: a page that keeps four characters of what was typed (`value_not_taken`)
+/// then puts a new box in its place that holds them. The digest was kept of what the box held at
+/// its read-back, so the new box reads as bullets. Fails with a digest kept only when the box
+/// holds the value it was given: the new box reads the four characters.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_kept_part_of_the_value_is_masked_where_it_goes() -> TestResult {
+    let bench = Bench::start().await?;
+    let opened = bench.open("/private/rewrite.html", Place::Front).await?;
+    let code_box = bench.r#ref(&opened, "textbox", "Short code").await?;
+    let env = bench.host(&opened);
+    let field = Field::new(&code_box, &bench.page_origin).with("246813")?;
+    let entry = bench.enter(&env, &opened, vec![field]).await;
+    assert_eq!(code(&entry), Some("value_not_taken"), "{entry:?}");
+    bench
+        .live
+        .main_world(
+            &opened.page,
+            "(() => { const old = document.querySelector('input'); \
+             const fresh = document.createElement('input'); \
+             fresh.setAttribute('aria-label', 'Fresh code'); fresh.value = old.value; \
+             old.replaceWith(fresh) })()",
+        )
+        .await?;
+    let fresh = bench.r#ref(&opened, "textbox", "Fresh code").await?;
+    assert_eq!(
+        masked_value(&bench, &opened, &fresh).await?,
+        "••••",
+        "the new box"
+    );
+    bench.close(opened).await
+}
+
+/// A check call's request on `opened` that compares `value` with the box `r#ref` names, the
+/// host having approved `origin` for it (ruling R48), within ten seconds.
+fn compare_request(
+    opened: &Opened,
+    r#ref: &str,
+    value: &str,
+    spaced: bool,
+    origin: &str,
+) -> TestResult<LookRequest> {
+    Ok(LookRequest {
+        tab: opened.page.tab,
+        url: None,
+        fields: vec![LookField {
+            box_ref: r#ref.to_owned(),
+            expect: Some(Expect {
+                origin: origin.to_owned(),
+                ..Expect::default()
+            }),
+            keys: false,
+        }],
+        compares: vec![Some(LookCompare {
+            value: PrivateText::new(value.to_owned())?,
+            spaced,
+            cut: false,
+        })],
+        deadline: Instant::now() + Duration::from_secs(10),
+    })
+}
+
+/// One check call on `opened` that compares `value` with the box `r#ref` names, on the page's
+/// own origin (ruling R48).
+async fn compared(
+    bench: &Bench,
+    opened: &Opened,
+    r#ref: &str,
+    value: &str,
+    spaced: bool,
+) -> TestResult<BoxLook> {
+    let request = compare_request(opened, r#ref, value, spaced, &bench.page_origin)?;
+    look_one(bench, opened, &request).await
+}
+
+/// The check call `request` on `opened`, and its one box's answer.
+async fn look_one(bench: &Bench, opened: &Opened, request: &LookRequest) -> TestResult<BoxLook> {
+    let env = bench.host(opened);
+    let looks = bench
+        .live
+        .playwright
+        .look_boxes(&env, request)
+        .await
+        .map_err(|error| format!("the check failed: {error:?}"))?;
+    assert!(!env.was_sent(), "a check never marks itself sent");
+    looks
+        .into_iter()
+        .next()
+        .ok_or_else(|| "no answer for the box".into())
+}
+
+/// The booleans a check answered, or `None` when it read nothing.
+fn booleans(look: &BoxLook) -> Option<(bool, bool)> {
+    look.compared
+        .map(|compared| (compared.holds, compared.contains))
+}
+
+/// Ruling R48's rows 1 to 5: the check call compares a host's value with a named box, in the
+/// box's isolated world, and answers two booleans. A box after a private fill holds and contains
+/// its value and not another; with `spaced` a box the page groups holds the bare number. A box
+/// that holds the number inside a longer text contains it and does not hold it, grouped too with
+/// `spaced`, and a box the page masked does neither. A covered, a hidden and an out-of-view box
+/// answer their refusal and both booleans: reading needs no hit. A checkbox answers neither. A
+/// box whose frame was removed answers neither, and `element_detached`: never a `false` for a
+/// box Neo did not read. A tab no longer at the host's address answers `page_changed` and
+/// neither boolean: the value goes only where the fill would send it. Fails with containment kept without setting separators aside (the
+/// grouped number in a longer text is not contained), and with an unread box answered as
+/// `holds: false`.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_the_check_call_compares_a_value_with_a_named_box() -> TestResult {
+    const NUMBER: &str = "4242424242424242";
+    const OTHER: &str = "5555555555554444";
+    let bench = Bench::start().await?;
+    let opened = bench.open("/private/compare.html", Place::Front).await?;
+    let r#ref = |name: &'static str| bench.r#ref(&opened, "textbox", name);
+    let card = r#ref("Card").await?;
+    let env = bench.host(&opened);
+    let entry = bench
+        .enter(
+            &env,
+            &opened,
+            vec![Field::new(&card, &bench.page_origin).with(NUMBER)?],
+        )
+        .await;
+    assert_eq!(entry.outcome, EntryOutcome::Entered, "{entry:?}");
+    let both = Some((true, true));
+    let contained = Some((false, true));
+    let neither = Some((false, false));
+    // Row 1.
+    let look = compared(&bench, &opened, &card, NUMBER, false).await?;
+    assert_eq!(booleans(&look), both, "the filled box: {look:?}");
+    let look = compared(&bench, &opened, &card, OTHER, false).await?;
+    assert_eq!(booleans(&look), neither, "another value: {look:?}");
+    let grouped = r#ref("Grouped").await?;
+    let look = compared(&bench, &opened, &grouped, NUMBER, true).await?;
+    assert_eq!(booleans(&look), both, "grouped, spaced: {look:?}");
+    let look = compared(&bench, &opened, &grouped, NUMBER, false).await?;
+    assert_eq!(booleans(&look), neither, "grouped, not spaced: {look:?}");
+    // Row 2.
+    let longer = r#ref("Longer").await?;
+    let look = compared(&bench, &opened, &longer, NUMBER, false).await?;
+    assert_eq!(booleans(&look), contained, "inside a longer text: {look:?}");
+    let longer_grouped = r#ref("Longer grouped").await?;
+    let look = compared(&bench, &opened, &longer_grouped, NUMBER, true).await?;
+    assert_eq!(
+        booleans(&look),
+        contained,
+        "grouped in a longer text: {look:?}"
+    );
+    let masked = r#ref("Masked").await?;
+    let look = compared(&bench, &opened, &masked, NUMBER, true).await?;
+    assert_eq!(booleans(&look), neither, "masked by the page: {look:?}");
+    // Row 3: the refusal and both booleans.
+    // A hidden box prints no ref: a host mints one with `locator.ref()`.
+    for (css, refused) in [
+        ("#covered", "box_covered"),
+        ("#hidden", "box_hidden"),
+        ("#away", "cover_unread"),
+    ] {
+        let name = css;
+        let named = bench.mint(&opened, css).await?;
+        let look = compared(&bench, &opened, &named, NUMBER, false).await?;
+        let code = look.refusal.as_ref().map(|error| error.code.as_str());
+        assert_eq!(
+            (code, booleans(&look)),
+            (Some(refused), both),
+            "{name}: {look:?}"
+        );
+    }
+    // Row 4: no text input.
+    let agree = bench.r#ref(&opened, "checkbox", "Agree").await?;
+    let look = compared(&bench, &opened, &agree, NUMBER, false).await?;
+    assert_eq!(booleans(&look), None, "a checkbox: {look:?}");
+    unapproved_compares_send_nothing(&bench, &opened, &card).await?;
+    // Row 5: the ref is dead.
+    let inner = r#ref("Inner box").await?;
+    bench
+        .live
+        .main_world(&opened.page, "document.querySelector('iframe').remove()")
+        .await?;
+    let look = compared(&bench, &opened, &inner, NUMBER, false).await?;
+    let code = look.refusal.as_ref().map(|error| error.code.as_str());
+    assert_eq!(
+        (code, booleans(&look)),
+        (Some("element_detached"), None),
+        "a box whose frame was removed: {look:?}"
+    );
+    bench.close(opened).await
+}
+
+/// Ruling R48's rows 8a and 8c on `card`, which holds the number: asserted on what was sent,
+/// the session of every command that carried it. A compare on the approved origin comes first,
+/// to show the watch sees a value that goes. A tab no longer at the host's address and a box on
+/// another origin than the host approved are refused as the fill is, with no boolean, and the
+/// value went to no frame at all.
+async fn unapproved_compares_send_nothing(
+    bench: &Bench,
+    opened: &Opened,
+    card: &str,
+) -> TestResult {
+    const NUMBER: &str = "4242424242424242";
+    // Rows 8a and 8c assert on what was sent: the session of every command that carried the
+    // number. A compare on the approved origin first, to show the watch sees a value that goes.
+    bench.recording.watch_for(NUMBER);
+    let look = compared(bench, opened, card, NUMBER, false).await?;
+    assert_eq!(
+        booleans(&look),
+        Some((true, true)),
+        "the approved origin: {look:?}"
+    );
+    assert!(
+        !bench.recording.take_carriers().is_empty(),
+        "the watch sees the compare's request"
+    );
+    // Row 8a: a tab no longer at the host's address is refused as the fill is, and not compared.
+    let mut elsewhere = compare_request(opened, card, NUMBER, false, &bench.page_origin)?;
+    elsewhere.url = Some("https://elsewhere.example/".to_owned());
+    let look = look_one(bench, opened, &elsewhere).await?;
+    let code = look.refusal.as_ref().map(|error| error.code.as_str());
+    assert_eq!(
+        (code, booleans(&look)),
+        (Some("page_changed"), None),
+        "another address: {look:?}"
+    );
+    assert_eq!(
+        bench.recording.take_carriers(),
+        Vec::<Option<String>>::new(),
+        "not sent"
+    );
+    // Row 8c: a box on another origin than the host approved answers `wrong_origin` and no
+    // boolean, and the value never went to its frame, nor anywhere else.
+    let foreign = compare_request(opened, card, NUMBER, false, &bench.other_origin)?;
+    let look = look_one(bench, opened, &foreign).await?;
+    let code = look.refusal.as_ref().map(|error| error.code.as_str());
+    assert_eq!(
+        (code, booleans(&look)),
+        (Some("wrong_origin"), None),
+        "another origin: {look:?}"
+    );
+    assert_eq!(
+        bench.recording.take_carriers(),
+        Vec::<Option<String>>::new(),
+        "not sent"
+    );
+    Ok(())
+}
+
+/// Ruling R48's row 6, not read: the box's frame is still there and stops answering for three
+/// seconds. The check ends at its two-second deadline with `run_timeout` and no boolean for the
+/// box: Neo never says `false` of a box it did not read.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_box_whose_frame_does_not_answer_gets_no_boolean() -> TestResult {
+    let bench = Bench::start().await?;
+    let opened = bench.open("/private/busy-frame.html", Place::Front).await?;
+    let busy = bench.r#ref(&opened, "textbox", "Busy box").await?;
+    bench
+        .live
+        .main_world(
+            &opened.page,
+            "document.querySelector('iframe').contentWindow.postMessage('go', '*')",
+        )
+        .await?;
+    let env = bench.host(&opened);
+    // The frame's own origin, approved, so only its silence keeps the compare from answering.
+    let frame_origin = bench.page_origin.replace("127.0.0.1", "[::1]");
+    let mut request = compare_request(&opened, &busy, FOLLOWED, false, &frame_origin)?;
+    request.deadline = Instant::now() + Duration::from_secs(2);
+    let answered = bench.live.playwright.look_boxes(&env, &request).await;
+    match answered {
+        Err(error) => assert_eq!(error.code, "run_timeout", "{error:?}"),
+        Ok(looks) => {
+            let look = looks.first().ok_or("an answer for the box")?;
+            let code = look.refusal.as_ref().map(|error| error.code.as_str());
+            assert_eq!(
+                (code, look.compared),
+                (Some("run_timeout"), None),
+                "{look:?}"
+            );
+        }
+    }
+    // The frame's loop ends a second later: let it, so the browser is idle for the next test.
+    time::sleep(Duration::from_millis(1500)).await;
+    bench.close(opened).await
+}
+
+/// A plain check call on `opened` for the box `r#ref` names, with no expectation and no
+/// compare, ending by `within` from now.
+fn plain_look(opened: &Opened, r#ref: &str, within: Duration) -> LookRequest {
+    LookRequest {
+        tab: opened.page.tab,
+        url: None,
+        fields: vec![LookField {
+            box_ref: r#ref.to_owned(),
+            expect: None,
+            keys: false,
+        }],
+        compares: vec![None],
+        deadline: Instant::now() + within,
+    }
+}
+
+/// The refusal code and `frame_gone` of the check call's answer for `r#ref`.
+async fn gone_of(
+    bench: &Bench,
+    opened: &Opened,
+    r#ref: &str,
+) -> TestResult<(Option<String>, bool)> {
+    let look = look_one(
+        bench,
+        opened,
+        &plain_look(opened, r#ref, Duration::from_secs(10)),
+    )
+    .await?;
+    Ok((look.refusal.map(|error| error.code), look.frame_gone))
+}
+
+/// The code a dead ref answers.
+const DETACHED: &str = "element_detached";
+
+/// Ruling R63, rows 1, 3, 7 and 8: whether a dead ref's frame left the tab, in a same-site frame
+/// (on the page's session) and a cross-site one (on its own). A live box answers no refusal and
+/// no `frame_gone` (row 8). A box the page removed from a document that stays answers
+/// `element_detached` and no `frame_gone` (row 7). A frame that loads a new document in place
+/// keeps its frame: its old box answers `element_detached` and no `frame_gone` (row 3). A frame
+/// the page removed takes its box out of the tab: `element_detached` and `frame_gone` (row 1).
+/// Fails with the field never set (row 1 answers false), and with every dead ref read as gone
+/// (rows 3 and 7 answer true).
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_dead_ref_says_frame_gone_only_when_its_frame_left() -> TestResult {
+    let bench = Bench::start().await?;
+    let opened = bench
+        .open("/private/frames-gone.html", Place::Front)
+        .await?;
+    let named = |name: &'static str| bench.r#ref(&opened, "textbox", name);
+    let (page, near, far) = (
+        named("Page box").await?,
+        named("Near box").await?,
+        named("Card number").await?,
+    );
+    for r#ref in [&page, &near, &far] {
+        assert_eq!(
+            gone_of(&bench, &opened, r#ref).await?,
+            (None, false),
+            "row 8: {ref}"
+        );
+    }
+    bench
+        .live
+        .main_world(&opened.page, "removePageBox()")
+        .await?;
+    assert_eq!(
+        gone_of(&bench, &opened, &page).await?,
+        (Some(DETACHED.to_owned()), false),
+        "row 7"
+    );
+    bench
+        .live
+        .main_world(&opened.page, "reloadNear() && reloadFar()")
+        .await?;
+    time::sleep(Duration::from_millis(800)).await;
+    for r#ref in [&near, &far] {
+        assert_eq!(
+            gone_of(&bench, &opened, r#ref).await?,
+            (Some(DETACHED.to_owned()), false),
+            "row 3: {ref}"
+        );
+    }
+    let (near, far) = (named("Near box").await?, named("Card number").await?);
+    bench
+        .live
+        .main_world(&opened.page, "removeNear() && removeFar()")
+        .await?;
+    for r#ref in [&near, &far] {
+        assert_eq!(
+            gone_of(&bench, &opened, r#ref).await?,
+            (Some(DETACHED.to_owned()), true),
+            "row 1: {ref}"
+        );
+    }
+    bench.close(opened).await
+}
+
+/// Ruling R63, row 2: the tab moves on to another document and takes its frames with it. A box
+/// of the old page's frames answers `element_detached` and `frame_gone`; a box of the old main
+/// document answers `element_detached` and no `frame_gone`, as the main frame stays. Fails with
+/// the field never set (the framed boxes answer false), and with every dead ref read as gone
+/// (the main document's box answers true).
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_top_navigation_takes_its_frames_with_it() -> TestResult {
+    let bench = Bench::start().await?;
+    let opened = bench
+        .open("/private/frames-gone.html", Place::Front)
+        .await?;
+    let named = |name: &'static str| bench.r#ref(&opened, "textbox", name);
+    let (page, near, far) = (
+        named("Page box").await?,
+        named("Near box").await?,
+        named("Card number").await?,
+    );
+    bench
+        .live
+        .main_world(&opened.page, "location.href = '/private/look.html'")
+        .await?;
+    time::sleep(Duration::from_millis(1000)).await;
+    assert_eq!(
+        gone_of(&bench, &opened, &page).await?,
+        (Some(DETACHED.to_owned()), false),
+        "the main document"
+    );
+    for r#ref in [&near, &far] {
+        assert_eq!(
+            gone_of(&bench, &opened, r#ref).await?,
+            (Some(DETACHED.to_owned()), true),
+            "a frame: {ref}"
+        );
+    }
+    bench.close(opened).await
+}
+
+/// Ruling R63, row 5: a ref from before a restart of Neo, here a second `Playwright` on the same
+/// browser, into a frame that is in fact gone: what it answers today (`element_detached`), and no
+/// `frame_gone`, as nothing records where that ref's world was. Fails with every dead ref read as
+/// gone.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_ref_from_before_a_restart_says_no_frame_gone() -> TestResult {
+    let bench = Bench::start().await?;
+    let opened = bench
+        .open("/private/frames-gone.html", Place::Front)
+        .await?;
+    let near = bench.r#ref(&opened, "textbox", "Near box").await?;
+    bench.live.main_world(&opened.page, "removeNear()").await?;
+    let restarted = LiveBrowser::connect().await?;
+    let env = HostEnv::new(&restarted);
+    let looks = restarted
+        .playwright
+        .look_boxes(&env, &plain_look(&opened, &near, Duration::from_secs(10)))
+        .await
+        .map_err(|error| format!("the check failed: {error:?}"))?;
+    let look = looks.first().ok_or("an answer for the box")?;
+    let code = look.refusal.as_ref().map(|error| error.code.clone());
+    assert_eq!(
+        (code, look.frame_gone),
+        (Some(DETACHED.to_owned()), false),
+        "{look:?}"
+    );
+    bench.close(opened).await
+}
+
+/// Ruling R63, row 6: a frame-tree read that fails, refused or never answered, gives no
+/// `frame_gone` for a ref whose frame is in fact gone; the same ref answers it once the read goes
+/// through. A read that is not whole cannot come back: the read requires every cross-site frame's
+/// tree and fails without one (`frame_tree::read_every`). Fails with a failed read taken as
+/// "the frame is not there".
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_failed_frame_tree_read_says_no_frame_gone() -> TestResult {
+    let bench = Bench::start().await?;
+    let opened = bench
+        .open("/private/frames-gone.html", Place::Front)
+        .await?;
+    let near = bench.r#ref(&opened, "textbox", "Near box").await?;
+    bench.live.main_world(&opened.page, "removeNear()").await?;
+    for (method, how) in [
+        ("Page.getFrameTree", Failing::Refuse),
+        ("Target.getTargets", Failing::Hang),
+    ] {
+        bench.recording.fail(method, how);
+        let look = look_one(
+            &bench,
+            &opened,
+            &plain_look(&opened, &near, Duration::from_secs(2)),
+        )
+        .await;
+        bench.recording.stop_failing();
+        let look = look?;
+        let code = look.refusal.as_ref().map(|error| error.code.clone());
+        assert_eq!(
+            (code, look.frame_gone),
+            (Some(DETACHED.to_owned()), false),
+            "{method} {how:?}: {look:?}"
+        );
+    }
+    assert_eq!(
+        gone_of(&bench, &opened, &near).await?,
+        (Some(DETACHED.to_owned()), true),
+        "the read goes through"
+    );
+    bench.close(opened).await
+}
+
+/// Ruling R63's two reads, held by a row (the design keeper's control): `frame_gone` needs two
+/// steady reads in a row that both miss the frame, so a second read that fails answers no
+/// `frame_gone`. Both frames are removed; a first check answers true and counts its lists of the
+/// out-of-process frames (two per read, the second read's at the end); the same check again with
+/// that list failing from the second read's first call on answers no `frame_gone`. Fails with the
+/// second read replaced by the first.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_frame_gone_needs_the_second_read_too() -> TestResult {
+    const LISTS: &str = "Target.getTargets";
+    let bench = Bench::start().await?;
+    let opened = bench
+        .open("/private/frames-gone.html", Place::Front)
+        .await?;
+    let near = bench.r#ref(&opened, "textbox", "Near box").await?;
+    bench
+        .live
+        .main_world(&opened.page, "removeNear() && removeFar()")
+        .await?;
+    bench.recording.reset_calls();
+    assert_eq!(
+        gone_of(&bench, &opened, &near).await?,
+        (Some(DETACHED.to_owned()), true),
+        "both reads miss the frame"
+    );
+    let lists = bench.recording.calls(LISTS);
+    assert!(lists >= 4, "two reads of two lists each: {lists}");
+    bench.recording.fail_from(LISTS, Failing::Refuse, lists - 1);
+    let look = gone_of(&bench, &opened, &near).await;
+    bench.recording.stop_failing();
+    assert_eq!(
+        look?,
+        (Some(DETACHED.to_owned()), false),
+        "the first read missed the frame and the second failed"
+    );
+    bench.close(opened).await
+}
+
+/// Ruling R63, rows 9 and 10: a field that carries a value, on a frame that left the tab, answers
+/// no `holds` and no `contains`, and `frame_gone`. A fill on that ref answers as on main: refused
+/// `element_detached`, nothing typed; the fill's answer has no such field. Fails with the field
+/// never set.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_value_on_a_gone_frame_is_not_compared_and_says_so() -> TestResult {
+    let bench = Bench::start().await?;
+    let opened = bench
+        .open("/private/frames-gone.html", Place::Front)
+        .await?;
+    let far = bench.r#ref(&opened, "textbox", "Card number").await?;
+    bench.live.main_world(&opened.page, "removeFar()").await?;
+    let request = compare_request(&opened, &far, CARD, false, &bench.other_origin)?;
+    let look = look_one(&bench, &opened, &request).await?;
+    let refused = look.refusal.as_ref().map(|error| error.code.clone());
+    assert_eq!(
+        (refused, look.compared, look.frame_gone),
+        (Some(DETACHED.to_owned()), None, true),
+        "{look:?}"
+    );
+    let env = bench.host(&opened);
+    let field = Field::new(&far, &bench.other_origin).with(CARD)?;
+    let entry = bench.enter(&env, &opened, vec![field]).await;
+    assert_eq!(entry.outcome, EntryOutcome::Refused, "{entry:?}");
+    assert_eq!(code(&entry), Some("element_detached"), "{entry:?}");
+    bench.close(opened).await
+}
+
+/// One ruling R64 row of a one-box fill: its number, the page's own setup, the box's role and
+/// name, the approved limit, whether a cut is allowed, the approved name, the value, the answer.
+type LimitRow<'a> = (
+    u32,
+    &'a str,
+    (&'a str, &'a str),
+    i32,
+    bool,
+    Option<&'a str>,
+    &'a str,
+    LimitAnswer,
+);
+
+/// What a ruling R64 row expects of a one-box fill.
+#[derive(Clone, Copy, Debug)]
+enum LimitAnswer {
+    /// Entered, this many characters typed, and listed in `max_length_moved` or not.
+    Entered { typed: usize, listed: bool },
+    /// Refused `box_changed`, naming this fact, nothing typed.
+    Changed(&'static str),
+}
+
+/// Ruling R64, row 1: a Visa number moves the code box's limit from 4 to 3 while it is typed, as
+/// a hosted card field does once it knows the brand. A host that sends back the limits it read
+/// (22, 5, 4) gets the form entered, 16, 5 and 3 characters, and the code box listed as moved.
+/// Main answers `partial`, `box_changed` at the code box. Fails with the rule off (any moved limit
+/// refuses) and with the flag never set.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_limit_moved_by_the_brand_still_takes_a_code_that_fits() -> TestResult {
+    let bench = Bench::start().await?;
+    let opened = bench
+        .open("/private/card-limits.html", Place::Front)
+        .await?;
+    let named = |name: &'static str| bench.r#ref(&opened, "textbox", name);
+    let (number, expiry, code_box) = (
+        named("Card number").await?,
+        named("Expiry").await?,
+        named("Security code").await?,
+    );
+    let origin = &bench.page_origin;
+    let fields = vec![
+        Field::new(&number, origin)
+            .max_length(22)
+            .with("4242424242424242")?,
+        Field::new(&expiry, origin).max_length(5).with("12/34")?,
+        Field::new(&code_box, origin).max_length(4).with("123")?,
+    ];
+    let env = bench.host(&opened);
+    let entry = bench.enter(&env, &opened, fields).await;
+    assert_eq!(entry.outcome, EntryOutcome::Entered, "{entry:?}");
+    assert_eq!(entry.typed, vec![16, 5, 3], "{entry:?}");
+    assert_eq!(entry.max_length_moved, vec![2], "{entry:?}");
+    bench.close(opened).await
+}
+
+/// Ruling R64, the one-box rows: a limit that moved refuses only when the value does not fit both
+/// the approved limit and the limit now; `cut` plays no part in it; -1 is a box approved with no
+/// limit; a box whose type the browser applies no limit to fits any value; a harmless move never
+/// hides a later fact that differs; a limit that moves during its own box's typing is not listed
+/// and the read-back decides. Each row opens the page afresh. Fails with the rule off (rows 2, 4
+/// and 11 refuse), with no refusal for any moved limit (rows 3, 5, 6, 7, 10 and 16 enter), with a
+/// harmless move ending the compare of the facts (row 9 enters), and with the flag never set.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+#[expect(clippy::too_many_lines, reason = "one table of the ruling's rows")]
+async fn tests_that_a_moved_limit_refuses_only_when_it_would_cut_the_value() -> TestResult {
+    use LimitAnswer::{Changed, Entered};
+    const VISA: &str = "4242424242424242";
+    const AMEX: &str = "378282246310005";
+    const TWENTY: &str = "42424242424242424242";
+    let bench = Bench::start().await?;
+    // (row, the page's own setup, role and name of the box, approved limit, cut, approved name,
+    // value, answer)
+    let rows: [LimitRow<'_>; 13] = [
+        (
+            2,
+            "setLimit('number', 17)",
+            ("textbox", "Card number"),
+            22,
+            false,
+            None,
+            AMEX,
+            Entered {
+                typed: 15,
+                listed: true,
+            },
+        ),
+        (
+            3,
+            "setLimit('code', 3)",
+            ("textbox", "Security code"),
+            4,
+            false,
+            None,
+            "1234",
+            Changed("maxLength"),
+        ),
+        (
+            4,
+            "setLimit('plain', 20)",
+            ("textbox", "Plain"),
+            -1,
+            false,
+            None,
+            VISA,
+            Entered {
+                typed: 16,
+                listed: true,
+            },
+        ),
+        (
+            5,
+            "setLimit('plain', 8)",
+            ("textbox", "Plain"),
+            -1,
+            false,
+            None,
+            VISA,
+            Changed("maxLength"),
+        ),
+        (
+            6,
+            "true",
+            ("textbox", "Plain"),
+            16,
+            true,
+            None,
+            TWENTY,
+            Changed("maxLength"),
+        ),
+        (
+            7,
+            "setLimit('plain', 12)",
+            ("textbox", "Plain"),
+            16,
+            true,
+            None,
+            TWENTY,
+            Changed("maxLength"),
+        ),
+        (
+            8,
+            "setLimit('plain', 16)",
+            ("textbox", "Plain"),
+            16,
+            true,
+            None,
+            TWENTY,
+            Entered {
+                typed: 16,
+                listed: false,
+            },
+        ),
+        (
+            9,
+            "setLimit('code', 3) && setName('code', 'other')",
+            ("textbox", "Security code"),
+            4,
+            false,
+            Some("cvc"),
+            "123",
+            Changed("name"),
+        ),
+        (
+            10,
+            "setLimit('plain', 4)",
+            ("textbox", "Plain"),
+            3,
+            false,
+            None,
+            "1234",
+            Changed("maxLength"),
+        ),
+        (
+            11,
+            "setLimit('pin', 3)",
+            ("spinbutton", "Pin"),
+            4,
+            false,
+            None,
+            "123456",
+            Entered {
+                typed: 6,
+                listed: true,
+            },
+        ),
+        (
+            14,
+            "true",
+            ("textbox", "Security code"),
+            4,
+            false,
+            None,
+            "123",
+            Entered {
+                typed: 3,
+                listed: false,
+            },
+        ),
+        (
+            16,
+            "setLimit('plain', 6)",
+            ("textbox", "Plain"),
+            -1,
+            false,
+            None,
+            "CANARY-49",
+            Changed("maxLength"),
+        ),
+        (
+            17,
+            "true",
+            ("textbox", "Card number"),
+            22,
+            false,
+            None,
+            AMEX,
+            Entered {
+                typed: 15,
+                listed: false,
+            },
+        ),
+    ];
+    let mut failures = Vec::new();
+    for (row, setup, (role, name), approved, cut, approved_name, value, answer) in rows {
+        let opened = bench
+            .open("/private/card-limits.html", Place::Front)
+            .await?;
+        bench.live.main_world(&opened.page, setup).await?;
+        let r#ref = bench.r#ref(&opened, role, name).await?;
+        let mut field = Field::new(&r#ref, &bench.page_origin).max_length(approved);
+        if cut {
+            field = field.cut();
+        }
+        if let Some(approved_name) = approved_name {
+            field = field.named(approved_name);
+        }
+        let env = bench.host(&opened);
+        let entry = bench.enter(&env, &opened, vec![field.with(value)?]).await;
+        let held = match answer {
+            Entered { typed, listed } => {
+                let moved: Vec<usize> = if listed { vec![0] } else { Vec::new() };
+                entry.outcome == EntryOutcome::Entered
+                    && entry.typed == vec![typed]
+                    && entry.max_length_moved == moved
+            }
+            Changed(fact) => {
+                entry.outcome == EntryOutcome::Refused
+                    && code(&entry) == Some("box_changed")
+                    && entry
+                        .error
+                        .as_ref()
+                        .is_some_and(|error| error.message.contains(&format!("box's {fact}")))
+                    && entry.typed == vec![0]
+                    && entry.max_length_moved.is_empty()
+            }
+        };
+        if !held {
+            failures.push(format!("row {row}, wanted {answer:?}: {entry:?}"));
+        }
+        bench.close(opened).await?;
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+    Ok(())
+}
+
+/// Ruling R64, the check call's rows (12 to 15): it carries no length, so it never refuses for a
+/// limit that moved; it answers `max_length_moved` with the limit in the facts, with a value too
+/// (whose compare still answers), and not when the limit is the approved one. Row 15 is R49's
+/// check-call row, which changes: -1 on a box that has a limit answers no refusal and the flag,
+/// where main answers `box_changed`. Fails with the rule off (rows 12 and 15 refuse) and with the
+/// flag never set.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_the_check_call_says_a_limit_moved_and_never_refuses_for_it() -> TestResult {
+    let bench = Bench::start().await?;
+    let opened = bench
+        .open("/private/card-limits.html", Place::Front)
+        .await?;
+    bench
+        .live
+        .main_world(&opened.page, "setLimit('code', 3) && setLimit('plain', 6)")
+        .await?;
+    let named = |name: &'static str| bench.r#ref(&opened, "textbox", name);
+    let (code_box, plain, number) = (
+        named("Security code").await?,
+        named("Plain").await?,
+        named("Card number").await?,
+    );
+    let checked = |r#ref: &str, approved: i32, value: Option<&str>| {
+        let mut request = plain_look(&opened, r#ref, Duration::from_secs(10));
+        request.fields[0].expect = Some(Expect {
+            origin: bench.page_origin.clone(),
+            max_length: Some(approved),
+            ..Expect::default()
+        });
+        let compare = value.map(|value| {
+            PrivateText::new(value.to_owned()).map(|value| LookCompare {
+                value,
+                spaced: false,
+                cut: false,
+            })
+        });
+        (request, compare)
+    };
+    for (row, r#ref, approved, value, limit_now, moved) in [
+        (12, &code_box, 4, None, Some(3), true),
+        (13, &code_box, 4, Some("123"), Some(3), true),
+        (14, &number, 22, None, Some(22), false),
+        (15, &plain, -1, None, Some(6), true),
+    ] {
+        let (mut request, compare) = checked(r#ref, approved, value);
+        request.compares = vec![compare.transpose()?];
+        let look = look_one(&bench, &opened, &request).await?;
+        assert!(look.refusal.is_none(), "row {row}: {look:?}");
+        assert_eq!(look.max_length_moved, moved, "row {row}: {look:?}");
+        let facts = look.facts.as_ref().ok_or("facts")?;
+        assert_eq!(facts.max_length, limit_now, "row {row}: {look:?}");
+        assert_eq!(
+            look.compared.is_some(),
+            value.is_some(),
+            "row {row}: {look:?}"
+        );
+    }
+    bench.close(opened).await
 }
 
 /// Rulings R55 and R56: a sign-in whose two boxes each sit under a sibling div that draws the
@@ -1077,9 +2618,11 @@ async fn tests_that_boxes_in_cross_site_frames_are_entered() -> TestResult {
     Ok(())
 }
 
-/// The card box hands focus to another box as it takes it, or the page takes
-/// the focus back into its own box when the frame takes it: `not_focused`, nothing in either
-/// box.
+/// The card box hands focus to another box as it takes it: `not_focused`, nothing in either box.
+/// Or the page takes the focus back into its own box when the frame takes it, a timer later: then
+/// `not_focused` with nothing typed, the whole value entered in the frame's box, or
+/// `value_not_taken` with the frame's box empty, as the page's race falls; never a part of the
+/// value, and never anything in the thief's box.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_a_focus_thief_gets_nothing() -> TestResult {
@@ -1140,25 +2683,28 @@ async fn tests_that_a_focus_thief_gets_nothing() -> TestResult {
             let entry = bench
                 .enter(&env, &opened, vec![Field::new(&number, other).with(CARD)?])
                 .await;
-            assert_eq!(
-                entry.outcome,
-                EntryOutcome::Refused,
-                "{place:?} focus thief #{round}: {entry:?}"
-            );
-            assert_eq!(
-                code(&entry),
-                Some("not_focused"),
-                "{place:?} focus thief #{round}"
-            );
-            assert_eq!(
-                bench.value(&opened, &number).await?,
-                "",
-                "{place:?} focus thief #{round}"
-            );
-            assert_eq!(
-                bench.value(&opened, &thief).await?,
-                "",
-                "{place:?} focus thief #{round}"
+            // The page takes the focus back a timer after its window blurs, so the race is the
+            // page's, and Neo's text goes on the frame's own connection: it lands whole in the
+            // frame's box or nowhere. Before Neo's focus check the thief wins (`not_focused`,
+            // nothing sent); after the insertion the box holds the value (entered); between the
+            // two the text finds no focus, and the read-back answers `value_not_taken` with an
+            // empty box. Never a part of the value, and never anything in the thief's box.
+            let held = bench.value(&opened, &number).await?;
+            let stolen = bench.value(&opened, &thief).await?;
+            let answered = match entry.outcome {
+                EntryOutcome::Refused => code(&entry) == Some("not_focused") && held.is_empty(),
+                EntryOutcome::Entered => held == CARD,
+                EntryOutcome::Uncertain => {
+                    code(&entry) == Some("value_not_taken") && held.is_empty()
+                }
+                _ => false,
+            };
+            assert!(
+                answered && stolen.is_empty(),
+                "{place:?} focus thief #{round}: {entry:?}; the frame's box holds {} characters, \
+                 the thief's {}",
+                held.chars().count(),
+                stolen.chars().count()
             );
             bench.close(opened).await?;
         }
@@ -1700,7 +3246,8 @@ fn printed_node(tree: &Value, name: &str) -> Option<String> {
 /// still holds what it got. (a) keys: the box's keydown handler focuses the neighbour at the
 /// third key, which lands there: `focus_lost`. (b) one insertion: the box's input handler moves
 /// the value into the neighbour and focuses it: `value_not_taken`. (c) the same move with the
-/// focus on a button marks nothing: the neighbour reads as the page holds it. On a tab in front
+/// focus on a button marks nothing, but the neighbour holds the whole value the entry was given,
+/// whose digest the read-back keeps (ruling R50), so it reads as bullets too. On a tab in front
 /// and behind.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
@@ -1716,7 +3263,7 @@ async fn tests_that_a_box_the_page_sends_the_value_into_is_marked_when_it_holds_
         for (mode, keys, stop, neighbour_holds, masked) in [
             ("keys", true, "focus_lost", third.as_str(), true),
             ("insert", false, "value_not_taken", STRAY, true),
-            ("button", false, "value_not_taken", STRAY, false),
+            ("button", false, "value_not_taken", STRAY, true),
         ] {
             let case = format!("{place:?} {mode}");
             let opened = bench
@@ -2622,32 +4169,9 @@ async fn tests_that_a_value_typed_and_emptied_between_two_looks_changes_the_read
     Ok(())
 }
 
-/// Ruling R45's named limit: until a snapshot of the document has walked a closed shadow root,
-/// Neo does not know the boxes inside it, and a picture taken then can show what one holds,
-/// whoever typed it (here the page's own script; the keyboard would do the same). A marked
-/// snapshot that walks the root closes it for that document.
-#[tokio::test]
-#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
-async fn tests_that_a_box_in_a_closed_root_is_known_once_a_snapshot_walked_it() -> TestResult {
-    let bench = Bench::start().await?;
-    let opened = bench
-        .open("/private/closed-card.html", Place::Front)
-        .await?;
-    let typed = bench
-        .live
-        .main_world(&opened.page, "fillCard('4242424242424242')")
-        .await?;
-    assert_eq!(typed, json!(16));
-    let playwright = &bench.live.playwright;
-    assert!(
-        matches!(
-            playwright.picture_check(opened.page.tab).await,
-            PictureCheck::Clear { .. }
-        ),
-        "the limit: no snapshot walked the closed root yet"
-    );
-    // A marked snapshot: clickable marking reads the DOM capture and hands the closed root's
-    // seeds to the document's world.
+/// A marked snapshot of `opened`: clickable marking reads the DOM capture and hands the closed
+/// roots' seeds to the document's world, which opens them to its engine.
+async fn marked_snapshot(bench: &Bench, opened: &Opened) -> TestResult {
     bench
         .live
         .invoke(
@@ -2658,11 +4182,984 @@ async fn tests_that_a_box_in_a_closed_root_is_known_once_a_snapshot_walked_it() 
             }),
         )
         .await??;
+    Ok(())
+}
+
+/// The DOM capture a marked snapshot sends. The camera's walk on demand never sends one.
+const CAPTURE: &str = "DOMSnapshot.captureSnapshot";
+/// The call that names a host's closed root for the camera's walk on demand, once per host.
+const DESCRIBE: &str = "DOM.describeNode";
+/// The call that brings a closed root into Neo's world for that walk.
+const RESOLVE: &str = "DOM.resolveNode";
+/// The walk's object group going, released when the walk ends.
+const RELEASE: &str = "Runtime.releaseObjectGroup";
+
+/// `text` typed with the page's keyboard alone, as a script's `keyboard.type` does: trusted key
+/// and input events into whatever holds the focus, with no locator and no snapshot.
+async fn type_keys(bench: &Bench, opened: &Opened, text: &str) -> TestResult {
+    bench
+        .live
+        .invoke(
+            "keyboard.type",
+            json!({
+                "call": { "api": "keyboard.type", "timeoutMs": 0 },
+                "page": opened.page.brand(), "text": text,
+            }),
+        )
+        .await??;
+    Ok(())
+}
+
+/// Whether the walk's object group was released within two seconds: its owner's drop spawns the
+/// release, which may land after the reading returned.
+async fn released(bench: &Bench) -> bool {
+    let until = Instant::now() + Duration::from_secs(2);
+    while bench.recording.calls(RELEASE) == 0 && Instant::now() < until {
+        time::sleep(Duration::from_millis(20)).await;
+    }
+    bench.recording.calls(RELEASE) > 0
+}
+
+/// One key pressed with the page's keyboard alone (`keyboard.press`).
+async fn press_key(bench: &Bench, opened: &Opened, key: &str) -> TestResult {
+    bench
+        .live
+        .invoke(
+            "keyboard.press",
+            json!({
+                "call": { "api": "keyboard.press", "timeoutMs": 0 },
+                "page": opened.page.brand(), "key": key,
+            }),
+        )
+        .await??;
+    Ok(())
+}
+
+/// A clear reading's text, or an error naming what came instead.
+fn clear(check: &PictureCheck, what: &str) -> TestResult<String> {
+    match check {
+        PictureCheck::Clear { reading } => Ok(reading.clone()),
+        other => Err(format!("{what}: a clear reading, not {other:?}").into()),
+    }
+}
+
+/// The camera's walk on demand (ruling R65), row 1: a card number typed into a box inside a
+/// closed shadow root by a script's keyboard alone, no snapshot and no locator, then the focus
+/// taken away, so only the typing events bring the root: the next reading reads private. Main
+/// reads clear, the box unknown until a snapshot walks the root. One host asked, one description,
+/// no DOM capture, and the walk's object group released. Emptied, the page reads clear, and the
+/// host is not asked again. Fails with the walk left out (reads clear).
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_typing_into_a_closed_root_reads_private_at_the_next_reading() -> TestResult {
+    let bench = Bench::start().await?;
+    let opened = bench
+        .open("/private/closed-card.html", Place::Front)
+        .await?;
+    let playwright = &bench.live.playwright;
+    let tab = opened.page.tab;
+    clear(&playwright.picture_check(tab).await, "before typing")?;
+    bench.live.main_world(&opened.page, "focusCard()").await?;
+    type_keys(&bench, &opened, CARD).await?;
+    bench.live.main_world(&opened.page, "blurCard()").await?;
+    bench.recording.reset_calls();
+    assert_eq!(
+        playwright.picture_check(tab).await,
+        PictureCheck::Private,
+        "row 1: typing reached the closed root"
+    );
+    assert_eq!(bench.recording.calls(CAPTURE), 0, "no DOM capture");
+    assert_eq!(bench.recording.calls(DESCRIBE), 1, "one host asked");
+    assert!(released(&bench).await, "the walk's object group released");
+    bench.live.main_world(&opened.page, "fillCard('')").await?;
+    bench.recording.reset_calls();
+    clear(&playwright.picture_check(tab).await, "emptied")?;
+    assert_eq!(bench.recording.calls(DESCRIBE), 0, "a host is asked once");
+    bench.close(opened).await
+}
+
+/// The input count of the one document a reading lists (`frame=loader#count;`), if any.
+fn counted(reading: &str) -> Option<u64> {
+    reading
+        .rsplit('#')
+        .next()
+        .and_then(|count| count.trim_end_matches(';').parse().ok())
+}
+
+/// The walk on demand, row 1b: the first input into an unknown closed root is counted at once.
+/// One character typed into the closed card box and removed again before the next reading: that
+/// reading reads the root, its box empty and clear, so only the count can drop a picture taken
+/// while the character showed. The count is above zero. Fails with the first input not counted.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_value_typed_and_gone_in_an_unknown_root_is_counted() -> TestResult {
+    let bench = Bench::start().await?;
+    let opened = bench
+        .open("/private/closed-card.html", Place::Front)
+        .await?;
+    let playwright = &bench.live.playwright;
+    clear(&playwright.picture_check(opened.page.tab).await, "before")?;
+    bench.live.main_world(&opened.page, "focusCard()").await?;
+    type_keys(&bench, &opened, "4").await?;
+    press_key(&bench, &opened, "Backspace").await?;
+    bench.live.main_world(&opened.page, "blurCard()").await?;
+    let after = clear(&playwright.picture_check(opened.page.tab).await, "after")?;
+    assert!(
+        counted(&after).is_some_and(|count| count > 0),
+        "the input was counted: {after}"
+    );
+    bench.close(opened).await
+}
+
+/// The walk on demand, row 2: a box that holds the focus at a reading is read, so a card number
+/// typed before Neo's first reading in the document (before its listeners existed) reads private
+/// while its box keeps the focus. The named limit beside it: the same, with the focus taken away
+/// before that first reading, reads clear. Fails with the focus not followed (the first case
+/// reads clear).
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_box_holding_the_focus_at_a_reading_is_read() -> TestResult {
+    let bench = Bench::start().await?;
+    let playwright = &bench.live.playwright;
+    for blurred in [false, true] {
+        let opened = bench
+            .open("/private/closed-card.html", Place::Front)
+            .await?;
+        bench.live.main_world(&opened.page, "focusCard()").await?;
+        type_keys(&bench, &opened, CARD).await?;
+        if blurred {
+            bench.live.main_world(&opened.page, "blurCard()").await?;
+        }
+        bench.recording.reset_calls();
+        let first = playwright.picture_check(opened.page.tab).await;
+        if blurred {
+            clear(
+                &first,
+                "typed before the first reading, the focus gone: the limit",
+            )?;
+        } else {
+            assert_eq!(first, PictureCheck::Private, "the box holds the focus");
+        }
+        assert_eq!(bench.recording.calls(CAPTURE), 0, "no DOM capture");
+        bench.close(opened).await?;
+    }
+    Ok(())
+}
+
+/// The walk on demand, row 3: a closed root the page attaches after the document's first
+/// reading (a single-page checkout that mounts its card form later), then typed into, reads
+/// private at the next reading. On the first head this was the limit: the walk was spent at the
+/// first reading. Fails with the walk left out.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_root_attached_after_the_first_reading_is_read_once_typed_into() -> TestResult
+{
+    let bench = Bench::start().await?;
+    let opened = bench
+        .open("/private/closed-card.html", Place::Front)
+        .await?;
+    let playwright = &bench.live.playwright;
+    clear(&playwright.picture_check(opened.page.tab).await, "first")?;
+    bench
+        .live
+        .main_world(&opened.page, "attachSecond() && focusSecond()")
+        .await?;
+    type_keys(&bench, &opened, CARD).await?;
+    bench.recording.reset_calls();
     assert_eq!(
         playwright.picture_check(opened.page.tab).await,
         PictureCheck::Private,
-        "after a marked snapshot walked the root, its box is known"
+        "the late root, typed into"
     );
+    assert_eq!(bench.recording.calls(CAPTURE), 0, "no DOM capture");
+    bench.close(opened).await
+}
+
+/// The walk on demand, row 4: a box two closed roots deep, typed into, reads private at the next
+/// reading, on a small page and on one of 75,000 elements (whose DOM capture takes about 930 ms):
+/// the outer host from the typing, its root's focus to the inner host, two descriptions, each
+/// host asked once, no capture. The reading's time is printed. Fails with one round a reading
+/// (the inner root is read only at the reading after).
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_nested_closed_roots_are_followed_on_a_large_page() -> TestResult {
+    let bench = Bench::start().await?;
+    let playwright = &bench.live.playwright;
+    for nodes in [0, 75_000] {
+        let opened = bench
+            .open(
+                &format!("/private/closed-nested.html?nodes={nodes}"),
+                Place::Front,
+            )
+            .await?;
+        clear(&playwright.picture_check(opened.page.tab).await, "first")?;
+        bench.live.main_world(&opened.page, "focusDeep()").await?;
+        type_keys(&bench, &opened, CARD).await?;
+        bench.recording.reset_calls();
+        let started = Instant::now();
+        let reading = playwright.picture_check(opened.page.tab).await;
+        let took = started.elapsed();
+        #[expect(
+            clippy::print_stderr,
+            reason = "the walk's measured cost goes to the test output for the pull request"
+        )]
+        {
+            eprintln!(
+                "WALK ON DEMAND, two closed roots deep, {nodes} elements: the reading took {took:?}"
+            );
+        }
+        assert_eq!(
+            reading,
+            PictureCheck::Private,
+            "{nodes}: the inner root's box"
+        );
+        assert_eq!(
+            bench.recording.calls(DESCRIBE),
+            2,
+            "{nodes}: each host once"
+        );
+        assert_eq!(bench.recording.calls(CAPTURE), 0, "{nodes}: no DOM capture");
+        bench.recording.reset_calls();
+        assert_eq!(
+            playwright.picture_check(opened.page.tab).await,
+            PictureCheck::Private
+        );
+        assert_eq!(
+            bench.recording.calls(DESCRIBE),
+            0,
+            "{nodes}: not asked again"
+        );
+        bench.close(opened).await?;
+    }
+    Ok(())
+}
+
+/// The walk on demand, row 5 (the design keeper's ruling A): a key that types nothing fires no
+/// input event, so it moves no reading. `PageDown` and Tab with nothing in focus land on the body,
+/// arrow keys on a listbox of divs, and Tab from it lands on a focusable span; a video with
+/// controls, a details element and a focusable div take a key each. Every reading equals the one
+/// before the keys, so no picture main stores is dropped. The video and the details element are
+/// never described; the focused div is, once, by the focus rule, and nothing is resolved for it.
+/// Fails with keydown listened for (the first key on the body moves the reading).
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_key_that_types_nothing_moves_no_reading() -> TestResult {
+    let bench = Bench::start().await?;
+    let opened = bench
+        .open("/private/closed-plain.html", Place::Front)
+        .await?;
+    let playwright = &bench.live.playwright;
+    let tab = opened.page.tab;
+    bench.live.main_world(&opened.page, "blurAll()").await?;
+    let before = clear(&playwright.picture_check(tab).await, "before")?;
+    bench.recording.reset_calls();
+    for key in ["PageDown", "Tab"] {
+        bench.live.main_world(&opened.page, "blurAll()").await?;
+        press_key(&bench, &opened, key).await?;
+        let after = clear(&playwright.picture_check(tab).await, key)?;
+        assert_eq!(before, after, "{key} on the body moves no reading");
+    }
+    bench
+        .live
+        .main_world(&opened.page, "focusOn('list')")
+        .await?;
+    for key in ["ArrowDown", "ArrowDown", "ArrowDown", "Tab"] {
+        press_key(&bench, &opened, key).await?;
+    }
+    let after = clear(&playwright.picture_check(tab).await, "the list")?;
+    assert_eq!(
+        before, after,
+        "arrow keys and Tab onto the span move no reading"
+    );
+    // A browser-made root's element never stands for a host: neither is described.
+    bench.recording.reset_calls();
+    for id in ["v", "d"] {
+        bench
+            .live
+            .main_world(&opened.page, &format!("focusOn('{id}')"))
+            .await?;
+        press_key(&bench, &opened, "a").await?;
+        let after = clear(&playwright.picture_check(tab).await, id)?;
+        assert_eq!(before, after, "a key on #{id} moves no reading");
+    }
+    assert_eq!(
+        bench.recording.calls(DESCRIBE),
+        0,
+        "the video and details: none asked"
+    );
+    assert_eq!(bench.recording.calls(RESOLVE), 0, "nothing resolved");
+    // A focusable div that holds the focus is described once, by the focus rule, never again.
+    bench
+        .live
+        .main_world(&opened.page, "focusOn('pad')")
+        .await?;
+    for key in ["a", "b"] {
+        press_key(&bench, &opened, key).await?;
+        let after = clear(&playwright.picture_check(tab).await, "pad")?;
+        assert_eq!(before, after, "a key on the pad moves no reading");
+    }
+    assert_eq!(bench.recording.calls(DESCRIBE), 1, "the pad once");
+    assert_eq!(bench.recording.calls(RESOLVE), 0, "it carries no root");
+    assert_eq!(bench.recording.calls(CAPTURE), 0, "no DOM capture");
+    bench.close(opened).await
+}
+
+/// The walk on demand, row 5b (the lead's rows, the design keeper's editing-host ruling): what
+/// takes input itself moves nothing. Typing into an editable region, and with the caret in an
+/// element inside one; a select changed by the keyboard, whose trusted input event names the
+/// select; typing into a document in design mode; and a region editable by style alone. None of
+/// these boxes is private, so the reading stays as it was: no input event named a host. An editing
+/// host that holds the focus is described once, by the focus rule. What the page measured, each
+/// input event's first target and what counts as editable, is printed. Fails with an editing host
+/// named by its own events (the reading moves).
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_what_takes_input_itself_asks_nothing() -> TestResult {
+    let bench = Bench::start().await?;
+    let playwright = &bench.live.playwright;
+    for (what, setup, keys) in [
+        ("an editable region", "focusOn('editor')", "abc"),
+        ("an element inside one", "caretInside()", "abc"),
+        ("a select", "focusOn('pick')", "t"),
+        ("design mode", "design()", "abc"),
+        ("a region editable by style", "caretIn('styled')", "abc"),
+    ] {
+        let opened = bench
+            .open("/private/closed-plain.html", Place::Front)
+            .await?;
+        let tab = opened.page.tab;
+        bench.live.main_world(&opened.page, setup).await?;
+        // Counted from before the first reading: the focus rule must not take it for a host either.
+        bench.recording.reset_calls();
+        let before = clear(&playwright.picture_check(tab).await, what)?;
+        type_keys(&bench, &opened, keys).await?;
+        let after = clear(&playwright.picture_check(tab).await, what)?;
+        let seen = bench.live.main_world(&opened.page, "seen()").await?;
+        #[expect(
+            clippy::print_stderr,
+            reason = "what the page measured goes to the test output for the design keeper"
+        )]
+        {
+            eprintln!("WHAT TAKES INPUT, {what}: {seen}");
+        }
+        assert!(
+            seen.as_str()
+                .is_some_and(|seen| !seen.contains("\"firsts\":[]")),
+            "{what}: an input event fired: {seen}"
+        );
+        assert_eq!(before, after, "{what}: no reading moved, no host named");
+        assert!(
+            bench.recording.calls(DESCRIBE) <= 1,
+            "{what}: at most the focused element, once, by the focus"
+        );
+        if what == "an editable region" {
+            assert_eq!(
+                bench.recording.calls(DESCRIBE),
+                1,
+                "the focused editing host, described once"
+            );
+        }
+        bench.close(opened).await?;
+    }
+    Ok(())
+}
+
+/// The walk on demand, row 5c (the design keeper's editable ruling): inside an editable region no
+/// event is certain, so a box in a closed root there is read through the focus. A card component
+/// with a closed root inside a contenteditable region, a closed-root host in a document in design
+/// mode, and an editing host that is itself a closed shadow host: each card box focused and typed
+/// into reads private at the next reading. The fifth named limit beside them: typed and its focus
+/// taken away before that reading, the card component's and the editing host's box stay unknown
+/// (clear, the count unmoved). Fails with the focus leaving editable elements out (the three read
+/// clear).
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_closed_root_inside_an_editable_region_is_read() -> TestResult {
+    let bench = Bench::start().await?;
+    let playwright = &bench.live.playwright;
+    for (what, setup, id, blurred) in [
+        ("a card component in a region", "true", "embed", false),
+        (
+            "a host in a document in design mode",
+            "design() && true",
+            "cardhost",
+            false,
+        ),
+        (
+            "an editing host that is a closed shadow host",
+            "true",
+            "edithost",
+            false,
+        ),
+        (
+            "a card component in a region, focus gone",
+            "true",
+            "embed",
+            true,
+        ),
+        ("an editing host, focus gone", "true", "edithost", true),
+    ] {
+        let opened = bench
+            .open("/private/closed-plain.html", Place::Front)
+            .await?;
+        let tab = opened.page.tab;
+        bench.live.main_world(&opened.page, setup).await?;
+        let before = clear(&playwright.picture_check(tab).await, what)?;
+        bench
+            .live
+            .main_world(&opened.page, &format!("focusCardIn('{id}')"))
+            .await?;
+        type_keys(&bench, &opened, CARD).await?;
+        if blurred {
+            bench
+                .live
+                .main_world(&opened.page, &format!("blurCardIn('{id}')"))
+                .await?;
+            let after = clear(&playwright.picture_check(tab).await, what)?;
+            assert_eq!(
+                before, after,
+                "{what}: the fifth limit, its typing not counted"
+            );
+        } else {
+            assert_eq!(
+                playwright.picture_check(tab).await,
+                PictureCheck::Private,
+                "{what}: read through the focus"
+            );
+        }
+        bench.close(opened).await?;
+    }
+    Ok(())
+}
+
+/// The walk on demand, row 5d (the design keeper's editable ruling): a text dropped on a paragraph
+/// inside a contenteditable region fires beforeinput naming the paragraph, an editable element
+/// that is not the region's editing host (measured by the snapshot design's reviewer). It asks,
+/// counts and names nothing: three readings after the drop are clear and the same as before it,
+/// none unknown. Fails with an event naming an editable element counted (the readings move, then
+/// read unknown).
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_text_dropped_in_an_editor_moves_nothing() -> TestResult {
+    let bench = Bench::start().await?;
+    let opened = bench
+        .open("/private/closed-plain.html", Place::Front)
+        .await?;
+    let playwright = &bench.live.playwright;
+    let tab = opened.page.tab;
+    let before = clear(&playwright.picture_check(tab).await, "before")?;
+    let centre = bench.live.main_world(&opened.page, "rect('para')").await?;
+    let centre: Vec<i64> = serde_json::from_str(centre.as_str().ok_or("rect")?)?;
+    let session = bench
+        .live
+        .browser
+        .pages
+        .get_session(opened.page.id.clone())
+        .await?;
+    let data = json!({
+        "items": [{ "mimeType": "text/plain", "data": "DROPPED" }],
+        "dragOperationsMask": 1,
+    });
+    for kind in ["dragEnter", "dragOver", "drop"] {
+        let _sent: Value = session
+            .session
+            .send(
+                "Input.dispatchDragEvent",
+                json!({ "type": kind, "x": centre.first(), "y": centre.get(1), "data": data }),
+            )
+            .await?;
+    }
+    time::sleep(Duration::from_millis(200)).await;
+    let dropped = bench
+        .live
+        .main_world(&opened.page, "document.getElementById('para').textContent")
+        .await?;
+    assert!(
+        dropped
+            .as_str()
+            .is_some_and(|text| text.contains("DROPPED")),
+        "the drop landed: {dropped}"
+    );
+    for reading in 1..=3 {
+        let after = clear(
+            &playwright.picture_check(tab).await,
+            &format!("reading {reading}"),
+        )?;
+        assert_eq!(before, after, "reading {reading}: the drop moved nothing");
+    }
+    bench.close(opened).await
+}
+
+/// The walk on demand, row 6 (the design keeper's ruling A): the page cancels beforeinput and
+/// writes the value itself. beforeinput still fires, trusted, with the host as its first target,
+/// so the box is counted at once and read private at the next reading though its focus is gone.
+/// The fourth limit beside it: a page that cancels the key itself fires no input event at all, so
+/// its box reads private while it holds the focus at a reading, and clear when it lost the focus
+/// before Neo's next reading. Fails with beforeinput not listened for (the first case reads clear).
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_page_that_writes_the_value_itself_is_read_while_it_can_be() -> TestResult {
+    let bench = Bench::start().await?;
+    let playwright = &bench.live.playwright;
+    for (cancel, blurred, expected) in [
+        ("beforeinput", true, "private"),
+        ("key", false, "private"),
+        ("key", true, "clear, the fourth limit"),
+    ] {
+        let opened = bench
+            .open(
+                &format!("/private/closed-card.html?cancel={cancel}"),
+                Place::Front,
+            )
+            .await?;
+        let tab = opened.page.tab;
+        clear(&playwright.picture_check(tab).await, "before")?;
+        bench.live.main_world(&opened.page, "focusCard()").await?;
+        type_keys(&bench, &opened, CARD).await?;
+        if blurred {
+            bench.live.main_world(&opened.page, "blurCard()").await?;
+        }
+        let reading = playwright.picture_check(tab).await;
+        let case = format!("{cancel} cancelled, focus kept {}", !blurred);
+        if expected == "private" {
+            assert_eq!(reading, PictureCheck::Private, "{case}");
+        } else {
+            clear(&reading, &format!("{case}: {expected}"))?;
+        }
+        bench.close(opened).await?;
+    }
+    Ok(())
+}
+
+/// The walk on demand, row 7 (the design keeper's ruling B): hosts an input event named are
+/// handed over first and the walk goes on while they wait, so a card typed after many other
+/// closed roots took input is read at the first reading after: forty roots typed into, then the
+/// card, reads private. Past what one reading's rounds take (eighty roots), a host that input
+/// reached and that is not asked yet makes the reading unknown, never clear, and a later reading
+/// reads private. Fails with such a host left unasked as clear (the eighty case reads clear).
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_host_that_input_reached_is_never_clear_while_it_waits() -> TestResult {
+    let bench = Bench::start().await?;
+    let playwright = &bench.live.playwright;
+    for count in [40, 80] {
+        let opened = bench
+            .open(
+                &format!("/private/closed-many.html?n={count}"),
+                Place::Front,
+            )
+            .await?;
+        let tab = opened.page.tab;
+        clear(&playwright.picture_check(tab).await, "before")?;
+        for index in 0..count {
+            bench
+                .live
+                .main_world(&opened.page, &format!("focusBox({index})"))
+                .await?;
+            type_keys(&bench, &opened, "x").await?;
+        }
+        bench.live.main_world(&opened.page, "focusCard()").await?;
+        type_keys(&bench, &opened, CARD).await?;
+        bench.live.main_world(&opened.page, "blurAll()").await?;
+        let first = playwright.picture_check(tab).await;
+        assert!(
+            matches!(first, PictureCheck::Private | PictureCheck::Unknown),
+            "{count}: private or unknown, never clear: {first:?}"
+        );
+        if count == 40 {
+            assert_eq!(
+                first,
+                PictureCheck::Private,
+                "40: read at the first reading"
+            );
+        }
+        let mut later = first;
+        for _ in 0..3 {
+            if later == PictureCheck::Private {
+                break;
+            }
+            later = playwright.picture_check(tab).await;
+        }
+        assert_eq!(
+            later,
+            PictureCheck::Private,
+            "{count}: read within a few readings"
+        );
+        bench.close(opened).await?;
+    }
+    Ok(())
+}
+
+/// The card page read once, then a card number typed into its closed root by the keyboard alone
+/// and the focus taken away, so only the input events bring the root.
+async fn card_typed_and_left(bench: &Bench, opened: &Opened) -> TestResult {
+    clear(
+        &bench.live.playwright.picture_check(opened.page.tab).await,
+        "before",
+    )?;
+    bench.live.main_world(&opened.page, "focusCard()").await?;
+    type_keys(bench, opened, CARD).await?;
+    bench.live.main_world(&opened.page, "blurCard()").await?;
+    Ok(())
+}
+
+/// The walk on demand, row 8 (the design keeper's ruling on a failed read, five readings): a host
+/// that an input event named and whose description fails is handed over again at each reading,
+/// and the reading is unknown while it is unread. Refused or unanswered once: unknown, then
+/// private at the next reading. Refused five times: unknown five times, then clear as on main,
+/// and never asked again. The count is the host's own: a second closed root typed into later,
+/// with its description refused, is unknown again, and private once it is answered. Fails with a
+/// failed read left as clear, with the host not handed over again, and with no bound on the tries.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_host_that_input_reached_is_tried_for_five_readings() -> TestResult {
+    let bench = Bench::start().await?;
+    let playwright = &bench.live.playwright;
+    for how in [Failing::Refuse, Failing::Hang] {
+        let opened = bench
+            .open("/private/closed-card.html", Place::Front)
+            .await?;
+        card_typed_and_left(&bench, &opened).await?;
+        bench.recording.fail(DESCRIBE, how);
+        let failed = playwright.picture_check(opened.page.tab).await;
+        bench.recording.stop_failing();
+        assert_eq!(failed, PictureCheck::Unknown, "{how:?}: unread, so unknown");
+        assert!(released(&bench).await, "{how:?}: the walk's group released");
+        assert_eq!(
+            playwright.picture_check(opened.page.tab).await,
+            PictureCheck::Private,
+            "{how:?}: handed over again and read"
+        );
+        bench.close(opened).await?;
+    }
+    let opened = bench
+        .open("/private/closed-card.html", Place::Front)
+        .await?;
+    card_typed_and_left(&bench, &opened).await?;
+    let tab = opened.page.tab;
+    bench.recording.fail(DESCRIBE, Failing::Refuse);
+    for reading in 1..=5 {
+        assert_eq!(
+            playwright.picture_check(tab).await,
+            PictureCheck::Unknown,
+            "refused at reading {reading}"
+        );
+    }
+    bench.recording.reset_calls();
+    clear(
+        &playwright.picture_check(tab).await,
+        "after five, as on main",
+    )?;
+    assert_eq!(bench.recording.calls(DESCRIBE), 0, "not asked again");
+    bench.recording.stop_failing();
+    clear(&playwright.picture_check(tab).await, "and later")?;
+    assert_eq!(bench.recording.calls(DESCRIBE), 0, "never asked again");
+    bench
+        .live
+        .main_world(&opened.page, "attachSecond() && focusSecond()")
+        .await?;
+    type_keys(&bench, &opened, CARD).await?;
+    bench.recording.fail(DESCRIBE, Failing::Refuse);
+    let second = playwright.picture_check(tab).await;
+    bench.recording.stop_failing();
+    assert_eq!(second, PictureCheck::Unknown, "the second host's own count");
+    assert_eq!(playwright.picture_check(tab).await, PictureCheck::Private);
+    bench.close(opened).await
+}
+
+/// The walk on demand, row 8b (the design keeper's finding on the third head): typing names its
+/// host for certain whatever the focus's one ask found before. The box in the closed root holds
+/// the focus at a reading whose description of the host is refused: that reading is as on main.
+/// Then a card number is typed: unknown while the description is still refused, private once it
+/// goes through. And a focusable div, asked once by the focus with no root, then given a closed
+/// root with a card box and typed into: read, private. Fails with a host the focus asked done
+/// with for good (both read clear).
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_typing_names_a_host_the_focus_asked_before() -> TestResult {
+    let bench = Bench::start().await?;
+    let playwright = &bench.live.playwright;
+    let opened = bench
+        .open("/private/closed-card.html", Place::Front)
+        .await?;
+    let tab = opened.page.tab;
+    clear(&playwright.picture_check(tab).await, "before")?;
+    bench.live.main_world(&opened.page, "focusCard()").await?;
+    bench.recording.fail(DESCRIBE, Failing::Refuse);
+    clear(
+        &playwright.picture_check(tab).await,
+        "the focus's one ask, refused",
+    )?;
+    type_keys(&bench, &opened, CARD).await?;
+    let refused = playwright.picture_check(tab).await;
+    bench.recording.stop_failing();
+    assert_eq!(
+        refused,
+        PictureCheck::Unknown,
+        "named by the typing, unread"
+    );
+    assert_eq!(
+        playwright.picture_check(tab).await,
+        PictureCheck::Private,
+        "read once the description goes through"
+    );
+    bench.close(opened).await?;
+    let opened = bench
+        .open("/private/closed-plain.html", Place::Front)
+        .await?;
+    let tab = opened.page.tab;
+    bench
+        .live
+        .main_world(&opened.page, "focusOn('pad')")
+        .await?;
+    bench.recording.reset_calls();
+    clear(&playwright.picture_check(tab).await, "the pad, asked")?;
+    assert_eq!(
+        bench.recording.calls(DESCRIBE),
+        1,
+        "the focus asked the pad once"
+    );
+    bench.live.main_world(&opened.page, "rootOnPad()").await?;
+    type_keys(&bench, &opened, CARD).await?;
+    assert_eq!(
+        playwright.picture_check(tab).await,
+        PictureCheck::Private,
+        "the root attached later, typed into"
+    );
+    bench.close(opened).await
+}
+
+/// The walk on demand, row 9c (Greptile's finding on #3661): a reading that sees a private value
+/// shown is private, and no walk may put a later clear answer in its place. A card box in the
+/// page's own document shows a number its script wrote while a card is typed into the closed
+/// root: that reading is private and asks nothing. Once the page empties its own box, the next
+/// reading walks and reads the closed root's card, private. Fails with the walk taken after an
+/// answer that shows a value (the first reading describes the host).
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_private_answer_is_never_walked_over() -> TestResult {
+    let bench = Bench::start().await?;
+    let opened = bench
+        .open("/private/closed-card.html?light=1", Place::Front)
+        .await?;
+    let playwright = &bench.live.playwright;
+    let tab = opened.page.tab;
+    assert_eq!(playwright.picture_check(tab).await, PictureCheck::Private);
+    bench.live.main_world(&opened.page, "focusCard()").await?;
+    type_keys(&bench, &opened, CARD).await?;
+    bench.live.main_world(&opened.page, "blurCard()").await?;
+    bench.recording.reset_calls();
+    assert_eq!(
+        playwright.picture_check(tab).await,
+        PictureCheck::Private,
+        "the page's own box shows its number"
+    );
+    assert_eq!(
+        bench.recording.calls(DESCRIBE),
+        0,
+        "no walk past a shown value"
+    );
+    bench.live.main_world(&opened.page, "fillLight('')").await?;
+    assert_eq!(
+        playwright.picture_check(tab).await,
+        PictureCheck::Private,
+        "the closed root's card, read now"
+    );
+    assert_eq!(
+        bench.recording.calls(DESCRIBE),
+        1,
+        "the host asked at that reading"
+    );
+    bench.close(opened).await
+}
+
+/// The walk on demand, row 9 (the lead's rule): a host that left the document is gone, not
+/// unread. A card typed into a closed root whose host the page then removes, before the next
+/// reading: that reading is clear, not unknown, nothing is asked, and the next one is the same.
+/// Fails with a removed host left waiting (the reading reads unknown).
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_host_that_left_the_document_costs_no_picture() -> TestResult {
+    let bench = Bench::start().await?;
+    let opened = bench
+        .open("/private/closed-card.html", Place::Front)
+        .await?;
+    let playwright = &bench.live.playwright;
+    let tab = opened.page.tab;
+    clear(&playwright.picture_check(tab).await, "before")?;
+    bench.live.main_world(&opened.page, "focusCard()").await?;
+    type_keys(&bench, &opened, CARD).await?;
+    bench.live.main_world(&opened.page, "removeHost()").await?;
+    bench.recording.reset_calls();
+    let gone = clear(&playwright.picture_check(tab).await, "gone")?;
+    assert_eq!(bench.recording.calls(DESCRIBE), 0, "nothing asked");
+    let next = clear(&playwright.picture_check(tab).await, "next")?;
+    assert_eq!(gone, next, "it stopped counting");
+    bench.close(opened).await
+}
+
+/// The walk on demand, row 10, a named limit: a card number the page's own script writes into a
+/// box inside a closed root, with no event, and the box never held the focus: the reading is
+/// clear, as on main, and nothing is asked.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_value_the_page_wrote_with_no_event_reads_clear() -> TestResult {
+    let bench = Bench::start().await?;
+    let opened = bench
+        .open("/private/closed-card.html?fill=1", Place::Front)
+        .await?;
+    bench.recording.reset_calls();
+    clear(
+        &bench.live.playwright.picture_check(opened.page.tab).await,
+        "the limit",
+    )?;
+    assert_eq!(bench.recording.calls(DESCRIBE), 0, "nothing asked");
+    assert_eq!(bench.recording.calls(CAPTURE), 0, "no DOM capture");
+    bench.close(opened).await
+}
+
+/// Waits until every frame of `opened` has loaded (or three seconds), asked of the page itself,
+/// so a camera reading sees each frame's document.
+async fn frames_loaded(bench: &Bench, opened: &Opened) -> TestResult {
+    bench
+        .live
+        .main_world(
+            &opened.page,
+            "Promise.all([...document.querySelectorAll('iframe')].map((f) => new Promise((done) => { \
+             let ready = false; try { ready = f.contentDocument?.readyState === 'complete' \
+             && f.contentDocument.URL !== 'about:blank' } catch {} \
+             if (ready) done(true); else { f.addEventListener('load', () => done(true)); \
+             setTimeout(() => done(true), 3000) } }))).then(() => true)",
+        )
+        .await?;
+    Ok(())
+}
+
+/// The walk on demand, row 11: a box inside a closed root of a child frame, typed into by a
+/// script's keyboard alone, reads private: a same-site frame on the page's session, and a
+/// cross-site frame on its own, each walked in its own world with no DOM capture. Fails with the
+/// walk left out.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_typing_into_a_closed_root_in_a_frame_reads_private() -> TestResult {
+    let bench = Bench::start().await?;
+    let playwright = &bench.live.playwright;
+    for (path, focus) in [
+        ("/private/closed-frame.html", "focusFrameCard()"),
+        (
+            "/private/xframe.html?src=closed-card.html%3Ffocus%3D1",
+            "document.getElementById('x').focus(); true",
+        ),
+    ] {
+        let opened = bench.open(path, Place::Front).await?;
+        frames_loaded(&bench, &opened).await?;
+        clear(&playwright.picture_check(opened.page.tab).await, path)?;
+        bench.live.main_world(&opened.page, focus).await?;
+        type_keys(&bench, &opened, CARD).await?;
+        bench.recording.reset_calls();
+        assert_eq!(
+            playwright.picture_check(opened.page.tab).await,
+            PictureCheck::Private,
+            "{path}: the frame's closed root, typed into"
+        );
+        assert_eq!(bench.recording.calls(CAPTURE), 0, "{path}: no DOM capture");
+        bench.close(opened).await?;
+    }
+    Ok(())
+}
+
+/// Input is counted in a closed root a marked snapshot opened (the snapshot design's reviewer's
+/// findings D and C), in the reviewer's seven orders: the snapshot before the first reading, and
+/// started 0, 10 and 30 ms after the first reading began, twice each; and an eighth, the snapshot
+/// after the first reading ended. A root the world knows but no reading entered yet gets its
+/// listener from the document's listener, as the event passes on its way to the root. One
+/// character typed and removed again leaves the frame's input count above zero at the next
+/// reading; nothing is asked, as the root is known. Fails with the listener left to the readings
+/// (the order 0 ms after the first reading began reads `#0`).
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_input_in_a_closed_root_a_snapshot_opened_moves_the_reading() -> TestResult {
+    let bench = Bench::start().await?;
+    let playwright = &bench.live.playwright;
+    // None: the snapshot first; Some(ms): started ms after the reading began; u64::MAX: after it.
+    for after in [
+        None,
+        Some(0),
+        Some(0),
+        Some(10),
+        Some(10),
+        Some(30),
+        Some(30),
+        Some(u64::MAX),
+    ] {
+        let opened = bench
+            .open("/private/closed-card.html", Place::Front)
+            .await?;
+        let tab = opened.page.tab;
+        let first = match after {
+            None => {
+                marked_snapshot(&bench, &opened).await?;
+                playwright.picture_check(tab).await
+            }
+            Some(u64::MAX) => {
+                let reading = playwright.picture_check(tab).await;
+                marked_snapshot(&bench, &opened).await?;
+                reading
+            }
+            Some(ms) => {
+                let snapshot = async {
+                    time::sleep(Duration::from_millis(ms)).await;
+                    marked_snapshot(&bench, &opened).await
+                };
+                let (reading, snapshot) = tokio::join!(playwright.picture_check(tab), snapshot);
+                snapshot?;
+                reading
+            }
+        };
+        clear(&first, &format!("{after:?}: first"))?;
+        bench.live.main_world(&opened.page, "focusCard()").await?;
+        type_keys(&bench, &opened, "4").await?;
+        press_key(&bench, &opened, "Backspace").await?;
+        bench.recording.reset_calls();
+        let second = clear(&playwright.picture_check(tab).await, "second")?;
+        // The count itself, not the reading: a root the snapshot opened after the first reading
+        // lists its box at the second one whatever was counted.
+        assert!(
+            counted(&second).is_some_and(|count| count > 0),
+            "{after:?}: the input was counted: {second}"
+        );
+        assert_eq!(
+            bench.recording.calls(DESCRIBE),
+            0,
+            "{after:?}: a known root asks nothing"
+        );
+        bench.close(opened).await?;
+    }
+    Ok(())
+}
+
+/// The design keeper's probe page: a 150,000-element main document and five small same-process
+/// frames with closed roots, answering one after another. On the first head the camera's capture
+/// of that session cost the picture. The walk on demand sends nothing here, as nothing is typed
+/// and no box holds the focus: both readings, 150 ms apart, are clear, with no DOM capture and no
+/// description.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_huge_page_with_staggered_small_frames_keeps_its_pictures() -> TestResult {
+    let bench = Bench::start().await?;
+    let opened = bench
+        .open("/private/huge-staggered.html", Place::Front)
+        .await?;
+    frames_loaded(&bench, &opened).await?;
+    let playwright = &bench.live.playwright;
+    bench.recording.reset_calls();
+    let first = playwright.picture_check(opened.page.tab).await;
+    time::sleep(Duration::from_millis(150)).await;
+    let second = playwright.picture_check(opened.page.tab).await;
+    clear(&first, "first")?;
+    clear(&second, "second")?;
+    assert_eq!(bench.recording.calls(CAPTURE), 0, "no DOM capture");
+    assert_eq!(bench.recording.calls(DESCRIBE), 0, "nothing asked");
     bench.close(opened).await
 }
 

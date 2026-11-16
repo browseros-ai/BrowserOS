@@ -4,9 +4,18 @@
 //!
 //! It keeps the session, the method, the event's `type` and a named key (`Shift`, `Delete`),
 //! never a character key or inserted text, so a recording holds no part of a value typed.
+//!
+//! While a test names a text ([`InputRecording::watch_for`]), it also keeps the session of every
+//! command, of any method, whose params carry that text: where a host's value went, and where it
+//! never went (ruling R48). Only the session is kept, never the params.
+//!
+//! It also fails one method a test names, refused or left hanging, from its first call or from
+//! its Nth, and counts every method's calls, so a row can show what a check answers when a read
+//! of the browser fails, the first read or only the second (ruling R63).
 
-use std::mem;
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
+use std::{future, mem};
 
 use browseros_cdp::{CdpError, CdpEvent};
 use browseros_core::{CdpConnection, SessionId};
@@ -24,10 +33,35 @@ pub(crate) struct InputCall {
     pub(crate) named_key: Option<String>,
 }
 
+/// How a command a test names fails ([`InputRecording::fail`]).
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Failing {
+    /// Answered at once with a protocol error, as Chromium refuses a command.
+    Refuse,
+    /// Never answered, as a renderer that does not get to it.
+    Hang,
+}
+
 /// The browser's connection, with every `Input.*` call kept until [`InputRecording::take`].
 pub(crate) struct InputRecording {
     inner: Arc<dyn CdpConnection>,
     calls: Mutex<Vec<InputCall>>,
+    /// The text a test watches for, and the session of each command that carried it since.
+    watched: Mutex<Option<(String, Vec<Option<String>>)>>,
+    /// The method a test makes fail, and how.
+    failing: Mutex<Option<Fault>>,
+    /// How many times each method was sent, since the last [`InputRecording::reset_calls`].
+    counts: Mutex<HashMap<String, usize>>,
+}
+
+/// A method a test makes fail, how, and from which of its calls since the fault was set.
+struct Fault {
+    method: String,
+    how: Failing,
+    /// The first call to fail, counted from 1.
+    from: usize,
+    /// The calls of `method` since the fault was set.
+    seen: usize,
 }
 
 impl InputRecording {
@@ -35,7 +69,89 @@ impl InputRecording {
         Arc::new(Self {
             inner,
             calls: Mutex::new(Vec::new()),
+            watched: Mutex::new(None),
+            failing: Mutex::new(None),
+            counts: Mutex::new(HashMap::new()),
         })
+    }
+
+    /// From now on, every `method` command fails `how`, until [`Self::stop_failing`].
+    pub(crate) fn fail(&self, method: &str, how: Failing) {
+        self.fail_from(method, how, 1);
+    }
+
+    /// From now on, `method` goes through for its first `from - 1` calls and then fails `how` at
+    /// every call, until [`Self::stop_failing`].
+    pub(crate) fn fail_from(&self, method: &str, how: Failing, from: usize) {
+        *self.failing.lock().unwrap_or_else(PoisonError::into_inner) = Some(Fault {
+            method: method.to_owned(),
+            how,
+            from,
+            seen: 0,
+        });
+    }
+
+    /// How many times `method` was sent since the last [`Self::reset_calls`].
+    pub(crate) fn calls(&self, method: &str) -> usize {
+        self.counts
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(method)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// Counts every method's calls from zero again.
+    pub(crate) fn reset_calls(&self) {
+        self.counts
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clear();
+    }
+
+    /// Commands go through again.
+    pub(crate) fn stop_failing(&self) {
+        *self.failing.lock().unwrap_or_else(PoisonError::into_inner) = None;
+    }
+
+    /// How `method` must fail, if a test made it.
+    fn note(&self, method: &str) -> Option<Failing> {
+        *self
+            .counts
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .entry(method.to_owned())
+            .or_default() += 1;
+        let mut failing = self.failing.lock().unwrap_or_else(PoisonError::into_inner);
+        let fault = failing.as_mut().filter(|fault| fault.method == method)?;
+        fault.seen += 1;
+        (fault.seen >= fault.from).then_some(fault.how)
+    }
+
+    /// From now on, keeps the session of every command whose params carry `text`.
+    pub(crate) fn watch_for(&self, text: &str) {
+        *self.watched.lock().unwrap_or_else(PoisonError::into_inner) =
+            Some((text.to_owned(), Vec::new()));
+    }
+
+    /// The session of each command that carried the watched text since the last call (`None`:
+    /// the browser's own), in the order they went out.
+    pub(crate) fn take_carriers(&self) -> Vec<Option<String>> {
+        self.watched
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_mut()
+            .map(|(_, carriers)| mem::take(carriers))
+            .unwrap_or_default()
+    }
+
+    fn spot(&self, params: impl FnOnce() -> String, session: Option<&SessionId>) {
+        let mut watched = self.watched.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some((text, carriers)) = watched.as_mut()
+            && params().contains(text.as_str())
+        {
+            carriers.push(session.map(|session| session.as_str().to_owned()));
+        }
     }
 
     /// The `Input.*` calls since the last take, in the order they went out.
@@ -44,6 +160,11 @@ impl InputRecording {
     }
 
     fn keep(&self, method: &str, params: &Value, session: Option<&SessionId>) {
+        self.spot(|| params.to_string(), session);
+        self.keep_input(method, params, session);
+    }
+
+    fn keep_input(&self, method: &str, params: &Value, session: Option<&SessionId>) {
         if !method.starts_with("Input.") {
             return;
         }
@@ -61,9 +182,10 @@ impl InputRecording {
     }
 
     fn keep_raw(&self, method: &str, params_json: &str, session: Option<&SessionId>) {
+        self.spot(|| params_json.to_owned(), session);
         if method.starts_with("Input.") {
             let params = serde_json::from_str(params_json).unwrap_or(Value::Null);
-            self.keep(method, &params, session);
+            self.keep_input(method, &params, session);
         }
     }
 }
@@ -76,6 +198,9 @@ impl CdpConnection for InputRecording {
         session: Option<&'a SessionId>,
     ) -> BoxFuture<'a, Result<Value, CdpError>> {
         self.keep(method, &params, session);
+        if let Some(how) = self.note(method) {
+            return failed(how);
+        }
         self.inner.send(method, params, session)
     }
 
@@ -86,6 +211,9 @@ impl CdpConnection for InputRecording {
         session: Option<&'a SessionId>,
     ) -> BoxFuture<'a, Result<String, CdpError>> {
         self.keep_raw(method, params_json, session);
+        if let Some(how) = self.note(method) {
+            return failed(how);
+        }
         self.inner.send_raw_json(method, params_json, session)
     }
 
@@ -97,6 +225,9 @@ impl CdpConnection for InputRecording {
         session: Option<&'a SessionId>,
     ) -> BoxFuture<'a, Result<Value, CdpError>> {
         self.keep(method, &params, session);
+        if let Some(how) = self.note(method) {
+            return failed(how);
+        }
         self.inner
             .send_at_epoch(expected_epoch, method, params, session)
     }
@@ -109,6 +240,9 @@ impl CdpConnection for InputRecording {
         session: Option<&'a SessionId>,
     ) -> BoxFuture<'a, Result<String, CdpError>> {
         self.keep_raw(method, params_json, session);
+        if let Some(how) = self.note(method) {
+            return failed(how);
+        }
         self.inner
             .send_raw_json_at_epoch(expected_epoch, method, params_json, session)
     }
@@ -145,5 +279,16 @@ impl CdpConnection for InputRecording {
 
     fn connection_epoch(&self) -> u64 {
         self.inner.connection_epoch()
+    }
+}
+
+/// A command's answer when a test makes it fail `how`.
+fn failed<'a, T: Send + 'a>(how: Failing) -> BoxFuture<'a, Result<T, CdpError>> {
+    match how {
+        Failing::Refuse => Box::pin(future::ready(Err(CdpError::Protocol {
+            code: -32000,
+            message: "refused by the test".to_owned(),
+        }))),
+        Failing::Hang => Box::pin(future::pending()),
     }
 }

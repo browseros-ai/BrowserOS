@@ -78,12 +78,15 @@ impl TabReservations {
 }
 
 fn kind_with_article(kind: Option<CaptchaKind>) -> String {
-    let kind = kind.unwrap_or(CaptchaKind::Unknown);
-    let article = match kind {
-        CaptchaKind::Unknown | CaptchaKind::Arkose | CaptchaKind::AwsWaf => "an",
-        _ => "a",
+    let name = kind.unwrap_or(CaptchaKind::Unknown).as_str();
+    // By the name said, so a kind whose wire name is another's (PerimeterX's is `unknown`) reads
+    // right either way.
+    let article = if name.starts_with(['a', 'e', 'i', 'o', 'u']) {
+        "an"
+    } else {
+        "a"
     };
-    format!("{article} {}", kind.as_str())
+    format!("{article} {name}")
 }
 
 fn step_label(step: SolveStep) -> String {

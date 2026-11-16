@@ -2,17 +2,16 @@
 //! scans catch values that a read model might hide after they have already reached disk.
 
 use std::error::Error;
-use std::fs;
-use std::io;
 use std::path::PathBuf;
+use std::{fs, io};
 
 use browseros_core::TabId;
 use neo_trace::{
     Delivery, Effect, EpochMillis, ErrorOwner, ErrorRecord, OperationEnded, OperationId,
     OperationKind, OperationRow, OperationSite, OperationStarted, Outcome, PageState, RecordPolicy,
     RedactionLimits, Redactor, RequestId, RunDetail, RunEffects, RunEnded, RunId, RunQuery,
-    RunStarted, RunStatus, TailQuery, TaskId, TraceSink, TraceStore, Values, WriterConfig,
-    spawn_writer,
+    RunStarted, RunStatus, RunTabsScope, TailQuery, TaskId, TraceSink, TraceStore, Values,
+    WriterConfig, spawn_writer,
 };
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -95,6 +94,8 @@ fn start_run(
         request_id: Some(RequestId::parse(request)?),
         task_id: Some(TaskId::parse(TASK)?),
         host_data,
+        tabs_scope: RunTabsScope::Browser,
+        access: None,
         at: at(0),
     });
     Ok(id)
@@ -146,12 +147,14 @@ fn run_ended(id: RunId) -> RunEnded {
 
 fn error(message: &str, operation_id: Option<OperationId>) -> ErrorRecord {
     ErrorRecord {
+        diagnostic_code: None,
         owner: ErrorOwner::Host,
         code: "host_error".to_owned(),
         message: message.to_owned(),
         host_code: Some("requires_owner".to_owned()),
         retryable: true,
         operation_id,
+        cover: None,
     }
 }
 

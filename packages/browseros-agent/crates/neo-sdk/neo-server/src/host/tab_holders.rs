@@ -39,12 +39,12 @@ use std::collections::{HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::Duration;
 
 use browseros_core::{TabId, TargetId};
 use neo_trace::TaskId;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::sync::{SetOnce, mpsc, oneshot};
 use tokio::{fs as async_fs, task, time};
@@ -80,6 +80,28 @@ pub(crate) struct TabHolders {
     unreadable: bool,
     /// Set once the start's restore ended, however it ended. A run's start waits for it.
     ready: SetOnce<()>,
+    /// How the start's restore ended, set before [`TabHolders::ready`] opens.
+    outcome: OnceLock<RestoreState>,
+}
+
+/// How the start's restore of the record ended, as `GET /system/health` reports it in
+/// `tabHolders.state`. Under task scope a lost record shows only as bound sessions losing their
+/// tabs after a restart of Neo's server, so a host reads here whether that was Neo's file. It
+/// names no tab and no task.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum RestoreState {
+    /// The restore has not ended yet; runs wait for it.
+    Pending,
+    /// It ran: every saved tab the browser still has went back to its task. Zero after a
+    /// browser restart, whose tabs are all new, is still a restore.
+    Restored,
+    /// The file could not be read: nothing was restored, nothing is saved for this process's
+    /// life, and the file is left for a person to look at.
+    Unreadable,
+    /// The browser's tabs could not be listed at start: nothing was restored, and the file is
+    /// left as it was.
+    Unlisted,
 }
 
 /// What the lock holds: the file as the latest line for each target says, and this process's
@@ -336,7 +358,14 @@ impl TabHolders {
             state: Arc::new(Mutex::new(state)),
             unreadable,
             ready: SetOnce::new(),
+            outcome: OnceLock::new(),
         })
+    }
+
+    /// How the start's restore ended, or `Pending` until it does.
+    #[must_use]
+    pub(crate) fn state(&self) -> RestoreState {
+        self.outcome.get().copied().unwrap_or(RestoreState::Pending)
     }
 
     /// Waits until the start's restore ended. Each task's tabs are in the book from then on, so a
@@ -411,8 +440,14 @@ impl TabHolders {
     /// tabs are still open cannot be told, and no tab is given to a task on a guess.
     pub(crate) async fn restore(&self, link: &BrowserLink, tabs: &TabRegistry) {
         let _ready = Ready(&self.ready);
+        let state = self.take_back(link, tabs).await;
+        let _ = self.outcome.set(state);
+    }
+
+    /// [`TabHolders::restore`]'s work, answering how it ended.
+    async fn take_back(&self, link: &BrowserLink, tabs: &TabRegistry) -> RestoreState {
         if self.unreadable {
-            return;
+            return RestoreState::Unreadable;
         }
         let (nothing_held, lines) = {
             let state = lock(&self.state);
@@ -423,13 +458,13 @@ impl TabHolders {
             if lines > 0 {
                 let _compacted = self.rewrite().await;
             }
-            return;
+            return RestoreState::Restored;
         }
         let Some(live) = every_tab(link).await else {
             tracing::error!(
                 "cannot list the browser's tabs at start; no task gets its tabs back, and the file of which task holds which tab is left as it is"
             );
-            return;
+            return RestoreState::Unlisted;
         };
         // Core's own listing next, so each live tab is in its cache before it is registered. A
         // tab it leaves out (an extension or devtools page) holds no task while Neo runs either:
@@ -445,7 +480,7 @@ impl TabHolders {
             tracing::error!(
                 "core could not list the browser's tabs at start; no task gets its tabs back, and the file of which task holds which tab is left as it is"
             );
-            return;
+            return RestoreState::Unlisted;
         }
         let saved = self.live(&live);
         let mut tasks = Vec::with_capacity(saved.len());
@@ -489,6 +524,7 @@ impl TabHolders {
             })
             .collect();
         self.keep_restored(&restored).await;
+        RestoreState::Restored
     }
 
     /// Appends the lines `changes` add, in order. A held tab's target is read from core's cache
@@ -725,7 +761,7 @@ mod tests {
     use serde_json::{Value, json};
     use tokio::time;
 
-    use super::{HolderFeed, LiveTab, TAB_HOLDERS_FILE, TabHolders};
+    use super::{HolderFeed, LiveTab, RestoreState, TAB_HOLDERS_FILE, TabHolders};
     use crate::browser::{
         BookChange, BookSink, Holder, PageRef, SavedTask, TabRegistry, TaskOrigin, TaskPage,
     };
@@ -1243,6 +1279,73 @@ mod tests {
                 ]
             );
             writer.abort();
+            Ok(())
+        })
+    }
+
+    /// How each start's restore ended, as health reports it: the file unreadable, the browser's
+    /// tabs unlisted, or restored, with zero tabs back after a whole browser restart too.
+    #[test]
+    fn each_restore_records_how_it_ended() -> Result<(), TestError> {
+        on_neo_runtime(async {
+            let rig = TestRig::new().await?;
+            let host = task("host-task")?;
+
+            let broken = tempfile::tempdir()?;
+            fs::create_dir(broken.path().join(TAB_HOLDERS_FILE))?;
+            let unreadable = TabHolders::open(broken.path()).await;
+            within(
+                Duration::from_secs(5),
+                unreadable.restore(&rig.link, &TabRegistry::new()),
+            )
+            .await?;
+            assert_eq!(unreadable.state(), RestoreState::Unreadable);
+
+            let saved = tempfile::tempdir()?;
+            let (kept, _) = tab(&rig, "https://kept.example/").await?;
+            let (gone, _) = tab(&rig, "https://gone.example/").await?;
+            let writer = TabHolders::open(saved.path()).await;
+            writer
+                .record(
+                    &rig.link,
+                    &rig.tabs,
+                    vec![held(kept, &host, &host, TaskOrigin::Host)],
+                )
+                .await;
+            let unlisted = TabHolders::open(saved.path()).await;
+            assert_eq!(
+                unlisted.state(),
+                RestoreState::Pending,
+                "before its restore"
+            );
+            rig.fake.answer("Browser.getTabs", json!({}));
+            within(
+                Duration::from_secs(15),
+                unlisted.restore(&rig.link, &TabRegistry::new()),
+            )
+            .await?;
+            rig.fake.unanswer("Browser.getTabs");
+            assert_eq!(unlisted.state(), RestoreState::Unlisted);
+
+            let elsewhere = tempfile::tempdir()?;
+            let writer = TabHolders::open(elsewhere.path()).await;
+            writer
+                .record(
+                    &rig.link,
+                    &rig.tabs,
+                    vec![held(gone, &host, &host, TaskOrigin::Host)],
+                )
+                .await;
+            assert!(rig.fake.close_tab(gone), "the fake had the tab");
+            let none_back = TabHolders::open(elsewhere.path()).await;
+            let book = TabRegistry::new();
+            within(Duration::from_secs(15), none_back.restore(&rig.link, &book)).await?;
+            assert_eq!(
+                none_back.state(),
+                RestoreState::Restored,
+                "the browser no longer has the saved tab: zero back is still a restore"
+            );
+            assert_eq!(book.owner(gone), None);
             Ok(())
         })
     }

@@ -194,6 +194,65 @@ fn outcome(result: &CallToolResult) -> Result<&Value, Box<dyn Error>> {
         .ok_or_else(|| "every result carries the run's _meta".into())
 }
 
+/// The `run` tool's description is one static text: the same bytes whatever `tabs.scope` says,
+/// and true under either. It states the task wall only as a condition on the host binding runs
+/// to their task, never as what every run meets: under `browser`, and for a run without a task,
+/// `context.pages()` lists every tab.
+#[test]
+fn the_run_description_is_the_same_and_true_under_either_tab_scope() -> TestResult {
+    const CONDITIONAL: &str = "When the host binds runs to their task, that is only this task's \
+         tabs (not the browser's tab count), and any other tab is refused with `page_not_in_task`.";
+    on_neo_runtime(async {
+        let mut served = Vec::new();
+        for scope in ["task", "browser"] {
+            let dir = tempfile::tempdir()?;
+            fs::create_dir_all(dir.path().join("claw-sdk"))?;
+            fs::write(
+                dir.path().join("claw-sdk").join("settings.json"),
+                format!(r#"{{"tabs":{{"scope":"{scope}"}}}}"#),
+            )?;
+            let neo = Neo::start_in(dir, FakeCdp::new()).await?;
+            neo.until_ready().await?;
+            let client = neo.legacy_client().await?;
+            let description = client
+                .list_tools(None)
+                .await?
+                .tools
+                .first()
+                .and_then(|tool| tool.description.clone())
+                .ok_or("the run tool has a description")?
+                .to_string();
+            // The setting is in force: a run with a task says which scope bound it.
+            let result = run(
+                &client,
+                json!({ "code": "return 1;" }),
+                Some(json!({ "taskId": "described" })),
+            )
+            .await?;
+            assert_eq!(outcome(&result)?.get("tabsScope"), Some(&json!(scope)));
+            client.cancel().await?;
+            served.push(description);
+        }
+        assert_eq!(
+            served.first(),
+            served.get(1),
+            "the description does not follow the setting"
+        );
+        let description = served.first().ok_or("served")?;
+        assert!(description.contains(CONDITIONAL), "{description}");
+        for unconditional in [
+            "(with a task: that task's tabs",
+            "Another task's tab is refused",
+        ] {
+            assert!(
+                !description.contains(unconditional),
+                "untrue under browser, or without a task: {unconditional}"
+            );
+        }
+        Ok(())
+    })
+}
+
 #[test]
 fn both_protocols_list_one_tool_and_run_plain_javascript() -> TestResult {
     on_neo_runtime(async {
@@ -719,6 +778,98 @@ fn the_agent_port_has_no_fill_route_and_the_run_tool_never_names_it() -> TestRes
                 );
             }
         }
+        client.cancel().await?;
+        Ok(())
+    })
+}
+
+/// The description's condition and permission behavior are exercised over the same MCP surface.
+#[test]
+fn the_read_only_sentence_matches_the_runs_actual_admission_rule() -> TestResult {
+    const SENTENCE: &str = r"A host may start a run read-only: then only reads, `context.newPage()`, a `goto` to an `http` or `https` address, and closing a tab this run opened are allowed; anything else fails `read_only_run` with nothing sent.";
+    on_neo_runtime(async {
+        let neo = Neo::start().await?;
+        neo.fake
+            .answer("Target.getTargetInfo", json!({"targetInfo":{}}));
+        neo.fake.answer(
+            "Page.navigate",
+            json!({"frameId":"frame", "errorText":"net::ERR_ABORTED"}),
+        );
+        let client = neo.legacy_client().await?;
+        let description = client
+            .list_tools(None)
+            .await?
+            .tools
+            .first()
+            .and_then(|tool| tool.description.clone())
+            .ok_or("run description")?
+            .to_string();
+        assert_eq!(
+            description.matches(SENTENCE).count(),
+            1,
+            "the host condition is stated once"
+        );
+        let code = r"
+            const task = await neo.createTask('reading');
+            await neo.task(task.id);
+            const p = await task.newPage();
+            await p.opener();
+            let navigation;
+            try { await p.goto('https://reading.example/'); }
+            catch (e) { navigation = [e.code, e.delivery]; }
+            const refused = [];
+            for (const action of [() => p.click('button'), () => p.fill('input', 'blocked'),
+                () => p.evaluate(() => 1), () => p.reload(), () => task.close(),
+                () => p.waitForEvent('filechooser')]) {
+                try { await action(); throw new Error('operation was admitted'); }
+                catch (e) { refused.push([e.owner, e.code, e.delivery]); }
+            }
+            await p.close();
+            return { navigation, refused, closed: p.isClosed() };
+        ";
+        let result = run(
+            &client,
+            json!({"code":code}),
+            Some(json!({"access":"read", "requestId":"read-description"})),
+        )
+        .await?;
+        assert_eq!(outcome(&result)?["access"], "read");
+        assert_eq!(outcome(&result)?["status"], "ok", "{result:?}");
+        assert_eq!(
+            outcome(&result)?["effects"],
+            "done",
+            "allowed lifecycle writes retain honest effects"
+        );
+        let value = result
+            .structured_content
+            .as_ref()
+            .and_then(|content| content.get("value"))
+            .ok_or("script value")?;
+        assert_eq!(value["navigation"], json!(["navigation_failed", "done"]));
+        assert_eq!(
+            value["refused"],
+            json!(vec![json!(["script", "read_only_run", "not_sent"]); 6])
+        );
+        assert_eq!(value["closed"], true);
+        for arguments in [json!({"code":3}), json!({"code":"return 1", "timeout":0})] {
+            let refusal = run(&client, arguments, Some(json!({"access":"read"}))).await?;
+            assert_eq!(
+                outcome(&refusal)?["access"],
+                "read",
+                "valid access survives invalid script arguments"
+            );
+        }
+        let normal = run(
+            &client,
+            json!({"code":"return 99;"}),
+            Some(json!({"requestId":"read-description"})),
+        )
+        .await?;
+        assert_eq!(
+            serde_json::to_vec(&normal)?,
+            serde_json::to_vec(&result)?,
+            "replay keeps the first access"
+        );
         client.cancel().await?;
         Ok(())
     })

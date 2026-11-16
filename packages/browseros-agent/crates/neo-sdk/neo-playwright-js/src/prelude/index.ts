@@ -24,6 +24,7 @@ import {
 import { Browser } from './browser'
 import { Buffer } from './buffer'
 import { BrowserContext } from './context'
+import { setCoverRenderer } from './cover'
 import { ElementHandle, elementBrand } from './element-handle'
 import { Download } from './event-values'
 import { createExpect } from './expect'
@@ -33,7 +34,13 @@ import { FrameLocator, Locator } from './locator'
 import { Page } from './page'
 import { createPlaywright, Selectors } from './playwright'
 import { Response } from './response'
+import { renderSnapshotV1, withDefaults } from './snapshot-v1'
 import { installUnsupported } from './unsupported'
+
+// A covered action's message shows its cover's snapshot as a script's default snapshot reads.
+setCoverRenderer(
+  (json) => renderSnapshotV1({ json, partial: [] }, withDefaults({})).text,
+)
 
 installUnsupported({
   Selectors,

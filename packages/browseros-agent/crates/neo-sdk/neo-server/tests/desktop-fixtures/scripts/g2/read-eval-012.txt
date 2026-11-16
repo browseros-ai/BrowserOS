@@ -1,0 +1,4 @@
+await page.goto(args.base + '/form.html');
+const value = await page.evaluate(() => 6 * 7);
+equal(value, 42, 'page evaluation round-trips the numeric value');
+return {value};

@@ -405,8 +405,7 @@ async fn click_after_parent_scrolls(options: Value, rounds: usize) -> TestResult
 
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
-async fn tests_that_a_covered_nested_frame_fails_not_actionable_naming_the_overlay_unsent()
--> TestResult {
+async fn tests_that_a_covered_nested_frame_fails_covered_naming_the_overlay_unsent() -> TestResult {
     let run = LiveRun::connect().await?;
     let server = FixtureServer::start(pages()).await?;
     let page = agent_tab(&run, &server.url("127.0.0.1", "/actions/cover-top.html")).await?;
@@ -431,18 +430,17 @@ async fn tests_that_a_covered_nested_frame_fails_not_actionable_naming_the_overl
         started.elapsed() >= Duration::from_millis(1400),
         "it waited"
     );
-    assert_eq!(
-        error.error_code(),
-        Some(ErrorCode::NotActionable),
-        "{error}"
-    );
+    // The overlay is in a page above the frame: its facts come from that page, and the call
+    // log keeps upstream's line (covered_live.rs has the facts' rows).
+    assert_eq!(error.error_code(), Some(ErrorCode::Covered), "{error}");
     assert_eq!(error.owner(), ErrorOwner::Website);
     assert!(
         error
             .message()
-            .starts_with("locator.click: Timeout 1500ms exceeded."),
+            .starts_with("locator.click: Timeout 1500ms exceeded.\n  On top: "),
         "{error}"
     );
+    assert!(error.cover_details().is_some(), "{error}");
     assert!(
         error.message().contains("<div id=\"overlay\"")
             && error.message().contains("intercepts pointer events"),

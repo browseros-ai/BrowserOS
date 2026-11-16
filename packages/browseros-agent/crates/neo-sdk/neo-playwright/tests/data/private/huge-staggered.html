@@ -1,0 +1,25 @@
+<!doctype html><meta charset=utf-8><title>Huge staggered</title>
+<!-- The design keeper's probe page for the camera's walk: a main document of 150,000 plain
+     elements and five small same-site frames (srcdoc, on the main document's session), each with
+     a closed shadow root and a plain box and no private box. Frame i also holds i times 3,500
+     elements, so the frames answer the camera one after another. One capture of the session would
+     hold all of it, and it cannot be called back: the camera must send none. -->
+<div id=many></div>
+<script>
+  const many = document.getElementById('many')
+  const chunk = document.createDocumentFragment()
+  for (let index = 0; index < 150000; index++) chunk.appendChild(document.createElement('span'))
+  many.appendChild(chunk)
+  for (let frame = 1; frame <= 5; frame++) {
+    const iframe = document.createElement('iframe')
+    iframe.title = 'Frame ' + frame
+    iframe.style.cssText = 'width:200px;height:40px;border:0'
+    iframe.srcdoc = '<div id=h></div><div id=m></div><script>' +
+      "document.getElementById('h').attachShadow({ mode: 'closed' }).innerHTML = '<input value=x>';" +
+      'const f = document.createDocumentFragment();' +
+      'for (let i = 0; i < ' + frame * 3500 + '; i++) f.appendChild(document.createElement(\'b\'));' +
+      "document.getElementById('m').appendChild(f);" +
+      '<\/script>'
+    document.body.appendChild(iframe)
+  }
+</script>

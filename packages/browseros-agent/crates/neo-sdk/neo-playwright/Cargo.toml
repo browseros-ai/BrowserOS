@@ -29,6 +29,10 @@ serde_json = { workspace = true, features = ["float_roundtrip", "raw_value", "un
 # Names the failing field in `invalid_input` messages (`target.chunks[0]: ...`).
 serde_path_to_error.workspace = true
 tokio.workspace = true
+# One debug line where the camera's walk on demand cannot read a host's closed shadow root or
+# ends early: the camera runs outside any op, so no call log hears it (ruling R65,
+# picture_check.rs).
+tracing.workspace = true
 # Prints each op's input and result types as the prelude's TypeScript (`src/wire/`,
 # tests/wire_generated.rs). A normal dependency because the route rows' bounds name `TS`; outside
 # the generator its impls are never called. Default features only (`serde-compat`): no impl for

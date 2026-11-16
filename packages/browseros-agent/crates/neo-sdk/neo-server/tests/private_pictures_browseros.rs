@@ -493,11 +493,12 @@ await page.goto('data:text/html,' + encodeURIComponent(html));
 return { page };
 "#;
 
-/// Ruling R45's named limit, on the whole stack (measured by the design's author): until a
-/// snapshot of the document has walked a closed shadow root, Neo does not know the boxes inside
-/// it, so a picture taken then can show what one holds, whoever typed it. A snapshot that walks
-/// the root closes it for that document; a closed root attached after that walk is unknown
-/// again until the next one.
+/// Ruling R45's named limit, on the whole stack (measured by the design's author): a value the
+/// page's own script writes into a box inside a closed shadow root fires no event, so until a
+/// snapshot of the document has walked that root, or typing has reached it or its box held the
+/// focus (the camera's walk on demand, ruling R65), Neo does not know the box, and a picture
+/// taken then can show what it holds. A snapshot that walks the root closes it for that
+/// document; a closed root attached after that walk is unknown again until the next one.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_box_in_a_closed_root_is_known_once_a_snapshot_walked_it() -> TestResult {
     let Some(browser) = browser_or_skip() else {

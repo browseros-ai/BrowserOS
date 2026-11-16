@@ -156,6 +156,26 @@ pub(crate) enum ProbeRequest {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         point: Option<Point>,
+        /// Set only by the private look's cover check of a page above the box's frame (ruling
+        /// R60): a frame that is only shifted is placed by its corner, and a point that hits
+        /// nothing, or hits what holds the frame, is clear. A click keeps upstream's answer.
+        #[serde(default)]
+        look: bool,
+    },
+    /// The facts of a pointer action that ended covered (covered-click spec section 2), sent
+    /// once to the world whose hit test found cover number `cover`: `target` is the action's
+    /// element, or in a page above its frame that page's iframe, and `point` the click point in
+    /// this frame's pixels. It hit-tests `point` again and answers facts only when the same
+    /// cover is still on top there.
+    Cover {
+        target: ProbeTarget,
+        point: Point,
+        cover: u32,
+        /// The cover is in a page above the element's frame, and `target` is that page's
+        /// iframe, tested as it is. Otherwise `target` is the element, retargeted as the
+        /// interceptor retargets it.
+        #[serde(default)]
+        above: bool,
     },
     /// `fill`, `selectOptions`, `selectText`, `focus`, `focusToType`, `blur` or
     /// `dispatchEvent` on a pin.
@@ -170,7 +190,22 @@ pub(crate) enum ProbeRequest {
     /// empty, and that the browser paints in clear (protected-fill ruling R45): `value` with a
     /// boolean. Neo's camera asks it in every frame before and after a picture. Reads no value
     /// out of the page.
-    PrivateShown,
+    PrivateShown {
+        /// The camera's walk of closed shadow roots on demand (ruling R65): the call's nodes are
+        /// closed roots Rust resolved into this world from the hosts `PrivateHosts` handed over.
+        /// The world keeps them for this question alone, never for its engine
+        /// (probe/private-shown.ts).
+        #[serde(default, skip_serializing_if = "is_false")]
+        #[ts(optional, as = "Option<bool>")]
+        walk: bool,
+    },
+    /// The hosts the camera's question has waiting, by handle (`returnByValue: false`, read
+    /// through deep serialization): elements a trusted input event or the focus pointed at,
+    /// which take no input themselves and may carry a closed shadow root this world does not
+    /// know. At most `limit`, the ones an input event named first. A host the focus pointed at is
+    /// handed over once; one an input event named once a reading until its root is kept, five
+    /// readings at most (ruling R65).
+    PrivateHosts { limit: u32 },
     /// One read of one element, resolved in the same call.
     Read {
         target: ProbeTarget,
@@ -194,6 +229,10 @@ pub(crate) enum ProbeRequest {
     /// then on (probe/shadow-roots.ts), and the rest are marking's targets, which for this call
     /// the engine reads as `cursor: pointer` (probe/pointer-targets.ts).
     Snapshot {
+        /// Annotate native inertness only for Neo text formats, never JSON or conformance.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        #[ts(optional, as = "Option<bool>")]
+        mark_inert: bool,
         root: ProbeTarget,
         mode: SnapshotMode,
         /// Any integer, as upstream passes it: a child frame's depth can come out zero or
@@ -504,6 +543,11 @@ pub(crate) enum Read {
     Ref,
     /// The border box in the element's own frame's viewport, or null with no layout box.
     BoundingBox,
+    /// The private look's in-view test (ruling R62) and its point for the pages above the frame
+    /// (ruling R60): the centre of the element's border box in its own frame's view, its
+    /// scrollbars left out (the window's view on a page with no scrolling element), or null when
+    /// that centre lies outside the view or there is no layout box.
+    ViewCentre,
     Attribute {
         name: String,
     },
@@ -585,6 +629,15 @@ pub(crate) enum UrlPattern {
 )]
 fn is_zero(count: &u32) -> bool {
     *count == 0
+}
+
+/// Serde's skip test for a flag that is absent from the wire when false.
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde's skip_serializing_if passes the field by reference"
+)]
+fn is_false(flag: &bool) -> bool {
+    !*flag
 }
 
 #[cfg(test)]

@@ -133,6 +133,7 @@ mod tests {
         text: TextForm::Kept,
         urls: false,
         max_tokens: 8000.0,
+        inert: false,
     };
 
     fn tab(id: &str) -> TargetId {

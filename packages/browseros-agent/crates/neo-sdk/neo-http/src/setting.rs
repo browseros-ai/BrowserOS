@@ -88,6 +88,23 @@ pub(crate) const TAB_IDLE_CLOSE: Setting = Setting {
     },
 };
 
+/// Whether a run that carries a task sees only its task's tabs (`task`) or every tab, as any
+/// run without a task does (`browser`). Each run reads it once, at its start. A saved value Neo
+/// cannot read falls back to the default, `task`, the narrow side. That holds only while the
+/// default is `task`: were it ever `browser`, this row would need `invalid_saved: task`.
+pub(crate) const TABS_SCOPE: Setting = Setting {
+    name: "tabs.scope",
+    invalid_saved: None,
+    rule: Rule::Choice {
+        default: TABS_SCOPE_TASK,
+        values: &[TABS_SCOPE_TASK, TABS_SCOPE_BROWSER],
+    },
+};
+
+/// `tabs.scope`'s names.
+pub(crate) const TABS_SCOPE_TASK: &str = "task";
+pub(crate) const TABS_SCOPE_BROWSER: &str = "browser";
+
 /// Runs older than this are deleted from the trace (the retention sweep). The default is
 /// `neo_trace::RetentionPolicy`'s own `max_age`, which a test keeps equal.
 pub(crate) const TRACE_RETENTION: Setting = Setting {
@@ -167,6 +184,7 @@ pub(crate) const FILE_READ_DIRS: Setting = Setting {
 /// Every setting this server knows, in the order the README lists them.
 pub(crate) const SETTINGS: &[Setting] = &[
     TAB_IDLE_CLOSE,
+    TABS_SCOPE,
     TRACE_RETENTION,
     TRACE_SCREENSHOTS,
     TRACE_VALUE_BYTES,

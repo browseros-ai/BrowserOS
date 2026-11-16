@@ -1,0 +1,6 @@
+await page.goto(args.base + '/sdk-input.html');
+
+const error = await rejected(async () => page.getByRef(await refFor(page, 'Checked radio')).uncheck(), /radio|uncheck|checked/i);
+const checked = await page.evaluate(() => document.getElementById('radio').checked);
+equal(checked, true, 'a radio remains checked after uncheck rejects');
+return { error, checked };

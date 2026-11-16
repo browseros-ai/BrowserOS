@@ -28,14 +28,16 @@
  * as `expect(locator).toHaveText(expected) failed`, named `Error`, never `TimeoutError`.
  */
 
+import { shapeCovered } from './cover'
 import type { ErrBody } from './generated/envelope'
 import type { OpName } from './generated/ops'
 import { localTimeout, type RefusalCode, refuser } from './host'
 import type { SignalLike } from './signal'
 
-/** The fields of claw-sdk's error envelope (runtime/bridge.rs `ErrBody`) every error carries. */
+/** Envelope metadata copied when present, matching runtime/bridge.rs `ErrBody`. */
 const FIELDS = [
   'code',
+  'diagnosticCode',
   'owner',
   'delivery',
   'retryable',
@@ -117,6 +119,8 @@ export function shapeBridgeError(
         : 'Error'
   if (thrown instanceof Error) {
     if (!assertion) thrown.message = apiMessage(api, op, thrown.message)
+    // A covered pointer action's cover: its snapshot into the message, the rest on the error.
+    shapeCovered(thrown)
     thrown.name = named
     return withFields(thrown, { timeout: timedOut })
   }

@@ -1,0 +1,7 @@
+const created = await context.newPage();
+try {
+  await created.goto(args.base + '/slow/links.html');
+  const snapshot = await created.ariaSnapshot();
+  includes(snapshot, 'Form page', 'new-page capture waits for the slow fixture instead of capturing about:blank');
+  return { url: created.url(), snapshot };
+} finally { await created.close(); }

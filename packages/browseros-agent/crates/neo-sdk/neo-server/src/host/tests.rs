@@ -11,7 +11,7 @@ use browseros_core::{NativeCapabilities, TabId};
 use neo_http::{ChecksPicture, Settings, SettingsDefaults, TookPrivateText};
 use neo_trace::{
     Effect, EpochMillis, OperationId, RedactionLimits, Redactor, RunEnded, RunId, RunStarted,
-    RunStatus, Screenshots, TraceStore, Values, WriterConfig,
+    RunStatus, RunTabsScope, Screenshots, TraceStore, Values, WriterConfig,
 };
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -36,6 +36,7 @@ use neo_playwright::FileAccess;
 use neo_trace::TraceSink;
 
 mod fill;
+mod hand_back;
 
 use self::fill::{ScriptedEntry, register_controls};
 
@@ -147,6 +148,7 @@ impl Host {
             cdp_port: 0,
             settings_file: dir.path().join("settings.json"),
             settings_defaults: SettingsDefaults::default(),
+            tabs: Arc::clone(&tabs),
         };
         let sink = inputs.sink.clone();
         let host = HostApi::bind(&config, inputs).await?;
@@ -475,6 +477,8 @@ async fn saved_recording_settings_reach_the_writer_without_a_usable_token() -> T
             request_id: None,
             task_id: None,
             host_data: None,
+            tabs_scope: RunTabsScope::Browser,
+            access: None,
             at: EpochMillis::now(),
         });
         host.sink.run_ended(RunEnded {

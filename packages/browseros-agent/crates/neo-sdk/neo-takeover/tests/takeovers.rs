@@ -21,15 +21,16 @@ use bytes::Bytes;
 use neo_takeover::testing::FakeXvnc;
 use neo_takeover::{
     Admitted, BrowserTabs, DisplayEnd, DisplayRequest, Displays, FitState, Fits, Follow, Front,
-    FrontError, LockEnd, LockTarget, Locks, OwnerHasControl, OwnerHasScreen, PartError, Reads,
-    ReleaseReason, ScreenHolder, ScreenSize, Takeover, TakeoverRequest, TakeoverState, TakeoverTtl,
-    Takeovers, Viewer as FitViewer, ViewerScale,
+    FrontError, LockEnd, LockTarget, Locks, OpenedTab, OwnerHasControl, OwnerHasScreen, PartError,
+    Reads, ReleaseReason, ScreenHolder, ScreenSize, TabLinks, Takeover, TakeoverRequest,
+    TakeoverState, TakeoverTtl, Takeovers, Viewer as FitViewer, ViewerScale,
 };
 use neo_trace::{
     Effect, EpochMillis, OperationId, OperationKind, OperationStarted, RedactionLimits, Redactor,
-    RunId, RunStarted, TaskId, TraceSink, TraceStore, WriterConfig, spawn_writer,
+    RunId, RunStarted, RunTabsScope, TaskId, TraceSink, TraceStore, WriterConfig, spawn_writer,
 };
 use serde_json::json;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -85,6 +86,11 @@ struct Harness {
 
 /// The parts as `Service::start` builds them, with `tabs` open.
 async fn harness(tabs: &[i64]) -> Result<Harness, BoxError> {
+    harness_with(tabs, TabLinks::none()).await
+}
+
+/// [`harness`], with `links` naming who holds each tab and what opened it.
+async fn harness_with(tabs: &[i64], links: TabLinks) -> Result<Harness, BoxError> {
     let dir = tempfile::tempdir()?;
     let store = TraceStore::open(&dir.path().join("trace.db")).await?;
     let sink = spawn_writer(
@@ -108,7 +114,7 @@ async fn harness(tabs: &[i64]) -> Result<Harness, BoxError> {
         sink.clone(),
         store,
     );
-    let takeovers = Takeovers::new(Arc::clone(&locks), Arc::clone(&fits), tabs);
+    let takeovers = Takeovers::new(Arc::clone(&locks), Arc::clone(&fits), tabs, links);
     Ok(Harness {
         _dir: dir,
         xvnc,
@@ -165,6 +171,8 @@ impl Harness {
             request_id: None,
             task_id: Some(task.clone()),
             host_data: None,
+            tabs_scope: RunTabsScope::Browser,
+            access: None,
             at: EpochMillis::now(),
         });
         self.sink.op_started(OperationStarted {
@@ -1121,5 +1129,408 @@ async fn follow_pauses_while_a_fit_holds_the_screen() -> TestResult {
 
     h.fits.restore(fit.id).await?;
     eventually(|| h.activated() == [3, 4]).await?;
+    Ok(())
+}
+
+/// Who holds each tab and what opened it, as the app answers for a release's `openedTabs`.
+fn links(held: &[(i64, &str)], opened_by: &[(i64, i64)]) -> TabLinks {
+    let held: HashMap<i64, String> = held
+        .iter()
+        .map(|(tab, task)| (*tab, (*task).to_owned()))
+        .collect();
+    let opened_by: HashMap<i64, i64> = opened_by.iter().copied().collect();
+    TabLinks {
+        task: Arc::new(move |tab| held.get(&tab.0).cloned()),
+        opener: Arc::new(move |tab| opened_by.get(&tab.0).map(|opener| TabId(*opener))),
+    }
+}
+
+/// A tab the owner opened by hand, as a release that listed the browser's tabs lists it.
+fn by_hand(tab: i64, url: &str, in_front: bool) -> OpenedTab {
+    OpenedTab {
+        tab: TabId(tab),
+        url: Some(url.to_owned()),
+        in_front: Some(in_front),
+        task_id: None,
+        opener: None,
+    }
+}
+
+/// The owner opens a tab during the takeover, and the tab watch's open reaches the takeovers.
+fn owner_opens(h: &Harness, tab: i64, url: &str) {
+    h.browser.open_tab(tab, url);
+    h.takeovers.note_opened(TabId(tab), None);
+}
+
+/// The hand-back: a release lists each tab the owner opened while the takeover was active and is
+/// still open, with no task and no opener, and the one left in front; it gives none away.
+#[tokio::test]
+async fn a_release_lists_the_tabs_opened_during_it_and_the_one_left_in_front() -> TestResult {
+    let h = harness(&[3]).await?;
+    let takeover = h.takeovers.start(request(None)?).await?;
+    assert_eq!(takeover.opened_tabs, None, "not while active");
+    owner_opens(&h, 7, "https://bank.example/");
+    owner_opens(&h, 8, "https://mail.example/");
+    owner_opens(&h, 9, "https://closed.example/");
+    h.browser.close_tab(9);
+    h.browser.show_in_front(8);
+    let released = h
+        .takeovers
+        .release(takeover.id, ReleaseReason::Done)
+        .await?;
+    assert_eq!(
+        released.opened_tabs,
+        Some(vec![
+            by_hand(7, "https://bank.example/", false),
+            by_hand(8, "https://mail.example/", true),
+        ]),
+        "a tab the owner closed again is not listed"
+    );
+    Ok(())
+}
+
+/// A popup of the takeover's tab already belongs to that tab's task: the release lists it with
+/// the task and its opener, so a host can tell it from a tab the owner opened by hand.
+#[tokio::test]
+async fn a_popup_of_the_takeovers_tab_is_listed_with_its_task_and_opener() -> TestResult {
+    let h = harness_with(&[3], links(&[(8, "session")], &[(8, 3)])).await?;
+    let takeover = h.takeovers.start(request(None)?).await?;
+    h.browser
+        .open_popup(3, 8, "https://card-check.example/", "link");
+    h.takeovers.note_opened(TabId(8), None);
+    let released = h
+        .takeovers
+        .release(takeover.id, ReleaseReason::Host)
+        .await?;
+    assert_eq!(
+        released.opened_tabs,
+        Some(vec![OpenedTab {
+            tab: TabId(8),
+            url: Some("https://card-check.example/".to_owned()),
+            in_front: Some(false),
+            task_id: Some("session".to_owned()),
+            opener: Some(TAB),
+        }])
+    );
+    Ok(())
+}
+
+/// A tab opened before the takeover started, or after its release, is not its; a repeated
+/// release answers the first release's list.
+#[tokio::test]
+async fn only_tabs_opened_while_active_are_listed_and_a_repeat_answers_the_first_list() -> TestResult
+{
+    let h = harness(&[3]).await?;
+    owner_opens(&h, 5, "https://before.example/");
+    let takeover = h.takeovers.start(request(None)?).await?;
+    owner_opens(&h, 7, "https://during.example/");
+    let first = h
+        .takeovers
+        .release(takeover.id, ReleaseReason::Done)
+        .await?;
+    owner_opens(&h, 9, "https://after.example/");
+    let again = h
+        .takeovers
+        .release(takeover.id, ReleaseReason::Host)
+        .await?;
+    let during = Some(vec![by_hand(7, "https://during.example/", false)]);
+    assert_eq!(first.opened_tabs, during);
+    assert_eq!(again, first, "the first release's reason and list stand");
+    assert_eq!(
+        h.takeovers
+            .get(takeover.id)
+            .and_then(|takeover| takeover.opened_tabs),
+        during
+    );
+    Ok(())
+}
+
+/// A host may run handoffs at once, one per tab: a tab opened while both were active is in both
+/// lists, and the host decides.
+#[tokio::test]
+async fn a_tab_opened_during_two_takeovers_is_in_both_lists() -> TestResult {
+    let h = harness(&[3, 4]).await?;
+    let first = h.takeovers.start(request(None)?).await?;
+    let second = h
+        .takeovers
+        .start(TakeoverRequest {
+            tab: TabId(4),
+            ..request(None)?
+        })
+        .await?;
+    owner_opens(&h, 9, "https://both.example/");
+    let listed = Some(vec![by_hand(9, "https://both.example/", false)]);
+    for id in [first.id, second.id] {
+        let released = h.takeovers.release(id, ReleaseReason::Done).await?;
+        assert_eq!(released.opened_tabs, listed);
+    }
+    Ok(())
+}
+
+/// Every reason a takeover ends builds the same list: the host's cancel, the owner's idle, and
+/// the takeover's own tab closing, which lists the other tabs still open.
+#[tokio::test]
+async fn every_release_reason_lists_the_tabs_opened_during_it() -> TestResult {
+    for reason in [
+        ReleaseReason::Done,
+        ReleaseReason::Idle,
+        ReleaseReason::Host,
+        ReleaseReason::TabClosed,
+    ] {
+        let h = harness(&[3]).await?;
+        let takeover = h.takeovers.start(request(None)?).await?;
+        owner_opens(&h, 7, "https://opened.example/");
+        let released = if reason == ReleaseReason::TabClosed {
+            h.browser.close_tab(3);
+            h.takeovers.tab_closed(TAB).await;
+            h.takeovers.get(takeover.id).ok_or("the takeover")?
+        } else {
+            h.takeovers.release(takeover.id, reason).await?
+        };
+        assert_eq!(released_for(&released), Some(reason));
+        assert_eq!(
+            released.opened_tabs,
+            Some(vec![by_hand(7, "https://opened.example/", false)]),
+            "{reason:?}"
+        );
+    }
+    Ok(())
+}
+
+/// The TTL's release builds the same list.
+#[tokio::test]
+async fn the_ttl_release_lists_the_tabs_opened_during_it() -> TestResult {
+    let h = harness(&[3]).await?;
+    let takeover = h
+        .takeovers
+        .start(TakeoverRequest {
+            ttl: TakeoverTtl::new(Duration::from_secs(60)).ok_or("a valid TTL")?,
+            ..request(None)?
+        })
+        .await?;
+    owner_opens(&h, 7, "https://opened.example/");
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(51)).await;
+    let released = h
+        .takeovers
+        .wait(takeover.id, Instant::now() + Duration::from_secs(5))
+        .await
+        .ok_or("the takeover")?;
+    tokio::time::resume();
+    assert_eq!(released_for(&released), Some(ReleaseReason::Expired));
+    assert_eq!(
+        released.opened_tabs,
+        Some(vec![by_hand(7, "https://opened.example/", false)])
+    );
+    Ok(())
+}
+
+/// A release whose listing of the browser's tabs does not answer still lists every tab it
+/// noted, with its address and front unknown, never guessed: a host never misses a tab the owner
+/// opened, and one that decides by the owner's last focus is not told the owner left another tab
+/// in front.
+#[tokio::test]
+async fn a_release_that_cannot_list_the_browsers_tabs_lists_every_tab_noted_as_unknown()
+-> TestResult {
+    let h = harness(&[3]).await?;
+    let takeover = h.takeovers.start(request(None)?).await?;
+    owner_opens(&h, 7, "https://opened.example/");
+    owner_opens(&h, 8, "https://front.example/");
+    h.browser.show_in_front(8);
+    h.browser.hang("Browser.getTabs");
+    let released = timeout(
+        WITHIN,
+        h.takeovers.release(takeover.id, ReleaseReason::Done),
+    )
+    .await??;
+    let unknown = |tab: i64| OpenedTab {
+        tab: TabId(tab),
+        url: None,
+        in_front: None,
+        task_id: None,
+        opener: None,
+    };
+    assert_eq!(released.opened_tabs, Some(vec![unknown(7), unknown(8)]));
+    Ok(())
+}
+
+/// The opener is read as the tab opens: once the opener closes, as the takeover's own tab does
+/// when it ends the takeover, the app no longer knows the link, and the popup still names it.
+#[tokio::test]
+async fn a_popup_keeps_its_opener_after_the_opener_closes() -> TestResult {
+    let known: Arc<std::sync::Mutex<HashMap<i64, i64>>> = Arc::default();
+    let links = TabLinks {
+        task: Arc::new(|_| None),
+        opener: {
+            let known = Arc::clone(&known);
+            Arc::new(move |tab| {
+                known
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .get(&tab.0)
+                    .map(|opener| TabId(*opener))
+            })
+        },
+    };
+    let h = harness_with(&[3], links).await?;
+    let takeover = h.takeovers.start(request(None)?).await?;
+    known
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .insert(8, 3);
+    h.browser
+        .open_popup(3, 8, "https://sign-in.example/", "link");
+    h.takeovers.note_opened(TabId(8), None);
+    // The takeover's tab closes; the app forgets the popup's link with it.
+    known
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clear();
+    h.browser.close_tab(3);
+    h.takeovers.tab_closed(TAB).await;
+    let released = h.takeovers.get(takeover.id).ok_or("the takeover")?;
+    assert_eq!(released_for(&released), Some(ReleaseReason::TabClosed));
+    assert_eq!(
+        released.opened_tabs,
+        Some(vec![OpenedTab {
+            tab: TabId(8),
+            url: Some("https://sign-in.example/".to_owned()),
+            in_front: Some(false),
+            task_id: None,
+            opener: Some(TAB),
+        }])
+    );
+    Ok(())
+}
+
+/// The owner opens `count` tabs from `first` on during the takeover.
+fn owner_opens_many(h: &Harness, first: i64, count: i64) {
+    for tab in first..first + count {
+        owner_opens(h, tab, &format!("https://opened.example/{tab}"));
+    }
+}
+
+/// The tab ids a release lists.
+fn listed_ids(takeover: &Takeover) -> Vec<i64> {
+    takeover
+        .opened_tabs
+        .iter()
+        .flatten()
+        .map(|opened| opened.tab.0)
+        .collect()
+}
+
+/// A page that opens tabs in a loop early must not hide the owner's last tabs: past 256 a
+/// takeover keeps the newest, counts them all, and says the list is cut, so a host treats a tab
+/// it does not list as unknown. A repeat release answers the same.
+#[tokio::test]
+async fn past_256_opens_a_release_keeps_the_newest_and_says_the_list_is_cut() -> TestResult {
+    let h = harness(&[3]).await?;
+    let takeover = h.takeovers.start(request(None)?).await?;
+    owner_opens_many(&h, 1000, 257);
+    let released = h
+        .takeovers
+        .release(takeover.id, ReleaseReason::Done)
+        .await?;
+    assert_eq!(
+        listed_ids(&released),
+        (1001..1257).collect::<Vec<_>>(),
+        "the newest 256"
+    );
+    assert_eq!(
+        (released.opened_tabs_noted, released.opened_tabs_truncated),
+        (Some(257), Some(true))
+    );
+    let again = h
+        .takeovers
+        .release(takeover.id, ReleaseReason::Host)
+        .await?;
+    assert_eq!(
+        again, released,
+        "a repeat answers the first release, its flag included"
+    );
+    Ok(())
+}
+
+/// A tab the takeover already noted, which comes back (the tab watch reports a tab again when it
+/// returns from an extension's page to a web page), is no new open: past 256, the first tab
+/// returning neither counts twice nor pushes a newer tab out.
+#[tokio::test]
+async fn a_tab_noted_before_that_returns_is_no_new_open() -> TestResult {
+    let h = harness(&[3]).await?;
+    let takeover = h.takeovers.start(request(None)?).await?;
+    owner_opens_many(&h, 1000, 257);
+    h.takeovers.note_opened(TabId(1000), None);
+    h.takeovers.note_opened(TabId(1256), None);
+    let released = h
+        .takeovers
+        .release(takeover.id, ReleaseReason::Done)
+        .await?;
+    assert_eq!(listed_ids(&released), (1001..1257).collect::<Vec<_>>());
+    assert_eq!(
+        (released.opened_tabs_noted, released.opened_tabs_truncated),
+        (Some(257), Some(true))
+    );
+    Ok(())
+}
+
+/// Up to 256 opens, the list is whole and says so.
+#[tokio::test]
+async fn up_to_256_opens_the_list_is_whole() -> TestResult {
+    let h = harness(&[3]).await?;
+    let takeover = h.takeovers.start(request(None)?).await?;
+    owner_opens_many(&h, 1000, 256);
+    let released = h
+        .takeovers
+        .release(takeover.id, ReleaseReason::Done)
+        .await?;
+    assert_eq!(listed_ids(&released), (1000..1256).collect::<Vec<_>>());
+    assert_eq!(
+        (released.opened_tabs_noted, released.opened_tabs_truncated),
+        (Some(256), Some(false))
+    );
+    let none = h.takeovers.start(TakeoverRequest {
+        tab: TabId(3),
+        ..request(None)?
+    });
+    let none = none.await?;
+    let quiet = h.takeovers.release(none.id, ReleaseReason::Done).await?;
+    assert_eq!(
+        (
+            quiet.opened_tabs.as_ref().map(Vec::len),
+            quiet.opened_tabs_noted,
+            quiet.opened_tabs_truncated
+        ),
+        (Some(0), Some(0), Some(false)),
+        "a takeover with no open says so too"
+    );
+    Ok(())
+}
+
+/// The flag does not depend on the release's listing: when the browser's tabs cannot be listed,
+/// the kept tabs are listed with their url and front unknown, and the list still says it is cut.
+#[tokio::test]
+async fn a_cut_list_says_so_when_the_browsers_tabs_cannot_be_listed() -> TestResult {
+    let h = harness(&[3]).await?;
+    let takeover = h.takeovers.start(request(None)?).await?;
+    owner_opens_many(&h, 1000, 257);
+    h.browser.hang("Browser.getTabs");
+    let released = timeout(
+        WITHIN,
+        h.takeovers.release(takeover.id, ReleaseReason::Done),
+    )
+    .await??;
+    assert_eq!(listed_ids(&released), (1001..1257).collect::<Vec<_>>());
+    assert!(
+        released
+            .opened_tabs
+            .iter()
+            .flatten()
+            .all(|opened| opened.url.is_none() && opened.in_front.is_none())
+    );
+    assert_eq!(
+        (released.opened_tabs_noted, released.opened_tabs_truncated),
+        (Some(257), Some(true))
+    );
     Ok(())
 }

@@ -37,6 +37,7 @@
  * that frame's tree walk there; no host fill happens under the switch.
  */
 
+import { holdsKeptValue, keepDigest, keepsDigests } from './private-digest'
 import { coverWrapper, renderedText } from './private-look'
 import type {
   BoxState,
@@ -99,20 +100,37 @@ const watched = new WeakMap<Element, Watched>()
 const active = new Map<Pin, Element>()
 
 /**
- * The wrapper whose text drew the value at a box's read-back (ruling R55), by pin, until the
- * `drawn` step asks whether it still does after Rust emptied the box. Kept apart from the box's
- * entry, which the read-back ends and the emptying's focus step starts again.
+ * The wrapper whose text drew the value at the last read-back that found it drawn (ruling R55),
+ * with that box's pin, until the `drawn` step asks whether it still draws after Rust emptied the
+ * box. Kept apart from the box's entry, which the read-back ends and the emptying's focus step
+ * starts again.
+ *
+ * One slot, not a map: a drawn long value ends its entry, and Rust empties that box and asks
+ * `drawn` for that pin before any other read-back in this world; in between the page hears only
+ * that pin's focus, focused, holds and forget steps, and one fill at a time holds a tab's input.
+ * A map kept a wrapper alive for the document's life for every code filled under a field's own
+ * drawing, since Rust asks `drawn` only for a long value (`DRAWN_CODE_MAX`).
+ *
+ * Not emptied by `forget`: the read-back that fills the slot forgets that pin's box right after,
+ * so every drawn value would answer that it still draws. Nor at the `forget` step: the emptying's
+ * guard sends one for that pin from a spawned task, and its order against the `drawn` step is not
+ * fixed. The last such wrapper of a document stays until the next read-back that finds a value
+ * drawn, the next `drawn` step, or the document's end.
  */
-const drawnWrappers = new Map<Pin, Element>()
+let drawnSlot: { pin: Pin; wrapper: Element } | undefined
 
-/** Whether Neo typed a private value into `element` (the mask reads it, pull request 4). */
+/**
+ * Whether the mask treats `element` as a box Neo typed a private value into (pull request 4):
+ * it carries the mark, or it held a value this world keeps a digest of when the current read
+ * through the mask began (ruling R50, `private-digest.ts`).
+ */
 export function privatelyTyped(element: Element): boolean {
-  return Object.hasOwn(element, MARK)
+  return Object.hasOwn(element, MARK) || holdsKeptValue(element)
 }
 
-/** Whether this world marked any box yet (`anyMarked`). */
+/** Whether this world marked any box or keeps any digest (`anyMarked`). */
 export function anyPrivatelyTyped(): boolean {
-  return anyMarked
+  return anyMarked || keepsDigests()
 }
 
 function mark(element: Element): void {
@@ -131,8 +149,8 @@ export function privateStep(
   // no wrapper kept answers that it still draws, so Neo never says the page was cleared when it
   // cannot tell.
   if (step.kind === 'drawn') {
-    const wrapper = drawnWrappers.get(pin)
-    drawnWrappers.delete(pin)
+    const wrapper = drawnSlot?.pin === pin ? drawnSlot.wrapper : undefined
+    drawnSlot = undefined
     return reply({
       kind: 'drawn',
       drawn: wrapper ? draws(wrapper, step.text) : true,
@@ -141,9 +159,12 @@ export function privateStep(
   // After `focus`, the box is reached through `active`, connected or not: a read-back must
   // reach a box that left its document, whose listener still knows what it held at its last
   // input. Before it, the box must be in its document.
+  // The check call's compare (ruling R48) reads a box no entry is under, as `focus` starts one.
   const box =
     active.get(pin) ??
-    (step.kind === 'focus' ? world.pins.live(pin) : undefined)
+    (step.kind === 'focus' || step.kind === 'compare'
+      ? world.pins.live(pin)
+      : undefined)
   if (!box) return { kind: 'detached' }
   const answered = answer(world, pin, box, step)
   return answered instanceof Promise ? answered.then(reply) : reply(answered)
@@ -169,6 +190,15 @@ function answer(
         kind: 'holds',
         holds: same(heldText(box), step.text, step.spaced),
       }
+    case 'compare': {
+      // Booleans only: nothing of the value, its place or its count leaves this world.
+      const held = heldText(box)
+      return {
+        kind: 'compared',
+        holds: same(held, step.text, step.spaced),
+        contains: contains(held, step.text, step.spaced),
+      }
+    }
     case 'readBack':
       return readBack(pin, box)
     case 'forget':
@@ -179,7 +209,10 @@ function answer(
   }
 }
 
-/** Marks the text control holding the focus in `box`'s document, down open shadow roots. */
+/**
+ * Marks the text control holding the focus in `box`'s document, down open shadow roots, and
+ * keeps a digest of what it holds (ruling R50): the text may have gone there.
+ */
 function markFocused(box: Element): boolean {
   let holder = box.ownerDocument.activeElement
   while (holder?.shadowRoot?.activeElement)
@@ -188,6 +221,7 @@ function markFocused(box: Element): boolean {
   const name = holder.localName
   if (name !== 'input' && name !== 'textarea') return false
   mark(holder)
+  keepDigest(heldText(holder))
   return true
 }
 
@@ -313,6 +347,13 @@ function readBack(pin: Pin, box: Element): PrivateAnswer {
   else if (entry && same(heldText(box), entry.text, entry.spaced))
     state = 'holds'
   else state = 'other'
+  // The mark follows the value (ruling R50): a digest of what the box holds now, whether that is
+  // the value it was given or another form or part of it, and of the value it was given,
+  // whatever it holds. A widget that splits a code across its boxes may mirror the whole of it
+  // into another control (a hidden input), and a box that left may come back re-created with
+  // it. The scan at the next request forgets whichever no control holds.
+  if (state !== 'left') keepDigest(heldText(box))
+  if (entry) keepDigest(entry.text)
   // The text may have gone to the control that holds the focus now: it is marked before the
   // box is forgotten, which ends this entry's reach to the box (ruling R26).
   if (state === 'other') markFocused(box)
@@ -320,7 +361,7 @@ function readBack(pin: Pin, box: Element): PrivateAnswer {
   const cover = entry?.cover
   const drawn =
     cover !== undefined && !cover.drewBefore && draws(cover.wrapper, cover.text)
-  if (cover && drawn) drawnWrappers.set(pin, cover.wrapper)
+  if (cover && drawn) drawnSlot = { pin, wrapper: cover.wrapper }
   forget(pin, box)
   const drawing = !cover ? 'none' : drawn ? 'drawn' : 'under'
   return { kind: 'readBack', state, heldAtLastInput, moving: leaving, drawing }
@@ -345,6 +386,17 @@ function draws(wrapper: Element, text: string): boolean {
 function heldText(box: Element): string {
   const value: unknown = Reflect.get(box, 'value')
   return typeof value === 'string' ? value : ''
+}
+
+/**
+ * Whether `held` contains `text`, or with `spaced` contains it once spaces, dashes and slashes
+ * are set aside in both, the rule `same` uses for equality: true whenever `same` is (ruling R48).
+ */
+function contains(held: string, text: string, spaced: boolean): boolean {
+  if (held.includes(text)) return true
+  if (!spaced) return false
+  const bare = (value: string) => value.replace(/[\s\-/]/g, '')
+  return bare(held).includes(bare(text))
 }
 
 /** Equal, or with `spaced` equal once spaces, dashes and slashes are set aside (`12 / 29`). */

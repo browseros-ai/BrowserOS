@@ -1,0 +1,18 @@
+<!doctype html><meta charset=utf-8><title>Busy frame</title>
+<!-- A card box in a frame on a third site ([::1]) that stops answering: once the page posts it a
+     message, the frame's script loops for three seconds, so its renderer runs no other task
+     meanwhile (ruling R48's row 6: a frame that is still there and does not answer). The loop
+     ends, and the third site shares its renderer with no other suite's frames.
+     ?inner=1 is that frame's page. -->
+<script>
+  if (new URLSearchParams(location.search).get('inner')) {
+    document.write('<input aria-label="Busy box" value="4242424242424242">')
+    addEventListener('message', () => {
+      const end = Date.now() + 3000
+      while (Date.now() < end) {}
+    })
+  } else {
+    const other = location.protocol + '//[::1]:' + location.port
+    document.write('<iframe title="Busy" src="' + other + '/private/busy-frame.html?inner=1"></iframe>')
+  }
+</script>

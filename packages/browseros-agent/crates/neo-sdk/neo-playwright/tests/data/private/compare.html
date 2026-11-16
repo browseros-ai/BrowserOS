@@ -1,0 +1,37 @@
+<!doctype html><meta charset=utf-8><title>Compare</title>
+<style>
+  body { margin: 24px; font: 15px sans-serif; }
+  input { display: block; margin: 6px 0; width: 280px; }
+  #covered { position: absolute; left: 420px; top: 24px; }
+  #banner { position: absolute; left: 400px; top: 0; width: 340px; height: 80px; z-index: 5;
+            background: rgba(255, 230, 120, 0.95); }
+  #hidden { visibility: hidden; }
+  #away { position: absolute; left: -9999px; top: 40px; }
+  iframe { width: 320px; height: 60px; border: 0; }
+</style>
+<!-- Boxes the check call compares a host's value with (ruling R48). The page's own script puts
+     the texts in: the card number grouped, inside a longer text, grouped inside a longer text,
+     masked, and the number in a covered, a hidden and an out-of-view box. A checkbox is no text
+     input. The frame holds a box of its own, for a ref that dies with its frame. -->
+<input id=covered aria-label="Covered">
+<div id=banner>We use cookies</div>
+<input id=card aria-label="Card">
+<input id=grouped aria-label="Grouped">
+<input id=longer aria-label="Longer">
+<input id=longer-grouped aria-label="Longer grouped">
+<input id=masked aria-label="Masked">
+<input id=hidden aria-label="Hidden">
+<input id=away aria-label="Away">
+<label><input type=checkbox id=agree> Agree</label>
+<iframe title="Inner" srcdoc="<input aria-label='Inner box' value='4242424242424242'>"></iframe>
+<script>
+  const number = '4242424242424242'
+  const set = (id, text) => { document.getElementById(id).value = text }
+  set('grouped', '4242 4242 4242 4242')
+  set('longer', 'Card: ' + number + ' ok')
+  set('longer-grouped', 'Card 4242 4242 4242 4242 ok')
+  set('masked', '•••• 4242')
+  set('covered', number)
+  set('hidden', number)
+  set('away', number)
+</script>

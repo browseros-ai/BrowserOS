@@ -19,6 +19,7 @@ import {
 import type { ReplyTo, SnapshotIframe, SnapshotRequest } from './protocol'
 import { type Found, resolveTarget } from './resolve'
 import { openClosedRoots } from './shadow-roots'
+import { markInert } from './snapshot-inert'
 import { frameSource, lastSnapshotRefs, type World } from './world'
 
 /**
@@ -74,6 +75,12 @@ export function snapshot(
   const take = () => marked(targets, engine, plain)
   const { result, skipped } = output.tree(element, take)
   const { json, iframeRefs, iframeDepths } = result
+  let inertMarkingMs: number | undefined
+  if (request.markInert && request.mode === 'ai' && output.neoSnapshot) {
+    const started = performance.now()
+    markInert(world, json)
+    inertMarkingMs = performance.now() - started
+  }
   const iframes: SnapshotIframe[] = []
   if (request.mode === 'ai') {
     const minted = lastSnapshotRefs(injected)
@@ -88,6 +95,7 @@ export function snapshot(
   }
   return {
     kind: 'snapshot',
+    ...(inertMarkingMs === undefined ? {} : { inertMarkingMs }),
     json,
     iframes,
     ...(skipped ? { marksSkipped: true } : {}),

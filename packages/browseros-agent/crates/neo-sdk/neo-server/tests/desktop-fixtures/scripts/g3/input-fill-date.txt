@@ -1,0 +1,6 @@
+await page.goto(args.base + '/sdk-fill.html');
+await page.getByRef(await refFor(page, "Date field")).fill("2026-10-29");
+const state = await page.evaluate(id => ({ value: document.getElementById(id).value, events: window.nativeEvents.filter(event => event.id === id) }), "date");
+equal(state.value, "2026-10-29", 'fill reads back the native value');
+equal(state.events, [{ id: "date", kind: 'input', value: "2026-10-29" }, { id: "date", kind: 'change', value: "2026-10-29" }], 'fill emits input and change with the stored value');
+return state;

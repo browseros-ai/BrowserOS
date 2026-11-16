@@ -1,7 +1,8 @@
 //! What one `run` call answers.
 
 use neo_trace::{
-    Delivery, ErrorOwner, ErrorRecord, OperationId, RequestId, RunEffects, RunId, RunStatus,
+    Delivery, DiagnosticCode, ErrorOwner, ErrorRecord, OperationId, RequestId, RunAccess,
+    RunEffects, RunId, RunStatus, RunTabsScope,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -53,6 +54,14 @@ pub(crate) struct RunReply {
     /// renders them as the first reply did.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) tips: Vec<ReplyTip>,
+    /// Which tabs the run saw (`task` when bound to its task's tabs, `browser` otherwise), or for
+    /// a call refused before it ran, would have seen. A reply an older Neo stored has none and
+    /// reads `browser`, which is what its run saw.
+    #[serde(default)]
+    pub(crate) tabs_scope: RunTabsScope,
+    /// The original run's restriction, retained in replay; normal and older replies omit it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) access: Option<RunAccess>,
 }
 
 /// How a run ended, as the caller sees it: the trace's `RunStatus` without the states a reply
@@ -102,6 +111,14 @@ pub(crate) struct ReplyError {
     pub(crate) owner: ErrorOwner,
     /// The stable code.
     pub(crate) code: String,
+    /// Optional detail from an uncaught operation failure. A rollback must still read a
+    /// stored replay when a newer image wrote a diagnostic this version does not know.
+    #[serde(
+        default,
+        deserialize_with = "DiagnosticCode::deserialize_optional",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub(crate) diagnostic_code: Option<DiagnosticCode>,
     /// The human message, clipped to the reply's text budget.
     pub(crate) message: String,
     /// Whether repeating the whole run is safe: it changed nothing.
@@ -179,6 +196,8 @@ impl RunReply {
             unknown: report.unknown.iter().map(OpNote::from).collect(),
             not_awaited: report.not_awaited.iter().map(OpNote::from).collect(),
             tasks: Vec::new(),
+            tabs_scope: run.scope().record(),
+            access: run.access(),
             tips: Vec::new(),
         }
     }
@@ -199,6 +218,21 @@ impl RunReply {
             }
         }
         within(&self.value, text) || self.logs.iter().any(|line| line.text.contains(text))
+    }
+
+    /// This reply, saying `scope` for the tabs its run saw or would have seen: a call refused
+    /// before it ran, or a run whose task ended without a reply, has no run to read it from.
+    #[must_use]
+    pub(crate) fn with_tabs_scope(mut self, scope: RunTabsScope) -> Self {
+        self.tabs_scope = scope;
+        self
+    }
+
+    /// Retains validated access on replies created before execution or after a crash.
+    #[must_use]
+    pub(crate) fn with_access(mut self, access: Option<RunAccess>) -> Self {
+        self.access = access;
+        self
     }
 
     /// A call refused before it ran: nothing happened, so repeating it is safe.
@@ -268,6 +302,8 @@ impl RunReply {
             unknown: Vec::new(),
             not_awaited: Vec::new(),
             tasks: Vec::new(),
+            tabs_scope: RunTabsScope::default(),
+            access: None,
             tips: Vec::new(),
         }
     }
@@ -334,6 +370,7 @@ impl ReplyError {
         Self {
             owner: error.owner(),
             code: error.code().as_str().to_owned(),
+            diagnostic_code: error.diagnostic_code(),
             message: error.message().to_owned(),
             retryable,
             operation_id: None,
@@ -355,12 +392,14 @@ impl ReplyError {
     #[must_use]
     pub(crate) fn record(&self) -> ErrorRecord {
         ErrorRecord {
+            diagnostic_code: self.diagnostic_code,
             owner: self.owner,
             code: self.code.clone(),
             message: self.message.clone(),
             host_code: None,
             retryable: self.retryable,
             operation_id: self.operation_id,
+            cover: None,
         }
     }
 }
@@ -387,7 +426,7 @@ fn is_zero(count: &usize) -> bool {
 mod tests {
     use std::error::Error;
 
-    use neo_trace::{ErrorOwner, OperationId, RunId};
+    use neo_trace::{DiagnosticCode, ErrorOwner, OperationId, RunId};
 
     use super::{OpNote, ReplyDelivery, ReplyEffects, ReplyStatus, RunReply};
     use crate::dispatch::{ErrorCode, OperationError};
@@ -417,6 +456,57 @@ mod tests {
             reply,
             "a repeat of the requestId renders exactly what the first call got"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn ordinary_replay_bytes_stay_identical_and_older_replies_have_no_access()
+    -> Result<(), Box<dyn Error>> {
+        let original = r#"{"id":"019a82c0-7b20-7000-8000-000000000001","status":"ok","effects":"none","value":42,"tasks":[],"tabsScope":"browser"}"#;
+        let reply: RunReply = serde_json::from_str(original)?;
+        assert_eq!(reply.access, None);
+        assert_eq!(
+            serde_json::to_string(&reply)?,
+            original,
+            "an absent optional restriction must not change an ordinary stored reply by a byte"
+        );
+        let old: RunReply = serde_json::from_value(serde_json::json!({
+            "id": reply.id, "status": "ok", "effects": "none", "value": 42,
+        }))?;
+        assert_eq!(
+            old.access, None,
+            "pre-access stored replies remain readable"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_stored_replay_ignores_an_unknown_diagnostic() -> Result<(), Box<dyn Error>> {
+        for (wire, diagnostic) in [
+            ("target_crashed", Some(DiagnosticCode::TargetCrashed)),
+            ("future_diagnostic", None),
+        ] {
+            let error = OperationError::neo(ErrorCode::INTERNAL_ERROR, "A browser failure");
+            let mut reply = RunReply::refused(RunId::new(), &error);
+            reply.access = Some(neo_trace::RunAccess::Read);
+            let mut stored = serde_json::to_value(&reply)?;
+            stored["error"]["diagnosticCode"] = serde_json::json!(wire);
+            let decoded: RunReply = serde_json::from_value(stored)?;
+            reply
+                .error
+                .as_mut()
+                .ok_or("the refused run has an error")?
+                .diagnostic_code = diagnostic;
+            assert_eq!(decoded, reply, "every other replay field is retained");
+            if diagnostic.is_none() {
+                assert!(
+                    serde_json::to_value(decoded)?["error"]
+                        .get("diagnosticCode")
+                        .is_none(),
+                    "unknown detail must not prevent reading or replaying the stored reply"
+                );
+            }
+        }
         Ok(())
     }
 

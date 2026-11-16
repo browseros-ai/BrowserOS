@@ -437,7 +437,7 @@ async fn tests_that_disposing_a_binding_reports_the_main_world() -> TestResult {
 
 /// A binding's dispose whose script removal never answers is cut off before its cleanup goes
 /// out, so it reports no main world: the report comes right before the cleanup's send.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn tests_that_a_dispose_stalled_before_its_cleanup_reports_nothing() -> TestResult {
     let connection = TestConnection::new([]);
     let browser = binding_browser(&connection).await?;

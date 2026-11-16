@@ -14,7 +14,7 @@ use tokio::fs;
 use tokio_util::sync::CancellationToken;
 
 use super::{AgentFront, FillService, HostHolds, TakeoverLock, tab_feed};
-use crate::browser::{BrowserLink, NeoTab};
+use crate::browser::{BrowserLink, NeoTab, TabRegistry};
 use crate::config::HostApiConfig;
 use crate::http::{BindError, HostListener};
 
@@ -61,6 +61,8 @@ pub(crate) struct HostInputs {
     pub(crate) settings_file: PathBuf,
     /// The downloads default discovered by the app, also used when there is no host listener.
     pub(crate) settings_defaults: SettingsDefaults,
+    /// The app's tab registry, whose task book `GET /v1/tabs` reads for each tab's `taskId`.
+    pub(crate) tabs: Arc<TabRegistry>,
 }
 
 /// The bound host listener and the auth in front of every request on it.
@@ -163,6 +165,7 @@ impl HostApi {
             cdp_port,
             settings_file: _,
             settings_defaults: _,
+            tabs,
         } = inputs;
         let service = Service::start(ServiceInputs {
             store,
@@ -178,6 +181,23 @@ impl HostApi {
                 let held = blank_tab.as_ref().and_then(|blank_tab| blank_tab.current());
                 (held == Some(tab)).then_some("neo")
             }),
+            // `GET /v1/tabs` names the task holding each tab now: the one task scope binds it to.
+            // A released takeover's `openedTabs` read it too, and the tab that opened each one.
+            tab_task: {
+                let tabs = Arc::clone(&tabs);
+                Arc::new(move |tab| tabs.holder(tab).map(|holder| holder.task.to_string()))
+            },
+            tab_opener: {
+                let tabs = Arc::clone(&tabs);
+                Arc::new(move |tab| tabs.opener(tab))
+            },
+        });
+        // Each tab the tab watch sees open reaches every active takeover at once, with its
+        // opener as the browser announced it, for the release's `openedTabs`. Not through the
+        // tab feed, which waits out each close's release before it reads on.
+        tabs.set_open_sink({
+            let service = service.clone();
+            Arc::new(move |tab, opener| service.tab_opened(tab, opener))
         });
         takeover.arm(Arc::clone(service.locks()));
         holds.arm({

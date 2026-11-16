@@ -138,6 +138,8 @@ export type AriaSnapshotOptions = Omit<SnapshotOptions, 'mode'> & {
   urls?: boolean
   maxTokens?: number
   delta?: boolean
+  /** Include content the browser has made inert; default text omits it. */
+  inert?: boolean
 }
 export type NavigateOptions = TimeoutOption &
   SignalOption & {
@@ -211,11 +213,12 @@ function snapshotV1Options(
   api: string,
   options: AriaSnapshotOptions,
 ): PassedV1Options & { delta: boolean } {
-  const { text, urls, maxTokens, delta } = options
+  const { text, urls, maxTokens, delta, inert } = options
   for (const [name, value] of [
     ['text', text],
     ['urls', urls],
     ['delta', delta],
+    ['inert', inert],
   ] as const)
     if (value !== undefined && typeof value !== 'boolean')
       throw clientError(api, `${name}: expected boolean, got ${typeof value}`)
@@ -224,6 +227,7 @@ function snapshotV1Options(
     urls,
     maxTokens: maxTokensOption(api, maxTokens),
     delta: delta ?? false,
+    inert,
   }
 }
 

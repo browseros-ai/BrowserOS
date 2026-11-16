@@ -47,6 +47,7 @@ use crate::op_input::OpArgs;
 use crate::op_scope::OpScope;
 use crate::op_spec::{OpSpec, PAGE, TARGET};
 use crate::page::OpPage;
+use crate::playwright_error::TARGET_CRASH_MESSAGE;
 use crate::probe::{
     self, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget, SnapshotIframe, SnapshotMode, Want,
 };
@@ -282,6 +283,7 @@ async fn page_snapshot(
     // baseline, so a run that ends later cannot hand the new document the old one's text.
     let document = pw.snapshot_baselines().generation(page.target_id());
     let request = ProbeRequest::Snapshot {
+        mark_inert: marks(input.mode, input.clickable),
         root: ProbeTarget::Document,
         mode: input.mode,
         depth: input.depth,
@@ -535,6 +537,7 @@ impl fmt::Display for Unread {
             Self::Timeout => write!(f, "timeout after {} ms", FRAME_BUDGET.as_millis()),
             Self::Detached => f.write_str("frame detached"),
             Self::Loading => f.write_str("frame not loaded"),
+            Self::Failed(ErrorCode::TargetCrashed) => f.write_str(TARGET_CRASH_MESSAGE),
             Self::Failed(code) => f.write_str(&code.as_str().replace('_', " ")),
         }
     }
@@ -551,6 +554,7 @@ impl Snapshotter<'_> {
     /// common probe sender carries the scope's output policy independently of these options.
     fn request(&self, root: ProbeTarget, depth: Option<i64>) -> ProbeRequest {
         ProbeRequest::Snapshot {
+            mark_inert: self.marking.is_some(),
             root,
             mode: self.mode,
             depth,
@@ -614,6 +618,13 @@ impl Snapshotter<'_> {
         }
         let reply = probe::call_with_nodes(self.scope, self.page, world, &request, &nodes).await;
         if main {
+            if let Ok(ProbeReply::Snapshot {
+                inert_marking_ms: Some(elapsed),
+                ..
+            }) = &reply
+            {
+                self.scope.log(format!("  inert marking: {elapsed:.3} ms"));
+            }
             *self.reading() = None;
             if matches!(reply, Ok(ProbeReply::Snapshot { .. })) {
                 self.scope.log(format!(
@@ -881,6 +892,14 @@ mod tests {
         assert_eq!(
             Unread::Failed(ErrorCode::TargetClosed).to_string(),
             "target closed"
+        );
+    }
+
+    #[test]
+    fn target_crashed_partial_snapshot_keeps_plain_recovery_guidance() {
+        assert_eq!(
+            Unread::Failed(ErrorCode::TargetCrashed).to_string(),
+            "The tab's page crashed. Close or reload the tab before retrying."
         );
     }
 

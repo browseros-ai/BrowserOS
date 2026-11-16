@@ -1,0 +1,6 @@
+await page.goto(args.base + '/form.html');
+const snapshot = await page.ariaSnapshot({mode:'ai'});
+const matches = snapshot.split('\n').filter(line => /Submit/i.test(line));
+assert(matches.length > 0, 'AX search finds Submit', {snapshot});
+assert(matches.some(line => /\[ref=e\d+\]/.test(line)), 'AX search preserves snapshot refs', {matches});
+return {matches, count:matches.length};

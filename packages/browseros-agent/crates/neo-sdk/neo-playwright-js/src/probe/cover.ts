@@ -1,0 +1,782 @@
+/**
+ * A pointer action under a cover, in Neo's isolated world (covered-click spec, sections 1 and 2;
+ * Rust's half is neo-playwright/src/action/cover.rs).
+ *
+ *   coverMark   at each covered check: which cover it is, for the pointer runner's count on
+ *               Rust's clock. The root of the hit target's subtree as upstream's
+ *               `expectHitTarget` finds it (injectedScript.ts), its number in this world, its
+ *               box, how opaque it shows, and whether it says it is loading.
+ *   cover       once, when an action ends covered: hit-tests the point again and, while the same
+ *               cover is on top, answers its facts. Which dialog it is, its ref, role, name and
+ *               markup, its own ai snapshot, the controls it shows, and how it stands to the
+ *               control (the kind that picks the answer's line, in Rust).
+ *
+ * Every text read runs under the request's `FailureOutput.tree`, so a privately typed box in the
+ * cover prints as the mask prints it (R47). Nothing here sends an event or changes the page; the
+ * one write is the engine's own ref expando that an ai snapshot leaves, as every snapshot does.
+ *
+ * The helpers below (`hitChain`, `coverRoot`, `whichDialog`, `dialogBehind`, `kindOf`,
+ * `takingControls`, `controlsOf`) are exported for sibling files of this folder only, such as a
+ * survey of the covers over a page's controls: one rule for "what covers it" and "what is its
+ * own", and no second hit test anywhere. They are never part of the probe's protocol.
+ */
+import type { FailureOutput } from './failure-output'
+import { SECTION_ROLES } from './pointer-targets'
+import { CONTROLS, drawingOf, renderedText } from './private-look'
+import { mayCarryRoot } from './private-shown'
+import type {
+  CoverControl,
+  CoverFacts,
+  CoverKind,
+  CoverMark,
+  CoverRequest,
+  Point,
+  ReplyTo,
+} from './protocol'
+import { resolveTarget } from './resolve'
+import type { World } from './world'
+
+/** The roles that answer "which dialog", before the section roles. */
+const DIALOG_ROLES: ReadonlySet<string> = new Set([
+  'dialog',
+  'alertdialog',
+  'menu',
+  'listbox',
+  'tooltip',
+])
+
+/**
+ * A notice's roles: a toast is named as itself, never as the full-view carrier a library keeps its
+ * toasts in. They name the cover beside the dialog roles, and never stand for the dialog a blank
+ * layer dims.
+ */
+const NOTICE_ROLES: ReadonlySet<string> = new Set(['status', 'alert', 'log'])
+
+/** The most controls an answer lists. */
+const MAX_CONTROLS = 8
+
+/** How much of a wordless cover's drawn text stands in for its snapshot. */
+const MAX_TEXT = 300
+
+/**
+ * Each cover root's number, the same at every check while the element is the same. A weak map in
+ * this document's probe, as the ref map keeps frame keys: a pin would be a new number at every
+ * call and spend one of the world's pin entries.
+ */
+const coverNumbers = new WeakMap<Element, number>()
+let nextCoverNumber = 1
+
+function coverNumber(element: Element): number {
+  let known = coverNumbers.get(element)
+  if (known === undefined) {
+    known = nextCoverNumber++
+    coverNumbers.set(element, known)
+  }
+  return known
+}
+
+/** The composed tree's parent: the parent element, or a shadow root's host. */
+function parentOrHost(element: Element): Element | undefined {
+  if (element.parentElement) return element.parentElement
+  const root = element.parentNode
+  return root && root.nodeType === 11 ? (root as ShadowRoot).host : undefined
+}
+
+/**
+ * What is on top at `point` and its ancestors up to `target`, walked as upstream's
+ * `expectHitTarget` walks them (injectedScript.ts at v1.64.1): `null` when `target`, or one of its
+ * descendants, is on top. The roots are found from the target up, which works in closed shadow
+ * roots, and each root's hit leads into the next.
+ */
+export function hitChain(target: Element, point: Point): Element[] | null {
+  const roots: (Document | ShadowRoot)[] = []
+  for (let at: Element | undefined = target; at; ) {
+    const root = at.getRootNode()
+    if (root.nodeType !== 9 && root.nodeType !== 11) break
+    roots.push(root as Document | ShadowRoot)
+    if (root.nodeType === 9) break
+    at = (root as ShadowRoot).host
+  }
+  let hit: Element | undefined
+  for (let index = roots.length - 1; index >= 0; index--) {
+    const root = roots[index]
+    if (!root) break
+    const elements = root.elementsFromPoint(point.x, point.y)
+    const single = root.elementFromPoint(point.x, point.y)
+    if (
+      single &&
+      elements[0] &&
+      parentOrHost(single) === elements[0] &&
+      getComputedStyle(single).display === 'contents'
+    )
+      elements.unshift(single)
+    const inner = elements[0]
+    if (!inner) break
+    hit = inner
+    const next = roots[index - 1]
+    if (index && next && inner !== (next as ShadowRoot).host) break
+  }
+  const chain: Element[] = []
+  while (hit && hit !== target) {
+    chain.push(hit)
+    hit = hit.assignedSlot ?? parentOrHost(hit)
+  }
+  return hit === target ? null : chain
+}
+
+/**
+ * The root of the cover's subtree: the topmost element of the hit chain that is not in the
+ * target's own chain, as upstream names it in "… from <root> subtree". When what is on top is
+ * one of the target's own ancestors, that ancestor.
+ */
+export function coverRoot(target: Element, chain: readonly Element[]): Element {
+  for (let at: Element | undefined = target; at; at = parentOrHost(at)) {
+    const index = chain.indexOf(at)
+    if (index > 0) return chain[index - 1] ?? at
+    if (index === 0) return at
+  }
+  return chain[chain.length - 1] ?? document.documentElement
+}
+
+/** Its own opacity times every ancestor's, which a fade changes. */
+function shownOpacity(element: Element): number {
+  let opacity = 1
+  for (let at: Element | undefined = element; at; at = parentOrHost(at)) {
+    const own = Number.parseFloat(getComputedStyle(at).opacity)
+    if (Number.isFinite(own)) opacity *= own
+  }
+  return opacity
+}
+
+/** It says it is loading: `aria-busy="true"` on it or around it, or a progress bar in it. */
+function saysLoading(element: Element): boolean {
+  return (
+    element.closest('[aria-busy="true"]') !== null ||
+    element.querySelector('[role="progressbar"], progress') !== null
+  )
+}
+
+/**
+ * Which cover a covered check found: `target` is the element the hit test was for (the action's
+ * retargeted element, or a parent page's iframe) and `point` the point in this frame's pixels.
+ * `undefined` when the target is on top after all.
+ */
+export function coverMark(
+  target: Element,
+  point: Point,
+): CoverMark | undefined {
+  const chain = hitChain(target, point)
+  if (!chain) return undefined
+  const root = coverRoot(target, chain)
+  const box = root.getBoundingClientRect()
+  return {
+    id: coverNumber(root),
+    rect: { x: box.x, y: box.y, width: box.width, height: box.height },
+    opacity: shownOpacity(root),
+    busy: saysLoading(root),
+  }
+}
+
+/**
+ * The `cover` request: the facts of an action that ended covered, while the cover numbered
+ * `request.cover` is still the one on top at `request.point`. A different cover, or none, answers
+ * `null`, and the action answers as it did before this request.
+ */
+export function cover(
+  world: World,
+  request: CoverRequest,
+  root: Node | undefined,
+  _nodes: readonly unknown[],
+  output: FailureOutput,
+): ReplyTo<'cover'> {
+  const found = resolveTarget(world, request.target, 'firstMatch', root)
+  if (found.kind !== 'one') return found
+  const { injected } = world
+  const element = found.element
+  // The arm's hit test is for the element its interceptor retargets to; a parent page's
+  // test is for its iframe as it is.
+  const subject = request.above
+    ? element
+    : (injected.retarget(element, 'button-link') ?? element)
+  const chain = hitChain(subject, request.point)
+  if (!chain) return { kind: 'cover', facts: null }
+  const top = coverRoot(subject, chain)
+  if (coverNumber(top) !== request.cover) return { kind: 'cover', facts: null }
+  return {
+    kind: 'cover',
+    facts: factsOf(world, output, subject, chain, top, request),
+  }
+}
+
+function factsOf(
+  world: World,
+  output: FailureOutput,
+  subject: Element,
+  chain: readonly Element[],
+  top: Element,
+  request: CoverRequest,
+): CoverFacts {
+  const { injected } = world
+  const kind = kindOf(world, subject, chain, request.point, request.above)
+  const layer = whichDialog(world, chain, top, request.point)
+  let shown = layer
+  // A cover whose content sits in a closed root this world does not know is not blank.
+  const closed = !layer.contains(subject) && inClosedPart(layer)
+  // A backdrop rendered beside its dialog is blank: the answer names the dialog open over it,
+  // while the cover, for the same-layer line too, stays the layer.
+  if (!closed && !layer.contains(subject) && isBlank(world, output, layer))
+    shown = dialogBehind(world, layer, request.point) ?? layer
+  const behind = shown !== layer
+  // A cover that holds the control (its wrapper, its label, the page's root) is the control's
+  // own surroundings: its snapshot would be the page, so it is left out.
+  const surrounds = shown.contains(subject) || shown === document.body
+  let snapshot: unknown = null
+  let words = true
+  if (!surrounds) {
+    snapshot = output.tree(shown, () => quietSnapshot(world, shown))
+    words = holdsWords(snapshot)
+  }
+  const controls = surrounds ? [] : controlsOf(world, output, shown)
+  // The engine drops a textbox's own text, so a wordless snapshot is not a wordless cover.
+  const drawn = words
+    ? undefined
+    : output.tree(shown, () => Array.from(renderedText(shown).trim()))
+  return {
+    layer: coverNumber(layer),
+    ref: world.refs.forElement(shown, world.seq),
+    role: injected.utils.getAriaRole(shown) ?? 'generic',
+    name: nameOf(world, output, shown),
+    markup: output.previewNode(layer),
+    snapshot,
+    ...(drawn && drawn.length > 0
+      ? { text: drawn.slice(0, MAX_TEXT).join('') }
+      : {}),
+    controls,
+    blank: !closed && controls.length === 0 && !words && !drawn?.length,
+    behind,
+    closed,
+    notice: !surrounds && inLiveRegion(world, shown),
+    kind: frameInCover(world, shown, kind) ? { is: 'page' } : kind,
+  }
+}
+
+/**
+ * A frame at the point gets the frame's line only when the cover named is that frame, or lists
+ * nothing but frames. A dialog with controls of its own, one of whose frames lies at the point
+ * (a sign-in dialog that draws its form in a frame), is answered or closed with those controls:
+ * the frame's line would send the agent to a bot-check solver with the dialog's Close listed above.
+ */
+function frameInCover(world: World, shown: Element, kind: CoverKind): boolean {
+  if (kind.is !== 'frame') return false
+  const frame = (element: Element) =>
+    element.localName === 'iframe' || element.localName === 'frame'
+  if (frame(shown)) return false
+  return takingControls(world, shown).some((control) => !frame(control))
+}
+
+/**
+ * The cover's own snapshot, moving nothing the agent's own reads depend on: `default` mode mints
+ * no engine ref (the engine's ref counter and `_ariaRef` stay as they were, so the agent's next
+ * snapshot numbers its refs as it would have without this answer), and the engine's last
+ * snapshot, which its aria-ref engine reads, is put back. Not a marked snapshot: it opens no
+ * closed root. The refs an answer prints come from the ref map (`forElement`), never from here.
+ */
+function quietSnapshot(world: World, element: Element): unknown {
+  const { injected } = world
+  const last: unknown = Reflect.get(injected, '_lastAriaSnapshotForQuery')
+  try {
+    return injected.ariaSnapshotJSON(element, { mode: 'default' }).json
+  } finally {
+    Reflect.set(injected, '_lastAriaSnapshotForQuery', last)
+  }
+}
+
+/**
+ * "Which dialog": walking up from what is on top to the cover's root, (1) the first element with a
+ * dialog-like role or a notice's role; else (2) the face, the outermost one that is fixed or in the
+ * top layer and takes the pointer itself (a fixed full-view carrier with `pointer-events: none` is
+ * no face: what it carries is); else (3) the first with one of the snapshot's section roles; else
+ * (4) the root. Never the page: an
+ * element that is or holds the document's main landmark, the body or the root element is skipped,
+ * and then what is on top is named. (A fixed banner inside the page's `main` makes `main` the root
+ * for a control outside it; its face is the banner.) What is on top starts inside the shadow roots
+ * of the hit this world can read: a consent tool draws its dialog in its host's root, and the
+ * document's hit test names only the host.
+ */
+export function whichDialog(
+  world: World,
+  chain: readonly Element[],
+  top: Element,
+  point: Point,
+): Element {
+  const [hit] = chain
+  let deepest: Element | undefined = hit
+  for (let depth = 0; deepest?.shadowRoot && depth < MAX_DEPTH; depth++) {
+    const inner = deepest.shadowRoot.elementFromPoint(point.x, point.y)
+    if (!inner || inner === deepest) break
+    deepest = inner
+  }
+  const path: Element[] = []
+  for (
+    let at: Element | undefined = deepest;
+    at && at !== hit;
+    at = at.assignedSlot ?? parentOrHost(at)
+  )
+    path.push(at)
+  for (const at of chain) {
+    path.push(at)
+    if (at === top) break
+  }
+  const document = top.ownerDocument
+  const main = document.querySelector('main, [role="main"]')
+  const page = (at: Element) =>
+    at === document.documentElement ||
+    at === document.body ||
+    (main !== null && at.contains(main))
+  const named = path.filter((at) => !page(at))
+  const roleOf = (element: Element) => world.injected.utils.getAriaRole(element)
+  const outermostFixed = named.findLastIndex(
+    (at) => getComputedStyle(at).position === 'fixed' || inTopLayer(at),
+  )
+  // `named` runs from what is on top outwards: up to the outermost fixed element, the outermost
+  // that takes the pointer is that element, or else what it carries.
+  const face =
+    outermostFixed < 0
+      ? undefined
+      : named.slice(0, outermostFixed + 1).findLast(takesPointer)
+  return (
+    named.find((at) => {
+      const role = roleOf(at) ?? ''
+      return DIALOG_ROLES.has(role) || NOTICE_ROLES.has(role)
+    }) ??
+    face ??
+    named.find((at) => SECTION_ROLES.has(roleOf(at) ?? '')) ??
+    (page(top) ? (path[0] ?? top) : top)
+  )
+}
+
+/**
+ * No control of its own takes the pointer, and its snapshot holds no words: a backdrop, a blank
+ * layer. Both read the composed tree (the engine's snapshot walks the roots it can read), so a
+ * dialog drawn in a shadow root is not blank.
+ */
+function isBlank(
+  world: World,
+  output: FailureOutput,
+  element: Element,
+): boolean {
+  return (
+    takingControls(world, element).length === 0 &&
+    !holdsWords(output.tree(element, () => quietSnapshot(world, element)))
+  )
+}
+
+/**
+ * The dialog a blank cover dims. Many libraries render the backdrop and its dialog as two children
+ * of `<body>`, so walking up from the backdrop never reaches the dialog: a shown element of the
+ * composed tree with a dialog role or in the top layer, neither inside the backdrop nor around it,
+ * standing on it (at the dialog's own centre the backdrop is under it), and whose own controls take
+ * the pointer; with several, the one nearest `point`. A dialog beside the layer is not the one it
+ * dims: a loading layer beside a cookie notice stays blank. `undefined` when there is none.
+ */
+export function dialogBehind(
+  world: World,
+  backdrop: Element,
+  point: Point,
+): Element | undefined {
+  const { injected } = world
+  // The document's own query, with no count: a portal renders its dialog at the end of `<body>`,
+  // after thousands of elements on a real page (3,620 to 21,981 measured). Beside it, the dialogs
+  // drawn in shadow roots.
+  const document = backdrop.ownerDocument
+  const candidates = [
+    ...document.querySelectorAll(DIALOGS),
+    ...inShadowRoots(document).filter((element) => element.matches(DIALOGS)),
+  ]
+  let nearest: { dialog: Element; distance: number } | undefined
+  for (const candidate of candidates) {
+    if (backdrop.contains(candidate) || candidate.contains(backdrop)) continue
+    if (!injected.utils.isElementVisible(candidate)) continue
+    const role = injected.utils.getAriaRole(candidate) ?? ''
+    if (!DIALOG_ROLES.has(role) && !inTopLayer(candidate)) continue
+    if (!standsOn(candidate, backdrop)) continue
+    if (takingControls(world, candidate).length === 0) continue
+    const box = candidate.getBoundingClientRect()
+    const dx = Math.max(box.left - point.x, 0, point.x - box.right)
+    const dy = Math.max(box.top - point.y, 0, point.y - box.bottom)
+    const distance = Math.hypot(dx, dy)
+    if (!nearest || distance < nearest.distance)
+      nearest = { dialog: candidate, distance }
+  }
+  return nearest?.dialog
+}
+
+/** Its own `pointer-events` lets the pointer take it. */
+function takesPointer(element: Element): boolean {
+  return getComputedStyle(element).pointerEvents !== 'none'
+}
+
+/**
+ * A notice that may go by itself: a live region on the cover or around it, by a notice's role or
+ * by `aria-live`. Its answer says so, beside its controls.
+ */
+function inLiveRegion(world: World, cover: Element): boolean {
+  for (
+    let at: Element | undefined = cover;
+    at;
+    at = at.assignedSlot ?? parentOrHost(at)
+  ) {
+    if (NOTICE_ROLES.has(world.injected.utils.getAriaRole(at) ?? ''))
+      return true
+    const live = at.getAttribute('aria-live')
+    if (live !== null && live !== 'off') return true
+  }
+  return false
+}
+
+/**
+ * At the dialog's own centre, the backdrop is among the elements under the pointer. The centre of
+ * the dialog's part in view: a hit test reads nothing outside the viewport. The hit test is the
+ * backdrop's own root's: a document's names a shadow root's host, never what the root holds, so
+ * a backdrop drawn inside a consent widget's root would never be found under its dialog.
+ */
+function standsOn(dialog: Element, backdrop: Element): boolean {
+  const box = dialog.getBoundingClientRect()
+  const left = Math.max(box.left, 0)
+  const right = Math.min(box.right, innerWidth)
+  const top = Math.max(box.top, 0)
+  const bottom = Math.min(box.bottom, innerHeight)
+  if (right <= left || bottom <= top) return false
+  const root = backdrop.getRootNode() as Document | ShadowRoot
+  return root
+    .elementsFromPoint((left + right) / 2, (top + bottom) / 2)
+    .some((element) => element === backdrop || backdrop.contains(element))
+}
+
+/** What may be the dialog a blank layer dims. */
+const DIALOGS =
+  '[role="dialog"], [role="alertdialog"], [aria-modal="true"], dialog[open], [popover]'
+
+/** The most elements a walk of a cover's composed tree, or of the document's shadow roots, reads. */
+const MAX_WALKED = 2000
+
+/** The most shadow roots a hit is followed into. */
+const MAX_DEPTH = 32
+
+/**
+ * `root`'s descendants in the composed tree: its light children, and the content of every shadow
+ * root this world can read, which is an open one or a closed one a marked snapshot handed it
+ * (`host.shadowRoot` answers both in Neo's world, shadow-roots.ts), and the elements a slot
+ * draws: a dialog in a root whose buttons are slotted from its host's light DOM has them only
+ * through its `<slot>`. In document order within each scope, each element once, at most
+ * MAX_WALKED.
+ */
+function composedDescendants(root: Element | Document): Element[] {
+  const found: Element[] = []
+  const seen = new Set<Element>()
+  const take = (element: Element): boolean => {
+    if (seen.has(element)) return false
+    seen.add(element)
+    found.push(element)
+    return true
+  }
+  const scopes: (Element | Document | ShadowRoot)[] = [root]
+  const own = root.nodeType === 1 ? (root as Element).shadowRoot : null
+  if (own) scopes.push(own)
+  for (let index = 0; index < scopes.length; index++) {
+    const scope = scopes[index]
+    if (!scope) continue
+    for (const element of scope.querySelectorAll('*')) {
+      if (found.length >= MAX_WALKED) return found
+      if (!take(element)) continue
+      if (element.shadowRoot) scopes.push(element.shadowRoot)
+      if (element.localName !== 'slot') continue
+      const slot = element as HTMLSlotElement
+      for (const assigned of slot.assignedElements({ flatten: true })) {
+        if (!take(assigned)) continue
+        scopes.push(assigned)
+        // A slotted design-system button keeps its real button in its own root.
+        if (assigned.shadowRoot) scopes.push(assigned.shadowRoot)
+      }
+    }
+  }
+  return found
+}
+
+/**
+ * The elements inside the shadow roots this world can read under `document`, nested roots
+ * included. Every host is found wherever it stands, since a host check is one property read per
+ * element; only the roots' own content is capped, at MAX_WALKED.
+ */
+function inShadowRoots(document: Document): Element[] {
+  const roots: ShadowRoot[] = []
+  for (const element of document.querySelectorAll('*'))
+    if (element.shadowRoot) roots.push(element.shadowRoot)
+  const found: Element[] = []
+  for (let index = 0; index < roots.length; index++) {
+    for (const element of roots[index]?.querySelectorAll('*') ?? []) {
+      if (found.length >= MAX_WALKED) return found
+      found.push(element)
+      if (element.shadowRoot) roots.push(element.shadowRoot)
+    }
+  }
+  return found
+}
+
+/**
+ * The cover is, or holds, a custom element that may carry a closed shadow root this world does
+ * not know (`mayCarryRoot`): its content is there, unread, and a new snapshot shows it. A plain
+ * `div` or `span` host looks the same as a blank layer from here and stays blank.
+ */
+function inClosedPart(cover: Element): boolean {
+  const elements = [cover, ...composedDescendants(cover)]
+  return elements.some(
+    (element) => element.localName.includes('-') && mayCarryRoot(element),
+  )
+}
+
+/** A modal `<dialog>` or an open popover: the browser draws it above every other layer. */
+function inTopLayer(element: Element): boolean {
+  try {
+    return element.matches(':modal') || element.matches(':popover-open')
+  } catch {
+    return false
+  }
+}
+
+/** Whether a snapshot tree has a name or a text anywhere in it. */
+function holdsWords(node: unknown): boolean {
+  if (typeof node === 'string') return node.trim() !== ''
+  if (Array.isArray(node)) return node.some(holdsWords)
+  if (typeof node !== 'object' || node === null) return false
+  for (const key of ['name', 'text', 'children'] as const)
+    if (holdsWords(Reflect.get(node, key))) return true
+  return false
+}
+
+/** The accessible name, read under the mask. */
+function nameOf(world: World, output: FailureOutput, element: Element): string {
+  return output.tree(element, () =>
+    world.injected.utils.getElementAccessibleNameText(element, false),
+  )
+}
+
+/** The roles that make an element a control, written in its `role` attribute. */
+const CONTROL_ROLES: ReadonlySet<string> = new Set([
+  'button',
+  'link',
+  'checkbox',
+  'radio',
+  'switch',
+  'tab',
+  'menuitem',
+  'option',
+])
+
+/**
+ * A control by the role written in its `role` attribute, whatever its tabindex: a custom close
+ * button is often a `div` with `role="button"` and nothing else. The attribute, not a computed
+ * role, so only what the page declares counts. A role attribute lists fallbacks; the first is the
+ * one a browser tries first.
+ */
+function explicitControl(element: Element): boolean {
+  const [role] = (element.getAttribute('role') ?? '').trim().split(/\s+/)
+  return CONTROL_ROLES.has(role ?? '')
+}
+
+/**
+ * The cover's controls that take the pointer at their middle, in the composed tree's order, so a
+ * dialog drawn in its host's shadow root has its buttons. One out of view counts, since the agent
+ * can scroll to it: a long dialog's button below the fold is the one an answer must not lose. This
+ * list also decides whether a cover is blank and which dialog a backdrop dims, so a control it
+ * misses can turn a dialog into "a blank layer", whose advice ends in a reload.
+ */
+export function takingControls(world: World, shown: Element): Element[] {
+  const { injected } = world
+  return composedDescendants(shown).filter((control) => {
+    if (!control.matches(CONTROLS) && !explicitControl(control)) return false
+    if (!injected.utils.isElementVisible(control)) return false
+    const box = control.getBoundingClientRect()
+    const middle = { x: box.x + box.width / 2, y: box.y + box.height / 2 }
+    const inView =
+      middle.x >= 0 &&
+      middle.y >= 0 &&
+      middle.x < innerWidth &&
+      middle.y < innerHeight
+    return !inView || hitChain(control, middle) === null
+  })
+}
+
+/**
+ * Up to eight of the cover's controls that take the pointer, with their roles, names and refs. A
+ * dialog puts its buttons last, so when there are more than eight the buttons are kept first.
+ */
+export function controlsOf(
+  world: World,
+  output: FailureOutput,
+  shown: Element,
+): CoverControl[] {
+  const { injected } = world
+  const taking = takingControls(world, shown)
+  const roleOf = (control: Element) =>
+    injected.utils.getAriaRole(control) ?? 'generic'
+  const kept = new Set<Element>(
+    taking
+      .filter((control) => roleOf(control) === 'button')
+      .slice(0, MAX_CONTROLS),
+  )
+  for (const control of taking) {
+    if (kept.size >= MAX_CONTROLS) break
+    kept.add(control)
+  }
+  return taking
+    .filter((control) => kept.has(control))
+    .map((control) => ({
+      role: roleOf(control),
+      name: nameOf(world, output, control),
+      ref: world.refs.forElement(control, world.seq),
+    }))
+}
+
+/**
+ * How the cover stands to the control: spec section 2's table, the first row that holds. `above`
+ * when `subject` is a page's iframe and the cover is in that page, above the control's frame.
+ */
+export function kindOf(
+  world: World,
+  subject: Element,
+  chain: readonly Element[],
+  point: Point,
+  above: boolean,
+): CoverKind {
+  const onTop = chain[0]
+  if (!onTop) return { is: 'nothing' }
+  if (folded(subject, point)) return { is: 'folded' }
+  if (onTop.localName === 'iframe' || onTop.localName === 'frame')
+    return { is: 'frame' }
+  if (above) return { is: 'page' }
+  const label = ownLabel(subject, onTop)
+  if (label) return labelKind(label)
+  const labelled = labelledControl(subject, onTop)
+  if (labelled)
+    return { is: 'labels', ref: world.refs.forElement(labelled, world.seq) }
+  const parent = parentOrHost(subject)
+  if (
+    onTop === parent ||
+    (parent && onTop === parentOrHost(parent)) ||
+    drawingOf(world, subject, onTop, false) !== null
+  )
+    return { is: 'wrapper' }
+  if (onTop.contains(subject) || onTop === document.documentElement)
+    return { is: 'nothing' }
+  const clear = clearPoint(subject)
+  if (clear) return { is: 'partial', position: clear }
+  return { is: 'page' }
+}
+
+/**
+ * After the action's scroll, a parent with `overflow: hidden` or `clip` still clips the point
+ * away: a closed panel or menu holds the control, and what is drawn there is not over it.
+ */
+function folded(subject: Element, point: Point): boolean {
+  for (let at = parentOrHost(subject); at; at = parentOrHost(at)) {
+    const style = getComputedStyle(at)
+    const clips = (value: string) => value === 'hidden' || value === 'clip'
+    if (!clips(style.overflowX) && !clips(style.overflowY)) continue
+    const box = at.getBoundingClientRect()
+    if (
+      point.x < box.left ||
+      point.x >= box.right ||
+      point.y < box.top ||
+      point.y >= box.bottom
+    )
+      return true
+  }
+  return false
+}
+
+/** The control's own `<label>` that holds what is on top, if it is one. */
+function ownLabel(subject: Element, onTop: Element): Element | undefined {
+  const labels: unknown = Reflect.get(subject, 'labels')
+  if (!(labels instanceof NodeList)) return undefined
+  return Array.from(labels).find(
+    (label): label is Element =>
+      label instanceof Element && label.contains(onTop),
+  )
+}
+
+/** The label's links, and a point of it on none of them when it has some. */
+function labelKind(label: Element): CoverKind {
+  const links = label.querySelectorAll('a[href]').length
+  if (links === 0) return { is: 'label', links: 0 }
+  const position = pointOffLinks(label)
+  return position ? { is: 'label', links, position } : { is: 'label', links }
+}
+
+/**
+ * A point of the label, from its padding edge, where the label itself or its plain content is on
+ * top: no link and no control inside it. Tried on a 5 by 3 grid over its box.
+ */
+function pointOffLinks(label: Element): Point | undefined {
+  const box = label.getBoundingClientRect()
+  const style = getComputedStyle(label)
+  const left = box.x + (Number.parseFloat(style.borderLeftWidth) || 0)
+  const topEdge = box.y + (Number.parseFloat(style.borderTopWidth) || 0)
+  for (const fy of [0.5, 0.25, 0.75])
+    for (const fx of [0.1, 0.3, 0.5, 0.7, 0.9]) {
+      const point = { x: box.x + box.width * fx, y: box.y + box.height * fy }
+      const chain = hitChain(label, point)
+      if (chain !== null) continue
+      const on = document.elementFromPoint(point.x, point.y)
+      if (on?.closest(`a[href], ${CONTROLS}`)) continue
+      return { x: point.x - left, y: point.y - topEdge }
+    }
+  return undefined
+}
+
+/** The control on top, when the target is a `<label>` for it. */
+function labelledControl(
+  subject: Element,
+  onTop: Element,
+): Element | undefined {
+  if (subject.localName !== 'label') return undefined
+  const control: unknown = Reflect.get(subject, 'control')
+  if (!(control instanceof Element)) return undefined
+  return control === onTop || control.contains(onTop) ? control : undefined
+}
+
+/**
+ * One of eight other points of the control where it is on top, from its padding edge, as
+ * `click({ position })` takes it. Only points inside the viewport count.
+ */
+function clearPoint(subject: Element): Point | undefined {
+  const box = subject.getBoundingClientRect()
+  const style = getComputedStyle(subject)
+  const left = box.x + (Number.parseFloat(style.borderLeftWidth) || 0)
+  const topEdge = box.y + (Number.parseFloat(style.borderTopWidth) || 0)
+  for (const [fx, fy] of [
+    [0.25, 0.25],
+    [0.5, 0.25],
+    [0.75, 0.25],
+    [0.25, 0.5],
+    [0.75, 0.5],
+    [0.25, 0.75],
+    [0.5, 0.75],
+    [0.75, 0.75],
+  ] as const) {
+    const point = { x: box.x + box.width * fx, y: box.y + box.height * fy }
+    if (
+      point.x < 0 ||
+      point.y < 0 ||
+      point.x >= innerWidth ||
+      point.y >= innerHeight
+    )
+      continue
+    if (hitChain(subject, point) === null)
+      return {
+        x: Math.round(point.x - left),
+        y: Math.round(point.y - topEdge),
+      }
+  }
+  return undefined
+}

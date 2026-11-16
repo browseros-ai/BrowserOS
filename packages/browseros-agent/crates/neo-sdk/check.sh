@@ -9,7 +9,12 @@
 #   - the workspace's lints (`[lints] workspace = true`: neo-takeover, neo-trace, neo-http,
 #     ...): plain rustfmt, as CI's `cargo fmt --all --check` and their own `lint:rust` run it.
 # Every crate gets clippy -D warnings on all targets and its tests (except TESTS_NOT_RUN below),
-# on CI's exact toolchain. None of these tests needs a display or a browser: the live suites skip
+# on CI's exact toolchain. The SDK image's Python scripts (neo-server/docker) get their tests and
+# an import each, and the pinned ruff where uv is installed, as CI's image scripts job does. The
+# Bun suites (neo-playwright-js's page side, neo-server's conformance tables, neo-captcha's test
+# bed) run under the
+# repository's pinned Bun, and the spec corpus's add-on lock file is resolved with --locked, as the
+# spec run builds it. None of these tests needs a display or a browser: the live suites skip
 # themselves (`#[ignore]`, or no `CLAW_SDK_E2E_BROWSER`), as CI's `cargo test --workspace` runs
 # them. The [lints] tables and clippy.toml need nothing here, because Cargo and clippy read them
 # on every build.
@@ -38,6 +43,26 @@ if ! cargo "+${TOOLCHAIN}" clippy --version >/dev/null 2>&1; then
   exit 1
 fi
 cargo_pinned() { cargo "+${TOOLCHAIN}" "$@"; }
+
+# The Bun CI's setup-bun reads from package.json (`engines.bun`). The page-side suite needs that
+# one: its build check compares the committed probe asset with a fresh build, which another Bun's
+# bundler writes differently (Bun 1.4.4 fails it on an unchanged tree). BUN names the binary
+# when the `bun` on PATH is another version.
+BUN_PINNED="$(python3 -c 'import json; print(json.load(open("package.json"))["engines"]["bun"])')"
+BUN_BIN="$(command -v "${BUN:-bun}" || true)"
+# Absolute, as the page-side step links it from another folder: a link to a relative path reads
+# that path from the link's own folder, and the suite would fall back to the default bun.
+if [[ -n "$BUN_BIN" && "$BUN_BIN" != /* ]]; then
+  BUN_BIN="$(cd "$(dirname "$BUN_BIN")" && pwd)/$(basename "$BUN_BIN")"
+fi
+BUN_FOUND="$([[ -n "$BUN_BIN" ]] && "$BUN_BIN" --version 2>/dev/null || true)"
+if [[ "$BUN_FOUND" != "$BUN_PINNED" ]]; then
+  echo "check.sh: the page-side suite needs Bun ${BUN_PINNED} (package.json engines.bun); ${BUN:-bun} here is ${BUN_FOUND:-missing}." >&2
+  echo "  Name it: BUN=/path/to/bun crates/neo-sdk/check.sh" >&2
+  echo "  To get one beside your default Bun, touching no shell start file, this prints its path:" >&2
+  echo "    npx --yes bun@${BUN_PINNED} -e 'console.log(process.execPath)'" >&2
+  exit 1
+fi
 
 # PACKAGES: claw-sdk's lint set. WORKSPACE_LINTED: every other SDK crate. ALL_ARGS: both.
 PACKAGES=()
@@ -136,6 +161,87 @@ done
 if [[ "$failed" -ne 0 ]]; then
   exit 1
 fi
+echo "  ok"
+
+# The SDK image's Python scripts (neo-server/docker): nothing above builds or imports them, and
+# CI's "Neo SDK image / scripts" job checks them, so a broken one used to pass this gate and fail
+# only on GitHub. Their tests as that job runs them, then a load of every script, subfolders
+# included, which fails as the image would on a name a script uses before it defines it. That job's ruff is
+# packages/browseros's pinned one, through uv: it runs here when uv is installed; the remote pool
+# has none, so there the gate names the command to run by hand.
+DOCKER_DIR="crates/neo-sdk/neo-server/docker"
+step "image scripts (${DOCKER_DIR})"
+if ! python3 -c 'import sys; sys.exit(sys.version_info < (3, 12))'; then
+  echo "check.sh: the image scripts need Python 3.12 or later, as the image runs them; python3 here is $(python3 --version 2>&1)." >&2
+  exit 1
+fi
+(
+  cd "$DOCKER_DIR"
+  python3 -m unittest discover -s supervisor -p "*_test.py" -q
+  python3 -m unittest discover -s . -p "*_test.py" -q
+  # Every script, in subfolders too, by its path: a name like neo-quit.py is no module name.
+  # Each loads as a module, so its `if __name__ == "__main__"` part does not run.
+  python3 -I - <<'PY'
+import importlib.util
+import pathlib
+import sys
+
+scripts = sorted(p for p in pathlib.Path(".").rglob("*.py") if not p.name.endswith("_test.py"))
+for path in scripts:
+    sys.path.insert(0, str(path.parent))  # a script imports the scripts beside it
+    name = "gate_" + "_".join(path.with_suffix("").parts).replace("-", "_")
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+print(f"  {len(scripts)} scripts import")
+PY
+  if command -v uv >/dev/null 2>&1; then
+    uv run --quiet --directory "$REPO_DIR/packages/browseros" ruff check "$PWD"
+  else
+    echo "  ruff not run: no uv here. When a ${DOCKER_DIR}/*.py file changed, run it as CI does:"
+    echo "    cd packages/browseros-agent/${DOCKER_DIR} && uv run --directory ../../../../../browseros ruff check \"\$PWD\""
+  fi
+)
+
+# The Bun suites. neo-playwright-js's page side: the probe's handlers on linkedom, the protocol
+# examples against both sides, the committed asset against a fresh build; GitHub's
+# "Tests / browseros-playwright-js" job runs it. neo-server's conformance tables: the judge's list
+# of what Neo refuses against the production table, which no CI job runs. neo-captcha's test bed:
+# its fixture catalog, fixture server and e2e runner against stubbed servers, which count the
+# fixture pages (#3671's two new pages reached GitHub's "Tests / captcha" red that way); run as
+# that job runs it, one process per file, about 4 s, with only Node's and Bun's built-ins to
+# import. Nothing above runs any of them, so a change that broke one passed this gate. Every run makes a frozen install of the
+# root and these packages alone: on the remote pool's checkout, which has no node_modules, it
+# installs what the suites need (well under a second there, where a whole `bun ci` takes 81 s);
+# on a full install it changes nothing (measured: 0.2 s, no package added or removed); and on a
+# checkout an earlier gate installed only for neo-playwright-js, it adds neo-server's (whose
+# conformance suite would otherwise miss @playwright/test, pngjs and the like). The suites then
+# take about 20 s. The runners start `bun` again, so a private directory with one
+# link named `bun` to the pinned binary goes first on PATH, whatever that binary is called (npm's
+# copy is bun.exe, alone in its folder).
+PAGE_DIR="crates/neo-sdk/neo-playwright-js"
+step "Bun suites (${PAGE_DIR}, neo-server conformance, neo-captcha test bed; Bun ${BUN_PINNED})"
+(
+  bun_dir="$(mktemp -d)"
+  trap 'rm -rf "$bun_dir"' EXIT
+  ln -s "$BUN_BIN" "$bun_dir/bun"
+  PATH="$bun_dir:$PATH"
+  export PATH
+  root="$(python3 -c 'import json; print(json.load(open("package.json"))["name"])')"
+  bun install --frozen-lockfile --filter "$root" --filter @browseros/neo-playwright-js \
+    --filter @browseros/neo-server
+  (cd "$PAGE_DIR" && bun run test)
+  (cd crates/neo-sdk/neo-server && bun run test:conformance)
+  bun run ./scripts/run-bun-test.ts ./crates/neo-sdk/neo-captcha/testbed
+)
+
+# The spec corpus builds its add-on (neo-playwright-tests/node/claw-addon) with --locked against a
+# lock file of its own, which nothing above reads: a dependency an SDK crate gained passed this
+# gate and stopped the spec run at its build. Resolving that lock with --locked, without building,
+# fails the same way in under a second.
+ADDON_MANIFEST="crates/neo-sdk/neo-playwright-tests/node/claw-addon/Cargo.toml"
+step "spec add-on lock (${ADDON_MANIFEST%/Cargo.toml})"
+cargo_pinned metadata --locked --format-version 1 --manifest-path "$ADDON_MANIFEST" >/dev/null
 echo "  ok"
 
 step "clippy -D warnings"

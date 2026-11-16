@@ -56,9 +56,14 @@ it('tests that input into a private box after the first reading is counted, so a
   const probe = booted(`
     <input id="card" type="text" autocomplete="cc-number" value="">
     <input id="q" type="text" name="q" value="">`)
+  // No host waits for the camera's walk: nothing holds the focus and nothing was typed.
   expect(asked(probe)).toEqual({
     kind: 'value',
-    value: { shown: false, inputs: 0, boxes: true },
+    value: {
+      shown: false,
+      inputs: 0,
+      boxes: true,
+    },
   })
   const card = probe.document.getElementById('card') as HTMLInputElement
   const search = probe.document.getElementById('q') as HTMLInputElement
@@ -73,7 +78,11 @@ it('tests that input into a private box after the first reading is counted, so a
   // Typed and gone again: shown no more, but the count moved.
   expect(asked(probe)).toEqual({
     kind: 'value',
-    value: { shown: false, inputs: 1, boxes: true },
+    value: {
+      shown: false,
+      inputs: 1,
+      boxes: true,
+    },
   })
 })
 

@@ -4,9 +4,9 @@ use crate::support::{Op, Start, TestResult, at, end_run, harness, op_started, st
 use axum::http::StatusCode;
 use browseros_core::TabId;
 use neo_trace::{
-    Delivery, DownloadStatus, Effect, ErrorOwner, ErrorRecord, OperationEnded, OperationId,
-    OperationKind, OperationSite, OperationStarted, Outcome, PageState, RunDownload, RunEnded,
-    RunId, RunStarted, RunStatus, TaskId, TraceStore,
+    Delivery, DiagnosticCode, DownloadStatus, Effect, ErrorOwner, ErrorRecord, OperationEnded,
+    OperationId, OperationKind, OperationSite, OperationStarted, Outcome, PageState, RunDownload,
+    RunEnded, RunId, RunStarted, RunStatus, RunTabsScope, TaskId, TraceStore,
 };
 use serde_json::json;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
@@ -57,12 +57,21 @@ async fn summary_omits_values_everywhere_and_keeps_audit_metadata() -> TestResul
     let run = RunId::new();
     let fill = OperationId::new(run, 1);
     let error = ErrorRecord {
+        diagnostic_code: None,
         owner: ErrorOwner::Website,
         code: "timeout".into(),
         message: format!("Could not fill {value}"),
         host_code: Some(value.into()),
         retryable: false,
         operation_id: Some(fill),
+        // A covered error's cover is page text: the full view shows it, a summary never does.
+        cover: Some(json!({
+            "ref": "e7",
+            "role": "dialog",
+            "name": value,
+            "kind": "page",
+            "controls": [{"ref": "e9", "role": "button", "name": value}],
+        })),
     };
     h.sink.run_started(RunStarted {
         id: run,
@@ -70,6 +79,8 @@ async fn summary_omits_values_everywhere_and_keeps_audit_metadata() -> TestResul
         request_id: None,
         task_id: Some(TaskId::parse("summary-canary")?),
         host_data: Some(json!({"value": value})),
+        tabs_scope: RunTabsScope::Browser,
+        access: None,
         at: at(0),
     });
     h.sink.op_started(OperationStarted {
@@ -162,6 +173,7 @@ async fn summary_omits_values_everywhere_and_keeps_audit_metadata() -> TestResul
         assert_eq!(op["error"]["code"], "timeout");
         assert_eq!(op["error"]["message"], "");
         assert!(op["error"].get("hostCode").is_none());
+        assert!(op["error"].get("cover").is_none(), "{op}");
         assert_eq!(op["internal"], false);
         let full = h.get(&format!("{uri}?fields=full&internal=true")).await?;
         assert_eq!(full.body, original.body, "explicit defaults");
@@ -172,6 +184,7 @@ async fn summary_omits_values_everywhere_and_keeps_audit_metadata() -> TestResul
     for key in ["code", "hostData", "result", "downloads"] {
         assert!(full.body[key].to_string().contains(value), "{key}");
     }
+    assert_eq!(full.body["operations"][0]["error"]["cover"]["name"], value);
     let audit = h
         .get("/v1/runs?taskId=summary-canary&fields=summary&internal=false")
         .await?;
@@ -348,6 +361,63 @@ async fn trace_view_options_reject_bad_values_and_duplicates() -> TestResult {
             h.get(&format!("{uri}?{options}"))
                 .await?
                 .assert_error(StatusCode::BAD_REQUEST, "invalid_request");
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn target_crashed_diagnostic_survives_full_and_summary_http_views() -> TestResult {
+    let h = harness().await?;
+    let run = start_run(&h.sink, Start::default());
+    let id = OperationId::new(run, 1);
+    op_started(&h.sink, id, Op::write(3, 1));
+    let error = ErrorRecord {
+        owner: ErrorOwner::Neo,
+        code: "internal_error".to_owned(),
+        diagnostic_code: Some(DiagnosticCode::TargetCrashed),
+        message: "The tab's page crashed. Close or reload the tab before retrying.".to_owned(),
+        host_code: None,
+        retryable: false,
+        operation_id: Some(id),
+        cover: None,
+    };
+    h.sink.op_ended(OperationEnded {
+        id,
+        outcome: Outcome::Error,
+        delivery: Delivery::Done,
+        sent_at: Some(at(2)),
+        result: None,
+        error: Some(error.clone()),
+        page_after: None,
+        main_world: false,
+        frames_incomplete: false,
+        at: at(3),
+    });
+    h.sink.run_ended(RunEnded {
+        id: run,
+        status: RunStatus::Error,
+        error: Some(error),
+        result: None,
+        replay: None,
+        at: at(4),
+    });
+    h.flushed().await?;
+    for uri in [format!("/v1/runs/{run}"), "/v1/trace".to_owned()] {
+        for fields in ["full", "summary"] {
+            let response = h.get(&format!("{uri}?fields={fields}")).await?;
+            assert_eq!(response.status, StatusCode::OK, "{}", response.body);
+            let operation = &response.body["operations"][0];
+            assert_eq!(operation["delivery"], "done");
+            let run_error = if uri == "/v1/trace" {
+                &response.body["runs"][0]["error"]
+            } else {
+                &response.body["error"]
+            };
+            for error in [&operation["error"], run_error] {
+                assert_eq!(error["code"], "internal_error");
+                assert_eq!(error["diagnosticCode"], "target_crashed");
+            }
         }
     }
     Ok(())

@@ -29,7 +29,8 @@ export const REQUEST_EXAMPLES: { [O in Op]: AtLeastOne<RequestOf<O>> } = {
   describe: [{ op: 'describe' }],
   screenshotMask: [{ op: 'screenshotMask', target: GO_BUTTON, color: '#F0F' }],
   screenshotMaskCleanup: [{ op: 'screenshotMaskCleanup' }],
-  privateShown: [{ op: 'privateShown' }],
+  privateShown: [{ op: 'privateShown' }, { op: 'privateShown', walk: true }],
+  privateHosts: [{ op: 'privateHosts', limit: 16 }],
   webStorage: [
     { op: 'webStorage', kind: 'local', action: 'items' },
     { op: 'webStorage', kind: 'session', action: 'getItem', name: 'token' },
@@ -109,8 +110,22 @@ export const REQUEST_EXAMPLES: { [O in Op]: AtLeastOne<RequestOf<O>> } = {
   moves: [{ op: 'moves' }],
   disarm: [{ op: 'disarm' }],
   frameBox: [
-    { op: 'frameBox', iframe: chunk('aria-ref=#1') },
-    { op: 'frameBox', iframe: { pin: 4 }, point: { x: 40.5, y: 12 } },
+    { op: 'frameBox', iframe: chunk('aria-ref=#1'), look: false },
+    {
+      op: 'frameBox',
+      iframe: { pin: 4 },
+      point: { x: 40.5, y: 12 },
+      look: true,
+    },
+  ],
+  cover: [
+    {
+      op: 'cover',
+      target: { pin: 3 },
+      point: { x: 40.5, y: 12 },
+      cover: 7,
+      above: false,
+    },
   ],
   edit: [
     { op: 'edit', pin: 3, edit: { kind: 'fill', value: 'hello' } },
@@ -168,6 +183,7 @@ export const REQUEST_EXAMPLES: { [O in Op]: AtLeastOne<RequestOf<O>> } = {
         cut: false,
         keys: false,
         frameVisible: true,
+        scroll: 'asItIs',
       },
     },
     {
@@ -186,12 +202,13 @@ export const REQUEST_EXAMPLES: { [O in Op]: AtLeastOne<RequestOf<O>> } = {
         cut: true,
         keys: false,
         frameVisible: true,
+        scroll: 'centre',
       },
     },
     {
       op: 'look',
       pin: 5,
-      look: { cut: false, keys: true, frameVisible: true },
+      look: { cut: false, keys: true, frameVisible: true, scroll: 'asItIs' },
     },
   ],
   private: [
@@ -205,6 +222,11 @@ export const REQUEST_EXAMPLES: { [O in Op]: AtLeastOne<RequestOf<O>> } = {
       op: 'private',
       pin: 3,
       step: { kind: 'holds', text: '4242 4242', spaced: true },
+    },
+    {
+      op: 'private',
+      pin: 3,
+      step: { kind: 'compare', text: '4242 4242', spaced: true },
     },
     { op: 'private', pin: 3, step: { kind: 'readBack' } },
     { op: 'private', pin: 3, step: { kind: 'forget' } },
@@ -281,6 +303,13 @@ export const REQUEST_EXAMPLES: { [O in Op]: AtLeastOne<RequestOf<O>> } = {
     },
     {
       op: 'read',
+      target: { pin: 3 },
+      strictness: 'strict',
+      frameVisible: true,
+      read: { kind: 'viewCentre' },
+    },
+    {
+      op: 'read',
       target: chunk('main'),
       strictness: 'firstMatch',
       frameVisible: true,
@@ -326,7 +355,7 @@ export const REQUEST_EXAMPLES: { [O in Op]: AtLeastOne<RequestOf<O>> } = {
     { op: 'selector', target: { pin: 4 } },
   ],
   snapshot: [
-    { op: 'snapshot', root: 'document', mode: 'ai' },
+    { op: 'snapshot', root: 'document', mode: 'ai', markInert: true },
     {
       op: 'snapshot',
       root: 'document',
@@ -505,6 +534,11 @@ const REPLY_EXAMPLES: {
     {
       kind: 'covered',
       by: '<div id="consent">…</div> intercepts pointer events',
+      cover: { id: 7, rect: RECT, opacity: 1, busy: false },
+    },
+    {
+      kind: 'covered',
+      by: '<div id="consent">…</div> intercepts pointer events',
     },
   ],
   armed: [{ kind: 'armed', rect: RECT, point: POINT, token: 11 }],
@@ -517,8 +551,76 @@ const REPLY_EXAMPLES: {
   ],
   moves: [{ kind: 'moves', moves: 3 }],
   frameBox: [
-    { kind: 'frameBox', origin: { x: 8, y: 120 }, hit: null },
-    { kind: 'frameBox', origin: null, hit: 'done' },
+    { kind: 'frameBox', origin: { x: 8, y: 120 }, hit: null, unseen: false },
+    { kind: 'frameBox', origin: null, hit: 'done', unseen: false },
+    {
+      kind: 'frameBox',
+      origin: { x: 8, y: 120 },
+      hit: { hitTargetDescription: '<html></html>' },
+      unseen: true,
+    },
+    {
+      kind: 'frameBox',
+      origin: { x: 8, y: 120 },
+      hit: { hitTargetDescription: '<div class="scrim"></div>' },
+      unseen: false,
+      cover: { id: 2, rect: RECT, opacity: 0.5, busy: true },
+    },
+  ],
+  cover: [
+    { kind: 'cover', facts: null },
+    {
+      kind: 'cover',
+      facts: {
+        layer: 5,
+        ref: 'e7',
+        role: 'dialog',
+        name: 'Sign in',
+        markup: '<div role="dialog" class="modal">…</div>',
+        snapshot: { role: 'dialog', name: 'Sign in', ref: 'e7', children: [] },
+        controls: [{ role: 'button', name: 'Close', ref: 'e9' }],
+        blank: false,
+        behind: false,
+        closed: false,
+        notice: false,
+        kind: { is: 'page' },
+      },
+    },
+    {
+      kind: 'cover',
+      facts: {
+        layer: 5,
+        ref: 'n4',
+        role: 'textbox',
+        name: '',
+        markup: '<div role="textbox" id="modal-wrapper">…</div>',
+        snapshot: { role: 'textbox' },
+        text: 'Resale prices often exceed face value.',
+        controls: [],
+        blank: false,
+        behind: false,
+        closed: false,
+        notice: false,
+        kind: { is: 'partial', position: { x: 12, y: 8 } },
+      },
+    },
+    {
+      kind: 'cover',
+      facts: {
+        layer: 5,
+        ref: 'e12',
+        role: 'generic',
+        name: '',
+        markup: '<label for="terms">…</label>',
+        snapshot: null,
+        controls: [],
+        blank: false,
+        behind: false,
+        closed: false,
+        notice: false,
+        kind: { is: 'label', links: 2, position: { x: 4, y: 9 } },
+      },
+    },
   ],
   value: [
     { kind: 'value', value: 'Welcome' },
@@ -551,6 +653,23 @@ const REPLY_EXAMPLES: {
       kind: 'value',
       value: {
         facts: {
+          origin: 'https://pay.example',
+          type: 'text',
+          autocomplete: 'cc-csc',
+          maxLength: 3,
+          inputMode: 'numeric',
+          name: 'cvc',
+          id: '',
+          sized: true,
+          empty: true,
+        },
+        maxLengthMoved: true,
+      },
+    },
+    {
+      kind: 'value',
+      value: {
+        facts: {
           origin: 'https://bank.example',
           type: 'password',
           autocomplete: 'current-password',
@@ -572,6 +691,10 @@ const REPLY_EXAMPLES: {
     { kind: 'value', value: { kind: 'focus', focus: 'noDocumentFocus' } },
     { kind: 'value', value: { kind: 'focus', focus: 'moving' } },
     { kind: 'value', value: { kind: 'holds', holds: true } },
+    {
+      kind: 'value',
+      value: { kind: 'compared', holds: false, contains: true },
+    },
     {
       kind: 'value',
       value: {
@@ -642,6 +765,7 @@ const REPLY_EXAMPLES: {
   snapshot: [
     {
       kind: 'snapshot',
+      inertMarkingMs: 0.125,
       json: [
         { role: 'heading', name: 'Pay', level: 1 },
         { role: 'button', name: 'Go', ref: 'e2', cursor: 'pointer' },
@@ -749,7 +873,7 @@ export function protocolDocument() {
     protocol: PROTOCOL,
     callFunction: CALL_FUNCTION,
     replyKinds: REPLY_KINDS,
-    byHandle: ['pinned'],
+    byHandle: ['pinned', 'privateHosts'],
     anyRequest: ['error', 'uninstalled'],
     calls: CALL_EXAMPLES,
     requests: Object.values(REQUEST_EXAMPLES).flat(),

@@ -23,6 +23,33 @@ bun run remote queue
 bun run remote fetch-image IMAGE_JOB_UUID
 ```
 
+New jobs check the coordinator before preparing source. Each status, queue and admission request
+uses one SSH call, with a **five-second connection/handshake limit** and a **twenty-second total
+reply budget**, including SSH setup. A connection timeout prints one line explaining that the
+usual cause is this machine's outside IPv4 not being admitted. Check that address:
+
+```sh
+curl --noproxy '*' -4fsS --connect-timeout 3 --max-time 5 https://api.ipify.org
+```
+
+Ask the pool operator to compare it with the SSH allowlist and admit it if needed; retrying
+will not help until access is fixed. A timeout can also mean a down VM or a network problem,
+so the hint is not proof of an allowlist mismatch. A reply timeout instead says
+`pool returned no reply in 20s; coordinator may be busy` and suggests `bun run remote queue`.
+It does not claim the address is blocked. A reachable full pool still waits for a slot;
+there is no total queue deadline. Each poll uses one SSH connection.
+If an admission reply is lost, no guest command has been dispatched; an unseen reservation
+remains protected by the existing two-minute client lease and independent reaper. Running-job
+RPC recovery, execution, lease renewal, cleanup and artifact transfers keep their existing
+budgets. `fetch-image` uses its saved guest endpoint without requiring the coordinator.
+
+The twenty-second reply deadline can end an already connected but slow request; it cannot
+prove that the coordinator made no reservation.
+An admission whose reply is lost, including one first reserved after the caller quit, can
+hold an undispatched slot for about two minutes before
+reaping (longer if cleanup cannot run or be proved); if you then see `already has two jobs`,
+wait for recovery and try again.
+
 `image` builds the SDK's amd64 image on Linux and runs its native acceptance suite.
 `viewer-image` uses the same builder for your local Docker architecture, then streams and loads
 that image into local Docker. The Rust build cross-compiles with Zig; QEMU runs the arm64
@@ -44,6 +71,7 @@ locks until a complete current-main remote run passes; the wrapper preserves its
 
 ```text
 agent in its worktree
+  | check coordinator (5s SSH connect, 20s total reply)
   | capture commit + dirty flag; freeze approved working files
   | ask the shared slot file for the first free VM
   | Crabbox uploads the frozen files, then runs the command
@@ -57,8 +85,20 @@ job may come from any developer or worktree. `queue` lists running and waiting j
 and kind. Each worker may have two jobs total, including waiters; a third is refused with
 the two existing job IDs. Gates go before images (including viewer images), then specs,
 detectors and other commands, with FIFO within each class. A dead client's waiter is
-withdrawn by its independent pipe observer; loss of the Mac expires it after ten seconds.
+withdrawn by its independent pipe observer; loss of the Mac expires it after sixty seconds.
+This backstop preserves queue age across two neighboring twenty-second requests, the polling
+pause and scheduling jitter. It does not extend a running reservation's two-minute lease.
 Running jobs use the separate two-minute cleanup lease described below.
+
+Host entries are considered in configuration order. Put the coordinator last so the other
+eligible machines take new jobs first; it remains usable when they are occupied. This reduces
+build I/O on the coordinator's disk without removing capacity or discarding durable state.
+
+**Rollout order:** drain the pool and install the matching coordinator `pool.py` with its
+sixty-second waiter policy **before** using this client. The old five-second client remains
+compatible during that step; this twenty-second client must not be deployed against the old
+ten-second policy. Preserve the host order and live registry under its existing lock; do not
+reset the state file. No guest/reaper implementation or running-job limits need changing.
 
 Cargo registry/Git downloads, the public Playwright corpus,
 Docker layers and BuildKit caches stay on each host; fresh source directories prevent jobs

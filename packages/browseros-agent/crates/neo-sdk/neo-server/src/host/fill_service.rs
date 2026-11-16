@@ -40,8 +40,8 @@ use super::fill_request::{CheckRequest, FillRequest};
 use super::{FilledTabs, TakeoverLock};
 use crate::browser::{BrowserLink, PageRef, TabsScope};
 use crate::builtins::{
-    ENTRY_BACKSTOP, FillProgress, FillValues, HOST_FILL, HOST_FILL_CHECK, HOST_FILL_CHECK_CODE,
-    HOST_FILL_CODE, boxes_args,
+    CheckCompared, CheckValues, ENTRY_BACKSTOP, FillProgress, FillValues, HOST_FILL,
+    HOST_FILL_CHECK, HOST_FILL_CHECK_CODE, HOST_FILL_CODE, boxes_args,
 };
 use crate::dispatch::{
     Call, Caller, Dispatcher, ErrorCode, OpFailure, OpReply, PendingReply, RunCtx, RunEnd,
@@ -307,6 +307,7 @@ impl Fill {
                 // door does not count as a script's use (ruling R27).
                 default_page: Some(PageRef { tab }),
                 tabs_scope: TabsScope::Browser,
+                access: None,
             },
         );
         if let Some(lock) = lock {
@@ -351,6 +352,7 @@ impl Fill {
             timeout,
             url,
             boxes,
+            values,
         } = request;
         let Some(view) = self.browser.view() else {
             return Err(Refused::BrowserUnavailable);
@@ -377,11 +379,14 @@ impl Fill {
                 deadline: Instant::now() + timeout + ENTRY_BACKSTOP,
                 default_page: Some(PageRef { tab }),
                 tabs_scope: TabsScope::Browser,
+                access: None,
             },
         );
         if let Some(lock) = lock {
             run.pass_lock(lock);
         }
+        // Ruling R48: the values wait in the run's slot beside the op, never in its input.
+        run.slot::<CheckValues>().put(values);
         let call = Call {
             name: HOST_FILL_CHECK.to_owned(),
             input: boxes_args(tab, url.as_deref(), &boxes),
@@ -396,14 +401,24 @@ impl Fill {
             // every box answers that refusal, with no facts.
             Err(failure) => vec![refused_box(&failure); boxes.len()],
         };
-        let answer = api::FillCheckResult {
+        let recorded = api::FillCheckResult {
             run_id: run.id().to_string(),
             fields,
         };
+        // The run records the answer without the compare's booleans, so a check that compared
+        // keeps the shape every check's run has (ruling R48); the host alone gets them.
+        let compared = run.slot::<CheckCompared>().take().unwrap_or_default();
+        let mut answer = recorded.clone();
+        for (field, compared) in answer.fields.iter_mut().zip(compared) {
+            if let Some(compared) = compared {
+                field.holds = Some(compared.holds);
+                field.contains = Some(compared.contains);
+            }
+        }
         guard.finish(RunEnd {
             status: status_of(&run),
             error: None,
-            result: serde_json::to_value(&answer).ok(),
+            result: serde_json::to_value(&recorded).ok(),
             replay: None,
         });
         Ok(answer)
@@ -451,15 +466,21 @@ fn checked(value: Value, boxes: usize) -> Vec<api::FillBoxCheck> {
             let refusal = api::OperationError {
                 owner: owner_name(ErrorOwner::Neo),
                 code: ErrorCode::INTERNAL_ERROR.as_str().to_owned(),
+                diagnostic_code: None,
                 message: "Neo could not read the look's answer".to_owned(),
                 retryable: true,
                 host_code: None,
                 operation_id: None,
+                cover: None,
             };
             vec![
                 api::FillBoxCheck {
                     facts: None,
                     refusal: Some(Box::new(refusal)),
+                    holds: None,
+                    contains: None,
+                    frame_gone: None,
+                    max_length_moved: None,
                 };
                 boxes
             ]
@@ -473,10 +494,19 @@ fn refused_box(failure: &OpFailure) -> api::FillBoxCheck {
         refusal: Some(Box::new(api::OperationError {
             owner: owner_name(failure.error.owner()),
             code: failure.error.code().as_str().to_owned(),
+            diagnostic_code: failure
+                .error
+                .diagnostic_code()
+                .map(|code| code.as_str().to_owned()),
             message: failure.error.message().to_owned(),
             retryable: failure.retryable,
             host_code: None,
             operation_id: Some(failure.operation.to_string()),
+            cover: None,
         })),
+        holds: None,
+        contains: None,
+        frame_gone: None,
+        max_length_moved: None,
     }
 }

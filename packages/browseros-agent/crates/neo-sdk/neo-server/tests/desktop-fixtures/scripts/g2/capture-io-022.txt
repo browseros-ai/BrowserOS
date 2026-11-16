@@ -1,0 +1,5 @@
+await page.goto(args.base + '/dynamic.html');
+await page.locator('#marker').waitFor({state:'attached',timeout:3000});
+const count = await page.locator('#marker').count();
+equal(count,1,'the waited selector exists on the page');
+return {matched:true,count};

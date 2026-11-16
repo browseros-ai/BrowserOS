@@ -1,0 +1,25 @@
+<!doctype html><meta charset=utf-8><title>Mark moves</title>
+<style> body { margin: 24px; font: 15px sans-serif; } input { display: block; margin: 8px 0; width: 260px; } </style>
+<!-- A card box whose page moves a part of what is typed, all but its first character, into
+     another box and gives that box the focus, inside the box's own input event (ruling R50's row
+     13b). One insertion fires that event synchronously, so the text has always moved before Neo
+     reads the box back: the read-back finds the box empty and marks the control that holds the
+     focus (markFocused). The part is not the whole value, so only markFocused's digest of what
+     that control holds can mask a copy of it. cloneCatch() then clones that control. Its
+     scripts run in the page's own world. -->
+<input id=mover aria-label="Mover">
+<input id=catch aria-label="Catch">
+<script>
+  const byId = (id) => document.getElementById(id)
+  byId('mover').addEventListener('input', (event) => {
+    byId('catch').value = event.target.value.slice(1)
+    event.target.value = ''
+    byId('catch').focus()
+  })
+  window.cloneCatch = () => {
+    const twin = byId('catch').cloneNode()
+    twin.id = 'caught'
+    twin.setAttribute('aria-label', 'Caught twin')
+    byId('catch').after(twin)
+  }
+</script>

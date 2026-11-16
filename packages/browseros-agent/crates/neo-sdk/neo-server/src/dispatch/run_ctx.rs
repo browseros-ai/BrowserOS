@@ -10,8 +10,8 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use browseros_core::{BrowserView, TabId};
 use neo_takeover::LockId;
 use neo_trace::{
-    Delivery, Effect, EpochMillis, ErrorRecord, OperationId, Outcome, RequestId, RunEffects,
-    RunEnded, RunId, RunStarted, RunStatus, TaskId, TraceSink,
+    Delivery, Effect, EpochMillis, ErrorRecord, OperationId, Outcome, RequestId, RunAccess,
+    RunEffects, RunEnded, RunId, RunStarted, RunStatus, TaskId, TraceSink,
 };
 use serde_json::Value;
 use tokio::sync::OnceCell;
@@ -40,6 +40,8 @@ pub(crate) struct RunCtx {
     family: Option<TaskId>,
     /// What the run may reach, fixed at its start ([`RunCtx::sight`]).
     scope: RunScope,
+    /// The host's immutable restriction; admission reads it before any page is resolved.
+    access: Option<RunAccess>,
     /// Read for the run's sight of each tab, live: the scope is fixed, which tabs it covers is not.
     tabs: Arc<TabRegistry>,
     view: BrowserView,
@@ -100,6 +102,8 @@ pub(crate) struct RunStart {
     /// what the run may reach ([`RunScope::decide`]). Neo's own runs (the janitor, private
     /// typing) read `Browser` always: they reach every tab.
     pub(crate) tabs_scope: TabsScope,
+    /// The host's operation restriction; Neo's own runs leave it absent.
+    pub(crate) access: Option<RunAccess>,
 }
 
 /// The run's end record. A plain data bag.
@@ -164,7 +168,7 @@ struct RunLedger {
     not_awaited: Vec<OpLine>,
     /// Pages this run closed, so a later use is the script's mistake, not Neo's.
     closed_by_run: HashSet<TabId>,
-    /// Tabs this bound run's own opens named ([`RunCtx::opened`]). Bounded by the run's opens.
+    /// Tabs this run's own opens named, for task reach and close permission ([`RunCtx::opened`]).
     opened_by_run: HashSet<TabId>,
 }
 
@@ -203,6 +207,7 @@ impl RunCtx {
             deadline,
             default_page,
             tabs_scope,
+            access,
         } = start;
         let trace = door.trace();
         if let Some(task) = &task_id {
@@ -229,6 +234,8 @@ impl RunCtx {
             request_id,
             task_id: task_id.clone(),
             host_data,
+            tabs_scope: scope.record(),
+            access,
             at: EpochMillis::now(),
         });
         let run = Arc::new(Self {
@@ -236,6 +243,7 @@ impl RunCtx {
             task_id,
             family,
             scope,
+            access,
             tabs: Arc::clone(door.tabs()),
             view: view.view,
             epoch: view.epoch,
@@ -300,6 +308,12 @@ impl RunCtx {
         &self.scope
     }
 
+    /// The operation restriction the host selected when this run was admitted.
+    #[must_use]
+    pub(crate) fn access(&self) -> Option<RunAccess> {
+        self.access
+    }
+
     /// Whether this run may reach `tab` now: the registry's answer for its scope, except that a
     /// bound run's own open is shown from the moment the browser names it, before its task
     /// holds it ([`RunCtx::opened`]).
@@ -314,12 +328,21 @@ impl RunCtx {
         self.tabs.sight(&self.scope, tab)
     }
 
-    /// This run's own open named `tab`. Its task takes it once the open returns; until then the
-    /// run sees it all the same, and after that its task holds it.
+    /// This run's own open named `tab`. An optional task takes it once the open returns; a
+    /// bound run sees it even before that attachment. Close permission uses the same evidence
+    /// independently of whether this run has a task or task scope is enabled.
     pub(crate) fn opened(&self, tab: TabId) {
-        if self.scope.is_bound() {
+        // Early browser naming and PageChange::Opened feed this same set. Task membership and
+        // agent origin are broader: another run's tab or a popup must not gain close permission.
+        if self.scope.is_bound() || self.access == Some(RunAccess::Read) {
             self.lock_ledger().opened_by_run.insert(tab);
         }
+    }
+
+    /// Whether this run itself opened `tab`, excluding popups and earlier runs' task tabs.
+    #[must_use]
+    pub(super) fn opened_it(&self, tab: TabId) -> bool {
+        self.lock_ledger().opened_by_run.contains(&tab)
     }
 
     /// The run's op `op` starts an open. Until the browser names its tab ([`RunCtx::named`]) or

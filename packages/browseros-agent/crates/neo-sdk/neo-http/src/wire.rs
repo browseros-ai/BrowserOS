@@ -7,7 +7,7 @@ use crate::event_log::EventKind;
 use crate::limits::{KEEP_SECONDS, MAX_NAVIGATE_INPUT, VIEWER_SIDE};
 use crate::query::Fields;
 use crate::setting::{Checked, SETTINGS, Setting, SettingValue};
-use crate::settings::{SetValues, Settings};
+use crate::settings::{FileLoadState, SetValues, Settings};
 use crate::tab_keeps::Keep;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
@@ -61,6 +61,8 @@ fn run_summary_fields(run: &RunSummary, fields: Fields) -> api::RunSummary {
         values: run.values.clone(),
         id: run.id.to_string(),
         task_id: run.task_id.as_ref().map(ToString::to_string),
+        tabs_scope: run.tabs_scope.map(|scope| scope.as_str().to_owned()),
+        access: run.access.map(|access| access.as_str().to_owned()),
         tabs: run.tabs.iter().map(|tab| tab.0).collect(),
         status: run.status.as_str().to_string(),
         effects: run.effects.map(|effects| effects.as_str().to_string()),
@@ -104,6 +106,8 @@ pub(crate) fn run(run: &RunDetail, inlined: &Inlined, fields: Fields) -> api::Ru
         values,
         id,
         task_id,
+        tabs_scope,
+        access,
         tabs,
         status,
         effects,
@@ -129,6 +133,8 @@ pub(crate) fn run(run: &RunDetail, inlined: &Inlined, fields: Fields) -> api::Ru
         values,
         id,
         task_id,
+        tabs_scope,
+        access,
         tabs,
         status,
         effects,
@@ -479,6 +485,22 @@ pub(crate) fn takeover(takeover: &Takeover) -> api::Takeover {
         released_at,
         expires_at: takeover.expires_at.millis(),
         input_drained: takeover.input_drained,
+        opened_tabs: takeover.opened_tabs.as_ref().map(|opened| {
+            opened
+                .iter()
+                .map(|tab| api::OpenedTab {
+                    tab_id: tab.tab.0,
+                    url: tab.url.clone(),
+                    in_front: tab.in_front,
+                    task_id: tab.task_id.clone(),
+                    opener_tab_id: tab.opener.map(|opener| opener.0),
+                })
+                .collect()
+        }),
+        opened_tabs_noted: takeover
+            .opened_tabs_noted
+            .map(|noted| i64::try_from(noted).unwrap_or(i64::MAX)),
+        opened_tabs_truncated: takeover.opened_tabs_truncated,
     }
 }
 
@@ -760,7 +782,8 @@ pub(crate) fn settings_object(
 }
 
 /// The settings as a host reads them: each at its value, and each default. `skipped` is what a
-/// `PUT` or `PATCH` skipped, both lists always present then; a `GET` has neither.
+/// `PUT` or `PATCH` skipped, both lists always present then; only a `GET` carries the startup
+/// file report, which is independent of changes to the live values.
 pub(crate) fn settings_state(
     settings: &Settings,
     skipped: Option<SettingsBody>,
@@ -785,7 +808,7 @@ pub(crate) fn settings_state(
             ))
         })
     };
-    let (unknown, unknown_values) = match skipped {
+    let (unknown, unknown_values, file) = match skipped {
         Some(SettingsBody {
             unknown,
             unknown_values,
@@ -793,12 +816,31 @@ pub(crate) fn settings_state(
         }) => (
             Some(unknown),
             Some(unknown_values.into_iter().map(str::to_owned).collect()),
+            None,
         ),
-        None => (None, None),
+        None => (
+            None,
+            None,
+            settings.file_report().map(|report| {
+                let state = match report.state {
+                    FileLoadState::Absent => "absent",
+                    FileLoadState::Applied => "applied",
+                    FileLoadState::Partial => "partial",
+                    FileLoadState::Unreadable => "unreadable",
+                };
+                Box::new(api::SettingsFile::new(
+                    state.to_owned(),
+                    report.unknown.clone(),
+                    report.unknown_values.clone(),
+                    report.invalid.clone(),
+                ))
+            }),
+        ),
     };
     Ok(api::SettingsState {
         unknown,
         unknown_values,
+        file,
         ..api::SettingsState::new(typed(current)?, typed(defaults)?)
     })
 }
@@ -828,6 +870,7 @@ fn operation_error(error: &ErrorRecord, fields: Fields) -> api::OperationError {
     api::OperationError {
         owner: error.owner.as_str().to_string(),
         code: error.code.clone(),
+        diagnostic_code: error.diagnostic_code.map(|code| code.as_str().to_owned()),
         host_code: (fields == Fields::Full)
             .then(|| error.host_code.clone())
             .flatten(),
@@ -838,5 +881,15 @@ fn operation_error(error: &ErrorRecord, fields: Fields) -> api::OperationError {
         },
         retryable: error.retryable,
         operation_id: error.operation_id.map(|id| id.to_string()),
+        // The cover's name and its controls' names are page text, so a summary view, which
+        // omits every text, omits the cover too. A cover the record cannot read as the
+        // contract's shape stays out: the record is neo-playwright's to fill, and a newer shape
+        // must not fail the read.
+        cover: error
+            .cover
+            .as_ref()
+            .filter(|_| fields == Fields::Full)
+            .and_then(|cover| serde_json::from_value(cover.clone()).ok())
+            .map(Box::new),
     }
 }

@@ -6,7 +6,7 @@
 //! It is not core's scripted `TestConnection`: captures that a test holds and releases need a
 //! reply that waits, which a canned reply cannot do.
 
-use crate::support::BoxError;
+use crate::support::{self, BoxError, PROGRESS_WATCHDOG};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use browseros_cdp::{CdpError, CdpEvent, SessionId, TargetedEvents};
@@ -16,7 +16,6 @@ use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
-use std::time::Duration;
 use tokio::sync::{broadcast, mpsc, watch};
 
 /// What the `capture`-th capture returns: a JPEG's start and end markers around its number, so a
@@ -60,6 +59,7 @@ pub(crate) struct ScriptedBrowser {
     /// Captures, by number, that never answer whatever `captures` says.
     hung: Mutex<Vec<usize>>,
     started: watch::Sender<usize>,
+    cancelled: watch::Sender<usize>,
     events: broadcast::Sender<CdpEvent>,
     targeted: TargetedEvents,
     /// The one window's state; openbox maximizes a normal window.
@@ -77,6 +77,7 @@ impl ScriptedBrowser {
             captures: watch::channel(Captures::Answer).0,
             hung: Mutex::default(),
             started: watch::channel(0).0,
+            cancelled: watch::channel(0).0,
             events: broadcast::channel(16).0,
             targeted: TargetedEvents::default(),
             window: Mutex::new("maximized"),
@@ -155,12 +156,26 @@ impl ScriptedBrowser {
             .push(number);
     }
 
-    /// Waits (up to 5 s) until `count` captures have started.
+    /// Waits within the fixture's progress watchdog until `count` captures have started.
     pub(crate) async fn captures_started(&self, count: usize) -> Result<(), BoxError> {
         let mut started = self.started.subscribe();
-        tokio::time::timeout(
-            Duration::from_secs(5),
+        support::watchdog(
+            "capture-start witness",
+            PROGRESS_WATCHDOG,
             started.wait_for(|started| *started >= count),
+        )
+        .await??;
+        Ok(())
+    }
+
+    /// Native captures cancelled before storage. Core's JPEG fallback can also cancel one, so
+    /// this alone does not prove the enclosing camera attempt ended.
+    pub(crate) async fn captures_cancelled(&self, count: usize) -> Result<(), BoxError> {
+        let mut cancelled = self.cancelled.subscribe();
+        support::watchdog(
+            "capture-cancellation witness",
+            PROGRESS_WATCHDOG,
+            cancelled.wait_for(|cancelled| *cancelled >= count),
         )
         .await??;
         Ok(())
@@ -211,6 +226,7 @@ impl ScriptedBrowser {
             .contains(&number);
         let mut captures = self.captures.subscribe();
         if hung || *captures.borrow_and_update() == Captures::Hang {
+            let _pending = HungCapture(&self.cancelled);
             std::future::pending::<()>().await;
         }
         if captures
@@ -281,6 +297,16 @@ impl ScriptedBrowser {
             }
             _ => Ok(json!({})),
         }
+    }
+}
+
+/// Latches native-request cancellation without waiting for storage. Both core's JPEG fallback
+/// and the camera's outer timeout can drop this future.
+struct HungCapture<'a>(&'a watch::Sender<usize>);
+
+impl Drop for HungCapture<'_> {
+    fn drop(&mut self) {
+        self.0.send_modify(|cancelled| *cancelled += 1);
     }
 }
 

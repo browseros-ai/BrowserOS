@@ -6,6 +6,8 @@
 //!      ─ resolve { want: element } ─ pin            none, detached: element_detached
 //!      ─ look { pin, ask } in that world ─ facts and the first refusal
 //!  tab address (main frame's `describe`) ─ page_changed, after the page side's origin check
+//!  dead refs, at a check (ruling R63) ─ the frame each ref's world was installed in, from the
+//!      frame table ─ one whole read of the tab's frame tree ─ frame_gone when it is not there
 //! ```
 //!
 //! The look never logs a resolution or a preview: a preview prints every attribute, `value`
@@ -19,14 +21,20 @@ use futures_util::future::{self, Either};
 use serde_json::{Value, json};
 use tokio::time::Instant;
 
+use crate::action::frame_projection::{self, Asker, Projection};
 use crate::action::protocol_scroll;
 use crate::action::requested_navigations::RequestedNavigations;
 use crate::op_scope::OpScope;
 use crate::page::OpPage;
+use crate::page::frame_tree::{self, FrameTree};
 use crate::private_entry::{
-    BoxAsk, BoxFacts, EntryCode, EntryError, LookField, LookRefusal, LookRefused, Looked, Sending,
+    BoxAsk, BoxFacts, Compared, CoverIn, EntryCode, EntryError, LookCompare, LookField,
+    LookRefusal, LookRefused, LookScroll, Looked, PageSecret, PrivateAnswer, PrivateStep, Sending,
+    Unread, entry_run,
 };
-use crate::probe::{ParsedSelector, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget, Want};
+use crate::probe::{
+    ParsedSelector, Point, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget, Read, Want,
+};
 use crate::resolve::{self, Resolved, Resolver};
 use crate::target::{AriaRefJump, LocatorTarget, Strictness};
 use crate::world::{Pin, Place};
@@ -41,6 +49,9 @@ pub(crate) struct LookedBox {
     pub(crate) pin: Pin,
     pub(crate) facts: BoxFacts,
     pub(crate) refusal: Option<EntryCode>,
+    /// Ruling R64: the box's limit moved from the approved one and the value fits both, or the
+    /// look carried no length. A fill lists the box when it types it after this look.
+    pub(crate) max_length_moved: bool,
 }
 
 /// What a box looks like now, or why it could not be looked at: its ref names no text input, or
@@ -194,30 +205,254 @@ pub(crate) async fn look_at(
             cut,
             keys: field.keys,
             frame_visible: site.frame_visible(),
+            scroll: LookScroll::AsItIs,
         };
-        let looked = match within(
-            scope,
-            site.call(scope, page, &ProbeRequest::Look { pin, look: ask }),
-        )
-        .await?
-        {
-            Ok(ProbeReply::Value { value }) => decode_looked(value.into_value())?,
-            // The pin's element left its document, or the document went, since the resolve.
-            Ok(ProbeReply::Detached) | Err(ProbeFailure::Gone(_)) => {
-                return Ok(Look::Unfound(EntryCode::ElementDetached));
-            }
-            Ok(_) => return Err(EntryCode::Internal),
-            Err(failure) => return Err(failure_code(failure)),
+        let Some((looked, above)) = look_in_view(scope, page, &site, pin, &ask).await? else {
+            return Ok(Look::Unfound(EntryCode::ElementDetached));
         };
-        return Ok(found(site, pin, looked, address));
+        return Ok(found(site, pin, looked, above, address));
     }
     Ok(Look::Unfound(EntryCode::ElementDetached))
 }
 
+/// The page side's look at the pinned box, where it stands in its own frame's view (ruling R62),
+/// and what the pages above its frame say of it (ruling R60): the look and the refusal they
+/// add, or `None` when the box or a frame on the way went away.
+///
+/// The look's scroll has two steps. Step 1, R61's, brought the whole box into view before this.
+/// A box larger than its view is shown by its nearest edge, so its centre can stay out of view
+/// though the page could show it. Step 2 runs only then, for a sized box the page side passed:
+/// the page side's look runs again with `LookScroll::Centre`, which first brings the box's
+/// centre to the middle of its view at once (`scrollIntoView` in Neo's isolated world, never the
+/// page's), so that its own hit is asked at a centre in view; then the centre is read again.
+/// Once for each look. Only a centre still out of view answers `cover_unread`: the page cannot
+/// scroll there. The page is
+/// left where step 2 put it. A box in view after step 1 never reaches step 2, so nothing changes
+/// for it: not its answer, not the page's place, not the number of messages.
+async fn look_in_view(
+    scope: &OpScope<'_>,
+    page: &OpPage<'_>,
+    site: &Resolved,
+    pin: Pin,
+    ask: &BoxAsk,
+) -> Result<Option<(Looked, Option<EntryCode>)>, EntryCode> {
+    let Some(mut looked) = look_once(scope, page, site, pin, ask).await? else {
+        return Ok(None);
+    };
+    let mut place = place_of(scope, page, site, pin, &looked).await?;
+    if matches!(place, Standing::Out) {
+        let centred = BoxAsk {
+            scroll: LookScroll::Centre,
+            ..ask.clone()
+        };
+        let Some(again) = look_once(scope, page, site, pin, &centred).await? else {
+            return Ok(None);
+        };
+        looked = again;
+        place = place_of(scope, page, site, pin, &looked).await?;
+    }
+    let above = match place {
+        Standing::Unasked => None,
+        Standing::Out => Some(EntryCode::CoverUnread(Unread::Unreachable)),
+        Standing::Gone => return Ok(None),
+        Standing::In(centre) => match pages_above(scope, page, site, centre).await? {
+            Above::Clear => None,
+            Above::Refused(code) => Some(code),
+            Above::Gone => return Ok(None),
+        },
+    };
+    Ok(Some((looked, above)))
+}
+
+/// One page-side look at the pinned box; `None` when its element left its document, or the
+/// document went, since the resolve.
+async fn look_once(
+    scope: &OpScope<'_>,
+    page: &OpPage<'_>,
+    site: &Resolved,
+    pin: Pin,
+    ask: &BoxAsk,
+) -> Result<Option<Looked>, EntryCode> {
+    let request = ProbeRequest::Look {
+        pin,
+        look: ask.clone(),
+    };
+    match within(scope, site.call(scope, page, &request)).await? {
+        Ok(ProbeReply::Value { value }) => decode_looked(value.into_value()).map(Some),
+        Ok(ProbeReply::Detached) | Err(ProbeFailure::Gone(_)) => Ok(None),
+        Ok(_) => Err(EntryCode::Internal),
+        Err(failure) => Err(failure_code(failure)),
+    }
+}
+
+/// Where a box stands in its own frame's view.
+#[derive(Clone, Copy, Debug)]
+enum Standing {
+    /// Nothing to place: the page side refused the box, or it has no size and is reached by
+    /// focus alone.
+    Unasked,
+    /// The centre of its border box, inside its own frame's view.
+    In(Point),
+    /// Its centre outside its own frame's view.
+    Out,
+    /// The box went away.
+    Gone,
+}
+
+/// The `viewCentre` read for a sized box the page side passed. The click's own measure is not
+/// used: it called a box wholly above and left of the view in view.
+async fn place_of(
+    scope: &OpScope<'_>,
+    page: &OpPage<'_>,
+    site: &Resolved,
+    pin: Pin,
+    looked: &Looked,
+) -> Result<Standing, EntryCode> {
+    let sized = looked.facts.as_ref().is_some_and(|facts| facts.sized);
+    if looked.refusal.is_some() || !sized {
+        return Ok(Standing::Unasked);
+    }
+    let read = ProbeRequest::Read {
+        target: ProbeTarget::Pin(pin),
+        strictness: Strictness::Strict,
+        frame_visible: site.frame_visible(),
+        read: Read::ViewCentre,
+    };
+    match within(scope, site.call(scope, page, &read)).await? {
+        Ok(ProbeReply::Read { value, .. }) => {
+            match serde_json::from_value::<Option<Point>>(value.into_value()) {
+                Ok(Some(centre)) => Ok(Standing::In(centre)),
+                Ok(None) => Ok(Standing::Out),
+                Err(_unreadable) => Err(EntryCode::Internal),
+            }
+        }
+        Ok(ProbeReply::Detached) | Err(ProbeFailure::Gone(_)) => Ok(Standing::Gone),
+        Ok(_) => Err(EntryCode::Internal),
+        Err(failure) => Err(failure_code(failure)),
+    }
+}
+
+/// What the pages above a box's frame say of its centre (ruling R60).
+#[derive(Debug, PartialEq, Eq)]
+enum Above {
+    /// Nothing above takes the pointer there, or the box is in the main frame.
+    Clear,
+    /// `box_covered` from a page above, or `cover_unread`.
+    Refused(EntryCode),
+    /// A frame on the way down went away since the look.
+    Gone,
+}
+
+/// Asks every page above the box's frame, from the top document down, what takes the pointer
+/// at the box's centre, out-of-process frames included. The page side's look sees only the
+/// documents its frame can reach (`frameElement` stops at an origin boundary), so before this a
+/// banner in a cross-origin parent over a sign-in frame was not seen, and a host reported a
+/// password typed under one. This reuses the click's projection (`frame_projection::project`,
+/// upstream's `_checkFrameIsHitTarget`) with the look's rules (`Asker::Look`):
+///
+/// - the box is already in view in its own frame (`look_in_view`), and the look's instant
+///   scrolls brought it into view in every page above too (rulings R61 and R62);
+/// - a parent's hit on the frame's owner element, or on what holds it, is clear; a parent that
+///   still cannot show the point (it cannot scroll there, or clips the frame away) answers
+///   `cover_unread`;
+/// - anything else the hit lands on covers, a label or a drawing included: rulings R55 and R56
+///   excuse the field's own in its own document only, since Neo cannot tell that an element of
+///   one document belongs to a field of another;
+/// - a frame that is only shifted is placed by its corner; one whose page changes its size or
+///   angle answers `cover_unread`, as does a parent that fails under the asking. Neo never
+///   guesses a point and never retries here: the sentence tells the agent what to do.
+async fn pages_above(
+    scope: &OpScope<'_>,
+    page: &OpPage<'_>,
+    site: &Resolved,
+    centre: Point,
+) -> Result<Above, EntryCode> {
+    if site.path().hops().is_empty() {
+        return Ok(Above::Clear);
+    }
+    let projected = within(
+        scope,
+        frame_projection::project(scope, page, site.path(), centre, true, Asker::Look),
+    )
+    .await?;
+    above_of(projected)
+}
+
+/// The projection's answer as the look's. A frame gone on the way down is the box gone; the
+/// entry's own deadline, a closed tab and a lost browser keep their codes; any other failure
+/// under the asking leaves a page above unasked.
+fn above_of(projected: Result<Projection, PlaywrightError>) -> Result<Above, EntryCode> {
+    Ok(match projected {
+        Ok(Projection::At(_)) => Above::Clear,
+        Ok(Projection::Covered { .. }) => Above::Refused(EntryCode::BoxCovered(CoverIn::PageAbove)),
+        Ok(Projection::Transformed) => Above::Refused(EntryCode::CoverUnread(Unread::SizeOrAngle)),
+        Ok(Projection::Unseen) => Above::Refused(EntryCode::CoverUnread(Unread::OutOfView)),
+        Ok(Projection::Gone) => Above::Gone,
+        Err(error) => match playwright_code(&error) {
+            EntryCode::ElementDetached => Above::Gone,
+            // Protocol failures refuse this box without ending the call. Keep that policy
+            // while retaining the crash's diagnostic and recovery text.
+            EntryCode::TargetCrashed => Above::Refused(EntryCode::TargetCrashed),
+            code @ (EntryCode::RunTimeout
+            | EntryCode::TargetClosed
+            | EntryCode::BrowserDisconnected) => return Err(code),
+            _ => Above::Refused(EntryCode::CoverUnread(Unread::NotAsked)),
+        },
+    })
+}
+
+/// The check call's compare in a box the look found (ruling R48): the host's value goes to the
+/// box's isolated world in one private step, cut to the part the box's `maxlength` keeps when the
+/// field allows a cut, and comes back as two booleans. `None` when the box or its world went
+/// away under the call: the box was not read.
+pub(crate) async fn compare(
+    page: &OpPage<'_>,
+    scope: &OpScope<'_>,
+    found: &LookedBox,
+    compare: &LookCompare,
+) -> Result<Option<Compared>, EntryCode> {
+    let fits = found
+        .facts
+        .max_length
+        .filter(|_| compare.cut && entry_run::cuts(&found.facts.kind))
+        .and_then(|max| usize::try_from(max).ok());
+    let step = PrivateStep::Compare {
+        text: PageSecret::fitting(&compare.value, fits),
+        spaced: compare.spaced,
+    };
+    let request = ProbeRequest::Private {
+        pin: found.pin,
+        step,
+    };
+    match within(scope, found.site.call(scope, page, &request)).await? {
+        Ok(ProbeReply::Value { value }) => {
+            match serde_json::from_value::<PrivateAnswer>(value.into_value()) {
+                Ok(PrivateAnswer::Compared { holds, contains }) => {
+                    Ok(Some(Compared { holds, contains }))
+                }
+                _ => Err(EntryCode::Internal),
+            }
+        }
+        Ok(ProbeReply::Detached) | Err(ProbeFailure::Gone(_)) => Ok(None),
+        Ok(_) => Err(EntryCode::Internal),
+        Err(failure) => Err(failure_code(failure)),
+    }
+}
+
 /// The page side's answer, with the tab's address checked in its place: right after the
-/// box's origin (step 3).
-fn found(site: Resolved, pin: Pin, looked: Looked, address: TabAddress) -> Look {
-    let Looked { facts, refusal } = looked;
+/// box's origin (step 3), and the pages above the box's frame last.
+fn found(
+    site: Resolved,
+    pin: Pin,
+    looked: Looked,
+    above: Option<EntryCode>,
+    address: TabAddress,
+) -> Look {
+    let Looked {
+        facts,
+        refusal,
+        max_length_moved,
+    } = looked;
     let Some(facts) = facts else {
         return Look::Unfound(EntryCode::NotAnInput);
     };
@@ -232,13 +467,14 @@ fn found(site: Resolved, pin: Pin, looked: Looked, address: TabAddress) -> Look 
         }) => Some(EntryCode::WrongOrigin),
         _ if address == TabAddress::Changed => Some(EntryCode::PageChanged),
         Some(refused) => Some(code_of(&refused)),
-        None => None,
+        None => above,
     };
     Look::Found(Box::new(LookedBox {
         site,
         pin,
         facts,
         refusal,
+        max_length_moved,
     }))
 }
 
@@ -254,7 +490,7 @@ fn code_of(refused: &LookRefused) -> EntryCode {
         },
         LookRefusal::BoxNotEditable => EntryCode::BoxNotEditable,
         LookRefusal::BoxHidden => EntryCode::BoxHidden,
-        LookRefusal::BoxCovered => EntryCode::BoxCovered,
+        LookRefusal::BoxCovered => EntryCode::BoxCovered(CoverIn::OwnDocument),
         LookRefusal::ValueTooLong => EntryCode::ValueTooLong,
     }
 }
@@ -274,6 +510,83 @@ pub(crate) fn ref_target(tab: TabId, box_ref: &str) -> Option<LocatorTarget> {
         "display": format!("getByRef('{box_ref}')"),
     });
     serde_json::from_value(target).ok()
+}
+
+/// Ruling R63: for each of `refs`, the texts of the check's dead refs, whether the frame its
+/// world was installed in is no longer in the tab. Only what Neo knows for certain: true when the
+/// frame table recorded that frame (`FrameWorlds::frame_of`) and one whole read of the tab's frame
+/// tree, every session and out-of-process frames included, holds it in neither of two steady
+/// reads in a row (`frame_tree::read_steady`, [`decide`]). False otherwise: a
+/// ref whose world this page never installed (one from before a restart), a frame still there
+/// (its document replaced in place, Neo's world lost over it, the box gone from a live
+/// document), and a tree read that fails, is not whole, saw a frame move process, or runs past
+/// the look's deadline. Two reads for all the refs at most, and none when no ref names a recorded
+/// frame.
+///
+/// A frame id is Chromium's own, kept by a frame across its navigations and reloads, so it
+/// leaves the tree only with the frame: removed by its page, or with a parent document that was
+/// replaced. A page the tab left for its back/forward cache is not in the tree either, and Back
+/// can bring it again; the contract says the answer is about now.
+pub(crate) async fn frames_gone(
+    page: &OpPage<'_>,
+    scope: &OpScope<'_>,
+    refs: &[&str],
+) -> Vec<bool> {
+    let frames: Vec<Option<FrameId>> = refs
+        .iter()
+        .map(|box_ref| {
+            AriaRefJump::parse(box_ref).and_then(|jump| page.frames().frame_of(jump.seq))
+        })
+        .collect();
+    if frames.iter().all(Option::is_none) {
+        return vec![false; refs.len()];
+    }
+    let root = page.root_session();
+    let read = || async {
+        frame_tree::read_steady(page.browser(), page.core_page(), &root)
+            .await
+            .ok()
+            .flatten()
+            .filter(FrameTree::is_whole)
+            .map(|tree| tree.ids().cloned().collect::<Vec<_>>())
+    };
+    let first = within(scope, read()).await.ok().flatten();
+    // A second read only when the first misses a recorded frame: it alone can make one true.
+    let misses = first
+        .as_deref()
+        .is_some_and(|tree| frames.iter().flatten().any(|frame| !tree.contains(frame)));
+    let second = if misses {
+        within(scope, read()).await.ok().flatten()
+    } else {
+        None
+    };
+    decide(&frames, first.as_deref(), second.as_deref())
+}
+
+/// [`frames_gone`]'s decision from two reads in a row, each the frame ids of a whole, steady read
+/// of the tab's frame tree (`frame_tree::read_steady`), or `None` for a read that failed, was not
+/// whole, saw the out-of-process frames change around the root's tree, or ran out of time. A
+/// recorded frame is gone only when both reads were made and neither holds it. Anything else
+/// answers false for every frame.
+///
+/// The limit of what is certain: a false true needs one frame to change process twice inside
+/// each of two windows of a few milliseconds.
+fn decide(
+    frames: &[Option<FrameId>],
+    first: Option<&[FrameId]>,
+    second: Option<&[FrameId]>,
+) -> Vec<bool> {
+    let (Some(first), Some(second)) = (first, second) else {
+        return vec![false; frames.len()];
+    };
+    frames
+        .iter()
+        .map(|frame| {
+            frame
+                .as_ref()
+                .is_some_and(|frame| !first.contains(frame) && !second.contains(frame))
+        })
+        .collect()
 }
 
 /// `future`, unless the look's deadline passes first (`run_timeout`).
@@ -297,6 +610,7 @@ pub(crate) fn playwright_code(error: &PlaywrightError) -> EntryCode {
     match error.error_code() {
         Some(ErrorCode::ElementDetached | ErrorCode::InvalidInput) => EntryCode::ElementDetached,
         Some(ErrorCode::TargetClosed) => EntryCode::TargetClosed,
+        Some(ErrorCode::TargetCrashed) => EntryCode::TargetCrashed,
         Some(ErrorCode::BrowserDisconnected) => EntryCode::BrowserDisconnected,
         Some(ErrorCode::WaitTimeout) => EntryCode::RunTimeout,
         _ => EntryCode::Internal,
@@ -334,6 +648,7 @@ pub(crate) fn failure_code(failure: ProbeFailure) -> EntryCode {
         ProbeFailure::Gone(_) => EntryCode::TargetClosed,
         ProbeFailure::Cdp(error) => match ErrorCode::from_core(&error) {
             ErrorCode::TargetClosed => EntryCode::TargetClosed,
+            ErrorCode::TargetCrashed => EntryCode::TargetCrashed,
             ErrorCode::BrowserDisconnected => EntryCode::BrowserDisconnected,
             _ => EntryCode::Internal,
         },
@@ -351,9 +666,85 @@ pub(crate) fn timeout_until(deadline: Instant) -> Duration {
 
 #[cfg(test)]
 mod tests {
-    use browseros_core::TabId;
+    use browseros_cdp::CdpError;
+    use browseros_core::{CoreError, TabId};
+    use serde_json::json;
 
-    use super::ref_target;
+    use super::{Above, CoverIn, EntryCode, Unread, above_of, ref_target};
+    use crate::action::frame_projection::Projection;
+    use crate::probe::{PageText, Point, ProbeFailure};
+    use crate::{ErrorCode, PlaywrightError};
+
+    #[test]
+    fn target_crashed_private_adapters_retain_the_diagnostic_without_ending_the_call() {
+        let core = CoreError::Cdp(CdpError::Protocol {
+            code: -32000,
+            message: "Target crashed".to_owned(),
+        });
+        let error = PlaywrightError::new(ErrorCode::from_core(&core), "unused".to_owned());
+        assert_eq!(super::playwright_code(&error), EntryCode::TargetCrashed);
+        assert_eq!(
+            super::failure_code(ProbeFailure::Cdp(core)),
+            EntryCode::TargetCrashed
+        );
+        assert!(!super::ends_the_call(EntryCode::TargetCrashed));
+        assert_eq!(
+            above_of(Err(error)),
+            Ok(Above::Refused(EntryCode::TargetCrashed)),
+            "a projection failure still refuses one box and preserves its diagnostic"
+        );
+    }
+
+    /// Ruling R60's table: what each answer of the pages above the box's frame refuses with.
+    /// Row (a), a page above that fails under the asking, has no live way to make it fail.
+    #[test]
+    fn tests_that_the_pages_above_answer_covered_unread_or_the_entrys_own_code()
+    -> Result<(), serde_json::Error> {
+        let banner: PageText = serde_json::from_value(json!("<div class=\"banner\">"))?;
+        let failed = |code| Err(PlaywrightError::new(code, "frameBox: failed".to_owned()));
+        let point = Point { x: 140.0, y: 147.0 };
+        assert_eq!(above_of(Ok(Projection::At(point))), Ok(Above::Clear));
+        assert_eq!(
+            above_of(Ok(Projection::Covered {
+                by: banner,
+                cover: None,
+                hop: 0,
+                at: point
+            })),
+            Ok(Above::Refused(EntryCode::BoxCovered(CoverIn::PageAbove)))
+        );
+        assert_eq!(
+            above_of(Ok(Projection::Transformed)),
+            Ok(Above::Refused(EntryCode::CoverUnread(Unread::SizeOrAngle)))
+        );
+        assert_eq!(
+            above_of(Ok(Projection::Unseen)),
+            Ok(Above::Refused(EntryCode::CoverUnread(Unread::OutOfView)))
+        );
+        assert_eq!(above_of(Ok(Projection::Gone)), Ok(Above::Gone));
+        assert_eq!(
+            above_of(failed(ErrorCode::ElementDetached)),
+            Ok(Above::Gone)
+        );
+        for unasked in [ErrorCode::Internal, ErrorCode::NotActionable] {
+            let wanted = if unasked == ErrorCode::NotActionable {
+                // A leaf that met its wait answers the entry's own deadline.
+                Err(EntryCode::RunTimeout)
+            } else {
+                Ok(Above::Refused(EntryCode::CoverUnread(Unread::NotAsked)))
+            };
+            assert_eq!(above_of(failed(unasked)), wanted, "{unasked:?}");
+        }
+        assert_eq!(
+            above_of(failed(ErrorCode::TargetClosed)),
+            Err(EntryCode::TargetClosed)
+        );
+        assert_eq!(
+            above_of(failed(ErrorCode::BrowserDisconnected)),
+            Err(EntryCode::BrowserDisconnected)
+        );
+        Ok(())
+    }
 
     #[test]
     fn tests_that_only_a_printed_or_minted_ref_names_a_box() {
@@ -376,6 +767,46 @@ mod tests {
             "aria-ref=e5",
         ] {
             assert!(ref_target(TabId(7), bad).is_none(), "{bad}");
+        }
+    }
+
+    /// Ruling R63's decision from two reads in a row (`frames_gone`): gone only for a recorded
+    /// frame that two steady, whole reads both miss.
+    #[test]
+    fn tests_that_frame_gone_is_true_only_when_two_reads_agree() {
+        use browseros_core::FrameId;
+
+        use super::decide;
+
+        let frame = |id: &str| FrameId(id.to_owned());
+        let recorded = [Some(frame("card")), Some(frame("page")), None];
+        let without_card = [frame("page")];
+        let with_card = [frame("page"), frame("card")];
+        assert_eq!(
+            decide(&recorded, Some(&without_card), Some(&without_card)),
+            vec![true, false, false],
+            "both reads miss the card frame; the page frame is there; one never recorded"
+        );
+        assert_eq!(
+            decide(&recorded, Some(&without_card), Some(&with_card)),
+            vec![false; 3],
+            "the second read holds it: not gone"
+        );
+        assert_eq!(
+            decide(&recorded, Some(&with_card), Some(&without_card)),
+            vec![false; 3],
+            "the first read holds it: not gone"
+        );
+        for (first, second, case) in [
+            (
+                None,
+                Some(&without_card[..]),
+                "the first read was not a steady whole read",
+            ),
+            (Some(&without_card[..]), None, "the second read was not one"),
+            (None, None, "neither"),
+        ] {
+            assert_eq!(decide(&recorded, first, second), vec![false; 3], "{case}");
         }
     }
 }

@@ -195,6 +195,10 @@ struct Watch {
     targets: HashMap<String, TabId>,
     /// CDP reports openerId even when no script subscribed to popup events.
     openers: HashMap<String, String>,
+    /// Each popup target's opener tab, resolved as the browser announced the popup, while the
+    /// opener was still open: an opener that closes before the next listing leaves `targets`,
+    /// and the registry drops its links, yet the open still names it.
+    opener_tabs: HashMap<String, TabId>,
     tabs: Arc<TabRegistry>,
     /// Tabs whose page target was destroyed, until a listing says whether each closed or only
     /// changed target.
@@ -245,6 +249,7 @@ impl Watch {
             current: None,
             targets: HashMap::new(),
             openers: HashMap::new(),
+            opener_tabs: HashMap::new(),
             tabs,
             closing: BTreeSet::new(),
             open: None,
@@ -262,6 +267,7 @@ impl Watch {
     fn start(&mut self, epoch: u64) {
         self.targets.clear();
         self.openers.clear();
+        self.opener_tabs.clear();
         self.closing.clear();
         self.tabs.forget_openers();
         self.begin(epoch);
@@ -300,13 +306,17 @@ impl Watch {
                 if target_info.kind != "page" {
                     return false;
                 }
-                if let Some(tab) = target_info.tab_id
-                    && let Some(opener) = target_info
-                        .opener_id
-                        .as_ref()
-                        .and_then(|opener| self.targets.get(opener))
-                {
-                    self.tabs.note_opener(TabId(tab), *opener);
+                let opener_tab = target_info
+                    .opener_id
+                    .as_ref()
+                    .and_then(|opener| self.targets.get(opener))
+                    .copied();
+                if let Some(opener) = opener_tab {
+                    if let Some(tab) = target_info.tab_id {
+                        self.tabs.note_opener(TabId(tab), opener);
+                    }
+                    self.opener_tabs
+                        .insert(target_info.target_id.clone(), opener);
                 }
                 if let Some(opener) = target_info.opener_id {
                     self.openers.insert(target_info.target_id.clone(), opener);
@@ -374,19 +384,32 @@ impl Watch {
         }
         self.openers
             .retain(|target, _| pages.iter().any(|page| page.target_id.as_str() == target));
+        self.opener_tabs
+            .retain(|target, _| pages.iter().any(|page| page.target_id.as_str() == target));
         let open: BTreeSet<TabId> = pages.iter().map(|page| page.tab_id).collect();
-        for tab in mem::take(&mut self.closing) {
-            if !open.contains(&tab) {
-                self.tabs.forget_announced(tab);
-                self.send(TabEvent::Closed {
+        // Opens go out before closes, each first to the registry's open sink, synchronously: a
+        // takeover whose tab closed in this listing is released by its close, and a tab the
+        // owner opened in the same moment must be in its notes first. The sink, not the event,
+        // carries opens to the takeovers, since the event's reader waits out each close's
+        // release before it reads on.
+        if let Some(before) = &self.open {
+            for &tab in open.difference(before) {
+                let opener = pages
+                    .iter()
+                    .find(|page| page.tab_id == tab)
+                    .and_then(|page| self.opener_tabs.get(page.target_id.as_str()))
+                    .copied();
+                self.tabs.opened(tab, opener);
+                self.send(TabEvent::Opened {
                     epoch: current.epoch,
                     tab,
                 });
             }
         }
-        if let Some(before) = &self.open {
-            for &tab in open.difference(before) {
-                self.send(TabEvent::Opened {
+        for tab in mem::take(&mut self.closing) {
+            if !open.contains(&tab) {
+                self.tabs.forget_announced(tab);
+                self.send(TabEvent::Closed {
                     epoch: current.epoch,
                     tab,
                 });

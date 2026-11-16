@@ -71,6 +71,11 @@ export class FailureOutput {
     this.checks = expectChecks(world.injected)
   }
 
+  /** Whether this request may add Neo-only tree annotations. */
+  get neoSnapshot(): boolean {
+    return !this.policy.conformance
+  }
+
   /** Installs only synchronous diagnostic seams, including vendor constructor closures. */
   run<T>(invoke: () => T): T {
     if (this.policy.conformance && !anyPrivatelyTyped()) return invoke()

@@ -98,6 +98,9 @@ struct State {
     /// The tab `Browser.activateTab` last brought to the front, as [`FakeBrowser::active`] reads
     /// it. Display admission is covered by the display tests.
     active: Option<i64>,
+    /// The tab `Browser.getTabs` reports as `isActive`, once a test sets one
+    /// ([`FakeBrowser::show_in_front`]); until then none is, as before.
+    in_front: Option<i64>,
     calls: Vec<Call>,
 }
 
@@ -127,6 +130,7 @@ impl FakeBrowser {
                 unreachable: Vec::new(),
                 hung: Vec::new(),
                 active: None,
+                in_front: None,
                 calls: Vec::new(),
             }),
             events: broadcast::channel(16).0,
@@ -300,6 +304,21 @@ impl FakeBrowser {
         });
     }
 
+    /// The owner opens tab `tab` at `url` by hand: no opener.
+    pub fn open_tab(&self, tab: i64, url: &str) {
+        self.state().tabs.push(Tab {
+            id: tab,
+            history: vec![(url.to_string(), "typed".to_string())],
+            index: 0,
+            opener: None,
+        });
+    }
+
+    /// The browser shows `tab` in front from now on, as `Browser.getTabs`' `isActive` says.
+    pub fn show_in_front(&self, tab: i64) {
+        self.state().in_front = Some(tab);
+    }
+
     pub fn close_tab(&self, tab: i64) {
         self.state().tabs.retain(|open| open.id != tab);
     }
@@ -312,14 +331,14 @@ impl FakeBrowser {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    fn tab_json(tab: &Tab) -> Value {
+    fn tab_json(tab: &Tab, in_front: Option<i64>) -> Value {
         json!({
             "tabId": tab.id,
             "targetId": target(tab.id),
             "windowId": 1,
             "url": tab.history.get(tab.index).map(|(url, _)| url.clone()).unwrap_or_default(),
             "title": format!("Tab {}", tab.id),
-            "isActive": false,
+            "isActive": in_front == Some(tab.id),
             "isLoading": false,
             "loadProgress": 1.0,
             "isPinned": false,
@@ -388,7 +407,11 @@ impl FakeBrowser {
         };
         let reply = match method {
             "Browser.getTabs" => {
-                let tabs = state.tabs.iter().map(Self::tab_json).collect::<Vec<_>>();
+                let tabs = state
+                    .tabs
+                    .iter()
+                    .map(|tab| Self::tab_json(tab, state.in_front))
+                    .collect::<Vec<_>>();
                 json!({ "tabs": tabs })
             }
             "Browser.getTabInfo" => {
@@ -397,7 +420,7 @@ impl FakeBrowser {
                     .iter()
                     .find(|tab| params["tabId"] == tab.id)
                     .ok_or_else(gone)?;
-                json!({ "tab": Self::tab_json(found) })
+                json!({ "tab": Self::tab_json(found, state.in_front) })
             }
             "Target.attachToTarget" => {
                 let id = format!(

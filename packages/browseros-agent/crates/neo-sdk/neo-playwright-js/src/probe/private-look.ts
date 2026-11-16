@@ -7,7 +7,9 @@
  *
  *   2 an <input> whose type takes text       notAnInput
  *   3 its frame on the host's origin         wrongOrigin
- *   4 every fact the host approved holds     wrongType, or boxChanged with the fact
+ *   4 every fact the host approved holds     wrongType, or boxChanged with the fact; a limit
+ *     (a moved limit the value fits holds,   that moved is a changed box only when it would
+ *     ruling R64)                            cut the value (maxLengthMoved otherwise)
  *   5 enabled and not read-only              boxNotEditable
  *   6 the box shows, and nothing else takes  boxHidden, boxCovered
  *     the pointer at its centre              (main's covered rule, below); a box with no
@@ -72,9 +74,25 @@ export function lookAt(world: World, element: Element, ask: BoxAsk): Looked {
   // focus and never hit-tested, so a wrapper from a look when it had a size must not carry over.
   coverWrappers.delete(element)
   if (!isTextInput(element)) return { refusal: { code: 'notAnInput' } }
+  // The second step of the look's scroll (ruling R62): a box larger than its view, which the
+  // browser's scroll shows by its nearest edge, has its centre brought to the middle of its view
+  // at once, whatever the page's scroll-behavior, before the covered check asks there.
+  if (ask.scroll === 'centre')
+    element.scrollIntoView({
+      block: 'center',
+      inline: 'center',
+      behavior: 'instant',
+    })
   const facts = factsOf(element)
   const refusal = firstRefusal(world, element, facts, ask)
-  return refusal ? { facts, refusal } : { facts }
+  // Ruling R64: the limit moved and still fits, so the look went on; the answer says so.
+  const moved =
+    ask.expect !== undefined && limitMove(facts, ask.expect, ask) === 'fits'
+  return {
+    facts,
+    ...(refusal ? { refusal } : {}),
+    ...(moved ? { maxLengthMoved: true } : {}),
+  }
 }
 
 function firstRefusal(
@@ -87,7 +105,7 @@ function firstRefusal(
   if (expect && facts.origin !== expect.origin) return { code: 'wrongOrigin' }
   if (expect?.type !== undefined && expect.type !== facts.type)
     return { code: 'wrongType' }
-  const fact = expect && changedFact(facts, expect)
+  const fact = expect && changedFact(facts, expect, ask)
   if (fact) return { code: 'boxChanged', fact }
   if (element.disabled || element.readOnly || element.matches(':disabled'))
     return { code: 'boxNotEditable' }
@@ -141,19 +159,51 @@ function originOf(document: Document): string {
   return typeof origin === 'string' ? origin : document.location.origin
 }
 
-function changedFact(facts: BoxFacts, expect: BoxExpect): BoxFact | undefined {
+function changedFact(
+  facts: BoxFacts,
+  expect: BoxExpect,
+  ask: BoxAsk,
+): BoxFact | undefined {
   if (
     expect.autocomplete !== undefined &&
     expect.autocomplete !== facts.autocomplete
   )
     return 'autocomplete'
-  if (expect.maxLength !== undefined && expect.maxLength !== facts.maxLength)
-    return 'maxLength'
+  // A limit that moved is a changed box only when the value does not fit it (ruling R64); a
+  // harmless move falls through, so a later fact that differs still refuses.
+  if (limitMove(facts, expect, ask) === 'cuts') return 'maxLength'
   if (expect.inputMode !== undefined && expect.inputMode !== facts.inputMode)
     return 'inputMode'
   if (expect.name !== undefined && expect.name !== facts.name) return 'name'
   if (expect.id !== undefined && expect.id !== facts.id) return 'id'
   return undefined
+}
+
+/**
+ * Ruling R64: the box's limit now against the one the host approved. `same` when the host
+ * approved none (not compared) or the same one; `fits` when it moved and the value fits both the
+ * approved limit and the limit now, or when the look carries no length (the check call's, which
+ * cannot tell, and never refuses for the limit); `cuts` when it moved and the value does not fit
+ * one of them. -1 is the DOM's own word for no limit (ruling R49): the facts, which leave a box's
+ * missing limit out, compare as -1. A value fits a limit when its length in UTF-16 code units is
+ * not above it, when the limit is none, or when the browser applies no maxlength to the box's
+ * type. `cut` plays no part here: with a cut, a host that approved 16 approved the cut at 16, so
+ * a limit gone or lower does not fit a longer value.
+ */
+function limitMove(
+  facts: BoxFacts,
+  expect: BoxExpect,
+  ask: BoxAsk,
+): 'same' | 'fits' | 'cuts' {
+  const approved = expect.maxLength
+  if (approved === undefined) return 'same'
+  const now = facts.maxLength ?? -1
+  if (approved === now) return 'same'
+  const { length } = ask
+  if (length === undefined) return 'fits'
+  const fits = (limit: number) =>
+    limit === -1 || !MAXLENGTH_TYPES.has(facts.type) || length <= limit
+  return fits(approved) && fits(now) ? 'fits' : 'cuts'
 }
 
 function isTextInput(element: Element): element is HTMLInputElement {
@@ -178,8 +228,10 @@ function isTextInput(element: Element): element is HTMLInputElement {
  * Anything else covers it.
  *
  * Kept as main, with its three blind spots (design section 5.3): an ancestor drawn over the box
- * counts as the box; a page's overlay over a cross-site frame is not seen; a cover inside the
- * box's own shadow root reads as its shadow host, an ancestor. Where the port differs:
+ * counts as the box; a page's overlay over a frame on another origin is not seen here; a cover
+ * inside the box's own shadow root reads as its shadow host, an ancestor. The second is closed
+ * after this look, in Rust, which asks every page above the box's frame from the top down
+ * (ruling R60: look_op.rs `pages_above`, private-frame.ts). Where the port differs:
  *
  * - A hit test that throws counts as covered, where main typed on.
  * - The point is the centre of the box's border box (`getBoundingClientRect`), where main took
@@ -246,7 +298,7 @@ function blocked(world: World, box: Element, keys: boolean): boolean {
 }
 
 /** An element that can take input or the focus, in a cover or as the cover itself. */
-const CONTROLS =
+export const CONTROLS =
   'input, textarea, select, button, a[href], iframe, frame, [contenteditable], [tabindex]'
 
 /**
@@ -266,7 +318,7 @@ const CONTROLS =
  *    digits do before any is typed; then only key by key (`keys`), as a host types a code.
  *    Other words cover the box.
  */
-function drawingOf(
+export function drawingOf(
   world: World,
   box: Element,
   blocker: Element,

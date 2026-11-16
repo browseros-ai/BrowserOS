@@ -1,0 +1,17 @@
+/** Native chooser handles retain the exact input; event registration precedes the activating input. */
+function file(name, text) { return {name, mimeType:'text/plain', buffer:Buffer.from(text)}; }
+async function choose(p, action) {
+  const waiting = p.waitForEvent('filechooser', {timeout:5000});
+  await action();
+  const chooser = await waiting;
+  assert(chooser.page() === p, 'chooser belongs to the initiating page');
+  return chooser;
+}
+
+await page.goto(args.base + '/upload.html');
+const chooser = await choose(page, () => page.locator('#upload-button').click());
+await page.goto(args.base + '/upload.html');
+const error = await rejected(async () => await chooser.setFiles(file('stale-chooser.txt','must not reach the replacement document')), /./s);
+const count = await page.locator('#hidden-file').evaluate(input => input.files.length);
+equal(count,0,'stale chooser never selects a file in the replacement document');
+return {error,count};

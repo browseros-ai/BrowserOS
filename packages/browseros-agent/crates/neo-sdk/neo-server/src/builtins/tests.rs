@@ -21,7 +21,7 @@ use neo_takeover::{Lock, LockBinding, LockTtl, Locks, Reads, TabHold};
 use neo_trace::{
     Delivery, Effect, EpochMillis, ErrorOwner, OperationId, OperationKind, OperationRow,
     OperationStarted, Outcome, RedactionLimits, Redactor, RunEnded, RunId, RunStarted, RunStatus,
-    TaskId, TraceSink, TraceStore, WriterConfig, spawn_writer,
+    RunTabsScope, TaskId, TraceSink, TraceStore, WriterConfig, spawn_writer,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -47,6 +47,8 @@ use crate::host::{FilledTabs, HostHolds, TakeoverLock};
 use crate::runtime::{Script, ScriptOutcome, run_script};
 use crate::test_rig::{TestError, on_neo_runtime};
 use crate::test_support::FakeCdp;
+
+mod read_only;
 
 /// The built-ins' door on the fake browser, with the app's own rules in the app's order
 /// (`door_rules`): the takeover lock over neo-takeover's real `Locks`, then the CAPTCHA claims.
@@ -216,6 +218,7 @@ impl Harness {
             deadline: Instant::now() + Defaults::RUN_TIMEOUT,
             default_page: None,
             tabs_scope: TabsScope::Browser,
+            access: None,
         };
         Ok(RunCtx::start(&self.dispatcher, start))
     }
@@ -2824,6 +2827,9 @@ async fn a_goto_never_sends_a_file_url_or_another_unsupported_scheme() -> Result
         "chrome-extension://abcdefghijklmnop/popup.html",
         "blob:https://bank.example/9d2c",
         "filesystem:https://bank.example/temporary/x",
+        // Keep the adapter's current raw-prefix admission even though the engine could
+        // lowercase and complete this as a local address after that admission.
+        "LOCALHOST:80",
         // No scheme the URL Standard reads, so none to allow.
         "bank.example/login",
     ];
@@ -2885,10 +2891,12 @@ async fn a_goto_sends_web_and_javascript_urls_to_the_browser() -> Result<(), Box
         "http://bank.example/",
         "HTTPS://bank.example/login",
         "data:text/html,<p>made in the script</p>",
+        "data:text/html,x",
         "about:blank",
         "javascript:void(document.title = 'ran')",
         " JavaScript:void(0)",
         "java\tscript:void(0)",
+        " \u{1}java\tscript:void(0)",
     ] {
         let failed = failure(
             harness
@@ -2917,8 +2925,10 @@ async fn a_goto_sends_web_and_javascript_urls_to_the_browser() -> Result<(), Box
             "http://bank.example/",
             "https://bank.example/login",
             "data:text/html,<p>made in the script</p>",
+            "data:text/html,x",
             "about:blank",
             "javascript:void(document.title = 'ran')",
+            "javascript:void(0)",
             "javascript:void(0)",
             "javascript:void(0)",
         ]
@@ -5943,6 +5953,8 @@ async fn neo_adopts_a_free_blank_tab_only_at_a_watch_start() -> Result<(), Box<d
         request_id: None,
         task_id: Some(TaskId::parse("mail")?),
         host_data: None,
+        tabs_scope: RunTabsScope::Browser,
+        access: None,
         at: EpochMillis::now(),
     });
     harness.sink.op_started(OperationStarted {
@@ -6422,6 +6434,7 @@ fn run_for(harness: &Harness, task: &TaskId) -> Result<(Arc<RunCtx>, RunGuard), 
         deadline: Instant::now() + Defaults::RUN_TIMEOUT,
         default_page: None,
         tabs_scope: TabsScope::Browser,
+        access: None,
     };
     Ok(RunCtx::start(&harness.dispatcher, start))
 }
@@ -6443,6 +6456,7 @@ fn run_scoped(
         deadline: Instant::now() + Defaults::RUN_TIMEOUT,
         default_page: None,
         tabs_scope: scope,
+        access: None,
     };
     Ok(RunCtx::start(&harness.dispatcher, start))
 }

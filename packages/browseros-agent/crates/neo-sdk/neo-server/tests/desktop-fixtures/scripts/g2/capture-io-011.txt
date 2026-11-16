@@ -1,0 +1,18 @@
+/** Native chooser handles retain the exact input; event registration precedes the activating input. */
+function file(name, text) { return {name, mimeType:'text/plain', buffer:Buffer.from(text)}; }
+async function choose(p, action) {
+  const waiting = p.waitForEvent('filechooser', {timeout:5000});
+  await action();
+  const chooser = await waiting;
+  assert(chooser.page() === p, 'chooser belongs to the initiating page');
+  return chooser;
+}
+
+const child = args.base2 + '/upload.html';
+await page.goto(args.base + '/upload-frame.html?src=' + encodeURIComponent(child));
+const chooser = await choose(page, () => page.frameLocator('iframe').getByRole('button',{name:'Attach document',exact:true}).click());
+await chooser.setFiles(file('frame-chooser.txt','selected in the remote child document'));
+await poll(async () => (await page.ariaSnapshot({mode:'ai'})).includes('Attached frame-chooser.txt'), 'the cross-origin document reports its selected file');
+const selected = await page.frameLocator('iframe').locator('#hidden-names').textContent();
+includes(selected,'frame-chooser.txt','the remote child input owns the selected file');
+return {selected,child};

@@ -122,6 +122,10 @@ impl OpEnv for HostEnv {
 }
 
 /// The fixture pages, under `/private/`.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one table of the private suites' fixture pages, a line pair each"
+)]
 pub(crate) fn pages() -> HashMap<String, Page> {
     [
         (
@@ -140,11 +144,81 @@ pub(crate) fn pages() -> HashMap<String, Page> {
             "smooth-login",
             include_str!("../data/private/smooth-login.html"),
         ),
+        ("maxlength", include_str!("../data/private/maxlength.html")),
+        ("compare", include_str!("../data/private/compare.html")),
+        (
+            "huge-staggered",
+            include_str!("../data/private/huge-staggered.html"),
+        ),
+        (
+            "closed-frame",
+            include_str!("../data/private/closed-frame.html"),
+        ),
+        (
+            "card-limits",
+            include_str!("../data/private/card-limits.html"),
+        ),
+        (
+            "frames-gone",
+            include_str!("../data/private/frames-gone.html"),
+        ),
+        (
+            "closed-plain",
+            include_str!("../data/private/closed-plain.html"),
+        ),
+        (
+            "closed-nested",
+            include_str!("../data/private/closed-nested.html"),
+        ),
+        (
+            "closed-many",
+            include_str!("../data/private/closed-many.html"),
+        ),
+        (
+            "pin-mirror",
+            include_str!("../data/private/pin-mirror.html"),
+        ),
+        (
+            "mark-moves",
+            include_str!("../data/private/mark-moves.html"),
+        ),
+        (
+            "busy-frame",
+            include_str!("../data/private/busy-frame.html"),
+        ),
+        (
+            "mark-follows",
+            include_str!("../data/private/mark-follows.html"),
+        ),
+        (
+            "out-of-view",
+            include_str!("../data/private/out-of-view.html"),
+        ),
+        (
+            "larger-than-view",
+            include_str!("../data/private/larger-than-view.html"),
+        ),
+        (
+            "quirks-login",
+            include_str!("../data/private/quirks-login.html"),
+        ),
         (
             "covered-select",
             include_str!("../data/private/covered-select.html"),
         ),
         ("look", include_str!("../data/private/look.html")),
+        (
+            "parent-cover",
+            include_str!("../data/private/parent-cover.html"),
+        ),
+        (
+            "parent-cover-middle",
+            include_str!("../data/private/parent-cover-middle.html"),
+        ),
+        (
+            "parent-cover-box",
+            include_str!("../data/private/parent-cover-box.html"),
+        ),
         (
             "drawn-label-login",
             include_str!("../data/private/drawn-label-login.html"),

@@ -1,0 +1,6 @@
+await page.goto(args.base + '/sdk-input.html');
+await page.getByRef(await refFor(page, 'Submit field')).click();
+await page.keyboard.type('a\n');
+const state = await page.evaluate(() => ({ value: document.getElementById('submit-field').value, submits: window.submits, enters: window.enterKeys }));
+equal(state, { value: 'a', submits: 1, enters: 1 }, 'typing a newline delivers Enter and submits once');
+return state;

@@ -1,0 +1,9 @@
+await page.goto(args.base + '/sdk-input.html');
+
+const state = () => page.evaluate(() => { const box = document.getElementById('mixed'); return { checked: box.checked, indeterminate: box.indeterminate }; });
+await page.getByRef(await refFor(page, 'Mixed checkbox')).uncheck();
+equal(await state(), { checked: false, indeterminate: true }, 'uncheck preserves the mixed appearance without a click');
+await page.getByRef(await refFor(page, 'Mixed checkbox')).check();
+const result = await state();
+equal(result, { checked: true, indeterminate: false }, 'check turns the mixed checkbox on');
+return result;

@@ -17,7 +17,7 @@ export type NeoProbe = NonNullable<typeof globalThis.__neoProbe>
  * reports it, and an install whose number differs from Rust's PROBE_PROTOCOL fails as
  * `neo / internal` (the engine asset is stale).
  */
-export const PROTOCOL = 39
+export const PROTOCOL = 47
 
 /**
  * The function declaration Rust sends with every request. Rust calls it on the world's global
@@ -34,7 +34,7 @@ export type Op = ProbeRequest['op']
 export type RequestMap = { [R in ProbeRequest as R['op']]: R }
 export type RequestOf<O extends Op> = RequestMap[O]
 export type ReplyKind = ProbeReply['kind']
-export type ValueOp = Exclude<Op, 'pinned'>
+export type ValueOp = Exclude<Op, 'pinned' | 'privateHosts'>
 
 export type DescribeRequest = RequestOf<'describe'>
 export type ResolveRequest = RequestOf<'resolve'>
@@ -43,6 +43,7 @@ export type VerdictRequest = RequestOf<'verdict'>
 export type MovesRequest = RequestOf<'moves'>
 export type DisarmRequest = RequestOf<'disarm'>
 export type FrameBoxRequest = RequestOf<'frameBox'>
+export type CoverRequest = RequestOf<'cover'>
 export type EditRequest = RequestOf<'edit'>
 export type LookRequest = RequestOf<'look'>
 export type PrivateRequest = RequestOf<'private'>
@@ -53,6 +54,7 @@ export type SnapshotRequest = RequestOf<'snapshot'>
 export type ExpectRequest = RequestOf<'expect'>
 export type MatchUrlRequest = RequestOf<'matchUrl'>
 export type PinnedRequest = RequestOf<'pinned'>
+export type PrivateHostsRequest = RequestOf<'privateHosts'>
 export type DocumentRequest = RequestOf<'document'>
 export type SetContentRequest = RequestOf<'setContent'>
 export type ArmInputRequest = RequestOf<'armInput'>
@@ -98,6 +100,7 @@ export const REPLY_KINDS = {
   moves: ['moves'],
   disarm: ['verdict'],
   frameBox: ['frameBox', 'detached', 'none', 'strict'],
+  cover: ['cover', 'detached', 'none', 'strict'],
   edit: ['value', 'detached', 'notFocused'],
   look: ['value', 'detached'],
   private: ['value', 'detached'],

@@ -1,0 +1,10 @@
+const url = args.base + '/links.html';
+await page.goto(url);
+await page.evaluate(() => { window.historySentinel = 'same-document'; history.pushState({ fixture: true }, '', '?sdk-history=1'); });
+const started = Date.now();
+await page.goBack();
+const elapsed = Date.now() - started;
+assert(elapsed < 5000, 'same-document back completes before 5000ms', { elapsed });
+const state = await page.evaluate(() => ({ url: location.href, sentinel: window.historySentinel }));
+equal(state, { url, sentinel: 'same-document' }, 'back crosses pushState without replacing the document');
+return { state, elapsed };

@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Covered</title>
+<style>
+  body { margin: 0; font: 16px sans-serif; }
+  #stage { position: relative; margin: 120px 0 0 120px; width: 600px; }
+  #target { width: 160px; height: 48px; }
+  .layer { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.4); z-index: 10; }
+  .dialog { position: absolute; left: 80px; top: 80px; width: 420px; padding: 16px; background: #fff; }
+  .float { position: absolute; z-index: 5; background: #ffe; }
+</style>
+</head>
+<body>
+<div id="stage"></div>
+<script>
+// One shape per hash beside a target that logs only trusted clicks (window.__log), so a row
+// reads what the page itself saw. Each shape is a kind of covered-click spec section 2's table.
+window.__log = []
+const stage = document.getElementById('stage')
+const log = (what) => (event) => { if (event.isTrusted) window.__log.push(what) }
+const button = () => {
+  const target = document.createElement('button')
+  target.id = 'target'
+  target.textContent = 'Buy'
+  target.addEventListener('click', log('target'))
+  stage.append(target)
+  return target
+}
+const layer = (html) => {
+  const element = document.createElement('div')
+  element.className = 'layer'
+  element.innerHTML = html
+  document.body.append(element)
+  return element
+}
+const dialog = `<div class="dialog" role="dialog" aria-label="What You Need To Know">
+  <p>Resale prices often exceed face value.</p>
+  <button id="accept">Accept &amp; Continue</button>
+  <button id="dismiss">Dismiss</button></div>`
+const consentHost = (mode, place) => {
+  const host = document.createElement('div')
+  host.id = 'consent'
+  host.style.cssText = 'position: fixed; inset: 0; z-index: 10'
+  const root = host.attachShadow({ mode })
+  root.innerHTML = `<div style="position: fixed; inset: 0; background: rgba(0, 0, 0, 0.4)">
+    <div role="dialog" aria-label="Privacy choices" style="position: absolute; ${place}; width: 420px; padding: 16px; background: #fff">
+      <p>We and our partners use cookies.</p>
+      <button id="all">Accept all</button> <button id="none">Reject all</button></div></div>`
+  root.getElementById('none').addEventListener('click', () => host.remove())
+  document.body.append(host)
+}
+const shapes = {
+  plain() {
+    button()
+  },
+  boxed() {
+    // A checkbox under a standing dialog, for check() and its label-free click.
+    stage.innerHTML = '<input type="checkbox" id="target" style="width: 13px; height: 13px">'
+    document.getElementById('target').addEventListener('click', log('target'))
+    layer(dialog)
+  },
+  dialog() {
+    button()
+    const cover = layer(dialog)
+    cover.querySelector('#dismiss').addEventListener('click', () => cover.remove())
+  },
+  blank() {
+    button()
+    layer('').style.cssText = 'background: none; opacity: 0'
+  },
+  frame() {
+    button()
+    const frame = document.createElement('iframe')
+    frame.id = 'check'
+    frame.title = 'Human verification challenge'
+    frame.srcdoc = '<p>Press &amp; hold</p>'
+    frame.style.cssText = 'position: fixed; inset: 0; width: 100%; height: 100%; border: 0; z-index: 10'
+    document.body.append(frame)
+  },
+  partial() {
+    const target = button()
+    target.style.width = '300px'
+    const widget = document.createElement('div')
+    widget.id = 'widget'
+    widget.textContent = 'EN'
+    widget.setAttribute('style', 'position: absolute; z-index: 5; left: 110px; top: 0; width: 80px; height: 48px; background: #ffe')
+    stage.append(widget)
+  },
+  label() {
+    stage.innerHTML = `<label id="own" style="position: relative; display: inline-block; padding: 8px">
+      <input type="checkbox" id="target" style="position: absolute; left: 8px; top: 8px; margin: 0; width: 13px; height: 13px">
+      <span style="position: relative; display: inline-block; width: 220px; height: 24px; background: #eef">Remember me</span></label>`
+    document.getElementById('target').addEventListener('click', log('target'))
+  },
+  links() {
+    stage.innerHTML = `<label id="own" style="position: relative; display: inline-block; padding: 8px; width: 420px">
+      <input type="checkbox" id="target" style="position: absolute; left: 8px; top: 8px; margin: 0; width: 13px; height: 13px">
+      <span style="position: relative; display: block; background: #eef; padding: 4px 4px 4px 24px">I agree to the
+      <a href="/elsewhere/terms">Terms</a> and the <a href="/elsewhere/privacy">Privacy Policy</a>
+      of this shop</span></label>`
+    document.getElementById('target').addEventListener('click', log('target'))
+  },
+  wrapper() {
+    stage.innerHTML = `<style>.option { position: relative; width: 200px; height: 40px }
+      .option::after { content: ''; position: absolute; inset: 0 }</style>
+      <div class="option"><input type="radio" id="target" name="size" style="margin: 12px; width: 13px; height: 13px"></div>`
+    document.getElementById('target').addEventListener('click', log('target'))
+  },
+  labels() {
+    stage.innerHTML = `<label id="target" for="email" style="display: block; width: 200px">Email</label>
+      <input id="email" style="position: absolute; left: 0; top: 0; width: 200px; height: 48px; box-sizing: border-box">`
+    document.getElementById('target').addEventListener('click', log('target'))
+  },
+  nothing() {
+    stage.innerHTML = `<div style="pointer-events: none"><div><span id="target">NO</span></div></div>`
+  },
+  folded() {
+    stage.innerHTML = `<div id="panel" style="height: 0; overflow: hidden">
+      <button id="target">Buy</button></div><p id="below" style="margin: 0">Shipping costs and returns</p>`
+    document.getElementById('target').addEventListener('click', log('target'))
+  },
+  two() {
+    button()
+    const cover = layer(`<div class="dialog" role="dialog" aria-label="Cookies" style="top: 400px">
+        <button id="cookies">OK</button></div>
+      <div class="dialog" role="dialog" aria-label="Sign in" style="top: 40px; left: 60px; height: 160px">
+        <button id="close">Close</button></div>`)
+    cover.querySelector('#cookies').addEventListener('click', (event) => event.target.parentElement.remove())
+  },
+  long() {
+    button()
+    const words = 'Please read every word of these terms before you go on. '.repeat(60)
+    layer(`<div class="dialog" role="dialog" aria-label="Terms"><p>${words}</p>
+      <button id="agree">I agree</button></div>`)
+  },
+  masked() {
+    button()
+    layer(`<div class="dialog" role="dialog" aria-label="Sign in">
+      <input type="password" id="secret" value="hunter2-hunter2" aria-label="Password">
+      <button id="go">Sign in</button></div>`)
+  },
+  late() {
+    // The cover comes with the press's own move: it was not there at the check.
+    const target = button()
+    target.addEventListener('mousemove', () => {
+      if (!document.querySelector('.layer')) layer(dialog)
+    })
+  },
+  siblings() {
+    // A backdrop and its dialog as two children of <body>, as many libraries render them: the
+    // backdrop takes the click point, and walking up from it never reaches the dialog.
+    button()
+    const backdrop = document.createElement('div')
+    backdrop.id = 'backdrop'
+    backdrop.style.cssText = 'position: fixed; inset: 0; z-index: 10; background: rgba(0, 0, 0, 0.4)'
+    const modal = document.createElement('div')
+    modal.setAttribute('role', 'dialog')
+    modal.setAttribute('aria-label', 'Sign up for deals')
+    modal.style.cssText = 'position: fixed; left: 360px; top: 260px; width: 240px; padding: 16px; z-index: 11; background: #fff'
+    modal.innerHTML = '<button id="later">No thanks</button> <button id="join">Sign up</button>'
+    document.body.append(backdrop, modal)
+  },
+  signin() {
+    // A sign-in dialog in a fixed full-view carrier that takes no pointer: a nameless modal
+    // dialog holding a labelled close button and, deeper inside it, the form's frame over the
+    // click point.
+    button()
+    const carrier = document.createElement('div')
+    carrier.style.cssText = 'position: fixed; inset: 0; z-index: 10; pointer-events: none'
+    carrier.innerHTML = `<div role="dialog" aria-modal="true" style="position: absolute; left: 60px; top: 60px; width: 440px; height: 320px; background: #fff; pointer-events: auto">
+      <button id="close" aria-label="Close Sign in or Sign up">x</button>
+      <div><iframe title="Login/Signup" srcdoc="<p>Sign in</p>" style="position: absolute; left: 20px; top: 40px; width: 400px; height: 260px; border: 0"></iframe></div></div>`
+    carrier.querySelector('#close').addEventListener('click', () => carrier.remove())
+    document.body.append(carrier)
+  },
+  slotted() {
+    // A backdrop beside a host whose shadow dialog draws its buttons through a slot: they are
+    // the host's light children, as a design system's footer slot holds them.
+    button()
+    const backdrop = document.createElement('div')
+    backdrop.id = 'backdrop'
+    backdrop.style.cssText = 'position: fixed; inset: 0; z-index: 10; background: rgba(0, 0, 0, 0.4)'
+    const host = document.createElement('div')
+    host.id = 'leaving'
+    const root = host.attachShadow({ mode: 'open' })
+    root.innerHTML = `<div role="dialog" aria-label="Before you go" style="position: fixed; left: 320px; top: 200px; width: 240px; padding: 16px; z-index: 11; background: #fff">
+      <p>Stay a while.</p><slot></slot></div>`
+    // Its second way out is a design-system button: a custom element slotted straight into the
+    // dialog, whose real button lives in its own open root.
+    if (!customElements.get('x-stay'))
+      customElements.define('x-stay', class extends HTMLElement {
+        constructor() {
+          super()
+          this.attachShadow({ mode: 'open' }).innerHTML = '<button>Stay</button>'
+        }
+      })
+    host.innerHTML = '<button id="leave">Leave</button> <x-stay></x-stay>'
+    host.querySelector('#leave').addEventListener('click', () => {
+      host.remove()
+      backdrop.remove()
+    })
+    document.body.append(backdrop, host)
+  },
+  shadowpair() {
+    // A consent widget that draws its fixed backdrop and its fixed dialog as two siblings in one
+    // open shadow root, under a host that is not itself fixed.
+    button()
+    const host = document.createElement('div')
+    host.id = 'widget'
+    const root = host.attachShadow({ mode: 'open' })
+    root.innerHTML = `<div id="veil" style="position: fixed; inset: 0; z-index: 10; background: rgba(0, 0, 0, 0.4)"></div>
+      <div role="dialog" aria-label="Your privacy" style="position: fixed; left: 320px; top: 200px; width: 240px; padding: 16px; z-index: 11; background: #fff">
+      <button id="ok">Got it</button></div>`
+    root.getElementById('ok').addEventListener('click', () => host.remove())
+    document.body.append(host)
+  },
+  rolebutton() {
+    // A backdrop beside a dialog whose only control is a div with role="button" and no tabindex,
+    // as many custom close buttons are.
+    button()
+    const backdrop = document.createElement('div')
+    backdrop.id = 'backdrop'
+    backdrop.style.cssText = 'position: fixed; inset: 0; z-index: 10; background: rgba(0, 0, 0, 0.4)'
+    const modal = document.createElement('div')
+    modal.setAttribute('role', 'dialog')
+    modal.setAttribute('aria-label', 'Rate your visit')
+    modal.style.cssText = 'position: fixed; left: 360px; top: 260px; width: 240px; padding: 16px; z-index: 11; background: #fff'
+    modal.innerHTML = '<div role="button" id="dismiss">Close</div>'
+    modal.querySelector('#dismiss').addEventListener('click', () => {
+      backdrop.remove()
+      modal.remove()
+    })
+    document.body.append(backdrop, modal)
+  },
+  siblingsdeep() {
+    // The same pair after 20,000 plain elements, the dialog the last child of <body>, as a portal
+    // renders it on a real page: a search capped at the first elements never meets it.
+    const filler = document.createElement('div')
+    filler.hidden = true
+    filler.innerHTML = '<span></span>'.repeat(20000)
+    document.body.append(filler)
+    shapes.siblings()
+  },
+  closed() {
+    // A consent widget whose content sits in a closed shadow root: from Neo's world it holds no
+    // control and no words, and it is not blank.
+    button()
+    customElements.define('x-consent', class extends HTMLElement {
+      constructor() {
+        super()
+        this.attachShadow({ mode: 'closed' }).innerHTML =
+          '<div style="background: #fff; padding: 16px">We use cookies <button>OK</button></div>'
+      }
+    })
+    const widget = document.createElement('x-consent')
+    widget.style.cssText = 'display: block; position: fixed; inset: 0; z-index: 10; background: rgba(0, 0, 0, 0.4)'
+    document.body.append(widget)
+  },
+  shadowopen() {
+    // A consent tool's backdrop and dialog drawn in its host's open shadow root. The target lies
+    // under the backdrop, away from the dialog, as most of a page does: the host is what is on
+    // top, and only a walk into its root finds the dialog's buttons.
+    button()
+    consentHost('open', 'left: 320px; top: 200px')
+  },
+  shadowclosed() {
+    // The dialog in a closed root, over the target: Neo's world reads the root once a marked
+    // snapshot opened it, and the walk up from what is on top starts inside it.
+    button()
+    consentHost('closed', 'left: 80px; top: 80px')
+  },
+  shadowbehind() {
+    // A blank backdrop in the document, and the dialog it dims drawn from a plain host's open
+    // shadow root, standing on it: only a walk into the document's roots finds that dialog.
+    button()
+    const backdrop = document.createElement('div')
+    backdrop.className = 'layer'
+    const host = document.createElement('div')
+    host.id = 'newsletter'
+    const root = host.attachShadow({ mode: 'open' })
+    root.innerHTML = `<div role="dialog" aria-label="Newsletter" style="position: fixed; left: 320px; top: 200px; width: 300px; padding: 16px; z-index: 11; background: #fff">
+      <p>Get our letters.</p><button id="later">Not now</button></div>`
+    root.getElementById('later').addEventListener('click', () => {
+      host.remove()
+      backdrop.remove()
+    })
+    document.body.append(backdrop, host)
+  },
+  beside() {
+    // A blank loading layer over the target, beside a cookie notice it does not stand under.
+    button()
+    const loader = document.createElement('div')
+    loader.style.cssText = 'position: fixed; left: 0; top: 0; width: 55%; height: 100%; z-index: 10'
+    const notice = document.createElement('div')
+    notice.setAttribute('role', 'dialog')
+    notice.setAttribute('aria-label', 'Cookies')
+    notice.style.cssText = 'position: fixed; right: 0; bottom: 0; width: 30%; padding: 16px; z-index: 11; background: #fff'
+    notice.innerHTML = '<button id="accept-cookies">Accept</button>'
+    document.body.append(loader, notice)
+  },
+  hidden() {
+    // A frame of the cover kind, inserted and not shown: nothing covers the target.
+    button()
+    layer(dialog).style.display = 'none'
+  },
+}
+;(shapes[location.hash.slice(1)] ?? shapes.dialog)()
+</script>
+</body>
+</html>

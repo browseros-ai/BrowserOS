@@ -76,6 +76,10 @@ export async function startCaptchaFixtureServer(
     if (request.method !== 'POST' || !page)
       return new Response('not found', { status: 404 })
     if (page.family === 'none') return verdict(true)
+    // PerimeterX's check has no token to verify: only a person passes it. The page refuses the
+    // submission as the covered site would, so a run reads a verdict rather than wait on a 404.
+    if (page.family === 'perimeterx')
+      return verdict(false, ['human-check-not-passed'])
     if (!(page.family in verification))
       return new Response('not found', { status: 404 })
     const vendor = page.family as Vendor

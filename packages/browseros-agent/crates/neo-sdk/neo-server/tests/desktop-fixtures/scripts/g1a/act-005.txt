@@ -1,0 +1,18 @@
+// Source port of act-005 at a7e536e152a4835abe9974498b27a5c927dd2e0d. Execution is owned by the coordinator.
+await page.goto(args.base + '/form.html');
+await page.ariaSnapshot();
+const point = await page.evaluate(() => {
+  const r = document.getElementById('bio').getBoundingClientRect();
+  return { x: Math.round(r.x + 10), y: Math.round(r.y + 10) };
+});
+let error = null;
+try {
+  await page.mouse.click(point.x, point.y);
+  await page.keyboard.type('typed at point');
+} catch (e) {
+  error = { message: String(e.message || e), code: e.code, owner: e.owner, delivery: e.delivery };
+}
+const value = await page.locator('#bio').inputValue();
+// The original case checks the value only when type_at succeeds. Keep that explicit allowance.
+if (error === null) includes(value, 'typed at point', 'coordinate typing reaches Bio');
+return { point, error, value, originalAllowsError: true };

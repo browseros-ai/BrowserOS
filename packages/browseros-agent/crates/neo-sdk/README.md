@@ -16,8 +16,9 @@ and start later scripts with `await neo.task(id)`. The latest task pick wins: bu
 Popups join their opener's task. `task.pages()` lists its tabs oldest first;
 `task.page(tabId)` picks one. Finish with `await task.close()` to close its tabs and end it.
 
-Any script may use any tab or task. `context.pages()` lists every tab with `tabId` and
-`taskId` (`null` without a task). Recover a lost id with
+`context.pages()` lists the tabs a run may use, with `tabId` and `taskId` (`null` without a
+task): every tab for a run without a task, and only its task's tabs for a run that carries one
+under `tabs.scope: "task"`, the default ([task scope](neo-server/README.md#task-scope)). Recover a lost id with
 `context.pages().find(p => p.url().includes('ycombinator'))?.taskId`.
 An unknown id throws `task_not_found`, whose hint points to `context.pages()` and `page.taskId`.
 The reply is exactly what the script returned, plus console lines and existing notes.
@@ -25,6 +26,12 @@ Hosts get touched tasks in `_meta["com.browseros.neo/run"].tasks`; host task ids
 neo-viewer proxy keep their existing behavior. Tasks live in memory (at most 4096). A restart
 of Neo's server gives each task back the tabs it held, as long as the browser kept them; a browser
 restart forgets every task. The janitor closes agent-opened tabs nobody used for the host's `tabs.idleCloseSeconds`, 30 minutes by default.
+
+A host may select `access: "read"` for one run in `_meta["com.browseros.neo/run"]`. Neo refuses
+other page changes before sending them, while allowing reads, new pages, HTTP(S) navigation on
+tabs an agent opened or a task holds, and closing tabs the same run opened. Replies and run records retain
+the access marker. [Read-only access](neo-server/README.md#read-only-access) defines the boundary,
+including site scripts, cookies, dialogs, screenshots and native downloads.
 
 ```text
 host / MCP run
@@ -117,6 +124,24 @@ state. This existing recovery limit also applies to unscaled takeovers.
 The default takeover blocks agent reads, including screenshots. Use `reads: "allow"` when
 scripts need to capture the tab during a takeover.
 
+### The hand-back
+
+The owner may open tabs during a takeover: a sign-in popup of the shared tab, or their bank by
+hand. Neo gives none of them to a task. The release, whatever ended it (done, idle, the host,
+the TTL, the tab closing), lists them in `openedTabs`: every tab that first appeared while the
+takeover was active and was still open when the release began, each with its `url`, `inFront`
+(the tab the owner left in front), `taskId` (the task holding it, or `null`) and `openerTabId`
+(the tab that opened it, or `null` for one opened by hand). `GET /v1/takeovers/{id}` answers the
+same list once released, and a repeated release answers the first one's. Each tab stays with
+the task holding it, or with no task (hidden from bound runs, never closed by the janitor); the
+host acts on the list by its own rule. Takeovers active at once each list a tab opened during
+both. If the release cannot list the browser's tabs within 2 s, it still lists every tab it
+kept, with `url` and `inFront` `null` (unknown), so a host never misses one the owner opened.
+A takeover keeps the newest 256 tabs opened during it and counts them all: the release says how
+many in `openedTabsNoted`, and `openedTabsTruncated` is `true` when more opened than it kept.
+Then the list is not every tab the owner opened, so treat any tab it does not list as unknown
+(for example, mark every tab no task holds): unknown never reads as absent.
+
 From `packages/browseros-agent`, run the existing SDK gate with private build state:
 
 ```sh
@@ -125,7 +150,11 @@ CARGO_BUILD_BUILD_DIR="$PWD/target/build-private" crates/neo-sdk/check.sh
 
 The gate covers every Rust crate in this folder: rustfmt, clippy `-D warnings` and tests for each
 (not yet `neo-captcha`'s tests, which are flaky; `check.sh` says why), plus Google's rustfmt
-options and the forbidden-dependency check for `neo-server` and `neo-playwright`. Follow [STYLE.md](STYLE.md) and the workspace's
+options and the forbidden-dependency check for `neo-server` and `neo-playwright`, and
+`neo-server`'s `hosted-run` build. It also runs the SDK image's Python scripts' tests and imports
+(and ruff where uv is installed), the Bun suites of `neo-playwright-js`, `neo-server`'s
+conformance tables and `neo-captcha`'s test bed under the pinned Bun (`BUN=/path/to/bun` names one), and resolves the spec
+corpus add-on's lock file with `--locked`. Follow [STYLE.md](STYLE.md) and the workspace's
 contributor rules. Build the server with `cargo build -p neo-server --bin browseros-claw-sdk`.
 Use Bun 1.4.2 in `neo-playwright-js` for `bun run build`, `bun run build:check` and its tests.
 Regenerate the host contract from the agent root with `bun run codegen:neo-sdk-api`; never

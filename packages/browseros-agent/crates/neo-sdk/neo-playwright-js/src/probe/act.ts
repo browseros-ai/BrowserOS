@@ -20,7 +20,9 @@
  * expiry past the last event its op can still send, so an expiry never lets an event of the
  * action through.
  */
+import { coverMark } from './cover'
 import type { FailureOutput } from './failure-output'
+import { lookFrameBox } from './private-frame'
 import type {
   ActRequest,
   DisarmRequest,
@@ -174,8 +176,19 @@ export function act(
     arm.blockAll,
   )
   if (interception === 'error:notconnected') return { kind: 'detached' }
-  if (typeof interception === 'string')
-    return { kind: 'covered', by: interception }
+  if (typeof interception === 'string') {
+    // Which cover this is, for the runner's count: the interceptor tests the element it
+    // retargets to, so the mark does too.
+    const mark = coverMark(
+      injected.retarget(element, 'button-link') ?? element,
+      place.point,
+    )
+    return {
+      kind: 'covered',
+      by: interception,
+      ...(mark ? { cover: mark } : {}),
+    }
+  }
   const slot = slotOf(world)
   slot.stopped = undefined
   slot.armed = {
@@ -239,7 +252,8 @@ export function disarm(
  * One parent frame of an action's element. `origin` is where the iframe's content box starts
  * in this frame's viewport (null when a transform makes it no single offset); with `point`, in
  * this frame's pixels, `hit` says whether the iframe receives events there (upstream's
- * `_checkFrameIsHitTarget`, one level).
+ * `_checkFrameIsHitTarget`, one level). With `look`, the private look's rules instead
+ * (`private-frame.ts`, ruling R60).
  */
 export function frameBox(
   world: World,
@@ -249,18 +263,27 @@ export function frameBox(
   const found = resolveTarget(world, request.iframe, 'firstMatch', root)
   if (found.kind !== 'one') return found
   const iframe = found.element
+  if (request.look) return lookFrameBox(world, iframe, request.point)
   const style = world.injected.describeIFrameStyle(iframe)
   if (style === 'error:notconnected') return { kind: 'detached' }
   const box = iframe.getBoundingClientRect()
+  const hit = request.point
+    ? world.injected.expectHitTarget(request.point, iframe)
+    : null
+  // A click's miss names its cover, for the runner's count, as the element's own frame does.
+  const mark =
+    request.point && hit !== null && hit !== 'done'
+      ? coverMark(iframe, request.point)
+      : undefined
   return {
     kind: 'frameBox',
     origin:
       style === 'transformed'
         ? null
         : { x: box.x + style.left, y: box.y + style.top },
-    hit: request.point
-      ? world.injected.expectHitTarget(request.point, iframe)
-      : null,
+    hit,
+    unseen: false,
+    ...(mark ? { cover: mark } : {}),
   }
 }
 

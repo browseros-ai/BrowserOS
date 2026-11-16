@@ -19,14 +19,16 @@
 //! does not exist) and recorded as kind `protected`, which the trace never photographs and the
 //! registry refuses on any method a script may call.
 
+use std::iter;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use browseros_core::TabId;
 use futures_util::future::BoxFuture;
 use neo_playwright::{
-    Answer, BoxFacts, BoxLook, BoxSpec, Drawing, Entry, EntryError, EntryOutcome, EntryRequest,
-    Expect, FileAccess, LookField, LookRequest, OpEnv, PrivateField, PrivateText,
+    Answer, BoxFacts, BoxLook, BoxSpec, Compared, Drawing, Entry, EntryError, EntryOutcome,
+    EntryRequest, Expect, FileAccess, LookCompare, LookField, LookRequest, OpEnv, PrivateField,
+    PrivateText,
 };
 use neo_sdk_api as api;
 use neo_trace::{Effect, ErrorOwner, OperationKind};
@@ -67,6 +69,17 @@ pub(crate) struct FillValues(Mutex<Option<Vec<PrivateText>>>);
 /// its error, so the counts travel here, beside it. Holds no value.
 #[derive(Default)]
 pub(crate) struct FillProgress(Mutex<Option<Entry>>);
+
+/// The values a check compares its boxes with (ruling R48), one per box, `None` for a box sent
+/// without one: put by the fill service before it submits the check's op and taken once by the
+/// method, as a fill's values are, so no value enters the op's recorded input.
+#[derive(Default)]
+pub(crate) struct CheckValues(Mutex<Option<Vec<Option<PrivateText>>>>);
+
+/// What each box's compare found, for the route's `holds` and `contains`: kept beside the op
+/// rather than in its output, so the op's and the run's records keep the shape they have.
+#[derive(Default)]
+pub(crate) struct CheckCompared(Mutex<Option<Vec<Option<Compared>>>>);
 
 /// One box as the fill's record names it: what the host named and approved, and for a fill how
 /// many characters its value has. Never the value. The fill service builds it; the method decodes
@@ -240,6 +253,28 @@ impl FillValues {
     }
 }
 
+impl CheckValues {
+    /// Hands the run its values, before its op is submitted.
+    pub(crate) fn put(&self, values: Vec<Option<PrivateText>>) {
+        *self.0.lock().unwrap_or_else(PoisonError::into_inner) = Some(values);
+    }
+
+    fn take(&self) -> Option<Vec<Option<PrivateText>>> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner).take()
+    }
+}
+
+impl CheckCompared {
+    fn put(&self, compared: Vec<Option<Compared>>) {
+        *self.0.lock().unwrap_or_else(PoisonError::into_inner) = Some(compared);
+    }
+
+    /// Each box's compare, once the check's op ended; `None` when the door refused the op.
+    pub(crate) fn take(&self) -> Option<Vec<Option<Compared>>> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner).take()
+    }
+}
+
 impl FillProgress {
     fn put(&self, entry: Entry) {
         *self.0.lock().unwrap_or_else(PoisonError::into_inner) = Some(entry);
@@ -330,6 +365,20 @@ impl Method for HostFillCheck {
     }
 
     async fn call(&self, op: &OpCtx<Self>, input: BoxesInput) -> Result<Value, LeafError> {
+        // Ruling R48: each box's value, if the host sent one, with the read-back's rule for it.
+        let values = op.run().slot::<CheckValues>().take().unwrap_or_default();
+        let compares = input
+            .fields
+            .iter()
+            .zip(values.into_iter().chain(iter::repeat_with(|| None)))
+            .map(|(recorded, value)| {
+                value.map(|value| LookCompare {
+                    value,
+                    spaced: recorded.spaced,
+                    cut: recorded.cut,
+                })
+            })
+            .collect();
         let request = LookRequest {
             tab: op.page()?.tab,
             url: input.url,
@@ -338,6 +387,7 @@ impl Method for HostFillCheck {
                 .into_iter()
                 .map(RecordedBox::into_look)
                 .collect(),
+            compares,
             deadline: entry_deadline(op.deadline()),
         };
         let env = OpCtxEnv::new(
@@ -350,7 +400,12 @@ impl Method for HostFillCheck {
             .race_classified(self.0.entry.look(&env, &request))
             .await?
             .map_err(|error| LeafError::definite(operation_error(&error)))?;
-        // The op's recorded result is the route's answer, so the record and the reply agree.
+        // The compare's booleans go beside the op, never into its recorded result.
+        op.run()
+            .slot::<CheckCompared>()
+            .put(looks.iter().map(|look| look.compared).collect());
+        // The op's recorded result is the route's answer without the compare, so the record and
+        // the reply agree on everything else.
         let fields: Vec<api::FillBoxCheck> = looks.into_iter().map(checked_box).collect();
         Ok(json!({ "fields": fields }))
     }
@@ -365,12 +420,22 @@ fn checked_box(look: BoxLook) -> api::FillBoxCheck {
             Box::new(api::OperationError {
                 owner: owner_name(refusal.owner),
                 code: refusal.code,
+                diagnostic_code: refusal.diagnostic_code.map(|code| code.as_str().to_owned()),
                 message: refusal.message,
                 retryable: true,
                 host_code: refusal.host_code,
                 operation_id: None,
+                cover: None,
             })
         }),
+        // The compare's booleans join the answer at the route only (`CheckCompared`).
+        holds: None,
+        contains: None,
+        // Ruling R63: true or absent, never false. It carries nothing of a value, so it is in
+        // the op's recorded result as in the reply.
+        frame_gone: look.frame_gone.then_some(true),
+        // Ruling R64: true or absent, never false; the limit itself is in the facts.
+        max_length_moved: look.max_length_moved.then_some(true),
     }
 }
 
@@ -458,5 +523,25 @@ fn operation_error(error: &EntryError) -> OperationError {
         ErrorOwner::Script => OperationError::script(code, &error.message),
         ErrorOwner::Website => OperationError::website(code, &error.message),
         ErrorOwner::Host => OperationError::host(code, &error.message),
+    }
+    .with_diagnostic(error.diagnostic_code)
+}
+
+#[cfg(test)]
+mod diagnostic_tests {
+    use neo_playwright::{Answer, EntryCode, EntryError, Sending};
+    use neo_trace::DiagnosticCode;
+
+    #[test]
+    fn target_crashed_private_entry_retains_its_typed_diagnostic() {
+        let entry = EntryError::of(EntryCode::TargetCrashed, Sending::Sent);
+        let error = super::operation_error(&entry);
+        assert_eq!(entry.answer(), Answer::Definite);
+        assert_eq!(error.code().as_str(), "internal_error");
+        assert_eq!(error.diagnostic_code(), Some(DiagnosticCode::TargetCrashed));
+        assert_eq!(
+            error.message(),
+            "The tab's page crashed. Close or reload the tab before retrying."
+        );
     }
 }
