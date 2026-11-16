@@ -10,6 +10,12 @@ const shape = new URL(location.href).searchParams.get('shape');
 const dlg = document.getElementById('modal');
 if (shape === 'inert') background.inert = true;
 if (shape === 'native') dlg.showModal();
+if (shape === 'stacked') {
+  const lower = dlg.cloneNode(true); lower.id = 'lower';
+  const button = lower.querySelector('button'); button.textContent = 'Lower modal action';
+  document.body.append(lower); lower.showModal(); dlg.showModal();
+  button.focus(); document.body.dataset.lowerModalFocused = String(document.activeElement === button);
+}
 if (shape === 'nested') { background.inert = true; background.append(dlg); dlg.showModal(); }
 if (shape === 'shadow') { const host = document.createElement('div'); document.body.append(host); host.attachShadow({mode:'open'}).append(dlg); dlg.showModal(); }
 if (shape === 'slotted-modal') {
@@ -58,6 +64,7 @@ const sdk = await openClaw(
 try {
   for (const shape of [
     'native',
+    'stacked',
     'inert',
     'nested',
     'shadow',
@@ -83,6 +90,7 @@ try {
       const text = await page.ariaSnapshot()
       const omitted = [
         'native',
+        'stacked',
         'inert',
         'nested',
         'slotted-modal',
@@ -90,6 +98,15 @@ try {
       ].includes(shape)
       const original = await page.ariaSnapshot({ inert: true })
       const full = await page.ariaSnapshot({ mode: 'full' })
+      if (shape === 'stacked') {
+        // Chromium refuses focus in the lower modal. PR1 deliberately lists either modal:
+        // it has no top-layer ordering test, so the conservative rule retains this control.
+        assert.equal(
+          await page.locator('body').getAttribute('data-lower-modal-focused'),
+          'false',
+        )
+        assert.match(text, /Lower modal action.*ref=/)
+      }
       if (omitted) {
         assert.match(text, /^# not listed:/, shape)
         assert.doesNotMatch(text, /Background action/, shape)
