@@ -13,7 +13,7 @@ export function jsonValue(value: unknown): JsonValue {
   if (Array.isArray(value)) {
     return value.map((item: unknown) => jsonValue(item))
   }
-  if (typeof value === 'object' && value !== null) {
+  if (typeof value === 'object') {
     const result: JsonObject = {}
     for (const [key, child] of Object.entries(value)) {
       result[key] = jsonValue(child)

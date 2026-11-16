@@ -26,10 +26,8 @@ function requiredCase(id: string): CaseSpec {
 
 function externalRow(entry: CaseSpec): Record<string, unknown> {
   const last = entry.steps.at(-1)
-  requireCondition(
-    last?.kind === 'script',
-    'Synthetic input needs a primary body',
-  )
+  if (last?.kind !== 'script')
+    throw new Error('Synthetic input needs a primary body')
   const originalPath = (path: string) => path.replace(/\.txt$/, '.js')
   return {
     id: entry.id,

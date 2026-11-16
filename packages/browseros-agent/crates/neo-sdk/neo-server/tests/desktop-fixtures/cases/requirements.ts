@@ -163,10 +163,8 @@ export function validateCaseContract(cases: readonly CaseSpec[]): void {
       `Unexpected failure contract for ${entry.id}`,
     )
     const last = entry.steps.at(-1)
-    requireCondition(
-      last?.kind === 'script',
-      `Final step must be a sequential script for ${entry.id}`,
-    )
+    if (last?.kind !== 'script')
+      throw new Error(`Final step must be a sequential script for ${entry.id}`)
     primary.add(last.script)
     for (const step of entry.steps) {
       if (step.kind === 'parallel') {

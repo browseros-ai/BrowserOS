@@ -77,13 +77,13 @@ function digest(value: unknown): string {
 }
 
 function parseBodyInventory(value: unknown): BodyInventory {
-  requireCondition(
-    value !== null &&
-      typeof value === 'object' &&
-      'commonSha256' in value &&
-      'bodies' in value,
-    'Malformed body inventory',
+  if (
+    value === null ||
+    typeof value !== 'object' ||
+    !('commonSha256' in value) ||
+    !('bodies' in value)
   )
+    throw new Error('Malformed body inventory')
   requireCondition(
     Object.keys(value).sort().join(',') === 'bodies,commonSha256',
     'Unexpected body inventory fields',
@@ -96,13 +96,13 @@ function parseBodyInventory(value: unknown): BodyInventory {
   return {
     commonSha256: digest(commonSha256),
     bodies: bodies.map((entry: unknown) => {
-      requireCondition(
-        entry !== null &&
-          typeof entry === 'object' &&
-          'path' in entry &&
-          'sha256' in entry,
-        'Malformed body entry',
+      if (
+        entry === null ||
+        typeof entry !== 'object' ||
+        !('path' in entry) ||
+        !('sha256' in entry)
       )
+        throw new Error('Malformed body entry')
       requireCondition(
         Object.keys(entry).sort().join(',') === 'path,sha256',
         'Unexpected body entry fields',

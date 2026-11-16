@@ -28,10 +28,8 @@ export type ManifestCase = OriginalCase &
 
 /** Unknown JSON stops here. Only selected, normalized contracts can reach public serialization. */
 function object(value: unknown): Record<string, unknown> {
-  requireCondition(
-    value !== null && typeof value === 'object' && !Array.isArray(value),
-    'Expected an object',
-  )
+  if (value === null || typeof value !== 'object' || Array.isArray(value))
+    throw new Error('Expected an object')
   return Object.fromEntries(Object.entries(value))
 }
 
