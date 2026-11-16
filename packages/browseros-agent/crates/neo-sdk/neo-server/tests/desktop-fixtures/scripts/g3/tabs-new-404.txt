@@ -1,0 +1,8 @@
+const created = await context.newPage();
+try {
+  const response = await created.goto(args.base + '/sdk-missing.html');
+  assert(response !== null, 'the 404 navigation returns a response');
+  equal(response.status(), 404, 'the newly opened page reports HTTP 404');
+  assert(context.pages().some(candidate => candidate.tabId === created.tabId), 'the 404 tab remains listed');
+  return { tabId: created.tabId, status: response.status(), url: created.url() };
+} finally { await created.close(); }

@@ -1,0 +1,8 @@
+// Source port of navigate-snapshot-007 at a7e536e152a4835abe9974498b27a5c927dd2e0d. Execution is owned by the coordinator.
+await page.goto(args.base + '/links.html');
+const full = await page.ariaSnapshot({ mode: 'full' });
+const interactive = await page.ariaSnapshot({ text: false });
+assert(!/- paragraph/.test(interactive), 'interactive snapshot drops paragraph rows', interactive);
+includes(interactive, '[ref=', 'interactive snapshot retains actionable refs');
+assert(interactive.length < full.length, 'interactive snapshot is smaller than full', { full, interactive });
+return { full, interactive };

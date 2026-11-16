@@ -1,0 +1,5 @@
+await page.goto(args.base + '/dynamic.html');
+await page.getByText('delayed content ready',{exact:true}).waitFor({state:'visible',timeout:5000});
+const text = await page.locator('#delayed').textContent();
+includes(text,'delayed content ready','the delayed text actually appears');
+return {matched:true,text};

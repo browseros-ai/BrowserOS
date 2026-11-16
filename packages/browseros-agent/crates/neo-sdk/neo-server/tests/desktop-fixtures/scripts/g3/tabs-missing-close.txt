@@ -1,0 +1,6 @@
+await page.goto(args.base + '/links.html');
+const task = await neo.task(page.taskId);
+const before = task.pages().map(candidate => candidate.tabId);
+const error = await rejected(async () => { await task.page(99999).close(); }, /missing|not.*task|no.*page|not.*found/i);
+equal(task.pages().map(candidate => candidate.tabId), before, 'refusing a nonexistent page preserves the task pages');
+return { error, pages: before };

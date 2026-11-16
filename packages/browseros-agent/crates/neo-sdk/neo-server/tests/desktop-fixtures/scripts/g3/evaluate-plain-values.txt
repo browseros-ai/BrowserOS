@@ -1,0 +1,6 @@
+await page.goto(args.base + '/form.html');
+const number = await page.evaluate(() => 42);
+equal(number, 42, 'evaluation preserves a plain number');
+const object = await page.evaluate(() => ({ count: 3, nested: { ok: true }, values: [1, null, 'x'] }));
+equal(object, { count: 3, nested: { ok: true }, values: [1, null, 'x'] }, 'evaluation preserves a nested object and mixed array');
+return { number, object };

@@ -1,0 +1,23 @@
+const refIn = (snapshot, label) => {
+  const line = snapshot.split('\n').find(line => line.includes(label));
+  const ref = line && /\[ref=([^\]]+)\]/.exec(line)?.[1];
+  assert(ref, `snapshot must give ${label} its own ref`, { line, snapshot });
+  return ref;
+};
+const selected = (snapshot, labels) => Object.fromEntries(labels.map(label => [label, refIn(snapshot, label)]));
+const labelsIn = (snapshot, labels) => {
+  for (const label of labels) includes(snapshot, label, `snapshot includes ${label}`);
+};
+
+const cursorStable = ["Cursor candidate 00", "Cursor candidate 32", "Cursor candidate 63"];
+const cursorReasons = ["Pointer-only target", "Assigned onclick target", "Editable target ready", "Tabindex target"];
+const untouched = async label => {
+  const state = await page.evaluate(() => window.snapshotCursorFixture.state());
+  equal(state.mutations, 0, label + ' makes no DOM mutation');
+  equal(state.sentinelPresent, true, label + ' preserves the page-owned look-alike marker');
+  return state;
+};
+
+const snapshot = await page.ariaSnapshot();
+const refs = selected(snapshot, cursorStable);
+return { snapshot, refs };

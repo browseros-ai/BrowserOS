@@ -1,0 +1,6 @@
+await page.goto(args.base + '/form.html');
+const started = Date.now();
+await page.waitForTimeout(800);
+const elapsed = Date.now()-started;
+assert(elapsed >= 700,'800 ms wait does not return before the original 700 ms allowance',{elapsed});
+return {elapsed};

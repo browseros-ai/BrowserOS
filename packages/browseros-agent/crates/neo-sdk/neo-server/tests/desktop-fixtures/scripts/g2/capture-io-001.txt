@@ -1,0 +1,5 @@
+await page.goto(args.base + '/media.html');
+const bytes = await page.screenshot({type:'jpeg'});
+const magic = bytes.subarray(0,8).toString('hex');
+assert(magic.startsWith('ffd8'), 'jpeg screenshot has its required magic bytes', {magic,length:bytes.length});
+return {bytes,magic,length:bytes.length};

@@ -1,0 +1,8 @@
+await page.goto(args.base + '/form.html');
+const ref = await refFor(page, 'Apply');
+await page.getByRef(ref).click();
+const text = await page.locator('body').innerText();
+await poll(async () => (await page.locator('#result').textContent()).includes('applied'), 'the snapshot-ref click updates #result');
+const result = await page.locator('#result').textContent();
+assert(text.length > 0, 'page handle reads nonempty content');
+return {applied:true,read:text.length > 0,pageCount:context.pages().length,result,ref};
