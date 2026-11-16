@@ -195,10 +195,7 @@ const PACKAGE_SUITES: Record<string, string[]> = {
   '@browseros/claw-onboard': ['claw-onboard'],
   '@browseros/app-onboard': ['app-onboard'],
   '@browseros/agent-cursor': ['agent-cursor', 'build'],
-  '@browseros/neo-playwright-js': [
-    'browseros-playwright-js',
-    'sdk-desktop-fixtures',
-  ],
+  '@browseros/neo-playwright-js': ['browseros-playwright-js'],
   // The build suite exercises scripts/build, which uses build-server-tools, so
   // an affected build-server-tools (or a scripts/ change, handled below) runs it.
   '@browseros/build-server-tools': ['build'],
@@ -206,15 +203,10 @@ const PACKAGE_SUITES: Record<string, string[]> = {
 }
 
 /**
- * Any affected Rust crate runs workspace-wide Rust checks and the browser contracts
- * that exercise the Rust servers, including the SDK desktop suite.
+ * The Rust CI suites run workspace-wide cargo, so any affected Rust crate
+ * triggers all of them.
  */
-const RUST_SUITES = [
-  'claw-server',
-  'claw-server-quality',
-  'claw-mcp',
-  'sdk-desktop-fixtures',
-]
+const RUST_SUITES = ['claw-server', 'claw-server-quality', 'claw-mcp']
 
 export interface AffectedPackage {
   name: string
@@ -231,6 +223,16 @@ function isRustPackage(path: string): boolean {
 }
 
 const AGENT = 'packages/browseros-agent/'
+
+// SDK browser contracts follow their own inputs, independently of the workspace-wide
+// Rust suites. Core/CDP are linked; MCP is an explicit shared compatibility watch.
+const SDK_FIXTURE_ROOTS = [
+  'crates/neo-sdk/',
+  'crates/browseros-core/',
+  'crates/browseros-cdp/',
+  'crates/browseros-mcp/',
+  'contracts/claw-mcp/',
+]
 
 /**
  * A change to the test harness itself (this workflow, this discovery script, or
@@ -265,6 +267,8 @@ export function computeAffectedSuites(
     if (isRustPackage(pkg.path)) {
       for (const suite of RUST_SUITES) keys.add(suite)
     }
+    if (SDK_FIXTURE_ROOTS.some((root) => `${pkg.path}/`.startsWith(root)))
+      keys.add('sdk-desktop-fixtures')
   }
 
   // Path signals for things that are not workspace packages.
@@ -325,15 +329,11 @@ export function computeAffectedSuites(
     )
   )
     keys.add('captcha')
-  // Fixture pages and original desktop contracts are inputs to the SDK-owned suite too.
+  // File paths also cover inputs outside Turbo packages, including fixture pages and
+  // SDK files above the individual crate roots. The trailing slash keeps sibling names out.
   if (
-    changedFiles.some(
-      (f) =>
-        f.startsWith(`${AGENT}contracts/claw-mcp/`) ||
-        f.startsWith(`${AGENT}crates/neo-sdk/neo-playwright-js/`) ||
-        f.startsWith(
-          `${AGENT}crates/neo-sdk/neo-server/tests/desktop-fixtures/`,
-        ),
+    changedFiles.some((f) =>
+      SDK_FIXTURE_ROOTS.some((root) => f.startsWith(`${AGENT}${root}`)),
     )
   )
     keys.add('sdk-desktop-fixtures')
