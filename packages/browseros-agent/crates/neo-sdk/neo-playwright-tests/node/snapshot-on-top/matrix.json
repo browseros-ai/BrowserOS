@@ -319,11 +319,12 @@
         "extent": "whole",
         "role": "generic",
         "name": "",
-        "controls": ["Dismiss"],
-        "flags": []
+        "controls": [""],
+        "flags": [],
+        "controlText": "Dismiss"
       }
     ],
-    "why": "Name the face/dialog that actually takes the hit; never choose a dialog merely by document order.",
+    "why": "Name the face/dialog that actually takes the hit; never choose a dialog merely by document order. Its control has no accessible name; the same ref carries Dismiss in the first block.",
     "phases": [],
     "face": "#hidden"
   },
@@ -424,14 +425,14 @@
     "expectedNotes": [
       {
         "selector": "#modal-wrapper",
-        "extent": "whole",
+        "extent": "part",
         "role": "dialog",
         "name": "Navigation menu",
         "controls": ["Close navigation menu"],
         "flags": []
       }
     ],
-    "why": "Name the face/dialog that actually takes the hit; never choose a dialog merely by document order.",
+    "why": "Name the face/dialog that actually takes the hit; never choose a dialog merely by document order. Initially the unrelated Comparison dialog takes the five sample hits and owns a clear control, so the navigation layer is part-view.",
     "phases": [
       {
         "after": "press Close comparison",
@@ -476,9 +477,10 @@
         "flags": []
       }
     ],
-    "why": "Name the face/dialog that actually takes the hit; never choose a dialog merely by document order.",
+    "why": "Name the face/dialog that actually takes the hit; never choose a dialog merely by document order. Main lists a closed root once known; a locator snapshot primes it without running the survey before upstream-mode comparison.",
     "phases": [],
-    "face": "#host"
+    "face": "#host",
+    "primeClosedRoots": true
   },
   {
     "id": "e01-body-siblings",
@@ -871,5 +873,27 @@
     "expectedControls": 21,
     "expectedNotes": [],
     "why": "A small popover off the centre is an edge bar; only a modal backdrop exempts its box."
+  },
+  {
+    "id": "e19-shared-holder-close",
+    "title": "Clear corner control in a joined portal holder",
+    "file": "pages/e19-shared-holder-close.html",
+    "viewport": {
+      "width": 1280,
+      "height": 800
+    },
+    "expectedControls": 22,
+    "expectedNotes": [
+      {
+        "selector": "#portal",
+        "extent": "whole",
+        "role": "dialog",
+        "name": "Shared holder",
+        "controls": ["Continue", "Close"],
+        "flags": []
+      }
+    ],
+    "firstText": "Read this first",
+    "why": "The fixed dimmer and dialog join through their plain portal; its clear corner Close is its own control."
   }
 ]

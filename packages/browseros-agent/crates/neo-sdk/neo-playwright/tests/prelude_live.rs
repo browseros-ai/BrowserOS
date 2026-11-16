@@ -3473,3 +3473,85 @@ async fn tests_that_on_top_delta_heads_follow_the_returned_snapshot() -> TestRes
     );
     Ok(())
 }
+
+
+/// The Node host checks the printed text; this table checks the same pages' actual survey
+/// counts at OpEnv::note, before the server's debug-log policy can discard those lines.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_on_top_survey_counts_match_each_fixture() -> TestResult {
+    let folder = Path::new(env!("CARGO_MANIFEST_DIR")).join("../neo-playwright-tests/node/snapshot-on-top");
+    let rows: Vec<Value> = serde_json::from_str(&fs::read_to_string(folder.join("matrix.json"))?)?;
+    let mut pages = HashMap::new();
+    for row in &rows {
+        let file = row["file"].as_str().ok_or("fixture file")?;
+        let path = Path::new(file).file_name().ok_or("fixture filename")?.to_string_lossy();
+        pages.insert(format!("/{path}"), Page::html(&fs::read_to_string(folder.join(file))?));
+    }
+    let server = FixtureServer::start(pages).await?;
+    let mut failures = Vec::new();
+    for row in rows {
+        let run = Arc::new(LiveRun::connect().await?.with_viewports());
+        let host: Arc<dyn OpHost> = Arc::clone(&run) as Arc<dyn OpHost>;
+        let file = row["file"].as_str().ok_or("fixture file")?;
+        let name = Path::new(file).file_name().ok_or("fixture filename")?.to_string_lossy();
+        let url = server.url("127.0.0.1", &format!("/{name}"));
+        // This is the Node fixture's exact agent script, with only its module export removed.
+        let driver = include_str!("../../neo-playwright-tests/node/snapshot-on-top-row.mjs").replacen("export async function", "async function", 1);
+        let script = format!(r#"{driver}
+            try {{ return await driveSnapshotRow(page, {row}, {url}); }}
+            finally {{ await page.close(); }}
+        "#, row = row, url = json!(url));
+        let output = match js_runner::run_script(&host, &json!({"page":null}), &script).await {
+            Ok(output) => output,
+            Err(error) => {
+                failures.push(format!("{}: {error}", row["id"]));
+                json!({"error":error.to_string()})
+            }
+        };
+        let log = notes(&run);
+        let counts: Vec<u64> = log.iter().filter_map(|line| line.trim().strip_prefix("cover survey: ")?.split_whitespace().next()?.parse().ok()).collect();
+        let initial = row["expectedControls"].as_u64().ok_or("fixture count")?;
+        let mut expected = vec![initial; 5];
+        for phase in row["phases"].as_array().into_iter().flatten() {
+            expected.push(phase["expectedControls"].as_u64().ok_or("phase count")?);
+        }
+        println!("{}", json!({"shape":row["id"],"output":output,"expected":expected,"tested":counts,"notes":log.iter().filter(|line|line.contains("cover survey") || line.contains("inert marking")).collect::<Vec<_>>()}));
+        if counts != expected { failures.push(format!("{} tested {counts:?}, expected {expected:?}", row["id"])); }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    Ok(())
+}
+
+/// Phase timings use the same note seam as fixture counts. Refused pages are reported as
+/// refusals; the named pages are never replaced by a smaller or more convenient page.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_on_top_survey_reports_named_page_phases() -> TestResult {
+    for url in ["https://news.ycombinator.com/item?id=50467087", "https://en.wikipedia.org/wiki/World_War_II", "https://www.ag-grid.com/example/"] {
+        let run = Arc::new(LiveRun::connect().await?.with_viewports());
+        let host: Arc<dyn OpHost> = Arc::clone(&run) as Arc<dyn OpHost>;
+        let script = format!(r#"
+            try {{
+                await page.setViewportSize({{width:1280,height:800}});
+                const response = await page.goto({url}, {{waitUntil:'domcontentloaded',timeout:30000}});
+                await page.waitForTimeout(1000);
+                const text = await page.ariaSnapshot({{timeout:60000}});
+                const result = {{status:response?.status(),title:await page.title(),elements:await page.evaluate(()=>document.querySelectorAll('*').length),characters:text.length,head:text.slice(0,400)}};
+                if ({url}.includes('wikipedia.org')) {{
+                    await page.evaluate(()=>scrollTo(0,document.documentElement.scrollHeight/2));
+                    const middle = await page.ariaSnapshot({{timeout:60000}});
+                    result.middle = {{characters:middle.length,head:middle.slice(0,400)}};
+                }}
+                return result;
+            }} finally {{ await page.close(); }}
+        "#, url = json!(url));
+        let result = match js_runner::run_script(&host, &json!({"page":null}), &script).await {
+            Ok(result) => result,
+            Err(error) => json!({"error":error.to_string()}),
+        };
+        let log = notes(&run);
+        println!("{}", json!({"url":url,"result":result,"notes":log.iter().filter(|line|line.contains("cover survey") || line.contains("inert marking")).collect::<Vec<_>>()}));
+    }
+    Ok(())
+}

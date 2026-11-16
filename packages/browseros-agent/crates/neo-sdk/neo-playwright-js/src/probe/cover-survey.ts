@@ -81,6 +81,7 @@ type Phases = {
   stopped: boolean
 }
 type Layer = { order: number; held: Element[]; note: SurveyLayer }
+type Group = { faces: Face[]; held: Element[] }
 
 export function surveyCovers(
   world: World,
@@ -151,7 +152,10 @@ export function surveyCovers(
   const centre = { x: innerWidth / 2, y: innerHeight / 2 }
   for (const face of found.values())
     face.named = shownAs(world, output, face.named, centre)
-  const groups = joinFaces(found, inside)
+  const groups = joinFaces(found, inside).map((faces) => ({
+    faces,
+    held: holdersOf(faces, inside),
+  }))
   const next: Remembered[] = []
   const layers = groups
     .map((group) =>
@@ -361,42 +365,44 @@ function joinFaces(found: Map<Element, Face>, inside: Inside): Face[][] {
   return groups
 }
 
+/** A joined portal owns the shared holder, including controls beside its fixed faces. */
+function holdersOf(faces: Face[], inside: Inside): Element[] {
+  const shared = [...new Set(faces.flatMap((face) => [...face.roots]))].filter(
+    (root) => faces.filter((face) => face.roots.has(root)).length > 1,
+  )
+  const held = shared.length ? shared : faces.map((face) => face.element)
+  for (const { named } of faces)
+    if (!held.some((root) => inside(root, named))) held.push(named)
+  return held
+}
+
 function describeLayer(
   world: World,
   output: FailureOutput,
-  group: Face[],
-  groups: Face[][],
+  group: Group,
+  groups: Group[],
   remembered: Remembered[],
   next: Remembered[],
   tested: Tested[],
   samples: Sample[],
   inside: Inside,
 ): Layer | undefined {
+  const { faces, held } = group
   const face =
-    group.find((face) => isBlank(world, output, face.element)) ?? group[0]
+    faces.find((face) => isBlank(world, output, face.element)) ?? faces[0]
   if (!face) return undefined
   const old = remembered.find((entry) =>
-    group.some((face) => entry.face.deref() === face.element),
+    faces.some((face) => entry.face.deref() === face.element),
   )
   const order =
     old?.order ??
     remembered.reduce((last, entry) => Math.max(last, entry.order + 1), 0) +
       next.length
   const named = face.named
-  const shared = Array.from(face.roots).filter(
-    (root) => group.filter((face) => face.roots.has(root)).length > 1,
-  )
-  const held = shared.length ? shared : group.map((face) => face.element)
-  if (named !== face.element && !held.some((root) => inside(root, named)))
-    held.push(named)
   const belongs = (element: Element) =>
     held.some((root) => inside(root, element))
   const ownOfAny = (element: Element) =>
-    groups.some((group) =>
-      group.some(
-        (face) => inside(face.element, element) || inside(face.named, element),
-      ),
-    )
+    groups.some(({ held }) => held.some((root) => inside(root, element)))
   const wholeView =
     samples.every(({ deepest }) => deepest && belongs(deepest)) &&
     tested.every(({ element, clear }) => !clear || ownOfAny(element)) &&
@@ -416,7 +422,7 @@ function describeLayer(
     controls.length === 0 &&
     !words &&
     isBlank(world, output, named)
-  for (const member of group)
+  for (const member of faces)
     next.push({
       face: new WeakRef(member.element),
       named: new WeakRef(member.named),

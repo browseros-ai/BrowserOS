@@ -306,6 +306,13 @@ impl LiveRun {
         Self::connect_through(|client| Arc::new(client) as Arc<dyn CdpConnection>).await
     }
 
+    /// Gives this owned fixture run the same viewport manager as the hosted adapter. Exact
+    /// viewport bounds are part of the survey's count; the normal SDK route still applies it.
+    pub(crate) fn with_viewports(mut self) -> Self {
+        self.env.view = self.env.view.with_viewports(Arc::default());
+        self
+    }
+
     /// As [`LiveRun::connect`], with every CDP call going through the connection `wrap` builds
     /// over the client, so a test can stand between the crate and the browser.
     pub(crate) async fn connect_through(
