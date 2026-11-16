@@ -56,6 +56,7 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::RunArgs;
+    use crate::config::Defaults;
     use crate::dispatch::ErrorCode;
 
     fn arguments(value: Value) -> Option<JsonObject> {
@@ -105,6 +106,35 @@ mod tests {
         assert_eq!(
             timeout.and_then(|timeout| timeout.get("maximum")),
             Some(&json!(900_000))
+        );
+    }
+
+    /// The schema's description is what a model reads about `timeout`, so its numbers are the
+    /// run budget's own (`Defaults::RUN_TIMEOUT`, `RUN_TIMEOUT_MAX`), which `RunTimeout`
+    /// enforces; the literals in the attribute and the doc comment cannot drift from them.
+    #[test]
+    fn the_schema_states_the_run_budgets_own_numbers() {
+        let schema = schema_for_type::<RunArgs>();
+        let timeout = schema
+            .get("properties")
+            .and_then(|properties| properties.get("timeout"));
+        let max = Defaults::RUN_TIMEOUT_MAX.as_millis();
+        let default = Defaults::RUN_TIMEOUT.as_millis();
+        assert_eq!(
+            timeout
+                .and_then(|timeout| timeout.get("maximum"))
+                .and_then(Value::as_u64)
+                .map(u128::from),
+            Some(max)
+        );
+        let description = timeout
+            .and_then(|timeout| timeout.get("description"))
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        assert!(
+            description.contains(&format!("from 1 to {max}"))
+                && description.contains(&format!("Leave it out for {default}")),
+            "{description}"
         );
     }
 }

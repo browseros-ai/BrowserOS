@@ -1,16 +1,19 @@
 /**
  * agent.d.ts: what a script sent to Neo's MCP `run` tool can use. Give this file to your
- * agent together with Neo's MCP URL.
+ * agent together with Neo's MCP URL. The `run` tool's own description says how to work a page
+ * (look with `page.ariaSnapshot()`, act on its refs, look again); this file declares the API and
+ * holds the differences from Playwright that description leaves out.
  *
  * `code` is the body of an async function: `await` each call, `return` a JSON value.
  * Each `run` call starts with fresh JavaScript; browser tabs carry over.
- * With no task, built-in `page` and `context.newPage()` each open a NEW tab with no task.
- * To keep tabs across runs, create a task and return its id:
+ * A run has a task when the host gives it one or the script picks one. With no task,
+ * built-in `page` and `context.newPage()` each open a NEW tab with no task.
+ * To keep tabs across runs yourself, create a task and return its id:
  *   first run:        const task = await neo.createTask('hn top 5'); return task.id
  *   every later run:  const task = await neo.task('<that id>')
  *   when finished:    await task.close()
- * After `neo.createTask()` or `neo.task()`, built-in `page` uses that task's last-used
- * open tab, else another open tab, else a new one. `context.newPage()` opens in the task.
+ * With a task (the host's, or after `neo.createTask()` or `neo.task()`), built-in `page` uses
+ * that task's last-used open tab, else another open tab, else a new one. `context.newPage()` opens in the task.
  * The latest task pick wins. Popups join their opener's task. You may declare `const page`.
  * Built-in `page` keeps the first tab it gets for the whole run. `await neo.task(id)` gives it
  * the task's open tab at once, so `page.url()` is that tab's on the next line. Otherwise (no
@@ -35,7 +38,26 @@ import type { Expect } from '@playwright/test'
 import type * as pw from 'playwright-core'
 
 declare module 'playwright-core' {
+  /** The options Neo's `ariaSnapshot()` takes beyond Playwright's. */
+  interface NeoAriaSnapshotOptions {
+    /** Left out: Neo's short list of what can be acted on, with refs. `'full'`: Playwright's own
+     * text with a ref on every visible element, capped at `maxTokens`. */
+    mode?: 'ai' | 'default' | 'full'
+    /** `true`: always include the page's text; `false`: never. Left out: only while the whole
+     * stays under about 3,000 tokens, and a line at its top says when it was left out. */
+    text?: boolean
+    /** Print each link's url. */
+    urls?: boolean
+    /** The cap, about 8,000 tokens by default. A `# cut:` line says what was left out and which
+     * section to snapshot instead; a block with a dialog, alertdialog, alert or status role past
+     * the cut is still printed whole. */
+    maxTokens?: number
+    /** On a page: only what changed since your last whole-page snapshot of this tab. */
+    delta?: boolean
+    timeout?: number
+  }
   interface Locator {
+    ariaSnapshot(options?: NeoAriaSnapshotOptions): Promise<string>
     /** Neo-only. Strictly resolves one attached element and returns its node-bound ref.
      * Reuses an engine ref or mints n<k>, prefixed f<seq> in other documents. Keep the ref
      * with its task's page for later runs. Removal or navigation makes it stale; minting
@@ -44,6 +66,7 @@ declare module 'playwright-core' {
   }
   /** Playwright's Page, plus: */
   interface Page {
+    ariaSnapshot(options?: NeoAriaSnapshotOptions): Promise<string>
     /** The tab's id. It stays the same across runs. `null` only for the built-in `page`
      * before it has a tab (see `page`). */
     readonly tabId: number | null
@@ -135,6 +158,30 @@ declare global {
   // Also given to every script: `console` (its lines come back with the result),
   // `setTimeout` and `clearTimeout`. The engine is QuickJS: no `Intl`, no Node APIs but Buffer.
 }
+
+/**
+ * Where Neo differs from Playwright 1.64. A member Neo lacks fails `method_unavailable` and names
+ * what to use instead, and most refusals say how to do it; these are the differences a script
+ * meets without such an error, or that change what a later run sees:
+ * - Init scripts and bindings (`addInitScript`, `exposeBinding`, `exposeFunction`, and the
+ *   `exposeFunctions` option of `addInitScript` and `evaluate`) last until the run ends. A
+ *   context's reaches each tab at the run's first write to it, so a popup's first document and
+ *   cross-site iframes run without it. A call the page does not await may run after the op that
+ *   caused it returned.
+ * - `page.emulateMedia` and `page.setViewportSize` stay on the tab in later runs, until it closes.
+ * - `waitForFunction` polls every 100 ms for `polling: 'raf'` (background tabs fire no animation
+ *   frames); the handle it resolves to holds the value, which `jsonValue()` reads.
+ * - A result nested more than about 50 objects deep fails `Maximum call stack size exceeded`.
+ * - `goto` opens http, https, data, about and javascript URLs; a `javascript:` URL runs, then
+ *   fails `net::ERR_ABORTED`. `reload` opens http, https, data and about. `file:` pages are
+ *   refused: write a local page with `page.setContent`, which refuses `waitUntil: 'networkidle'`.
+ * - Path reads (`setInputFiles`, `drop`, script and style tags, init scripts) must be inside the
+ *   host's `files.readDirs`, the downloads folder by default, so a later run can upload what
+ *   `download.path()` returned. A `{ name, mimeType, buffer }` payload needs no folder and totals
+ *   under 10 MiB a call. A directory upload needs its tab in front, which the tabs Neo opens for
+ *   a script never are.
+ * - In hosted BrowserOS a script receives no console messages and no page errors, by design.
+ */
 
 /**
  * Walkthrough: Hacker News, top five links in five tabs
