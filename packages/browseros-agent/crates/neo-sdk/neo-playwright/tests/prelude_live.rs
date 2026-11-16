@@ -3219,16 +3219,19 @@ async fn tests_that_clipped_snapshot_text_keeps_whole_characters_across_json() -
          <div style=\"cursor:pointer\" onclick=\"1\"><div>{title}</div>\
          <div>😀 and more words after the emoji</div></div><button>Go</button>"
     );
-    let server = FixtureServer::start(HashMap::from([(
-        "/clip".to_owned(),
-        Page::html(&html),
-    )]))
-    .await?;
+    let server =
+        FixtureServer::start(HashMap::from([("/clip".to_owned(), Page::html(&html))])).await?;
     let host: Arc<dyn OpHost> = Arc::new(LiveRun::connect().await?);
     let text = snapshot_of(&host, &server.url("127.0.0.1", "/clip"), "{ text: false }").await?;
     let ending = format!(": {title}…");
-    assert!(text.lines().any(|line| line.ends_with(&ending)), "{text}");
-    assert!(!text.contains('\u{fffd}'), "clipping must not replace a character: {text}");
+    assert!(
+        text.lines().any(|line| line.ends_with(&ending)),
+        "all 78 title letters must survive, immediately followed by an ellipsis: {text}"
+    );
+    assert!(
+        !text.contains('\u{fffd}'),
+        "clipping must not replace a character: {text}"
+    );
     Ok(())
 }
 
