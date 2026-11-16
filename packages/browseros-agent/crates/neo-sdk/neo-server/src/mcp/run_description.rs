@@ -53,23 +53,24 @@ const WAITS: &str = r"A wait (an action, a read, a snapshot, a navigation) gives
 Waiting longer does not bring a missing or covered element: when you are not sure an element is there and free, pass `{ timeout: 5000 }`.
 `page.setDefaultTimeout(ms)` sets the wait for that page for the rest of the run, navigations included.";
 
-/// A pointer action under a cover today: it waits out its timeout, then fails with the cover's
-/// markup in the call log (`neo-playwright/src/action/pointer_action.rs`). When a covered click
-/// comes to answer early and name its cover with that cover's controls, the pull request that
-/// builds it rewrites this sentence; the test that pins it fails until then.
-const COVERED_CLICK: &str = r#"A click on an element that another element covers waits out its timeout and fails `not_actionable`; its message names the cover (`<div id="modal"> intercepts pointer events`).
-Close or answer that cover with one of its own controls, then click again; if the same cover is still named, closing it again will not help."#;
+/// A pointer action under a cover: it waits out its timeout, then fails `covered`, and its
+/// message names the cover with its ref, its snapshot and its controls, and one line of what to
+/// do (`neo-playwright/src/action/cover.rs`). When a covered click comes to answer early, the pull
+/// request that builds it rewrites this sentence.
+const COVERED_CLICK: &str = r"A click on an element that another element covers waits out its timeout and fails `covered`; its message says what is `On top:`, with its ref and its controls, and what to do.
+Answer or close it with one of those controls (in a script: `error.cover.controls`), then click again; if the message says the same layer covered your last click, closing it again will not help.";
 
 /// A checkbox or radio under its own label, which upstream Playwright refuses to click too, and
 /// the trusted ways that work today, as the cover rules' author measured them on a real browser:
 /// Space on a rendered control (a 1 px clipped one included) is one trusted press that no cover
 /// delays; on a control that is not rendered it returns without error and changes nothing, hence
-/// the read-back; a click at a label's centre followed the link inside it, a click at its
-/// top-left corner did not. The text names no untrusted way (`dispatchEvent`): a model would read
-/// it as leave to press through any cover. Removed by the pull request that makes such a click
-/// land through its label; its pinning test fails until then.
+/// the read-back; on a box that is already checked it unchecks it (a host measured this), hence
+/// "only when `isChecked()` differs"; a click at a label's centre followed the link inside it, a
+/// click at its top-left corner did not. The text names no untrusted way (`dispatchEvent`): a
+/// model would read it as leave to press through any cover. Removed by the pull request that
+/// makes such a click land through its label; its pinning test fails until then.
 const OWN_LABEL_CLICK: &str = r"When a checkbox's or radio's own label covers it (`<label …> intercepts pointer events`), press Space on the control: `await page.getByRef('e5').press('Space')` is one trusted press and waits for no cover.
-Space toggles, so read the state first if the box may already be checked.
+Space toggles: press it only when `isChecked()` differs from the state you want.
 If the control is not rendered (only its label shows), click the label at its top-left corner, `click({ position: { x: 5, y: 5 } })`, and only when the label starts with plain words: a click at the centre of a label that holds a link can follow the link and lose the page.
 Read the state back with `isChecked()` either way: Space on a control that is not rendered changes nothing and says nothing.";
 
@@ -290,8 +291,9 @@ mod tests {
             "only a block with a dialog or alert role survives the cut.",
             "`fill` waits out its timeout on one with no size.",
             "when you are not sure an element is there and free, pass `{ timeout: 5000 }`.",
-            "if the same cover is still named, closing it again will not help.",
+            "if the message says the same layer covered your last click, closing it again will not help.",
             "press Space on the control: `await page.getByRef('e5').press('Space')` is one trusted press and waits for no cover.",
+            "Space toggles: press it only when `isChecked()` differs from the state you want.",
             "Read the state back with `isChecked()` either way:",
         ] {
             assert!(description.contains(sentence), "{sentence}: {description}");
@@ -394,20 +396,25 @@ mod tests {
         Ok(())
     }
 
-    /// Every error code the text names is one Neo answers, and the cover line it quotes is the
-    /// one the pointer action writes.
+    /// Every error code the text names is one Neo answers, and the cover lines it quotes are the
+    /// ones the covered answer writes.
     #[test]
     fn the_codes_and_the_cover_line_the_text_names_are_neos() {
         const POINTER: &str = include_str!("../../../neo-playwright/src/action/pointer_action.rs");
+        const COVER: &str = include_str!("../../../neo-playwright/src/action/cover.rs");
         for (code, part) in [
-            (ErrorCode::NOT_ACTIONABLE, COVERED_CLICK),
+            (ErrorCode::COVERED, COVERED_CLICK),
             (ErrorCode::PAGE_NOT_IN_TASK, TASKS),
             (ErrorCode::READ_ONLY_RUN, READ_ONLY),
         ] {
             assert!(part.contains(&format!("`{}`", code.as_str())), "{part}");
         }
         assert!(POINTER.contains("intercepts pointer events"));
-        assert!(COVERED_CLICK.contains("intercepts pointer events"));
+        assert!(OWN_LABEL_CLICK.contains("intercepts pointer events"));
+        assert!(COVER.contains("\\n  On top: "));
+        assert!(COVERED_CLICK.contains("`On top:`"));
+        assert!(COVER.contains("The same layer covered your last "));
+        assert!(COVERED_CLICK.contains("the same layer covered your last click"));
     }
 
     #[test]

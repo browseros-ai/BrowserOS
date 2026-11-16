@@ -154,6 +154,25 @@ declare global {
      */
     retryable?: boolean
     operationId?: string
+    /**
+     * With `code: 'covered'`: what took the pointer at the element's point until the timeout
+     * ran out. The message shows it, its controls and what to do; `ref` works with `getByRef`.
+     */
+    cover?: {
+      ref: string
+      role: string
+      name: string
+      kind:
+        | 'page'
+        | 'frame'
+        | 'partial'
+        | 'label'
+        | 'wrapper'
+        | 'labels'
+        | 'nothing'
+        | 'folded'
+      controls: { ref: string; role: string; name: string }[]
+    }
   }
   /** A timeout, as Playwright's. */
   class TimeoutError extends NeoError {}

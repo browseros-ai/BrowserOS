@@ -470,6 +470,7 @@ fn checked(value: Value, boxes: usize) -> Vec<api::FillBoxCheck> {
                 retryable: true,
                 host_code: None,
                 operation_id: None,
+                cover: None,
             };
             vec![
                 api::FillBoxCheck {
@@ -496,6 +497,7 @@ fn refused_box(failure: &OpFailure) -> api::FillBoxCheck {
             retryable: failure.retryable,
             host_code: None,
             operation_id: Some(failure.operation.to_string()),
+            cover: None,
         })),
         holds: None,
         contains: None,

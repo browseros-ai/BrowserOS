@@ -18,7 +18,8 @@ use futures_util::future;
 use crate::op_scope::OpScope;
 use crate::page::OpPage;
 use crate::probe::{
-    Hit, PageText, ParsedSelector, Point, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget,
+    CoverMark, Hit, PageText, ParsedSelector, Point, ProbeFailure, ProbeReply, ProbeRequest,
+    ProbeTarget,
 };
 use crate::resolve::{self, FramePath, Hop, HopIframe};
 use crate::{ErrorCode, PlaywrightError};
@@ -39,8 +40,15 @@ pub(crate) enum Projection {
     /// The point in the main viewport's CSS pixels.
     At(Point),
     /// An element of a parent frame receives events at the point instead of the iframe:
-    /// upstream's description of it (`<div id="overlay"></div>`), page text of the parent.
-    Covered { by: PageText },
+    /// upstream's description of it (`<div id="overlay"></div>`), page text of the parent;
+    /// which cover it is, for a click's count; and where it was seen, for its facts: the
+    /// parent's index among the path's hops, from the main frame down, and the point there.
+    Covered {
+        by: PageText,
+        cover: Option<CoverMark>,
+        hop: usize,
+        at: Point,
+    },
     /// A CSS transform requires browser-mapped quads rather than an additive offset. For the
     /// look, only a transform that changes the frame's size or angle.
     Transformed,
@@ -74,7 +82,7 @@ pub(crate) async fn project(
         match placed? {
             Placed::Origin(origin) => origins.push(origin),
             Placed::NoOrigin => return Ok(Projection::Transformed),
-            Placed::Hit(_) | Placed::Unseen => {
+            Placed::Hit(..) | Placed::Unseen => {
                 return Err(broken("frameBox answered a hit test nobody asked for"));
             }
             Placed::Gone => return Ok(Projection::Gone),
@@ -102,10 +110,18 @@ pub(crate) async fn project(
             .map(|(hop, at)| frame_box(scope, page, hop, Some(*at), asker)),
     )
     .await;
-    for hit in hits {
+    for (index, hit) in hits.into_iter().enumerate() {
         match hit? {
-            Placed::Hit(Hit::Done(_)) => {}
-            Placed::Hit(Hit::Missed { by }) => return Ok(Projection::Covered { by }),
+            Placed::Hit(Hit::Done(_), _) => {}
+            Placed::Hit(Hit::Missed { by }, cover) => {
+                let at = at_level.get(index).copied().unwrap_or(point);
+                return Ok(Projection::Covered {
+                    by,
+                    cover,
+                    hop: index,
+                    at,
+                });
+            }
             Placed::Unseen => return Ok(Projection::Unseen),
             Placed::Gone => return Ok(Projection::Gone),
             Placed::Origin(_) | Placed::NoOrigin => {
@@ -120,7 +136,8 @@ pub(crate) async fn project(
 enum Placed {
     Origin(Point),
     NoOrigin,
-    Hit(Hit),
+    /// The hit test's answer, and on a click's miss which cover took the point.
+    Hit(Hit, Option<CoverMark>),
     /// The look's hit test found the point where this page cannot show it.
     Unseen,
     Gone,
@@ -133,16 +150,8 @@ async fn frame_box(
     point: Option<Point>,
     asker: Asker,
 ) -> Result<Placed, PlaywrightError> {
-    let iframe = match &hop.iframe {
-        HopIframe::Pin(pin) => ProbeTarget::Pin(*pin),
-        HopIframe::Key(key) => {
-            ProbeTarget::Chunk(ParsedSelector::frame_key(key).map_err(|error| {
-                scope.fail(ErrorCode::Internal, &format!("a frame key: {error}"))
-            })?)
-        }
-    };
     let request = ProbeRequest::FrameBox {
-        iframe,
+        iframe: iframe_target(scope, hop)?,
         point,
         look: asker == Asker::Look,
     };
@@ -153,7 +162,11 @@ async fn frame_box(
                 unseen: true,
                 ..
             }) if point.is_some() => Placed::Unseen,
-            Ok(ProbeReply::FrameBox { hit: Some(hit), .. }) if point.is_some() => Placed::Hit(hit),
+            Ok(ProbeReply::FrameBox {
+                hit: Some(hit),
+                cover,
+                ..
+            }) if point.is_some() => Placed::Hit(hit, cover),
             Ok(ProbeReply::FrameBox {
                 origin: Some(origin),
                 ..
@@ -170,6 +183,21 @@ async fn frame_box(
             Err(failure) => return Err(resolve::failed(scope, failure)),
         },
     )
+}
+
+/// A hop's `<iframe>`, as its parent's world finds it.
+pub(crate) fn iframe_target(
+    scope: &OpScope<'_>,
+    hop: &Hop,
+) -> Result<ProbeTarget, PlaywrightError> {
+    Ok(match &hop.iframe {
+        HopIframe::Pin(pin) => ProbeTarget::Pin(*pin),
+        HopIframe::Key(key) => {
+            ProbeTarget::Chunk(ParsedSelector::frame_key(key).map_err(|error| {
+                scope.fail(ErrorCode::Internal, &format!("a frame key: {error}"))
+            })?)
+        }
+    })
 }
 
 /// Upstream's `roundPoint`: two decimals, toward zero, as the page point is sent.

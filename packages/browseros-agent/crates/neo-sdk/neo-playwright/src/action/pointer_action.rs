@@ -28,6 +28,7 @@ use ts_rs::TS;
 use crate::action::actionability::{PointerKind, Requirements, requirements, state_name};
 use crate::action::arm_guard::ArmGuard;
 use crate::action::attempt_log::AttemptLog;
+use crate::action::cover::{self, CoverWatch, Seat};
 use crate::action::frame_projection::{self, Projection};
 use crate::action::pointer_quads::{self, Placement as QuadPlacement};
 use crate::action::protocol_scroll;
@@ -42,13 +43,14 @@ use crate::locator_handler::Prechecks;
 use crate::op_scope::{OpScope, Sent};
 use crate::page::OpPage;
 use crate::probe::{
-    ArmPlan, DropEntry, Edit, FilePayload, Hit, HitAction, PageText, Point, ProbeFailure,
-    ProbeReply, ProbeRequest, ProbeTarget, Ran, Read, Rect, Resolution, ScrollPlan, Want,
+    ArmPlan, CoverMark, DropEntry, Edit, FilePayload, Hit, HitAction, PageText, Point,
+    ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget, Ran, Read, Rect, Resolution, ScrollPlan,
+    Want,
 };
 use crate::resolve::{self, Resolved};
 use crate::target::{Strictness, Target};
 use crate::world::Pin;
-use crate::{ErrorCode, Playwright, PlaywrightError};
+use crate::{ErrorCode, Playwright, PlaywrightError, TimedOut};
 
 /// Two measurements at least this far apart, with the same rect, make an element stable. One
 /// animation frame, as upstream's `stableRafCount: 1` waits, but on Rust's clock.
@@ -246,6 +248,9 @@ pub(crate) struct PointerRunner<'a> {
     matched: bool,
     /// Correlates completed input with its independently published navigation events.
     navigation_cut: Option<NavigationCut>,
+    /// The covers the inner loop's completed checks found (`cover.rs`), for what a timeout
+    /// under one says.
+    covers: CoverWatch,
 }
 
 impl<'a> PointerRunner<'a> {
@@ -264,6 +269,7 @@ impl<'a> PointerRunner<'a> {
             strictness,
             matched: false,
             navigation_cut: None,
+            covers: CoverWatch::new(),
         }
     }
 
@@ -299,6 +305,32 @@ impl<'a> PointerRunner<'a> {
     async fn run_holding(
         &mut self,
         action: &PointerAction,
+        drag: Option<&mut Drag>,
+    ) -> Result<(), PlaywrightError> {
+        let ran = self.attempts(action, drag).await;
+        self.answered(action, ran).await
+    }
+
+    /// A timeout under a cover says what covers the element (`cover.rs`); any other answer
+    /// passes as it is.
+    async fn answered<T>(
+        &self,
+        action: &PointerAction,
+        ran: Result<T, PlaywrightError>,
+    ) -> Result<T, PlaywrightError> {
+        match ran {
+            Err(error) if error.timed_out() == TimedOut::Yes => {
+                let name = requirements(action.kind).name;
+                Err(cover::covered_timeout(self.scope, self.page, &self.covers, name, error).await)
+            }
+            other => other,
+        }
+    }
+
+    /// [`PointerRunner::run_holding`]'s attempts, until one is done, fails, or times out.
+    async fn attempts(
+        &mut self,
+        action: &PointerAction,
         mut drag: Option<&mut Drag>,
     ) -> Result<(), PlaywrightError> {
         self.subject.log_waiting();
@@ -316,7 +348,8 @@ impl<'a> PointerRunner<'a> {
                 .await?
             {
                 Inner::Done => return Ok(()),
-                Inner::Reresolve => {}
+                // A cover's count starts again when the locator resolves again.
+                Inner::Reresolve => self.covers.cleared(),
             }
         }
         Err(self.timed_out())
@@ -326,6 +359,16 @@ impl<'a> PointerRunner<'a> {
     /// only if it differs, then verify the click changed it. A state that is already right
     /// sends nothing, and neither does unchecking a checked radio, which no click can do.
     pub(crate) async fn set_checked(
+        &mut self,
+        checked: bool,
+        action: &PointerAction,
+    ) -> Result<(), PlaywrightError> {
+        let ran = self.checking(checked, action).await;
+        self.answered(action, ran).await
+    }
+
+    /// [`PointerRunner::set_checked`]'s attempts.
+    async fn checking(
         &mut self,
         checked: bool,
         action: &PointerAction,
@@ -358,7 +401,10 @@ impl<'a> PointerRunner<'a> {
             }
             match self.on_element(&located, Some(pin), action, None).await? {
                 Inner::Done => {}
-                Inner::Reresolve => continue,
+                Inner::Reresolve => {
+                    self.covers.cleared();
+                    continue;
+                }
             }
             if action.trial {
                 return Ok(());
@@ -565,6 +611,7 @@ impl<'a> PointerRunner<'a> {
                     if action.force {
                         return Err(self.forced("Element is not visible"));
                     }
+                    self.covers.cleared();
                     self.scope
                         .log(format!("  element is not {}", state_name(missing)));
                     continue;
@@ -602,14 +649,16 @@ impl<'a> PointerRunner<'a> {
                         point,
                         browser_mapped,
                     } => (point, browser_mapped),
-                    Placed::Covered { by } => {
+                    Placed::Covered { by, cover, hop, at } => {
                         self.log_hit_refused(&req, by);
+                        self.saw_above(located, hop, at, cover)?;
                         continue;
                     }
                     Placed::Outside => {
                         if action.force {
                             return Err(self.forced("Element is outside of the viewport"));
                         }
+                        self.covers.cleared();
                         self.log_steps_before_hit(&req);
                         self.scope
                             .log("  element is outside of the viewport".to_owned());
@@ -645,6 +694,7 @@ impl<'a> PointerRunner<'a> {
                 );
                 match self.call(located, &arm).await? {
                     Called::Reply(ProbeReply::Armed { .. }) => {
+                        self.covers.cleared();
                         guard = Some(ArmGuard::new(
                             self.scope,
                             located.world().clone(),
@@ -654,6 +704,7 @@ impl<'a> PointerRunner<'a> {
                         ));
                     }
                     Called::Reply(ProbeReply::Measured { in_view, .. }) => {
+                        self.covers.cleared();
                         self.scope.log(if in_view {
                             "  element is not stable".to_owned()
                         } else {
@@ -662,12 +713,15 @@ impl<'a> PointerRunner<'a> {
                         continue;
                     }
                     Called::Reply(ProbeReply::State { missing, .. }) => {
+                        self.covers.cleared();
                         self.scope
                             .log(format!("  element is not {}", state_name(missing)));
                         continue;
                     }
-                    Called::Reply(ProbeReply::Covered { by }) => {
+                    Called::Reply(ProbeReply::Covered { by, cover }) => {
                         self.log_hit_refused(&req, by);
+                        self.covers
+                            .saw(own_seat(located, pin, measured.point), cover);
                         continue;
                     }
                     Called::Reply(ProbeReply::None { stale_ref: None } | ProbeReply::Detached) => {
@@ -818,6 +872,7 @@ impl<'a> PointerRunner<'a> {
                                 hit: Hit::Missed { by },
                             }) => {
                                 self.log_covered(by);
+                                self.covers.missed(own_seat(located, pin, measured.point));
                                 continue;
                             }
                             Ok(other) => {
@@ -1029,7 +1084,9 @@ impl<'a> PointerRunner<'a> {
                     browser_mapped: false,
                 })
             }
-            Projection::Covered { by } => Ok(Placed::Covered { by }),
+            Projection::Covered { by, cover, hop, at } => {
+                Ok(Placed::Covered { by, cover, hop, at })
+            }
             // Only the look's question answers it; a click's point outside a page reads so.
             Projection::Unseen => Ok(Placed::Outside),
             Projection::Transformed => {
@@ -1065,6 +1122,30 @@ impl<'a> PointerRunner<'a> {
             // next pass.
             Projection::Gone => Ok(Placed::Reresolve),
         }
+    }
+
+    /// A parent page's hit test found a cover: where, for its facts.
+    fn saw_above(
+        &mut self,
+        located: &Resolved,
+        hop: usize,
+        at: Point,
+        cover: Option<CoverMark>,
+    ) -> Result<(), PlaywrightError> {
+        let Some(parent) = located.path().hops().get(hop) else {
+            return Err(self.scope.fail(
+                ErrorCode::Internal,
+                "a parent page's hit test named a page the path does not hold",
+            ));
+        };
+        let seat = Seat {
+            world: parent.parent.clone(),
+            target: frame_projection::iframe_target(self.scope, parent)?,
+            point: at,
+            above: Some(hop),
+        };
+        self.covers.saw(seat, cover);
+        Ok(())
     }
 
     /// A hit test that refused before any input: upstream checks the hit target only after the
@@ -1163,11 +1244,25 @@ enum Placed {
     },
     /// Browser-mapped quads leave no substantial area inside the root viewport.
     Outside,
-    /// A parent frame's element is in the way: its description, page text of that frame.
+    /// A parent frame's element is in the way: its description, page text of that frame;
+    /// which cover it is; the parent's index on the path and the point there.
     Covered {
         by: PageText,
+        cover: Option<CoverMark>,
+        hop: usize,
+        at: Point,
     },
     Reresolve,
+}
+
+/// Where the element's own frame tested its cover: the pinned element at its click point.
+fn own_seat(located: &Resolved, pin: Pin, point: Point) -> Seat {
+    Seat {
+        world: located.world().clone(),
+        target: ProbeTarget::Pin(pin),
+        point,
+        above: None,
+    }
 }
 
 /// The interceptor's expiry, in the probe's milliseconds: [`ARM_MARGIN`] past the op's

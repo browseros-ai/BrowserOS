@@ -794,6 +794,13 @@ impl Writer {
             } else {
                 String::new()
             };
+            // A covered error's cover holds page text (its name, its controls' names): stored
+            // only with values on, and clipped as the message is.
+            error.cover = error
+                .cover
+                .take()
+                .filter(|_| keep)
+                .map(|cover| redactor.texts(&cover));
             error
         });
         let page = event.page_after.map(|mut page| {
@@ -909,6 +916,13 @@ impl Writer {
             } else {
                 String::new()
             };
+            // A covered error's cover holds page text (its name, its controls' names): stored
+            // only with values on, and clipped as the message is.
+            error.cover = error
+                .cover
+                .take()
+                .filter(|_| keep)
+                .map(|cover| redactor.texts(&cover));
             error
         });
         let bounded = match open.as_ref().filter(|_| keep) {

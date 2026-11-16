@@ -568,6 +568,64 @@
     return pending.size ? Promise.all([...pending]) : null;
   }
 
+  // crates/neo-sdk/neo-playwright-js/src/prelude/cover.ts
+  var SNAPSHOT_CHARS = 1500;
+  var renderSnapshot;
+  function setCoverRenderer(render) {
+    renderSnapshot = render;
+  }
+  var ON_TOP = `
+  On top: `;
+  function shapeCovered(error) {
+    const cover = Reflect.get(error, "cover");
+    if (typeof cover !== "object" || cover === null)
+      return;
+    const snapshot = Reflect.get(cover, "snapshot");
+    const lines = snapshotLines(snapshot);
+    if (lines !== "")
+      error.message = underOnTop(error.message, lines);
+    const { snapshot: _left, ...kept } = cover;
+    Reflect.set(error, "cover", kept);
+  }
+  function snapshotLines(snapshot) {
+    if (typeof snapshot !== "object" || snapshot === null || !renderSnapshot)
+      return "";
+    let text;
+    try {
+      text = renderSnapshot(snapshot);
+    } catch {
+      return "";
+    }
+    const kept = [];
+    let used = 0;
+    for (const line of text.split(`
+`)) {
+      if (line.trim() === "")
+        continue;
+      if (used + line.length + 1 > SNAPSHOT_CHARS) {
+        const room = SNAPSHOT_CHARS - used - 1;
+        if (room > 0)
+          kept.push(`    ${line.slice(0, room)}…`);
+        kept.push("    … (the rest of its snapshot is cut)");
+        break;
+      }
+      used += line.length + 1;
+      kept.push(`    ${line}`);
+    }
+    return kept.join(`
+`);
+  }
+  function underOnTop(message, lines) {
+    const at = message.indexOf(ON_TOP);
+    if (at < 0)
+      return message;
+    const end = message.indexOf(`
+`, at + ON_TOP.length);
+    return end < 0 ? `${message}
+${lines}` : `${message.slice(0, end)}
+${lines}${message.slice(end)}`;
+  }
+
   // crates/neo-sdk/neo-playwright-js/src/prelude/host.ts
   function localTimeout(message) {
     const neo = Reflect.get(globalThis, "__neo");
@@ -648,6 +706,7 @@
     if (thrown instanceof Error) {
       if (!assertion)
         thrown.message = apiMessage(api, op, thrown.message);
+      shapeCovered(thrown);
       thrown.name = named;
       return withFields(thrown, { timeout: timedOut });
     }
@@ -8137,7 +8196,7 @@ ${value.stack}`;
     }
     return [...lines, ...unplaced];
   }
-  function renderSnapshot(result) {
+  function renderSnapshot2(result) {
     return yamlLines(result, true).map((line) => line.text).join(`
 `);
   }
@@ -9023,9 +9082,9 @@ ${changes}`;
       const site = captureSite();
       const mode = options.mode ?? (upstreamSnapshots ? "default" : "ai");
       if (upstreamSnapshots)
-        return renderSnapshot(await this._snapshot(api, selector, options, mode));
+        return renderSnapshot2(await this._snapshot(api, selector, options, mode));
       if (mode === "default")
-        return renderSnapshot(await this._snapshot(api, selector, options, mode));
+        return renderSnapshot2(await this._snapshot(api, selector, options, mode));
       if (mode === "full") {
         const maxTokens = maxTokensOption(api, options.maxTokens) ?? DEFAULT_MAX_TOKENS;
         return renderFullSnapshot(await this._snapshot(api, selector, options, "ai", true), maxTokens);
@@ -19944,6 +20003,7 @@ Call Log:
   }
 
   // crates/neo-sdk/neo-playwright-js/src/prelude/index.ts
+  setCoverRenderer((json) => renderSnapshotV1({ json, partial: [] }, withDefaults({})).text);
   installUnsupported({
     Selectors,
     Browser,

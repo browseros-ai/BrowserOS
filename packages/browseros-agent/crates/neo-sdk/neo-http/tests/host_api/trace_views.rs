@@ -63,6 +63,7 @@ async fn summary_omits_values_everywhere_and_keeps_audit_metadata() -> TestResul
         host_code: Some(value.into()),
         retryable: false,
         operation_id: Some(fill),
+        cover: None,
     };
     h.sink.run_started(RunStarted {
         id: run,

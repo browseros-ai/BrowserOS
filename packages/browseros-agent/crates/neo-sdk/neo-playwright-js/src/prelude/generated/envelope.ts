@@ -136,7 +136,12 @@ message: string,
  * A failed `expect` matcher's facts, which the bootstrap puts on the error as
  * `matcherResult` for the expect prelude to complete.
  */
-matcher?: unknown, };
+matcher?: unknown, 
+/**
+ * A `covered` pointer action's cover (`{ ref, role, name, kind, controls, snapshot }`): the
+ * bootstrap renders its snapshot into the message and puts the rest on the error as `cover`.
+ */
+cover?: unknown, };
 
 /**
  * Whose behavior must change to fix a failure.

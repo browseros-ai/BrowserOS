@@ -679,7 +679,12 @@ mod tests {
         let point = Point { x: 140.0, y: 147.0 };
         assert_eq!(above_of(Ok(Projection::At(point))), Ok(Above::Clear));
         assert_eq!(
-            above_of(Ok(Projection::Covered { by: banner })),
+            above_of(Ok(Projection::Covered {
+                by: banner,
+                cover: None,
+                hop: 0,
+                at: point
+            })),
             Ok(Above::Refused(EntryCode::BoxCovered(CoverIn::PageAbove)))
         );
         assert_eq!(

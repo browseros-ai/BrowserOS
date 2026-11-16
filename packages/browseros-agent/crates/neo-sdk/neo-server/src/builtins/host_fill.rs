@@ -424,6 +424,7 @@ fn checked_box(look: BoxLook) -> api::FillBoxCheck {
                 retryable: true,
                 host_code: refusal.host_code,
                 operation_id: None,
+                cover: None,
             })
         }),
         // The compare's booleans join the answer at the route only (`CheckCompared`).
