@@ -1048,6 +1048,7 @@ async fn values_on_keeps_a_covered_errors_cover_in_records_and_events() -> TestR
         at: at(1),
     });
     let error = ErrorRecord {
+        diagnostic_code: None,
         owner: ErrorOwner::Website,
         code: "covered".into(),
         message: "locator.click: Timeout 1500ms exceeded.".into(),
