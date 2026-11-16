@@ -298,7 +298,7 @@ async fn a_read_only_skill_has_nothing_to_choose() -> anyhow::Result<()> {
 #[tokio::test]
 async fn the_meter_starts_the_moment_ultrafast_turns_on() -> anyhow::Result<()> {
     let gateway = FakeGateway::start().await?;
-    let mut app = app(false, Some(&gateway)).await?;
+    let app = app(false, Some(&gateway)).await?;
     let since_file = app
         .state
         .config
