@@ -406,6 +406,91 @@ async fn tests_that_a_backdrop_beside_its_dialog_is_named_after_the_dialog() -> 
     result
 }
 
+/// A sign-in dialog with a close button of its own, whose form's frame lies over the click point:
+/// the cover is the dialog, its kind is `page`, its controls are the button and the frame, and
+/// the last line is the ordinary one, not the frame's; the button's ref closes it.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_dialogs_frame_at_the_point_keeps_the_dialogs_line() -> TestResult {
+    let shape = Shape::shape("signin").await?;
+    let result = async {
+        let (message, cover) = covered(shape.click("#target").await)?;
+        assert_eq!(text(&cover, "role"), "dialog", "{message}");
+        assert_eq!(text(&cover, "kind"), "page", "{message}");
+        let close = control_ref(&cover, "Close Sign in or Sign up")?;
+        control_ref(&cover, "Login/Signup")?;
+        assert!(
+            message.contains("\n  Do: answer or close it with one of its controls"),
+            "{message}"
+        );
+        assert!(!message.contains("a frame covers it"), "{message}");
+        let by_ref = locator(&shape.page, &[aria_ref(&close)], &close);
+        shape.act("locator.click", &by_ref, json!({})).await?;
+        shape.click("#target").await?;
+        assert_eq!(
+            shape.log().await?,
+            ["target"],
+            "the dialog closed, the click lands"
+        );
+        TestResult::Ok(())
+    }
+    .await;
+    shape.close().await;
+    result
+}
+
+/// A backdrop beside a host whose shadow dialog draws its buttons through a slot: a plain button
+/// and a custom element whose real button lives in its own root. The answer names the dialog,
+/// lists both, and the plain one's ref presses it.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_dialogs_slotted_button_is_its_control() -> TestResult {
+    let shape = Shape::shape("slotted").await?;
+    let result = async {
+        let (message, cover) = covered(shape.click("#target").await)?;
+        assert!(
+            message.contains(". Open over it: dialog \"Before you go\" [ref="),
+            "{message}"
+        );
+        assert!(!message.contains("Do: a blank layer"), "{message}");
+        let leave = control_ref(&cover, "Leave")?;
+        control_ref(&cover, "Stay")?;
+        let by_ref = locator(&shape.page, &[aria_ref(&leave)], &leave);
+        shape.act("locator.click", &by_ref, json!({})).await?;
+        shape.click("#target").await?;
+        assert_eq!(
+            shape.log().await?,
+            ["target"],
+            "the slotted button pressed, the click lands"
+        );
+        TestResult::Ok(())
+    }
+    .await;
+    shape.close().await;
+    result
+}
+
+/// A fixed backdrop and a fixed dialog drawn as siblings in one open shadow root, under a host
+/// that is not fixed: the backdrop is named after the dialog standing on it, with its button.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_backdrop_in_a_shadow_root_is_named_after_its_dialog() -> TestResult {
+    let shape = Shape::shape("shadowpair").await?;
+    let result = async {
+        let (message, cover) = covered(shape.click("#target").await)?;
+        assert!(
+            message.contains(". Open over it: dialog \"Your privacy\" [ref="),
+            "{message}"
+        );
+        assert!(!message.contains("Do: a blank layer"), "{message}");
+        control_ref(&cover, "Got it")?;
+        TestResult::Ok(())
+    }
+    .await;
+    shape.close().await;
+    result
+}
+
 /// A backdrop beside a dialog whose only control is a `div` with `role="button"` and no
 /// tabindex: the answer names the dialog, not a blank layer, and lists that control, whose ref
 /// presses it.

@@ -217,6 +217,7 @@ function factsOf(
   request: CoverRequest,
 ): CoverFacts {
   const { injected } = world
+  const kind = kindOf(world, subject, chain, request.point, request.above)
   const layer = whichDialog(world, chain, top, request.point)
   let shown = layer
   // A cover whose content sits in a closed root this world does not know is not blank.
@@ -255,8 +256,22 @@ function factsOf(
     behind,
     closed,
     notice: !surrounds && inLiveRegion(world, shown),
-    kind: kindOf(world, subject, chain, request.point, request.above),
+    kind: frameInCover(world, shown, kind) ? { is: 'page' } : kind,
   }
+}
+
+/**
+ * A frame at the point gets the frame's line only when the cover named is that frame, or lists
+ * nothing but frames. A dialog with controls of its own, one of whose frames lies at the point
+ * (a sign-in dialog that draws its form in a frame), is answered or closed with those controls:
+ * the frame's line would send the agent to a bot-check solver with the dialog's Close listed above.
+ */
+function frameInCover(world: World, shown: Element, kind: CoverKind): boolean {
+  if (kind.is !== 'frame') return false
+  const frame = (element: Element) =>
+    element.localName === 'iframe' || element.localName === 'frame'
+  if (frame(shown)) return false
+  return takingControls(world, shown).some((control) => !frame(control))
 }
 
 /**
@@ -421,7 +436,9 @@ function inLiveRegion(world: World, cover: Element): boolean {
 
 /**
  * At the dialog's own centre, the backdrop is among the elements under the pointer. The centre of
- * the dialog's part in view: a hit test reads nothing outside the viewport.
+ * the dialog's part in view: a hit test reads nothing outside the viewport. The hit test is the
+ * backdrop's own root's: a document's names a shadow root's host, never what the root holds, so
+ * a backdrop drawn inside a consent widget's root would never be found under its dialog.
  */
 function standsOn(dialog: Element, backdrop: Element): boolean {
   const box = dialog.getBoundingClientRect()
@@ -430,7 +447,8 @@ function standsOn(dialog: Element, backdrop: Element): boolean {
   const top = Math.max(box.top, 0)
   const bottom = Math.min(box.bottom, innerHeight)
   if (right <= left || bottom <= top) return false
-  return dialog.ownerDocument
+  const root = backdrop.getRootNode() as Document | ShadowRoot
+  return root
     .elementsFromPoint((left + right) / 2, (top + bottom) / 2)
     .some((element) => element === backdrop || backdrop.contains(element))
 }
@@ -448,11 +466,20 @@ const MAX_DEPTH = 32
 /**
  * `root`'s descendants in the composed tree: its light children, and the content of every shadow
  * root this world can read, which is an open one or a closed one a marked snapshot handed it
- * (`host.shadowRoot` answers both in Neo's world, shadow-roots.ts). In document order within each
- * scope, at most MAX_WALKED.
+ * (`host.shadowRoot` answers both in Neo's world, shadow-roots.ts), and the elements a slot
+ * draws: a dialog in a root whose buttons are slotted from its host's light DOM has them only
+ * through its `<slot>`. In document order within each scope, each element once, at most
+ * MAX_WALKED.
  */
 function composedDescendants(root: Element | Document): Element[] {
   const found: Element[] = []
+  const seen = new Set<Element>()
+  const take = (element: Element): boolean => {
+    if (seen.has(element)) return false
+    seen.add(element)
+    found.push(element)
+    return true
+  }
   const scopes: (Element | Document | ShadowRoot)[] = [root]
   const own = root.nodeType === 1 ? (root as Element).shadowRoot : null
   if (own) scopes.push(own)
@@ -461,8 +488,16 @@ function composedDescendants(root: Element | Document): Element[] {
     if (!scope) continue
     for (const element of scope.querySelectorAll('*')) {
       if (found.length >= MAX_WALKED) return found
-      found.push(element)
+      if (!take(element)) continue
       if (element.shadowRoot) scopes.push(element.shadowRoot)
+      if (element.localName !== 'slot') continue
+      const slot = element as HTMLSlotElement
+      for (const assigned of slot.assignedElements({ flatten: true })) {
+        if (!take(assigned)) continue
+        scopes.push(assigned)
+        // A slotted design-system button keeps its real button in its own root.
+        if (assigned.shadowRoot) scopes.push(assigned.shadowRoot)
+      }
     }
   }
   return found

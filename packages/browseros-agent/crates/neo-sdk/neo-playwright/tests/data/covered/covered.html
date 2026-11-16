@@ -162,6 +162,60 @@ const shapes = {
     modal.innerHTML = '<button id="later">No thanks</button> <button id="join">Sign up</button>'
     document.body.append(backdrop, modal)
   },
+  signin() {
+    // A sign-in dialog in a fixed full-view carrier that takes no pointer: a nameless modal
+    // dialog holding a labelled close button and, deeper inside it, the form's frame over the
+    // click point.
+    button()
+    const carrier = document.createElement('div')
+    carrier.style.cssText = 'position: fixed; inset: 0; z-index: 10; pointer-events: none'
+    carrier.innerHTML = `<div role="dialog" aria-modal="true" style="position: absolute; left: 60px; top: 60px; width: 440px; height: 320px; background: #fff; pointer-events: auto">
+      <button id="close" aria-label="Close Sign in or Sign up">x</button>
+      <div><iframe title="Login/Signup" srcdoc="<p>Sign in</p>" style="position: absolute; left: 20px; top: 40px; width: 400px; height: 260px; border: 0"></iframe></div></div>`
+    carrier.querySelector('#close').addEventListener('click', () => carrier.remove())
+    document.body.append(carrier)
+  },
+  slotted() {
+    // A backdrop beside a host whose shadow dialog draws its buttons through a slot: they are
+    // the host's light children, as a design system's footer slot holds them.
+    button()
+    const backdrop = document.createElement('div')
+    backdrop.id = 'backdrop'
+    backdrop.style.cssText = 'position: fixed; inset: 0; z-index: 10; background: rgba(0, 0, 0, 0.4)'
+    const host = document.createElement('div')
+    host.id = 'leaving'
+    const root = host.attachShadow({ mode: 'open' })
+    root.innerHTML = `<div role="dialog" aria-label="Before you go" style="position: fixed; left: 320px; top: 200px; width: 240px; padding: 16px; z-index: 11; background: #fff">
+      <p>Stay a while.</p><slot></slot></div>`
+    // Its second way out is a design-system button: a custom element slotted straight into the
+    // dialog, whose real button lives in its own open root.
+    if (!customElements.get('x-stay'))
+      customElements.define('x-stay', class extends HTMLElement {
+        constructor() {
+          super()
+          this.attachShadow({ mode: 'open' }).innerHTML = '<button>Stay</button>'
+        }
+      })
+    host.innerHTML = '<button id="leave">Leave</button> <x-stay></x-stay>'
+    host.querySelector('#leave').addEventListener('click', () => {
+      host.remove()
+      backdrop.remove()
+    })
+    document.body.append(backdrop, host)
+  },
+  shadowpair() {
+    // A consent widget that draws its fixed backdrop and its fixed dialog as two siblings in one
+    // open shadow root, under a host that is not itself fixed.
+    button()
+    const host = document.createElement('div')
+    host.id = 'widget'
+    const root = host.attachShadow({ mode: 'open' })
+    root.innerHTML = `<div id="veil" style="position: fixed; inset: 0; z-index: 10; background: rgba(0, 0, 0, 0.4)"></div>
+      <div role="dialog" aria-label="Your privacy" style="position: fixed; left: 320px; top: 200px; width: 240px; padding: 16px; z-index: 11; background: #fff">
+      <button id="ok">Got it</button></div>`
+    root.getElementById('ok').addEventListener('click', () => host.remove())
+    document.body.append(host)
+  },
   rolebutton() {
     // A backdrop beside a dialog whose only control is a div with role="button" and no tabindex,
     // as many custom close buttons are.

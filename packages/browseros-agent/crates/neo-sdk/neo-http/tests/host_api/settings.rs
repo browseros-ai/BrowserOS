@@ -913,7 +913,7 @@ async fn values_off_reaches_records_and_events_without_payloads() -> TestResult 
             "ref": "e7",
             "role": "dialog",
             "name": "cover-canary-host-api",
-            "kind": {"is": "page"},
+            "kind": "page",
             "controls": [{"ref": "e9", "role": "button", "name": "control-canary-host-api"}],
         })),
     };
@@ -1007,6 +1007,111 @@ async fn values_off_reaches_records_and_events_without_payloads() -> TestResult 
         !all.contains("canary-host-api"),
         "no trace read or event carries a canary"
     );
+    Ok(())
+}
+
+/// The values-off test's covered error with values on: its cover reaches the record, the run list,
+/// the tail and the events, so the canaries that test looks for are live, and their absence there
+/// is the writer's doing.
+#[tokio::test]
+async fn values_on_keeps_a_covered_errors_cover_in_records_and_events() -> TestResult {
+    use crate::support::{EventStream, at};
+    use neo_trace::{
+        Delivery, Effect, ErrorOwner, ErrorRecord, OperationEnded, OperationId, OperationKind,
+        OperationStarted, Outcome, RunEnded, RunId, RunStarted, RunStatus, RunTabsScope,
+    };
+
+    let h = harness().await?;
+    let mut stream = EventStream::open(&h, "/v1/events", None).await?;
+    let run = RunId::new();
+    let op = OperationId::new(run, 1);
+    h.sink.run_started(RunStarted {
+        id: run,
+        code: "code".into(),
+        request_id: None,
+        task_id: None,
+        host_data: None,
+        tabs_scope: RunTabsScope::Browser,
+        access: None,
+        at: at(0),
+    });
+    h.sink.op_started(OperationStarted {
+        site: None,
+        id: op,
+        parent: None,
+        name: "locator.click".into(),
+        kind: OperationKind::Builtin,
+        effect: Effect::Write,
+        tab: Some(TabId(7)),
+        args: json!({}),
+        at: at(1),
+    });
+    let error = ErrorRecord {
+        owner: ErrorOwner::Website,
+        code: "covered".into(),
+        message: "locator.click: Timeout 1500ms exceeded.".into(),
+        host_code: None,
+        retryable: false,
+        operation_id: Some(op),
+        cover: Some(json!({
+            "ref": "e7",
+            "role": "dialog",
+            "name": "cover-canary-host-api",
+            "kind": "page",
+            "controls": [{"ref": "e9", "role": "button", "name": "control-canary-host-api"}],
+        })),
+    };
+    h.sink.op_ended(OperationEnded {
+        id: op,
+        outcome: Outcome::Error,
+        delivery: Delivery::NotSent,
+        sent_at: None,
+        result: None,
+        error: Some(error.clone()),
+        page_after: None,
+        main_world: false,
+        frames_incomplete: false,
+        at: at(3),
+    });
+    h.sink.run_ended(RunEnded {
+        id: run,
+        status: RunStatus::Error,
+        error: Some(error),
+        result: None,
+        replay: None,
+        at: at(4),
+    });
+    h.sink.flush().await?;
+    let events = stream.take(4).await?;
+    let record = h.get(&format!("/v1/runs/{run}")).await?;
+    // `values` is absent on a record whose values were kept; only `off` is ever written.
+    assert!(record.body.get("values").is_none(), "{}", record.body);
+    assert_eq!(
+        record.body["error"]["cover"]["name"], "cover-canary-host-api",
+        "{}",
+        record.body
+    );
+    assert_eq!(
+        record.body["operations"][0]["error"]["cover"]["controls"][0]["name"],
+        "control-canary-host-api",
+        "{}",
+        record.body
+    );
+    let list = h.get("/v1/runs").await?;
+    assert_eq!(
+        list.body["items"][0]["error"]["cover"]["name"], "cover-canary-host-api",
+        "{}",
+        list.body
+    );
+    let tail = h.get("/v1/trace").await?;
+    assert_eq!(
+        tail.body["operations"][0]["error"]["cover"]["name"], "cover-canary-host-api",
+        "{}",
+        tail.body
+    );
+    let events = json!(events.iter().map(|event| &event.data).collect::<Vec<_>>()).to_string();
+    assert!(events.contains("cover-canary-host-api"), "{events}");
+    assert!(events.contains("control-canary-host-api"), "{events}");
     Ok(())
 }
 
