@@ -106,6 +106,14 @@ fn handleless_start_for(tool: &str) -> HandlelessStart {
     }
 }
 
+/// The handle a modern call advertises back to the agent. An ephemeral probe advertises
+/// none: a handle it could echo would route later real work into a session the audit
+/// skips, so that work would silently vanish. With no handle the next real call arrives
+/// handle-less and opens a fresh task instead.
+fn advertised_handle(session: &Session, handle: SessionId) -> Option<SessionId> {
+    (!session.is_ephemeral()).then_some(handle)
+}
+
 /// Owns one MCP transport lifetime. Drop best-effort schedules removal of a started
 /// server session, which records its end and begins retained-group handling.
 pub struct ClawMcpService {
@@ -1380,7 +1388,8 @@ impl ServerHandler for ClawMcpService {
                     handleless_start_for(&request.name),
                 )
                 .await?;
-            (started, Some(handle))
+            let handle = advertised_handle(started.session.as_ref(), handle);
+            (started, handle)
         } else {
             (self.learn_session_from_request(&context).await?, None)
         };
@@ -4281,6 +4290,43 @@ mod tests {
         ] {
             assert_eq!(handleless_start_for(opener), HandlelessStart::OpenTask);
         }
+    }
+
+    #[tokio::test]
+    async fn an_ephemeral_probe_advertises_no_handle_but_an_opener_does() -> anyhow::Result<()> {
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let state = call.state.clone();
+        let persisted = state
+            .sessions
+            .mint_with_id(
+                SessionId::new("persisted"),
+                claude_identity(),
+                claude_client(),
+                None,
+                true,
+            )
+            .await?;
+        let probe = state
+            .sessions
+            .mint_with_id(
+                SessionId::new("probe"),
+                claude_identity(),
+                claude_client(),
+                None,
+                false,
+            )
+            .await?;
+        assert_eq!(
+            advertised_handle(persisted.as_ref(), SessionId::new("persisted")),
+            Some(SessionId::new("persisted")),
+            "a real task advertises its handle so the agent keeps working in it"
+        );
+        assert_eq!(
+            advertised_handle(probe.as_ref(), SessionId::new("probe")),
+            None,
+            "a probe advertises no handle, so later real work never reuses it"
+        );
+        Ok(())
     }
 
     #[tokio::test]
