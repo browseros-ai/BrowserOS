@@ -8,6 +8,9 @@
 //! `BROWSERCLAW_HOSTED_MODE=1` when testing hosted mode; then the console test checks that
 //! nothing arrives. Run with `bun run test:browser -- cargo test -p neo-playwright --test
 //! events_live -- --ignored`. Every test opens and closes its own tabs.
+//! The hidden-iframe download regression has its own command: `bun run test:browser -- cargo
+//! test -p neo-playwright --test events_live
+//! tests_that_a_hidden_iframe_download_reaches_its_page_and_finishes -- --ignored --exact`.
 
 #[path = "support/js_runner.rs"]
 #[expect(
@@ -26,6 +29,7 @@ mod page_server;
 
 use std::env;
 use std::future::{self, Future};
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -92,6 +96,82 @@ async fn wait_for(
 async fn click_soon(run: &LiveRun, page: &TestPage, selector: &str) -> TestResult {
     time::sleep(Duration::from_millis(50)).await;
     run.click(page, selector).await
+}
+
+/// The attachment's iframe exists only after the trusted click, so the watcher's initial
+/// frame tree cannot supply its owner. A page waiter must receive it and its saved file.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_hidden_iframe_download_reaches_its_page_and_finishes() -> TestResult {
+    with_page(|run, server, page| async move {
+        let result = async {
+            open(&run, &page, &server.url("/child.html")).await?;
+            run.eval(
+                &page,
+                r#"(() => {
+                    const button = document.createElement('button');
+                    button.id = 'download';
+                    button.textContent = 'Download attachment';
+                    button.addEventListener('click', event => {
+                        window.downloadClickTrusted = event.isTrusted;
+                        const frame = document.createElement('iframe');
+                        frame.hidden = true;
+                        frame.src = '/attachment.txt';
+                        document.body.append(frame);
+                    });
+                    document.body.append(button);
+                })()"#,
+            )
+            .await?;
+            let since = now_ms()?;
+            let (download, clicked) = tokio::join!(
+                wait_for(&run, Some(&page), "download", since),
+                click_soon(&run, &page, "#download")
+            );
+            clicked?;
+            assert_eq!(
+                run.eval(&page, "window.downloadClickTrusted").await?,
+                json!(true),
+                "the iframe must be created by a trusted click"
+            );
+            let download = download?;
+            assert_eq!(download["event"], json!("download"));
+            assert_eq!(download["page"], brand(&page), "{download}");
+            assert_eq!(
+                download["download"]["url"],
+                json!(server.url("/attachment.txt"))
+            );
+            assert_eq!(
+                download["download"]["suggestedFilename"],
+                json!("iframe-attachment.txt")
+            );
+            let finished = run
+                .invoke(
+                    "download.path",
+                    json!({ "call": { "timeoutMs": 5000 },
+                        "download": download["download"]["id"] }),
+                )
+                .await?;
+            assert_eq!(finished["failure"], Value::Null, "{finished}");
+            let path = finished["path"]
+                .as_str()
+                .ok_or("a completed download returns its saved path")?;
+            assert_eq!(
+                Path::new(path).file_name().and_then(|name| name.to_str()),
+                Some("iframe-attachment.txt"),
+                "the completed file keeps the attachment's filename"
+            );
+            assert_eq!(
+                tokio::fs::read_to_string(path).await?,
+                "iframe attachment\n"
+            );
+            tokio::fs::remove_file(path).await?;
+            Ok(())
+        }
+        .await;
+        (run, result)
+    })
+    .await
 }
 
 /// A run that sees only its family's tabs (as neo-server binds a run to its task) still hears

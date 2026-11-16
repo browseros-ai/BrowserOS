@@ -2862,6 +2862,196 @@ mod worker_observation_tests {
         (hub, watcher)
     }
 
+    /// A same-process child created after the initial tree has no target attachment of its
+    /// own. Its download must still reach listeners on the page whose session attached it.
+    #[tokio::test]
+    async fn a_same_process_iframe_download_is_reported_on_its_page() -> Result<(), Box<dyn Error>>
+    {
+        let connection = TestConnection::new([
+            (
+                "Target.getTargets",
+                json!({ "targetInfos": [
+                    { "targetId": "page", "type": "page", "url": "https://example.test/" }
+                ] }),
+            ),
+            ("Target.setDiscoverTargets", json!({})),
+            ("Browser.setDownloadBehavior", json!({})),
+            (
+                "Page.getFrameTree",
+                json!({ "frameTree": { "frame": {
+                    "id": "page", "url": "https://example.test/"
+                } } }),
+            ),
+        ]);
+        let (hub, mut watcher) = scripted(&connection);
+        watcher.discover(false).await?;
+        watcher
+            .handle(CdpEvent {
+                method: "Target.attachedToTarget".to_owned(),
+                params: json!({ "sessionId": "page-session", "targetInfo": {
+                    "targetId": "page", "type": "page", "url": "https://example.test/"
+                } }),
+                session_id: None,
+            })
+            .await;
+        watcher
+            .handle(CdpEvent {
+                method: "Page.frameAttached".to_owned(),
+                params: json!({ "frameId": "child", "parentFrameId": "page" }),
+                session_id: Some(SessionId::from("page-session")),
+            })
+            .await;
+        assert!(
+            hub.read_after(0).records.into_iter().any(|record| matches!(
+                record.event,
+                PageEvent::FrameLifecycle(event)
+                    if event.kind == PageEventKind::FrameAttached
+                        && event.target.as_str() == "page"
+                        && event.frame.id.0 == "child"
+            )),
+            "the page session must publish its child's attachment before the download"
+        );
+        watcher
+            .handle(CdpEvent {
+                method: "Browser.downloadWillBegin".to_owned(),
+                params: json!({ "frameId": "child", "guid": "download",
+                    "url": "https://example.test/attachment.txt",
+                    "suggestedFilename": "iframe-attachment.txt" }),
+                session_id: None,
+            })
+            .await;
+        let download = hub
+            .read_after(0)
+            .records
+            .into_iter()
+            .find_map(|record| match record.event {
+                PageEvent::Download(download) => Some(download),
+                _ => None,
+            })
+            .ok_or("the browser's download must be published")?;
+        assert_eq!(
+            download.page,
+            Some(TargetId("page".to_owned())),
+            "a child without its own target still downloads on its parent page"
+        );
+        Ok(())
+    }
+
+    /// Root download events must share the tab's ordering barrier: otherwise the begin can
+    /// pass its frame attachment, or completion can pass a held begin and be discarded.
+    #[tokio::test]
+    async fn a_same_process_iframe_download_waits_for_its_attachment_and_keeps_completion()
+    -> Result<(), Box<dyn Error>> {
+        use std::path::PathBuf;
+
+        use crate::DownloadState;
+
+        let connection = TestConnection::new([]);
+        let (hub, mut watcher) = scripted(&connection);
+        watcher.progress.start(0, 0);
+        let page = TargetId("page".to_owned());
+        let page_session = SessionId::from("page-session");
+        let frame_session = SessionId::from("remote-session");
+        watcher.sessions.insert(page_session.clone(), page.clone());
+        watcher.lifecycle_sources.attach(&page_session, &page);
+        let (seeded, _answers) = mpsc::unbounded_channel();
+        watcher.seeded = Some(seeded);
+
+        // An OOPIF's tree read holds later events from every session of its tab, including
+        // the root session that announces this new same-process child.
+        read(
+            &mut watcher,
+            cdp(
+                "Target.attachedToTarget",
+                "page-session",
+                json!({ "sessionId": "remote-session", "targetInfo": {
+                    "targetId": "remote", "type": "iframe", "url": "https://example.test/frame"
+                } }),
+            ),
+        )
+        .await;
+        read(
+            &mut watcher,
+            cdp(
+                "Page.frameAttached",
+                "page-session",
+                json!({ "frameId": "child", "parentFrameId": "page" }),
+            ),
+        )
+        .await;
+        for (method, params) in [
+            (
+                "Browser.downloadWillBegin",
+                json!({ "frameId": "child", "guid": "download",
+                    "url": "https://example.test/attachment.txt",
+                    "suggestedFilename": "iframe-attachment.txt" }),
+            ),
+            (
+                "Browser.downloadProgress",
+                json!({ "guid": "download", "state": "completed",
+                    "filePath": "/downloads/iframe-attachment.txt" }),
+            ),
+        ] {
+            read(
+                &mut watcher,
+                CdpEvent {
+                    method: method.to_owned(),
+                    params,
+                    session_id: None,
+                },
+            )
+            .await;
+        }
+        let published_before_tree = hub
+            .read_after(0)
+            .records
+            .iter()
+            .any(|record| matches!(record.event, PageEvent::Download(_)));
+
+        watcher.seeded_tree(SeededTree {
+            session: frame_session,
+            tree: Some(json!({ "frameTree": { "frame": {
+                "id": "remote", "parentId": "page", "url": "https://example.test/frame"
+            } } })),
+        });
+        watcher.advance_lines().await;
+        let records = hub.read_after(0).records;
+        let attached = records
+            .iter()
+            .position(|record| matches!(
+                &record.event,
+                PageEvent::FrameLifecycle(event)
+                    if event.kind == PageEventKind::FrameAttached
+                        && event.target == page
+                        && event.frame.id.0 == "child"
+            ))
+            .ok_or("the held child attachment must be published")?;
+        let (began, download) = records
+            .iter()
+            .enumerate()
+            .find_map(|(position, record)| match &record.event {
+                PageEvent::Download(download) => Some((position, download)),
+                _ => None,
+            })
+            .ok_or("the browser's download must be published")?;
+        assert!(
+            !published_before_tree && attached < began,
+            "the download must wait until its held frame attachment is published"
+        );
+        assert_eq!(
+            download.page.as_ref(),
+            Some(&page),
+            "the same-process child's download belongs to its page"
+        );
+        let tracked = hub.downloads().get("download").ok_or("the download is listed")?;
+        assert_eq!(
+            tracked.facts().state,
+            DownloadState::Completed(PathBuf::from("/downloads/iframe-attachment.txt")),
+            "completed progress must follow its begin through the same ordering barrier"
+        );
+        Ok(())
+    }
+
     fn worker(id: &str) -> WorkerInfo {
         WorkerInfo {
             id: id.to_owned(),
