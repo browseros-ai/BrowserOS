@@ -371,6 +371,7 @@ async fn target_crashed_diagnostic_survives_full_and_summary_http_views() -> Tes
         host_code: None,
         retryable: false,
         operation_id: Some(id),
+        cover: None,
     };
     h.sink.op_ended(OperationEnded {
         id,
