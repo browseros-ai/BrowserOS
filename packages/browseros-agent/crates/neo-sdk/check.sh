@@ -11,7 +11,8 @@
 # Every crate gets clippy -D warnings on all targets and its tests (except TESTS_NOT_RUN below),
 # on CI's exact toolchain. The SDK image's Python scripts (neo-server/docker) get their tests and
 # an import each, and the pinned ruff where uv is installed, as CI's image scripts job does. The
-# Bun suites (neo-playwright-js's page side, neo-server's conformance tables) run under the
+# Bun suites (neo-playwright-js's page side, neo-server's conformance tables, neo-captcha's test
+# bed) run under the
 # repository's pinned Bun, and the spec corpus's add-on lock file is resolved with --locked, as the
 # spec run builds it. None of these tests needs a display or a browser: the live suites skip
 # themselves (`#[ignore]`, or no `CLAW_SDK_E2E_BROWSER`), as CI's `cargo test --workspace` runs
@@ -205,8 +206,11 @@ PY
 # The Bun suites. neo-playwright-js's page side: the probe's handlers on linkedom, the protocol
 # examples against both sides, the committed asset against a fresh build; GitHub's
 # "Tests / browseros-playwright-js" job runs it. neo-server's conformance tables: the judge's list
-# of what Neo refuses against the production table, which no CI job runs. Nothing above runs
-# either, so a change that broke one passed this gate. Every run makes a frozen install of the
+# of what Neo refuses against the production table, which no CI job runs. neo-captcha's test bed:
+# its fixture catalog, fixture server and e2e runner against stubbed servers, which count the
+# fixture pages (#3671's two new pages reached GitHub's "Tests / captcha" red that way); run as
+# that job runs it, one process per file, about 4 s, with only Node's and Bun's built-ins to
+# import. Nothing above runs any of them, so a change that broke one passed this gate. Every run makes a frozen install of the
 # root and these packages alone: on the remote pool's checkout, which has no node_modules, it
 # installs what the suites need (well under a second there, where a whole `bun ci` takes 81 s);
 # on a full install it changes nothing (measured: 0.2 s, no package added or removed); and on a
@@ -216,7 +220,7 @@ PY
 # link named `bun` to the pinned binary goes first on PATH, whatever that binary is called (npm's
 # copy is bun.exe, alone in its folder).
 PAGE_DIR="crates/neo-sdk/neo-playwright-js"
-step "Bun suites (${PAGE_DIR}, neo-server conformance; Bun ${BUN_PINNED})"
+step "Bun suites (${PAGE_DIR}, neo-server conformance, neo-captcha test bed; Bun ${BUN_PINNED})"
 (
   bun_dir="$(mktemp -d)"
   trap 'rm -rf "$bun_dir"' EXIT
@@ -228,6 +232,7 @@ step "Bun suites (${PAGE_DIR}, neo-server conformance; Bun ${BUN_PINNED})"
     --filter @browseros/neo-server
   (cd "$PAGE_DIR" && bun run test)
   (cd crates/neo-sdk/neo-server && bun run test:conformance)
+  bun run ./scripts/run-bun-test.ts ./crates/neo-sdk/neo-captcha/testbed
 )
 
 # The spec corpus builds its add-on (neo-playwright-tests/node/claw-addon) with --locked against a
