@@ -1,0 +1,6 @@
+// A returned whole-page v1 snapshot becomes this tab's baseline after the successful MCP reply.
+await page.goto(args.base + '/links.html');
+const snapshot = await page.ariaSnapshot();
+includes(snapshot, 'Form page', 'the baseline is the unchanged links document');
+assert(typeof page.tabId === 'number' && typeof page.taskId === 'string', 'the baseline has a live task and tab identity');
+return { snapshot, pageId: page.tabId, taskId: page.taskId, url: page.url() };

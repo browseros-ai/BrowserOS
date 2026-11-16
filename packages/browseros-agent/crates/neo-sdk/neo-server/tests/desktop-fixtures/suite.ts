@@ -18,6 +18,10 @@ import {
 } from './receipt'
 import { borrowedTargets } from './root-cdp'
 import { startServer } from './server'
+import {
+  observeMissingOptionSelect,
+  type PendingSelect,
+} from './terminal-select'
 
 interface Options {
   partition: Partition
@@ -33,7 +37,12 @@ function options(args: readonly string[]): Options {
     const flag = args[index]
     const value = args[index + 1]
     if (value === undefined) throw new Error(`Missing value for ${flag}`)
-    if (flag === '--partition' && (value === 'ordinary' || value === 'density'))
+    if (
+      flag === '--partition' &&
+      (value === 'ordinary' ||
+        value === 'density' ||
+        value === 'terminal-select')
+    )
       partition = value
     else if (flag === '--out') out = resolve(value)
     else if (flag === '--case') caseId = value
@@ -87,9 +96,8 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
   const opts = options(args)
   await mkdir(join(opts.out, 'cases'), { recursive: true })
   const expected = cases.filter((spec) => {
-    const density = spec.hostSetup?.kind === 'device-scale'
     return (
-      density === (opts.partition === 'density') &&
+      spec.execution === opts.partition &&
       (!opts.caseId || spec.id === opts.caseId)
     )
   })
@@ -97,6 +105,7 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
     throw new Error('Suite selection contains no cases')
   const expectedIds = expected.map((spec) => spec.id)
   const results: CaseResult[] = []
+  let pendingSelect: PendingSelect | undefined
   let fixtures: FixturePair | undefined
   let server: ServerHandle | undefined
   let failure: string | undefined
@@ -133,17 +142,19 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
       browser,
       logPath: join(opts.out, 'server.log'),
     })
+    const host = createHostClient({
+      socketPath: server.socketPath,
+      token: server.token,
+    })
+    const common = await loadCommon()
     const harness = new Harness({
       run: createRunClient(server.baseUrl),
-      host: createHostClient({
-        socketPath: server.socketPath,
-        token: server.token,
-      }),
+      host,
       targets: borrowedTargets(cdpPort),
       base: fixtures.primary.origin,
       base2: `http://localhost:${fixtures.secondary.port}`,
       scale: browser.scale,
-      common: await loadCommon(),
+      common,
       loadBody,
       async recordEvidence(evidence) {
         await Bun.write(
@@ -155,6 +166,28 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
     startupMs = performance.now() - started
     for (const spec of expected) {
       checkInterrupted()
+      if (spec.execution === 'terminal-select') {
+        if (opts.partition !== 'terminal-select' || expected.length !== 1)
+          throw new Error(
+            'Terminal select requires its own final disposable browser',
+          )
+        const step = spec.steps[0]
+        if (step?.kind !== 'script')
+          throw new Error('Terminal select requires one script')
+        const check = await observeMissingOptionSelect({
+          spec,
+          baseUrl: server.baseUrl,
+          host,
+          common,
+          base: fixtures.primary.origin,
+          base2: `http://localhost:${fixtures.secondary.port}`,
+          body: await loadBody(step.script),
+        })
+        if (check.kind === 'failed') results.push(check.result)
+        else pendingSelect = check.observation
+        // Even a failed observation seals the disposable browser. Only suite cleanup follows.
+        break
+      }
       const result = await harness.check(spec)
       results.push(result)
       console.log(
@@ -187,19 +220,27 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
       `Fixture cleanup: ${error instanceof Error ? error.message : String(error)}`,
     )
   }
-  const coverage = coverageError(expectedIds, results)
+  // A pending observation is deliberately absent from passing coverage and JUnit. Its
+  // enclosing launcher is still alive; the parent alone can turn it into a named result.
+  const coverage =
+    pendingSelect && results.length === 0
+      ? undefined
+      : coverageError(expectedIds, results)
   const failures = [failure, interrupted, coverage, ...cleanupErrors].filter(
     (message): message is string => message !== undefined,
   )
   const caseCleanupMs = results.reduce(
     (total, result) => total + result.cleanupMs,
-    0,
+    pendingSelect?.cleanupMs ?? 0,
   )
   const receipt: PartitionReceipt = {
     partition: opts.partition,
     startedAt,
     startupMs,
-    casesMs: results.reduce((total, result) => total + result.durationMs, 0),
+    casesMs: results.reduce(
+      (total, result) => total + result.durationMs,
+      pendingSelect?.durationMs ?? 0,
+    ),
     caseCleanupMs,
     cleanupMs: caseCleanupMs + performance.now() - cleanupStarted,
     finishedAt: Date.now(),
@@ -210,7 +251,31 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
       results.every((result) => result.status !== 'fail'),
     ...(failures.length ? { failure: failures.join('; ') } : {}),
   }
-  await Bun.write(join(opts.out, 'junit.xml'), junit(receipt))
+  if (pendingSelect) {
+    await Bun.write(
+      join(opts.out, 'pending-select.json'),
+      `${JSON.stringify(
+        {
+          observation: pendingSelect,
+          sdkStopped:
+            server !== undefined &&
+            cleanupErrors.every((error) => !error.startsWith('SDK cleanup:')),
+          fixturesStopped:
+            fixtures !== undefined &&
+            cleanupErrors.every(
+              (error) => !error.startsWith('Fixture cleanup:'),
+            ),
+          failure: failures.length ? failures.join('; ') : null,
+        },
+        null,
+        2,
+      )}\n`,
+    )
+    receipt.complete = false
+    // No pass or terminal JUnit is emitted while browser/private-state destruction is pending.
+  } else if (opts.partition !== 'terminal-select') {
+    await Bun.write(join(opts.out, 'junit.xml'), junit(receipt))
+  }
   await Bun.write(
     join(opts.out, 'receipt.json'),
     `${JSON.stringify(receipt, null, 2)}\n`,
@@ -220,7 +285,7 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
   console.log(
     `${opts.partition}: ${results.filter((result) => result.status === 'pass').length} pass, ${results.filter((result) => result.status === 'xfail').length} xfail, ${results.filter((result) => result.status === 'fail').length} fail`,
   )
-  return receipt.complete ? 0 : 1
+  return pendingSelect && failures.length === 0 ? 0 : receipt.complete ? 0 : 1
 }
 
 if (import.meta.main) {

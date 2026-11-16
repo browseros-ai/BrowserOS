@@ -1,0 +1,5 @@
+// A fresh request reads the exact value returned to the caller by this alias's own first run.
+assert(Array.isArray(args.prior) && args.prior.length === 1, 'the caller supplies exactly the producing run');
+const value = args.prior[0];
+equal(value, 'R'.repeat(33000) + 'SDK_CAP_VALUE_TAIL', 'the caller retains every byte of the large inline value');
+return { length: value.length, tail: value.endsWith('SDK_CAP_VALUE_TAIL') };

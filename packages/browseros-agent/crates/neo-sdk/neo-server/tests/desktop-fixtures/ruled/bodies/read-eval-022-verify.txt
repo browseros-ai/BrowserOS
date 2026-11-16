@@ -1,0 +1,3 @@
+// A second successful run checks exactly what the MCP caller passed across the request boundary.
+equal(args.prior, [{ acceptedTimeoutMs: 600000, result: 'sdk-timeout-accepted' }], 'caller receives exact budget sentinel');
+return { verified: true };

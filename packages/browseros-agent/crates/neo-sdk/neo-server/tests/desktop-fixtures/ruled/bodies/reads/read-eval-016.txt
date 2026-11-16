@@ -1,0 +1,7 @@
+await page.goto(args.base + '/form.html');
+const value = await page.evaluate(() => 'z'.repeat(20000));
+assert(typeof value === 'string', 'evaluation returns a string', typeof value);
+equal(value.length, 20000, 'the evaluated string has its complete original length');
+equal(value, 'z'.repeat(20000), 'evaluation preserves every character');
+// Return the entire value so the next request can verify what crossed the MCP caller boundary.
+return value;
