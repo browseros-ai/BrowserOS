@@ -15,7 +15,11 @@ const files = [
   'neo-server/src/runtime/js/neo_prelude.js',
 ]
 
-export async function openClaw(cdpPort, options = {}, { onUncaught, upstreamSnapshots = true } = {}) {
+export async function openClaw(
+  cdpPort,
+  options = {},
+  { onUncaught, upstreamSnapshots = true } = {},
+) {
   const require = createRequire(import.meta.url)
   const addon = require(
     process.env.CLAW_NODE_ADDON || './claw-addon/claw_node.node',
