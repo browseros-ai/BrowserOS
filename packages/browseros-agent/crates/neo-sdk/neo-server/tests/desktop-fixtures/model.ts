@@ -1,4 +1,7 @@
-/** Public desktop contracts own test intent; the harness owns every process and task lifecycle. */
+/**
+ * Desktop contracts describe intent. The harness owns case tasks and settings; the suite owns
+ * its SDK process, while test:browser owns browser startup and shutdown.
+ */
 export type JsonValue =
   | null
   | boolean

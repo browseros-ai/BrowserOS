@@ -161,6 +161,14 @@ export const SUITES: Record<string, SuiteConfig> = {
     needs_browser: true,
     needs_rust: true,
   },
+  'sdk-desktop-fixtures': {
+    suite: 'sdk-desktop-fixtures',
+    command:
+      'bun crates/neo-sdk/neo-server/tests/desktop-fixtures/check.ts --run',
+    junit_path: 'test-results/sdk-desktop-fixtures.xml',
+    needs_browser: true,
+    needs_rust: true,
+  },
   captcha: {
     suite: 'captcha',
     command:
@@ -187,7 +195,10 @@ const PACKAGE_SUITES: Record<string, string[]> = {
   '@browseros/claw-onboard': ['claw-onboard'],
   '@browseros/app-onboard': ['app-onboard'],
   '@browseros/agent-cursor': ['agent-cursor', 'build'],
-  '@browseros/neo-playwright-js': ['browseros-playwright-js'],
+  '@browseros/neo-playwright-js': [
+    'browseros-playwright-js',
+    'sdk-desktop-fixtures',
+  ],
   // The build suite exercises scripts/build, which uses build-server-tools, so
   // an affected build-server-tools (or a scripts/ change, handled below) runs it.
   '@browseros/build-server-tools': ['build'],
@@ -195,10 +206,15 @@ const PACKAGE_SUITES: Record<string, string[]> = {
 }
 
 /**
- * The Rust CI suites run workspace-wide cargo, so any affected Rust crate
- * triggers all of them.
+ * Any affected Rust crate runs workspace-wide Rust checks and the browser contracts
+ * that exercise the Rust servers, including the SDK desktop suite.
  */
-const RUST_SUITES = ['claw-server', 'claw-server-quality', 'claw-mcp']
+const RUST_SUITES = [
+  'claw-server',
+  'claw-server-quality',
+  'claw-mcp',
+  'sdk-desktop-fixtures',
+]
 
 export interface AffectedPackage {
   name: string
@@ -309,6 +325,18 @@ export function computeAffectedSuites(
     )
   )
     keys.add('captcha')
+  // Fixture pages and original desktop contracts are inputs to the SDK-owned suite too.
+  if (
+    changedFiles.some(
+      (f) =>
+        f.startsWith(`${AGENT}contracts/claw-mcp/`) ||
+        f.startsWith(`${AGENT}crates/neo-sdk/neo-playwright-js/`) ||
+        f.startsWith(
+          `${AGENT}crates/neo-sdk/neo-server/tests/desktop-fixtures/`,
+        ),
+    )
+  )
+    keys.add('sdk-desktop-fixtures')
   // claw-server's tests check that every key the shipped behaviour file
   // documents applies on this server.
   if (changedFiles.includes('packages/browseros/docker/neo/neo.toml'))

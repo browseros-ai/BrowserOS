@@ -94,18 +94,28 @@ describe('computeAffectedSuites', () => {
     }
   })
 
-  it('maps any affected Rust crate to all three Rust suites', () => {
+  it('maps any affected Rust crate to all Rust suites', () => {
     expect(
       suiteNames([
         pkg('@browseros/browseros-core-rust', 'crates/browseros-core'),
       ]),
-    ).toEqual(['claw-server', 'claw-server-quality', 'claw-mcp'])
+    ).toEqual([
+      'claw-server',
+      'claw-server-quality',
+      'claw-mcp',
+      'sdk-desktop-fixtures',
+    ])
   })
 
   it('treats the Rust server app path as a Rust package', () => {
     expect(
       suiteNames([pkg('@browseros/claw-server', 'apps/claw-server')]),
-    ).toEqual(['claw-server', 'claw-server-quality', 'claw-mcp'])
+    ).toEqual([
+      'claw-server',
+      'claw-server-quality',
+      'claw-mcp',
+      'sdk-desktop-fixtures',
+    ])
   })
 
   it('runs the Rust suites and its own check script for a claw-sdk change', () => {
@@ -116,6 +126,7 @@ describe('computeAffectedSuites', () => {
       'claw-server-quality',
       'claw-sdk-quality',
       'claw-mcp',
+      'sdk-desktop-fixtures',
     ])
   })
 
@@ -174,7 +185,7 @@ describe('computeAffectedSuites', () => {
         [],
         ['packages/browseros-agent/contracts/claw-mcp/tools.json'],
       ),
-    ).toEqual(['claw-mcp'])
+    ).toEqual(['claw-mcp', 'sdk-desktop-fixtures'])
   })
 
   it('ignores unrelated non-package files', () => {
@@ -221,6 +232,7 @@ describe('computeAffectedSuites', () => {
       'claw-server',
       'claw-server-quality',
       'claw-mcp',
+      'sdk-desktop-fixtures',
     ])
   })
 
