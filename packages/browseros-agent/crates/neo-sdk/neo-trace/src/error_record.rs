@@ -83,7 +83,7 @@ pub struct ErrorRecord {
 
 #[cfg(test)]
 mod tests {
-    use super::ErrorOwner;
+    use super::{DiagnosticCode, ErrorOwner};
 
     #[test]
     fn old_error_records_need_no_diagnostic_or_migration() -> Result<(), serde_json::Error> {
@@ -92,6 +92,34 @@ mod tests {
         )?;
         assert_eq!(old.diagnostic_code, None);
         assert!(serde_json::to_value(old)?.get("diagnosticCode").is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn stored_error_records_ignore_unknown_diagnostics() -> Result<(), serde_json::Error> {
+        for (diagnostic, expected) in [
+            (Some("target_crashed"), Some(DiagnosticCode::TargetCrashed)),
+            (None, None),
+            (Some("future_diagnostic"), None),
+        ] {
+            let stored = serde_json::json!({
+                "owner": "neo",
+                "code": "internal_error",
+                "diagnosticCode": diagnostic,
+                "message": "stored failure",
+                "retryable": false,
+            });
+            let record: super::ErrorRecord = serde_json::from_str(&stored.to_string())?;
+            assert_eq!(record.owner, ErrorOwner::Neo);
+            assert_eq!(record.code, "internal_error");
+            assert_eq!(record.diagnostic_code, expected);
+            assert_eq!(record.message, "stored failure");
+            assert!(!record.retryable);
+            assert_eq!(
+                serde_json::to_value(record)?.get("diagnosticCode"),
+                expected.map(|code| serde_json::json!(code.as_str())).as_ref()
+            );
+        }
         Ok(())
     }
 

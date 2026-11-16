@@ -421,7 +421,7 @@ fn is_zero(count: &usize) -> bool {
 mod tests {
     use std::error::Error;
 
-    use neo_trace::{ErrorOwner, OperationId, RunId};
+    use neo_trace::{DiagnosticCode, ErrorOwner, OperationId, RunId};
 
     use super::{OpNote, ReplyDelivery, ReplyEffects, ReplyStatus, RunReply};
     use crate::dispatch::{ErrorCode, OperationError};
@@ -472,6 +472,35 @@ mod tests {
             old.access, None,
             "pre-access stored replies remain readable"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn a_stored_replay_ignores_an_unknown_diagnostic() -> Result<(), Box<dyn Error>> {
+        for (wire, diagnostic) in [
+            ("target_crashed", Some(DiagnosticCode::TargetCrashed)),
+            ("future_diagnostic", None),
+        ] {
+            let error = OperationError::neo(ErrorCode::INTERNAL_ERROR, "A browser failure");
+            let mut reply = RunReply::refused(RunId::new(), &error);
+            let mut stored = serde_json::to_value(&reply)?;
+            stored["error"]["diagnosticCode"] = serde_json::json!(wire);
+            let decoded: RunReply = serde_json::from_value(stored)?;
+            reply
+                .error
+                .as_mut()
+                .ok_or("the refused run has an error")?
+                .diagnostic_code = diagnostic;
+            assert_eq!(decoded, reply, "every other replay field is retained");
+            if diagnostic.is_none() {
+                assert!(
+                    serde_json::to_value(decoded)?["error"]
+                        .get("diagnosticCode")
+                        .is_none(),
+                    "unknown detail must not prevent reading or replaying the stored reply"
+                );
+            }
+        }
         Ok(())
     }
 
