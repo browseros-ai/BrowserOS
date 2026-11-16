@@ -35,8 +35,9 @@ use tower::ServiceExt;
 pub(crate) type BoxError = Box<dyn std::error::Error + Send + Sync>;
 pub(crate) type TestResult = Result<(), BoxError>;
 
-/// Service startup still uses wall time, before a screenshot fixture freezes Tokio's clock.
-/// This is a readiness watchdog, independent of the camera's eight-second capture budget.
+/// Fixture startup and persisted-output readiness use wall time for real scheduler/store work.
+/// Startup must finish before a screenshot fixture freezes Tokio's clock. This watchdog is
+/// independent of the camera's eight-second capture budget.
 pub(crate) const READINESS_WATCHDOG: Duration = Duration::from_secs(30);
 /// Progress witnesses keep their existing bound; their errors identify the stalled stage.
 pub(crate) const PROGRESS_WATCHDOG: Duration = Duration::from_secs(5);
