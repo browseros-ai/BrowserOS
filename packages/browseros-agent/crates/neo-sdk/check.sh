@@ -206,10 +206,13 @@ PY
 # examples against both sides, the committed asset against a fresh build; GitHub's
 # "Tests / browseros-playwright-js" job runs it. neo-server's conformance tables: the judge's list
 # of what Neo refuses against the production table, which no CI job runs. Nothing above runs
-# either, so a change that broke one passed this gate. A checkout with no node_modules (the
-# remote pool's) gets a frozen install of the root and these packages alone (well under a second
-# there, where a whole `bun ci` takes 81 s); the suites then take about 20 s. A tree that has
-# node_modules is left as it is. The runners start `bun` again, so a private directory with one
+# either, so a change that broke one passed this gate. Every run makes a frozen install of the
+# root and these packages alone: on the remote pool's checkout, which has no node_modules, it
+# installs what the suites need (well under a second there, where a whole `bun ci` takes 81 s);
+# on a full install it changes nothing (measured: 0.2 s, no package added or removed); and on a
+# checkout an earlier gate installed only for neo-playwright-js, it adds neo-server's (whose
+# conformance suite would otherwise miss @playwright/test, pngjs and the like). The suites then
+# take about 20 s. The runners start `bun` again, so a private directory with one
 # link named `bun` to the pinned binary goes first on PATH, whatever that binary is called (npm's
 # copy is bun.exe, alone in its folder).
 PAGE_DIR="crates/neo-sdk/neo-playwright-js"
@@ -220,11 +223,9 @@ step "Bun suites (${PAGE_DIR}, neo-server conformance; Bun ${BUN_PINNED})"
   ln -s "$BUN_BIN" "$bun_dir/bun"
   PATH="$bun_dir:$PATH"
   export PATH
-  if [[ ! -d node_modules ]]; then
-    root="$(python3 -c 'import json; print(json.load(open("package.json"))["name"])')"
-    bun install --frozen-lockfile --filter "$root" --filter @browseros/neo-playwright-js \
-      --filter @browseros/neo-server
-  fi
+  root="$(python3 -c 'import json; print(json.load(open("package.json"))["name"])')"
+  bun install --frozen-lockfile --filter "$root" --filter @browseros/neo-playwright-js \
+    --filter @browseros/neo-server
   (cd "$PAGE_DIR" && bun run test)
   (cd crates/neo-sdk/neo-server && bun run test:conformance)
 )
