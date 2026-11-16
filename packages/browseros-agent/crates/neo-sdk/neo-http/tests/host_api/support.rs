@@ -490,6 +490,7 @@ pub(crate) fn start_known_run(sink: &TraceSink, run: RunId, start: Start<'_>) {
         task_id: start.task.and_then(|id| TaskId::parse(id).ok()),
         host_data: None,
         tabs_scope: RunTabsScope::Browser,
+        access: None,
         at: at(start.at),
     });
 }

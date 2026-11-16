@@ -158,7 +158,7 @@ The realm provides `URL`, `URLSearchParams`, `atob`, `btoa` and `DOMException`. 
 
 The model sends `run { code, timeout? }`. `code` is the body of an async function whose parameters are the SDK: Playwright's `page`, `context`, `browser`, `expect` and `playwright` (its `selectors` and `errors`), and Node's `Buffer` (neo-playwright's prelude), `neo`, `console`, the timers, and the error classes. `timeout` is in milliseconds, from 1 to 900000, and defaults to 300000. Unknown fields are refused. Each run gets a fresh QuickJS realm. `src/mcp/run_description.rs` builds the text the model reads about all of this.
 
-The host sends its ids in `_meta["com.browseros.neo/run"]` as `{ requestId?, taskId?, hostData? }`. Neo refuses unknown keys as `host / invalid_meta`. `hostData` is up to 2048 bytes of JSON that Neo stores with the run and never reads.
+The host sends its ids and access in `_meta["com.browseros.neo/run"]` as `{ requestId?, taskId?, hostData?, access? }`. Neo refuses unknown keys as `host / invalid_meta`. `hostData` is up to 2048 bytes of JSON that Neo stores with the run and never reads.
 
 A host's `taskId` is also a Neo task id and seeds the run's current task. Neo registers it when a run first opens a tab for it; `neo.task(hostId)` can then fetch it. After a restart of Neo's server it starts on the same tab as before (see below). The neo-viewer proxy still supplies the host's task metadata.
 
@@ -179,7 +179,7 @@ Tasks live in memory, at most 4096. Empty tasks remain until closed or evicted f
 
 Closing the browser's last tab quits the browser, and Neo's server with it, so Neo keeps one blank tab of its own open at all times (`browser/neo_tab.rs`). At the browser link's first connect and after each reconnect it adopts a blank tab no task owns (the launch tab, or its own tab the browser restored), else it opens one in the background; if that tab closes while Neo runs, it opens another, and every close Neo makes (a script's `page.close()`, with or without `runBeforeUnload`, `task.close()`, the janitor) first makes sure it is open. If Neo cannot open it and the browser lists no other tab, the close fails `neo / cdp_error` with nothing sent, rather than quit the browser. So the janitor may close every idle agent tab, a script may close its last tab, and a host's tab reset needs no keeper tab of its own. No script sees or reaches it: `context.pages()`, task listings and page events leave it out, and an op that names it fails `script / invalid_input` with nothing sent. Apart from task scope, this is the one exception to `context.pages()` listing every tab. Neo keeps the tab only while it is blank: once the owner browses in it (in a fresh browser it is often the tab they see) or a fit's navigate moves it, Neo opens a new blank tab and then hands the old one back as an ordinary owner's tab. A run's initial pages and `context.pages()` check for this first, so a script lists the owner's page at once; otherwise Neo notices within 30 seconds. A context's `page` listeners hear of the handed-back tab as of a tab the owner opened, and the janitor never closes it. The host sees it in `GET /v1/tabs` as `owner: "neo"`. The janitor's own check that never closes the browser's last tab stays as a fallback. The Node-hosted embedding keeps no blank tab: its host launched its own browser.
 
-The result carries `_meta["com.browseros.neo/run"]` as `{ id, status, effects, error?, unknown, tasks, tabsScope }`. `id` is the run's id in the trace. `tabsScope` is `task` when the run was bound to its task's tabs and `browser` when it saw every tab; a refused run says what it would have been, and a repeated request's reply carries the first run's. An older Neo sends none, which means `browser`. `status` is `ok`, `error`, `cancelled`, or `timeout`, and `isError` is set unless it is `ok`. `effects` is `none`, `done`, or `unknown`. `unknown` lists the writes that were sent and never confirmed. `structuredContent` is unchanged.
+The result carries `_meta["com.browseros.neo/run"]` as `{ id, status, effects, error?, unknown, tasks, tabsScope, access? }`. `id` is the run's id in the trace. `tabsScope` is `task` when the run was bound to its task's tabs and `browser` when it saw every tab; a refused run says what it would have been, and a repeated request's reply carries the first run's. An older Neo sends none, which means `browser`. `status` is `ok`, `error`, `cancelled`, or `timeout`, and `isError` is set unless it is `ok`. `effects` is `none`, `done`, or `unknown`. `unknown` lists the writes that were sent and never confirmed. `structuredContent` is unchanged.
 
 `tasks` is host metadata, always present (`[]` when no tasks were touched). Each entry carries `id`, `name`, `kind`, and `tabs: { tabId, url }[]`. Tasks appear once, in first-touch order, even when the script failed. Tabs and URLs reflect reply time; a closed task has kind `closed` and no tabs.
 
@@ -208,6 +208,45 @@ The script's `page`, `context`, `browser` and `expect` behave as Playwright 1.64
 - A function `evaluate` passes stays exposed, off `window`, until the run ends. Playwright erases these when the main frame loads a new document; Neo's prelude does not see every new document, and a page there cannot reach them anyway.
 
 A `requestId` never runs twice. A repeat while its run is going joins it and gets the same reply. A repeat within 10 minutes of the end gets the stored reply, from memory or from the trace store, so this holds across a restart. Later repeats are refused as `host / duplicate_request`, naming the first run. If the store cannot be read, Neo refuses the call as `neo / trace_unavailable` rather than risk a second run. Neo notices a gone client at the next SSE keep-alive, within 5 seconds. A run with a `requestId` then keeps going for 15 seconds, so a retry can join it. A run without one stops at once.
+
+### Read-only access
+
+A host selects one read-only run with `access: "read"` in that metadata. Absence keeps ordinary
+execution; every other present value, including `null`, is `host / invalid_meta`. An older Neo
+refuses the unknown `access` key instead of silently running without the restriction. Task scope
+still decides which tabs the run can read; access restricts what it can send to those tabs.
+
+Before sending browser work, Neo admits only operations labelled Read (except
+`events.interceptFileChooser`), `context.newPage`, `task.newPage`, `disposable.dispose`, `goto` to
+a completed `http` or `https` address on a tab that is not the owner's, and closing a tab this
+same run opened. The owner's tab is one no agent opened and no task holds. Task-held tabs restored
+after a server restart remain navigable. Popups and tabs another run opened cannot be closed.
+Other operations fail with `script / read_only_run`, `delivery: "not_sent"`. A refused close says
+`a read-only run may close only a tab it opened itself`.
+
+Every reply's `_meta["com.browseros.neo/run"]` and every run record includes `access: "read"`,
+even on failure. Ordinary runs and older records omit it. A repeated `requestId` returns the
+original run's access, even if the repeat asks for different access. `effects` still reports
+sent writes honestly: an allowed navigation can make a read-only run's effects `done`.
+
+Screenshots and PDFs returned as buffers, snapshots with text or delta, and text locator waits
+are allowed. A screenshot `path` captures first, then its `page.saveScreenshot` write is refused
+without saving a file. PDF `path` keeps its existing unsupported-method refusal. A file chooser
+wait fails with `read_only_run`; `page.on('filechooser')` registers nothing because its setup
+fails quietly. Reads may scroll or install observation probes. Screenshots may bring a tab
+forward and temporarily change focus, caret, animations or rendering; PDFs fire print events.
+
+Read-only access cannot promise a page load is harmless. The site's own scripts run with the
+owner's cookies. A GET can sign out, unsubscribe, use a one-time link or mark something read;
+responses set cookies, and navigations add history entries. A navigation to a file still downloads
+it into Neo's own folder. The script cannot save it elsewhere or upload it.
+
+Dialogs follow Neo's existing rule: without a script listener, confirm and prompt dialogs are
+dismissed after 250 ms, and `beforeunload` is accepted, so a navigation can lose unsaved input.
+A read-only listener may read dialog text but cannot answer `dialog.*`. While that listener
+lives, confirm, prompt and `beforeunload` stay open and the page waits, including the run's own
+navigation. Listeners end by run teardown; on the following reap, within about a second of the
+listener ending, Neo applies the same automatic answer.
 
 ### Task scope
 

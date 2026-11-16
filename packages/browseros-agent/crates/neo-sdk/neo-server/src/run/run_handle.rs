@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-use neo_trace::{RunId, RunTabsScope};
+use neo_trace::{RunAccess, RunId, RunTabsScope};
 use tokio::sync::{Notify, watch};
 use tokio::time;
 
@@ -22,6 +22,8 @@ use super::RunReply;
 pub(crate) struct RunHandle {
     id: RunId,
     grace: Duration,
+    /// Fixed before spawning: even a task that unwinds without a reply retains host access.
+    access: Option<RunAccess>,
     /// Which tabs the run saw or would have seen, set once at admission, so a reply the run
     /// never wrote itself (a crash) says it too.
     tabs_scope: OnceLock<RunTabsScope>,
@@ -39,10 +41,11 @@ pub(crate) struct Waiter {
 impl RunHandle {
     /// The handle of run `id`, which outlives its last waiter by `grace`.
     #[must_use]
-    pub(crate) fn new(id: RunId, grace: Duration) -> Arc<Self> {
+    pub(crate) fn new(id: RunId, grace: Duration, access: Option<RunAccess>) -> Arc<Self> {
         Arc::new(Self {
             id,
             grace,
+            access,
             tabs_scope: OnceLock::new(),
             reply: watch::channel(None).0,
             waiters: AtomicUsize::new(0),
@@ -66,6 +69,7 @@ impl RunHandle {
     pub(crate) fn crashed(&self) -> RunReply {
         RunReply::crashed(self.id)
             .with_tabs_scope(self.tabs_scope.get().copied().unwrap_or_default())
+            .with_access(self.access)
     }
 
     /// A new waiter, counted before it is returned, so the count is never zero between a
@@ -150,7 +154,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn a_run_is_orphaned_only_once_no_waiter_came_back_within_the_grace()
     -> Result<(), Box<dyn Error>> {
-        let handle = RunHandle::new(RunId::new(), Duration::from_secs(15));
+        let handle = RunHandle::new(RunId::new(), Duration::from_secs(15), None);
         let first = handle.waiter();
         let watch = Arc::clone(&handle);
         let orphaned = tokio::spawn(async move { watch.orphaned().await });
@@ -170,7 +174,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn the_grace_restarts_when_a_retry_that_joined_leaves() {
-        let handle = RunHandle::new(RunId::new(), Duration::from_secs(15));
+        let handle = RunHandle::new(RunId::new(), Duration::from_secs(15), None);
         let first = handle.waiter();
         let watch = Arc::clone(&handle);
         let orphaned = tokio::spawn(async move { watch.orphaned().await });
@@ -190,7 +194,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn without_a_grace_the_last_waiter_leaving_orphans_at_once() {
-        let handle = RunHandle::new(RunId::new(), Duration::ZERO);
+        let handle = RunHandle::new(RunId::new(), Duration::ZERO, None);
         let waiter = handle.waiter();
         let watch = Arc::clone(&handle);
         let orphaned = tokio::spawn(async move { watch.orphaned().await });
@@ -202,7 +206,7 @@ mod tests {
     #[tokio::test]
     async fn every_waiter_gets_the_one_reply() {
         let id = RunId::new();
-        let handle = RunHandle::new(id, Duration::ZERO);
+        let handle = RunHandle::new(id, Duration::ZERO, None);
         let (early, late) = (handle.waiter(), handle.waiter());
         handle.finish(Arc::new(RunReply::crashed(id)));
         assert_eq!(early.reply().await.id, id);

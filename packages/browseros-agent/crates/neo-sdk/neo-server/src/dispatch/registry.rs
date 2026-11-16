@@ -75,6 +75,19 @@ impl RegistryBuilder {
 }
 
 impl Registry {
+    /// Includes hidden registrations in the permission audit, so a new hidden Read cannot
+    /// silently join read-only execution. This exposes specs only, never erased run methods.
+    #[cfg(test)]
+    pub(super) fn all_specs(&self) -> Vec<MethodSpec> {
+        let mut specs: Vec<_> = self
+            .methods
+            .values()
+            .map(|registered| registered.spec)
+            .collect();
+        specs.sort_by_key(|spec| spec.name);
+        specs
+    }
+
     /// The specs the `run` description shows, sorted by name so the description is stable.
     #[must_use]
     pub(crate) fn listed(&self) -> Vec<MethodSpec> {

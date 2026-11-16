@@ -21,7 +21,7 @@ info:
     unique among the browser's tabs until the browser restarts. An old number may then name
     a different tab. A host
     may send two optional ids of its own with a run
-    (`_meta["com.browseros.neo/run"] = {requestId?, taskId?, hostData?}`), each at most 128
+    (`_meta["com.browseros.neo/run"] = {requestId?, taskId?, hostData?, access?}`), each at most 128
     bytes. `requestId` names one call. Runs can be looked up by it, and a repeat of it never
     runs again (within its task when the run has a `taskId`, else across Neo; under the `task`
     tab scope, a request without a `taskId` repeats only a run without one), as long as Neo's
@@ -1625,6 +1625,35 @@ components:
             `task` when the run was bound to its task's tabs, `browser` when it saw every tab, as
             its result's `_meta["com.browseros.neo/run"].tabsScope` said. Absent for runs recorded
             before Neo kept it, which saw every tab (`browser`).
+        access:
+          type: string
+          x-extensible-enum: [read]
+          description: >-
+            A host selects one read-only run with `_meta["com.browseros.neo/run"].access: "read"`.
+            Absent means ordinary execution; every other present request value, including null,
+            is host/invalid_meta. Older servers refuse the unknown metadata key.
+            The door admits reads except events.interceptFileChooser, newPage, disposable.dispose,
+            goto to a completed http(s) address on a tab that is not the owner's own, and
+            closing a tab the same run opened (not a popup or another run's tab).
+            Other operations fail script/read_only_run with delivery not_sent before browser work.
+            The owner's tab is one no agent opened and no task holds. Task scope separately limits
+            which tabs a run can reach. A requestId repeat retains the original run's access.
+            Effects still reports sent writes, including allowed navigation.
+            Screenshot/PDF buffers, snapshot text/delta and text locator waits are admitted.
+            Screenshot path captures first, then saveScreenshot is refused without saving a file;
+            PDF path keeps its existing unsupported refusal. A file chooser wait fails;
+            page.on('filechooser') registers nothing as its setup fails quietly.
+            Reads may scroll; screenshots may foreground a tab and temporarily change focus,
+            caret, animations or rendering, and PDF fires print events.
+            Site scripts run with the owner's cookies. A GET can sign out, unsubscribe, use a
+            one-time link or mark something read; responses set cookies and navigation adds history.
+            A goto may lose unsaved input and may download a file into Neo's own folder, as today;
+            the script cannot save it elsewhere or upload it.
+            Without a listener Neo dismisses confirm/prompt after 250 ms and accepts beforeunload.
+            A read-only dialog listener may read text but cannot answer dialog.*; it holds the page
+            and navigation while alive. Listeners end by run teardown, then the next reap applies
+            the same automatic answer within about a second of the listener ending.
+            Only read-only runs include this field; ordinary and older records omit it.
         tabs:
           type: array
           description: The tabs its operations targeted, ascending.
@@ -1695,6 +1724,12 @@ components:
             `task` when the run was bound to its task's tabs, `browser` when it saw every tab, as
             its result's `_meta["com.browseros.neo/run"].tabsScope` said. Absent for runs recorded
             before Neo kept it, which saw every tab (`browser`).
+        access:
+          type: string
+          x-extensible-enum: [read]
+          description: >-
+            The host's read-only restriction, as on RunSummary; retained from run start through
+            failure and request replay. Ordinary runs and older records omit it.
         tabs:
           type: array
           description: The tabs its operations targeted, ascending.

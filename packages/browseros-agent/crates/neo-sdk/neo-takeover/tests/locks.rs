@@ -64,6 +64,7 @@ fn write_in_flight(sink: &TraceSink, tab: i64) -> OperationId {
         task_id: None,
         host_data: None,
         tabs_scope: RunTabsScope::Browser,
+        access: None,
         at: EpochMillis::now(),
     });
     let op = OperationId::new(run, 1);

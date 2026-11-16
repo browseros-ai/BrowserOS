@@ -23,6 +23,7 @@ async fn record_listeners(h: &Harness) -> Result<RunId, crate::support::BoxError
         task_id: Some(TaskId::parse("listener-compatibility")?),
         host_data: Some(json!({"fixture": "default-listeners"})),
         tabs_scope: RunTabsScope::Browser,
+        access: None,
         at: at(0),
     });
     let calls = [

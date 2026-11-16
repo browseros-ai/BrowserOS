@@ -80,6 +80,9 @@ fn run_meta(reply: &RunReply) -> Value {
     meta.insert("unknown".to_owned(), Value::Array(unknown));
     meta.insert("tasks".to_owned(), json!(reply.tasks));
     meta.insert("tabsScope".to_owned(), json!(reply.tabs_scope));
+    if let Some(access) = reply.access {
+        meta.insert("access".to_owned(), json!(access));
+    }
     Value::Object(meta)
 }
 
@@ -160,7 +163,7 @@ fn op_label(note: &OpNote) -> String {
 mod tests {
     use std::error::Error;
 
-    use neo_trace::{OperationId, RunId};
+    use neo_trace::{OperationId, RunAccess, RunId};
     use serde_json::json;
 
     use super::text;
@@ -251,6 +254,27 @@ mod tests {
         let plain = serde_json::to_value(super::RunTool::result(&reply))?;
         assert_eq!(wire["content"], plain["content"]);
         assert_eq!(wire["structuredContent"], plain["structuredContent"]);
+        Ok(())
+    }
+
+    #[test]
+    fn ordinary_metadata_bytes_stay_identical_and_access_comes_only_from_the_reply()
+    -> Result<(), Box<dyn Error>> {
+        let mut reply: RunReply = serde_json::from_value(json!({
+            "id": "019a82c0-7b20-7000-8000-000000000001", "status": "ok",
+            "effects": "none", "value": 42,
+        }))?;
+        assert_eq!(
+            serde_json::to_string(&super::run_meta(&reply))?,
+            r#"{"effects":"none","id":"019a82c0-7b20-7000-8000-000000000001","status":"ok","tabsScope":"browser","tasks":[],"unknown":[]}"#,
+            "ordinary host metadata must be byte-identical"
+        );
+        let ordinary = super::RunTool::result(&reply);
+        reply.access = Some(RunAccess::Read);
+        let read = super::RunTool::result(&reply);
+        assert_eq!(ordinary.content, read.content);
+        assert_eq!(ordinary.structured_content, read.structured_content);
+        assert_eq!(super::run_meta(&reply)["access"], "read");
         Ok(())
     }
 

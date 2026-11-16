@@ -95,6 +95,7 @@ fn start_run(
         task_id: Some(TaskId::parse(TASK)?),
         host_data,
         tabs_scope: RunTabsScope::Browser,
+        access: None,
         at: at(0),
     });
     Ok(id)

@@ -82,6 +82,12 @@ const ERRORS: &str = r#"A failed SDK call throws a `NeoError` (a `TimeoutError` 
 `delivery: "unknown"` means a write may have happened: look at the page before repeating it.
 `retryable: true` means a repeat is safe, never that it will succeed: read the `message` first."#;
 
+/// A host's per-call restriction (`_meta` `access: "read"`), stated as a condition so this static
+/// text stays true for every run. The dispatch door refuses disallowed operations before any
+/// browser work, which is why the sentence can promise "nothing sent". The refusal explains the
+/// rejected operation, so the sentence lists only what a read-only script may do.
+const READ_ONLY: &str = r"A host may start a run read-only: then only reads, `context.newPage()`, a `goto` to an `http` or `https` address, and closing a tab this run opened are allowed; anything else fails `read_only_run` with nothing sent.";
+
 /// Tabs and tasks. One static text, never built from `tabs.scope` or the call: whether a run is
 /// bound to its task is the host's setting and the call's `taskId`, so the text says what binding
 /// does only as a condition, and stays true under either scope and for a run without a task. A
@@ -118,6 +124,7 @@ pub(crate) fn run_description(registry: &Registry) -> String {
         lines.push(format!("{COVERED_CLICK}\n{OWN_LABEL_CLICK}"));
     }
     lines.push(ERRORS.to_owned());
+    lines.push(READ_ONLY.to_owned());
     lines.push(TASKS.to_owned());
     lines.push(format!(
         "{GLOBALS}\nA reply holds at most {} KiB of JSON.",
@@ -148,7 +155,8 @@ mod tests {
     use serde_json::Value;
 
     use super::{
-        COVERED_CLICK, ERRORS, GLOBALS, LOOP, OWN_LABEL_CLICK, TASKS, WAITS, run_description,
+        COVERED_CLICK, ERRORS, GLOBALS, LOOP, OWN_LABEL_CLICK, READ_ONLY, TASKS, WAITS,
+        run_description,
     };
     use crate::dispatch::{
         ErrorCode, LeafError, Listing, Method, MethodSpec, OpCtx, PageTarget, RegistryBuilder,
@@ -394,11 +402,27 @@ mod tests {
         for (code, part) in [
             (ErrorCode::NOT_ACTIONABLE, COVERED_CLICK),
             (ErrorCode::PAGE_NOT_IN_TASK, TASKS),
+            (ErrorCode::READ_ONLY_RUN, READ_ONLY),
         ] {
             assert!(part.contains(&format!("`{}`", code.as_str())), "{part}");
         }
         assert!(POINTER.contains("intercepts pointer events"));
         assert!(COVERED_CLICK.contains("intercepts pointer events"));
+    }
+
+    #[test]
+    fn the_read_only_sentence_is_conditional_and_follows_errors() {
+        const SENTENCE: &str = r"A host may start a run read-only: then only reads, `context.newPage()`, a `goto` to an `http` or `https` address, and closing a tab this run opened are allowed; anything else fails `read_only_run` with nothing sent.";
+        let description = run_description(&RegistryBuilder::default().build());
+        assert_eq!(
+            description.matches(SENTENCE).count(),
+            1,
+            "the host condition and refusal are stated once"
+        );
+        assert!(
+            description.contains(&format!("{ERRORS}\n\n{SENTENCE}")),
+            "read-only access follows the error model it relies on"
+        );
     }
 
     #[test]

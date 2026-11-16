@@ -90,6 +90,7 @@ fn start_run(sink: &TraceSink, start: Start<'_>) -> RunId {
         task_id: start.task.map(task),
         host_data: Some(json!({"ownerRun": "r1"})),
         tabs_scope: RunTabsScope::Browser,
+        access: None,
         at: at(start.at),
     });
     run
@@ -682,6 +683,7 @@ async fn host_data_of_4_kib_is_stored_whole_and_a_larger_one_is_cut()
             task_id: None,
             host_data: Some(host_data_of(bytes)),
             tabs_scope: RunTabsScope::Browser,
+            access: None,
             at: at(0),
         });
         // Host data reaches disk with the run's end.
@@ -1551,6 +1553,7 @@ async fn a_start_keeps_input_code_and_host_data_off_disk_until_the_end()
         task_id: None,
         host_data: Some(json!({"note": format!("for {found}")})),
         tabs_scope: RunTabsScope::Browser,
+        access: None,
         at: at(0),
     });
     let fill = OperationId::new(run, 1);
@@ -1937,6 +1940,7 @@ async fn a_run_keeps_the_tabs_it_saw_and_a_taskless_request_finds_only_taskless_
         task_id: Some(task("host-s")),
         host_data: None,
         tabs_scope: RunTabsScope::Task,
+        access: None,
         at: at(10),
     });
     let unbound = start_run(
@@ -1974,6 +1978,76 @@ async fn a_run_keeps_the_tabs_it_saw_and_a_taskless_request_finds_only_taskless_
         untasked.map(|run| run.id),
         Some(unbound),
         "under the task scope, only a run without a task"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn access_is_persisted_from_start_and_survives_reopen_without_inventing_it_for_old_starts()
+-> Result<(), Box<dyn Error>> {
+    use neo_trace::RunAccess;
+
+    let h = harness(WriterConfig::default()).await;
+    let read = RunId::new();
+    h.sink.run_started(RunStarted {
+        id: read,
+        code: "return 1".to_owned(),
+        request_id: Some(request("read-request")),
+        task_id: None,
+        host_data: None,
+        tabs_scope: RunTabsScope::Browser,
+        access: Some(RunAccess::Read),
+        at: at(0),
+    });
+    let normal = start_in(&h.sink, None, 10);
+    let unseen = RunId::new();
+    read_on(&h.sink, OperationId::new(unseen, 1), None, 20);
+    flushed(&h).await;
+    for (id, expected) in [
+        (read, Some(RunAccess::Read)),
+        (normal, None),
+        (unseen, None),
+    ] {
+        assert_eq!(
+            h.store.run_summary(id).await?.and_then(|run| run.access),
+            expected
+        );
+        assert_eq!(
+            h.store.run(id).await?.and_then(|run| run.summary.access),
+            expected
+        );
+    }
+    assert_eq!(
+        h.store
+            .run_by_request(&request("read-request"), None)
+            .await?
+            .and_then(|run| run.access),
+        Some(RunAccess::Read)
+    );
+    let Harness { dir, sink, store } = h;
+    drop(sink);
+    drop(store);
+    let reopened = open(&dir).await;
+    let row = reopened.run_summary(read).await?.ok_or("interrupted run")?;
+    assert_eq!(row.status, RunStatus::Interrupted);
+    assert_eq!(
+        row.access,
+        Some(RunAccess::Read),
+        "the start retains permission even without an end or replay"
+    );
+    assert_eq!(
+        reopened
+            .run_summary(normal)
+            .await?
+            .and_then(|run| run.access),
+        None
+    );
+    assert_eq!(
+        reopened
+            .run_summary(unseen)
+            .await?
+            .and_then(|run| run.access),
+        None
     );
     Ok(())
 }

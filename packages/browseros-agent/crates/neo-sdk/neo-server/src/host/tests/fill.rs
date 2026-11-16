@@ -530,6 +530,7 @@ async fn script_call(
             deadline: Instant::now() + Duration::from_secs(10),
             default_page: None,
             tabs_scope: TabsScope::Browser,
+            access: None,
         },
     );
     let reply = host

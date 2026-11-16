@@ -884,6 +884,7 @@ async fn values_off_reaches_records_and_events_without_payloads() -> TestResult 
         task_id: None,
         host_data: Some(json!({"data":"host-canary-host-api"})),
         tabs_scope: RunTabsScope::Browser,
+        access: None,
         at: at(0),
     });
     h.sink.op_started(OperationStarted {

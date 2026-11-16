@@ -28,12 +28,15 @@ pub mod hosted;
 mod http;
 mod logging;
 mod mcp;
+#[cfg(test)]
+mod read_only_live;
 mod run;
 mod runtime;
 #[cfg(test)]
 mod test_rig;
 #[cfg(feature = "test-support")]
 pub mod test_support;
+mod url_scheme;
 
 pub use app::{App, StartError};
 pub use config::{AppConfig, ConfigError};

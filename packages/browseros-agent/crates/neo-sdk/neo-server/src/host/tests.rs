@@ -478,6 +478,7 @@ async fn saved_recording_settings_reach_the_writer_without_a_usable_token() -> T
             task_id: None,
             host_data: None,
             tabs_scope: RunTabsScope::Browser,
+            access: None,
             at: EpochMillis::now(),
         });
         host.sink.run_ended(RunEnded {

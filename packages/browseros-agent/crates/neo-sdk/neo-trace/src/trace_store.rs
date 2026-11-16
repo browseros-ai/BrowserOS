@@ -717,6 +717,7 @@ fn summary_select() -> Select<runs::Entity> {
             runs::Column::Complete,
             runs::Column::Values,
             runs::Column::TabsScope,
+            runs::Column::Access,
         ])
         .column_as(SimpleExpr::SubQuery(None, Box::new(tabs)), "tabs")
 }

@@ -203,6 +203,19 @@ returns bytes. Returning those bytes from `run` yields an inline result or a hos
 large. It does not create a download or accept a `path` option. For an actual download, await
 `download.path()` before importing its host endpoint.
 
+### Trace-store upgrades and rollback
+
+This image advances the trace-store fence from 6 to 7 for the nullable `runs.access` column.
+Opening a store at fence 6 upgrades it in place and preserves its runs and recorded request ids.
+Existing runs have no access value; the upgrade does not mark them read-only.
+
+An older image cannot read a store this image has written. At startup it moves that store to
+`trace.db.broken-<ms>` and starts a fresh, empty one. Request ids from before that replacement
+are forgotten, so retrying one can execute the script again. The old store remains beside the
+new one for inspection. This is the existing rollback rule for the stored trace, separate from
+the MCP protocol: no new wire protocol version is used, and older servers refuse the unknown
+`access` metadata key before executing a script.
+
 ### Stop and restart
 
 `tini` forwards SIGTERM to the entrypoint, which quits the browser over CDP (`neo-quit 9110`); the browser
