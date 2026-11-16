@@ -20,7 +20,7 @@
  * expiry past the last event its op can still send, so an expiry never lets an event of the
  * action through.
  */
-import { coverMark } from './cover'
+import { coverMark, labelPlainPoint, ownPress, shownOwnLabel } from './cover'
 import type { FailureOutput } from './failure-output'
 import { lookFrameBox } from './private-frame'
 import type {
@@ -29,6 +29,7 @@ import type {
   FrameBoxRequest,
   Hit,
   MovesRequest,
+  OwnPress,
   Point,
   Rect,
   ReplyTo,
@@ -121,21 +122,9 @@ export function act(
   if (found.kind !== 'one') return found
   const { element } = found
   const { injected } = world
-  for (const state of request.states) {
-    let result: ReturnType<World['injected']['elementState']>
-    try {
-      result = injected.elementState(element, state, request.frameVisible)
-    } catch (error) {
-      // A state the element cannot have (`editable` on a <div>) throws; upstream has logged
-      // what the locator resolved to by then, so the error reply carries it (index.ts).
-      if (error instanceof Error)
-        Object.assign(error, resolutionOf(world, found))
-      throw error
-    }
-    if (result.received === 'error:notconnected') return { kind: 'detached' }
-    if (!result.matches)
-      return { kind: 'state', missing: state, ...resolutionOf(world, found) }
-  }
+  const checked = checkStates(world, request, found, output)
+  if ('kind' in checked) return checked
+  const { subject, own } = checked
   const pin =
     typeof request.target === 'object' && 'pin' in request.target
       ? request.target.pin
@@ -144,15 +133,17 @@ export function act(
   // An arming request runs under Rust's page input lock, so a stale interceptor found here is
   // never another op's live one: an earlier op of this world that lost its verdict.
   if (arm) stopArmed(slotOf(world))
-  else scroll(element, request.scroll)
+  else scroll(subject, request.scroll)
   // Upstream's stability rect: the retargeted element's bounding box (InjectedScript's
-  // _checkElementIsStable).
-  const rect = injected
-    .retarget(element, 'no-follow-label')
-    ?.getBoundingClientRect()
+  // _checkElementIsStable), or the label's that takes the press.
+  const rect = (
+    own ? subject : injected.retarget(element, 'no-follow-label')
+  )?.getBoundingClientRect()
   if (!rect) return { kind: 'detached' }
   const box = rectOf(rect)
-  const place = clickPoint(element, request.position)
+  const place = own
+    ? labelPlace(subject)
+    : clickPoint(element, request.position)
   const resolved = resolutionOf(world, found)
   if (!place) return { kind: 'state', missing: 'visible', ...resolved }
   const measured = {
@@ -170,30 +161,73 @@ export function act(
   // A transformed frame can map a different clipped centroid, or scale a subpixel
   // local target into view. Rust checked that geometry; events establish its hit.
   const interception = output.arm(
-    element,
+    subject,
     arm.action,
     arm.browserMapped ? undefined : place.point,
     arm.blockAll,
   )
   if (interception === 'error:notconnected') return { kind: 'detached' }
-  if (typeof interception === 'string') {
-    // Which cover this is, for the runner's count: the interceptor tests the element it
-    // retargets to, so the mark does too.
-    const mark = coverMark(
-      injected.retarget(element, 'button-link') ?? element,
-      place.point,
-    )
-    return {
-      kind: 'covered',
-      by: interception,
-      ...(mark ? { cover: mark } : {}),
+  if (typeof interception !== 'string')
+    return armSlot(world, arm, interception, box, place.point, own)
+  if (own) return coveredReply(world, element, place.point, interception)
+  return armOwn(world, request, output, element, place.point, box, interception)
+}
+
+/**
+ * The request's states on the element. A checkbox or radio that is not shown, whose own label
+ * is, is the label's to press (covered-click C, a label's state two): the waits after the states
+ * and the press then go to that label. Otherwise the first state that does not hold answers.
+ */
+function checkStates(
+  world: World,
+  request: ActRequest,
+  found: Extract<ReturnType<typeof resolveTarget>, { kind: 'one' }>,
+  output: FailureOutput,
+): { subject: Element; own?: OwnPress } | ReplyTo<'act'> {
+  const { element } = found
+  let label: Element | undefined
+  for (const state of request.states) {
+    let result: ReturnType<World['injected']['elementState']>
+    try {
+      result = world.injected.elementState(element, state, request.frameVisible)
+    } catch (error) {
+      // A state the element cannot have (`editable` on a <div>) throws; upstream has logged
+      // what the locator resolved to by then, so the error reply carries it (index.ts).
+      if (error instanceof Error)
+        Object.assign(error, resolutionOf(world, found))
+      throw error
     }
+    if (result.received === 'error:notconnected') return { kind: 'detached' }
+    if (result.matches) continue
+    label =
+      state === 'visible' && request.own
+        ? shownOwnLabel(world, element)
+        : undefined
+    if (!label)
+      return { kind: 'state', missing: state, ...resolutionOf(world, found) }
   }
+  return label
+    ? {
+        subject: label,
+        own: { case: 'label', markup: output.previewNode(label) },
+      }
+    : { subject: element }
+}
+
+/** Keeps `taken` armed for the verdict, and answers where the input must go. */
+function armSlot(
+  world: World,
+  arm: NonNullable<ActRequest['arm']>,
+  taken: Interception,
+  box: Rect,
+  point: Point,
+  press: OwnPress | undefined,
+): ReplyTo<'act'> {
   const slot = slotOf(world)
   slot.stopped = undefined
   slot.armed = {
     token: arm.token,
-    interception,
+    interception: taken,
     // Only a Rust that lost the page lets this fire: it bounds how long the page's own
     // clicks stay blocked after a lost connection.
     expiry: setTimeout(() => {
@@ -201,7 +235,76 @@ export function act(
       if (stopped) slot.stopped = { ...stopped, expired: true }
     }, arm.expiryMs),
   }
-  return { kind: 'armed', rect: box, point: place.point, token: arm.token }
+  return {
+    kind: 'armed',
+    rect: box,
+    point,
+    token: arm.token,
+    ...(press ? { own: press } : {}),
+  }
+}
+
+/**
+ * Covered-click C: the same interceptor, armed on what is the target's own at that case's point
+ * (`ownPress`), so nothing is pressed through anything foreign. A transformed frame maps its own
+ * point, so it gets the covered answer. The interceptor tests the element it retargets to, so
+ * what of the target's own may take the press, and the cover's mark, go by it too.
+ */
+function armOwn(
+  world: World,
+  request: ActRequest,
+  output: FailureOutput,
+  element: Element,
+  point: Point,
+  box: Rect,
+  interception: string,
+): ReplyTo<'act'> {
+  const { arm } = request
+  const retargeted = world.injected.retarget(element, 'button-link') ?? element
+  const choice =
+    arm && request.own && !arm.browserMapped
+      ? ownPress(world, output, retargeted, point, request.own)
+      : undefined
+  const at =
+    choice &&
+    (choice.point ?? clickPoint(choice.element, choice.press.position)?.point)
+  if (arm && choice && at) {
+    const again = output.arm(choice.element, arm.action, at, arm.blockAll)
+    if (again === 'error:notconnected') return { kind: 'detached' }
+    if (typeof again !== 'string')
+      return armSlot(world, arm, again, box, at, choice.press)
+  }
+  return coveredReply(world, element, point, interception)
+}
+
+/** The covered answer, with which cover this is for the runner's count. */
+function coveredReply(
+  world: World,
+  element: Element,
+  point: Point,
+  interception: string,
+): ReplyTo<'act'> {
+  const retargeted = world.injected.retarget(element, 'button-link') ?? element
+  const mark = coverMark(retargeted, point)
+  return {
+    kind: 'covered',
+    by: interception,
+    ...(mark ? { cover: mark } : {}),
+  }
+}
+
+/** Where a press on a label that takes it goes: its first plain point, as a click point. */
+function labelPlace(
+  label: Element,
+): { point: Point; inView: boolean; borderOffset?: Point } | undefined {
+  const point = labelPlainPoint(label)
+  if (!point) return undefined
+  const inView =
+    point.x >= 0 &&
+    point.y >= 0 &&
+    point.x < innerWidth &&
+    point.y < innerHeight
+  return { point, inView }
 }
 
 export function verdict(

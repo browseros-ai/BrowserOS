@@ -102,7 +102,39 @@ const shapes = {
       of this shop</span></label>`
     document.getElementById('target').addEventListener('click', log('target'))
   },
+  alllink() {
+    // A checkbox under its own label that is all link: no point of the label is plain.
+    stage.innerHTML = `<label id="own" style="position: relative; display: inline-block; width: 320px">
+      <input type="checkbox" id="target" style="position: absolute; left: 8px; top: 8px; margin: 0; width: 13px; height: 13px">
+      <a href="/elsewhere/terms" style="position: relative; display: block; padding: 8px 8px 8px 24px; background: #eef">Read and accept the terms</a></label>`
+    document.getElementById('target').addEventListener('click', log('target'))
+  },
+  hiddenbox() {
+    // A checkbox that is not shown, and its own label that is: a styled box drawn by the label.
+    stage.innerHTML = `<input type="checkbox" id="target" style="display: none">
+      <label id="own" for="target" style="display: inline-block; padding: 8px; background: #eef">Subscribe to the newsletter</label>`
+    document.getElementById('target').addEventListener('click', log('target'))
+  },
   wrapper() {
+    // A radio card: its blank wrapper takes the pointer and selects the radio on a press.
+    stage.innerHTML = `<style>.option { position: relative; width: 200px; height: 40px }
+      .option::after { content: ''; position: absolute; inset: 0 }</style>
+      <div class="option"><input type="radio" id="target" name="size" style="margin: 12px; width: 13px; height: 13px"></div>`
+    document.getElementById('target').addEventListener('click', log('target'))
+    document.querySelector('.option').addEventListener('click', () => {
+      document.getElementById('target').checked = true
+    })
+  },
+  veilbutton() {
+    // A button under its parent's blank veil: the parent is its own wrapper, but only a state
+    // would show what a press on it did, and a button has none.
+    stage.innerHTML = `<style>.veiled { position: relative; width: 200px; height: 48px }
+      .veiled::after { content: ''; position: absolute; inset: 0 }</style>
+      <div class="veiled"><button id="target" style="width: 160px; height: 40px">Pay now</button></div>`
+    document.getElementById('target').addEventListener('click', log('target'))
+  },
+  wrapperdead() {
+    // The same blank wrapper with nothing behind it: a press on it changes nothing.
     stage.innerHTML = `<style>.option { position: relative; width: 200px; height: 40px }
       .option::after { content: ''; position: absolute; inset: 0 }</style>
       <div class="option"><input type="radio" id="target" name="size" style="margin: 12px; width: 13px; height: 13px"></div>`

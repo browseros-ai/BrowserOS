@@ -29,6 +29,8 @@ import type {
   CoverKind,
   CoverMark,
   CoverRequest,
+  OwnAllowed,
+  OwnPress,
   Point,
   ReplyTo,
 } from './protocol'
@@ -273,7 +275,7 @@ function factsOf(
     behind,
     closed,
     notice: !surrounds && inLiveRegion(world, shown),
-    kind: frameInCover(world, shown, kind) ? { is: 'page' } : kind,
+    kind: frameKind(shown, kind, controls),
   }
 }
 
@@ -318,15 +320,28 @@ function isFrame(element: Element): boolean {
 }
 
 /**
- * A frame at the point gets the frame's line only when the cover named is that frame, or lists
- * nothing but frames. A dialog with controls of its own, one of whose frames lies at the point
- * (a sign-in dialog that draws its form in a frame), is answered or closed with those controls:
- * the frame's line would send the agent to a bot-check solver with the dialog's Close listed above.
+ * The kind against the cover named and the controls it lists, for the frame's line:
+ * - a cover that is a frame keeps its kind and its line;
+ * - a cover that lists nothing but frames, one or more, gets the frame's kind whatever lies at the
+ *   point, with a line that points into the frame (`inside`): its way out is in there, as on a
+ *   sign-in sheet whose Close is the frame's own;
+ * - a frame at the point of a cover with controls of its own (a sign-in dialog that draws its form
+ *   in a frame) is `page`: the frame's line would send the agent to a bot-check solver with the
+ *   dialog's Close listed above.
  */
-function frameInCover(world: World, shown: Element, kind: CoverKind): boolean {
-  if (kind.is !== 'frame') return false
-  if (isFrame(shown)) return false
-  return takingControls(world, shown).some((control) => !isFrame(control))
+function frameKind(
+  shown: Element,
+  kind: CoverKind,
+  controls: readonly CoverControl[],
+): CoverKind {
+  if (shown.localName === 'iframe' || shown.localName === 'frame') return kind
+  if (kind.is !== 'page' && kind.is !== 'frame') return kind
+  const frames = controls.filter((control) => control.role === 'iframe')
+  if (frames.length > 0 && frames.length === controls.length)
+    return { is: 'frame', inside: true }
+  return kind.is === 'frame' && frames.length < controls.length
+    ? { is: 'page' }
+    : kind
 }
 
 /**
@@ -682,6 +697,9 @@ function explicitControl(element: Element): boolean {
  * accessible name, and its composed tree holds exactly one shown element whose role is `dialog`
  * or `alertdialog` (an open `<dialog>` counts; `aria-modal` alone does not). None, or two or
  * more, a dialog nested in a dialog included: `undefined`, and the cover is shown as itself.
+ * The count runs inside the walk's bound (MAX_WALKED), a named limit: a second dialog past it is
+ * not seen. Giving up at the bound would take the name from every cover that holds one large
+ * dialog, which is commoner, and counting past it costs a second walk.
  */
 function soleDialog(world: World, cover: Element): Element | undefined {
   const { utils } = world.injected
@@ -705,22 +723,12 @@ const NATIVE_CONTROLS =
 
 /**
  * A cover's control, by what it is: a native control, a frame, an editable region, or an element
- * whose role attribute names a control. One that has only a tabindex counts when it is in the
- * tab order (0 or more) and has an accessible name: a `div` with `tabindex="0"` and a label
- * `Close` is a careless page's close button, while a dialog's focus guards, its off-screen focus
- * target and its title span are not. A dialog or alertdialog is never a control: it is what the
- * controls are in, and an answer that lists it hides the way out.
+ * whose role attribute names a control. An element with only a tabindex is not one: a dialog's
+ * container, its focus guards, an off-screen focus target and its title span all carry one, and
+ * an answer that lists them hides the way out among them.
  */
-export function coverControl(world: World, element: Element): boolean {
-  const { utils } = world.injected
-  const role = utils.getAriaRole(element)
-  if (role === 'dialog' || role === 'alertdialog') return false
-  if (element.matches(NATIVE_CONTROLS) || explicitControl(element)) return true
-  const tabindex = Number.parseInt(element.getAttribute('tabindex') ?? '', 10)
-  return (
-    tabindex >= 0 &&
-    utils.getElementAccessibleNameText(element, false).trim() !== ''
-  )
+export function coverControl(element: Element): boolean {
+  return element.matches(NATIVE_CONTROLS) || explicitControl(element)
 }
 
 /** A control's role as an answer prints it: a frame is an `iframe`, as a snapshot prints one. */
@@ -740,7 +748,7 @@ export function controlRole(world: World, control: Element): string {
 export function takingControls(world: World, shown: Element): Element[] {
   const { injected } = world
   return composedDescendants(shown).filter((control) => {
-    if (!coverControl(world, control)) return false
+    if (!coverControl(control)) return false
     if (!injected.utils.isElementVisible(control)) return false
     const box = control.getBoundingClientRect()
     const middle = { x: box.x + box.width / 2, y: box.y + box.height / 2 }
@@ -847,6 +855,146 @@ function ownLabel(subject: Element, onTop: Element): Element | undefined {
     (label): label is Element =>
       label instanceof Element && label.contains(onTop),
   )
+}
+
+/** The roles whose press point cannot matter: a clear point of one is pressed by itself. */
+const POINT_ROLES: ReadonlySet<string> = new Set([
+  'link',
+  'button',
+  'checkbox',
+  'radio',
+  'switch',
+  'tab',
+  'menuitem',
+  'option',
+])
+
+/**
+ * What of the target's own takes a press its covered point refused: the element the interceptor
+ * arms on, and the frame point it expects, which the caller works out from `press.position` for
+ * a clear point (`act.ts`'s `clickPoint`, as a script's `position` is read).
+ */
+export type OwnChoice = {
+  element: Element
+  point?: Point
+  press: OwnPress
+}
+
+/**
+ * Covered-click C, the presses that land by themselves: what of `target`'s own may take a press
+ * the interceptor refused at `point`. It goes by the covered answer's own kinds (`kindOf`), so
+ * Neo presses where its answer would have told the agent to:
+ * - its own label: at `point` when the label or its plain content is on top there, else at the
+ *   label's first plain point; a label that is all link or control takes no press;
+ * - its own wrapper or drawing: only the cover `allowed.wrapper` names, and only for a checkbox, a
+ *   radio or a switch, whose state shows what the press did. Over any other control a wrapper
+ *   may be a blank veil, and a parent's text holds its button's own text, so no test of what
+ *   the wrapper draws tells the two apart: the answer comes;
+ * - a clear point of it, the one the answer prints, for a target whose point cannot matter.
+ * Never a frame, another control's label, or anything foreign. `undefined`: the answer comes.
+ */
+export function ownPress(
+  world: World,
+  output: FailureOutput,
+  target: Element,
+  point: Point,
+  allowed: OwnAllowed,
+): OwnChoice | undefined {
+  const chain = hitChain(target, point)
+  const onTop = chain?.[0]
+  if (!chain || !onTop) return undefined
+  const kind = kindOf(world, target, chain, point, false)
+  if (kind.is === 'label') {
+    const label = ownLabel(target, onTop)
+    if (!label) return undefined
+    const at = plainAt(label, onTop) ? point : labelPlainPoint(label)
+    if (!at) return undefined
+    return {
+      element: label,
+      point: at,
+      press: { case: 'label', markup: output.previewNode(label) },
+    }
+  }
+  if (kind.is === 'wrapper') {
+    if (coverNumber(coverRoot(target, chain)) !== allowed.wrapper)
+      return undefined
+    const checked = checkedState(world, target)
+    if (checked === undefined) return undefined
+    return {
+      element: onTop,
+      point,
+      press: { case: 'wrapper', markup: output.previewNode(onTop), checked },
+    }
+  }
+  if (kind.is === 'partial') {
+    const role = world.injected.utils.getAriaRole(target) ?? ''
+    if (!POINT_ROLES.has(role) && target.localName !== 'summary')
+      return undefined
+    return {
+      element: target,
+      press: { case: 'point', position: kind.position },
+    }
+  }
+  return undefined
+}
+
+/**
+ * A checkbox or radio that is not shown, and a label of its own that is: the label a click
+ * through it goes to (a label's state two). Checkboxes and radios only.
+ */
+export function shownOwnLabel(
+  world: World,
+  control: Element,
+): Element | undefined {
+  if (control.localName !== 'input') return undefined
+  const type = control.getAttribute('type')?.toLowerCase()
+  if (type !== 'checkbox' && type !== 'radio') return undefined
+  const labels: unknown = Reflect.get(control, 'labels')
+  if (!(labels instanceof NodeList)) return undefined
+  return Array.from(labels).find(
+    (label): label is Element =>
+      label instanceof Element &&
+      world.injected.utils.isElementVisible(label) &&
+      labelPlainPoint(label) !== undefined,
+  )
+}
+
+/**
+ * What is on top lies in the label itself or its plain content: neither a link nor a control
+ * of the label's own holds it, so a press there is the label's.
+ */
+function plainAt(label: Element, onTop: Element): boolean {
+  for (
+    let at: Element | null = onTop;
+    at && at !== label;
+    at = at.parentElement
+  )
+    if (at.matches(`a[href], ${CONTROLS}`)) return false
+  return label.contains(onTop)
+}
+
+/** The label's first plain point (`pointOffLinks`), in the frame's pixels. */
+export function labelPlainPoint(label: Element): Point | undefined {
+  const offset = pointOffLinks(label)
+  if (!offset) return undefined
+  const box = label.getBoundingClientRect()
+  const style = getComputedStyle(label)
+  return {
+    x: box.x + (Number.parseFloat(style.borderLeftWidth) || 0) + offset.x,
+    y: box.y + (Number.parseFloat(style.borderTopWidth) || 0) + offset.y,
+  }
+}
+
+/** A checkbox's, radio's or switch's state; `undefined` for any other control. */
+function checkedState(world: World, control: Element): boolean | undefined {
+  const role = world.injected.utils.getAriaRole(control) ?? ''
+  if (role !== 'checkbox' && role !== 'radio' && role !== 'switch')
+    return undefined
+  try {
+    return world.injected.elementState(control, 'checked', true).matches
+  } catch {
+    return undefined
+  }
 }
 
 /** The label's links, and a point of it on none of them when it has some. */

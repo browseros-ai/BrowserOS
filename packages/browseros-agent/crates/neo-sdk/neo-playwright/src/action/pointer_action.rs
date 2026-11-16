@@ -43,9 +43,9 @@ use crate::locator_handler::Prechecks;
 use crate::op_scope::{OpScope, Sent};
 use crate::page::OpPage;
 use crate::probe::{
-    ArmPlan, CoverMark, DropEntry, Edit, FilePayload, Hit, HitAction, PageText, Point,
-    ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget, Ran, Read, Rect, Resolution, ScrollPlan,
-    Want,
+    ArmPlan, CoverMark, DropEntry, Edit, FilePayload, Hit, HitAction, OwnAllowed, OwnCase,
+    OwnPress, PageText, Point, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget, Ran, Read,
+    Rect, Resolution, ScrollPlan, Want,
 };
 use crate::resolve::{self, Resolved};
 use crate::target::{Strictness, Target};
@@ -251,6 +251,12 @@ pub(crate) struct PointerRunner<'a> {
     /// The covers the inner loop's completed checks found (`cover.rs`), for what a timeout
     /// under one says.
     covers: CoverWatch,
+    /// What of the target's own took the last press that landed by itself (covered-click C),
+    /// so a checking action whose state did not change says which.
+    pressed_by: Option<OwnCase>,
+    /// A press through the own wrapper of a checkbox, a radio or a switch: its pin and its state
+    /// before, read again after a plain click, since only the state shows what the press did.
+    wrapper_before: Option<(Pin, bool)>,
 }
 
 impl<'a> PointerRunner<'a> {
@@ -270,6 +276,8 @@ impl<'a> PointerRunner<'a> {
             matched: false,
             navigation_cut: None,
             covers: CoverWatch::new(),
+            pressed_by: None,
+            wrapper_before: None,
         }
     }
 
@@ -347,12 +355,33 @@ impl<'a> PointerRunner<'a> {
                 .on_element(&located, None, action, drag.as_deref_mut())
                 .await?
             {
-                Inner::Done => return Ok(()),
+                Inner::Done => {
+                    self.wrapper_state(&located).await?;
+                    return Ok(());
+                }
                 // A cover's count starts again when the locator resolves again.
                 Inner::Reresolve => self.covers.cleared(),
             }
         }
         Err(self.timed_out())
+    }
+
+    /// After a plain click through the own wrapper of a checkbox, a radio or a switch: only the
+    /// state shows what such a press did, so an unchanged one gets a line in the call log, which
+    /// the trace keeps as the op's note.
+    async fn wrapper_state(&mut self, located: &Resolved) -> Result<(), PlaywrightError> {
+        let Some((pin, before)) = self.wrapper_before.take() else {
+            return Ok(());
+        };
+        if let Some(after) = self.checkable(located, pin).await?
+            && after.checked == before
+        {
+            self.scope.log(
+                "  its own wrapper took the press, and the control's state did not change"
+                    .to_owned(),
+            );
+        }
+        Ok(())
     }
 
     /// `check`, `uncheck` and `setChecked`, as upstream's `_setChecked`: read the state, click
@@ -399,6 +428,7 @@ impl<'a> PointerRunner<'a> {
                      selecting another radio button in the same group.",
                 ));
             }
+            self.pressed_by = None;
             match self.on_element(&located, Some(pin), action, None).await? {
                 Inner::Done => {}
                 Inner::Reresolve => {
@@ -406,15 +436,16 @@ impl<'a> PointerRunner<'a> {
                     continue;
                 }
             }
+            // The checking action verifies the state itself, below.
+            self.wrapper_before = None;
             if action.trial {
                 return Ok(());
             }
             return match self.checkable(&located, pin).await? {
                 Some(after) if after.checked == checked => Ok(()),
-                Some(_) => Err(self.scope.fail(
-                    ErrorCode::PageError,
-                    "Clicking the checkbox did not change its state",
-                )),
+                Some(_) => Err(self
+                    .scope
+                    .fail(ErrorCode::PageError, &unchanged(self.pressed_by))),
                 None => Err(self.scope.fail(
                     ErrorCode::ElementDetached,
                     "Element is not attached to the DOM",
@@ -670,7 +701,7 @@ impl<'a> PointerRunner<'a> {
             // The burst is built on a copy of the tab's devices, which the tab takes only as the
             // burst goes out, so a refused attempt leaves the mouse where it was.
             let mut planned = input.plan();
-            let burst = burst(&mut planned, page_point, action)?;
+            let mut burst = burst(&mut planned, page_point, action)?;
 
             // ② Arm the interceptor while the element still has ①'s rect.
             let mut guard = None;
@@ -693,8 +724,33 @@ impl<'a> PointerRunner<'a> {
                     Some(plan),
                 );
                 match self.call(located, &arm).await? {
-                    Called::Reply(ProbeReply::Armed { .. }) => {
+                    Called::Reply(ProbeReply::Armed {
+                        point, own: press, ..
+                    }) => {
                         self.covers.cleared();
+                        // From every armed reply, so a retry that arms on the control itself does
+                        // not keep an earlier attempt's own press for the checking error or the
+                        // wrapper's state read.
+                        self.pressed_by = press.as_ref().map(|press| press.case);
+                        self.wrapper_before = press
+                            .as_ref()
+                            .and_then(|press| press.checked)
+                            .map(|checked| (pin, checked));
+                        if let Some(press) = press {
+                            // Covered-click C: the interceptor is armed on what is the target's
+                            // own, at that case's point, and the input goes there. A point of the
+                            // same frame moves on the page by the same offset (a transformed frame
+                            // gets no such press).
+                            if point != measured.point {
+                                let moved = PagePoint {
+                                    x: page_point.x + point.x - measured.point.x,
+                                    y: page_point.y + point.y - measured.point.y,
+                                };
+                                planned = input.plan();
+                                burst = self::burst(&mut planned, moved, action)?;
+                            }
+                            self.scope.log(own_line(&press));
+                        }
                         guard = Some(ArmGuard::new(
                             self.scope,
                             located.world().clone(),
@@ -1022,7 +1078,23 @@ impl<'a> PointerRunner<'a> {
             scroll,
             position: action.position,
             arm,
+            own: self.own_allowed(action),
         }
+    }
+
+    /// Covered-click C: what of the target's own this action may press when its point is
+    /// covered. A click or a dblclick with no script `position`, not forced, not a trial and not
+    /// under the conformance flag; a wrapper only as the cover that stood its checks.
+    fn own_allowed(&self, action: &PointerAction) -> Option<OwnAllowed> {
+        let pressing = matches!(action.kind, PointerKind::Click | PointerKind::Dblclick);
+        (pressing
+            && action.position.is_none()
+            && !action.force
+            && !action.trial
+            && !self.scope.conformance())
+        .then(|| OwnAllowed {
+            wrapper: self.covers.wrapper_allowed(),
+        })
     }
 
     /// The pinned element after the protocol's scroll (`protocol_scroll.rs`): the `act` that
@@ -1274,6 +1346,32 @@ fn arm_expiry(timeout: Option<Duration>, burst: &[InputStep]) -> u64 {
     u64::try_from(lasts.as_millis())
         .unwrap_or(MAX_TIMER_MS)
         .min(MAX_TIMER_MS)
+}
+
+/// A checking action's error when its press left the state as it was: upstream's words, and
+/// which of the target's own took the press when one did (covered-click C).
+fn unchanged(pressed_by: Option<OwnCase>) -> String {
+    let taken = match pressed_by {
+        None => return "Clicking the checkbox did not change its state".to_owned(),
+        Some(OwnCase::Label) => "its own label",
+        Some(OwnCase::Wrapper) => "its own wrapper",
+        Some(OwnCase::Point) => "a clear point of it",
+    };
+    format!("Clicking the checkbox did not change its state: {taken} took the press")
+}
+
+/// The call log's one line for a press that landed by itself, in one fixed form a host can
+/// count with one match (`takes the press: `); the trace keeps it as the op's note.
+fn own_line(press: &OwnPress) -> String {
+    let markup = press.markup.as_deref().unwrap_or_default();
+    match press.case {
+        OwnCase::Label => format!("  its own label takes the press: {markup}"),
+        OwnCase::Wrapper => format!("  its own wrapper takes the press: {markup}"),
+        OwnCase::Point => format!(
+            "  a clear point of it takes the press: {}",
+            press.position.map(cover::point_text).unwrap_or_default()
+        ),
+    }
 }
 
 /// The input of one attempt, built on a copy of the tab's devices (`PageInput::plan`), which

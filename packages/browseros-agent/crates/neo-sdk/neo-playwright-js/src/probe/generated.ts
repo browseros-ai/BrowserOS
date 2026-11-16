@@ -225,7 +225,7 @@ notice: boolean, kind: CoverKind, };
 /**
  * How the cover stands to the control, which picks the answer's line (spec section 2's table).
  */
-export type CoverKind = { "is": "page" } | { "is": "frame" } | { "is": "partial", position: Point, } | { "is": "label", links: number, position?: Point, } | { "is": "wrapper" } | { "is": "labels", ref: string, } | { "is": "nothing" } | { "is": "folded" };
+export type CoverKind = { "is": "page" } | { "is": "frame", inside?: boolean, } | { "is": "partial", position: Point, } | { "is": "label", links: number, position?: Point, } | { "is": "wrapper" } | { "is": "labels", ref: string, } | { "is": "nothing" } | { "is": "folded" };
 
 /**
  * Which cover stood at one check of a pointer action (covered-click spec section 1): the root
@@ -403,6 +403,42 @@ export type Looked = { facts?: BoxFacts, refusal?: LookRefused,
 maxLengthMoved?: boolean, };
 
 /**
+ * Covered-click C, the presses that land by themselves: a click or dblclick with no script
+ * `position`, not forced, not a trial and not under the conformance flag may land on what is the
+ * target's own when its point is covered: its own label, its own wrapper or drawing, or a clear
+ * point of it. The probe arms the same interceptor on that element at that point.
+ */
+export type OwnAllowed = { 
+/**
+ * The one cover a wrapper may be: the cover that stood four checks and does not say it is
+ * loading (the pointer runner's count). Absent: no wrapper takes the press.
+ */
+wrapper?: number, };
+
+/**
+ * Which of the target's own takes a press that lands by itself.
+ */
+export type OwnCase = "label" | "wrapper" | "point";
+
+/**
+ * A press that lands by itself (covered-click C): what takes it, as the call log names it.
+ */
+export type OwnPress = { case: OwnCase, 
+/**
+ * The label's or the wrapper's markup, as the call log prints an element.
+ */
+markup?: string, 
+/**
+ * The clear point, relative to the target, as the covered answer prints it.
+ */
+position?: Point, 
+/**
+ * A checkbox's, radio's or switch's state before a press through its own wrapper: the
+ * runner reads it again after, since only the state shows what such a press did.
+ */
+checked?: boolean, };
+
+/**
  * A private value on its way to Neo's isolated world, where the box's listener and the
  * read-back compare with it: the whole value, or the part a `maxlength` lets in. It prints
  * as `[private]` and is zeroed when dropped, as [`PrivateText`] is. Only the entry builds one,
@@ -486,7 +522,12 @@ borderOffset?: Point, resolved?: Resolution, } | { "kind": "covered", by: string
 /**
  * Absent when a second look found the element on top after all.
  */
-cover?: CoverMark, } | { "kind": "armed", rect: Rect, point: Point, token: number, } | { "kind": "verdict", hit: Hit, } | { "kind": "moves", moves: number, } | { "kind": "frameBox", origin: Point | null, hit: Hit | null, 
+cover?: CoverMark, } | { "kind": "armed", rect: Rect, point: Point, token: number, 
+/**
+ * The interceptor is armed on what is the target's own, at `point`: the press lands
+ * there by itself (`OwnPress`).
+ */
+own?: OwnPress, } | { "kind": "verdict", hit: Hit, } | { "kind": "moves", moves: number, } | { "kind": "frameBox", origin: Point | null, hit: Hit | null, 
 /**
  * Only for the private look (ruling R60): this page cannot show `point`, which lies
  * outside its viewport, or where the iframe is clipped away though it takes the
@@ -522,7 +563,12 @@ export type ProbeRequest = { "op": "describe" } | { "op": "resolve", target: Pro
 /**
  * Every `<iframe>` on the way down is visible (the resolver's hops).
  */
-frameVisible: boolean, scroll: ScrollPlan, position?: Point, arm?: ArmPlan, } | { "op": "verdict", token: number, } | { "op": "moves" } | { "op": "disarm" } | { "op": "frameBox", iframe: ProbeTarget, point?: Point, 
+frameVisible: boolean, scroll: ScrollPlan, position?: Point, arm?: ArmPlan, 
+/**
+ * The presses that land by themselves: present when this action may press what is the
+ * target's own, so a covered arming arms on it instead (`OwnAllowed`).
+ */
+own?: OwnAllowed, } | { "op": "verdict", token: number, } | { "op": "moves" } | { "op": "disarm" } | { "op": "frameBox", iframe: ProbeTarget, point?: Point, 
 /**
  * Set only by the private look's cover check of a page above the box's frame (ruling
  * R60): a frame that is only shifted is placed by its corner, and a point that hits

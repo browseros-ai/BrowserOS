@@ -13,9 +13,13 @@ export * from './generated'
 export type NeoProbe = NonNullable<typeof globalThis.__neoProbe>
 
 /**
- * Bumped on any shape change, and on any change to what Rust relies on the probe doing. `boot`
- * reports it, and an install whose number differs from Rust's PROBE_PROTOCOL fails as
- * `neo / internal` (the engine asset is stale).
+ * Bumped on any shape change, and on any change to what Rust relies on the probe doing. A change
+ * only in what a page-side answer says does not bump it: a document kept across a server update
+ * keeps its older probe until it navigates, and an image never meets that, since it ships the
+ * server and the page script together and starts a new browser. The one change of behaviour alone
+ * that does bump is one that adds masking or closes a leak, so that no kept document goes on
+ * answering the old way. `boot` reports it, and an install whose number differs from Rust's
+ * PROBE_PROTOCOL fails as `neo / internal` (the engine asset is stale).
  */
 export const PROTOCOL = 51
 

@@ -58,6 +58,9 @@ pub(crate) struct Standing {
     from_start: bool,
 }
 
+/// The checks a cover stands before a press may go through it as the target's own wrapper.
+const WRAPPER_CHECKS: u32 = 4;
+
 /// The record of a pointer action's completed checks, kept by its runner on Rust's clock.
 #[derive(Debug)]
 pub(crate) struct CoverWatch {
@@ -117,6 +120,15 @@ impl CoverWatch {
             checks: 1,
             from_start: first,
         });
+    }
+
+    /// The cover a press may go through as the target's own wrapper or drawing (covered-click
+    /// C): the one that has stood for [`WRAPPER_CHECKS`] checks and does not say it is loading.
+    /// A cover that just arrived may still be a page's veil on its way somewhere.
+    pub(crate) fn wrapper_allowed(&self) -> Option<u32> {
+        let standing = self.standing.as_ref()?;
+        let mark = standing.mark.as_ref()?;
+        (standing.checks >= WRAPPER_CHECKS && !mark.busy).then_some(mark.id)
     }
 
     /// The cover the last completed check found, if it found one.
@@ -404,8 +416,12 @@ fn todo(facts: &CoverFacts) -> String {
              wait for it: getByRef('{}').waitFor({{ state: 'hidden' }}).",
             facts.r#ref
         ),
-        CoverKind::Frame => "a frame covers it. Its content is under its ref in the snapshot. If \
-                             it is a bot check, use the solver."
+        CoverKind::Frame { inside: false } => "a frame covers it. Its content is under its ref in \
+                                               the snapshot. If it is a bot check, use the solver."
+            .to_owned(),
+        CoverKind::Frame { inside: true } => "its content is in a frame: it is under the frame's \
+                                              ref in the snapshot. If it is a bot check, use the \
+                                              solver."
             .to_owned(),
         CoverKind::Partial { position } => format!(
             "only part of it is covered. Act on it at a clear point: {{ position: {} }}.",
@@ -446,7 +462,7 @@ fn todo(facts: &CoverFacts) -> String {
     }
 }
 
-fn point_text(point: Point) -> String {
+pub(crate) fn point_text(point: Point) -> String {
     format!("{{ x: {}, y: {} }}", point.x.round(), point.y.round())
 }
 
@@ -470,7 +486,7 @@ fn field(facts: &CoverFacts) -> Value {
 fn kind_name(kind: &CoverKind) -> &'static str {
     match kind {
         CoverKind::Page => "page",
-        CoverKind::Frame => "frame",
+        CoverKind::Frame { .. } => "frame",
         CoverKind::Partial { .. } => "partial",
         CoverKind::Label { .. } => "label",
         CoverKind::Wrapper => "wrapper",

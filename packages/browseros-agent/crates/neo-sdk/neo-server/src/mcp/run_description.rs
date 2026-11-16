@@ -68,23 +68,12 @@ Waiting longer does not bring a missing or covered element: when you are not sur
 /// A pointer action under a cover: it waits out its timeout, then fails `covered`, and its
 /// message names the cover with its ref, its snapshot and its controls, and one line of what to
 /// do (`neo-playwright/src/action/cover.rs`). When a covered click comes to answer early, the pull
-/// request that builds it rewrites this sentence.
+/// request that builds it rewrites this sentence. A press whose cover is the target's own label,
+/// wrapper or drawing, or that finds a clear point of the target, lands by itself and the call log
+/// says which, so the text says nothing of it; a label that is all link gets this answer, whose Do
+/// line says to press Space.
 const COVERED_CLICK: &str = r"A click on an element that another element covers waits out its timeout and fails `covered`; its message says what is `On top:`, with its ref and its controls, and what to do.
 Answer or close it with one of those controls (in a script: `error.cover.controls`), then click again; if the message says the same layer covered your last click, closing it again will not help.";
-
-/// A checkbox or radio under its own label, which upstream Playwright refuses to click too, and
-/// the trusted ways that work today, as the cover rules' author measured them on a real browser:
-/// Space on a rendered control (a 1 px clipped one included) is one trusted press that no cover
-/// delays; on a control that is not rendered it returns without error and changes nothing, hence
-/// the read-back; on a box that is already checked it unchecks it (a host measured this), hence
-/// "only when `isChecked()` differs"; a click at a label's centre followed the link inside it, a
-/// click at its top-left corner did not. The text names no untrusted way (`dispatchEvent`): a
-/// model would read it as leave to press through any cover. Removed by the pull request that
-/// makes such a click land through its label; its pinning test fails until then.
-const OWN_LABEL_CLICK: &str = r"When a checkbox's or radio's own label covers it (`<label …> intercepts pointer events`), press Space on the control: `await page.getByRef('e5').press('Space')` is one trusted press and waits for no cover.
-Space toggles: press it only when `isChecked()` differs from the state you want.
-If the control is not rendered (only its label shows), click the label at its top-left corner, `click({ position: { x: 5, y: 5 } })`, and only when the label starts with plain words: a click at the centre of a label that holds a link can follow the link and lose the page.
-Read the state back with `isChecked()` either way: Space on a control that is not rendered changes nothing and says nothing.";
 
 /// The error model, which the agent needs before it retries anything. The model reads
 /// `retryable` inside its script, so the text says it means "safe to repeat", never "will
@@ -135,7 +124,7 @@ pub(crate) fn run_description(registry: &Registry) -> String {
         lines.push(LOOP.to_owned());
         lines.push(SNAPSHOT_ON_TOP.to_owned());
         lines.push(WAITS.to_owned());
-        lines.push(format!("{COVERED_CLICK}\n{OWN_LABEL_CLICK}"));
+        lines.push(COVERED_CLICK.to_owned());
     }
     lines.push(ERRORS.to_owned());
     lines.push(READ_ONLY.to_owned());
@@ -169,8 +158,8 @@ mod tests {
     use serde_json::Value;
 
     use super::{
-        COVERED_CLICK, ERRORS, GLOBALS, LOOP, OWN_LABEL_CLICK, READ_ONLY, SNAPSHOT_ON_TOP, TASKS,
-        WAITS, run_description,
+        COVERED_CLICK, ERRORS, GLOBALS, LOOP, READ_ONLY, SNAPSHOT_ON_TOP, TASKS, WAITS,
+        run_description,
     };
     use crate::dispatch::{
         ErrorCode, LeafError, Listing, Method, MethodSpec, OpCtx, PageTarget, RegistryBuilder,
@@ -291,7 +280,7 @@ mod tests {
     #[test]
     fn the_loop_waits_and_covers_appear_with_the_snapshot_method() -> Result<(), Box<dyn Error>> {
         let description = with_snapshot()?;
-        for part in [LOOP, SNAPSHOT_ON_TOP, WAITS, COVERED_CLICK, OWN_LABEL_CLICK] {
+        for part in [LOOP, SNAPSHOT_ON_TOP, WAITS, COVERED_CLICK] {
             assert!(description.contains(part), "{part}");
         }
         for sentence in [
@@ -307,9 +296,6 @@ mod tests {
             "`fill` waits out its timeout on one with no size.",
             "when you are not sure an element is there and free, pass `{ timeout: 5000 }`.",
             "if the message says the same layer covered your last click, closing it again will not help.",
-            "press Space on the control: `await page.getByRef('e5').press('Space')` is one trusted press and waits for no cover.",
-            "Space toggles: press it only when `isChecked()` differs from the state you want.",
-            "Read the state back with `isChecked()` either way:",
         ] {
             assert!(description.contains(sentence), "{sentence}: {description}");
         }
@@ -423,7 +409,6 @@ mod tests {
     /// ones the covered answer writes.
     #[test]
     fn the_codes_and_the_cover_line_the_text_names_are_neos() {
-        const POINTER: &str = include_str!("../../../neo-playwright/src/action/pointer_action.rs");
         const COVER: &str = include_str!("../../../neo-playwright/src/action/cover.rs");
         for (code, part) in [
             (ErrorCode::COVERED, COVERED_CLICK),
@@ -432,8 +417,6 @@ mod tests {
         ] {
             assert!(part.contains(&format!("`{}`", code.as_str())), "{part}");
         }
-        assert!(POINTER.contains("intercepts pointer events"));
-        assert!(OWN_LABEL_CLICK.contains("intercepts pointer events"));
         assert!(COVER.contains("\\n  On top: "));
         assert!(COVERED_CLICK.contains("`On top:`"));
         assert!(COVER.contains("The same layer covered your last "));

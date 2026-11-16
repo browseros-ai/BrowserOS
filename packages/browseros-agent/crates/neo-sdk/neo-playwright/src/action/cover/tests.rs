@@ -190,6 +190,12 @@ fn tests_that_each_kind_says_what_to_do() -> Result<(), serde_json::Error> {
              bot check, use the solver.",
         ),
         (
+            json!({ "is": "frame", "inside": true }),
+            none.clone(),
+            "Do: its content is in a frame: it is under the frame's ref in the snapshot. If it \
+             is a bot check, use the solver.",
+        ),
+        (
             json!({ "is": "partial", "position": { "x": 12.4, "y": 7.6 } }),
             none.clone(),
             "Do: only part of it is covered. Act on it at a clear point: { position: { x: 12, \
@@ -381,4 +387,38 @@ fn tests_that_on_top_words_are_only_for_an_unnamed_layer_without_controls() {
         ..note
     };
     assert!(!on_top_line(&with_name).contains(", says "));
+}
+
+/// Covered-click C: a press may go through a wrapper only as the cover that stood four checks and
+/// does not say it is loading; a cover that just arrived, or moved, or says it is loading, may
+/// still be a veil on its way somewhere.
+#[tokio::test]
+async fn tests_that_a_wrapper_takes_the_press_after_four_checks_unless_it_is_loading() {
+    let mut watch = CoverWatch::new();
+    for _ in 0..3 {
+        watch.saw(seat(None), Some(mark(7, 0.0, 1.0)));
+    }
+    assert_eq!(watch.wrapper_allowed(), None, "three checks are not enough");
+    watch.saw(seat(None), Some(mark(7, 0.0, 1.0)));
+    assert_eq!(
+        watch.wrapper_allowed(),
+        Some(7),
+        "the fourth check allows it"
+    );
+    watch.saw(seat(None), Some(mark(7, 4.0, 1.0)));
+    assert_eq!(watch.wrapper_allowed(), None, "a moved cover starts over");
+
+    let mut busy = CoverWatch::new();
+    let loading = CoverMark {
+        busy: true,
+        ..mark(9, 0.0, 1.0)
+    };
+    for _ in 0..5 {
+        busy.saw(seat(None), Some(loading));
+    }
+    assert_eq!(
+        busy.wrapper_allowed(),
+        None,
+        "a cover that says it is loading"
+    );
 }
