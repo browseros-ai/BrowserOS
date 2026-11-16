@@ -362,6 +362,10 @@ impl AppState {
         {
             tracing::warn!(error = %error, "agent guide sync failed");
         }
+        // Outside the change check too, so a switch already on at startup still gets its date.
+        if let Err(error) = self.record_ultrafast_start().await {
+            tracing::warn!(error = %error, "ultrafast start date not saved");
+        }
         if !changed {
             return false;
         }
@@ -369,6 +373,36 @@ impl AppState {
             tracing::warn!(error = %error, "skill file sync failed");
         }
         true
+    }
+
+    /// Saves the day this computer got ultrafast, the first time the switch is on: the earlier of
+    /// now and the first ultrafast run, so a computer that used it before keeps those savings.
+    async fn record_ultrafast_start(&self) -> AppResult<()> {
+        if !self.ultrafast_enabled() {
+            return Ok(());
+        }
+        let store = JsonStore::new(self.config.browserclaw_dir.clone());
+        if crate::services::ultrafast_meter::saved_since(&store)
+            .await?
+            .is_some()
+        {
+            return Ok(());
+        }
+        let history = self.audit_log.all_ultrafast_sessions().await?;
+        let kept = self.ultrafast_ledger.all().await?;
+        let first_run = history
+            .iter()
+            .map(|session| session.first_run_at)
+            .chain(kept.iter().map(|record| record.first_run_at))
+            .min();
+        crate::services::ultrafast_meter::since(
+            &store,
+            true,
+            first_run,
+            crate::clock::now_epoch_ms(),
+        )
+        .await?;
+        Ok(())
     }
 
     pub async fn live_tab_activity(&self) -> Vec<TabActivityRecord> {

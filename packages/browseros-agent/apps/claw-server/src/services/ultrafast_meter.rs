@@ -40,6 +40,15 @@ pub fn start_date(saved: Option<i64>, on: bool, first_run: Option<i64>, now: i64
     saved.or_else(|| on.then(|| first_run.map_or(now, |first| first.min(now))))
 }
 
+/// The saved start date, if this computer has one yet.
+pub async fn saved_since(store: &JsonStore) -> AppResult<Option<i64>> {
+    match store.read_json::<SinceFile>(SINCE_FILE).await {
+        Ok(file) => Ok(Some(file.since)),
+        Err(AppError::StorageNotFound(_)) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
 /// Serialises the read-then-save, so two first requests can't race on the same file: the first one
 /// saves the date and the other reads it.
 static SINCE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -52,11 +61,7 @@ pub async fn since(
     now: i64,
 ) -> AppResult<Option<i64>> {
     let _guard = SINCE_LOCK.lock().await;
-    let saved = match store.read_json::<SinceFile>(SINCE_FILE).await {
-        Ok(file) => Some(file.since),
-        Err(AppError::StorageNotFound(_)) => None,
-        Err(error) => return Err(error),
-    };
+    let saved = saved_since(store).await?;
     let since = start_date(saved, on, first_run, now);
     if saved.is_none()
         && let Some(since) = since
