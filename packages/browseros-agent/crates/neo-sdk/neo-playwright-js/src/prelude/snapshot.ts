@@ -17,6 +17,7 @@
  */
 
 import { CHARS_PER_TOKEN, cap, type Printed, partialHead } from './snapshot-cap'
+import { inertRoots } from './snapshot-inert'
 import { KEPT, SECTION, sectionLabel, shownText } from './snapshot-v1'
 import {
   type AriaNodeJSON,
@@ -145,12 +146,20 @@ export function renderFullSnapshot(
   result: SnapshotResult,
   maxTokens: number,
 ): string {
+  const roots = inertRoots(result.json)
+  const count = roots.length ? treeLines(roots, false).length : 0
+  const head = count
+    ? [
+        `# inert: ${count} lines of this page cannot be clicked or typed into now. page.ariaSnapshot() lists what can.`,
+      ]
+    : []
   return cap(
-    [],
+    head,
     partialHead(result),
     printed(yamlLines(result, false)),
     maxTokens * CHARS_PER_TOKEN,
     FULL_CALL,
+    head.length,
   )
 }
 

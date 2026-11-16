@@ -346,7 +346,7 @@ export const REQUEST_EXAMPLES: { [O in Op]: AtLeastOne<RequestOf<O>> } = {
     { op: 'selector', target: { pin: 4 } },
   ],
   snapshot: [
-    { op: 'snapshot', root: 'document', mode: 'ai' },
+    { op: 'snapshot', root: 'document', mode: 'ai', markInert: true },
     {
       op: 'snapshot',
       root: 'document',
@@ -689,6 +689,7 @@ const REPLY_EXAMPLES: {
   snapshot: [
     {
       kind: 'snapshot',
+      inertMarkingMs: 0.125,
       json: [
         { role: 'heading', name: 'Pay', level: 1 },
         { role: 'button', name: 'Go', ref: 'e2', cursor: 'pointer' },

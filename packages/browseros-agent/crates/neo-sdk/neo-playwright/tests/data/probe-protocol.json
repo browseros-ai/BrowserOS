@@ -1,5 +1,5 @@
 {
-  "protocol": 44,
+  "protocol": 46,
   "callFunction": "function (call, root, ...nodes) { const probe = globalThis.__neoProbe; return probe ? probe.call(call, root ?? this, nodes) : { kind: \"uninstalled\" }; }",
   "replyKinds": {
     "describe": [
@@ -119,7 +119,8 @@
       "request": {
         "op": "snapshot",
         "root": "document",
-        "mode": "ai"
+        "mode": "ai",
+        "markInert": true
       },
       "policy": {
         "conformance": false,
@@ -1080,7 +1081,8 @@
     {
       "op": "snapshot",
       "root": "document",
-      "mode": "ai"
+      "mode": "ai",
+      "markInert": true
     },
     {
       "op": "snapshot",
@@ -1289,19 +1291,19 @@
   "replies": [
     {
       "kind": "described",
-      "protocol": 44,
+      "protocol": 46,
       "seq": 0,
       "url": "https://example.com/"
     },
     {
       "kind": "described",
-      "protocol": 44,
+      "protocol": 46,
       "seq": 347,
       "url": "https://pay.example/frame"
     },
     {
       "kind": "described",
-      "protocol": 44,
+      "protocol": 46,
       "seq": 512340,
       "url": "https://example.com/",
       "retired": 0
@@ -1755,6 +1757,7 @@
     },
     {
       "kind": "snapshot",
+      "inertMarkingMs": 0.125,
       "json": [
         {
           "role": "heading",

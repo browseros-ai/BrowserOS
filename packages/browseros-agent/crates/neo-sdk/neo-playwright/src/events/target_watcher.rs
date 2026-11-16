@@ -2795,6 +2795,7 @@ mod worker_observation_tests {
                     text: TextForm::LeftOut,
                     urls: false,
                     max_tokens: 8000.0,
+                    inert: false,
                 },
             };
             baselines.commit(target, document, baseline);

@@ -7,10 +7,14 @@
  * (tests/selector-goldens.test.ts). The bundler tree-shakes each module to what is named here,
  * which keeps code that needs `URL` (urlMatch's `urlMatches`) out of the QuickJS bundle.
  */
-export type {
-  AriaNodeJSON,
-  AriaSnapshotJSON,
-} from '../../../neo-playwright/third_party/playwright/packages/isomorphic/ariaSnapshot'
+import type { AriaNodeJSON as UpstreamAriaNode } from '../../../neo-playwright/third_party/playwright/packages/isomorphic/ariaSnapshot'
+
+/** The upstream tree plus Neo's isolated-world annotation; upstream renderers ignore it. */
+export type AriaNodeJSON = Omit<UpstreamAriaNode, 'children'> & {
+  inert?: boolean
+  children?: (AriaNodeJSON | string)[]
+}
+export type AriaSnapshotJSON = AriaNodeJSON[]
 export { renderAriaSnapshotAsYaml } from '../../../neo-playwright/third_party/playwright/packages/isomorphic/ariaSnapshotRenderer'
 export {
   asLocator,

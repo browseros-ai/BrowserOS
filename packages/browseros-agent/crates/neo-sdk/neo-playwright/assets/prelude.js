@@ -7507,7 +7507,7 @@ ${value.stack}`;
       `# partial: closed shadow roots not all read (${roots.sent} of ${roots.found})`
     ] : [];
   }
-  function cap(head, pinned, lines, limit, call = "ariaSnapshot()") {
+  function cap(head, pinned, lines, limit, call = "ariaSnapshot()", requiredHead = 0) {
     const whole = [...head, ...pinned, ...lines.map((line) => line.text)].join(`
 `);
     const measured = whole.length - pinned.reduce((sum, line) => sum + line.length + 1, 0);
@@ -7521,7 +7521,7 @@ ${value.stack}`;
       used += 1 + text.length;
       taken += 1;
     }
-    const top = head.slice(0, taken);
+    const top = head.slice(0, Math.max(requiredHead, taken));
     let cut = Math.max(0, taken - head.length);
     for (let index = 0;index < cut; index++) {
       const end = lines[index].keptEnd;
@@ -7579,6 +7579,28 @@ ${value.stack}`;
         return section;
     }
     return;
+  }
+
+  // crates/neo-sdk/neo-playwright-js/src/prelude/snapshot-inert.ts
+  function inertRoots(json) {
+    const roots = [];
+    const pending = [...json].reverse();
+    while (pending.length) {
+      const node = pending.pop();
+      if (!node)
+        continue;
+      if (node.inert)
+        roots.push(node);
+      else {
+        const children = node.children ?? [];
+        for (let index = children.length - 1;index >= 0; index--) {
+          const child = children[index];
+          if (child && typeof child !== "string")
+            pending.push(child);
+        }
+      }
+    }
+    return roots;
   }
 
   // crates/neo-sdk/neo-playwright-js/src/prelude/snapshot-v1.ts
@@ -7651,12 +7673,13 @@ ${value.stack}`;
     return {
       text: passed.text,
       urls: passed.urls ?? false,
-      maxTokens: passed.maxTokens ?? DEFAULT_MAX_TOKENS
+      maxTokens: passed.maxTokens ?? DEFAULT_MAX_TOKENS,
+      ...passed.inert ? { inert: true } : {}
     };
   }
   function renderSnapshotV1(result, options) {
     const { urls, maxTokens } = options;
-    const textForm = options.text === false ? null : walk(result, urls, true);
+    const textForm = options.text === false ? null : walk(result, urls, true, options.inert === true);
     let text;
     if (textForm === null)
       text = "never";
@@ -7664,7 +7687,12 @@ ${value.stack}`;
       text = "always";
     else
       text = joinedLength(textForm) <= TEXT_LIMIT_CHARS ? "kept" : "leftOut";
-    const form = { text, urls, maxTokens };
+    const form = {
+      text,
+      urls,
+      maxTokens,
+      ...options.inert ? { inert: true } : {}
+    };
     return { text: renderForm(result, form, textForm), form };
   }
   function renderSnapshotV1As(result, form) {
@@ -7672,23 +7700,30 @@ ${value.stack}`;
   }
   function renderForm(result, form, walked) {
     const limit = form.maxTokens * CHARS_PER_TOKEN;
+    const text = form.text === "kept" || form.text === "always";
+    const roots = form.inert ? [] : inertRoots(result.json);
+    const omitted = roots.length ? walk({ ...result, json: roots, partial: [] }, form.urls, text, true) : [];
+    const inertHead = omitted.length ? [
+      `# not listed: ${omitted.length} lines (${omitted.filter((line) => line.ref).length} with refs) of this page are inert: nothing in them can be clicked or typed into now. Pass { inert: true } to list them.`
+    ] : [];
     const partial = partialHead(result);
+    const finish = (head, lines) => cap([...inertHead, ...head], partial, lines, limit, "ariaSnapshot()", inertHead.length);
     if (form.text === "never")
-      return cap([], partial, walk(result, form.urls, false), limit);
-    const textForm = walked ?? walk(result, form.urls, true);
+      return finish([], walk(result, form.urls, false, form.inert === true));
+    const textForm = walked ?? walk(result, form.urls, true, form.inert === true);
     if (form.text !== "leftOut")
-      return cap([], partial, textForm, limit);
-    const interactiveForm = walk(result, form.urls, false);
+      return finish([], textForm);
+    const interactiveForm = walk(result, form.urls, false, form.inert === true);
     const left = joinedLength(textForm) - joinedLength(interactiveForm);
     const about = aboutTokens(left);
     const notice = `# text left out: about ${about} tokens. Pass { text: true } to include it.`;
-    return cap([notice], partial, interactiveForm, limit);
+    return finish([notice], interactiveForm);
   }
-  function walk(result, urls, text) {
+  function walk(result, urls, text, inert) {
     const partials = new Map;
     for (const partial of result.partial)
       partials.set(partial.ref, [...partials.get(partial.ref) ?? [], partial]);
-    const printer = new Printer(urls, partials);
+    const printer = new Printer(urls, partials, inert);
     printer.walk(result.json, 0, text);
     for (const unplaced of partials.values())
       for (const partial of unplaced)
@@ -7704,11 +7739,13 @@ ${value.stack}`;
   class Printer {
     urls;
     partials;
+    inert;
     lines = [];
     steps = [];
-    constructor(urls, partials) {
+    constructor(urls, partials, inert) {
       this.urls = urls;
       this.partials = partials;
+      this.inert = inert;
     }
     walk(children, level, text) {
       this.content({ children: [...children] }, level, text);
@@ -7743,7 +7780,24 @@ ${value.stack}`;
       }
       return printed;
     }
+    omit(root) {
+      const pending = [root];
+      while (pending.length) {
+        const node = pending.pop();
+        if (!node)
+          continue;
+        if (node.ref)
+          this.partials.delete(node.ref);
+        for (const child of node.children ?? [])
+          if (typeof child !== "string")
+            pending.push(child);
+      }
+    }
     node(child, level, text) {
+      if (typeof child !== "string" && child.inert && !this.inert) {
+        this.omit(child);
+        return;
+      }
       if (typeof child === "string")
         this.piece(child, level, text);
       else if (child.role === "text")
@@ -8062,7 +8116,12 @@ ${value.stack}`;
 `);
   }
   function renderFullSnapshot(result, maxTokens) {
-    return cap([], partialHead(result), printed(yamlLines(result, false)), maxTokens * CHARS_PER_TOKEN, FULL_CALL);
+    const roots = inertRoots(result.json);
+    const count = roots.length ? treeLines(roots, false).length : 0;
+    const head = count ? [
+      `# inert: ${count} lines of this page cannot be clicked or typed into now. page.ariaSnapshot() lists what can.`
+    ] : [];
+    return cap(head, partialHead(result), printed(yamlLines(result, false)), maxTokens * CHARS_PER_TOKEN, FULL_CALL, head.length);
   }
   function printed(lines) {
     const ends = lines.map(() => lines.length);
@@ -8112,7 +8171,8 @@ ${whole.text}`, baseline: whole };
     const whole = renderSnapshotV1(result, {
       text: passed.text ?? passedText(form.text),
       urls: passed.urls ?? form.urls,
-      maxTokens: passed.maxTokens ?? form.maxTokens
+      maxTokens: passed.maxTokens ?? form.maxTokens,
+      inert: passed.inert ?? form.inert ?? false
     });
     return { returned: `${TOO_MUCH}
 ${whole.text}`, baseline: whole };
@@ -8122,7 +8182,7 @@ ${whole.text}`, baseline: whole };
 ${renderSnapshotV1(result, withDefaults(passed)).text}`;
   }
   function agrees(passed, form) {
-    return (passed.text === undefined || passed.text === showsText(form.text)) && (passed.urls === undefined || passed.urls === form.urls) && (passed.maxTokens === undefined || passed.maxTokens === form.maxTokens);
+    return (passed.text === undefined || passed.text === showsText(form.text)) && (passed.urls === undefined || passed.urls === form.urls) && (passed.maxTokens === undefined || passed.maxTokens === form.maxTokens) && (passed.inert === undefined || passed.inert === (form.inert ?? false));
   }
   function showsText(text) {
     return text === "kept" || text === "always";
@@ -8135,7 +8195,7 @@ ${renderSnapshotV1(result, withDefaults(passed)).text}`;
     return;
   }
   function sizeLine(line) {
-    return line.startsWith("# text left out: ") || line.startsWith("# cut: ");
+    return line.startsWith("# text left out: ") || line.startsWith("# cut: ") || line.startsWith("# not listed: ");
   }
   function listChanges(previous, current) {
     const before = previous.split(`
@@ -8395,11 +8455,12 @@ ${changes}`;
     return known;
   }
   function snapshotV1Options(api, options) {
-    const { text, urls, maxTokens, delta } = options;
+    const { text, urls, maxTokens, delta, inert } = options;
     for (const [name, value] of [
       ["text", text],
       ["urls", urls],
-      ["delta", delta]
+      ["delta", delta],
+      ["inert", inert]
     ])
       if (value !== undefined && typeof value !== "boolean")
         throw clientError(api, `${name}: expected boolean, got ${typeof value}`);
@@ -8407,7 +8468,8 @@ ${changes}`;
       text,
       urls,
       maxTokens: maxTokensOption(api, maxTokens),
-      delta: delta ?? false
+      delta: delta ?? false,
+      inert
     };
   }
   function maxTokensOption(api, maxTokens) {

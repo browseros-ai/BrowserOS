@@ -95,6 +95,7 @@ export function renderDelta(
     text: passed.text ?? passedText(form.text),
     urls: passed.urls ?? form.urls,
     maxTokens: passed.maxTokens ?? form.maxTokens,
+    inert: passed.inert ?? form.inert ?? false,
   })
   return { returned: `${TOO_MUCH}\n${whole.text}`, baseline: whole }
 }
@@ -119,7 +120,8 @@ function agrees(passed: PassedV1Options, form: SnapshotForm): boolean {
   return (
     (passed.text === undefined || passed.text === showsText(form.text)) &&
     (passed.urls === undefined || passed.urls === form.urls) &&
-    (passed.maxTokens === undefined || passed.maxTokens === form.maxTokens)
+    (passed.maxTokens === undefined || passed.maxTokens === form.maxTokens) &&
+    (passed.inert === undefined || passed.inert === (form.inert ?? false))
   )
 }
 
@@ -137,7 +139,11 @@ function passedText(text: TextForm): boolean | undefined {
 
 /** The lines that describe the snapshot's size: the notice and the cut line (snapshot-cap.ts). */
 function sizeLine(line: string): boolean {
-  return line.startsWith('# text left out: ') || line.startsWith('# cut: ')
+  return (
+    line.startsWith('# text left out: ') ||
+    line.startsWith('# cut: ') ||
+    line.startsWith('# not listed: ')
+  )
 }
 
 /**

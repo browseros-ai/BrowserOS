@@ -73,6 +73,7 @@ export function cap(
   lines: readonly Printed[],
   limit: number,
   call = 'ariaSnapshot()',
+  requiredHead = 0,
 ): string {
   const whole = [...head, ...pinned, ...lines.map((line) => line.text)].join(
     '\n',
@@ -89,7 +90,9 @@ export function cap(
     used += 1 + text.length
     taken += 1
   }
-  const top = head.slice(0, taken)
+  // Native-inert explanations must survive even a limit smaller than the first line.
+  // They still consume budget before ordinary content, unlike unmetered partial notices.
+  const top = head.slice(0, Math.max(requiredHead, taken))
   let cut = Math.max(0, taken - head.length)
   // A kept block is never split: when the limit falls inside one, the cut goes before it. The
   // first such block is the outermost, since a nested block starts after its parent.

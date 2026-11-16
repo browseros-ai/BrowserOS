@@ -30,6 +30,7 @@ import {
   partialHead,
   type Section,
 } from './snapshot-cap'
+import { inertRoots } from './snapshot-inert'
 import type { AriaNodeJSON } from './vendored'
 import { renderAriaSnapshotAsYaml } from './vendored'
 import type {
@@ -151,6 +152,8 @@ export type SnapshotV1Options = {
   /** Prints each link's `/url`. */
   urls: boolean
   maxTokens: number
+  /** Include browser-inert subtrees; omission is the default. */
+  inert?: boolean
 }
 
 /**
@@ -161,6 +164,7 @@ export type PassedV1Options = {
   text?: boolean
   urls?: boolean
   maxTokens?: number
+  inert?: boolean
 }
 
 /** `passed` with Neo's defaults for what the script left out; `text` stays to the length rule. */
@@ -169,6 +173,7 @@ export function withDefaults(passed: PassedV1Options): SnapshotV1Options {
     text: passed.text,
     urls: passed.urls ?? false,
     maxTokens: passed.maxTokens ?? DEFAULT_MAX_TOKENS,
+    ...(passed.inert ? { inert: true } : {}),
   }
 }
 
@@ -184,12 +189,20 @@ export function renderSnapshotV1(
   options: SnapshotV1Options,
 ): RenderedV1 {
   const { urls, maxTokens } = options
-  const textForm = options.text === false ? null : walk(result, urls, true)
+  const textForm =
+    options.text === false
+      ? null
+      : walk(result, urls, true, options.inert === true)
   let text: TextForm
   if (textForm === null) text = 'never'
   else if (options.text === true) text = 'always'
   else text = joinedLength(textForm) <= TEXT_LIMIT_CHARS ? 'kept' : 'leftOut'
-  const form = { text, urls, maxTokens }
+  const form = {
+    text,
+    urls,
+    maxTokens,
+    ...(options.inert ? { inert: true } : {}),
+  }
   return { text: renderForm(result, form, textForm), form }
 }
 
@@ -213,24 +226,48 @@ function renderForm(
   walked: Printed[] | null,
 ): string {
   const limit = form.maxTokens * CHARS_PER_TOKEN
+  const text = form.text === 'kept' || form.text === 'always'
+  const roots = form.inert ? [] : inertRoots(result.json)
+  const omitted = roots.length
+    ? walk({ ...result, json: roots, partial: [] }, form.urls, text, true)
+    : []
+  const inertHead = omitted.length
+    ? [
+        `# not listed: ${omitted.length} lines (${omitted.filter((line) => line.ref).length} with refs) of this page are inert: nothing in them can be clicked or typed into now. Pass { inert: true } to list them.`,
+      ]
+    : []
   const partial = partialHead(result)
+  const finish = (head: string[], lines: Printed[]) =>
+    cap(
+      [...inertHead, ...head],
+      partial,
+      lines,
+      limit,
+      'ariaSnapshot()',
+      inertHead.length,
+    )
   if (form.text === 'never')
-    return cap([], partial, walk(result, form.urls, false), limit)
-  const textForm = walked ?? walk(result, form.urls, true)
-  if (form.text !== 'leftOut') return cap([], partial, textForm, limit)
-  const interactiveForm = walk(result, form.urls, false)
+    return finish([], walk(result, form.urls, false, form.inert === true))
+  const textForm = walked ?? walk(result, form.urls, true, form.inert === true)
+  if (form.text !== 'leftOut') return finish([], textForm)
+  const interactiveForm = walk(result, form.urls, false, form.inert === true)
   const left = joinedLength(textForm) - joinedLength(interactiveForm)
   const about = aboutTokens(left)
   const notice = `# text left out: about ${about} tokens. Pass { text: true } to include it.`
-  return cap([notice], partial, interactiveForm, limit)
+  return finish([notice], interactiveForm)
 }
 
 /** One form: the tree walked with page text on or off, then partial frames with no iframe line. */
-function walk(result: SnapshotResult, urls: boolean, text: boolean): Printed[] {
+function walk(
+  result: SnapshotResult,
+  urls: boolean,
+  text: boolean,
+  inert: boolean,
+): Printed[] {
   const partials = new Map<string, PartialFrame[]>()
   for (const partial of result.partial)
     partials.set(partial.ref, [...(partials.get(partial.ref) ?? []), partial])
-  const printer = new Printer(urls, partials)
+  const printer = new Printer(urls, partials, inert)
   // A virtual root over the json array, so a locator's root node goes through the same rules:
   // a locator on `main` prints `- main [ref=e2]:` and its content.
   printer.walk(result.json, 0, text)
@@ -279,6 +316,7 @@ class Printer {
     private readonly urls: boolean,
     /** The frames Rust could not read, by iframe ref; each is removed once printed. */
     private readonly partials: Map<string, PartialFrame[]>,
+    private readonly inert: boolean,
   ) {}
 
   /** Prints `children` at `level`, depth first in document order. */
@@ -323,12 +361,28 @@ class Printer {
     return printed
   }
 
+  /** Omitted iframe subtrees own their partial diagnostics, so none may reappear later. */
+  private omit(root: AriaNodeJSON): void {
+    const pending = [root]
+    while (pending.length) {
+      const node = pending.pop()
+      if (!node) continue
+      if (node.ref) this.partials.delete(node.ref)
+      for (const child of node.children ?? [])
+        if (typeof child !== 'string') pending.push(child)
+    }
+  }
+
   /** One child of the node being walked, by the first rule that matches it. */
   private node(
     child: AriaNodeJSON | string,
     level: number,
     text: boolean,
   ): void {
+    if (typeof child !== 'string' && child.inert && !this.inert) {
+      this.omit(child)
+      return
+    }
     if (typeof child === 'string') this.piece(child, level, text)
     else if (child.role === 'text') this.piece(child.text ?? '', level, text)
     else if (KEPT.has(child.role)) this.kept(child, level)

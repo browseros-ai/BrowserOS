@@ -214,6 +214,10 @@ pub(crate) enum ProbeRequest {
     /// then on (probe/shadow-roots.ts), and the rest are marking's targets, which for this call
     /// the engine reads as `cursor: pointer` (probe/pointer-targets.ts).
     Snapshot {
+        /// Annotate native inertness only for Neo text formats, never JSON or conformance.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        #[ts(optional, as = "Option<bool>")]
+        mark_inert: bool,
         root: ProbeTarget,
         mode: SnapshotMode,
         /// Any integer, as upstream passes it: a child frame's depth can come out zero or
