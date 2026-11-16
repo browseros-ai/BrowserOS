@@ -85,15 +85,14 @@ export function snapshot(
   }
   // Survey only the whole main page, after the engine's walk and inside this same read.
   // Remember before diagnostics take any quiet subtree snapshots, so the printed refs win.
-  if (request.mode === 'ai') world.refs.remember(lastSnapshotRefs(injected))
+  const minted = request.mode === 'ai' ? lastSnapshotRefs(injected) : undefined
+  if (minted) world.refs.remember(minted)
   const survey =
     request.surveyCovers && request.mode === 'ai' && output.neoSnapshot
       ? surveyCovers(world, output, json)
       : undefined
   const iframes: SnapshotIframe[] = []
-  if (request.mode === 'ai') {
-    const minted = lastSnapshotRefs(injected)
-    world.refs.remember(minted)
+  if (minted) {
     // Only the iframes the depth limit rendered, as upstream's `renderedIframeRefs`.
     for (const ref of iframeRefs) {
       const depth = iframeDepths[ref]
