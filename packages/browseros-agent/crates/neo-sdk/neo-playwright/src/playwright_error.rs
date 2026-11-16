@@ -421,7 +421,7 @@ mod tests {
 
     /// The error table as the sdk-playwright design states it, plus `wait_timeout`, written
     /// out apart from the code so a wrong row there fails here.
-    const TABLE: [(&str, ErrorOwner, TimedOut, Answer); 18] = [
+    const TABLE: [(&str, ErrorOwner, TimedOut, Answer); 19] = [
         (
             "strict_mode_violation",
             ErrorOwner::Script,
