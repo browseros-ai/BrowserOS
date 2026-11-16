@@ -9,6 +9,10 @@ const fixture = `<!doctype html><main id="background"><p>Background prose</p><bu
 const shape = new URL(location.href).searchParams.get('shape');
 const dlg = document.getElementById('modal');
 if (shape === 'inert') background.inert = true;
+if (shape === 'inert-image') {
+  background.inert = true;
+  background.innerHTML = '<a href="#article"><img alt="Article image" style="pointer-events:none;width:80px;height:30px" src="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2280%22 height=%2230%22/%3E"></a>';
+}
 if (shape === 'native') dlg.showModal();
 if (shape === 'stacked') {
   const lower = dlg.cloneNode(true); lower.id = 'lower';
@@ -29,6 +33,23 @@ if (shape === 'shadow-no-refs') {
   background.inert = true;
   dlg.style.pointerEvents = 'none';
   background.attachShadow({mode:'open'}).append(dlg); dlg.showModal();
+}
+if (shape === 'shadow-wrapped-no-refs') {
+  background.inert = true; dlg.style.pointerEvents = 'none';
+  const wrap = document.createElement('section'); wrap.setAttribute('aria-label', 'Wrapper');
+  background.attachShadow({mode:'open'}).append(wrap); wrap.append(dlg); dlg.showModal();
+}
+if (shape === 'shadow-modal-beside-inert') {
+  const side = document.createElement('aside'); side.inert = true;
+  side.innerHTML = '<button>Side action</button>'; document.body.append(side);
+  const host = document.createElement('div'); document.body.append(host);
+  host.attachShadow({mode:'open'}).append(dlg); dlg.showModal();
+}
+if (shape === 'closed-modal' || shape === 'closed-modal-no-refs') {
+  background.inert = true;
+  if (shape === 'closed-modal-no-refs') dlg.style.pointerEvents = 'none';
+  const host = document.createElement('div'); background.append(host);
+  host.attachShadow({mode:'closed'}).append(dlg); dlg.showModal();
 }
 if (shape === 'slotted-inert') {
   const host = document.createElement('div'); document.body.append(host);
@@ -66,12 +87,17 @@ try {
     'native',
     'stacked',
     'inert',
+    'inert-image',
     'nested',
     'shadow',
     'slotted-modal',
     'slotted-inert',
     'closed-inert',
     'shadow-no-refs',
+    'shadow-wrapped-no-refs',
+    'shadow-modal-beside-inert',
+    'closed-modal',
+    'closed-modal-no-refs',
     'shadow-flattened-modal',
     'aria-modal',
     'aria-hidden',
@@ -84,7 +110,10 @@ try {
       )
       // Closed-root opening belongs to marked snapshots independently of inertness.
       // Establish that existing view before comparing later unannotated JSON/YAML reads.
-      if (shape === 'closed-inert') await page.ariaSnapshot({ inert: true })
+      if (
+        ['closed-inert', 'closed-modal', 'closed-modal-no-refs'].includes(shape)
+      )
+        await page.ariaSnapshot({ inert: true })
       const upstreamText = await page.ariaSnapshot({ mode: 'default' })
       const beforeJson = await page.ariaSnapshotJSON({ mode: 'ai' })
       const text = await page.ariaSnapshot()
@@ -95,6 +124,7 @@ try {
         'nested',
         'slotted-modal',
         'slotted-inert',
+        'closed-modal',
       ].includes(shape)
       const original = await page.ariaSnapshot({ inert: true })
       const full = await page.ariaSnapshot({ mode: 'full' })
@@ -121,6 +151,21 @@ try {
             /^# not listed:/,
             shape,
           )
+      } else if (shape === 'inert-image') {
+        assert.match(text, /^# not listed:/, shape)
+        assert.doesNotMatch(text, /Article image|link/, shape)
+        assert.match(original, /link.*ref=/, shape)
+      } else if (shape === 'shadow-modal-beside-inert') {
+        assert.match(text, /^# not listed:/, shape)
+        assert.match(text, /Background action/, shape)
+        assert.match(text, /Modal action.*ref=/, shape)
+        assert.doesNotMatch(text, /Side action/, shape)
+        assert.match(original, /Side action/, shape)
+      } else if (shape === 'closed-modal-no-refs') {
+        assert.match(text, /^# not listed:/, shape)
+        assert.match(text, /Read this first.*Modal action/s, shape)
+        assert.doesNotMatch(text, /Background action/, shape)
+        assert.match(original, /Background action/, shape)
       } else if (shape === 'closed-inert') {
         assert.match(text, /^# not listed:/, shape)
         assert.doesNotMatch(text, /Hidden shadow action/, shape)
@@ -128,7 +173,7 @@ try {
       } else if (shape === 'shadow-flattened-modal') {
         assert.match(text, /Live modal message/, shape)
         assert.doesNotMatch(text, /^# not listed:/, shape)
-      } else if (shape === 'shadow-no-refs') {
+      } else if (['shadow-no-refs', 'shadow-wrapped-no-refs'].includes(shape)) {
         assert.match(text, /Read this first.*Modal action/s, shape)
         assert.doesNotMatch(text, /^# not listed:/, shape)
       } else {

@@ -10483,7 +10483,7 @@ ${value.stack}`;
     if (modals.length === 0 && !hasInertAttribute(document2, refs))
       return [];
     const modalAncestors = new Set;
-    for (const modal of modals)
+    for (const modal of reachableModals(document2, modals))
       for (let ancestor = parent(modal);ancestor; ancestor = parent(ancestor))
         modalAncestors.add(ancestor);
     const ancestry = new WeakMap;
@@ -10525,6 +10525,22 @@ ${value.stack}`;
     }
     return marked;
   }
+  function reachableModals(document2, modals) {
+    const reachable = [...modals];
+    const pending = [document2];
+    const seen = new Set;
+    for (let root = pending.pop();root; root = pending.pop()) {
+      for (const element of root.querySelectorAll("*")) {
+        const shadow = element.shadowRoot;
+        if (!shadow || seen.has(shadow))
+          continue;
+        seen.add(shadow);
+        reachable.push(...shadow.querySelectorAll("dialog:modal"));
+        pending.push(shadow);
+      }
+    }
+    return reachable;
+  }
   function hasInertAttribute(document2, refs) {
     if (document2.querySelector("[inert]"))
       return true;
@@ -10555,7 +10571,7 @@ ${value.stack}`;
     }
     for (const node of visited.reverse()) {
       const element = node.ref ? refs.get(node.ref)?.element : undefined;
-      if (!element || element.shadowRoot !== null || !isInert(element) || node.children?.some((child) => typeof child !== "string" && protectedNodes.has(child)))
+      if (element !== undefined && !isInert(element) || node.children?.some((child) => typeof child !== "string" && protectedNodes.has(child)))
         protectedNodes.add(node);
     }
     return protectedNodes;

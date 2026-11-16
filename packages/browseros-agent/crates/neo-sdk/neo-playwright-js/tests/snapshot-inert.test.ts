@@ -291,3 +291,23 @@ it('a heading never folds an omitted descendant back into its own text', () => {
     '- heading [level=2]: Heading Inert explanation',
   )
 })
+
+it('an emptied live container does not repeat its name as replacement text', () => {
+  const result: SnapshotResult = {
+    json: [
+      {
+        role: 'group',
+        ref: 'e1',
+        name: 'Container name',
+        children: [
+          { role: 'button', ref: 'e2', name: 'Inert content', inert: true },
+        ],
+      },
+    ],
+    partial: [],
+  }
+  const text = renderSnapshotV1(result, withDefaults({})).text
+  expect(text).toStartWith('# not listed: 1 lines (1 with refs)')
+  expect(text).not.toContain('Container name')
+  expect(text).not.toContain('Inert content')
+})

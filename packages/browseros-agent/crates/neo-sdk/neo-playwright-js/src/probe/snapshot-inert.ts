@@ -25,13 +25,13 @@ export function markInert(world: World, json: AriaSnapshotJSON): void {
 
 function inertNodes(world: World, json: AriaSnapshotJSON) {
   const document = world.injected.document
-  // A closed/open shadow root may hold a modal the document selector cannot see. Do not
-  // guess at it: shadow-contained modal content remains listed, including its live controls.
+  // Only document-level modals make the page inert in this version. Shadow modals are
+  // discovered below for protection, so their live content can never be hidden with a host.
   const modals = [...document.querySelectorAll('dialog:modal')]
   const refs = lastSnapshotRefs(world.injected)
   if (modals.length === 0 && !hasInertAttribute(document, refs)) return []
   const modalAncestors = new Set<Element>()
-  for (const modal of modals)
+  for (const modal of reachableModals(document, modals))
     for (let ancestor = parent(modal); ancestor; ancestor = parent(ancestor))
       modalAncestors.add(ancestor)
   // Cache composed ancestors too: large pages share most of those paths. Keep modal and
@@ -88,6 +88,30 @@ function inertNodes(world: World, json: AriaSnapshotJSON) {
   return marked
 }
 
+/**
+ * Modals the engine can read, including closed roots its isolated-world getter already opened.
+ * This runs only after an inert trigger. An explicit stack handles deeply nested shadow hosts
+ * without spending the JS call stack; no modal found here makes the surrounding page inert.
+ */
+function reachableModals(
+  document: Document,
+  modals: readonly Element[],
+): Element[] {
+  const reachable = [...modals]
+  const pending: (Document | ShadowRoot)[] = [document]
+  const seen = new Set<ShadowRoot>()
+  for (let root = pending.pop(); root; root = pending.pop()) {
+    for (const element of root.querySelectorAll('*')) {
+      const shadow = element.shadowRoot
+      if (!shadow || seen.has(shadow)) continue
+      seen.add(shadow)
+      reachable.push(...shadow.querySelectorAll('dialog:modal'))
+      pending.push(shadow)
+    }
+  }
+  return reachable
+}
+
 /** Find attribute triggers in roots the engine already read, without another document walk. */
 function hasInertAttribute(
   document: Document,
@@ -125,13 +149,9 @@ function liveAncestors(
   for (const node of visited.reverse()) {
     const element = node.ref ? refs.get(node.ref)?.element : undefined
     if (
-      // A node without a ref has no element to prove inert. In particular a shadow modal
-      // can expose only prose or keyboard controls: never hide it with its inert host.
-      !element ||
-      // The engine may flatten a ref-less modal into its host's text, even with its role
-      // overridden. A known shadow host is uncertain; preserve it without searching for modals.
-      element.shadowRoot !== null ||
-      !isInert(element) ||
+      // A ref-less image or icon proves nothing about its inert ancestors. Only known-live
+      // elements protect this tree path; reachable modal ancestors are protected separately.
+      (element !== undefined && !isInert(element)) ||
       node.children?.some(
         (child) => typeof child !== 'string' && protectedNodes.has(child),
       )

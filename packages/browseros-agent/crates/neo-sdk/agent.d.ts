@@ -54,6 +54,10 @@ declare module 'playwright-core' {
     maxTokens?: number
     /** On a page: only what changed since your last whole-page snapshot of this tab. */
     delta?: boolean
+    /** `true`: the snapshot exactly as it was before Neo left out what the browser has made inert,
+     * such as the page behind a modal dialog. Left out: a `# not listed:` line at the top says
+     * how much was left out and names this option. */
+    inert?: boolean
     timeout?: number
   }
   interface Locator {
