@@ -1,0 +1,23 @@
+/** Native chooser handles retain the exact input; event registration precedes the activating input. */
+function file(name, text) { return {name, mimeType:'text/plain', buffer:Buffer.from(text)}; }
+async function choose(p, action) {
+  const waiting = p.waitForEvent('filechooser', {timeout:5000});
+  await action();
+  const chooser = await waiting;
+  assert(chooser.page() === p, 'chooser belongs to the initiating page');
+  return chooser;
+}
+
+const child = args.base2 + '/upload.html?parentPicker=1';
+const url = args.base + '/upload-frame.html?src=' + encodeURIComponent(child) + '&borrowed=1';
+const borrowed = context.pages().find(p => p.url() === url);
+assert(borrowed, 'the host created an external borrowed page before this run', {url,visible:context.pages().map(p => p.url())});
+try {
+  const chooser = await choose(borrowed, () => borrowed.frameLocator('iframe').getByRole('button',{name:'Attach to parent',exact:true}).click());
+  await chooser.setFiles(file('parent-chooser.txt','selected by the borrowed page parent'));
+  const selected = await borrowed.locator('#parent-status').textContent();
+  includes(selected,'Parent selection: parent-chooser.txt','a borrowed iframe opener selects the parent document input');
+  return {selected,url,tabId:borrowed.tabId};
+} finally {
+  await borrowed.close();
+}

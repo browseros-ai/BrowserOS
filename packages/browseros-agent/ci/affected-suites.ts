@@ -161,6 +161,14 @@ export const SUITES: Record<string, SuiteConfig> = {
     needs_browser: true,
     needs_rust: true,
   },
+  'sdk-desktop-fixtures': {
+    suite: 'sdk-desktop-fixtures',
+    command:
+      'bun crates/neo-sdk/neo-server/tests/desktop-fixtures/check.ts --run',
+    junit_path: 'test-results/sdk-desktop-fixtures.xml',
+    needs_browser: true,
+    needs_rust: true,
+  },
   captcha: {
     suite: 'captcha',
     command:
@@ -216,6 +224,16 @@ function isRustPackage(path: string): boolean {
 
 const AGENT = 'packages/browseros-agent/'
 
+// SDK browser contracts follow their own inputs, independently of the workspace-wide
+// Rust suites. Core/CDP are linked; MCP is an explicit shared compatibility watch.
+const SDK_FIXTURE_ROOTS = [
+  'crates/neo-sdk/',
+  'crates/browseros-core/',
+  'crates/browseros-cdp/',
+  'crates/browseros-mcp/',
+  'contracts/claw-mcp/',
+]
+
 /**
  * A change to the test harness itself (this workflow, this discovery script, or
  * the shared test runners used by every suite) must run the full matrix, so a
@@ -249,6 +267,8 @@ export function computeAffectedSuites(
     if (isRustPackage(pkg.path)) {
       for (const suite of RUST_SUITES) keys.add(suite)
     }
+    if (SDK_FIXTURE_ROOTS.some((root) => `${pkg.path}/`.startsWith(root)))
+      keys.add('sdk-desktop-fixtures')
   }
 
   // Path signals for things that are not workspace packages.
@@ -309,6 +329,14 @@ export function computeAffectedSuites(
     )
   )
     keys.add('captcha')
+  // File paths also cover inputs outside Turbo packages, including fixture pages and
+  // SDK files above the individual crate roots. The trailing slash keeps sibling names out.
+  if (
+    changedFiles.some((f) =>
+      SDK_FIXTURE_ROOTS.some((root) => f.startsWith(`${AGENT}${root}`)),
+    )
+  )
+    keys.add('sdk-desktop-fixtures')
   // claw-server's tests check that every key the shipped behaviour file
   // documents applies on this server.
   if (changedFiles.includes('packages/browseros/docker/neo/neo.toml'))

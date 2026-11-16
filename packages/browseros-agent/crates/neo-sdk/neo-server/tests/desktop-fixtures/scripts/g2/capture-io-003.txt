@@ -1,0 +1,5 @@
+await page.goto(args.base + '/media.html');
+const bytes = await page.screenshot({type:'webp'});
+const magic = bytes.subarray(0,8).toString('hex');
+assert(magic.startsWith('52494646'), 'webp screenshot has its required magic bytes', {magic,length:bytes.length});
+return {bytes,magic,length:bytes.length};

@@ -1,0 +1,12 @@
+await page.goto(args.base + '/sdk-drag.html');
+await page.getByRef(await refFor(page, "HTML source")).dragTo(page.getByRef(await refFor(page, "HTML target")));
+
+const state = await page.evaluate(() => window.htmlDrag);
+assert(state.starts > 0, 'HTML5 dragstart fires', state);
+assert(state.overs > 0, 'HTML5 dragover fires', state);
+equal(state.dropped, 'html-source', 'drop receives the source DataTransfer data');
+
+await page.getByRef(await refFor(page, 'Follow-up button')).click();
+const followUps = await page.evaluate(() => window.followUps);
+equal(followUps, 1, 'the next click lands after the drag ends');
+return { state, followUps };

@@ -1,0 +1,32 @@
+/**
+ * Hosted port of desktop fill contracts at a7e536e152a4835abe9974498b27a5c927dd2e0d.
+ * The root runner owns this task and its cleanup. This body only uses its page.
+ */
+
+// locator.ref pins the same node for every action and read. Unlike an AI snapshot,
+// it can also name a covered field, so that the original refusal can be measured.
+async function g1cField(label, scope = page) {
+  const ref = await scope.getByLabel(label, { exact: true }).ref({ timeout: 5000 });
+  return { label, ref, target: page.getByRef(ref) };
+}
+
+function g1cFailure(error) {
+  return { message: String(error?.message ?? error), code: error?.code ?? null,
+    owner: error?.owner ?? null, delivery: error?.delivery ?? null };
+}
+
+await page.goto(args.base + '/fill.html');
+const field = await g1cField("Disabled field");
+let failure = null;
+try {
+  await field.target.fill('replacement', { timeout: 2500 });
+} catch (error) {
+  failure = g1cFailure(error);
+}
+const actual = await page.evaluate(() => ({
+  value: document.getElementById("disabled").value,
+  other: document.getElementById('other').value,
+}));
+assert(failure !== null && actual.value === 'original' && actual.other === 'untouched',
+  'fill must reject without changing either field', { failure, ...actual, ref: field.ref });
+return { failure, ...actual, ref: field.ref };

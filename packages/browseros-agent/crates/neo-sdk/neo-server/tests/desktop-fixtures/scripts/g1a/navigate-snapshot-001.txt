@@ -1,0 +1,8 @@
+// Source port of navigate-snapshot-001 at a7e536e152a4835abe9974498b27a5c927dd2e0d. Execution is owned by the coordinator.
+await page.goto(args.base + '/links.html');
+await page.goto(args.base + '/form.html');
+const snapshot = await page.ariaSnapshot();
+includes(snapshot, '[ref=', 'the navigation response contains a fresh actionable snapshot');
+const path = await page.evaluate(() => location.pathname);
+includes(path, '/form.html', 'navigation changes the URL to form.html');
+return { pageId: page.tabId, snapshot, path };

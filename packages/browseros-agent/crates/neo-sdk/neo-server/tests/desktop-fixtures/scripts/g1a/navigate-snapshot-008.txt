@@ -1,0 +1,6 @@
+// Source port of navigate-snapshot-008 at a7e536e152a4835abe9974498b27a5c927dd2e0d. Execution is owned by the coordinator.
+await page.goto(args.base + '/form.html');
+const full = await page.ariaSnapshot({ mode: 'full' });
+const shallow = await page.ariaSnapshot({ mode: 'full', depth: 1 });
+assert(shallow.split('\n').length < full.split('\n').length && !shallow.includes('option "Red"'), 'depth one prunes option rows', { full, shallow });
+return { full, shallow };

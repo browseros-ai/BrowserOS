@@ -1,0 +1,14 @@
+const created = await context.newPage();
+try {
+  // Subscribe before goto so a fast file response cannot outrun the download listener.
+  const pendingDownload = created.waitForEvent('download');
+  let navigationError = null;
+  try { await created.goto(args.base + '/files/report.txt'); }
+  catch (error) { navigationError = { message: error.message, code: error.code }; }
+  const download = await pendingDownload;
+  const filename = download.suggestedFilename();
+  assert(filename && /report/.test(filename), 'the new tab reports its download', { filename, navigationError });
+  equal(await created.evaluate(() => location.href), 'about:blank', 'a download leaves the new tab on about:blank');
+  assert(context.pages().some(candidate => candidate.tabId === created.tabId), 'the new download tab remains listed');
+  return { tabId: created.tabId, filename, navigationError, url: created.url() };
+} finally { await created.close(); }

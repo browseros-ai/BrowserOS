@@ -1,0 +1,43 @@
+const refIn = (snapshot, label) => {
+  const line = snapshot.split('\n').find(line => line.includes(label));
+  const ref = line && /\[ref=([^\]]+)\]/.exec(line)?.[1];
+  assert(ref, `snapshot must give ${label} its own ref`, { line, snapshot });
+  return ref;
+};
+const selected = (snapshot, labels) => Object.fromEntries(labels.map(label => [label, refIn(snapshot, label)]));
+const labelsIn = (snapshot, labels) => {
+  for (const label of labels) includes(snapshot, label, `snapshot includes ${label}`);
+};
+
+const frameLabels = ["Parent action ready", "Frame A action ready", "Frame A cursor ready", "Grandchild action ready", "Grandchild cursor ready", "Frame B action ready", "Frame B cursor ready"];
+const ordered = snapshot => {
+  let prior = -1;
+  for (const label of frameLabels) {
+    const index = snapshot.indexOf(label, prior + 1);
+    assert(index !== -1, `frame text preserves DOM stitch order at ${label}`, { snapshot });
+    prior = index;
+  }
+};
+const frameSnapshot = async (wanted = frameLabels) => {
+  let snapshot = '';
+  await poll(async () => {
+    const ready = await page.evaluate(() => window.snapshotFrameFixture.state().ready);
+    if (!ready) return false;
+    snapshot = await page.ariaSnapshot();
+    return wanted.every(label => snapshot.includes(label));
+  }, 'all frame labels appear in the snapshot', 30000);
+  return snapshot;
+};
+const mixedUrl = new URL(args.base + '/snapshot-frame-tree.html');
+const childOrigin = new URL(args.base2);
+childOrigin.hostname = mixedUrl.hostname === 'localhost' ? '127.0.0.1' : 'localhost';
+mixedUrl.searchParams.set('childOrigin', childOrigin.origin);
+
+mixedUrl.searchParams.set('deepOrigin', new URL(args.base).origin);
+await page.goto(mixedUrl.toString());
+const snapshot = await frameSnapshot(['Frame B action ready', 'Deep frame action ready', 'Deep frame cursor ready']);
+const cursorRef = refIn(snapshot, 'Deep frame cursor ready');
+const actionRef = refIn(snapshot, 'Deep frame action ready');
+await page.getByRef(actionRef).click();
+const final = await frameSnapshot(['Deep frame action clicked']);
+return { actionRef, cursorRef, final };

@@ -1,0 +1,8 @@
+await page.goto(args.base + '/links.html');
+const url = args.base + "/form.html";
+const response = await page.goto(url);
+assert(response !== null, 'document navigation returns a response');
+const status = response.status();
+equal(status, 200, 'navigation names the HTTP status');
+equal(await page.evaluate(() => location.href), url, 'navigation reaches the requested document');
+return { status, url };
