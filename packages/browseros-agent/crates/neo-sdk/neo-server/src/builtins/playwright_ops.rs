@@ -101,7 +101,7 @@ const PLAYWRIGHT_API: &str = "Playwright's API on `page`, `context` and `browser
     no browser log entries: console and pageerror listeners are accepted but stay silent, \
     and `page.waitForEvent` for either fails immediately with `neo/unsupported`; exposed \
     bindings work. A wait (an action, a read, a snapshot, an event, a navigation) gives up \
-    after 30 s and an `expect` after 5 s, unless given a `timeout`; \
+    after 30 s and an `expect` after 5 s (`toPass` never), unless given a `timeout`; \
     `page.setDefaultTimeout(ms)` or `context.setDefaultTimeout(ms)` changes the 30 s from then \
     on. Unlike Playwright, `waitForFunction` \
     polls every 100 ms for its default `polling: 'raf'`, since animation frames never fire in \
@@ -974,23 +974,24 @@ mod tests {
 
     /// The `run` description's wait times are the prelude's defaults, read from `timeouts.ts`
     /// rather than repeated, so the two cannot drift apart again (the description said 5 s for a
-    /// wait long after #3528 made it 30 s). neo-server's README says the same sentence.
+    /// wait long after #3528 made it 30 s). neo-server's README says the same sentence. `toPass`
+    /// is the one `expect` with no default limit (expect.ts), which the sentence names.
     #[test]
     fn tests_that_the_described_wait_times_are_the_preludes_defaults() -> Result<(), Box<dyn Error>>
     {
         const TIMEOUTS: &str = include_str!("../../../neo-playwright-js/src/prelude/timeouts.ts");
         const README: &str = include_str!("../../README.md");
+        // Only the literal's digits are read, so a `;` or a comment after it changes nothing.
         let seconds = |name: &str| -> Result<u64, Box<dyn Error>> {
-            let line = TIMEOUTS
+            let (_, value) = TIMEOUTS
                 .lines()
-                .find(|line| line.contains(&format!("const {name} = ")))
+                .find_map(|line| line.split_once(&format!("const {name} = ")))
                 .ok_or(format!("timeouts.ts has no {name}"))?;
-            let millis: u64 = line
-                .rsplit('=')
-                .next()
-                .unwrap_or_default()
-                .trim()
-                .replace('_', "")
+            let millis: u64 = value
+                .chars()
+                .take_while(|c| c.is_ascii_digit() || *c == '_')
+                .filter(char::is_ascii_digit)
+                .collect::<String>()
                 .parse()?;
             Ok(millis / 1000)
         };
