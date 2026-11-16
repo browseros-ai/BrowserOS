@@ -868,6 +868,22 @@ impl AuditLog {
         Ok(sessions)
     }
 
+    /// The listed sessions where ultrafast did work, such as the ones about to be deleted.
+    pub async fn ultrafast_sessions_in(
+        &self,
+        session_ids: &[String],
+    ) -> AppResult<Vec<UltrafastSession>> {
+        if session_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let candidates = ToolDispatches::find()
+            .filter(tool_dispatches::Column::SessionId.is_in(session_ids.iter().cloned()))
+            .filter(tool_dispatches::Column::ToolName.is_in(["run_skill", "pursue"]))
+            .all(self.db.connection())
+            .await?;
+        self.ultrafast_sessions(candidates).await
+    }
+
     /// Loads the sessions whose `run_skill` or `pursue` rows show ultrafast did work and derives
     /// each one's stats and pursue steps from all of its rows.
     async fn ultrafast_sessions(

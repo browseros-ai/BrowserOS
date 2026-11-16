@@ -998,6 +998,89 @@ async fn a_task_over_several_days_dates_the_meter_by_neos_run() -> anyhow::Resul
     Ok(())
 }
 
+async fn sweep_history(app: &TestApp) -> anyhow::Result<i64> {
+    let (status, _, bytes) = request(
+        &app.router,
+        "POST",
+        "/api/v1/audit/cleanup",
+        None,
+        Body::empty(),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    Ok(json_body(&bytes)?["sessionsDeleted"]
+        .as_i64()
+        .unwrap_or_default())
+}
+
+#[tokio::test]
+async fn ultrafast_savings_outlast_the_history_retention() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_millis() as i64;
+    let day = 24 * 60 * 60 * 1000;
+    let pursued = json!({ "outcome": "completed", "pagesRead": 3, "pageTokens": 9_000 });
+    for (session, at) in [("aged-out", now - 30 * day), ("recent", now - day)] {
+        app.state
+            .audit_log
+            .record_tool_dispatch(in_session(
+                session,
+                ultrafast_dispatch("pursue", at, 4_000, &pursued, DispatchId::new(), None, 100),
+            ))
+            .await?;
+    }
+    app.state.ultrafast.set(true);
+    let before = get_json(&app, "/api/v1/plan/savings").await?;
+    assert_eq!(before["tasks"], 2);
+
+    // The default 7-day retention deletes the older task's history.
+    assert_eq!(sweep_history(&app).await?, 1);
+    let after = get_json(&app, "/api/v1/plan/savings").await?;
+    assert_eq!(after["meter"], before["meter"]);
+    assert_eq!(after["totals"], before["totals"]);
+    // Still a customer with runs, so Home keeps the meter rather than the first-task prompt.
+    assert_eq!(after["tasks"], 2);
+    let listed = after["latest"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("latest missing"))?
+        .iter()
+        .map(|item| item["sessionId"].as_str().unwrap_or_default())
+        .collect::<Vec<_>>();
+    assert_eq!(listed, ["recent"]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn the_sweep_keeps_a_runs_savings_even_if_home_never_read_them() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_millis() as i64;
+    let pursued = json!({ "outcome": "completed", "pagesRead": 3, "pageTokens": 9_000 });
+    app.state
+        .audit_log
+        .record_tool_dispatch(ultrafast_dispatch(
+            "pursue",
+            now - 20 * 24 * 60 * 60 * 1000,
+            4_000,
+            &pursued,
+            DispatchId::new(),
+            None,
+            100,
+        ))
+        .await?;
+    assert_eq!(sweep_history(&app).await?, 1);
+
+    app.state.ultrafast.set(true);
+    let savings = get_json(&app, "/api/v1/plan/savings").await?;
+    assert_eq!(savings["tasks"], 1);
+    assert_eq!(savings["totals"]["tokensSaved"], 9_000);
+    assert_eq!(savings["meter"]["tokensSaved"], 9_000);
+    assert_eq!(savings["meter"]["fastestRunMs"], 4_000);
+    Ok(())
+}
+
 #[tokio::test]
 async fn savings_start_at_zero() -> anyhow::Result<()> {
     let app = test_app().await?;

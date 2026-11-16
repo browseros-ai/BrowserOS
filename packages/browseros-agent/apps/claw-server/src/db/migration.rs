@@ -31,7 +31,91 @@ impl MigratorTrait for Migrator {
             Box::new(m0022_add_mode_to_skill_runs::Migration),
             Box::new(m0023_add_tool_calls_daily::Migration),
             Box::new(m0024_add_write_consent_to_skill_flows::Migration),
+            Box::new(m0025_add_ultrafast_sessions::Migration),
         ]
+    }
+}
+
+mod m0025_add_ultrafast_sessions {
+    use super::*;
+
+    pub struct Migration;
+
+    impl MigrationName for Migration {
+        fn name(&self) -> &str {
+            "m0025_add_ultrafast_sessions"
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl MigrationTrait for Migration {
+        async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            // What ultrafast did in each task, kept after the task's audit rows are deleted so the
+            // Home meter never loses savings to the retention sweep.
+            let count = |column: UltrafastSessions| {
+                ColumnDef::new(column)
+                    .big_integer()
+                    .not_null()
+                    .default(0)
+                    .to_owned()
+            };
+            manager
+                .create_table(
+                    Table::create()
+                        .table(UltrafastSessions::Table)
+                        .if_not_exists()
+                        .col(
+                            ColumnDef::new(UltrafastSessions::SessionId)
+                                .string()
+                                .not_null()
+                                .primary_key(),
+                        )
+                        .col(count(UltrafastSessions::DurationMs))
+                        .col(count(UltrafastSessions::PagesRead))
+                        .col(count(UltrafastSessions::TokensSaved))
+                        .col(
+                            ColumnDef::new(UltrafastSessions::FastestRunMs)
+                                .big_integer()
+                                .null(),
+                        )
+                        .col(
+                            ColumnDef::new(UltrafastSessions::NeoSteps)
+                                .big_integer()
+                                .null(),
+                        )
+                        .col(
+                            ColumnDef::new(UltrafastSessions::BrowserSteps)
+                                .big_integer()
+                                .null(),
+                        )
+                        .col(count(UltrafastSessions::FirstRunAt))
+                        .col(count(UltrafastSessions::LastRunAt))
+                        .to_owned(),
+                )
+                .await?;
+            Ok(())
+        }
+
+        async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            manager
+                .drop_table(Table::drop().table(UltrafastSessions::Table).to_owned())
+                .await?;
+            Ok(())
+        }
+    }
+
+    #[derive(DeriveIden)]
+    enum UltrafastSessions {
+        Table,
+        SessionId,
+        DurationMs,
+        PagesRead,
+        TokensSaved,
+        FastestRunMs,
+        NeoSteps,
+        BrowserSteps,
+        FirstRunAt,
+        LastRunAt,
     }
 }
 

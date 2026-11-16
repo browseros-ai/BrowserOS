@@ -7,10 +7,9 @@ use crate::{
     AppState,
     clock::now_epoch_ms,
     db::{
-        audit_log::{
-            ListTasksQuery, TaskDetail, TaskStatus, TaskSummary, ToolDispatchRow, UltrafastSession,
-        },
+        audit_log::{ListTasksQuery, TaskDetail, TaskStatus, TaskSummary, ToolDispatchRow},
         pursue_runs::{PursueOutcome, PursueRun, PursueStepKind, pursue_run},
+        ultrafast_ledger::UltrafastRecord,
         ultrafast_runs::{UltrafastRunStats, ultrafast_run_stats},
     },
     error::{AppResult, CanonicalError, RequestId},
@@ -185,31 +184,51 @@ pub(super) async fn savings(
     Extension(request_id): Extension<RequestId>,
     State(state): State<AppState>,
 ) -> Result<Json<PlanSavings>, CanonicalError> {
+    let internal = |source| internal(&request_id, source);
+    // Save what the history still shows first, so nothing it holds is lost once it ages out.
     let sessions = state
         .audit_log
         .all_ultrafast_sessions()
         .await
-        .map_err(|source| internal(&request_id, source))?;
-    let totals = sessions
+        .map_err(internal)?;
+    let records = sessions
         .iter()
-        .fold(UltrafastRunStats::default(), |sum, session| {
+        .map(UltrafastRecord::from)
+        .collect::<Vec<_>>();
+    state
+        .ultrafast_ledger
+        .record(&records)
+        .await
+        .map_err(internal)?;
+    let ledger = state.ultrafast_ledger.all().await.map_err(internal)?;
+    let totals = ledger
+        .iter()
+        .fold(UltrafastRunStats::default(), |sum, record| {
             UltrafastRunStats {
-                duration_ms: sum.duration_ms.saturating_add(session.totals.duration_ms),
-                pages_read: sum.pages_read.saturating_add(session.totals.pages_read),
-                tokens_saved: sum.tokens_saved.saturating_add(session.totals.tokens_saved),
+                duration_ms: sum.duration_ms.saturating_add(record.totals.duration_ms),
+                pages_read: sum.pages_read.saturating_add(record.totals.pages_read),
+                tokens_saved: sum.tokens_saved.saturating_add(record.totals.tokens_saved),
             }
         });
+    let in_history = sessions
+        .iter()
+        .map(|session| (session.session_id.as_str(), session))
+        .collect::<HashMap<_, _>>();
     let live = live_sessions(&state).await;
     let mut latest = Vec::with_capacity(SAVINGS_LATEST);
-    for session in &sessions {
+    for record in &ledger {
         if latest.len() == SAVINGS_LATEST {
             break;
         }
+        // A task whose history has aged out still counts, but has nothing left to list.
+        let Some(session) = in_history.get(record.session_id.as_str()) else {
+            continue;
+        };
         let Some(task) = state
             .audit_log
             .get_task_summary(&session.session_id)
             .await
-            .map_err(|source| internal(&request_id, source))?
+            .map_err(internal)?
         else {
             continue;
         };
@@ -218,11 +237,11 @@ pub(super) async fn savings(
         summary.pursue = session.pursue.clone().map(contract_pursue);
         latest.push(summary);
     }
-    let tasks = i64::try_from(sessions.len()).unwrap_or(i64::MAX);
+    let tasks = i64::try_from(ledger.len()).unwrap_or(i64::MAX);
     let mut savings = PlanSavings::new(*contract_ultrafast(totals), tasks, latest);
-    savings.meter = meter(&state, &sessions)
+    savings.meter = meter(&state, &ledger)
         .await
-        .map_err(|source| internal(&request_id, source))?
+        .map_err(internal)?
         .map(Box::new);
     Ok(Json(savings))
 }
@@ -230,10 +249,10 @@ pub(super) async fn savings(
 /// The Home meter, counted from the day this computer got ultrafast; `None` before that day.
 async fn meter(
     state: &AppState,
-    sessions: &[UltrafastSession],
+    records: &[UltrafastRecord],
 ) -> AppResult<Option<PlanSavingsMeter>> {
     let now = now_epoch_ms();
-    let first_run = sessions.iter().map(|session| session.first_run_at).min();
+    let first_run = records.iter().map(|record| record.first_run_at).min();
     let store = JsonStore::new(state.config.browserclaw_dir.clone());
     let Some(since) =
         ultrafast_meter::since(&store, state.ultrafast_enabled(), first_run, now).await?
@@ -241,7 +260,7 @@ async fn meter(
         return Ok(None);
     };
     let neo = state.session_efficiency.window_since(since).await?;
-    let meter = ultrafast_meter::meter(since, neo.raw_token_savings_estimate, sessions, now);
+    let meter = ultrafast_meter::meter(since, neo.raw_token_savings_estimate, records, now);
     let mut contract = PlanSavingsMeter::new(meter.since, meter.tokens_saved, meter.run_times);
     contract.neo_step_share = meter.neo_step_share;
     contract.fastest_run_ms = meter.fastest_run_ms;

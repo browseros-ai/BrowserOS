@@ -57,6 +57,8 @@ pub struct AppState {
     pub feedback_cohort: Arc<crate::services::feedback_cohort::FeedbackCohort>,
     pub feedback_invites: Arc<crate::db::feedback_invite::FeedbackInviteRepository>,
     pub tool_calls_daily: Arc<crate::db::tool_calls_daily::ToolCallsDailyRepository>,
+    /// What ultrafast did in each task, kept after the task's history is deleted.
+    pub ultrafast_ledger: Arc<crate::db::ultrafast_ledger::UltrafastLedger>,
     pub profiles: Arc<ProfileService>,
     pub sessions: Arc<Sessions>,
     /// Saved native-profile intent is separate from agent profiles and live browser state.
@@ -170,6 +172,9 @@ impl AppState {
         let tool_calls_daily = Arc::new(
             crate::db::tool_calls_daily::ToolCallsDailyRepository::new(database.clone()),
         );
+        let ultrafast_ledger = Arc::new(crate::db::ultrafast_ledger::UltrafastLedger::new(
+            database.clone(),
+        ));
         let skill = load_browserclaw_skill(&config.resources_dir, config.behavior.tab_grouping)?;
         let ultrafast_skill = with_ultrafast(&skill)?;
         let claude_desktop = Arc::new(crate::services::claude_desktop::ClaudeDesktop::new(
@@ -313,6 +318,7 @@ impl AppState {
             feedback_cohort,
             feedback_invites,
             tool_calls_daily,
+            ultrafast_ledger,
             profiles,
             sessions,
             targets,

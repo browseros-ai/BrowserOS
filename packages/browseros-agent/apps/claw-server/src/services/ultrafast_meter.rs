@@ -3,7 +3,7 @@
 //! `<data dir>/billing/ultrafast-since.json`.
 
 use crate::{
-    db::audit_log::UltrafastSession,
+    db::ultrafast_ledger::UltrafastRecord,
     error::{AppError, AppResult},
     storage::JsonStore,
 };
@@ -66,23 +66,23 @@ pub async fn since(
     Ok(since)
 }
 
-/// The meter from the start date, neo's own token saving since then, and every ultrafast session.
+/// The meter from the start date, neo's own token saving since then, and every ultrafast task.
 #[must_use]
-pub fn meter(since: i64, neo_saved: i64, sessions: &[UltrafastSession], now: i64) -> Meter {
-    let ultrafast_tokens = sessions
+pub fn meter(since: i64, neo_saved: i64, records: &[UltrafastRecord], now: i64) -> Meter {
+    let ultrafast_tokens = records
         .iter()
-        .filter(|session| session.last_run_at >= since)
-        .map(|session| session.totals.tokens_saved.max(0))
+        .filter(|record| record.last_run_at >= since)
+        .map(|record| record.totals.tokens_saved.max(0))
         .fold(0_i64, i64::saturating_add);
-    let mut run_times = sessions
+    let mut run_times = records
         .iter()
-        .map(|session| session.last_run_at)
+        .map(|record| record.last_run_at)
         .filter(|at| *at >= now.saturating_sub(WEEK_MS))
         .collect::<Vec<_>>();
     run_times.sort_unstable_by(|a, b| b.cmp(a));
-    let shares = sessions
+    let shares = records
         .iter()
-        .filter_map(|session| session.pursue_step_share)
+        .filter_map(|record| record.pursue_step_share)
         .filter(|(_, all)| *all > 0)
         .map(|(neo, all)| neo as f64 / all as f64)
         .collect::<Vec<_>>();
@@ -90,9 +90,9 @@ pub fn meter(since: i64, neo_saved: i64, sessions: &[UltrafastSession], now: i64
         let mean = shares.iter().sum::<f64>() / shares.len() as f64;
         (mean * 100.0).round().clamp(0.0, 100.0) as i32
     });
-    let fastest_run_ms = sessions
+    let fastest_run_ms = records
         .iter()
-        .flat_map(|session| session.run_durations.iter().copied())
+        .filter_map(|record| record.fastest_run_ms)
         .filter(|duration| *duration > 0)
         .min();
     Meter {
@@ -120,17 +120,15 @@ mod tests {
         tokens: i64,
         runs: &[i64],
         share: Option<(i64, i64)>,
-    ) -> UltrafastSession {
-        UltrafastSession {
+    ) -> UltrafastRecord {
+        UltrafastRecord {
             session_id: format!("s{last_run_at}"),
             totals: UltrafastRunStats {
                 duration_ms: runs.iter().sum(),
                 pages_read: 1,
                 tokens_saved: tokens,
             },
-            measured: None,
-            pursue: None,
-            run_durations: runs.to_vec(),
+            fastest_run_ms: runs.iter().copied().filter(|run| *run > 0).min(),
             pursue_step_share: share,
             first_run_at: last_run_at,
             last_run_at,
