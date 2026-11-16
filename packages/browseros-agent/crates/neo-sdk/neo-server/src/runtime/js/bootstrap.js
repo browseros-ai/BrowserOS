@@ -10,8 +10,134 @@
 // reaches its code as the parameters of its function, never as globals.
 
 ;(() => {
-  const nativeInvoke = globalThis.__neo_invoke // (name, inputJson, site) => Promise<string>, never rejects
-  const nativeLog = globalThis.__neo_log // (level, text) => undefined
+  /**
+   * Owns text crossing between this realm and Rust. Existing codecs serialize values first;
+   * this boundary repairs only UTF-16 units that Rust's scalar strings cannot represent.
+   * Raw log text stays opaque, including any literal JSON or selector escapes it contains.
+   */
+  const wire = (() => {
+    const rawInvoke = globalThis.__neo_invoke // (name, inputJson, site) => Promise<string>
+    const rawLog = globalThis.__neo_log // (level, text) => undefined
+    const parseJson = JSON.parse
+    const { charCodeAt, includes, slice, toWellFormed } = String.prototype
+    const join = Array.prototype.join
+    const apply = Reflect.apply
+    const setPrototypeOf = Object.setPrototypeOf
+
+    // Preserve the native bindings' type errors for direct calls with non-string arguments.
+    function scalarText(text) {
+      return typeof text === 'string' ? apply(toWellFormed, text, []) : text
+    }
+
+    // A complete JSON unicode escape, or -1. Grammar errors belong to the existing parser.
+    function escapeUnit(text, at) {
+      if (
+        at + 5 >= text.length ||
+        apply(charCodeAt, text, [at]) !== 0x5c ||
+        apply(charCodeAt, text, [at + 1]) !== 0x75
+      )
+        return -1
+      let unit = 0
+      for (let index = at + 2; index < at + 6; index++) {
+        const code = apply(charCodeAt, text, [index])
+        let digit
+        if (code >= 0x30 && code <= 0x39) digit = code - 0x30
+        else if (code >= 0x41 && code <= 0x46) digit = code - 0x41 + 10
+        else if (code >= 0x61 && code <= 0x66) digit = code - 0x61 + 10
+        else return -1
+        unit = unit * 16 + digit
+      }
+      return unit
+    }
+
+    // Shared token descriptions avoid allocating for each escape in a large JSON string.
+    const shortEscape = { width: 2, replace: false }
+    const scalarEscape = { width: 6, replace: false }
+    const pairedEscape = { width: 12, replace: false }
+    const loneEscape = { width: 6, replace: true }
+
+    /**
+     * Owns escape consumption inside a string token. Only complete adjacent high/low escapes
+     * form a pair; unknown or incomplete escapes retain their spelling for the strict parser.
+     */
+    function jsonEscape(text, at) {
+      const unit = escapeUnit(text, at)
+      if (unit === -1) return shortEscape
+      if (unit < 0xd800 || unit > 0xdfff) return scalarEscape
+      if (unit <= 0xdbff) {
+        const low = escapeUnit(text, at + 6)
+        if (low >= 0xdc00 && low <= 0xdfff) return pairedEscape
+      }
+      return loneEscape
+    }
+
+    /**
+     * Repairs string tokens, including keys, without another object walk or JSON round trip.
+     * Escapes are consumed atomically so literal backslash-u text and valid pairs keep their
+     * exact spelling. The scan is iterative because codec inputs can exceed the JS stack depth.
+     */
+    function jsonText(text) {
+      if (typeof text !== 'string') return text
+      text = scalarText(text)
+      // Native string search keeps large base64 payloads out of the JS character loop.
+      if (!apply(includes, text, ['\\u'])) return text
+      let insideString = false
+      let cursor = 0
+      let unchangedStart = 0
+      let chunks
+      while (cursor < text.length) {
+        const code = apply(charCodeAt, text, [cursor])
+        if (code === 0x22) {
+          insideString = !insideString
+          cursor++
+          continue
+        }
+        if (!insideString || code !== 0x5c) {
+          cursor++
+          continue
+        }
+        const token = jsonEscape(text, cursor)
+        if (token.replace) {
+          // No inherited setters or script-mutable methods run between repair and native entry.
+          chunks ??= setPrototypeOf([], null)
+          chunks[chunks.length] = apply(slice, text, [unchangedStart, cursor])
+          chunks[chunks.length] = '�'
+          unchangedStart = cursor + token.width
+        }
+        cursor += token.width
+      }
+      if (chunks === undefined) return text
+      chunks[chunks.length] = apply(slice, text, [unchangedStart])
+      return apply(join, chunks, [''])
+    }
+
+    return Object.freeze({
+      invoke(name, inputJson, site) {
+        // Submit synchronously so an abort can find its registration before the next yield.
+        return rawInvoke(
+          scalarText(name),
+          jsonText(inputJson),
+          scalarText(site),
+        )
+      },
+      log(level, text) {
+        return rawLog(scalarText(level), scalarText(text))
+      },
+      result(settledJson) {
+        return jsonText(settledJson)
+      },
+      read(jsonFromRust) {
+        return parseJson(jsonText(jsonFromRust))
+      },
+    })
+  })()
+
+  // Direct calls to the existing native globals share the SDK's boundary. The raw Rust
+  // functions remain private, and captured intrinsics keep later script mutations out of it.
+  const nativeInvoke = wire.invoke
+  globalThis.__neo_invoke = nativeInvoke
+  const nativeLog = wire.log
+  globalThis.__neo_log = nativeLog
   const nativeSleep = globalThis.__neo_sleep // (ms) => Promise<undefined>, cut short by the run's stop
 
   // How much of a thrown error's stack crosses to Rust, which reads only the agent's first frame
@@ -371,7 +497,7 @@
     } finally {
       detach?.()
     }
-    const envelope = JSON.parse(text)
+    const envelope = wire.read(text)
     for (const listener of replyListeners) listener(envelope)
     if (envelope.err !== undefined) {
       const error = envelope.err.timeout
@@ -425,7 +551,7 @@
     const recorded = nativeInvoke(String(api), brand, site).then(
       (text) => {
         try {
-          const envelope = JSON.parse(text)
+          const envelope = wire.read(text)
           for (const listener of replyListeners) listener(envelope)
           const decided = envelope.err
           if (decided === undefined) return undefined
@@ -566,8 +692,9 @@
   // JSON string, {"ok": value} or {"thrown": …}: every throw is caught here, in JS, so only
   // QuickJS stopping the script (its interrupt, its heap) makes the promise reject.
   async function run(main, initJson) {
+    let settledJson
     try {
-      const init = JSON.parse(initJson)
+      const init = wire.read(initJson)
       // Each awaited, in order: a provider may build its parameter with an op before the agent's
       // first statement, as the Playwright prelude's `page` reads its frame tree.
       const args = []
@@ -585,10 +712,12 @@
         value === undefined ? null : value,
         jsonSafe(),
       )
-      return `{"ok":${json ?? 'null'}}`
+      settledJson = `{"ok":${json ?? 'null'}}`
     } catch (error) {
-      return settleThrown(error)
+      settledJson = await settleThrown(error)
     }
+    // Both settlements cross here after their own codec, including thrown names and stacks.
+    return wire.result(settledJson)
   }
 
   globalThis.__neo = Object.freeze({

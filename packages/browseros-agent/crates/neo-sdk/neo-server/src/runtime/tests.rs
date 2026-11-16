@@ -8,7 +8,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use neo_trace::{Delivery, Effect, ErrorOwner, OperationId, Outcome};
-use rquickjs::{AsyncContext, AsyncRuntime, Context, Runtime};
+use rquickjs::function::{Async, Func};
+use rquickjs::{AsyncContext, AsyncRuntime, Context, Promise, Runtime};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -934,6 +935,426 @@ fn input_the_codec_refuses_is_refused_and_recorded_by_the_door() -> Result<(), T
             .ok_or("the refusal is on the record")?;
         assert_eq!(row.outcome, Some(Outcome::Error));
         assert_eq!(row.delivery, Some(Delivery::NotSent));
+        Ok(())
+    })
+}
+
+/// Each JS escape has one backslash, so QuickJS creates an unpaired UTF-16 unit rather than
+/// literal backslash-u text. Rust must receive replacement characters at the JSON boundary.
+#[test]
+fn lone_surrogates_in_returned_strings_become_replacement_characters() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        for (code, expected) in [
+            (r"return 'a\ud83d';", "a�"),
+            (r"return '\udc00b';", "�b"),
+            (r"return '\ud83d\ud83d\ude00\udc00';", "�😀�"),
+        ] {
+            assert_eq!(
+                returned(script(&rig, code).await?)?,
+                json!(expected),
+                "only unpaired units become replacement characters: {code}"
+            );
+        }
+        Ok(())
+    })
+}
+
+#[test]
+fn lone_surrogates_in_nested_returned_data_become_replacement_characters() -> Result<(), TestError>
+{
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let code = r"
+            return {
+              object: { ['key\ud83d']: '\udc00' },
+              array: ['a\ud83d', { ['key\udc00']: ['\ud83dX\udc00'] }],
+              literal: '\\ud83d',
+            };";
+        assert_eq!(
+            returned(script(&rig, code).await?)?,
+            json!({
+                "object": { "key�": "�" },
+                "array": ["a�", { "key�": ["�X�"] }],
+                "literal": r"\ud83d",
+            }),
+            "nested values and property names cross whole, while literal escape text stays literal"
+        );
+        Ok(())
+    })
+}
+
+#[test]
+fn lone_surrogates_in_operation_inputs_become_replacement_characters() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let code = r"
+            return await __neo.invoke('test.echo', {
+              high: 'a\ud83d', low: '\udc00b',
+              nested: { ['key\ud83d']: ['\ud83dX\udc00'] },
+              literal: '\\ud83d',
+            });";
+        assert_eq!(
+            returned(script(&rig, code).await?)?,
+            json!({
+                "high": "a�", "low": "�b",
+                "nested": { "key�": ["�X�"] },
+                "literal": r"\ud83d",
+            }),
+            "the real echo method receives decoded input instead of an invalid-input refusal"
+        );
+        Ok(())
+    })
+}
+
+#[test]
+fn well_formed_surrogate_pairs_and_other_strings_cross_unchanged() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let code = r#"
+            const values = [
+              '', 'ASCII / "quoted" \'single\' \\ slash',
+              '\u0000\b\t\n\f\r\u001f\u007f', 'e\u0301',
+              '\u007f\u0080\ud7ff\ue000\ufffd\ufffe\uffff',
+              '🦊', '\ud83d\ude00', '\ud800\udc00', '\udbff\udfff',
+              '\\ud83d\\udc00',
+            ];
+            const echoed = await __neo.invoke('test.echo', { values });
+            return { direct: values, echoed: echoed.values };"#;
+        let expected = json!([
+            "",
+            "ASCII / \"quoted\" 'single' \\ slash",
+            "\0\x08\t\n\x0c\r\u{001f}\u{007f}",
+            "e\u{0301}",
+            "\u{007f}\u{0080}\u{d7ff}\u{e000}�\u{fffe}\u{ffff}",
+            "🦊",
+            "😀",
+            "\u{10000}",
+            "\u{10ffff}",
+            r"\ud83d\udc00",
+        ]);
+        assert_eq!(
+            returned(script(&rig, code).await?)?,
+            json!({ "direct": &expected, "echoed": &expected }),
+            "controls, combining marks, Unicode boundaries and valid pairs retain their exact value"
+        );
+        Ok(())
+    })
+}
+
+#[test]
+fn lone_surrogates_in_logs_are_repaired_without_decoding_opaque_text() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let end = script(
+            &rig,
+            r"
+                console.log('high\ud800', '\\ud800');
+                const error = new Error('message\udc00');
+                error.name = 'Name\ud800';
+                console.error(error);
+                console.log({ value: '\ud800' });
+                __neo_log('warn\ud800', 'native\udc00');
+                return 1;",
+        )
+        .await?;
+        assert!(
+            matches!(end.outcome, ScriptOutcome::Returned(value) if value == json!(1)),
+            "all console and direct native calls complete through the scalar text boundary"
+        );
+        let (lines, dropped) = end.logs.into_parts();
+        assert_eq!(
+            lines,
+            vec![
+                LogLine {
+                    level: LogLevel::Log,
+                    text: r"high� \ud800".to_owned(),
+                },
+                LogLine {
+                    level: LogLevel::Error,
+                    text: "Name�: message�".to_owned(),
+                },
+                LogLine {
+                    level: LogLevel::Log,
+                    text: r#"{"value":"\ud800"}"#.to_owned(),
+                },
+                LogLine {
+                    level: LogLevel::Log,
+                    text: "native�".to_owned(),
+                },
+            ],
+            "raw console/native text is scalar text, while a formatted object's escapes stay literal"
+        );
+        assert_eq!(dropped, 0);
+        Ok(())
+    })
+}
+
+#[test]
+fn surrogate_wrappers_preserve_native_non_string_type_errors() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let code = r"
+            const rejected = [];
+            for (const call of [
+              () => __neo_invoke(1, '{}', ''),
+              () => __neo_invoke('test.echo', 1, ''),
+              () => __neo_invoke('test.echo', '{}', 1),
+              () => __neo_log(1, ''),
+              () => __neo_log('log', 1),
+            ]) {
+              try { await call(); rejected.push(false); }
+              catch (error) { rejected.push(error instanceof TypeError); }
+            }
+            return rejected;";
+        assert_eq!(
+            returned(script(&rig, code).await?)?,
+            json!([true, true, true, true, true]),
+            "normalization cannot coerce native arguments that the Rust bindings reject"
+        );
+        Ok(())
+    })
+}
+
+#[test]
+fn lone_surrogates_in_thrown_values_keep_the_script_s_error() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        for (code, expected) in [
+            (r"throw 'high\ud800-low\udc00';", "high�-low�"),
+            (
+                r"
+                    const error = new Error('message\udc00');
+                    error.name = 'Name\ud800';
+                    error.stack = 'stack\ud800';
+                    throw error;",
+                "Name�: message�",
+            ),
+        ] {
+            let error = failed(script(&rig, code).await?)?;
+            assert_eq!(
+                (error.owner(), error.code(), error.message()),
+                (ErrorOwner::Script, ErrorCode::SCRIPT_ERROR, expected),
+                "settling a malformed thrown string must preserve its original error ownership"
+            );
+        }
+        Ok(())
+    })
+}
+
+#[test]
+fn surrogate_repair_keeps_json_grammar_strict_and_key_order() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let code = r#"
+            const malformed = [
+              String.raw`{"value":"\ud800\q"}`,
+              String.raw`{"value":"\ud800\u12"}`,
+              String.raw`{"value":"\ud800\u12xz"}`,
+              String.raw`{"value":"\ud800\Udc00"}`,
+              String.raw`{"value":"\ud800"} trailing`,
+              String.raw`{"value":\ud800}`,
+              String.raw`{"value":"\ud800`,
+            ];
+            const errors = [];
+            for (const input of malformed) {
+              const reply = JSON.parse(await __neo_invoke('test.echo', input, ''));
+              errors.push(reply.err?.code);
+            }
+            const reply = JSON.parse(await __neo_invoke('test.echo',
+              String.raw`{"\ud800":1,"\udc00":2,"__proto__":{"value":"\ud800"}}`, ''));
+            return { errors, keys: reply.ok };"#;
+        assert_eq!(
+            returned(script(&rig, code).await?)?,
+            json!({
+                "errors": vec!["invalid_input"; 7],
+                "keys": { "�": 2, "__proto__": { "value": "�" } },
+            }),
+            "only complete surrogate tokens are repaired; key collisions keep the parser's last value"
+        );
+        Ok(())
+    })
+}
+
+/// Rust String/Value senders already contain scalar text. This raw native fixture injects
+/// malformed JSON defensively and observes numeric code units before the result boundary can
+/// repair anything, so a broken incoming reader cannot pass through outgoing normalization.
+#[test]
+fn surrogate_wire_readers_repair_before_script_observation() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let runtime = AsyncRuntime::new()?;
+        let context = AsyncContext::full(&runtime).await?;
+        let result: Result<String, String> = context
+            .async_with(async |ctx| {
+                let result = async {
+                    let invoke = |name: String, input: String, site: String| {
+                        let reply = match name.as_str() {
+                            "fixture.raw�" => {
+                                assert_eq!(site, "site�");
+                                assert_eq!(
+                                    input,
+                                    r#" {"\uD83d\uDE00":"\ud83D\ude00","literal":"\\ud800","key�":"�\uD800\uDc00�"} "#,
+                                    "unchanged tokens retain hex spelling, whitespace and literal escapes"
+                                );
+                                "{}"
+                            }
+                            "fixture.reply" => {
+                                r#"{"ok":{"\ud800":"\udc00","pair":"\uD83d\uDe00","literal":"\\ud800"}}"#
+                            }
+                            "fixture.refuse" => {
+                                r#"{"err":{"code":"\ud800","owner":"script","delivery":"not_sent","retryable":true,"operationId":"fixture.1"}}"#
+                            }
+                            _ => panic!("unexpected fixture call: {name}"),
+                        };
+                        async move { reply.to_owned() }
+                    };
+                    ctx.globals()
+                        .set("__neo_invoke", Func::from(Async(invoke)))?;
+                    ctx.globals()
+                        .set("__neo_log", Func::from(|_level: String, _text: String| {}))?;
+                    ctx.eval::<(), _>(include_str!("js/bootstrap.js"))?;
+                    let promise: Promise<'_> = ctx.eval(
+                        r#"
+                        (async () => {
+                          const apply = Reflect.apply;
+                          const charCodeAt = String.prototype.charCodeAt;
+                          const codes = text => {
+                            const units = [];
+                            for (let i = 0; i < text.length; i++)
+                              units[units.length] = apply(charCodeAt, text, [i]);
+                            return units;
+                          };
+                          const raw = String.raw` {"\uD83d\uDE00":"\ud83D\ude00","literal":"\\ud800","key\ud800":"\uD800\uD800\uDc00\udc00"} `;
+                          const init = String.raw`{"value":"\ud800"}`;
+                          const seen = {};
+                          __neo.provide('fixtureInit', init => init.value);
+                          __neo.onReply(reply => {
+                            if (reply.err) seen.refusal = codes(reply.err.code);
+                          });
+                          String.prototype.toWellFormed = () => 'bypassed';
+                          String.prototype.charCodeAt = () => 0;
+                          String.prototype.includes = () => false;
+                          String.prototype.slice = () => '';
+                          Array.prototype.join = () => 'bypassed';
+                          Reflect.apply = () => 'bypassed';
+                          JSON.parse = () => ({ bypassed: true });
+                          return await __neo.run(async (...args) => {
+                            seen.init = codes(args[args.length - 1]);
+                            await __neo_invoke('fixture.raw\ud800', raw, 'site\udc00');
+                            const reply = await __neo.invoke('fixture.reply', {});
+                            const key = Object.keys(reply)[0];
+                            seen.key = codes(key);
+                            seen.value = codes(reply[key]);
+                            seen.pair = codes(reply.pair);
+                            seen.literal = codes(reply.literal);
+                            __neo.refuse('fixture.refuse', 'unused', 'unused');
+                            return seen;
+                          }, init);
+                        })()"#,
+                    )?;
+                    promise.into_future::<String>().await
+                }
+                .await;
+                result.map_err(|error| error.to_string())
+            })
+            .await;
+        assert_eq!(
+            serde_json::from_str::<Value>(&result?)?,
+            json!({ "ok": {
+                "init": [65533], "key": [65533], "value": [65533],
+                "pair": [55357, 56832], "literal": [92, 117, 100, 56, 48, 48],
+                "refusal": [65533],
+            }}),
+            "init, op and refusal readers repair before JS observes them, despite mutated intrinsics"
+        );
+        Ok(())
+    })
+}
+
+/// Only the browser-facing leaves are doubles: locator construction, the bootstrap, QuickJS,
+/// JSON decoding and dispatch remain real. The leaves assert what a Rust operation receives.
+#[test]
+fn lone_surrogates_in_fill_values_and_locator_text_reach_rust() -> Result<(), TestError> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct FillInput {
+        #[serde(rename = "call")]
+        _call: Value,
+        target: Value,
+        strict: String,
+        value: String,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct CountInput {
+        #[serde(rename = "call")]
+        _call: Value,
+        target: Value,
+    }
+
+    on_neo_runtime(async {
+        let mut rig = TestRig::new().await?;
+        let page = rig.owner_tab("https://strings.example/").await?;
+        let mut registry = RegistryBuilder::default();
+        registry.define(TaskOp {
+            name: "locator.fill",
+            effect: Effect::Write,
+            answer: |input: FillInput| {
+                assert_eq!(input.value, "value�-low�");
+                assert_eq!(input.strict, "strict");
+                assert_eq!(
+                    input.target.pointer("/chunks/0/parts"),
+                    Some(&json!([{
+                        "name": "text", "body": "selector�-low�", "source": "selector�-low�",
+                    }])),
+                    "raw selector text is normalized inside the decoded locator too"
+                );
+                Ok(Value::Null)
+            },
+        })?;
+        registry.define(TaskOp {
+            name: "locator.count",
+            effect: Effect::Read,
+            answer: |input: CountInput| {
+                // getByText JSON-quotes its argument before crossing the bridge. These are
+                // already well-formed strings of escape characters, so decoding them again
+                // here would change the selector's meaning rather than repair the transport.
+                assert_eq!(
+                    input.target.pointer("/chunks/0/parts"),
+                    Some(&json!([{
+                        "name": "internal:text",
+                        "body": r#""label\ud83d-low\udc00"i"#,
+                        "source": r#""label\ud83d-low\udc00"i"#,
+                    }])),
+                    "the prelude's existing selector escapes remain literal at the Rust boundary"
+                );
+                Ok(json!(1))
+            },
+        })?;
+        rig.dispatcher = Arc::new(Dispatcher::new(
+            registry.build(),
+            Vec::new(),
+            rig.sink.clone(),
+            Arc::clone(&rig.link),
+            Arc::clone(&rig.tabs),
+            Observer::unrecorded(),
+        ));
+        let (run, _guard) = rig.run(BUDGET, None)?;
+        let script = Script {
+            code: r"
+                await page.locator('text=selector\ud83d-low\udc00').fill('value\ud83d-low\udc00');
+                return await page.getByText('label\ud83d-low\udc00').count();"
+                .to_owned(),
+            page: Some(page),
+            pages: Vec::new(),
+            observed: None,
+        };
+        assert_eq!(
+            returned(run_script(&run, &rig.dispatcher, script).await)?,
+            json!(1),
+            "both public prelude calls reach their Rust operation with the contracted input"
+        );
         Ok(())
     })
 }
@@ -2099,8 +2520,8 @@ fn listener_registration_keeps_its_site_while_internal_event_work_has_none() -> 
     })
 }
 
-/// Contract doubles for the five task ops. Production task storage is outside the runtime;
-/// these tests keep the real QuickJS preludes, dispatcher and trace writer.
+/// Contract doubles for operation boundaries outside the runtime. These tests keep the real
+/// QuickJS preludes, dispatcher and trace writer while observing decoded input.
 struct TaskOp<I> {
     name: &'static str,
     effect: Effect,

@@ -8,9 +8,11 @@
  * `String.fromCharCode`, which upstream's serializers lean on as well.
  *
  * The values are Playwright's serialized format (`SerializedValue`): plain objects, arrays,
- * strings, finite numbers, booleans and null. `writeJson` spells them as `JSON.stringify` does,
- * byte for byte, since Rust's strict parse reads that text (`page/page_value.rs`), and drops what
- * `JSON.stringify` drops; `readJson` reads the text the prelude's `JSON.stringify` wrote.
+ * strings, finite numbers, booleans and null. `writeJson` drops what `JSON.stringify` drops and
+ * otherwise spells it byte for byte, except that unpaired UTF-16 surrogates become U+FFFD.
+ * Rust's strict JSON reader (`page/page_value.rs`) rejects surrogate escapes that cannot form a
+ * Unicode scalar. This shared quoting boundary covers string values and object keys before
+ * Rust reads the text. `readJson` reads the text the prelude's `JSON.stringify` wrote.
  */
 
 const HEX = '0123456789abcdef'
@@ -37,8 +39,8 @@ const unicodeEscape = (code: number): string =>
   `\\u${HEX[(code >> 12) & 15]}${HEX[(code >> 8) & 15]}${HEX[(code >> 4) & 15]}${HEX[code & 15]}`
 
 /**
- * `JSON.stringify`'s string quoting (ECMA-262 QuoteJSONString): `"` and `\`, the control
- * characters, and a lone surrogate are escaped; everything else is copied in runs.
+ * Quotes strings without consulting page-owned globals. Valid surrogate pairs and ordinary
+ * runs keep `JSON.stringify`'s bytes; lone surrogate units become U+FFFD so Rust can read them.
  */
 function quote(text: string): string {
   let out = '"'
@@ -55,7 +57,7 @@ function quote(text: string): string {
         at++
         continue
       }
-      escaped = unicodeEscape(code)
+      escaped = '\ufffd'
     } else continue
     out += text.slice(start, at) + escaped
     start = at + 1
