@@ -880,11 +880,14 @@ fn operation_error(error: &ErrorRecord, fields: Fields) -> api::OperationError {
         },
         retryable: error.retryable,
         operation_id: error.operation_id.map(|id| id.to_string()),
-        // A cover the record cannot read as the contract's shape stays out: the record is
-        // neo-playwright's to fill, and a newer shape must not fail the read.
+        // The cover's name and its controls' names are page text, so a summary view, which
+        // omits every text, omits the cover too. A cover the record cannot read as the
+        // contract's shape stays out: the record is neo-playwright's to fill, and a newer shape
+        // must not fail the read.
         cover: error
             .cover
             .as_ref()
+            .filter(|_| fields == Fields::Full)
             .and_then(|cover| serde_json::from_value(cover.clone()).ok())
             .map(Box::new),
     }

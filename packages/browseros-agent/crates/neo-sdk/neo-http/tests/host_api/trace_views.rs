@@ -63,7 +63,14 @@ async fn summary_omits_values_everywhere_and_keeps_audit_metadata() -> TestResul
         host_code: Some(value.into()),
         retryable: false,
         operation_id: Some(fill),
-        cover: None,
+        // A covered error's cover is page text: the full view shows it, a summary never does.
+        cover: Some(json!({
+            "ref": "e7",
+            "role": "dialog",
+            "name": value,
+            "kind": "page",
+            "controls": [{"ref": "e9", "role": "button", "name": value}],
+        })),
     };
     h.sink.run_started(RunStarted {
         id: run,
@@ -165,6 +172,7 @@ async fn summary_omits_values_everywhere_and_keeps_audit_metadata() -> TestResul
         assert_eq!(op["error"]["code"], "timeout");
         assert_eq!(op["error"]["message"], "");
         assert!(op["error"].get("hostCode").is_none());
+        assert!(op["error"].get("cover").is_none(), "{op}");
         assert_eq!(op["internal"], false);
         let full = h.get(&format!("{uri}?fields=full&internal=true")).await?;
         assert_eq!(full.body, original.body, "explicit defaults");
@@ -175,6 +183,7 @@ async fn summary_omits_values_everywhere_and_keeps_audit_metadata() -> TestResul
     for key in ["code", "hostData", "result", "downloads"] {
         assert!(full.body[key].to_string().contains(value), "{key}");
     }
+    assert_eq!(full.body["operations"][0]["error"]["cover"]["name"], value);
     let audit = h
         .get("/v1/runs?taskId=summary-canary&fields=summary&internal=false")
         .await?;

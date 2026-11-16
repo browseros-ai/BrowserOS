@@ -9584,6 +9584,7 @@ ${value.stack}`;
   }
   function factsOf2(world, output, subject, chain, top, request) {
     const { injected } = world;
+    const kind = kindOf(world, subject, chain, request.point, request.above);
     const layer = whichDialog(world, chain, top, request.point);
     let shown = layer;
     const closed = !layer.contains(subject) && inClosedPart(layer);
@@ -9612,8 +9613,16 @@ ${value.stack}`;
       behind,
       closed,
       notice: !surrounds && inLiveRegion(world, shown),
-      kind: kindOf(world, subject, chain, request.point, request.above)
+      kind: frameInCover(world, shown, kind) ? { is: "page" } : kind
     };
+  }
+  function frameInCover(world, shown, kind) {
+    if (kind.is !== "frame")
+      return false;
+    const frame = (element) => element.localName === "iframe" || element.localName === "frame";
+    if (frame(shown))
+      return false;
+    return takingControls(world, shown).some((control) => !frame(control));
   }
   function quietSnapshot(world, element) {
     const { injected } = world;
@@ -9706,13 +9715,22 @@ ${value.stack}`;
     const bottom = Math.min(box.bottom, innerHeight);
     if (right <= left || bottom <= top)
       return false;
-    return dialog.ownerDocument.elementsFromPoint((left + right) / 2, (top + bottom) / 2).some((element) => element === backdrop || backdrop.contains(element));
+    const root = backdrop.getRootNode();
+    return root.elementsFromPoint((left + right) / 2, (top + bottom) / 2).some((element) => element === backdrop || backdrop.contains(element));
   }
   var DIALOGS = '[role="dialog"], [role="alertdialog"], [aria-modal="true"], dialog[open], [popover]';
   var MAX_WALKED = 2000;
   var MAX_DEPTH = 32;
   function composedDescendants(root) {
     const found = [];
+    const seen = new Set;
+    const take = (element) => {
+      if (seen.has(element))
+        return false;
+      seen.add(element);
+      found.push(element);
+      return true;
+    };
     const scopes = [root];
     const own = root.nodeType === 1 ? root.shadowRoot : null;
     if (own)
@@ -9724,9 +9742,20 @@ ${value.stack}`;
       for (const element of scope.querySelectorAll("*")) {
         if (found.length >= MAX_WALKED)
           return found;
-        found.push(element);
+        if (!take(element))
+          continue;
         if (element.shadowRoot)
           scopes.push(element.shadowRoot);
+        if (element.localName !== "slot")
+          continue;
+        const slot = element;
+        for (const assigned of slot.assignedElements({ flatten: true })) {
+          if (!take(assigned))
+            continue;
+          scopes.push(assigned);
+          if (assigned.shadowRoot)
+            scopes.push(assigned.shadowRoot);
+        }
       }
     }
     return found;
