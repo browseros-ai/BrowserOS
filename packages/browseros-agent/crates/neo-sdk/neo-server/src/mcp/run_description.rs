@@ -82,6 +82,10 @@ const ERRORS: &str = r#"A failed SDK call throws a `NeoError` (a `TimeoutError` 
 `delivery: "unknown"` means a write may have happened: look at the page before repeating it.
 `retryable: true` means a repeat is safe, never that it will succeed: read the `message` first."#;
 
+/// A host's per-call restriction (`_meta` `access: "read"`), stated as a condition so this static
+/// text stays true for every run. The dispatch door refuses disallowed operations before any
+/// browser work, which is why the sentence can promise "nothing sent". The refusal explains the
+/// rejected operation, so the sentence lists only what a read-only script may do.
 const READ_ONLY: &str = r"A host may start a run read-only: then only reads, `context.newPage()`, a `goto` to an `http` or `https` address, and closing a tab this run opened are allowed; anything else fails `read_only_run` with nothing sent.";
 
 /// Tabs and tasks. One static text, never built from `tabs.scope` or the call: whether a run is
