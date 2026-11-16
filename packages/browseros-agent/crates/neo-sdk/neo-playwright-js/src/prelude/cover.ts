@@ -11,11 +11,25 @@
  * controls and "Do" lines stand without it.
  */
 
-import { renderSnapshotV1, withDefaults } from './snapshot-v1'
 import type { AriaSnapshotJSON } from './vendored'
 
 /** The most of the cover's rendered snapshot the message carries. */
 const SNAPSHOT_CHARS = 1500
+
+/**
+ * Renders a snapshot tree in a script's default snapshot form. The prelude's entry (index.ts) sets
+ * it once. errors.ts, part of every call's error path, imports this module, and a static import
+ * of the snapshot renderer here would make the renderer and its vendored Playwright modules
+ * dependencies of that core path.
+ */
+let renderSnapshot: ((json: AriaSnapshotJSON) => string) | undefined
+
+/** Gives this module the snapshot renderer; the prelude's entry calls it once. */
+export function setCoverRenderer(
+  render: (json: AriaSnapshotJSON) => string,
+): void {
+  renderSnapshot = render
+}
 
 /** The line Rust writes the cover on; the snapshot goes right under it. */
 const ON_TOP = '\n  On top: '
@@ -44,13 +58,11 @@ export function shapeCovered(error: Error): void {
 
 /** The snapshot as the message prints it, each line under "On top", or '' for none. */
 function snapshotLines(snapshot: unknown): string {
-  if (typeof snapshot !== 'object' || snapshot === null) return ''
+  if (typeof snapshot !== 'object' || snapshot === null || !renderSnapshot)
+    return ''
   let text: string
   try {
-    text = renderSnapshotV1(
-      { json: snapshot as AriaSnapshotJSON, partial: [] },
-      withDefaults({}),
-    ).text
+    text = renderSnapshot(snapshot as AriaSnapshotJSON)
   } catch {
     return ''
   }

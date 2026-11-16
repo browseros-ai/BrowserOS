@@ -5,7 +5,13 @@
  * leaves Rust's message as it is, its controls and "Do" lines included.
  */
 import { expect, test } from 'bun:test'
-import { shapeCovered } from '../src/prelude/cover'
+import { setCoverRenderer, shapeCovered } from '../src/prelude/cover'
+import { renderSnapshotV1, withDefaults } from '../src/prelude/snapshot-v1'
+
+// As the prelude's entry does (index.ts).
+setCoverRenderer(
+  (json) => renderSnapshotV1({ json, partial: [] }, withDefaults({})).text,
+)
 
 const RUST = [
   'locator.click: Timeout 1500ms exceeded.',
