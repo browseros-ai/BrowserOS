@@ -3,19 +3,16 @@
 
 use std::error::Error;
 use std::net::SocketAddr;
-use std::path::Path;
 use std::time::Duration;
 use std::{env, fs};
 
-use neo_trace::{RunId, TraceStore};
-use rmcp::ServiceExt;
+use neo_trace::{Outcome, RunId, TraceStore};
 use rmcp::model::{
     CallToolRequestParams, CallToolResult, ClientInfo, MetaObject, RequestMetaObject,
 };
 use rmcp::service::{RoleClient, RunningService};
 use rmcp::transport::StreamableHttpClientTransport;
 use serde_json::{Value, json};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::time;
 
@@ -34,6 +31,8 @@ fn surrogate_page_values_live() -> TestResult {
 }
 
 async fn drive(cdp_port: u16) -> TestResult {
+    use rmcp::ServiceExt;
+
     // Create lone units inside the page, so serializing the function's source cannot fail at
     // the earlier QuickJS input boundary and disguise which reader rejects the page's reply.
     let cases = [
@@ -111,16 +110,6 @@ async fn drive(cdp_port: u16) -> TestResult {
     let evidence = measured?;
     if let Some(path) = env::var_os("NEO_SURROGATE_EVIDENCE") {
         fs::write(&path, serde_json::to_vec_pretty(&evidence)?)?;
-        println!(
-            "SURROGATE_PAGE_VALUES_EVIDENCE {}",
-            Path::new(&path).display()
-        );
-    }
-    for observation in evidence["cases"].as_array().ok_or("case evidence")? {
-        println!(
-            "SURROGATE_PAGE_VALUES {} {}",
-            observation["name"], observation["outcome"]
-        );
     }
     // Expectations always describe the fixed contract. Baseline classification belongs to the
     // remote job, which reads the same evidence instead of changing this test's expectations.
@@ -143,6 +132,8 @@ async fn drive(cdp_port: u16) -> TestResult {
 }
 
 async fn ready(address: SocketAddr) -> TestResult {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
     time::timeout(Duration::from_secs(60), async {
         loop {
             let mut socket = TcpStream::connect(address).await?;
@@ -200,7 +191,7 @@ async fn trace(store: &TraceStore, reply: &CallToolResult) -> TestResult<Value> 
                     .iter()
                     .map(|op| {
                         json!({"name": op.name, "delivery": op.delivery, "error": op.error,
-                        "outcome": op.outcome.map(|outcome| outcome.as_str()),
+                        "outcome": op.outcome.map(Outcome::as_str),
                         "mainWorld": op.main_world})
                     })
                     .collect();
