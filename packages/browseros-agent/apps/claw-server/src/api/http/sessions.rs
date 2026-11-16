@@ -20,7 +20,7 @@ use crate::{
             LiveTabProjection,
         },
         sessions::Session,
-        ultrafast_meter,
+        ultrafast_meter::{self, NeoWindow, NeoWindows},
     },
     storage::JsonStore,
 };
@@ -30,9 +30,10 @@ use axum::{
     http::StatusCode,
 };
 use claw_api::models::{
-    CancelSessionResponse, Dispatch, PlanSavings, PlanSavingsMeter, ResolveHelpRequest,
-    ResolveHelpResponse, SessionBrowserTab, SessionDetail, SessionList, SessionPursueRun,
-    SessionPursueStep, SessionStatus, SessionSummary, SessionTokenUsage, SessionUltrafastRun,
+    CancelSessionResponse, Dispatch, PlanSavings, PlanSavingsMeter, PlanSavingsPeriod,
+    PlanSavingsPeriods, PlanSavingsSite, ResolveHelpRequest, ResolveHelpResponse,
+    SessionBrowserTab, SessionDetail, SessionList, SessionPursueRun, SessionPursueStep,
+    SessionStatus, SessionSummary, SessionTokenUsage, SessionUltrafastRun,
 };
 use std::{collections::HashMap, sync::Arc};
 
@@ -259,12 +260,55 @@ async fn meter(
     else {
         return Ok(None);
     };
-    let neo = state.session_efficiency.window_since(since).await?;
-    let meter = ultrafast_meter::meter(since, neo.raw_token_savings_estimate, records, now);
-    let mut contract = PlanSavingsMeter::new(meter.since, meter.tokens_saved, meter.run_times);
+    let [since_start, month, week] = ultrafast_meter::period_starts(since, now);
+    let neo = NeoWindows {
+        since: neo_window(state, since_start).await?,
+        last_30_days: neo_window(state, month).await?,
+        last_7_days: neo_window(state, week).await?,
+    };
+    let meter = ultrafast_meter::meter(since, &neo, records, now);
+    let periods = PlanSavingsPeriods::new(
+        contract_period(&meter.periods.since),
+        contract_period(&meter.periods.last_30_days),
+        contract_period(&meter.periods.last_7_days),
+    );
+    let mut contract =
+        PlanSavingsMeter::new(meter.since, meter.tokens_saved, meter.run_times, periods);
     contract.neo_step_share = meter.neo_step_share;
     contract.fastest_run_ms = meter.fastest_run_ms;
     Ok(Some(contract))
+}
+
+/// neo's own saving, time saved and tasks finished from sessions that ended at or after `start`.
+async fn neo_window(state: &AppState, start: i64) -> AppResult<NeoWindow> {
+    let window = state.session_efficiency.window_since(start).await?;
+    Ok(NeoWindow {
+        tokens_saved: window.raw_token_savings_estimate,
+        time_saved_ms: window.human_time_saved_ms,
+        tasks_finished: window.session_count,
+    })
+}
+
+fn contract_period(period: &ultrafast_meter::Period) -> PlanSavingsPeriod {
+    let mut contract = PlanSavingsPeriod::new(
+        period.tokens_saved,
+        period.runs,
+        period.pages_read,
+        period.duration_ms,
+        period.site_tasks,
+        period.site_tasks_finished,
+        period
+            .top_sites
+            .iter()
+            .map(|(site, runs)| PlanSavingsSite::new(site.clone(), *runs))
+            .collect(),
+        period.time_saved_ms,
+        period.tasks_finished,
+        period.run_times.clone(),
+    );
+    contract.fastest_run_ms = period.fastest_run_ms;
+    contract.neo_step_share = period.neo_step_share;
+    contract
 }
 
 pub(super) async fn cancel(

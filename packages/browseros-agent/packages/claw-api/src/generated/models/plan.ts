@@ -482,6 +482,138 @@ export interface PlanSavingsMeter {
      * @memberof PlanSavingsMeter
      */
     fastestRunMs?: number;
+    /**
+     * The meter's Details, for each period it can show.
+     * @type {PlanSavingsPeriods}
+     * @memberof PlanSavingsMeter
+     */
+    periods: PlanSavingsPeriods;
+}
+
+/**
+ * What ultrafast and neo did in one period.
+ * @export
+ * @interface PlanSavingsPeriod
+ */
+export interface PlanSavingsPeriod {
+    /**
+     * neo's page-description saving from sessions that ended in the period, plus the page text neo read itself in the period's ultrafast tasks.
+     * @type {number}
+     * @memberof PlanSavingsPeriod
+     */
+    tokensSaved: number;
+    /**
+     * Ultrafast tasks in the period.
+     * @type {number}
+     * @memberof PlanSavingsPeriod
+     */
+    runs: number;
+    /**
+     * Pages neo read itself in those tasks.
+     * @type {number}
+     * @memberof PlanSavingsPeriod
+     */
+    pagesRead: number;
+    /**
+     * Time neo's ultrafast runs took in those tasks.
+     * @type {number}
+     * @memberof PlanSavingsPeriod
+     */
+    durationMs: number;
+    /**
+     * The shortest single run in the period. Absent without one.
+     * @type {number}
+     * @memberof PlanSavingsPeriod
+     */
+    fastestRunMs?: number;
+    /**
+     * In the period's tasks that used pursue, the average share of browser steps neo took. Absent without one.
+     * @type {number}
+     * @memberof PlanSavingsPeriod
+     */
+    neoStepShare?: number;
+    /**
+     * The period's tasks that used pursue.
+     * @type {number}
+     * @memberof PlanSavingsPeriod
+     */
+    siteTasks: number;
+    /**
+     * Of those, the ones pursue finished without handing back.
+     * @type {number}
+     * @memberof PlanSavingsPeriod
+     */
+    siteTasksFinished: number;
+    /**
+     * Sites with the most ultrafast tasks in the period, most first.
+     * @type {Array<PlanSavingsSite>}
+     * @memberof PlanSavingsPeriod
+     */
+    topSites: Array<PlanSavingsSite>;
+    /**
+     * Time saved by every task that ended in the period.
+     * @type {number}
+     * @memberof PlanSavingsPeriod
+     */
+    timeSavedMs: number;
+    /**
+     * Tasks that ended in the period.
+     * @type {number}
+     * @memberof PlanSavingsPeriod
+     */
+    tasksFinished: number;
+    /**
+     * When each of the period's ultrafast tasks last ran, in epoch milliseconds, newest first, for a chart by local day or week.
+     * @type {Array<number>}
+     * @memberof PlanSavingsPeriod
+     */
+    runTimes: Array<number>;
+}
+
+/**
+ * The Details numbers since this computer got ultrafast, and for the last 30 and 7 days. A task counts in a period when its last ultrafast run started in it; neo's own saving, time saved and tasks finished follow the cockpit's windows.
+ * @export
+ * @interface PlanSavingsPeriods
+ */
+export interface PlanSavingsPeriods {
+    /**
+     * Since this computer got ultrafast. Its tokensSaved is the meter's tokensSaved.
+     * @type {PlanSavingsPeriod}
+     * @memberof PlanSavingsPeriods
+     */
+    since: PlanSavingsPeriod;
+    /**
+     *
+     * @type {PlanSavingsPeriod}
+     * @memberof PlanSavingsPeriods
+     */
+    last30Days: PlanSavingsPeriod;
+    /**
+     *
+     * @type {PlanSavingsPeriod}
+     * @memberof PlanSavingsPeriods
+     */
+    last7Days: PlanSavingsPeriod;
+}
+
+/**
+ *
+ * @export
+ * @interface PlanSavingsSite
+ */
+export interface PlanSavingsSite {
+    /**
+     * The site, as the task list shows it.
+     * @type {string}
+     * @memberof PlanSavingsSite
+     */
+    site: string;
+    /**
+     * Ultrafast tasks on that site in the period.
+     * @type {number}
+     * @memberof PlanSavingsSite
+     */
+    runs: number;
 }
 
 /**

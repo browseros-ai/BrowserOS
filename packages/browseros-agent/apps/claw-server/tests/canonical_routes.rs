@@ -1082,6 +1082,89 @@ async fn the_sweep_keeps_a_runs_savings_even_if_home_never_read_them() -> anyhow
 }
 
 #[tokio::test]
+async fn the_details_periods_count_sites_and_site_tasks() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_millis() as i64;
+    let day = 24 * 60 * 60 * 1000;
+    let on_site = |session: &str, url: &str, at: i64, outcome: &str, tokens: i64| {
+        let mut row = in_session(
+            session,
+            ultrafast_dispatch(
+                "pursue",
+                at,
+                4_000,
+                &json!({ "outcome": outcome, "pagesRead": 2, "pageTokens": tokens }),
+                DispatchId::new(),
+                None,
+                100,
+            ),
+        );
+        row.url = Some(url.to_string());
+        row
+    };
+    for row in [
+        on_site(
+            "old",
+            "https://www.flipkart.com/",
+            now - 20 * day,
+            "completed",
+            40_000,
+        ),
+        on_site(
+            "recent",
+            "https://www.flipkart.com/",
+            now - 2 * day,
+            "handed_back",
+            5_000,
+        ),
+        on_site(
+            "today",
+            "https://www.google.com/travel",
+            now - 1_000,
+            "completed",
+            1_000,
+        ),
+    ] {
+        app.state.audit_log.record_tool_dispatch(row).await?;
+    }
+    app.state.ultrafast.set(true);
+    let meter = get_json(&app, "/api/v1/plan/savings").await?["meter"].clone();
+    let periods = &meter["periods"];
+
+    // The since period is the meter's own number.
+    assert_eq!(periods["since"]["tokensSaved"], meter["tokensSaved"]);
+    assert_eq!(periods["since"]["runs"], 3);
+    assert_eq!(periods["since"]["siteTasks"], 3);
+    assert_eq!(periods["since"]["siteTasksFinished"], 2);
+    let sites = periods["since"]["topSites"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("topSites missing"))?
+        .iter()
+        .map(|site| {
+            (
+                site["site"].as_str().unwrap_or_default().to_string(),
+                site["runs"].clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(sites[0].1, 2, "{sites:?}");
+    assert!(sites[0].0.contains("flipkart"), "{sites:?}");
+
+    // The 20-day-old task is in 30 days but not in 7.
+    assert_eq!(periods["last30Days"]["runs"], 3);
+    assert_eq!(periods["last7Days"]["runs"], 2);
+    assert_eq!(periods["last7Days"]["pagesRead"], 4);
+    assert_eq!(periods["last7Days"]["siteTasksFinished"], 1);
+    assert_eq!(
+        periods["last7Days"]["runTimes"].as_array().map(Vec::len),
+        Some(2)
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn savings_start_at_zero() -> anyhow::Result<()> {
     let app = test_app().await?;
     seed_dispatch(&app, "ordinary-session").await?;

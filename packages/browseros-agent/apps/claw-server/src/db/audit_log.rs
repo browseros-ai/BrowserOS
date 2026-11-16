@@ -48,6 +48,8 @@ pub struct UltrafastSession {
     /// When neo's first and last ultrafast runs in the session started, not the agent's calls.
     pub first_run_at: i64,
     pub last_run_at: i64,
+    /// The site the task ran on, as the task list shows it.
+    pub site: Option<String>,
 }
 
 const ARGS_JSON_MAX: usize = 4096;
@@ -904,6 +906,13 @@ impl AuditLog {
             return Ok(sessions);
         }
         let conn = self.db.connection();
+        let sites = Tasks::find()
+            .filter(tasks::Column::SessionId.is_in(with_runs.iter().cloned()))
+            .all(conn)
+            .await?
+            .into_iter()
+            .filter_map(|task| Some((task.session_id, task.site?)))
+            .collect::<HashMap<_, _>>();
         let rows = ToolDispatches::find()
             .filter(tool_dispatches::Column::SessionId.is_in(with_runs))
             .order_by_asc(tool_dispatches::Column::CreatedAt)
@@ -932,6 +941,7 @@ impl AuditLog {
             let first_run_at = runs.iter().map(|run| run.at).min().unwrap_or(0);
             let last_run_at = runs.iter().map(|run| run.at).max().unwrap_or(0);
             sessions.push(UltrafastSession {
+                site: sites.get(&session_id).cloned(),
                 session_id,
                 totals,
                 measured,

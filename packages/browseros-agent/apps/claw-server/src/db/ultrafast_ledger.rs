@@ -4,7 +4,10 @@
 //! the retention sweep deletes a task.
 
 use crate::{
-    db::{Database, audit_log::UltrafastSession, ultrafast_runs::UltrafastRunStats},
+    db::{
+        Database, audit_log::UltrafastSession, pursue_runs::PursueOutcome,
+        ultrafast_runs::UltrafastRunStats,
+    },
     error::AppResult,
 };
 use sea_orm::{ConnectionTrait, DatabaseBackend, Statement, Value};
@@ -19,6 +22,9 @@ pub struct UltrafastRecord {
     pub pursue_step_share: Option<(i64, i64)>,
     pub first_run_at: i64,
     pub last_run_at: i64,
+    pub site: Option<String>,
+    /// How the task's pursue ended; `None` for a task without one, such as a saved skill.
+    pub pursue_outcome: Option<PursueOutcome>,
 }
 
 impl From<&UltrafastSession> for UltrafastRecord {
@@ -35,7 +41,24 @@ impl From<&UltrafastSession> for UltrafastRecord {
             pursue_step_share: session.pursue_step_share,
             first_run_at: session.first_run_at,
             last_run_at: session.last_run_at,
+            site: session.site.clone(),
+            pursue_outcome: session.pursue.as_ref().map(|run| run.outcome),
         }
+    }
+}
+
+fn outcome_text(outcome: PursueOutcome) -> &'static str {
+    match outcome {
+        PursueOutcome::Completed => "completed",
+        PursueOutcome::HandedBack => "handed_back",
+    }
+}
+
+fn outcome_from(text: &str) -> Option<PursueOutcome> {
+    match text {
+        "completed" => Some(PursueOutcome::Completed),
+        "handed_back" => Some(PursueOutcome::HandedBack),
+        _ => None,
     }
 }
 
@@ -63,7 +86,7 @@ impl UltrafastLedger {
                     DatabaseBackend::Sqlite,
                     "INSERT INTO ultrafast_sessions (session_id, duration_ms, pages_read, \
                      tokens_saved, fastest_run_ms, neo_steps, browser_steps, first_run_at, \
-                     last_run_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) \
+                     last_run_at, site, pursue_outcome) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
                      ON CONFLICT(session_id) DO UPDATE SET \
                      duration_ms = max(duration_ms, excluded.duration_ms), \
                      pages_read = max(pages_read, excluded.pages_read), \
@@ -73,7 +96,9 @@ impl UltrafastLedger {
                      neo_steps = coalesce(excluded.neo_steps, neo_steps), \
                      browser_steps = coalesce(excluded.browser_steps, browser_steps), \
                      first_run_at = min(first_run_at, excluded.first_run_at), \
-                     last_run_at = max(last_run_at, excluded.last_run_at)",
+                     last_run_at = max(last_run_at, excluded.last_run_at), \
+                     site = coalesce(excluded.site, site), \
+                     pursue_outcome = coalesce(excluded.pursue_outcome, pursue_outcome)",
                     [
                         Value::from(record.session_id.clone()),
                         Value::from(record.totals.duration_ms.max(0)),
@@ -84,6 +109,8 @@ impl UltrafastLedger {
                         Value::from(browser_steps),
                         Value::from(record.first_run_at),
                         Value::from(record.last_run_at),
+                        Value::from(record.site.clone()),
+                        Value::from(record.pursue_outcome.map(outcome_text)),
                     ],
                 ))
                 .await?;
@@ -99,7 +126,8 @@ impl UltrafastLedger {
             .query_all(Statement::from_string(
                 DatabaseBackend::Sqlite,
                 "SELECT session_id, duration_ms, pages_read, tokens_saved, fastest_run_ms, \
-                 neo_steps, browser_steps, first_run_at, last_run_at FROM ultrafast_sessions \
+                 neo_steps, browser_steps, first_run_at, last_run_at, site, pursue_outcome \
+                 FROM ultrafast_sessions \
                  ORDER BY last_run_at DESC, session_id DESC"
                     .to_string(),
             ))
@@ -119,6 +147,11 @@ impl UltrafastLedger {
                     pursue_step_share: neo.zip(all),
                     first_run_at: row.try_get("", "first_run_at")?,
                     last_run_at: row.try_get("", "last_run_at")?,
+                    site: row.try_get("", "site")?,
+                    pursue_outcome: row
+                        .try_get::<Option<String>>("", "pursue_outcome")?
+                        .as_deref()
+                        .and_then(outcome_from),
                 })
             })
             .collect::<Result<Vec<_>, sea_orm::DbErr>>()
@@ -142,6 +175,8 @@ mod tests {
             pursue_step_share: Some((3, 4)),
             first_run_at: last - 1_000,
             last_run_at: last,
+            site: Some("google.com".into()),
+            pursue_outcome: Some(PursueOutcome::HandedBack),
         }
     }
 
@@ -172,6 +207,8 @@ mod tests {
         assert_eq!(rows[1].fastest_run_ms, Some(3_000));
         assert_eq!(rows[1].pursue_step_share, Some((3, 4)));
         assert_eq!(rows[0].fastest_run_ms, None);
+        assert_eq!(rows[1].site.as_deref(), Some("google.com"));
+        assert_eq!(rows[1].pursue_outcome, Some(PursueOutcome::HandedBack));
         Ok(())
     }
 }

@@ -32,7 +32,58 @@ impl MigratorTrait for Migrator {
             Box::new(m0023_add_tool_calls_daily::Migration),
             Box::new(m0024_add_write_consent_to_skill_flows::Migration),
             Box::new(m0025_add_ultrafast_sessions::Migration),
+            Box::new(m0026_add_site_and_outcome_to_ultrafast_sessions::Migration),
         ]
+    }
+}
+
+mod m0026_add_site_and_outcome_to_ultrafast_sessions {
+    use super::*;
+
+    pub struct Migration;
+
+    impl MigrationName for Migration {
+        fn name(&self) -> &str {
+            "m0026_add_site_and_outcome_to_ultrafast_sessions"
+        }
+    }
+
+    /// The site each ultrafast task ran on and how its pursue ended, for the savings by site and
+    /// the site tasks neo finished on its own.
+    const COLUMNS: [&str; 2] = ["site", "pursue_outcome"];
+
+    #[async_trait::async_trait]
+    impl MigrationTrait for Migration {
+        async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            for column in COLUMNS {
+                if manager.has_column("ultrafast_sessions", column).await? {
+                    continue;
+                }
+                manager
+                    .alter_table(
+                        Table::alter()
+                            .table(Alias::new("ultrafast_sessions"))
+                            .add_column(ColumnDef::new(Alias::new(column)).string().null())
+                            .to_owned(),
+                    )
+                    .await?;
+            }
+            Ok(())
+        }
+
+        async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            for column in COLUMNS {
+                manager
+                    .alter_table(
+                        Table::alter()
+                            .table(Alias::new("ultrafast_sessions"))
+                            .drop_column(Alias::new(column))
+                            .to_owned(),
+                    )
+                    .await?;
+            }
+            Ok(())
+        }
     }
 }
 

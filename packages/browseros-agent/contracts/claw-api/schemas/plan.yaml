@@ -346,7 +346,7 @@ PlanSavings:
 PlanSavingsMeter:
   type: object
   additionalProperties: false
-  required: [since, tokensSaved, runTimes]
+  required: [since, tokensSaved, runTimes, periods]
   description: >-
     The Home meter for an ultrafast customer, counted from the day this
     computer got ultrafast.
@@ -394,3 +394,119 @@ PlanSavingsMeter:
         The shortest single ultrafast run: a skill that finished without the
         agent, or a pursue that finished or handed back. Absent before the
         first one.
+    periods:
+      allOf:
+        - $ref: '#/PlanSavingsPeriods'
+      description: The meter's Details, for each period it can show.
+PlanSavingsPeriods:
+  type: object
+  additionalProperties: false
+  required: [since, last30Days, last7Days]
+  description: >-
+    The Details numbers since this computer got ultrafast, and for the last
+    30 and 7 days. A task counts in a period when its last ultrafast run
+    started in it; neo's own saving, time saved and tasks finished follow the
+    cockpit's windows.
+  properties:
+    since:
+      allOf:
+        - $ref: '#/PlanSavingsPeriod'
+      description: >-
+        Since this computer got ultrafast. Its tokensSaved is the meter's
+        tokensSaved.
+    last30Days:
+      $ref: '#/PlanSavingsPeriod'
+    last7Days:
+      $ref: '#/PlanSavingsPeriod'
+PlanSavingsPeriod:
+  type: object
+  additionalProperties: false
+  required:
+    [tokensSaved, runs, pagesRead, durationMs, siteTasks, siteTasksFinished, topSites, timeSavedMs, tasksFinished, runTimes]
+  description: What ultrafast and neo did in one period.
+  properties:
+    tokensSaved:
+      type: integer
+      format: int64
+      minimum: 0
+      maximum: 9007199254740991
+      description: >-
+        neo's page-description saving from sessions that ended in the period,
+        plus the page text neo read itself in the period's ultrafast tasks.
+    runs:
+      type: integer
+      format: int64
+      minimum: 0
+      description: Ultrafast tasks in the period.
+    pagesRead:
+      type: integer
+      format: int64
+      minimum: 0
+      description: Pages neo read itself in those tasks.
+    durationMs:
+      type: integer
+      format: int64
+      minimum: 0
+      description: Time neo's ultrafast runs took in those tasks.
+    fastestRunMs:
+      type: integer
+      format: int64
+      minimum: 0
+      description: The shortest single run in the period. Absent without one.
+    neoStepShare:
+      type: integer
+      format: int32
+      minimum: 0
+      maximum: 100
+      description: >-
+        In the period's tasks that used pursue, the average share of browser
+        steps neo took. Absent without one.
+    siteTasks:
+      type: integer
+      format: int64
+      minimum: 0
+      description: The period's tasks that used pursue.
+    siteTasksFinished:
+      type: integer
+      format: int64
+      minimum: 0
+      description: Of those, the ones pursue finished without handing back.
+    topSites:
+      type: array
+      maxItems: 3
+      description: Sites with the most ultrafast tasks in the period, most first.
+      items:
+        $ref: '#/PlanSavingsSite'
+    timeSavedMs:
+      type: integer
+      format: int64
+      minimum: 0
+      description: Time saved by every task that ended in the period.
+    tasksFinished:
+      type: integer
+      format: int64
+      minimum: 0
+      description: Tasks that ended in the period.
+    runTimes:
+      type: array
+      maxItems: 10000
+      description: >-
+        When each of the period's ultrafast tasks last ran, in epoch
+        milliseconds, newest first, for a chart by local day or week.
+      items:
+        type: integer
+        format: int64
+        minimum: 0
+PlanSavingsSite:
+  type: object
+  additionalProperties: false
+  required: [site, runs]
+  properties:
+    site:
+      type: string
+      description: The site, as the task list shows it.
+    runs:
+      type: integer
+      format: int64
+      minimum: 1
+      description: Ultrafast tasks on that site in the period.
