@@ -1096,3 +1096,118 @@ async fn tests_that_a_click_that_logs_completes_under_a_console_listener_and_is_
     run.close_page(&page).await;
     result
 }
+
+/// One `page.waitForFunction` that times out while its predicate logs at every 1 ms poll
+/// (upstream's "should avoid side effects after timeout", WA-005), with a console listener on:
+/// how many polls ran after its timeout reply (page stamps later than the reply's wall clock), and
+/// how many of their console events reached the pump only after it.
+async fn timed_out_wait(run: &LiveRun, page: &TestPage) -> TestResult<(bool, usize, usize)> {
+    let evaluate = |expression: &str| {
+        json!({ "page": brand(page), "expression": expression, "isFunction": true,
+                "arg": { "value": r#"{"v":"undefined"}"#, "handles": [] } })
+    };
+    run.invoke(
+        "page.evaluate",
+        evaluate("() => { window.__n = 0; window.__t = []; }"),
+    )
+    .await?;
+    let pump = async {
+        let mut pumped: Vec<(Instant, String)> = Vec::new();
+        loop {
+            let reply = time::timeout(
+                Duration::from_secs(10),
+                run.invoke("events.next", json!({})),
+            )
+            .await
+            .map_err(|_elapsed| "no event in 10 s")??;
+            let at = Instant::now();
+            let mut ended = false;
+            for event in reply
+                .get("events")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default()
+            {
+                let text = event
+                    .pointer("/message/text")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned();
+                ended |= text == "end-marker";
+                pumped.push((at, text));
+            }
+            if ended {
+                return TestResult::Ok(pumped);
+            }
+        }
+    };
+    let waited = async {
+        let input = json!({
+            "call": { "timeoutMs": 1000 }, "page": brand(page), "isFunction": true,
+            "expression": "() => { window.__n += 1; window.__t.push(Date.now()); \
+                           console.log('poll ' + window.__n); }",
+            "arg": { "value": r#"{"v":"undefined"}"#, "handles": [] }, "pollingInterval": 1,
+        });
+        let waited = run.invoke("page.waitForFunction", input).await;
+        let (replied, replied_ms) = (Instant::now(), now_ms()?);
+        // Upstream's test gives the page two seconds to log more.
+        time::sleep(Duration::from_secs(2)).await;
+        run.invoke("page.evaluate", evaluate("() => console.log('end-marker')"))
+            .await?;
+        TestResult::Ok((waited.is_err(), replied, replied_ms))
+    };
+    let (pumped, waited) = tokio::join!(pump, waited);
+    let (pumped, (timed_out, replied, replied_ms)) = (pumped?, waited?);
+    let stamps = run
+        .invoke(
+            "page.evaluate",
+            evaluate("() => JSON.stringify(window.__t)"),
+        )
+        .await?;
+    let stamps: Vec<u64> = serde_json::from_str(stamps.as_str().unwrap_or("[]"))?;
+    let ran_after = stamps.iter().filter(|stamp| **stamp > replied_ms).count();
+    let heard_after = pumped
+        .iter()
+        .filter(|(at, text)| text.starts_with("poll ") && *at > replied)
+        .count();
+    Ok((timed_out, ran_after, heard_after))
+}
+
+/// WA-005: a `waitForFunction` that times out has no side effect a listener sees after its error.
+/// No poll runs after it (Neo releases the poller before the reply), and the console events of
+/// the polls that ran before it reach the listener before it, as upstream's do: its timeout awaits
+/// the poller's cancel, and protocol messages arrive in order. Here the watcher reads each event
+/// [`WATCHER_LAG`] behind the wire, as a loaded runner can: the timed-out reply must still wait
+/// for the events before it. Fails on main every round: a timed-out op answered at once, and the
+/// last polls' events came after the error.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_timed_out_wait_for_function_logs_nothing_after_its_error() -> TestResult {
+    if env::var("BROWSERCLAW_HOSTED_MODE").is_ok_and(|mode| mode == "1") {
+        return Ok(());
+    }
+    let run = LiveRun::connect_through(|client| {
+        Arc::new(SlowWatcher { client }) as Arc<dyn CdpConnection>
+    })
+    .await?;
+    let server = PageServer::start().await?;
+    let page = run.new_page().await?;
+    let result = async {
+        open(&run, &page, &server.url("/popups.html")).await?;
+        run.invoke(
+            "events.listen",
+            json!({ "page": brand(&page), "event": "console", "enabled": true, "since": now_ms()? }),
+        )
+        .await?;
+        for round in 0..3 {
+            let (timed_out, ran_after, heard_after) = Box::pin(timed_out_wait(&run, &page)).await?;
+            assert!(timed_out, "round {round}: the wait timed out");
+            assert_eq!(ran_after, 0, "round {round}: no poll ran after the error");
+            assert_eq!(heard_after, 0, "round {round}: no console event after the error");
+        }
+        TestResult::Ok(())
+    }
+    .await;
+    run.close_page(&page).await;
+    result
+}
