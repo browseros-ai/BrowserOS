@@ -1097,11 +1097,25 @@ async fn tests_that_a_click_that_logs_completes_under_a_console_listener_and_is_
     result
 }
 
+/// What one timed-out `waitForFunction` left behind, as the WA-005 row reads it.
+struct TimedOutWait {
+    /// The wait's error code; `None` when it answered.
+    code: Option<ErrorCode>,
+    /// How many polls ran, by the predicate's own page stamps.
+    polls: usize,
+    /// Polls whose page stamp is later than the reply's wall clock.
+    ran_after: usize,
+    /// The poll messages the pump took before the reply, in the order it took them.
+    heard_before: Vec<String>,
+    /// How many poll messages the pump took only after the reply.
+    heard_after: usize,
+}
+
 /// One `page.waitForFunction` that times out while its predicate logs at every 1 ms poll
-/// (upstream's "should avoid side effects after timeout", WA-005), with a console listener on:
-/// how many polls ran after its timeout reply (page stamps later than the reply's wall clock), and
-/// how many of their console events reached the pump only after it.
-async fn timed_out_wait(run: &LiveRun, page: &TestPage) -> TestResult<(bool, usize, usize)> {
+/// (upstream's "should avoid side effects after timeout", WA-005), with a console listener on.
+/// The pump reads until a marker logged 2 s after the reply, so every poll's message is counted
+/// on one side of the reply or the other.
+async fn timed_out_wait(run: &LiveRun, page: &TestPage) -> TestResult<TimedOutWait> {
     let evaluate = |expression: &str| {
         json!({ "page": brand(page), "expression": expression, "isFunction": true,
                 "arg": { "value": r#"{"v":"undefined"}"#, "handles": [] } })
@@ -1148,16 +1162,20 @@ async fn timed_out_wait(run: &LiveRun, page: &TestPage) -> TestResult<(bool, usi
                            console.log('poll ' + window.__n); }",
             "arg": { "value": r#"{"v":"undefined"}"#, "handles": [] }, "pollingInterval": 1,
         });
-        let waited = run.invoke("page.waitForFunction", input).await;
+        let code = run
+            .invoke("page.waitForFunction", input)
+            .await
+            .err()
+            .and_then(|error| error.error_code());
         let (replied, replied_ms) = (Instant::now(), now_ms()?);
         // Upstream's test gives the page two seconds to log more.
         time::sleep(Duration::from_secs(2)).await;
         run.invoke("page.evaluate", evaluate("() => console.log('end-marker')"))
             .await?;
-        TestResult::Ok((waited.is_err(), replied, replied_ms))
+        TestResult::Ok((code, replied, replied_ms))
     };
     let (pumped, waited) = tokio::join!(pump, waited);
-    let (pumped, (timed_out, replied, replied_ms)) = (pumped?, waited?);
+    let (pumped, (code, replied, replied_ms)) = (pumped?, waited?);
     let stamps = run
         .invoke(
             "page.evaluate",
@@ -1165,12 +1183,17 @@ async fn timed_out_wait(run: &LiveRun, page: &TestPage) -> TestResult<(bool, usi
         )
         .await?;
     let stamps: Vec<u64> = serde_json::from_str(stamps.as_str().unwrap_or("[]"))?;
-    let ran_after = stamps.iter().filter(|stamp| **stamp > replied_ms).count();
-    let heard_after = pumped
-        .iter()
-        .filter(|(at, text)| text.starts_with("poll ") && *at > replied)
-        .count();
-    Ok((timed_out, ran_after, heard_after))
+    let (before, after): (Vec<_>, Vec<_>) = pumped
+        .into_iter()
+        .filter(|(_, text)| text.starts_with("poll "))
+        .partition(|(at, _)| *at <= replied);
+    Ok(TimedOutWait {
+        code,
+        polls: stamps.len(),
+        ran_after: stamps.iter().filter(|stamp| **stamp > replied_ms).count(),
+        heard_before: before.into_iter().map(|(_, text)| text).collect(),
+        heard_after: after.len(),
+    })
 }
 
 /// WA-005: a `waitForFunction` that times out has no side effect a listener sees after its error.
@@ -1178,8 +1201,9 @@ async fn timed_out_wait(run: &LiveRun, page: &TestPage) -> TestResult<(bool, usi
 /// the polls that ran before it reach the listener before it, as upstream's do: its timeout awaits
 /// the poller's cancel, and protocol messages arrive in order. Here the watcher reads each event
 /// [`WATCHER_LAG`] behind the wire, as a loaded runner can: the timed-out reply must still wait
-/// for the events before it. Fails on main every round: a timed-out op answered at once, and the
-/// last polls' events came after the error.
+/// for the events before it. Each round must time out with `WaitTimeout` and hear every poll
+/// that ran, in order, so it cannot pass on a wait that failed early or never polled. Fails on main
+/// every time: a timed-out op answered at once, and the last polls' events came after the error.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_a_timed_out_wait_for_function_logs_nothing_after_its_error() -> TestResult {
@@ -1200,10 +1224,23 @@ async fn tests_that_a_timed_out_wait_for_function_logs_nothing_after_its_error()
         )
         .await?;
         for round in 0..3 {
-            let (timed_out, ran_after, heard_after) = Box::pin(timed_out_wait(&run, &page)).await?;
-            assert!(timed_out, "round {round}: the wait timed out");
-            assert_eq!(ran_after, 0, "round {round}: no poll ran after the error");
-            assert_eq!(heard_after, 0, "round {round}: no console event after the error");
+            let wait = Box::pin(timed_out_wait(&run, &page)).await?;
+            assert_eq!(
+                wait.code,
+                Some(ErrorCode::WaitTimeout),
+                "round {round}: the wait timed out"
+            );
+            assert!(wait.polls > 1, "round {round}: the predicate polled ({} polls)", wait.polls);
+            assert_eq!(wait.ran_after, 0, "round {round}: no poll ran after the error");
+            assert_eq!(wait.heard_after, 0, "round {round}: no console event after the error");
+            let every_poll: Vec<String> = (1..=wait.polls).map(|n| format!("poll {n}")).collect();
+            assert!(
+                wait.heard_before == every_poll,
+                "round {round}: the listener heard every poll, in order, before the error \
+                 ({} heard, {} ran)",
+                wait.heard_before.len(),
+                wait.polls
+            );
         }
         TestResult::Ok(())
     }
