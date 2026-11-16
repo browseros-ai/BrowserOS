@@ -255,6 +255,7 @@ impl Sessions {
             agent,
             identity,
             client.name.clone(),
+            client.version.clone(),
             declared_product,
             !persist,
             Instant::now(),
