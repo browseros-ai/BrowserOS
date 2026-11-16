@@ -186,26 +186,6 @@ pub(crate) enum ProbeRequest {
     /// One step of the private entry on a pinned box (design sections 5.4 to 5.6): `value`
     /// with its answer (`PrivateAnswer`), or `detached` for a pin that is gone.
     Private { pin: Pin, step: PrivateStep },
-    /// Whether this frame's document holds a box the mask treats as private, that is not
-    /// empty, and that the browser paints in clear (protected-fill ruling R45): `value` with a
-    /// boolean. Neo's camera asks it in every frame before and after a picture. Reads no value
-    /// out of the page.
-    PrivateShown {
-        /// The camera's walk of closed shadow roots on demand (ruling R65): the call's nodes are
-        /// closed roots Rust resolved into this world from the hosts `PrivateHosts` handed over.
-        /// The world keeps them for this question alone, never for its engine
-        /// (probe/private-shown.ts).
-        #[serde(default, skip_serializing_if = "is_false")]
-        #[ts(optional, as = "Option<bool>")]
-        walk: bool,
-    },
-    /// The hosts the camera's question has waiting, by handle (`returnByValue: false`, read
-    /// through deep serialization): elements a trusted input event or the focus pointed at,
-    /// which take no input themselves and may carry a closed shadow root this world does not
-    /// know. At most `limit`, the ones an input event named first. A host the focus pointed at is
-    /// handed over once; one an input event named once a reading until its root is kept, five
-    /// readings at most (ruling R65).
-    PrivateHosts { limit: u32 },
     /// One read of one element, resolved in the same call.
     Read {
         target: ProbeTarget,
@@ -633,15 +613,6 @@ pub(crate) enum UrlPattern {
 )]
 fn is_zero(count: &u32) -> bool {
     *count == 0
-}
-
-/// Serde's skip test for a flag that is absent from the wire when false.
-#[expect(
-    clippy::trivially_copy_pass_by_ref,
-    reason = "serde's skip_serializing_if passes the field by reference"
-)]
-fn is_false(flag: &bool) -> bool {
-    !*flag
 }
 
 #[cfg(test)]

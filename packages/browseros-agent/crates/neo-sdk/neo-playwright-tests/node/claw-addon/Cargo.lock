@@ -1585,7 +1585,6 @@ dependencies = [
  "serde_json",
  "serde_path_to_error",
  "tokio",
- "tracing",
  "ts-rs",
  "url",
  "uuid",

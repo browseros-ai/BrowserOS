@@ -1,6 +1,7 @@
 //! Private typing: the host names boxes by ref and hands Neo the values; Neo looks at every
 //! box, types each value character by character, reads it back and answers one outcome. The
-//! value never becomes an op's input, so it reaches no record, event, reply or picture.
+//! value never becomes an op's input or structured output. Pictures of its tab follow the
+//! host's `fill.pictures` setting; only `never` withholds them after private typing.
 //! Design: `claw-sdk/protected-fill/design.md`.
 //!
 //! ```text
@@ -29,7 +30,6 @@ mod entry_op;
 mod entry_request;
 mod entry_run;
 mod look_op;
-mod picture_check;
 mod private_text;
 
 pub(crate) use box_ask::{BoxAsk, LookRefusal, LookRefused, LookScroll, Looked};
@@ -42,5 +42,4 @@ pub use entry::{
 pub(crate) use entry_ask::{BoxState, FocusState, PageSecret, PrivateAnswer, PrivateStep};
 pub use entry_request::{EntryRequest, LookCompare, LookField, LookRequest, PrivateField};
 pub(crate) use entry_run::PrivateTabs;
-pub use picture_check::PictureCheck;
 pub use private_text::{MAX_PRIVATE_CHARS, PrivateText, PrivateTextRefused};

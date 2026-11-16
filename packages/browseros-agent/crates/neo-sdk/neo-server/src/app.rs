@@ -66,7 +66,6 @@ async fn private_typing(
     let retention = settings.clone();
     let pictures = settings.clone();
     let entry = Arc::clone(playwright);
-    let reader = Arc::clone(playwright);
     // The entry's own set refuses a script's picture of a filled tab only under `fill.pictures:
     // never` (ruling R58): it gets the setting now and after every change, before the change
     // answers, so a picture reads it as it stands when it is asked for.
@@ -82,10 +81,6 @@ async fn private_typing(
         pictures_never: Arc::new(move || pictures.fill_pictures_never()),
         shutdown: shutdown.clone(),
         took: Arc::new(move |tab| entry.withholds_picture(tab)),
-        checks: Arc::new(move |tab| {
-            let reader = Arc::clone(&reader);
-            Box::pin(async move { reader.picture_verdict(tab).await })
-        }),
     })
 }
 

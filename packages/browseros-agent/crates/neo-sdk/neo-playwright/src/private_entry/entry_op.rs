@@ -185,8 +185,9 @@ impl Playwright {
     }
 
     /// Whether a picture of `tab` is withheld now: the host's `fill.pictures` is `never` and the
-    /// tab took a private entry (ruling R58). The host's camera asks it before and after each
-    /// capture (design section 10.3); a script's own pictures are refused on the same answer.
+    /// tab took a private entry (ruling R58). A script's own pictures use this policy. The
+    /// server's camera reads its own setting and this entry's membership separately so it can
+    /// withhold every tab before membership has been restored.
     #[must_use]
     pub fn withholds_picture(&self, tab: TabId) -> bool {
         self.private_tabs().withholds_picture(tab)

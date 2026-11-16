@@ -1,18 +1,8 @@
-//! Neo's stored pictures and private boxes, end to end on a real BrowserOS (protected-fill ruling
-//! R45; design section 10.3).
+//! Stored pictures follow the host's `fill.pictures` setting. Visible card numbers are stored
+//! under `allowed`; `never` withholds pictures after private typing. The restart rows pin the
+//! filled-tab record and the existing limit that fills under `allowed` write no record.
 //!
-//! ```text
-//!  a script fills a password box ─ a click ─ pictured (a password box paints bullets)
-//!  a script fills a card box the page declares (cc-number) ─ a click ─ withheld: a frame shows
-//!    a private box's value painted in clear
-//!  the script empties it ─ a click ─ pictured again
-//!
-//!  the host fills a plain box through the route ─ a click ─ withheld (the tab took a fill)
-//!  Neo restarts, the browser and its tab kept ─ a click ─ still withheld (the record beside the
-//!    trace) ─ the snapshot still prints the box as bullets (its mark lives in the page)
-//! ```
-//!
-//! Like `e2e_browseros.rs`, it runs only when `CLAW_SDK_E2E_BROWSER` names a BrowserOS binary.
+//! Runs when `CLAW_SDK_E2E_BROWSER` names a BrowserOS binary.
 
 #[path = "support/browseros_rig.rs"]
 pub mod browseros_rig;
@@ -52,15 +42,6 @@ return { page, note, pw, card };
 "#;
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_script_s_card_number_keeps_neos_pictures_off_while_it_shows() -> TestResult {
-    let Some(browser) = browser_or_skip() else {
-        return Ok(());
-    };
-    let rig = Rig::start(&browser, CaptchaKey::Absent)?;
-    within(&rig, Box::pin(card_number(&rig))).await
-}
-
-#[tokio::test(flavor = "multi_thread")]
 async fn a_neo_restart_keeps_the_tabs_that_took_a_fill() -> TestResult {
     let Some(browser) = browser_or_skip() else {
         return Ok(());
@@ -74,17 +55,9 @@ async fn a_neo_restart_keeps_the_tabs_that_took_a_fill() -> TestResult {
     Err(format!("{failure}\n{}", rig.logs()).into())
 }
 
-/// Ruling R58 on a real BrowserOS, rows 1, 3, 5 and 6 of its spec, on one tab that took the
-/// host's fill. Row 1, the default: a script's `page.screenshot()` and `page.pdf()` work, and
-/// Neo's camera stores a click's picture. Row 3, the switch at once: under `never` the click is
-/// withheld and the script's pictures refused, under `allowed` pictured again, and under `never`
-/// refused again (row 5: a fill made under `allowed` is refused in this run once the host says
-/// never). Row 6, R45 under `allowed`: a card number the host typed privately, painted in clear,
-/// withholds Neo's picture until the box is emptied. Row 5 after a restart of Neo, still under
-/// `never`: the tab is pictured, for no record was written under `allowed`. Fails with the
-/// setting left out of the entry's answer (`withholds_picture`: row 1 refused), with the
-/// settings watcher left out (row 3 pictured under `never`), or with the record written whatever
-/// the setting (row 5 withheld after the restart).
+/// A visible card number is stored under the default and withheld on the same filled tab
+/// under `never`. A restart retains only fills recorded under `never`; an earlier fill under
+/// `allowed` becomes unknown and the still-visible card is pictured again.
 #[tokio::test(flavor = "multi_thread")]
 async fn pictures_follow_the_hosts_fill_pictures_setting() -> TestResult {
     let Some(browser) = browser_or_skip() else {
@@ -117,7 +90,7 @@ async fn setting(rig: &mut Rig) -> TestResult {
     };
     let (pw, card) = (refs("pw")?, refs("card")?);
 
-    // Row 1: the default. A password box paints bullets, so R45 keeps out of the way.
+    // A fill under the default records no tab on disk.
     host_fill(rig, tab, &pw, "CANARY-pictures-pw-5").await?;
     assert_eq!(
         script_picture(&client, tab, "screenshot").await?,
@@ -130,7 +103,7 @@ async fn setting(rig: &mut Rig) -> TestResult {
         "row 1"
     );
 
-    // Row 3, the switch at once, and back; row 5 in this run: the fill came under `allowed`.
+    // The setting applies to a known filled tab at the next picture.
     for (pictures, expected) in [("never", false), ("allowed", true), ("never", false)] {
         set_pictures(rig, pictures).await?;
         let stored = picture(rig, &click(&client, tab).await?).await? == Picture::Stored;
@@ -149,27 +122,21 @@ async fn setting(rig: &mut Rig) -> TestResult {
         );
     }
 
-    // Row 6: R45 under `allowed`.
+    // The camera stores visible values unless the filled-tab setting withholds them.
     set_pictures(rig, "allowed").await?;
     host_fill(rig, tab, &card, CARD).await?;
     assert_eq!(
         picture(rig, &click(&client, tab).await?).await?,
-        Picture::Withheld,
-        "row 6: a card number typed privately, painted in clear"
-    );
-    let empty = on_tab(
-        tab,
-        "await p.fill('#card', ''); await p.click('#go'); return true;",
-    );
-    let emptied = run(&client, &empty, &json!({})).await?;
-    assert_eq!(
-        picture(rig, &emptied).await?,
         Picture::Stored,
-        "row 6: emptied"
+        "a visible card number is stored under allowed"
     );
-
     // Row 5 after a restart: no record was written under `allowed`, so the tab is pictured.
     set_pictures(rig, "never").await?;
+    assert_eq!(
+        picture(rig, &click(&client, tab).await?).await?,
+        Picture::Withheld,
+        "the same visible card number is withheld on a filled tab under never"
+    );
     client.cancel().await?;
     assert_eq!(rig.stop_neo().await?, Some(0), "SIGTERM is a normal stop");
     rig.restart_neo()?;
@@ -257,54 +224,7 @@ async fn script_picture(client: &Client, tab: i64, how: &str) -> Result<String, 
     Ok(value(&answer)?.as_str().unwrap_or_default().to_owned())
 }
 
-/// Runs `drive` within the test's budget, with both processes' logs on a failure.
-async fn within(rig: &Rig, drive: impl Future<Output = TestResult>) -> TestResult {
-    let failure = match time::timeout(TEST_BUDGET, drive).await {
-        Ok(Ok(())) => return Ok(()),
-        Ok(Err(error)) => error.to_string(),
-        Err(_elapsed) => format!("the drive did not finish within {TEST_BUDGET:?}"),
-    };
-    Err(format!("{failure}\n{}", rig.logs()).into())
-}
-
-async fn card_number(rig: &Rig) -> TestResult {
-    rig.until_ready().await?;
-    let client = rig.client().await?;
-    run(&client, PAGE, &json!({ "taskId": TASK })).await?;
-    let step = |code: &'static str| {
-        let client = &client;
-        async move { run(client, code, &json!({ "taskId": TASK })).await }
-    };
-    let password =
-        step("await page.fill('#pw', 'CANARY-pw-1'); await page.click('#go'); return true;")
-            .await?;
-    assert_eq!(
-        picture(rig, &password).await?,
-        Picture::Stored,
-        "a password box paints bullets: its page is pictured"
-    );
-    let card =
-        step("await page.fill('#card', '4242424242424242'); await page.click('#go'); return true;")
-            .await?;
-    assert_eq!(
-        picture(rig, &card).await?,
-        Picture::Withheld,
-        "a card number painted in clear withholds the picture"
-    );
-    let emptied =
-        step("await page.fill('#card', ''); await page.click('#go'); return true;").await?;
-    assert_eq!(
-        picture(rig, &emptied).await?,
-        Picture::Stored,
-        "an emptied card box lets Neo picture the page again"
-    );
-    assert!(
-        !rig.neo_log()?.contains(CARD),
-        "the card number is in no log line of Neo's"
-    );
-    Ok(())
-}
-
+/// A fill under `never` remains withheld across a server restart and navigation.
 async fn restart(rig: &mut Rig) -> TestResult {
     rig.until_ready().await?;
     // Today's rule is the host's `fill.pictures: never` (ruling R58), set before the fill.
@@ -473,80 +393,4 @@ fn value(result: &CallToolResult) -> Result<&Value, Box<dyn Error>> {
         .as_ref()
         .and_then(|content| content.get("value"))
         .ok_or_else(|| format!("the run returned a value: {result:?}").into())
-}
-
-/// A card box the page declares, inside a CLOSED shadow root that the page's own script fills.
-const CLOSED_PAGE: &str = r#"
-const html = '<title>closed</title>'
-  + '<div id="host"></div>'
-  + '<button id="fill">Fill</button><button id="empty">Empty</button>'
-  + '<button id="later">Later</button><button id="go">Go</button>'
-  + '<script>'
-  + 'const box = (label) => \'<input autocomplete="cc-number" aria-label="\' + label + \'">\';'
-  + 'const root = document.getElementById("host").attachShadow({ mode: "closed" });'
-  + 'root.innerHTML = box("Card number");'
-  + 'document.getElementById("fill").onclick = () => { root.querySelector("input").value = "4242424242424242"; };'
-  + 'document.getElementById("empty").onclick = () => { root.querySelector("input").value = ""; };'
-  + 'document.getElementById("later").onclick = () => { const h = document.createElement("div"); document.body.appendChild(h); const r = h.attachShadow({ mode: "closed" }); r.innerHTML = box("Second card"); r.querySelector("input").value = "5555555555554444"; };'
-  + '</scr' + 'ipt>';
-await page.goto('data:text/html,' + encodeURIComponent(html));
-return { page };
-"#;
-
-/// Ruling R45's named limit, on the whole stack (measured by the design's author): a value the
-/// page's own script writes into a box inside a closed shadow root fires no event, so until a
-/// snapshot of the document has walked that root, or typing has reached it or its box held the
-/// focus (the camera's walk on demand, ruling R65), Neo does not know the box, and a picture
-/// taken then can show what it holds. A snapshot that walks the root closes it for that
-/// document; a closed root attached after that walk is unknown again until the next one.
-#[tokio::test(flavor = "multi_thread")]
-async fn a_box_in_a_closed_root_is_known_once_a_snapshot_walked_it() -> TestResult {
-    let Some(browser) = browser_or_skip() else {
-        return Ok(());
-    };
-    let rig = Rig::start(&browser, CaptchaKey::Absent)?;
-    within(&rig, Box::pin(closed_root(&rig))).await
-}
-
-async fn closed_root(rig: &Rig) -> TestResult {
-    rig.until_ready().await?;
-    let client = rig.client().await?;
-    run(&client, CLOSED_PAGE, &json!({ "taskId": TASK })).await?;
-    let steps: [(&str, &str, Picture); 6] = [
-        (
-            "the box empty, no snapshot yet",
-            "await page.click('#go'); return true;",
-            Picture::Stored,
-        ),
-        (
-            "the page puts a card number in, no snapshot yet: the limit",
-            "await page.click('#fill'); await page.click('#go'); return true;",
-            Picture::Stored,
-        ),
-        (
-            "after the script's own snapshot walked the root",
-            "await page.ariaSnapshot(); await page.click('#go'); return true;",
-            Picture::Withheld,
-        ),
-        (
-            "the page empties the box",
-            "await page.click('#empty'); await page.click('#go'); return true;",
-            Picture::Stored,
-        ),
-        (
-            "a second closed root attached after that snapshot, its box filled: the limit again",
-            "await page.click('#later'); await page.click('#go'); return true;",
-            Picture::Stored,
-        ),
-        (
-            "after the next snapshot",
-            "await page.ariaSnapshot(); await page.click('#go'); return true;",
-            Picture::Withheld,
-        ),
-    ];
-    for (what, code, expected) in steps {
-        let result = run(&client, code, &json!({ "taskId": TASK })).await?;
-        assert_eq!(picture(rig, &result).await?, expected, "{what}");
-    }
-    Ok(())
 }

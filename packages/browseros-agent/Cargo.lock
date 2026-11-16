@@ -2009,7 +2009,6 @@ dependencies = [
  "sha2",
  "tempfile",
  "tokio",
- "tracing",
  "ts-rs",
  "url",
  "uuid",
