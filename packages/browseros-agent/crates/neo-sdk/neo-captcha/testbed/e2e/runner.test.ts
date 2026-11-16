@@ -303,11 +303,26 @@ for (const server of ['sdk', 'claw-server'] as const) {
     expect(records.filter((r) => r.outcome !== 'PASS')).toEqual([])
     expect(exitCode(records)).toBe(0)
     expect(summarize(records)).toMatchObject({
-      pass: 19,
-      siteAccepted: 5,
+      pass: 21,
+      siteAccepted: 6,
       deliveredOnly: 0,
-      detected: 14,
+      detected: 15,
       paidTasks: 0,
+    })
+    // PerimeterX's check is a detection refused by name (type `unknown` on purpose); its frame
+    // waiting hidden is an ordinary page the site accepts.
+    expect(records.find((r) => r.id === 'perimeterx-modal')).toMatchObject({
+      verdict: 'unsolved',
+      type: 'unknown',
+      reason: 'unsupported_type',
+      check: 'detect',
+      outcome: 'PASS',
+    })
+    expect(records.find((r) => r.id === 'perimeterx-waiting')).toMatchObject({
+      verdict: 'already_clear',
+      check: 'solve',
+      site: 'accepted',
+      outcome: 'PASS',
     })
     const recaptcha = records.find((r) => r.id === 'recaptcha-v2-test')
     expect(recaptcha).toMatchObject({
@@ -407,14 +422,14 @@ test('tests that an absent SDK solver passes every page only when absence is exp
   const expected = await run('no-tool', { expectToolMissing: true })
   expect(expected.records.every((r) => r.outcome === 'PASS')).toBe(true)
   expect(summarize(expected.records)).toMatchObject({
-    pass: 19,
+    pass: 21,
     siteAccepted: 0,
     deliveredOnly: 0,
     detected: 0,
-    absent: 19,
+    absent: 21,
   })
   expect(renderSummary(expected.records)).toContain(
-    'solver absent as expected: 19',
+    'solver absent as expected: 21',
   )
   expect(
     expected.records.every((r) => r.error === 'host/captcha_unavailable'),
