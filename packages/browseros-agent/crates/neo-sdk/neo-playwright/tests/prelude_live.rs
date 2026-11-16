@@ -3207,6 +3207,34 @@ async fn snapshot_of(host: &Arc<dyn OpHost>, url: &str, options: &str) -> TestRe
     Ok(result.as_str().ok_or("the snapshot")?.to_owned())
 }
 
+/// The interactive snapshot crosses JSON twice: to retain its delta baseline and to return
+/// the run's result. A clip through an emoji must succeed at both boundaries without repair.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_clipped_snapshot_text_keeps_whole_characters_across_json() -> TestResult {
+    let _alone = ALONE.acquire().await?;
+    let title = "a".repeat(78);
+    let html = format!(
+        "<!doctype html><meta charset=\"utf-8\">\
+         <div style=\"cursor:pointer\" onclick=\"1\"><div>{title}</div>\
+         <div>😀 and more words after the emoji</div></div><button>Go</button>"
+    );
+    let server =
+        FixtureServer::start(HashMap::from([("/clip".to_owned(), Page::html(&html))])).await?;
+    let host: Arc<dyn OpHost> = Arc::new(LiveRun::connect().await?);
+    let text = snapshot_of(&host, &server.url("127.0.0.1", "/clip"), "{ text: false }").await?;
+    let ending = format!(": {title}…");
+    assert!(
+        text.lines().any(|line| line.ends_with(&ending)),
+        "all 78 title letters must survive, immediately followed by an ellipsis: {text}"
+    );
+    assert!(
+        !text.contains('\u{fffd}'),
+        "clipping must not replace a character: {text}"
+    );
+    Ok(())
+}
+
 /// A closed root that holds a list of 150 items, each a button in an `li`: one root, so one
 /// seed, since a list, an item and a button cannot host a root of their own. Every item prints.
 #[tokio::test]

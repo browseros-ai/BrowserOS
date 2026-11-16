@@ -8125,7 +8125,12 @@ ${value.stack}`;
     return pieces.filter((piece) => piece !== "").join(" ");
   }
   function clip(text, length) {
-    return text.length <= length ? text : `${text.slice(0, length).trimEnd()}…`;
+    if (text.length <= length)
+      return text;
+    const last = text.charCodeAt(length - 1);
+    if (last >= 55296 && last <= 56319)
+      length--;
+    return `${text.slice(0, length).trimEnd()}…`;
   }
   function partialComment(partial) {
     return `# partial: ${partial.frame} not read (${partial.reason})`;

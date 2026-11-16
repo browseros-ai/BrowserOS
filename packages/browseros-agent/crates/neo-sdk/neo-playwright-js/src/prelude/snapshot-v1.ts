@@ -772,7 +772,11 @@ function ownText(node: AriaNodeJSON, inert: boolean): string {
 }
 
 function clip(text: string, length: number): string {
-  return text.length <= length ? text : `${text.slice(0, length).trimEnd()}…`
+  if (text.length <= length) return text
+  // A lone surrogate cannot cross the JSON bridge that keeps the delta baseline.
+  const last = text.charCodeAt(length - 1)
+  if (last >= 0xd800 && last <= 0xdbff) length--
+  return `${text.slice(0, length).trimEnd()}…`
 }
 
 function partialComment(partial: PartialFrame): string {
