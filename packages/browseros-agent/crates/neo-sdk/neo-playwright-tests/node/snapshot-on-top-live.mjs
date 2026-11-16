@@ -9,9 +9,18 @@ import { fileURLToPath } from 'node:url'
 import { openClaw } from './claw-loader.mjs'
 
 const folder = fileURLToPath(new URL('./snapshot-on-top/', import.meta.url))
-const matrix = JSON.parse(
+let matrix = JSON.parse(
   fs.readFileSync(path.join(folder, 'matrix.json'), 'utf8'),
 )
+const selected = process.argv.slice(2)
+if (selected.length) {
+  matrix = matrix.filter((row) => selected.includes(row.id))
+  assert.equal(
+    matrix.length,
+    selected.length,
+    'every selected fixture must exist',
+  )
+}
 const server = http.createServer((req, res) => {
   const name = path.basename(new URL(req.url, 'http://fixture').pathname)
   const file = path.join(folder, 'pages', name)
