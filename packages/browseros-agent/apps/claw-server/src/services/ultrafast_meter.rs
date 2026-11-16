@@ -40,6 +40,10 @@ pub fn start_date(saved: Option<i64>, on: bool, first_run: Option<i64>, now: i64
     saved.or_else(|| on.then(|| first_run.map_or(now, |first| first.min(now))))
 }
 
+/// Serialises the read-then-save, so two first requests can't race on the same file: the first one
+/// saves the date and the other reads it.
+static SINCE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 /// Reads the saved start date, and saves one the first time ultrafast is on.
 pub async fn since(
     store: &JsonStore,
@@ -47,6 +51,7 @@ pub async fn since(
     first_run: Option<i64>,
     now: i64,
 ) -> AppResult<Option<i64>> {
+    let _guard = SINCE_LOCK.lock().await;
     let saved = match store.read_json::<SinceFile>(SINCE_FILE).await {
         Ok(file) => Some(file.since),
         Err(AppError::StorageNotFound(_)) => None,
@@ -166,6 +171,27 @@ mod tests {
             since(&store, true, Some(DAY), NOW + DAY).await?,
             Some(90 * DAY)
         );
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn first_requests_at_once_all_get_the_one_saved_date() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let store = JsonStore::new(dir.path().to_path_buf());
+        let requests = (0..16_i64)
+            .map(|offset| {
+                let store = store.clone();
+                tokio::spawn(async move { since(&store, true, Some(50 * DAY + offset), NOW).await })
+            })
+            .collect::<Vec<_>>();
+        let mut dates = Vec::new();
+        for request in requests {
+            dates.push(request.await??);
+        }
+        let first = dates[0];
+        assert!(first.is_some());
+        assert!(dates.iter().all(|date| *date == first), "{dates:?}");
+        assert_eq!(since(&store, false, None, NOW).await?, first);
         Ok(())
     }
 
