@@ -607,7 +607,7 @@ struct FileChooserParams {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct DownloadParams {
-    frame_id: String,
+    frame_id: FrameId,
     guid: String,
     #[serde(default)]
     url: String,
@@ -1835,6 +1835,53 @@ impl Watcher {
             return self.lines.contains_key(tab).then(|| tab.clone());
         }
         let tab = match event.method.as_str() {
+            "Browser.downloadWillBegin" => {
+                let frame = FrameId(event.params.get("frameId")?.as_str()?.to_owned());
+                // Browser events have no page session. A held attachment already identifies
+                // its tab, but must reach the tracker before the download queries ownership.
+                self.frame_owner(&frame)
+                    .or_else(|| {
+                        self.lines.iter().find_map(|(tab, line)| {
+                            line.iter()
+                                .any(|item| {
+                                    let LineItem::Event { event, .. } = item else {
+                                        return false;
+                                    };
+                                    let id = match event.method.as_str() {
+                                        "Page.frameAttached" | "Page.navigatedWithinDocument" => {
+                                            event.params.get("frameId")
+                                        }
+                                        "Page.frameNavigated" => event
+                                            .params
+                                            .get("frame")
+                                            .and_then(|frame| frame.get("id")),
+                                        _ => None,
+                                    };
+                                    id.and_then(Value::as_str) == Some(frame.0.as_str())
+                                })
+                                .then_some(tab)
+                        })
+                    })?
+                    .clone()
+            }
+            "Browser.downloadProgress" => {
+                let guid = event.params.get("guid")?.as_str()?;
+                // Completion for an unknown GUID is discarded. It must follow a held begin
+                // through the same line so DownloadTable registration always happens first.
+                self.lines
+                    .iter()
+                    .find_map(|(tab, line)| {
+                        line.iter()
+                            .any(|item| {
+                                matches!(item, LineItem::Event { event, .. }
+                                    if event.method == "Browser.downloadWillBegin"
+                                        && event.params.get("guid").and_then(Value::as_str)
+                                            == Some(guid))
+                            })
+                            .then_some(tab)
+                    })?
+                    .clone()
+            }
             "Target.attachedToTarget"
                 if event
                     .params
@@ -2260,8 +2307,18 @@ impl Watcher {
         }
     }
 
+    /// Raw frame ownership, before download-only popups are attributed to their opener.
+    /// OOPIF targets remain a fallback while their lifecycle tree read is outstanding.
+    fn frame_owner(&self, frame: &FrameId) -> Option<&TargetId> {
+        self.pages
+            .get_key_value(&TargetId(frame.0.clone()))
+            .map(|(target, _)| target)
+            .or_else(|| self.frames.get(&frame.0))
+            .or_else(|| self.lifecycle.owner(frame))
+    }
+
     fn download(&mut self, download: DownloadParams) {
-        let frame_target = TargetId(download.frame_id.clone());
+        let frame_target = TargetId(download.frame_id.0.clone());
         let page = match self.pages.get(&frame_target) {
             // A tab that opened only to download never gets a document: upstream reports the
             // download on its opener.
@@ -2271,7 +2328,7 @@ impl Watcher {
                 ..
             }) => Some(opener.clone()),
             Some(_) => Some(frame_target),
-            None => self.frames.get(&download.frame_id).cloned(),
+            None => self.frame_owner(&download.frame_id).cloned(),
         };
         self.writer.hub().downloads().begin(
             download.guid.clone(),
@@ -2280,7 +2337,7 @@ impl Watcher {
         );
         self.writer.record(PageEvent::Download(DownloadStarted {
             page,
-            frame: FrameId(download.frame_id),
+            frame: download.frame_id,
             guid: download.guid,
             url: download.url,
             suggested_filename: download.suggested_filename,
@@ -2958,7 +3015,7 @@ mod worker_observation_tests {
         watcher.seeded = Some(seeded);
 
         // An OOPIF's tree read holds later events from every session of its tab, including
-        // the root session that announces this new same-process child.
+        // the page session that announces this new same-process child.
         read(
             &mut watcher,
             cdp(
@@ -3018,13 +3075,15 @@ mod worker_observation_tests {
         let records = hub.read_after(0).records;
         let attached = records
             .iter()
-            .position(|record| matches!(
-                &record.event,
-                PageEvent::FrameLifecycle(event)
-                    if event.kind == PageEventKind::FrameAttached
-                        && event.target == page
-                        && event.frame.id.0 == "child"
-            ))
+            .position(|record| {
+                matches!(
+                    &record.event,
+                    PageEvent::FrameLifecycle(event)
+                        if event.kind == PageEventKind::FrameAttached
+                            && event.target == page
+                            && event.frame.id.0 == "child"
+                )
+            })
             .ok_or("the held child attachment must be published")?;
         let (began, download) = records
             .iter()
@@ -3043,7 +3102,10 @@ mod worker_observation_tests {
             Some(&page),
             "the same-process child's download belongs to its page"
         );
-        let tracked = hub.downloads().get("download").ok_or("the download is listed")?;
+        let tracked = hub
+            .downloads()
+            .get("download")
+            .ok_or("the download is listed")?;
         assert_eq!(
             tracked.facts().state,
             DownloadState::Completed(PathBuf::from("/downloads/iframe-attachment.txt")),
