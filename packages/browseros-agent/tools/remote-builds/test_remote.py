@@ -684,13 +684,26 @@ class TransferTests(unittest.TestCase):
     def test_native_git_and_frozen_index_send_identical_approved_working_bytes(self):
         metadata = remote.freeze(CRABBOX, self.repo, self.frozen, self.config)
         self.assertTrue(metadata["dirty"])
-        self.assertEqual(3, metadata["files"])
+        self.assertEqual(4, metadata["files"])
+        self.assertEqual("node_modules/\ntarget/\n", (self.frozen / ".gitignore").read_text())
         self.assertEqual("// uncommitted working bytes\n",
                          (self.frozen / "packages/browseros-agent/src/credentials.rs").read_text())
         self.assertFalse((self.frozen / ".git").exists())
         remote.index_snapshot(self.frozen)
         files = remote.manifest(CRABBOX, self.frozen, self.config)
         self.assertEqual(metadata["files"], len(files))
+
+    def test_workspace_policy_keeps_nested_editor_settings_out_of_transfer(self):
+        policy = Path(__file__).resolve().parents[2] / ".gitignore"
+        self.write("packages/browseros-agent/.gitignore", policy.read_text())
+        paths = ["packages/browseros-agent/.vscode/settings.json",
+                 "packages/browseros-agent/crates/example/.vscode/settings.json"]
+        for path in paths:
+            self.write(path, "untracked editor settings\n")
+        remote.freeze(CRABBOX, self.repo, self.frozen, self.config)
+        for path in paths:
+            self.assertFalse((self.frozen / path).exists(), path)
+        self.assertTrue((self.frozen / "packages/browseros-agent/src/target/mod.rs").is_file())
 
     def test_selected_symlink_is_rejected(self):
         path = self.repo / "packages/browseros-agent/leak"
@@ -778,7 +791,7 @@ class TransferTests(unittest.TestCase):
                                                              remote.INCLUDE + remote.LEGACY_SUPERVISOR)))
         metadata = remote.freeze(CRABBOX, self.repo, self.frozen, self.config)
         self.assertTrue(metadata["dirty"])
-        self.assertEqual(8, metadata["files"])
+        self.assertEqual(9, metadata["files"])
         selected = {row["path"] for row in json.loads((self.frozen.parent / "source-files.json").read_text())}
         self.assertTrue(set(remote.LEGACY_SUPERVISOR).issubset(selected))
         self.assertFalse(any(path.endswith(("other.txt", ".env")) for path in selected))

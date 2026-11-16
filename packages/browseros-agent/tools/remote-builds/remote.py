@@ -44,7 +44,8 @@ POOL_NO_REPLY = (
     "an admission may still hold a slot until lease cleanup; do not resubmit automatically"
 )
 HELPER = "/usr/local/lib/browseros-remote-builds/"
-INCLUDE = ["packages/browseros-agent", ".github/workflows/test.yml"]
+# The snapshot naming guard needs the root ignore policy as well as nested policies.
+INCLUDE = ["packages/browseros-agent", ".github/workflows/test.yml", ".gitignore"]
 LEGACY_SUPERVISOR = ["packages/browseros/docker/neo/" + name for name in
                      ("neo-server-info.sh", "openbox-rc.xml", "entrypoint.sh", "healthcheck.sh", "neo-quit.py")]
 JOB_KINDS = {"gate", "image", "viewer-image", "spec", "detector", "run"}

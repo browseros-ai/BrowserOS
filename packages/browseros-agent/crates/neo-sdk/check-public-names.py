@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import tempfile
 
 
 # Keep identifying spellings out of public source while still matching compound identifiers.
@@ -68,6 +69,42 @@ PRODUCT_LINES = {
 }
 
 
+def ignored_snapshot_directories(root):
+    """Use Git's ignore semantics without creating metadata in the source snapshot.
+
+    Only directory matches may prune the scan: an ignored filename can still be
+    tracked source. Personal/global excludes must never hide public source bytes.
+    """
+    env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull)
+    with tempfile.TemporaryDirectory(prefix="public-names-index-") as metadata:
+        subprocess.run(["git", "init", "--quiet", "--bare", "--template=", metadata],
+                       check=True, env=env)
+        git = ["git", "--git-dir=" + metadata, "--work-tree=" + str(root),
+               "-c", "core.excludesFile=" + os.devnull]
+        candidates = subprocess.check_output(
+            [*git, "ls-files", "--others", "--ignored", "--directory",
+             "--exclude-per-directory=.gitignore", "-z", "--", "packages/browseros-agent"],
+            cwd=root, env=env,
+        )
+        directories = [name[:-1] for name in candidates.split(b"\0") if name.endswith(b"/")]
+        if not directories:
+            return set()
+        # ls-files may collapse a directory whose individual files are ignored.
+        # Confirm that the directory itself matches before pruning its children.
+        matched = subprocess.run(
+            [*git, "check-ignore", "--no-index", "--stdin", "-z"],
+            input=b"\0".join(directories) + b"\0", stdout=subprocess.PIPE, cwd=root, env=env,
+        )
+        if matched.returncode not in (0, 1):
+            matched.check_returncode()
+        return {root / os.fsdecode(name) for name in matched.stdout.split(b"\0") if name}
+
+
+def walk_error(error):
+    raise error  # A directory read failure must fail the guard, not hide source.
+
+
 def source_paths(root):
     """Select the index in a checkout, or the remote builder's bounded source bundle."""
     if (root / ".git").exists():
@@ -84,8 +121,24 @@ def source_paths(root):
     workflow = root / ".github/workflows/test.yml"
     if not agent.is_dir() or not workflow.is_file():
         raise ValueError("incomplete remote source snapshot")
-    paths = [path for path in agent.rglob("*") if path.is_symlink() or path.is_file()]
+    ignored = ignored_snapshot_directories(root)
+    paths = []
+    for folder, directories, files in os.walk(agent, onerror=walk_error):
+        for name in list(directories):
+            path = Path(folder) / name
+            if path.is_symlink():
+                paths.append(path)  # Scan link text without traversing its target.
+                directories.remove(name)
+            elif path in ignored:
+                directories.remove(name)
+        paths.extend(Path(folder) / name for name in files
+                     if (Path(folder) / name).is_symlink() or (Path(folder) / name).is_file())
     paths.append(workflow)
+    # New snapshots carry the root policy too; older bundles remain conservative
+    # when it is absent. The policy file itself is public source and must be scanned.
+    policy = root / ".gitignore"
+    if policy.is_symlink() or policy.is_file():
+        paths.append(policy)
     return sorted(path.relative_to(root).as_posix() for path in paths), "snapshot"
 
 
