@@ -9583,14 +9583,18 @@ ${value.stack}`;
     };
   }
   function factsOf2(world, output, subject, chain, top, request) {
-    const { injected } = world;
     const kind = kindOf(world, subject, chain, request.point, request.above);
     const layer = whichDialog(world, chain, top, request.point);
     let shown = layer;
+    let behind = false;
+    const aroundIt = layer.contains(subject) || layer === document.body;
     const closed = !layer.contains(subject) && inClosedPart(layer);
-    if (!closed && !layer.contains(subject) && isBlank(world, output, layer))
-      shown = dialogBehind(world, layer, request.point) ?? layer;
-    const behind = shown !== layer;
+    if (!closed && !aroundIt) {
+      const blank = isBlank(world, output, layer);
+      const dialog = blank ? dialogBehind(world, layer, request.point) : soleDialog(world, layer);
+      behind = blank && dialog !== undefined;
+      shown = dialog ?? layer;
+    }
     const surrounds = shown.contains(subject) || shown === document.body;
     let snapshot = null;
     let words = true;
@@ -9603,9 +9607,9 @@ ${value.stack}`;
     return {
       layer: coverNumber(layer),
       ref: world.refs.forElement(shown, world.seq),
-      role: injected.utils.getAriaRole(shown) ?? "generic",
+      role: controlRole(world, shown),
       name: nameOf(world, output, shown),
-      markup: output.previewNode(layer),
+      markup: output.previewNode(behind ? layer : shown),
       snapshot,
       ...drawn && drawn.length > 0 ? { text: drawn.slice(0, MAX_TEXT).join("") } : {},
       controls,
@@ -9722,43 +9726,41 @@ ${value.stack}`;
   var MAX_WALKED = 2000;
   var MAX_DEPTH = 32;
   function composedDescendants(root) {
-    const found = [];
-    const seen = new Set;
-    const take = (element) => {
-      if (seen.has(element))
-        return false;
-      seen.add(element);
-      found.push(element);
-      return true;
-    };
-    const scopes = [root];
+    const walk = { found: [], seen: new Set, scopes: [root] };
     const own = root.nodeType === 1 ? root.shadowRoot : null;
     if (own)
-      scopes.push(own);
-    for (let index = 0;index < scopes.length; index++) {
-      const scope = scopes[index];
+      walk.scopes.push(own);
+    for (let index = 0;index < walk.scopes.length; index++) {
+      const scope = walk.scopes[index];
       if (!scope)
         continue;
       for (const element of scope.querySelectorAll("*")) {
-        if (found.length >= MAX_WALKED)
-          return found;
-        if (!take(element))
+        if (walk.found.length >= MAX_WALKED)
+          return walk.found;
+        if (!take(walk, element))
           continue;
-        if (element.shadowRoot)
-          scopes.push(element.shadowRoot);
-        if (element.localName !== "slot")
-          continue;
-        const slot = element;
-        for (const assigned of slot.assignedElements({ flatten: true })) {
-          if (!take(assigned))
-            continue;
-          scopes.push(assigned);
-          if (assigned.shadowRoot)
-            scopes.push(assigned.shadowRoot);
-        }
+        if (element.localName === "slot")
+          takeSlotted(walk, element);
       }
     }
-    return found;
+    return walk.found;
+  }
+  function take(walk, element) {
+    if (walk.seen.has(element))
+      return false;
+    walk.seen.add(element);
+    walk.found.push(element);
+    if (element.shadowRoot)
+      walk.scopes.push(element.shadowRoot);
+    return true;
+  }
+  function takeSlotted(walk, slot) {
+    for (const assigned of slot.assignedElements({ flatten: true })) {
+      if (walk.found.length >= MAX_WALKED)
+        return;
+      if (take(walk, assigned))
+        walk.scopes.push(assigned);
+    }
   }
   function inShadowRoots(document2) {
     const roots = [];
@@ -9817,10 +9819,39 @@ ${value.stack}`;
     const [role] = (element.getAttribute("role") ?? "").trim().split(/\s+/);
     return CONTROL_ROLES.has(role ?? "");
   }
+  function soleDialog(world, cover) {
+    const { utils } = world.injected;
+    const role = utils.getAriaRole(cover) ?? "";
+    if (DIALOG_ROLES.has(role) || NOTICE_ROLES.has(role))
+      return;
+    if (utils.getElementAccessibleNameText(cover, false).trim() !== "")
+      return;
+    const dialogs = composedDescendants(cover).filter((element) => {
+      const its = utils.getAriaRole(element);
+      return (its === "dialog" || its === "alertdialog") && utils.isElementVisible(element);
+    });
+    return dialogs.length === 1 ? dialogs[0] : undefined;
+  }
+  var NATIVE_CONTROLS = "input, textarea, select, button, a[href], iframe, frame, [contenteditable]";
+  function coverControl(world, element) {
+    const { utils } = world.injected;
+    const role = utils.getAriaRole(element);
+    if (role === "dialog" || role === "alertdialog")
+      return false;
+    if (element.matches(NATIVE_CONTROLS) || explicitControl(element))
+      return true;
+    const tabindex = Number.parseInt(element.getAttribute("tabindex") ?? "", 10);
+    return tabindex >= 0 && utils.getElementAccessibleNameText(element, false).trim() !== "";
+  }
+  function controlRole(world, control) {
+    if (control.localName === "iframe" || control.localName === "frame")
+      return "iframe";
+    return world.injected.utils.getAriaRole(control) ?? "generic";
+  }
   function takingControls(world, shown) {
     const { injected } = world;
     return composedDescendants(shown).filter((control) => {
-      if (!control.matches(CONTROLS) && !explicitControl(control))
+      if (!coverControl(world, control))
         return false;
       if (!injected.utils.isElementVisible(control))
         return false;
@@ -9831,9 +9862,8 @@ ${value.stack}`;
     });
   }
   function controlsOf(world, output, shown) {
-    const { injected } = world;
     const taking = takingControls(world, shown);
-    const roleOf = (control) => injected.utils.getAriaRole(control) ?? "generic";
+    const roleOf = (control) => controlRole(world, control);
     const kept = new Set(taking.filter((control) => roleOf(control) === "button").slice(0, MAX_CONTROLS));
     for (const control of taking) {
       if (kept.size >= MAX_CONTROLS)

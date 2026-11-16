@@ -216,17 +216,25 @@ function factsOf(
   top: Element,
   request: CoverRequest,
 ): CoverFacts {
-  const { injected } = world
   const kind = kindOf(world, subject, chain, request.point, request.above)
   const layer = whichDialog(world, chain, top, request.point)
   let shown = layer
+  let behind = false
+  const aroundIt = layer.contains(subject) || layer === document.body
   // A cover whose content sits in a closed root this world does not know is not blank.
   const closed = !layer.contains(subject) && inClosedPart(layer)
-  // A backdrop rendered beside its dialog is blank: the answer names the dialog open over it,
-  // while the cover, for the same-layer line too, stays the layer.
-  if (!closed && !layer.contains(subject) && isBlank(world, output, layer))
-    shown = dialogBehind(world, layer, request.point) ?? layer
-  const behind = shown !== layer
+  if (!closed && !aroundIt) {
+    // A backdrop rendered beside its dialog is blank: the answer names the dialog open over
+    // it. A nameless layer that holds one dialog, as a portal holds the backdrop and the dialog
+    // side by side, is shown as that dialog. The cover, for the same-layer line and the
+    // runner's count, stays the layer either way.
+    const blank = isBlank(world, output, layer)
+    const dialog = blank
+      ? dialogBehind(world, layer, request.point)
+      : soleDialog(world, layer)
+    behind = blank && dialog !== undefined
+    shown = dialog ?? layer
+  }
   // A cover that holds the control (its wrapper, its label, the page's root) is the control's
   // own surroundings: its snapshot would be the page, so it is left out.
   const surrounds = shown.contains(subject) || shown === document.body
@@ -244,9 +252,11 @@ function factsOf(
   return {
     layer: coverNumber(layer),
     ref: world.refs.forElement(shown, world.seq),
-    role: injected.utils.getAriaRole(shown) ?? 'generic',
+    role: controlRole(world, shown),
     name: nameOf(world, output, shown),
-    markup: output.previewNode(layer),
+    // A blank layer prints as itself, the dialog open over it after; a dialog shown for its
+    // nameless layer prints as the dialog.
+    markup: output.previewNode(behind ? layer : shown),
     snapshot,
     ...(drawn && drawn.length > 0
       ? { text: drawn.slice(0, MAX_TEXT).join('') }
@@ -472,35 +482,47 @@ const MAX_DEPTH = 32
  * MAX_WALKED.
  */
 function composedDescendants(root: Element | Document): Element[] {
-  const found: Element[] = []
-  const seen = new Set<Element>()
-  const take = (element: Element): boolean => {
-    if (seen.has(element)) return false
-    seen.add(element)
-    found.push(element)
-    return true
-  }
-  const scopes: (Element | Document | ShadowRoot)[] = [root]
+  const walk: Walk = { found: [], seen: new Set(), scopes: [root] }
   const own = root.nodeType === 1 ? (root as Element).shadowRoot : null
-  if (own) scopes.push(own)
-  for (let index = 0; index < scopes.length; index++) {
-    const scope = scopes[index]
+  if (own) walk.scopes.push(own)
+  for (let index = 0; index < walk.scopes.length; index++) {
+    const scope = walk.scopes[index]
     if (!scope) continue
     for (const element of scope.querySelectorAll('*')) {
-      if (found.length >= MAX_WALKED) return found
-      if (!take(element)) continue
-      if (element.shadowRoot) scopes.push(element.shadowRoot)
-      if (element.localName !== 'slot') continue
-      const slot = element as HTMLSlotElement
-      for (const assigned of slot.assignedElements({ flatten: true })) {
-        if (!take(assigned)) continue
-        scopes.push(assigned)
-        // A slotted design-system button keeps its real button in its own root.
-        if (assigned.shadowRoot) scopes.push(assigned.shadowRoot)
-      }
+      if (walk.found.length >= MAX_WALKED) return walk.found
+      if (!take(walk, element)) continue
+      if (element.localName === 'slot')
+        takeSlotted(walk, element as HTMLSlotElement)
     }
   }
-  return found
+  return walk.found
+}
+
+/** A composed walk's state: what it took, in order, and the scopes it has still to read. */
+type Walk = {
+  found: Element[]
+  seen: Set<Element>
+  scopes: (Element | Document | ShadowRoot)[]
+}
+
+/** Takes `element` once, and queues its own root: what a slot draws keeps its own there too. */
+function take(walk: Walk, element: Element): boolean {
+  if (walk.seen.has(element)) return false
+  walk.seen.add(element)
+  walk.found.push(element)
+  if (element.shadowRoot) walk.scopes.push(element.shadowRoot)
+  return true
+}
+
+/**
+ * The elements `slot` draws, each with its light descendants and its own root: a slotted
+ * design-system button keeps its real button in its own root. Under the walk's one limit.
+ */
+function takeSlotted(walk: Walk, slot: HTMLSlotElement): void {
+  for (const assigned of slot.assignedElements({ flatten: true })) {
+    if (walk.found.length >= MAX_WALKED) return
+    if (take(walk, assigned)) walk.scopes.push(assigned)
+  }
 }
 
 /**
@@ -585,6 +607,59 @@ function explicitControl(element: Element): boolean {
 }
 
 /**
+ * The one dialog a nameless cover holds: the cover has no dialog-like and no notice role and no
+ * accessible name, and its composed tree holds exactly one shown element whose role is `dialog`
+ * or `alertdialog` (an open `<dialog>` counts; `aria-modal` alone does not). None, or two or
+ * more, a dialog nested in a dialog included: `undefined`, and the cover is shown as itself.
+ */
+function soleDialog(world: World, cover: Element): Element | undefined {
+  const { utils } = world.injected
+  const role = utils.getAriaRole(cover) ?? ''
+  if (DIALOG_ROLES.has(role) || NOTICE_ROLES.has(role)) return undefined
+  if (utils.getElementAccessibleNameText(cover, false).trim() !== '')
+    return undefined
+  const dialogs = composedDescendants(cover).filter((element) => {
+    const its = utils.getAriaRole(element)
+    return (
+      (its === 'dialog' || its === 'alertdialog') &&
+      utils.isElementVisible(element)
+    )
+  })
+  return dialogs.length === 1 ? dialogs[0] : undefined
+}
+
+/** What is a control by itself: `CONTROLS` without its bare `[tabindex]`. */
+const NATIVE_CONTROLS =
+  'input, textarea, select, button, a[href], iframe, frame, [contenteditable]'
+
+/**
+ * A cover's control, by what it is: a native control, a frame, an editable region, or an element
+ * whose role attribute names a control. One that has only a tabindex counts when it is in the
+ * tab order (0 or more) and has an accessible name: a `div` with `tabindex="0"` and a label
+ * `Close` is a careless page's close button, while a dialog's focus guards, its off-screen focus
+ * target and its title span are not. A dialog or alertdialog is never a control: it is what the
+ * controls are in, and an answer that lists it hides the way out.
+ */
+function coverControl(world: World, element: Element): boolean {
+  const { utils } = world.injected
+  const role = utils.getAriaRole(element)
+  if (role === 'dialog' || role === 'alertdialog') return false
+  if (element.matches(NATIVE_CONTROLS) || explicitControl(element)) return true
+  const tabindex = Number.parseInt(element.getAttribute('tabindex') ?? '', 10)
+  return (
+    tabindex >= 0 &&
+    utils.getElementAccessibleNameText(element, false).trim() !== ''
+  )
+}
+
+/** A control's role as an answer prints it: a frame is an `iframe`, as a snapshot prints one. */
+function controlRole(world: World, control: Element): string {
+  if (control.localName === 'iframe' || control.localName === 'frame')
+    return 'iframe'
+  return world.injected.utils.getAriaRole(control) ?? 'generic'
+}
+
+/**
  * The cover's controls that take the pointer at their middle, in the composed tree's order, so a
  * dialog drawn in its host's shadow root has its buttons. One out of view counts, since the agent
  * can scroll to it: a long dialog's button below the fold is the one an answer must not lose. This
@@ -594,7 +669,7 @@ function explicitControl(element: Element): boolean {
 export function takingControls(world: World, shown: Element): Element[] {
   const { injected } = world
   return composedDescendants(shown).filter((control) => {
-    if (!control.matches(CONTROLS) && !explicitControl(control)) return false
+    if (!coverControl(world, control)) return false
     if (!injected.utils.isElementVisible(control)) return false
     const box = control.getBoundingClientRect()
     const middle = { x: box.x + box.width / 2, y: box.y + box.height / 2 }
@@ -616,10 +691,8 @@ export function controlsOf(
   output: FailureOutput,
   shown: Element,
 ): CoverControl[] {
-  const { injected } = world
   const taking = takingControls(world, shown)
-  const roleOf = (control: Element) =>
-    injected.utils.getAriaRole(control) ?? 'generic'
+  const roleOf = (control: Element) => controlRole(world, control)
   const kept = new Set<Element>(
     taking
       .filter((control) => roleOf(control) === 'button')
