@@ -144,6 +144,8 @@ declare global {
     constructor(message: string)
     /** e.g. `task_not_found`, `task_page_missing`, `page_closed`, `method_unavailable`. */
     code?: string
+    /** Optional detail, e.g. `target_crashed` beside primary `internal_error`. Ignore unknown values. */
+    diagnosticCode?: string
     /** Who must fix it. */
     owner?: 'neo' | 'script' | 'website' | 'host'
     /** `unknown`: a write may have happened. Look at the page before repeating it. */

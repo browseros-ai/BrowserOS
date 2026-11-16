@@ -10,10 +10,11 @@
 //!  stopped after it, ambiguous    delivery unknown    retryable false  (focus_lost, timeout …)
 //! ```
 
-use neo_trace::{Delivery, ErrorOwner};
+use neo_trace::{Delivery, DiagnosticCode, ErrorOwner};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+use crate::playwright_error::TARGET_CRASH_MESSAGE;
 use crate::{Answer, Refusal};
 
 /// The host's first question about an entry: did any character go out, and did all land.
@@ -176,6 +177,8 @@ pub enum EntryCode {
     RunTimeout,
     /// The tab closed under the entry.
     TargetClosed,
+    /// The browser answered with `Target crashed`; delivery follows the existing protocol row.
+    TargetCrashed,
     /// The browser connection dropped.
     BrowserDisconnected,
     /// A Neo bug: a probe reply Rust cannot read, a stale engine asset.
@@ -207,6 +210,7 @@ impl EntryCode {
             Self::PageMoved => "page_moved",
             Self::RunTimeout => "run_timeout",
             Self::TargetClosed => "target_closed",
+            Self::TargetCrashed => "internal_error",
             Self::BrowserDisconnected => "browser_disconnected",
             Self::Internal => "internal",
         }
@@ -236,6 +240,7 @@ impl EntryCode {
             Self::CoverUnread(_)
             | Self::RunTimeout
             | Self::TargetClosed
+            | Self::TargetCrashed
             | Self::BrowserDisconnected
             | Self::Internal => ErrorOwner::Neo,
         }
@@ -261,6 +266,7 @@ impl EntryCode {
             | Self::BoxNotCleared
             | Self::ValueDrawn
             | Self::ValueStillDrawn
+            | Self::TargetCrashed
             | Self::Internal => Answer::Definite,
             Self::FocusLost
             | Self::ValueNotTaken
@@ -352,6 +358,7 @@ impl EntryCode {
             }
             Self::RunTimeout => "The entry ran out of time.",
             Self::TargetClosed => "The tab closed during the entry.",
+            Self::TargetCrashed => TARGET_CRASH_MESSAGE,
             Self::BrowserDisconnected => "Neo lost its connection to the browser.",
             Self::Internal => "Neo failed inside the entry.",
         }
@@ -376,6 +383,9 @@ pub struct EntryError {
     pub owner: ErrorOwner,
     /// The stable code: an [`EntryCode`]'s, or a host policy's own.
     pub code: String,
+    /// Optional diagnostic beside the compatible primary `internal_error` code.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diagnostic_code: Option<DiagnosticCode>,
     /// A fixed sentence, or a host policy's message.
     pub message: String,
     /// The SDK's one meaning: `true` only when nothing was sent, so the same call is safe to
@@ -393,6 +403,8 @@ impl EntryError {
         Self {
             owner: code.owner(),
             code: code.as_str().to_owned(),
+            diagnostic_code: (code == EntryCode::TargetCrashed)
+                .then_some(DiagnosticCode::TargetCrashed),
             message: code.message().to_owned(),
             retryable: sending == Sending::NotYet,
             host_code: None,
@@ -406,6 +418,7 @@ impl EntryError {
         Self {
             owner: refusal.owner,
             code: refusal.code,
+            diagnostic_code: None,
             message: refusal.message,
             retryable: sending == Sending::NotYet,
             host_code: refusal.host_code,
@@ -482,10 +495,33 @@ impl Entry {
 
 #[cfg(test)]
 mod tests {
-    use neo_trace::Delivery;
+    use neo_trace::{Delivery, DiagnosticCode};
 
     use super::{CoverIn, EntryCode, EntryError, Sending, delivery_of};
     use crate::Answer;
+
+    #[test]
+    fn target_crashed_private_entry_keeps_compatible_code_and_existing_delivery()
+    -> Result<(), serde_json::Error> {
+        for (sending, delivery) in [
+            (Sending::NotYet, Delivery::NotSent),
+            (Sending::Sent, Delivery::Done),
+        ] {
+            let error = EntryError::of(EntryCode::TargetCrashed, sending);
+            assert_eq!(error.code, "internal_error");
+            assert_eq!(error.diagnostic_code, Some(DiagnosticCode::TargetCrashed));
+            assert_eq!(error.answer(), Answer::Definite);
+            assert_eq!(delivery_of(sending, Some(&error)), delivery);
+            assert_eq!(error.retryable, sending == Sending::NotYet);
+            let wire = serde_json::to_value(&error)?;
+            assert_eq!(wire["diagnosticCode"], "target_crashed");
+            assert_eq!(
+                wire["message"],
+                "The tab's page crashed. Close or reload the tab before retrying."
+            );
+        }
+        Ok(())
+    }
 
     #[test]
     fn tests_that_retryable_means_nothing_was_sent() {
@@ -539,6 +575,7 @@ mod tests {
             EntryCode::PageMoved,
             EntryCode::RunTimeout,
             EntryCode::TargetClosed,
+            EntryCode::TargetCrashed,
             EntryCode::BrowserDisconnected,
             EntryCode::Internal,
         ];

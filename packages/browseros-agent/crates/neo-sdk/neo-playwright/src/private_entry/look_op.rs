@@ -390,6 +390,9 @@ fn above_of(projected: Result<Projection, PlaywrightError>) -> Result<Above, Ent
         Ok(Projection::Gone) => Above::Gone,
         Err(error) => match playwright_code(&error) {
             EntryCode::ElementDetached => Above::Gone,
+            // Protocol failures refuse this box without ending the call. Keep that policy
+            // while retaining the crash's diagnostic and recovery text.
+            EntryCode::TargetCrashed => Above::Refused(EntryCode::TargetCrashed),
             code @ (EntryCode::RunTimeout
             | EntryCode::TargetClosed
             | EntryCode::BrowserDisconnected) => return Err(code),
@@ -607,6 +610,7 @@ pub(crate) fn playwright_code(error: &PlaywrightError) -> EntryCode {
     match error.error_code() {
         Some(ErrorCode::ElementDetached | ErrorCode::InvalidInput) => EntryCode::ElementDetached,
         Some(ErrorCode::TargetClosed) => EntryCode::TargetClosed,
+        Some(ErrorCode::TargetCrashed) => EntryCode::TargetCrashed,
         Some(ErrorCode::BrowserDisconnected) => EntryCode::BrowserDisconnected,
         Some(ErrorCode::WaitTimeout) => EntryCode::RunTimeout,
         _ => EntryCode::Internal,
@@ -644,6 +648,7 @@ pub(crate) fn failure_code(failure: ProbeFailure) -> EntryCode {
         ProbeFailure::Gone(_) => EntryCode::TargetClosed,
         ProbeFailure::Cdp(error) => match ErrorCode::from_core(&error) {
             ErrorCode::TargetClosed => EntryCode::TargetClosed,
+            ErrorCode::TargetCrashed => EntryCode::TargetCrashed,
             ErrorCode::BrowserDisconnected => EntryCode::BrowserDisconnected,
             _ => EntryCode::Internal,
         },
@@ -661,13 +666,34 @@ pub(crate) fn timeout_until(deadline: Instant) -> Duration {
 
 #[cfg(test)]
 mod tests {
-    use browseros_core::TabId;
+    use browseros_cdp::CdpError;
+    use browseros_core::{CoreError, TabId};
     use serde_json::json;
 
     use super::{Above, CoverIn, EntryCode, Unread, above_of, ref_target};
     use crate::action::frame_projection::Projection;
-    use crate::probe::{PageText, Point};
+    use crate::probe::{PageText, Point, ProbeFailure};
     use crate::{ErrorCode, PlaywrightError};
+
+    #[test]
+    fn target_crashed_private_adapters_retain_the_diagnostic_without_ending_the_call() {
+        let core = CoreError::Cdp(CdpError::Protocol {
+            code: -32000,
+            message: "Target crashed".to_owned(),
+        });
+        let error = PlaywrightError::new(ErrorCode::from_core(&core), "unused".to_owned());
+        assert_eq!(super::playwright_code(&error), EntryCode::TargetCrashed);
+        assert_eq!(
+            super::failure_code(ProbeFailure::Cdp(core)),
+            EntryCode::TargetCrashed
+        );
+        assert!(!super::ends_the_call(EntryCode::TargetCrashed));
+        assert_eq!(
+            above_of(Err(error)),
+            Ok(Above::Refused(EntryCode::TargetCrashed)),
+            "a projection failure still refuses one box and preserves its diagnostic"
+        );
+    }
 
     /// Ruling R60's table: what each answer of the pages above the box's frame refuses with.
     /// Row (a), a page above that fails under the asking, has no live way to make it fail.

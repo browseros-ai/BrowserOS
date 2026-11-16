@@ -121,6 +121,7 @@ mod tests {
 
     fn failure(owner: ErrorOwner) -> ErrorRecord {
         ErrorRecord {
+            diagnostic_code: None,
             owner,
             code: "x".into(),
             message: "x".into(),

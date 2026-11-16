@@ -31,6 +31,10 @@ use serde_json::Value;
 use crate::Refusal;
 use crate::listed_enum::listed_enum;
 
+/// Recovery guidance shared by operations and wrappers that replace their error messages.
+pub(crate) const TARGET_CRASH_MESSAGE: &str =
+    "The tab's page crashed. Close or reload the tab before retrying.";
+
 listed_enum! {
     /// The crate's error vocabulary. [`ErrorCode::as_str`] is the stable wire name.
     pub enum ErrorCode {
@@ -73,6 +77,8 @@ listed_enum! {
         Unsupported,
         /// The page or frame closed, or left the run's view, under the op.
         TargetClosed,
+        /// The browser answered this operation with the exact `Target crashed` protocol error.
+        TargetCrashed,
         /// The CDP connection dropped, changed epoch or stopped answering.
         BrowserDisconnected,
         /// The script aborted the op through Playwright's `signal` option. Like a timeout, the
@@ -144,6 +150,7 @@ impl ErrorCode {
             Self::InvalidInput => row("invalid_input", Script, No, Definite),
             Self::Unsupported => row("unsupported", Neo, No, Definite),
             Self::TargetClosed => row("target_closed", Neo, No, Ambiguous),
+            Self::TargetCrashed => row("target_crashed", Neo, No, Definite),
             Self::BrowserDisconnected => row("browser_disconnected", Neo, No, Ambiguous),
             Self::Aborted => row("aborted", Script, No, Ambiguous),
             Self::Internal => row("internal", Neo, No, Definite),
@@ -182,6 +189,11 @@ impl ErrorCode {
         match error {
             CoreError::Cdp(cdp) => match cdp {
                 CdpError::SessionGone => Self::TargetClosed,
+                // This classifies only the reply in hand. Later operations still ask the
+                // browser, and retain the same delivery and retry rules as other protocol errors.
+                CdpError::Protocol { message, .. } if message == "Target crashed" => {
+                    Self::TargetCrashed
+                }
                 // Tab/target lookup can race a close before the detached event reaches the
                 // journal. These exact missing-identity replies are closure evidence; other
                 // protocol failures remain Internal.
@@ -499,6 +511,12 @@ mod tests {
             ErrorOwner::Neo,
             TimedOut::No,
             Answer::Ambiguous,
+        ),
+        (
+            "target_crashed",
+            ErrorOwner::Neo,
+            TimedOut::No,
+            Answer::Definite,
         ),
         (
             "browser_disconnected",

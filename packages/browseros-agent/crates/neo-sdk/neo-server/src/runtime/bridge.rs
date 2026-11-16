@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use futures_util::FutureExt;
 use futures_util::future::{BoxFuture, Shared};
-use neo_trace::{Delivery, ErrorOwner, OperationId};
+use neo_trace::{Delivery, DiagnosticCode, ErrorOwner, OperationId};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::time::{self, Duration, Instant};
@@ -189,6 +189,10 @@ pub(crate) enum Envelope<'a> {
 pub(crate) struct ErrBody<'a> {
     /// The stable code (`wait_timeout`, `invalid_input`, …).
     code: &'static str,
+    /// Optional diagnostic; the primary code remains compatible with older callers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    diagnostic_code: Option<DiagnosticCode>,
     /// Who must change to fix it.
     owner: ErrorOwner,
     /// Whether the op's side effect happened.
@@ -473,6 +477,7 @@ impl<'a> From<&'a OpFailure> for ErrBody<'a> {
     fn from(failure: &'a OpFailure) -> Self {
         Self {
             code: failure.error.code().as_str(),
+            diagnostic_code: failure.error.diagnostic_code(),
             owner: failure.error.owner(),
             delivery: failure.delivery,
             retryable: failure.retryable,

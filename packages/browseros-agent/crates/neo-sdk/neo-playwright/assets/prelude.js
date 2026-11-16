@@ -651,6 +651,7 @@ ${lines}${message.slice(end)}`;
   // crates/neo-sdk/neo-playwright-js/src/prelude/errors.ts
   var FIELDS = [
     "code",
+    "diagnosticCode",
     "owner",
     "delivery",
     "retryable",

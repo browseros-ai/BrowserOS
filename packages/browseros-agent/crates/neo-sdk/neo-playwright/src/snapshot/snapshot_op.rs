@@ -47,6 +47,7 @@ use crate::op_input::OpArgs;
 use crate::op_scope::OpScope;
 use crate::op_spec::{OpSpec, PAGE, TARGET};
 use crate::page::OpPage;
+use crate::playwright_error::TARGET_CRASH_MESSAGE;
 use crate::probe::{
     self, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget, SnapshotIframe, SnapshotMode, Want,
 };
@@ -536,6 +537,7 @@ impl fmt::Display for Unread {
             Self::Timeout => write!(f, "timeout after {} ms", FRAME_BUDGET.as_millis()),
             Self::Detached => f.write_str("frame detached"),
             Self::Loading => f.write_str("frame not loaded"),
+            Self::Failed(ErrorCode::TargetCrashed) => f.write_str(TARGET_CRASH_MESSAGE),
             Self::Failed(code) => f.write_str(&code.as_str().replace('_', " ")),
         }
     }
@@ -890,6 +892,14 @@ mod tests {
         assert_eq!(
             Unread::Failed(ErrorCode::TargetClosed).to_string(),
             "target closed"
+        );
+    }
+
+    #[test]
+    fn target_crashed_partial_snapshot_keeps_plain_recovery_guidance() {
+        assert_eq!(
+            Unread::Failed(ErrorCode::TargetCrashed).to_string(),
+            "The tab's page crashed. Close or reload the tab before retrying."
         );
     }
 

@@ -5,6 +5,7 @@
 // (src/prelude/generated/envelope.ts).
 import { describe, expect, it } from 'bun:test'
 import { readFileSync } from 'node:fs'
+import { shapeBridgeError } from '../src/prelude/errors'
 import type { Envelope, RunInit } from '../src/prelude/generated/envelope'
 import { json, loadPrelude } from './support/prelude-runtime'
 
@@ -39,6 +40,51 @@ const FIELDS = `({ name: e.name, message: e.message, code: e.code, owner: e.owne
   delivery: e.delivery, retryable: e.retryable, operationId: e.operationId, timeout: e.timeout })`
 
 describe('the pinned run envelope', () => {
+  it('retains target_crashed on caught, uncaught, and reshaped errors', async () => {
+    const error = {
+      code: 'internal_error',
+      diagnosticCode: 'target_crashed',
+      owner: 'neo',
+      delivery: 'done',
+      retryable: false,
+      operationId: '0196a0c4-1f2e-7a3b-8c4d-5e6f7a8b9c0d.5',
+      timeout: false,
+      message:
+        "The tab's page crashed. Close or reload the tab before retrying.",
+    }
+    const runtime = loadPrelude({
+      seed: init('init.page'),
+      answer: ({ name }) =>
+        name === 'page.frames'
+          ? frames
+          : name === 'page.title'
+            ? { err: error }
+            : null,
+    })
+    expect(
+      json(
+        await runtime.run(`
+          try { await page.title() }
+          catch (e) {
+            return { code: e.code, diagnosticCode: e.diagnosticCode,
+              delivery: e.delivery, message: e.message }
+          }
+        `),
+      ),
+    ).toEqual({
+      code: 'internal_error',
+      diagnosticCode: 'target_crashed',
+      delivery: 'done',
+      message: `page.title: ${error.message}`,
+    })
+    expect(json(await runtime.settle('await page.title()'))).toEqual({
+      operation: error,
+    })
+    const reshaped = shapeBridgeError('page.title', 'page.title', error)
+    expect(Reflect.get(reshaped, 'diagnosticCode')).toBe('target_crashed')
+    expect(Reflect.get(reshaped, 'code')).toBe('internal_error')
+  })
+
   it("tests that a run's init names its page, every tab and their facts", async () => {
     const runtime = loadPrelude({
       seed: init('init.page'),

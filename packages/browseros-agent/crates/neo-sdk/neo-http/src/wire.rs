@@ -870,6 +870,7 @@ fn operation_error(error: &ErrorRecord, fields: Fields) -> api::OperationError {
     api::OperationError {
         owner: error.owner.as_str().to_string(),
         code: error.code.clone(),
+        diagnostic_code: error.diagnostic_code.map(|code| code.as_str().to_owned()),
         host_code: (fields == Fields::Full)
             .then(|| error.host_code.clone())
             .flatten(),

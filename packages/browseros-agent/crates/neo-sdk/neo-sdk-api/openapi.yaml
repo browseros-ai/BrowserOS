@@ -1475,6 +1475,12 @@ components:
             timeout ran out; the message names it, says what it shows and what to do, and
             `cover` holds it. Under the spec harness's conformance switch the same wait answers
             `not_actionable`, with Playwright's own message.
+        diagnosticCode:
+          type: string
+          description: >-
+            Optional typed detail. A crashed renderer retains primary code internal_error and
+            adds target_crashed. Present in full and summary views; clients ignore unknown values.
+          x-extensible-enum: [target_crashed]
         hostCode:
           type: string
           description: The host's own code when `code` is `host_error`, e.g. `needs_owner`.

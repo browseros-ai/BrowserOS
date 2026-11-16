@@ -181,6 +181,12 @@ Closing the browser's last tab quits the browser, and Neo's server with it, so N
 
 The result carries `_meta["com.browseros.neo/run"]` as `{ id, status, effects, error?, unknown, tasks, tabsScope, access? }`. `id` is the run's id in the trace. `tabsScope` is `task` when the run was bound to its task's tabs and `browser` when it saw every tab; a refused run says what it would have been, and a repeated request's reply carries the first run's. An older Neo sends none, which means `browser`. `status` is `ok`, `error`, `cancelled`, or `timeout`, and `isError` is set unless it is `ok`. `effects` is `none`, `done`, or `unknown`. `unknown` lists the writes that were sent and never confirmed. `structuredContent` is unchanged.
 
+An operation that receives the exact CDP reply `Target crashed` keeps primary code `internal_error`
+and adds `diagnosticCode: "target_crashed"` on caught errors, uncaught run errors, and traces,
+including full and summary HTTP views. Its message asks you to close or reload the tab before
+retrying. The SDK remembers no crash state. Later operations on the same tab still reach the
+browser, with the existing delivery and retry rules.
+
 `tasks` is host metadata, always present (`[]` when no tasks were touched). Each entry carries `id`, `name`, `kind`, and `tabs: { tabId, url }[]`. Tasks appear once, in first-touch order, even when the script failed. Tabs and URLs reflect reply time; a closed task has kind `closed` and no tabs.
 
 The agent's reply is exactly what the script returned, plus console lines and existing notes. Task metadata adds no reply text. Return `task.id` explicitly to keep it for later runs.

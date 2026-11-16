@@ -38,6 +38,8 @@
       super(String(err.message))
       this.name = 'NeoError'
       this.code = err.code // e.g. "page_closed"
+      if (err.diagnosticCode !== undefined)
+        this.diagnosticCode = err.diagnosticCode
       this.owner = err.owner // "neo" | "script" | "website" | "host"
       this.delivery = err.delivery // "not_sent" | "done" | "unknown"
       this.retryable = err.retryable
