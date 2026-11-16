@@ -19,32 +19,101 @@ if (shape === 'slotted-modal') {
   dlg.innerHTML = '<slot name="action"></slot>';
   host.attachShadow({mode:'open'}).append(dlg); dlg.showModal();
 }
+if (shape === 'shadow-no-refs') {
+  background.inert = true;
+  dlg.style.pointerEvents = 'none';
+  background.attachShadow({mode:'open'}).append(dlg); dlg.showModal();
+}
+if (shape === 'slotted-inert') {
+  const host = document.createElement('div'); document.body.append(host);
+  const action = background.querySelector('button'); action.slot = 'action'; host.append(action);
+  host.attachShadow({mode:'open'}).innerHTML = '<div inert><slot name="action"></slot></div>';
+}
+if (shape === 'closed-inert') {
+  background.attachShadow({mode:'closed'}).innerHTML = '<div inert><button>Hidden shadow action</button></div>';
+}
+if (shape === 'shadow-flattened-modal') {
+  background.inert = true;
+  background.attachShadow({mode:'open'}).innerHTML = '<dialog role="none">Live modal message</dialog>';
+  background.shadowRoot.querySelector('dialog').showModal();
+}
+if (shape === 'delta') {
+  background.querySelector('button').onclick = () => dlg.showModal();
+  dlg.querySelector('button').onclick = () => dlg.close();
+}
 if (shape === 'aria-modal') { dlg.setAttribute('role','dialog'); dlg.setAttribute('aria-modal','true'); dlg.show(); }
 if (shape === 'aria-hidden') background.setAttribute('aria-hidden','true');
 if (shape === 'overlay') document.body.insertAdjacentHTML('beforeend','<div style="position:fixed;inset:0;background:white">Overlay</div>');
 </script>`
-const server = http.createServer((_req, res) => { res.setHeader('content-type', 'text/html'); res.end(fixture) })
-await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
-const sdk = await openClaw(Number(process.env.BROWSEROS_CDP_PORT), { timeoutMs: 120000 }, { upstreamSnapshots: false })
+const server = http.createServer((_req, res) => {
+  res.setHeader('content-type', 'text/html')
+  res.end(fixture)
+})
+await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+const sdk = await openClaw(
+  Number(process.env.BROWSEROS_CDP_PORT),
+  { timeoutMs: 120000 },
+  { upstreamSnapshots: false },
+)
 try {
-  for (const shape of ['native', 'inert', 'nested', 'shadow', 'slotted-modal', 'aria-modal', 'aria-hidden', 'overlay']) {
+  for (const shape of [
+    'native',
+    'inert',
+    'nested',
+    'shadow',
+    'slotted-modal',
+    'slotted-inert',
+    'closed-inert',
+    'shadow-no-refs',
+    'shadow-flattened-modal',
+    'aria-modal',
+    'aria-hidden',
+    'overlay',
+  ]) {
     const page = await sdk.context.newPage()
     try {
-      await page.goto(`http://127.0.0.1:${server.address().port}/?shape=${shape}`)
+      await page.goto(
+        `http://127.0.0.1:${server.address().port}/?shape=${shape}`,
+      )
+      // Closed-root opening belongs to marked snapshots independently of inertness.
+      // Establish that existing view before comparing later unannotated JSON/YAML reads.
+      if (shape === 'closed-inert') await page.ariaSnapshot({ inert: true })
       const upstreamText = await page.ariaSnapshot({ mode: 'default' })
       const beforeJson = await page.ariaSnapshotJSON({ mode: 'ai' })
       const text = await page.ariaSnapshot()
-      if (['native', 'inert', 'nested', 'slotted-modal'].includes(shape)) assert.match(text, /^# not listed:/, shape)
+      const omitted = [
+        'native',
+        'inert',
+        'nested',
+        'slotted-modal',
+        'slotted-inert',
+      ].includes(shape)
       const original = await page.ariaSnapshot({ inert: true })
       const full = await page.ariaSnapshot({ mode: 'full' })
-      if (['native', 'inert', 'nested', 'slotted-modal'].includes(shape)) {
+      if (omitted) {
         assert.match(text, /^# not listed:/, shape)
         assert.doesNotMatch(text, /Background action/, shape)
         assert.match(original, /Background action/, shape)
         assert.match(full, /^# inert:/, shape)
         assert.match(full, /Background action/, shape)
-        if (shape !== 'inert') assert.match(text, /Modal action.*ref=/, shape)
-        for (const maxTokens of [1, 2, 10, 20, 100]) assert.match(await page.ariaSnapshot({ maxTokens }), /^# not listed:/, shape)
+        if (!['inert', 'slotted-inert'].includes(shape))
+          assert.match(text, /Modal action.*ref=/, shape)
+        for (const maxTokens of [1, 2, 10, 20, 100])
+          assert.match(
+            await page.ariaSnapshot({ maxTokens }),
+            /^# not listed:/,
+            shape,
+          )
+      } else if (shape === 'closed-inert') {
+        assert.match(text, /^# not listed:/, shape)
+        assert.doesNotMatch(text, /Hidden shadow action/, shape)
+        assert.match(original, /Hidden shadow action/, shape)
+      } else if (shape === 'shadow-flattened-modal') {
+        assert.match(text, /Live modal message/, shape)
+        assert.doesNotMatch(text, /^# not listed:/, shape)
+      } else if (shape === 'shadow-no-refs') {
+        assert.match(text, /Read this first.*Modal action/s, shape)
+        assert.doesNotMatch(text, /^# not listed:/, shape)
       } else {
         assert.match(text, /Background action/, shape)
         assert.doesNotMatch(text, /^# not listed:/, shape)
@@ -53,12 +122,61 @@ try {
       // JSON is deliberately the unannotated tree even on the same world after a marked read.
       const json = await page.ariaSnapshotJSON({ mode: 'ai' })
       assert.doesNotMatch(JSON.stringify(json), /"inert":/)
-      assert.deepEqual(json, beforeJson, `${shape}: JSON bytes unchanged by annotation`)
+      assert.deepEqual(
+        json,
+        beforeJson,
+        `${shape}: JSON bytes unchanged by annotation`,
+      )
       assert.equal(await page.ariaSnapshot({ mode: 'default' }), upstreamText)
       console.log(JSON.stringify({ shape, text, original, full }))
-    } finally { await page.close() }
+    } finally {
+      await page.close()
+    }
+  }
+  const page = await sdk.context.newPage()
+  try {
+    // The external-JS harness returns no script value, so it commits no cross-run baseline.
+    // Exercise its uncompared delta reads here; snapshot-inert.test.ts pins the comparison.
+    await page.goto(`http://127.0.0.1:${server.address().port}/?shape=delta`)
+    const before = await page.ariaSnapshot()
+    await page.getByRole('button', { name: 'Background action' }).click()
+    const opening = await page.ariaSnapshot({ delta: true })
+    assert.match(opening, /^# whole page: no earlier snapshot of this page/)
+    assert.match(opening, /# not listed:/)
+    assert.doesNotMatch(opening, /Background action/)
+    await page.getByRole('button', { name: 'Modal action' }).click()
+    const closing = await page.ariaSnapshot({ delta: true })
+    assert.match(closing, /Background action/)
+    assert.match(before, /Background action/)
+    console.log(JSON.stringify({ shape: 'delta', before, opening, closing }))
+  } finally {
+    await page.close()
+  }
+  await sdk.finish()
+  const conformance = await openClaw(Number(process.env.BROWSEROS_CDP_PORT), {
+    timeoutMs: 120000,
+  })
+  try {
+    for (const shape of ['native', 'inert']) {
+      const page = await conformance.context.newPage()
+      try {
+        await page.goto(
+          `http://127.0.0.1:${server.address().port}/?shape=${shape}`,
+        )
+        const before = await page.ariaSnapshot()
+        assert.equal(await page.ariaSnapshot({ inert: true }), before)
+        assert.doesNotMatch(before, /^# (?:not listed|inert):/)
+        console.log(
+          JSON.stringify({ shape: `conformance-${shape}`, text: before }),
+        )
+      } finally {
+        await page.close()
+      }
+    }
+  } finally {
+    await conformance.finish()
   }
 } finally {
   await sdk.finish()
-  await new Promise(resolve => server.close(resolve))
+  await new Promise((resolve) => server.close(resolve))
 }

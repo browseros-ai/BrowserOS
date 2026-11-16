@@ -153,14 +153,15 @@ export function renderFullSnapshot(
         `# inert: ${count} lines of this page cannot be clicked or typed into now. page.ariaSnapshot() lists what can.`,
       ]
     : []
-  return cap(
-    head,
+  const body = cap(
+    [],
     partialHead(result),
     printed(yamlLines(result, false)),
     maxTokens * CHARS_PER_TOKEN,
     FULL_CALL,
-    head.length,
   )
+  // Inertness is a pinned explanation, before the unchanged full tree and outside its cap.
+  return [...head, ...(body ? [body] : [])].join('\n')
 }
 
 /**

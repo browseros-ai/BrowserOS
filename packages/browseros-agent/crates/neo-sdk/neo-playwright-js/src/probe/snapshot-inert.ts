@@ -28,30 +28,42 @@ function inertNodes(world: World, json: AriaSnapshotJSON) {
   // A closed/open shadow root may hold a modal the document selector cannot see. Do not
   // guess at it: shadow-contained modal content remains listed, including its live controls.
   const modals = [...document.querySelectorAll('dialog:modal')]
-  if (modals.length === 0 && !document.querySelector('[inert]')) return []
+  const refs = lastSnapshotRefs(world.injected)
+  if (modals.length === 0 && !hasInertAttribute(document, refs)) return []
   const modalAncestors = new Set<Element>()
   for (const modal of modals)
     for (let ancestor = parent(modal); ancestor; ancestor = parent(ancestor))
       modalAncestors.add(ancestor)
-  const inert = new WeakMap<Element, boolean>()
+  // Cache composed ancestors too: large pages share most of those paths. Keep modal and
+  // attribute ancestry separate because a native modal escapes even an inert ancestor.
+  const ancestry = new WeakMap<
+    Element,
+    { modal: boolean; attribute: boolean }
+  >()
   const isInert = (element: Element): boolean => {
-    const cached = inert.get(element)
-    if (cached !== undefined) return cached
-    let attribute = false
-    let liveModal = false
+    const pending: Element[] = []
+    let state = { modal: false, attribute: false }
     for (
       let ancestor: Element | null = element;
       ancestor;
       ancestor = parent(ancestor)
     ) {
-      if (ancestor.matches('dialog:modal')) liveModal = true
-      if (ancestor.hasAttribute('inert')) attribute = true
+      const known = ancestry.get(ancestor)
+      if (known) {
+        state = known
+        break
+      }
+      pending.push(ancestor)
     }
-    const value = !liveModal && (attribute || modals.length > 0)
-    inert.set(element, value)
-    return value
+    for (const ancestor of pending.reverse()) {
+      state = {
+        modal: state.modal || ancestor.matches('dialog:modal'),
+        attribute: state.attribute || ancestor.hasAttribute('inert'),
+      }
+      ancestry.set(ancestor, state)
+    }
+    return !state.modal && (state.attribute || modals.length > 0)
   }
-  const refs = lastSnapshotRefs(world.injected)
   const protectedNodes = liveAncestors(json, refs, isInert)
   const marked: AriaNodeJSON[] = []
   const pending = [...json]
@@ -76,6 +88,24 @@ function inertNodes(world: World, json: AriaSnapshotJSON) {
   return marked
 }
 
+/** Find attribute triggers in roots the engine already read, without another document walk. */
+function hasInertAttribute(
+  document: Document,
+  refs: ReturnType<typeof lastSnapshotRefs>,
+): boolean {
+  if (document.querySelector('[inert]')) return true
+  const seen = new Set<ShadowRoot>()
+  for (const { element } of refs.values()) {
+    let root = element.getRootNode()
+    while (root instanceof ShadowRoot && !seen.has(root)) {
+      seen.add(root)
+      if (root.querySelector('[inert]')) return true
+      root = root.host.getRootNode()
+    }
+  }
+  return false
+}
+
 /** Preserve live descendants the engine already exposed, including shadow-contained modals. */
 function liveAncestors(
   json: AriaSnapshotJSON,
@@ -95,7 +125,13 @@ function liveAncestors(
   for (const node of visited.reverse()) {
     const element = node.ref ? refs.get(node.ref)?.element : undefined
     if (
-      (node.ref && (!element || !isInert(element))) ||
+      // A node without a ref has no element to prove inert. In particular a shadow modal
+      // can expose only prose or keyboard controls: never hide it with its inert host.
+      !element ||
+      // The engine may flatten a ref-less modal into its host's text, even with its role
+      // overridden. A known shadow host is uncertain; preserve it without searching for modals.
+      element.shadowRoot !== null ||
+      !isInert(element) ||
       node.children?.some(
         (child) => typeof child !== 'string' && protectedNodes.has(child),
       )

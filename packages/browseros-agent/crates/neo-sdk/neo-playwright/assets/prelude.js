@@ -7507,7 +7507,7 @@ ${value.stack}`;
       `# partial: closed shadow roots not all read (${roots.sent} of ${roots.found})`
     ] : [];
   }
-  function cap(head, pinned, lines, limit, call = "ariaSnapshot()", requiredHead = 0) {
+  function cap(head, pinned, lines, limit, call = "ariaSnapshot()") {
     const whole = [...head, ...pinned, ...lines.map((line) => line.text)].join(`
 `);
     const measured = whole.length - pinned.reduce((sum, line) => sum + line.length + 1, 0);
@@ -7521,7 +7521,7 @@ ${value.stack}`;
       used += 1 + text.length;
       taken += 1;
     }
-    const top = head.slice(0, Math.max(requiredHead, taken));
+    const top = head.slice(0, taken);
     let cut = Math.max(0, taken - head.length);
     for (let index = 0;index < cut; index++) {
       const end = lines[index].keptEnd;
@@ -7686,7 +7686,7 @@ ${value.stack}`;
     else if (options.text === true)
       text = "always";
     else
-      text = joinedLength(textForm) <= TEXT_LIMIT_CHARS ? "kept" : "leftOut";
+      text = joinedLength(textForm.lines) <= TEXT_LIMIT_CHARS ? "kept" : "leftOut";
     const form = {
       text,
       urls,
@@ -7701,34 +7701,55 @@ ${value.stack}`;
   function renderForm(result, form, walked) {
     const limit = form.maxTokens * CHARS_PER_TOKEN;
     const text = form.text === "kept" || form.text === "always";
-    const roots = form.inert ? [] : inertRoots(result.json);
-    const omitted = roots.length ? walk({ ...result, json: roots, partial: [] }, form.urls, text, true) : [];
-    const inertHead = omitted.length ? [
+    const shown = text && walked ? walked : walk(result, form.urls, text, form.inert === true);
+    const omitted = shown.omitted;
+    const inertHead = shown.skipped ? [
       `# not listed: ${omitted.length} lines (${omitted.filter((line) => line.ref).length} with refs) of this page are inert: nothing in them can be clicked or typed into now. Pass { inert: true } to list them.`
     ] : [];
     const partial = partialHead(result);
-    const finish = (head, lines) => cap([...inertHead, ...head], partial, lines, limit, "ariaSnapshot()", inertHead.length);
-    if (form.text === "never")
-      return finish([], walk(result, form.urls, false, form.inert === true));
-    const textForm = walked ?? walk(result, form.urls, true, form.inert === true);
+    const finish = (head, lines) => {
+      const body = cap(head, partial, lines, limit);
+      return [...inertHead, ...body ? [body] : []].join(`
+`);
+    };
     if (form.text !== "leftOut")
-      return finish([], textForm);
-    const interactiveForm = walk(result, form.urls, false, form.inert === true);
-    const left = joinedLength(textForm) - joinedLength(interactiveForm);
+      return finish([], shown.lines);
+    const textForm = walked ?? walk(result, form.urls, true, form.inert === true);
+    const left = joinedLength(textForm.lines) - joinedLength(shown.lines);
     const about = aboutTokens(left);
     const notice = `# text left out: about ${about} tokens. Pass { text: true } to include it.`;
-    return finish([notice], interactiveForm);
+    return finish([notice], shown.lines);
   }
   function walk(result, urls, text, inert) {
     const partials = new Map;
     for (const partial of result.partial)
       partials.set(partial.ref, [...partials.get(partial.ref) ?? [], partial]);
-    const printer = new Printer(urls, partials, inert);
+    const omitted = [];
+    let segment;
+    let boundary;
+    let skipped = 0;
+    const printer = new Printer(urls, partials, inert, (node, text, level) => {
+      skipped++;
+      const line = printer.lines.at(-1);
+      if (!segment || !boundary || boundary.line !== line || boundary.body !== line?.body || boundary.length !== printer.lines.length || boundary.level !== level) {
+        segment = new Printer(urls, new Map, true);
+        omitted.push(segment);
+      }
+      segment.walk([node], level, text);
+      boundary = { line, body: line?.body, length: printer.lines.length, level };
+    });
     printer.walk(result.json, 0, text);
     for (const unplaced of partials.values())
       for (const partial of unplaced)
         printer.comment(partialComment(partial), 0);
-    return printer.finish().map((line) => ({
+    return {
+      lines: printedLines(printer.finish()),
+      omitted: omitted.flatMap((segment) => printedLines(segment.finish())),
+      skipped
+    };
+  }
+  function printedLines(lines) {
+    return lines.map((line) => ({
       text: "  ".repeat(line.level) + (line.textLine ? renderAriaSnapshotAsYaml([{ role: "text", text: line.body }]) : line.body),
       ref: line.ref,
       section: line.section,
@@ -7740,12 +7761,14 @@ ${value.stack}`;
     urls;
     partials;
     inert;
+    onOmit;
     lines = [];
     steps = [];
-    constructor(urls, partials, inert) {
+    constructor(urls, partials, inert, onOmit) {
       this.urls = urls;
       this.partials = partials;
       this.inert = inert;
+      this.onOmit = onOmit;
     }
     walk(children, level, text) {
       this.content({ children: [...children] }, level, text);
@@ -7795,6 +7818,7 @@ ${value.stack}`;
     }
     node(child, level, text) {
       if (typeof child !== "string" && child.inert && !this.inert) {
+        this.onOmit?.(child, text, level);
         this.omit(child);
         return;
       }
@@ -7878,7 +7902,7 @@ ${value.stack}`;
         };
     }
     heading(node, level) {
-      const own = node.name ? "" : ownText(node);
+      const own = node.name ? "" : ownText(node, this.inert);
       this.element(copy(node, {
         ref: actionable(node),
         urls: false,
@@ -7891,11 +7915,11 @@ ${value.stack}`;
       if (node.text !== undefined && node.text !== node.name)
         value = node.text;
       else if (FIELD.has(node.role) && node.text === undefined) {
-        const own = ownText(node);
+        const own = ownText(node, this.inert);
         if (own !== "" && own !== node.name)
           value = own;
       } else if (!node.name) {
-        const label = ownText(node) || (node.role === "link" && !this.urls ? node.url ?? "" : "");
+        const label = ownText(node, this.inert) || (node.role === "link" && !this.urls ? node.url ?? "" : "");
         if (label !== "")
           value = text ? label : clip(label, OWN_TEXT_CLIP);
       }
@@ -8016,7 +8040,7 @@ ${value.stack}`;
     }
     return true;
   }
-  function ownText(node) {
+  function ownText(node, inert) {
     const pieces = [];
     const stack = [node];
     for (let item = stack.pop();item !== undefined; item = stack.pop()) {
@@ -8030,6 +8054,8 @@ ${value.stack}`;
       const children = item.children ?? [];
       for (let index = children.length - 1;index >= 0; index--) {
         const child = children[index];
+        if (typeof child !== "string" && child.inert && !inert)
+          continue;
         if (typeof child === "string" || child.role === "text")
           stack.push(child);
         else if (!actionable(child) && !fieldWithoutRef(child))
@@ -8121,7 +8147,9 @@ ${value.stack}`;
     const head = count ? [
       `# inert: ${count} lines of this page cannot be clicked or typed into now. page.ariaSnapshot() lists what can.`
     ] : [];
-    return cap(head, partialHead(result), printed(yamlLines(result, false)), maxTokens * CHARS_PER_TOKEN, FULL_CALL, head.length);
+    const body = cap([], partialHead(result), printed(yamlLines(result, false)), maxTokens * CHARS_PER_TOKEN, FULL_CALL);
+    return [...head, ...body ? [body] : []].join(`
+`);
   }
   function printed(lines) {
     const ends = lines.map(() => lines.length);
