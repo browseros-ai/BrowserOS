@@ -3,7 +3,7 @@
 //! dispatched internally, and the primitives that script recorded as its children. For ultrafast
 //! browsing: each `pursue` dispatch, which keeps the pages it read and their token estimate.
 
-use crate::db::audit_log::ToolDispatchRow;
+use crate::db::{audit_log::ToolDispatchRow, pursue_runs::pursue_outcome};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct UltrafastRunStats {
@@ -63,6 +63,20 @@ pub fn ultrafast_run_stats(dispatches: &[ToolDispatchRow]) -> Option<UltrafastRu
         }
     }
     stats
+}
+
+/// How long each ultrafast run in the session took: every `run_skill` that finished without the
+/// agent, and every `pursue` that finished or handed back.
+#[must_use]
+pub fn ultrafast_run_durations(dispatches: &[ToolDispatchRow]) -> Vec<i64> {
+    dispatches
+        .iter()
+        .filter(|row| {
+            (row.tool_name == "run_skill" && finished_without_agent(row))
+                || pursue_outcome(row).is_some()
+        })
+        .map(|row| row.duration_ms.unwrap_or(0).max(0))
+        .collect()
 }
 
 /// The pages a `pursue` call read itself and their token estimate, when it read any. Calls
@@ -352,5 +366,24 @@ mod tests {
                 tokens_saved: 70_942,
             })
         );
+    }
+
+    #[test]
+    fn each_finished_skill_and_each_pursue_with_an_outcome_is_one_run() {
+        let mut rows = phone_deals_run(DONE);
+        rows.push(pursue(
+            900,
+            90_000,
+            6_000,
+            r#"{"isError":false,"outcome":"handed_back","structuredKeys":[]}"#,
+        ));
+        rows.push(pursue(
+            901,
+            99_000,
+            800,
+            r#"{"isError":true,"outcome":"completed","structuredKeys":[]}"#,
+        ));
+        assert_eq!(ultrafast_run_durations(&rows), vec![15_354, 6_000]);
+        assert!(ultrafast_run_durations(&phone_deals_run(HANDED_BACK)).is_empty());
     }
 }

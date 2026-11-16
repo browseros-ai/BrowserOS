@@ -438,6 +438,50 @@ export interface PlanSavings {
      * @memberof PlanSavings
      */
     latest: Array<SessionSummary>;
+    /**
+     * Present only once ultrafast has been on for this computer: what the Home meter shows since then.
+     * @type {PlanSavingsMeter}
+     * @memberof PlanSavings
+     */
+    meter?: PlanSavingsMeter;
+}
+
+/**
+ * The Home meter for an ultrafast customer, counted from the day this computer got ultrafast.
+ * @export
+ * @interface PlanSavingsMeter
+ */
+export interface PlanSavingsMeter {
+    /**
+     * When this computer got ultrafast, in epoch milliseconds: the first time it was on here, or the first ultrafast run if that came earlier.
+     * @type {number}
+     * @memberof PlanSavingsMeter
+     */
+    since: number;
+    /**
+     * Estimated tokens neo kept off the agent since then: page descriptions instead of screenshots, plus the page text neo read itself during ultrafast runs. The two are measured differently, so this is an estimate.
+     * @type {number}
+     * @memberof PlanSavingsMeter
+     */
+    tokensSaved: number;
+    /**
+     * When each ultrafast task of the last 7 days last ran, in epoch milliseconds, newest first, for a by-day chart in local time.
+     * @type {Array<number>}
+     * @memberof PlanSavingsMeter
+     */
+    runTimes: Array<number>;
+    /**
+     * In tasks that used pursue, the average share of browser steps neo took itself, as a whole percent. Absent until such a task recorded a step.
+     * @type {number}
+     * @memberof PlanSavingsMeter
+     */
+    neoStepShare?: number;
+    /**
+     * The shortest single ultrafast run: a skill that finished without the agent, or a pursue that finished or handed back. Absent before the first one.
+     * @type {number}
+     * @memberof PlanSavingsMeter
+     */
+    fastestRunMs?: number;
 }
 
 /**

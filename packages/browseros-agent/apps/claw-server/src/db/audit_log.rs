@@ -7,10 +7,11 @@ use crate::{
             prelude::{AgentSessionEnds, AgentSessionStarts, Tasks, ToolDispatches},
             tasks, tool_dispatches,
         },
-        pursue_runs::{PursueRun, pursue_outcome, pursue_run},
+        pursue_runs::{PursueRun, pursue_outcome, pursue_run, pursue_step_share},
         session_efficiency_stats::ELIGIBLE_TOKEN_ESTIMATOR_VERSION,
         ultrafast_runs::{
-            UltrafastRunStats, finished_without_agent, pursue_reads, ultrafast_run_stats,
+            UltrafastRunStats, finished_without_agent, pursue_reads, ultrafast_run_durations,
+            ultrafast_run_stats,
         },
     },
     error::AppResult,
@@ -40,6 +41,11 @@ pub struct UltrafastSession {
     pub totals: UltrafastRunStats,
     pub measured: Option<UltrafastRunStats>,
     pub pursue: Option<PursueRun>,
+    /// How long each ultrafast run in the session took.
+    pub run_durations: Vec<i64>,
+    /// neo's browser steps during pursue and every browser step in the session, when neo took any.
+    pub pursue_step_share: Option<(i64, i64)>,
+    pub first_run_at: i64,
     pub last_run_at: i64,
 }
 
@@ -905,12 +911,16 @@ impl AuditLog {
                 .fold(0_i64, i64::saturating_add);
             let mut totals = measured.unwrap_or_default();
             totals.duration_ms = totals.duration_ms.saturating_add(unmeasured_ms);
+            let first_run_at = dispatches.first().map_or(0, |row| row.created_at);
             let last_run_at = dispatches.last().map_or(0, |row| row.created_at);
             sessions.push(UltrafastSession {
                 session_id,
                 totals,
                 measured,
                 pursue,
+                run_durations: ultrafast_run_durations(&dispatches),
+                pursue_step_share: pursue_step_share(&dispatches),
+                first_run_at,
                 last_run_at,
             });
         }

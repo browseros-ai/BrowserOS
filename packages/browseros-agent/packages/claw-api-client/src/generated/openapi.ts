@@ -1848,6 +1848,33 @@ export interface components {
       tasks: number
       /** @description The newest of those tasks, newest first, each with what neo measured (`ultrafast`) and what it did with pursue (`pursue`) where recorded. */
       latest: components['schemas']['SessionSummary'][]
+      /** @description Present only once ultrafast has been on for this computer: what the Home meter shows since then. */
+      meter?: components['schemas']['PlanSavingsMeter']
+    }
+    /** @description The Home meter for an ultrafast customer, counted from the day this computer got ultrafast. */
+    PlanSavingsMeter: {
+      /**
+       * Format: int64
+       * @description When this computer got ultrafast, in epoch milliseconds: the first time it was on here, or the first ultrafast run if that came earlier.
+       */
+      since: number
+      /**
+       * Format: int64
+       * @description Estimated tokens neo kept off the agent since then: page descriptions instead of screenshots, plus the page text neo read itself during ultrafast runs. The two are measured differently, so this is an estimate.
+       */
+      tokensSaved: number
+      /** @description When each ultrafast task of the last 7 days last ran, in epoch milliseconds, newest first, for a by-day chart in local time. */
+      runTimes: number[]
+      /**
+       * Format: int32
+       * @description In tasks that used pursue, the average share of browser steps neo took itself, as a whole percent. Absent until such a task recorded a step.
+       */
+      neoStepShare?: number
+      /**
+       * Format: int64
+       * @description The shortest single ultrafast run: a skill that finished without the agent, or a pursue that finished or handed back. Absent before the first one.
+       */
+      fastestRunMs?: number
     }
   }
   responses: {

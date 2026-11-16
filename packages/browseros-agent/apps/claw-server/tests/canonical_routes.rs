@@ -892,6 +892,74 @@ async fn savings_sum_every_ultrafast_task_and_list_the_newest_first() -> anyhow:
 }
 
 #[tokio::test]
+async fn the_meter_counts_from_the_day_ultrafast_was_first_on() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_millis() as i64;
+    let day = 24 * 60 * 60 * 1000;
+    let done = json!({ "status": "done", "output": {}, "steps": 3, "durationMs": 15_000 });
+    let pursued = json!({ "outcome": "handed_back", "pagesRead": 4, "pageTokens": 10_000 });
+    let click = |at: i64| RecordToolDispatchInput {
+        args_json: bounded_args_json(&json!({ "kind": "click" })),
+        ..in_session(
+            "pursue-session",
+            ultrafast_dispatch("act", at, 200, &json!({}), DispatchId::new(), None, 10),
+        )
+    };
+    let first_run = now - 10 * day;
+    for row in [
+        ultrafast_dispatch(
+            "run_skill",
+            first_run,
+            15_354,
+            &done,
+            DispatchId::new(),
+            None,
+            1_701,
+        ),
+        in_session(
+            "pursue-session",
+            ultrafast_dispatch(
+                "pursue",
+                now - day,
+                6_000,
+                &pursued,
+                DispatchId::new(),
+                None,
+                100,
+            ),
+        ),
+        click(now - day + 1_000),
+        click(now - day + 2_000),
+        click(now - day + 20_000),
+    ] {
+        app.state.audit_log.record_tool_dispatch(row).await?;
+    }
+
+    // Before ultrafast has been on here, there is nothing to count from.
+    let savings = get_json(&app, "/api/v1/plan/savings").await?;
+    assert!(savings.get("meter").is_none(), "{savings}");
+
+    app.state.ultrafast.set(true);
+    let savings = get_json(&app, "/api/v1/plan/savings").await?;
+    let meter = &savings["meter"];
+    // The computer used ultrafast before the date was recorded, so it counts from that first run.
+    assert_eq!(meter["since"], first_run);
+    assert_eq!(meter["tokensSaved"], 10_000);
+    assert_eq!(meter["runTimes"], json!([now - day + 20_000]));
+    // Two of the three clicks fell inside pursue.
+    assert_eq!(meter["neoStepShare"], 67);
+    assert_eq!(meter["fastestRunMs"], 6_000);
+
+    // The date stays when ultrafast goes off and comes back, as on a lapse or a renewal.
+    app.state.ultrafast.set(false);
+    let savings = get_json(&app, "/api/v1/plan/savings").await?;
+    assert_eq!(savings["meter"]["since"], first_run);
+    Ok(())
+}
+
+#[tokio::test]
 async fn savings_start_at_zero() -> anyhow::Result<()> {
     let app = test_app().await?;
     seed_dispatch(&app, "ordinary-session").await?;

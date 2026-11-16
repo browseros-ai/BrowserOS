@@ -76,6 +76,54 @@ pub fn pursue_run(dispatches: &[ToolDispatchRow]) -> Option<PursueRun> {
     run
 }
 
+/// How many of a session's browser steps neo took during pursue, and how many steps there were in
+/// all: the agent's own `act` and `navigate` calls, and the `nav.*` and `input.*` primitives its
+/// `run` scripts recorded. A saved skill's script steps are neo's, not the agent's, so they are left
+/// out. Returns `None` when neo took no step during pursue.
+#[must_use]
+pub fn pursue_step_share(dispatches: &[ToolDispatchRow]) -> Option<(i64, i64)> {
+    let spans = |tool: &str| {
+        dispatches
+            .iter()
+            .filter(|row| row.tool_name == tool && !failed(row))
+            .map(|row| {
+                let duration = row.duration_ms.unwrap_or(0).max(0);
+                (row.created_at, row.created_at.saturating_add(duration))
+            })
+            .collect::<Vec<_>>()
+    };
+    let inside =
+        |spans: &[(i64, i64)], at: i64| spans.iter().any(|(start, end)| at >= *start && at <= *end);
+    let pursue_spans = spans("pursue");
+    let skill_spans = spans("run_skill");
+    let scripts = dispatches
+        .iter()
+        .filter(|row| row.parent_dispatch_id.is_none())
+        .filter_map(|row| Some((row.dispatch_id.as_deref()?, row.created_at)))
+        .collect::<std::collections::HashMap<_, _>>();
+    let (mut neo, mut all) = (0_i64, 0_i64);
+    for row in dispatches.iter().filter(|row| !failed(row)) {
+        match row.parent_dispatch_id.as_deref() {
+            None if step(row).is_some() => {
+                all += 1;
+                if inside(&pursue_spans, row.created_at) {
+                    neo += 1;
+                }
+            }
+            Some(parent)
+                if (row.tool_name.starts_with("nav.") || row.tool_name.starts_with("input."))
+                    && !scripts
+                        .get(parent)
+                        .is_some_and(|at| inside(&skill_spans, *at)) =>
+            {
+                all += 1;
+            }
+            _ => {}
+        }
+    }
+    (neo > 0).then_some((neo, all))
+}
+
 /// The outcome a pursue call kept in its result summary, when it finished or handed back.
 pub(crate) fn pursue_outcome(row: &ToolDispatchRow) -> Option<PursueOutcome> {
     if row.tool_name != "pursue" || failed(row) {
@@ -383,5 +431,46 @@ mod tests {
         assert_eq!(run.outcome, PursueOutcome::Completed);
         assert_eq!(run.duration_ms, 8_662);
         assert_eq!(run.steps.len(), 4);
+    }
+
+    fn child(id: i64, at: i64, tool: &str, parent: &str) -> ToolDispatchRow {
+        ToolDispatchRow {
+            parent_dispatch_id: Some(parent.into()),
+            ..row(id, at, tool, "{}", ACTED, 50)
+        }
+    }
+
+    #[test]
+    fn the_step_share_counts_neo_inside_pursue_against_every_browser_step() {
+        // Three steps inside pursue, then one click of the agent's own.
+        assert_eq!(pursue_step_share(&flights()), Some((3, 4)));
+    }
+
+    #[test]
+    fn the_agents_script_primitives_count_as_its_steps_but_reads_do_not() {
+        let mut rows = flights();
+        rows.push(child(20, 9_100, "nav.goto", "d9"));
+        rows.push(child(21, 9_200, "input.click", "d9"));
+        rows.push(child(22, 9_300, "read", "d9"));
+        assert_eq!(pursue_step_share(&rows), Some((3, 6)));
+    }
+
+    #[test]
+    fn a_saved_skills_own_script_steps_are_left_out() {
+        let mut rows = flights();
+        rows.push(row(30, 30_000, "run_skill", "{}", ACTED, 5_000));
+        rows.push(row(31, 30_010, "run", "{}", ACTED, 4_900));
+        rows.push(child(32, 31_000, "nav.goto", "d31"));
+        rows.push(child(33, 32_000, "input.click", "d31"));
+        assert_eq!(pursue_step_share(&rows), Some((3, 4)));
+    }
+
+    #[test]
+    fn without_a_step_inside_pursue_there_is_no_share() {
+        let rows = vec![
+            row(1, 1_000, "pursue", "{}", HANDED_BACK, 500),
+            act(2, 5_000, r#"{"kind":"click","page":9,"ref":"e1"}"#),
+        ];
+        assert_eq!(pursue_step_share(&rows), None);
     }
 }

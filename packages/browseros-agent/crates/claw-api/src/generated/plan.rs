@@ -423,6 +423,9 @@ pub struct PlanSavings {
     /// The newest of those tasks, newest first, each with what neo measured (`ultrafast`) and what it did with pursue (`pursue`) where recorded.
     #[serde(rename = "latest")]
     pub latest: Vec<models::SessionSummary>,
+    /// Present only once ultrafast has been on for this computer: what the Home meter shows since then.
+    #[serde(rename = "meter", skip_serializing_if = "Option::is_none")]
+    pub meter: Option<Box<models::PlanSavingsMeter>>,
 }
 
 impl PlanSavings {
@@ -436,6 +439,40 @@ impl PlanSavings {
             totals: Box::new(totals),
             tasks,
             latest,
+            meter: None,
+        }
+    }
+}
+
+/// PlanSavingsMeter : The Home meter for an ultrafast customer, counted from the day this computer got ultrafast.
+#[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PlanSavingsMeter {
+    /// When this computer got ultrafast, in epoch milliseconds: the first time it was on here, or the first ultrafast run if that came earlier.
+    #[serde(rename = "since")]
+    pub since: i64,
+    /// Estimated tokens neo kept off the agent since then: page descriptions instead of screenshots, plus the page text neo read itself during ultrafast runs. The two are measured differently, so this is an estimate.
+    #[serde(rename = "tokensSaved")]
+    pub tokens_saved: i64,
+    /// When each ultrafast task of the last 7 days last ran, in epoch milliseconds, newest first, for a by-day chart in local time.
+    #[serde(rename = "runTimes")]
+    pub run_times: Vec<i64>,
+    /// In tasks that used pursue, the average share of browser steps neo took itself, as a whole percent. Absent until such a task recorded a step.
+    #[serde(rename = "neoStepShare", skip_serializing_if = "Option::is_none")]
+    pub neo_step_share: Option<i32>,
+    /// The shortest single ultrafast run: a skill that finished without the agent, or a pursue that finished or handed back. Absent before the first one.
+    #[serde(rename = "fastestRunMs", skip_serializing_if = "Option::is_none")]
+    pub fastest_run_ms: Option<i64>,
+}
+
+impl PlanSavingsMeter {
+    /// The Home meter for an ultrafast customer, counted from the day this computer got ultrafast.
+    pub fn new(since: i64, tokens_saved: i64, run_times: Vec<i64>) -> PlanSavingsMeter {
+        PlanSavingsMeter {
+            since,
+            tokens_saved,
+            run_times,
+            neo_step_share: None,
+            fastest_run_ms: None,
         }
     }
 }

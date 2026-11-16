@@ -5,12 +5,15 @@
 use super::{error, internal};
 use crate::{
     AppState,
+    clock::now_epoch_ms,
     db::{
-        audit_log::{ListTasksQuery, TaskDetail, TaskStatus, TaskSummary, ToolDispatchRow},
+        audit_log::{
+            ListTasksQuery, TaskDetail, TaskStatus, TaskSummary, ToolDispatchRow, UltrafastSession,
+        },
         pursue_runs::{PursueOutcome, PursueRun, PursueStepKind, pursue_run},
         ultrafast_runs::{UltrafastRunStats, ultrafast_run_stats},
     },
-    error::{CanonicalError, RequestId},
+    error::{AppResult, CanonicalError, RequestId},
     ids::SessionId,
     services::{
         cockpit::{
@@ -18,7 +21,9 @@ use crate::{
             LiveTabProjection,
         },
         sessions::Session,
+        ultrafast_meter,
     },
+    storage::JsonStore,
 };
 use axum::{
     Extension, Json,
@@ -26,9 +31,9 @@ use axum::{
     http::StatusCode,
 };
 use claw_api::models::{
-    CancelSessionResponse, Dispatch, PlanSavings, ResolveHelpRequest, ResolveHelpResponse,
-    SessionBrowserTab, SessionDetail, SessionList, SessionPursueRun, SessionPursueStep,
-    SessionStatus, SessionSummary, SessionTokenUsage, SessionUltrafastRun,
+    CancelSessionResponse, Dispatch, PlanSavings, PlanSavingsMeter, ResolveHelpRequest,
+    ResolveHelpResponse, SessionBrowserTab, SessionDetail, SessionList, SessionPursueRun,
+    SessionPursueStep, SessionStatus, SessionSummary, SessionTokenUsage, SessionUltrafastRun,
 };
 use std::{collections::HashMap, sync::Arc};
 
@@ -214,11 +219,33 @@ pub(super) async fn savings(
         latest.push(summary);
     }
     let tasks = i64::try_from(sessions.len()).unwrap_or(i64::MAX);
-    Ok(Json(PlanSavings::new(
-        *contract_ultrafast(totals),
-        tasks,
-        latest,
-    )))
+    let mut savings = PlanSavings::new(*contract_ultrafast(totals), tasks, latest);
+    savings.meter = meter(&state, &sessions)
+        .await
+        .map_err(|source| internal(&request_id, source))?
+        .map(Box::new);
+    Ok(Json(savings))
+}
+
+/// The Home meter, counted from the day this computer got ultrafast; `None` before that day.
+async fn meter(
+    state: &AppState,
+    sessions: &[UltrafastSession],
+) -> AppResult<Option<PlanSavingsMeter>> {
+    let now = now_epoch_ms();
+    let first_run = sessions.iter().map(|session| session.first_run_at).min();
+    let store = JsonStore::new(state.config.browserclaw_dir.clone());
+    let Some(since) =
+        ultrafast_meter::since(&store, state.ultrafast_enabled(), first_run, now).await?
+    else {
+        return Ok(None);
+    };
+    let neo = state.session_efficiency.window_since(since).await?;
+    let meter = ultrafast_meter::meter(since, neo.raw_token_savings_estimate, sessions, now);
+    let mut contract = PlanSavingsMeter::new(meter.since, meter.tokens_saved, meter.run_times);
+    contract.neo_step_share = meter.neo_step_share;
+    contract.fastest_run_ms = meter.fastest_run_ms;
+    Ok(Some(contract))
 }
 
 pub(super) async fn cancel(
