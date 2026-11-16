@@ -177,7 +177,7 @@ pub(crate) enum ProbeReply {
     Snapshot {
         /// The main page's same-request cover survey; absent outside Neo's two text formats.
         #[serde(default)]
-        #[ts(optional)]
+        #[ts(optional, as = "Option<Vec<SurveyLayer>>")]
         on_top: Vec<SurveyLayer>,
         #[serde(default)]
         #[ts(optional)]

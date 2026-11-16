@@ -159,7 +159,7 @@ pub(crate) struct SnapshotResult {
     pub(crate) partial: Vec<PartialFrame>,
     /// Pinned words from the main page alone; empty keeps every old output byte unchanged.
     #[serde(rename = "onTop", skip_serializing_if = "Vec::is_empty")]
-    #[ts(optional)]
+    #[ts(optional, as = "Option<Vec<SnapshotTop>>")]
     pub(crate) on_top: Vec<SnapshotTop>,
     /// Set on `page.ariaSnapshot` only; a locator's snapshot never becomes a baseline.
     #[serde(skip_serializing_if = "Option::is_none")]

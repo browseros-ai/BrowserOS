@@ -106,8 +106,14 @@ export function hitChain(target: Element, point: Point): Element[] | null {
   return hit === target ? null : chain
 }
 
-/** The click's one walk through its roots; the survey supplies only its main document. */
-export function hitAtRoots(roots: readonly (Document | ShadowRoot)[], point: Point): Element | undefined {
+/**
+ * The click's one root traversal runs from the outer document inward. A survey sample supplies
+ * only the document: it must not enter a shadow root on behalf of a subject it does not have.
+ */
+export function hitAtRoots(
+  roots: readonly (Document | ShadowRoot)[],
+  point: Point,
+): Element | undefined {
   let hit: Element | undefined
   for (let index = roots.length - 1; index >= 0; index--) {
     const root = roots[index]
@@ -255,7 +261,12 @@ function factsOf(
       ? { text: drawn.slice(0, MAX_TEXT).join('') }
       : {}),
     controls,
-    blank: !isFrame(shown) && !closed && controls.length === 0 && !words && !drawn?.length,
+    blank:
+      !isFrame(shown) &&
+      !closed &&
+      controls.length === 0 &&
+      !words &&
+      !drawn?.length,
     behind,
     closed,
     notice: !surrounds && inLiveRegion(world, shown),
@@ -264,10 +275,22 @@ function factsOf(
 }
 
 /** One naming decision for a click and the survey; the latter has no clicked subject. */
-export function shownAs(world: World, output: FailureOutput, layer: Element, point: Point, subject?: Element): Element {
-  const holds = subject ? (layer.contains(subject) || layer === world.injected.document.body) : pageElement(layer)
+export function shownAs(
+  world: World,
+  output: FailureOutput,
+  layer: Element,
+  point: Point,
+  subject?: Element,
+): Element {
+  const holds = subject
+    ? layer.contains(subject) || layer === world.injected.document.body
+    : pageElement(layer)
   if (holds || inClosedPart(layer)) return layer
-  return (isBlank(world, output, layer) ? dialogBehind(world, layer, point) : soleDialog(world, layer)) ?? layer
+  return (
+    (isBlank(world, output, layer)
+      ? dialogBehind(world, layer, point)
+      : soleDialog(world, layer)) ?? layer
+  )
 }
 
 /** A frame contains a separate document, never an empty backdrop in this world. */
@@ -602,7 +625,11 @@ function holdsWords(node: unknown): boolean {
 }
 
 /** The accessible name, read under the mask. */
-export function nameOf(world: World, output: FailureOutput, element: Element): string {
+export function nameOf(
+  world: World,
+  output: FailureOutput,
+  element: Element,
+): string {
   return output.tree(element, () =>
     world.injected.utils.getElementAccessibleNameText(element, false),
   )
@@ -679,8 +706,7 @@ export function coverControl(world: World, element: Element): boolean {
 
 /** A control's role as an answer prints it: a frame is an `iframe`, as a snapshot prints one. */
 export function controlRole(world: World, control: Element): string {
-  if (isFrame(control))
-    return 'iframe'
+  if (isFrame(control)) return 'iframe'
   return world.injected.utils.getAriaRole(control) ?? 'generic'
 }
 
