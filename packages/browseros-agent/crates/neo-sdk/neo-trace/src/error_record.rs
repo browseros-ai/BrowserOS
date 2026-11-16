@@ -3,7 +3,8 @@
 //! host decisions and what the website did.
 
 use crate::OperationId;
-use serde::{Deserialize, Serialize};
+use serde::de::value::StringDeserializer;
+use serde::{Deserialize, Deserializer, Serialize};
 
 /// Whose behavior must change to fix a failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -51,6 +52,16 @@ impl DiagnosticCode {
             Self::TargetCrashed => "target_crashed",
         }
     }
+
+    /// Keep stored errors readable after rollback when a newer writer added a diagnostic.
+    /// Unknown strings become absent; malformed types still fail deserialization. Known names
+    /// use the enum's deserializer so typed and stored names stay in sync.
+    pub fn deserialize_optional<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<Self>, D::Error> {
+        let name = Option::<String>::deserialize(deserializer)?;
+        Ok(name.and_then(|name| Self::deserialize(StringDeserializer::<D::Error>::new(name)).ok()))
+    }
 }
 
 /// A failure as it is stored: bounded on the writer before it reaches disk.
@@ -62,7 +73,11 @@ pub struct ErrorRecord {
     /// A stable snake_case code, e.g. `owner_has_control`.
     pub code: String,
     /// Optional detail retained in full and summary views, without changing the primary code.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "DiagnosticCode::deserialize_optional",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub diagnostic_code: Option<DiagnosticCode>,
     /// The human message.
     pub message: String,
@@ -121,6 +136,28 @@ mod tests {
             );
         }
         Ok(())
+    }
+
+    #[test]
+    fn stored_error_records_reject_malformed_diagnostics() {
+        for diagnostic in [
+            serde_json::json!(true),
+            serde_json::json!(42),
+            serde_json::json!([]),
+            serde_json::json!({ "target_crashed": null }),
+        ] {
+            let stored = serde_json::json!({
+                "owner": "neo",
+                "code": "internal_error",
+                "diagnosticCode": diagnostic,
+                "message": "stored failure",
+                "retryable": false,
+            });
+            assert!(
+                serde_json::from_str::<super::ErrorRecord>(&stored.to_string()).is_err(),
+                "malformed diagnostic should be rejected: {diagnostic}"
+            );
+        }
     }
 
     #[test]
