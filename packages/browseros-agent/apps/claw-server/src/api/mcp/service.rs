@@ -99,9 +99,18 @@ enum HandlelessStart {
 /// no session handle must not mint a standalone task: it carries no task intent, so an
 /// isolated one would otherwise become a one-call orphan in the cockpit. Everything else,
 /// `name_session`, `run_skill` and the first real browser action, opens a task.
-fn handleless_start_for(tool: &str) -> HandlelessStart {
+///
+/// `tabs` is split by its action: `list` and `active` only read, so they stay ephemeral,
+/// but `new` and `close` mutate browser state and must leave a task record rather than run
+/// unrecorded. The action is read from the call arguments, defaulting to the tool's own
+/// `list` default when absent.
+fn handleless_start_for(tool: &str, raw_args: &Value) -> HandlelessStart {
     match tool {
-        "tabs" | "browser_target" | MARK_SKILL_RUN_TOOL_NAME => HandlelessStart::Ephemeral,
+        "tabs" => match raw_args.get("action").and_then(Value::as_str) {
+            Some("new") | Some("close") => HandlelessStart::OpenTask,
+            _ => HandlelessStart::Ephemeral,
+        },
+        "browser_target" | MARK_SKILL_RUN_TOOL_NAME => HandlelessStart::Ephemeral,
         _ => HandlelessStart::OpenTask,
     }
 }
@@ -870,7 +879,15 @@ impl ClawMcpService {
                     format!("promoting an ephemeral session failed: {error}"),
                     None,
                 )
-            })
+            })?;
+        // The ephemeral mint skipped the start analytics, so the promotion emits it now. Its
+        // teardown emits the matching end analytics once the session is no longer ephemeral,
+        // keeping the start/end analytics paired.
+        self.state.analytics.capture(
+            crate::analytics::events::AGENT_SESSION_STARTED,
+            json!({ "client_name": session.client_name() }),
+        );
+        Ok(())
     }
 
     async fn resolve_modern_session_with_intent(
@@ -922,18 +939,10 @@ impl ClawMcpService {
             // No handle at all is a request to start something new, and the only honest
             // reading of it. Nothing here guesses which session a caller "meant". A
             // pure-utility probe does not start a task, so it runs in an ephemeral session
-            // that never lands a task row; a genuine opener mints and, on opening, retires
-            // this client's prior finished task so it stops lingering `Live`.
+            // that never lands a task row; a genuine opener mints a real task session.
             return match start {
                 HandlelessStart::Ephemeral => self.mint_ephemeral_session(client).await,
-                HandlelessStart::OpenTask => {
-                    let opened = self.mint_session(client).await?;
-                    self.state
-                        .sessions
-                        .retire_superseded_tasks(&opened.0.session)
-                        .await;
-                    Ok(opened)
-                }
+                HandlelessStart::OpenTask => self.mint_session(client).await,
             };
         };
         if matches!(
@@ -1410,7 +1419,7 @@ impl ServerHandler for ClawMcpService {
                     provided_handle,
                     declared,
                     modern_client,
-                    handleless_start_for(&request.name),
+                    handleless_start_for(&request.name, &raw_args),
                 )
                 .await?;
             (started, Some(handle))
@@ -4269,13 +4278,6 @@ mod tests {
         }
     }
 
-    fn claude_identity() -> ClientIdentity {
-        ClientIdentity::Ephemeral {
-            slug: "claude".to_string(),
-            label: "Claude".to_string(),
-        }
-    }
-
     async fn record_probe(
         state: &AppState,
         session: &Arc<Session>,
@@ -4303,8 +4305,32 @@ mod tests {
 
     #[test]
     fn pure_utility_probes_do_not_open_a_task() {
-        for probe in ["tabs", "browser_target", MARK_SKILL_RUN_TOOL_NAME] {
-            assert_eq!(handleless_start_for(probe), HandlelessStart::Ephemeral);
+        let no_args = json!({});
+        assert_eq!(
+            handleless_start_for("browser_target", &no_args),
+            HandlelessStart::Ephemeral
+        );
+        assert_eq!(
+            handleless_start_for(MARK_SKILL_RUN_TOOL_NAME, &no_args),
+            HandlelessStart::Ephemeral
+        );
+        // A read-only tabs probe (list is also the default when action is absent) stays ephemeral.
+        for read_only in [
+            json!({}),
+            json!({ "action": "list" }),
+            json!({ "action": "active" }),
+        ] {
+            assert_eq!(
+                handleless_start_for("tabs", &read_only),
+                HandlelessStart::Ephemeral
+            );
+        }
+        // A mutating tabs action changes browser state and must open a task.
+        for mutating in [json!({ "action": "new" }), json!({ "action": "close" })] {
+            assert_eq!(
+                handleless_start_for("tabs", &mutating),
+                HandlelessStart::OpenTask
+            );
         }
         for opener in [
             NAME_SESSION_TOOL_NAME,
@@ -4312,7 +4338,10 @@ mod tests {
             "navigate",
             "act",
         ] {
-            assert_eq!(handleless_start_for(opener), HandlelessStart::OpenTask);
+            assert_eq!(
+                handleless_start_for(opener, &no_args),
+                HandlelessStart::OpenTask
+            );
         }
     }
 
@@ -4416,82 +4445,54 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn opening_a_new_task_completes_the_prior_live_task_as_done_and_collapses_its_group()
+    async fn a_mutating_tabs_call_opens_a_task_while_a_read_only_probe_does_not()
     -> anyhow::Result<()> {
-        use crate::services::sessions::{PageOwnership, RetainedGroupAction};
-        use std::sync::Mutex as StdMutex;
-
         let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
         let service = ClawMcpService::new(call.state.clone());
         let state = call.state.clone();
 
-        let collapsed: Arc<StdMutex<Vec<(crate::ids::ConvoId, RetainedGroupAction)>>> =
-            Arc::new(StdMutex::new(Vec::new()));
-        let recorder = collapsed.clone();
-        state.sessions.set_retained_group_hook(Arc::new(
-            move |_ownership: Arc<PageOwnership>, key, action| {
-                let recorder = recorder.clone();
-                Box::pin(async move {
-                    recorder
-                        .lock()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner())
-                        .push((key, action));
-                    true
-                })
-            },
-        ));
-
-        let prior = state
-            .sessions
-            .mint_with_id(
-                SessionId::new("prior-task"),
-                claude_identity(),
-                claude_client(),
-                None,
-                true,
-            )
-            .await?;
-        prior.mark_used();
-        record_probe(&state, &prior, NAME_SESSION_TOOL_NAME).await?;
-        let prior_convo = prior.convo_id().clone();
-
-        let (opened, _) = service
+        // A read-only tabs probe runs ephemerally and lands no task row.
+        let (probe, _) = service
             .resolve_modern_session_with_intent(
                 None,
                 None,
                 Some(claude_client()),
-                HandlelessStart::OpenTask,
+                handleless_start_for("tabs", &json!({ "action": "list" })),
             )
             .await
             .map_err(|error| anyhow::anyhow!("{error:?}"))?;
-        assert_ne!(opened.session.id().as_str(), "prior-task");
+        assert!(probe.session.is_ephemeral());
+        record_probe(&state, &probe.session, "tabs").await?;
 
-        assert!(
-            !state.sessions.contains(&SessionId::new("prior-task")).await,
-            "the superseded task is retired from the live map"
-        );
+        // A mutating tabs action opens a real task that is recorded.
+        let (mutating, _) = service
+            .resolve_modern_session_with_intent(
+                None,
+                None,
+                Some(claude_client()),
+                handleless_start_for("tabs", &json!({ "action": "new" })),
+            )
+            .await
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        assert!(!mutating.session.is_ephemeral());
+        record_probe(&state, &mutating.session, "tabs").await?;
+
         let tasks = state
             .audit_log
             .list_tasks(crate::db::audit_log::ListTasksQuery::default())
             .await?;
-        let prior_status = tasks
+        let listed: Vec<&str> = tasks
             .tasks
             .iter()
-            .find(|task| task.session_id == "prior-task")
-            .map(|task| task.status);
-        assert_eq!(
-            prior_status,
-            Some(crate::db::audit_log::TaskStatus::Done),
-            "a superseded task completes as Done, never cancelled"
-        );
-        let collapsed = collapsed
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+            .map(|task| task.session_id.as_str())
+            .collect();
         assert!(
-            collapsed.iter().any(
-                |(key, action)| key == &prior_convo && *action == RetainedGroupAction::Collapse
-            ),
-            "the superseded task's tab group is collapsed"
+            listed.contains(&mutating.session.id().as_str()),
+            "a mutating tabs call must leave a task record"
+        );
+        assert!(
+            !listed.contains(&probe.session.id().as_str()),
+            "a read-only tabs probe must not surface as a task"
         );
         Ok(())
     }

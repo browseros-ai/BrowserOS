@@ -517,43 +517,6 @@ impl Sessions {
         Ok(false)
     }
 
-    /// Retires the client's prior live tasks when it opens a new one, so a finished task
-    /// stops lingering `Live` until a manual Stop. Each idle prior task of the same client
-    /// is torn down as `closed`, which derives `Done`, releases its tab claims and collapses
-    /// its group; operator-stop is never set, so none is relabelled `cancelled`. A session
-    /// with a dispatch in flight is left alone so concurrent work is not cancelled, and an
-    /// ephemeral probe is skipped since it is not a task.
-    pub async fn retire_superseded_tasks(&self, opened: &Arc<Session>) {
-        let opened_id = opened.id().clone();
-        let slug = opened.agent().slug().to_string();
-        let client_name = opened.client_name().to_string();
-        let prior: Vec<Arc<Session>> = {
-            let sessions = self.sessions.read().await;
-            sessions
-                .values()
-                .filter(|session| {
-                    session.id() != &opened_id
-                        && !session.is_ephemeral()
-                        && session.is_used()
-                        && session.agent().slug() == slug
-                        && session.client_name() == client_name
-                })
-                .cloned()
-                .collect()
-        };
-        for session in prior {
-            if session.active_dispatch_count().await > 0 {
-                continue;
-            }
-            if let Err(error) = self
-                .remove(session.id(), "closed", Some("superseded by a new task"))
-                .await
-            {
-                warn!(error = %error, session_id = %session.id(), "retiring a superseded task failed");
-            }
-        }
-    }
-
     async fn restore_pending_operator_stop(&self, id: &SessionId, session: Arc<Session>) {
         if session.operator_stop_requested() {
             self.sessions
@@ -687,28 +650,33 @@ impl Sessions {
         if let Some(hook) = self.retained_group_hook.get() {
             hook(self.ownership.clone(), key, RetainedGroupAction::Collapse).await;
         }
-        for tool in usage.tools.iter().filter(|tool| tool.dispatch_count > 0) {
+        // An ephemeral probe skipped its start analytics at mint, so it emits no task-level
+        // end analytics either; its non-analytics teardown (tab-claim release, group collapse)
+        // still runs above. A promoted session is no longer ephemeral and pairs normally.
+        if !session.is_ephemeral() {
+            for tool in usage.tools.iter().filter(|tool| tool.dispatch_count > 0) {
+                self.analytics.capture(
+                    events::AGENT_SESSION_TOOL_USAGE,
+                    json!({
+                        "client_name": usage.client_name.as_str(),
+                        "tool_name": tool.tool_name.as_str(),
+                        "dispatch_count": tool.dispatch_count,
+                        "total_duration_ms": tool.total_duration_ms,
+                        "max_duration_ms": tool.max_duration_ms,
+                    }),
+                );
+            }
             self.analytics.capture(
-                events::AGENT_SESSION_TOOL_USAGE,
+                events::AGENT_SESSION_ENDED,
                 json!({
+                    "kind": kind,
                     "client_name": usage.client_name.as_str(),
-                    "tool_name": tool.tool_name.as_str(),
-                    "dispatch_count": tool.dispatch_count,
-                    "total_duration_ms": tool.total_duration_ms,
-                    "max_duration_ms": tool.max_duration_ms,
+                    "dispatch_count": usage.dispatch_count,
+                    "distinct_tool_count": usage.distinct_tool_count,
+                    "max_concurrent_used_sessions": usage.max_concurrent_used_sessions,
                 }),
             );
         }
-        self.analytics.capture(
-            events::AGENT_SESSION_ENDED,
-            json!({
-                "kind": kind,
-                "client_name": usage.client_name.as_str(),
-                "dispatch_count": usage.dispatch_count,
-                "distinct_tool_count": usage.distinct_tool_count,
-                "max_concurrent_used_sessions": usage.max_concurrent_used_sessions,
-            }),
-        );
         audit_result?;
         Ok(())
     }
@@ -1522,6 +1490,45 @@ mod tests {
                     "max_concurrent_used_sessions": 0,
                 }),
             )]
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn an_ephemeral_session_teardown_emits_no_task_analytics() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let (audit_log, session_tabs) = repositories(&dir).await?;
+        let analytics = Arc::new(RecordingAnalytics::default());
+        let registry = Sessions::new_with_analytics(
+            audit_log,
+            session_tabs,
+            Duration::from_secs(60),
+            Duration::from_secs(60),
+            Duration::from_secs(1),
+            analytics.clone(),
+        );
+        let ephemeral = Session::new_with_declared_product(
+            SessionId::new("ephemeral-probe"),
+            ClientIdentity::Ephemeral {
+                slug: "agent".to_string(),
+                label: "Agent".to_string(),
+            },
+            ConversationIdentity::new("agent", "ephemeral-label".to_string()),
+            "Codex".to_string(),
+            "1".to_string(),
+            None,
+            true,
+            Instant::now(),
+        );
+        ephemeral
+            .record_tool_usage("tabs", Duration::from_millis(10), 1)
+            .await;
+        registry.insert_for_testing(ephemeral.clone()).await;
+
+        assert!(registry.remove(ephemeral.id(), "closed", None).await?);
+        assert!(
+            analytics.snapshot().is_empty(),
+            "an ephemeral probe skips start analytics at mint, so its teardown emits no end analytics"
         );
         Ok(())
     }
