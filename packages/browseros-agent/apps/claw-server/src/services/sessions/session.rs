@@ -29,6 +29,9 @@ pub struct Session {
     // slug. Retain its recognized product before that resolution, for display
     // only, and freeze it alongside the raw protocol client metadata.
     declared_client_product: Option<&'static str>,
+    // A handle-less pure-utility probe runs in an ephemeral session that is never
+    // persisted to the audit, so such calls do not surface as standalone tasks.
+    ephemeral: bool,
     dispatches: Mutex<DispatchState>,
     dispatches_drained: Notify,
     operator_stop_requested: AtomicBool,
@@ -53,7 +56,7 @@ impl Session {
         client_name: String,
         now: Instant,
     ) -> Arc<Self> {
-        Self::new_with_declared_product(id, agent, identity, client_name, None, now)
+        Self::new_with_declared_product(id, agent, identity, client_name, None, false, now)
     }
 
     /// Creates a session with its declared product fallback already fixed, before
@@ -65,6 +68,7 @@ impl Session {
         identity: ConversationIdentity,
         client_name: String,
         declared_client_product: Option<&'static str>,
+        ephemeral: bool,
         now: Instant,
     ) -> Arc<Self> {
         Arc::new(Self {
@@ -73,6 +77,7 @@ impl Session {
             identity,
             usage: UsageTracker::new(client_name),
             declared_client_product,
+            ephemeral,
             dispatches: Mutex::new(DispatchState {
                 accepting: true,
                 active: BTreeMap::new(),
@@ -115,6 +120,13 @@ impl Session {
     #[must_use]
     pub fn declared_client_product(&self) -> Option<&'static str> {
         self.declared_client_product
+    }
+
+    /// An ephemeral session executes a handle-less probe without ever being recorded
+    /// as a task: the audit skips its start and its dispatches, so it leaves no row.
+    #[must_use]
+    pub fn is_ephemeral(&self) -> bool {
+        self.ephemeral
     }
 
     pub fn mark_used(&self) {

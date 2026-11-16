@@ -60,6 +60,10 @@ pub async fn record_local_tool_dispatch(
     state: &AppState,
     dispatch: LocalToolDispatch<'_>,
 ) -> anyhow::Result<()> {
+    // An ephemeral probe leaves no task row, so its local dispatch is not recorded either.
+    if dispatch.session.is_ephemeral() {
+        return Ok(());
+    }
     state
         .audit_worker
         .submit(AuditEvent::without_preview(RecordToolDispatchInput {
@@ -109,6 +113,11 @@ async fn build_event(
         );
         return None;
     };
+    // An ephemeral session is a handle-less probe, not a task: recording its dispatch would
+    // give it a task row, the orphan this path exists to stop. The tool still runs.
+    if identity.session.is_ephemeral() {
+        return None;
+    }
     let page_id = if call.flags.new_page {
         result_page_id(result)
     } else {

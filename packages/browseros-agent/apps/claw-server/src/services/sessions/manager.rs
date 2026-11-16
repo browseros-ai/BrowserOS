@@ -222,17 +222,23 @@ impl Sessions {
         client: ClientInfo,
     ) -> AppResult<Arc<Session>> {
         let id = SessionId::new(Ulid::new().to_string());
-        self.mint_with_id(id, agent, client, None).await
+        self.mint_with_id(id, agent, client, None, true).await
     }
 
     /// Publishes ownership and client presentation together. `declared_product`
     /// comes from the unmodified agentName, before a saved profile rewrites its slug.
+    ///
+    /// `persist` records the session start to the audit and captures analytics. A
+    /// handle-less pure-utility probe mints with `persist` false: it runs in the live
+    /// map so the tool can execute and idle sweeping can reap it, but leaves no audit
+    /// start and, paired with the audit skipping its dispatches, never becomes a task.
     pub async fn mint_with_id(
         self: &Arc<Self>,
         id: SessionId,
         agent: ClientIdentity,
         client: ClientInfo,
         declared_product: Option<&'static str>,
+        persist: bool,
     ) -> AppResult<Arc<Session>> {
         let identity = {
             let mut reserved_keys = self.reserved_keys.lock().await;
@@ -250,8 +256,13 @@ impl Sessions {
             identity,
             client.name.clone(),
             declared_product,
+            !persist,
             Instant::now(),
         );
+        if !persist {
+            self.sessions.write().await.insert(id, session.clone());
+            return Ok(session);
+        }
         let audit_result = self
             .audit_log
             .record_session_start(
@@ -503,6 +514,43 @@ impl Sessions {
             };
         }
         Ok(false)
+    }
+
+    /// Retires the client's prior live tasks when it opens a new one, so a finished task
+    /// stops lingering `Live` until a manual Stop. Each idle prior task of the same client
+    /// is torn down as `closed`, which derives `Done`, releases its tab claims and collapses
+    /// its group; operator-stop is never set, so none is relabelled `cancelled`. A session
+    /// with a dispatch in flight is left alone so concurrent work is not cancelled, and an
+    /// ephemeral probe is skipped since it is not a task.
+    pub async fn retire_superseded_tasks(&self, opened: &Arc<Session>) {
+        let opened_id = opened.id().clone();
+        let slug = opened.agent().slug().to_string();
+        let client_name = opened.client_name().to_string();
+        let prior: Vec<Arc<Session>> = {
+            let sessions = self.sessions.read().await;
+            sessions
+                .values()
+                .filter(|session| {
+                    session.id() != &opened_id
+                        && !session.is_ephemeral()
+                        && session.is_used()
+                        && session.agent().slug() == slug
+                        && session.client_name() == client_name
+                })
+                .cloned()
+                .collect()
+        };
+        for session in prior {
+            if session.active_dispatch_count().await > 0 {
+                continue;
+            }
+            if let Err(error) = self
+                .remove(session.id(), "closed", Some("superseded by a new task"))
+                .await
+            {
+                warn!(error = %error, session_id = %session.id(), "retiring a superseded task failed");
+            }
+        }
     }
 
     async fn restore_pending_operator_stop(&self, id: &SessionId, session: Arc<Session>) {

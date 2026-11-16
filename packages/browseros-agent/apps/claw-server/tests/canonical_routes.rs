@@ -1445,6 +1445,7 @@ async fn canonical_cancel_stops_an_idle_zero_dispatch_session() -> anyhow::Resul
                 title: None,
             },
             None,
+            true,
         )
         .await?;
 

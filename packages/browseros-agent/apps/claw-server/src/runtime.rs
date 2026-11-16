@@ -686,6 +686,7 @@ mod tests {
                     title: None,
                 },
                 None,
+                true,
             )
             .await?;
         state
