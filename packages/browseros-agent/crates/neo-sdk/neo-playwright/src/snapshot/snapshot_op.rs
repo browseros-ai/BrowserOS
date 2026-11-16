@@ -29,6 +29,7 @@
 
 use std::borrow::Cow;
 use std::fmt;
+use std::mem;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
@@ -762,7 +763,7 @@ impl Snapshotter<'_> {
         mut root: FrameReply,
         depth: Option<i64>,
     ) -> Result<aria_snapshot::SnapshotResult, PlaywrightError> {
-        let on_top = std::mem::take(&mut root.on_top);
+        let on_top = mem::take(&mut root.on_top);
         let mut result = aria_snapshot::stitch(self.below(root, depth).await?);
         result.on_top = on_top;
         let count = |seeds: usize| u32::try_from(seeds).unwrap_or(u32::MAX);
@@ -914,6 +915,39 @@ fn child_depth(depth: Option<i64>, iframe_depth: u32) -> Option<i64> {
         .map(|depth| depth - i64::from(iframe_depth) - 1)
 }
 
+/// Names are already masked page facts; this is the same wording the covered answer owns.
+fn top_note(layer: &SurveyLayer) -> aria_snapshot::SnapshotTop {
+    let controls: Vec<_> = layer
+        .controls
+        .iter()
+        .map(|control| {
+            (
+                control.role.as_str(),
+                control.name.as_value(),
+                control.r#ref.as_str(),
+            )
+        })
+        .collect();
+    let note = OnTopNote {
+        role: &layer.role,
+        name: layer.name.as_value(),
+        reference: &layer.r#ref,
+        blank: layer.blank,
+        loading: layer.loading,
+        whole_view: layer.whole_view,
+        controls: &controls,
+        first_words: layer
+            .first_words
+            .as_ref()
+            .and_then(|words| words.as_value().as_str()),
+    };
+    aria_snapshot::SnapshotTop {
+        r#ref: layer.r#ref.clone(),
+        line: action::on_top_line(&note),
+        whole_view: layer.whole_view,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::error::Error;
@@ -996,38 +1030,5 @@ mod tests {
             );
         }
         Ok(())
-    }
-}
-
-/// Names are already masked page facts; this is the same wording the covered answer owns.
-fn top_note(layer: &SurveyLayer) -> aria_snapshot::SnapshotTop {
-    let controls: Vec<_> = layer
-        .controls
-        .iter()
-        .map(|control| {
-            (
-                control.role.as_str(),
-                control.name.as_value(),
-                control.r#ref.as_str(),
-            )
-        })
-        .collect();
-    let note = OnTopNote {
-        role: &layer.role,
-        name: layer.name.as_value(),
-        reference: &layer.r#ref,
-        blank: layer.blank,
-        loading: layer.loading,
-        whole_view: layer.whole_view,
-        controls: &controls,
-        first_words: layer
-            .first_words
-            .as_ref()
-            .and_then(|words| words.as_value().as_str()),
-    };
-    aria_snapshot::SnapshotTop {
-        r#ref: layer.r#ref.clone(),
-        line: action::on_top_line(&note),
-        whole_view: layer.whole_view,
     }
 }
