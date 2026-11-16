@@ -132,7 +132,9 @@ mod tests {
             assert!(!record.retryable);
             assert_eq!(
                 serde_json::to_value(record)?.get("diagnosticCode"),
-                expected.map(|code| serde_json::json!(code.as_str())).as_ref()
+                expected
+                    .map(|code| serde_json::json!(code.as_str()))
+                    .as_ref()
             );
         }
         Ok(())
