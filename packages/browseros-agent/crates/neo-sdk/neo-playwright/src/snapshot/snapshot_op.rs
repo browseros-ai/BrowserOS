@@ -282,6 +282,7 @@ async fn page_snapshot(
     // baseline, so a run that ends later cannot hand the new document the old one's text.
     let document = pw.snapshot_baselines().generation(page.target_id());
     let request = ProbeRequest::Snapshot {
+        mark_inert: marks(input.mode, input.clickable),
         root: ProbeTarget::Document,
         mode: input.mode,
         depth: input.depth,
@@ -551,6 +552,7 @@ impl Snapshotter<'_> {
     /// common probe sender carries the scope's output policy independently of these options.
     fn request(&self, root: ProbeTarget, depth: Option<i64>) -> ProbeRequest {
         ProbeRequest::Snapshot {
+            mark_inert: self.marking.is_some(),
             root,
             mode: self.mode,
             depth,
@@ -614,6 +616,13 @@ impl Snapshotter<'_> {
         }
         let reply = probe::call_with_nodes(self.scope, self.page, world, &request, &nodes).await;
         if main {
+            if let Ok(ProbeReply::Snapshot {
+                inert_marking_ms: Some(elapsed),
+                ..
+            }) = &reply
+            {
+                self.scope.log(format!("  inert marking: {elapsed:.3} ms"));
+            }
             *self.reading() = None;
             if matches!(reply, Ok(ProbeReply::Snapshot { .. })) {
                 self.scope.log(format!(

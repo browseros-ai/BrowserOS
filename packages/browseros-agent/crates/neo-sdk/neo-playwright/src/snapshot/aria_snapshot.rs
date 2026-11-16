@@ -45,6 +45,9 @@ pub(crate) struct AriaNode {
     pub(crate) expanded: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) active: Option<bool>,
+    /// Browser-declared inert subtree, only on Neo-format reads; live modal descendants are never enclosed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) inert: Option<bool>,
     /// `true`, `"grammar"` or `"spelling"`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) invalid: Option<Value>,
@@ -385,6 +388,28 @@ pub(crate) mod tests {
             unknown.is_err(),
             "a field the stitch has not been checked against fails"
         );
+    }
+
+    #[test]
+    fn inert_annotations_survive_frame_stitching_and_encoding() -> Result<(), Box<dyn Error>> {
+        let frame = FrameSnapshot {
+            json: serde_json::from_value(json!([{
+                "role": "iframe", "ref": "e2", "inert": true
+            }]))?,
+            children: vec![ChildFrame::Read {
+                iframe_ref: "e2".to_owned(),
+                snapshot: FrameSnapshot {
+                    json: serde_json::from_value(json!([{
+                        "role": "button", "ref": "f1e3", "name": "Inside", "inert": true
+                    }]))?,
+                    children: Vec::new(),
+                },
+            }],
+        };
+        let result = serde_json::to_value(stitch(frame))?;
+        assert_eq!(result["json"][0]["inert"], true);
+        assert_eq!(result["json"][0]["children"][0]["inert"], true);
+        Ok(())
     }
 
     /// tests/data/snapshot-output.json is what `stitch` returns for the recorded page, with the

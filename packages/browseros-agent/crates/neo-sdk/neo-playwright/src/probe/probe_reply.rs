@@ -24,7 +24,7 @@ use crate::world::{FrameSeq, Pin};
 /// contract: a world keeps the probe an earlier build installed, and the install replaces that
 /// probe only when its number differs (`engine_source`), so a shape changed under the same
 /// number reaches this build in the old shape. The lock's test catches a change without a bump.
-pub(crate) const PROBE_PROTOCOL: u32 = 44;
+pub(crate) const PROBE_PROTOCOL: u32 = 46;
 
 /// One reply; `kind` is the tag. Any request may also answer `error`, and `uninstalled` when
 /// the world has no booted probe.
@@ -161,9 +161,11 @@ pub(crate) enum ProbeReply {
     },
     /// One frame's `ariaSnapshotJSON` and its rendered iframes.
     Snapshot {
-        #[ts(
-            type = "import('../../../neo-playwright/third_party/playwright/packages/isomorphic/ariaSnapshot').AriaSnapshotJSON"
-        )]
+        /// Isolated-world inert annotation time, for the operation trace only.
+        #[serde(default)]
+        #[ts(optional)]
+        inert_marking_ms: Option<f64>,
+        #[ts(type = "import('../prelude/vendored').AriaSnapshotJSON")]
         json: Value,
         iframes: Vec<SnapshotIframe>,
         /// Clickable marking threw on this page and the snapshot was taken again without it;

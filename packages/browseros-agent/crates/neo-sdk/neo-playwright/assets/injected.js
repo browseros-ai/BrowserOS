@@ -9700,6 +9700,9 @@ ${value.stack}`;
       this.engine = diagnosticEngine(world.injected);
       this.checks = expectChecks(world.injected);
     }
+    get neoSnapshot() {
+      return !this.policy.conformance;
+    }
     run(invoke) {
       if (this.policy.conformance && !anyPrivatelyTyped())
         return invoke();
@@ -9985,7 +9988,7 @@ ${value.stack}`;
   }
 
   // crates/neo-sdk/neo-playwright-js/src/probe/protocol.ts
-  var PROTOCOL = 44;
+  var PROTOCOL = 46;
 
   // crates/neo-sdk/neo-playwright-js/src/probe/read.ts
   var XHTML2 = "http://www.w3.org/1999/xhtml";
@@ -10458,6 +10461,122 @@ ${value.stack}`;
     });
   }
 
+  // crates/neo-sdk/neo-playwright-js/src/probe/snapshot-inert.ts
+  function parent(element) {
+    if (element.assignedSlot)
+      return element.assignedSlot;
+    if (element.parentElement)
+      return element.parentElement;
+    const root = element.getRootNode();
+    return root instanceof ShadowRoot ? root.host : null;
+  }
+  function markInert(world, json) {
+    try {
+      for (const node of inertNodes(world, json))
+        node.inert = true;
+    } catch {}
+  }
+  function inertNodes(world, json) {
+    const document2 = world.injected.document;
+    const modals = [...document2.querySelectorAll("dialog:modal")];
+    const refs = lastSnapshotRefs(world.injected);
+    if (modals.length === 0 && !hasInertAttribute(document2, refs))
+      return [];
+    const modalAncestors = new Set;
+    for (const modal of reachableModals(document2, modals))
+      for (let ancestor = parent(modal);ancestor; ancestor = parent(ancestor))
+        modalAncestors.add(ancestor);
+    const ancestry = new WeakMap;
+    const isInert = (element) => {
+      const pending = [];
+      let state = { modal: false, attribute: false };
+      for (let ancestor = element;ancestor; ancestor = parent(ancestor)) {
+        const known = ancestry.get(ancestor);
+        if (known) {
+          state = known;
+          break;
+        }
+        pending.push(ancestor);
+      }
+      for (const ancestor of pending.reverse()) {
+        state = {
+          modal: state.modal || ancestor.matches("dialog:modal"),
+          attribute: state.attribute || ancestor.hasAttribute("inert")
+        };
+        ancestry.set(ancestor, state);
+      }
+      return !state.modal && (state.attribute || modals.length > 0);
+    };
+    const protectedNodes = liveAncestors(json, refs, isInert);
+    const marked = [];
+    const pending = [...json];
+    while (pending.length) {
+      const node = pending.pop();
+      if (!node)
+        continue;
+      const element = node.ref ? refs.get(node.ref)?.element : undefined;
+      if (element && !protectedNodes.has(node) && !modalAncestors.has(element) && isInert(element)) {
+        marked.push(node);
+        continue;
+      }
+      for (const child of node.children ?? [])
+        if (typeof child !== "string")
+          pending.push(child);
+    }
+    return marked;
+  }
+  function reachableModals(document2, modals) {
+    const reachable = [...modals];
+    const pending = [document2];
+    const seen = new Set;
+    for (let root = pending.pop();root; root = pending.pop()) {
+      for (const element of root.querySelectorAll("*")) {
+        const shadow = element.shadowRoot;
+        if (!shadow || seen.has(shadow))
+          continue;
+        seen.add(shadow);
+        reachable.push(...shadow.querySelectorAll("dialog:modal"));
+        pending.push(shadow);
+      }
+    }
+    return reachable;
+  }
+  function hasInertAttribute(document2, refs) {
+    if (document2.querySelector("[inert]"))
+      return true;
+    const seen = new Set;
+    for (const { element } of refs.values()) {
+      let root = element.getRootNode();
+      while (root instanceof ShadowRoot && !seen.has(root)) {
+        seen.add(root);
+        if (root.querySelector("[inert]"))
+          return true;
+        root = root.host.getRootNode();
+      }
+    }
+    return false;
+  }
+  function liveAncestors(json, refs, isInert) {
+    const protectedNodes = new Set;
+    const visited = [];
+    const scan = [...json];
+    while (scan.length) {
+      const node = scan.pop();
+      if (!node)
+        continue;
+      visited.push(node);
+      for (const child of node.children ?? [])
+        if (typeof child !== "string")
+          scan.push(child);
+    }
+    for (const node of visited.reverse()) {
+      const element = node.ref ? refs.get(node.ref)?.element : undefined;
+      if (element !== undefined && !isInert(element) || node.children?.some((child) => typeof child !== "string" && protectedNodes.has(child)))
+        protectedNodes.add(node);
+    }
+    return protectedNodes;
+  }
+
   // crates/neo-sdk/neo-playwright-js/src/probe/snapshot.ts
   var FRAME_ROOT = parseSelector("body,frameset");
   function frameRoot(world) {
@@ -10486,6 +10605,12 @@ ${value.stack}`;
     const take = () => marked(targets, engine, plain);
     const { result, skipped } = output.tree(element, take);
     const { json, iframeRefs, iframeDepths } = result;
+    let inertMarkingMs;
+    if (request.markInert && request.mode === "ai" && output.neoSnapshot) {
+      const started = performance.now();
+      markInert(world, json);
+      inertMarkingMs = performance.now() - started;
+    }
     const iframes = [];
     if (request.mode === "ai") {
       const minted = lastSnapshotRefs(injected);
@@ -10500,6 +10625,7 @@ ${value.stack}`;
     }
     return {
       kind: "snapshot",
+      ...inertMarkingMs === undefined ? {} : { inertMarkingMs },
       json,
       iframes,
       ...skipped ? { marksSkipped: true } : {}

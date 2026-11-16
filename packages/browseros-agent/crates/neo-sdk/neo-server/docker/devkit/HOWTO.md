@@ -92,7 +92,7 @@ For a field printed without a ref, call `const ref = await field.ref()` on its r
   - button "Frame action" [ref=f1e3]
 ```
 
-On a bigger page its first line says how much text it left out. `{ text: true }` always includes the text and `{ text: false }` never does; `{ urls: true }` prints each link's url; `{ maxTokens: 20000 }` raises the 8,000-token cap. `page.getByRef('e5').ariaSnapshot()` reads one section. `{ mode: 'default' }` uses Playwright's own default YAML with the private field values masked as described below.
+On a bigger page a line at its top says how much text it left out. `{ text: true }` always includes the text and `{ text: false }` never does; `{ urls: true }` prints each link's url; `{ maxTokens: 20000 }` raises the 8,000-token cap. `page.getByRef('e5').ariaSnapshot()` reads one section. `{ mode: 'default' }` uses Playwright's own default YAML with the private field values masked as described below.
 
 Snapshots mask an `input` or `textarea` value when the page declares `type="password"` or includes a whole `autocomplete` token of `current-password`, `new-password`, `cc-number`, `cc-csc` or `one-time-code`. Tokens ignore case and may appear alongside other whitespace-separated tokens. A nonempty private value prints one `•` (U+2022) per UTF-16 unit; an empty value stays empty. For example, `Pw🔒` prints `••••`. Masking happens before each frame's tree leaves Neo's isolated world, including cross-origin frames and open or already exposed closed shadow roots, so text with or without page text, full/default modes, JSON, deltas, stored delta baselines and snapshot operation results in the trace all receive masked values. The spec harness's conformance switch preserves upstream output.
 
@@ -130,6 +130,8 @@ What sits inside a closed shadow root (a Cloudflare Turnstile widget, a closed w
 ```
 
 A new document in the tab (a navigation, a reload) starts over. A locator's snapshot, `{ mode: 'default' }` and `{ mode: 'full' }` ignore `delta` and never become the baseline. When a run takes a whole-page snapshot of a page you were already given, its reply ends with a one-line tip saying so, at most three times per task.
+
+`page.ariaSnapshot()` leaves out what the browser has made inert, such as the page behind a modal dialog. When it leaves anything out, its first line, `# not listed: ...`, reports how many lines were left out; `{ inert: true }` lists them. A host that parses or slices snapshot text must expect this first line.
 
 ```sh
 ./dev.sh run --task howto-aria -f devkit/examples/aria-ref.js

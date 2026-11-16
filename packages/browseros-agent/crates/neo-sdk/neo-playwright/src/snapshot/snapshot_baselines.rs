@@ -51,6 +51,10 @@ pub(crate) struct SnapshotForm {
     pub(crate) urls: bool,
     /// `maxTokens`, as the call resolved it: the cap the text was cut at.
     pub(crate) max_tokens: f64,
+    /// Whether the caller requested browser-inert content in the default format.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(optional, as = "Option<bool>")]
+    pub(crate) inert: bool,
 }
 
 /// The `text` option of the call that rendered a text, and, when the call left it out, what the
@@ -237,6 +241,7 @@ mod tests {
         text: TextForm::Kept,
         urls: false,
         max_tokens: 8000.0,
+        inert: false,
     };
 
     /// `text`, rendered as a default snapshot that kept its text.
@@ -359,6 +364,7 @@ mod tests {
                 text: TextForm::Never,
                 urls: true,
                 max_tokens: 20000.0,
+                inert: false,
             },
         };
         baselines.commit(&tab("A"), read, never.clone());
@@ -384,6 +390,7 @@ mod tests {
                 text: TextForm::LeftOut,
                 urls: false,
                 max_tokens: 8000.0,
+                inert: false,
             },
         };
         assert_eq!(

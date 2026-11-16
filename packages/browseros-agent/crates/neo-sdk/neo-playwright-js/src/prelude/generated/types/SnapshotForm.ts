@@ -19,4 +19,8 @@ urls: boolean,
 /**
  * `maxTokens`, as the call resolved it: the cap the text was cut at.
  */
-maxTokens: number, };
+maxTokens: number, 
+/**
+ * Whether the caller requested browser-inert content in the default format.
+ */
+inert?: boolean, };

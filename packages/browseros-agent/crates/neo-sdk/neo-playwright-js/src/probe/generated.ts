@@ -397,7 +397,11 @@ borderOffset?: Point, resolved?: Resolution, } | { "kind": "covered", by: string
  * outside its viewport, or where the iframe is clipped away though it takes the
  * pointer. A click's `frameBox` always answers false.
  */
-unseen: boolean, } | { "kind": "value", value: PageText, } | { "kind": "notFocused", holder?: string, } | { "kind": "read", value: PageText, resolved?: Resolution, } | { "kind": "values", count: number, values: Array<PageText>, } | { "kind": "selector", selector: string, } | { "kind": "snapshot", json: import('../../../neo-playwright/third_party/playwright/packages/isomorphic/ariaSnapshot').AriaSnapshotJSON, iframes: Array<SnapshotIframe>, 
+unseen: boolean, } | { "kind": "value", value: PageText, } | { "kind": "notFocused", holder?: string, } | { "kind": "read", value: PageText, resolved?: Resolution, } | { "kind": "values", count: number, values: Array<PageText>, } | { "kind": "selector", selector: string, } | { "kind": "snapshot", 
+/**
+ * Isolated-world inert annotation time, for the operation trace only.
+ */
+inertMarkingMs?: number, json: import('../prelude/vendored').AriaSnapshotJSON, iframes: Array<SnapshotIframe>, 
 /**
  * Clickable marking threw on this page and the snapshot was taken again without it;
  * the op's call log says so.
@@ -428,7 +432,11 @@ look: boolean, } | { "op": "edit", pin: Pin, edit: Edit, } | { "op": "look", pin
  * The world keeps them for this question alone, never for its engine
  * (probe/private-shown.ts).
  */
-walk?: boolean, } | { "op": "privateHosts", limit: number, } | { "op": "read", target: ProbeTarget, strictness: Strictness, frameVisible: boolean, read: Read, } | { "op": "readAll", target: ProbeTarget, read: ReadAll, } | { "op": "screenshotMask", target: ProbeTarget, color: string, } | { "op": "screenshotMaskCleanup" } | { "op": "selector", target: ProbeTarget, } | { "op": "snapshot", root: ProbeTarget, mode: SnapshotMode, 
+walk?: boolean, } | { "op": "privateHosts", limit: number, } | { "op": "read", target: ProbeTarget, strictness: Strictness, frameVisible: boolean, read: Read, } | { "op": "readAll", target: ProbeTarget, read: ReadAll, } | { "op": "screenshotMask", target: ProbeTarget, color: string, } | { "op": "screenshotMaskCleanup" } | { "op": "selector", target: ProbeTarget, } | { "op": "snapshot", 
+/**
+ * Annotate native inertness only for Neo text formats, never JSON or conformance.
+ */
+markInert?: boolean, root: ProbeTarget, mode: SnapshotMode, 
 /**
  * Any integer, as upstream passes it: a child frame's depth can come out zero or
  * negative, and the engine reads those differently from no depth.
