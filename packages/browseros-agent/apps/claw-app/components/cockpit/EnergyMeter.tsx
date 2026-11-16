@@ -143,7 +143,11 @@ function Meter({
               since you got ultrafast
             </span>
           </div>
-          <Milestone card={card} />
+          {/* Keyed on the milestone so one crossed while Home is open mounts fresh and plays its burst. */}
+          <Milestone
+            key={card.kind === 'quiet' ? 'quiet' : card.key}
+            card={card}
+          />
           <div className="grid @2xl:grid-cols-4 grid-cols-2 gap-2.5">
             <Tile
               value={<CountUp to={pages} />}

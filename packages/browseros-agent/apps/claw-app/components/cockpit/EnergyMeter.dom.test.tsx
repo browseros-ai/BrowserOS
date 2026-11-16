@@ -160,6 +160,22 @@ describe('the ultrafast meter', () => {
     expect(text()).toContain('You passed 250k tokens saved')
   })
 
+  it('plays the burst for a milestone crossed while Home is open', async () => {
+    const at = (tokensSaved: number): PlanSavings => ({
+      ...SAVINGS,
+      meter: { ...SAVINGS.meter, since: 1, runTimes: [], tokensSaved },
+    })
+    await render(query({ data: at(61_000) }))
+    expect(text()).toContain('39k to go to 100k')
+    expect(body.querySelector('[data-burst]')).toBeNull()
+
+    // The next poll brings the total past 100k without leaving Home.
+    await render(query({ data: at(101_500) }))
+    expect(text()).toContain('You passed 100k tokens saved')
+    expect(body.querySelector('[data-burst]')).toBeTruthy()
+    expect(storage.get('ultrafastMilestoneSeen:v1')).toBe('100000')
+  })
+
   it('lays the panel out with container queries from a wrapper', async () => {
     await render(query({}))
     const panel = body.querySelector('section[aria-label="ultrafast"]')
