@@ -7663,6 +7663,73 @@ ${value.stack}`;
     return roots;
   }
 
+  // crates/neo-sdk/neo-playwright-js/src/prelude/snapshot-on-top.ts
+  function onTopHead(result) {
+    return (result.onTop ?? []).flatMap((layer) => layer.line.split(`
+`));
+  }
+  function isOnTopLine(line) {
+    return line.startsWith("# on top: ") || line.startsWith("#   its controls: ") || line.startsWith("# no longer on top: ");
+  }
+  function onTopDelta(previous, result) {
+    const current = new Set((result.onTop ?? []).map((layer) => layer.ref));
+    const removed = [];
+    for (const line of previous.split(`
+`)) {
+      const match = /^# on top: (\S+ (?:"(?:[^"\\]|\\.)*" )?\[ref=([^\]]+)\])/.exec(line);
+      if (match && !current.has(match[2]))
+        removed.push(`# no longer on top: ${match[1]}`);
+    }
+    return [...onTopHead(result), ...removed];
+  }
+  function onTopContent(result) {
+    const layers = (result.onTop ?? []).filter((layer) => layer.wholeView);
+    if (!layers.length)
+      return { first: [], rest: result.json };
+    const front = new Map(layers.map((layer) => [layer.ref, []]));
+    const nodes = [];
+    const selected = new Set;
+    const pending = [...result.json].reverse();
+    while (pending.length) {
+      const node = pending.pop();
+      if (!node)
+        continue;
+      nodes.push(node);
+      if (node.inert)
+        continue;
+      const block = node.onTop ? front.get(node.onTop) : undefined;
+      if (block) {
+        selected.add(node);
+        block.push(node);
+      } else
+        for (const child of [...node.children ?? []].reverse())
+          if (typeof child !== "string")
+            pending.push(child);
+    }
+    const remaining = new Map;
+    for (const node of nodes.reverse()) {
+      if (selected.has(node)) {
+        remaining.set(node, undefined);
+        continue;
+      }
+      const children = node.children?.flatMap((child) => {
+        if (typeof child === "string" || !remaining.has(child))
+          return [child];
+        const kept = remaining.get(child);
+        return kept ? [kept] : [];
+      });
+      const changed = children && (children.length !== node.children?.length || children.some((child, index) => child !== node.children?.[index]));
+      remaining.set(node, changed ? { ...node, children } : node);
+    }
+    return {
+      first: layers.flatMap((layer) => front.get(layer.ref) ?? []),
+      rest: result.json.flatMap((node) => {
+        const kept = remaining.get(node);
+        return kept ? [kept] : [];
+      })
+    };
+  }
+
   // crates/neo-sdk/neo-playwright-js/src/prelude/snapshot-v1.ts
   var INTERACTIVE = new Set([
     "button",
@@ -7769,7 +7836,7 @@ ${value.stack}`;
     const partial = partialHead(result);
     const finish = (head, lines) => {
       const body = cap(head, partial, lines, limit);
-      return [...inertHead, ...body ? [body] : []].join(`
+      return [...onTopHead(result), ...inertHead, ...body ? [body] : []].join(`
 `);
     };
     if (form.text !== "leftOut")
@@ -7798,7 +7865,12 @@ ${value.stack}`;
       segment.walk([node], level, text);
       boundary = { line, body: line?.body, length: printer.lines.length, level };
     });
-    printer.walk(result.json, 0, text);
+    const front = onTopContent(result);
+    if (front.first.length) {
+      printer.walk(front.first, 0, true);
+      printer.separateText();
+    }
+    printer.walk(front.rest, 0, text);
     for (const unplaced of partials.values())
       for (const partial of unplaced)
         printer.comment(partialComment(partial), 0);
@@ -7824,6 +7896,7 @@ ${value.stack}`;
     onOmit;
     lines = [];
     steps = [];
+    textBoundary = 0;
     constructor(urls, partials, inert, onOmit) {
       this.urls = urls;
       this.partials = partials;
@@ -7842,6 +7915,9 @@ ${value.stack}`;
         else
           this.closeSection(step.node, step.header);
       }
+    }
+    separateText() {
+      this.textBoundary = this.lines.length;
     }
     comment(body, level) {
       this.lines.push({ level, body, textLine: false, comment: true, ref: false });
@@ -7918,7 +7994,7 @@ ${value.stack}`;
       if (!text || raw === "")
         return;
       const last = this.lines[this.lines.length - 1];
-      if (last?.textLine && last.level === level)
+      if (this.lines.length > this.textBoundary && last?.textLine && last.level === level)
         last.body += ` ${raw}`;
       else
         this.lines.push({
@@ -8213,7 +8289,7 @@ ${value.stack}`;
       `# inert: ${count} lines of this page cannot be clicked or typed into now. page.ariaSnapshot() lists what can.`
     ] : [];
     const body = cap([], partialHead(result), printed(yamlLines(result, false)), maxTokens * CHARS_PER_TOKEN, FULL_CALL);
-    return [...head, ...body ? [body] : []].join(`
+    return [...onTopHead(result), ...head, ...body ? [body] : []].join(`
 `);
   }
   function printed(lines) {
@@ -8251,15 +8327,26 @@ ${value.stack}`;
   function renderDelta(stored, result, passed) {
     if (stored === null) {
       const whole = renderSnapshotV1(result, withDefaults(passed));
-      return { returned: `${NO_BASELINE}
-${whole.text}`, baseline: whole };
+      return {
+        returned: [
+          ...onTopHead(result),
+          NO_BASELINE,
+          withoutTop(whole.text)
+        ].join(`
+`),
+        baseline: whole
+      };
     }
     const { form } = stored;
     if (agrees(passed, form)) {
       const current = renderSnapshotV1As(result, form);
       const changes = listChanges(stored.text, current);
       if (changes !== null)
-        return { returned: changes, baseline: { text: current, form } };
+        return {
+          returned: [...onTopDelta(stored.text, result), changes].join(`
+`),
+          baseline: { text: current, form }
+        };
     }
     const whole = renderSnapshotV1(result, {
       text: passed.text ?? passedText(form.text),
@@ -8267,12 +8354,23 @@ ${whole.text}`, baseline: whole };
       maxTokens: passed.maxTokens ?? form.maxTokens,
       inert: passed.inert ?? form.inert ?? false
     });
-    return { returned: `${TOO_MUCH}
-${whole.text}`, baseline: whole };
+    return {
+      returned: [
+        ...onTopDelta(stored.text, result),
+        TOO_MUCH,
+        withoutTop(whole.text)
+      ].join(`
+`),
+      baseline: whole
+    };
   }
   function renderUncompared(result, passed) {
-    return `${NO_TIME}
-${renderSnapshotV1(result, withDefaults(passed)).text}`;
+    return [
+      ...onTopHead(result),
+      NO_TIME,
+      withoutTop(renderSnapshotV1(result, withDefaults(passed)).text)
+    ].join(`
+`);
   }
   function agrees(passed, form) {
     return (passed.text === undefined || passed.text === showsText(form.text)) && (passed.urls === undefined || passed.urls === form.urls) && (passed.maxTokens === undefined || passed.maxTokens === form.maxTokens) && (passed.inert === undefined || passed.inert === (form.inert ?? false));
@@ -8288,7 +8386,7 @@ ${renderSnapshotV1(result, withDefaults(passed)).text}`;
     return;
   }
   function sizeLine(line) {
-    return line.startsWith("# text left out: ") || line.startsWith("# cut: ") || line.startsWith("# not listed: ");
+    return isOnTopLine(line) || line.startsWith("# text left out: ") || line.startsWith("# cut: ") || line.startsWith("# not listed: ");
   }
   function listChanges(previous, current) {
     const before = previous.split(`
@@ -8460,6 +8558,11 @@ ${changes}`;
   }
   function indentOf(line) {
     return line.length - line.trimStart().length;
+  }
+  function withoutTop(text) {
+    return text.split(`
+`).filter((line) => !isOnTopLine(line)).join(`
+`);
   }
 
   // crates/neo-sdk/neo-playwright-js/src/prelude/snapshot-late.ts

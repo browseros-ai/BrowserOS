@@ -1,5 +1,5 @@
 {
-  "protocol": 48,
+  "protocol": 49,
   "callFunction": "function (call, root, ...nodes) { const probe = globalThis.__neoProbe; return probe ? probe.call(call, root ?? this, nodes) : { kind: \"uninstalled\" }; }",
   "replyKinds": {
     "describe": [
@@ -1150,7 +1150,8 @@
     {
       "op": "snapshot",
       "root": "document",
-      "mode": "ai"
+      "mode": "ai",
+      "surveyCovers": true
     },
     {
       "op": "snapshot",
@@ -1309,19 +1310,19 @@
   "replies": [
     {
       "kind": "described",
-      "protocol": 48,
+      "protocol": 49,
       "seq": 0,
       "url": "https://example.com/"
     },
     {
       "kind": "described",
-      "protocol": 48,
+      "protocol": 49,
       "seq": 347,
       "url": "https://pay.example/frame"
     },
     {
       "kind": "described",
-      "protocol": 48,
+      "protocol": 49,
       "seq": 512340,
       "url": "https://example.com/",
       "retired": 0
@@ -1893,6 +1894,55 @@
     {
       "kind": "selector",
       "selector": "iframe[name=\"pay\"]"
+    },
+    {
+      "kind": "snapshot",
+      "json": [
+        {
+          "role": "dialog",
+          "name": "Read first",
+          "ref": "e9",
+          "onTop": "e9",
+          "children": [
+            {
+              "role": "button",
+              "name": "Close",
+              "ref": "e10"
+            }
+          ]
+        }
+      ],
+      "iframes": [],
+      "onTop": [
+        {
+          "role": "dialog",
+          "name": "Read first",
+          "ref": "e9",
+          "blank": false,
+          "loading": false,
+          "wholeView": true,
+          "controls": [
+            {
+              "role": "button",
+              "name": "Close",
+              "ref": "e10"
+            }
+          ],
+          "firstRefs": [
+            "e9"
+          ]
+        }
+      ],
+      "surveyTested": 3,
+      "surveyMs": 1,
+      "surveyPhases": {
+        "hits": 1,
+        "count": 0,
+        "naming": 1,
+        "linking": 1,
+        "marks": 0.1,
+        "stopped": false
+      }
     },
     {
       "kind": "snapshot",

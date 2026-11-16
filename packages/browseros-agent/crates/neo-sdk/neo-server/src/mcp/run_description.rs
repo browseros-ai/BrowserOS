@@ -165,8 +165,8 @@ mod tests {
     use serde_json::Value;
 
     use super::{
-        COVERED_CLICK, ERRORS, GLOBALS, LOOP, OWN_LABEL_CLICK, READ_ONLY, TASKS, WAITS,
-        run_description,
+        COVERED_CLICK, ERRORS, GLOBALS, LOOP, OWN_LABEL_CLICK, READ_ONLY, SNAPSHOT_ON_TOP, TASKS,
+        WAITS, run_description,
     };
     use crate::dispatch::{
         ErrorCode, LeafError, Listing, Method, MethodSpec, OpCtx, PageTarget, RegistryBuilder,

@@ -50,7 +50,8 @@ use crate::op_spec::{OpSpec, PAGE, TARGET};
 use crate::page::OpPage;
 use crate::playwright_error::TARGET_CRASH_MESSAGE;
 use crate::probe::{
-    self, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget, SnapshotIframe, SnapshotMode, SurveyLayer, Want,
+    self, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget, SnapshotIframe, SnapshotMode,
+    SurveyLayer, Want,
 };
 use crate::resolve::{self, Hopped, Landed, Resolver};
 use crate::target::{Chunk, PageRef, Strictness, Target};
@@ -623,17 +624,37 @@ impl Snapshotter<'_> {
         }
         let reply = probe::call_with_nodes(self.scope, self.page, world, &request, &nodes).await;
         if main {
-            if let Ok(ProbeReply::Snapshot { survey_phases: Some(phases), survey_tested, .. }) = &reply {
+            if let Ok(ProbeReply::Snapshot {
+                survey_phases: Some(phases),
+                survey_tested,
+                ..
+            }) = &reply
+            {
                 self.scope.log(format!("  cover survey phases: hits {:.3} ms, count {:.3} ms, naming {:.3} ms, linking {:.3} ms, marks {:.3} ms", phases.hits, phases.count, phases.naming, phases.linking, phases.marks));
                 if phases.stopped {
-                    self.scope.log(format!("  cover survey stopped at its budget after {} controls", survey_tested.unwrap_or_default()));
+                    self.scope.log(format!(
+                        "  cover survey stopped at its budget after {} controls",
+                        survey_tested.unwrap_or_default()
+                    ));
                 }
             }
-            if let Ok(ProbeReply::Snapshot { on_top_skipped: true, .. }) = &reply {
-                self.scope.log("  cover content move skipped (engine shape)".to_owned());
+            if let Ok(ProbeReply::Snapshot {
+                on_top_skipped: true,
+                ..
+            }) = &reply
+            {
+                self.scope
+                    .log("  cover content move skipped (engine shape)".to_owned());
             }
-            if let Ok(ProbeReply::Snapshot { survey_tested: Some(tested), survey_ms: Some(elapsed), .. }) = &reply {
-                self.scope.log(format!("  cover survey: {tested} controls tested in {elapsed:.3} ms"));
+            if let Ok(ProbeReply::Snapshot {
+                survey_tested: Some(tested),
+                survey_ms: Some(elapsed),
+                ..
+            }) = &reply
+            {
+                self.scope.log(format!(
+                    "  cover survey: {tested} controls tested in {elapsed:.3} ms"
+                ));
             }
             if let Ok(ProbeReply::Snapshot {
                 inert_marking_ms: Some(elapsed),
@@ -711,8 +732,16 @@ impl Snapshotter<'_> {
             Err(failure) => return Err(resolve::failed(self.scope, failure)),
         };
         match self.call(&world, None, None, request).await {
-            Ok(ProbeReply::Snapshot { json, iframes, on_top, .. }) => frame_reply(json, iframes)
-                .map(|mut frame| { frame.on_top = on_top.iter().map(top_note).collect(); Some(frame) })
+            Ok(ProbeReply::Snapshot {
+                json,
+                iframes,
+                on_top,
+                ..
+            }) => frame_reply(json, iframes)
+                .map(|mut frame| {
+                    frame.on_top = on_top.iter().map(top_note).collect();
+                    Some(frame)
+                })
                 .map_err(|why| self.scope.fail(ErrorCode::Internal, why)),
             Ok(ProbeReply::None { stale_ref: None }) => Ok(None),
             Ok(other) => Err(resolve::refused(self.scope, other)),
@@ -868,7 +897,11 @@ fn frame_reply(json: Value, iframes: Vec<SnapshotIframe>) -> Result<FrameReply, 
         "the probe's snapshot has a node this build cannot read; rebuild \
          crates/neo-sdk/neo-playwright-js"
     })?;
-    Ok(FrameReply { json, iframes, on_top: Vec::new() })
+    Ok(FrameReply {
+        json,
+        iframes,
+        on_top: Vec::new(),
+    })
 }
 
 /// A child frame's depth, as upstream computes it: the parent's minus the iframe's own depth
@@ -967,11 +1000,34 @@ mod tests {
 
 /// Names are already masked page facts; this is the same wording the covered answer owns.
 fn top_note(layer: &SurveyLayer) -> aria_snapshot::SnapshotTop {
-    let controls: Vec<_> = layer.controls.iter().map(|control| (control.role.as_str(), control.name.as_value(), control.r#ref.as_str())).collect();
+    let controls: Vec<_> = layer
+        .controls
+        .iter()
+        .map(|control| {
+            (
+                control.role.as_str(),
+                control.name.as_value(),
+                control.r#ref.as_str(),
+            )
+        })
+        .collect();
     let note = OnTopNote {
-        role: &layer.role, name: layer.name.as_value(), reference: &layer.r#ref,
-        blank: layer.blank, loading: layer.loading, whole_view: layer.whole_view,
-        controls: &controls, first_words: layer.first_words.as_ref().and_then(|words| words.as_value().as_str()),
+        role: &layer.role,
+        name: layer.name.as_value(),
+        reference: &layer.r#ref,
+        blank: layer.blank,
+        loading: layer.loading,
+        whole_view: layer.whole_view,
+        controls: &controls,
+        first_words: layer
+            .first_words
+            .as_ref()
+            .and_then(|words| words.as_value().as_str()),
     };
-    aria_snapshot::SnapshotTop { r#ref: layer.r#ref.clone(), line: action::on_top_line(&note), whole_view: layer.whole_view, first_refs: layer.first_refs.clone() }
+    aria_snapshot::SnapshotTop {
+        r#ref: layer.r#ref.clone(),
+        line: action::on_top_line(&note),
+        whole_view: layer.whole_view,
+        first_refs: layer.first_refs.clone(),
+    }
 }

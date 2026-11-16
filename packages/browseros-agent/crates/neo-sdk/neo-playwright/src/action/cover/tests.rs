@@ -353,14 +353,32 @@ fn tests_that_on_top_words_are_only_for_an_unnamed_layer_without_controls() {
     let empty = json!("");
     let words = format!("{}🧑more", "a".repeat(59));
     let note = OnTopNote {
-        role: "generic", name: &empty, reference: "e9", blank: false, loading: true,
-        whole_view: false, controls: &[], first_words: Some(&words),
+        role: "generic",
+        name: &empty,
+        reference: "e9",
+        blank: false,
+        loading: true,
+        whole_view: false,
+        controls: &[],
+        first_words: Some(&words),
     };
-    assert_eq!(on_top_line(&note), format!("# on top: generic [ref=e9], loading, says \"{}🧑…\" over part of the view", "a".repeat(59)));
+    assert_eq!(
+        on_top_line(&note),
+        format!(
+            "# on top: generic [ref=e9], loading, says \"{}🧑…\" over part of the view",
+            "a".repeat(59)
+        )
+    );
     let name = json!("Dismiss");
     let controls = [("button", &name, "e10")];
-    let with_controls = OnTopNote { controls: &controls, ..note };
+    let with_controls = OnTopNote {
+        controls: &controls,
+        ..note
+    };
     assert!(!on_top_line(&with_controls).contains(", says "));
-    let with_name = OnTopNote { name: &name, ..note };
+    let with_name = OnTopNote {
+        name: &name,
+        ..note
+    };
     assert!(!on_top_line(&with_name).contains(", says "));
 }

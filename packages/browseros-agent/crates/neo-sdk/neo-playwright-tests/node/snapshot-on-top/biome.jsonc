@@ -1,0 +1,20 @@
+{
+  "extends": "//",
+  "overrides": [
+    {
+      "includes": ["pages/*.html"],
+      // These static fixture pages preserve the source shapes, including invalid roles and unnamed frames.
+      "linter": {
+        "rules": {
+          "a11y": {
+            "useValidAriaRole": "off",
+            "useValidAriaValues": "off",
+            "useAriaPropsSupportedByRole": "off",
+            "useIframeTitle": "off",
+            "useButtonType": "off"
+          }
+        }
+      }
+    }
+  ]
+}

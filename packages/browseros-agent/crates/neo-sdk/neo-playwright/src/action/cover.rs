@@ -320,7 +320,9 @@ pub(crate) fn on_top_line(note: &OnTopNote<'_>) -> String {
     if note.loading {
         line.push_str(", loading");
     }
-    if !note.blank && note.controls.is_empty() && note.name.as_str().is_none_or(|name| name.trim().is_empty())
+    if !note.blank
+        && note.controls.is_empty()
+        && note.name.as_str().is_none_or(|name| name.trim().is_empty())
         && let Some(words) = note.first_words.filter(|words| !words.is_empty())
     {
         let words = clipped(words, 60);
@@ -336,7 +338,11 @@ pub(crate) fn on_top_line(note: &OnTopNote<'_>) -> String {
             .controls
             .iter()
             .filter(|(role, _, _)| *role == "button")
-            .chain(note.controls.iter().filter(|(role, _, _)| *role != "button"))
+            .chain(
+                note.controls
+                    .iter()
+                    .filter(|(role, _, _)| *role != "button"),
+            )
             .take(ON_TOP_CONTROLS)
             .map(|(role, name, reference)| node_named(role, name, reference, CONTROL_NAME_CHARS))
             .collect();
