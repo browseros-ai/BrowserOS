@@ -29,13 +29,18 @@ Each run starts with fresh JavaScript; tabs stay open between runs.";
 /// gets no ref, and `fill` waits out its whole timeout on one with no size and names nothing, so
 /// that sentence stays. The cap (`snapshot-cap.ts`) prints a dialog, alertdialog, alert or status
 /// block whole past its cut and drops every other cover, so the text says "popup" for what a page
-/// shows and names the roles for what survives. A sentence about what the snapshot's first line
+/// shows and names the roles for what survives.
+/// A ref resolves from `page` in any frame: the resolver jumps to the document that printed it
+/// (`neo-playwright/src/resolve/resolver.rs`). A model that knows Playwright doubts that for a
+/// frame's content, and in a real run guessed a locator beside a printed frame ref, so the text
+/// says it. A sentence about what the snapshot's first line
 /// says stands over the page goes right after this paragraph, once the snapshot prints one.
 const LOOP: &str = r#"Work in a loop: look, act, look again.
 - Look: `return await page.ariaSnapshot()` lists what you can act on, each with a ref, such as `- button "Add to cart" [ref=e41]`.
   It includes the page's text while the whole stays under about 3,000 tokens, and a line at its top says when it left the text out; `{ text: true }` always includes it.
 - Act on a ref from your latest snapshot: `await page.getByRef('e41').click()`.
   A guessed locator (`getByRole`, `getByText`, `locator('main')`) can match nothing and wait out its timeout, or match two and fail; use one only for an element printed without a ref.
+  A ref works from `page` wherever the snapshot printed it, inside a frame too: `page.getByRef('f12e12')`.
   `page.getByRef('e12').ariaSnapshot({ mode: 'full' })` prints section e12 with a ref on every visible element.
   A field printed without a ref has no size or takes no pointer: `page.getByRole('textbox', { name: '…' }).pressSequentially('…')` types into it; `fill` waits out its timeout on one with no size.
 - Look again after an action that can open, close or load something (a click, Enter, a submit): end the script by returning a new snapshot, and choose the next action from it.
@@ -285,6 +290,7 @@ mod tests {
             "Work in a loop: look, act, look again.",
             "Act on a ref from your latest snapshot: `await page.getByRef('e41').click()`.",
             "use one only for an element printed without a ref.",
+            "A ref works from `page` wherever the snapshot printed it, inside a frame too: `page.getByRef('f12e12')`.",
             "end the script by returning a new snapshot, and choose the next action from it.",
             "Fills of one form can share a script; the click that submits it ends the script.",
             "Return each snapshot whole, as the string it is.",
