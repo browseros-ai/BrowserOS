@@ -460,7 +460,6 @@ pub(crate) struct SurveyLayer {
     #[serde(default)]
     #[ts(optional, type = "string")]
     pub(crate) first_words: Option<PageText>,
-    pub(crate) first_refs: Vec<String>,
 }
 
 /// One control of a cover that takes the pointer.

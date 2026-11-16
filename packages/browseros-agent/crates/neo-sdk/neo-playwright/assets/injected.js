@@ -9915,7 +9915,8 @@ ${value.stack}`;
   function controlRole(world, control) {
     if (isFrame(control))
       return "iframe";
-    return world.injected.utils.getAriaRole(control) ?? "generic";
+    const role = world.injected.utils.getAriaRole(control);
+    return !role || role === "presentation" || role === "none" ? "generic" : role;
   }
   function takingControls(world, shown) {
     const { injected } = world;
@@ -11086,7 +11087,12 @@ ${value.stack}`;
     }));
     const { found, tested, main } = findFaces(world, refs, samples, started, phases);
     phases.hits = performance.now() - started;
-    const inside = (root, element) => injected.utils.isInsideScope(root, element);
+    const inside = (root, element) => {
+      for (let at = element;at; at = at.assignedSlot ?? parentOrHost2(at))
+        if (at === root)
+          return true;
+      return false;
+    };
     const page = pageGuard(world, refs, inside, phases, main);
     const remembered = memory.get(document2) ?? [];
     retainFaces(world, found, remembered, page);
@@ -11130,13 +11136,14 @@ ${value.stack}`;
     const main = world.injected.document.querySelector('main, [role="main"]');
     const found = new Map;
     const tested = [];
-    for (const { point, hit } of samples) {
+    for (const sample of samples) {
+      const { point, hit } = sample;
       const chain = [];
       for (let at = hit;at; at = at.assignedSlot ?? parentOrHost2(at))
         chain.push(at);
       const top = chain.at(-1);
       if (top)
-        addFace(world, found, chain, top, point, false, main);
+        sample.deepest = addFace(world, found, chain, top, point, false, main);
     }
     for (const { element } of refs.values()) {
       if (tested.length >= MAX_CONTROLS2 || performance.now() - started >= BUDGET_MS) {
@@ -11161,15 +11168,17 @@ ${value.stack}`;
     return { found, tested, main };
   }
   function addFace(world, found, chain, root, point, observed, main) {
-    const element = coverFace(coverPath(chain, root, point).filter((element) => !pageElement(element, main)));
+    const path = coverPath(chain, root, point);
+    const deepest = path[0];
+    const element = coverFace(path.filter((element) => !pageElement(element, main)));
     if (!element || edgeBar(element))
-      return;
+      return deepest;
     const known = found.get(element);
     if (known) {
       known.observed ||= observed;
       if (observed)
         known.roots.add(root);
-      return;
+      return deepest;
     }
     found.set(element, {
       element,
@@ -11177,6 +11186,7 @@ ${value.stack}`;
       roots: new Set(observed ? [root] : []),
       observed
     });
+    return deepest;
   }
   function pageGuard(world, refs, inside, phases, main) {
     let controls;
@@ -11249,7 +11259,7 @@ ${value.stack}`;
       held.push(named);
     const belongs = (element) => held.some((root) => inside(root, element));
     const ownOfAny = (element) => groups.some((group) => group.some((face) => inside(face.element, element) || inside(face.named, element)));
-    const wholeView = samples.every(({ hit }) => hit && belongs(hit)) && tested.every(({ element, clear }) => !clear || ownOfAny(element)) && tested.some(({ element, clear }) => !clear && !belongs(element));
+    const wholeView = samples.every(({ deepest }) => deepest && belongs(deepest)) && tested.every(({ element, clear }) => !clear || ownOfAny(element)) && tested.some(({ element, clear }) => !clear && !belongs(element));
     const controls = Array.from(new Map(held.flatMap((root) => controlsOf(world, output, root)).map((control) => [control.ref, control])).values());
     const words = output.tree(named, () => renderedText(named).trim().replace(/\s+/g, " "));
     const blank = !inClosedPart(named) && controls.length === 0 && !words && isBlank(world, output, named);
@@ -11271,8 +11281,7 @@ ${value.stack}`;
         loading: held.some(saysLoading),
         wholeView,
         controls,
-        ...words ? { firstWords: Array.from(words).slice(0, 61).join("") } : {},
-        firstRefs: []
+        ...words ? { firstWords: Array.from(words).slice(0, 61).join("") } : {}
       }
     };
   }
@@ -11298,8 +11307,6 @@ ${value.stack}`;
       const layer = element && layers.find(({ held, note }) => note.wholeView && !note.blank && held.some((root) => inside(root, element)));
       if (layer) {
         node.onTop = layer.note.ref;
-        if (node.ref)
-          layer.note.firstRefs.push(node.ref);
       } else
         for (const child of node.children ?? [])
           if (typeof child !== "string")
@@ -11324,7 +11331,7 @@ ${value.stack}`;
     ].map(([x = 0, y = 0]) => ({ x: x * innerWidth, y: y * innerHeight }));
   }
   function edgeBar(element) {
-    if (inTopLayer(element))
+    if (element.matches(":modal"))
       return false;
     const box = element.getBoundingClientRect();
     const centre = box.left <= innerWidth / 2 && box.right > innerWidth / 2 && box.top <= innerHeight / 2 && box.bottom > innerHeight / 2;
@@ -11493,7 +11500,15 @@ ${value.stack}`;
     const minted = request.mode === "ai" ? lastSnapshotRefs(injected) : undefined;
     if (minted)
       world.refs.remember(minted);
-    const survey = request.surveyCovers && request.mode === "ai" && output.neoSnapshot ? surveyCovers(world, output, json) : undefined;
+    let survey;
+    let surveyFailed = false;
+    if (request.surveyCovers && request.mode === "ai" && output.neoSnapshot) {
+      try {
+        survey = surveyCovers(world, output, json);
+      } catch {
+        surveyFailed = true;
+      }
+    }
     const iframes = [];
     if (minted) {
       for (const ref of iframeRefs) {
@@ -11510,9 +11525,9 @@ ${value.stack}`;
         onTop: survey.layers,
         surveyTested: survey.tested,
         surveyMs: survey.phases.hits,
-        surveyPhases: survey.phases,
-        onTopSkipped: survey.marksSkipped
+        surveyPhases: survey.phases
       } : {},
+      ...surveyFailed || survey?.marksSkipped ? { onTopSkipped: true } : {},
       ...inertMarkingMs === undefined ? {} : { inertMarkingMs },
       json,
       iframes,

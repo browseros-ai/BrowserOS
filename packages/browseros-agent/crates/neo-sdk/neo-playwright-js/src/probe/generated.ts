@@ -669,7 +669,7 @@ export type Strictness = "strict" | "firstMatch";
 /**
  * A layer the main frame found in the snapshot's own request. The action module words it.
  */
-export type SurveyLayer = { role: string, name: string, ref: string, blank: boolean, loading: boolean, wholeView: boolean, controls: Array<CoverControl>, firstWords?: string, firstRefs: Array<string>, };
+export type SurveyLayer = { role: string, name: string, ref: string, blank: boolean, loading: boolean, wholeView: boolean, controls: Array<CoverControl>, firstWords?: string, };
 
 /**
  * Each added read phase is measured separately so a large document cannot hide the hit budget.

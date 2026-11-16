@@ -815,5 +815,61 @@
     ],
     "firstText": "Please read this whole message",
     "why": "The engine node-to-element link moves the ref-less shared holder, including its own text."
+  },
+  {
+    "id": "e16-shadow-layer",
+    "title": "Open-shadow whole-view layer",
+    "file": "pages/e16-shadow-layer.html",
+    "viewport": {
+      "width": 1280,
+      "height": 800
+    },
+    "expectedControls": 21,
+    "expectedNotes": [
+      {
+        "selector": "x-modal",
+        "extent": "whole",
+        "role": "dialog",
+        "name": "Sign in",
+        "controls": ["Close"],
+        "flags": []
+      }
+    ],
+    "firstText": "Read this first",
+    "why": "Flat-tree content and controls belong to their full-view shadow panel; its content prints before the page."
+  },
+  {
+    "id": "e17-slotted-layer",
+    "title": "Slotted whole-view layer",
+    "file": "pages/e17-slotted-layer.html",
+    "viewport": {
+      "width": 1280,
+      "height": 800
+    },
+    "expectedControls": 21,
+    "expectedNotes": [
+      {
+        "selector": "x-modal",
+        "extent": "whole",
+        "role": "dialog",
+        "name": "Sign in",
+        "controls": ["Close"],
+        "flags": []
+      }
+    ],
+    "firstText": "Read this first",
+    "why": "Flat-tree content and controls belong to their full-view shadow panel; its content prints before the page."
+  },
+  {
+    "id": "e18-edge-popover",
+    "title": "Small popover off the centre",
+    "file": "pages/e18-edge-popover.html",
+    "viewport": {
+      "width": 1280,
+      "height": 800
+    },
+    "expectedControls": 21,
+    "expectedNotes": [],
+    "why": "A small popover off the centre is an edge bar; only a modal backdrop exempts its box."
   }
 ]

@@ -44,6 +44,7 @@ const DIALOGS = new Set([
   'log',
 ])
 type Inside = (root: Element, element: Element) => boolean
+type Sample = { point: Point; hit: Element | undefined; deepest?: Element }
 type Face = {
   element: Element
   named: Element
@@ -69,7 +70,6 @@ export type SurveyLayer = {
   wholeView: boolean
   controls: ReturnType<typeof controlsOf>
   firstWords?: string
-  firstRefs: string[]
 }
 
 type Phases = {
@@ -107,7 +107,7 @@ export function surveyCovers(
   // Five document-only hits always precede the budgeted prefix of controls. A shadow host
   // remains a host here: only the click's own root list can take a hit into that root.
   const started = performance.now()
-  const samples = viewPoints().map((point) => ({
+  const samples: Sample[] = viewPoints().map((point) => ({
     point,
     hit: hitAtRoots([document], point),
   }))
@@ -119,8 +119,17 @@ export function surveyCovers(
     phases,
   )
   phases.hits = performance.now() - started
-  const inside: Inside = (root, element) =>
-    injected.utils.isInsideScope(root, element)
+  // The engine's scope walk crosses hosts but not slots. Layer membership follows the
+  // rendered flat tree so a panel owns its slotted controls and content as well.
+  const inside: Inside = (root, element) => {
+    for (
+      let at: Element | undefined = element;
+      at;
+      at = at.assignedSlot ?? parentOrHost(at)
+    )
+      if (at === root) return true
+    return false
+  }
   const page = pageGuard(world, refs, inside, phases, main)
   const remembered = memory.get(document) ?? []
   retainFaces(world, found, remembered, page)
@@ -181,19 +190,21 @@ export function surveyCovers(
 function findFaces(
   world: World,
   refs: ReturnType<typeof lastSnapshotRefs>,
-  samples: { point: Point; hit: Element | undefined }[],
+  samples: Sample[],
   started: number,
   phases: Phases,
 ) {
   const main = world.injected.document.querySelector('main, [role="main"]')
   const found = new Map<Element, Face>()
   const tested: Tested[] = []
-  for (const { point, hit } of samples) {
+  for (const sample of samples) {
+    const { point, hit } = sample
     const chain: Element[] = []
     for (let at = hit; at; at = at.assignedSlot ?? parentOrHost(at))
       chain.push(at)
     const top = chain.at(-1)
-    if (top) addFace(world, found, chain, top, point, false, main)
+    if (top)
+      sample.deepest = addFace(world, found, chain, top, point, false, main)
   }
   // The engine's ref map has tree order. Filtering and testing in one pass means a budget
   // stop leaves a tested prefix, never a selected list whose tail was silently untested.
@@ -234,18 +245,19 @@ function addFace(
   point: Point,
   observed: boolean,
   main: Element | null,
-): void {
+): Element | undefined {
+  // Reuse the click's existing shadow descent for reach; the raw document sample is a host.
+  const path = coverPath(chain, root, point)
+  const deepest = path[0]
   const element = coverFace(
-    coverPath(chain, root, point).filter(
-      (element) => !pageElement(element, main),
-    ),
+    path.filter((element) => !pageElement(element, main)),
   )
-  if (!element || edgeBar(element)) return
+  if (!element || edgeBar(element)) return deepest
   const known = found.get(element)
   if (known) {
     known.observed ||= observed
     if (observed) known.roots.add(root)
-    return
+    return deepest
   }
   found.set(element, {
     element,
@@ -253,6 +265,7 @@ function addFace(
     roots: new Set(observed ? [root] : []),
     observed,
   })
+  return deepest
 }
 
 /** The expensive majority clause is lazy: ordinary pages never count the whole document. */
@@ -356,7 +369,7 @@ function describeLayer(
   remembered: Remembered[],
   next: Remembered[],
   tested: Tested[],
-  samples: { hit: Element | undefined }[],
+  samples: Sample[],
   inside: Inside,
 ): Layer | undefined {
   const face =
@@ -385,7 +398,7 @@ function describeLayer(
       ),
     )
   const wholeView =
-    samples.every(({ hit }) => hit && belongs(hit)) &&
+    samples.every(({ deepest }) => deepest && belongs(deepest)) &&
     tested.every(({ element, clear }) => !clear || ownOfAny(element)) &&
     tested.some(({ element, clear }) => !clear && !belongs(element))
   const controls = Array.from(
@@ -422,7 +435,6 @@ function describeLayer(
       wholeView,
       controls,
       ...(words ? { firstWords: Array.from(words).slice(0, 61).join('') } : {}),
-      firstRefs: [],
     },
   }
 }
@@ -461,7 +473,6 @@ function markBlocks(
       )
     if (layer) {
       node.onTop = layer.note.ref
-      if (node.ref) layer.note.firstRefs.push(node.ref)
     } else
       for (const child of node.children ?? [])
         if (typeof child !== 'string') pending.push(child)
@@ -491,7 +502,7 @@ function viewPoints(): Point[] {
 }
 /** Thin edge bars scroll clear and never describe the current view. */
 function edgeBar(element: Element): boolean {
-  if (inTopLayer(element)) return false
+  if (element.matches(':modal')) return false
   const box = element.getBoundingClientRect()
   const centre =
     box.left <= innerWidth / 2 &&

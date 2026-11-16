@@ -784,7 +784,6 @@ const REPLY_EXAMPLES: {
           loading: false,
           wholeView: true,
           controls: [{ role: 'button', name: 'Close', ref: 'e10' }],
-          firstRefs: ['e9'],
         },
       ],
       surveyTested: 3,

@@ -176,14 +176,13 @@ pub(crate) struct SnapshotResult {
     pub(crate) closed_roots: Option<ClosedRoots>,
 }
 
-/// Rust's shared wording plus the refs whose whole-view block the default renderer moves.
+/// Rust's shared wording and reach; the tree's marks identify the whole-view content.
 #[derive(Clone, Debug, PartialEq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SnapshotTop {
     pub(crate) r#ref: String,
     pub(crate) line: String,
     pub(crate) whole_view: bool,
-    pub(crate) first_refs: Vec<String>,
 }
 
 /// How many of the seeds clickable marking found inside closed shadow roots reached a probe.

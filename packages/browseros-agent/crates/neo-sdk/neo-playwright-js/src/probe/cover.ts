@@ -707,7 +707,8 @@ export function coverControl(world: World, element: Element): boolean {
 /** A control's role as an answer prints it: a frame is an `iframe`, as a snapshot prints one. */
 export function controlRole(world: World, control: Element): string {
   if (isFrame(control)) return 'iframe'
-  return world.injected.utils.getAriaRole(control) ?? 'generic'
+  const role = world.injected.utils.getAriaRole(control)
+  return !role || role === 'presentation' || role === 'none' ? 'generic' : role
 }
 
 /**

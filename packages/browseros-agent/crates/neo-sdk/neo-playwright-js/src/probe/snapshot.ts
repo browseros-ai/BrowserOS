@@ -87,10 +87,16 @@ export function snapshot(
   // Remember before diagnostics take any quiet subtree snapshots, so the printed refs win.
   const minted = request.mode === 'ai' ? lastSnapshotRefs(injected) : undefined
   if (minted) world.refs.remember(minted)
-  const survey =
-    request.surveyCovers && request.mode === 'ai' && output.neoSnapshot
-      ? surveyCovers(world, output, json)
-      : undefined
+  let survey: ReturnType<typeof surveyCovers> | undefined
+  let surveyFailed = false
+  if (request.surveyCovers && request.mode === 'ai' && output.neoSnapshot) {
+    // Cover hints are diagnostic: an unforeseen page shape must never take away its read.
+    try {
+      survey = surveyCovers(world, output, json)
+    } catch {
+      surveyFailed = true
+    }
+  }
   const iframes: SnapshotIframe[] = []
   if (minted) {
     // Only the iframes the depth limit rendered, as upstream's `renderedIframeRefs`.
@@ -109,9 +115,9 @@ export function snapshot(
           surveyTested: survey.tested,
           surveyMs: survey.phases.hits,
           surveyPhases: survey.phases,
-          onTopSkipped: survey.marksSkipped,
         }
       : {}),
+    ...(surveyFailed || survey?.marksSkipped ? { onTopSkipped: true } : {}),
     ...(inertMarkingMs === undefined ? {} : { inertMarkingMs }),
     json,
     iframes,

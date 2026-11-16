@@ -643,8 +643,9 @@ impl Snapshotter<'_> {
                 ..
             }) = &reply
             {
-                self.scope
-                    .log("  cover content move skipped (engine shape)".to_owned());
+                self.scope.log(
+                    "  cover survey or content move skipped (page or engine shape)".to_owned(),
+                );
             }
             if let Ok(ProbeReply::Snapshot {
                 survey_tested: Some(tested),
@@ -1028,6 +1029,5 @@ fn top_note(layer: &SurveyLayer) -> aria_snapshot::SnapshotTop {
         r#ref: layer.r#ref.clone(),
         line: action::on_top_line(&note),
         whole_view: layer.whole_view,
-        first_refs: layer.first_refs.clone(),
     }
 }
