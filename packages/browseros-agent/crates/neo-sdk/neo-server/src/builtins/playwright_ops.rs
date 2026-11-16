@@ -100,8 +100,10 @@ const PLAYWRIGHT_API: &str = "Playwright's API on `page`, `context` and `browser
     hosted BrowserOS, by design, a script receives no console messages, no page errors and \
     no browser log entries: console and pageerror listeners are accepted but stay silent, \
     and `page.waitForEvent` for either fails immediately with `neo/unsupported`; exposed \
-    bindings work. A call that waits gives up after 5 s unless given a `timeout`, \
-    and a navigation after 30 s. Unlike Playwright, `waitForFunction` \
+    bindings work. A wait (an action, a read, a snapshot, an event, a navigation) gives up \
+    after 30 s and an `expect` after 5 s, unless given a `timeout`; \
+    `page.setDefaultTimeout(ms)` or `context.setDefaultTimeout(ms)` changes the 30 s from then \
+    on. Unlike Playwright, `waitForFunction` \
     polls every 100 ms for its default `polling: 'raf'`, since animation frames never fire in \
     Neo's background tabs, and the handle it resolves to holds a snapshot of the value, which \
     `jsonValue()` reads; `setContent` refuses `waitUntil: 'networkidle'`, which Neo cannot \
@@ -967,6 +969,45 @@ mod tests {
                 "the door reads `{field}` in {name}, but the wire declares {declaration}"
             );
         }
+        Ok(())
+    }
+
+    /// The `run` description's wait times are the prelude's defaults, read from `timeouts.ts`
+    /// rather than repeated, so the two cannot drift apart again (the description said 5 s for a
+    /// wait long after #3528 made it 30 s). neo-server's README says the same sentence.
+    #[test]
+    fn tests_that_the_described_wait_times_are_the_preludes_defaults() -> Result<(), Box<dyn Error>>
+    {
+        const TIMEOUTS: &str = include_str!("../../../neo-playwright-js/src/prelude/timeouts.ts");
+        const README: &str = include_str!("../../README.md");
+        let seconds = |name: &str| -> Result<u64, Box<dyn Error>> {
+            let line = TIMEOUTS
+                .lines()
+                .find(|line| line.contains(&format!("const {name} = ")))
+                .ok_or(format!("timeouts.ts has no {name}"))?;
+            let millis: u64 = line
+                .rsplit('=')
+                .next()
+                .unwrap_or_default()
+                .trim()
+                .replace('_', "")
+                .parse()?;
+            Ok(millis / 1000)
+        };
+        let wait = seconds("DEFAULT_TIMEOUT")?;
+        let expect = seconds("DEFAULT_EXPECT_TIMEOUT")?;
+        assert_eq!(
+            seconds("DEFAULT_NAVIGATION_TIMEOUT")?,
+            wait,
+            "the description gives a navigation the wait's time"
+        );
+        let said = format!("gives up after {wait} s and an `expect` after {expect} s");
+        assert!(
+            super::PLAYWRIGHT_API.contains(&said),
+            "the run description says: {said}"
+        );
+        let readme = README.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(readme.contains(&said), "neo-server's README says: {said}");
         Ok(())
     }
 
