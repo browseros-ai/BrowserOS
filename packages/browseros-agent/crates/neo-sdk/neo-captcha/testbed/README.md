@@ -28,9 +28,9 @@ minutes for a cold build, or set `--startup-timeout`.
 
 ## Pages
 
-`--pages fixtures` (default) runs the eight local fixtures and the eleven fake-key GeeTest, AWS WAF
+`--pages fixtures` (default) runs the ten local fixtures and the eleven fake-key GeeTest, AWS WAF
 and FunCaptcha pages, which include cross-site frames and closed shadow roots; `spotting` runs only
-those eleven; `demo` runs the eight public demos; `all` runs all 27. `--only id,id` narrows any
+those eleven; `demo` runs the eight public demos; `all` runs all 29. `--only id,id` narrows any
 group. Fixtures use two listeners on different sites, `127.0.0.1:A` for top pages and `localhost:B`
 for embedded widgets; `--fixture-frame-host` changes the frame host. See
 [`fixtures/README.md`](fixtures/README.md).
@@ -50,8 +50,9 @@ are kept, never tokens.
 - A page lists the verdicts that pass (`expect`), and may pin the type, the reason and a paid-task
   cap. `unsolved` is the SDK's verdict for every definite failure, and only its reason keeps
   claw-server's `unsupported` apart: `unsolved` / `unsupported_type` fails, and is never UNVERIFIED,
-  unless the page allows it. hCaptcha and the Cloudflare wall pass only that way, with the right
-  type; the spotting pages accept it beside any other `unsolved`.
+  unless the page allows it. hCaptcha, the Cloudflare wall and PerimeterX's check pass only that
+  way, with the right type (PerimeterX's is `unknown` on purpose: claw-server's closed `type` enum
+  does not list it); the spotting pages accept it beside any other `unsolved`.
 - `solved`, and `already_clear` on a CAPTCHA page, pass only if the site accepted the submission.
   `token_applied` passes a `solved` page only if the site accepted. A site that accepts a page the
   solver called `unsolved` fails it.

@@ -329,6 +329,19 @@ async fn solve_on_captcha_pages(rig: &Rig, pages: &CaptchaPages) -> TestResult {
             "unsolved",
             "unsupported_type",
         ),
+        // Its `type` stays `unknown`: claw-server's closed schema does not list PerimeterX.
+        (
+            "/perimeterx",
+            json!("unknown"),
+            "unsolved",
+            "unsupported_type",
+        ),
+        (
+            "/perimeterx-waiting",
+            Value::Null,
+            "already_clear",
+            "no_captcha",
+        ),
     ];
     let mut observed = Vec::new();
     let mut logged = rig.neo_log()?.len();
@@ -379,12 +392,41 @@ async fn solve_on_captcha_pages(rig: &Rig, pages: &CaptchaPages) -> TestResult {
             "{route}: {seen}"
         );
     }
+    perimeterx_is_named(&observed)?;
     assert_eq!(
         pages.provider_calls(),
         0,
         "no request reached the provider stub"
     );
     client.cancel().await?;
+    Ok(())
+}
+
+/// The `PerimeterX` refusal names the family its `type` cannot (claw-server's closed schema lists
+/// no `perimeterx`), in the script's line and in the solver's `captcha.detected` note.
+fn perimeterx_is_named(observed: &[Value]) -> TestResult {
+    let seen = observed
+        .iter()
+        .find(|seen| seen.get("route") == Some(&json!("/perimeterx")))
+        .ok_or("the PerimeterX page was run")?;
+    let line = seen
+        .pointer("/solved/message")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    assert!(
+        line.contains("PerimeterX's press-and-hold human check"),
+        "{seen}"
+    );
+    let noted = seen
+        .get("detected")
+        .and_then(Value::as_array)
+        .is_some_and(|notes| {
+            notes
+                .iter()
+                .filter_map(Value::as_str)
+                .any(|note| note.contains(r#""family":"perimeterx""#))
+        });
+    assert!(noted, "{seen}");
     Ok(())
 }
 
