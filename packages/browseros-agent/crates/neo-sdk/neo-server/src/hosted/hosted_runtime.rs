@@ -92,6 +92,18 @@ impl HostedRuntime {
             .map_err(HostedError::from_error)?
     }
 
+    /// Keep fixture persistence on its owned executor, where the trace writer runs. Only
+    /// behavior tests use this seam; lifecycle tests exercise the production `close` path.
+    #[cfg(test)]
+    pub(super) async fn settle_fixture_trace(&self) -> Result<(), HostedError> {
+        let stack = Arc::clone(&self.stack);
+        self.executor
+            .handle
+            .spawn(async move { stack.settle_fixture_trace().await })
+            .await
+            .map_err(HostedError::from_error)?
+    }
+
     /// Stops all runs, drains their operations, flushes traces, then releases all background
     /// browser tasks and the CDP socket. Repeated and concurrent closes share one result.
     pub async fn close(&self) -> Result<(), HostedError> {
