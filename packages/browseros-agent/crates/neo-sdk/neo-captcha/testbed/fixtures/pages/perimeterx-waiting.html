@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Rolled oats, 18 oz</title></head>
+<body>
+<h1>Rolled oats, 18 oz</h1>
+<form id="captcha-form" method="post" action="/submit/perimeterx-waiting">
+  <button id="store" type="button">Choose a store</button>
+  <button id="submit" type="submit">Submit</button>
+</form>
+<script>
+// An ordinary page of a site PerimeterX (HUMAN) guards, with its check's frame inserted but not
+// shown (`display: none`), as the sensor leaves it until it challenges; the frame holds the same
+// challenge as perimeterx-modal.html, so only the frame's own box tells the two apart. As there,
+// without its scripts:
+// the sensor inserts `iframe#px-captcha-modal` (no address) over the whole viewport and writes the
+// frame's document, whose `#px-captcha` holds the challenge's frames; the button sits in one of
+// them under an id that is random per load, with translated labels. `_pxAppId` is the sensor's,
+// on every page of a site it guards. Nothing here loads from or sends to anyone.
+(() => {
+  const shown = false;
+  window._pxAppId = 'PXfixture';
+  const state = window.__captchaFixture = { id: 'perimeterx-waiting', family: 'none', sitekey: null, rendered: false, callbackFired: false, tokenLength: 0, errors: [] };
+  const mirror = () => { document.documentElement.dataset.captchaFixture = JSON.stringify(state); };
+  const modal = document.createElement('iframe');
+  modal.id = 'px-captcha-modal';
+  modal.setAttribute('style', `display: ${shown ? 'block' : 'none'}; position: fixed; top: 0; left: 0; width: 100%; height: 100%; border: none; z-index: 2147483647;`);
+  document.body.appendChild(modal);
+  const doc = modal.contentDocument;
+  doc.open();
+  doc.write('<!doctype html><title>Human verification</title><body style="margin:0;background:#b0b0b0;font:16px sans-serif">'
+    + '<div id="px-captcha-wrapper" dir="auto"><div class="px-captcha-background"></div>'
+    + '<div class="px-captcha-container" style="width:530px;margin:240px auto;padding:24px;background:#fff;text-align:center">'
+    + '<div class="px-captcha-header">Quick verification</div>'
+    + '<div class="px-captcha-message">Press &amp; hold to confirm you are a human (and not a bot).</div>'
+    + '<div id="px-captcha" style="display:block;min-width:253px"></div></div></div>');
+  doc.close();
+  const challenge = doc.createElement('iframe');
+  challenge.title = 'Human verification challenge';
+  challenge.setAttribute('style', 'width: 100%; height: 52px; border: 0;');
+  const id = Math.random().toString(36).slice(2, 14);
+  challenge.srcdoc = `<body style="margin:0"><div id="${id}" role="button" tabindex="0" aria-label="Press &amp; Hold Human Challenge" style="margin:0 auto;width:253px;height:48px;line-height:48px;border:2px solid #c00;border-radius:26px;text-align:center">Press &amp; hold</div></body>`;
+  doc.getElementById('px-captcha').appendChild(challenge);
+  state.rendered = true;
+  mirror();
+})();
+</script>
+</body>
+</html>

@@ -147,7 +147,7 @@ fn verdict_value(outcome: &SolveOutcome) -> Option<SolveOutput> {
         verdict,
         kind: outcome.kind,
         reason: outcome.reason,
-        message: message(verdict, outcome.reason),
+        message: message_for(verdict, outcome.reason, outcome.kind),
         duration_ms: outcome.duration_ms,
         paid_tasks: outcome.paid_tasks,
     })
@@ -191,6 +191,22 @@ fn event_line(event: &CaptchaEvent) -> String {
 /// the script branches on. Exhaustive on both enums, so a new verdict or reason does not
 /// compile until someone words it.
 fn message(verdict: Verdict, reason: SolveReason) -> String {
+    worded(verdict, cause(reason))
+}
+
+/// [`message`], naming the family when the answer's `type` cannot: `PerimeterX`'s is `unknown`
+/// (see neo-captcha's `CaptchaKind::PerimeterX`), so its refusal says what blocks the page.
+fn message_for(verdict: Verdict, reason: SolveReason, kind: Option<CaptchaKind>) -> String {
+    if kind == Some(CaptchaKind::PerimeterX) && reason == SolveReason::UnsupportedType {
+        return worded(
+            verdict,
+            "it is PerimeterX's press-and-hold human check, which only a person can pass",
+        );
+    }
+    message(verdict, reason)
+}
+
+fn worded(verdict: Verdict, why: &str) -> String {
     let (said, next) = match verdict {
         Verdict::Solved => ("The CAPTCHA is solved", "carry on with the task."),
         Verdict::TokenApplied => (
@@ -211,7 +227,7 @@ fn message(verdict: Verdict, reason: SolveReason) -> String {
             "look at the page again before acting.",
         ),
     };
-    format!("{said} ({}); {next}", cause(reason))
+    format!("{said} ({why}); {next}")
 }
 
 /// Why, in a few words.
@@ -342,6 +358,34 @@ mod tests {
         for (verdict, reason, line) in table {
             assert_eq!(message(verdict, reason), line, "{verdict:?} / {reason:?}");
         }
+    }
+
+    /// `PerimeterX`'s `type` stays `unknown` (claw-server's closed schema does not list it), so its
+    /// refusal names the family in the line, and every other answer reads as before.
+    #[test]
+    fn a_perimeterx_refusal_names_the_family_and_a_person() {
+        let mut refused = outcome(SolveStatus::Unsupported, SolveReason::UnsupportedType);
+        refused.kind = Some(CaptchaKind::PerimeterX);
+        let value = verdict_value(&refused).and_then(|value| serde_json::to_value(value).ok());
+        assert_eq!(
+            value,
+            Some(serde_json::json!({
+                "verdict": "unsolved",
+                "type": "unknown",
+                "reason": "unsupported_type",
+                "message": "The CAPTCHA still blocks the page (it is PerimeterX's press-and-hold \
+                            human check, which only a person can pass); stop and tell the user it \
+                            needs their help.",
+                "durationMs": 1840,
+                "paidTasks": 0,
+            }))
+        );
+        refused.kind = Some(CaptchaKind::Hcaptcha);
+        let value = verdict_value(&refused).map(|value| value.message);
+        assert_eq!(
+            value.as_deref(),
+            Some(message(Verdict::Unsolved, SolveReason::UnsupportedType).as_str())
+        );
     }
 
     #[test]

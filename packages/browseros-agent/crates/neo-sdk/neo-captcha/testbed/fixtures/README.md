@@ -30,6 +30,8 @@ Each standalone page loads its vendor's real script. It mirrors widget state int
 | `turnstile-interactive.html` | Completion after checkbox interaction | `3x00000000000000000000FF` |
 | `no-captcha.html` | Ordinary form; always accepted | None |
 | `hcaptcha.html` | hCaptcha detection; the SDK refuses it as `unsolved` / `unsupported_type` | `10000000-ffff-ffff-ffff-000000000001` |
+| `perimeterx-modal.html` | PerimeterX's press-and-hold check over a page, mimicked with no vendor script: `iframe#px-captcha-modal` and its `#px-captcha`; refused as `unsolved` / `unsupported_type`, type `unknown`, the message naming PerimeterX | None |
+| `perimeterx-waiting.html` | The same frame inserted but not shown, as before it challenges; `already_clear` | None |
 
 Public test secrets, verified against vendor documentation:
 
