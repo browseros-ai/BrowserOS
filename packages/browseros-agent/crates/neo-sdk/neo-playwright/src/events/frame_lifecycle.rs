@@ -78,6 +78,17 @@ impl FrameLifecycleTracker {
         self.attached.retain(|(tab, _)| tab != target);
     }
 
+    /// The containing page of a live frame, including same-process children without a
+    /// target of their own. Seeds and lifecycle events own this membership and its removal.
+    pub(crate) fn owner(&self, frame: &FrameId) -> Option<&TargetId> {
+        self.tabs.iter().find_map(|(target, frames)| {
+            frames
+                .iter()
+                .any(|known| known.id == *frame)
+                .then_some(target)
+        })
+    }
+
     /// Main-document state already ordered before its subsequent load notification.
     pub(crate) fn main(&self, target: &TargetId) -> Option<EventFrame> {
         self.tabs
@@ -309,6 +320,11 @@ mod tests {
             1,
             "the seeded document's own commit cannot detach its children"
         );
+        assert_eq!(
+            tracker.owner(&FrameId("existing".to_owned())),
+            Some(&target),
+            "the seed and its replay preserve the child's containing page"
+        );
         let removed = tracker.record(
             &target,
             "Page.frameDetached",
@@ -332,6 +348,17 @@ mod tests {
                 .first()
                 .and_then(|event| event.frame.parent_id.as_ref()),
             Some(&FrameId("main".to_owned()))
+        );
+        assert_eq!(
+            tracker.owner(&FrameId("existing".to_owned())),
+            None,
+            "a real removal clears the child's ownership"
+        );
+        tracker.forget(&target);
+        assert_eq!(
+            tracker.owner(&FrameId("main".to_owned())),
+            None,
+            "forgetting the page clears its remaining frame ownership"
         );
         Ok(())
     }
@@ -361,6 +388,11 @@ mod tests {
                 .is_empty(),
             "a renderer swap never detaches a Frame"
         );
+        assert_eq!(
+            tracker.owner(&FrameId("child".to_owned())),
+            Some(&target),
+            "a renderer swap keeps the attached frame on the same page"
+        );
         let navigated = tracker.record(
             &target,
             "Page.frameNavigated",
@@ -386,6 +418,11 @@ mod tests {
             Some(&FrameId("main".to_owned())),
             "an OOPIF commit retains the embedding parent"
         );
+        assert_eq!(
+            tracker.owner(&FrameId("nested".to_owned())),
+            None,
+            "a new document clears ownership of the replaced descendants"
+        );
         let removed = tracker.record(
             &target,
             "Page.frameNavigated",
@@ -395,6 +432,11 @@ mod tests {
             removed.first().map(|event| event.kind),
             Some(PageEventKind::FrameDetached),
             "main-frame commit removes children before announcing navigation"
+        );
+        assert_eq!(
+            tracker.owner(&FrameId("child".to_owned())),
+            None,
+            "main-document replacement clears ownership of its old child frames"
         );
         assert!(
             tracker
