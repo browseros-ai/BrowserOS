@@ -33,8 +33,8 @@ Each run starts with fresh JavaScript; tabs stay open between runs.";
 /// A ref resolves from `page` in any frame: the resolver jumps to the document that printed it
 /// (`neo-playwright/src/resolve/resolver.rs`). A model that knows Playwright doubts that for a
 /// frame's content, and in a real run guessed a locator beside a printed frame ref, so the text
-/// says it. A sentence about what the snapshot's first line
-/// says stands over the page goes right after this paragraph, once the snapshot prints one.
+/// says it. SNAPSHOT_ON_TOP adds the separate pinned head that names layers over the page
+/// before its ordinary content.
 const LOOP: &str = r#"Work in a loop: look, act, look again.
 - Look: `return await page.ariaSnapshot()` lists what you can act on, each with a ref, such as `- button "Add to cart" [ref=e41]`.
   It includes the page's text while the whole stays under about 3,000 tokens, and a line at its top says when it left the text out; `{ text: true }` always includes it.
@@ -48,6 +48,9 @@ const LOOP: &str = r#"Work in a loop: look, act, look again.
 - Return each snapshot whole, as the string it is.
   When its `# cut:` line says more was left out, snapshot the section it offers (`page.getByRef('e12').ariaSnapshot()`), or reach what you know is there with a locator.
   Pages often list a popup last, where a slice, a line filter or a small `maxTokens` can cut it off; only a block with a dialog or alert role survives the cut."#;
+
+/// The snapshot's pinned cover head keeps a portal after the footer visible before an agent's cut.
+const SNAPSHOT_ON_TOP: &str = r"A line `# on top: …` at the snapshot's top names a layer that takes the pointer from the controls under it, with that layer's own controls: deal with it first.";
 
 /// The wait times, which a test reads from the prelude's `timeouts.ts` so the two cannot drift
 /// (this text once said 5 s while the prelude waited 30). None of the 71 waits in that evaluation
@@ -126,6 +129,7 @@ pub(crate) fn run_description(registry: &Registry) -> String {
     let mut lines = vec![USAGE.to_owned()];
     if listed.iter().any(|spec| spec.name == SNAPSHOT_METHOD) {
         lines.push(LOOP.to_owned());
+        lines.push(SNAPSHOT_ON_TOP.to_owned());
         lines.push(WAITS.to_owned());
         lines.push(format!("{COVERED_CLICK}\n{OWN_LABEL_CLICK}"));
     }
@@ -283,11 +287,12 @@ mod tests {
     #[test]
     fn the_loop_waits_and_covers_appear_with_the_snapshot_method() -> Result<(), Box<dyn Error>> {
         let description = with_snapshot()?;
-        for part in [LOOP, WAITS, COVERED_CLICK, OWN_LABEL_CLICK] {
+        for part in [LOOP, SNAPSHOT_ON_TOP, WAITS, COVERED_CLICK, OWN_LABEL_CLICK] {
             assert!(description.contains(part), "{part}");
         }
         for sentence in [
             "Work in a loop: look, act, look again.",
+            "A line `# on top: …` at the snapshot's top names a layer that takes the pointer from the controls under it, with that layer's own controls: deal with it first.",
             "Act on a ref from your latest snapshot: `await page.getByRef('e41').click()`.",
             "use one only for an element printed without a ref.",
             "A ref works from `page` wherever the snapshot printed it, inside a frame too: `page.getByRef('f12e12')`.",
@@ -320,6 +325,14 @@ mod tests {
             "the common path comes before the exceptions"
         );
         Ok(())
+    }
+
+    /// This text must ship with the snapshot's behaviour, not merely with an unused formatter.
+    #[test]
+    fn the_on_top_sentence_has_a_snapshot_caller() {
+        const SNAPSHOT: &str = include_str!("../../../neo-playwright/src/snapshot/snapshot_op.rs");
+        assert!(SNAPSHOT.contains("action::on_top_line(&note)"));
+        assert!(SNAPSHOT_ON_TOP.contains("`# on top: …`"));
     }
 
     /// The cap keeps these four roles whole past its cut, and only these: what the text says

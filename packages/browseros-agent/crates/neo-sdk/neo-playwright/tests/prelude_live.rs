@@ -3407,3 +3407,39 @@ async fn tests_that_closed_roots_slot_their_hosts_children_as_open_ones_do() -> 
     );
     Ok(())
 }
+
+/// The pinned survey head follows the returned baseline across fresh realms, including a
+/// closed layer read that the script did not return and therefore must not commit.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_on_top_delta_heads_follow_the_returned_snapshot() -> TestResult {
+    let body = format!(r#"<button id="open">Open</button>{}
+<div id="shade" style="display:none;position:fixed;inset:0;background:#8888;z-index:10"></div>
+<section id="box" role="dialog" aria-label="Read first" style="display:none;position:fixed;left:25%;top:25%;width:50%;height:50%;background:white;z-index:11"><p>Current cover</p><button id="close">Close</button></section>
+<script>document.querySelector('#open').onclick=()=>{{shade.style.display='block';box.style.display='block'}};document.querySelector('#close').onclick=()=>{{shade.style.display='none';box.style.display='none'}};</script>"#,
+        (0..20).map(|n| format!("<p><a href='#story{n}'>Story {n}</a></p>")).collect::<String>());
+    let server = FixtureServer::start(HashMap::from([("/on-top".to_owned(), Page::html(body))])).await?;
+    let run = Arc::new(LiveRun::connect().await?);
+    let host: Arc<dyn OpHost> = Arc::clone(&run) as Arc<dyn OpHost>;
+    let url = json!(server.url("127.0.0.1", "/on-top"));
+    let opened = js_runner::run_script(&host, &json!({ "page": null }), &format!("await page.goto({url}); return {{ tab: page.toJSON().tab, text: await page.ariaSnapshot() }}")).await?;
+    run.end_run(Some(&opened));
+    let tab = opened["tab"].as_i64().ok_or("the page's tab")?;
+    let init = json!({ "page": { "$neo": "page", "tab": tab } });
+    let covered = js_runner::run_script(&host, &init, "await page.getByRole('button', {name:'Open', exact:true}).click(); return await page.ariaSnapshot({delta:true})").await?;
+    run.end_run(Some(&covered));
+    assert!(covered.as_str().is_some_and(|text| text.starts_with("# on top: dialog \"Read first\"")), "{covered}");
+    let unchanged = js_runner::run_script(&host, &init, "return await page.ariaSnapshot({delta:true})").await?;
+    run.end_run(Some(&unchanged));
+    let text = unchanged.as_str().ok_or("the unchanged snapshot")?;
+    assert!(text.starts_with("# on top: dialog \"Read first\""), "{text}");
+    assert!(text.ends_with("# no change since your last snapshot of this tab"), "{text}");
+    let unread = js_runner::run_script(&host, &init, "await page.getByRole('button', {name:'Close', exact:true}).click(); await page.ariaSnapshot(); return 'not a page read'").await?;
+    run.end_run(Some(&unread));
+    let removed = js_runner::run_script(&host, &init, "try { return await page.ariaSnapshot({delta:true}) } finally { await page.close() }").await?;
+    run.end_run(Some(&removed));
+    let text = removed.as_str().ok_or("the closed layer's snapshot")?;
+    assert!(text.starts_with("# no longer on top: dialog \"Read first\""), "{text}");
+    assert!(!text.lines().any(|line| line.starts_with("+# on top:") || line.starts_with("-# on top:")), "{text}");
+    Ok(())
+}

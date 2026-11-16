@@ -108,7 +108,8 @@ export function snapshot(
       ? {
           onTop: survey.layers,
           surveyTested: survey.tested,
-          surveyMs: survey.elapsed,
+          surveyMs: survey.phases.hits,
+          surveyPhases: survey.phases,
           onTopSkipped: survey.marksSkipped,
         }
       : {}),

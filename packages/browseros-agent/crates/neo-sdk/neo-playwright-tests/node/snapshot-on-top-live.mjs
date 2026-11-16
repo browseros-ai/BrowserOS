@@ -65,7 +65,7 @@ try {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'neo-on-top-'))
     const sdk = await openClaw(
       Number(process.env.BROWSEROS_CDP_PORT),
-      { stateDir, timeoutMs: 120000 },
+      { stateDir, timeoutMs: 120000, hostedMode: true },
       { upstreamSnapshots: false },
     )
     const run = sdk.native.id
@@ -87,7 +87,16 @@ try {
         outputs.push(text)
         return text
       }
-      checkNotes(await snap(row.expectedControls), row.expectedNotes)
+      const initial = await snap(row.expectedControls)
+      checkNotes(initial, row.expectedNotes)
+      if (row.firstText) {
+        assert.ok(initial.indexOf(row.firstText) >= 0, initial)
+        assert.ok(
+          initial.indexOf(row.firstText) < initial.indexOf('Outside box'),
+          initial,
+        )
+        assert.equal(initial.split(row.firstText).length - 1, 1, initial)
+      }
       const full = await snap(row.expectedControls, { mode: 'full' })
       checkNotes(full, row.expectedNotes)
       const json = await page.ariaSnapshotJSON({ mode: 'ai' })

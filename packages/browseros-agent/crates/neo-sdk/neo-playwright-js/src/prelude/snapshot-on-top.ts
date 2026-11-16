@@ -33,51 +33,50 @@ export function onTopContent(result: SnapshotResult): {
   first: AriaNodeJSON[]
   rest: AriaNodeJSON[]
 } {
-  let rest = result.json
-  const first: AriaNodeJSON[] = []
-  for (const layer of result.onTop ?? []) {
-    const wanted = new Set(layer.firstRefs)
-    const nodes: AriaNodeJSON[] = []
-    const selected = new Set<AriaNodeJSON>()
-    const pending = [...rest].reverse()
-    while (pending.length) {
-      const node = pending.pop()
-      if (!node) continue
-      nodes.push(node)
-      if (node.inert) continue
-      if (node.onTop === layer.ref || (node.ref && wanted.has(node.ref))) {
-        selected.add(node)
-        first.push(node)
-      } else {
-        for (const child of [...(node.children ?? [])].reverse())
-          if (typeof child !== 'string') pending.push(child)
-      }
+  const layers = (result.onTop ?? []).filter((layer) => layer.wholeView)
+  if (!layers.length) return { first: [], rest: result.json }
+  const front = new Map(
+    layers.map((layer) => [layer.ref, [] as AriaNodeJSON[]]),
+  )
+  const nodes: AriaNodeJSON[] = []
+  const selected = new Set<AriaNodeJSON>()
+  const pending = [...result.json].reverse()
+  while (pending.length) {
+    const node = pending.pop()
+    if (!node) continue
+    nodes.push(node)
+    if (node.inert) continue
+    const block = node.onTop ? front.get(node.onTop) : undefined
+    if (block) {
+      selected.add(node)
+      block.push(node)
+    } else
+      for (const child of [...(node.children ?? [])].reverse())
+        if (typeof child !== 'string') pending.push(child)
+  }
+  // One iterative projection preserves deep trees, source order and the untouched input.
+  const remaining = new Map<AriaNodeJSON, AriaNodeJSON | undefined>()
+  for (const node of nodes.reverse()) {
+    if (selected.has(node)) {
+      remaining.set(node, undefined)
+      continue
     }
-    // An iterative projection preserves deep page trees and never mutates the stitched input.
-    const remaining = new Map<AriaNodeJSON, AriaNodeJSON | undefined>()
-    for (const node of nodes.reverse()) {
-      if (selected.has(node)) {
-        remaining.set(node, undefined)
-        continue
-      }
-      const children = node.children?.flatMap((child) => {
-        if (typeof child === 'string' || !remaining.has(child)) return [child]
-        const kept = remaining.get(child)
-        return kept ? [kept] : []
-      })
-      remaining.set(
-        node,
-        children &&
-          (children.length !== node.children?.length ||
-            children.some((child, index) => child !== node.children?.[index]))
-          ? { ...node, children }
-          : node,
-      )
-    }
-    rest = rest.flatMap((node) => {
-      const kept = remaining.get(node)
+    const children = node.children?.flatMap((child) => {
+      if (typeof child === 'string' || !remaining.has(child)) return [child]
+      const kept = remaining.get(child)
       return kept ? [kept] : []
     })
+    const changed =
+      children &&
+      (children.length !== node.children?.length ||
+        children.some((child, index) => child !== node.children?.[index]))
+    remaining.set(node, changed ? { ...node, children } : node)
   }
-  return { first, rest }
+  return {
+    first: layers.flatMap((layer) => front.get(layer.ref) ?? []),
+    rest: result.json.flatMap((node) => {
+      const kept = remaining.get(node)
+      return kept ? [kept] : []
+    }),
+  }
 }

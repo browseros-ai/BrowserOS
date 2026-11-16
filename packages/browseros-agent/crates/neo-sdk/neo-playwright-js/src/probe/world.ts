@@ -184,7 +184,6 @@ export function lastSnapshotNodes(
   json: AriaSnapshotJSON,
 ): {
   nodes: Map<AriaNodeJSON, Element>
-  elements: Element[]
 } {
   const snapshot: unknown = Reflect.get(injected, '_lastAriaSnapshotForQuery')
   const root: unknown =
@@ -211,16 +210,6 @@ export function lastSnapshotNodes(
         'the engine snapshot node has no element link',
       )
     return element
-  }
-  const elements = new Set<Element>()
-  const walk = [root]
-  while (walk.length) {
-    const node = walk.pop()
-    if (!node) continue
-    const element = elementOf(node)
-    if (element) elements.add(element)
-    for (const child of node.children)
-      if (typeof child !== 'string') walk.push(child)
   }
   const nodes = new Map<AriaNodeJSON, Element>()
   const roots = root.role === 'fragment' ? root.children : [root]
@@ -280,7 +269,7 @@ export function lastSnapshotNodes(
         )
     })
   }
-  return { nodes, elements: Array.from(elements) }
+  return { nodes }
 }
 
 /** What one of the engine's expect checks found: its own result, before `.not`. */

@@ -182,7 +182,7 @@ pub(crate) struct SnapshotResult {
 pub(crate) struct SnapshotTop {
     pub(crate) r#ref: String,
     pub(crate) line: String,
-    pub(crate) removed: String,
+    pub(crate) whole_view: bool,
     pub(crate) first_refs: Vec<String>,
 }
 

@@ -320,10 +320,10 @@ pub(crate) fn on_top_line(note: &OnTopNote<'_>) -> String {
     if note.loading {
         line.push_str(", loading");
     }
-    if !note.blank && note.controls.is_empty() && note.name.as_str().is_none_or(str::is_empty)
+    if !note.blank && note.controls.is_empty() && note.name.as_str().is_none_or(|name| name.trim().is_empty())
         && let Some(words) = note.first_words.filter(|words| !words.is_empty())
     {
-        let words: String = words.chars().take(60).collect();
+        let words = clipped(words, 60);
         let _ = write!(line, ", says {}", Value::from(words));
     }
     line.push_str(if note.whole_view {
@@ -345,23 +345,23 @@ pub(crate) fn on_top_line(note: &OnTopNote<'_>) -> String {
     line
 }
 
-/// The identity line kept in a delta baseline when this layer later disappears.
-pub(crate) fn on_top_removed(note: &OnTopNote<'_>) -> String {
-    format!("# no longer on top: {}", node_named(note.role, note.name, note.reference, NAME_CHARS))
-}
-
 /// A node as a snapshot line names it: its role, its name quoted as a snapshot quotes one and
 /// clipped to `chars` characters, and its ref. The role alone for a nameless node.
 fn node_named(role: &str, name: &Value, reference: &str, chars: usize) -> String {
     match name.as_str().map(str::trim) {
         Some(name) if !name.is_empty() => {
-            let clipped: String = match name.char_indices().nth(chars) {
-                Some((cut, _)) => format!("{}…", name.get(..cut).unwrap_or(name)),
-                None => name.to_owned(),
-            };
+            let clipped = clipped(name, chars);
             format!("{role} {} [ref={reference}]", Value::from(clipped))
         }
         _ => format!("{role} [ref={reference}]"),
+    }
+}
+
+/// Every field in a layer line clips between Unicode characters and shares its ellipsis rule.
+fn clipped(text: &str, chars: usize) -> String {
+    match text.char_indices().nth(chars) {
+        Some((cut, _)) => format!("{}…", text.get(..cut).unwrap_or(text)),
+        None => text.to_owned(),
     }
 }
 

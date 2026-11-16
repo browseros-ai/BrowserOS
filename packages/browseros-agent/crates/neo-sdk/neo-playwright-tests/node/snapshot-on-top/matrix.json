@@ -792,5 +792,27 @@
       }
     ],
     "why": "A nameless portal is shown as its sole dialog; the main-frame controls line keeps the frame and the close."
+  },
+  {
+    "id": "e15-ref-less-holder",
+    "title": "Whole-view shared holder has no box or ref",
+    "file": "pages/e15-ref-less-holder.html",
+    "viewport": {
+      "width": 1280,
+      "height": 800
+    },
+    "expectedControls": 3,
+    "expectedNotes": [
+      {
+        "selector": "#holder",
+        "extent": "whole",
+        "role": "dialog",
+        "name": "Ref-less block",
+        "controls": ["Dismiss"],
+        "flags": []
+      }
+    ],
+    "firstText": "Please read this whole message",
+    "why": "The engine node-to-element link moves the ref-less shared holder, including its own text."
   }
 ]

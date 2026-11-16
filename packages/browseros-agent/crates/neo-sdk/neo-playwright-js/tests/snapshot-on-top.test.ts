@@ -8,7 +8,7 @@ import type { SnapshotResult } from '../src/prelude/wire'
 const head =
   '# on top: generic [ref=e9] over the whole view\n#   its controls: button "Dismiss" [ref=e10]'
 const gone = '# no longer on top: generic [ref=e9]'
-const layer = { ref: 'e9', line: head, removed: gone, firstRefs: ['e9'] }
+const layer = { ref: 'e9', line: head, wholeView: true, firstRefs: ['e9'] }
 const result = (
   whole = true,
 ): SnapshotResult & { onTop: (typeof layer)[] } => ({
@@ -21,6 +21,7 @@ const result = (
     {
       role: 'generic',
       ref: 'e9',
+      onTop: whole ? 'e9' : undefined,
       children: [
         'Read this first',
         { role: 'button', name: 'Dismiss', ref: 'e10' },
@@ -35,6 +36,7 @@ const result = (
         ? {}
         : {
             firstRefs: [],
+            wholeView: false,
             line: head.replace('over the whole view', 'over part of the view'),
           }),
     },
