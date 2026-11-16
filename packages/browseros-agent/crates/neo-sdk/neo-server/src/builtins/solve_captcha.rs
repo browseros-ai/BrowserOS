@@ -16,11 +16,12 @@ use crate::dispatch::{
 };
 
 /// The method's own line in the `run` description, shown only when this Neo has a provider key.
+/// Its time limit is neo-captcha's [`neo_captcha::SOLVE_DEADLINE`], which a test checks.
 const LISTED: &str = "neo.solveCaptcha(page) → { verdict, type, reason, message, durationMs, \
-    paidTasks }: solves the CAPTCHA on the page, in up to 120 s. verdict is solved | \
-    token_applied | already_clear | unsolved | cancelled | unknown; branch on it, and look at \
-    the page again after cancelled or unknown. Await it before any other action on that page: a \
-    write there meanwhile fails page_busy.";
+    paidTasks }: solves the CAPTCHA on the page, in up to 120 s. Branch on `verdict`: solved | \
+    token_applied | already_clear | unsolved | cancelled | unknown. After cancelled or unknown, \
+    look at the page again. Await it before any other action on that page: a write there \
+    meanwhile fails `page_busy`.";
 /// Why every call fails without a key: the deployment's to fix, not the script's (decision 7).
 const NO_KEY: &str = "this Neo has no CAPTCHA provider key, so neo.solveCaptcha is off; the \
     deployment must configure one";
@@ -191,8 +192,18 @@ fn event_line(event: &CaptchaEvent) -> String {
 /// the script branches on. Exhaustive on both enums, so a new verdict or reason does not
 /// compile until someone words it.
 fn message(verdict: Verdict, reason: SolveReason) -> String {
+    // The solver detects only the families it knows, so finding none is not proof that nothing
+    // blocks the page: an unknown human check that covers it reads the same. The line says what
+    // was found, and what such a check means for the script.
+    if verdict == Verdict::AlreadyClear && reason == SolveReason::NoCaptcha {
+        return NONE_FOUND.to_owned();
+    }
     worded(verdict, cause(reason))
 }
+
+/// The line for `already_clear` with no CAPTCHA found.
+const NONE_FOUND: &str = "Neo found no CAPTCHA it knows on the page; carry on with the task. If \
+    a human check still covers the page, stop and tell the user it needs their help.";
 
 /// [`message`], naming the family when the answer's `type` cannot: `PerimeterX`'s is `unknown`
 /// (see neo-captcha's `CaptchaKind::PerimeterX`), so its refusal says what blocks the page.
@@ -264,7 +275,7 @@ mod tests {
         Attempts, CaptchaKind, SolveMethod, SolveOutcome, SolveReason, SolveStatus, Verdict,
     };
 
-    use super::{message, verdict_value};
+    use super::{LISTED, cause, message, verdict_value};
 
     const VERDICTS: [Verdict; 6] = [
         Verdict::Solved,
@@ -334,7 +345,13 @@ mod tests {
             (
                 Verdict::AlreadyClear,
                 SolveReason::NoCaptcha,
-                "No CAPTCHA blocks the page (no CAPTCHA was found); carry on with the task.",
+                "Neo found no CAPTCHA it knows on the page; carry on with the task. If a human \
+                 check still covers the page, stop and tell the user it needs their help.",
+            ),
+            (
+                Verdict::AlreadyClear,
+                SolveReason::AlreadyPassed,
+                "No CAPTCHA blocks the page (it had already passed); carry on with the task.",
             ),
             (
                 Verdict::Unsolved,
@@ -358,6 +375,15 @@ mod tests {
         for (verdict, reason, line) in table {
             assert_eq!(message(verdict, reason), line, "{verdict:?} / {reason:?}");
         }
+    }
+
+    /// The listed time limit and the deadline reason's words are the solver's own deadline.
+    #[test]
+    fn the_listed_time_limit_is_the_solvers_deadline() {
+        let said = format!("in up to {} s", neo_captcha::SOLVE_DEADLINE.as_secs());
+        assert!(LISTED.contains(&said), "the line says: {said}");
+        let deadline = format!("its {} s limit", neo_captcha::SOLVE_DEADLINE.as_secs());
+        assert!(cause(SolveReason::DeadlineExceeded).contains(&deadline));
     }
 
     /// `PerimeterX`'s `type` stays `unknown` (claw-server's closed schema does not list it), so its

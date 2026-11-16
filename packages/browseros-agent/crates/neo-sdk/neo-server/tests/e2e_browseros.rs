@@ -265,7 +265,10 @@ async fn solve_on_a_clear_page(rig: &Rig) -> TestResult {
     );
     assert_eq!(
         field("message"),
-        json!("No CAPTCHA blocks the page (no CAPTCHA was found); carry on with the task.")
+        json!(
+            "Neo found no CAPTCHA it knows on the page; carry on with the task. If a human check \
+             still covers the page, stop and tell the user it needs their help."
+        )
     );
     client.cancel().await?;
     Ok(())

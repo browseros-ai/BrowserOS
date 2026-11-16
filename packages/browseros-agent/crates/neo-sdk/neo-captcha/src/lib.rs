@@ -50,6 +50,10 @@ use self::{
     },
 };
 
+/// How long one solve may run, from detection to its verdict. Hosts state it to their agents
+/// (neo-server's `run` description reads it from here), so it is one named number.
+pub const SOLVE_DEADLINE: Duration = Duration::from_secs(120);
+
 pub(crate) struct SolveCtx<'a, P: CaptchaPage, B: CaptchaBackend> {
     pub page: &'a P,
     pub backend: &'a B,
@@ -115,8 +119,9 @@ impl CaptchaSolver {
         &self.events
     }
 
-    /// Detects and solves the CAPTCHA on `page` within 120 s. `Err` only when the solve never
-    /// started; every started solve, cancelled or not, returns an outcome and frees the page.
+    /// Detects and solves the CAPTCHA on `page` within [`SOLVE_DEADLINE`]. `Err` only when the
+    /// solve never started; every started solve, cancelled or not, returns an outcome and frees
+    /// the page.
     pub async fn solve(
         &self,
         view: BrowserView,
@@ -125,7 +130,7 @@ impl CaptchaSolver {
         human_help: HumanHelp,
     ) -> Result<SolveOutcome, SolveRefusal> {
         let human_help_available = human_help == HumanHelp::Available;
-        let deadline = Instant::now() + Duration::from_secs(120);
+        let deadline = Instant::now() + SOLVE_DEADLINE;
         let live = LivePage::new(view, page.clone());
         let validation = tokio::select! {
             biased;
