@@ -78,38 +78,41 @@ fn target_crashed_real_page_op_precedes_failed_native_refresh_on_the_wire() -> R
                 Arc::clone(&rig.tabs),
                 Observer::new(Arc::clone(&facade) as _),
             ));
-            let playwright = facade.get().await;
-            assert!(
-                playwright
-                    .synchronize_events(playwright.event_fence())
-                    .await
-            );
+            facade.get().await;
             let target = rig
                 .link
                 .page(page.tab)
                 .await
                 .ok_or("cached native tab")?
                 .target_id;
-            let before = playwright.event_fence();
             assert!(rig.fake.page_event(
                 page.tab,
                 "Target.targetCrashed",
                 json!({ "targetId": target.as_str(), "status": "crashed", "errorCode": 1 }),
             ));
+            let service = rig.run_service(GRACE);
+            let proof_input = json!({ "page": { "$neo": "page", "tab": page.tab } });
+            let proof_code = format!("await __neo.invoke('page.title', {proof_input});");
+            // FakeCdp does not number event broadcasts, so its fence cannot prove watcher
+            // progress. A real adapter refusal, while native reads still work and the fake
+            // emits no crash protocol reply, proves the persistent registry knows the crash.
             within(CRASH_REFUSAL_WATCHDOG, async {
-                while playwright.event_fence() <= before {
+                loop {
+                    let observed = service.run(request(&proof_code, RunMeta::default())?).await;
+                    if observed.error.as_ref().is_some_and(|error| {
+                        error.diagnostic_code == Some(DiagnosticCode::TargetCrashed)
+                    }) {
+                        break Ok::<(), TestError>(());
+                    }
                     task::yield_now().await;
                 }
             })
-            .await?;
-            assert!(
-                playwright
-                    .synchronize_events(playwright.event_fence())
-                    .await
-            );
+            .await
+            .map_err(|error| {
+                format!("waiting for remembered-crash registry proof before {failure}: {error}")
+            })??;
             // No crash injection or synthetic method is used after this boundary. The next
             // fresh run reaches the production Playwright adapter over QuickJS's real bridge.
-            time::sleep(Duration::from_millis(1)).await;
             let expect_title = matches!(&failure, CdpError::ConnectionLost);
             let operation = if expect_title {
                 "expect.page"
@@ -135,7 +138,6 @@ fn target_crashed_real_page_op_precedes_failed_native_refresh_on_the_wire() -> R
             } else {
                 json!({ "page": { "$neo": "page", "tab": page.tab } })
             };
-            let service = rig.run_service(GRACE);
             let initial_tabs = rig.fake.count("Browser.getTabs");
             rig.fake.hold_next("Browser.getTabs");
             let request = request(
@@ -148,7 +150,10 @@ fn target_crashed_real_page_op_precedes_failed_native_refresh_on_the_wire() -> R
                     task::yield_now().await;
                 }
             })
-            .await?;
+            .await
+            .map_err(|error| {
+                format!("waiting for initial healthy getTabs before {failure}: {error}")
+            })?;
             // RunService lists initial pages before starting QuickJS. Its healthy reply is
             // already captured and held here; only the later foreground op sees the errors.
             for method in ["Browser.getTabInfo", "Browser.getTabs"] {
@@ -158,7 +163,14 @@ fn target_crashed_real_page_op_precedes_failed_native_refresh_on_the_wire() -> R
             let before_tabs = rig.fake.count("Browser.getTabs");
             let before_attach = rig.fake.count("Target.attachToTarget");
             rig.fake.release_held();
-            let failed = within(CRASH_REFUSAL_WATCHDOG, pending).await??;
+            let failed = within(CRASH_REFUSAL_WATCHDOG, pending)
+                .await
+                .map_err(|error| {
+                    format!("awaiting {operation} wire operation under {failure}: {error}")
+                })?
+                .map_err(|error| {
+                    format!("joining {operation} wire operation under {failure}: {error}")
+                })?;
             let error = error_of(&failed)?;
             assert_eq!(error.code, "internal_error", "{failure}");
             assert_eq!(error.diagnostic_code, Some(DiagnosticCode::TargetCrashed));
