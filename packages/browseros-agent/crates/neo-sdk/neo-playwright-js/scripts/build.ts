@@ -1,6 +1,7 @@
 /**
- * Builds every file neo-playwright embeds or tests against from this package and the
- * crate's vendored Playwright (third_party/playwright, never edited):
+ * Builds every file neo-playwright embeds or tests against, and the snapshot text cases
+ * neo-snapshot is judged by, from this package and the crate's vendored Playwright
+ * (third_party/playwright, never edited). Paths are under crates/neo-sdk/neo-playwright:
  *
  *   assets/injected.js   page side: src/probe/index.ts with Playwright's InjectedScript, one
  *                        IIFE whose only global is __neoProbe, evaluated in the isolated world
@@ -18,6 +19,8 @@
  *                                    (scripts/in-page-values.ts)
  *   tests/data/wire-examples.json    every op input the fresh prelude sends, which the crate
  *                                    invokes offline (scripts/wire-examples.ts)
+ *   ../neo-snapshot/tests/data/cases/  what today's snapshot renderer prints for each case,
+ *                                    which the Rust renderer is judged by (scripts/snapshot-cases)
  *
  * `bun scripts/build.ts` writes them, and `--check` fails when a committed copy is stale. The
  * crate embeds the assets with include_str!, so Cargo needs no build step. Use the Bun version
@@ -29,6 +32,7 @@ import type { BunPlugin } from 'bun'
 import { engines } from '../../../../package.json'
 import { protocolDocument } from '../src/probe/protocol-examples'
 import { inPageValuesDocument } from './in-page-values'
+import { snapshotCaseOutputs } from './snapshot-cases/write'
 import { wireExamplesDocument } from './wire-examples'
 
 const packageRoot = resolve(import.meta.dir, '..')
@@ -261,6 +265,7 @@ ${bindingsController}`,
       path: 'crates/neo-sdk/neo-playwright/tests/data/wire-examples.json',
       text: await wireExamplesDocument(preludeAsset),
     },
+    ...snapshotCaseOutputs(),
   ]
 }
 
