@@ -11118,6 +11118,7 @@ ${value.stack}`;
       };
     }
     const naming = performance.now();
+    const counting = phases.count;
     const centre = { x: innerWidth / 2, y: innerHeight / 2 };
     for (const face of found.values())
       face.named = shownAs(world, output, face.named, centre);
@@ -11128,7 +11129,7 @@ ${value.stack}`;
     const next = [];
     const layers = groups.map((group) => describeLayer(world, output, group, groups, remembered, next, tested, samples, inside)).filter((layer) => layer !== undefined).sort((a, b) => Number(b.note.wholeView) - Number(a.note.wholeView) || a.order - b.order).slice(0, MAX_LAYERS);
     memory.set(document2, next);
-    phases.naming += performance.now() - naming;
+    phases.naming += Math.max(0, performance.now() - naming - (phases.count - counting));
     const marksSkipped = markBlocks(world, json, layers, inside, phases);
     return {
       layers: layers.map(({ note }) => note),
@@ -11354,7 +11355,7 @@ ${value.stack}`;
         name: nameOf(world, output, named),
         ref: world.refs.forElement(named, world.seq),
         blank,
-        loading: held.some(saysLoading),
+        loading: controlsFrom.some(saysLoading),
         wholeView,
         controls,
         ...words ? { firstWords: Array.from(words).slice(0, 61).join("") } : {}

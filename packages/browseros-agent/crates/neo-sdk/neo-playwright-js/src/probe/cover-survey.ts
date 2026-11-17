@@ -165,6 +165,7 @@ export function surveyCovers(
     }
   }
   const naming = performance.now()
+  const counting = phases.count
   const centre = { x: innerWidth / 2, y: innerHeight / 2 }
   for (const face of found.values())
     face.named = shownAs(world, output, face.named, centre)
@@ -195,7 +196,10 @@ export function surveyCovers(
     )
     .slice(0, MAX_LAYERS)
   memory.set(document, next)
-  phases.naming += performance.now() - naming
+  phases.naming += Math.max(
+    0,
+    performance.now() - naming - (phases.count - counting),
+  )
   const marksSkipped = markBlocks(world, json, layers, inside, phases)
   return {
     layers: layers.map(({ note }) => note),
@@ -461,7 +465,7 @@ function joinFaces(found: Map<Element, Face>, inside: Inside): Face[][] {
  * A joined portal owns its shared holder. When a backdrop names an inner dialog, the dialog's
  * pointer-taking fixed carrier belongs to the same layer, so the gap beside the dialog still
  * counts as covered. The page guard peels app shells rather than adopting their content.
- * Controls keep their original holders so the shared covered answer names the same controls.
+ * Controls and loading facts keep their original holders, as the shared covered answer does.
  */
 function holdersOf(
   faces: Face[],
@@ -555,7 +559,7 @@ function describeLayer(
       name: nameOf(world, output, named),
       ref: world.refs.forElement(named, world.seq),
       blank,
-      loading: held.some(saysLoading),
+      loading: controlsFrom.some(saysLoading),
       wholeView,
       controls,
       ...(words ? { firstWords: Array.from(words).slice(0, 61).join('') } : {}),
