@@ -649,10 +649,11 @@ paths:
         - A widget that spreads a code across several boxes shows the digits of the boxes Neo
           did not fill. Fill it one box at a time. The fill's `uncertain` outcome is the sign
           that a value given to one box did not stay there.
-        - A page's copy of a typed value into another box has no mark: it prints in a
-          snapshot, in `inputValue()` and in an error's preview unless the page declares that
-          box private. A clone or replacement is a new box too. Neo keeps the mark on the node
-          it typed into; it does not follow the copied value.
+        - A page's copy of a typed value into an unmarked box reads in clear through
+          `inputValue()`. Ordinary snapshots and error previews mask that copy only if the
+          page declares its box private. The original node and an already marked destination
+          keep their marks. A clone or replacement is a new box without the original's mark:
+          Neo does not follow the copied value.
         - `neo.solveCaptcha` photographs the challenge's own rectangle and sends it to the
           provider, on such a tab too.
         - An element preview of a marked or declared private box in a call log or an error

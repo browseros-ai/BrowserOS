@@ -753,16 +753,6 @@ async fn tests_that_max_length_minus_one_fills_only_a_box_with_none() -> TestRes
 /// A fixed card-shaped value for private-entry checks.
 const CARD_VALUE: &str = "4242424242424242";
 
-/// What Neo's `inputValue()` answers for the box `r#ref` names: a read through the mask.
-async fn masked_value(bench: &Bench, opened: &Opened, r#ref: &str) -> TestResult<String> {
-    let target = ref_target(&opened.page.brand(), r#ref);
-    let read = bench
-        .live
-        .invoke("locator.inputValue", input_value(&target))
-        .await??;
-    Ok(read.as_str().unwrap_or_default().to_owned())
-}
-
 /// A copy the page makes into an undeclared box prints its value in direct reads,
 /// snapshots and error previews. The original node keeps its private-fill mark in both modes.
 #[tokio::test]
@@ -780,10 +770,18 @@ async fn tests_that_a_copied_value_prints_while_the_typed_box_keeps_its_mark() -
     assert_eq!(entry.outcome, EntryOutcome::Entered, "{entry:?}");
     bench.live.main_world(&opened.page, "copyValue()").await?;
     let bullets = "•".repeat(CARD_VALUE.len());
-    assert_eq!(masked_value(&bench, &opened, &original).await?, bullets);
-    assert_eq!(masked_value(&bench, &opened, &copy).await?, CARD_VALUE);
     let page = opened.page.brand();
     for conformance in [false, true] {
+        for (field_ref, expected) in [(&original, bullets.as_str()), (&copy, CARD_VALUE)] {
+            let mut input = input_value(&ref_target(&page, field_ref));
+            input["call"]["conformance"] = json!(conformance);
+            let read = bench.live.invoke("locator.inputValue", input).await??;
+            assert_eq!(
+                read,
+                json!(expected),
+                "inputValue conformance={conformance}"
+            );
+        }
         let tree = bench
             .live
             .invoke("page.ariaSnapshot", page_snapshot(&page, conformance))
