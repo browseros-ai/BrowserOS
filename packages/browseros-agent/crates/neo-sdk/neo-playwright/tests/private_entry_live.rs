@@ -4292,7 +4292,8 @@ async fn tests_that_a_box_marked_in_a_removed_frame_stays_masked() -> TestResult
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_only_a_filled_receiving_tab_discovers_a_moved_declared_box() -> TestResult {
     let bench = Bench::start().await?;
-    for filled in [false, true] {
+    // Fill and close the first tab so browser-wide history cannot enable the unfilled tab.
+    for filled in [true, false] {
         let opened = bench
             .open("/private/moved-box.html?inside=1", Place::Front)
             .await?;

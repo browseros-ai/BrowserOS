@@ -10345,25 +10345,9 @@ ${value.stack}`;
   function isHtmlTextarea(node) {
     return node?.nodeType === 1 && "localName" in node && node.localName === "textarea" && "namespaceURI" in node && node.namespaceURI === HTML_NAMESPACE;
   }
-  function hasReadableOpener(document2) {
-    try {
-      const view = document2.defaultView;
-      if (!view)
-        return true;
-      const opener = view.opener;
-      if (opener === null || opener === undefined)
-        return false;
-      if (typeof opener !== "object" && typeof opener !== "function")
-        return true;
-      const _openerDocument = Reflect.get(opener, "document");
-      return true;
-    } catch (error) {
-      return !(typeof error === "object" && error !== null && ("name" in error) && error.name === "SecurityError");
-    }
-  }
   function collectFieldPrototypes({
     root,
-    mayHaveOtherFrame
+    discoverMovedFields
   }) {
     const prototypes = {
       inputs: new Set([HTMLInputElement.prototype]),
@@ -10393,7 +10377,7 @@ ${value.stack}`;
     const ownerDocument = root?.ownerDocument ?? document;
     if (root)
       collect(root);
-    if (!mayHaveOtherFrame && !hasReadableOpener(ownerDocument))
+    if (!discoverMovedFields)
       return prototypes;
     const roots = [ownerDocument];
     for (const tree of roots) {
@@ -10525,10 +10509,9 @@ ${value.stack}`;
         cause: new AggregateError(failures)
       });
   }
-  function withMarkedFieldsMasked(walk, root = document.documentElement) {
-    return anyPrivatelyTyped() || root !== null && privatelyTyped(root) ? withMaskedFieldValues({ root, mayHaveOtherFrame: true }, walk, {
-      declared: false
-    }) : walk();
+  function withMarkedFieldsMasked(discovery, walk) {
+    const { root } = discovery;
+    return anyPrivatelyTyped() || root !== null && privatelyTyped(root) ? withMaskedFieldValues(discovery, walk, { declared: false }) : walk();
   }
   function withMaskedFieldValues(discovery, walk, { declared = true } = {}) {
     const prototypes = collectFieldPrototypes(discovery);
@@ -10591,7 +10574,7 @@ ${value.stack}`;
       this.world = world;
       this.policy = Object.freeze({
         conformance: policy.conformance,
-        mayHaveOtherFrame: policy.mayHaveOtherFrame
+        discoverMovedFields: policy.discoverMovedFields
       });
       this.engine = diagnosticEngine(world.injected);
       this.checks = expectChecks(world.injected);
@@ -10610,18 +10593,24 @@ ${value.stack}`;
     tree(root, read) {
       if (this.policy.conformance && !anyPrivatelyTyped())
         return read();
-      return this.run(() => withMaskedFieldValues({ root, mayHaveOtherFrame: this.policy.mayHaveOtherFrame }, read, { declared: !this.policy.conformance }));
+      return this.run(() => withMaskedFieldValues({ root, discoverMovedFields: this.policy.discoverMovedFields }, read, { declared: !this.policy.conformance }));
     }
     async check(element, params, frameVisible) {
       const field = this.world.injected.retarget(element, "follow-label") ?? element;
       const mode = this.checkMode(element, field, params);
       const compare = () => this.checks.single(element, params, frameVisible);
-      const check = await (mode.kind === "guardedTree" ? this.tree(element, compare) : this.run(() => withMarkedFieldsMasked(compare, field)));
+      const check = await (mode.kind === "guardedTree" ? this.tree(element, compare) : this.run(() => withMarkedFieldsMasked({
+        root: field,
+        discoverMovedFields: this.policy.discoverMovedFields
+      }, compare)));
       return mode.kind === "realValue" && typeof check.received === "string" ? { ...check, received: characterMarker(check.received) } : check;
     }
     checkMany(elements, params) {
       const compare = () => this.checks.every(elements, params);
-      return !this.policy.conformance && guardedComparison(params) ? this.tree(elements[0] ?? this.world.injected.document.documentElement, compare) : this.run(() => withMarkedFieldsMasked(compare, elements[0] ?? null));
+      return !this.policy.conformance && guardedComparison(params) ? this.tree(elements[0] ?? this.world.injected.document.documentElement, compare) : this.run(() => withMarkedFieldsMasked({
+        root: elements[0] ?? null,
+        discoverMovedFields: this.policy.discoverMovedFields
+      }, compare));
     }
     arm(...args) {
       return this.engine.arm(this.previewNode, ...args);
@@ -10657,7 +10646,7 @@ ${value.stack}`;
   }
 
   // crates/neo-sdk/neo-playwright-js/src/probe/protocol.ts
-  var PROTOCOL = 50;
+  var PROTOCOL = 51;
 
   // crates/neo-sdk/neo-playwright-js/src/probe/read.ts
   var XHTML2 = "http://www.w3.org/1999/xhtml";
@@ -11728,7 +11717,7 @@ ${value.stack}`;
       return false;
     const request = Reflect.get(value, "request");
     const policy = Reflect.get(value, "policy");
-    return hasKnownOp(request) && typeof policy === "object" && policy !== null && typeof Reflect.get(policy, "conformance") === "boolean" && typeof Reflect.get(policy, "mayHaveOtherFrame") === "boolean";
+    return hasKnownOp(request) && typeof policy === "object" && policy !== null && typeof Reflect.get(policy, "conformance") === "boolean" && typeof Reflect.get(policy, "discoverMovedFields") === "boolean";
   }
   function hasKnownOp(request) {
     if (typeof request !== "object" || request === null)
