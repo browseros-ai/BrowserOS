@@ -51,10 +51,10 @@ struct Detached {
 
 /// Decode only the Page-domain facts a navigation waiter needs. Renderer swaps retain the
 /// frame's identity; only an actual removal ends its wait.
-pub(crate) fn parse(method: &str, params: Value) -> Option<PageEvent> {
+pub(crate) fn parse(method: &str, params: &Value) -> Option<PageEvent> {
     match method {
         "Page.frameNavigated" => {
-            let Committed { frame } = serde_json::from_value(params).ok()?;
+            let Committed { frame } = Committed::deserialize(params).ok()?;
             Some(PageEvent::Navigation(NavigationEvent {
                 frame: frame.id,
                 url: format!("{}{}", frame.url, frame.url_fragment),
@@ -64,7 +64,7 @@ pub(crate) fn parse(method: &str, params: Value) -> Option<PageEvent> {
             }))
         }
         "Page.navigatedWithinDocument" => {
-            let navigation: SameDocument = serde_json::from_value(params).ok()?;
+            let navigation = SameDocument::deserialize(params).ok()?;
             Some(PageEvent::Navigation(NavigationEvent {
                 frame: navigation.frame_id,
                 url: navigation.url,
@@ -74,7 +74,7 @@ pub(crate) fn parse(method: &str, params: Value) -> Option<PageEvent> {
             }))
         }
         "Page.frameDetached" => {
-            let detached: Detached = serde_json::from_value(params).ok()?;
+            let detached = Detached::deserialize(params).ok()?;
             Some(if detached.reason == "swap" {
                 PageEvent::FrameSwapped(detached.frame_id)
             } else {
@@ -99,14 +99,14 @@ mod tests {
         assert_eq!(
             parse(
                 "Page.frameDetached",
-                json!({"frameId":"child", "reason":"swap"})
+                &json!({"frameId":"child", "reason":"swap"})
             ),
             Some(PageEvent::FrameSwapped(FrameId("child".to_owned())))
         );
         assert_eq!(
             parse(
                 "Page.frameDetached",
-                json!({"frameId":"child", "reason":"remove"})
+                &json!({"frameId":"child", "reason":"remove"})
             ),
             Some(PageEvent::FrameDetached(FrameId("child".to_owned())))
         );
@@ -117,7 +117,7 @@ mod tests {
     -> Result<(), Box<dyn Error>> {
         let Some(PageEvent::Navigation(committed)) = parse(
             "Page.frameNavigated",
-            json!({
+            &json!({
                 "frame": {"id":"main", "loaderId":"L1", "url":"https://a.test/", "urlFragment":"#part"}
             }),
         ) else {
@@ -125,7 +125,7 @@ mod tests {
         };
         let Some(PageEvent::Navigation(history)) = parse(
             "Page.navigatedWithinDocument",
-            json!({
+            &json!({
                 "frameId":"main", "url":"https://a.test/#other"
             }),
         ) else {

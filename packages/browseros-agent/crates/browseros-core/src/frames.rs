@@ -2,6 +2,7 @@ use crate::connection::CdpConnection;
 use crate::{CoreError, FrameId, PageId, ProtocolSession, SessionId};
 use browseros_cdp::{CdpEvent, target};
 use futures_util::future::BoxFuture;
+use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex as StdMutex, PoisonError, Weak};
@@ -393,7 +394,7 @@ impl FrameRegistry {
         tokio::spawn(async move {
             loop {
                 match events.recv().await {
-                    Ok(event) => registry.handle_event(event).await,
+                    Ok(event) => registry.handle_event(&event).await,
                     // A frame-heavy page can attach many targets at once and overflow the CDP
                     // event buffer. Keep listening instead of dying for the rest of the session: a
                     // missed attach is recovered on demand when a frame is resolved, and a missed
@@ -409,17 +410,16 @@ impl FrameRegistry {
         });
     }
 
-    async fn handle_event(&self, event: CdpEvent) {
+    async fn handle_event(&self, event: &CdpEvent) {
         match event.method.as_str() {
             "Target.attachedToTarget" => {
-                let parsed = serde_json::from_value::<target::AttachedToTargetEvent>(event.params);
+                let parsed = target::AttachedToTargetEvent::deserialize(&event.params);
                 if let Ok(params) = parsed {
-                    self.on_attached(params, event.session_id).await;
+                    self.on_attached(params, event.session_id.clone()).await;
                 }
             }
             "Target.detachedFromTarget" => {
-                let parsed =
-                    serde_json::from_value::<target::DetachedFromTargetEvent>(event.params);
+                let parsed = target::DetachedFromTargetEvent::deserialize(&event.params);
                 if let Ok(params) = parsed {
                     self.on_detached(&SessionId::from(params.session_id)).await;
                 }
@@ -783,7 +783,7 @@ mod tests {
             Box::pin(async { Ok("{}".to_string()) })
         }
 
-        fn events(&self) -> broadcast::Receiver<CdpEvent> {
+        fn events(&self) -> broadcast::Receiver<Arc<CdpEvent>> {
             let (_tx, rx) = broadcast::channel(1);
             rx
         }
@@ -844,7 +844,7 @@ mod tests {
             Box::pin(async { Ok("{}".to_string()) })
         }
 
-        fn events(&self) -> broadcast::Receiver<CdpEvent> {
+        fn events(&self) -> broadcast::Receiver<Arc<CdpEvent>> {
             let (_tx, rx) = broadcast::channel(1);
             rx
         }
@@ -1067,7 +1067,7 @@ mod tests {
             Box::pin(async { Ok("{}".to_string()) })
         }
 
-        fn events(&self) -> broadcast::Receiver<CdpEvent> {
+        fn events(&self) -> broadcast::Receiver<Arc<CdpEvent>> {
             let (_tx, rx) = broadcast::channel(1);
             rx
         }
@@ -1203,7 +1203,7 @@ mod tests {
         let event = attached_child();
         let _: browseros_cdp::target::AttachedToTargetEvent =
             serde_json::from_value(event.params.clone())?;
-        registry.handle_event(event).await;
+        registry.handle_event(&event).await;
         let sent = cdp.sent.lock().unwrap_or_else(PoisonError::into_inner);
         let position = |method| sent.iter().position(|sent| sent == method);
         assert!(
@@ -1276,7 +1276,7 @@ mod tests {
             ("plain", "paused-child", true),
         ] {
             registry
-                .handle_event(CdpEvent {
+                .handle_event(&CdpEvent {
                     method: "Target.attachedToTarget".to_owned(),
                     session_id: Some(SessionId::from(parent)),
                     params: json!({"sessionId": child, "waitingForDebugger": waiting, "targetInfo": {
@@ -1334,7 +1334,7 @@ mod tests {
         let event = attached_child();
         let _: browseros_cdp::target::AttachedToTargetEvent =
             serde_json::from_value(event.params.clone())?;
-        registry.handle_event(event).await;
+        registry.handle_event(&event).await;
         assert_eq!(
             cdp.connection_epoch(),
             2,

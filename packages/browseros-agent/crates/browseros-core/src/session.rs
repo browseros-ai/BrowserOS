@@ -285,7 +285,7 @@ impl BrowserSession {
         self.connection.clone()
     }
 
-    pub fn cdp_events(&self) -> broadcast::Receiver<CdpEvent> {
+    pub fn cdp_events(&self) -> broadcast::Receiver<Arc<CdpEvent>> {
         self.connection.events()
     }
 
@@ -297,7 +297,7 @@ impl BrowserSession {
 
     /// See [`crate::connection::CdpConnection::events_counted`].
     #[must_use]
-    pub fn cdp_events_counted(&self) -> (broadcast::Receiver<CdpEvent>, u64) {
+    pub fn cdp_events_counted(&self) -> (broadcast::Receiver<Arc<CdpEvent>>, u64) {
         self.connection.events_counted()
     }
 
@@ -349,7 +349,7 @@ impl BrowserSession {
                 match events.recv().await {
                     Ok(event) => {
                         if event.method == "Target.detachedFromTarget" {
-                            handle_detached_event(&session, event).await;
+                            handle_detached_event(&session, &event).await;
                         }
                     }
                     // Survive a CDP event-buffer overflow on a frame-heavy page instead of
@@ -362,7 +362,7 @@ impl BrowserSession {
     }
 }
 
-async fn handle_detached_event(session: &BrowserSession, event: CdpEvent) {
+async fn handle_detached_event(session: &BrowserSession, event: &CdpEvent) {
     let session_id = event
         .params
         .get("sessionId")
@@ -483,7 +483,7 @@ impl CdpConnection for EvictingConnection {
         )
     }
 
-    fn events(&self) -> broadcast::Receiver<CdpEvent> {
+    fn events(&self) -> broadcast::Receiver<Arc<CdpEvent>> {
         self.inner.events()
     }
 
@@ -495,7 +495,7 @@ impl CdpConnection for EvictingConnection {
         self.inner.events_broadcast()
     }
 
-    fn events_counted(&self) -> (broadcast::Receiver<CdpEvent>, u64) {
+    fn events_counted(&self) -> (broadcast::Receiver<Arc<CdpEvent>>, u64) {
         self.inner.events_counted()
     }
 

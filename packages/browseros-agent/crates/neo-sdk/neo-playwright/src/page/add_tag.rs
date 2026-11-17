@@ -6,6 +6,7 @@
 
 use std::io::ErrorKind;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 
 use browseros_cdp::CdpEvent;
@@ -272,7 +273,7 @@ fn csp_message(event: &CdpEvent, session: Option<&browseros_core::SessionId>) ->
     if event.method != "Log.entryAdded" || event.session_id.as_ref() != session {
         return None;
     }
-    let logged: Logged = serde_json::from_value(event.params.clone()).ok()?;
+    let logged = Logged::deserialize(&event.params).ok()?;
     let Entry { level, text } = logged.entry;
     (level == "error"
         && (text.contains("Content-Security-Policy") || text.contains("Content Security Policy")))
@@ -282,7 +283,7 @@ fn csp_message(event: &CdpEvent, session: Option<&browseros_core::SessionId>) ->
 /// Fails with the CSP report `events` already received for `session`, if one is there.
 fn received_report(
     scope: &OpScope<'_>,
-    events: &mut broadcast::Receiver<CdpEvent>,
+    events: &mut broadcast::Receiver<Arc<CdpEvent>>,
     session: Option<&browseros_core::SessionId>,
 ) -> Result<(), PlaywrightError> {
     loop {
@@ -302,7 +303,9 @@ fn received_report(
 struct Lagged;
 
 /// The next event already received; `None` when none is.
-fn queued(events: &mut broadcast::Receiver<CdpEvent>) -> Result<Option<CdpEvent>, Lagged> {
+fn queued(
+    events: &mut broadcast::Receiver<Arc<CdpEvent>>,
+) -> Result<Option<Arc<CdpEvent>>, Lagged> {
     match events.try_recv() {
         Ok(event) => Ok(Some(event)),
         Err(TryRecvError::Lagged(_)) => Err(Lagged),

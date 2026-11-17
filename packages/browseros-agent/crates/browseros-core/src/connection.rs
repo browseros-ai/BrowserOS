@@ -57,7 +57,12 @@ pub trait CdpConnection: Send + Sync {
         Box::pin(async move { Err(unsupported_epoch_transport(method)) })
     }
 
-    fn events(&self) -> broadcast::Receiver<CdpEvent>;
+    /// Every event no targeted subscriber took. A broadcast hands each receiver its own clone
+    /// of what it carries, so the event rides behind an `Arc`: one allocation, whatever the
+    /// receiver count. Check `method` and `session_id` through the `Arc` first, read params by
+    /// reference (`T::deserialize(&event.params)`), and take an owned copy with
+    /// `Arc::unwrap_or_clone` only of an event the reader keeps.
+    fn events(&self) -> broadcast::Receiver<Arc<CdpEvent>>;
 
     /// Every later event of `method` on a dedicated, unbounded channel that bypasses the
     /// broadcast ring. Each subscriber of a method gets every one of its events, and while any
@@ -82,7 +87,7 @@ pub trait CdpConnection: Send + Sync {
     /// A receiver of [`Self::events`] and the [`Self::events_broadcast`] count of the events it
     /// will never receive, taken together so no event is in both or in neither. A transport
     /// that does not count answers 0.
-    fn events_counted(&self) -> (broadcast::Receiver<CdpEvent>, u64) {
+    fn events_counted(&self) -> (broadcast::Receiver<Arc<CdpEvent>>, u64) {
         (self.events(), 0)
     }
 
@@ -147,7 +152,7 @@ impl CdpConnection for CdpClient {
         })
     }
 
-    fn events(&self) -> broadcast::Receiver<CdpEvent> {
+    fn events(&self) -> broadcast::Receiver<Arc<CdpEvent>> {
         CdpClient::events(self)
     }
 
@@ -159,7 +164,7 @@ impl CdpConnection for CdpClient {
         CdpClient::events_broadcast(self)
     }
 
-    fn events_counted(&self) -> (broadcast::Receiver<CdpEvent>, u64) {
+    fn events_counted(&self) -> (broadcast::Receiver<Arc<CdpEvent>>, u64) {
         CdpClient::events_counted(self)
     }
 
@@ -275,7 +280,7 @@ impl ProtocolSession {
         self.session_id.as_ref()
     }
 
-    pub(crate) fn subscribe_events(&self) -> broadcast::Receiver<CdpEvent> {
+    pub(crate) fn subscribe_events(&self) -> broadcast::Receiver<Arc<CdpEvent>> {
         self.connection.events()
     }
 

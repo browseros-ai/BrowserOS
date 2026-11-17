@@ -45,7 +45,7 @@ struct NativeFixture {
 
 struct FixtureConnection {
     state: Mutex<NativeFixture>,
-    events: broadcast::Sender<CdpEvent>,
+    events: broadcast::Sender<Arc<CdpEvent>>,
     targeted: TargetedEvents,
     hold_interception_ack: AtomicBool,
 }
@@ -153,9 +153,9 @@ impl FixtureConnection {
 
     /// Offers `event` to its method's targeted subscribers and broadcasts it only when none
     /// took it, as `CdpClient` does. Fails when the broadcast is needed and no one reads it.
-    fn emit(&self, event: CdpEvent) -> Result<(), broadcast::error::SendError<CdpEvent>> {
+    fn emit(&self, event: CdpEvent) -> Result<(), broadcast::error::SendError<Arc<CdpEvent>>> {
         if let Some(event) = self.targeted.deliver(event) {
-            self.events.send(event)?;
+            self.events.send(Arc::new(event))?;
         }
         Ok(())
     }
@@ -479,7 +479,7 @@ impl CdpConnection for FixtureConnection {
                 .to_string())
         })
     }
-    fn events(&self) -> broadcast::Receiver<CdpEvent> {
+    fn events(&self) -> broadcast::Receiver<Arc<CdpEvent>> {
         self.events.subscribe()
     }
     fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {

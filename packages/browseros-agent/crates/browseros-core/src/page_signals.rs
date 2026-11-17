@@ -496,7 +496,7 @@ impl PageSignals {
         tokio::spawn(async move {
             loop {
                 match events.recv().await {
-                    Ok(event) => signals.handle_event(event).await,
+                    Ok(event) => signals.handle_event(&event).await,
                     Err(broadcast::error::RecvError::Lagged(skipped)) => {
                         warn!("browser page signal listener lagged by {skipped} CDP event(s)");
                     }
@@ -506,7 +506,7 @@ impl PageSignals {
         });
     }
 
-    async fn handle_event(&self, event: CdpEvent) {
+    async fn handle_event(&self, event: &CdpEvent) {
         match event.method.as_str() {
             "Page.javascriptDialogOpening" => self.handle_dialog_opening(event).await,
             "Page.javascriptDialogClosed" => self.handle_dialog_closed(event),
@@ -527,8 +527,8 @@ impl PageSignals {
                     )
                 );
                 if cross_document {
-                    self.record_document_event(&event, |page, sequence| {
-                        frame_document(page, &event).started = Some(sequence);
+                    self.record_document_event(event, |page, sequence| {
+                        frame_document(page, event).started = Some(sequence);
                     });
                 }
             }
@@ -536,18 +536,18 @@ impl PageSignals {
             // `navigatedWithinDocument`), including a back-forward cache restore, which then
             // arrives through `frameStoppedLoading` since it never fires DOMContentLoaded again.
             "Page.frameNavigated" => {
-                self.record_document_event(&event, |page, sequence| {
-                    frame_document(page, &event).committed = Some(sequence);
+                self.record_document_event(event, |page, sequence| {
+                    frame_document(page, event).committed = Some(sequence);
                 });
             }
             "Page.domContentEventFired" => {
-                self.record_document_event(&event, |page, sequence| {
+                self.record_document_event(event, |page, sequence| {
                     page.content_loaded = Some(sequence);
                 });
             }
             "Page.frameStoppedLoading" => {
-                self.record_document_event(&event, |page, sequence| {
-                    frame_document(page, &event).stopped = Some(sequence);
+                self.record_document_event(event, |page, sequence| {
+                    frame_document(page, event).stopped = Some(sequence);
                 });
             }
             // A `swap` moves a frame to another process and it keeps navigating; only a
@@ -555,7 +555,7 @@ impl PageSignals {
             "Page.frameDetached"
                 if event.params.get("reason").and_then(Value::as_str) == Some("remove") =>
             {
-                let Some((page_id, _session_id)) = self.page_for_event(&event) else {
+                let Some((page_id, _session_id)) = self.page_for_event(event) else {
                     return;
                 };
                 if let (Some(page), Some(frame)) = (
@@ -590,8 +590,8 @@ impl PageSignals {
             .send_modify(|changes| *changes = changes.wrapping_add(1));
     }
 
-    async fn handle_dialog_opening(&self, event: CdpEvent) {
-        let Some((page_id, session_id)) = self.page_for_event(&event) else {
+    async fn handle_dialog_opening(&self, event: &CdpEvent) {
+        let Some((page_id, session_id)) = self.page_for_event(event) else {
             return;
         };
         let dialog = dialog_from_params(&event.params);
@@ -604,15 +604,15 @@ impl PageSignals {
         state.pages.entry(page_id).or_default().pending_dialog = Some(dialog);
     }
 
-    fn handle_dialog_closed(&self, event: CdpEvent) {
-        let Some((page_id, _session_id)) = self.page_for_event(&event) else {
+    fn handle_dialog_closed(&self, event: &CdpEvent) {
+        let Some((page_id, _session_id)) = self.page_for_event(event) else {
             return;
         };
         self.clear_dialog(&page_id);
     }
 
-    fn handle_console_api_called(&self, event: CdpEvent) {
-        let Some((page_id, _session_id)) = self.page_for_event(&event) else {
+    fn handle_console_api_called(&self, event: &CdpEvent) {
+        let Some((page_id, _session_id)) = self.page_for_event(event) else {
             return;
         };
         let Some(entry) = console_entry_from_params(&event.params) else {
@@ -621,8 +621,8 @@ impl PageSignals {
         self.push_console_entry(&page_id, entry);
     }
 
-    fn handle_exception_thrown(&self, event: CdpEvent) {
-        let Some((page_id, _session_id)) = self.page_for_event(&event) else {
+    fn handle_exception_thrown(&self, event: &CdpEvent) {
+        let Some((page_id, _session_id)) = self.page_for_event(event) else {
             return;
         };
         let entry = exception_entry_from_params(&event.params);
@@ -903,7 +903,7 @@ mod tests {
     }
 
     struct TestConnection {
-        sender: broadcast::Sender<CdpEvent>,
+        sender: broadcast::Sender<Arc<CdpEvent>>,
         targeted: TargetedEvents,
         sent: Mutex<Vec<SentCall>>,
         /// What the browser replays from its console storage when `Runtime.enable` arrives.
@@ -935,7 +935,7 @@ mod tests {
                 session_id: session_id.map(SessionId::from),
             };
             if let Some(event) = self.targeted.deliver(event) {
-                let _ = self.sender.send(event);
+                let _ = self.sender.send(Arc::new(event));
             }
         }
 
@@ -991,7 +991,7 @@ mod tests {
             })
         }
 
-        fn events(&self) -> broadcast::Receiver<CdpEvent> {
+        fn events(&self) -> broadcast::Receiver<Arc<CdpEvent>> {
             self.sender.subscribe()
         }
 

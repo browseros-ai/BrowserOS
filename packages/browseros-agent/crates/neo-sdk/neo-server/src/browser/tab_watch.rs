@@ -341,7 +341,7 @@ impl Watch {
 
     /// Notes every event already queued, so a burst costs one listing. None is dropped: a
     /// destroy among them still makes its tab a candidate before the listing.
-    fn note_queued(&mut self, cdp_events: &mut Receiver<CdpEvent>) {
+    fn note_queued(&mut self, cdp_events: &mut Receiver<Arc<CdpEvent>>) {
         loop {
             match cdp_events.try_recv() {
                 Ok(event) => {
@@ -425,7 +425,7 @@ impl Watch {
 }
 
 /// Drops every queued event: they came from a socket the watch no longer follows.
-fn drop_queued(cdp_events: &mut Receiver<CdpEvent>) {
+fn drop_queued(cdp_events: &mut Receiver<Arc<CdpEvent>>) {
     loop {
         match cdp_events.try_recv() {
             Ok(_) | Err(TryRecvError::Lagged(_)) => {}

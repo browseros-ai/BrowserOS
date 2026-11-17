@@ -57,7 +57,7 @@ impl TransferState {
                 let event = events.recv().await;
                 let Some(state) = weak.upgrade() else { break };
                 match event {
-                    Ok(event) => state.observe(event).await,
+                    Ok(event) => state.observe(&event).await,
                     Err(broadcast::error::RecvError::Lagged(_)) => {
                         // A missed navigation could otherwise let an old chooser select files.
                         state.lock().choosers.clear();
@@ -382,13 +382,13 @@ impl TransferState {
         }
     }
 
-    async fn observe(&self, event: CdpEvent) {
+    async fn observe(&self, event: &CdpEvent) {
         match event.method.as_str() {
             "Page.fileChooserOpened" => {
                 if let (Some(session), Some(frame)) =
-                    (event.session_id, event.params["frameId"].as_str())
+                    (&event.session_id, event.params["frameId"].as_str())
                 {
-                    let session = SessionId::from(session);
+                    let session = session.clone();
                     let mut state = self.lock();
                     state.next_chooser = state.next_chooser.wrapping_add(1);
                     let chooser = FileChooser {
@@ -442,9 +442,9 @@ impl TransferState {
             }
             "Target.attachedToTarget" if event.params["targetInfo"]["type"] == "iframe" => {
                 if let (Some(parent), Some(child)) =
-                    (event.session_id, event.params["sessionId"].as_str())
+                    (&event.session_id, event.params["sessionId"].as_str())
                 {
-                    let parent = SessionId::from(parent);
+                    let parent = parent.clone();
                     let child = SessionId::from(child);
                     let parent_session = {
                         let mut state = self.lock();
@@ -517,7 +517,7 @@ mod tests {
     /// Answers every command, except that Chromium refuses each one sent on `gone` as gone.
     struct Browser {
         gone: SessionId,
-        events: broadcast::Sender<CdpEvent>,
+        events: broadcast::Sender<Arc<CdpEvent>>,
         targeted: TargetedEvents,
     }
 
@@ -532,9 +532,9 @@ mod tests {
 
         /// Offers `event` to its method's targeted subscribers and broadcasts it only when none
         /// took it, as `CdpClient` does. Fails when the broadcast is needed and no one reads it.
-        fn emit(&self, event: CdpEvent) -> Result<(), broadcast::error::SendError<CdpEvent>> {
+        fn emit(&self, event: CdpEvent) -> Result<(), broadcast::error::SendError<Arc<CdpEvent>>> {
             if let Some(event) = self.targeted.deliver(event) {
-                self.events.send(event)?;
+                self.events.send(Arc::new(event))?;
             }
             Ok(())
         }
@@ -576,7 +576,7 @@ mod tests {
             self.send(method, params, session)
         }
 
-        fn events(&self) -> broadcast::Receiver<CdpEvent> {
+        fn events(&self) -> broadcast::Receiver<Arc<CdpEvent>> {
             self.events.subscribe()
         }
 

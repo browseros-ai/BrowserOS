@@ -69,7 +69,7 @@ struct Fake {
 
 struct Native {
     state: std::sync::Mutex<Fake>,
-    events: broadcast::Sender<CdpEvent>,
+    events: broadcast::Sender<Arc<CdpEvent>>,
     targeted: TargetedEvents,
 }
 
@@ -403,7 +403,7 @@ impl CdpConnection for Native {
         })
     }
 
-    fn events(&self) -> broadcast::Receiver<CdpEvent> {
+    fn events(&self) -> broadcast::Receiver<Arc<CdpEvent>> {
         self.events.subscribe()
     }
 
@@ -1239,7 +1239,7 @@ impl Fixture {
             session_id: Some(SessionId::from(session)),
         };
         if let Some(event) = self.native.targeted.deliver(event) {
-            let _ = self.native.events.send(event);
+            let _ = self.native.events.send(Arc::new(event));
         }
     }
 }
