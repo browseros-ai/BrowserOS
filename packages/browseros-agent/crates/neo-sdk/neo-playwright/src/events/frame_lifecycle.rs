@@ -174,8 +174,13 @@ impl FrameLifecycleTracker {
                         ..EventFrame::default()
                     };
                     if let Some(known) = frames.iter_mut().find(|known| known.id == frame.id) {
-                        frame.loader_id.clone_from(&known.loader_id);
-                        *known = frame.clone();
+                        // A seed listed this frame before its queued attach arrived (the read
+                        // ran ahead of the events). The attach still announces it once, under
+                        // the parent it names, but keeps the document the seed gave it: an
+                        // attach carries no document, and taking its empty URL lost the seed's
+                        // until the frame's next commit.
+                        known.parent_id = frame.parent_id;
+                        frame = known.clone();
                     } else {
                         frames.push(frame.clone());
                     }
@@ -413,6 +418,44 @@ mod tests {
             ),
             ("https://ad.test/", "slot", Some("main")),
             "the seed's document, under the parent the attach gave"
+        );
+        Ok(())
+    }
+
+    /// A seed that read a frame before its queued attach arrived keeps that frame's document:
+    /// the attach announces the frame once, under its parent, and takes nothing from it.
+    #[test]
+    fn tests_that_a_late_attach_keeps_the_document_a_seed_gave() -> Result<(), Box<dyn Error>> {
+        let mut tracker = FrameLifecycleTracker::default();
+        let target = TargetId("main".to_owned());
+        tracker.seed(
+            &target,
+            json!({"frameTree": {
+                "frame": {"id":"main", "loaderId":"document", "url":"https://a.test/"},
+                "childFrames": [{"frame":{"id":"child", "loaderId":"child-document",
+                    "url":"https://a.test/child", "name":"slot"}}]
+            }}),
+        );
+        let attached = tracker.record(
+            &target,
+            "Page.frameAttached",
+            &json!({"frameId":"child", "parentFrameId":"main"}),
+        );
+        assert_eq!(
+            attached.len(),
+            1,
+            "the queued attach still announces the frame once"
+        );
+        let removed = tracker.record(
+            &target,
+            "Page.frameDetached",
+            &json!({"frameId":"child", "reason":"remove"}),
+        );
+        let frame = &removed.first().ok_or("the removal is reported")?.frame;
+        assert_eq!(
+            (frame.url.as_str(), frame.name.as_str()),
+            ("https://a.test/child", "slot"),
+            "the attach left the seeded document in place"
         );
         Ok(())
     }
