@@ -2,6 +2,7 @@
 import type { ClosedRoots } from "./ClosedRoots";
 import type { PartialFrame } from "./PartialFrame";
 import type { SnapshotTop } from "./SnapshotTop";
+import type { Unmarked } from "./Unmarked";
 
 /**
  * The snapshot ops' output, and the contract with the prelude that renders it:
@@ -31,6 +32,11 @@ import type { SnapshotTop } from "./SnapshotTop";
  * and of `mode: 'full'`.
  */
 export type SnapshotResult = { json: import('../../vendored').AriaSnapshotJSON, partial: Array<PartialFrame>, 
+/**
+ * Only the root frame: a requested clickable check did not finish. The renderer explains
+ * the possible missing refs without turning this read’s status into a page change.
+ */
+unmarked?: Unmarked, 
 /**
  * Pinned words from the main page alone; empty keeps every old output byte unchanged.
  */

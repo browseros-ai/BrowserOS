@@ -7730,6 +7730,17 @@ ${value.stack}`;
     };
   }
 
+  // crates/neo-sdk/neo-playwright-js/src/prelude/snapshot-unmarked.ts
+  var PREFIX = "# refs missing: ";
+  function unmarkedHead(result) {
+    return result.unmarked ? [
+      `${PREFIX}the check for clickable elements did not finish on this page (${result.unmarked.reason}). Some clickable elements may have no ref here, and content inside closed shadow roots may be missing. Take the snapshot again; if this line is still here, use a locator.`
+    ] : [];
+  }
+  function isUnmarkedLine(line) {
+    return line.startsWith(PREFIX);
+  }
+
   // crates/neo-sdk/neo-playwright-js/src/prelude/snapshot-v1.ts
   var INTERACTIVE = new Set([
     "button",
@@ -7836,7 +7847,12 @@ ${value.stack}`;
     const partial = partialHead(result);
     const finish = (head, lines) => {
       const body = cap(head, partial, lines, limit);
-      return [...onTopHead(result), ...inertHead, ...body ? [body] : []].join(`
+      return [
+        ...onTopHead(result),
+        ...unmarkedHead(result),
+        ...inertHead,
+        ...body ? [body] : []
+      ].join(`
 `);
     };
     if (form.text !== "leftOut")
@@ -8289,7 +8305,12 @@ ${value.stack}`;
       `# inert: ${count} lines of this page cannot be clicked or typed into now. page.ariaSnapshot() lists what can.`
     ] : [];
     const body = cap([], partialHead(result), printed(yamlLines(result, false)), maxTokens * CHARS_PER_TOKEN, FULL_CALL);
-    return [...onTopHead(result), ...head, ...body ? [body] : []].join(`
+    return [
+      ...onTopHead(result),
+      ...unmarkedHead(result),
+      ...head,
+      ...body ? [body] : []
+    ].join(`
 `);
   }
   function printed(lines) {
@@ -8331,7 +8352,8 @@ ${value.stack}`;
         returned: [
           NO_BASELINE,
           ...onTopHead(result),
-          withoutTop(whole.text)
+          ...unmarkedHead(result),
+          withoutReadHeads(whole.text)
         ].join(`
 `),
         baseline: whole
@@ -8345,7 +8367,12 @@ ${value.stack}`;
         const [status, ...body] = changes.split(`
 `);
         return {
-          returned: [status, ...onTopDelta(stored.text, result), ...body].join(`
+          returned: [
+            status,
+            ...onTopDelta(stored.text, result),
+            ...unmarkedHead(result),
+            ...body
+          ].join(`
 `),
           baseline: { text: current, form }
         };
@@ -8361,7 +8388,8 @@ ${value.stack}`;
       returned: [
         TOO_MUCH,
         ...onTopDelta(stored.text, result),
-        withoutTop(whole.text)
+        ...unmarkedHead(result),
+        withoutReadHeads(whole.text)
       ].join(`
 `),
       baseline: whole
@@ -8371,7 +8399,8 @@ ${value.stack}`;
     return [
       NO_TIME,
       ...onTopHead(result),
-      withoutTop(renderSnapshotV1(result, withDefaults(passed)).text)
+      ...unmarkedHead(result),
+      withoutReadHeads(renderSnapshotV1(result, withDefaults(passed)).text)
     ].join(`
 `);
   }
@@ -8389,7 +8418,7 @@ ${value.stack}`;
     return;
   }
   function sizeLine(line) {
-    return isOnTopLine(line) || line.startsWith("# text left out: ") || line.startsWith("# cut: ") || line.startsWith("# not listed: ");
+    return isOnTopLine(line) || isUnmarkedLine(line) || line.startsWith("# text left out: ") || line.startsWith("# cut: ") || line.startsWith("# not listed: ");
   }
   function listChanges(previous, current) {
     const before = previous.split(`
@@ -8562,9 +8591,9 @@ ${changes}`;
   function indentOf(line) {
     return line.length - line.trimStart().length;
   }
-  function withoutTop(text) {
+  function withoutReadHeads(text) {
     return text.split(`
-`).filter((line) => !isOnTopLine(line)).join(`
+`).filter((line) => !isOnTopLine(line) && !isUnmarkedLine(line)).join(`
 `);
   }
 

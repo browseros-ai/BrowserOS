@@ -32,6 +32,7 @@ import {
   type Section,
 } from './snapshot-cap'
 import { onTopContent, onTopHead } from './snapshot-on-top'
+import { unmarkedHead } from './snapshot-unmarked'
 import type { AriaNodeJSON } from './vendored'
 import { renderAriaSnapshotAsYaml } from './vendored'
 import type {
@@ -242,9 +243,12 @@ function renderForm(
     // This explanation is pinned before the ordinary notice, outside its token budget.
     // Leave the partial-frame warnings in their existing position inside cap().
     const body = cap(head, partial, lines, limit)
-    return [...onTopHead(result), ...inertHead, ...(body ? [body] : [])].join(
-      '\n',
-    )
+    return [
+      ...onTopHead(result),
+      ...unmarkedHead(result),
+      ...inertHead,
+      ...(body ? [body] : []),
+    ].join('\n')
   }
   if (form.text !== 'leftOut') return finish([], shown.lines)
   const textForm = walked ?? walk(result, form.urls, true, form.inert === true)

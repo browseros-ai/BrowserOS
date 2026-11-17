@@ -23,6 +23,7 @@
  * out of the comparison and of the result: they describe the snapshot's size, not the page.
  */
 import { isOnTopLine, onTopDelta, onTopHead } from './snapshot-on-top'
+import { isUnmarkedLine, unmarkedHead } from './snapshot-unmarked'
 import {
   type PassedV1Options,
   type RenderedV1,
@@ -84,7 +85,8 @@ export function renderDelta(
       returned: [
         NO_BASELINE,
         ...onTopHead(result),
-        withoutTop(whole.text),
+        ...unmarkedHead(result),
+        withoutReadHeads(whole.text),
       ].join('\n'),
       baseline: whole,
     }
@@ -98,9 +100,12 @@ export function renderDelta(
       // Layer facts follow that status and stay outside every diff hunk.
       const [status, ...body] = changes.split('\n')
       return {
-        returned: [status, ...onTopDelta(stored.text, result), ...body].join(
-          '\n',
-        ),
+        returned: [
+          status,
+          ...onTopDelta(stored.text, result),
+          ...unmarkedHead(result),
+          ...body,
+        ].join('\n'),
         baseline: { text: current, form },
       }
     }
@@ -118,7 +123,8 @@ export function renderDelta(
     returned: [
       TOO_MUCH,
       ...onTopDelta(stored.text, result),
-      withoutTop(whole.text),
+      ...unmarkedHead(result),
+      withoutReadHeads(whole.text),
     ].join('\n'),
     baseline: whole,
   }
@@ -136,7 +142,8 @@ export function renderUncompared(
   return [
     NO_TIME,
     ...onTopHead(result),
-    withoutTop(renderSnapshotV1(result, withDefaults(passed)).text),
+    ...unmarkedHead(result),
+    withoutReadHeads(renderSnapshotV1(result, withDefaults(passed)).text),
   ].join('\n')
 }
 
@@ -165,10 +172,11 @@ function passedText(text: TextForm): boolean | undefined {
   return undefined
 }
 
-/** The lines that describe the snapshot's size: the notice and the cut line (snapshot-cap.ts). */
+/** Read and size facts are not changes in the page, on either side of the comparison. */
 function sizeLine(line: string): boolean {
   return (
     isOnTopLine(line) ||
+    isUnmarkedLine(line) ||
     line.startsWith('# text left out: ') ||
     line.startsWith('# cut: ') ||
     line.startsWith('# not listed: ')
@@ -435,10 +443,10 @@ function indentOf(line: string): number {
   return line.length - line.trimStart().length
 }
 
-/** Layer facts follow the delta's status once; a whole-page body cannot repeat them. */
-function withoutTop(text: string): string {
+/** Read facts follow the delta status once; a whole-page body cannot repeat them. */
+function withoutReadHeads(text: string): string {
   return text
     .split('\n')
-    .filter((line) => !isOnTopLine(line))
+    .filter((line) => !isOnTopLine(line) && !isUnmarkedLine(line))
     .join('\n')
 }

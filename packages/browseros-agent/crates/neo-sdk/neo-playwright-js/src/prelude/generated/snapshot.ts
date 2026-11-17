@@ -27,6 +27,7 @@ export type { SnapshotPendingInput } from './types/SnapshotPendingInput'
 export type { SnapshotResult } from './types/SnapshotResult'
 export type { SnapshotTop } from './types/SnapshotTop'
 export type { TextForm } from './types/TextForm'
+export type { Unmarked } from './types/Unmarked'
 
 /** Each snapshot op's input, after the `call` header every op shares. */
 export type SnapshotInputs = {
