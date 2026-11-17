@@ -5,6 +5,8 @@ mod clock;
 pub mod config;
 pub mod db;
 pub mod error;
+#[cfg(test)]
+mod free_path;
 pub mod identity;
 pub mod ids;
 pub mod runtime;

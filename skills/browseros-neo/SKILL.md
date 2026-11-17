@@ -48,11 +48,11 @@ Derive the page you work on inside the same script that uses it. When you do car
 
 ## With ultrafast: start with pursue
 
-If your BrowserOS neo lists a tool named `pursue` (it comes with ultrafast), start each task that does something on a site with it. Open or find the page, then give pursue that page and the whole outcome you want, with any text you already know in `values`. neo decides each step and does it.
+If your BrowserOS neo lists a tool named `pursue` (it comes with ultrafast), pick the tool by the path, not the goal. If getting to what you need means clicking through a site (search, filters, pickers, modals, booking or checkout), open or find the page and give pursue the whole outcome, even when you only want to read what is at the end. Phrase it as a destination or an action, not a question: "open the seat map for tonight's 7 pm show", not "are any corner seats free?". Put any text you already know in `values`. neo decides each step and does it.
 
 If pursue says `completed`, read the page to confirm. If it says `handed_back`, carry on with one `run` script from the page and url it names. Skip the steps it lists as done, and do not call pursue again for that task.
 
-Go straight to `run` for reading or collecting data and for work across many pages at once. Without `pursue` in your tool list, skip this section.
+Go straight to `run` only when you already have a url that shows the data, or for work across many known pages. If the page draws what you need on a canvas, read it with a screenshot. A `run` call is capped by its `timeout`, 60 seconds by default, not the 30 seconds mentioned below. Without `pursue` in your tool list, skip this section.
 
 ## Writing a `run` script
 
