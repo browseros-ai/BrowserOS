@@ -401,11 +401,27 @@ impl FakeCdp {
 
     /// Waits for browser receipt, including calls logged before this waiter subscribed.
     pub async fn received(&self, method: &str) -> Result<(), RecvError> {
+        self.received_matching(|calls| calls.iter().any(|call| call.method == method).then_some(()))
+            .await
+    }
+
+    /// Waits until `inspect` finds a value in the receipt log, without cloning or polling it.
+    /// The callback runs under the log's mutex and must not call back into this fake.
+    pub async fn received_matching<T>(
+        &self,
+        inspect: impl Fn(&[FakeCall]) -> Option<T>,
+    ) -> Result<T, RecvError> {
         let mut received = self.received.subscribe();
-        while self.count(method) == 0 {
+        loop {
+            let found = {
+                let state = self.lock();
+                inspect(&state.calls)
+            };
+            if let Some(found) = found {
+                return Ok(found);
+            }
             received.changed().await?;
         }
-        Ok(())
     }
 
     /// Answers one call. `None` means it never will. `expected` is the caller's epoch for an

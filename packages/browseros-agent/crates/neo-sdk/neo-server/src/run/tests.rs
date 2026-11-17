@@ -55,7 +55,7 @@ fn target_crashed_real_page_op_precedes_failed_native_refresh_on_the_wire() -> R
         ] {
             let mut rig = TestRig::new().await?;
             let page = rig.owner_tab("https://example.test/").await?;
-            let discovery_before = rig.fake.count("Target.getTargets");
+            let discovery_before = rig.fake.calls().len();
             let facade = PlaywrightFacade::start(
                 Arc::clone(&rig.link),
                 false,
@@ -82,27 +82,28 @@ fn target_crashed_real_page_op_precedes_failed_native_refresh_on_the_wire() -> R
                 Observer::new(Arc::clone(&facade) as _),
             ));
             facade.get().await;
-            // The facade starts its watcher in a spawned task. Its first discovery command
-            // follows event subscription; emitting before it can lose this fixture's crash.
-            within(CRASH_REFUSAL_WATCHDOG, async {
-                while rig.fake.count("Target.getTargets") == discovery_before {
-                    task::yield_now().await;
-                }
-            })
+            // The page-registry seed also sends Target.getTargets. Only the live event
+            // watcher follows it with a context listing from the same task. Waiting for that
+            // pair both identifies its sender and prevents a crash before its subscription.
+            let watcher = within(
+                CRASH_REFUSAL_WATCHDOG,
+                rig.fake.received_matching(|calls| {
+                    let calls = &calls[discovery_before..];
+                    calls
+                        .iter()
+                        .filter(|call| call.method == "Target.getTargets")
+                        .filter_map(|call| call.task)
+                        .find(|sender| {
+                            calls.iter().any(|call| {
+                                call.method == "Browser.getTabs" && call.task == Some(*sender)
+                            })
+                        })
+                }),
+            )
             .await
             .map_err(|error| {
                 format!("waiting for crash watcher subscription before {failure}: {error}")
-            })?;
-            // The facade keeps this watcher alive throughout the fixture, so its task ID
-            // cannot be reused by an operation, even when they share a worker thread.
-            let watcher = rig
-                .fake
-                .calls()
-                .into_iter()
-                .rev()
-                .find(|call| call.method == "Target.getTargets")
-                .and_then(|call| call.task)
-                .ok_or("the discovery command has a watcher task")?;
+            })??;
             let target = rig
                 .link
                 .page(page.tab)
@@ -203,21 +204,22 @@ fn target_crashed_real_page_op_precedes_failed_native_refresh_on_the_wire() -> R
                 // at its second gate. This is background traffic the count must leave out,
                 // and cannot be a command sent by the refused operation.
                 let calls_before = rig.fake.calls().len();
-                within(CRASH_REFUSAL_WATCHDOG, async {
-                    while !rig
-                        .fake
-                        .calls()
-                        .iter()
-                        .skip(calls_before)
-                        .any(|call| call.method == "Browser.getTabs" && call.task == Some(watcher))
-                    {
-                        task::yield_now().await;
-                    }
-                })
+                within(
+                    CRASH_REFUSAL_WATCHDOG,
+                    rig.fake.received_matching(|calls| {
+                        calls
+                            .iter()
+                            .skip(calls_before)
+                            .any(|call| {
+                                call.method == "Browser.getTabs" && call.task == Some(watcher)
+                            })
+                            .then_some(())
+                    }),
+                )
                 .await
                 .map_err(|error| {
                     format!("waiting for a watcher listing while {operation} is gated: {error}")
-                })?;
+                })??;
             }
             within(CRASH_REFUSAL_WATCHDOG, rig.gate.wait())
                 .await
