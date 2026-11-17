@@ -1180,9 +1180,12 @@ async fn tests_that_a_click_that_logs_completes_under_a_console_listener_and_is_
     let server = PageServer::start().await?;
     let page = run.new_page().await?;
     // A delayed tick distinguishes an occupied test executor from a live reader that lost
-    // its socket. This observer adds no browser traffic and never changes an op's deadline.
+    // its socket. Start at observer creation so earlier browser setup cannot count as a
+    // scheduler stall. This adds no browser traffic and never changes an op's deadline.
     let scheduler_gap = Arc::new(AtomicU64::new(0));
-    let last_tick = Arc::new(AtomicU64::new(0));
+    let last_tick = Arc::new(AtomicU64::new(
+        u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+    ));
     let monitor = env::var_os("NEO_LIVE_DIAGNOSTICS").map(|_| {
         let gap = Arc::clone(&scheduler_gap);
         let tick = Arc::clone(&last_tick);
