@@ -109,11 +109,11 @@ const shapes = {
   dragcovered() {
     // A drag whose drop target stands under a cover: the press on the source lands, the drop
     // does not. The window logs the trusted button events, the release among them.
+    // The drop target lies wholly in the view and its cover is in the page's flow, so no scroll of
+    // the attempt moves the target out from under it.
     stage.innerHTML = `<div id="src" style="width: 80px; height: 40px; background: #eef">src</div>
-      <div id="dst" style="position: absolute; left: 300px; top: 0; width: 120px; height: 60px; background: #efe">dst</div>`
-    const over = document.createElement('div')
-    over.setAttribute('style', 'position: fixed; left: 400px; top: 100px; width: 180px; height: 100px; z-index: 10; background: rgba(0, 0, 0, 0.3)')
-    document.body.append(over)
+      <div id="dst" style="position: absolute; left: 200px; top: 0; width: 120px; height: 60px; background: #efe">dst</div>
+      <div id="over" style="position: absolute; left: 190px; top: -10px; width: 140px; height: 80px; z-index: 10; background: rgba(0, 0, 0, 0.3)"></div>`
     for (const type of ['mousedown', 'mouseup'])
       window.addEventListener(type, (event) => { if (event.isTrusted) window.__log.push(type) }, true)
   },

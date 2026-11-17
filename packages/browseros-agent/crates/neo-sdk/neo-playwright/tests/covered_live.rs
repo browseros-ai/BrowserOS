@@ -1574,6 +1574,8 @@ fn stopped_early_form(message: &str, api: &str) -> TestResult<(f64, u64)> {
 async fn tests_that_a_standing_cover_stops_a_click_after_five_seconds() -> TestResult {
     let shape = Shape::shape("dialog").await?;
     let result = async {
+        // The run's calls before the click: the page's own `goto` marked the run sent.
+        let before = shape.run.calls().len();
         let began = Instant::now();
         let error = shape
             .act_called("locator.click", built_in())
@@ -1598,7 +1600,7 @@ async fn tests_that_a_standing_cover_stops_a_click_after_five_seconds() -> TestR
             ],
         )?;
         assert!(
-            !shape.run.calls().contains(&EnvCall::MarkSent),
+            !shape.run.calls()[before..].contains(&EnvCall::MarkSent),
             "an early stop where no attempt sent input is not_sent"
         );
         let cover = error.cover_details().ok_or("error.cover")?;
