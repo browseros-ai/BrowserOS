@@ -13,7 +13,7 @@ import {
   skillCommand,
   skillSites,
   stuckWhile,
-  ultrafastBadge,
+  ultrafastMark,
   usedLabel,
   worksInAgents,
 } from './skills.helpers'
@@ -170,15 +170,24 @@ const ultrafast = (patch: Partial<SkillUltrafast>): SkillUltrafast => ({
   ...patch,
 })
 
-describe('ultrafastBadge', () => {
-  it('names each state and stays quiet for a plain skill', () => {
-    expect(ultrafastBadge(ultrafast({}))?.label).toBe('Ultrafast')
-    expect(ultrafastBadge(ultrafast({ status: 'degraded' }))?.tone).toBe(
-      'warning',
-    )
-    expect(ultrafastBadge(ultrafast({ status: 'broken' }))?.tone).toBe('danger')
-    expect(ultrafastBadge(ultrafast({ status: 'none' }))).toBeNull()
-    expect(ultrafastBadge(undefined)).toBeNull()
+describe('ultrafastMark', () => {
+  it('shows the plain wordmark when verified, a dim wordmark and a word otherwise, and nothing for a plain skill', () => {
+    expect(ultrafastMark(ultrafast({}))).toEqual({
+      dim: false,
+      word: null,
+      tone: 'muted',
+    })
+    expect(ultrafastMark(ultrafast({ status: 'degraded' }))).toEqual({
+      dim: true,
+      word: 'needs a repair',
+      tone: 'amber',
+    })
+    expect(ultrafastMark(ultrafast({ status: 'broken' }))).toMatchObject({
+      word: 'paused',
+      tone: 'red',
+    })
+    expect(ultrafastMark(ultrafast({ status: 'none' }))).toBeNull()
+    expect(ultrafastMark(undefined)).toBeNull()
   })
 })
 

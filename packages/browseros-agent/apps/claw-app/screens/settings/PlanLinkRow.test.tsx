@@ -93,6 +93,16 @@ describe('the Your plan row', () => {
     },
   )
 
+  it('tests that the plan is named by the ultrafast wordmark only while it is on', () => {
+    const title = (plan: Plan) =>
+      render(plan).getElementById('your-plan-title')?.textContent?.trim()
+    expect(title(planOf())).toBe('Free')
+    expect(title(planOf({ status: 'active' }))).toBe('ultrafast Active')
+    expect(title(planOf({ status: 'ending', endsAt: DATE }))).toBe(
+      'ultrafast Ends Nov 27, 2026',
+    )
+  })
+
   it('tests that a build without billing, or a plan not read yet, shows no row', () => {
     expect(render(planOf({ available: false })).body.innerHTML).toBe('')
     expect(render().body.innerHTML).toBe('')

@@ -14,9 +14,9 @@ import {
   ShoppingCart,
   UserRoundCheck,
   WandSparkles,
-  Zap,
 } from 'lucide-react'
 import type { CSSProperties, ReactNode } from 'react'
+import { UltrafastWordmark } from '@/components/audit/UltrafastMarks'
 import { cn } from '@/lib/utils'
 
 // Every picture rests on its final frame. The animations only add the way in,
@@ -39,7 +39,16 @@ export function StepRacePicture({ large = false }: { large?: boolean }) {
   return (
     <Picture caption="Illustration. Each dot is a step your agent pays for.">
       <Lane icon={Bot} label="Your agent alone" dots={10} large={large} />
-      <Lane icon={Zap} label="With ultrafast" dots={4} fast large={large} />
+      <Lane
+        label={
+          <>
+            With <UltrafastWordmark />
+          </>
+        }
+        dots={4}
+        fast
+        large={large}
+      />
     </Picture>
   )
 }
@@ -69,7 +78,13 @@ export function SkillPicture() {
             style={delay(0.6)}
           />
         </BarRow>
-        <BarRow icon={Zap} label="Without your agent" fast>
+        <BarRow
+          label={
+            <>
+              Without your agent <UltrafastWordmark />
+            </>
+          }
+        >
           <span
             className="block h-3 w-1/4 origin-left rounded-full bg-primary motion-safe:animate-uf-grow motion-safe:[animation-duration:0.8s]"
             style={delay(0.6)}
@@ -148,14 +163,14 @@ function Picture({
 }
 
 function Lane({
-  icon: Icon,
+  icon,
   label,
   dots,
   fast = false,
   large = false,
 }: {
-  icon: LucideIcon
-  label: string
+  icon?: LucideIcon
+  label: ReactNode
   dots: number
   fast?: boolean
   /** Bigger dots, with the label above them, for a picture that stands alone. */
@@ -170,7 +185,7 @@ function Lane({
           : 'gap-1.5 sm:grid-cols-[136px_minmax(0,1fr)] sm:gap-3',
       )}
     >
-      <Label icon={Icon} label={label} fast={fast} />
+      <Label icon={icon} label={label} />
       <span
         className={cn(
           'flex flex-wrap items-center',
@@ -198,39 +213,25 @@ function Lane({
 function BarRow({
   icon,
   label,
-  fast = false,
   children,
 }: {
-  icon: LucideIcon
-  label: string
-  fast?: boolean
+  icon?: LucideIcon
+  label: ReactNode
   children: ReactNode
 }) {
   return (
     <div className="grid grid-cols-1 items-center gap-1.5 sm:grid-cols-[150px_minmax(0,1fr)] sm:gap-3">
-      <Label icon={icon} label={label} fast={fast} />
+      <Label icon={icon} label={label} />
       <span className="flex items-center gap-2">{children}</span>
     </div>
   )
 }
 
-function Label({
-  icon: Icon,
-  label,
-  fast,
-}: {
-  icon: LucideIcon
-  label: string
-  fast: boolean
-}) {
+/** The ultrafast lanes carry the wordmark in their label instead of an icon. */
+function Label({ icon: Icon, label }: { icon?: LucideIcon; label: ReactNode }) {
   return (
-    <span
-      className={cn(
-        'inline-flex items-center gap-1.5 font-semibold text-[13.5px]',
-        fast ? 'text-accent-ink' : 'text-ink-2',
-      )}
-    >
-      <Icon className="size-3.5" />
+    <span className="inline-flex items-center gap-1.5 font-semibold text-[13.5px] text-ink-2">
+      {Icon ? <Icon className="size-3.5" /> : null}
       {label}
     </span>
   )

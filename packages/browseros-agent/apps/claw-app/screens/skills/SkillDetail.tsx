@@ -17,12 +17,12 @@ import {
   ShieldCheck,
   TriangleAlert,
   UserRoundCheck,
-  Zap,
 } from 'lucide-react'
 import { type ReactNode, useId, useState } from 'react'
 import { Link, NavLink, useNavigate } from 'react-router'
 import { CodeBlock } from '@/components/agents/code-block'
 import { SessionStatusBadge } from '@/components/audit/SessionStatusBadge'
+import { UltrafastWordmark } from '@/components/audit/UltrafastMarks'
 import { AgentMark } from '@/components/harness/AgentMark'
 import { Page } from '@/components/layout/Page'
 import { PageHeader } from '@/components/layout/PageHeader'
@@ -39,9 +39,10 @@ import { RunSkillButton } from '@/components/skills/RunSkillButton'
 import { RunsChoiceDialog } from '@/components/skills/RunsChoiceDialog'
 import { SiteBadge } from '@/components/skills/SiteBadge'
 import { SkillActions } from '@/components/skills/SkillActions'
-import { UltrafastBadge } from '@/components/skills/UltrafastBadge'
+import { UltrafastState } from '@/components/skills/UltrafastState'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Skeleton } from '@/components/ui/skeleton'
+import { cn } from '@/lib/utils'
 import { useSkillFlow } from '@/modules/api/skills.hooks'
 import { taskDayAndTime } from '@/screens/audit/audit.helpers'
 import { useSkillDetailData } from './skill-detail.data'
@@ -52,9 +53,11 @@ import {
   type RunsChoice,
   runModeCounts,
   runModeLabel,
+  runSpeed,
   runsChoice,
   skillCommand,
   stuckWhile,
+  ultrafastMark,
   usedLabel,
 } from './skills.helpers'
 
@@ -91,6 +94,7 @@ export function SkillDetail() {
 
   const { skill, body, runs } = detail
   const { steps, learnedNotes } = parseSkillBody(body)
+  const p50Ms = skill.ultrafast?.p50Ms
 
   return (
     <Page>
@@ -118,8 +122,16 @@ export function SkillDetail() {
                 onDeleted={() => navigate('/skills')}
               />
             </div>
-            <p className="flex flex-wrap items-center gap-2 text-[14px] text-ink-3">
-              <UltrafastBadge ultrafast={skill.ultrafast} />
+            <p className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[14px] text-ink-3">
+              <UltrafastState
+                ultrafast={skill.ultrafast}
+                wordmarkClassName="text-[14.5px]"
+              >
+                {p50Ms ? <span>{runSpeed(p50Ms)}</span> : null}
+              </UltrafastState>
+              {ultrafastMark(skill.ultrafast) ? (
+                <span aria-hidden className="h-3.5 w-px bg-border-2" />
+              ) : null}
               {usedLabel(skill.runCount, skill.lastRunAt, Date.now())}
             </p>
           </div>
@@ -232,18 +244,25 @@ function UltrafastSection({ skill, runs }: { skill: Skill; runs: SkillRun[] }) {
   const ranFast = counts.ultrafast + counts.handedBack > 0
   const choice = runsChoice(ultrafast, runs)
   return (
-    <Section title="Ultrafast">
-      <div className="flex flex-col gap-2.5 text-[14.5px] text-ink-2">
-        <UltrafastBadge
-          ultrafast={ultrafast}
-          size="md"
-          className="self-start"
-        />
+    <Card
+      size="compact"
+      className="gap-0 overflow-hidden border-border-2 bg-card p-0 shadow-card"
+    >
+      <div className="relative flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1.5 border-accent-tint-2 border-b bg-accent-tint py-4 pr-5 pl-6 before:absolute before:inset-y-0 before:left-0 before:w-[3px] before:bg-primary dark:border-primary/25 dark:bg-primary/12">
+        <h2>
+          <UltrafastState
+            ultrafast={ultrafast}
+            wordmarkClassName="text-[19px]"
+            className="text-[14px]"
+          />
+        </h2>
+        {health ? <p className="text-[13.5px] text-ink-2">{health}</p> : null}
+      </div>
+      <div className="flex flex-col gap-2.5 px-5 pt-[18px] pb-5 text-[14.5px] text-ink-2">
         {choice ? null : <p>{ULTRAFAST_STATE[ultrafast.status]}</p>}
         {ultrafast.reason ? (
           <p className="text-[13.5px] text-ink-3">{ultrafast.reason}</p>
         ) : null}
-        {health ? <p className="text-[13.5px] text-ink-3">{health}</p> : null}
         {ranFast ? (
           <p className="text-[13.5px] text-ink-3">
             {counts.ultrafast} ultrafast · {counts.handedBack} handed back ·{' '}
@@ -253,7 +272,7 @@ function UltrafastSection({ skill, runs }: { skill: Skill; runs: SkillRun[] }) {
         {choice ? <RunsChoiceBlock skill={skill} choice={choice} /> : null}
         {ultrafast.flowVersion > 0 ? <FlowFile name={skill.name} /> : null}
       </div>
-    </Section>
+    </Card>
   )
 }
 
@@ -262,12 +281,6 @@ const ALWAYS_WITH_REASON: Record<string, string> = {
   order: 'This skill places an order.',
   send: 'This skill sends something for you.',
   delete: 'This skill deletes something.',
-}
-
-const CHIP_CLASS: Record<RunsChoice['chipTone'], string> = {
-  accent: 'bg-accent-tint text-accent-ink',
-  amber: 'bg-amber-tint text-amber-ink',
-  muted: 'bg-bg-sunken text-ink-2',
 }
 
 /** "With your agent" or "without your agent" for a skill that changes something. */
@@ -282,13 +295,22 @@ function RunsChoiceBlock({
     null,
   )
   const detail = skill.ultrafast?.runs
-  const chip = (
-    <span
-      className={`self-start rounded-full px-2.5 py-1 font-semibold text-[12.5px] ${CHIP_CLASS[choice.chipTone]}`}
-    >
-      {choice.chip}
-    </span>
-  )
+  const chip =
+    choice.chipTone === 'ultrafast' ? (
+      <p className="font-semibold text-[14px] text-cyanotype-ink">
+        <UltrafastWordmark className="mr-1.5" />
+        {choice.chip}
+      </p>
+    ) : choice.chipTone === 'amber' ? (
+      <p className="flex items-center gap-2 font-bold text-[14px] text-amber-ink">
+        {choice.state === 'choose' ? (
+          <MessageCircleQuestion aria-hidden className="size-[15px]" />
+        ) : null}
+        {choice.chip}
+      </p>
+    ) : (
+      <p className="font-semibold text-[14px] text-ink-2">{choice.chip}</p>
+    )
   if (choice.state === 'read') {
     return (
       <div className="flex flex-col gap-2.5">
@@ -361,10 +383,9 @@ function RunsChoiceBlock({
           icon={
             choice.withoutLocked ? (
               <Lock aria-hidden className="size-4" />
-            ) : (
-              <Zap aria-hidden className="size-4" />
-            )
+            ) : null
           }
+          ultrafast
           title="Without your agent"
           time={choice.fastLabel}
           why="neo does it by itself. It only stops if a step can’t find what it expects."
@@ -435,6 +456,7 @@ function RunsOption({
   selected,
   disabled,
   icon,
+  ultrafast = false,
   title,
   time,
   why,
@@ -443,6 +465,8 @@ function RunsOption({
   selected: boolean
   disabled: boolean
   icon: ReactNode
+  /** The ultrafast way to run: a Signal Blue edge and the wordmark after the title. */
+  ultrafast?: boolean
   title: string
   time: string | null
   why: string
@@ -453,7 +477,12 @@ function RunsOption({
       size="compact"
       interactive={!disabled}
       selected={selected}
-      className={`relative flex-row gap-3 px-3.5 py-3 ${disabled ? 'opacity-55' : ''}`}
+      className={cn(
+        'relative flex-row gap-3 px-3.5 py-3',
+        ultrafast &&
+          'before:absolute before:-inset-y-px before:-left-px before:w-[3px] before:rounded-l-2xl before:bg-primary',
+        disabled && 'opacity-55',
+      )}
     >
       <RadioGroupItem
         value={value}
@@ -462,15 +491,18 @@ function RunsOption({
         className={`mt-0.5 ${CARD_TARGET_CLASS}`}
       />
       <span className="flex flex-col gap-0.5">
-        <span
-          id={titleId}
-          className="flex items-center gap-1.5 font-bold text-[14.5px] text-cyanotype-ink"
-        >
+        <span className="flex items-center gap-1.5 font-bold text-[14.5px] text-cyanotype-ink">
           {icon}
-          {title}
+          <span id={titleId}>{title}</span>{' '}
+          {ultrafast ? <UltrafastWordmark className="text-[13.5px]" /> : null}
         </span>
         {time ? (
-          <span className="font-bold text-[17px] text-cyanotype-ink">
+          <span
+            className={cn(
+              'font-bold text-[17px]',
+              ultrafast ? 'text-accent-ink' : 'text-cyanotype-ink',
+            )}
+          >
             {time}
           </span>
         ) : null}
@@ -565,11 +597,10 @@ function RecentRuns({ runs }: { runs: SkillRun[] }) {
                     label={run.agentId}
                     className="text-[13.5px] text-ink-3"
                   />
-                  {runModeLabel(run) ? (
-                    <span className="flex items-center gap-1 text-[13.5px] text-ink-3">
-                      {run.mode === 'ultrafast' ? (
-                        <Zap aria-hidden className="size-3 text-accent-ink" />
-                      ) : null}
+                  {run.mode === 'ultrafast' ? (
+                    <UltrafastWordmark className="text-[13.5px]" />
+                  ) : runModeLabel(run) ? (
+                    <span className="text-[13.5px] text-ink-3">
                       {runModeLabel(run)}
                     </span>
                   ) : null}

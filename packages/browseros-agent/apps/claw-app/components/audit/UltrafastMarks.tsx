@@ -23,6 +23,20 @@ export function UltrafastRail({ className }: { className?: string }) {
   )
 }
 
+/** "ultrafast" in its bold italic Signal Blue: the brand, used once per surface as a label. */
+export function UltrafastWordmark({ className }: { className?: string }) {
+  return (
+    <span
+      className={cn(
+        'whitespace-nowrap font-extrabold text-accent-ink italic tracking-[-0.01em]',
+        className,
+      )}
+    >
+      ultrafast
+    </span>
+  )
+}
+
 /** "ultrafast" in its bold italic, then what ultrafast did, in words. */
 export function UltrafastNote({
   children,
@@ -33,9 +47,7 @@ export function UltrafastNote({
 }) {
   return (
     <span className={cn('text-[13.5px] text-ink-2', className)}>
-      <span className="mr-1.5 font-extrabold text-accent-ink italic tracking-[-0.01em]">
-        ultrafast
-      </span>
+      <UltrafastWordmark className="mr-1.5" />
       {children}
     </span>
   )

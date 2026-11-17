@@ -7,6 +7,7 @@
 import type { Plan } from '@browseros/claw-api'
 import { ArrowRight } from 'lucide-react'
 import { useHref } from 'react-router'
+import { UltrafastWordmark } from '@/components/audit/UltrafastMarks'
 import {
   AnimatedBadge,
   type AnimatedBadgeStatus,
@@ -33,7 +34,11 @@ export function PlanLinkRow() {
         id={PLAN_ROW_ID}
         title={
           <span className="flex flex-wrap items-center gap-2">
-            {current.status === 'none' ? 'Free' : 'ultrafast'}
+            {current.status === 'none' ? (
+              'Free'
+            ) : (
+              <UltrafastWordmark className="text-[17px]" />
+            )}{' '}
             {pill ? (
               <AnimatedBadge status={pill.status} size="sm" showIcon={false}>
                 {pill.label}
