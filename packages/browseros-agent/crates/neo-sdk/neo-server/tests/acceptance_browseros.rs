@@ -346,6 +346,22 @@ fn complete_stored_failure_messages(
             "the source failure was retained whole"
         );
         messages.insert(redactor.text(message));
+        // Only the script's error carries the cover's snapshot.
+        let lines: Vec<_> = message.split('\n').collect();
+        if let Some(on_top) = lines.iter().position(|line| line.starts_with("  On top: ")) {
+            let rest = lines
+                .iter()
+                .skip(on_top + 1)
+                .skip_while(|line| line.starts_with("    "));
+            let without_snapshot = lines
+                .iter()
+                .take(on_top + 1)
+                .chain(rest)
+                .copied()
+                .collect::<Vec<_>>()
+                .join("\n");
+            messages.insert(redactor.text(&without_snapshot));
+        }
     }
     Ok(messages)
 }
