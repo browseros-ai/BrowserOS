@@ -372,7 +372,8 @@ async fn tests_that_a_forced_click_its_parent_frame_scrolls_for_reaches_only_the
 /// cross-site parent, must scroll first: agent tabs, then tabs core did not open, which click
 /// under the focus lease.
 async fn click_after_parent_scrolls(options: Value, rounds: usize) -> TestResult {
-    let run = LiveRun::connect().await?;
+    // The adopted-tab rounds exercise borrowed focus while the native tab stays behind.
+    let run = LiveRun::connect().await?.without_activation();
     let server = FixtureServer::start(pages()).await?;
     let url = server.url("127.0.0.1", "/actions/far-top.html");
     for round in 0..rounds {
@@ -478,7 +479,8 @@ async fn tests_that_a_covered_nested_frame_fails_covered_naming_the_overlay_unse
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_clicks_land_in_an_agent_tab_and_in_an_adopted_tab_under_a_restored_lease()
 -> TestResult {
-    let run = LiveRun::connect().await?;
+    // A native foreground move would outlive the lease whose restoration this row checks.
+    let run = LiveRun::connect().await?.without_activation();
     let server = FixtureServer::start(pages()).await?;
     let url = server.url("127.0.0.1", "/actions/page.html");
 
@@ -532,7 +534,7 @@ async fn tests_that_clicks_land_in_an_agent_tab_and_in_an_adopted_tab_under_a_re
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_a_click_dropped_mid_burst_disarms_releases_and_restores_the_lease() -> TestResult
 {
-    let run = LiveRun::connect().await?;
+    let run = LiveRun::connect().await?.without_activation();
     let server = FixtureServer::start(pages()).await?;
     let page = run
         .open_adopted(&server.url("127.0.0.1", "/actions/page.html"))

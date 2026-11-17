@@ -1158,6 +1158,7 @@ async fn tests_that_a_click_that_logs_completes_under_a_console_listener_and_is_
         run.click(&page, "#tables").await?;
         // Tables stored before the listener: its lease's `Runtime.enable` replays them too.
         time::sleep(Duration::from_millis(1000)).await;
+        run.eval(&page, "window.__landed = 0; document.querySelector('#log').addEventListener('click', () => window.__landed++)").await?;
         let host: Arc<dyn OpHost> = Arc::clone(&run) as Arc<dyn OpHost>;
         let heard = js_runner::run_script(
             &host,
@@ -1168,6 +1169,7 @@ async fn tests_that_a_click_that_logs_completes_under_a_console_listener_and_is_
         )
         .await?;
         assert_eq!(heard, json!(1), "the handler's message, exactly once");
+        assert_eq!(run.eval(&page, "window.__landed").await?, json!(1), "the console-listener click landed exactly once");
         Ok(())
     }
     .await;
