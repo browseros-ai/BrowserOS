@@ -3,7 +3,7 @@
  *
  *   bun scripts/snapshot-cases/preview.ts <gap file name, e.g. on-top> [case name filter]
  *
- * Only that gap's module is loaded, so a gap being written cannot break another's preview.
+ * Only that gap's cases render, so another gap's failing case cannot break this preview.
  */
 import type { Gap } from './model'
 import { snapshotCaseOutputs } from './write'

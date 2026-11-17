@@ -1,6 +1,6 @@
 /**
- * The snapshot text cases reach every line of today's renderer: the eight snapshot files, the
- * covered block, and the vendored printer's half the renderer calls. A line they do not reach is
+ * The snapshot text cases reach every line of today's renderer: the snapshot files, the
+ * covered block, and the vendored printer's half the renderer calls (`RENDERER`). A line they do not reach is
  * listed with its reason in scripts/snapshot-cases/unreached.ts. Every line reached proves every
  * line ran, not every boundary; the cases name the boundaries themselves.
  *
@@ -54,7 +54,6 @@ function code(text: string): boolean {
   )
 }
 
-/** The line numbers an entry explains: its `from` line through its `to` line, or the whole file. */
 function explained(entry: Unreached, source: string[]): number[] {
   if (entry.from === undefined) return source.map((_, index) => index + 1)
   const start = source.findIndex((line) => line.trim() === entry.from)

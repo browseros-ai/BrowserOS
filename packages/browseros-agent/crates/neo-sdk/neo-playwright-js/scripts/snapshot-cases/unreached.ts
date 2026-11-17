@@ -21,8 +21,9 @@ export const RENDERER = [
 ]
 
 /**
- * Lines `from` through `to` (each a line's trimmed text, `to` defaulting to `from`), or the
- * whole file when neither is given.
+ * Lines `from` through `to`, or the whole file when neither is given. `from` is the first line
+ * of the file whose trimmed text it is, and `to` (defaulting to `from`) the first such line at
+ * or after it, so a line of common text may need a `from` that pins it.
  */
 export type Unreached = {
   file: (typeof RENDERER)[number]
@@ -38,21 +39,21 @@ export const UNREACHED: Unreached[] = [
   {
     file: 'src/prelude/snapshot-late.ts',
     reason:
-      'The call’s clock, not its text: whether a whole page’s baseline operations still have time. Its one text, the no-time answer, is `renderUncompared` in snapshot-delta.ts, which the `notRead` cases reach. The port moves this clock into the operation, pinned by rows on a scripted clock (design 1.7, 5.6).',
+      'The call’s clock, not its text: whether a whole page’s baseline operations still have time. Its one text, the no-time answer, is `renderUncompared` in snapshot-delta.ts, which the `notRead` cases reach. The port moves this clock into the operation, pinned by rows on a scripted clock (the Rust snapshot renderer design, 1.7 and 5.6).',
   },
   {
     file: VENDORED_PRINTER,
     from: 'function convertToBestGuessRegex(text: string): string {',
     to: 'return String(new RegExp(pattern));',
     reason:
-      'The regex mode, which only a failed `expect` uses, inside the page with upstream’s own copy of this printer: its string to pattern step. Not ported (design 3.2).',
+      'The regex mode, which only a failed `expect` uses, inside the page with upstream’s own copy of this printer: its string to pattern step. Not ported (the Rust snapshot renderer design, 3.2).',
   },
   {
     file: VENDORED_PRINTER,
     from: 'function textContributesInfo(node: AriaNodeJSON, text: string): boolean {',
     to: 'return filtered.trim().length / text.length > 0.1;',
     reason:
-      'The regex mode’s test of whether a text says more than its name. Not ported (design 3.2).',
+      'The regex mode’s test of whether a text says more than its name. Not ported (the Rust snapshot renderer design, 3.2).',
   },
   {
     file: 'src/prelude/snapshot-delta.ts',
@@ -66,6 +67,6 @@ export const UNREACHED: Unreached[] = [
     from: '} catch {',
     to: "return ''",
     reason:
-      'Only a tree outside Playwright’s types makes today’s renderer throw. Rust’s typed decode refuses such a tree before anything renders (design 1.4), so the Rust block has no failure to fall back from.',
+      'Only a tree outside Playwright’s types makes today’s renderer throw. Rust’s typed decode refuses such a tree before anything renders (the Rust snapshot renderer design, 1.4), so the Rust block has no failure to fall back from.',
   },
 ]

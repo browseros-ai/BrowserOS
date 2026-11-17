@@ -2,16 +2,18 @@
  * Writes the snapshot text cases (model.ts) from today's renderer, as two files the Rust
  * renderer's tests read and never run JavaScript for:
  *
- *   playwright.json   Playwright's format on trees with no Neo facts, printed by the vendored
- *                     printer itself (`renderAriaSnapshotAsYaml`). They outlive the TypeScript
- *                     renderer: the vendored files stay, so these are rewritten at every engine
- *                     upgrade and their diff is what upstream now prints differently.
+ *   playwright.json   Playwright's format on trees with no Neo facts, written from the vendored
+ *                     printer itself (`renderAriaSnapshotAsYaml`), with today's renderer held to
+ *                     it byte for byte. They outlive the TypeScript renderer: the vendored files
+ *                     stay, so these are rewritten at every engine upgrade and their diff is what
+ *                     upstream now prints differently.
  *   neo.json          every other call, printed by today's renderer in the prelude. Frozen when
  *                     that renderer is deleted; from then on a rule change is a reviewed diff.
  *
  * build.ts writes both with the other generated files and `build.ts --check` fails when either is
- * stale, so a change to today's renderer shows as a diff of the cases in review, and while both
- * engines exist it fails the Rust renderer's check until the two agree.
+ * stale, so a change to today's renderer shows as a diff of the cases in review. The Rust
+ * renderer's tests are to read the same files, so while both engines exist a change to one fails
+ * the other's check until the two agree.
  */
 
 import { setCoverRenderer, shapeCovered } from '../../src/prelude/cover'
@@ -81,7 +83,7 @@ const GAPS: Record<string, Gap> = {
 const FOLDER = 'crates/neo-sdk/neo-snapshot/tests/data/cases'
 
 /**
- * Together under 1 MB, as the design sets (section 2.4): the largest JSON the SDK tracks is
+ * Together under 1 MB, as the Rust snapshot renderer design sets (section 2.4): the largest JSON the SDK tracks is
  * 1.14 MB, and these are read by a test on every gate run.
  */
 const MAX_BYTES = 1_000_000
@@ -89,7 +91,7 @@ const MAX_BYTES = 1_000_000
 const ABOUT = [
   'Snapshot text cases: what today’s renderer prints for each call, byte for byte. Written by crates/neo-sdk/neo-playwright-js/scripts/snapshot-cases/write.ts through scripts/build.ts; do not edit by hand. The shape is documented in scripts/snapshot-cases/model.ts.',
   'A case renders `snapshots[case.snapshot]` with `case.call` and must print `case.text`; a whole page in Neo’s format also keeps `case.pending` as the tab’s pending baseline. A snapshot with `chain` instead of `json` is built in code: `depth` nodes, each a copy of `link` holding the next, the last `leaf`.',
-  'Lone halves of a character are written as U+FFFD: the covered block’s cut is JavaScript’s own, and U+FFFD is what every reader outside the script engine receives (design 1.9). No other text holds one.',
+  'Lone halves of a character are written as U+FFFD: the covered block’s cut is JavaScript’s own, and U+FFFD is what every reader outside the script engine receives (the Rust snapshot renderer design, 1.9). No other text holds one.',
 ]
 
 /** The tree as Rust will hand it to the renderer: a fresh copy, so no render sees another's. */
@@ -109,15 +111,15 @@ function built(shape: Chain): AriaNodeJSON[] {
 }
 
 /**
- * No fact beside the tree: Playwright's format on it is the vendored printer's alone, since
- * every fact is Neo's (a `# partial:` line, the head lines Playwright's format never prints).
+ * No fact beside the tree. Every fact is Neo's, so a Playwright-format call on a tree with one
+ * tests a Neo rule, even when the rule is to leave the fact out: it belongs in neo.json, frozen
+ * with today's renderer, not in playwright.json, which only the vendored printer writes.
  */
 function factless(snapshot: Snapshot): boolean {
   const { json: _json, chain: _chain, partial, ...rest } = snapshot
   return partial.length === 0 && Object.keys(rest).length === 0
 }
 
-/** What `kept.passed` kept on `kept.snapshot`: the pending text and form of that page call. */
 function earlier(
   given: Earlier | { keptBy: { snapshot: string; passed: object } },
   snapshots: Record<string, Snapshot>,
@@ -175,7 +177,16 @@ function render(
   }
   if (snapshot === null) throw new Error('only a cover may have no snapshot')
   const tree = result(snapshot)
-  if ('playwright' in call) return { text: renderSnapshot(tree) }
+  if ('playwright' in call) {
+    const text = renderSnapshot(tree)
+    if (!factless(snapshot)) return { text }
+    // Neo walks the tree with its own stack and asks the vendored printer one node at a time;
+    // on a tree with no facts that must be the vendored printer's own text, byte for byte.
+    const vendored = renderAriaSnapshotAsYaml(tree.json)
+    if (text !== vendored)
+      throw new Error("today's Playwright text is not the vendored printer's")
+    return { text: vendored }
+  }
   if ('full' in call)
     return {
       text: renderFullSnapshot(tree, call.full.maxTokens ?? DEFAULT_MAX_TOKENS),
@@ -225,18 +236,15 @@ export function writeCase(
           },
         }
       : def.call
-  const { text, pending } = render(call, snapshot)
-  if (
-    'playwright' in call &&
-    snapshot !== null &&
-    factless(snapshot) &&
-    text !== renderAriaSnapshotAsYaml(result(snapshot).json)
-  )
-    // Neo walks the tree with its own stack and asks the vendored printer one node at a time;
-    // on a tree with no facts that must be the vendored printer's own text, byte for byte.
+  let answer: ReturnType<typeof render>
+  try {
+    answer = render(call, snapshot)
+  } catch (error) {
     throw new Error(
-      `${def.name}: today's Playwright text is not the vendored printer's`,
+      `${def.name}: ${error instanceof Error ? error.message : error}`,
     )
+  }
+  const { text, pending } = answer
   return {
     name: def.name,
     snapshot: def.snapshot,
@@ -282,7 +290,7 @@ export function caseDocument(
   return `${lines.join('\n')}\n`
 }
 
-/** Both files, from every gap's cases. Throws on a duplicate name or past the size limit. */
+/** Both files, for `gaps` (every gap by default). Throws on a case the files could not hold. */
 export function snapshotCaseOutputs(
   gaps: Record<string, Gap> = GAPS,
 ): { path: string; text: string }[] {

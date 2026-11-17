@@ -40,7 +40,10 @@ export type Chain = {
   leaf: AriaNodeJSON
 }
 
-/** A snapshot's input: its tree, given whole or as a chain, and its facts. */
+/**
+ * What Rust hands the renderer, as a case file holds it: kept once per file under `snapshots`,
+ * named, and shared by every case that renders it. Rust's test decodes it into the crate's tree.
+ */
 export type Snapshot = Facts &
   ({ json: AriaNodeJSON[]; chain?: never } | { chain: Chain; json?: never })
 
@@ -50,7 +53,7 @@ export type Snapshot = Facts &
  */
 export type Earlier = 'notRead' | 'nothing' | SnapshotBaseline
 
-/** One call of the renderer, one variant per kind of text (the design's `Call`). */
+/** One call of the renderer, one variant per kind of text (the Rust snapshot renderer design's `Call`). */
 export type Call =
   | { playwright: Record<string, never> }
   /** `maxTokens` left out is the default cap, as the operation will apply it. */
@@ -74,8 +77,8 @@ export type Case = {
 }
 
 /**
- * A stored baseline as a real one arises: what a whole-page call with `passed` on snapshot
- * `from` kept. The writer resolves it into the text and form that call kept.
+ * A stored baseline as a real one arises: what a whole-page call with `passed` kept on the
+ * snapshot named `snapshot`. The writer resolves it into that call's text and form.
  */
 export type KeptBy = { keptBy: { snapshot: string; passed: Passed } }
 
@@ -86,10 +89,9 @@ export type CallDef =
 
 export type CaseDef = { name: string; snapshot: string | null; call: CallDef }
 
-/** One gap of the design's table (section 2.4): its trees, and the calls made on them. */
+/** One gap of the Rust snapshot renderer design's table (section 2.4): its trees, and the calls made on them. */
 export type Gap = { snapshots: Record<string, Snapshot>; cases: CaseDef[] }
 
-/** A snapshot of `json` with no partial frame unless `facts` says so. */
 export function tree(
   json: AriaNodeJSON[],
   facts: Partial<Facts> = {},
@@ -97,7 +99,6 @@ export function tree(
   return { json, partial: [], ...facts }
 }
 
-/** A snapshot whose tree is a chain (see `Chain`). */
 export function chain(shape: Chain, facts: Partial<Facts> = {}): Snapshot {
   return { chain: shape, partial: [], ...facts }
 }
