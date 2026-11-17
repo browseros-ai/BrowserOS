@@ -380,10 +380,13 @@ impl Input {
     }
 
     pub async fn insert_text(&self, text: &str) -> Result<(), CoreError> {
-        self.with_page_session_retry(|session| {
-            let text = text.to_string();
-            async move { insert_text(&session, &text).await }
-        })
+        self.held(Box::pin(async {
+            self.with_page_session_retry(|session| {
+                let text = text.to_string();
+                async move { insert_text(&session, &text).await }
+            })
+            .await
+        }))
         .await
     }
 
