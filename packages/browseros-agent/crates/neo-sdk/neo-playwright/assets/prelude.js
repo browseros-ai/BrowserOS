@@ -11884,7 +11884,7 @@ ${changes}`;
       const first = (async () => {
         if (await this._readFrames(timeoutMs))
           return;
-        if (this.#framesIncomplete && !this._closed && this._used()) {
+        if (this.#framesIncomplete && !this._closed && (this._used() || !this.#leftUnanswered)) {
           await sleep("page.frames", FRAMES_RETRY_MS).catch(() => {});
           await this._readFrames(timeoutMs);
         }
@@ -12308,6 +12308,17 @@ ${changes}`;
 
   // crates/neo-sdk/neo-playwright-js/src/prelude/context.ts
   var LISTED_FRAMES_TIMEOUT_MS = 1000;
+  var LISTED_START_GRACE_MS = 300;
+  function withinStartGrace(reads) {
+    return new Promise((resolve) => {
+      const cancel = startTimer(LISTED_START_GRACE_MS, resolve);
+      const done = () => {
+        cancel();
+        resolve();
+      };
+      reads.then(done, done);
+    });
+  }
   function pageFact(value) {
     if (value instanceof Page)
       return value._tab === null ? null : { tab: value._tab };
@@ -12443,11 +12454,16 @@ ${changes}`;
     }
     async _readInitialFrames(runPage) {
       const held = [];
+      const listed = [];
       for (const page of new Set([runPage, ...this._knownPages()])) {
         const read = page._readInitialFrames(page === runPage ? 0 : LISTED_FRAMES_TIMEOUT_MS);
         if (page._used())
           held.push(read);
+        else
+          listed.push(read);
       }
+      if (listed.length > 0)
+        held.push(withinStartGrace(Promise.all(listed)));
       await Promise.all(held);
     }
     async _settleFrames() {

@@ -1331,14 +1331,18 @@ export class Page extends EventEmitter {
     if (this._tab === null || this._closed) return Promise.resolve()
     if (this.#firstRead) return this.#firstRead
     // A read that answers no tree or a partial one (an out-of-process frame's session was still
-    // attaching, the tab was loading) is read once more before the tree is handed to the script,
-    // if the script uses the page by then. One still not whole, or refused, stays marked
-    // (`#framesIncomplete`) and is read again before the script's next operation settles. A page
-    // the script has not used is asked again only once its frame version moves (`_askIfChanged`):
-    // an attaching frame's session and a navigation's commit both move it.
+    // attaching, the tab was loading) is read once more before the tree is handed to the script.
+    // One still not whole, or refused, stays marked (`#framesIncomplete`) and is read again
+    // before the script's next operation settles. A page the script has not used is read once
+    // more only when its read answered a partial tree: one that answered nothing is busy, and is
+    // asked again only once its frame version moves (`_askIfChanged`).
     const first = (async () => {
       if (await this._readFrames(timeoutMs)) return
-      if (this.#framesIncomplete && !this._closed && this._used()) {
+      if (
+        this.#framesIncomplete &&
+        !this._closed &&
+        (this._used() || !this.#leftUnanswered)
+      ) {
         await sleep('page.frames', FRAMES_RETRY_MS).catch(() => {})
         await this._readFrames(timeoutMs)
       }

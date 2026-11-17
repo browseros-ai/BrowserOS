@@ -11,7 +11,13 @@ import { send } from './generated'
  */
 
 import { type BindingCallback, exposeOnContext } from './bindings'
-import type { Observation, PageFact, Reply, RunInit } from './bridge'
+import {
+  type Observation,
+  type PageFact,
+  type Reply,
+  type RunInit,
+  startTimer,
+} from './bridge'
 import type { Browser } from './browser'
 import { EventEmitter } from './emitter'
 import { internalError } from './errors'
@@ -29,6 +35,30 @@ import { TimeoutSettings } from './timeouts'
  * `SNAPSHOT_BUDGET`, also one second) does not cover.
  */
 const LISTED_FRAMES_TIMEOUT_MS = 1_000
+
+/**
+ * How long a run's start waits for the first frame-tree reads of the listed tabs the script has
+ * not used: one window for all of them, read in parallel, which ends the moment every one has
+ * answered. It keeps the observer contract: `frames()` of a listed tab is whole from the first
+ * statement when the tab answers, as a host's observer reads another tab (`context.pages()`, then
+ * `frames()`, accept_frames.py's `observer`). An answering tab needs milliseconds, its one retry
+ * for a frame whose session was still attaching about 100 ms more. What it costs: a tab whose
+ * renderer is busy answers nothing until the native read gives up after a second, so it costs a
+ * run at most this, once, at the start; no later statement waits for it.
+ */
+const LISTED_START_GRACE_MS = 300
+
+/** Resolves once `reads` settle or `LISTED_START_GRACE_MS` passed, whichever comes first. */
+function withinStartGrace(reads: Promise<unknown>): Promise<void> {
+  return new Promise((resolve) => {
+    const cancel = startTimer(LISTED_START_GRACE_MS, resolve)
+    const done = () => {
+      cancel()
+      resolve()
+    }
+    void reads.then(done, done)
+  })
+}
 
 /** The page an op result names: a revived Page, or a raw `{"$neo":"page","tab":1}` brand. */
 function pageFact(value: unknown): PageFact | null {
@@ -289,7 +319,8 @@ export class BrowserContext extends EventEmitter {
   //
   // The script waits only for the pages it used in this run, and for a page the run first saw
   // after it started until that page leaves a read unanswered (`Page._used`). Every other page is
-  // read in the background, and one that did not answer is asked again only once its frame
+  // read in the background, past the start's short grace for listed tabs
+  // (`LISTED_START_GRACE_MS`), and one that did not answer is asked again only once its frame
   // version moves (`Page._askIfChanged`). A page whose renderer is busy answers no read until the
   // native read gives up after a second; when the script waited on every page, each statement
   // paid that second for a tab the script never touched (four seconds for one `ariaSnapshot()`
@@ -298,19 +329,23 @@ export class BrowserContext extends EventEmitter {
   /**
    * Every known page's frame tree, read in parallel at the run's start (FR-1): the run's page
    * and every tab the init listed. Page facts carry no frame tree, so this is how a tab the
-   * script reaches through `pages()` lists its iframes. The start waits only for the pages the
-   * script used, which here is the run's page alone; a listed tab's read goes on in the
-   * background, bounded by `LISTED_FRAMES_TIMEOUT_MS`, and its tree is applied when it answers.
-   * These reads are Neo's own (`Page._refreshFrames`) and move nothing the run's acts move.
+   * script reaches through `pages()` lists its iframes from the first statement. The start waits
+   * for the pages the script used, which here is the run's page alone, and for every other listed
+   * tab within `LISTED_START_GRACE_MS`: one that answers has its tree by the first statement, and
+   * one that does not goes on in the background, bounded by `LISTED_FRAMES_TIMEOUT_MS`. These
+   * reads are Neo's own (`Page._refreshFrames`) and move nothing the run's acts move.
    */
   async _readInitialFrames(runPage: Page): Promise<void> {
     const held: Promise<void>[] = []
+    const listed: Promise<void>[] = []
     for (const page of new Set([runPage, ...this._knownPages()])) {
       const read = page._readInitialFrames(
         page === runPage ? 0 : LISTED_FRAMES_TIMEOUT_MS,
       )
       if (page._used()) held.push(read)
+      else listed.push(read)
     }
+    if (listed.length > 0) held.push(withinStartGrace(Promise.all(listed)))
     await Promise.all(held)
   }
 

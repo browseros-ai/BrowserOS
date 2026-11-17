@@ -1023,8 +1023,10 @@ async fn target_crashed_message_recovery_closes_and_opens_a_working_page() -> Te
 /// deterministic: a run that waits for a busy tab's frame tree pays the native read's whole
 /// budget (one second, `frame_tree.rs` `SNAPSHOT_BUDGET`), and with the start hold back a run
 /// cannot go under 2.1 s, so every try fails and the best of three cannot hide it. The run itself
-/// takes about 150 ms on the pool's debug build (main took 5.3 s); the rest, and the tries,
-/// absorb the seconds-long CPU stalls of a debug test thread on a loaded machine.
+/// takes about 150 ms on the pool's debug build (main took 5.3 s), plus the start's one grace for
+/// listed tabs (`LISTED_START_GRACE_MS` in context.ts, 300 ms, one window for all of them): three
+/// busy tabs paying it one after another would come to 1,050 ms and fail too. The rest, and the
+/// tries, absorb the seconds-long CPU stalls of a debug test thread on a loaded machine.
 const BESIDE_BUSY_TABS_BOUND: Duration = Duration::from_millis(900);
 
 /// Tries per case before [`BESIDE_BUSY_TABS_BOUND`] fails it. The busy tabs stay busy for 20 s,
@@ -1264,5 +1266,43 @@ async fn tests_that_a_busy_tab_another_client_opens_mid_run_costs_one_wait_at_mo
     }
     .await;
     run.close_page(&healthy).await;
+    result
+}
+
+/// A run lists a listed tab's whole frame tree from its first statement, as a host's observer
+/// reads it: `context.pages()` names another tab, and the script walks its frames before any
+/// await, cross-site ones included. Nothing in the run touched that tab; the start waits for its
+/// first read within the grace for listed tabs (`LISTED_START_GRACE_MS` in context.ts), which a
+/// tab that answers needs only milliseconds of.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_listed_tab_lists_its_whole_frame_tree_from_the_first_statement() -> TestResult
+{
+    let run = Arc::new(LiveRun::connect().await?);
+    let server = PageServer::start().await?;
+    let own = run.new_page().await?;
+    let other = run.new_page().await?;
+    let result = async {
+        goto(&run, &own, &server.url("/child.html"), "load").await?;
+        goto(&run, &other, &server.url("/frames.html"), "load").await?;
+        let init =
+            json!({ "page": brand(&own), "pages": run.page_facts(vec![own.tab, other.tab]).await });
+        let host: Arc<dyn OpHost> = Arc::clone(&run) as Arc<dyn OpHost>;
+        let script = format!(
+            "const p = context.pages().find((q) => q.tabId === {})\n\
+             return p.frames().map((frame) => frame.name()).sort()",
+            other.tab.0
+        );
+        let names = js_runner::run_script(&host, &init, &script).await?;
+        assert_eq!(
+            names,
+            json!(["", "cross", "deep", "same"]),
+            "the other tab's whole tree at the first statement"
+        );
+        Ok::<(), Box<dyn Error>>(())
+    }
+    .await;
+    run.close_page(&other).await;
+    run.close_page(&own).await;
     result
 }

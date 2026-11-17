@@ -730,8 +730,9 @@ it('tests that a page whose frames change between every two operations has its c
 
 // A host measured a run on a healthy tab at about four seconds while another tab of the browser
 // was busy: the start waited for the busy tab's read, then its retry, then every statement waited
-// for it again, a second each (the native read's budget). The script never touched that tab.
-it('tests that a tab whose frames read never answers holds neither the run start nor its operations', async () => {
+// for it again, a second each (the native read's budget). The script never touched that tab. Now
+// the start waits for it within its grace for listed tabs, and no statement waits for it.
+it('tests that a tab whose frames read never answers holds the run start no longer than its grace, and none of its operations', async () => {
   const runtime = loadPrelude({
     seed: OBSERVER,
     answer: (call) => {
@@ -756,6 +757,51 @@ it('tests that a tab whose frames read never answers holds neither the run start
       ([tab]) => tab === 1009,
     ),
   ).toEqual([[1009, 'page.frames']])
+})
+
+// The observer contract (accept.sh's frames check): a host's run walks another listed tab's
+// frames in its first statement. The start waits for that tab's first read within its grace, so a
+// tab that answers has its whole tree by then, though nothing in the run touched it.
+it('tests that a listed tab that answers within the start grace has its whole tree at the first statement', async () => {
+  const runtime = loadPrelude({
+    seed: OBSERVER,
+    answer: async (call) => {
+      if (call.name !== 'page.frames') return null
+      if (tabOf(call) === 1009)
+        await new Promise((resolve) => setTimeout(resolve, 50))
+      return TREE
+    },
+  })
+  const names = json(
+    await runtime.run(`return ${OTHER}.frames().map((f) => f.name())`),
+  )
+  expect(names).toEqual(['', 'same', 'cross'])
+})
+
+// The grace is one window for every listed tab, read in parallel: three tabs that never answer
+// cost the start the grace once, not three times.
+it('tests that the start grace is one window for all listed tabs', async () => {
+  const runtime = loadPrelude({
+    seed: {
+      ...SEED,
+      pages: [1007, 1009, 1010, 1011].map((tab) => ({
+        tab,
+        url: `https://${tab}.example/`,
+        title: String(tab),
+        closed: false,
+      })),
+    },
+    answer: (call) => {
+      if (call.name === 'page.frames')
+        return tabOf(call) === 1007 ? TREE : new Promise(() => {})
+      return 'A'
+    },
+  })
+  const started = Date.now()
+  await runtime.run('return await page.title()')
+  const took = Date.now() - started
+  expect(took).toBeGreaterThanOrEqual(250)
+  expect(took).toBeLessThan(800)
 })
 
 it('tests that a tab the script never used whose read got no tree is asked again only once its frames change', async () => {
@@ -801,7 +847,8 @@ it('tests that a listed tab the script acts on while its start read is in flight
         return { ok: 'Other', pages: [{ tab: 1009 }] }
       if (call.name !== 'page.frames') return null
       if (tabOf(call) !== 1009 || reads1009++ > 0) return TREE
-      await new Promise((resolve) => setTimeout(resolve, 30))
+      // Longer than the start's grace for listed tabs, so it is still in flight.
+      await new Promise((resolve) => setTimeout(resolve, 400))
       return {
         ok: TREE,
         pages: [{ tab: 1009 }],
