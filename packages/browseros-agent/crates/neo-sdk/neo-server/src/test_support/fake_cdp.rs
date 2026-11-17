@@ -72,6 +72,8 @@ struct FakeState {
     hung: HashSet<String>,
     /// Canned answers that replace the fake's own for a method.
     answers: HashMap<String, Value>,
+    /// Typed CDP failures, kept separate from successful JSON protocol replies.
+    failures: HashMap<String, CdpError>,
     /// URL -> the title of the document served there.
     served: HashMap<String, String>,
     /// Methods whose next call is answered only on [`FakeCdp::release_held`].
@@ -123,6 +125,7 @@ impl FakeCdp {
                 calls: Vec::new(),
                 hung: HashSet::new(),
                 answers: HashMap::new(),
+                failures: HashMap::new(),
                 served: HashMap::new(),
                 hold_next: HashSet::new(),
                 hold_after: HashMap::new(),
@@ -294,6 +297,11 @@ impl FakeCdp {
     /// `errorText` the way Chromium does for a host that does not resolve.
     pub fn answer(&self, method: &str, result: Value) {
         self.lock().answers.insert(method.to_owned(), result);
+    }
+
+    /// Calls to `method` fail with the transport's typed error, including native tab reads.
+    pub fn fail(&self, method: &str, error: CdpError) {
+        self.lock().failures.insert(method.to_owned(), error);
     }
 
     /// Calls to `method` get the fake's own answer again, after [`FakeCdp::answer`].
@@ -479,7 +487,9 @@ impl FakeState {
             };
             return (Reply::Now(Err(error), Vec::new()), None);
         }
-        let reply = if self.hung.contains(method) {
+        let reply = if let Some(error) = self.failures.get(method) {
+            Reply::Now(Err(error.clone()), Vec::new())
+        } else if self.hung.contains(method) {
             Reply::Never
         } else if let Some(result) = self.answers.get(method) {
             Reply::Now(Ok(result.clone()), Vec::new())

@@ -33,6 +33,157 @@ use crate::test_rig::{ManualClock, TestError, TestRig, on_neo_runtime, within};
 const GRACE: Duration = Duration::from_secs(30);
 
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the real builtin, runtime wire and stored trace must share one remembered-crash fixture"
+)]
+fn target_crashed_real_page_op_precedes_failed_native_refresh_on_the_wire() -> Result<(), TestError>
+{
+    use browseros_cdp::CdpError;
+    use neo_playwright::FileAccess;
+
+    use crate::builtins::{self, PlaywrightFacade};
+    use crate::dispatch::{Dispatcher, Observer, RegistryBuilder};
+
+    on_neo_runtime(async {
+        for failure in [
+            CdpError::Timeout {
+                method: "native tab refresh".to_owned(),
+            },
+            CdpError::ConnectionLost,
+        ] {
+            let mut rig = TestRig::new().await?;
+            let page = rig.owner_tab("https://example.test/").await?;
+            let facade = PlaywrightFacade::start(
+                Arc::clone(&rig.link),
+                false,
+                Arc::default(),
+                Arc::new(FileAccess::new(Vec::new, Vec::new())),
+                None,
+            );
+            let mut registry = RegistryBuilder::default();
+            builtins::builtin_set(
+                &mut registry,
+                builtins::BuiltinDeps {
+                    solver: None,
+                    claims: Arc::default(),
+                    playwright: Arc::clone(&facade),
+                },
+            )?;
+            rig.dispatcher = Arc::new(Dispatcher::new(
+                registry.build(),
+                Vec::new(),
+                rig.sink.clone(),
+                Arc::clone(&rig.link),
+                Arc::clone(&rig.tabs),
+                Observer::new(Arc::clone(&facade) as _),
+            ));
+            let playwright = facade.get().await;
+            assert!(
+                playwright
+                    .synchronize_events(playwright.event_fence())
+                    .await
+            );
+            let target = rig
+                .link
+                .page(page.tab)
+                .await
+                .ok_or("cached native tab")?
+                .target_id;
+            let before = playwright.event_fence();
+            assert!(rig.fake.page_event(
+                page.tab,
+                "Target.targetCrashed",
+                json!({ "targetId": target.as_str(), "status": "crashed", "errorCode": 1 }),
+            ));
+            within(CRASH_REFUSAL_WATCHDOG, async {
+                while playwright.event_fence() <= before {
+                    task::yield_now().await;
+                }
+            })
+            .await?;
+            assert!(
+                playwright
+                    .synchronize_events(playwright.event_fence())
+                    .await
+            );
+            // No crash injection or synthetic method is used after this boundary. The next
+            // fresh run reaches the production Playwright adapter over QuickJS's real bridge.
+            time::sleep(Duration::from_millis(1)).await;
+            let input = json!({ "page": { "$neo": "page", "tab": page.tab } });
+            let service = rig.run_service(GRACE);
+            let initial_tabs = rig.fake.count("Browser.getTabs");
+            rig.fake.hold_next("Browser.getTabs");
+            let request = request(
+                &format!("await __neo.invoke('page.title', {input});"),
+                RunMeta::default(),
+            )?;
+            let pending = task::spawn(async move { service.run(request).await });
+            within(CRASH_REFUSAL_WATCHDOG, async {
+                while rig.fake.count("Browser.getTabs") == initial_tabs {
+                    task::yield_now().await;
+                }
+            })
+            .await?;
+            // RunService lists initial pages before starting QuickJS. Its healthy reply is
+            // already captured and held here; only the later foreground op sees the errors.
+            for method in ["Browser.getTabInfo", "Browser.getTabs"] {
+                rig.fake.fail(method, failure.clone());
+            }
+            let before_info = rig.fake.count("Browser.getTabInfo");
+            let before_tabs = rig.fake.count("Browser.getTabs");
+            let before_attach = rig.fake.count("Target.attachToTarget");
+            rig.fake.release_held();
+            let failed = within(CRASH_REFUSAL_WATCHDOG, pending).await??;
+            let error = error_of(&failed)?;
+            assert_eq!(error.code, "internal_error", "{failure}");
+            assert_eq!(error.diagnostic_code, Some(DiagnosticCode::TargetCrashed));
+            assert_eq!(error.delivery, Some(ReplyDelivery::NotSent));
+            assert!(error.retryable, "unsent real builtin failure: {failure}");
+            assert!(
+                error.message.starts_with("page.title:"),
+                "the error keeps the source operation: {}",
+                error.message
+            );
+            let wire = serde_json::to_value(&*failed)?;
+            assert_eq!(wire["error"]["code"], "internal_error");
+            assert_eq!(wire["error"]["diagnosticCode"], "target_crashed");
+            assert_eq!(wire["error"]["delivery"], "not_sent");
+            assert_eq!(
+                rig.fake.count("Browser.getTabInfo"),
+                before_info,
+                "known crash refusal must precede the adapter's URL/file refresh: {failure}"
+            );
+            assert_eq!(
+                rig.fake.count("Browser.getTabs"),
+                before_tabs,
+                "known crash refusal must also precede Core's refresh fallback: {failure}"
+            );
+            assert_eq!(
+                rig.fake.count("Target.attachToTarget"),
+                before_attach,
+                "the fresh run must not prepare the crashed renderer: {failure}"
+            );
+            rig.sink.flush().await?;
+            let stored = rig.store.run(failed.id).await?.ok_or("stored failed run")?;
+            let operation = stored
+                .operations
+                .iter()
+                .find(|operation| operation.name == "page.title")
+                .ok_or("the real builtin operation is traced")?;
+            assert_eq!(operation.delivery, Some(Delivery::NotSent));
+            let stored_error = operation.error.as_ref().ok_or("stored builtin error")?;
+            assert_eq!(stored_error.code, "internal_error");
+            assert_eq!(
+                stored_error.diagnostic_code,
+                Some(DiagnosticCode::TargetCrashed)
+            );
+        }
+        Ok(())
+    })
+}
+
+#[test]
 fn target_crashed_diagnostic_survives_caught_uncaught_and_stored_errors() -> Result<(), TestError> {
     on_neo_runtime(async {
         let rig = TestRig::new().await?;
