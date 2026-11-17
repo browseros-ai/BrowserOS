@@ -3,8 +3,8 @@
  * Copyright 2026 BrowserOS
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
- * The energy meter's Details, for ultrafast customers only: what neo saved
- * since they got ultrafast and over the last 30 and 7 days. Free installs keep
+ * The ultrafast card's Details, for ultrafast customers only: what neo saved since they got
+ * ultrafast and over the last 30 and 7 days, on the same ink as the card. Free installs keep
  * SavingsCard's dialog.
  */
 
@@ -12,12 +12,10 @@ import type {
   PlanSavings,
   PlanSavingsMeter,
   PlanSavingsPeriod,
-  SessionSummary,
 } from '@browseros/claw-api'
 import { X } from 'lucide-react'
-import { type ReactElement, type ReactNode, useState } from 'react'
-import { Link, useLocation } from 'react-router'
-import { SiteChip } from '@/components/favicon/SiteChip'
+import { type ReactElement, useState } from 'react'
+import { UltrafastWordmark } from '@/components/audit/UltrafastMarks'
 import {
   CenterMorphModal,
   CenterMorphModalClose,
@@ -25,31 +23,28 @@ import {
   CenterMorphModalTrigger,
 } from '@/components/motion/center-morph-modal'
 import { cn } from '@/lib/utils'
-import { ultrafastNote, ultrafastTime } from '@/screens/audit/audit.helpers'
+import { ultrafastTime } from '@/screens/audit/audit.helpers'
 import { tokensSavedSinceUltrafast } from './energy-meter.helpers'
-import { BigNumber, INK, Wordmark } from './InkPanel'
+import { BigNumber, INK, InkFact } from './InkPanel'
 import { timeSavedAmount } from './savings.helpers'
 import {
   type AxisLabel,
   axisLabels,
   barPx,
-  countsFit,
   DETAILS_HOW_WE_COUNT,
   monthDay,
   PERIODS,
   type PeriodKey,
-  periodStart,
   type RunsColumn,
   type RunsStrip,
-  referenceStep,
   runsStrip,
   stripCaption,
   stripPx,
 } from './ultrafast-details.helpers'
 
-/** The strip's width in the 540px dialog, and in the sheet on a 390px screen. */
-const WIDE = 500
-const NARROW = 352
+/** The strip's width in the 560px dialog, and in the sheet on a 390px screen. */
+const WIDE = 504
+const NARROW = 354
 
 export function UltrafastDetailsDialog({
   savings,
@@ -68,9 +63,10 @@ export function UltrafastDetailsDialog({
         showCloseButton={false}
         backdropClassName="bg-[rgb(1_18_63/0.36)] backdrop-blur-none dark:bg-black/60"
         className={cn(
-          'flex max-h-[calc(100dvh-96px)] max-w-[540px] flex-col border-border-2 bg-card shadow-[0_30px_60px_-24px_rgb(1_18_63/0.55)]',
+          'flex max-h-[calc(100dvh-96px)] max-w-[560px] flex-col border-0 shadow-[0_30px_60px_-24px_rgb(1_18_63/0.55)] dark:shadow-[inset_0_0_0_1px_rgb(238_243_255/0.08)]',
+          INK.panel,
           // Below sm it docks to the bottom as a sheet. The modal's layer sits 16px inside the window and is the containing block here.
-          'max-sm:fixed max-sm:-inset-x-4 max-sm:top-auto max-sm:-bottom-4 max-sm:max-h-[calc(100dvh-56px)] max-sm:w-auto max-sm:max-w-none max-sm:border-b-0',
+          'max-sm:fixed max-sm:-inset-x-4 max-sm:top-auto max-sm:-bottom-4 max-sm:max-h-[calc(100dvh-56px)] max-sm:w-auto max-sm:max-w-none',
         )}
       >
         <Report savings={savings} meter={meter} />
@@ -87,79 +83,45 @@ function Report({
   meter: PlanSavingsMeter
 }) {
   const [key, setKey] = useState<PeriodKey>('since')
-  const now = Date.now()
   const period = meter.periods[key]
-  // The since tab shows the meter's own figure, read the same way the meter and the ultrafast page read it.
+  // The since tab shows the card's own figure, read the same way the card and the ultrafast page read it.
   const tokens =
     key === 'since'
       ? (tokensSavedSinceUltrafast(savings) ?? period.tokensSaved)
       : period.tokensSaved
-  const neverRan = meter.periods.since.runs === 0
-  const start = periodStart(key, meter.since, now)
-  const latest = savings.latest
-    .filter((task) => (task.endedAt ?? task.startedAt) >= start)
-    .slice(0, 3)
-  const caption =
+  const where =
     key === 'since'
-      ? `tokens saved since ${monthDay(meter.since)}`
-      : `tokens saved in the last ${key === 'last30Days' ? '30' : '7'} days`
+      ? `since ${monthDay(meter.since)}`
+      : `in the last ${key === 'last30Days' ? '30' : '7'} days`
 
   return (
     <>
-      <div
-        className={cn(
-          'relative flex-none px-[18px] pt-2 sm:px-5 sm:pt-4',
-          INK.panel,
-        )}
-      >
+      <div className="relative flex-none px-[18px] pt-2 sm:px-7 sm:pt-5">
         <span
           aria-hidden
-          className="mx-auto mb-2.5 block h-1 w-9 rounded-sm bg-[rgb(238_243_255/0.32)] sm:hidden"
+          className="mx-auto mb-3 block h-1 w-9 rounded-sm bg-[rgb(238_243_255/0.32)] sm:hidden"
         />
         <CenterMorphModalClose>
           <button
             type="button"
             aria-label="Close"
             className={cn(
-              'absolute top-4 right-2.5 grid size-8 place-items-center rounded-lg hover:bg-[rgb(238_243_255/0.08)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9cc0ff] sm:top-2.5',
+              'absolute top-5 right-2.5 grid size-8 place-items-center rounded-lg hover:bg-[rgb(238_243_255/0.08)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9cc0ff] sm:top-3.5 sm:right-3.5',
               INK.ink2,
             )}
           >
             <X aria-hidden className="size-4" />
           </button>
         </CenterMorphModalClose>
-        <div className="flex items-baseline gap-2.5 pr-11">
-          <h2
-            className={cn(
-              'm-0 font-bold text-[17px] tracking-[-0.015em]',
-              INK.ink,
-            )}
-          >
-            Your savings
-          </h2>
-          <Wordmark className={cn('text-[13.5px]', INK.ink2)} />
-        </div>
-        <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-2.5 pt-2.5 pb-3.5">
-          <div>
-            <BigNumber tokens={tokens} className="text-[40px] sm:text-[46px]" />
-            <div className={cn('mt-1.5 text-[13.5px]', INK.ink2)}>
-              {caption}
-            </div>
-          </div>
-          <div className="flex">
-            <Side label="of your time saved">
-              {timeSavedAmount(period.timeSavedMs)}
-            </Side>
-            <Side label="tasks finished" divided>
-              {period.tasksFinished}
-            </Side>
-          </div>
-        </div>
+        <h2 className="m-0 flex items-baseline gap-2.5 pr-11 font-normal">
+          <UltrafastWordmark className={cn('text-[16px]', INK.ink)} />{' '}
+          <span className={cn('text-[13.5px]', INK.ink3)}>Your savings</span>
+        </h2>
         <div
           role="tablist"
           aria-label="Period"
           className={cn(
-            'flex gap-[18px] overflow-x-auto border-t [scrollbar-width:none] sm:gap-[22px]',
+            'mt-3.5 flex gap-[18px] overflow-x-auto border-b [scrollbar-width:none] sm:gap-[22px]',
             INK.line,
           )}
         >
@@ -171,7 +133,7 @@ function Report({
               aria-selected={tab.key === key}
               onClick={() => setKey(tab.key)}
               className={cn(
-                'h-10 shrink-0 whitespace-nowrap border-b-2 text-[13.5px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9cc0ff]',
+                '-mb-px h-10 shrink-0 whitespace-nowrap border-b-2 text-[13.5px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9cc0ff]',
                 tab.key === key
                   ? 'border-[#eef3ff] font-semibold text-[#eef3ff]'
                   : cn('border-transparent font-medium', INK.ink3),
@@ -182,21 +144,68 @@ function Report({
           ))}
         </div>
       </div>
-      <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto overscroll-contain px-[18px] pt-3.5 pb-6 sm:px-5 sm:pt-4 sm:pb-5">
-        <WhereNeoHelped
-          period={period}
-          note={
-            neverRan && key === 'since'
-              ? 'Sites show up here after your first ultrafast run.'
-              : 'No ultrafast runs in this period.'
-          }
-        />
-        <WhatNeoDid periodKey={key} period={period} neverRan={neverRan} />
-        {period.runs > 0 ? (
-          <Runs periodKey={key} period={period} since={meter.since} now={now} />
-        ) : null}
-        {latest.length > 0 ? <LatestRuns tasks={latest} /> : null}
-        <p className="m-0 text-[12px] text-ink-3 leading-normal">
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain px-[18px] pt-[18px] pb-7 sm:px-7 sm:pt-[22px] sm:pb-[26px]">
+        <div className="flex flex-col gap-2">
+          <BigNumber tokens={tokens} className="text-[50px] sm:text-[60px]" />
+          <span className={cn('text-[14.5px]', INK.ink2)}>
+            tokens saved {where}
+          </span>
+        </div>
+        {period.runs === 0 ? (
+          <>
+            <Rule />
+            <p className={cn('m-0 text-[13.5px]', INK.ink2)}>
+              {key === 'since'
+                ? 'Your first ultrafast run will show here.'
+                : `No ultrafast runs ${where}. Switch to "Since you got ultrafast" to see your earlier runs.`}
+            </p>
+          </>
+        ) : (
+          <>
+            <dl className="m-0 mt-6 grid grid-cols-2 gap-x-6 gap-y-[18px] sm:grid-cols-3 sm:gap-x-8 sm:gap-y-5">
+              <InkFact
+                label="of your time saved"
+                value={timeSavedAmount(period.timeSavedMs)}
+              />
+              <InkFact
+                label={period.runs === 1 ? 'ultrafast run' : 'ultrafast runs'}
+                value={period.runs.toLocaleString('en-US')}
+              />
+              <InkFact
+                label="steps done by neo"
+                value={
+                  period.neoStepShare == null
+                    ? 'None yet'
+                    : `${period.neoStepShare}%`
+                }
+              />
+              <InkFact
+                label="fastest run"
+                value={
+                  period.fastestRunMs == null
+                    ? 'None yet'
+                    : ultrafastTime(period.fastestRunMs)
+                }
+              />
+              <InkFact
+                label="average run"
+                value={ultrafastTime(period.durationMs / period.runs)}
+              />
+              <InkFact
+                label="pages neo accelerated"
+                value={period.pagesRead.toLocaleString('en-US')}
+              />
+            </dl>
+            <Rule />
+            <Runs
+              periodKey={key}
+              period={period}
+              since={meter.since}
+              now={Date.now()}
+            />
+          </>
+        )}
+        <p className={cn('m-0 mt-5 text-[12.5px] leading-normal', INK.ink3)}>
           {DETAILS_HOW_WE_COUNT}
         </p>
       </div>
@@ -204,179 +213,8 @@ function Report({
   )
 }
 
-function Side({
-  label,
-  divided = false,
-  children,
-}: {
-  label: string
-  divided?: boolean
-  children: ReactNode
-}) {
-  return (
-    <div
-      className={cn(
-        'flex flex-col gap-px',
-        divided ? cn('border-l pl-4', INK.line) : 'pr-4',
-      )}
-    >
-      <b
-        className={cn(
-          'font-bold text-[18px] tabular-nums tracking-[-0.02em]',
-          INK.ink,
-        )}
-      >
-        {children}
-      </b>
-      <span className={cn('text-[12.5px]', INK.ink3)}>{label}</span>
-    </div>
-  )
-}
-
-function Heading({ children }: { children: ReactNode }) {
-  return (
-    <h3 className="m-0 mb-1.5 font-bold text-[13.5px] text-cyanotype-ink">
-      {children}
-    </h3>
-  )
-}
-
-/** One ledger line on the light body: the label, dotted leaders, the figure. */
-function LedgerRow({
-  label,
-  none = false,
-  children,
-}: {
-  label: string
-  none?: boolean
-  children: ReactNode
-}) {
-  return (
-    <div className="flex items-baseline gap-2 py-1">
-      <dt className="flex min-w-0 flex-1 items-baseline gap-2 text-[13.5px] text-ink-2">
-        <span className="whitespace-nowrap">{label}</span>
-        <span
-          aria-hidden
-          className="min-w-3 flex-1 -translate-y-1 border-border border-b border-dotted"
-        />
-      </dt>
-      <dd
-        className={cn(
-          'm-0 whitespace-nowrap',
-          none
-            ? 'font-medium text-[13.5px] text-ink-3'
-            : 'font-bold text-[15px] text-cyanotype-ink tabular-nums',
-        )}
-      >
-        {children}
-      </dd>
-    </div>
-  )
-}
-
-function WhereNeoHelped({
-  period,
-  note,
-}: {
-  period: PlanSavingsPeriod
-  note: string
-}) {
-  const busiest = Math.max(1, ...period.topSites.map((site) => site.runs))
-  return (
-    <section>
-      <Heading>Where neo helped</Heading>
-      {period.topSites.length === 0 ? (
-        <p className="m-0 text-[13.5px] text-ink-2">{note}</p>
-      ) : (
-        <>
-          <ul className="m-0 flex list-none flex-col gap-0.5 p-0">
-            {period.topSites.map((site) => (
-              <li
-                key={site.site}
-                className="grid grid-cols-[22px_104px_minmax(0,1fr)_56px] items-center gap-2.5 py-[3px] text-[13.5px] text-ink sm:grid-cols-[22px_140px_minmax(0,1fr)_64px] sm:gap-3"
-              >
-                <SiteChip site={site.site} />
-                <span className="truncate">{site.site}</span>
-                <span>
-                  <span
-                    className="block h-[5px] rounded-sm bg-primary"
-                    style={{ width: `${(site.runs / busiest) * 100}%` }}
-                  />
-                </span>
-                <span className="text-right text-[13px] text-ink-2 tabular-nums">
-                  {site.runs === 1 ? '1 run' : `${site.runs} runs`}
-                </span>
-              </li>
-            ))}
-          </ul>
-          <dl className="m-0">
-            <LedgerRow label="Pages neo accelerated">
-              {period.pagesRead}
-            </LedgerRow>
-          </dl>
-        </>
-      )}
-    </section>
-  )
-}
-
-function WhatNeoDid({
-  periodKey,
-  period,
-  neverRan,
-}: {
-  periodKey: PeriodKey
-  period: PlanSavingsPeriod
-  neverRan: boolean
-}) {
-  if (period.runs === 0) {
-    const where =
-      periodKey === 'since'
-        ? 'since you got ultrafast'
-        : `in the last ${periodKey === 'last30Days' ? '30' : '7'} days`
-    return (
-      <section>
-        <Heading>What neo did</Heading>
-        <p className="m-0 font-semibold text-[14px] text-cyanotype-ink">
-          {neverRan
-            ? 'Your first ultrafast run will show here'
-            : `No ultrafast runs ${where}`}
-        </p>
-        <p className="m-0 mt-1 text-[13.5px] text-ink-2">
-          Give your agent a task on a website and neo takes the clicks and
-          typing itself.
-          {!neverRan && periodKey !== 'since'
-            ? ' Switch to "Since you got ultrafast" to see your earlier runs.'
-            : ''}
-        </p>
-      </section>
-    )
-  }
-  return (
-    <section>
-      <Heading>What neo did</Heading>
-      <dl className="m-0 grid grid-cols-1 sm:grid-cols-2 sm:gap-x-7">
-        <LedgerRow label="ultrafast runs">{period.runs}</LedgerRow>
-        <LedgerRow label="Fastest run" none={period.fastestRunMs == null}>
-          {period.fastestRunMs == null
-            ? 'None yet'
-            : ultrafastTime(period.fastestRunMs)}
-        </LedgerRow>
-        <LedgerRow label="Site tasks finished" none={period.siteTasks === 0}>
-          {period.siteTasks > 0
-            ? `${period.siteTasksFinished} of ${period.siteTasks}`
-            : 'None yet'}
-        </LedgerRow>
-        <LedgerRow label="Average run">
-          {ultrafastTime(period.durationMs / period.runs)}
-        </LedgerRow>
-        <LedgerRow label="Steps done by neo" none={period.neoStepShare == null}>
-          {period.neoStepShare == null ? 'None yet' : `${period.neoStepShare}%`}
-        </LedgerRow>
-        <LedgerRow label="Tasks finished">{period.tasksFinished}</LedgerRow>
-      </dl>
-    </section>
-  )
+function Rule() {
+  return <hr className={cn('m-0 mt-[26px] mb-5 border-0 border-t', INK.line)} />
 }
 
 function Runs({
@@ -391,53 +229,42 @@ function Runs({
   now: number
 }) {
   const strip = runsStrip(periodKey, period, since, now)
-  const room = {
-    wide: countsFit(strip, WIDE),
-    narrow: countsFit(strip, NARROW),
-  }
-  const step = strip.bars ? referenceStep(strip.busiest) : null
-  const columns = {
-    gridTemplateColumns: `repeat(${strip.columns.length}, minmax(0, 1fr))`,
-  }
   const unit = strip.weekly ? 'week' : 'day'
   const busiestColumn = strip.columns.find(
     (column) => column.runs === strip.busiest,
   )
   return (
     <section>
-      <Heading>Runs</Heading>
-      <div
-        data-strip={strip.bars ? 'bars' : 'squares'}
-        className="flex flex-col gap-[5px]"
+      <h3
+        className={cn(
+          'm-0 mb-3 flex items-baseline justify-between gap-3 font-semibold text-[14px]',
+          INK.ink,
+        )}
       >
+        Runs
+        {period.siteTasks > 0 ? (
+          <span className={cn('font-normal text-[13px]', INK.ink3)}>
+            {period.siteTasksFinished.toLocaleString('en-US')} of{' '}
+            {period.siteTasks.toLocaleString('en-US')} site tasks finished
+          </span>
+        ) : null}
+      </h3>
+      <div data-strip={strip.bars ? 'bars' : 'squares'}>
         <div
           role="img"
           aria-label={`${period.runs} ultrafast ${period.runs === 1 ? 'run' : 'runs'}, the busiest ${unit} ${busiestColumn?.label ?? ''} with ${strip.busiest}`}
           className="relative grid items-end"
-          style={{ ...columns, height: stripPx(strip) }}
+          style={{
+            gridTemplateColumns: `repeat(${strip.columns.length}, minmax(0, 1fr))`,
+            height: stripPx(strip),
+          }}
         >
-          {step ? (
-            <div
-              aria-hidden
-              className={cn(
-                'pointer-events-none absolute inset-x-0 border-border border-t border-dotted',
-                room.narrow && 'max-sm:hidden',
-                room.wide && 'sm:hidden',
-              )}
-              style={{ bottom: 3 + barPx(step, strip.busiest) }}
-            >
-              <b className="absolute -top-[7px] left-0 bg-card pr-1 font-medium font-mono text-[10px] text-ink-3 leading-3">
-                {step}
-              </b>
-            </div>
-          ) : null}
           {strip.columns.map((column, index) => (
             <Column
               // biome-ignore lint/suspicious/noArrayIndexKey: columns are fixed positions in time
               key={index}
               column={column}
               strip={strip}
-              room={room}
               edge={
                 index === 0
                   ? 'start'
@@ -456,8 +283,8 @@ function Runs({
           labels={axisLabels(periodKey, strip, WIDE)}
           className="max-sm:hidden"
         />
-        <p className="m-0 mt-px text-[12px] text-ink-3">
-          {stripCaption(periodKey, strip, since)}
+        <p className={cn('m-0 mt-2 text-[12.5px]', INK.ink3)}>
+          {stripCaption(strip)}
         </p>
       </div>
     </section>
@@ -467,15 +294,12 @@ function Runs({
 function Column({
   column,
   strip,
-  room,
   edge,
 }: {
   column: RunsColumn
   strip: RunsStrip
-  room: { wide: boolean; narrow: boolean }
   edge: 'start' | 'end' | null
 }) {
-  const busiest = column.runs === strip.busiest
   const tip = `${column.label}: ${
     column.before
       ? 'before ultrafast'
@@ -488,9 +312,11 @@ function Column({
       data-tip={tip}
       data-runs={column.before ? undefined : column.runs}
       className={cn(
-        'relative flex h-full flex-col-reverse items-center gap-0.5 border-border border-b pb-[3px]',
-        column.before && 'border-dotted',
-        'hover:after:absolute hover:after:bottom-[calc(100%+4px)] hover:after:z-[3] hover:after:whitespace-nowrap hover:after:rounded-md hover:after:bg-cyanotype-ink hover:after:px-[7px] hover:after:py-[3px] hover:after:font-medium hover:after:text-[11.5px] hover:after:text-background hover:after:content-[attr(data-tip)]',
+        'relative flex h-full flex-col-reverse items-center gap-0.5 border-b pb-1',
+        column.before
+          ? 'border-[rgb(238_243_255/0.1)] border-dotted'
+          : INK.line,
+        'hover:after:absolute hover:after:bottom-[calc(100%+4px)] hover:after:z-[3] hover:after:whitespace-nowrap hover:after:rounded-md hover:after:bg-[#eef3ff] hover:after:px-[7px] hover:after:py-[3px] hover:after:font-medium hover:after:text-[#0c2742] hover:after:text-[11.5px] hover:after:content-[attr(data-tip)]',
         edge === 'start'
           ? 'hover:after:left-0'
           : edge === 'end'
@@ -501,24 +327,25 @@ function Column({
       {column.purchase ? (
         <span
           aria-hidden
-          className="absolute -bottom-1 left-1/2 -ml-[0.75px] h-[7px] w-[1.5px] bg-primary"
+          className="absolute -bottom-[5px] left-1/2 -ml-[0.75px] h-[7px] w-[1.5px] bg-[#9cc0ff]"
         />
       ) : null}
       {column.before || column.runs === 0 ? null : strip.bars ? (
         <>
           <b
-            className="block w-[min(8px,62%)] flex-none rounded-t-[1.5px] bg-primary"
+            className="block w-[min(8px,62%)] flex-none rounded-t-[1.5px] bg-[#9cc0ff]"
             style={{ height: barPx(column.runs, strip.busiest) }}
           />
-          <em
-            className={cn(
-              'mb-px flex-none font-medium font-mono text-[10px] text-ink-2 not-italic tabular-nums leading-none',
-              !(room.narrow || busiest) && 'max-sm:hidden',
-              !(room.wide || busiest) && 'sm:hidden',
-            )}
-          >
-            {column.runs}
-          </em>
+          {column.runs === strip.busiest ? (
+            <em
+              className={cn(
+                'mb-0.5 flex-none font-medium font-mono text-[10px] not-italic tabular-nums leading-none',
+                INK.ink2,
+              )}
+            >
+              {column.runs}
+            </em>
+          ) : null}
         </>
       ) : (
         Array.from({ length: column.runs }, (_, square) => (
@@ -526,7 +353,7 @@ function Column({
             // biome-ignore lint/suspicious/noArrayIndexKey: one square per run
             key={square}
             data-square
-            className="block size-[7px] flex-none rounded-[1.5px] bg-primary"
+            className="block size-[7px] flex-none rounded-[1.5px] bg-[#9cc0ff]"
           />
         ))
       )}
@@ -545,7 +372,8 @@ function Axis({
     <div
       aria-hidden
       className={cn(
-        'relative h-[13px] font-mono text-[10.5px] text-ink-3 leading-[13px]',
+        'relative mt-1.5 h-3.5 font-mono text-[10.5px] leading-[14px]',
+        INK.ink3,
         className,
       )}
     >
@@ -554,7 +382,7 @@ function Axis({
           key={`${label.text}-${label.left}`}
           className={cn(
             'absolute top-0 whitespace-nowrap',
-            label.kind === 'purchase' && 'font-semibold text-accent-ink',
+            label.kind === 'purchase' && cn('font-medium', INK.accent),
             label.kind === 'before' && 'font-sans text-[11.5px]',
           )}
           style={{ left: `${(label.left * 100).toFixed(2)}%` }}
@@ -563,42 +391,5 @@ function Axis({
         </span>
       ))}
     </div>
-  )
-}
-
-function LatestRuns({ tasks }: { tasks: SessionSummary[] }) {
-  const location = useLocation()
-  return (
-    <section>
-      <Heading>Latest ultrafast runs</Heading>
-      <ul className="m-0 flex list-none flex-col gap-px p-0">
-        {tasks.map((task) => {
-          const note = ultrafastNote(task.pursue, task.ultrafast)
-          return (
-            <li key={task.sessionId}>
-              <Link
-                to={`/audit/${encodeURIComponent(task.sessionId)}`}
-                state={{ from: location.pathname }}
-                className="grid grid-cols-[22px_minmax(0,1fr)] items-center gap-x-3 gap-y-px py-1 text-[13.5px] no-underline sm:grid-cols-[22px_minmax(0,1fr)_auto]"
-              >
-                {task.site ? (
-                  <SiteChip site={task.site} />
-                ) : (
-                  <span aria-hidden />
-                )}
-                <span className="truncate font-semibold text-cyanotype-ink">
-                  {task.name}
-                </span>
-                {note ? (
-                  <span className="col-start-2 truncate text-[13px] text-ink-3 sm:col-start-auto sm:max-w-[240px]">
-                    {note}
-                  </span>
-                ) : null}
-              </Link>
-            </li>
-          )
-        })}
-      </ul>
-    </section>
   )
 }

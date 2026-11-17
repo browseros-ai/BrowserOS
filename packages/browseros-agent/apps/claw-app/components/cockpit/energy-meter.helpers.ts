@@ -60,31 +60,19 @@ export function passedMilestone(tokens: number): number | null {
   return passedMilestones(tokens).at(-1) ?? null
 }
 
-/** The line under the scale: how far the next milestone is, and the last one passed. */
-export interface MeterNote {
-  toGo: string
-  next: string
-  /** "You just passed 250k" until halfway to the next, then "Passed 250k"; the first run gets its own words. */
-  passed: string | null
-}
-
-export function meterNote(tokens: number, runs: number): MeterNote {
-  const next = nextMilestone(tokens)
+/**
+ * The line under the total while it is fresh: "You just passed 250k" until halfway to the next
+ * milestone, and "Your first ultrafast run is in" after the first run. Null the rest of the time.
+ */
+export function milestoneNote(tokens: number, runs: number): string | null {
   const passed = passedMilestone(tokens)
-  const toGo = meterTokens(next - tokens)
   if (passed === null) {
-    return {
-      toGo,
-      next: meterTokens(next),
-      passed: runs === 1 ? 'Your first ultrafast run is in' : null,
-    }
+    return runs === 1 ? 'Your first ultrafast run is in' : null
   }
-  const fresh = tokens < passed + (next - passed) / 2
-  return {
-    toGo,
-    next: meterTokens(next),
-    passed: `${fresh ? 'You just passed' : 'Passed'} ${meterTokens(passed)}`,
-  }
+  const next = nextMilestone(tokens)
+  return tokens < passed + (next - passed) / 2
+    ? `You just passed ${meterTokens(passed)}`
+    : null
 }
 
 /** "254k" as the figure "254" and its unit "k", so the unit can be set smaller. */
@@ -92,70 +80,4 @@ export function meterParts(tokens: number): { figure: string; unit: string } {
   const shown = meterTokens(tokens)
   const unit = /[kM]$/.test(shown) ? shown.slice(-1) : ''
   return { figure: unit ? shown.slice(0, -1) : shown, unit }
-}
-
-/** The stretch the scale shows: from the last milestone passed (or 0) to the next one. */
-export interface ScaleSpan {
-  from: number
-  to: number
-}
-
-/** Each stretch fills the whole ruler, so a bigger total never gets a thinner slice of it. */
-export function scaleSpan(tokens: number): ScaleSpan {
-  return { from: passedMilestone(tokens) ?? 0, to: nextMilestone(tokens) }
-}
-
-/** Where a value sits on the stretch, from 0 at its start to 1 at the next milestone. */
-export function scalePosition(value: number, span: ScaleSpan): number {
-  return Math.min(1, Math.max(0, (value - span.from) / (span.to - span.from)))
-}
-
-/** A round tick spacing that rules the stretch into about 25 steps, every fifth one longer. */
-function tickStep(span: ScaleSpan): number {
-  const raw = (span.to - span.from) / 25
-  const power = 10 ** Math.floor(Math.log10(raw))
-  const step = [1, 2, 2.5, 5].find((nice) => nice * power >= raw) ?? 10
-  return step * power
-}
-
-export function scaleTicks(
-  span: ScaleSpan,
-): { value: number; major: boolean }[] {
-  const step = tickStep(span)
-  const ticks: { value: number; major: boolean }[] = []
-  for (
-    let index = Math.ceil(span.from / step);
-    index * step <= span.to;
-    index++
-  ) {
-    ticks.push({ value: index * step, major: index % 5 === 0 })
-  }
-  return ticks
-}
-
-/** The milestones passed before the stretch starts, folded into the trail at the left. */
-export function trailCount(tokens: number): number {
-  return Math.max(0, passedMilestones(tokens).length - 1)
-}
-
-const READING_KEY = 'ultrafastMeterReading:v1'
-
-/** The total the needle last showed on this computer, or null the first time. */
-export function lastReading(): number | null {
-  try {
-    const stored = localStorage.getItem(READING_KEY)
-    if (stored === null) return null
-    const value = Number(stored)
-    return Number.isFinite(value) ? value : null
-  } catch {
-    return null
-  }
-}
-
-export function rememberReading(tokens: number): void {
-  try {
-    localStorage.setItem(READING_KEY, String(Math.round(tokens)))
-  } catch {
-    // Without browser storage the needle just starts where it ends next time.
-  }
 }

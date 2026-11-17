@@ -36,7 +36,7 @@ const globalDescriptors = new Map(
   ]),
 )
 
-const { EnergyMeter } = await import('./EnergyMeter')
+const { UltrafastSummary } = await import('./UltrafastSummary')
 const { SavingsCard } = await import('./SavingsCard')
 const { MemoryRouter } = await import('react-router')
 const { QueryClient, QueryClientProvider } = await import(
@@ -239,7 +239,7 @@ async function renderMeter(data: PlanSavings) {
     root.render(
       <QueryClientProvider client={client}>
         <MemoryRouter>
-          <EnergyMeter savings={query(data)} stats={STATS} />
+          <UltrafastSummary savings={query(data)} />
         </MemoryRouter>
       </QueryClientProvider>,
     ),
@@ -266,30 +266,44 @@ function strip(): Element | null {
   return dialog()?.querySelector('[data-strip]') ?? null
 }
 
+function figures(): string[] {
+  return [...(dialog()?.querySelectorAll('dl > div') ?? [])].map((fact) =>
+    (fact.textContent ?? '').replace(/\s+/g, ' '),
+  )
+}
+
 describe('the ultrafast Details', () => {
-  it('opens from the meter with the since numbers under a fixed header', async () => {
+  it('opens from the card on the since numbers: the total, six figures, the runs and how we count', async () => {
     await renderMeter(
       savings({ since: SINCE, last30Days: SINCE, last7Days: WEEK }),
     )
     await openDetails()
     const shown = text(dialog())
     expect(dialog()?.getAttribute('aria-label')).toBe('Your savings')
+    expect(text(dialog()?.querySelector('h2') ?? null)).toBe(
+      'ultrafast Your savings',
+    )
     expect(tab('Since you got ultrafast')?.getAttribute('aria-selected')).toBe(
       'true',
     )
     expect(shown).toContain(`326ktokens saved since ${PURCHASED}`)
-    expect(shown).toContain('52 minutesof your time saved')
-    expect(shown).toContain('14tasks finished')
-    expect(shown).toContain('Where neo helped')
-    expect(shown).toContain('flipkart.com2 runs')
-    expect(shown).toContain('Pages neo accelerated38')
-    expect(shown).toContain('ultrafast runs5')
-    expect(shown).toContain('Fastest run3 sec')
-    expect(shown).toContain('Site tasks finished1 of 2')
-    expect(shown).toContain('Average run16 sec')
-    expect(shown).toContain('Steps done by neo64%')
-    expect(shown).toContain('Tasks finished14')
+    expect(figures()).toEqual([
+      'of your time saved52 minutes',
+      'ultrafast runs5',
+      'steps done by neo64%',
+      'fastest run3 sec',
+      'average run16 sec',
+      'pages neo accelerated38',
+    ])
+    expect(text(dialog()?.querySelector('h3') ?? null)).toBe(
+      'Runs1 of 2 site tasks finished',
+    )
     expect(shown).toContain('They are measured differently')
+    // Sites, the task count and the latest runs are not in this popup.
+    expect(shown).not.toContain('Where neo helped')
+    expect(shown).not.toContain('flipkart.com')
+    expect(shown).not.toContain('tasks finished14')
+    expect(shown).not.toContain('Latest ultrafast runs')
     // Not the free plan's dialog.
     expect(shown).not.toContain('steps taken')
   })
@@ -300,20 +314,18 @@ describe('the ultrafast Details', () => {
     )
     await openDetails()
     await click(tab('7 days'))
-    let shown = text(dialog())
     expect(tab('7 days')?.getAttribute('aria-selected')).toBe('true')
     expect(tab('Since you got ultrafast')?.getAttribute('aria-selected')).toBe(
       'false',
     )
-    expect(shown).toContain('109ktokens saved in the last 7 days')
-    expect(shown).toContain('ultrafast runs4')
-    expect(shown).toContain('24 minutesof your time saved')
-    expect(shown).toContain('Pages neo accelerated11')
+    expect(text(dialog())).toContain('109ktokens saved in the last 7 days')
+    expect(figures()).toContain('ultrafast runs4')
+    expect(figures()).toContain('of your time saved24 minutes')
+    expect(figures()).toContain('pages neo accelerated11')
     expect(strip()?.querySelectorAll('[data-tip]').length).toBe(7)
 
     await click(tab('30 days'))
-    shown = text(dialog())
-    expect(shown).toContain('tokens saved in the last 30 days')
+    expect(text(dialog())).toContain('tokens saved in the last 30 days')
     // One column a day, the days before the purchase on their own baseline.
     expect(strip()?.querySelectorAll('[data-tip]').length).toBe(30)
     expect(
@@ -322,7 +334,7 @@ describe('the ultrafast Details', () => {
     expect(text(strip())).toContain('before ultrafast')
   })
 
-  it('stacks one square per run on a light strip', async () => {
+  it('stacks one square per run while the days are light', async () => {
     await renderMeter(
       savings({ since: SINCE, last30Days: SINCE, last7Days: WEEK }),
     )
@@ -330,17 +342,13 @@ describe('the ultrafast Details', () => {
     expect(strip()?.getAttribute('data-strip')).toBe('squares')
     expect(strip()?.querySelectorAll('[data-square]').length).toBe(5)
     expect(text(strip())).toContain('One square is one ultrafast run.')
-    expect(text(strip())).toContain(
-      `${PURCHASED} is the day you got ultrafast.`,
-    )
   })
 
-  it('turns the whole strip into bars with counts once a day passes eight runs', async () => {
+  it('draws bars once a day passes eight runs, with only the busiest one counted', async () => {
     await renderMeter(
       savings({ since: HEAVY, last30Days: HEAVY, last7Days: WEEK }),
     )
     await openDetails()
-    const shown = text(strip())
     expect(strip()?.getAttribute('data-strip')).toBe('bars')
     expect(strip()?.querySelectorAll('[data-square]').length).toBe(0)
     expect(
@@ -350,8 +358,8 @@ describe('the ultrafast Details', () => {
       [...(strip()?.querySelectorAll('em') ?? [])].map(
         (count) => count.textContent,
       ),
-    ).toContain('40')
-    expect(shown).toContain('Runs per day. Hover a day for its count.')
+    ).toEqual(['40'])
+    expect(text(strip())).toContain('Runs per day. The busiest day is marked.')
     const busiest = strip()?.querySelector('[data-runs="40"]')
     expect(busiest?.getAttribute('data-tip')).toMatch(/: 40 runs$/)
   })
@@ -371,29 +379,11 @@ describe('the ultrafast Details', () => {
     await openDetails()
     await click(tab('7 days'))
     const shown = text(dialog())
-    expect(shown).toContain('No ultrafast runs in the last 7 days')
+    expect(shown).toContain('No ultrafast runs in the last 7 days.')
     expect(shown).toContain('Switch to "Since you got ultrafast"')
-    expect(shown).toContain('No ultrafast runs in this period.')
-    expect(shown).toContain('2tasks finished')
+    expect(figures()).toEqual([])
     expect(strip()).toBeNull()
-  })
-
-  it('welcomes a customer who got ultrafast today', async () => {
-    const fresh = period({
-      tokensSaved: 1_200,
-      timeSavedMs: 30_000,
-      tasksFinished: 1,
-    })
-    await renderMeter(
-      savings({ since: fresh, last30Days: fresh, last7Days: fresh }, 0),
-    )
-    await openDetails()
-    const shown = text(dialog())
-    expect(shown).toContain('Your first ultrafast run will show here')
-    expect(shown).toContain(
-      'Sites show up here after your first ultrafast run.',
-    )
-    expect(shown).not.toContain('Switch to')
+    expect(shown).toContain('They are measured differently')
   })
 })
 
