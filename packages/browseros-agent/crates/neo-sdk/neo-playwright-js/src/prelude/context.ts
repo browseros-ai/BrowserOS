@@ -233,8 +233,9 @@ export class BrowserContext extends EventEmitter {
     // A page first seen once the run started (a popup, a new page, an op's result, a tab
     // another run opened, one a start read's reply listed) has its tree read now. Such a page
     // holds the script until it leaves a read unanswered (`Page._newInRun`), so the next settle
-    // step joins this read and its tree is there by the script's next await. A sync getter cannot wait for it, so in the instant it is handed out (a popup
-    // listener) `frames()` lists what was read so far, as upstream's does as a popup opens.
+    // step joins this read and its tree is there by the script's next await. A sync getter
+    // cannot wait for it, so in the instant it is handed out (a popup listener) `frames()` lists
+    // what was read so far, as upstream's does as a popup opens.
     if (fresh && this.#started && !page.isClosed())
       void page._readInitialFrames(LISTED_FRAMES_TIMEOUT_MS)
     return page

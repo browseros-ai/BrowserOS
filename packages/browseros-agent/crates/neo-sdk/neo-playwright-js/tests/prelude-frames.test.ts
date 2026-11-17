@@ -862,6 +862,92 @@ it('tests that a page first seen mid-run that does not answer costs the run one 
   ])
 })
 
+// A tab the script starts using while a background read of it is in flight: that read was sent
+// before the op's reply named the tab, so it answers against an older observation and is not
+// applied. The op reads the tab once more before it resolves.
+it('tests that a tab the script starts using during a background read of it has its current tree when that op resolves', async () => {
+  let reads1009 = 0
+  const runtime = loadPrelude({
+    seed: OBSERVER,
+    answer: async (call) => {
+      if (call.name === 'page.title')
+        return tabOf(call) === 1009
+          ? { ok: 'Other', pages: [{ tab: 1009 }] }
+          : { ok: 'Agent', frames: [{ tab: 1009, version: 3 }] }
+      if (call.name !== 'page.frames') return null
+      if (tabOf(call) !== 1009) return TREE
+      reads1009 += 1
+      if (reads1009 === 1) return TREE
+      if (reads1009 > 2) return ADDED
+      await new Promise((resolve) => setTimeout(resolve, 30))
+      return {
+        ok: ADDED,
+        pages: [{ tab: 1009 }],
+        observed: { seq: 3, events: 0, payloadCurrent: true },
+      }
+    },
+  })
+  const count = json(
+    await runtime.run(`
+      await page.title()
+      const p = ${OTHER}
+      await p.title()
+      return p.frames().length
+    `),
+  )
+  expect(count).toEqual(4)
+  expect(reads1009).toEqual(3)
+})
+
+// A page first seen mid-run spends its one wait for good: one that answers a background read
+// between busy spells does not hold the script again.
+it('tests that a page first seen mid-run spends its one wait for good, though it later answers', async () => {
+  const timeline: string[] = []
+  let titles = 0
+  let reads1011 = 0
+  const runtime = loadPrelude({
+    seed: SEED,
+    answer: async (call) => {
+      if (call.name === 'page.frames') {
+        if (tabOf(call) !== 1011) return TREE
+        reads1011 += 1
+        const read = reads1011
+        if (read === 2) return TREE
+        await new Promise((resolve) => setTimeout(resolve, 40))
+        timeline.push(`1011 read ${read} got no tree`)
+        return {}
+      }
+      titles += 1
+      timeline.push(`title ${titles}`)
+      if (titles === 1)
+        return {
+          ok: 'A',
+          pages: [{ tab: 1011, url: 'https://c.example/', title: 'C' }],
+        }
+      // Its frames change after its first read, and again after its second.
+      if (titles === 2 || titles === 3)
+        return { ok: 'A', frames: [{ tab: 1011, version: titles }] }
+      return 'A'
+    },
+  })
+  await runtime.run(`
+    await page.title()
+    await page.title()
+    await page.waitForTimeout(20)
+    await page.title()
+    await page.title()
+    await page.waitForTimeout(100)
+  `)
+  expect(timeline).toEqual([
+    'title 1',
+    '1011 read 1 got no tree',
+    'title 2',
+    'title 3',
+    'title 4',
+    '1011 read 3 got no tree',
+  ])
+})
+
 it('tests that a page first seen mid-run has its whole tree when the operation that handed it out resolves', async () => {
   const runtime = loadPrelude({
     seed: SEED,

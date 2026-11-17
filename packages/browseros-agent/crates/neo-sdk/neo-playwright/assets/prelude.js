@@ -11326,7 +11326,8 @@ ${changes}`;
     _working = false;
     _framesWatched = false;
     _newInRun = false;
-    #unanswered = false;
+    #leftUnanswered = false;
+    #superseded = false;
     _framesChanged = 0;
     #framesReadAt = 0;
     #framesAskedAt = 0;
@@ -11868,7 +11869,10 @@ ${changes}`;
     async _settle(timeoutMs) {
       if (this.#firstRead)
         await this.#firstRead;
-      if (this._used() && this._framesStale())
+      if (!this._used() || !this._framesStale())
+        return;
+      await this._readFrames(timeoutMs);
+      if (this.#superseded && this._used() && this._framesStale())
         await this._readFrames(timeoutMs);
     }
     _askIfChanged(timeoutMs) {
@@ -11880,7 +11884,8 @@ ${changes}`;
       if (this.#framesRead)
         return this.#framesRead;
       const read = this._refreshFrames("page.frames", timeoutMs).catch(() => {
-        this.#unanswered = true;
+        this.#leftUnanswered = true;
+        this.#superseded = false;
         this._framesUnknown();
         return false;
       }).finally(() => {
@@ -11899,13 +11904,17 @@ ${changes}`;
         this._applyFrames(tree.frames, observed);
         this.#framesReadAt = version;
         this.#framesIncomplete = tree.incomplete === true;
-        this.#unanswered = false;
+        this.#superseded = false;
         return !this.#framesIncomplete;
       }
-      if (tree === null || typeof tree !== "object" || observed === null || this._closed)
+      if (tree === null || typeof tree !== "object" || observed === null || this._closed) {
+        this.#superseded = false;
         return false;
-      if (this.#payloadCurrent(observed))
-        this.#unanswered = true;
+      }
+      const current = this.#payloadCurrent(observed);
+      if (current)
+        this.#leftUnanswered = true;
+      this.#superseded = !current;
       this._framesUnknown();
       return false;
     }
@@ -11913,7 +11922,7 @@ ${changes}`;
       this.#framesIncomplete = true;
     }
     _used() {
-      return this._working || this._framesWatched || this._newInRun && !this.#unanswered;
+      return this._working || this._framesWatched || this._newInRun && !this.#leftUnanswered;
     }
     _frameVersion(version) {
       this._framesChanged = Math.max(this._framesChanged, version);
