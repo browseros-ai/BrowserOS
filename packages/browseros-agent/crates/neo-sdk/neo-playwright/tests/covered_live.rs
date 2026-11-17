@@ -1770,6 +1770,9 @@ async fn tests_that_a_cover_that_leaves_lets_the_click_land_in_time() -> TestRes
 
 /// Covered-click B, row 5: a cover that moves, fades, says it is loading or holds a progress bar
 /// keeps the whole wait under the built-in timeout: the click lands when it leaves, at 7 or 8 s.
+/// The moving cover's place never repeats while it stands: a move with a period can coincide with
+/// the checks' phase (a check every 500 ms plus its own cost), see one place at every check, and
+/// stop the click early for a cover that never stood still.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_a_cover_that_moves_fades_or_loads_keeps_the_wait() -> TestResult {
