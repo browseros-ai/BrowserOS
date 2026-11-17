@@ -7,16 +7,14 @@
 //!                                           ── the tab's input lock ──────────────────────
 //!                                           send_effect() → edit { pin, … }   (detached: again)
 //!  scrollIntoViewIfNeeded       outer loop, then upstream's inner retry:
-//!                                           act → 16 ms → act → same rect
+//!                                           act → STABLE_GAP → act → same rect
 //!                                           → act → DOM.scrollIntoViewIfNeeded → act
 //! ```
-
-use std::time::Duration;
 
 use crate::action::attempt_log::AttemptLog;
 use crate::action::protocol_scroll;
 use crate::action::subject::Subject;
-use crate::backoff::Backoff;
+use crate::backoff::{Backoff, STABLE_GAP};
 use crate::locator_handler::Prechecks;
 use crate::op_scope::{OpScope, Sent};
 use crate::page::OpPage;
@@ -38,9 +36,6 @@ enum Restart {
     /// A screenshot's scroll, whose op logged its own preparation first (fonts), kept.
     Never,
 }
-
-/// Two measurements this far apart with the same rect make a scrolled element stable.
-const STABLE_GAP: Duration = Duration::from_millis(16);
 
 /// Runs one element action on one locator or element handle; the page applies it, and no device
 /// input is sent.
