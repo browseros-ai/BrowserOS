@@ -1331,6 +1331,13 @@ async fn tests_that_a_box_in_a_nested_oopif_is_where_input_reaches_it() -> TestR
         .await?;
         sessions.push(session);
     }
+    // Raw input below uses root-viewport coordinates. Scrolling only the child frames leaves
+    // the button's center below a short Linux viewport, even when its top edge is visible.
+    live.main_world(
+        &page,
+        "document.querySelector('iframe[title=b1]').scrollIntoView({ block: 'start' })",
+    )
+    .await?;
     let frame = attach_frame(&live, &server.url("[::1]", "/nest/c4.html")).await?;
     let local = in_frame(
         &live,
