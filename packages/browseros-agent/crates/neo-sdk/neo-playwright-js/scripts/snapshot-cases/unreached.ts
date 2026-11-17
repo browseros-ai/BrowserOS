@@ -42,9 +42,30 @@ export const UNREACHED: Unreached[] = [
   },
   {
     file: VENDORED_PRINTER,
-    from: 'const includeText = options.convertStringsToRegex ? textContributesInfo : () => true;',
-    to: 'const renderString = options.convertStringsToRegex ? convertToBestGuessRegex : (str: string) => str;',
+    from: 'function convertToBestGuessRegex(text: string): string {',
+    to: 'return String(new RegExp(pattern));',
     reason:
-      'The regex mode, which only a failed `expect` uses, inside the page with upstream’s own copy of this printer. Not ported (design 3.2).',
+      'The regex mode, which only a failed `expect` uses, inside the page with upstream’s own copy of this printer: its string to pattern step. Not ported (design 3.2).',
+  },
+  {
+    file: VENDORED_PRINTER,
+    from: 'function textContributesInfo(node: AriaNodeJSON, text: string): boolean {',
+    to: 'return filtered.trim().length / text.length > 0.1;',
+    reason:
+      'The regex mode’s test of whether a text says more than its name. Not ported (design 3.2).',
+  },
+  {
+    file: 'src/prelude/snapshot-delta.ts',
+    from: 'while (x > 0 && y > 0) {',
+    to: "reversed.push({ kind: ' ', before: offset + x, after: offset + y })",
+    reason:
+      'No input reaches it: `diff` matches the common head before the search, so the first lines of the middle differ, round 0’s snake is empty, and the walk back always ends at the start. A port may keep the loop; no case can tell.',
+  },
+  {
+    file: 'src/prelude/cover.ts',
+    from: '} catch {',
+    to: "return ''",
+    reason:
+      'Only a tree outside Playwright’s types makes today’s renderer throw. Rust’s typed decode refuses such a tree before anything renders (design 1.4), so the Rust block has no failure to fall back from.',
   },
 ]
