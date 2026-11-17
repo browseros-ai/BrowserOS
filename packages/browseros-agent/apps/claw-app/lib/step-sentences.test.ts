@@ -390,6 +390,48 @@ describe('when neo takes a task over', () => {
     expect(steps.some((step) => step.isError)).toBe(false)
   })
 
+  it('keeps the run on the takeover and times neo’s steps from it', () => {
+    const { steps } = describeSteps([
+      {
+        ...pursue('handed_back', 1_000, 4_000),
+        resultMeta: JSON.stringify({
+          isError: false,
+          outcome: 'handed_back',
+          pagesRead: 4,
+          pageTokens: 12_310,
+        }),
+      },
+      call('act', { args: { kind: 'click' }, url: STORE, at: 1_400 }),
+      call('act', { args: { kind: 'fill' }, url: STORE, at: 3_100 }),
+      call('read', { url: STORE, at: 6_000 }),
+    ])
+
+    expect(steps[0]?.neoRun).toEqual({
+      goal: GOAL,
+      outcome: 'handed_back',
+      durationMs: 4_000,
+      stepCount: 2,
+      pagesRead: 4,
+      pageTokens: 12_310,
+    })
+    expect(steps.map((step) => step.neoOffsetMs)).toEqual([
+      undefined,
+      400,
+      2_100,
+      undefined,
+    ])
+  })
+
+  it('leaves a run that is still going without an ending', () => {
+    const { steps } = describeSteps([
+      { ...pursue('', 1_000, 0), durationMs: undefined, resultMeta: undefined },
+      call('act', { args: { kind: 'click' }, url: STORE, at: 9_000 }),
+    ])
+
+    expect(steps[0]?.neoRun).toEqual({ goal: GOAL, stepCount: 1 })
+    expect(steps[1]?.neoOffsetMs).toBe(8_000)
+  })
+
   it('marks nothing when neo finishes the task', () => {
     const { steps } = describeSteps([
       pursue('completed', 1_000, 4_000),

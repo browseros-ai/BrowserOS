@@ -1,7 +1,6 @@
 import type {
   AuditAgent,
   SessionPursueRun,
-  SessionPursueStep,
   SessionUltrafastRun,
 } from '@browseros/claw-api'
 import { agentIdentity } from '@/components/harness/harness.types'
@@ -198,7 +197,6 @@ export function pursuePill(pursue: SessionPursueRun): string {
 export function ultrafastNote(
   pursue: SessionPursueRun | undefined,
   ultrafast: SessionUltrafastRun | undefined,
-  { withTokens = false }: { withTokens?: boolean } = {},
 ): string | null {
   const parts: string[] = []
   if (pursue) {
@@ -216,39 +214,5 @@ export function ultrafastNote(
   if (ultrafast && ultrafast.pagesRead > 0) {
     parts.push(`read ${pagesLabel(ultrafast.pagesRead)}`)
   }
-  if (ultrafast && withTokens && ultrafast.tokensSaved > 0) {
-    parts.push(`${chipTokens(ultrafast.tokensSaved)} tokens saved`)
-  }
   return parts.length > 0 ? parts.join(', ') : null
-}
-
-/** One of neo's steps in plain words, from only what was recorded. */
-export function pursueStepLabel(step: SessionPursueStep): string {
-  const text = step.text
-  switch (step.action) {
-    case 'click':
-      return 'Clicked'
-    case 'type':
-      return text ? `Typed "${text}"` : 'Typed into a field'
-    case 'press':
-      return text ? `Pressed ${text}` : 'Pressed a key'
-    case 'check':
-      return 'Ticked a box'
-    case 'uncheck':
-      return 'Unticked a box'
-    case 'select':
-      return text ? `Chose "${text}"` : 'Chose an option'
-    case 'scroll':
-      return 'Scrolled the page'
-    case 'drag':
-      return 'Dragged an item'
-    case 'dialog':
-      return 'Answered a pop-up'
-    case 'open':
-      return text ? `Opened ${text}` : 'Opened a page'
-    case 'back':
-      return 'Went back'
-    case 'reload':
-      return 'Reloaded the page'
-  }
 }

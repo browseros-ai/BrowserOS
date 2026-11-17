@@ -21,6 +21,8 @@ interface TaskPlayerProps {
   onFullScreen: () => void
   /** The full-screen player is open; this one holds the step's picture. */
   fullScreen: boolean
+  /** Where neo's runs sit on the scrubber, in activity seconds. */
+  neoMarks?: readonly { startAt: number; endAt: number }[]
 }
 
 /**
@@ -36,6 +38,7 @@ export function TaskPlayer({
   snapshotId,
   onFullScreen,
   fullScreen,
+  neoMarks,
 }: TaskPlayerProps) {
   const baseUrl = useTaskScreenshotBaseUrl()
   const hasRecording = replay.plan.durationSeconds > 0
@@ -58,6 +61,7 @@ export function TaskPlayer({
           parked={fullScreen}
           posterSrc={pictureSrc}
           onToggleFullScreen={onFullScreen}
+          neoMarks={neoMarks}
         />
       ) : replay.recordingState === 'loading' ? (
         <ReplayPanel

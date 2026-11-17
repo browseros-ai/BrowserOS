@@ -27,6 +27,8 @@ interface ReplayPanelProps {
    * the shared playback time.
    */
   parked?: boolean
+  /** Spans of the timeline where neo drove, marked under the scrubber. */
+  neoMarks?: readonly { startAt: number; endAt: number }[]
 }
 
 /** The replay player: tab strip, recording warnings, viewport and transport. */
@@ -37,6 +39,7 @@ export function ReplayPanel({
   onToggleFullScreen,
   fullScreen = false,
   parked = false,
+  neoMarks,
 }: ReplayPanelProps) {
   const {
     replay,
@@ -169,6 +172,7 @@ export function ReplayPanel({
             playback={playback}
             totalSeconds={plan.durationSeconds}
             actions={plan.actions}
+            neoMarks={neoMarks}
             onSeek={seek}
             onToggleFullScreen={onToggleFullScreen}
             fullScreen={fullScreen}

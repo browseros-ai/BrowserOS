@@ -12,13 +12,14 @@ import {
   Zap,
 } from 'lucide-react'
 import { useReducedMotion } from 'motion/react'
-import { Fragment, useEffect, useId, useRef } from 'react'
+import { useEffect, useId, useRef } from 'react'
 import { Button } from '@/components/motion/button/base'
 import { Card } from '@/components/motion/card'
 import type { DescribedStep } from '@/lib/step-sentences'
 import { cn } from '@/lib/utils'
 import type { ReplayVerb } from '@/modules/api/replay.hooks'
-import { offsetLabel } from './task-detail.helpers'
+import { NeoRun } from './NeoRun'
+import { offsetLabel, railItems } from './task-detail.helpers'
 
 interface TaskStepsProps {
   steps: DescribedStep[]
@@ -31,6 +32,12 @@ interface TaskStepsProps {
   onSelect: (step: DescribedStep) => void
   /** "rail" drops the card chrome to fill a side panel, as in full screen. */
   layout?: 'card' | 'rail'
+  /** The agent's name, for where neo hands the page back. */
+  agent?: string
+  /** The neo run whose ending is the chosen row, by its takeover's index. */
+  chosenRunEnd?: number | null
+  /** Chooses the end of the neo run that starts at `takeover`. */
+  onSelectRunEnd?: (takeover: number) => void
 }
 
 const VERB_ICON: Record<ReplayVerb, LucideIcon> = {
@@ -57,6 +64,9 @@ export function TaskSteps({
   onShowHiddenChange,
   onSelect,
   layout = 'card',
+  agent = 'your agent',
+  chosenRunEnd = null,
+  onSelectRunEnd,
 }: TaskStepsProps) {
   const reduce = useReducedMotion() ?? false
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -77,11 +87,7 @@ export function TaskSteps({
     })
   }, [activeIndex, reduce])
 
-  // A hand back with nothing recorded after it still says who carries on.
-  const lastHandBack = steps.findLastIndex((step) => step.handedBack)
-  const endsWithHandBack =
-    lastHandBack >= 0 &&
-    !steps.slice(lastHandBack + 1).some((step) => step.afterHandBack)
+  const items = railItems(steps)
 
   const progress =
     activeIndex >= 0
@@ -106,20 +112,39 @@ export function TaskSteps({
           </p>
         ) : (
           <ol className="flex flex-col">
-            {steps.map((step, index) => (
-              <Fragment key={step.dispatchIds[0] ?? index}>
-                {step.afterHandBack ? <HandBackNote /> : null}
+            {items.map((item, position) => {
+              const last = position === items.length - 1
+              if (item.kind === 'run') {
+                const takeover = steps[item.takeover]
+                return (
+                  <NeoRun
+                    key={takeover?.dispatchIds[0] ?? item.takeover}
+                    run={item}
+                    steps={steps}
+                    activeIndex={activeIndex}
+                    endChosen={chosenRunEnd === item.takeover}
+                    agent={agent}
+                    startedAt={startedAt}
+                    last={last}
+                    onSelect={onSelect}
+                    onSelectEnd={() => onSelectRunEnd?.(item.takeover)}
+                  />
+                )
+              }
+              const step = steps[item.index]
+              if (!step) return null
+              return (
                 <StepRow
+                  key={step.dispatchIds[0] ?? item.index}
                   step={step}
-                  index={index}
+                  index={item.index}
                   activeIndex={activeIndex}
-                  last={index === steps.length - 1}
+                  last={last}
                   time={offsetLabel(step.firstAt, startedAt)}
                   onSelect={onSelect}
                 />
-              </Fragment>
-            ))}
-            {endsWithHandBack ? <HandBackNote /> : null}
+              )
+            })}
           </ol>
         )}
       </div>
@@ -164,16 +189,6 @@ export function TaskSteps({
 }
 
 // ---------------------------------------------------------------------------
-
-/** Where neo hands a task back and the agent carries on: a continuation, not a failure. */
-function HandBackNote() {
-  return (
-    <li className="flex items-center gap-2 py-1.5 pl-[50px] text-[12.5px] text-ink-3">
-      <span>Back to your agent</span>
-      <span aria-hidden className="h-px flex-1 bg-border" />
-    </li>
-  )
-}
 
 function StepRow({
   step,
