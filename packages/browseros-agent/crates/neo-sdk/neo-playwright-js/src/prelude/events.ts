@@ -277,7 +277,7 @@ export class EventHub {
         this.sendListen(site, page, event, on, since, lease),
       )
       this.chooserChanges.set(page, changed)
-      trackChooserSetup(changed)
+      trackChooserSetup(page, changed)
     } else void this.sendListen(site, page, event, on, since)
     this.settleNavigationPublications()
     if (on && !this.pumping) {
@@ -589,7 +589,7 @@ export class EventHub {
         { page, event: 'fileChooser', enabled: true, lease: id },
       )
     })
-    trackChooserSetup(ready)
+    trackChooserSetup(page, ready)
     let released: Promise<void> | null = null
     return {
       ready,
@@ -607,7 +607,7 @@ export class EventHub {
               },
             )
           })
-          trackChooserSetup(released)
+          trackChooserSetup(page, released)
         }
         return released
       },
