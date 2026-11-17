@@ -85,6 +85,24 @@ fn native_thread_id() -> Option<u32> {
         .and_then(|path| path.file_name()?.to_str()?.parse().ok())
 }
 
+/// Opt-in phase receipts tie this test runtime to the browser and external CPU observations.
+#[expect(
+    clippy::print_stderr,
+    reason = "opt-in live fixture diagnostic receipts"
+)]
+fn trace_console_phase(started: Instant, phase: &str) {
+    if env::var_os("NEO_LIVE_DIAGNOSTICS").is_some() {
+        eprintln!(
+            "LIVE_CONSOLE {}",
+            json!({ "phase": phase, "wallMs": now_ms().ok(),
+                "elapsedMs": started.elapsed().as_millis(),
+                "pid": process::id(), "tid": native_thread_id(),
+                "thread": format!("{:?}", thread::current().id()),
+                "runtime": format!("{:?}", Handle::current().runtime_flavor()) })
+        );
+    }
+}
+
 /// `page.waitForEvent(event)` stamped at `since`, with a 5 s timeout.
 async fn wait_for(
     run: &LiveRun,
@@ -1163,18 +1181,7 @@ async fn tests_that_a_click_that_logs_completes_under_a_console_listener_and_is_
         return Ok(());
     }
     let started = Instant::now();
-    let trace = |phase: &str| {
-        if env::var_os("NEO_LIVE_DIAGNOSTICS").is_some() {
-            eprintln!(
-                "LIVE_CONSOLE {}",
-                json!({ "phase": phase, "wallMs": now_ms().ok(),
-                    "elapsedMs": started.elapsed().as_millis(),
-                    "pid": process::id(), "tid": native_thread_id(),
-                    "thread": format!("{:?}", thread::current().id()),
-                    "runtime": format!("{:?}", Handle::current().runtime_flavor()) })
-            );
-        }
-    };
+    let trace = |phase: &str| trace_console_phase(started, phase);
     trace("connect");
     let run = Arc::new(LiveRun::connect().await?);
     let server = PageServer::start().await?;
