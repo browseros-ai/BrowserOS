@@ -263,6 +263,21 @@ describe('the ultrafast meter', () => {
     expect(text()).toContain('149k to go to 250k')
   })
 
+  it('starts the needle from the left end of a new stretch when a milestone is crossed', async () => {
+    reducedMotion = false
+    await render(query({ data: at(80_000) }))
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 40)))
+    expect(storage.get('ultrafastMeterReading:v1')).toBe('80000')
+
+    // The next poll crosses 100k: the ruler becomes 100k to 250k and the last reading sits before it.
+    await render(query({ data: at(101_500) }))
+    expect(needle()).toContain('translateX(0%)')
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 40)))
+    expect(needle()).toContain(
+      `translateX(${scalePosition(101_500, scaleSpan(101_500)) * 100}%)`,
+    )
+  })
+
   it('lays the panel out with container queries from a wrapper', async () => {
     await render(query({}))
     const panel = body.querySelector('section[aria-label="ultrafast"]')
