@@ -8,9 +8,18 @@
  * dispatch rows without a React tree.
  */
 
-import type { SessionScreenshot } from '@browseros/claw-api'
+import type {
+  SessionPursueRun,
+  SessionScreenshot,
+  SessionUltrafastRun,
+} from '@browseros/claw-api'
 import type { DescribedStep } from '@/lib/step-sentences'
 import type { ToolDispatchRow } from '@/modules/api/audit.hooks'
+import {
+  chipTokens,
+  pagesLabel,
+  ultrafastTime,
+} from '@/screens/audit/audit.helpers'
 import type { ReplayAction } from '@/screens/replay/session-replay'
 
 /** When each dispatch completed, by dispatch id. */
@@ -125,4 +134,125 @@ export function pagesVisited(
 export function offsetLabel(at: number, startedAt: number): string {
   const seconds = Math.max(0, Math.floor((at - startedAt) / 1000))
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
+}
+
+/** A row of "What happened": one step, or a whole neo run (the takeover and the steps neo took). */
+export type RailItem =
+  | { kind: 'step'; index: number }
+  | { kind: 'run'; takeover: number; steps: number[] }
+
+/** The list's rows, with each neo run gathered behind the step where neo took over. */
+export function railItems(steps: readonly DescribedStep[]): RailItem[] {
+  const items: RailItem[] = []
+  for (const [index, step] of steps.entries()) {
+    const last = items.at(-1)
+    if (step.neoOffsetMs !== undefined && last?.kind === 'run') {
+      last.steps.push(index)
+    } else if (step.neoRun) {
+      items.push({ kind: 'run', takeover: index, steps: [] })
+    } else {
+      items.push({ kind: 'step', index })
+    }
+  }
+  return items
+}
+
+/** The last step of a run, or the takeover when neo took none. */
+export function runLastIndex(run: Extract<RailItem, { kind: 'run' }>): number {
+  return run.steps.at(-1) ?? run.takeover
+}
+
+/** "+0.4s" under ten seconds, then "+12s": how long after the takeover a step came. */
+export function offsetFromTakeover(offsetMs: number): string {
+  const seconds = Math.max(0, offsetMs) / 1000
+  return seconds < 10 ? `+${seconds.toFixed(1)}s` : `+${Math.round(seconds)}s`
+}
+
+/** Where each neo run sits on the scrubber, in activity seconds. */
+export function neoRunMarks(
+  steps: readonly DescribedStep[],
+  actions: readonly ReplayAction[],
+): { startAt: number; endAt: number }[] {
+  const marks: { startAt: number; endAt: number }[] = []
+  for (const item of railItems(steps)) {
+    if (item.kind !== 'run') continue
+    const takeover = steps[item.takeover]
+    const last = steps[runLastIndex(item)]
+    const start = takeover && actionForStep(takeover, actions)
+    const end = last && actionForStep(last, actions)
+    if (!start) continue
+    marks.push({
+      startAt: start.startAt,
+      endAt: Math.max(start.startAt, end?.startAt ?? start.startAt),
+    })
+  }
+  return marks
+}
+
+/** A run of words where some are set as figures. */
+export type Phrase = (string | { figure: string })[]
+
+export interface UltrafastLineText {
+  sentence: Phrase
+  figures: { value: string; label: string }[]
+}
+
+/**
+ * The task page's ultrafast line: one sentence of what neo did, then its figures.
+ * Null when ultrafast did nothing in the task.
+ */
+export function ultrafastLineText(
+  pursue: SessionPursueRun | undefined,
+  ultrafast: SessionUltrafastRun | undefined,
+  agent: string,
+): UltrafastLineText | null {
+  let sentence: Phrase
+  if (pursue) {
+    const time = { figure: ultrafastTime(pursue.durationMs) }
+    const steps = pursue.steps.length
+    if (pursue.outcome === 'completed') {
+      sentence = ['neo finished the task on its own in ', time, '.']
+    } else if (steps === 0) {
+      sentence = [`neo handed the page back to ${agent} after `, time, '.']
+    } else {
+      sentence = [
+        'neo did ',
+        { figure: steps === 1 ? '1 step' : `${steps} steps` },
+        ' in ',
+        time,
+        `, then handed the page back to ${agent}.`,
+      ]
+    }
+  } else if (ultrafast) {
+    const time = { figure: ultrafastTime(ultrafast.durationMs) }
+    sentence =
+      ultrafast.pagesRead > 0
+        ? [
+            'neo read the pages itself in ',
+            time,
+            `, so ${agent} didn’t have to.`,
+          ]
+        : ['neo ran it in ', time, '.']
+  } else {
+    return null
+  }
+  const figures: UltrafastLineText['figures'] = []
+  if (ultrafast && ultrafast.tokensSaved > 0) {
+    figures.push({
+      value: chipTokens(ultrafast.tokensSaved),
+      label: 'tokens saved',
+    })
+  }
+  if (ultrafast && ultrafast.pagesRead > 0) {
+    const [value, ...rest] = pagesLabel(ultrafast.pagesRead).split(' ')
+    figures.push({ value: value ?? '', label: `${rest.join(' ')} read` })
+  }
+  if (pursue?.outcome === 'completed' && pursue.steps.length > 0) {
+    const steps = pursue.steps.length
+    figures.push({
+      value: String(steps),
+      label: steps === 1 ? 'step by neo' : 'steps by neo',
+    })
+  }
+  return { sentence, figures }
 }
