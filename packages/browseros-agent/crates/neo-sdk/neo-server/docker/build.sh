@@ -7,7 +7,7 @@
 #            [--capsolver-key-file FILE] [--twocaptcha-key-file FILE]
 #
 #   --platform   default: the Docker engine's own architecture. The server is cross-compiled
-#                with zig either way; only the image's apt/dpkg steps run on the target arch.
+#                with zig either way; slimviewer and OpenH264 compile on the target arch.
 #   --tag        default: neo-sdk:<browser version>-<9-char commit>[-dirty]-<arch>. All but the
 #                arch is also the image's org.opencontainers.image.version label. -dirty means
 #                uncommitted changes in packages/browseros-agent, which holds every input.

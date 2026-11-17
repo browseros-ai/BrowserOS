@@ -8,8 +8,8 @@
 #             is removed with everything else.
 #   --logs    save each container's log there, for CI artifacts.
 #   --prefix  name what it creates NAME-<run>-*. Default: neo-sdk-accept.
-#   --case    run only identity, boot and one takeover-scale, takeover-restart, takeover-expiry
-#             or takeover-refusal check in a fresh container. Default: the full acceptance suite.
+#   --case    run identity and the slimviewer checks, or identity, boot and one
+#             takeover-{scale,restart,expiry,refusal} check. Default: the full acceptance suite.
 #   --scale   lifecycle check scale, 1 or 2. Default: 2. takeover-scale measures both scales.
 #
 # Prints one `PASS|FAIL|SKIP <check> <detail>` line per check and exits 1 if any check failed.
@@ -24,6 +24,10 @@
 #                    or websockify; python3 present; the CAPTCHA key files are exactly the ones
 #                    provenance.json's captchaKeys names (none in a keyless image), non-empty, 0400
 #                    neo, with the baked label only when it names any
+#   slimviewer-assets  installed viewer sha256, encoder, page hashes and OpenH264 BSD notice
+#   slimviewer       entrypoint child under a remapped uid, IPv4 loopback only, live spectator
+#                    H.264 keyframe before and after the supervisor replaces the killed process
+#   slimviewer-disabled  healthy under NEO_SLIMVIEWER=0 with no viewer process or listener
 #   boot             healthy within 90 s with a host group and token, under only the capabilities
 #                    README.md documents and no-new-privileges; listeners as README "Ports"
 #   mcp              smoke_sdk.py; a `run` with the host's _meta fills a page; a repeat replays
@@ -112,7 +116,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 [ -n "$image" ] || usage
-case "$selected_case" in ""|takeover-scale|takeover-restart|takeover-expiry|takeover-refusal) ;; *) usage ;; esac
+case "$selected_case" in ""|slimviewer|takeover-scale|takeover-restart|takeover-expiry|takeover-refusal) ;; *) usage ;; esac
 case "$selected_scale" in 1|2) ;; *) usage ;; esac
 docker image inspect "$image" >/dev/null 2>&1 || { echo "accept.sh: no image '$image'" >&2; exit 2; }
 
@@ -187,6 +191,28 @@ wait_healthy() { # name seconds
     sleep 1
   done
   return 1
+}
+
+# A remapped uid or second browser must never write the host's or the main check's /data.
+scratch_neo() { # name [docker run args...]
+  local name=$1; shift
+  docker run --memory 3g --memory-swap 3g -d --name "$name" --network "$network" --shm-size=1g \
+    --tmpfs /data:rw,size=1g --label neo-sdk-accept="$run_id" "${host_caps[@]}" \
+    -v "$secrets:/run/neo-accept:ro" -e CLAW_HOST_TOKEN_FILE=/run/neo-accept/host-token \
+    -e NEO_HOST_GID=$host_gid "$@" "$image" >/dev/null
+}
+
+slimviewer_case() { # check mode [docker run args...]
+  local check=$1 mode=$2 name="$prefix-$1" detail
+  shift 2
+  if ! scratch_neo "$name" "$@" || ! wait_healthy "$name" 90 >/dev/null; then
+    result FAIL "$check" "fresh container did not start healthy"
+  elif detail=$(docker exec --user neo -i "$name" python3 - "$mode" < "$here/accept_slimviewer.py" 2>&1); then
+    result PASS "$check" "$detail"
+  else
+    result FAIL "$check" "$detail"
+  fi
+  remove "$name"
 }
 
 wait_ready() { # name seconds: /system/ready through the browser's proxy, from inside
@@ -403,7 +429,7 @@ problems=()
 [ -n "$(fact sha)" ] && [ "$(fact sha)" = "$(fact provenance_sha)" ] || problems+=("server sha256 differs from provenance.json")
 [ -n "$(fact sources)" ] && [ "$(fact built_from)" = "$(fact sources)" ] || problems+=("server compiled from sources '$(fact built_from)', not the build's '$(fact sources)'")
 [ "$(fact browser)" = "$(fact browser | cut -d/ -f1)/$(fact provenance_deb)" ] || problems+=("deb $(fact browser) not in provenance")
-[ "$(fact novnc)/$(fact websockify)" = absent/absent ] || problems+=("viewer installed")
+[ "$(fact novnc)/$(fact websockify)" = absent/absent ] || problems+=("noVNC or websockify installed")
 [ "$(fact python3)" = present ] || problems+=("no python3 for neo-quit")
 case "$(fact notices)" in *LICENSE*NOTICE*THIRD_PARTY_NOTICES.md*) ;; *) problems+=("Playwright notices missing") ;; esac
 # The image says which CAPTCHA keys it carries (provenance.json captchaKeys, names only); the key
@@ -431,11 +457,26 @@ fi
 detail="$image_arch, browser $(fact browser), server $(fact marker) $(fact sha | cut -c1-12), rev $(fact revision | cut -c1-9), keys ${captcha_keys:-none}"
 if [ ${#problems[@]} -eq 0 ]; then result PASS identity "$detail"; else result FAIL identity "${problems[*]}"; fi
 
+if [ -z "$selected_case" ] || [ "$selected_case" = slimviewer ]; then
+  # As neo, not root: the installed files must be readable by the users a host runs.
+  if detail=$(docker run --rm -i --network none --name "$prefix-assets" --user neo --entrypoint python3 \
+      "$image" - assets < "$here/accept_slimviewer.py" 2>&1); then
+    encoder=$(docker image inspect -f '{{index .Config.Labels "io.browseros.slimviewer.encoders"}}' "$image")
+    if [ "$encoder" = openh264 ]; then result PASS slimviewer-assets "$detail"
+    else result FAIL slimviewer-assets "encoder label '$encoder', expected openh264"; fi
+  else
+    result FAIL slimviewer-assets "$detail"
+  fi
+fi
+
 if [ "$image_arch" != "$engine_arch" ]; then
   if [ -n "$selected_case" ]; then
     result SKIP "$selected_case" "$image_arch image on a $engine_arch engine: emulated, not evidence"
+    if [ "$selected_case" = slimviewer ]; then
+      result SKIP slimviewer-disabled "$image_arch image on a $engine_arch engine: emulated, not evidence"
+    fi
   else
-    for check in boot mcp host-api downloads pdf-downloads blobs frames tab-keep takeover-scale settings settings-file settings-file-ids settings-file-link files trace-values mcp-remote restart-browser stop persist kill-all captcha-keys; do
+    for check in slimviewer slimviewer-disabled boot mcp host-api downloads pdf-downloads blobs frames tab-keep takeover-scale settings settings-file settings-file-ids settings-file-link files trace-values mcp-remote restart-browser stop persist kill-all captcha-keys; do
       result SKIP "$check" "$image_arch image on a $engine_arch engine: emulated, not evidence"
     done
   fi
@@ -445,6 +486,15 @@ fi
 
 docker network create --internal --label neo-sdk-accept="$run_id" "$network" >/dev/null || { echo "accept.sh: no network" >&2; exit 1; }
 [ -n "$data_dir" ] || docker volume create --label neo-sdk-accept="$run_id" "$volume" >/dev/null
+
+if [ -z "$selected_case" ] || [ "$selected_case" = slimviewer ]; then
+  slimviewer_case slimviewer running -e PUID=2345 -e PGID=2345
+  slimviewer_case slimviewer-disabled disabled -e NEO_SLIMVIEWER=0
+  if [ "$selected_case" = slimviewer ]; then
+    printf '\n'; printf '%s\n' "${results[@]}"
+    exit "$failed"
+  fi
+fi
 
 if [ -n "$selected_case" ]; then
   selected="$prefix-$selected_case"
@@ -481,7 +531,7 @@ start_neo "$main" -e CLAW_LOG=trace "$image"
 if seconds=$(wait_healthy "$main" 90) && install_client "$main"; then
   listening=$(jget "$(client "$main" python3 accept_client.py listeners)" '" ".join(a for a in d["listening"] if not a.startswith("127.0.0.11:"))')
   socket=$(docker exec "$main" stat -c '%a %U %g' /run/neo /run/neo/host.sock 2>&1 | tr '\n' ' ')
-  want="0.0.0.0:9010 0.0.0.0:9011 127.0.0.1:5900 127.0.0.1:9110 127.0.0.1:9210"
+  want="0.0.0.0:9010 0.0.0.0:9011 127.0.0.1:5900 127.0.0.1:5910 127.0.0.1:5911 127.0.0.1:9110 127.0.0.1:9210"
   problems=()
   for address in $want; do case " $listening " in *" $address "*) ;; *) problems+=("not listening on $address") ;; esac; done
   for address in $listening; do
@@ -872,15 +922,6 @@ for pid in pids:
     # The image's own keys under a host's other ids (the entrypoint re-owns Neo's home, the
     # keys' folder, to them): the server still reads every key, and no file door a script has
     # reads or overwrites one, even with / listed.
-    # Started as the host-key container above is: an expendable tmpfs /data (start_neo's shared
-    # volume would clash), the host's token and group, the image last.
-    scratch_neo() { # name [docker run args...]
-      local name=$1; shift
-      docker run --memory 3g --memory-swap 3g -d --name "$name" --network "$network" --shm-size=1g \
-        --tmpfs /data:rw,size=1g --label neo-sdk-accept="$run_id" "${host_caps[@]}" \
-        -v "$secrets:/run/neo-accept:ro" -e CLAW_HOST_TOKEN_FILE=/run/neo-accept/host-token \
-        -e NEO_HOST_GID=$host_gid "$@" "$image" >/dev/null
-    }
     own="$prefix-own-keys" own_keys="" own_captcha=""
     scratch_neo "$own" -e PUID=2345 -e PGID=2345
     if wait_healthy "$own" 90 >/dev/null && install_client "$own"; then
