@@ -113,8 +113,10 @@ const shapes = {
   },
   partialround() {
     // A button 43 px wide whose first clear sample lies at 10.75 px, a nested link starting at
-    // 10.9 px in its top part, and a widget over its middle: a position rounded after the test
-    // would press the link. The point that is tested is the point that is pressed.
+    // 10.9 px in its top part, and a widget over its middle. It pins the outcome (the press lands
+    // on the button's own part beside the link), not the order: on a whole-pixel layout it passes
+    // with test-then-round too. The rounding fix rests on its reasoning; a fractional-offset
+    // fixture is a follow-up.
     const target = button()
     target.style.cssText = 'position: relative; display: inline-block; width: 43px; height: 48px; margin: 0; padding: 0; border: 0'
     target.innerHTML = '<a href="/elsewhere/more" id="info" style="position: absolute; left: 10.9px; top: 0; width: 32.1px; height: 20px">i</a>'

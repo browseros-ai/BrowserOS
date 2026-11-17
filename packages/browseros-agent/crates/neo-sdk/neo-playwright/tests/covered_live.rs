@@ -361,13 +361,15 @@ where
 }
 
 /// Covered-click C: a press whose cover is the target's own lands by itself, with one trusted
-/// press, and the call log says which in one fixed form: a clear point of a button half under
-/// a widget (and of one whose left part is a component drawing a link, which is not its own
-/// surface; of one whose first sample lies a quarter-pixel before a nested link; and of a card
-/// whose quick-add button shows on hover over its first clear point, which the guard at delivery
-/// swallows once before the press lands on the card's own part), a checkbox under its own label, a terms checkbox whose label holds two links (the
-/// press goes where the label is plain, and the page stays), and a radio under its own blank
-/// wrapper once that wrapper stood its four checks.
+/// press, and the call log says which in one fixed form. The shapes: a clear point of a button
+/// half under a widget; of one whose left part is a component drawing a link, which is not its
+/// own surface; of one whose first sample lies a quarter-pixel before a nested link, which pins
+/// where the press lands but not the order of test and rounding, since on a whole-pixel layout
+/// the old order passes too; of a card whose quick-add button shows on hover over its first clear
+/// point, which the guard at delivery swallows once before the press lands on the card's own
+/// part; a checkbox under its own label; a terms checkbox whose label holds two links (the press
+/// goes where the label is plain, and the page stays); and a radio under its own blank wrapper
+/// once that wrapper stood its four checks.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_a_press_on_the_targets_own_lands_by_itself() -> TestResult {
