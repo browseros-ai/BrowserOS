@@ -321,3 +321,77 @@ return {failed,ms:Date.now()-start,pressed:await page.evaluate(()=>window.presse
     client.cancel().await?;
     Ok(())
 }
+
+/// Chromium's own replies carry page text as well: the DOM capture behind the clickable check,
+/// and `DOM.describeNode` behind an element handle. A lone half in the page must reach both
+/// repaired, or a target clickable only by a script listener loses its ref and a handle on it
+/// never answers. The whole emoji is the control: the same page with valid text.
+const SCRIPT_ONLY_PAGE: &str = r"
+page.setDefaultTimeout(3000);
+const html=`<meta charset=utf-8><div id=card style=display:inline-block;padding:8px>Card</div><script>
+const card=document.getElementById('card');
+card.textContent='Before '+String.fromCodePoint(UNIT)+' After';
+document.body.dataset.clicks='0';
+card.addEventListener('click',()=>document.body.dataset.clicks=String(Number(document.body.dataset.clicks)+1));
+</script>`;
+await page.goto('data:text/html,'+encodeURIComponent(html));
+const start=Date.now();
+const snapshot=await page.ariaSnapshot();
+const ms=Date.now()-start;
+const line=snapshot.split('\n').find(l=>l.includes('Before'))??null;
+const ref=/\[ref=([^\]]+)\]/.exec(line??'')?.[1]??null;
+let handled=null,handleError=null;
+try{const handle=await page.$('#card');handled=handle?await handle.evaluate(e=>e.id):null}catch(e){handleError=String(e.message)}
+if(ref)await page.getByRef(ref).click();
+return {snapshot,ms,line,ref,handled,handleError,clicks:await page.evaluate(()=>Number(document.body.dataset.clicks))};
+";
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_script_only_element_with_a_lone_half_keeps_its_ref_and_its_handle_answers() -> TestResult
+{
+    let Some(browser) = browseros_rig::browser_or_skip() else {
+        return Ok(());
+    };
+    let rig = Rig::start(&browser, CaptchaKey::Absent)?;
+    let result = time::timeout(Duration::from_secs(120), async {
+        rig.until_ready().await?;
+        let client = rig.client().await?;
+        for (unit, text) in [
+            (0xd83d_u32, "Before \u{fffd} After"),
+            (0xde00, "Before \u{fffd} After"),
+            (0x1f600, "Before 😀 After"),
+        ] {
+            let task = format!("script-only-{unit:x}");
+            let code = SCRIPT_ONLY_PAGE.replace("UNIT", &unit.to_string());
+            let (value, _) = returned(&client, &task, &code).await?;
+            assert!(
+                value["line"]
+                    .as_str()
+                    .is_some_and(|line| line.contains(text)),
+                "{task}: {value}"
+            );
+            assert!(
+                value["ref"].is_string(),
+                "{task}: the clickable check marks the script-only target: {value}"
+            );
+            assert_eq!(value["clicks"], 1, "{task}: its ref clicks it: {value}");
+            assert_eq!(
+                value["handled"], "card",
+                "{task}: a handle on it answers: {value}"
+            );
+            writeln!(
+                io::stderr(),
+                "SCRIPT_ONLY unit={unit:x} ref={} snapshot_ms={}",
+                value["ref"],
+                value["ms"]
+            )?;
+        }
+        client.cancel().await?;
+        Ok::<(), Box<dyn Error>>(())
+    })
+    .await;
+    match result {
+        Ok(Ok(())) => Ok(()),
+        other => Err(format!("{other:?}\n{}", rig.logs()).into()),
+    }
+}
