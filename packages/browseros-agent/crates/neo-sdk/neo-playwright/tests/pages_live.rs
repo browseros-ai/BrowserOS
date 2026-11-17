@@ -38,6 +38,7 @@ use neo_playwright::{Answer, ErrorCode, PlaywrightError, TimedOut};
 use neo_trace::ErrorOwner;
 use page_server::{PageServer, SLOW};
 use serde_json::{Value, json};
+use tokio::sync::Semaphore;
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::broadcast::error::TryRecvError;
 use tokio::time;
@@ -1047,6 +1048,7 @@ const BESIDE_BUSY_TABS_SCRIPT: &str = "const text = await page.ariaSnapshot()\n\
     reason = "each case prints its tries, the measure its bound is checked against"
 )]
 async fn tests_that_a_run_beside_busy_tabs_never_waits_for_their_frames() -> TestResult {
+    let _alone = BUSY_TABS.acquire().await?;
     let run = Arc::new(LiveRun::connect().await?);
     let server = PageServer::start().await?;
     let healthy = run.new_page().await?;
@@ -1106,8 +1108,12 @@ async fn tests_that_a_run_beside_busy_tabs_never_waits_for_their_frames() -> Tes
     result
 }
 
-/// The longest the five statements after another client opened a busy tab may take, from the
-/// moment the run learned of the tab, in the best of [`BESIDE_BUSY_TABS_TRIES`] tries. A tab the
+/// The two rows with busy tabs, one at a time. A run sees every tab of the browser, so the other
+/// row's busy tabs would cost this row's run waits that are not the ones it measures.
+static BUSY_TABS: Semaphore = Semaphore::const_new(1);
+
+/// The longest the run may take from the moment another client opened a busy tab to the end of
+/// its next five statements, in the best of [`BESIDE_BUSY_TABS_TRIES`] tries. A tab the
 /// run first sees mid-run holds the script for its reads until one goes unanswered, so such a tab
 /// may cost the run one wait in all: one native read's whole budget (one second,
 /// `frame_tree.rs` `SNAPSHOT_BUDGET`). The bound is that one wait plus the room
@@ -1116,14 +1122,15 @@ async fn tests_that_a_run_beside_busy_tabs_never_waits_for_their_frames() -> Tes
 const MID_RUN_BUSY_TAB_BOUND: Duration = Duration::from_millis(1_900);
 
 /// The script of [`tests_that_a_busy_tab_another_client_opens_mid_run_costs_one_wait_at_most`]:
-/// it learns of the other client's tab through the context's `page` event, then runs five
-/// statements on its own tab, and returns how long that took from the moment the tab reached it.
-const MID_RUN_BUSY_TAB_SCRIPT: &str = "let seenAt = 0\n\
-    context.on('page', () => { if (seenAt === 0) seenAt = Date.now() })\n\
-    await context.waitForEvent('page', { timeout: 15000 })\n\
-    const afterWait = Date.now()\n\
+/// it waits for the other client's tab, then runs five statements on its own tab. It waits for
+/// that tab's `page` event alone: a listener for every tab would make each tab the parallel suite
+/// opens meanwhile one the run first saw mid-run, each with a wait of its own.
+const MID_RUN_BUSY_TAB_SCRIPT: &str = "await context.waitForEvent('page', {\n\
+        predicate: (other) => other.url().includes('busy.html'),\n\
+        timeout: 15000,\n\
+    })\n\
     for (let i = 0; i < 5; i++) await page.title()\n\
-    return Date.now() - (seenAt === 0 ? afterWait : Math.min(seenAt, afterWait))";
+    return 1";
 
 /// The live run's ops, with how long each `page.frames` read took and on which tab.
 struct FrameReads {
@@ -1181,10 +1188,10 @@ impl OpHost for FrameReads {
     reason = "each try prints its time, the measure its bound is checked against"
 )]
 async fn tests_that_a_busy_tab_another_client_opens_mid_run_costs_one_wait_at_most() -> TestResult {
+    let _alone = BUSY_TABS.acquire().await?;
     let run = Arc::new(LiveRun::connect().await?);
     let server = PageServer::start().await?;
     let healthy = run.new_page().await?;
-    let mut others = Vec::new();
     let result = async {
         goto(&run, &healthy, &server.url("/child.html"), "load").await?;
         let busy_url = server
@@ -1199,26 +1206,37 @@ async fn tests_that_a_busy_tab_another_client_opens_mid_run_costs_one_wait_at_mo
                 reads: Mutex::new(Vec::new()),
             });
             let host: Arc<dyn OpHost> = Arc::clone(&recorder) as Arc<dyn OpHost>;
+            let script = async {
+                let outcome = js_runner::run_script(&host, &init, MID_RUN_BUSY_TAB_SCRIPT).await;
+                (outcome, Instant::now())
+            };
             // Another client opens the tab once the run waits for it, the way the owner or another
             // session opens one: nothing of the run's names it.
             let open = async {
                 time::sleep(Duration::from_millis(300)).await;
-                run.browser()
+                let opened = run
+                    .browser()
                     .cdp(
                         "Target.createTarget",
                         json!({ "url": busy_url, "background": true }),
                         None,
                     )
-                    .await
+                    .await;
+                (opened, Instant::now())
             };
-            let (took, opened) = tokio::join!(
-                js_runner::run_script(&host, &init, MID_RUN_BUSY_TAB_SCRIPT),
-                open
-            );
-            if let Some(target) = opened?.get("targetId").and_then(Value::as_str) {
-                others.push(target.to_owned());
-            }
-            let took = Duration::from_millis(took?.as_u64().ok_or("the script returns its time")?);
+            let ((outcome, ended), (opened, opened_at)) = tokio::join!(script, open);
+            let target = opened?
+                .get("targetId")
+                .and_then(Value::as_str)
+                .ok_or("Target.createTarget named no target")?
+                .to_owned();
+            // At once, so its loop does not load the machine for the next try or other rows.
+            let _closed = run
+                .browser()
+                .cdp("Target.closeTarget", json!({ "targetId": target }), None)
+                .await;
+            outcome?;
+            let took = ended.saturating_duration_since(opened_at);
             let reads = recorder
                 .reads
                 .lock()
@@ -1245,12 +1263,6 @@ async fn tests_that_a_busy_tab_another_client_opens_mid_run_costs_one_wait_at_mo
         Ok::<(), Box<dyn Error>>(())
     }
     .await;
-    for target in &others {
-        let _closed = run
-            .browser()
-            .cdp("Target.closeTarget", json!({ "targetId": target }), None)
-            .await;
-    }
     run.close_page(&healthy).await;
     result
 }
