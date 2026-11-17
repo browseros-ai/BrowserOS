@@ -74,6 +74,8 @@ pub(crate) struct OpScope<'env> {
     api: String,
     /// Captured once from the trusted call header, never from a request or world cache.
     conformance: bool,
+    /// The header's covered-click B stamp: nothing chose this op's timeout ([`CallHeader`]).
+    timeout_built_in: bool,
     started: Instant,
     /// Playwright's timeout for this op. `None` is `timeout: 0`: the op waits until the host
     /// drops it at the run's deadline.
@@ -185,6 +187,7 @@ impl<'env> OpScope<'env> {
             spec,
             api: call.api.unwrap_or_else(|| spec.name.to_owned()),
             conformance: call.conformance,
+            timeout_built_in: call.timeout_built_in,
             started: Instant::now(),
             timeout: call
                 .timeout_ms
@@ -244,6 +247,12 @@ impl<'env> OpScope<'env> {
     /// Whether every probe diagnostic in this operation must preserve upstream bytes.
     pub(crate) fn conformance(&self) -> bool {
         self.conformance
+    }
+
+    /// Whether nobody chose this op's timeout: only Neo's own prelude found none on the call,
+    /// the page or the context ([`CallHeader`]'s stamp). Covered-click B stops early only then.
+    pub(crate) fn timeout_built_in(&self) -> bool {
+        self.timeout_built_in
     }
 
     /// The tab this op admitted, once it has.
@@ -853,6 +862,7 @@ mod tests {
             api: api.map(str::to_owned),
             timeout_ms,
             conformance: false,
+            timeout_built_in: false,
         }
     }
 

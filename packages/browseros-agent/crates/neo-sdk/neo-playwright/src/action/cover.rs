@@ -64,6 +64,59 @@ pub(crate) struct Standing {
 /// The checks a cover stands before a press may go through it as the target's own wrapper.
 const WRAPPER_CHECKS: u32 = 4;
 
+/// Covered-click B: how long the same cover stands, on Rust's clock, before a pointer action
+/// under the built-in timeout stops waiting (the owner's number, 2026-11-16).
+pub(crate) const EARLY_STOP: Duration = Duration::from_secs(5);
+
+/// Covered-click B: the fewest checks a cover stands before that stop. After four the scroll
+/// rotation (if needed, end, center, start) has run once, so a sticky header or footer had every
+/// alignment.
+const EARLY_CHECKS: u32 = 4;
+
+/// A pointer action that stops waiting under a standing cover: how long it stood and how many
+/// checks saw it, for the answer's first line and the record.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct EarlyStop {
+    pub(crate) stood: Duration,
+    pub(crate) checks: u32,
+}
+
+/// Which wait a pointer action keeps under a cover that stands (covered-click B).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Waiting {
+    /// Neo's own built-in timeout, which nobody chose, outside the conformance flag: the early
+    /// stop applies.
+    BuiltIn,
+    /// A timeout somebody chose, or the conformance flag: the whole wait, as upstream.
+    Whole,
+}
+
+impl Waiting {
+    /// The op's wait: built-in only under the prelude's stamp and outside the conformance flag.
+    pub(crate) fn of(scope: &OpScope<'_>) -> Self {
+        if scope.timeout_built_in() && !scope.conformance() {
+            Self::BuiltIn
+        } else {
+            Self::Whole
+        }
+    }
+}
+
+/// Covered-click B's decision, pure: a pointer action stops waiting when the same cover has
+/// stood [`EARLY_STOP`] and at least [`EARLY_CHECKS`] checks, and does not say it is loading,
+/// under Neo's built-in timeout ([`Waiting::BuiltIn`]). Whether it is the same cover (a pass, a
+/// move, a fade or another cover starts the count again) is the watch's; this reads what the
+/// watch kept.
+pub(crate) fn decide(
+    stood: Duration,
+    checks: u32,
+    loading: bool,
+    waiting: Waiting,
+) -> Option<EarlyStop> {
+    (waiting == Waiting::BuiltIn && !loading && checks >= EARLY_CHECKS && stood >= EARLY_STOP)
+        .then_some(EarlyStop { stood, checks })
+}
+
 /// The record of a pointer action's completed checks, kept by its runner on Rust's clock.
 #[derive(Debug)]
 pub(crate) struct CoverWatch {
@@ -142,6 +195,19 @@ impl CoverWatch {
         (standing.checks >= WRAPPER_CHECKS && !mark.busy).then_some(mark.id)
     }
 
+    /// Covered-click B: whether the action stops waiting now, under the cover that stands. Only
+    /// a cover known by its mark counts: one known only from a verdict's miss has no box yet.
+    pub(crate) fn early(&self, now: Instant, waiting: Waiting) -> Option<EarlyStop> {
+        let standing = self.standing.as_ref()?;
+        let mark = standing.mark.as_ref()?;
+        decide(
+            now.saturating_duration_since(standing.since),
+            standing.checks,
+            mark.busy,
+            waiting,
+        )
+    }
+
     /// The cover the last completed check found, if it found one.
     pub(crate) fn standing(&self) -> Option<&Standing> {
         self.standing.as_ref()
@@ -194,12 +260,43 @@ pub(crate) async fn covered_timeout(
     if scope.conformance() || timed_out.error_code() != Some(ErrorCode::NotActionable) {
         return timed_out;
     }
-    let Some(standing) = watch.standing() else {
-        return timed_out;
-    };
-    let Some(mark) = standing.mark else {
-        return timed_out;
-    };
+    covered_answer(scope, page, watch, action, None)
+        .await
+        .unwrap_or(timed_out)
+}
+
+/// The answer's first line: upstream's timeout line when the timeout ran out, and covered-click
+/// B's fixed form when the action stopped early. It keeps the word `Timeout`, so a script that
+/// tells a timeout by its message still does; the name stays `TimeoutError` and the code
+/// `covered` either way.
+fn first_line(scope: &OpScope<'_>, early: Option<EarlyStop>) -> String {
+    match early {
+        Some(stop) => format!(
+            "Timeout cut short: the same cover stayed on top for {:.1} s ({} checks).",
+            stop.stood.as_secs_f64(),
+            stop.checks
+        ),
+        None => format!(
+            "Timeout {}ms exceeded.",
+            scope.timeout().map_or(0, |timeout| timeout.as_millis())
+        ),
+    }
+}
+
+/// The covered answer under the cover that stands: the cover's facts read from the world that saw
+/// it (section 2). `None` when no cover stands or its facts cannot be read: then the caller
+/// answers as it would without one, since the timing never comes before the facts. The timeout's
+/// answer and covered-click B's early stop (`early`) share it: they differ only in the first line
+/// and in the cover field's `stoodMs` and `checks`, present only on an early stop.
+pub(crate) async fn covered_answer(
+    scope: &OpScope<'_>,
+    page: &OpPage<'_>,
+    watch: &CoverWatch,
+    action: &str,
+    early: Option<EarlyStop>,
+) -> Option<PlaywrightError> {
+    let standing = watch.standing()?;
+    let mark = standing.mark?;
     let request = ProbeRequest::Cover {
         target: standing.seat.target.clone(),
         point: standing.seat.point,
@@ -209,9 +306,8 @@ pub(crate) async fn covered_timeout(
     let asked = resolve::ask(scope, page, &standing.seat.world, &request, None);
     let Ok(Ok(ProbeReply::Cover { facts: Some(facts) })) = time::timeout(FACTS_BUDGET, asked).await
     else {
-        return timed_out;
+        return None;
     };
-    let millis = scope.timeout().map_or(0, |timeout| timeout.as_millis());
     let since = if standing.from_start {
         None
     } else {
@@ -231,12 +327,22 @@ pub(crate) async fn covered_timeout(
         stopped: watch.stopped,
         again: again.map(|before| (before.action, before.at.elapsed())),
     };
-    scope
-        .fail(
-            ErrorCode::Covered,
-            &format!("Timeout {millis}ms exceeded.{}", lines.render()),
-        )
-        .with_cover(field(&facts))
+    let mut cover = field(&facts);
+    if let (Some(stop), Value::Object(fields)) = (early, &mut cover) {
+        fields.insert(
+            "stoodMs".to_owned(),
+            json!(u64::try_from(stop.stood.as_millis()).unwrap_or(u64::MAX)),
+        );
+        fields.insert("checks".to_owned(), json!(stop.checks));
+    }
+    Some(
+        scope
+            .fail(
+                ErrorCode::Covered,
+                &format!("{}{}", first_line(scope, early), lines.render()),
+            )
+            .with_cover(cover),
+    )
 }
 
 /// The facts' lines, in the order a host that cuts a long message keeps them: what is on top

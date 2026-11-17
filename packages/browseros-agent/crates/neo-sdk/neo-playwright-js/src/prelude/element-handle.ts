@@ -30,7 +30,7 @@ import type { Page } from './page'
 import { saveScreenshot, screenshotType } from './screenshot'
 import { locatorBrand } from './selectors'
 import { signalOf } from './signal'
-import { type TimeoutOption, timeoutMs } from './timeouts'
+import { headerTimeout, type Resolved, type TimeoutOption } from './timeouts'
 import type { KeyList } from './upstream-check'
 import type {
   ElementBrand,
@@ -117,7 +117,7 @@ export class ElementHandle extends EventEmitter {
     op: Op,
     site: CallSite,
     api: string,
-    timeout: number,
+    timeout: number | Resolved,
     args: Omit<OpInputs[Op], 'target' | 'strict'>,
   ): Promise<OpOutputs[Op]> {
     this.#live(api)
@@ -129,7 +129,7 @@ export class ElementHandle extends EventEmitter {
     return await invoke(
       op,
       site,
-      { api, timeoutMs: timeoutMs(api, timeout) },
+      { api, ...headerTimeout(api, timeout) },
       input,
     )
   }
@@ -148,13 +148,13 @@ export class ElementHandle extends EventEmitter {
     const target = this._brand
     return await send[op](
       site,
-      { api, timeoutMs: timeoutMs(api, 0) },
+      { api, ...headerTimeout(api, 0) },
       { target, strict: 'strict' },
     )
   }
 
-  #timeout(options: TimeoutOption | undefined): number {
-    return this._page._timeoutSettings.timeout(options)
+  #timeout(options: TimeoutOption | undefined): Resolved {
+    return this._page._timeoutSettings.resolved(options)
   }
 
   /** `selector` as a locator rooted at this handle's node, as upstream's handle queries scope it. */
@@ -177,7 +177,7 @@ export class ElementHandle extends EventEmitter {
     const api = 'elementHandle.$'
     const handle = await send['locator.elementHandle'](
       site,
-      { api, timeoutMs: timeoutMs(api, 0) },
+      { api, ...headerTimeout(api, 0) },
       {
         target: this.#rooted(api, selector),
         strict: 'firstMatch',
@@ -192,7 +192,7 @@ export class ElementHandle extends EventEmitter {
     const api = 'elementHandle.$$'
     const handles = await send['locator.elementHandles'](
       site,
-      { api, timeoutMs: timeoutMs(api, 0) },
+      { api, ...headerTimeout(api, 0) },
       { target: this.#rooted(api, selector) },
     )
     return handles.flatMap((handle) => {
@@ -209,7 +209,7 @@ export class ElementHandle extends EventEmitter {
     this.#live(api)
     await send['locator.click'](
       site,
-      { api, timeoutMs: timeoutMs(api, timeout) },
+      { api, ...headerTimeout(api, timeout) },
       { target: this._brand, strict: 'strict', ...picked },
     )
   }
@@ -222,7 +222,7 @@ export class ElementHandle extends EventEmitter {
     this.#live(api)
     await send['locator.dblclick'](
       site,
-      { api, timeoutMs: timeoutMs(api, timeout) },
+      { api, ...headerTimeout(api, timeout) },
       { target: this._brand, strict: 'strict', ...picked },
     )
   }
@@ -235,7 +235,7 @@ export class ElementHandle extends EventEmitter {
     this.#live(api)
     await send['locator.hover'](
       site,
-      { api, timeoutMs: timeoutMs(api, timeout) },
+      { api, ...headerTimeout(api, timeout) },
       { target: this._brand, strict: 'strict', ...picked },
     )
   }
@@ -248,7 +248,7 @@ export class ElementHandle extends EventEmitter {
     this.#live(api)
     await send['locator.check'](
       site,
-      { api, timeoutMs: timeoutMs(api, timeout) },
+      { api, ...headerTimeout(api, timeout) },
       { target: this._brand, strict: 'strict', ...picked },
     )
   }
@@ -261,7 +261,7 @@ export class ElementHandle extends EventEmitter {
     this.#live(api)
     await send['locator.uncheck'](
       site,
-      { api, timeoutMs: timeoutMs(api, timeout) },
+      { api, ...headerTimeout(api, timeout) },
       { target: this._brand, strict: 'strict', ...picked },
     )
   }
@@ -278,7 +278,7 @@ export class ElementHandle extends EventEmitter {
     this.#live(api)
     await send[op](
       site,
-      { api, timeoutMs: timeoutMs(api, timeout) },
+      { api, ...headerTimeout(api, timeout) },
       { target: this._brand, strict: 'strict', ...picked },
     )
   }
@@ -294,7 +294,7 @@ export class ElementHandle extends EventEmitter {
     this.#live(api)
     await send['locator.fill'](
       site,
-      { api, timeoutMs: timeoutMs(api, timeout) },
+      { api, ...headerTimeout(api, timeout) },
       { target: this._brand, strict: 'strict', value, ...picked },
     )
   }
@@ -310,7 +310,7 @@ export class ElementHandle extends EventEmitter {
     this.#live(api)
     await send['locator.press'](
       site,
-      { api, timeoutMs: timeoutMs(api, timeout) },
+      { api, ...headerTimeout(api, timeout) },
       { target: this._brand, strict: 'strict', key, ...picked },
     )
   }
@@ -326,7 +326,7 @@ export class ElementHandle extends EventEmitter {
     this.#live(api)
     await send['locator.pressSequentially'](
       site,
-      { api, timeoutMs: timeoutMs(api, timeout) },
+      { api, ...headerTimeout(api, timeout) },
       { target: this._brand, strict: 'strict', text, ...picked },
     )
   }
@@ -345,7 +345,7 @@ export class ElementHandle extends EventEmitter {
     this.#live(api)
     return await send['locator.selectOption'](
       site,
-      { api, timeoutMs: timeoutMs(api, timeout) },
+      { api, ...headerTimeout(api, timeout) },
       {
         target: this._brand,
         strict: 'strict',
@@ -368,7 +368,7 @@ export class ElementHandle extends EventEmitter {
     this.#live(api)
     await send['locator.selectText'](
       site,
-      { api, timeoutMs: timeoutMs(api, timeout) },
+      { api, ...headerTimeout(api, timeout) },
       { target: this._brand, strict: 'strict', ...picked },
     )
   }
@@ -385,7 +385,7 @@ export class ElementHandle extends EventEmitter {
       this.#live(api)
       return await send['locator.setInputFiles'](
         site,
-        { api, timeoutMs: timeoutMs(api, timeout) },
+        { api, ...headerTimeout(api, timeout) },
         { target: this._brand, strict: 'strict', files: input },
       )
     })
@@ -398,7 +398,7 @@ export class ElementHandle extends EventEmitter {
     this.#live(api)
     await send['locator.focus'](
       site,
-      { api, timeoutMs: timeoutMs(api, timeout) },
+      { api, ...headerTimeout(api, timeout) },
       { target: this._brand, strict: 'strict' },
     )
   }
@@ -410,7 +410,7 @@ export class ElementHandle extends EventEmitter {
     this.#live(api)
     await send['locator.dispatchEvent'](
       site,
-      { api, timeoutMs: timeoutMs(api, timeout) },
+      { api, ...headerTimeout(api, timeout) },
       { target: this._brand, strict: 'strict', type, eventInit },
     )
   }
@@ -422,7 +422,7 @@ export class ElementHandle extends EventEmitter {
     this.#live(api)
     await send['locator.scrollIntoViewIfNeeded'](
       site,
-      { api, timeoutMs: timeoutMs(api, timeout) },
+      { api, ...headerTimeout(api, timeout) },
       { target: this._brand, strict: 'strict' },
     )
   }
@@ -438,7 +438,7 @@ export class ElementHandle extends EventEmitter {
     const target = this._brand
     await send['locator.waitFor'](
       site,
-      { api, timeoutMs: timeoutMs(api, timeout) },
+      { api, ...headerTimeout(api, timeout) },
       { target, strict: 'strict', state, omitReturnValue: true },
     )
   }
@@ -470,7 +470,7 @@ export class ElementHandle extends EventEmitter {
     const target = this._brand
     return await send['locator.getAttribute'](
       site,
-      { api, timeoutMs: timeoutMs(api, 0) },
+      { api, ...headerTimeout(api, 0) },
       { target, strict: 'strict', name },
     )
   }
@@ -532,7 +532,7 @@ export class ElementHandle extends EventEmitter {
       api,
       await send['locator.evaluate'](
         site,
-        { api, timeoutMs: timeoutMs(api, 0) },
+        { api, ...headerTimeout(api, 0) },
         { target: this._brand, strict: 'strict', ...script },
       ),
     )
@@ -552,7 +552,7 @@ export class ElementHandle extends EventEmitter {
     const script = pageCall(api, 'query', pageFunction, arg)
     const value = await send['page.evalOnSelector'](
       site,
-      { api, timeoutMs: timeoutMs(api, 0) },
+      { api, ...headerTimeout(api, 0) },
       {
         target: this.#rooted(api, selector),
         strict: 'firstMatch',
@@ -574,7 +574,7 @@ export class ElementHandle extends EventEmitter {
     const script = pageCall(api, 'query', pageFunction, arg)
     const value = await send['locator.evaluateAll'](
       site,
-      { api, timeoutMs: timeoutMs(api, 0) },
+      { api, ...headerTimeout(api, 0) },
       { target: this.#rooted(api, selector), ...script },
     )
     return fromPageValue(api, value)
@@ -589,7 +589,7 @@ export class ElementHandle extends EventEmitter {
     const signal = signalOf(api, options)
     const image = await send['page.screenshot'](
       site,
-      { api, timeoutMs: timeoutMs(api, this.#timeout(options)) },
+      { api, ...headerTimeout(api, this.#timeout(options)) },
       {
         page: await this._page._brand(api),
         target: this._brand,

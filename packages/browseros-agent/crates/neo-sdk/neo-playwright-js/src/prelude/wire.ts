@@ -71,7 +71,15 @@ export type UnopenedPageBrand = PageHandle & { tab: null }
  * `locator.click` op), which every message from the op starts with. `timeoutMs` is the
  * Playwright timeout the prelude resolved; 0 means none, and the run deadline bounds the op.
  */
-export type CallHeader = { api: string; timeoutMs: number }
+/**
+ * Every op's header. `timeoutBuiltIn` (covered-click B) only when the prelude found no timeout on
+ * the call, the page or the context; absent means chosen (`timeouts.ts`'s `headerTimeout`).
+ */
+export type CallHeader = {
+  api: string
+  timeoutMs: number
+  timeoutBuiltIn?: true
+}
 
 /**
  * The Playwright events Neo reports. `page` and `pageload` are the context's; `dialog`,
