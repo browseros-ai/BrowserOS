@@ -1013,7 +1013,9 @@ async fn answer(
         Answer::Accept(_) => "accept",
         Answer::Dismiss => "dismiss",
     };
-    let admitted = scope.admit(pw.browser(), page.tab()).await?;
+    // Past the tab's removal fence: a removal held behind this very dialog ends only once it is
+    // answered (`OpScope::admit_past_removals`).
+    let admitted = scope.admit_past_removals(pw.browser(), page.tab()).await?;
     let target = admitted.session.target_id.clone();
     // From here the dialog is the script's: the grace and the reap leave it to this answer, and
     // `answering` reopens it for them unless the browser acknowledges the answer.

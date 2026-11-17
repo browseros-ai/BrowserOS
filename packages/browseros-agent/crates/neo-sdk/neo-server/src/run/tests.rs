@@ -1202,6 +1202,52 @@ fn the_deadline_times_the_run_out() -> Result<(), TestError> {
     })
 }
 
+/// A run's reply waits on no tab's init-script removal. Its script registered one on a tab whose
+/// renderer then never answers the removal (a busy tab): the run still answers well inside the
+/// teardown grace that a wait for the removal would take, and the removal was sent. A first run
+/// on the tab, whose removal is answered, starts the Playwright facade and attaches the tab, so
+/// the run measured holds only its op and its teardown.
+#[test]
+fn a_runs_reply_does_not_wait_for_its_init_scripts_to_leave_a_busy_tab() -> Result<(), TestError> {
+    const ADD: &str = "Page.addScriptToEvaluateOnNewDocument";
+    const REMOVE: &str = "Page.removeScriptToEvaluateOnNewDocument";
+    on_neo_runtime(async {
+        let mut rig = TestRig::new().await?;
+        let page = rig.owner_tab("https://example.test/").await?;
+        rig.dispatcher = rig.builtin_dispatcher()?;
+        rig.fake.answer(ADD, json!({ "identifier": "script-1" }));
+        let service = rig.run_service(GRACE);
+        let input =
+            json!({ "page": { "$neo": "page", "tab": page.tab }, "source": "window.seen = 1" });
+        let code = format!("await __neo.invoke('page.addInitScript', {input}); return 1;");
+        let removals = |count: usize| {
+            rig.fake.received_matching(move |calls| {
+                (calls.iter().filter(|call| call.method == REMOVE).count() >= count).then_some(())
+            })
+        };
+
+        let first = service.run(request(&code, meta(None, None)?)?).await;
+        assert_eq!(first.status, ReplyStatus::Ok, "{first:?}");
+        within(Defaults::TEARDOWN_GRACE, removals(1))
+            .await?
+            .map_err(|error| format!("the first run's removal is sent and answered: {error}"))?;
+
+        rig.fake.hang(REMOVE);
+        let started = time::Instant::now();
+        let reply = service.run(request(&code, meta(None, None)?)?).await;
+        let elapsed = started.elapsed();
+        assert_eq!(reply.status, ReplyStatus::Ok, "{reply:?}");
+        assert!(
+            elapsed < Defaults::TEARDOWN_GRACE,
+            "the reply left before a wait for the hung removal could end: {elapsed:?}"
+        );
+        within(Defaults::TEARDOWN_GRACE, removals(2))
+            .await?
+            .map_err(|error| format!("the second run's removal is sent: {error}"))?;
+        Ok(())
+    })
+}
+
 #[test]
 fn a_refused_call_is_recorded_without_its_request_id() -> Result<(), TestError> {
     on_neo_runtime(async {

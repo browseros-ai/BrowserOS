@@ -327,14 +327,12 @@ impl RunService {
         builtins::keep_downloads(&run, self.store.outputs()).await;
         let values = self.settings.trace_policy().values;
         let end = keep_blobs(run.id(), end, self.store.outputs(), values).await;
-        // A run's init scripts end with it: removed before the reply, so the next run's first
-        // navigation, or the owner's, loads without them. A renderer that does not answer within
-        // the grace leaves the rest to the run state's drop, which removes them in the background.
-        let _removed = time::timeout(
-            Defaults::TEARDOWN_GRACE,
-            builtins::remove_init_scripts(&run),
-        )
-        .await;
+        // A run's init scripts end with it. Their removals start here, before the reply, and the
+        // reply waits for none of them: awaiting them held a run whose last op was on a healthy
+        // tab up to the grace whenever another tab it registered on had a busy renderer, so one
+        // busy tab added up to 2 s to the reply of every run that registered there. Each removal
+        // fences its own tab instead, and the next op on that tab, in any run, waits for it.
+        builtins::remove_init_scripts(&run);
         // The run's end record is built from its reply, so the trace and a `requestId` replay keep
         // exactly what the caller got.
         let mut reply = RunReply::build(&run, end);

@@ -588,7 +588,11 @@ async fn target_crashed_later_requests_in_one_operation_follow_a_new_document() 
         Op::from_name("page.waitForFunction").ok_or("page.waitForFunction")?,
         CallHeader::default(),
     )
-    .tracking(run.playwright.crashes(), browser);
+    .tracking(
+        run.playwright.crashes(),
+        browser,
+        run.playwright.removal_fences(),
+    );
     let admitted = scope.admit(browser, run.page.tab()).await?;
     let session = browser.protocol_session(admitted.session.session_id.clone());
     let earlier = scope.begin_protocol(&session);
@@ -1229,7 +1233,11 @@ async fn admission_rebind(bound: bool) -> TestResult {
         Op::from_name("mouse.move").ok_or("mouse.move")?,
         CallHeader::default(),
     )
-    .tracking(run.playwright.crashes(), &browser);
+    .tracking(
+        run.playwright.crashes(),
+        &browser,
+        run.playwright.removal_fences(),
+    );
     let refused = scope.observe_page(&browser, tab_id).await;
     assert!(
         tab.script().replaced.load(Ordering::SeqCst),

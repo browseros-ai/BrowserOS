@@ -18,7 +18,7 @@ use crate::input::input_op;
 use crate::op::{Op, OpKind};
 use crate::op_input::OpInput;
 use crate::op_scope::OpScope;
-use crate::page::{MediaSessions, PageRegistry, context_op, page_op};
+use crate::page::{MediaSessions, PageRegistry, RemovalFences, context_op, page_op};
 use crate::private_entry::PrivateTabs;
 use crate::read::read_op;
 use crate::snapshot::{SnapshotBaselines, snapshot_op};
@@ -66,6 +66,10 @@ pub struct Playwright {
     private_tabs: PrivateTabs,
     /// Admission facts survive individual runs and eviction of public crash events.
     crashes: Arc<TargetCrashes>,
+    /// The tabs with an ended run's init-script removal still in flight, which every op's
+    /// admission on such a tab waits out. Here, not in a run's state, because the next run's op
+    /// is the one that waits.
+    removals: Arc<RemovalFences>,
 }
 
 // A hand-written `Debug`: the session is not worth printing.
@@ -100,6 +104,7 @@ impl Playwright {
             registry.note_open_tabs(&reader).await;
         }));
         let media = MediaSessions::new(&browser);
+        let removals = Arc::new(RemovalFences::new(Arc::clone(&crashes)));
         Arc::new(Self {
             browser,
             events,
@@ -111,6 +116,7 @@ impl Playwright {
             snapshot_baselines,
             private_tabs: PrivateTabs::default(),
             crashes,
+            removals,
         })
     }
 
@@ -231,6 +237,10 @@ impl Playwright {
         &self.crashes
     }
 
+    pub(crate) fn removal_fences(&self) -> &Arc<RemovalFences> {
+        &self.removals
+    }
+
     /// Each tab's last whole-page v1 snapshot text its caller was given; shared with the runs'
     /// pending texts, which commit to it when their runs end.
     pub(crate) fn snapshot_baselines(&self) -> &Arc<SnapshotBaselines> {
@@ -254,7 +264,7 @@ impl Playwright {
                 ..CallHeader::default()
             };
             OpScope::new(env, op, call)
-                .tracking(&self.crashes, &self.browser)
+                .tracking(&self.crashes, &self.browser, &self.removals)
                 .check_cached_crash(&info)?;
         }
         Ok(())
@@ -276,7 +286,8 @@ impl Playwright {
         input: Value,
     ) -> Result<Value, PlaywrightError> {
         let OpInput { call, args } = OpInput::decode(op, input)?;
-        let scope = OpScope::new(env, op, call).tracking(&self.crashes, &self.browser);
+        let scope =
+            OpScope::new(env, op, call).tracking(&self.crashes, &self.browser, &self.removals);
         let answered = match op.kind() {
             OpKind::Action(op) => action_op::invoke(self, &scope, op, args).await,
             OpKind::Read(op) => read_op::invoke(self, &scope, op, args).await,

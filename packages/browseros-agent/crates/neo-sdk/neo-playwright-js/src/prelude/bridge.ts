@@ -129,10 +129,11 @@ export async function invoke<Op extends OpName>(
   signal?: SignalLike,
 ): Promise<OpOutputs[Op]> {
   try {
-    const ready = readyChoosers(op)
+    const input = requestInput(call, args)
+    const ready = readyChoosers(op, input)
     if (ready) await ready
     countPumps()
-    const value = (await host().invoke(op, requestInput(call, args), {
+    const value = (await host().invoke(op, input, {
       signal,
       site: site.value,
     })) as OpOutputs[Op]
@@ -169,10 +170,11 @@ export async function invokeObserved<Op extends OpName>(
   apply?: (value: OpOutputs[Op], observed: Observation | null) => void,
 ): Promise<{ value: OpOutputs[Op]; observed: Observation | null }> {
   try {
-    const ready = readyChoosers(op)
+    const input = requestInput(call, args)
+    const ready = readyChoosers(op, input)
     if (ready) await ready
     countPumps()
-    const reply = await host().invoke(op, requestInput(call, args), {
+    const reply = await host().invoke(op, input, {
       site: site.value,
       observed: true,
       signal,

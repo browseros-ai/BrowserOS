@@ -12,7 +12,8 @@
 //!  TabJanitor::sweep ─▶ a Neo-origin run ─▶ Dispatcher::submit(page.close) per idle agent tab
 //!  keep_downloads ─▶ at a run's end, the finished files its download events handed it, copied
 //!                    beside the trace for the host (the run service calls it before it answers)
-//!  remove_init_scripts ─▶ at a run's end, its init scripts off every tab, before it answers
+//!  remove_init_scripts ─▶ at a run's end, its init scripts' removals started on every tab,
+//!                        before it answers and awaiting none: the tab's next op waits for them
 //! ```
 //!
 //! Every built-in is a private `dispatch::Method` type, reachable only by the name it registers,

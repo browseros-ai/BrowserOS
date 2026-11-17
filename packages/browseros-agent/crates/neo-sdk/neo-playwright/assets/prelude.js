@@ -555,17 +555,31 @@
 
   // crates/neo-sdk/neo-playwright-js/src/prelude/chooser-setup.ts
   var pending = new Set;
-  function trackChooserSetup(setup) {
-    pending.add(setup);
+  function trackChooserSetup(page, setup) {
+    const entry = { page, done: setup };
+    pending.add(entry);
     const remove = () => {
-      pending.delete(setup);
+      pending.delete(entry);
     };
     setup.then(remove, remove);
   }
-  function readyChoosers(op) {
+  function readyChoosers(op, input) {
     if (OPS[op].effect === "read")
       return null;
-    return pending.size ? Promise.all([...pending]) : null;
+    const brand = pageBrand(input);
+    if (brand == null)
+      return null;
+    const tab = typeof brand === "object" && "tab" in brand && typeof brand.tab === "number" ? brand.tab : null;
+    const held = [...pending].filter(({ page }) => tab === null || page._tab === null || page._tab === tab).map(({ done }) => done);
+    return held.length ? Promise.all(held) : null;
+  }
+  function pageBrand(input) {
+    if ("page" in input && input.page != null)
+      return input.page;
+    if (!("target" in input))
+      return;
+    const { target } = input;
+    return typeof target === "object" && target !== null && "page" in target ? target.page : undefined;
   }
 
   // crates/neo-sdk/neo-playwright-js/src/prelude/cover.ts
@@ -867,11 +881,12 @@ ${lines}${message.slice(end)}`;
   }
   async function invoke(op, site, call, args, signal) {
     try {
-      const ready = readyChoosers(op);
+      const input = requestInput(call, args);
+      const ready = readyChoosers(op, input);
       if (ready)
         await ready;
       countPumps();
-      const value = await host().invoke(op, requestInput(call, args), {
+      const value = await host().invoke(op, input, {
         signal,
         site: site.value
       });
@@ -890,11 +905,12 @@ ${lines}${message.slice(end)}`;
   }
   async function invokeObserved(op, site, call, args, onResult, signal, apply) {
     try {
-      const ready = readyChoosers(op);
+      const input = requestInput(call, args);
+      const ready = readyChoosers(op, input);
       if (ready)
         await ready;
       countPumps();
-      const reply = await host().invoke(op, requestInput(call, args), {
+      const reply = await host().invoke(op, input, {
         site: site.value,
         observed: true,
         signal,
@@ -10476,7 +10492,7 @@ ${changes}`;
         const previous = this.chooserChanges.get(page) ?? Promise.resolve();
         const changed = previous.then(() => this.sendListen(site, page, event, on, since, lease));
         this.chooserChanges.set(page, changed);
-        trackChooserSetup(changed);
+        trackChooserSetup(page, changed);
       } else
         this.sendListen(site, page, event, on, since);
       this.settleNavigationPublications();
@@ -10642,7 +10658,7 @@ ${changes}`;
       const ready = target.then(async (page) => {
         await send["events.interceptFileChooser"](site, { api, timeoutMs: 0 }, { page, event: "fileChooser", enabled: true, lease: id });
       });
-      trackChooserSetup(ready);
+      trackChooserSetup(page, ready);
       let released = null;
       return {
         ready,
@@ -10656,7 +10672,7 @@ ${changes}`;
                 lease: id
               });
             });
-            trackChooserSetup(released);
+            trackChooserSetup(page, released);
           }
           return released;
         }

@@ -84,11 +84,12 @@ const PLAYWRIGHT_API: &str = r"Playwright 1.64's API on `page`, `context` and `b
     A directory upload needs its tab in front, which the tabs Neo opens for a script never are.
   - By design, hosted BrowserOS gives a script no console messages and no page errors: `console` and `pageerror` listeners stay silent.";
 
-/// At a run's end, after its ops drained: removes the init scripts its ops registered from every
-/// tab, awaiting each removal (neo-playwright's `RunState::remove_init_scripts`). The run service
-/// calls it before it answers, so a script ends with the run that registered it.
-pub(crate) async fn remove_init_scripts(run: &RunCtx) {
-    run.slot::<RunState>().remove_init_scripts().await;
+/// At a run's end, after its ops drained: starts removing the init scripts and bindings its ops
+/// registered from every tab, awaiting none (neo-playwright's `RunState::remove_init_scripts`).
+/// The run service calls it before it answers. Each removal fences its tab, so the next op on
+/// that tab, in any run, waits for it, and a script still ends with the run that registered it.
+pub(crate) fn remove_init_scripts(run: &RunCtx) {
+    run.slot::<RunState>().remove_init_scripts();
 }
 
 /// Schemes shared by goto and reload. Goto additionally passes JavaScript URLs to Chromium; a
