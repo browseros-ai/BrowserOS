@@ -465,9 +465,9 @@ export type ProbeCall = { request: ProbeRequest, policy: ProbePolicy, };
  */
 export type ProbePolicy = { conformance: boolean, 
 /**
- * Only a current, complete observation can prove the frame has no adoption sources.
+ * Search for foreign field prototypes only on a receiving tab that took a private fill.
  */
-mayHaveOtherFrame: boolean, };
+discoverMovedFields: boolean, };
 
 /**
  * One reply; `kind` is the tag. Any request may also answer `error`, and `uninstalled` when

@@ -91,12 +91,6 @@ impl FrameAttachLog {
         self.gaps.fetch_add(1, Ordering::AcqRel);
     }
 
-    /// Whether any broadcast history was lost. Unlike a tab's consumed queue, this fact lasts
-    /// for the instance's lifetime, so a read-only cache cannot mistake missing events for calm.
-    pub(crate) fn has_gaps(&self) -> bool {
-        self.gaps.load(Ordering::Acquire) != 0
-    }
-
     /// Drops `tab`'s queue: the tab closed.
     pub(crate) fn forget(&self, tab: &TargetId) {
         self.lock().remove(tab);

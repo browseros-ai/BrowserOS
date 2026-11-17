@@ -65,7 +65,7 @@ export class FailureOutput {
     // The delayed arm retains these values, never a caller-owned mutable wire object.
     this.policy = Object.freeze({
       conformance: policy.conformance,
-      mayHaveOtherFrame: policy.mayHaveOtherFrame,
+      discoverMovedFields: policy.discoverMovedFields,
     })
     this.engine = diagnosticEngine(world.injected)
     this.checks = expectChecks(world.injected)
@@ -101,7 +101,7 @@ export class FailureOutput {
     // discovered prototypes and remain masked in every mode; an unmarked spec world stays native.
     return this.run(() =>
       withMaskedFieldValues(
-        { root, mayHaveOtherFrame: this.policy.mayHaveOtherFrame },
+        { root, discoverMovedFields: this.policy.discoverMovedFields },
         read,
         { declared: !this.policy.conformance },
       ),
@@ -125,7 +125,15 @@ export class FailureOutput {
     // Restore getters now, then await its result; viewport's later read is never guarded.
     const check = await (mode.kind === 'guardedTree'
       ? this.tree(element, compare)
-      : this.run(() => withMarkedFieldsMasked(compare, field)))
+      : this.run(() =>
+          withMarkedFieldsMasked(
+            {
+              root: field,
+              discoverMovedFields: this.policy.discoverMovedFields,
+            },
+            compare,
+          ),
+        ))
     return mode.kind === 'realValue' && typeof check.received === 'string'
       ? { ...check, received: characterMarker(check.received) }
       : check
@@ -138,7 +146,15 @@ export class FailureOutput {
           elements[0] ?? this.world.injected.document.documentElement,
           compare,
         )
-      : this.run(() => withMarkedFieldsMasked(compare, elements[0] ?? null))
+      : this.run(() =>
+          withMarkedFieldsMasked(
+            {
+              root: elements[0] ?? null,
+              discoverMovedFields: this.policy.discoverMovedFields,
+            },
+            compare,
+          ),
+        )
   }
 
   /** Its vendor listener and stop closure retain this request's preview after dispatch ends. */

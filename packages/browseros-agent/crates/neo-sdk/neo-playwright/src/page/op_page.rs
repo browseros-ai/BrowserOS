@@ -6,7 +6,6 @@ use browseros_core::{BrowserSession, FrameId, PageId, ProtocolSession, TabId, Ta
 
 use crate::op_scope::{AdmittedPage, OpScope};
 use crate::page::PageState;
-use crate::page::frame_routes::RootAttachment;
 use crate::probe::ProbeFailure;
 use crate::target::PageRef;
 use crate::world::{Endpoint, FrameWorlds, Installer, IsolatedWorld, Place};
@@ -115,43 +114,10 @@ impl<'op> OpPage<'op> {
         }
     }
 
-    /// Whether this tab may have any frame besides the snapshot's exact frame, checked
-    /// against the run's existing admitted tree. A cache only proves absence with live,
-    /// gap-free observation while checking it; uncertainty enables the scan rather than
-    /// fetching topology or changing frame storage.
-    ///
-    /// Private-entry history in any tab always answers true (ruling R59). A marked box keeps
-    /// its original prototype when the page moves it into another frame or window; even after
-    /// the source closes, only a document-wide scan finds that foreign prototype to guard it.
-    pub(crate) fn may_have_other_frame(&self, scope: &OpScope<'_>, world: &IsolatedWorld) -> bool {
-        if self.pw.private_tabs().any() {
-            return true;
-        }
-        let fence = self.pw.event_fence();
-        if self.frames().lifecycle_has_gaps() || !self.pw.events_live_through(fence) {
-            return true;
-        }
-        let Some(session) = world.session_id() else {
-            return true;
-        };
-        let epoch = self.browser().connection().connection_epoch();
-        let root = RootAttachment {
-            session: self.admitted.session.session_id.clone(),
-            frame: FrameId(self.target_id().as_str().to_owned()),
-            epoch,
-        };
-        let other_frame = scope.run_state().frames.may_have_other_frame(
-            self.tab(),
-            &root,
-            world.frame(),
-            session,
-            self.pw.events(),
-        );
-        other_frame
-            || self.frames().lifecycle_has_gaps()
-            || self.browser().connection().connection_epoch() != epoch
-            || self.pw.event_fence() != fence
-            || !self.pw.events_live_through(fence)
+    /// Only a receiving tab that took a private fill searches for foreign field prototypes.
+    /// Local prototypes and a read's explicit field root are guarded on every tab.
+    pub(crate) fn took_private_text(&self) -> bool {
+        self.pw.private_tabs().took(self.tab())
     }
 
     /// The world of `endpoint`'s frame, installed on first use; concurrent first uses share one

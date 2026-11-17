@@ -137,7 +137,7 @@ function conformanceCall(request: ProbeRequest): unknown {
   if (!probe) throw new Error('the fixture has no probe')
   return probe.call({
     request,
-    policy: { conformance: true, mayHaveOtherFrame: true },
+    policy: { conformance: true, discoverMovedFields: true },
   })
 }
 

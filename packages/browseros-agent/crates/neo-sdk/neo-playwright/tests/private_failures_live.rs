@@ -218,7 +218,7 @@ async fn probe(
 ) -> TestResult<Value> {
     let call = json!({
         "request": request,
-        "policy": { "conformance": conformance, "mayHaveOtherFrame": false },
+        "policy": { "conformance": conformance, "discoverMovedFields": false },
     });
     isolated(
         session,

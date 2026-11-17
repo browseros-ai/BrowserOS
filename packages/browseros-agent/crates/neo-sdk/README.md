@@ -68,6 +68,11 @@ after the host's private typing happened there. A value typed by a script or by 
 the keyboard is not covered by that setting. Only a fill under `never` writes the filled-tab
 record, so after Neo restarts a tab filled under the default is not known as filled.
 
+Snapshots search for moved fields only on a receiving tab that took a host's private fill.
+On other tabs, a name derived from a box moved in from another frame or window can print
+its value. Local fields and an explicit field root remain guarded; a moved marked box's
+`inputValue()` and value assertions still read bullets.
+
 `neo-server/docker/` builds the Neo SDK image, the browser plus this server.
 See [the image's README](neo-server/docker/README.md) for host integration.
 

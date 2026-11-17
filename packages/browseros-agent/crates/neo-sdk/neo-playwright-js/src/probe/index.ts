@@ -200,7 +200,7 @@ function isProbeCall(value: unknown): value is ProbeCall {
     typeof policy === 'object' &&
     policy !== null &&
     typeof Reflect.get(policy, 'conformance') === 'boolean' &&
-    typeof Reflect.get(policy, 'mayHaveOtherFrame') === 'boolean'
+    typeof Reflect.get(policy, 'discoverMovedFields') === 'boolean'
   )
 }
 

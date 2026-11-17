@@ -108,7 +108,7 @@ it('tests that a snapshot whose clickable marking throws is still taken, as upst
 })
 
 it('never installs any field or text override under conformance', () => {
-  page = openProbePage(PAGE, { conformance: true, mayHaveOtherFrame: true })
+  page = openProbePage(PAGE, { conformance: true, discoverMovedFields: true })
   page.boot({ frameSeq: 3, epoch: 'a' })
   const probe = page
   showFixture(probe)
@@ -228,7 +228,7 @@ it("tests that a box the entry typed into prints bullets in the page's snapshot,
     page?.close()
     page = openProbePage(MARKED_PAGE, {
       conformance,
-      mayHaveOtherFrame: true,
+      discoverMovedFields: true,
     })
     page.boot({ frameSeq: 3, epoch: 'a' })
     showFixture(page)
