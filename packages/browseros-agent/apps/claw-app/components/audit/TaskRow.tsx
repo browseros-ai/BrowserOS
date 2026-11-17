@@ -22,6 +22,7 @@ import {
   ultrafastTime,
 } from '@/screens/audit/audit.helpers'
 import { SessionStatusBadge } from './SessionStatusBadge'
+import { UltrafastMark, UltrafastRail } from './UltrafastMarks'
 import { UltrafastRunBadge } from './UltrafastRunBadge'
 
 interface TaskRowProps {
@@ -35,6 +36,7 @@ interface TaskRowProps {
 export function TaskRow({ task, now, timeOnly = false }: TaskRowProps) {
   const location = useLocation()
   const screenshotBaseUrl = useTaskScreenshotBaseUrl()
+  const ultrafast = Boolean(task.pursue || task.ultrafast)
   const shot =
     task.latestScreenshotId != null && screenshotBaseUrl !== null
       ? taskScreenshotUrl(
@@ -49,8 +51,9 @@ export function TaskRow({ task, now, timeOnly = false }: TaskRowProps) {
       to={`/audit/${encodeURIComponent(task.sessionId)}`}
       state={{ from: location.pathname }}
       data-task-row={task.sessionId}
-      className="grid grid-cols-[72px_minmax(0,1fr)] items-center gap-x-4 gap-y-2 px-4 py-3.5 transition-colors hover:bg-bg-canvas focus-visible:bg-bg-canvas focus-visible:outline-none sm:grid-cols-[112px_minmax(0,1fr)_auto] sm:gap-x-[18px] sm:px-[18px]"
+      className="relative grid grid-cols-[72px_minmax(0,1fr)] items-center gap-x-4 gap-y-2 px-4 py-3.5 transition-colors hover:bg-bg-canvas focus-visible:bg-bg-canvas focus-visible:outline-none sm:grid-cols-[112px_minmax(0,1fr)_auto] sm:gap-x-[18px] sm:px-[18px]"
     >
+      {ultrafast ? <UltrafastRail /> : null}
       <span
         className={cn(
           'relative grid aspect-[16/10] place-items-center overflow-hidden rounded-md border border-border-2',
@@ -74,10 +77,23 @@ export function TaskRow({ task, now, timeOnly = false }: TaskRowProps) {
             ) : null}
           </>
         ) : task.site ? (
-          <SiteChip site={task.site} size="lg" />
+          <SiteChip
+            site={task.site}
+            size="lg"
+            className={cn(ultrafast && 'max-sm:-translate-x-2.5')}
+          />
         ) : (
-          <Globe aria-hidden className="size-5 text-ink-3" />
+          <Globe
+            aria-hidden
+            className={cn(
+              'size-5 text-ink-3',
+              ultrafast && 'max-sm:-translate-x-2.5',
+            )}
+          />
         )}
+        {ultrafast ? (
+          <UltrafastMark className="absolute right-1.5 bottom-1.5" />
+        ) : null}
       </span>
       <span className="flex min-w-0 flex-col gap-[3px]">
         <span className="truncate font-semibold text-[15.5px] text-cyanotype-ink">
