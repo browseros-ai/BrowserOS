@@ -65,12 +65,16 @@ async fn summary_omits_values_everywhere_and_keeps_audit_metadata() -> TestResul
         retryable: false,
         operation_id: Some(fill),
         // A covered error's cover is page text: the full view shows it, a summary never does.
+        // An early stop's two numbers ride on it, and the full view decodes the stored cover
+        // into the contract's `Cover`, so a shape the model lacks would drop them silently.
         cover: Some(json!({
             "ref": "e7",
             "role": "dialog",
             "name": value,
             "kind": "page",
             "controls": [{"ref": "e9", "role": "button", "name": value}],
+            "stoodMs": 5012,
+            "checks": 13,
         })),
     };
     h.sink.run_started(RunStarted {
@@ -184,7 +188,10 @@ async fn summary_omits_values_everywhere_and_keeps_audit_metadata() -> TestResul
     for key in ["code", "hostData", "result", "downloads"] {
         assert!(full.body[key].to_string().contains(value), "{key}");
     }
-    assert_eq!(full.body["operations"][0]["error"]["cover"]["name"], value);
+    let cover = &full.body["operations"][0]["error"]["cover"];
+    assert_eq!(cover["name"], value);
+    assert_eq!(cover["stoodMs"], 5012, "{cover}");
+    assert_eq!(cover["checks"], 13, "{cover}");
     let audit = h
         .get("/v1/runs?taskId=summary-canary&fields=summary&internal=false")
         .await?;
