@@ -33,6 +33,18 @@ to the appropriate loopback TCP port. See [Host integration](docs/integrate.md).
 | `--preset` | `ultrafast` | Encoder preset for x264 builds |
 | `--help`, `--version` | | Print options or version and exit |
 
+## Build with Docker
+
+From this directory, export the release binary, web assets and licence notices, or
+run formatting, Clippy and tests for the default, x264-only and combined features.
+
+```sh
+docker buildx build --output type=local,dest=target/rootfs .
+docker buildx build --target slimviewer-check --output type=cacheonly .
+```
+
+The release uses OpenH264. To build the full SDK image, run `../neo-server/docker/build.sh`.
+
 ## Build on Linux
 
 Use Rust 1.98.0, Git, Make, a C/C++ toolchain and NASM. From this directory,

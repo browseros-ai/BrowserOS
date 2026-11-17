@@ -2,20 +2,20 @@
 #
 # The BrowserOS Neo SDK image: the released neo browser plus this commit's SDK server
 # (browseros-claw-sdk, one MCP tool: `run`), for hosts that build on it or run it alone.
-# README.md beside this file is the host contract. Build it with build.sh, from one
-# context, packages/browseros-agent, filtered by Dockerfile.dockerignore. The image owns its
+# README.md beside this file is the host contract. build.sh supplies packages/browseros-agent
+# (filtered by Dockerfile.dockerignore) and the slimviewer build output. The image owns its
 # browser supervisor (supervisor/ beside this file); the default Neo image, packages/browseros/
 # docker/neo with claw-server, is production's and shares nothing with it.
 #
 #   stage server          (build machine's arch)  workspace minus supervisor/ and viewer ─▶ server
-#   stage slimviewer-check (target arch, CI only) Rust tests for OpenH264 and x264
-#   stage slimviewer-build (target arch)          OpenH264-only binary, web assets and notices
+#   context slimviewer    (target arch)          binary, web assets and notices from neo-slimviewer
 #   stage neo-sdk-runtime (target arch)           ubuntu + pinned browser .deb + server
 #                                                 + slimviewer + supervisor/ + provenance
 #   stage neo-sdk-keyed   neo-sdk-runtime + CAPTCHA keys from BuildKit secrets (build.sh --*-key-file)
 #   stage neo-sdk         neo-sdk-runtime as is: keyless, the default target
 
 ARG UBUNTU_IMAGE=ubuntu:24.04@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852
+# Keep RUST_IMAGE in sync with ../../neo-slimviewer/Dockerfile.
 ARG RUST_IMAGE=rust:1.98.0-bookworm@sha256:82150a52ec202c1b14d7817e14516c392bb7f5cfebd88f1ed531cb37ebd39922
 
 # The server, cross-compiled on the build machine's own architecture exactly as
@@ -28,9 +28,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3-venv &&
  && ln -s "$(/opt/zig/bin/python -c 'import pathlib, ziglang; print(pathlib.Path(ziglang.__file__).parent)')/zig" /usr/local/bin/zig \
  && cargo install --locked cargo-zigbuild --version 0.23.0
 WORKDIR /src
-# The supervisor and standalone viewer have their own stages or runtime layers. Neither
-# belongs in the server's build cache key or its compiled-in source digest.
-COPY --exclude=crates/neo-sdk/neo-server/docker/supervisor --exclude=crates/neo-sdk/neo-slimviewer . .
+# The supervisor is installed at runtime and does not belong in the server's source digest.
+COPY --exclude=crates/neo-sdk/neo-server/docker/supervisor . .
 # The target cache is per architecture and shared by every checkout built on this Docker daemon,
 # so third-party crates compile once; the registry is shared by both architectures.
 # build-server.sh cleans the workspace's own crates from it before each build, because Cargo judges
@@ -51,138 +50,10 @@ RUN --mount=type=cache,id=neo-sdk-cargo-registry,target=/usr/local/cargo/registr
     if [ -n "$NEO_SDK_BUILD_JOBS" ]; then export CARGO_BUILD_JOBS="$NEO_SDK_BUILD_JOBS"; fi; \
     bash crates/neo-sdk/neo-server/docker/build-server.sh "$target"
 
-# OpenH264's makefile and assembler run on the target CPU, as does the Rust linker.
-FROM ${RUST_IMAGE} AS slimviewer-toolchain
-RUN apt-get update && apt-get install -y --no-install-recommends g++ nasm && rm -rf /var/lib/apt/lists/*
-ARG SOURCE_DATE_EPOCH=0
-ENV SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH} \
-    CARGO_INCREMENTAL=0 \
-    RUSTFLAGS="--remap-path-prefix=/src=. --remap-path-prefix=/usr/local/cargo=/cargo --remap-path-prefix=/usr/local/rustup=/rust" \
-    CFLAGS="-ffile-prefix-map=/src=. -ffile-prefix-map=/usr/local/cargo=/cargo" \
-    CXXFLAGS="-ffile-prefix-map=/src=. -ffile-prefix-map=/usr/local/cargo=/cargo" \
-    OPENH264_ROOT=/opt/openh264
-COPY crates/neo-sdk/neo-slimviewer/csrc/build-openh264.sh /tmp/build-openh264.sh
-RUN sh /tmp/build-openh264.sh /opt/openh264
-WORKDIR /src
-COPY --exclude=tests --exclude=web crates/neo-sdk/neo-slimviewer/ .
-ARG TARGETARCH
-ARG NEO_SDK_CACHE_SCOPE=
-ARG NEO_SDK_BUILD_JOBS=
-
-# Only the explicit check target installs x264 or compiles tests.
-FROM slimviewer-toolchain AS slimviewer-check
-RUN apt-get update && apt-get install -y --no-install-recommends libx264-dev && rm -rf /var/lib/apt/lists/* \
- && rustup component add clippy rustfmt
-COPY crates/neo-sdk/neo-slimviewer/tests/ tests/
-RUN --mount=type=cache,id=neo-slimviewer-registry-${TARGETARCH},target=/usr/local/cargo/registry,sharing=locked \
-    --mount=type=cache,id=neo-slimviewer-target-${TARGETARCH}${NEO_SDK_CACHE_SCOPE},target=/src/target,sharing=locked \
-    set -eu; \
-    if [ -n "$NEO_SDK_BUILD_JOBS" ]; then export CARGO_BUILD_JOBS="$NEO_SDK_BUILD_JOBS"; fi; \
-    cargo fmt --check; \
-    cargo clean --locked --profile dev -p "$(cargo pkgid --locked)"; \
-    cargo clippy --locked --all-targets -- -D warnings; \
-    cargo test --locked; \
-    cargo clippy --locked --all-targets --no-default-features --features x264 -- -D warnings; \
-    cargo test --locked --no-default-features --features x264; \
-    cargo clippy --locked --all-targets --all-features -- -D warnings; \
-    cargo test --locked --all-features
-
-FROM slimviewer-toolchain AS slimviewer-build
-# Cargo uses mtimes. Rebuild the local crate and its C++ shim even for an older checkout.
-RUN --mount=type=cache,id=neo-slimviewer-registry-${TARGETARCH},target=/usr/local/cargo/registry,sharing=locked \
-    --mount=type=cache,id=neo-slimviewer-target-${TARGETARCH}${NEO_SDK_CACHE_SCOPE},target=/src/target,sharing=locked \
-    set -eu; \
-    if [ -n "$NEO_SDK_BUILD_JOBS" ]; then export CARGO_BUILD_JOBS="$NEO_SDK_BUILD_JOBS"; fi; \
-    cargo clean --locked --release -p "$(cargo pkgid --locked)"; \
-    cargo build --release --locked --no-default-features --features openh264; \
-    binary=target/release/slimviewer; \
-    ldd "$binary" > /tmp/linked-libraries; \
-    if grep -E 'x264|not found' /tmp/linked-libraries; then exit 1; fi; \
-    nm -D "$binary" > /tmp/dynamic-symbols; \
-    if grep -E '[[:space:]](x264_|sv_x264_)' /tmp/dynamic-symbols; then exit 1; fi; \
-    if "$binary" --encoder x264 > /tmp/x264-rejection 2>&1; then exit 1; fi; \
-    grep -F 'encoder x264 is not built in' /tmp/x264-rejection; \
-    strip --strip-all "$binary"; "$binary" --help; \
-    install -D -m 0755 "$binary" /out/usr/local/bin/slimviewer
-
-# Audit every dependency in the lockfile, including build-only and foreign-target crates.
-# Ubuntu ships the copyright notices for the runtime's dynamically linked system libraries.
-RUN --mount=type=cache,id=neo-slimviewer-registry-${TARGETARCH},target=/usr/local/cargo/registry,sharing=locked <<'AUDIT'
-set -eu
-cargo metadata --locked --format-version 1 > /tmp/cargo-metadata.json
-python3 - <<'PY'
-import json
-import pathlib
-import subprocess
-
-metadata = json.loads(pathlib.Path('/tmp/cargo-metadata.json').read_text())
-# Reviewed SPDX alternatives, selecting permissive terms. Unknown expressions,
-# GPL/AGPL-only crates and unreviewed local dependencies fail the release build.
-approved = {
-    'MIT': 'MIT',
-    'Apache-2.0': 'Apache-2.0',
-    'MIT OR Apache-2.0': 'MIT',
-    'Apache-2.0 OR MIT': 'MIT',
-    'Unlicense OR MIT': 'MIT',
-    'Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT': 'MIT',
-    'MIT OR Apache-2.0 OR LGPL-2.1-or-later': 'MIT',
-    '(MIT OR Apache-2.0) AND Unicode-3.0': 'MIT AND Unicode-3.0',
-}
-packages = [p for p in metadata['packages'] if p['id'] != metadata['resolve']['root']]
-for package in packages:
-    if package['source'] is None or package.get('license') not in approved:
-        raise SystemExit(f"Unapproved crate licence: {package['name']} {package.get('license')}")
-print(f'Crate licence audit: {len(packages)} packages; no GPL/AGPL licence selected.')
-out = pathlib.Path('/out/usr/share/doc/slimviewer/THIRD-PARTY-LICENSES')
-out.parent.mkdir(parents=True, exist_ok=True)
-
-def notice_files(root):
-    prefixes = ('LICENSE', 'LICENCE', 'COPYING', 'COPYRIGHT', 'NOTICE', 'UNLICENSE', 'AUTHORS')
-    return sorted(p for p in root.rglob('*') if p.is_file()
-                  and any(part.upper().startswith(prefixes) for part in p.relative_to(root).parts))
-
-with out.open('w') as report:
-    def section(title, files, root):
-        if not files:
-            raise SystemExit(f'Missing licence text/notice: {title}')
-        report.write(f'\n{"=" * 72}\n{title}\n')
-        for path in files:
-            report.write(f'\n--- {path.relative_to(root)} ---\n')
-            report.write(path.read_text())
-            report.write('\n')
-
-    report.write('Third-party notices for slimviewer\nGenerated from Cargo.lock and the pinned build environment.\n')
-    report.write(f'Crate licence audit: {len(packages)} packages; selected terms below.\n')
-    for package in sorted(packages, key=lambda p: (p['name'], p['version'])):
-        root = pathlib.Path(package['manifest_path']).parent
-        files = notice_files(root)
-        if package.get('license_file'):
-            explicit = root / package['license_file']
-            if explicit not in files:
-                files.append(explicit)
-        section(f"{package['name']} {package['version']} — {package['license']}; selected: {approved[package['license']]}",
-                sorted(files), root)
-
-    root = pathlib.Path('/opt/openh264/share/doc/openh264')
-    version, _ = (root / 'SOURCE').read_text().split()
-    section(f'OpenH264 {version.removeprefix("v")} — BSD-2-Clause (built from source)',
-            [root / 'SOURCE', root / 'LICENSE'], root)
-
-    sysroot = pathlib.Path(subprocess.check_output(['rustc', '--print', 'sysroot'], text=True).strip())
-    rust_docs = sysroot / 'share/doc/rust'
-    rust_version = subprocess.check_output(['rustc', '--version'], text=True).split()[1]
-    section(f'Rust standard library {rust_version}',
-            [rust_docs / 'COPYRIGHT-library.html'] +
-            sorted(p for p in (rust_docs / 'licenses').rglob('*') if p.is_file()), rust_docs)
-PY
-AUDIT
-
-COPY --chmod=0644 crates/neo-sdk/neo-slimviewer/web/slimviewer.html crates/neo-sdk/neo-slimviewer/web/ui.js /out/usr/share/slimviewer/
-# COPY --chmod also gives the folder it creates 0644, which no other user can enter; hosts read
-# the page and adapter from here as any user.
-RUN chmod 0755 /out/usr/share/slimviewer \
- && printf '%s\n' libc6 libgcc-s1 libstdc++6 > /out/usr/share/slimviewer/RUNTIME-DEPS \
- && find /out -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} +
+# build.sh supplies a named context that replaces this entire stage. A bare build
+# reaches the diagnostic without resolving a slimviewer image from a registry.
+FROM ${UBUNTU_IMAGE} AS slimviewer
+RUN echo 'Missing slimviewer build context. Run neo-server/docker/build.sh to build the SDK image.' >&2 && exit 1
 
 FROM ${UBUNTU_IMAGE} AS neo-sdk-runtime
 ARG TARGETARCH
@@ -232,7 +103,9 @@ COPY --chmod=0755 crates/neo-sdk/neo-server/docker/supervisor/healthcheck.sh /us
 COPY --chmod=0755 crates/neo-sdk/neo-server/docker/supervisor/neo-quit.py /usr/local/bin/neo-quit
 COPY crates/neo-sdk/neo-playwright/THIRD_PARTY_NOTICES.md crates/neo-sdk/neo-playwright/third_party/playwright/LICENSE crates/neo-sdk/neo-playwright/third_party/playwright/NOTICE /usr/share/doc/neo-sdk/playwright/
 
-COPY --from=slimviewer-build /out/ /
+COPY --from=slimviewer /usr/local/bin/slimviewer /usr/local/bin/slimviewer
+COPY --from=slimviewer /usr/share/slimviewer/ /usr/share/slimviewer/
+COPY --from=slimviewer /usr/share/doc/slimviewer/ /usr/share/doc/slimviewer/
 RUN set -eu; while read -r package; do \
       [ "$(dpkg-query -W -f='${db:Status-Status}' "$package")" = installed ] \
         || { echo "missing slimviewer runtime package: $package" >&2; exit 1; }; \
@@ -250,9 +123,8 @@ ARG NEO_SDK_REVISION=unknown
 ARG NEO_SDK_DIRTY=true
 ARG NEO_SDK_VERSION=unknown
 # Read the same OpenH264 pin that build.rs verified when it linked the binary.
-RUN --mount=from=slimviewer-build,source=/opt/openh264/share/doc/openh264/SOURCE,target=/tmp/openh264-source \
-    set -eu; . /usr/share/neo-sdk/browser.lock; server=$(neo-server-info path); \
-    read -r openh264_version openh264_revision < /tmp/openh264-source; \
+RUN set -eu; . /usr/share/neo-sdk/browser.lock; server=$(neo-server-info path); \
+    read -r openh264_version openh264_revision < /usr/share/doc/slimviewer/OPENH264-SOURCE; \
     jq -n --arg version "$NEO_SDK_VERSION" --arg revision "$NEO_SDK_REVISION" --argjson dirty "$NEO_SDK_DIRTY" --arg arch "$TARGETARCH" \
       --arg browser "$NEO_BROWSER_VERSION" --arg deb "$(dpkg-query -W -f '${Version}' browserclaw)" \
       --arg slimviewer_sha256 "$(sha256sum /usr/local/bin/slimviewer | cut -d' ' -f1)" \

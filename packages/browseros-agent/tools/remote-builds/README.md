@@ -154,9 +154,10 @@ on VM1 using an OS file lock. `guest.py` puts each command in a named systemd se
 stop the whole process tree even if a child detaches. These are short-lived SSH commands,
 not a new network service.
 
-The image driver and recipes are installed on every worker, so an older checkout does not
-need this feature's files. Explicit source metadata selects that checkout's actual Docker
-inputs. A narrow Node preload supplies only a legacy spec report's `git rev-parse HEAD` in
+Image jobs use the checkout's recipe and build script so its Dockerfiles receive their
+matching build contexts. Workers also carry a recipe and driver for older checkouts
+that predate the pool or need Git history. Explicit source metadata identifies the snapshot.
+A narrow Node preload supplies only a legacy spec report's `git rev-parse HEAD` in
 the uploaded agent directory; public corpus Git and other child processes run normally.
 
 ### Legacy supervisor compatibility and removal

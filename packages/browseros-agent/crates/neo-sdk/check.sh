@@ -65,8 +65,8 @@ if [[ "$BUN_FOUND" != "$BUN_PINNED" ]]; then
   exit 1
 fi
 
-# neo-slimviewer needs a source-built OpenH264. Its clippy and tests run in the image's
-# slimviewer-check Docker target.
+# neo-slimviewer needs a source-built OpenH264. Its Clippy and tests run in
+# neo-slimviewer/Dockerfile's slimviewer-check target.
 STANDALONE_CRATES=(neo-slimviewer)
 
 # PACKAGES: claw-sdk's lint set. WORKSPACE_LINTED: the other workspace members. ALL_ARGS: both.

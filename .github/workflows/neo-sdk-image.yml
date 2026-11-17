@@ -131,10 +131,10 @@ jobs:
         id: viewer
         if: github.event_name == 'pull_request'
         working-directory: packages/browseros-agent
-        # A pull_request checkout is the test merge. Its first parent is the PR's base.
+        # HEAD^1 is the test merge's base. The whole viewer crate includes its Dockerfile* inputs.
         run: |
           paths=$(git diff --name-only HEAD^1 HEAD -- crates/neo-sdk/neo-slimviewer \
-            crates/neo-sdk/neo-server/docker/Dockerfile crates/neo-sdk/neo-server/docker/Dockerfile.dockerignore)
+            'crates/neo-sdk/neo-server/docker/Dockerfile*' crates/neo-sdk/neo-server/docker/build.sh)
           if [[ -n "$paths" ]]; then echo 'changed=true' >> "$GITHUB_OUTPUT"; fi
       - uses: astral-sh/setup-uv@v8.3.2
       - name: Supervisor tests
@@ -146,21 +146,22 @@ jobs:
         run: uv run --directory "$GITHUB_WORKSPACE/packages/browseros" ruff check "$PWD"
 
   slimviewer-check:
-    name: Neo SDK image / slimviewer checks
+    name: Neo SDK image / slimviewer checks (${{ matrix.runner }})
     needs: scripts
     if: needs.scripts.outputs.viewer_changed == 'true'
-    # arm64 exercises the shipped OpenH264 viewer in the native image build and acceptance job.
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - name: Test the default, x264 and combined encoders
-        working-directory: packages/browseros-agent
-        run: |
-          docker buildx build --platform linux/amd64 --target slimviewer-check --output type=cacheonly \
-            --file crates/neo-sdk/neo-server/docker/Dockerfile .
+        working-directory: packages/browseros-agent/crates/neo-sdk/neo-slimviewer
+        run: docker buildx build --target slimviewer-check --output type=cacheonly .
 
   image:
     name: Neo SDK image / ${{ matrix.arch }} build + accept

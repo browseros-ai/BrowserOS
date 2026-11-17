@@ -1,5 +1,5 @@
 # The context is packages/browseros-agent. The server needs every workspace member's manifest
-# and sources plus its lockfile. The standalone viewer and runtime inputs are selected below.
+# and sources plus its lockfile. The standalone viewer builds in its own context.
 *
 !Cargo.toml
 !Cargo.lock
@@ -11,17 +11,7 @@
 target
 # The CAPTCHA testbed beside neo-captcha's sources is no build input either.
 crates/neo-sdk/neo-captcha/testbed
-# Only the viewer's build inputs, Rust integration tests and shipped assets enter the context.
 crates/neo-sdk/neo-slimviewer
-!crates/neo-sdk/neo-slimviewer/Cargo.toml
-!crates/neo-sdk/neo-slimviewer/Cargo.lock
-!crates/neo-sdk/neo-slimviewer/build.rs
-!crates/neo-sdk/neo-slimviewer/csrc
-crates/neo-sdk/neo-slimviewer/csrc/*.Dockerfile
-!crates/neo-sdk/neo-slimviewer/src
-!crates/neo-sdk/neo-slimviewer/tests/**/*.rs
-!crates/neo-sdk/neo-slimviewer/web/slimviewer.html
-!crates/neo-sdk/neo-slimviewer/web/ui.js
 # This folder's scripts and docs are not build inputs, so editing them leaves the image cached.
 # The browser pin, the server's build step and the supervisor (supervisor/, its tests aside) are.
 crates/neo-sdk/neo-server/docker

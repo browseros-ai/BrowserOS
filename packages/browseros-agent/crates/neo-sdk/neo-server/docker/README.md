@@ -8,9 +8,10 @@ Production uses the default Neo image
 it in `.github/workflows/neo-sdk-image.yml`, which publishes it only when asked (Publish below).
 
 ```
-build.sh ──buildx──▶ Dockerfile ─┬─ server   (build machine's arch): this workspace ─▶ browseros-claw-sdk
-                                 └─ neo-sdk  (target arch): ubuntu + browser.lock's .deb + the server
-                                              + supervisor/ (this folder)
+build.sh ──▶ neo-slimviewer/Dockerfile ──▶ binary, web assets, notices (target CPU)
+         └─▶ this Dockerfile            ◀── slimviewer files as a named context
+                   ├─ server   (build CPU)   cross-compiles browseros-claw-sdk
+                   └─ neo-sdk  (target CPU)  Ubuntu, pinned browser, server, slimviewer, supervisor
 accept.sh <image> ──▶ disposable containers ──▶ PASS / FAIL / SKIP per check
 ```
 
@@ -26,11 +27,14 @@ crates/neo-sdk/neo-server/docker/build.sh --platform linux/arm64   # a dev Mac
 crates/neo-sdk/neo-server/docker/build.sh --platform linux/amd64   # host containers
 ```
 
+Run either command from `packages/browseros-agent`. Buildx exports the standalone viewer's
+release files to a temporary directory and supplies it as the `slimviewer` context for the
+second build. The viewer and OpenH264 compile on the target CPU. The server uses zig to
+cross-compile on the build CPU. Cargo keeps a separate build cache for each target architecture.
+
 The tag is `neo-sdk:<browser>-<commit>-<arch>`, with `-dirty` before the arch when
 `packages/browseros-agent` (which holds every input) has uncommitted changes. `build.sh` prints `TAG=`, `IMAGE_ID=` and the
-image's `provenance.json`. The server is cross-compiled with zig, so an amd64 image builds on an Apple
-silicon Mac without emulating rustc. The first build takes about 7 minutes; Cargo's cache is kept per
-architecture after that, shared by every checkout built on the Docker daemon.
+image's `provenance.json`.
 
 That cache never decides which server an image gets. Cargo judges freshness by file mtimes, so a
 checkout whose sources were older than the cache's last build once shipped that build's server under
@@ -58,8 +62,8 @@ without a download event.
 that kept tabs remain open. After release it checks that tabs stay open for a fresh idle interval
 and polls for their eventual closure. These deadlines allow delayed sweeps while still failing
 when cleanup never happens.
-An image for another architecture than the Docker engine's gets the static `identity` check only, because
-booting it would be emulated. CI runs both scripts natively on amd64 and arm64
+An image for another architecture than the Docker engine's gets the `identity` and `slimviewer-assets`
+checks. CI runs both scripts natively on amd64 and arm64
 (`.github/workflows/neo-sdk-image.yml`) on every pull request and push that changes the image's inputs,
 with the supervisor's and the scripts' own tests; the accept logs and `provenance.json` are its artifacts.
 
