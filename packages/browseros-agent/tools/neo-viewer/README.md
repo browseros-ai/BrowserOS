@@ -270,7 +270,8 @@ most six HTTP/1.1 connections to one origin and a stream holds one for as long a
 open, so a stream per tab would leave six tabs no connection for anything else. The tab that holds
 the `neo-viewer:events` Web Lock opens the stream and relays it to the other tabs over a
 BroadcastChannel; when it closes, the next tab in line opens it and every tab takes a fresh
-snapshot (`web/viewer-events.ts`).
+snapshot (`web/viewer-events.ts`). Not yet measured: an owning tab hidden long enough for Chrome to
+throttle its timers (its relay runs on stream and channel events, not timers).
 
 Once a run's reply is in, the viewer reads Neo's record of it through the host API
 (`GET /v1/runs/{id}?wait=10`, joined by the reply's `_meta["com.browseros.neo/run"].id`, which is
