@@ -189,11 +189,11 @@ NEO_E2E_BROWSER=/usr/bin/browserclaw python3 crates/neo-sdk/live.py
 The test profile is optimized at level 2 through the environment; repository Cargo profiles
 are unchanged. The live host processes large console events with the row's existing deadlines.
 The command compiles all 22 `neo-playwright` live targets and `neo-server`'s
-`acceptance_browseros` and five-row `probe_reply_browseros` targets once. Each suite runs
-through `bun run test:browser` with one test thread; live targets and acceptance use `--ignored`,
-while probe replies use their ordinary selection. Independent test clients share browser tabs inside a
-suite, so serial execution prevents one client's cleanup from clearing another's
-emulation. Each suite gets a fresh private browser. The acceptance rig also gets
+`acceptance_browseros`, `probe_reply_browseros`, and `snapshot_unmarked_browseros` targets once.
+Each suite runs through `bun run test:browser` with one test thread. Live targets and acceptance
+use `--ignored`; probe replies and snapshot notices use ordinary selection. Independent test
+clients share browser tabs inside a suite, so serial execution prevents one client's cleanup
+from clearing another's emulation. Each suite gets a fresh private browser. The acceptance rig also gets
 `CLAW_SDK_E2E_BROWSER` from the selected executable so its four rows actually run.
 The report in `.llm/sdk-live` contains the compile duration, optimization settings, pass/fail/early-return counts,
 commands, logs, and per-suite outcomes. CI reports its measured compile cost in the job summary.

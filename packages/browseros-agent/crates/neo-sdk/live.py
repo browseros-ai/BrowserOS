@@ -137,6 +137,7 @@ def main():
     suites.extend([
         Suite("neo-server", "acceptance_browseros"),
         Suite("neo-server", "probe_reply_browseros", ignored_only=False),
+        Suite("neo-server", "snapshot_unmarked_browseros", ignored_only=False),
     ])
 
     environment = os.environ.copy()
