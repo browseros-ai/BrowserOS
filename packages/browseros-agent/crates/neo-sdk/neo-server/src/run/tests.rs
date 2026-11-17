@@ -2185,3 +2185,47 @@ fn a_join_with_different_access_keeps_the_first_handles_reply() -> Result<(), Te
         Ok(())
     })
 }
+
+/// A fixture progress witness, not a product latency budget: the competing observation is
+/// held until this run answers, so waiting on it cannot succeed even on a fast machine.
+const CRASH_REFUSAL_WATCHDOG: Duration = Duration::from_secs(30);
+
+#[test]
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "the test deliberately stalls an existing observation turn to prove a crash refusal never waits for it"
+)]
+fn target_crashed_unsent_refusal_does_not_wait_for_page_observation() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let service = rig.run_service(GRACE);
+        let pending = caller(
+            &service,
+            request(
+                r"
+            await __neo.invoke('test.touch', { page });
+            await __neo.invoke('test.gate', {});
+            await __neo.invoke('test.gate', {});
+            await __neo.invoke('test.crashed', { page });
+        ",
+                RunMeta::default(),
+            )?,
+        );
+        rig.gate.wait().await;
+        // A different operation may own an observation turn while its event fence stalls.
+        // An unsent crash has no payload or page facts to order behind that turn.
+        let held = rig.dispatcher.observer().hold().await;
+        rig.gate.wait().await;
+        let result = time::timeout(CRASH_REFUSAL_WATCHDOG, pending).await;
+        drop(held);
+        let failed = result.map_err(|elapsed| {
+            format!("cached-crash refusal stalled behind page observation: {elapsed}")
+        })??;
+        assert_eq!(
+            error_of(&failed)?.diagnostic_code,
+            Some(DiagnosticCode::TargetCrashed)
+        );
+        assert_eq!(error_of(&failed)?.delivery, Some(ReplyDelivery::NotSent));
+        Ok(())
+    })
+}

@@ -56,13 +56,15 @@ impl FileChooser {
         page: &PageHandle,
         opened: &FileChooserOpened,
     ) -> Result<Option<Self>, PlaywrightError> {
+        let observation = scope.observation();
+        let scope = &observation;
         let admitted = match scope.observe_page(pw.browser(), page.tab()).await {
             Ok(Some(admitted)) => admitted,
             Ok(None) => return Ok(None),
             Err(error) if error.error_code() == Some(ErrorCode::TargetClosed) => return Ok(None),
             Err(error) => return Err(error),
         };
-        let op_page = OpPage::observed(pw, &admitted).await;
+        let op_page = OpPage::observed(pw, scope, &admitted).await;
         let world = match world_call::listed_frame_world(&op_page, scope, Some(&opened.frame)).await
         {
             Ok(Some(world)) if world.session().session_id() == Some(&opened.session) => world,

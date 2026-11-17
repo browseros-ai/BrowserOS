@@ -68,7 +68,8 @@ impl<'a> HandleSite<'a> {
         let resolved = world
             .session()
             .send::<_, ResolvedNode>("DOM.resolveNode", params)
-            .await;
+            .await
+            .inspect_err(|error| scope.record_protocol_error(world.session(), error));
         match resolved {
             Ok(resolved) => Ok(Some(Self {
                 page,

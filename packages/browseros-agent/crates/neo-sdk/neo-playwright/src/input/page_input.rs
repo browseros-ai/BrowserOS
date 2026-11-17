@@ -237,7 +237,10 @@ impl PageInput {
             .within(dispatched)
             .await
             .map_err(|_expired| BurstFailure::Expired)?
-            .map_err(BurstFailure::Cdp)?;
+            .map_err(|error| {
+                scope.record_protocol_error(&self.session, &error);
+                BurstFailure::Cdp(error)
+            })?;
         Ok(())
     }
 
@@ -259,7 +262,10 @@ impl PageInput {
                     self.last = Some(event);
                     replied
                         .map_err(|_expired| BurstFailure::Expired)?
-                        .map_err(BurstFailure::Cdp)?;
+                        .map_err(|error| {
+                            scope.record_protocol_error(&self.session, &error);
+                            BurstFailure::Cdp(error)
+                        })?;
                 }
             }
         }

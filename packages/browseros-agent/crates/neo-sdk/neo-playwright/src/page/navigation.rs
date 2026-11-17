@@ -339,7 +339,7 @@ async fn drive(
     wait_until: LoadState,
 ) -> Result<Option<Response>, PlaywrightError> {
     let failed = |error: WatchError| watch_error(scope, &error);
-    let core = |error: CoreError| scope.core_error(&error);
+    let core = |error: CoreError| scope.protocol_error(session, &error);
     let arrival = match navigation {
         Navigation::Goto { url, referer, .. } => {
             let sent = scope.send_effect()?;
@@ -371,7 +371,7 @@ async fn drive(
                 Err(error) if moved(&error) => watch.replay_lifecycle(),
                 Err(error) => return Err(failed(error)),
             }
-            let reply = reply.map_err(core)?;
+            let reply = reply.map_err(|error| scope.protocol_error(&target.command, &error))?;
             // A download is answered with an error text too, so it goes first, as upstream.
             if reply.is_download {
                 return Err(scope.fail(ErrorCode::NavigationFailed, "Download is starting"));

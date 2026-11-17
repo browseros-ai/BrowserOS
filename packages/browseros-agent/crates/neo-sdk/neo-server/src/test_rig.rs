@@ -560,6 +560,8 @@ struct CrashInput {
     sent: bool,
     #[serde(default)]
     uncertain: bool,
+    #[serde(default)]
+    page: Option<PageTarget>,
 }
 
 impl Method for Crashed {
@@ -570,8 +572,8 @@ impl Method for Crashed {
         MethodSpec::new("test.crashed", Effect::Write)
     }
 
-    fn target(_input: &CrashInput) -> Option<&PageTarget> {
-        None
+    fn target(input: &CrashInput) -> Option<&PageTarget> {
+        input.page.as_ref()
     }
 
     fn call(

@@ -264,7 +264,7 @@ async fn enable_frame(
     session
         .send_value("Page.enable", json!({}))
         .await
-        .map_err(|error| scope.core_error(&error))?;
+        .map_err(|error| scope.protocol_error(&session, &error))?;
     Ok(())
 }
 

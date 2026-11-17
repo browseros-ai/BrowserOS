@@ -543,6 +543,7 @@ pub(super) async fn enter_iframe(
     {
         Ok(described) => described,
         Err(error) => {
+            scope.record_protocol_error(parent.session(), &error);
             return match ProbeFailure::from_core(error) {
                 ProbeFailure::Gone(_) => Ok(Hopped::ParentGone),
                 failure => Err(failed(scope, failure)),

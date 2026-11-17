@@ -205,6 +205,9 @@ pub(crate) async fn print(
         .await
         .and_then(decode)
         .map_err(|error| match &error {
+            _ if ErrorCode::from_core(&error) == ErrorCode::TargetCrashed => {
+                scope.protocol_error(&session, &error)
+            }
             // The browser itself refused to print (headed Chrome cannot): not Neo's bug.
             CoreError::Cdp(CdpError::Protocol { message, .. }) => scope.fail(
                 ErrorCode::Unsupported,

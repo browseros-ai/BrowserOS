@@ -415,9 +415,9 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::{Answer, ErrorCode, PlaywrightError, TimedOut};
-    use crate::test_env::EnvCall;
+    use crate::test_env::{EnvCall, TestEnv};
     use crate::test_support::{ProbeAnswer, ScriptedRun, ScriptedTab, TabScript, TestResult};
-    use crate::{Op, Refusal};
+    use crate::{Op, OpEnv, Refusal};
 
     /// The error table as the sdk-playwright design states it, plus `wait_timeout`, written
     /// out apart from the code so a wrong row there fails here.
@@ -718,8 +718,8 @@ mod tests {
         );
     }
 
-    /// One command fails once; the next operation sees the browser's ordinary answer. This
-    /// distinguishes an error diagnostic from remembered crash state that refuses later work.
+    /// The browser fails only one command, so a later refusal must come from the facade's
+    /// remembered state, while the first command still proves the existing delivery rules.
     struct OneCrashReply {
         method: &'static str,
         failed: AtomicBool,
@@ -750,8 +750,7 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn target_crashed_goto_keeps_delivery_and_later_operations_reach_the_browser()
-    -> TestResult {
+    async fn target_crashed_goto_keeps_delivery_and_refuses_later_renderer_work() -> TestResult {
         let tab = ScriptedTab::new(OneCrashReply::on("Page.navigate"));
         let run = ScriptedRun::over(&tab).await?;
         let goto = Op::from_name("page.goto").ok_or("page.goto is an op")?;
@@ -767,19 +766,20 @@ mod tests {
         assert!(run.env.calls().contains(&EnvCall::MarkSent));
         assert_eq!(tab.sent("Page.navigate"), 1, "a crash reply is not retried");
 
+        let later_env = TestEnv::over(run.env.view().clone());
         let later = run
             .playwright
-            .invoke(&run.env, goto, input)
+            .invoke(&later_env, goto, input)
             .await
             .err()
-            .ok_or("the browser answers the later navigation with its net error")?;
+            .ok_or("the remembered crash refuses a fresh run's navigation")?;
         assert_eq!(
             tab.sent("Page.navigate"),
-            2,
-            "later work still reaches the browser"
+            1,
+            "a cached refusal sends no later navigation"
         );
-        assert_eq!(later.error_code(), Some(ErrorCode::NavigationFailed));
-        assert!(later.message().contains("net::ERR_ABORTED"));
+        assert_eq!(later.error_code(), Some(ErrorCode::TargetCrashed));
+        assert!(!later_env.calls().contains(&EnvCall::MarkSent));
         assert_eq!(crashed.code(), "target_crashed");
         assert!(
             crashed.message().starts_with(
@@ -791,8 +791,8 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn target_crashed_input_keeps_uncertainty_and_later_operations_reach_the_browser()
-    -> TestResult {
+    async fn target_crashed_input_keeps_uncertainty_and_refuses_later_renderer_work() -> TestResult
+    {
         let tab = ScriptedTab::new(OneCrashReply::on("Input.insertText"));
         let run = ScriptedRun::over(&tab).await?;
         let insert = Op::from_name("keyboard.insertText").ok_or("keyboard.insertText is an op")?;
@@ -815,14 +815,19 @@ mod tests {
             "input is not replayed after a crash reply"
         );
 
-        assert_eq!(
-            run.playwright.invoke(&run.env, insert, input).await?,
-            Value::Null
-        );
+        let later_env = TestEnv::over(run.env.view().clone());
+        let later = run
+            .playwright
+            .invoke(&later_env, insert, input)
+            .await
+            .err()
+            .ok_or("the remembered crash refuses a fresh run's input")?;
+        assert_eq!(later.error_code(), Some(ErrorCode::TargetCrashed));
+        assert!(!later_env.calls().contains(&EnvCall::MarkSent));
         assert_eq!(
             tab.sent("Input.insertText"),
-            2,
-            "later work still reaches the browser"
+            1,
+            "a cached refusal sends no later input"
         );
         assert_eq!(crashed.code(), "target_crashed");
         assert_eq!(

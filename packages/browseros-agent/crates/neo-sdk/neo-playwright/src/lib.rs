@@ -64,6 +64,9 @@ mod run_state;
 mod snapshot;
 mod target;
 #[cfg(test)]
+mod target_crashed_tests;
+mod target_crashes;
+#[cfg(test)]
 mod test_env;
 #[cfg(test)]
 mod test_support;

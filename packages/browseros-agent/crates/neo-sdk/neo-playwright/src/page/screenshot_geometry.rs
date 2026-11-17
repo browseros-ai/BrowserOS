@@ -172,7 +172,7 @@ impl ScreenshotGeometry {
             .root_session()
             .send("Page.getLayoutMetrics", json!({}))
             .await
-            .map_err(|error| scope.core_error(&error))?;
+            .map_err(|error| scope.protocol_error(&page.root_session(), &error))?;
         let document = if let Some(mut rect) = element {
             let fits = rect.width <= metrics.width && rect.height <= metrics.height;
             rect.x += metrics.scroll_x;
@@ -335,7 +335,7 @@ async fn metrics(
                     .root_session()
                     .send("Page.getLayoutMetrics", json!({}))
                     .await
-                    .map_err(|error| scope.core_error(&error))?;
+                    .map_err(|error| scope.protocol_error(&page.root_session(), &error))?;
                 if matches!(target, MetricsTarget::Element) {
                     return Err(scope.fail(
                         ErrorCode::ElementDetached,

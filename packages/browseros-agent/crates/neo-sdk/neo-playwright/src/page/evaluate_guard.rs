@@ -499,7 +499,7 @@ impl<'op> EvaluateGuard<'op> {
         } else {
             main_world_nodes(&session, &group, &script.handles, &script.subject)
                 .await
-                .map_err(|error| scope.core_error(&error))?
+                .map_err(|error| scope.protocol_error(&session, &error))?
         };
         let Some(objects) = objects else {
             script.leave_document();
@@ -531,7 +531,7 @@ impl<'op> EvaluateGuard<'op> {
             }
             script.evaluator = Evaluator::Absent;
         };
-        let outcome = called.map_err(|error| scope.core_error(&error))?;
+        let outcome = called.map_err(|error| scope.protocol_error(&session, &error))?;
         if matches!(
             outcome,
             Outcome::NotRun | Outcome::Destroyed | Outcome::Navigated
@@ -738,6 +738,7 @@ pub(super) async fn main_world_document(
                     "objectGroup": group }),
         )
         .await
+        .inspect_err(|error| scope.record_protocol_error(session, error))
         .map_err(ProbeFailure::from_core)?;
     let isolated = named.result.object_id.ok_or_else(|| {
         ProbeFailure::Broken("the isolated world returned no document".to_owned())
@@ -745,6 +746,7 @@ pub(super) async fn main_world_document(
     let described: Described = session
         .send("DOM.describeNode", json!({ "objectId": isolated }))
         .await
+        .inspect_err(|error| scope.record_protocol_error(session, error))
         .map_err(ProbeFailure::from_core)?;
     // No `executionContextId`: the node resolves in its own document's main world.
     let resolved: Resolved = session
@@ -753,6 +755,7 @@ pub(super) async fn main_world_document(
             json!({ "backendNodeId": described.node.backend_node_id, "objectGroup": group }),
         )
         .await
+        .inspect_err(|error| scope.record_protocol_error(session, error))
         .map_err(ProbeFailure::from_core)?;
     let local = described
         .node
@@ -1283,7 +1286,8 @@ async fn make_evaluator(scope: &OpScope<'_>, session: &ProtocolSession, group: &
             "Runtime.evaluate",
             json!({ "expression": &*EVALUATOR_JS, "objectGroup": group, "silent": true }),
         )
-        .await;
+        .await
+        .inspect_err(|error| scope.record_protocol_error(session, error));
     match made
         .ok()
         .and_then(|reply| decode::<Named>(reply).ok())
@@ -1433,7 +1437,7 @@ pub(super) async fn insert_tag(
             }),
         )
         .await
-        .map_err(|error| scope.core_error(&error))?;
+        .map_err(|error| scope.protocol_error(session, &error))?;
     session
         .send_value(
             "Runtime.callFunctionOn",
@@ -1443,7 +1447,7 @@ pub(super) async fn insert_tag(
             }),
         )
         .await
-        .map_err(|error| scope.core_error(&error))?;
+        .map_err(|error| scope.protocol_error(session, &error))?;
     if let Some(thrown) = reply.thrown() {
         return Err(scope.fail(ErrorCode::PageError, &thrown));
     }

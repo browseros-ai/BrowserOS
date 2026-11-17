@@ -22,6 +22,7 @@ use crate::page::{MediaSessions, PageRegistry, context_op, page_op};
 use crate::private_entry::PrivateTabs;
 use crate::read::read_op;
 use crate::snapshot::{SnapshotBaselines, snapshot_op};
+use crate::target_crashes::TargetCrashes;
 use crate::world::{Epoch, FrameAttachLog};
 use crate::{OpEnv, PlaywrightError, TimedOut, locator_handler};
 
@@ -62,6 +63,8 @@ pub struct Playwright {
     snapshot_baselines: Arc<SnapshotBaselines>,
     /// The tabs a private entry typed into, for the host's camera.
     private_tabs: PrivateTabs,
+    /// Admission facts survive individual runs and eviction of public crash events.
+    crashes: Arc<TargetCrashes>,
 }
 
 // A hand-written `Debug`: the session is not worth printing.
@@ -81,12 +84,14 @@ impl Playwright {
         let attach_log = Arc::new(FrameAttachLog::default());
         let progress = Arc::new(WatcherProgress::default());
         let snapshot_baselines = Arc::new(SnapshotBaselines::default());
+        let crashes = Arc::new(TargetCrashes::default());
         let watcher = TargetWatcher::spawn(
             Arc::clone(&browser),
             writer,
             Arc::clone(&attach_log),
             Arc::clone(&progress),
             Arc::clone(&snapshot_baselines),
+            Arc::clone(&crashes),
         );
         let pages = Arc::new(PageRegistry::new(attach_log));
         let (registry, reader) = (Arc::clone(&pages), Arc::clone(&browser));
@@ -104,6 +109,7 @@ impl Playwright {
             media,
             snapshot_baselines,
             private_tabs: PrivateTabs::default(),
+            crashes,
         })
     }
 
@@ -163,6 +169,7 @@ impl Playwright {
     /// Retire workers after a successful explicit page close; their outstanding promises
     /// must reject before the native renderer's eventual protocol shutdown.
     pub(crate) async fn workers_closed(&self, target: TargetId) {
+        self.crashes.confirmed_closed(&target);
         self.watcher
             .synchronize(Some(target), self.watcher.fence())
             .await;
@@ -219,6 +226,10 @@ impl Playwright {
         &self.pages
     }
 
+    pub(crate) fn crashes(&self) -> &TargetCrashes {
+        &self.crashes
+    }
+
     /// Each tab's last whole-page v1 snapshot text its caller was given; shared with the runs'
     /// pending texts, which commit to it when their runs end.
     pub(crate) fn snapshot_baselines(&self) -> &Arc<SnapshotBaselines> {
@@ -241,7 +252,7 @@ impl Playwright {
         input: Value,
     ) -> Result<Value, PlaywrightError> {
         let OpInput { call, args } = OpInput::decode(op, input)?;
-        let scope = OpScope::new(env, op, call);
+        let scope = OpScope::new(env, op, call).tracking(&self.crashes, &self.browser);
         let answered = match op.kind() {
             OpKind::Action(op) => action_op::invoke(self, &scope, op, args).await,
             OpKind::Read(op) => read_op::invoke(self, &scope, op, args).await,
@@ -258,7 +269,9 @@ impl Playwright {
                 return scope.settle(event_op::invoke(self, &scope, op, args).await);
             }
         };
-        if let Some(bound) = ordering_wait(op, &answered) {
+        if !scope.refused_crash_before_sending()
+            && let Some(bound) = ordering_wait(op, &answered)
+        {
             self.events_before_reply(&scope, bound).await;
         }
         scope.settle(answered)
@@ -313,6 +326,8 @@ impl Playwright {
 /// polls logged before the error, as upstream's does (WA-005). No poll runs after it: the wait
 /// releases its poller before it answers (`page::evaluate`).
 fn ordering_wait(op: Op, answered: &Result<Value, PlaywrightError>) -> Option<Duration> {
+    // Crash admission must not wait behind the renderer events that caused refusal. The
+    // independent pump still delivers them; successful operations keep their ordering fence.
     let timed_out = matches!(answered, Err(error) if error.timed_out() == TimedOut::Yes);
     if !timed_out {
         return Some(EVENTS_BEFORE_REPLY);

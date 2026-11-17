@@ -252,7 +252,7 @@ pub(crate) async fn emulate(
         .frames()
         .enable_initialization(&root.at_connection_epoch())
         .await
-        .map_err(|error| scope.core_error(&error))?;
+        .map_err(|error| scope.protocol_error(&root, &error))?;
     // Discovery may initialize a previously missed paused renderer. Do that before taking
     // the page lock, which its initializer also needs. Merge the live binding set under the
     // lock afterwards so frames attached during discovery cannot miss this update.
@@ -281,7 +281,7 @@ pub(crate) async fn emulate(
                     pw.media().forget(&session);
                     continue;
                 }
-                return Err(scope.core_error(&error));
+                return Err(scope.protocol_error(&session, &error));
             }
             sessions.push(session);
         }
@@ -299,7 +299,7 @@ pub(crate) async fn emulate(
         match next.send_in_page(&root, session).await {
             Ok(RendererDelivery::Applied) => {}
             Ok(RendererDelivery::ClosedChild) => pw.media().forget(session),
-            Err(error) => return Err(scope.core_error(&error)),
+            Err(error) => return Err(scope.protocol_error(session, &error)),
         }
     }
     if let Some(mut state) = update.state.take() {

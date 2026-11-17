@@ -699,7 +699,7 @@ async fn run_before_unload(
     session
         .send_value("Page.close", json!({}))
         .await
-        .map_err(|error| scope.core_error(&error))?;
+        .map_err(|error| scope.protocol_error(&session, &error))?;
     Ok(())
 }
 
@@ -737,7 +737,7 @@ async fn request_gc(
         .within(session.send_value("HeapProfiler.collectGarbage", json!({})))
         .await
         .map_err(|_expired| scope.timed_out(ErrorCode::BrowserDisconnected))?
-        .map_err(|error| scope.core_error(&error))?;
+        .map_err(|error| scope.protocol_error(&session, &error))?;
     Ok(())
 }
 

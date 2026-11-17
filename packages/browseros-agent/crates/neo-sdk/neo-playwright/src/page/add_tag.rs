@@ -197,7 +197,7 @@ pub(crate) async fn insert(
         .log_leases()
         .acquire(session, now_ms() as f64)
         .await
-        .map_err(|error| scope.core_error(&error))?;
+        .map_err(|error| scope.protocol_error(session, &error))?;
     // Log.enable replays retained entries. They belong to earlier actions, so only messages
     // arriving after this barrier participate in this insertion's upstream-style CSP race.
     while let Ok(Some(_)) | Err(Lagged) = queued(&mut events) {}
@@ -243,7 +243,7 @@ pub(crate) async fn insert(
     let described: Described = session
         .send("DOM.describeNode", json!({ "objectId": object }))
         .await
-        .map_err(|error| scope.core_error(&error))?;
+        .map_err(|error| scope.protocol_error(session, &error))?;
     let element = TagElement {
         brand: "element",
         page: page_ref.clone(),

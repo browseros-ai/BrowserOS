@@ -399,7 +399,7 @@ pub(crate) async fn add_to_page(
     let sent = scope.send_effect()?;
     let registration = add(&session, &source, &sent)
         .await
-        .map_err(|error| scope.core_error(&error))?;
+        .map_err(|error| scope.protocol_error(&session, &error))?;
     let id = scope.run_state().init_scripts.keep(registration);
     Ok(Registered(id))
 }
@@ -583,7 +583,7 @@ impl InitScripts {
                 hub.position_at(since),
             );
             hub.wake();
-            let core = |error| scope.core_error(&error);
+            let core = |error| scope.protocol_error(session, &error);
             scope.sending_main_world();
             session
                 .send_value(
@@ -668,7 +668,7 @@ impl InitScripts {
                         scope.sending_main_world();
                         add_script(&session, source, RunNow::No, None)
                             .await
-                            .map_err(|error| scope.core_error(&error))?
+                            .map_err(|error| scope.protocol_error(&session, &error))?
                     }
                     Reach::Binding(binding) => {
                         let hub = self.lock().hub.clone().ok_or_else(|| {
@@ -838,7 +838,7 @@ async fn hold_binding_runtime(
         .runtime_leases()
         .acquire(session, floor)
         .await
-        .map_err(|error| scope.core_error(&error))?;
+        .map_err(|error| scope.protocol_error(session, &error))?;
     run.events.hold_runtime(&calls, vec![lease.into()]);
     Ok(())
 }
@@ -870,7 +870,7 @@ async fn add_binding(
     )
     .await
     .map(Some)
-    .map_err(|error| scope.core_error(&error))
+    .map_err(|error| scope.protocol_error(session, &error))
 }
 
 /// Whether a script also runs at once in the documents the session has loaded.

@@ -159,9 +159,13 @@ async fn enter_child(
     let owner = parent
         .session()
         .send::<_, FrameOwner>("DOM.getFrameOwner", json!({ "frameId": child.as_str() }))
-        .await;
+        .await
+        .inspect_err(|error| scope.record_protocol_error(parent.session(), error));
     let owner = match owner {
         Ok(owner) => owner.backend_node_id,
+        Err(error) if ErrorCode::from_core(&error) == ErrorCode::TargetCrashed => {
+            return Err(scope.core_error(&error));
+        }
         // The frame's owner is not in this document (yet, or any more). That says nothing
         // about the parent's own document, so its world stays: invalidating it would retire
         // the seq that the parent's refs live under.
@@ -176,7 +180,8 @@ async fn enter_child(
     let resolved = parent
         .session()
         .send::<_, ResolvedNode>("DOM.resolveNode", params)
-        .await;
+        .await
+        .inspect_err(|error| scope.record_protocol_error(parent.session(), error));
     let object = match resolved {
         Ok(resolved) => resolved.object.object_id,
         Err(error) => return gone_or(scope, error),
@@ -215,6 +220,9 @@ async fn enter_child(
 /// A CDP failure on the parent's session: the parent's world is gone, the owner node is not
 /// there (a protocol error), or the op fails.
 fn gone_or(scope: &OpScope<'_>, error: CoreError) -> Result<Hopped, PlaywrightError> {
+    if ErrorCode::from_core(&error) == ErrorCode::TargetCrashed {
+        return Err(scope.core_error(&error));
+    }
     match ProbeFailure::from_core(error) {
         ProbeFailure::Gone(_) => Ok(Hopped::ParentGone),
         ProbeFailure::Cdp(CoreError::Cdp(CdpError::Protocol { .. })) => Ok(Hopped::Missing),

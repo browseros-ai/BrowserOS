@@ -17,6 +17,7 @@ use crate::{Playwright, PlaywrightError};
 /// around every message, about 7 CDP messages per call, which a 6-message click cannot afford.
 pub(crate) struct OpPage<'op> {
     pw: &'op Playwright,
+    scope: &'op OpScope<'op>,
     admitted: &'op AdmittedPage,
     state: Arc<PageState>,
 }
@@ -36,9 +37,10 @@ impl<'op> OpPage<'op> {
         pw.media()
             .ensure_root(&admitted.core_page, &session, state.media())
             .await
-            .map_err(|error| scope.core_error(&error))?;
+            .map_err(|error| scope.protocol_error(&session, &error))?;
         Ok(Self {
             pw,
+            scope,
             admitted,
             state,
         })
@@ -47,9 +49,14 @@ impl<'op> OpPage<'op> {
     /// A page already checked through the run's view, for an event batch's read-only work.
     /// This does not select an action target in the scope; several chooser records can be
     /// adopted by one pump operation without weakening the single-tab write invariant.
-    pub(crate) async fn observed(pw: &'op Playwright, admitted: &'op AdmittedPage) -> Self {
+    pub(crate) async fn observed(
+        pw: &'op Playwright,
+        scope: &'op OpScope<'op>,
+        admitted: &'op AdmittedPage,
+    ) -> Self {
         Self {
             pw,
+            scope,
             admitted,
             state: pw.pages().page(pw.browser(), admitted).await,
         }
@@ -102,6 +109,14 @@ impl<'op> OpPage<'op> {
         self.pw.browser()
     }
 
+    /// Installs and probe calls retain their endpoint here. Same-process children share the
+    /// root session; an independent child renderer's failure stays local to that renderer.
+    pub(crate) fn record_failure(&self, source: &ProtocolSession, failure: &ProbeFailure) {
+        if let ProbeFailure::Cdp(error) = failure {
+            self.scope.record_protocol_error(source, error);
+        }
+    }
+
     /// The main frame on the page's own session. A page target's main frame id is its target
     /// id, and stays so across cross-process navigations (measured).
     pub(crate) fn main_endpoint(&self) -> Endpoint {
@@ -133,11 +148,16 @@ impl<'op> OpPage<'op> {
             .media()
             .ensure(&endpoint.session, self.state.media())
             .await
-            .map_err(ProbeFailure::from_core)?;
+            .map_err(ProbeFailure::from_core)
+            .inspect_err(|failure| self.record_failure(&endpoint.session, failure))?;
         let installer = Installer {
             browser: self.pw.browser(),
             epoch: self.pw.epoch(),
         };
-        self.state.frames().world(installer, endpoint, place).await
+        self.state
+            .frames()
+            .world(installer, endpoint, place)
+            .await
+            .inspect_err(|failure| self.record_failure(&endpoint.session, failure))
     }
 }

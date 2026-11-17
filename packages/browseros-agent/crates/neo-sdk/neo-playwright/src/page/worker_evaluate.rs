@@ -143,7 +143,7 @@ async fn call_in_worker(
             }),
         )
         .await
-        .map_err(|error| scope.core_error(&error))?;
+        .map_err(|error| scope.protocol_error(session, &error))?;
     let global = global.result.object_id.ok_or_else(|| {
         scope.fail(
             ErrorCode::Internal,
@@ -165,7 +165,7 @@ async fn call_in_worker(
             }),
         )
         .await
-        .map_err(|error| scope.core_error(&error))
+        .map_err(|error| scope.protocol_error(session, &error))
 }
 
 #[derive(Deserialize)]
