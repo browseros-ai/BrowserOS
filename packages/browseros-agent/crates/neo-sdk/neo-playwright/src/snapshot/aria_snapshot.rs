@@ -161,6 +161,11 @@ pub(crate) struct SnapshotResult {
     #[ts(type = "import('../../vendored').AriaSnapshotJSON")]
     pub(crate) json: Vec<AriaNode>,
     pub(crate) partial: Vec<PartialFrame>,
+    /// Only the root frame: a requested clickable check did not finish. The renderer explains
+    /// the possible missing refs without turning this read’s status into a page change.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub(crate) unmarked: Option<Unmarked>,
     /// Pinned words from the main page alone; empty keeps every old output byte unchanged.
     #[serde(rename = "onTop", skip_serializing_if = "Vec::is_empty")]
     #[ts(optional, as = "Option<Vec<SnapshotTop>>")]
@@ -178,6 +183,13 @@ pub(crate) struct SnapshotResult {
     #[serde(rename = "closedRoots", skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub(crate) closed_roots: Option<ClosedRoots>,
+}
+
+/// Why the root frame’s requested clickable check was unavailable. Rust owns this fact;
+/// child-frame failures remain in their call logs and never become a page-wide notice.
+#[derive(Clone, Debug, PartialEq, Serialize, TS)]
+pub(crate) struct Unmarked {
+    pub(crate) reason: String,
 }
 
 /// Rust's shared wording and reach; the tree's marks identify the whole-view content.
@@ -206,6 +218,7 @@ pub(crate) fn stitch(root: FrameSnapshot) -> SnapshotResult {
     }
     SnapshotResult {
         on_top: Vec::new(),
+        unmarked: None,
         json,
         partial,
         document: None,

@@ -137,6 +137,8 @@ A new document in the tab (a navigation, a reload) starts over. A locator's snap
 
 A `# on top: ...` line names a layer taking the pointer from controls, followed by up to four of its own controls. These lines survive every token cap; a whole-view layer's content prints before the rest of the default snapshot.
 
+When the root frame's check for clickable elements did not finish, `# refs missing: ...` explains that some clickable elements may lack refs and content inside closed shadow roots may be missing. It follows the on-top lines (in a delta, after the status and on-top lines) and precedes `# not listed: ...` or `# inert: ...`. It survives every token cap and is never part of a delta's changes.
+
 ```sh
 ./dev.sh run --task howto-aria -f devkit/examples/aria-ref.js
 ```
