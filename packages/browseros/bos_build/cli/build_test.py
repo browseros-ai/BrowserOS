@@ -240,6 +240,92 @@ class ShowPlanPresetTest(_ProfileMixin):
         self.assertNotIn("super-secret-cert", result.output)
 
 
+class CleanWithoutProvisionTest(_ProfileMixin):
+    def test_rejected_before_resolving_checkout_or_running_steps(self):
+        for preset, clean_args in (
+            ("release", ()),
+            ("release", ("--clean",)),
+            ("debug", ("--clean",)),
+        ):
+            for plan_args in ((), ("--show-plan",)):
+                with (
+                    self.subTest(preset=preset, clean=clean_args, plan=plan_args),
+                    scrubbed_env(),
+                    mock.patch(
+                        "bos_build.cli.build._resolve_chromium_src",
+                        side_effect=AssertionError("must reject before checkout access"),
+                    ) as resolve_src,
+                    mock.patch("bos_build.cli.build.run_pipeline") as run_pipeline,
+                ):
+                    result = invoke(
+                        "--preset",
+                        preset,
+                        "--provision",
+                        "none",
+                        *clean_args,
+                        *plan_args,
+                    )
+                    self.assertEqual(result.exit_code, 1, combined(result))
+                    output = combined(result)
+                    self.assertIn("--provision none", output)
+                    self.assertIn("toolchains", output)
+                    self.assertIn("--no-clean", output)
+                    resolve_src.assert_not_called()
+                    run_pipeline.assert_not_called()
+
+    def test_profile_clean_without_provision_is_rejected(self):
+        path = self._profile("preset: release\nprovision: none\n")
+        with scrubbed_env():
+            result = invoke("--profile", str(path), "--show-plan")
+        self.assertEqual(result.exit_code, 1, combined(result))
+        self.assertIn("--no-clean", combined(result))
+
+    def test_plan_without_clean_is_allowed(self):
+        for args in (
+            ("--preset", "release", "--no-clean"),
+            ("--preset", "release", "--skip", "clean"),
+            ("--preset", "release", "--from", "configure"),
+            ("--preset", "debug"),
+        ):
+            with self.subTest(args=args), scrubbed_env():
+                result = invoke(*args, "--provision", "none", "--show-plan")
+            self.assertEqual(result.exit_code, 0, combined(result))
+            self.assertNotIn("clean", plan_lines(result.output))
+            self.assertIn("compile", plan_lines(result.output))
+
+    def test_profile_skip_clean_is_allowed(self):
+        path = self._profile("preset: release\nprovision: none\nskip: [clean]\n")
+        with scrubbed_env():
+            result = invoke("--profile", str(path), "--show-plan")
+        self.assertEqual(result.exit_code, 0, combined(result))
+        self.assertNotIn("clean", plan_lines(result.output))
+
+    def test_resume_rejected_when_later_architecture_still_cleans(self):
+        path = self._profile(
+            "preset: release\nprovision: none\narch: [x64, arm64]\n"
+        )
+        with scrubbed_env():
+            result = invoke(
+                "--profile", str(path), "--from", "compile", "--show-plan"
+            )
+        self.assertEqual(result.exit_code, 1, combined(result))
+        self.assertIn("--no-clean", combined(result))
+
+    def test_universal_resume_after_shared_clean_is_allowed(self):
+        with (
+            scrubbed_env(),
+            mock.patch("bos_build.core.planner.get_platform", return_value="macos"),
+            mock.patch("bos_build.cli.build.get_platform", return_value="macos"),
+        ):
+            result = invoke(
+                "--preset", "release", "--provision", "none",
+                "--arch", "universal", "--from", "compile", "--show-plan",
+            )
+        self.assertEqual(result.exit_code, 0, combined(result))
+        self.assertNotIn("clean", plan_lines(result.output))
+        self.assertIn("merge_universal", plan_lines(result.output))
+
+
 class EmptyPlanTest(_PinnedSourceTest):
     def _host_debug_plan(self):
         return plan(Switches(preset="debug"), get_platform_arch(), get_platform())
