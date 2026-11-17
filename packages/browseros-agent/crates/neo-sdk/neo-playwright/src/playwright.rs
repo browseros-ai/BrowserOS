@@ -22,6 +22,7 @@ use crate::page::{MediaSessions, PageRegistry, context_op, page_op};
 use crate::private_entry::PrivateTabs;
 use crate::read::read_op;
 use crate::snapshot::{SnapshotBaselines, snapshot_op};
+use crate::target::CallHeader;
 use crate::target_crashes::TargetCrashes;
 use crate::world::{Epoch, FrameAttachLog};
 use crate::{OpEnv, PlaywrightError, TimedOut, locator_handler};
@@ -234,6 +235,23 @@ impl Playwright {
     /// pending texts, which commit to it when their runs end.
     pub(crate) fn snapshot_baselines(&self) -> &Arc<SnapshotBaselines> {
         &self.snapshot_baselines
+    }
+
+    /// Lets a host refuse remembered renderer crashes before its own native-tab reads.
+    /// Call only for renderer operations, after host policy. Unknown targets perform no CDP
+    /// work and pass through, so the host must still run every ordinary guard afterwards.
+    pub async fn check_cached_crash(
+        &self,
+        env: &dyn OpEnv,
+        op: Op,
+        tab: TabId,
+    ) -> Result<(), PlaywrightError> {
+        if let Some(info) = self.browser.pages.get_info_by_tab(tab).await {
+            OpScope::new(env, op, CallHeader::default())
+                .tracking(&self.crashes, &self.browser)
+                .check_cached_crash(&info)?;
+        }
+        Ok(())
     }
 
     /// Runs one operation. `input` is the JSON the prelude sent: its `call` header opens the

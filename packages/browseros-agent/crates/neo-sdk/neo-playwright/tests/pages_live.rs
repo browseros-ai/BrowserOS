@@ -21,12 +21,14 @@ use std::future::Future;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+use browseros_cdp::CdpEvent;
 use browseros_core::TabId;
 use live_run::{EnvCall, LiveRun, TestPage, TestResult, brand, test_page};
 use neo_playwright::{Answer, ErrorCode, PlaywrightError, TimedOut};
 use neo_trace::ErrorOwner;
 use page_server::{PageServer, SLOW};
 use serde_json::{Value, json};
+use tokio::sync::broadcast::{Receiver, error::TryRecvError};
 use tokio::time;
 
 /// Opens a tab, runs `body` on it, and closes the tab whatever happened.
@@ -780,94 +782,224 @@ async fn a_tab_handle_survives_a_playwright_restart() -> TestResult {
 const CRASH_PROGRESS_WATCHDOG: Duration = Duration::from_secs(30);
 const CRASH_COMMAND_REPLY_WAIT: Duration = Duration::from_secs(1);
 
-/// The diagnostic must name a recovery a script can actually complete. This kills only this
-/// fixture's renderer, waits for the browser's native crash event, then follows the message
-/// through the SDK rather than replacing the dead target through a raw browser command.
+/// Observes native crashes independently of the SDK watcher. Receiving this event is not a
+/// watcher barrier: the test's first fresh-run read must still expose any watcher/core race.
+#[expect(
+    clippy::print_stderr,
+    reason = "the native crash and command results diagnose a real renderer crash"
+)]
+async fn crash_renderer(
+    run: &LiveRun,
+    page: &TestPage,
+    events: &mut Receiver<CdpEvent>,
+    crashes: &mut Vec<Value>,
+) -> TestResult<String> {
+    let core_page = run.core_page(page).await?;
+    let attached = run.browser().pages.get_session(core_page).await?;
+    let target = attached.target_id;
+    let observed = async {
+        loop {
+            let event = events.recv().await?;
+            if event.method == "Target.targetCrashed" {
+                let ours = event.params["targetId"].as_str() == Some(target.as_str());
+                crashes.push(event.params);
+                if ours {
+                    return Ok::<(), Box<dyn Error>>(());
+                }
+            }
+        }
+    };
+    // Page.crash can lose its reply. A native event proves a crashed renderer even then.
+    let (crash_event, crash_reply) = tokio::join!(
+        time::timeout(CRASH_PROGRESS_WATCHDOG, observed),
+        time::timeout(
+            CRASH_COMMAND_REPLY_WAIT,
+            attached.session.send_value("Page.crash", json!({}))
+        ),
+    );
+    eprintln!(
+        "CRASH_RECOVERY {}",
+        json!({"stage": "native_crash", "target": target.as_str(), "nativeCrashes": crashes,
+               "observation": format!("{crash_event:?}"), "reply": format!("{crash_reply:?}")})
+    );
+    crash_event??;
+    Ok(target.as_str().to_owned())
+}
+
+/// These owned witnesses exercise the sites other parallel rows use. Read both the SDK title
+/// and the renderer itself, so a surviving tab entry alone cannot pass the isolation check.
+#[expect(
+    clippy::print_stderr,
+    reason = "witness results identify collateral renderer crashes before a later assertion"
+)]
+async fn check_crash_neighbours(
+    run: &LiveRun,
+    neighbours: &[(TestPage, &str)],
+    stage: &str,
+) -> TestResult {
+    for (page, expected) in neighbours {
+        let title = time::timeout(
+            CRASH_PROGRESS_WATCHDOG,
+            run.invoke(
+                "page.title",
+                json!({"page": brand(page), "call": {"timeoutMs": 5_000}}),
+            ),
+        )
+        .await;
+        let evaluated = time::timeout(
+            CRASH_PROGRESS_WATCHDOG,
+            run.eval(page, "[document.title, 6 * 7]"),
+        )
+        .await;
+        eprintln!(
+            "CRASH_RECOVERY {}",
+            json!({"stage": stage, "tab": page.tab.0, "expectedTitle": expected,
+                   "title": format!("{title:?}"), "evaluate": format!("{evaluated:?}")})
+        );
+        let title = title??;
+        let evaluated = evaluated??;
+        if title != json!(expected) || evaluated != json!([expected, 42]) {
+            return Err(format!(
+                "{stage}: neighbour {} changed: title={title}, evaluate={evaluated}",
+                page.tab.0
+            )
+            .into());
+        }
+    }
+    Ok(())
+}
+
+/// Keep every native crash, including targets owned by other rows. This drains observations
+/// already delivered to the fixture; it sends no command and does not synchronize the watcher.
+#[expect(
+    clippy::print_stderr,
+    reason = "all observed native target IDs distinguish collateral crashes from SDK errors"
+)]
+fn check_crash_scope(
+    target: &str,
+    events: &mut Receiver<CdpEvent>,
+    crashes: &mut Vec<Value>,
+    stage: &str,
+) -> TestResult {
+    let drained = loop {
+        match events.try_recv() {
+            Ok(event) if event.method == "Target.targetCrashed" => crashes.push(event.params),
+            Ok(_) => {}
+            Err(TryRecvError::Empty) => break Ok(()),
+            Err(error) => break Err(error),
+        }
+    };
+    eprintln!(
+        "CRASH_RECOVERY {}",
+        json!({"stage": stage, "target": target, "nativeCrashes": crashes,
+               "eventsError": drained.as_ref().err().map(ToString::to_string)})
+    );
+    drained?;
+    if crashes
+        .iter()
+        .any(|event| event["targetId"].as_str() != Some(target))
+    {
+        return Err(format!("{stage}: a renderer outside {target} crashed: {crashes:?}").into());
+    }
+    Ok(())
+}
+
+/// Follows the error's SDK recovery guidance and owns the replacement through cleanup.
+async fn recover_crashed_page(run: &LiveRun, page: &TestPage, url: &str) -> TestResult {
+    run.invoke("page.close", json!({"page": brand(page)}))
+        .await?;
+    let replacement = run.new_page().await?;
+    let recovered = async {
+        goto(run, &replacement, url, "load").await?;
+        let title = run
+            .invoke("page.title", json!({"page": brand(&replacement)}))
+            .await?;
+        if title != json!("child") {
+            return Err(format!("the named recovery must leave a usable renderer: {title}").into());
+        }
+        Ok(())
+    }
+    .await;
+    run.close_page(&replacement).await;
+    recovered
+}
+
+/// The crash diagnostic must name a recovery a script can complete while neighbouring sites
+/// survive. Crash a dedicated site, then follow the message through the SDK.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+#[expect(
+    clippy::print_stderr,
+    reason = "the first fresh-run read must retain its underlying error and protocol methods"
+)]
 async fn target_crashed_message_recovery_closes_and_opens_a_working_page() -> TestResult {
-    with_page(|mut run, _server, page| async move {
+    with_page(|mut run, server, page| async move {
+        let mut neighbours = Vec::new();
         let result = async {
             run.bind(&[page.tab]);
-            goto(
-                &run,
-                &page,
-                "data:text/html,<title>before crash</title>",
-                "load",
-            )
-            .await?;
-            let core_page = run.core_page(&page).await?;
-            let attached = run.browser().pages.get_session(core_page).await?;
-            let target = attached.target_id;
-            let session = attached.session;
+            for (url, title) in [
+                (server.url("/child.html"), "child"),
+                ("about:blank".to_owned(), ""),
+            ] {
+                let neighbour = run.new_page().await?;
+                neighbours.push((neighbour.clone(), title));
+                goto(&run, &neighbour, &url, "load").await?;
+            }
+            check_crash_neighbours(&run, &neighbours, "before_crash").await?;
+            // Renderer ownership follows a site, not a tab or an ephemeral server port.
+            // With desktop site isolation, this stable fixture URL gives Page.crash its own
+            // renderer, apart from the parallel rows' 127.0.0.1 and blank/data documents.
+            let crash_url = server
+                .url("/child.html")
+                .replacen("127.0.0.1", "crash-recovery.localhost", 1);
+            goto(&run, &page, &crash_url, "load").await?;
             let mut events = run.browser().cdp_events();
-            // A crash command may itself lose its reply. The independently observed native
-            // event proves an actual crashed renderer; an injected protocol error does not.
-            let observed = async {
-                loop {
-                    let event = events.recv().await?;
-                    if event.method == "Target.targetCrashed"
-                        && event.params["targetId"].as_str() == Some(target.as_str())
-                    {
-                        return Ok::<Value, Box<dyn Error>>(event.params);
-                    }
-                }
-            };
-            let (crash_event, _crash_reply) = tokio::join!(
-                time::timeout(CRASH_PROGRESS_WATCHDOG, observed),
-                time::timeout(
-                    CRASH_COMMAND_REPLY_WAIT,
-                    session.send_value("Page.crash", json!({}))
-                ),
-            );
-            let crash_event = crash_event??;
-            assert_eq!(crash_event["targetId"], json!(target.as_str()));
+            let mut crashes = Vec::new();
+            let target = crash_renderer(&run, &page, &mut events, &mut crashes).await?;
             run.next_run();
+            run.record_methods();
             let failed = run
                 .invoke(
                     "page.title",
                     json!({"page": brand(&page), "call":{"timeoutMs": 5_000}}),
                 )
                 .await;
+            let methods = run.recorded_methods();
+            eprintln!(
+                "CRASH_RECOVERY {}",
+                json!({"stage": "fresh_run_read", "target": target, "nativeCrashes": crashes,
+                       "result": format!("{failed:?}"), "error": failed.as_ref().err().map(ToString::to_string),
+                       "methods": methods})
+            );
+            let isolated =
+                check_crash_scope(&target, &mut events, &mut crashes, "after_fresh_run_read");
+            let surviving = check_crash_neighbours(&run, &neighbours, "after_crash").await;
+            check_crash_scope(&target, &mut events, &mut crashes, "after_crash")?;
+            isolated?;
+            surviving?;
             let error = failed
                 .err()
                 .ok_or("a crashed renderer must fail the read")?;
-            assert_eq!(error.error_code(), Some(ErrorCode::TargetCrashed));
-            let message = error.to_string();
-            assert!(
-                message.contains("page.close()") && message.contains("context.newPage()"),
-                "the script needs executable recovery guidance: {message}"
-            );
-            assert!(
-                !message.contains("reload"),
-                "the message must not direct a script into a refused reload"
-            );
-            run.invoke("page.close", json!({"page": brand(&page)}))
-                .await?;
-            let replacement = run.new_page().await?;
-            let recovered = async {
-                goto(
-                    &run,
-                    &replacement,
-                    "data:text/html,<title>recovered</title>",
-                    "load",
-                )
-                .await?;
-                let title = run
-                    .invoke("page.title", json!({"page": brand(&replacement)}))
-                    .await?;
-                assert_eq!(
-                    title,
-                    json!("recovered"),
-                    "the named recovery must leave a usable renderer"
-                );
-                Ok::<(), Box<dyn Error>>(())
+            if error.error_code() != Some(ErrorCode::TargetCrashed) {
+                return Err(format!("expected TargetCrashed: {error}; {error:?}").into());
             }
-            .await;
-            run.close_page(&replacement).await;
-            recovered
+            let message = error.to_string();
+            if !message.contains("page.close()")
+                || !message.contains("context.newPage()")
+                || message.contains("reload")
+            {
+                return Err(format!("the script needs executable recovery guidance: {message}").into());
+            }
+            recover_crashed_page(&run, &page, &crash_url).await?;
+            let surviving = check_crash_neighbours(&run, &neighbours, "after_recovery").await;
+            check_crash_scope(&target, &mut events, &mut crashes, "after_recovery")?;
+            surviving
         }
         .await;
+        // Ordinary assertion failures return errors above so all owned witnesses close too.
+        for (neighbour, _) in &neighbours {
+            run.close_page(neighbour).await;
+        }
         (run, result)
     })
     .await

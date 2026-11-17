@@ -201,6 +201,28 @@ impl Method for PlaywrightOp {
         let ruled = page.is_some()
             && matches!(self.op.spec().target, OpTarget::Field(_))
             && self.pages != PageEffect::Closes;
+        let playwright = self.facade.get().await;
+        let env = OpCtxEnv::new(
+            op,
+            self.facade.hosted_mode(),
+            Arc::clone(self.facade.front()),
+            Arc::clone(self.facade.file_access()),
+        )
+        .keeping(self.facade.blank_tab().cloned());
+        // The door already ran host policy. A remembered renderer crash must answer before
+        // our URL/file guard refreshes native tab facts, which may fail with the crashed tab.
+        // Return the refusal now: skipping a guard and continuing could admit work after a
+        // concurrent recovery without ever enforcing that guard. Browser-only close/opener
+        // and every operation without remembered crash evidence retain their ordinary path.
+        if ruled
+            && !self.closes_tab()
+            && self.spec.name != "page.opener"
+            && let Some(page) = page
+        {
+            op.race_classified(playwright.check_cached_crash(&env, self.op, page.tab))
+                .await?
+                .map_err(|error| leaf_error(&error))?;
+        }
         if ruled && let Some(refusal) = refused_page(op, self.spec.name, self.pages).await? {
             return Err(LeafError::definite(refusal));
         }
@@ -224,14 +246,6 @@ impl Method for PlaywrightOp {
         } else {
             None
         };
-        let playwright = self.facade.get().await;
-        let env = OpCtxEnv::new(
-            op,
-            self.facade.hosted_mode(),
-            Arc::clone(self.facade.front()),
-            Arc::clone(self.facade.file_access()),
-        )
-        .keeping(self.facade.blank_tab().cloned());
         let result = op
             .race_classified(playwright.invoke(&env, self.op, input))
             .await;
