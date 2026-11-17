@@ -21,7 +21,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::op_scope::{OpScope, ProtocolRequest};
-use crate::page::{MAX_VALUE_DEPTH, OpPage, json_depth};
+use crate::page::{self, MAX_VALUE_DEPTH, OpPage};
 use crate::private_entry::PrivateStep;
 use crate::probe::probe_reply::ProbeReply;
 use crate::probe::probe_request::{ProbeCall, ProbePolicy, ProbeRequest};
@@ -449,7 +449,7 @@ pub(crate) fn reply_of(called: Value) -> Result<ProbeReply, ProbeFailure> {
         called.result.value.as_str().ok_or_else(|| {
             ProbeFailure::Broken("the probe returned no JSON reply text".to_owned())
         })?;
-    let depth = json_depth(text);
+    let depth = page::json_depth(text);
     if depth > MAX_VALUE_DEPTH {
         return Err(ProbeFailure::Broken(format!(
             "the probe reply reaches JSON depth {depth}, above limit {MAX_VALUE_DEPTH}. Pass {{ depth: n }} or take a locator's snapshot of a section."
@@ -616,6 +616,8 @@ async fn is_uninstalled(world: &IsolatedWorld, object: Option<&str>) -> Result<b
 
 #[cfg(test)]
 mod tests {
+    use crate::page;
+
     use std::error::Error;
     use std::slice;
 
@@ -793,7 +795,7 @@ mod tests {
                 "[".repeat(depth - 1),
                 "]".repeat(depth - 1)
             );
-            assert_eq!(super::json_depth(&text), depth);
+            assert_eq!(page::json_depth(&text), depth);
             let reply = reply_of(json!({ "result": { "type": "string", "value": text } }));
             assert_eq!(reply.is_ok(), depth == 297, "depth {depth}: {reply:?}");
         }

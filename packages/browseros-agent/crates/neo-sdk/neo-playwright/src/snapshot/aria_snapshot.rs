@@ -21,7 +21,7 @@ use serde_json::Value;
 use ts_rs::TS;
 
 use super::snapshot_rules;
-use crate::page::{MAX_VALUE_DEPTH, json_depth};
+use crate::page::{self, MAX_VALUE_DEPTH};
 
 /// One node of `ariaSnapshotJSON`: upstream's `AriaNodeJSON` (isomorphic/ariaSnapshot.ts).
 ///
@@ -227,7 +227,8 @@ fn merge(frame: FrameSnapshot, partial: &mut Vec<PartialFrame>) -> Vec<AriaNode>
             } => {
                 let mut below = Vec::new();
                 let nodes = merge(snapshot, &mut below);
-                let unread_refs = below.iter().map(|frame| frame.r#ref.clone()).collect();
+                let unread_refs: HashSet<String> =
+                    below.iter().map(|frame| frame.r#ref.clone()).collect();
                 // Preserve the existing child-order of partial notes. If attachment later
                 // drops this branch, only its descendants' notes are removed.
                 partial.extend(below);
@@ -276,7 +277,7 @@ fn attach(
             // The child's top array becomes this iframe's children array. Test before
             // attachment: the parent stays readable even when this one branch cannot fit.
             let encoded = serde_json::to_string(&child.nodes);
-            let deepest = encoded.as_deref().map_or(MAX_VALUE_DEPTH, json_depth);
+            let deepest = encoded.as_deref().map_or(MAX_VALUE_DEPTH, page::json_depth);
             if depth + deepest > MAX_VALUE_DEPTH {
                 partial.retain(|frame| !child.unread_refs.contains(&frame.r#ref));
                 partial.push(PartialFrame {

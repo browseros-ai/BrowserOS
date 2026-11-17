@@ -47,7 +47,7 @@ use crate::listed_enum::listed_enum;
 use crate::op_input::OpArgs;
 use crate::op_scope::OpScope;
 use crate::op_spec::{OpSpec, PAGE, TARGET};
-use crate::page::{MAX_VALUE_DEPTH, OpPage, json_depth};
+use crate::page::{self, MAX_VALUE_DEPTH, OpPage};
 use crate::playwright_error::TARGET_CRASH_MESSAGE;
 use crate::probe::{
     self, ErrorClass, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget, SnapshotIframe,
@@ -776,7 +776,7 @@ impl Snapshotter<'_> {
                 "could not encode the stitched snapshot",
             )
         })?;
-        let nesting = json_depth(&encoded);
+        let nesting = page::json_depth(&encoded);
         if nesting > MAX_VALUE_DEPTH {
             return Err(self.scope.fail(ErrorCode::Unsupported, &format!(
                 "The stitched snapshot reaches JSON depth {nesting}, above the limit of {MAX_VALUE_DEPTH}. Pass {{ depth: n }} or take a locator's snapshot of a section."
