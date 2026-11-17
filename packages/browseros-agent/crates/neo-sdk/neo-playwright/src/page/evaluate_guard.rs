@@ -494,12 +494,13 @@ impl<'op> EvaluateGuard<'op> {
         if script.evaluator == Evaluator::Unmade {
             script.evaluator = make_evaluator(scope, &session, &group).await;
         }
+        let nodes_request = scope.begin_protocol(&session);
         let objects = if script.mode == CallMode::Poll && script.poller.is_some() {
             Some(Vec::new())
         } else {
             main_world_nodes(&session, &group, &script.handles, &script.subject)
                 .await
-                .map_err(|error| scope.core_error(&error))?
+                .map_err(|error| scope.protocol_error(&nodes_request, &error))?
         };
         let Some(objects) = objects else {
             script.leave_document();
@@ -520,12 +521,16 @@ impl<'op> EvaluateGuard<'op> {
                 other_world: AtomicBool::new(false),
                 _sent: &sent,
             };
+            let crash = scope.begin_protocol(&session);
             let called = match script.mode {
                 CallMode::Once | CallMode::Truthy => {
                     call.evaluate(&document, script, &objects).await
                 }
                 CallMode::Poll => script.poll(&call, &document, &objects).await,
             };
+            if let Err(error) = &called {
+                crash.record(error);
+            }
             if !call.other_world.load(Ordering::Relaxed) {
                 break called;
             }
@@ -731,6 +736,7 @@ pub(super) async fn main_world_document(
 ) -> Result<MainDocument, ProbeFailure> {
     let session = world.session();
     let group = scope.object_group(session).to_owned();
+    let crash = scope.begin_protocol(session);
     let named: Named = session
         .send(
             "Runtime.callFunctionOn",
@@ -738,21 +744,26 @@ pub(super) async fn main_world_document(
                     "objectGroup": group }),
         )
         .await
+        .inspect_err(|error| crash.record(error))
         .map_err(ProbeFailure::from_core)?;
     let isolated = named.result.object_id.ok_or_else(|| {
         ProbeFailure::Broken("the isolated world returned no document".to_owned())
     })?;
+    let crash = scope.begin_protocol(session);
     let described: Described = session
         .send("DOM.describeNode", json!({ "objectId": isolated }))
         .await
+        .inspect_err(|error| crash.record(error))
         .map_err(ProbeFailure::from_core)?;
     // No `executionContextId`: the node resolves in its own document's main world.
+    let crash = scope.begin_protocol(session);
     let resolved: Resolved = session
         .send(
             "DOM.resolveNode",
             json!({ "backendNodeId": described.node.backend_node_id, "objectGroup": group }),
         )
         .await
+        .inspect_err(|error| crash.record(error))
         .map_err(ProbeFailure::from_core)?;
     let local = described
         .node
@@ -1278,12 +1289,14 @@ fn not_run<T>(error: CoreError) -> Result<Called<T>, CoreError> {
 /// out: a host refusal at the send after it leaves the agent's script unsent, but this ran.
 async fn make_evaluator(scope: &OpScope<'_>, session: &ProtocolSession, group: &str) -> Evaluator {
     scope.sending_main_world();
+    let crash = scope.begin_protocol(session);
     let made = session
         .send_value(
             "Runtime.evaluate",
             json!({ "expression": &*EVALUATOR_JS, "objectGroup": group, "silent": true }),
         )
-        .await;
+        .await
+        .inspect_err(|error| crash.record(error));
     match made
         .ok()
         .and_then(|reply| decode::<Named>(reply).ok())
@@ -1418,6 +1431,7 @@ pub(super) async fn insert_tag(
     _sent: &Sent<'_>,
 ) -> Result<String, PlaywrightError> {
     let session = world.session();
+    let crash = scope.begin_protocol(session);
     let reply: Reply = session
         .send(
             "Runtime.callFunctionOn",
@@ -1433,7 +1447,8 @@ pub(super) async fn insert_tag(
             }),
         )
         .await
-        .map_err(|error| scope.core_error(&error))?;
+        .map_err(|error| scope.protocol_error(&crash, &error))?;
+    let crash = scope.begin_protocol(session);
     session
         .send_value(
             "Runtime.callFunctionOn",
@@ -1443,7 +1458,7 @@ pub(super) async fn insert_tag(
             }),
         )
         .await
-        .map_err(|error| scope.core_error(&error))?;
+        .map_err(|error| scope.protocol_error(&crash, &error))?;
     if let Some(thrown) = reply.thrown() {
         return Err(scope.fail(ErrorCode::PageError, &thrown));
     }

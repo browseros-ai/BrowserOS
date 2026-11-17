@@ -42,7 +42,8 @@ use std::time::Duration;
 
 use browseros_core::pages::{PageInfo, PageSession};
 use browseros_core::{
-    BrowserSession, BrowserView, CoreError, PageId, ProtocolSession, TabId, TargetId,
+    BrowserSession, BrowserView, CoreError, PageAdmission, PageId, ProtocolSession, SessionId,
+    TabId, TargetId,
 };
 use futures_util::future::{self, Either};
 use neo_trace::Effect;
@@ -50,11 +51,13 @@ use serde_json::Value;
 use tokio::time::{self, Instant};
 
 use crate::call_log::CallLog;
+use crate::events::EventFence;
 use crate::object_group::ObjectGroup;
 use crate::op::Op;
 use crate::op_spec::{Capability, OpSpec};
 use crate::playwright_error::TARGET_CRASH_MESSAGE;
 use crate::target::CallHeader;
+use crate::target_crashes::{TargetCrashes, TargetTicket};
 use crate::{ErrorCode, OpEnv, PlaywrightError, ReadPath, RunState, WritePath};
 
 pub(crate) use sent::Sent;
@@ -76,13 +79,79 @@ pub(crate) struct OpScope<'env> {
     /// drops it at the run's deadline.
     timeout: Option<Duration>,
     /// A std mutex: lines are pushed between awaits, never across one.
-    log: Mutex<CallLog>,
+    log: Arc<Mutex<CallLog>>,
     /// The page this op acts on, admitted once.
     page: OnceLock<AdmittedPage>,
     objects: ObjectGroup,
+    /// Facade-owned facts survive runs. Each observation still captures its own native target.
+    crashes: Option<CrashTracking<'env>>,
+    renderer: OnceLock<RendererAdmission>,
+    /// Ordering may be skipped only for a remembered refusal before this scope sent anything.
+    /// The host remains delivery's authority; these facts only control the listener fence.
+    crash_refused: AtomicBool,
+    sent: AtomicBool,
     /// Set once the op passed its `MainWorld` gateway: every effect it sends from then on is
     /// the gateway's main-world script, so `send_effect` reports it to the host.
     main_world: AtomicBool,
+}
+
+#[derive(Clone, Copy)]
+struct CrashTracking<'a> {
+    crashes: &'a TargetCrashes,
+    browser: &'a BrowserSession,
+}
+
+/// The session that may report a crash against this operation's native-target ticket.
+/// A child OOPIF uses another session; its error must never poison this parent admission.
+struct RendererAdmission {
+    ticket: TargetTicket,
+    session: SessionId,
+}
+
+/// One request's crash authority, captured before dispatch and held until its reply. Long
+/// operations renew between requests; replies already in flight retain their old document.
+pub(crate) struct ProtocolRequest<'a> {
+    tracking: Option<CrashTracking<'a>>,
+    ticket: Option<TargetTicket>,
+}
+
+impl ProtocolRequest<'_> {
+    pub(crate) fn record(&self, error: &CoreError) {
+        if ErrorCode::from_core(error) == ErrorCode::TargetCrashed
+            && let (Some(tracking), Some(ticket)) = (self.tracking, &self.ticket)
+        {
+            tracking.crashes.reply_after_events(
+                ticket,
+                tracking.browser.connection().connection_epoch(),
+                EventFence(tracking.browser.cdp_events_broadcast()),
+            );
+        }
+    }
+}
+
+/// Core owns policy and calls this hook with fresh facts before and after attachment. The
+/// side channel distinguishes our refusal from a Core failure without widening `CoreError`.
+struct CrashAdmission<'a> {
+    tracking: Option<CrashTracking<'a>>,
+    ticket: Mutex<Option<TargetTicket>>,
+    refused: AtomicBool,
+}
+
+impl PageAdmission for CrashAdmission<'_> {
+    fn admit(&self, fresh: &PageInfo) -> Result<(), CoreError> {
+        if let Some(tracking) = self.tracking {
+            let ticket = tracking.crashes.ticket(
+                &fresh.target_id,
+                tracking.browser.connection().connection_epoch(),
+            );
+            if tracking.crashes.refuses(&ticket) {
+                self.refused.store(true, Ordering::Relaxed);
+                return Err(CoreError::Message(TARGET_CRASH_MESSAGE.to_owned()));
+            }
+            *self.ticket.lock().unwrap_or_else(PoisonError::into_inner) = Some(ticket);
+        }
+        Ok(())
+    }
 }
 
 /// A page admitted for one op through the run's view: the profile and window scope check ran
@@ -121,11 +190,38 @@ impl<'env> OpScope<'env> {
                 .timeout_ms
                 .filter(|millis| *millis > 0)
                 .map(Duration::from_millis),
-            log: Mutex::default(),
+            log: Arc::default(),
             page: OnceLock::new(),
             objects: ObjectGroup::new(),
+            crashes: None,
+            renderer: OnceLock::new(),
+            crash_refused: AtomicBool::new(false),
+            sent: AtomicBool::new(false),
             main_world: AtomicBool::new(false),
         }
+    }
+
+    /// Binds foreground operations, including host entry points, to facade-lifetime facts.
+    pub(crate) fn tracking(
+        mut self,
+        crashes: &'env TargetCrashes,
+        browser: &'env BrowserSession,
+    ) -> Self {
+        self.crashes = Some(CrashTracking { crashes, browser });
+        self
+    }
+
+    /// Batch observations need independent admission tickets. They share the operation's
+    /// policy, deadline and log, but an error from one tab cannot stamp another tab's ticket.
+    pub(crate) fn observation(&self) -> Self {
+        let mut scope = Self::of_spec(self.env, self.spec, CallHeader::default());
+        scope.api.clone_from(&self.api);
+        scope.started = self.started;
+        scope.timeout = self.timeout;
+        scope.conformance = self.conformance;
+        scope.crashes = self.crashes;
+        scope.log = Arc::clone(&self.log);
+        scope
     }
 
     /// The object group for remote objects this op asks `session` for. Naming it registers
@@ -276,11 +372,32 @@ impl<'env> OpScope<'env> {
         let Some(info) = self.known_tab(browser, tab).await? else {
             return Ok(None);
         };
+        let admission = CrashAdmission {
+            tracking: self.crashes,
+            ticket: Mutex::default(),
+            refused: AtomicBool::new(false),
+        };
         let session = self
             .view()
-            .page_session(info.page_id.clone())
+            .page_session_admitted(info.page_id.clone(), &admission)
             .await
-            .map_err(|error| self.core_error(&error))?;
+            .map_err(|error| {
+                if admission.refused.load(Ordering::Relaxed) {
+                    self.cached_crash()
+                } else {
+                    self.core_error(&error)
+                }
+            })?;
+        if let Some(ticket) = admission
+            .ticket
+            .into_inner()
+            .unwrap_or_else(PoisonError::into_inner)
+        {
+            let _ = self.renderer.set(RendererAdmission {
+                ticket,
+                session: session.session_id.clone(),
+            });
+        }
         // Raw SDK calls bypass core's operation leases. Recover an interrupted earlier
         // resize here, before any page read can observe its rejected metrics. This path
         // takes no lease when the viewport is already applied and leaves dialogs usable.
@@ -381,7 +498,29 @@ impl<'env> OpScope<'env> {
     /// script added at the op's admission. The op's own effect still goes through
     /// [`OpScope::send_effect`].
     pub(crate) fn recheck(&self) -> Result<(), PlaywrightError> {
-        self.env.recheck().map_err(PlaywrightError::from)
+        self.env.recheck().map_err(PlaywrightError::from)?;
+        self.check_renderer()
+    }
+
+    /// Host policy goes first; a known crash then refuses renderer work before `mark_sent`.
+    pub(crate) fn check_renderer(&self) -> Result<(), PlaywrightError> {
+        if let (Some(tracking), Some(renderer)) = (self.crashes, self.renderer.get())
+            && tracking.crashes.refuses(&renderer.ticket)
+        {
+            return Err(self.cached_crash());
+        }
+        Ok(())
+    }
+
+    fn cached_crash(&self) -> PlaywrightError {
+        self.crash_refused.store(true, Ordering::Relaxed);
+        self.fail(ErrorCode::TargetCrashed, TARGET_CRASH_MESSAGE)
+    }
+
+    /// An initial crash reply can follow events produced by sent work. Only a refusal that
+    /// sent nothing has no such events to order before its reply.
+    pub(crate) fn refused_crash_before_sending(&self) -> bool {
+        self.crash_refused.load(Ordering::Relaxed) && !self.sent.load(Ordering::Relaxed)
     }
 
     /// Tells the host this op is about to send script into a page's main world
@@ -416,7 +555,7 @@ impl<'env> OpScope<'env> {
                 "a read operation cannot change the page",
             )),
             Effect::Write => {
-                let sent = Sent::after_recheck(self.env).map_err(PlaywrightError::from)?;
+                let sent = Sent::after_recheck(self)?;
                 if self.main_world.load(Ordering::Relaxed) {
                     self.sending_main_world();
                 }
@@ -570,6 +709,47 @@ impl<'env> OpScope<'env> {
         }
     }
 
+    /// Only the admitted root session can stamp this native target. The request's fresh
+    /// revision is captured before any await, so a later poll follows a replacement document
+    /// without letting an earlier request's delayed error poison it.
+    pub(crate) fn begin_protocol(&self, source: &ProtocolSession) -> ProtocolRequest<'env> {
+        let ticket = self.crashes.and_then(|tracking| {
+            let renderer = self.renderer.get()?;
+            (source.session_id() == Some(&renderer.session))
+                .then(|| {
+                    tracking.crashes.request(
+                        &renderer.ticket,
+                        tracking.browser.connection().connection_epoch(),
+                    )
+                })
+                .flatten()
+        });
+        ProtocolRequest {
+            tracking: self.crashes,
+            ticket,
+        }
+    }
+
+    /// Source-known helpers use the same pre-dispatch capture without changing their error
+    /// type. Opaque helpers retain stateless classification rather than guessing a target.
+    pub(crate) async fn protocol_request<T>(
+        &self,
+        source: &ProtocolSession,
+        request: impl Future<Output = Result<T, CoreError>>,
+    ) -> Result<T, CoreError> {
+        let authority = self.begin_protocol(source);
+        request.await.inspect_err(|error| authority.record(error))
+    }
+
+    pub(crate) fn protocol_error(
+        &self,
+        request: &ProtocolRequest<'_>,
+        error: &CoreError,
+    ) -> PlaywrightError {
+        request.record(error);
+        self.core_error(error)
+    }
+
     /// `neo / internal`: this op's leaf is not built yet.
     pub(crate) fn not_built(&self) -> PlaywrightError {
         self.fail(ErrorCode::Internal, "not built yet")
@@ -593,8 +773,10 @@ impl<'env> OpScope<'env> {
 /// `recheck`, then `mark_sent`, so even a second caller could not skip either.
 mod sent {
     use std::marker::PhantomData;
+    use std::sync::atomic::Ordering;
 
-    use crate::{OpEnv, Refusal};
+    use super::OpScope;
+    use crate::PlaywrightError;
 
     /// Proof that the host re-ran its attempt-stage policies on the op's tab and marked this op
     /// sent. Every function that dispatches input, navigates, edits an element or runs
@@ -608,9 +790,10 @@ mod sent {
     impl<'scope> Sent<'scope> {
         /// `recheck`, then `mark_sent`, in the order STYLE P6 requires: a refusal returns before
         /// anything is marked.
-        pub(super) fn after_recheck(env: &'scope dyn OpEnv) -> Result<Self, Refusal> {
-            env.recheck()?;
-            env.mark_sent();
+        pub(super) fn after_recheck(scope: &'scope OpScope<'_>) -> Result<Self, PlaywrightError> {
+            scope.recheck()?;
+            scope.env.mark_sent();
+            scope.sent.store(true, Ordering::Relaxed);
             Ok(Self {
                 _scope: PhantomData,
             })

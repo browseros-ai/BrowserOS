@@ -541,7 +541,7 @@ mod diagnostic_tests {
         assert_eq!(error.diagnostic_code(), Some(DiagnosticCode::TargetCrashed));
         assert_eq!(
             error.message(),
-            "The tab's page crashed. Close or reload the tab before retrying."
+            "The tab's page crashed. Close it with page.close() and open a new page with context.newPage()."
         );
     }
 }

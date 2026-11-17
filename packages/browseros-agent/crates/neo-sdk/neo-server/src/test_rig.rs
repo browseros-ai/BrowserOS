@@ -560,6 +560,8 @@ struct CrashInput {
     sent: bool,
     #[serde(default)]
     uncertain: bool,
+    #[serde(default)]
+    page: Option<PageTarget>,
 }
 
 impl Method for Crashed {
@@ -570,8 +572,8 @@ impl Method for Crashed {
         MethodSpec::new("test.crashed", Effect::Write)
     }
 
-    fn target(_input: &CrashInput) -> Option<&PageTarget> {
-        None
+    fn target(input: &CrashInput) -> Option<&PageTarget> {
+        input.page.as_ref()
     }
 
     fn call(
@@ -587,7 +589,7 @@ impl Method for Crashed {
         }
         let error = OperationError::neo(
             ErrorCode::INTERNAL_ERROR,
-            "The tab's page crashed. Close or reload the tab before retrying.",
+            "The tab's page crashed. Close it with page.close() and open a new page with context.newPage().",
         )
         .with_diagnostic(Some(DiagnosticCode::TargetCrashed));
         future::ready(Err(if input.uncertain {

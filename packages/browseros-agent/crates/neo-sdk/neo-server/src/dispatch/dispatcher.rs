@@ -10,7 +10,9 @@ use crate::browser::Seen;
 use browseros_core::pages::PageInfo;
 use browseros_core::viewport::Size;
 use browseros_core::{BrowserView, PageId, TabId};
-use neo_trace::{Delivery, Effect, OperationId, PageState, RunAccess, TaskId, TraceSink};
+use neo_trace::{
+    Delivery, DiagnosticCode, Effect, OperationId, PageState, RunAccess, TaskId, TraceSink,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::{Mutex as AsyncMutex, oneshot};
@@ -906,6 +908,26 @@ impl Dispatcher {
         ending: &mut Ending,
         opening_task: Option<&TaskId>,
     ) -> PageFacts {
+        // A cached crash has no payload to reconcile. Waiting on the observation turn would
+        // put this refusal back behind renderer work. Release policy still runs; no page
+        // facts are published as synchronized when that observation has not happened.
+        if state.sent_at().is_none()
+            && matches!(ending, Ending::Failed(leaf) if leaf.error().diagnostic_code() == Some(DiagnosticCode::TargetCrashed))
+        {
+            if let Err(error) = self.check(
+                run,
+                &PolicyCheck {
+                    tab: target.map(|page| page.tab),
+                    ..check
+                },
+            ) {
+                *ending = Ending::Refused(error);
+            }
+            return PageFacts {
+                pages: Vec::new(),
+                observed: None,
+            };
+        }
         let reports = state.take_reports();
         let mut pages: Vec<PageRef> = target.into_iter().cloned().collect();
         let mut refreshed: Vec<TabId> = Vec::new();

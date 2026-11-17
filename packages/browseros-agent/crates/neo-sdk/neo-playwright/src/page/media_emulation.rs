@@ -248,11 +248,12 @@ pub(crate) async fn emulate(
     let tree = frame_tree::read(pw.browser(), page.core_page(), &root)
         .await
         .map_err(|error| scope.core_error(&error))?;
+    let crash = scope.begin_protocol(&root);
     pw.browser()
         .frames()
         .enable_initialization(&root.at_connection_epoch())
         .await
-        .map_err(|error| scope.core_error(&error))?;
+        .map_err(|error| scope.protocol_error(&crash, &error))?;
     // Discovery may initialize a previously missed paused renderer. Do that before taking
     // the page lock, which its initializer also needs. Merge the live binding set under the
     // lock afterwards so frames attached during discovery cannot miss this update.
@@ -276,12 +277,13 @@ pub(crate) async fn emulate(
         {
             // Existing renderers may predate this facade. Arm their nested attachment before
             // sending the preference; only a definitively closed child is harmless here.
+            let crash = scope.begin_protocol(&session);
             if let Err(error) = pw.browser().frames().enable_initialization(&session).await {
                 if child_closed(&error) {
                     pw.media().forget(&session);
                     continue;
                 }
-                return Err(scope.core_error(&error));
+                return Err(scope.protocol_error(&crash, &error));
             }
             sessions.push(session);
         }
@@ -296,10 +298,11 @@ pub(crate) async fn emulate(
     for session in &update.sessions {
         let _sent = scope.send_effect()?;
         update.sent = true;
+        let crash = scope.begin_protocol(session);
         match next.send_in_page(&root, session).await {
             Ok(RendererDelivery::Applied) => {}
             Ok(RendererDelivery::ClosedChild) => pw.media().forget(session),
-            Err(error) => return Err(scope.core_error(&error)),
+            Err(error) => return Err(scope.protocol_error(&crash, &error)),
         }
     }
     if let Some(mut state) = update.state.take() {

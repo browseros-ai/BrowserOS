@@ -232,12 +232,16 @@ impl PageInput {
         let Some(event) = self.last.as_ref().filter(|event| event.is_mouse_move()) else {
             return Ok(());
         };
+        let crash = scope.begin_protocol(&self.session);
         let dispatched = dispatch(&self.session, self.pointer_scale, event);
         scope
             .within(dispatched)
             .await
             .map_err(|_expired| BurstFailure::Expired)?
-            .map_err(BurstFailure::Cdp)?;
+            .map_err(|error| {
+                crash.record(&error);
+                BurstFailure::Cdp(error)
+            })?;
         Ok(())
     }
 
@@ -254,12 +258,16 @@ impl PageInput {
                 InputStep::Dispatch(event) => {
                     // Counted before the reply: the event is on the wire once sent.
                     self.note(&event);
+                    let crash = scope.begin_protocol(&self.session);
                     let dispatched = dispatch(&self.session, self.pointer_scale, &event);
                     let replied = scope.within(dispatched).await;
                     self.last = Some(event);
                     replied
                         .map_err(|_expired| BurstFailure::Expired)?
-                        .map_err(BurstFailure::Cdp)?;
+                        .map_err(|error| {
+                            crash.record(&error);
+                            BurstFailure::Cdp(error)
+                        })?;
                 }
             }
         }

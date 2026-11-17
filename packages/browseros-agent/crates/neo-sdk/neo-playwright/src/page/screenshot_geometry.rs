@@ -168,11 +168,12 @@ impl ScreenshotGeometry {
         } else {
             None
         };
+        let crash = scope.begin_protocol(&page.root_session());
         let layout: LayoutMetrics = page
             .root_session()
             .send("Page.getLayoutMetrics", json!({}))
             .await
-            .map_err(|error| scope.core_error(&error))?;
+            .map_err(|error| scope.protocol_error(&crash, &error))?;
         let document = if let Some(mut rect) = element {
             let fits = rect.width <= metrics.width && rect.height <= metrics.height;
             rect.x += metrics.scroll_x;
@@ -331,11 +332,12 @@ async fn metrics(
             Err(ProbeFailure::Gone(_)) => {
                 // A world can disappear when its tab closes as well. This context-independent
                 // read keeps a closed session or lost transport fatal, even with timeout: 0.
+                let crash = scope.begin_protocol(&page.root_session());
                 let _: Value = page
                     .root_session()
                     .send("Page.getLayoutMetrics", json!({}))
                     .await
-                    .map_err(|error| scope.core_error(&error))?;
+                    .map_err(|error| scope.protocol_error(&crash, &error))?;
                 if matches!(target, MetricsTarget::Element) {
                     return Err(scope.fail(
                         ErrorCode::ElementDetached,

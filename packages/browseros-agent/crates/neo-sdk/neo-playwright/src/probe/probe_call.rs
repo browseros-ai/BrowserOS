@@ -20,7 +20,7 @@ use browseros_core::page_js::is_stale_context;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::op_scope::OpScope;
+use crate::op_scope::{OpScope, ProtocolRequest};
 use crate::page::OpPage;
 use crate::private_entry::PrivateStep;
 use crate::probe::probe_reply::ProbeReply;
@@ -175,6 +175,14 @@ impl fmt::Display for ProbeFailure {
 
 impl Error for ProbeFailure {}
 
+impl ProtocolRequest<'_> {
+    pub(crate) fn probe_failure(&self, failure: &ProbeFailure) {
+        if let ProbeFailure::Cdp(error) = failure {
+            self.record(error);
+        }
+    }
+}
+
 /// `Runtime.callFunctionOn`'s result.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -249,6 +257,7 @@ pub(crate) async fn call(
     world: &IsolatedWorld,
     request: &ProbeRequest,
 ) -> Result<ProbeReply, ProbeFailure> {
+    let crash = scope.begin_protocol(world.session());
     send(
         world,
         request,
@@ -257,6 +266,7 @@ pub(crate) async fn call(
         Gesture::None,
     )
     .await
+    .inspect_err(|failure| crash.probe_failure(failure))
 }
 
 /// Raw installation tests intentionally own worlds without admitting a page or keeping an
@@ -282,6 +292,7 @@ pub(crate) async fn call_with_gesture(
     world: &IsolatedWorld,
     request: &ProbeRequest,
 ) -> Result<ProbeReply, ProbeFailure> {
+    let crash = scope.begin_protocol(world.session());
     send(
         world,
         request,
@@ -290,6 +301,7 @@ pub(crate) async fn call_with_gesture(
         Gesture::User,
     )
     .await
+    .inspect_err(|failure| crash.probe_failure(failure))
 }
 
 /// One request about an element handle's node (`root`, a remote object in this world), which
@@ -308,11 +320,14 @@ pub(crate) async fn call_on(
     request: &ProbeRequest,
     root: &str,
 ) -> Result<ProbeReply, ProbeFailure> {
+    let crash = scope.begin_protocol(world.session());
     let handed = Handed {
         root: Some(root),
         nodes: &[],
     };
-    send(world, request, policy(scope, page), handed, Gesture::None).await
+    send(world, request, policy(scope, page), handed, Gesture::None)
+        .await
+        .inspect_err(|failure| crash.probe_failure(failure))
 }
 
 /// One request with several nodes (remote objects in this world, from `DOM.resolveNode` with
@@ -326,8 +341,11 @@ pub(crate) async fn call_with_nodes(
     request: &ProbeRequest,
     nodes: &[String],
 ) -> Result<ProbeReply, ProbeFailure> {
+    let crash = scope.begin_protocol(world.session());
     let handed = Handed { root: None, nodes };
-    send(world, request, policy(scope, page), handed, Gesture::None).await
+    send(world, request, policy(scope, page), handed, Gesture::None)
+        .await
+        .inspect_err(|failure| crash.probe_failure(failure))
 }
 
 /// The remote objects a call hands the probe after its request.
@@ -445,6 +463,7 @@ pub(crate) async fn pinned_object(
     world: &IsolatedWorld,
     pin: Pin,
 ) -> Result<Option<String>, ProbeFailure> {
+    let crash = scope.begin_protocol(world.session());
     let request = ProbeRequest::Pinned { pin };
     let params = json!({
         "objectId": world.global(),
@@ -461,7 +480,8 @@ pub(crate) async fn pinned_object(
         .session()
         .send::<_, Value>("Runtime.callFunctionOn", params)
         .await
-        .map_err(ProbeFailure::from_core)?;
+        .map_err(ProbeFailure::from_core)
+        .inspect_err(|failure| crash.probe_failure(failure))?;
     let called: Called = serde_json::from_value(called)
         .map_err(|error| ProbeFailure::Broken(format!("CDP returned no call result: {error}")))?;
     if let Some(exception) = called.exception_details {
@@ -471,10 +491,14 @@ pub(crate) async fn pinned_object(
         )));
     }
     let result = called.result;
+    let uninstalled = scope.begin_protocol(world.session());
     match result.subtype.as_deref() {
         Some("node") => Ok(result.object_id),
         Some("null") => Ok(None),
-        _ if is_uninstalled(world, result.object_id.as_deref()).await? => {
+        _ if is_uninstalled(world, result.object_id.as_deref())
+            .await
+            .inspect_err(|failure| uninstalled.probe_failure(failure))? =>
+        {
             Err(ProbeFailure::Gone(Ran::No))
         }
         _ => Err(ProbeFailure::Broken(
@@ -493,6 +517,7 @@ pub(crate) async fn pinned_nodes(
     world: &IsolatedWorld,
     pins: Vec<Pin>,
 ) -> Result<Option<Vec<BackendNodeId>>, ProbeFailure> {
+    let crash = scope.begin_protocol(world.session());
     let count = pins.len();
     let requests: Vec<ProbeRequest> = pins
         .into_iter()
@@ -528,7 +553,8 @@ pub(crate) async fn pinned_nodes(
             }),
         )
         .await
-        .map_err(ProbeFailure::from_core)?;
+        .map_err(ProbeFailure::from_core)
+        .inspect_err(|failure| crash.probe_failure(failure))?;
     if let Some(exception) = called.exception_details {
         return Err(ProbeFailure::Broken(format!(
             "the probe threw: {}",

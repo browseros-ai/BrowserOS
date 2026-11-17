@@ -696,10 +696,11 @@ async fn run_before_unload(
         .browser()
         .protocol_session(admitted.session.session_id.clone());
     let _sent = scope.send_effect()?;
+    let crash = scope.begin_protocol(&session);
     session
         .send_value("Page.close", json!({}))
         .await
-        .map_err(|error| scope.core_error(&error))?;
+        .map_err(|error| scope.protocol_error(&crash, &error))?;
     Ok(())
 }
 
@@ -733,11 +734,12 @@ async fn request_gc(
         .browser()
         .protocol_session(admitted.session.session_id.clone());
     let _sent = scope.send_effect()?;
+    let crash = scope.begin_protocol(&session);
     scope
         .within(session.send_value("HeapProfiler.collectGarbage", json!({})))
         .await
         .map_err(|_expired| scope.timed_out(ErrorCode::BrowserDisconnected))?
-        .map_err(|error| scope.core_error(&error))?;
+        .map_err(|error| scope.protocol_error(&crash, &error))?;
     Ok(())
 }
 

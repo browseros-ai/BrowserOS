@@ -133,6 +133,7 @@ async fn call_in_worker(
     // the effect is marked. It is still Neo's script in the worker's own realm, which a refusal
     // at the send below would leave unreported.
     scope.sending_main_world();
+    let crash = scope.begin_protocol(session);
     let global: Global = session
         .send(
             "Runtime.evaluate",
@@ -143,7 +144,7 @@ async fn call_in_worker(
             }),
         )
         .await
-        .map_err(|error| scope.core_error(&error))?;
+        .map_err(|error| scope.protocol_error(&crash, &error))?;
     let global = global.result.object_id.ok_or_else(|| {
         scope.fail(
             ErrorCode::Internal,
@@ -151,6 +152,7 @@ async fn call_in_worker(
         )
     })?;
     let _sent = scope.send_effect()?;
+    let crash = scope.begin_protocol(session);
     session
         .send_value(
             "Runtime.callFunctionOn",
@@ -165,7 +167,7 @@ async fn call_in_worker(
             }),
         )
         .await
-        .map_err(|error| scope.core_error(&error))
+        .map_err(|error| scope.protocol_error(&crash, &error))
 }
 
 #[derive(Deserialize)]

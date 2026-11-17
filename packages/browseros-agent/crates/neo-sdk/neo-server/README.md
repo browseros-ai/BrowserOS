@@ -181,11 +181,16 @@ Closing the browser's last tab quits the browser, and Neo's server with it, so N
 
 The result carries `_meta["com.browseros.neo/run"]` as `{ id, status, effects, error?, unknown, tasks, tabsScope, access? }`. `id` is the run's id in the trace. `tabsScope` is `task` when the run was bound to its task's tabs and `browser` when it saw every tab; a refused run says what it would have been, and a repeated request's reply carries the first run's. An older Neo sends none, which means `browser`. `status` is `ok`, `error`, `cancelled`, or `timeout`, and `isError` is set unless it is `ok`. `effects` is `none`, `done`, or `unknown`. `unknown` lists the writes that were sent and never confirmed. `structuredContent` is unchanged.
 
-An operation that receives the exact CDP reply `Target crashed` keeps primary code `internal_error`
-and adds `diagnosticCode: "target_crashed"` on caught errors, uncaught run errors, and traces,
-including full and summary HTTP views. Its message asks you to close or reload the tab before
-retrying. The SDK remembers no crash state. Later operations on the same tab still reach the
-browser, with the existing delivery and retry rules.
+A renderer crash keeps primary code `internal_error` and adds optional
+`diagnosticCode: "target_crashed"` on caught errors, uncaught run errors and traces, including
+full and summary HTTP views. Older clients can continue handling `internal_error`. A write
+already sent retains its delivery under the existing rules; later renderer operations on the
+same native target are refused as `not_sent`, across runs, without waiting for its renderer.
+A script should close the crashed tab with `page.close()` and open a replacement with
+`context.newPage()`, as the diagnostic says. A host or person may instead reload it in the
+browser. SDK `goto` and `reload` remain refused while the crash is remembered. Refusal clears
+after a later main-document commit has a fresh matching frame-tree reply and all events through
+that reply have been applied, or after confirmed closure. Without that proof it remains in place.
 
 `tasks` is host metadata, always present (`[]` when no tasks were touched). Each entry carries `id`, `name`, `kind`, and `tabs: { tabId, url }[]`. Tasks appear once, in first-touch order, even when the script failed. Tabs and URLs reflect reply time; a closed task has kind `closed` and no tabs.
 

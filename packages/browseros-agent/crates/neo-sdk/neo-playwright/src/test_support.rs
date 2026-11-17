@@ -320,6 +320,7 @@ static SCRIPTED_SESSIONS: AtomicU64 = AtomicU64::new(0);
 pub(crate) struct ScriptedTab<S> {
     script: S,
     session: String,
+    connection_epoch: AtomicU64,
     /// `Browser.createTab` opened tab 9, which `Browser.getTabs` lists from then on.
     created: AtomicBool,
     /// Commands the script slowed ([`TabScript::delay`]) and that have not been answered or
@@ -328,6 +329,8 @@ pub(crate) struct ScriptedTab<S> {
     /// Every command sent, by method, in order.
     sent: Mutex<Vec<String>>,
     events: broadcast::Sender<CdpEvent>,
+    /// Count and subscription share this lock, matching the real transport's fence contract.
+    broadcast_count: Mutex<u64>,
     targeted: TargetedEvents,
 }
 
@@ -365,16 +368,24 @@ impl<S: TabScript> ScriptedTab<S> {
                 "scripted-session-{}",
                 SCRIPTED_SESSIONS.fetch_add(1, Ordering::Relaxed)
             ),
+            connection_epoch: AtomicU64::new(1),
             created: AtomicBool::new(false),
             slowed: AtomicUsize::new(0),
             sent: Mutex::default(),
             events: broadcast::channel(16).0,
+            broadcast_count: Mutex::default(),
             targeted: TargetedEvents::default(),
         })
     }
 
     pub(crate) fn script(&self) -> &S {
         &self.script
+    }
+
+    /// Replaces the transport while retaining native tabs. Ordinary unbound views follow it;
+    /// an explicitly pinned capability must refuse commands from the previous epoch.
+    pub(crate) fn reconnect(&self) {
+        self.connection_epoch.fetch_add(1, Ordering::SeqCst);
     }
 
     /// How many commands the script slowed are still waiting for their answer.
@@ -392,6 +403,15 @@ impl<S: TabScript> ScriptedTab<S> {
             .count()
     }
 
+    /// Every command sent so far, including setup. Tests take a baseline after watcher
+    /// initialization so an admission refusal cannot hide renderer work behind setup counts.
+    pub(crate) fn sent_methods(&self) -> Vec<String> {
+        self.sent
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
     /// Sends the browser event `method` with `params`, as Chromium sends it on the root session.
     pub(crate) fn emit(&self, method: &str, params: Value) {
         self.emit_on(method, params, None);
@@ -406,6 +426,11 @@ impl<S: TabScript> ScriptedTab<S> {
             session_id,
         };
         if let Some(event) = self.targeted.deliver(event) {
+            let mut count = self
+                .broadcast_count
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            *count += 1;
             let _ = self.events.send(event);
         }
     }
@@ -601,7 +626,7 @@ impl<S: TabScript> CdpConnection for ScriptedTab<S> {
         })
     }
 
-    // Core sends a creation's reads at the connection's epoch, which never changes here.
+    // An epoch check and dispatch contain no await, matching the transport publication seam.
     fn send_at_epoch<'a>(
         &'a self,
         expected_epoch: u64,
@@ -609,11 +634,12 @@ impl<S: TabScript> CdpConnection for ScriptedTab<S> {
         params: Value,
         session: Option<&'a SessionId>,
     ) -> BoxFuture<'a, Result<Value, CdpError>> {
-        if expected_epoch != 1 {
+        let actual = self.connection_epoch();
+        if expected_epoch != actual {
             return Box::pin(async move {
                 Err(CdpError::ConnectionEpochChanged {
                     expected: expected_epoch,
-                    actual: 1,
+                    actual,
                 })
             });
         }
@@ -627,11 +653,12 @@ impl<S: TabScript> CdpConnection for ScriptedTab<S> {
         params_json: &'a str,
         session: Option<&'a SessionId>,
     ) -> BoxFuture<'a, Result<String, CdpError>> {
-        if expected_epoch != 1 {
+        let actual = self.connection_epoch();
+        if expected_epoch != actual {
             return Box::pin(async move {
                 Err(CdpError::ConnectionEpochChanged {
                     expected: expected_epoch,
-                    actual: 1,
+                    actual,
                 })
             });
         }
@@ -640,6 +667,21 @@ impl<S: TabScript> CdpConnection for ScriptedTab<S> {
 
     fn events(&self) -> broadcast::Receiver<CdpEvent> {
         self.events.subscribe()
+    }
+
+    fn events_broadcast(&self) -> u64 {
+        *self
+            .broadcast_count
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn events_counted(&self) -> (broadcast::Receiver<CdpEvent>, u64) {
+        let count = self
+            .broadcast_count
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        (self.events.subscribe(), *count)
     }
 
     fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
@@ -651,7 +693,7 @@ impl<S: TabScript> CdpConnection for ScriptedTab<S> {
     }
 
     fn connection_epoch(&self) -> u64 {
-        1
+        self.connection_epoch.load(Ordering::SeqCst)
     }
 }
 

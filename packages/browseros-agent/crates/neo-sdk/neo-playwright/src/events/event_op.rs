@@ -457,10 +457,21 @@ async fn subscription(
         Some(handle) => {
             let event = page_event(scope, event)?;
             let page = handle.tab();
-            let admitted = scope.admit(pw.browser(), page).await?;
+            // Close and crash are browser target events. Renderer setup can lose a race
+            // with the very close being observed, and must also remain usable on a dead page.
+            let target = if matches!(event, PageEventKind::Close | PageEventKind::Crash) {
+                scope.admit_target(pw.browser(), page).await?
+            } else {
+                scope
+                    .admit(pw.browser(), page)
+                    .await?
+                    .session
+                    .target_id
+                    .clone()
+            };
             Ok(Subscription::Page {
                 tab: page,
-                target: admitted.session.target_id.clone(),
+                target,
                 event,
             })
         }
@@ -528,13 +539,14 @@ async fn lease_runtime(
     let floor = since_ms as f64;
     let admitted = scope.admit(pw.browser(), *tab).await?;
     let session = &admitted.session.session;
+    let crash = scope.begin_protocol(session);
     let runtime = pw
         .browser()
         .page_signals
         .runtime_leases()
         .acquire(session, floor)
         .await
-        .map_err(|error| scope.core_error(&error))?;
+        .map_err(|error| scope.protocol_error(&crash, &error))?;
     if *event != PageEventKind::Console {
         return Ok(vec![runtime.into()]);
     }
@@ -560,9 +572,13 @@ async fn lease_runtime(
 
 /// Context listeners observe existing tabs without requiring a prior page action. These are
 /// core-owned observation sessions; event release still maps each returned tab through the run.
-async fn observe_context(scope: &OpScope<'_>) -> Result<(), PlaywrightError> {
+async fn observe_context(pw: &Playwright, scope: &OpScope<'_>) -> Result<(), PlaywrightError> {
     let setup = async {
-        let listing = scope.view().list_pages().await?;
+        let listing = scope
+            .view()
+            .list_pages()
+            .await
+            .map_err(|error| scope.core_error(&error))?;
         // Not a tab the host hides from this run: the run never hears of it.
         scope.tabs_settled(&listing.pages).await;
         for page in listing
@@ -575,19 +591,19 @@ async fn observe_context(scope: &OpScope<'_>) -> Result<(), PlaywrightError> {
                 .events
                 .remember_page(&page.target_id, page.tab_id);
             // A tab can close between listing and attachment. The watcher retries live tabs.
-            if let Err(error) = scope.view().page_session(page.page_id).await {
+            let observation = scope.observation();
+            if let Err(error) = observation.observe_page(pw.browser(), page.tab_id).await {
                 scope.log(format!(
                     "context lifecycle observation will retry attachment: {error}"
                 ));
             }
         }
-        Ok::<(), CoreError>(())
+        Ok::<(), PlaywrightError>(())
     };
     scope
         .within(setup)
         .await
         .map_err(|_expired| scope.timed_out(ErrorCode::WaitTimeout))?
-        .map_err(|error| scope.core_error(&error))
 }
 
 /// The failure for a context event other than `page`.
@@ -647,7 +663,7 @@ async fn listen(
     // Register before asynchronous observation setup: an off arriving during setup removes
     // the actual listener and cannot be undone when this on finishes.
     if observes_context {
-        observe_context(scope).await?;
+        observe_context(pw, scope).await?;
     }
     // A pump that already read past an event this listener should get reads again.
     hub.wake();
@@ -749,7 +765,7 @@ async fn wait(
     // While it waits, the watcher records and holds what this wait could receive.
     let _waiting = run.events.waiting(subscription.clone(), input.since);
     if matches!(subscription, Subscription::Context(_)) {
-        observe_context(scope).await?;
+        observe_context(pw, scope).await?;
     }
     let found = async {
         // Inside the wait's deadline: a slow enable ends at the script's timeout too.
@@ -1024,9 +1040,10 @@ async fn answer(
         Answer::Dismiss => (false, None),
     };
     let sent = scope.send_effect()?;
+    let crash = scope.begin_protocol(&session);
     send_answer(&session, &sent, accept, prompt.as_deref())
         .await
-        .map_err(|error| scope.core_error(&error))?;
+        .map_err(|error| scope.protocol_error(&crash, &error))?;
     answering.answered();
     Ok(())
 }

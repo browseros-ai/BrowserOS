@@ -261,10 +261,11 @@ async fn enable_frame(
         .ok_or_else(|| scope.fail(ErrorCode::Internal, "the page has no session"))?;
     let (_, session) =
         navigation::frame_host(pw, scope, page.tab(), (root_id, main.session), frame).await?;
+    let crash = scope.begin_protocol(&session);
     session
         .send_value("Page.enable", json!({}))
         .await
-        .map_err(|error| scope.core_error(&error))?;
+        .map_err(|error| scope.protocol_error(&crash, &error))?;
     Ok(())
 }
 
