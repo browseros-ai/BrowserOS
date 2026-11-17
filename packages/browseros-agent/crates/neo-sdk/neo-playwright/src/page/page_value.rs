@@ -22,6 +22,7 @@
 
 use std::collections::HashMap;
 
+use neo_trace::json_value_depth as depth_of;
 use serde::Deserialize;
 use serde_json::{Map, Number, Value, json};
 
@@ -564,36 +565,6 @@ pub(crate) fn js_number(number: f64) -> String {
     } else {
         format!("{number}")
     }
-}
-
-/// The deepest `[`/`{` nesting in `text` outside its strings, in one pass over the bytes. A
-/// multi-byte character never holds a quote, a backslash or a bracket byte.
-#[must_use]
-pub fn depth_of(text: &str) -> usize {
-    let (mut depth, mut deepest) = (0_usize, 0_usize);
-    let (mut in_string, mut escaped) = (false, false);
-    for byte in text.bytes() {
-        if in_string {
-            if escaped {
-                escaped = false;
-            } else if byte == b'\\' {
-                escaped = true;
-            } else if byte == b'"' {
-                in_string = false;
-            }
-            continue;
-        }
-        match byte {
-            b'"' => in_string = true,
-            b'[' | b'{' => {
-                depth += 1;
-                deepest = deepest.max(depth);
-            }
-            b']' | b'}' => depth = depth.saturating_sub(1),
-            _ => {}
-        }
-    }
-    deepest
 }
 
 /// Standard base64 with padding, as `btoa` and `Uint8Array.prototype.toBase64` write it.

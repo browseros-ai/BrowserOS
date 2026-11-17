@@ -47,10 +47,9 @@ pub(crate) mod page_op;
 mod page_registry;
 mod page_state;
 mod page_value;
-// Probe text and main-world values share one proven JSON nesting bound and scanner.
-pub(crate) use page_value::{MAX_DEPTH as MAX_VALUE_DEPTH, depth_of as json_depth};
-// The host runtime scans its own settled values with this same implementation.
-pub use page_value::depth_of as json_value_depth;
+// Probe text and main-world values share this proven cap; the pure scanner is neo-trace’s.
+pub(crate) use neo_trace::json_value_depth as json_depth;
+pub(crate) use page_value::MAX_DEPTH as MAX_VALUE_DEPTH;
 mod pdf;
 mod save_screenshot;
 mod screenshot;

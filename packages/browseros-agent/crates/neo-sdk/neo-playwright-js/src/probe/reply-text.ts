@@ -8,7 +8,7 @@ import { MAX_REPLY_DEPTH, SNAPSHOT_DEPTH_ERROR } from './generated'
 const FALLBACK =
   '{"kind":"error","class":"internal","message":"Neo could not serialize the probe reply."}'
 
-/** JSON nesting outside strings, using the same byte-independent scan as page_value.rs. */
+/** JSON nesting outside strings, using the same byte-independent scan as neo-trace’s json_value_depth.rs. */
 export function replyDepth(text: string): number {
   let depth = 0
   let deepest = 0

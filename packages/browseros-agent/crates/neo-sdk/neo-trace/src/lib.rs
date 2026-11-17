@@ -39,6 +39,7 @@ mod blob_id;
 mod epoch_millis;
 mod error_record;
 mod ids;
+mod json_value_depth;
 mod operation_record;
 mod read_model;
 mod record_policy;
@@ -59,6 +60,7 @@ pub use blob_id::{BlobId, NotABlobId};
 pub use epoch_millis::EpochMillis;
 pub use error_record::{DiagnosticCode, ErrorOwner, ErrorRecord};
 pub use ids::{IdError, OperationId, RequestId, RunId, TaskId};
+pub use json_value_depth::json_value_depth;
 pub use operation_record::{
     Delivery, Effect, OperationEnded, OperationKind, OperationReached, OperationSite,
     OperationStarted, Outcome, PageState,

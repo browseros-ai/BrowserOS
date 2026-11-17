@@ -90,11 +90,11 @@ return {snapshot,text:await page.getByRole('button').textContent()};
                 let code = HALF_PAGE.replace("HALF", &half.to_string()).replace("PLACE", &json!(place).to_string());
                 let (value, reply) = returned(&client, &task, &code).await?;
                 let snapshot = value["snapshot"].as_str().ok_or("snapshot text")?;
-                assert!(snapshot.contains('\u{fffd}'), "{task}: {value}");
+                assert!(snapshot.contains("Before \u{fffd} After"), "{task}: {value}");
                 assert_eq!(value["clicks"], 1, "{task}: selector click");
                 assert_eq!(value["unit"], half, "the page still holds the original half");
                 assert_eq!(value["replacement"], 0, "replacement text is not the DOM's text");
-                assert!(value["failed"].as_str().is_some_and(|s| s.contains("Never matches")), "{task}: failed expect replies");
+                assert!(value["failed"].as_str().is_some_and(|s| s.contains("Never matches") && s.contains("Before \u{fffd} After")), "{task}: failed expect replies with the repaired preview");
                 if place == "text" {
                     assert_eq!(value["text"], "Before \u{fffd} After");
                     assert_eq!(value["inner"], "Before \u{fffd} After");
@@ -106,7 +106,11 @@ return {snapshot,text:await page.getByRole('button').textContent()};
                 let id = browseros_rig::outcome(&reply)?["id"].as_str().ok_or("run id")?;
                 let trace = rig.host("GET", &format!("/v1/runs/{id}?wait=30"), Some(browseros_rig::HOST_TOKEN), None).await?;
                 assert_eq!(trace.status, 200);
-                assert!(trace.text().contains("clickable marking skipped"), "the shared DOMSnapshot limitation stays explicit: {}", trace.text());
+                let recorded = trace.json()?;
+                let snapshot_op = recorded["operations"].as_array().and_then(|ops| {
+                    ops.iter().find(|op| op["name"] == "page.ariaSnapshot")
+                }).ok_or("snapshot trace operation")?;
+                assert_eq!(snapshot_op["outcome"], "ok", "{task}: the host records the read’s success");
                 let ref_code = format!("await page.getByRef({}).click();return await page.evaluate(()=>Number(document.body.dataset.clicks));", value["ref"]);
                 let (clicks, _) = returned(&client, &task, &ref_code).await?;
                 assert_eq!(clicks, 2, "{task}: the printed ref resolves in a later run");
