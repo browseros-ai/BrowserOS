@@ -230,10 +230,13 @@ function factsOf(
 ): CoverFacts {
   const kind = kindOf(world, subject, chain, request.point, request.above)
   const layer = whichDialog(world, chain, top, request.point)
-  const closed = !layer.contains(subject) && inClosedPart(layer)
-  const shown = shownAs(world, output, layer, request.point, subject)
-  // Only a blank face names a sibling behind it; a sole child dialog is the layer's content.
-  const behind = shown !== layer && isBlank(world, output, layer)
+  const { shown, behind, closed } = shownLayer(
+    world,
+    output,
+    layer,
+    request.point,
+    subject,
+  )
   // A cover that holds the control (its wrapper, its label, the page's root) is the control's
   // own surroundings: its snapshot would be the page, so it is left out.
   const surrounds = shown.contains(subject) || shown === document.body
@@ -282,15 +285,31 @@ export function shownAs(
   point: Point,
   subject?: Element,
 ): Element {
+  return shownLayer(world, output, layer, point, subject).shown
+}
+
+/** Keep the blank reading beside the chosen element: the click needs both, without a
+ * second control walk or quiet snapshot just to decide which markup to print. */
+function shownLayer(
+  world: World,
+  output: FailureOutput,
+  layer: Element,
+  point: Point,
+  subject?: Element,
+): { shown: Element; behind: boolean; closed: boolean } {
   const holds = subject
     ? layer.contains(subject) || layer === world.injected.document.body
     : pageElement(layer)
-  if (holds || inClosedPart(layer)) return layer
-  return (
-    (isBlank(world, output, layer)
-      ? dialogBehind(world, layer, point)
-      : soleDialog(world, layer)) ?? layer
-  )
+  const closed = subject
+    ? !layer.contains(subject) && inClosedPart(layer)
+    : !holds && inClosedPart(layer)
+  if (holds || closed) return { shown: layer, behind: false, closed }
+  const blank = isBlank(world, output, layer)
+  const shown =
+    (blank ? dialogBehind(world, layer, point) : soleDialog(world, layer)) ??
+    layer
+  // Only a blank face names a sibling behind it; a sole child dialog is the layer's content.
+  return { shown, behind: blank && shown !== layer, closed }
 }
 
 /** A frame contains a separate document, never an empty backdrop in this world. */
