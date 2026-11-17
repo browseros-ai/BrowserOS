@@ -157,6 +157,18 @@ export const onTop: Gap = {
       welcome({ ...promo(), inert: true }, signIn(true)),
       { onTop: [SIGN_IN, PROMO] },
     ),
+    // A whole-view layer under two wrappers that each hold only the next: every wrapper is
+    // replaced, so the layer's content prints once, first.
+    'on-top/whole-deep': tree(
+      [
+        {
+          role: 'generic',
+          children: [{ role: 'generic', children: [signIn(true)] }],
+        },
+        tickets(),
+      ],
+      { onTop: [SIGN_IN] },
+    ),
     // Every form of the words, with no content marked.
     'on-top/every-form': tree([tickets()], { onTop: Object.values(FORMS) }),
     // The same page under no layer: each form comes back as `# no longer on top:` with its own ref.
@@ -193,6 +205,7 @@ export const onTop: Gap = {
       page: page(),
       'page-inert': page({ inert: true }),
     }),
+    ...calls('on-top/whole-deep', { page: page() }),
     ...calls('on-top/no-layers', {
       'delta-after-every-form': delta({}, keptBy('on-top/every-form')),
     }),

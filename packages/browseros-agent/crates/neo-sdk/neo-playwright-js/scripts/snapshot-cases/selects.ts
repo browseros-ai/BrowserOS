@@ -29,6 +29,15 @@ export const selects: Gap = {
         children: options(13, [3]),
       },
     ]),
+    // The "more options" line past a cut is one more line, and not one with a ref.
+    'selects/thirteen-cut': tree([
+      {
+        role: 'combobox',
+        name: 'Size',
+        ref: 'e1',
+        children: options(13, [3]),
+      },
+    ]),
     // 12 options, at the limit: every one is listed without text too.
     'selects/twelve': tree([
       {
@@ -160,6 +169,9 @@ export const selects: Gap = {
   },
   cases: [
     ...calls('selects/thirteen', { full: full(), ...both }),
+    ...calls('selects/thirteen-cut', {
+      'page-notext-max7': page({ text: false, maxTokens: 7 }),
+    }),
     ...calls('selects/twelve', { 'page-notext': page({ text: false }) }),
     ...calls('selects/none-selected', { 'page-notext': page({ text: false }) }),
     ...calls('selects/listbox', { 'page-notext': page({ text: false }) }),

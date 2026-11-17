@@ -76,6 +76,28 @@ const UNDER_NOTICE = {
   form: { text: 'leftOut', urls: false, maxTokens: 8000 },
 } as const
 
+/** The same stored text, its form listing the inert parts. */
+const UNDER_NOTICE_INERT = {
+  text: '- button "Go" [ref=e1]',
+  form: { text: 'leftOut', urls: false, maxTokens: 8000, inert: true },
+} as const
+
+/** A dialog of one line, the page's first, then buttons: the same lines in both capped formats. */
+function savedFirst(buttons: string[]): AriaNodeJSON[] {
+  return [
+    { role: 'dialog', name: 'Saved', ref: 'e1', text: 'Changes saved.' },
+    ...buttons.map((name, index) => button(name, `e${index + 2}`)),
+  ]
+}
+
+const deals = (ref: number): AriaNodeJSON =>
+  section(
+    'region',
+    `e${ref}`,
+    [button('C', `e${ref + 1}`), button('D', `e${ref + 2}`)],
+    'Deals',
+  )
+
 export const boundaries: Gap = {
   snapshots: {
     // A text form of exactly 12,000 units, an emoji in it: the text is kept. A locator's call,
@@ -224,6 +246,58 @@ export const boundaries: Gap = {
         button('Three', 'e8'),
       ]),
     ]),
+    // A kept block that is the first line and holds the limit: the cut goes before it, so the
+    // text opens with the cut line.
+    'boundaries/kept-first-holds-limit': tree([
+      {
+        role: 'dialog',
+        name: 'Confirm',
+        ref: 'e1',
+        children: ['Pay now?', button('Yes', 'e2'), button('No', 'e3')],
+      },
+      button('One', 'e4'),
+      button('Two', 'e5'),
+    ]),
+    // A kept block that ends exactly at the cut stays above the cut line.
+    'boundaries/kept-ends-at-cut': tree(savedFirst(['One', 'Two', 'Three'])),
+    // A kept block wholly above the cut, lines after it taken too, stays where it is.
+    'boundaries/kept-above-cut': tree(
+      savedFirst(['One', 'Two', 'Three', 'Four']),
+    ),
+    // A section that starts exactly at the cut and fits the limit is not open there: it is
+    // offered as not shown above, not as all of it.
+    'boundaries/offer-starts-at-cut': tree([
+      button('Add to cart', 'e1'),
+      button('Add to list', 'e2'),
+      deals(3),
+    ]),
+    // A section whose own lines are the limit (74 units) and end exactly at the cut is not open
+    // there: it is not offered.
+    'boundaries/offer-ends-at-cut': tree([
+      deals(1),
+      button('Add to cart', 'e4'),
+      button('Add to list', 'e5'),
+    ]),
+    // A section with a ref and nothing under it is never offered; the next section is. Neo's
+    // format prints no line for it at all.
+    'boundaries/offer-empty-section': tree([
+      button('One', 'e1'),
+      button('Two', 'e2'),
+      section('region', 'e3', [], 'Ads'),
+      section(
+        'navigation',
+        'e4',
+        [link('About us', 'e5'), link('Contact', 'e6')],
+        'Footer',
+      ),
+    ]),
+    // 1,000 units of text left out when the inert part counts, 400 when it does not: under a
+    // stored form that lists the inert parts, its text is in the number.
+    'boundaries/notice-inert': tree([
+      button('Go', 'e1'),
+      { role: 'paragraph', children: [filler(391)] },
+      { role: 'paragraph', inert: true, children: [filler(599)] },
+    ]),
     // Every line past the limit is in a kept block: nothing is cut, the text stays as it was.
     'boundaries/kept-only-past': tree([
       button('One', 'e1'),
@@ -277,5 +351,15 @@ export const boundaries: Gap = {
     }),
     ...calls('boundaries/kept-not-split', capped(30)),
     ...calls('boundaries/kept-only-past', capped(20)),
+    ...calls('boundaries/kept-first-holds-limit', capped(10)),
+    ...calls('boundaries/kept-ends-at-cut', capped(12)),
+    ...calls('boundaries/kept-above-cut', capped(24)),
+    ...calls('boundaries/offer-starts-at-cut', capped(20)),
+    ...calls('boundaries/offer-ends-at-cut', capped(18.5)),
+    ...calls('boundaries/offer-empty-section', capped(6)),
+    ...calls('boundaries/notice-inert', {
+      'delta-under-notice-inert': delta({}, UNDER_NOTICE_INERT),
+      'delta-under-notice': delta({}, UNDER_NOTICE),
+    }),
   ],
 }

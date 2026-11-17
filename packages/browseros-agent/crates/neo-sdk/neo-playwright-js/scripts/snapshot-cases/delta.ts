@@ -170,6 +170,31 @@ const order = (status: string, offers: boolean): AriaNodeJSON[] => [
 
 const NOTES = words(91)
 
+const STAR: AriaNodeJSON = { role: 'img', name: 'Star' }
+
+const pictures = (...colors: string[]): AriaNodeJSON[] =>
+  colors.map((color) => ({ role: 'img', name: `${color} mug` }))
+
+/** A count, forty stars, a count: forty equal lines between two that change. */
+const rated = (raters: number, sold: number): AriaNodeJSON[] => [
+  {
+    role: 'main',
+    ref: 'e1',
+    children: [
+      `Rated by ${raters}`,
+      ...Array.from({ length: 40 }, () => STAR),
+      `Sold ${sold}`,
+    ],
+  },
+]
+
+/** `stars` pictures at the top, then three named ones and a note of 21 sentences. */
+const starred = (stars: number): AriaNodeJSON[] => [
+  ...Array.from({ length: stars }, () => STAR),
+  ...['Red', 'Tan', 'Jug'].map((name): AriaNodeJSON => ({ role: 'img', name })),
+  { role: 'paragraph', children: [words(21)] },
+]
+
 const notesThen = (empty: number): SnapshotBaseline => ({
   text: [
     '- main [ref=e1]:',
@@ -275,6 +300,39 @@ export const delta: Gap = {
     'delta/order-at-half': tree(order('has shipped', true)),
     // A drawer line fewer, so the new text is one unit shorter and odd: the same changes pass half.
     'delta/order-past-half': tree(order('has shipped', false)),
+    // The first picture gone and one added below the next: one line out and one in, not two.
+    'delta/gallery-shifted': tree(gallery(['Blue mug', 'Grey mug', 'Tan mug'])),
+    // A picture between two of one name, above the thirty: the baseline of the next.
+    'delta/between': tree(
+      shop({ mugs: [...pictures('Red', 'Blue', 'Red'), ...MUGS] }),
+    ),
+    // Shuffled with one added: of the shortest scripts, the one that removes the first picture
+    // first is listed, not the one that adds two above it.
+    'delta/shuffled': tree(
+      shop({ mugs: [...pictures('Blue', 'Tan', 'Red', 'Blue'), ...MUGS] }),
+    ),
+    // Two pictures of one name after another: the baseline of the next.
+    'delta/gallery-twins': tree(gallery(['Red mug', 'Blue mug', 'Blue mug'])),
+    // The first two gone, the last named as the second: both are removed, the search never
+    // matching a removed line with the unchanged line after it.
+    'delta/gallery-twin-left': tree(gallery(['Blue mug'])),
+    // Forty equal lines between two that change: the baseline of the next.
+    'delta/rated': tree(rated(12, 30)),
+    // Both counts changed: the bound before the search matches the equal lines one for one, so
+    // two hunks are listed, under half the text.
+    'delta/rated-again': tree(rated(13, 31)),
+    // Three pictures and a note: the baseline of the next.
+    'delta/unstarred': tree(starred(0)),
+    // Sixty lines added at the top: changes of 881 units, under half of 1,789, where the bound
+    // before the search counts each added line at its length and two (840).
+    'delta/starred': tree(starred(60)),
+    // A blank page: its text is empty, and an empty text after an empty one is no change.
+    'delta/blank': tree([]),
+    // A picture shown twice: the added line is the line above it again, which the matched head
+    // and the matched tail must not both take.
+    'delta/doubled': tree(
+      shop({ mugs: [...MUGS.slice(0, 10), MUGS[9], ...MUGS.slice(10)] }),
+    ),
     // A long note and links: the stored text has 1,000 or 1,001 empty lines, which no call writes.
     'delta/notes': tree([
       {
@@ -386,6 +444,27 @@ export const delta: Gap = {
     ].flatMap((name) =>
       calls(name, { 'delta-after-shop': since({}, keptBy('delta/shop')) }),
     ),
+    ...calls('delta/gallery-shifted', {
+      'delta-after-gallery': since({}, keptBy('delta/gallery')),
+    }),
+    ...calls('delta/shuffled', {
+      'delta-after-between': since({}, keptBy('delta/between')),
+    }),
+    ...calls('delta/gallery-twin-left', {
+      'delta-after-twins': since({}, keptBy('delta/gallery-twins')),
+    }),
+    ...calls('delta/rated-again', {
+      'delta-after-rated': since({}, keptBy('delta/rated')),
+    }),
+    ...calls('delta/starred', {
+      'delta-after-unstarred': since({}, keptBy('delta/unstarred')),
+    }),
+    ...calls('delta/blank', {
+      'delta-after-blank': since({}, keptBy('delta/blank')),
+    }),
+    ...calls('delta/doubled', {
+      'delta-after-shop': since({}, keptBy('delta/shop')),
+    }),
     ...calls('delta/shifted-removal', {
       'delta-after-coupon-error': since({}, keptBy('delta/coupon-error')),
     }),

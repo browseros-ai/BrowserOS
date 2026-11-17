@@ -74,6 +74,18 @@ export const clip: Gap = {
     'clip/emoji-across-80': tree([
       clickable('e1', ['a'.repeat(40), `${'b'.repeat(38)}${EMOJI}c`]),
     ]),
+    // The first and the last character outside the first 65,536 (U+10000, U+10FFFF) on units 80
+    // and 81: the clip backs up to 79 for both ends of the high half's range.
+    'clip/astral-ends-across-80': tree([
+      clickable('e1', [
+        'a'.repeat(40),
+        `${'b'.repeat(38)}${String.fromCodePoint(0x10000)}c`,
+      ]),
+      clickable('e2', [
+        'a'.repeat(40),
+        `${'b'.repeat(38)}${String.fromCodePoint(0x10ffff)}c`,
+      ]),
+    ]),
     // The clip trims what it ends on by JavaScript's whitespace: the joining space and U+FEFF,
     // never U+0085.
     'clip/trim': tree([
@@ -93,6 +105,9 @@ export const clip: Gap = {
     ...calls('clip/past-80', { 'page-notext': page({ text: false }) }),
     ...calls('clip/emoji-ends-at-80', { 'page-notext': page({ text: false }) }),
     ...calls('clip/emoji-across-80', { 'page-notext': page({ text: false }) }),
+    ...calls('clip/astral-ends-across-80', {
+      'page-notext': page({ text: false }),
+    }),
     ...calls('clip/trim', { 'page-notext': page({ text: false }) }),
   ],
 }
