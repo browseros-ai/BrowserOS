@@ -29,8 +29,8 @@ use std::path::Path;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-use browseros_cdp::CdpEvent;
-use browseros_core::TabId;
+use browseros_cdp::{CdpClient, CdpEvent, ConnectOptions};
+use browseros_core::{CdpConnection, ProtocolSession, SessionId, TabId};
 use futures_util::future::BoxFuture;
 use js_runner::OpHost;
 use live_run::{EnvCall, LiveRun, TestPage, TestResult, brand, test_page};
@@ -1284,6 +1284,184 @@ async fn tests_that_a_busy_tab_another_client_opens_mid_run_costs_one_wait_at_mo
         assert!(
             tries.iter().any(|took| *took < MID_RUN_BUSY_TAB_BOUND),
             "every try took {MID_RUN_BUSY_TAB_BOUND:?} or more: {tries:?}"
+        );
+        Ok::<(), Box<dyn Error>>(())
+    }
+    .await;
+    run.close_page(&healthy).await;
+    result
+}
+
+/// The longest a run that listens on its context may take beside a tab whose renderer is busy, in
+/// the best of [`BESIDE_BUSY_TABS_TRIES`] tries: three new tabs, each navigated while the context
+/// waits for its commit, and a read of the run's own page after each (thirteen replies). With a
+/// context-level listener the target watcher attaches core's page session to every untouched tab.
+/// With that attach awaited on its loop, each pass over the busy tab holds the loop for the
+/// attach's whole bound (one second, `CONTEXT_ATTACH_WAIT` in `target_watcher.rs`); a pass runs on
+/// every tick and every new tab, so the loop is nearly always in one, and each reply waits for it
+/// (up to two seconds, `SYNCHRONIZE_BOUND`): about 1.5 s a reply, near 20 s a try (read from code,
+/// not measured). The run itself takes about a second on a debug build (estimated); the rest, and
+/// the tries, absorb the 2 to 3 s stalls of a debug test thread on a loaded machine.
+const CONTEXT_LISTENER_BESIDE_BUSY_TAB_BOUND: Duration = Duration::from_millis(4_000);
+
+/// How long a probe of the busy tab's renderer waits before it counts the tab as busy: a healthy
+/// renderer answers `1 + 1` in milliseconds, a loaded one well within this.
+const BUSY_PROBE_WAIT: Duration = Duration::from_secs(1);
+
+/// The script of [`tests_that_a_context_listener_beside_a_busy_tab_never_waits_for_it`], over
+/// `url`: a context-level `framenavigated` listener, then three new tabs, each navigated while the
+/// context waits for its commit, and a read of the run's own page after each. It returns the new
+/// tabs' ids and the commits the listener heard.
+fn context_listener_script(url: &str) -> String {
+    format!(
+        "const heard = []\n\
+         context.on('framenavigated', (frame) => heard.push(frame.url()))\n\
+         const opened = []\n\
+         try {{\n\
+             for (let i = 0; i < 3; i++) {{\n\
+                 const other = await context.newPage()\n\
+                 opened.push(other.tabId)\n\
+                 const target = {url:?} + '?n=' + i\n\
+                 const committed = context.waitForEvent('framenavigated', {{\n\
+                     predicate: (frame) => frame.url() === target,\n\
+                     timeout: 15000,\n\
+                 }})\n\
+                 await other.goto(target)\n\
+                 await committed\n\
+                 await page.title()\n\
+             }}\n\
+         }} catch (error) {{\n\
+             return {{ opened, heard, error: String(error) }}\n\
+         }}\n\
+         return {{ opened, heard }}"
+    )
+}
+
+/// Opens `url` in a background tab as another client does, over a connection of the test's own,
+/// and returns its target id once its renderer stopped answering. The probe's session is on that
+/// other connection, which the run's watcher never hears of, so neither core nor the watcher has
+/// attached a page session to the tab when this returns: only the watcher's own observer, which
+/// it attached while the tab still answered (`busy.html` starts its loop 300 ms after it loads).
+async fn open_busy_tab(url: &str) -> TestResult<String> {
+    let client = Arc::new(CdpClient::connect(ConnectOptions::new(live_run::cdp_port())).await?);
+    let transport: Arc<dyn CdpConnection> = Arc::<CdpClient>::clone(&client);
+    let opened: TestResult<String> = async {
+        let created = transport
+            .send(
+                "Target.createTarget",
+                json!({ "url": url, "background": true }),
+                None,
+            )
+            .await?;
+        let target = created
+            .get("targetId")
+            .and_then(Value::as_str)
+            .ok_or("no target id")?
+            .to_owned();
+        let attached = transport
+            .send(
+                "Target.attachToTarget",
+                json!({ "targetId": target, "flatten": true }),
+                None,
+            )
+            .await?;
+        let session = attached
+            .get("sessionId")
+            .and_then(Value::as_str)
+            .ok_or("no session id")?
+            .to_owned();
+        let probe =
+            ProtocolSession::for_session(Arc::clone(&transport), SessionId::from(session.as_str()));
+        for _ in 0..100 {
+            let answer = time::timeout(
+                BUSY_PROBE_WAIT,
+                probe.send_value("Runtime.evaluate", json!({ "expression": "1 + 1" })),
+            )
+            .await;
+            if answer.is_err() {
+                return Ok(target);
+            }
+            time::sleep(Duration::from_millis(50)).await;
+        }
+        Err(format!("{url} kept answering").into())
+    }
+    .await;
+    // Dropping CdpClient does not stop its reader tasks; the probe's session goes with it.
+    client.disconnect().await;
+    opened
+}
+
+/// A run that listens on its context is not held by a busy tab it never uses, however many tabs
+/// open meanwhile: the target watcher attaches core's page session to the busy tab off its loop,
+/// so the run's replies and its events keep their pace. The busy tab is another client's, opened
+/// before the run and busy before the run's listener goes out, so every attach of it meets a
+/// renderer that does not answer. The run sees only its own tabs, as a run neo-server binds to
+/// its task does: the listener's own setup attaches each tab the run sees, a wait of the op's that
+/// this row does not measure.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+#[expect(
+    clippy::print_stderr,
+    reason = "each try prints its time, the measure its bound is checked against"
+)]
+async fn tests_that_a_context_listener_beside_a_busy_tab_never_waits_for_it() -> TestResult {
+    let _alone = BUSY_TABS.acquire().await?;
+    let mut run = Arc::new(LiveRun::connect().await?);
+    let server = PageServer::start().await?;
+    let healthy = run.new_page().await?;
+    let result = async {
+        goto(&run, &healthy, &server.url("/child.html"), "load").await?;
+        run.bind(&[healthy.tab]);
+        // Another site than the healthy tab's, so Chromium never puts them in one renderer.
+        let busy_url = server
+            .url("/busy.html")
+            .replacen("127.0.0.1", "localhost", 1);
+        let script = context_listener_script(&server.url("/child.html"));
+        let init =
+            json!({ "page": brand(&healthy), "pages": run.page_facts(vec![healthy.tab]).await });
+        let mut tries = Vec::new();
+        while tries.len() < BESIDE_BUSY_TABS_TRIES {
+            let busy = open_busy_tab(&busy_url).await?;
+            let host: Arc<dyn OpHost> = Arc::clone(&run) as Arc<dyn OpHost>;
+            let started = Instant::now();
+            let outcome = js_runner::run_script(&host, &init, &script).await;
+            let took = started.elapsed();
+            drop(host);
+            let _closed = run
+                .browser()
+                .cdp("Target.closeTarget", json!({ "targetId": busy }), None)
+                .await;
+            let opened = outcome
+                .as_ref()
+                .ok()
+                .and_then(|outcome| outcome.get("opened"))
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            for tab in opened.iter().filter_map(Value::as_i64) {
+                run.close_page(&TestPage { tab: TabId(tab) }).await;
+            }
+            // A new run for the next try: the script's listener, left on, would have the watcher
+            // attach the next busy tab at once, before it is busy.
+            Arc::get_mut(&mut run)
+                .ok_or("the run is still shared")?
+                .next_run();
+            let outcome = outcome?;
+            eprintln!("CONTEXT_LISTENER_BESIDE_BUSY_TAB took={took:?} script={outcome}");
+            assert!(
+                outcome.get("error").is_none() && opened.len() == 3,
+                "the script did not open its three tabs and see each one's commit: {outcome}"
+            );
+            tries.push(took);
+            if took < CONTEXT_LISTENER_BESIDE_BUSY_TAB_BOUND {
+                break;
+            }
+        }
+        assert!(
+            tries
+                .iter()
+                .any(|took| *took < CONTEXT_LISTENER_BESIDE_BUSY_TAB_BOUND),
+            "every try took {CONTEXT_LISTENER_BESIDE_BUSY_TAB_BOUND:?} or more: {tries:?}"
         );
         Ok::<(), Box<dyn Error>>(())
     }
