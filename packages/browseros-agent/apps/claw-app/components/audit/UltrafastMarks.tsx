@@ -6,23 +6,6 @@
 
 import { cn } from '@/lib/utils'
 
-/**
- * The margin rule along the left edge of an ultrafast task's card. Between two ultrafast rows it
- * reaches over the divider, so a run of them reads as one rule.
- */
-export function UltrafastRail({ className }: { className?: string }) {
-  return (
-    <span
-      aria-hidden
-      data-ultrafast-rail
-      className={cn(
-        'pointer-events-none absolute inset-y-0 left-0 w-0.5 bg-primary [[data-ultrafast]+[data-ultrafast]>&]:-top-px',
-        className,
-      )}
-    />
-  )
-}
-
 /** "ultrafast" in its bold italic Signal Blue: the brand, used once per surface as a label. */
 export function UltrafastWordmark({ className }: { className?: string }) {
   return (
