@@ -153,7 +153,20 @@ jobs:
           printf '#!/bin/sh\nexec /usr/bin/aa-exec -p browserclaw -- %s "$@"\n' "$executable" > "$browser/launch"
           chmod 0755 "$browser/launch"
           export NEO_E2E_BROWSER="$browser/launch" CLAW_SDK_E2E_BROWSER="$browser/launch"
-          echo "browser.lock $NEO_BROWSER_VERSION: $("$browser/launch" --version)" | tee "$POOL_ARTIFACTS/browser.txt"
+          version=$("$browser/launch" --version)
+          echo "browser.lock $NEO_BROWSER_VERSION: $version" | tee "$POOL_ARTIFACTS/browser.txt"
+          # The same check as neo-sdk-live.yml: the browser the suites will drive reports the
+          # pinned build over CDP, before the long build starts.
+          # shellcheck disable=SC2016
+          node tools/test-browser.mjs node --input-type=module -e '
+          import { writeFileSync } from "node:fs";
+          import { execFileSync } from "node:child_process";
+          const expected = execFileSync(process.env.NEO_E2E_BROWSER, ["--version"], { encoding: "utf8" }).match(/\d+\.\d+\.\d+\.\d+/)?.[0];
+          const version = await (await fetch(`http://127.0.0.1:${process.env.BROWSEROS_CDP_PORT}/json/version`)).json();
+          if (!expected || version.Browser !== `Chrome/${expected}`) throw new Error(`pinned executable ${expected}, CDP ${version.Browser}`);
+          writeFileSync(`${process.env.POOL_ARTIFACTS}/browser-version.json`, JSON.stringify({ expected, cdp: version.Browser }, null, 2) + "\n");
+          console.log(`CDP ${version.Browser}`);
+          '
           python3 -m unittest discover -s crates/neo-sdk/tests -p test_live.py
           python3 crates/neo-sdk/live.py --output "$POOL_ARTIFACTS/live" 2>&1 | tee "$POOL_ARTIFACTS/run.log"
 

@@ -99,6 +99,21 @@ def pool_jobs_waiting(runs: list[dict], jobs_of, policy: Policy) -> int:
     return count
 
 
+def runner_group_problem(group: dict, repositories: list[str], policy: Policy) -> str | None:
+    """Why the organisation's runner group would let other code reach the pool, if it would.
+
+    The group is the GitHub-side boundary: it keeps every other repository and workflow,
+    a fork's pull request included, from being given these runners. The dispatcher mints
+    no runner unless it reads back exactly that restriction.
+    """
+    if group.get("visibility") != "selected" or repositories != [policy.repository]:
+        return f"runner group admits {group.get('visibility')} repositories {repositories}, not only {policy.repository}"
+    if group.get("restricted_to_workflows") is not True \
+            or sorted(group.get("selected_workflows") or []) != sorted(policy.workflow_refs()):
+        return f"runner group is not restricted to exactly {policy.workflow_refs()}"
+    return None
+
+
 def runners_to_start(demand: int, supply: int, held: int) -> int:
     """New slots to open: unmet demand, bounded by the pool's per-worker cap.
 
@@ -185,7 +200,11 @@ class Transport:
                 "buildrunner@" + self.endpoints[host["name"]], command]
 
     def call(self, host: dict, command: str) -> dict:
-        reply = subprocess.run(self.args(host, command), capture_output=True, text=True, timeout=700)
+        for attempt in range(3):
+            reply = subprocess.run(self.args(host, command), capture_output=True, text=True, timeout=700)
+            if reply.returncode != 255:  # SSH's own failure; the guest's refusals exit 70.
+                break
+            time.sleep(5 * (attempt + 1))
         if reply.returncode:
             raise RuntimeError(f"{host['name']} {command.split()[0]}: {reply.stderr.strip()[-300:]}")
         return json.loads(reply.stdout)
@@ -208,7 +227,7 @@ class Transport:
 class Slot(threading.Thread):
     """One pool reservation that hosts one runner for one GitHub job.
 
-    States: acquiring → starting → idle (registered, no job yet) → busy → done.
+    States: acquiring → starting → idle (registered, no job yet) → busy or finishing → done.
     A slot leaves acquiring for done without a host when demand disappears.
     """
 
@@ -238,6 +257,13 @@ class Slot(threading.Thread):
         message = {"lease": True, "submission": SUBMISSION, "hosts": settings["hosts"]}
         while self.wanted:
             host = self.pool("acquire", **message)["host"]
+            if host and host["name"] not in settings["hosts"]:
+                # A coordinator whose pool.py predates host lists ignores ours. Hand the
+                # machine straight back, untouched, and stop until an operator upgrades it.
+                self.pool("release")
+                self.dispatcher.halt(f"the pool granted {host['name']}, outside {settings['hosts']}: "
+                                     "install the current pool.py on the coordinator, then restart")
+                return None
             if host and self.dispatcher.transport.reachable(host):
                 return host
             if host:
@@ -256,6 +282,9 @@ class Slot(threading.Thread):
         self.state = "starting"
         dispatcher, settings = self.dispatcher, self.dispatcher.settings
         try:
+            problem = dispatcher.group_problem()
+            if problem:
+                raise RuntimeError(problem)
             minted = dispatcher.github.call("POST", f"/orgs/{settings['org']}/actions/runners/generate-jitconfig", {
                 "name": RUNNER_PREFIX + self.job[:12], "runner_group_id": settings["runnerGroupId"],
                 "labels": [dispatcher.policy.label], "work_folder": "_work"})
@@ -282,17 +311,30 @@ class Slot(threading.Thread):
             if self.state != "idle" or time.monotonic() - checked < POLL_SECONDS:
                 continue
             checked = time.monotonic()
-            if self.runner_busy():
+            # Supervision (and so the lease) lasts as long as the runner job does. A GitHub
+            # or SSH error here is retried at the next poll: it must never leave a running
+            # job to be cancelled by the reaper.
+            busy = self.runner_busy()
+            if busy:
                 self.state = "busy"
-            elif time.monotonic() - started > IDLE_SECONDS and self.withdraw_runner():
-                self.dispatcher.transport.call(host, "cancel " + self.job)
+            elif busy is False and time.monotonic() - started > IDLE_SECONDS and self.withdraw_runner():
+                self.state = "finishing"  # No longer able to serve a queued job.
+                try:
+                    self.dispatcher.transport.call(host, "cancel " + self.job)
+                except (RuntimeError, OSError, subprocess.SubprocessError) as error:
+                    # The deleted registration also ends the runner; its exit ends the watch.
+                    log(f"{self.job}: cancel failed: {error}")
 
-    def runner_busy(self) -> bool:
+    def runner_busy(self) -> bool | None:
+        """True once GitHub assigned the runner a job; None when GitHub could not say."""
         path = f"/orgs/{self.dispatcher.settings['org']}/actions/runners/{self.runner}"
         try:
             return bool(self.dispatcher.github.call("GET", path).get("busy"))
         except NotFound:
             return True  # GitHub removes a one-job runner once its job is done.
+        except Exception as error:
+            log(f"{self.job}: runner status unavailable: {error}")
+            return None
 
     def withdraw_runner(self) -> bool:
         """Delete an unused registration first, so GitHub cannot assign it a job meanwhile."""
@@ -300,6 +342,9 @@ class Slot(threading.Thread):
             self.forget_runner(strict=True)
         except Conflict:
             self.state = "busy"  # Assigned in the meantime: let it run.
+            return False
+        except Exception as error:
+            log(f"{self.job}: could not withdraw runner {self.runner}: {error}")
             return False
         log(f"{self.job}: runner idle for {IDLE_SECONDS}s; withdrawn")
         return True
@@ -365,6 +410,29 @@ class Dispatcher:
         self.policy = Policy(settings["repository"], settings["workflow"],
                              tuple(settings["branches"]), settings["label"])
         self.slots: list[Slot] = []
+        self.halted: str | None = None
+        self.group = (0.0, "runner group not checked yet")
+        self.group_lock = threading.Lock()
+
+    def halt(self, reason: str) -> None:
+        if self.halted is None:
+            log("halted: " + reason)
+        self.halted = reason
+
+    def group_problem(self) -> str | None:
+        """Read the runner group's restriction back, at most once a minute."""
+        with self.group_lock:
+            checked, problem = self.group
+            if time.monotonic() - checked > 60 or checked == 0.0:
+                org, group = self.settings["org"], self.settings["runnerGroupId"]
+                settings = self.github.call("GET", f"/orgs/{org}/actions/runner-groups/{group}")
+                listed = self.github.call("GET", f"/orgs/{org}/actions/runner-groups/{group}/repositories?per_page=100")
+                problem = runner_group_problem(settings, [repository["full_name"] for repository in
+                                                         listed.get("repositories", [])], self.policy)
+                if problem:
+                    log("not minting runners: " + problem)
+                self.group = (time.monotonic(), problem)
+            return problem
 
     def demand(self) -> int:
         repository, workflow = self.policy.repository, Path(self.policy.workflow).name
@@ -388,6 +456,8 @@ class Dispatcher:
                     log(f"removed stale runner {runner['name']}")
 
     def tick(self) -> None:
+        if self.halted or self.group_problem():
+            return
         demand = self.demand()
         self.slots = [slot for slot in self.slots if slot.state != "done"]
         serving = [slot for slot in self.slots if slot.wanted and slot.state in {"acquiring", "starting", "idle"}]

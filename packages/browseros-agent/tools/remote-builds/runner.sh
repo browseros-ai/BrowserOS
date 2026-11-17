@@ -28,6 +28,18 @@ sweep() {
   for shared in /tmp /var/tmp /var/crash /dev/shm /run/lock; do
     sudo -n find "$shared" -xdev -mindepth 1 -user "$account" -delete 2>/dev/null || true
   done
+  # System V shared memory, semaphores and queues outlive the processes that made them.
+  # Their creator can always remove them, so this runs as the account itself.
+  sudo -n -u "$account" python3 - <<'PY' || true
+import os, subprocess
+uid = str(os.getuid())
+for kind, flag in (("shm", "-m"), ("sem", "-s"), ("msg", "-q")):
+    rows = open(f"/proc/sysvipc/{kind}").read().splitlines()
+    header = rows[0].split()
+    for fields in (row.split() for row in rows[1:]):
+        if uid in (fields[header.index("uid")], fields[header.index("cuid")]):
+            subprocess.run(["ipcrm", flag, fields[1]], check=False)
+PY
   sudo -n find "$base" -mindepth 1 -maxdepth 1 -exec rm -rf --one-file-system -- {} + || true
 }
 

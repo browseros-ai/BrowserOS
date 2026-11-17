@@ -151,8 +151,9 @@ should never run beside them.
    - Organisation: **Self-hosted runners**, read and write.
    - Repository: **Actions**, read; **Metadata**, read.
 
-   It needs no webhook. Install it on this repository only. Copy its private key straight to
-   the coordinator, as below. Never commit it or put it in a repository.
+   It needs no webhook. Install it on this repository only. Move its private key from the
+   downloaded file straight to the coordinator, as below. Never paste it into a terminal,
+   commit it, or put it in a repository.
 2. Create the runner group with the App's token. Every field matters:
    - `visibility: selected`, listing only this repository.
    - `allows_public_repositories: true`. A public repository needs it; the default admits only
@@ -164,12 +165,22 @@ should never run beside them.
 
 ### Coordinator
 
+First install the current `pool.py` the usual way, at a natural idle (0 running, 0 waiting),
+keeping a backup. An older `pool.py` ignores the dispatcher's host list. The dispatcher notices,
+hands that machine straight back and halts, but it can do nothing useful until the upgrade.
+
 As `buildrunner`, with the same private directory as the reaper:
 
 ```sh
 umask 077
 ssh-keygen -q -t ed25519 -N '' -C pool-runner-dispatcher -f /var/lib/browseros-remote-builds/runners_ed25519
-install -m 0600 /dev/stdin /var/lib/browseros-remote-builds/github-app.pem   # paste the App key
+```
+
+From the machine that downloaded the App's key, file to file, so the key is never shown:
+
+```sh
+ssh COORDINATOR 'umask 077; cat > /var/lib/browseros-remote-builds/github-app.pem' < DOWNLOADED_KEY.pem
+rm DOWNLOADED_KEY.pem
 ```
 
 `/var/lib/browseros-remote-builds/runners.json` (mode 0600) holds ids and paths only:
@@ -193,6 +204,10 @@ install -m 0600 /dev/stdin /var/lib/browseros-remote-builds/github-app.pem   # p
 `hosts` lists the `pool.json` names that may serve GitHub jobs. The dispatcher passes it with
 each `acquire`, and `pool.py` gives that job only those hosts. Private endpoints and pinned
 host keys come from `reaper.json` and `reaper-known-hosts`.
+
+Before minting any runner, and once a minute after that, the dispatcher reads the runner group
+back. It mints nothing unless the group admits only this repository and only the workflow refs
+in `runners.json`. Its log says why when it refuses.
 
 Install the dispatcher and start it:
 

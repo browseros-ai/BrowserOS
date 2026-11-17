@@ -126,6 +126,16 @@ class PolicyTests(unittest.TestCase):
         checking = {1: [job_row("in_progress", labels=("ubuntu-24.04",)), job_row()]}
         self.assertEqual(0, runners.pool_jobs_waiting([run_row(1)], checking.get, POLICY))
 
+    def test_only_a_group_restricted_to_this_repository_and_workflow_passes(self):
+        good = {"visibility": "selected", "restricted_to_workflows": True, "selected_workflows": [ALLOWED]}
+        self.assertIsNone(runners.runner_group_problem(good, [REPOSITORY], POLICY))
+        problems = [({**good, "visibility": "all"}, [REPOSITORY]), (good, [REPOSITORY, "org/other"]),
+                    ({**good, "restricted_to_workflows": False}, [REPOSITORY]),
+                    ({**good, "selected_workflows": [ALLOWED, f"{REPOSITORY}/{WORKFLOW}@refs/heads/dev"]}, [REPOSITORY]),
+                    ({**good, "selected_workflows": []}, [REPOSITORY])]
+        for group, repositories in problems:
+            self.assertIsNotNone(runners.runner_group_problem(group, repositories, POLICY), group)
+
     def test_runners_receive_the_allowed_workflow_refs(self):
         self.assertEqual([ALLOWED], POLICY.workflow_refs())
 
@@ -152,6 +162,8 @@ class FakeGitHub:
         self.runners = {}
         self.queued = queued
         self.lock = threading.Lock()
+        self.group = {"visibility": "selected", "restricted_to_workflows": True, "selected_workflows": [ALLOWED]}
+        self.status_errors = 0
 
     def call(self, method, path, body=None):
         with self.lock:
@@ -164,8 +176,15 @@ class FakeGitHub:
                 return {"workflow_runs": [run_row(7)] if "status=queued" in path else []}
             if path.endswith("per_page=100") and "/runs/" in path:
                 return {"jobs": [job_row() for _ in range(self.queued)]}
+            if path.endswith("/runner-groups/3"):
+                return self.group
+            if "/runner-groups/3/repositories" in path:
+                return {"repositories": [{"full_name": REPOSITORY}]}
             if "/runner-groups/" in path:
                 return {"runners": []}
+            if method == "GET" and self.status_errors:
+                self.status_errors -= 1
+                raise RuntimeError("GitHub GET: HTTP 502")
             runner = int(path.rsplit("/", 1)[1])
             if runner not in self.runners:
                 raise runners.NotFound(path)
@@ -250,6 +269,44 @@ class DispatcherTests(PoolFixture):
         self.assertGreater(deleted, 0)
         self.assertIsNone(self.holder("vm-4"))
 
+    def test_github_errors_while_a_job_runs_never_end_its_supervision(self):
+        dispatcher, github, transport = self.dispatcher(takes_job=False)
+        github.status_errors = 3
+        with patch.object(runners, "IDLE_SECONDS", 60):
+            slot = runners.Slot(dispatcher)
+            slot.start()
+            time.sleep(0.2)
+            self.assertTrue(slot.is_alive())
+            self.assertEqual("idle", slot.state)
+            transport.process.done.set()
+            slot.join(5)
+        self.assertEqual(["result", "cleanup"], transport.calls)
+        self.assertIsNone(self.holder("vm-4"))
+
+    def test_no_runner_is_minted_unless_the_group_is_restricted(self):
+        dispatcher, github, transport = self.dispatcher(takes_job=True)
+        github.group = {**github.group, "restricted_to_workflows": False}
+        slot = runners.Slot(dispatcher)
+        slot.start()
+        slot.join(5)
+        self.assertFalse(any(path.endswith("generate-jitconfig") for _, path in github.calls))
+        self.assertIsNone(self.holder("vm-4"))
+        with patch.object(runners.Slot, "start", lambda slot: None):
+            dispatcher.group = (0.0, None)
+            dispatcher.tick()
+        self.assertEqual([], [slot for slot in dispatcher.slots if slot.state != "done"])
+
+    def test_a_coordinator_that_ignores_host_lists_gets_its_host_back_and_halts_the_dispatcher(self):
+        dispatcher, github, transport = self.dispatcher(takes_job=True)
+        legacy = lambda state, message: pool.request(state, {key: value for key, value in message.items() if key != "hosts"})
+        with patch.object(runners, "pool_request", legacy):
+            slot = runners.Slot(dispatcher)
+            slot.start()
+            slot.join(5)
+        self.assertIn("vm-1", dispatcher.halted)
+        self.assertIsNone(self.holder("vm-1"))
+        self.assertFalse(transport.started.is_set())
+
     def test_a_waiting_slot_withdraws_when_its_job_disappears(self):
         self.occupy("vm-4")
         dispatcher, github, transport = self.dispatcher(takes_job=True)
@@ -275,12 +332,16 @@ class DispatcherTests(PoolFixture):
 
     def test_no_runner_is_minted_for_a_fork_pull_request(self):
         dispatcher, github, transport = self.dispatcher(takes_job=True)
+        answer = github.call
         github.call = lambda method, path, body=None: (
             {"workflow_runs": [run_row(8, event="pull_request", head="fork/repo")]} if "/workflows/" in path
-            else {"jobs": [job_row()]})
+            else answer(method, path, body))
         with patch.object(runners.Slot, "start", lambda slot: None):
             dispatcher.tick()
-        self.assertEqual([], dispatcher.slots)
+            self.assertEqual([], dispatcher.slots)
+            github.call = answer
+            dispatcher.tick()
+        self.assertEqual(1, len(dispatcher.slots))  # The same dispatcher does serve main's run.
 
 
 class HookTests(unittest.TestCase):
