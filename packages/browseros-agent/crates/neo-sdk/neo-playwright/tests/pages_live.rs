@@ -1144,6 +1144,17 @@ const MID_RUN_BUSY_TAB_SCRIPT: &str = "const seen = []\n\
     for (let i = 0; i < 5; i++) await page.title()\n\
     return { seen, tab: busy.tabId }";
 
+/// Closes every tab the browser lists at `url`. The row's busy tabs are on a URL of their own (its
+/// server's port), so this finds them whatever the script returned and touches no other row's tab.
+async fn close_tabs_at(run: &LiveRun, url: &str) {
+    let Ok(pages) = run.browser().pages.list().await else {
+        return;
+    };
+    for info in pages.into_iter().filter(|info| info.url.starts_with(url)) {
+        run.close_page(&TestPage { tab: info.tab_id }).await;
+    }
+}
+
 /// The live run's ops, with how long each `page.frames` read took and on which tab, and a signal
 /// once the script's `waitForEvent` went out (`events.wait`).
 struct FrameReads {
@@ -1241,12 +1252,11 @@ async fn tests_that_a_busy_tab_another_client_opens_mid_run_costs_one_wait_at_mo
                 (opened, Instant::now())
             };
             let ((outcome, ended), (opened, opened_at)) = tokio::join!(script, open);
+            // At once and whatever the try's outcome, so its loop does not load the machine for
+            // the next try or other rows, and a failed try leaves no busy tab behind.
+            close_tabs_at(&run, &busy_url).await;
             opened?;
             let outcome = outcome?;
-            if let Some(tab) = outcome.get("tab").and_then(Value::as_i64) {
-                // At once, so its loop does not load the machine for the next try or other rows.
-                run.close_page(&TestPage { tab: TabId(tab) }).await;
-            }
             let took = ended.saturating_duration_since(opened_at);
             let reads = recorder
                 .reads
