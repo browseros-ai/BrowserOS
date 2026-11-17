@@ -1,0 +1,94 @@
+{
+  "about": [
+    "Snapshot text cases: what today’s renderer prints for each call, byte for byte. Written by crates/neo-sdk/neo-playwright-js/scripts/snapshot-cases/write.ts through scripts/build.ts; do not edit by hand. The shape is documented in scripts/snapshot-cases/model.ts.",
+    "A case renders `snapshots[case.snapshot]` with `case.call` and must print `case.text`; a whole page in Neo’s format also keeps `case.pending` as the tab’s pending baseline. A snapshot with `chain` instead of `json` is built in code: `depth` nodes, each a copy of `link` holding the next, the last `leaf`.",
+    "Lone halves of a character are written as U+FFFD: the covered block’s cut is JavaScript’s own, and U+FFFD is what every reader outside the script engine receives (design 1.9). No other text holds one."
+  ],
+  "snapshots": {
+    "control/shop": {
+      "json": [
+        {
+          "role": "banner",
+          "ref": "e1",
+          "children": [
+            {
+              "role": "link",
+              "name": "Home",
+              "ref": "e2",
+              "url": "https://shop.example/",
+              "cursor": "pointer"
+            },
+            {
+              "role": "link",
+              "name": "Cart (0)",
+              "ref": "e3",
+              "url": "https://shop.example/cart",
+              "cursor": "pointer"
+            }
+          ]
+        },
+        {
+          "role": "main",
+          "ref": "e4",
+          "children": [
+            { "role": "heading", "name": "Mugs", "level": 1, "ref": "e5" },
+            {
+              "role": "paragraph",
+              "ref": "e6",
+              "children": ["Made to order. Free shipping over $40."]
+            },
+            {
+              "role": "list",
+              "ref": "e7",
+              "children": [
+                {
+                  "role": "listitem",
+                  "ref": "e8",
+                  "children": [
+                    {
+                      "role": "link",
+                      "name": "Blue mug",
+                      "ref": "e9",
+                      "url": "https://shop.example/mugs/blue",
+                      "cursor": "pointer"
+                    },
+                    "$18",
+                    {
+                      "role": "button",
+                      "name": "Add Blue mug to cart",
+                      "ref": "e10",
+                      "cursor": "pointer"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "partial": []
+    },
+    "control/chain": {
+      "chain": {
+        "depth": 3,
+        "link": { "role": "region" },
+        "leaf": { "role": "button", "name": "Deep", "ref": "e1" }
+      },
+      "partial": []
+    }
+  },
+  "cases": [
+    {
+      "name": "control/shop/playwright",
+      "snapshot": "control/shop",
+      "call": { "playwright": {} },
+      "text": "- banner [ref=e1]:\n  - link \"Home\" [ref=e2] [cursor=pointer]:\n    - /url: https://shop.example/\n  - link \"Cart (0)\" [ref=e3] [cursor=pointer]:\n    - /url: https://shop.example/cart\n- main [ref=e4]:\n  - heading \"Mugs\" [level=1] [ref=e5]\n  - paragraph [ref=e6]:\n    - text: Made to order. Free shipping over $40.\n  - list [ref=e7]:\n    - listitem [ref=e8]:\n      - link \"Blue mug\" [ref=e9] [cursor=pointer]:\n        - /url: https://shop.example/mugs/blue\n      - text: $18\n      - button \"Add Blue mug to cart\" [ref=e10] [cursor=pointer]"
+    },
+    {
+      "name": "control/chain/playwright",
+      "snapshot": "control/chain",
+      "call": { "playwright": {} },
+      "text": "- region:\n  - region:\n    - button \"Deep\" [ref=e1]"
+    }
+  ]
+}
