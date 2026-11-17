@@ -203,7 +203,7 @@ async function openTab(cdp, url) {
       const contextId = await tab.world()
       return {
         contextId,
-        described: await tab.evaluate(install(options), contextId),
+        described: JSON.parse(await tab.evaluate(install(options), contextId)),
       }
     },
     async call(contextId, request, nodes = []) {
@@ -222,7 +222,7 @@ async function openTab(cdp, url) {
         },
       )
       if (exceptionDetails) throw new Error(exceptionDetails.text)
-      return result.value
+      return JSON.parse(result.value)
     },
     /** `expression`'s value in world `contextId`, by handle. */
     async handle(expression, contextId) {
@@ -388,7 +388,9 @@ async function plainPage(cdp, server, epoch) {
       { marked: outside(marked.json), after: outside(after.json), cursorAfter },
     )
 
-    const same = await tab.evaluate(install({ frameSeq: 5, epoch }), contextId)
+    const same = JSON.parse(
+      await tab.evaluate(install({ frameSeq: 5, epoch }), contextId),
+    )
     const pinAfterSame = await tab.call(
       contextId,
       resolveRequest({ pin: button.pin }),
@@ -404,9 +406,11 @@ async function plainPage(cdp, server, epoch) {
       'a second boot with the same epoch is a no-op: same seq, pins and keys live',
       { seq: same.seq, pin: pinAfterSame.kind, key: keyAfterSame.kind },
     )
-    const rekeyed = await tab.evaluate(
-      install({ frameSeq: 347, epoch: `${epoch}-next` }),
-      contextId,
+    const rekeyed = JSON.parse(
+      await tab.evaluate(
+        install({ frameSeq: 347, epoch: `${epoch}-next` }),
+        contextId,
+      ),
     )
     const pinAfter = await tab.call(
       contextId,
@@ -488,12 +492,10 @@ async function cspPage(cdp, server, epoch) {
       `   measured: eval in the ${WORLD} world under this CSP: ${JSON.stringify(evalIn)}`,
     )
     // The install needs no eval, so it runs with DevTools' eval exemption off as well.
-    const described = await tab.evaluate(
-      install({ frameSeq: 0, epoch }),
-      contextId,
-      {
+    const described = JSON.parse(
+      await tab.evaluate(install({ frameSeq: 0, epoch }), contextId, {
         allowUnsafeEvalBlockedByCSP: false,
-      },
+      }),
     )
     check(
       described.kind === 'described' && described.seq === 0,
@@ -574,9 +576,11 @@ async function secondConnection(tab, epoch) {
     console.log(
       `   measured: a second CDP connection's ${WORLD} world ${seen === 'object' ? 'is the same world: it already holds the probe' : `is a new world (${seen})`}`,
     )
-    const described = await evaluate(
-      install({ frameSeq: 512, epoch: `${epoch}-restart` }),
-      executionContextId,
+    const described = JSON.parse(
+      await evaluate(
+        install({ frameSeq: 512, epoch: `${epoch}-restart` }),
+        executionContextId,
+      ),
     )
     const { result } = await other.send(
       'Runtime.callFunctionOn',
@@ -588,12 +592,11 @@ async function secondConnection(tab, epoch) {
       },
       sessionId,
     )
+    const reply = JSON.parse(result.value)
     check(
-      described.seq === 512 &&
-        result.value.kind === 'none' &&
-        result.value.staleRef === '#2',
+      described.seq === 512 && reply.kind === 'none' && reply.staleRef === '#2',
       "a restarted claw-sdk's install takes its own seq, and refs from before it are stale",
-      { seq: described.seq, oldRef: result.value },
+      { seq: described.seq, oldRef: reply },
     )
   } finally {
     other.close()

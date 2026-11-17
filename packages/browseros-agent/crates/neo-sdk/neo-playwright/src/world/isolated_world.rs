@@ -258,6 +258,11 @@ impl IsolatedWorld {
                      speaks {PROBE_PROTOCOL}; rebuild crates/neo-sdk/neo-playwright-js"
                 )));
             }
+            Ok(ProbeReply::Error { message, .. }) => {
+                return Err(ProbeFailure::Broken(format!(
+                    "the engine failed to install: {message}"
+                )));
+            }
             Ok(_) => {
                 return Err(ProbeFailure::Broken(
                     "boot answered something other than `described`".to_owned(),
@@ -515,9 +520,9 @@ mod tests {
     impl Browser {
         /// Replies to the install's commands: `evaluated` to the evaluate, `booted` as the
         /// install function's return.
-        fn answering(evaluated: Value, booted: Value) -> Arc<Self> {
-            let mut called = json!({ "result": { "type": "object" } });
-            called["result"]["value"] = booted;
+        fn answering(evaluated: Value, booted: &Value) -> Arc<Self> {
+            let mut called = json!({ "result": { "type": "string" } });
+            called["result"]["value"] = json!(booted.to_string());
             let replies = TestConnection::new([
                 (
                     "Page.createIsolatedWorld",
@@ -534,7 +539,7 @@ mod tests {
 
         /// A handle, and a world that boots with seq 3.
         fn new() -> Arc<Self> {
-            Self::answering(handle(), described(None))
+            Self::answering(handle(), &described(None))
         }
 
         /// The session sends `event` just before the reply to the next `command`.
@@ -747,7 +752,7 @@ mod tests {
 
     #[tokio::test]
     async fn tests_that_a_gone_unique_id_and_a_lagged_watch_fail_gone() -> TestResult {
-        let gone = Browser::answering(cdp_error("uniqueContextId not found"), described(None));
+        let gone = Browser::answering(cdp_error("uniqueContextId not found"), &described(None));
         gone.on(
             "Page.createIsolatedWorld",
             "Runtime.executionContextCreated",
@@ -805,7 +810,7 @@ mod tests {
             (described(Some(0)), Some(FrameSeq(0))),
             (described(None), None),
         ] {
-            let browser = Browser::answering(handle(), booted);
+            let browser = Browser::answering(handle(), &booted);
             browser.on(
                 "Page.createIsolatedWorld",
                 "Runtime.executionContextCreated",
@@ -844,6 +849,19 @@ mod tests {
         assert!(
             broadcast.try_recv().is_err(),
             "a method with a live targeted subscriber must bypass the broadcast"
+        );
+        Ok(())
+    }
+    #[tokio::test]
+    async fn a_probe_boot_error_keeps_its_message_at_the_install_boundary()
+    -> Result<(), Box<dyn Error>> {
+        let browser = Browser::answering(
+            handle(),
+            &json!({"kind":"error","class":"internal","message":"boot diagnostic"}),
+        );
+        let failure = install(&browser).await.err().ok_or("boot must fail")?;
+        assert!(
+            matches!(failure, ProbeFailure::Broken(message) if message == "the engine failed to install: boot diagnostic")
         );
         Ok(())
     }

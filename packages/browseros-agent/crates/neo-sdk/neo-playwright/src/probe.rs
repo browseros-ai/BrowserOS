@@ -6,8 +6,8 @@
 //!    objectId: <the world's global, held since install>,   // never executionContextId: see probe_call
 //!    functionDeclaration: CALL_FUNCTION,
 //!    arguments: [{ value: <ProbeCall> }, root?, ...nodes?], returnByValue: true }
-//!        └─▶ globalThis.__neoProbe.call(call, root, nodes) ─▶ <ProbeReply>,
-//!            or { kind: "uninstalled" }
+//!        └─▶ globalThis.__neoProbe.call(call, root, nodes) ─▶ JSON text of <ProbeReply>
+//!            (including errors and uninstalled); pinned nodes still leave by handle
 //! ```
 //!
 //! Rust's request/reply types generate `neo-playwright-js/src/probe/generated.ts` via
@@ -29,7 +29,7 @@ pub(crate) use probe_call::{
 };
 pub(crate) use probe_reply::{
     CoverFacts, CoverKind, CoverMark, ErrorClass, Hit, OwnCase, OwnPress, PROBE_PROTOCOL, PageText,
-    Point, ProbeReply, Rect, Resolution, SnapshotIframe, SurveyLayer,
+    Point, ProbeReply, Rect, Resolution, SnapshotIframe, SurveyLayer, depth_error,
 };
 pub(crate) use probe_request::{
     ArmPlan, BootOptions, DocumentPart, DropEntry, Edit, ElementState, ExpectParams, FilePayload,

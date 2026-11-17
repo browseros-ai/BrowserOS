@@ -10,11 +10,11 @@ use std::error::Error;
 use ts_rs::{Config, TS, TypeVisitor};
 
 use crate::action::{Checkable, FileInput, FilesSet, Filled, Selected};
-use crate::page::StorageValue;
+use crate::page::{MAX_VALUE_DEPTH, StorageValue};
 use crate::private_entry::{Looked, PrivateAnswer};
 use crate::read::{FrameOrigin, Located, PinnedMatch};
 
-use super::probe_reply::ProbeReply;
+use super::probe_reply::{ProbeReply, SNAPSHOT_DEPTH_ERROR};
 use super::probe_request::{BootOptions, ProbeCall};
 
 const HEADER: &str = "\
@@ -76,7 +76,10 @@ impl Declarations {
         if !self.collisions.is_empty() {
             return Err(self.collisions.join("\n").into());
         }
-        let mut output = format!("{HEADER}\n");
+        let mut output = format!(
+            "{HEADER}\nexport const MAX_REPLY_DEPTH = {MAX_VALUE_DEPTH};\nexport const SNAPSHOT_DEPTH_ERROR = {};\n\n",
+            serde_json::to_string(SNAPSHOT_DEPTH_ERROR)?
+        );
         for declaration in self.named.into_values() {
             output.push_str(&declaration.text);
             output.push('\n');

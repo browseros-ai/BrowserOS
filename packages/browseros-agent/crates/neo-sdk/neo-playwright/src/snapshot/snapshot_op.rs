@@ -47,11 +47,11 @@ use crate::listed_enum::listed_enum;
 use crate::op_input::OpArgs;
 use crate::op_scope::OpScope;
 use crate::op_spec::{OpSpec, PAGE, TARGET};
-use crate::page::OpPage;
+use crate::page::{self, MAX_VALUE_DEPTH, OpPage};
 use crate::playwright_error::TARGET_CRASH_MESSAGE;
 use crate::probe::{
-    self, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget, SnapshotIframe, SnapshotMode,
-    SurveyLayer, Want,
+    self, ErrorClass, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget, SnapshotIframe,
+    SnapshotMode, SurveyLayer, Want,
 };
 use crate::resolve::{self, Hopped, Landed, Resolver};
 use crate::target::{Chunk, PageRef, Strictness, Target};
@@ -534,6 +534,8 @@ enum Unread {
     Loading,
     /// CDP or the probe failed there in the way the code names.
     Failed(ErrorCode),
+    /// The child replied promptly, but its tree cannot fit the admitted JSON depth.
+    Depth(usize),
 }
 
 impl fmt::Display for Unread {
@@ -542,6 +544,7 @@ impl fmt::Display for Unread {
             Self::Timeout => write!(f, "timeout after {} ms", FRAME_BUDGET.as_millis()),
             Self::Detached => f.write_str("frame detached"),
             Self::Loading => f.write_str("frame not loaded"),
+            Self::Depth(levels) => f.write_str(&probe::depth_error(*levels)),
             Self::Failed(ErrorCode::TargetCrashed) => f.write_str(TARGET_CRASH_MESSAGE),
             Self::Failed(code) => f.write_str(&code.as_str().replace('_', " ")),
         }
@@ -764,6 +767,19 @@ impl Snapshotter<'_> {
     ) -> Result<aria_snapshot::SnapshotResult, PlaywrightError> {
         let on_top = mem::take(&mut root.on_top);
         let mut result = aria_snapshot::stitch(self.below(root, depth).await?);
+        let encoded = serde_json::to_string(&result).map_err(|_unencodable| {
+            self.scope.fail(
+                ErrorCode::Internal,
+                "could not encode the stitched snapshot",
+            )
+        })?;
+        let nesting = page::json_depth(&encoded);
+        if nesting > MAX_VALUE_DEPTH {
+            return Err(self.scope.fail(
+                ErrorCode::Unsupported,
+                &probe::depth_error(nesting.saturating_sub(1) / 2),
+            ));
+        }
         result.on_top = on_top;
         let count = |seeds: usize| u32::try_from(seeds).unwrap_or(u32::MAX);
         result.closed_roots = self
@@ -812,6 +828,7 @@ impl Snapshotter<'_> {
         match read {
             Ok(frame) => Ok(ChildFrame::Read {
                 iframe_ref: iframe.r#ref,
+                src: iframe.src,
                 snapshot: self.below(frame, depth).await?,
             }),
             Err(unread) => Ok(ChildFrame::Partial(PartialFrame {
@@ -872,6 +889,11 @@ impl Snapshotter<'_> {
                         .map_err(|_why| Unread::Failed(ErrorCode::Internal));
                 }
                 Ok(ProbeReply::None { .. }) => return Ok(FrameReply::empty()),
+                Ok(ProbeReply::Error {
+                    class: ErrorClass::Unsupported,
+                    tree_depth: Some(levels),
+                    ..
+                }) => return Err(Unread::Depth(levels)),
                 Ok(other) => {
                     let refused = resolve::refused(self.scope, other);
                     return Err(Unread::Failed(
@@ -1029,5 +1051,31 @@ mod tests {
             );
         }
         Ok(())
+    }
+    #[test]
+    fn a_probe_tree_at_the_reply_cap_still_decodes_as_typed_aria_nodes()
+    -> Result<(), Box<dyn Error>> {
+        use serde::Deserialize as _;
+        for groups in [70, 130, 147] {
+            let text = format!(
+                "[{}{{\"role\":\"button\",\"name\":\"End\"}}{}]",
+                "{\"role\":\"group\",\"children\":[".repeat(groups),
+                "]}".repeat(groups)
+            );
+            let mut reader = serde_json::Deserializer::from_str(&text);
+            reader.disable_recursion_limit();
+            let value = serde_json::Value::deserialize(&mut reader)?;
+            let frame = super::frame_reply(value, Vec::new())?;
+            assert_eq!(frame.json.len(), 1);
+        }
+        Ok(())
+    }
+    #[test]
+    fn a_child_depth_reason_uses_tree_levels_and_an_actionable_cut() {
+        let reason = Unread::Depth(149).to_string();
+        assert!(reason.contains("149 levels deep"));
+        assert!(reason.contains("about 147"));
+        assert!(reason.contains("140 or less"));
+        assert!(reason.contains("locator's snapshot"));
     }
 }

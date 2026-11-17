@@ -220,12 +220,14 @@ async fn probe(
         "request": request,
         "policy": { "conformance": conformance, "discoverMovedFields": false },
     });
-    isolated(
+    let value = isolated(
         session,
         context,
         &format!("globalThis.__neoProbe.call({call}, null, [])"),
     )
-    .await
+    .await?;
+    let text = value.as_str().ok_or("probe value leaves as JSON text")?;
+    Ok(serde_json::from_str(text)?)
 }
 
 fn target(selector: &str) -> Value {
