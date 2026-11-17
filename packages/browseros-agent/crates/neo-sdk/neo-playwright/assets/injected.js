@@ -8854,6 +8854,15 @@ ${value.stack}`;
     return root && root.nodeType === 11 ? root.host : undefined;
   }
   function hitChain(target, point) {
+    let hit = hitAt(target, point);
+    const chain = [];
+    while (hit && hit !== target) {
+      chain.push(hit);
+      hit = hit.assignedSlot ?? parentOrHost2(hit);
+    }
+    return hit === target ? null : chain;
+  }
+  function hitAt(target, point) {
     const roots = [];
     for (let at = target;at; ) {
       const root = at.getRootNode();
@@ -8864,13 +8873,7 @@ ${value.stack}`;
         break;
       at = root.host;
     }
-    let hit = hitAtRoots(roots, point);
-    const chain = [];
-    while (hit && hit !== target) {
-      chain.push(hit);
-      hit = hit.assignedSlot ?? parentOrHost2(hit);
-    }
-    return hit === target ? null : chain;
+    return hitAtRoots(roots, point);
   }
   function hitAtRoots(roots, point) {
     let hit;
@@ -8956,7 +8959,8 @@ ${value.stack}`;
       snapshot = output.tree(shown, () => quietSnapshot(world, shown));
       words = holdsWords(snapshot);
     }
-    const controls = surrounds ? [] : controlsOf(world, output, shown);
+    const taking = surrounds ? [] : takingControls(world, shown);
+    const controls = controlsOf(world, output, shown, taking);
     const drawn = words ? undefined : output.tree(shown, () => Array.from(renderedText(shown).trim()));
     return {
       layer: coverNumber(layer),
@@ -8971,7 +8975,7 @@ ${value.stack}`;
       behind,
       closed,
       notice: !surrounds && inLiveRegion(world, shown),
-      kind: frameInCover(world, shown, kind) ? { is: "page" } : kind
+      kind: frameKind(shown, kind, taking)
     };
   }
   function shownAs(world, output, layer, point, subject) {
@@ -8989,12 +8993,15 @@ ${value.stack}`;
   function isFrame(element) {
     return element.localName === "iframe" || element.localName === "frame";
   }
-  function frameInCover(world, shown, kind) {
-    if (kind.is !== "frame")
-      return false;
+  function frameKind(shown, kind, taking) {
     if (isFrame(shown))
-      return false;
-    return takingControls(world, shown).some((control) => !isFrame(control));
+      return kind;
+    if (kind.is !== "page" && kind.is !== "frame")
+      return kind;
+    const frames = taking.filter(isFrame);
+    if (frames.length > 0 && frames.length === taking.length)
+      return { is: "frame", inside: true };
+    return kind.is === "frame" && frames.length < taking.length ? { is: "page" } : kind;
   }
   function quietSnapshot(world, element) {
     const { injected } = world;
@@ -9210,15 +9217,8 @@ ${value.stack}`;
     return dialogs.length === 1 ? dialogs[0] : undefined;
   }
   var NATIVE_CONTROLS = "input, textarea, select, button, a[href], iframe, frame, [contenteditable]";
-  function coverControl(world, element) {
-    const { utils } = world.injected;
-    const role = utils.getAriaRole(element);
-    if (role === "dialog" || role === "alertdialog")
-      return false;
-    if (element.matches(NATIVE_CONTROLS) || explicitControl(element))
-      return true;
-    const tabindex = Number.parseInt(element.getAttribute("tabindex") ?? "", 10);
-    return tabindex >= 0 && utils.getElementAccessibleNameText(element, false).trim() !== "";
+  function coverControl(element) {
+    return element.matches(NATIVE_CONTROLS) || explicitControl(element);
   }
   function controlRole(world, control) {
     if (isFrame(control))
@@ -9229,7 +9229,7 @@ ${value.stack}`;
   function takingControls(world, shown) {
     const { injected } = world;
     return composedDescendants(shown).filter((control) => {
-      if (!coverControl(world, control))
+      if (!coverControl(control))
         return false;
       if (!injected.utils.isElementVisible(control))
         return false;
@@ -9239,8 +9239,7 @@ ${value.stack}`;
       return !inView || hitChain(control, middle) === null;
     });
   }
-  function controlsOf(world, output, shown) {
-    const taking = takingControls(world, shown);
+  function controlsOf(world, output, shown, taking = takingControls(world, shown)) {
     const roleOf = (control) => controlRole(world, control);
     const kept = new Set(taking.filter((control) => roleOf(control) === "button").slice(0, MAX_CONTROLS));
     for (const control of taking) {
@@ -9298,6 +9297,102 @@ ${value.stack}`;
       return;
     return Array.from(labels).find((label) => label instanceof Element && label.contains(onTop));
   }
+  var POINT_ROLES = new Set([
+    "link",
+    "button",
+    "checkbox",
+    "radio",
+    "switch",
+    "tab",
+    "menuitem",
+    "option"
+  ]);
+  function ownPress(world, output, target, point, allowed) {
+    const chain = hitChain(target, point);
+    const onTop = chain?.[0];
+    if (!chain || !onTop)
+      return;
+    const kind = kindOf(world, target, chain, point, false);
+    if (kind.is === "label") {
+      const label = ownLabel(target, onTop);
+      if (!label)
+        return;
+      const at = ownSurface(label, onTop) ? point : labelPlainPoint(label);
+      if (!at)
+        return;
+      return {
+        element: label,
+        point: at,
+        press: { case: "label", markup: output.previewNode(label) }
+      };
+    }
+    if (kind.is === "wrapper") {
+      if (coverNumber(coverRoot(target, chain)) !== allowed.wrapper)
+        return;
+      if (drawsUnseen(onTop))
+        return;
+      const checked = checkedState(world, target);
+      if (checked === undefined)
+        return;
+      return {
+        element: onTop,
+        point,
+        press: { case: "wrapper", markup: output.previewNode(onTop), checked }
+      };
+    }
+    if (kind.is === "partial") {
+      const role = world.injected.utils.getAriaRole(target) ?? "";
+      if (!POINT_ROLES.has(role) && target.localName !== "summary")
+        return;
+      return {
+        element: target,
+        press: { case: "point", position: kind.position }
+      };
+    }
+    return;
+  }
+  function shownOwnLabel(world, control) {
+    if (control.localName !== "input")
+      return;
+    const type = control.getAttribute("type")?.toLowerCase();
+    if (type !== "checkbox" && type !== "radio")
+      return;
+    const labels = Reflect.get(control, "labels");
+    if (!(labels instanceof NodeList))
+      return;
+    const shown = Array.from(labels).filter((label) => label instanceof Element && world.injected.utils.isElementVisible(label));
+    return shown.find((label) => labelPlainPoint(label) !== undefined) ?? shown[0];
+  }
+  function ownSurface(owner, hit) {
+    for (let at = hit;at && at !== owner; at = at.parentElement)
+      if (at.matches(`a[href], ${CONTROLS}`) || explicitControl(at) || drawsUnseen(at))
+        return false;
+    return owner.contains(hit);
+  }
+  function drawsUnseen(element) {
+    return element.shadowRoot !== null || element.localName.includes("-") && mayCarryRoot(element);
+  }
+  function labelPlainPoint(label) {
+    const offset = pointOffLinks(label);
+    if (!offset)
+      return;
+    const box = label.getBoundingClientRect();
+    const style = getComputedStyle(label);
+    return {
+      x: box.x + (Number.parseFloat(style.borderLeftWidth) || 0) + offset.x,
+      y: box.y + (Number.parseFloat(style.borderTopWidth) || 0) + offset.y
+    };
+  }
+  function checkedState(world, control) {
+    const role = world.injected.utils.getAriaRole(control) ?? "";
+    if (role !== "checkbox" && role !== "radio" && role !== "switch")
+      return;
+    try {
+      return world.injected.elementState(control, "checked", true).matches;
+    } catch {
+      return;
+    }
+  }
   function labelKind(label) {
     const links = label.querySelectorAll("a[href]").length;
     if (links === 0)
@@ -9310,14 +9405,16 @@ ${value.stack}`;
     const style = getComputedStyle(label);
     const left = box.x + (Number.parseFloat(style.borderLeftWidth) || 0);
     const topEdge = box.y + (Number.parseFloat(style.borderTopWidth) || 0);
+    const root = label.getRootNode();
+    const scope = root instanceof ShadowRoot ? root : document;
     for (const fy of [0.5, 0.25, 0.75])
       for (const fx of [0.1, 0.3, 0.5, 0.7, 0.9]) {
         const point = { x: box.x + box.width * fx, y: box.y + box.height * fy };
         const chain = hitChain(label, point);
         if (chain !== null)
           continue;
-        const on = document.elementFromPoint(point.x, point.y);
-        if (on?.closest(`a[href], ${CONTROLS}`))
+        const on = scope.elementFromPoint(point.x, point.y);
+        if (on && !ownSurface(label, on))
           continue;
         return { x: point.x - left, y: point.y - topEdge };
       }
@@ -9349,7 +9446,8 @@ ${value.stack}`;
       const point = { x: box.x + box.width * fx, y: box.y + box.height * fy };
       if (point.x < 0 || point.y < 0 || point.x >= innerWidth || point.y >= innerHeight)
         continue;
-      if (hitChain(subject, point) === null)
+      const hit = hitAt(subject, point);
+      if (hit && ownSurface(subject, hit))
         return {
           x: Math.round(point.x - left),
           y: Math.round(point.y - topEdge)
@@ -9496,31 +9594,21 @@ ${value.stack}`;
       return found;
     const { element } = found;
     const { injected } = world;
-    for (const state of request.states) {
-      let result;
-      try {
-        result = injected.elementState(element, state, request.frameVisible);
-      } catch (error) {
-        if (error instanceof Error)
-          Object.assign(error, resolutionOf(world, found));
-        throw error;
-      }
-      if (result.received === "error:notconnected")
-        return { kind: "detached" };
-      if (!result.matches)
-        return { kind: "state", missing: state, ...resolutionOf(world, found) };
-    }
+    const checked = checkStates(world, request, found, output);
+    if ("kind" in checked)
+      return checked;
+    const { subject, own } = checked;
     const pin = typeof request.target === "object" && "pin" in request.target ? request.target.pin : world.pins.add(element);
     const { arm } = request;
     if (arm)
       stopArmed(slotOf(world));
     else
-      scroll(element, request.scroll);
-    const rect = injected.retarget(element, "no-follow-label")?.getBoundingClientRect();
+      scroll(subject, request.scroll);
+    const rect = (own ? subject : injected.retarget(element, "no-follow-label"))?.getBoundingClientRect();
     if (!rect)
       return { kind: "detached" };
     const box = rectOf(rect);
-    const place = clickPoint(element, request.position);
+    const place = own ? labelPlace(subject) : clickPoint(element, request.position);
     const resolved = resolutionOf(world, found);
     if (!place)
       return { kind: "state", missing: "visible", ...resolved };
@@ -9538,29 +9626,89 @@ ${value.stack}`;
       return measured;
     if (arm.expectRect && !sameRect(box, arm.expectRect))
       return measured;
-    const interception = output.arm(element, arm.action, arm.browserMapped ? undefined : place.point, arm.blockAll);
+    const interception = output.arm(subject, arm.action, arm.browserMapped ? undefined : place.point, arm.blockAll);
     if (interception === "error:notconnected")
       return { kind: "detached" };
-    if (typeof interception === "string") {
-      const mark = coverMark(injected.retarget(element, "button-link") ?? element, place.point);
-      return {
-        kind: "covered",
-        by: interception,
-        ...mark ? { cover: mark } : {}
-      };
+    if (typeof interception !== "string")
+      return armSlot(world, arm, interception, box, place.point, own);
+    if (own)
+      return coveredReply(world, element, place.point, interception);
+    return armOwn(world, request, output, element, place.point, box, interception);
+  }
+  function checkStates(world, request, found, output) {
+    const { element } = found;
+    let label;
+    for (const state of request.states) {
+      let result;
+      try {
+        result = world.injected.elementState(element, state, request.frameVisible);
+      } catch (error) {
+        if (error instanceof Error)
+          Object.assign(error, resolutionOf(world, found));
+        throw error;
+      }
+      if (result.received === "error:notconnected")
+        return { kind: "detached" };
+      if (result.matches)
+        continue;
+      label = state === "visible" && request.own ? shownOwnLabel(world, element) : undefined;
+      if (!label)
+        return { kind: "state", missing: state, ...resolutionOf(world, found) };
     }
+    return label ? {
+      subject: label,
+      own: { case: "label", markup: output.previewNode(label) }
+    } : { subject: element };
+  }
+  function armSlot(world, arm, taken, box, point, press) {
     const slot = slotOf(world);
     slot.stopped = undefined;
     slot.armed = {
       token: arm.token,
-      interception,
+      interception: taken,
       expiry: setTimeout(() => {
         const stopped = stopArmed(slot);
         if (stopped)
           slot.stopped = { ...stopped, expired: true };
       }, arm.expiryMs)
     };
-    return { kind: "armed", rect: box, point: place.point, token: arm.token };
+    return {
+      kind: "armed",
+      rect: box,
+      point,
+      token: arm.token,
+      ...press ? { own: press } : {}
+    };
+  }
+  function armOwn(world, request, output, element, point, box, interception) {
+    const { arm } = request;
+    const retargeted = world.injected.retarget(element, "button-link") ?? element;
+    const choice = arm && request.own && !arm.browserMapped ? ownPress(world, output, retargeted, point, request.own) : undefined;
+    const at = choice && (choice.point ?? clickPoint(choice.element, choice.press.position)?.point);
+    if (arm && choice && at) {
+      const again = output.arm(choice.element, arm.action, at, arm.blockAll);
+      if (again === "error:notconnected")
+        return { kind: "detached" };
+      if (typeof again !== "string")
+        return armSlot(world, arm, again, box, at, choice.press);
+    }
+    return coveredReply(world, element, point, interception);
+  }
+  function coveredReply(world, element, point, interception) {
+    const retargeted = world.injected.retarget(element, "button-link") ?? element;
+    const mark = coverMark(retargeted, point);
+    return {
+      kind: "covered",
+      by: interception,
+      ...mark ? { cover: mark } : {}
+    };
+  }
+  function labelPlace(label) {
+    const point = labelPlainPoint(label);
+    if (!point)
+      return;
+    const inView = point.x >= 0 && point.y >= 0 && point.x < innerWidth && point.y < innerHeight;
+    return { point, inView };
   }
   function verdict(world, request) {
     const slot = slotOf(world);
@@ -10960,7 +11108,7 @@ ${value.stack}`;
         phases.stopped = true;
         break;
       }
-      if (!coverControl(world, element))
+      if (!coverControl(element))
         continue;
       if (!world.injected.elementState(element, "visible", true).matches || !world.injected.elementState(element, "enabled", true).matches)
         continue;
@@ -11060,7 +11208,7 @@ ${value.stack}`;
           page = true;
           return true;
         }
-        controls ??= Array.from(refs.values(), ({ element }) => element).filter((element) => coverControl(world, element));
+        controls ??= Array.from(refs.values(), ({ element }) => element).filter((element) => coverControl(element));
         page = controls.filter((control) => ownControl(element, control)).length > controls.length / 2;
         return page;
       } finally {
