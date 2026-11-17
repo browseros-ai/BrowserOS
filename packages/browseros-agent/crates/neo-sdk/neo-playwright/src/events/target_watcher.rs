@@ -15,7 +15,11 @@
 //!   that opened as a separate window is recorded as one (D9), and reports back here.
 //! - **Sessions.** Page events arrive on page sessions. `Target.attachedToTarget` names each
 //!   session's tab (core's attaches and its OOPIF auto-attaches alike); a session attached
-//!   before the watcher started is looked up in core's page registry.
+//!   before the watcher started is looked up in core's page registry. Each session's frame tree
+//!   seeds the frame tracker, read on a task of its own while the tab's later events wait in its
+//!   line (`TabLine`), and while a run listens on the context for lifecycle events, core's page
+//!   session is attached to each untouched tab the same way (`attach_page`). Nothing on the loop
+//!   waits for a renderer there: a busy tab holds only its own tab's events.
 //! - **Dialogs.** An `alert()` is already accepted by core's page signals (a listed deviation).
 //!   Any other dialog is held for the runs listening for dialogs on its tab, then
 //!   [`DIALOG_GRACE`] later held for whoever listens by then, or closed by Neo; the reap tick
@@ -23,7 +27,7 @@
 //! - **Frames.** `Page.frameAttached`, a removing `Page.frameDetached` and the main frame's
 //!   `Page.frameNavigated` go to the `FrameAttachLog`, from one session per native target, so frames are
 //!   numbered in the order Playwright numbers them (`world/frame_attach_log.rs`). Each
-//!   out-of-process frame's session gets `Page` on as it attaches (`seed_frame_session`), so its
+//!   out-of-process frame's session gets `Page` on as it attaches (`read_tree`), so its
 //!   own commits arrive whether or not anything read its frames. That commit
 //!   and a closed tab also drop the tab's snapshot baseline, and a lag or a new connection drops
 //!   all of them (`SnapshotBaselines`), so a delta never diffs a new document against the one it
@@ -54,8 +58,8 @@ use std::{fmt, mem};
 
 use browseros_cdp::CdpEvent;
 use browseros_core::{
-    BrowserSession, BrowserView, CoreError, FrameId, ProtocolSession, RuntimeLease, SessionId,
-    TabId, TargetId,
+    BrowserSession, BrowserView, CoreError, FrameId, PageId, ProtocolSession, RuntimeLease,
+    SessionId, TabId, TargetId,
 };
 use futures_util::future;
 use serde::Deserialize;
@@ -107,13 +111,19 @@ const TICK: Duration = Duration::from_millis(250);
 /// How long a synchronize waits for the watcher's answer before the asker goes on without it.
 const SYNCHRONIZE_BOUND: Duration = Duration::from_secs(2);
 
-/// How long a new frame session's `Page.enable` and tree read may take together ([`TabLine`]).
-/// The tree only seeds the frame tracker with frames that existed before the session reported
-/// events, and a read that fails or misses this leaves it unseeded, as a failed read always
-/// did. It was 1 s while the whole watcher waited for it; its tab's events wait for it now, and
-/// a frame whose renderer is busy with ad script answers in 100 ms to over a second (measured),
-/// so the wait is short. A healthy frame answers the enable in about one round trip.
+/// How long a session's frame-tree read may take, a frame session's `Page.enable` with it
+/// ([`TabLine`]). The tree only seeds the frame tracker with frames that existed before the
+/// session reported events, and a read that fails or misses this leaves it unseeded, as a failed
+/// read always did; a tab's own session may read again at its next load event (`page_load`). It
+/// was 1 s while the whole watcher waited for it; its tab's events wait for it now, and a frame
+/// whose renderer is busy with ad script answers in 100 ms to over a second (measured), so the
+/// wait is short. A healthy frame answers the enable in about one round trip.
 const TREE_READ_WAIT: Duration = Duration::from_millis(200);
+
+/// How long one attach of core's page session to an untouched tab may take for a context-level
+/// listener (`attach_page`): core's attach turns the tab's domains on, which its renderer answers.
+/// A tab that misses it is attached again on a later pass.
+const CONTEXT_ATTACH_WAIT: Duration = Duration::from_secs(1);
 
 /// Bounds passive recovery setup off the event loop. Failure leaves refusal in place and
 /// permits the next observation pass to retry; it is not an operation deadline.
@@ -370,6 +380,9 @@ struct Watcher {
     /// Where those reads send their answers back, so only this task writes the tracker; set by
     /// the run loop. Without it (a test driving `handle` alone) a read is awaited in place.
     seeded: Option<UnboundedSender<SeededTree>>,
+    /// Each untouched tab's attach of core's page session for a context-level listener, while
+    /// out or until the next pass replaces it ([`Watcher::attach_page`]).
+    attaching: HashMap<TargetId, JoinHandle<()>>,
     /// Synchronize requests whose fence covers an event a line still holds: answered once the
     /// log has every event before their fence.
     deferred: Vec<WatcherRequest>,
@@ -379,25 +392,34 @@ struct Watcher {
     held_attachments: HashMap<String, TargetId>,
 }
 
-/// One tab's events while a frame-tree read for one of its new frame sessions is out.
+/// One tab's events while a frame-tree read of one of its sessions is out.
 ///
-/// A new out-of-process frame's tree is read once, to seed the frame tracker with frames that
-/// existed before its session reported events. The frame answers only between its script's
-/// tasks (about 100 ms under an ad's busy loop, measured), and the loop used to wait for it in
-/// place: a page that keeps creating frames kept the loop on one read after another, and every
-/// reply's synchronize behind it. Now the read goes out on a task of its own, and the tab's
-/// later events wait here, in order, until its answer is applied: the tracker sees the tree
-/// and the tab's events in the same order as when the loop waited, while other tabs go on.
+/// A session's tree is read to seed the frame tracker with frames that existed before the
+/// session reported events: an out-of-process frame's session as it attaches, and the tab's own
+/// session as it attaches or is first met in an event, and again at a load event while the tab's
+/// main frame is unknown (`page_load`). A renderer answers only between its script's tasks (about
+/// 100 ms under an ad's busy loop, measured; not at all while a page's script spins), and the
+/// loop used to wait for it in place: one busy tab held every tab's events, and every reply's
+/// synchronize, behind its reads. Now the read goes out on a task of its own, and the tab's later
+/// events wait here, in order, until its answer is applied: the tracker sees the tree and the
+/// tab's events in the same order as when the loop waited, while other tabs go on. A read that
+/// fails or misses [`TREE_READ_WAIT`] lets the line go on as one that answered does; a line that
+/// waited for a read never answered would hold its tab's events, and the synchronize of every
+/// reply whose fence covers one, for good.
 type TabLine = VecDeque<LineItem>;
 
 enum LineItem {
-    /// A frame session's tree read and how far it got.
+    /// A session's tree read and how far it got.
     Read {
         session: SessionId,
         answer: TreeAnswer,
     },
     /// An event of the tab read at broadcast `position` and held behind the reads before it.
     Event { position: u64, event: CdpEvent },
+    /// The tab's `load` or `DOMContentLoaded`, read at broadcast `position` while its main frame
+    /// was unknown, behind the read it waits for: recorded with the main frame that read gave, or
+    /// not at all, and never read for again (`page_load`).
+    Load { position: u64, kind: PageEventKind },
 }
 
 /// A tree read's state in its line.
@@ -413,6 +435,15 @@ enum TreeAnswer {
 struct SeededTree {
     session: SessionId,
     tree: Option<Value>,
+}
+
+/// Whose frame tree a read is of, which decides whether it turns `Page` on too ([`read_tree`]).
+#[derive(Clone, Copy)]
+enum TreeRead {
+    /// A tab's own session: core's attach turned `Page` on there.
+    Page,
+    /// An out-of-process frame's session: on an adopted tab nothing else turns `Page` on there.
+    Frame,
 }
 
 /// A bounded, epoch-pinned read, returned to the event owner without awaiting its own fence.
@@ -471,6 +502,10 @@ impl Drop for RootObserver {
 
 impl Drop for Watcher {
     fn drop(&mut self) {
+        // An attach still out would otherwise outlive the watcher by up to its bound.
+        for attach in self.attaching.values() {
+            attach.abort();
+        }
         let observers = mem::take(&mut self.root_observers);
         if observers.is_empty() {
             return;
@@ -707,6 +742,7 @@ impl Watcher {
             found,
             lines: HashMap::new(),
             seeded: None,
+            attaching: HashMap::new(),
             deferred: Vec::new(),
             held_attachments: HashMap::new(),
         };
@@ -1120,7 +1156,7 @@ impl Watcher {
             }
             "Page.loadEventFired" | "Page.domContentEventFired" => {
                 if let Some(session) = session_id {
-                    self.page_load(&method, &session).await;
+                    self.page_load(&method, &session, ingress).await;
                 }
             }
             "Page.javascriptDialogOpening" => {
@@ -1285,6 +1321,7 @@ impl Watcher {
         self.attach_log.forget(target);
         self.baselines.tab_closed(target);
         self.lifecycle.forget(target);
+        self.attaching.remove(target);
         let Some(page) = self.pages.remove(target) else {
             return;
         };
@@ -1665,7 +1702,7 @@ impl Watcher {
                 self.sessions.insert(session_id.clone(), target.clone());
                 self.page_sessions.insert(session_id.clone());
                 if self.lifecycle_sources.accepts(&session_id) {
-                    self.seed_lifecycle(&target, &session_id).await;
+                    self.start_seed(&target, &session_id, TreeRead::Page).await;
                 }
             }
             "iframe" => {
@@ -1680,7 +1717,7 @@ impl Watcher {
                     self.writer.frames_changed(tab.clone());
                     self.frame_logs.insert(session_id.clone(), FrameLog::Off);
                     if self.lifecycle_sources.accepts(&session_id) {
-                        self.seed_frame_session(&tab, &session_id).await;
+                        self.start_seed(&tab, &session_id, TreeRead::Frame).await;
                     }
                     self.lease_frame_log(&session_id).await;
                 }
@@ -1818,7 +1855,11 @@ impl Watcher {
         self.sessions
             .insert(session.clone(), info.target_id.clone());
         self.lifecycle_sources.attach(session, &info.target_id);
-        self.seed_lifecycle(&info.target_id, session).await;
+        // The event that named the session is handled now, before the tree is applied: the read
+        // goes out while it is handled, so the tree is newer than it, and the tab's later events
+        // wait behind the read.
+        self.start_seed(&info.target_id, session, TreeRead::Page)
+            .await;
         Some(info.target_id)
     }
 
@@ -1850,9 +1891,7 @@ impl Watcher {
                     continue;
                 }
                 if full {
-                    let _ =
-                        time::timeout(Duration::from_secs(1), self.view.page_session(page.page_id))
-                            .await;
+                    self.attach_page(page.target_id, page.page_id);
                 } else if !self
                     .root_observers
                     .values()
@@ -1862,6 +1901,29 @@ impl Watcher {
                 }
             }
         }
+    }
+
+    /// Attaches core's full page session to the untouched tab `target` for a run's context-level
+    /// listener, on a task of its own. Core's attach waits for the tab's renderer to turn its
+    /// domains on, which a busy tab answers only when its script lets it; awaited on the loop, it
+    /// would hold the loop for [`CONTEXT_ATTACH_WAIT`] on every pass while the tab stays busy, and
+    /// with it every tab's events and every reply's synchronize. One attach per tab is out at a
+    /// time; a later pass attaches again once it ended without a session.
+    /// Nothing comes back to the loop: it learns the session from the attach's own
+    /// `Target.attachedToTarget`, in wire order with the tab's other events.
+    fn attach_page(&mut self, target: TargetId, page: PageId) {
+        if self
+            .attaching
+            .get(&target)
+            .is_some_and(|attach| !attach.is_finished())
+        {
+            return;
+        }
+        let view = self.view.clone();
+        let attach = tokio::spawn(async move {
+            let _ = time::timeout(CONTEXT_ATTACH_WAIT, view.page_session(page)).await;
+        });
+        self.attaching.insert(target, attach);
     }
 
     async fn observe_workers(&mut self, target: TargetId) {
@@ -1990,27 +2052,25 @@ impl Watcher {
         }
     }
 
-    /// Sessions can attach to a tab whose documents existed before this watcher. Remember
-    /// those frames silently so their first removal still carries a real Frame payload.
-    async fn seed_lifecycle(&mut self, target: &TargetId, session: &SessionId) {
-        let session = self.browser.protocol_session(session.clone());
-        if let Ok(Ok(tree)) = time::timeout(
-            Duration::from_secs(1),
-            session.send_value("Page.getFrameTree", json!({})),
-        )
-        .await
-        {
-            self.lifecycle.seed(target, tree);
+    /// Reads `session`'s frame tree into the tracker, so the tab's frames that existed before the
+    /// session reported events still carry a real Frame payload when they go. The read goes out
+    /// on a task of its own, and the tab's events read from now on wait in its line until the
+    /// answer is applied ([`TabLine`]). A session has one read in its tab's line at most: while
+    /// one is there, this sends none. Whether a read of `session` is in the line now.
+    async fn start_seed(&mut self, tab: &TargetId, session: &SessionId, read: TreeRead) -> bool {
+        let in_line =
+            self.lines.values().flatten().any(
+                |item| matches!(item, LineItem::Read { session: asked, .. } if asked == session),
+            );
+        if in_line {
+            return true;
         }
-    }
-
-    /// [`Self::seed_lifecycle`] for a new out-of-process frame session, off the loop: `Page` is
-    /// turned on and the read goes out now, and the tab's later events wait in its line until
-    /// the answer is applied ([`TabLine`]).
-    async fn seed_frame_session(&mut self, tab: &TargetId, session: &SessionId) {
+        let protocol = self.browser.protocol_session(session.clone());
         let Some(seeded) = self.seeded.clone() else {
-            self.seed_lifecycle(tab, session).await;
-            return;
+            if let Some(tree) = read_tree(&protocol, read).await {
+                self.lifecycle.seed(tab, tree);
+            }
+            return false;
         };
         self.lines
             .entry(tab.clone())
@@ -2019,31 +2079,12 @@ impl Watcher {
                 session: session.clone(),
                 answer: TreeAnswer::Out,
             });
-        let protocol = self.browser.protocol_session(session.clone());
         let session = session.clone();
         drop(tokio::spawn(async move {
-            // A frame's own commits reach the watcher only from its own session, and only once
-            // `Page` is on there. Core turns it on only on tabs it created, for its file chooser
-            // interception; on an adopted tab (the owner's, another session's) only a frames read
-            // would (`frame_tree::oopif_tree`). Both commands go out together, `Page.enable`
-            // first: `join` polls them in order and the client writes through a fair lock, so the
-            // frame's renderer gets the enable first and answers in that order. A commit made
-            // before `Page` was on is in the tree (`FrameLifecycleTracker::seed` gives it to the
-            // frame), and one made after sends its own event, which waits in the tab's line until
-            // this read is applied. Awaiting the enable before sending the read measured worse:
-            // on an adopted tab, whose frames all attach at once, one frame's read missed the
-            // deadline in each of two runs. Sent together, the read keeps its place in the
-            // renderer's queue, likely ahead of core's own setup of the frame (inferred).
-            let read = future::join(
-                protocol.send_value("Page.enable", json!({})),
-                protocol.send_value("Page.getFrameTree", json!({})),
-            );
-            let tree = time::timeout(TREE_READ_WAIT, read)
-                .await
-                .ok()
-                .and_then(|(_enabled, tree)| tree.ok());
+            let tree = read_tree(&protocol, read).await;
             let _ = seeded.send(SeededTree { session, tree });
         }));
+        true
     }
 
     /// Puts an event just read from the broadcast in its tab's line if that tab has a frame-tree
@@ -2178,8 +2219,8 @@ impl Watcher {
         self.lines.contains_key(&tab).then_some(tab)
     }
 
-    /// A frame session's tree came back: its read in the line is answered, to be applied in
-    /// order by [`Self::advance_lines`].
+    /// A session's tree came back: its read in the line is answered, to be applied in order by
+    /// [`Self::advance_lines`].
     fn seeded_tree(&mut self, SeededTree { session, tree }: SeededTree) {
         let read = self
             .lines
@@ -2204,7 +2245,7 @@ impl Watcher {
             let next = self.lines.iter_mut().find_map(|(tab, line)| {
                 let ready = match line.front() {
                     Some(LineItem::Read { answer, .. }) => matches!(answer, TreeAnswer::Back(_)),
-                    Some(LineItem::Event { .. }) => true,
+                    Some(LineItem::Event { .. } | LineItem::Load { .. }) => true,
                     None => false,
                 };
                 if ready {
@@ -2222,9 +2263,17 @@ impl Watcher {
                     ..
                 } => self.lifecycle.seed(&tab, tree),
                 LineItem::Read { .. } => {}
+                LineItem::Load { kind, .. } => self.record_load(tab, kind),
                 LineItem::Event { event, position } => {
+                    // What the event queues for its own tab (a load event's new read and the load
+                    // behind it, `page_load`) goes ahead of the tab's events read after it, as
+                    // when an event is handled as it is read: those come back behind it.
+                    let later = self.lines.remove(&tab);
                     self.handle_at(event, EventFence(position.saturating_add(1)))
                         .await;
+                    if let Some(later) = later {
+                        self.lines.entry(tab).or_default().extend(later);
+                    }
                 }
             }
         }
@@ -2245,7 +2294,9 @@ impl Watcher {
             .values()
             .filter_map(|line| {
                 line.iter().find_map(|item| match item {
-                    LineItem::Event { position, .. } => Some(*position),
+                    LineItem::Event { position, .. } | LineItem::Load { position, .. } => {
+                        Some(*position)
+                    }
                     LineItem::Read { .. } => None,
                 })
             })
@@ -2289,28 +2340,57 @@ impl Watcher {
         self.navigated(method, session, params, ingress).await;
     }
 
-    /// Load notifications from an OOPIF belong to its Frame, never to the page or context.
-    async fn page_load(&mut self, method: &str, session: &SessionId) {
-        if let Some(target) = self.target_of(session).await
-            && self.lifecycle_sources.accepts(session)
+    /// A tab's `load` or `DOMContentLoaded`, recorded with its main frame. Load notifications
+    /// from an OOPIF belong to its Frame, never to the page or context.
+    ///
+    /// Only a tree read names the main frame of a tab first met with its document already
+    /// committed. While it is unknown, the event waits in the tab's line behind its session's
+    /// read: the one in the line, or else a new one. So a tab whose read failed or missed
+    /// [`TREE_READ_WAIT`] (a popup or an adopted tab whose renderer was busy) is read again at
+    /// its next load event, and its `load` is not lost until its next main-frame commit; a read
+    /// that came back with a tree named the main frame, so none follows it. Its readers are a script's page and context `load` and
+    /// `domcontentloaded` listeners and an awaited document's readiness.
+    async fn page_load(&mut self, method: &str, session: &SessionId, ingress: EventFence) {
+        let Some(target) = self.target_of(session).await else {
+            return;
+        };
+        if !self.lifecycle_sources.accepts(session)
             // The chosen root session can predate core's most recently attached session.
-            && self.lifecycle_sources.targets.get(session) == Some(&target)
+            || self.lifecycle_sources.targets.get(session) != Some(&target)
         {
-            let kind = if method == "Page.loadEventFired" {
-                PageEventKind::Load
-            } else {
-                PageEventKind::DomContentLoaded
-            };
-            if self.lifecycle.main(&target).is_none() {
-                self.seed_lifecycle(&target, session).await;
-            }
-            if let Some(frame) = self.lifecycle.main(&target) {
-                self.writer.record(PageEvent::Load {
-                    target,
+            return;
+        }
+        let kind = if method == "Page.loadEventFired" {
+            PageEventKind::Load
+        } else {
+            PageEventKind::DomContentLoaded
+        };
+        if self.lifecycle.main(&target).is_none()
+            && self.start_seed(&target, session, TreeRead::Page).await
+        {
+            self.lines
+                .entry(target)
+                .or_default()
+                .push_back(LineItem::Load {
+                    position: ingress.0.saturating_sub(1),
                     kind,
-                    frame,
                 });
-            }
+            // Its hold is published before the loop counts it read. It is right even while
+            // `advance_lines` holds the tab's later events aside: each is newer than this load.
+            self.publish_hold();
+            return;
+        }
+        self.record_load(target, kind);
+    }
+
+    /// Records `target`'s load event of `kind` with its main frame, if the tracker knows it.
+    fn record_load(&mut self, target: TargetId, kind: PageEventKind) {
+        if let Some(frame) = self.lifecycle.main(&target) {
+            self.writer.record(PageEvent::Load {
+                target,
+                kind,
+                frame,
+            });
         }
     }
 
@@ -2718,6 +2798,42 @@ async fn window_kind(
             .map_or(WindowKind::Tab, |_popup| WindowKind::Window),
         Err(_unknown) => WindowKind::Tab,
     }
+}
+
+/// One frame-tree read for the tracker ([`Watcher::start_seed`]), within [`TREE_READ_WAIT`];
+/// `None` when it failed or ran out.
+async fn read_tree(protocol: &ProtocolSession, read: TreeRead) -> Option<Value> {
+    let tree = match read {
+        TreeRead::Page => {
+            time::timeout(
+                TREE_READ_WAIT,
+                protocol.send_value("Page.getFrameTree", json!({})),
+            )
+            .await
+        }
+        // A frame's own commits reach the watcher only from its own session, and only once `Page`
+        // is on there. Core turns it on only on tabs it created, for its file chooser
+        // interception; on an adopted tab (the owner's, another session's) only a frames read
+        // would (`frame_tree::oopif_tree`). Both commands go out together, `Page.enable` first:
+        // `join` polls them in order and the client writes through a fair lock, so the frame's
+        // renderer gets the enable first and answers in that order. A commit made before `Page`
+        // was on is in the tree (`FrameLifecycleTracker::seed` gives it to the frame), and one
+        // made after sends its own event, which waits in the tab's line until this read is
+        // applied. Awaiting the enable before sending the read measured worse: on an adopted
+        // tab, whose frames all attach at once, one frame's read missed the deadline in each of
+        // two runs. Sent together, the read keeps its place in the renderer's queue, likely
+        // ahead of core's own setup of the frame (inferred).
+        TreeRead::Frame => time::timeout(
+            TREE_READ_WAIT,
+            future::join(
+                protocol.send_value("Page.enable", json!({})),
+                protocol.send_value("Page.getFrameTree", json!({})),
+            ),
+        )
+        .await
+        .map(|(_enabled, tree)| tree),
+    };
+    tree.ok().and_then(Result::ok)
 }
 
 /// An event's params as `T`; one that does not decode is ignored, like any event the watcher
@@ -4210,6 +4326,406 @@ mod crash_tests {
         assert!(
             watcher.crashes.is_crashed(&target),
             "new crash evidence defeats a proof waiting for its reply fence"
+        );
+        Ok(())
+    }
+}
+
+/// The frame-tree reads that seed the tracker, and a context listener's page attach, as the run
+/// loop drives them: none holds the loop, a tab's events keep their order behind its read, and a
+/// read that fails or runs out lets them go.
+#[cfg(test)]
+mod seed_tests {
+    use std::error::Error;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use browseros_cdp::CdpEvent;
+    use browseros_core::testing::{TestConnection, cdp_error, cdp_pending};
+    use browseros_core::{BrowserSession, BrowserSessionHooks, CdpConnection, SessionId, TargetId};
+    use serde_json::{Value, json};
+    use tokio::sync::mpsc::{self, UnboundedReceiver};
+    use tokio::sync::oneshot;
+    use tokio::{task, time};
+
+    use super::{
+        CONTEXT_ATTACH_WAIT, EventFence, SeededTree, TREE_READ_WAIT, Watcher, WatcherRequest,
+    };
+    use crate::events::{EventHub, PageEvent, PageEventKind, Subscription, WatcherProgress};
+    use crate::run_state::RunState;
+    use crate::snapshot::SnapshotBaselines;
+    use crate::world::FrameAttachLog;
+
+    type TestResult = Result<(), Box<dyn Error>>;
+
+    /// A watcher over `connection` whose tree reads answer on the returned channel, as the run
+    /// loop's do.
+    fn watcher(
+        connection: &Arc<TestConnection>,
+    ) -> (Arc<EventHub>, Watcher, UnboundedReceiver<SeededTree>) {
+        let browser = BrowserSession::new(
+            Arc::clone(connection) as Arc<dyn CdpConnection>,
+            BrowserSessionHooks::default(),
+        );
+        let (hub, writer) = EventHub::new();
+        let progress = Arc::new(WatcherProgress::default());
+        progress.start(0, 0);
+        let (mut watcher, _found) = Watcher::new(
+            browser,
+            writer,
+            Arc::new(FrameAttachLog::default()),
+            progress,
+            Arc::new(SnapshotBaselines::default()),
+            Arc::default(),
+        );
+        let (seeded, answers) = mpsc::unbounded_channel();
+        watcher.seeded = Some(seeded);
+        (hub, watcher, answers)
+    }
+
+    /// Handles `event` as the run loop does: held in its tab's line or handled, then counted
+    /// as read.
+    async fn read(watcher: &mut Watcher, event: CdpEvent) {
+        if let Some(event) = watcher.hold(event) {
+            watcher.handle(event).await;
+        }
+        watcher.progress.handled(1);
+    }
+
+    /// Applies the next tree read's answer as the run loop does.
+    async fn answer_next(
+        watcher: &mut Watcher,
+        answers: &mut UnboundedReceiver<SeededTree>,
+    ) -> TestResult {
+        let answer = time::timeout(Duration::from_secs(30), answers.recv())
+            .await?
+            .ok_or("a tree read answers")?;
+        watcher.seeded_tree(answer);
+        watcher.advance_lines().await;
+        Ok(())
+    }
+
+    /// Session `session`, tab `tab`'s own, attaches.
+    fn page_attached(session: &str, tab: &str) -> CdpEvent {
+        CdpEvent {
+            method: "Target.attachedToTarget".to_owned(),
+            params: json!({ "sessionId": session,
+                "targetInfo": { "targetId": tab, "type": "page", "url": "https://a.test/" } }),
+            session_id: None,
+        }
+    }
+
+    fn on(session: &str, method: &str, params: Value) -> CdpEvent {
+        CdpEvent {
+            method: method.to_owned(),
+            params,
+            session_id: Some(SessionId::from(session)),
+        }
+    }
+
+    /// Tab `tab`'s tree, its main frame at `url`.
+    fn tree(tab: &str, url: &str) -> Value {
+        json!({ "frameTree": { "frame": { "id": tab, "loaderId": "seeded", "url": url } } })
+    }
+
+    /// The log's load and frame records, in order: each load with its main frame's URL, each frame
+    /// transition with its frame's URL, or its id while it has none.
+    fn records(hub: &EventHub) -> Vec<String> {
+        hub.read_after(0)
+            .records
+            .into_iter()
+            .filter_map(|record| match record.event {
+                PageEvent::Load { kind, frame, .. } => {
+                    Some(format!("{} {}", kind.name(), frame.url))
+                }
+                PageEvent::FrameLifecycle(event) => {
+                    let frame = if event.frame.url.is_empty() {
+                        event.frame.id.0
+                    } else {
+                        event.frame.url
+                    };
+                    Some(format!("{} {frame}", event.kind.name()))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// How many tree reads went to `session`.
+    fn tree_reads(connection: &TestConnection, session: &str) -> Result<usize, Box<dyn Error>> {
+        Ok(connection
+            .calls()?
+            .iter()
+            .filter(|call| {
+                call.method == "Page.getFrameTree"
+                    && call.session.as_ref().map(SessionId::as_str) == Some(session)
+            })
+            .count())
+    }
+
+    /// Lets spawned reads and attaches reach the connection.
+    async fn settle() {
+        for _ in 0..20 {
+            task::yield_now().await;
+        }
+    }
+
+    /// The first invariant of a tab's line: the tab's events are recorded in the order the tab
+    /// sent them, whatever reads they wait behind. A `DOMContentLoaded` held behind the tab's
+    /// failed first read reads the tab again when its turn comes, and the commit and the `load`
+    /// the tab sent after it stay behind it until that read is applied.
+    #[tokio::test]
+    async fn a_tab_s_events_keep_their_order_through_its_line() -> TestResult {
+        let connection = TestConnection::new([
+            ("Page.getFrameTree", cdp_error("busy")),
+            ("Page.getFrameTree", tree("tab", "https://a.test/")),
+        ]);
+        let (hub, mut watcher, mut answers) = watcher(&connection);
+        read(&mut watcher, page_attached("page", "tab")).await;
+        for (method, params) in [
+            ("Page.domContentEventFired", json!({ "timestamp": 1.0 })),
+            (
+                "Page.frameNavigated",
+                json!({ "frame": { "id": "tab", "loaderId": "next", "url": "https://a.test/next" } }),
+            ),
+            ("Page.loadEventFired", json!({ "timestamp": 2.0 })),
+        ] {
+            read(&mut watcher, on("page", method, params)).await;
+        }
+
+        answer_next(&mut watcher, &mut answers).await?;
+        assert_eq!(
+            records(&hub),
+            Vec::<String>::new(),
+            "the DOMContentLoaded waits for the second read, and the rest behind it"
+        );
+        assert_eq!(watcher.progress.applied_through(), 1);
+
+        answer_next(&mut watcher, &mut answers).await?;
+        assert_eq!(
+            records(&hub),
+            [
+                "domcontentloaded https://a.test/",
+                "framenavigated https://a.test/next",
+                "load https://a.test/next"
+            ],
+            "in the tab's own order"
+        );
+        assert_eq!(watcher.progress.applied_through(), 4);
+        assert!(watcher.lines.is_empty());
+        Ok(())
+    }
+
+    /// The second invariant of a tab's line: a read that fails, or that the renderer never
+    /// answers, lets the tab's events go once it gives up, as one that answered does, and with
+    /// them the reply whose fence covers one.
+    #[tokio::test(start_paused = true)]
+    async fn a_read_that_fails_or_times_out_releases_its_line() -> TestResult {
+        let connection = TestConnection::new([
+            ("Page.getFrameTree", cdp_error("No frame tree")),
+            ("Page.getFrameTree", cdp_pending()),
+        ]);
+        let (hub, mut watcher, mut answers) = watcher(&connection);
+        for (tab, session) in [("failed", "failed-page"), ("silent", "silent-page")] {
+            read(&mut watcher, page_attached(session, tab)).await;
+            let child = format!("{tab}-child");
+            read(
+                &mut watcher,
+                on(
+                    session,
+                    "Page.frameAttached",
+                    json!({ "frameId": child, "parentFrameId": tab }),
+                ),
+            )
+            .await;
+            let read_so_far = watcher.progress.events_handled();
+            let (done, mut answered) = oneshot::channel();
+            watcher.deferred.push(WatcherRequest {
+                closed: None,
+                handed_back: None,
+                fence: EventFence(read_so_far),
+                done,
+            });
+            watcher.answer_deferred();
+            assert!(
+                answered.try_recv().is_err(),
+                "{tab}: the reply waits for the held attach"
+            );
+
+            answer_next(&mut watcher, &mut answers).await?;
+            assert!(watcher.lines.is_empty(), "{tab}: the line is gone");
+            assert_eq!(watcher.progress.applied_through(), read_so_far, "{tab}");
+            assert!(answered.try_recv().is_ok(), "{tab}: the reply goes on");
+            assert!(
+                records(&hub).contains(&format!("frameattached {child}")),
+                "{tab}: {:?}",
+                records(&hub)
+            );
+        }
+        Ok(())
+    }
+
+    /// A tab whose renderer never answers its tree read costs the loop nothing: its attach is
+    /// handled at once, its own later events wait in its line, and another tab's events apply.
+    #[tokio::test(start_paused = true)]
+    async fn a_page_attach_whose_tree_read_never_answers_does_not_stop_the_loop() -> TestResult {
+        let connection = TestConnection::new([]);
+        connection.always("Page.getFrameTree", cdp_pending())?;
+        let (hub, mut watcher, _answers) = watcher(&connection);
+        let (healthy, healthy_page) = (
+            TargetId("healthy".to_owned()),
+            SessionId::from("healthy-page"),
+        );
+        watcher
+            .sessions
+            .insert(healthy_page.clone(), healthy.clone());
+        watcher.lifecycle_sources.attach(&healthy_page, &healthy);
+        // No time passes on the loop's clock: a read awaited in place would run into this.
+        time::timeout(TREE_READ_WAIT / 4, async {
+            read(&mut watcher, page_attached("busy-page", "busy")).await;
+            for (session, tab) in [("busy-page", "busy"), ("healthy-page", "healthy")] {
+                let frame = json!({ "frameId": format!("{tab}-child"), "parentFrameId": tab });
+                read(&mut watcher, on(session, "Page.frameAttached", frame)).await;
+            }
+        })
+        .await
+        .map_err(|elapsed| format!("the loop waited for the busy tab's tree: {elapsed}"))?;
+        assert_eq!(watcher.progress.events_handled(), 3, "every event was read");
+        assert_eq!(
+            records(&hub),
+            ["frameattached healthy-child"],
+            "the other tab's event is in the log; the busy tab's waits for its read"
+        );
+        assert_eq!(
+            watcher.progress.applied_through(),
+            1,
+            "only the busy tab's own event is held"
+        );
+        Ok(())
+    }
+
+    /// A load event of a tab whose main frame is unknown, because its first read failed, reads
+    /// the tab again, and is recorded once that read is applied, with the main frame it names:
+    /// never before it.
+    #[tokio::test]
+    async fn a_load_event_of_a_tab_whose_main_frame_is_unknown_is_recorded_with_the_frame_its_read_names()
+    -> TestResult {
+        let connection = TestConnection::new([
+            ("Page.getFrameTree", cdp_error("busy")),
+            ("Page.getFrameTree", tree("tab", "https://a.test/")),
+        ]);
+        let (hub, mut watcher, mut answers) = watcher(&connection);
+        read(&mut watcher, page_attached("page", "tab")).await;
+        answer_next(&mut watcher, &mut answers).await?;
+        read(
+            &mut watcher,
+            on("page", "Page.loadEventFired", json!({ "timestamp": 1.0 })),
+        )
+        .await;
+        assert_eq!(
+            records(&hub),
+            Vec::<String>::new(),
+            "it waits for the read it started"
+        );
+        assert_eq!(
+            watcher.progress.applied_through(),
+            1,
+            "and keeps its place in the log"
+        );
+
+        answer_next(&mut watcher, &mut answers).await?;
+        assert_eq!(records(&hub), ["load https://a.test/"]);
+        assert_eq!(watcher.progress.applied_through(), 2);
+        assert_eq!(
+            tree_reads(&connection, "page")?,
+            2,
+            "the failed read was followed by another"
+        );
+        Ok(())
+    }
+
+    /// A session is read once while its read is in the line, however many load events wait
+    /// behind it, and never again once a read came back with its tab's main frame.
+    #[tokio::test]
+    async fn a_session_is_not_read_again_while_its_read_is_out_or_after_a_tree() -> TestResult {
+        let connection =
+            TestConnection::new([("Page.getFrameTree", tree("tab", "https://a.test/"))]);
+        let (hub, mut watcher, mut answers) = watcher(&connection);
+        read(&mut watcher, page_attached("page", "tab")).await;
+        for (method, stamp) in [
+            ("Page.domContentEventFired", 1.0),
+            ("Page.loadEventFired", 2.0),
+        ] {
+            read(
+                &mut watcher,
+                on("page", method, json!({ "timestamp": stamp })),
+            )
+            .await;
+        }
+        answer_next(&mut watcher, &mut answers).await?;
+        read(
+            &mut watcher,
+            on("page", "Page.loadEventFired", json!({ "timestamp": 3.0 })),
+        )
+        .await;
+        settle().await;
+        assert_eq!(
+            records(&hub),
+            [
+                "domcontentloaded https://a.test/",
+                "load https://a.test/",
+                "load https://a.test/"
+            ]
+        );
+        assert_eq!(tree_reads(&connection, "page")?, 1);
+        assert!(watcher.lines.is_empty());
+        Ok(())
+    }
+
+    /// While a run listens on the context for lifecycle events, an untouched tab whose renderer
+    /// never answers core's attach costs the loop nothing, and only one attach of it is out at a
+    /// time; once that one ends without a session, a later pass attaches it again.
+    #[tokio::test(start_paused = true)]
+    async fn a_context_listener_s_page_attach_never_holds_the_loop() -> TestResult {
+        let connection = TestConnection::new([]);
+        connection.always(
+            "Browser.getTabs",
+            json!({ "tabs": [{ "tabId": 7, "targetId": "busy", "windowId": 1,
+                "url": "https://busy.test/", "title": "Busy", "isActive": false,
+                "isLoading": false, "loadProgress": 1.0, "isPinned": false, "isHidden": false }] }),
+        )?;
+        connection.always("Target.attachToTarget", cdp_pending())?;
+        let (hub, mut watcher, _answers) = watcher(&connection);
+        let run = Arc::new(RunState::default());
+        hub.bind(&run);
+        run.events
+            .listen(Subscription::Context(PageEventKind::Dialog), 1_000, 0);
+        let attaches = || -> Result<usize, Box<dyn Error>> {
+            Ok(connection
+                .calls()?
+                .iter()
+                .filter(|call| call.method == "Target.attachToTarget")
+                .count())
+        };
+
+        for pass in 0..2 {
+            time::timeout(TREE_READ_WAIT / 4, watcher.observe_context())
+                .await
+                .map_err(|elapsed| {
+                    format!("pass {pass} waited for the busy tab's attach: {elapsed}")
+                })?;
+        }
+        settle().await;
+        assert_eq!(attaches()?, 1, "one attach of the tab is out at a time");
+
+        time::sleep(CONTEXT_ATTACH_WAIT * 2).await;
+        settle().await;
+        time::timeout(TREE_READ_WAIT / 4, watcher.observe_context()).await?;
+        settle().await;
+        assert_eq!(
+            attaches()?,
+            2,
+            "an attach that ended without a session is tried again"
         );
         Ok(())
     }
