@@ -54,6 +54,7 @@ fn target_crashed_real_page_op_precedes_failed_native_refresh_on_the_wire() -> R
         ] {
             let mut rig = TestRig::new().await?;
             let page = rig.owner_tab("https://example.test/").await?;
+            let discovery_before = rig.fake.count("Target.getTargets");
             let facade = PlaywrightFacade::start(
                 Arc::clone(&rig.link),
                 false,
@@ -79,6 +80,17 @@ fn target_crashed_real_page_op_precedes_failed_native_refresh_on_the_wire() -> R
                 Observer::new(Arc::clone(&facade) as _),
             ));
             facade.get().await;
+            // The facade starts its watcher in a spawned task. Its first discovery command
+            // follows event subscription; emitting before it can lose this fixture's crash.
+            within(CRASH_REFUSAL_WATCHDOG, async {
+                while rig.fake.count("Target.getTargets") == discovery_before {
+                    task::yield_now().await;
+                }
+            })
+            .await
+            .map_err(|error| {
+                format!("waiting for crash watcher subscription before {failure}: {error}")
+            })?;
             let target = rig
                 .link
                 .page(page.tab)
