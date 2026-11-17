@@ -9644,9 +9644,7 @@ ${value.stack}`;
   function factsOf2(world, output, subject, chain, top, request) {
     const kind = kindOf(world, subject, chain, request.point, request.above);
     const layer = whichDialog(world, chain, top, request.point);
-    const closed = !layer.contains(subject) && inClosedPart(layer);
-    const shown = shownAs(world, output, layer, request.point, subject);
-    const behind = shown !== layer && isBlank(world, output, layer);
+    const { shown, behind, closed } = shownLayer(world, output, layer, request.point, subject);
     const surrounds = shown.contains(subject) || shown === document.body;
     let snapshot = null;
     let words = true;
@@ -9673,10 +9671,16 @@ ${value.stack}`;
     };
   }
   function shownAs(world, output, layer, point, subject) {
+    return shownLayer(world, output, layer, point, subject).shown;
+  }
+  function shownLayer(world, output, layer, point, subject) {
     const holds = subject ? layer.contains(subject) || layer === world.injected.document.body : pageElement(layer);
-    if (holds || inClosedPart(layer))
-      return layer;
-    return (isBlank(world, output, layer) ? dialogBehind(world, layer, point) : soleDialog(world, layer)) ?? layer;
+    const closed = subject ? !layer.contains(subject) && inClosedPart(layer) : !holds && inClosedPart(layer);
+    if (holds || closed)
+      return { shown: layer, behind: false, closed };
+    const blank = isBlank(world, output, layer);
+    const shown = (blank ? dialogBehind(world, layer, point) : soleDialog(world, layer)) ?? layer;
+    return { shown, behind: blank && shown !== layer, closed };
   }
   function isFrame(element) {
     return element.localName === "iframe" || element.localName === "frame";
