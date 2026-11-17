@@ -10,6 +10,7 @@ use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
 use tokio::sync::watch::error::RecvError;
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
+use tokio::task::{self, Id};
 
 /// The one window every fake tab lives in.
 const WINDOW_ID: i64 = 1;
@@ -36,7 +37,7 @@ const EVENT_BACKLOG: usize = 1024;
 /// - `Page.navigate` arriving at a page [`FakeCdp::serve`] registered, so a load changes the
 ///   tab's URL and title the way a real document's `<title>` would.
 ///
-/// Any other method answers `{}`. Every call is logged with the epoch it was sent on.
+/// Any other method answers `{}`. Every call is logged with its connection epoch and sender task.
 #[derive(Debug)]
 pub struct FakeCdp {
     state: Mutex<FakeState>,
@@ -54,6 +55,9 @@ pub struct FakeCall {
     pub params: Value,
     /// The connection epoch it was sent on.
     pub epoch: u64,
+    /// The Tokio task that sent this call, stable across worker-thread handoffs. `None` for
+    /// calls outside a task; lets tests distinguish independent watchers from foreground work.
+    pub task: Option<Id>,
 }
 
 #[derive(Debug)]
@@ -397,11 +401,27 @@ impl FakeCdp {
 
     /// Waits for browser receipt, including calls logged before this waiter subscribed.
     pub async fn received(&self, method: &str) -> Result<(), RecvError> {
+        self.received_matching(|calls| calls.iter().any(|call| call.method == method).then_some(()))
+            .await
+    }
+
+    /// Waits until `inspect` finds a value in the receipt log, without cloning or polling it.
+    /// The callback runs under the log's mutex and must not call back into this fake.
+    pub async fn received_matching<T>(
+        &self,
+        inspect: impl Fn(&[FakeCall]) -> Option<T>,
+    ) -> Result<T, RecvError> {
         let mut received = self.received.subscribe();
-        while self.count(method) == 0 {
+        loop {
+            let found = {
+                let state = self.lock();
+                inspect(&state.calls)
+            };
+            if let Some(found) = found {
+                return Ok(found);
+            }
             received.changed().await?;
         }
-        Ok(())
     }
 
     /// Answers one call. `None` means it never will. `expected` is the caller's epoch for an
@@ -500,6 +520,7 @@ impl FakeState {
             method: method.to_owned(),
             params,
             epoch: self.epoch,
+            task: task::try_id(),
         });
         let later = match self.hold_after.get_mut(method) {
             Some(0) => self.hold_after.remove(method).is_some(),
