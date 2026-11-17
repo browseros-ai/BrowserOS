@@ -19,6 +19,7 @@
 import { CHARS_PER_TOKEN, cap, type Printed, partialHead } from './snapshot-cap'
 import { inertRoots } from './snapshot-inert'
 import { onTopHead } from './snapshot-on-top'
+import { unmarkedHead } from './snapshot-unmarked'
 import { KEPT, SECTION, sectionLabel, shownText } from './snapshot-v1'
 import {
   type AriaNodeJSON,
@@ -162,7 +163,12 @@ export function renderFullSnapshot(
     FULL_CALL,
   )
   // Inertness is a pinned explanation, before the unchanged full tree and outside its cap.
-  return [...onTopHead(result), ...head, ...(body ? [body] : [])].join('\n')
+  return [
+    ...onTopHead(result),
+    ...unmarkedHead(result),
+    ...head,
+    ...(body ? [body] : []),
+  ].join('\n')
 }
 
 /**
