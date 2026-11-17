@@ -285,9 +285,11 @@ class Slot(threading.Thread):
             problem = dispatcher.group_problem()
             if problem:
                 raise RuntimeError(problem)
+            # A just-in-time runner carries only the labels named here: GitHub adds no default
+            # `self-hosted` label, and the workflow asks for both.
             minted = dispatcher.github.call("POST", f"/orgs/{settings['org']}/actions/runners/generate-jitconfig", {
                 "name": RUNNER_PREFIX + self.job[:12], "runner_group_id": settings["runnerGroupId"],
-                "labels": [dispatcher.policy.label], "work_folder": "_work"})
+                "labels": ["self-hosted", dispatcher.policy.label], "work_folder": "_work"})
         except Exception:
             self.pool("release")  # Nothing reached the host; the slot is free again.
             raise
