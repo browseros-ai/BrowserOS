@@ -31,11 +31,20 @@ impl PageAccess {
         Ok(fresh)
     }
     pub(crate) async fn session(self: &Arc<Self>) -> Result<PageSession, CoreError> {
+        self.session_admitted(None).await
+    }
+    /// Both acquisition paths use the same Core checks and returned capability. Legacy calls
+    /// supply no additional hook; a caller's hook never replaces Core's admission or guard.
+    pub(super) async fn session_admitted(
+        self: &Arc<Self>,
+        additional: Option<&dyn PageAdmission>,
+    ) -> Result<PageSession, CoreError> {
         let live = self.view.validate_live().await?;
         let admission = Admission {
             access: self,
             scope: live.as_ref().map(|live| &live.scope),
             windows: live.as_ref().map_or(&[], |live| live.windows.as_slice()),
+            additional,
         };
         let mut session = self
             .view
@@ -209,6 +218,7 @@ struct Admission<'a> {
     access: &'a PageAccess,
     scope: Option<&'a CapturedScope>,
     windows: &'a [NativeWindow],
+    additional: Option<&'a dyn PageAdmission>,
 }
 impl PageAdmission for Admission<'_> {
     fn admit(&self, fresh: &PageInfo) -> Result<(), CoreError> {
@@ -221,6 +231,10 @@ impl PageAdmission for Admission<'_> {
         }
         if fresh.target_id != self.access.target {
             return Err(TargetError::PageTargetChanged(fresh.page_id.clone()).into());
+        }
+        // A caller must never observe or authorize an incarnation Core has already refused.
+        if let Some(additional) = self.additional {
+            additional.admit(fresh)?;
         }
         Ok(())
     }
