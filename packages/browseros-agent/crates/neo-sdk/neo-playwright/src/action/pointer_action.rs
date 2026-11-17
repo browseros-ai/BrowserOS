@@ -1117,11 +1117,12 @@ impl<'a> PointerRunner<'a> {
     }
 
     /// Covered-click C: what of the target's own this action may press when its point is
-    /// covered. A click or a dblclick with no script `position`, not forced, not a trial and not
-    /// under the conformance flag; a wrapper only as the cover that stood its checks.
+    /// covered. A click with no script `position`, not forced, not a trial and not under the
+    /// conformance flag; a wrapper only as the cover that stood its checks. A dblclick keeps the
+    /// covered answer, as on main: it is two presses, the guard at delivery asks only the first,
+    /// and through a checkbox's own wrapper the second press toggles it back.
     fn own_allowed(&self, action: &PointerAction) -> Option<OwnAllowed> {
-        let pressing = matches!(action.kind, PointerKind::Click | PointerKind::Dblclick);
-        (pressing
+        (action.kind == PointerKind::Click
             && action.position.is_none()
             && !action.force
             && !action.trial

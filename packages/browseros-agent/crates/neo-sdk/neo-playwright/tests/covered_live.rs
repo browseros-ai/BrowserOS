@@ -508,6 +508,30 @@ async fn tests_that_a_wrapper_that_is_something_in_itself_is_not_pressed() -> Te
     .await
 }
 
+/// A dblclick under the target's own cover keeps the covered answer, as on main: on the
+/// half-covered button and on the checkbox under its own label, nothing is pressed and no
+/// `takes the press` line is logged.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_dblclick_keeps_the_covered_answer() -> TestResult {
+    each_shape(&["partial", "label"], |shape, name| async move {
+        let result = async {
+            let answer = shape
+                .act("locator.dblclick", &shape.at("#target"), json!({}))
+                .await;
+            let (message, _cover) = covered(answer)?;
+            let log = shape.log().await?;
+            if presses(&shape) != 0 || !log.is_empty() {
+                return Err(format!("{name}: saw {log:?}, {message}").into());
+            }
+            TestResult::Ok(())
+        }
+        .await;
+        (shape, result)
+    })
+    .await
+}
+
 /// A slider half under a widget: a clear point of it would take a press for a button, but a
 /// slider pressed anywhere moves its value, so only the point roles go through a clear point.
 /// The covered answer comes, with the kind and the clear point to act on; nothing is pressed.

@@ -403,8 +403,8 @@ export type Looked = { facts?: BoxFacts, refusal?: LookRefused,
 maxLengthMoved?: boolean, };
 
 /**
- * Covered-click C, the presses that land by themselves: a click or dblclick with no script
- * `position`, not forced, not a trial and not under the conformance flag may land on what is the
+ * Covered-click C, the presses that land by themselves: a click with no script `position`, not
+ * forced, not a trial and not under the conformance flag may land on what is the
  * target's own when its point is covered: its own label, its own wrapper or drawing, or a clear
  * point of it. The probe arms the same interceptor on that element at that point.
  */
