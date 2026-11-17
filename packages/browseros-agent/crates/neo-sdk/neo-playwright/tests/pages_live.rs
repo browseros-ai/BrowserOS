@@ -1124,15 +1124,25 @@ static BUSY_TABS: Semaphore = Semaphore::const_new(1);
 const MID_RUN_BUSY_TAB_BOUND: Duration = Duration::from_millis(1_900);
 
 /// The script of [`tests_that_a_busy_tab_another_client_opens_mid_run_costs_one_wait_at_most`]:
-/// it waits for the other client's tab, then runs five statements on its own tab. It waits for
-/// that tab's `page` event alone: a listener for every tab would make each tab the parallel suite
-/// opens meanwhile one the run first saw mid-run, each with a wait of its own.
-const MID_RUN_BUSY_TAB_SCRIPT: &str = "await context.waitForEvent('page', {\n\
-        predicate: (other) => other.url().includes('busy.html'),\n\
-        timeout: 15000,\n\
-    })\n\
+/// it waits for the tab the owner opens from its page, then runs five statements on its own tab,
+/// and returns the URLs its wait saw and the busy tab's id. It waits on its page's `popup` event:
+/// a context-level `page` wait makes the target watcher try to attach to every tab of the
+/// browser on its own loop, which a busy tab stalls, so that row would measure the watcher.
+const MID_RUN_BUSY_TAB_SCRIPT: &str = "const seen = []\n\
+    let busy\n\
+    try {\n\
+        busy = await page.waitForEvent('popup', {\n\
+            predicate: (other) => {\n\
+                seen.push(other.url())\n\
+                return other.url().includes('busy.html')\n\
+            },\n\
+            timeout: 15000,\n\
+        })\n\
+    } catch (error) {\n\
+        return { seen, error: String(error) }\n\
+    }\n\
     for (let i = 0; i < 5; i++) await page.title()\n\
-    return 1";
+    return { seen, tab: busy.tabId }";
 
 /// The live run's ops, with how long each `page.frames` read took and on which tab, and a signal
 /// once the script's `waitForEvent` went out (`events.wait`).
@@ -1184,10 +1194,11 @@ impl OpHost for FrameReads {
 }
 
 /// A tab another client opens while a run is going, and that never answers, costs the run one
-/// wait at most, never one per statement. The run first sees it mid-run, so its first read holds
-/// the script, as a popup's or a new page's does; that read goes unanswered, and from then on the
-/// tab is read only in the background. The row also checks that the run did read the tab while it
-/// was busy, so it cannot pass by never meeting the busy tab.
+/// wait at most, never one per statement. Here the owner opens it from the run's page, as a
+/// click on a link that opens a tab would. The run first sees it mid-run, so its first read holds
+/// the script; that read goes unanswered, and from then on the tab is read only in the background.
+/// The row also checks that the run did read the tab while it was busy, so it cannot pass by never
+/// meeting the busy tab.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 #[expect(
@@ -1218,34 +1229,24 @@ async fn tests_that_a_busy_tab_another_client_opens_mid_run_costs_one_wait_at_mo
                 let outcome = js_runner::run_script(&host, &init, MID_RUN_BUSY_TAB_SCRIPT).await;
                 (outcome, Instant::now())
             };
-            // Another client opens the tab once the script's `waitForEvent` went out, the way the
-            // owner or another session opens one: nothing of the run's names it. Opened sooner, its
-            // `page` event could come before the wait's start and never reach the script.
+            // The owner opens the tab once the script's `waitForEvent` went out, from the run's
+            // page with a user gesture: nothing of the run's opened it. Opened sooner, its event
+            // could come before the wait's start and never reach the script.
             let open = async {
                 let _waiting =
                     time::timeout(Duration::from_secs(10), recorder.waiting.notified()).await;
                 let opened = run
-                    .browser()
-                    .cdp(
-                        "Target.createTarget",
-                        json!({ "url": busy_url, "background": true }),
-                        None,
-                    )
+                    .eval(&healthy, &format!("window.open({busy_url:?}); ''"))
                     .await;
                 (opened, Instant::now())
             };
             let ((outcome, ended), (opened, opened_at)) = tokio::join!(script, open);
-            let target = opened?
-                .get("targetId")
-                .and_then(Value::as_str)
-                .ok_or("Target.createTarget named no target")?
-                .to_owned();
-            // At once, so its loop does not load the machine for the next try or other rows.
-            let _closed = run
-                .browser()
-                .cdp("Target.closeTarget", json!({ "targetId": target }), None)
-                .await;
-            outcome?;
+            opened?;
+            let outcome = outcome?;
+            if let Some(tab) = outcome.get("tab").and_then(Value::as_i64) {
+                // At once, so its loop does not load the machine for the next try or other rows.
+                run.close_page(&TestPage { tab: TabId(tab) }).await;
+            }
             let took = ended.saturating_duration_since(opened_at);
             let reads = recorder
                 .reads
@@ -1256,7 +1257,11 @@ async fn tests_that_a_busy_tab_another_client_opens_mid_run_costs_one_wait_at_mo
                 .iter()
                 .filter(|(tab, read)| *tab != healthy.tab.0 && *read >= Duration::from_millis(900))
                 .count();
-            eprintln!("MID_RUN_BUSY_TAB took={took:?} reads={reads:?}");
+            eprintln!("MID_RUN_BUSY_TAB took={took:?} reads={reads:?} script={outcome}");
+            assert!(
+                outcome.get("error").is_none(),
+                "the script never met the busy tab's page event: {outcome}"
+            );
             assert!(
                 unanswered >= 1,
                 "the run never met the busy tab unanswered, so this try tested nothing: {reads:?}"
