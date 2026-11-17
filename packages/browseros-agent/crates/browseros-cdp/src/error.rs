@@ -4,6 +4,8 @@ pub enum CdpError {
     Protocol { code: i64, message: String },
     #[error("CDP request timed out: {method}")]
     Timeout { method: String },
+    /// The socket went down while the request waited for its reply. The cause is recorded
+    /// before this error is delivered: [`crate::CdpClient::last_connection_loss`].
     #[error("CDP connection lost")]
     ConnectionLost,
     /// Bound dispatch was rejected before writing to a different socket incarnation.
