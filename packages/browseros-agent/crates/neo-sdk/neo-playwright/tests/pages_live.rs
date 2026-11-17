@@ -28,7 +28,8 @@ use neo_playwright::{Answer, ErrorCode, PlaywrightError, TimedOut};
 use neo_trace::ErrorOwner;
 use page_server::{PageServer, SLOW};
 use serde_json::{Value, json};
-use tokio::sync::broadcast::{Receiver, error::TryRecvError};
+use tokio::sync::broadcast::Receiver;
+use tokio::sync::broadcast::error::TryRecvError;
 use tokio::time;
 
 /// Opens a tab, runs `body` on it, and closes the tab whatever happened.
