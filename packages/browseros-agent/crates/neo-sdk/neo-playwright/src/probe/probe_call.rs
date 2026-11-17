@@ -35,28 +35,21 @@ use crate::world::{BackendNodeId, IsolatedWorld, Pin};
 pub(crate) const CALL_FUNCTION: &str = "function (call, root, ...nodes) { const probe = globalThis.__neoProbe; return probe ? probe.call(call, root ?? this, nodes) : { kind: \"uninstalled\" }; }";
 
 impl ProbePolicy {
-    /// Drop cannot borrow an ended operation or inspect its admitted page. Cleanup retains
-    /// the captured authority and conservatively permits adopted-field discovery instead.
+    /// Drop cannot borrow an ended operation or inspect its admitted page. These controls
+    /// never read or search fields, so this conservative permission cannot start discovery.
     pub(crate) fn for_cleanup(scope: &OpScope<'_>) -> Self {
         Self {
             conformance: scope.conformance(),
-            may_have_other_frame: true,
+            discover_moved_fields: true,
         }
     }
 }
 
-/// Compute topology at the send seam for the exact world, after any retry or frame hop.
-/// Conformance must not even inspect the frame metadata used only for private output.
-fn policy(scope: &OpScope<'_>, page: &OpPage<'_>, world: &IsolatedWorld) -> ProbePolicy {
-    with_frame_context(scope.conformance(), || {
-        page.may_have_other_frame(scope, world)
-    })
-}
-
-fn with_frame_context(conformance: bool, hint: impl FnOnce() -> bool) -> ProbePolicy {
+/// Capture this receiving tab's fill history in both modes. No frame metadata is read.
+fn policy(scope: &OpScope<'_>, page: &OpPage<'_>) -> ProbePolicy {
     ProbePolicy {
-        conformance,
-        may_have_other_frame: conformance || hint(),
+        conformance: scope.conformance(),
+        discover_moved_fields: page.took_private_text(),
     }
 }
 
@@ -259,7 +252,7 @@ pub(crate) async fn call(
     send(
         world,
         request,
-        policy(scope, page, world),
+        policy(scope, page),
         Handed::NONE,
         Gesture::None,
     )
@@ -275,7 +268,7 @@ pub(crate) async fn call_for_tests(
 ) -> Result<ProbeReply, ProbeFailure> {
     let policy = ProbePolicy {
         conformance: false,
-        may_have_other_frame: true,
+        discover_moved_fields: true,
     };
     send(world, request, policy, Handed::NONE, Gesture::None).await
 }
@@ -292,7 +285,7 @@ pub(crate) async fn call_with_gesture(
     send(
         world,
         request,
-        policy(scope, page, world),
+        policy(scope, page),
         Handed::NONE,
         Gesture::User,
     )
@@ -319,14 +312,7 @@ pub(crate) async fn call_on(
         root: Some(root),
         nodes: &[],
     };
-    send(
-        world,
-        request,
-        policy(scope, page, world),
-        handed,
-        Gesture::None,
-    )
-    .await
+    send(world, request, policy(scope, page), handed, Gesture::None).await
 }
 
 /// One request with several nodes (remote objects in this world, from `DOM.resolveNode` with
@@ -341,14 +327,7 @@ pub(crate) async fn call_with_nodes(
     nodes: &[String],
 ) -> Result<ProbeReply, ProbeFailure> {
     let handed = Handed { root: None, nodes };
-    send(
-        world,
-        request,
-        policy(scope, page, world),
-        handed,
-        Gesture::None,
-    )
-    .await
+    send(world, request, policy(scope, page), handed, Gesture::None).await
 }
 
 /// The remote objects a call hands the probe after its request.
@@ -470,7 +449,7 @@ pub(crate) async fn pinned_object(
     let params = json!({
         "objectId": world.global(),
         "functionDeclaration": CALL_FUNCTION,
-        "arguments": call_arguments(&request, policy(scope, page, world), Handed::NONE)?,
+        "arguments": call_arguments(&request, policy(scope, page), Handed::NONE)?,
         "returnByValue": false,
         // Chromium truncates property previews by UTF-16 code unit and can emit lone
         // surrogates for emoji attributes, which Rust's JSON decoder cannot read. The node
@@ -527,7 +506,7 @@ pub(crate) async fn pinned_nodes(
          return nodes.some(node => node && !(node instanceof Node) && \
                            node.kind === 'uninstalled') ? null : nodes; }}"
     );
-    let policy = policy(scope, page, world);
+    let policy = policy(scope, page);
     let calls: Vec<ProbeCall<'_>> = requests
         .iter()
         .map(|request| ProbeCall { request, policy })
@@ -594,7 +573,6 @@ async fn is_uninstalled(world: &IsolatedWorld, object: Option<&str>) -> Result<b
 
 #[cfg(test)]
 mod tests {
-    use std::cell::Cell;
     use std::error::Error;
     use std::slice;
 
@@ -602,9 +580,7 @@ mod tests {
     use browseros_core::CoreError;
     use serde_json::{Value, json};
 
-    use super::{
-        CALL_FUNCTION, Handed, ProbeFailure, Ran, call_arguments, reply_of, with_frame_context,
-    };
+    use super::{CALL_FUNCTION, Handed, ProbeFailure, Ran, call_arguments, reply_of};
     use crate::probe::probe_reply::ProbeReply;
     use crate::probe::probe_request::{ProbePolicy, ProbeRequest};
 
@@ -626,11 +602,11 @@ mod tests {
         let request = ProbeRequest::Describe;
         let policy = ProbePolicy {
             conformance: false,
-            may_have_other_frame: true,
+            discover_moved_fields: true,
         };
         let envelope = json!({ "value": {
             "request": { "op": "describe" },
-            "policy": { "conformance": false, "mayHaveOtherFrame": true },
+            "policy": { "conformance": false, "discoverMovedFields": true },
         } });
         assert_eq!(
             call_arguments(
@@ -674,27 +650,6 @@ mod tests {
             "nodes follow an empty root, in order, so the probe reads them positionally"
         );
         Ok(())
-    }
-
-    #[test]
-    fn conformance_skips_even_the_lazy_frame_metadata_read() {
-        let read = Cell::new(false);
-        let policy = with_frame_context(true, || {
-            read.set(true);
-            false
-        });
-        assert!(policy.conformance);
-        assert!(
-            !read.get(),
-            "upstream diagnostics do not inspect private topology"
-        );
-        let policy = with_frame_context(false, || {
-            read.set(true);
-            false
-        });
-        assert!(read.get());
-        assert!(!policy.conformance);
-        assert!(!policy.may_have_other_frame);
     }
 
     fn protocol_error(message: &str) -> CoreError {

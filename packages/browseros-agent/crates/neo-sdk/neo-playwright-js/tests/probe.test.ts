@@ -277,7 +277,7 @@ it('rejects missing or malformed common policy before reading a private snapshot
   for (const call of [
     request,
     { request },
-    { request, policy: { conformance: 'true', mayHaveOtherFrame: false } },
+    { request, policy: { conformance: 'true', discoverMovedFields: false } },
   ]) {
     expect(globalThis.__neoProbe?.call(call)).toMatchObject({
       kind: 'error',
@@ -287,7 +287,7 @@ it('rejects missing or malformed common policy before reading a private snapshot
   expect(
     globalThis.__neoProbe?.call({
       request,
-      policy: { conformance: false, mayHaveOtherFrame: false },
+      policy: { conformance: false, discoverMovedFields: false },
     }),
   ).not.toEqual(
     expect.objectContaining({ class: 'internal', message: 'not a probe call' }),

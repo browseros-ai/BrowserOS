@@ -29,7 +29,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use browseros_core::ProtocolSession;
-use fixture_server::{FixtureServer, Page};
+use fixture_server::FixtureServer;
 use input_recording::{Failing, InputCall, InputRecording};
 use live_browser::{LiveBrowser, TestPage, TestResult};
 use neo_playwright::{
@@ -77,13 +77,7 @@ struct Opened {
 impl Bench {
     async fn start() -> TestResult<Self> {
         let turn = ONE_AT_A_TIME.acquire().await?;
-        let mut pages = private_host::pages();
-        pages.insert(
-            "/private/moved-window.html".to_owned(),
-            Page::html(include_str!("data/private/moved-window.html"))
-                .with_header("cache-control", "no-store"),
-        );
-        let server = FixtureServer::start(pages).await?;
+        let server = FixtureServer::start(private_host::pages()).await?;
         let recording = InputRecording::over(LiveBrowser::cdp_client().await?);
         let live = LiveBrowser::connect_on(Arc::clone(&recording) as _).await?;
         let (page_origin, other_origin) = private_host::origins(&server);
@@ -4243,9 +4237,8 @@ async fn tests_that_the_mark_travels_with_a_box_moved_into_another_frame() -> Te
 
 /// Ruling R53: a box marked inside a frame (so its prototype is that frame's), which the page
 /// moves into its own document before removing the frame. A later agent run (another script)
-/// learns the tab's frames afresh: after a `page.evaluate`, which stores the tab's frame tree in
-/// the run, the tree proves one frame and a snapshot would skip the document-wide field scan.
-/// The tab took a private entry, so the scan still runs and guards the box's foreign
+/// learns the tab's frames afresh after a `page.evaluate`. The receiving tab took a private
+/// entry, so the document-wide scan still runs after the source frame leaves and guards its foreign
 /// prototype: a name built from it prints bullets.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
@@ -4292,191 +4285,51 @@ async fn tests_that_a_box_marked_in_a_removed_frame_stays_masked() -> TestResult
     bench.close(opened).await
 }
 
-/// Where the box is born and privately filled before the page adopts it into the other window.
-#[derive(Clone, Copy)]
-enum SourceWindow {
-    Popup,
-    Opener,
-}
-
-/// The page opens the related tab and moves the actual marked node; the receiver never takes
-/// a private entry. A fresh run evaluates there first, so its cached tree proves one frame.
-/// With the old `if self.pw.took_private_text(self.tab())` hint, that proof skips the foreign
-/// prototype search and the derived button name leaks in both directions (R59's negative).
-#[expect(
-    clippy::too_many_lines,
-    reason = "one paired-window lifetime keeps the private entry, adoption and cleanup together"
-)]
-async fn moved_window_snapshots(
-    bench: &Bench,
-    source_window: SourceWindow,
-) -> TestResult<Vec<String>> {
-    let source = match source_window {
-        SourceWindow::Popup => "popup",
-        SourceWindow::Opener => "opener",
-    };
-    let path = format!("/private/moved-window.html?source={source}");
-    let opener_url = bench.server.url("127.0.0.1", &path);
-    let popup_url = format!("{opener_url}&popup=1");
-    let result = async {
-        let opener = bench.open(&path, Place::Front).await?;
-        bench
-            .live
-            .invoke(
-                "locator.click",
-                json!({
-                    "call": { "api": "locator.click", "timeoutMs": 5_000 },
-                    "target": css_target(&opener.page.brand(), &["#open"]), "strict": "strict",
-                }),
-            )
-            .await??;
-        page_does(bench, &opener, "popupReady()").await?;
-        let info = bench
-            .live
-            .browser
-            .pages
-            .list()
-            .await?
-            .into_iter()
-            .find(|info| info.url == popup_url)
-            .ok_or("the page-created related tab is listed")?;
-        let popup = Opened {
-            page: TestPage {
-                id: info.page_id,
-                tab: info.tab_id,
-            },
-            cover: None,
-            place: Place::Front,
-        };
-        let (source, receiver, move_box) = match source_window {
-            SourceWindow::Popup => (&popup, &opener, "moveToOpener()"),
-            SourceWindow::Opener => (&opener, &popup, "moveToPopup()"),
-        };
-        let code = bench.r#ref(source, "textbox", "Code").await?;
-        // The popup may leave its opener behind. Private entry supports background tabs;
-        // this adoption row needs no foreground-placement precondition from Bench.enter.
-        let env = HostEnv::new(&bench.live);
-        let entry = bench
-            .live
-            .playwright
-            .enter_privately(
-                &env,
-                EntryRequest {
-                    tab: source.page.tab,
-                    url: None,
-                    fields: vec![Field::new(&code, &bench.page_origin).with(MARKED)?],
-                    deadline: Instant::now() + Duration::from_secs(15),
-                },
-            )
-            .await;
-        if entry.outcome != EntryOutcome::Entered {
-            return Err(format!("the source's private entry failed: {entry:?}").into());
-        }
-        page_does(bench, source, move_box).await?;
-        if matches!(source_window, SourceWindow::Opener) {
-            bench.live.close(&opener.page).await?;
-            page_does(
-                bench,
-                receiver,
-                "!window.opener || window.opener.closed ? 1 : 0",
-            )
+/// A receiving tab searches for a foreign prototype only after its own private fill. The
+/// source probe is warmed before adoption, and its frame is removed before either snapshot.
+/// The declared Code box is never filled by Neo; a separate Plain box supplies the history.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_only_a_filled_receiving_tab_discovers_a_moved_declared_box() -> TestResult {
+    let bench = Bench::start().await?;
+    for filled in [false, true] {
+        let opened = bench
+            .open("/private/moved-box.html?inside=1", Place::Front)
             .await?;
-        }
-        let page = receiver.page.brand();
-        let run: Arc<RunState> = Arc::default();
-        let singleton = bench
-            .live
-            .invoke_in_run(
-                Arc::clone(&run),
-                "page.evaluate",
-                json!({
-                    "call": { "api": "page.evaluate", "timeoutMs": 5_000 }, "page": page,
-                    "expression": "() => window.frames.length === 0 && (!window.opener || window.opener.closed)",
-                    "isFunction": true,
-                    "arg": { "value": r#"{"v":"undefined"}"#, "handles": [] },
-                }),
-            )
-            .await??;
-        if singleton.get("value") != Some(&json!(true)) {
-            return Err(format!("the receiver has no other frame or live opener: {singleton}").into());
-        }
-        let mut printed = Vec::new();
-        for _ in 0..3 {
-            printed.push(printed_in_run(bench, Arc::clone(&run), &page).await?);
-        }
-        TestResult::Ok(printed)
-    }
-    .await;
-    // Snapshot assertions run only after cleanup. Listing by these fixture URLs also covers
-    // a failure after window.open but before the new tab's handle reached the test.
-    let cleanup: TestResult = async {
-        let pages = bench.live.browser.pages.list().await?;
-        let mut first_error = None;
-        for info in pages
-            .into_iter()
-            .filter(|info| info.url == opener_url || info.url == popup_url)
-        {
-            if let Err(error) = bench
-                .live
-                .browser
-                .cdp(
-                    "Target.closeTarget",
-                    json!({ "targetId": info.target_id.as_str() }),
-                    None,
-                )
-                .await
-                && first_error.is_none()
-            {
-                first_error = Some(error);
+        let result: TestResult<String> = async {
+            let _code = bench.r#ref(&opened, "textbox", "Code").await?;
+            page_does(&bench, &opened, &format!(
+                "(() => {{ const code = frameDoc()?.getElementById('code'); if (!code) return 0; code.autocomplete = 'one-time-code'; code.value = {MARKED:?}; return 1; }})()"
+            )).await?;
+            if filled {
+                let plain = bench.r#ref(&opened, "textbox", "Plain").await?;
+                let env = bench.host(&opened);
+                let entry = bench.enter(&env, &opened, vec![
+                    Field::new(&plain, &bench.page_origin).with("Receiving-tab-fill")?
+                ]).await;
+                if entry.outcome != EntryOutcome::Entered {
+                    return Err(format!("receiving tab's history fill failed: {entry:?}").into());
+                }
             }
-        }
-        match first_error {
-            Some(error) => Err(error.into()),
-            None => Ok(()),
-        }
-    }
-    .await;
-    let printed = result?;
-    cleanup?;
-    Ok(printed)
-}
-
-/// R59: a plain box privately filled in a popup keeps its mark when the page adopts it into
-/// the opener. The old per-tab hint is this row's negative: the opener took no private entry.
-#[tokio::test]
-#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
-async fn tests_that_r59_masks_a_box_moved_from_a_popup_into_its_opener() -> TestResult {
-    let bench = Bench::start().await?;
-    let bullets = "•".repeat(MARKED.chars().count());
-    for (round, printed) in moved_window_snapshots(&bench, SourceWindow::Popup)
-        .await?
-        .iter()
-        .enumerate()
-    {
+            page_does(&bench, &opened, "moveOut()").await?;
+            page_does(&bench, &opened, "dropFrame()").await?;
+            printed_in_run(&bench, Arc::default(), &opened.page.brand()).await
+        }.await;
+        let closed = bench.close(opened).await;
+        let printed = result?;
+        closed?;
+        let value = if filled {
+            "•".repeat(MARKED.len())
+        } else {
+            MARKED.to_owned()
+        };
         assert!(
-            !printed.contains(MARKED) && printed.contains(&format!("Send {bullets}")),
-            "#{round}: the opener prints the derived button name as bullets, the value nowhere: {printed}"
+            printed.contains(&format!("Send {value}")),
+            "filled={filled}: {printed}"
         );
-    }
-    Ok(())
-}
-
-/// R59: the mirror move, then the source opener closes before the receiver's first read. The
-/// old per-tab hint is this row's negative; the browser's entry memory must outlive the source.
-#[tokio::test]
-#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
-async fn tests_that_r59_masks_a_box_moved_into_a_popup_after_its_opener_closes() -> TestResult {
-    let bench = Bench::start().await?;
-    let bullets = "•".repeat(MARKED.chars().count());
-    for (round, printed) in moved_window_snapshots(&bench, SourceWindow::Opener)
-        .await?
-        .iter()
-        .enumerate()
-    {
-        assert!(
-            !printed.contains(MARKED) && printed.contains(&format!("Send {bullets}")),
-            "#{round}: the popup prints the derived button name as bullets, the value nowhere: {printed}"
-        );
+        if filled {
+            assert!(!printed.contains(MARKED), "filled={filled}: {printed}");
+        }
     }
     Ok(())
 }

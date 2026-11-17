@@ -54,7 +54,7 @@ export type ProbePage = {
  */
 export function openProbePage(
   html: string,
-  policy: ProbePolicy = { conformance: false, mayHaveOtherFrame: true },
+  policy: ProbePolicy = { conformance: false, discoverMovedFields: true },
 ): ProbePage {
   const { window, document } = parseHTML(html)
   // linkedom omits the native defaultValue accessors. Supply their markup reads only in this

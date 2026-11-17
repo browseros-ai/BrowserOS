@@ -891,11 +891,11 @@ const REPLY_EXAMPLES: {
 const CALL_EXAMPLES: AtLeastOne<ProbeCall> = [
   {
     request: REQUEST_EXAMPLES.snapshot[0],
-    policy: { conformance: false, mayHaveOtherFrame: true },
+    policy: { conformance: false, discoverMovedFields: true },
   },
   {
     request: REQUEST_EXAMPLES.expect[0],
-    policy: { conformance: true, mayHaveOtherFrame: false },
+    policy: { conformance: true, discoverMovedFields: false },
   },
 ]
 
