@@ -239,6 +239,13 @@
       "name": "@browseros/claw-server",
       "version": "0.0.0",
     },
+    "apps/firefox-sync": {
+      "name": "@browseros/firefox-sync",
+      "version": "0.0.1",
+      "bin": {
+        "browseros-firefox-sync": "./src/cli.ts",
+      },
+    },
     "apps/server": {
       "name": "@browseros/server",
       "version": "0.0.168",
@@ -726,6 +733,8 @@
     "@browseros/claw-server": ["@browseros/claw-server@workspace:apps/claw-server"],
 
     "@browseros/diagnostics": ["@browseros/diagnostics@workspace:packages/diagnostics"],
+
+    "@browseros/firefox-sync": ["@browseros/firefox-sync@workspace:apps/firefox-sync"],
 
     "@browseros/harness-integrations-rust": ["@browseros/harness-integrations-rust@workspace:crates/harness-integrations"],
 

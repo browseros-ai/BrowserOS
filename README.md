@@ -144,7 +144,8 @@ BrowserOS/
     ├── apps/
     │   ├── claw-server/             # BrowserOS neo backend: MCP endpoint + JSON API (Rust)
     │   ├── claw-app/                # BrowserOS neo dashboard extension (WXT + React)
-    │   └── claw-onboard/            # BrowserOS neo onboarding flow (Vite)
+    │   ├── claw-onboard/            # BrowserOS neo onboarding flow (Vite)
+    │   └── firefox-sync/            # Copies Firefox passwords and sessions into a running neo (Bun CLI)
     │
     ├── packages/                    # Shared TypeScript packages
     │   ├── build-server-tools/      # Shared build tooling for server binaries and assets
@@ -167,6 +168,7 @@ BrowserOS/
 | [`apps/claw-server`](packages/browseros-agent/apps/claw-server/) | BrowserOS neo backend: MCP endpoint agents connect to, plus the API behind the dashboard |
 | [`apps/claw-app`](packages/browseros-agent/apps/claw-app/) | BrowserOS neo new-tab dashboard: watch, replay, and manage agent sessions |
 | [`apps/claw-onboard`](packages/browseros-agent/apps/claw-onboard/) | BrowserOS neo first-run onboarding |
+| [`apps/firefox-sync`](packages/browseros-agent/apps/firefox-sync/) | Copies Firefox passwords and signed-in sessions into a running BrowserOS neo over CDP; repeat runs update what changed |
 
 ### Contributing
 

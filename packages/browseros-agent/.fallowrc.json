@@ -5,6 +5,7 @@
     "apps/server/src/compiled-bootstrap.ts",
     "apps/claw-onboard/src/main.tsx",
     "apps/app-onboard/src/main.tsx",
+    "apps/firefox-sync/src/cli.ts",
     "apps/app/entrypoints/app/main.tsx",
     "apps/app/entrypoints/sidepanel/main.tsx",
     "apps/app/entrypoints/background/index.ts",
