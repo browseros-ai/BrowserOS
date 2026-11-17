@@ -38,9 +38,9 @@ use neo_playwright::{Answer, ErrorCode, PlaywrightError, TimedOut};
 use neo_trace::ErrorOwner;
 use page_server::{PageServer, SLOW};
 use serde_json::{Value, json};
-use tokio::sync::Semaphore;
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::broadcast::error::TryRecvError;
+use tokio::sync::{Notify, Semaphore};
 use tokio::time;
 
 /// Opens a tab, runs `body` on it, and closes the tab whatever happened.
@@ -1134,10 +1134,12 @@ const MID_RUN_BUSY_TAB_SCRIPT: &str = "await context.waitForEvent('page', {\n\
     for (let i = 0; i < 5; i++) await page.title()\n\
     return 1";
 
-/// The live run's ops, with how long each `page.frames` read took and on which tab.
+/// The live run's ops, with how long each `page.frames` read took and on which tab, and a signal
+/// once the script's `waitForEvent` went out (`events.wait`).
 struct FrameReads {
     run: Arc<LiveRun>,
     reads: Mutex<Vec<(i64, Duration)>>,
+    waiting: Notify,
 }
 
 impl OpHost for FrameReads {
@@ -1151,6 +1153,9 @@ impl OpHost for FrameReads {
                 .get("page")
                 .and_then(|page| page.get("tab"))
                 .and_then(Value::as_i64);
+            if name == "events.wait" {
+                self.waiting.notify_one();
+            }
             let started = Instant::now();
             let answer = OpHost::invoke(&*self.run, name, input).await;
             if name == "page.frames"
@@ -1206,16 +1211,19 @@ async fn tests_that_a_busy_tab_another_client_opens_mid_run_costs_one_wait_at_mo
             let recorder = Arc::new(FrameReads {
                 run: Arc::clone(&run),
                 reads: Mutex::new(Vec::new()),
+                waiting: Notify::new(),
             });
             let host: Arc<dyn OpHost> = Arc::clone(&recorder) as Arc<dyn OpHost>;
             let script = async {
                 let outcome = js_runner::run_script(&host, &init, MID_RUN_BUSY_TAB_SCRIPT).await;
                 (outcome, Instant::now())
             };
-            // Another client opens the tab once the run waits for it, the way the owner or another
-            // session opens one: nothing of the run's names it.
+            // Another client opens the tab once the script's `waitForEvent` went out, the way the
+            // owner or another session opens one: nothing of the run's names it. Opened sooner, its
+            // `page` event could come before the wait's start and never reach the script.
             let open = async {
-                time::sleep(Duration::from_millis(300)).await;
+                let _waiting =
+                    time::timeout(Duration::from_secs(10), recorder.waiting.notified()).await;
                 let opened = run
                     .browser()
                     .cdp(
