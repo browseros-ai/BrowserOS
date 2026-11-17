@@ -490,6 +490,12 @@ impl Picture {
         if !self.calm_sharp
             && let Some(plan) = self.settled(now, self.last_big)
         {
+            if Some(self.link.at) == self.ladder.half && !self.full_return_fits(now) {
+                return Plan {
+                    scale: Scale::Half,
+                    sharp_qp: None,
+                };
+            }
             return plan;
         }
         let scale = if big || self.scale == Scale::Half {
@@ -603,6 +609,18 @@ impl Picture {
                 * (self.width * self.soft.len()) as f32
                 / idr.pixels as f32,
         )
+    }
+
+    /// A motion return reopens the full encoder and puts an IDR on the wire.
+    /// Keep its transfer within 300 ms even when half-size traffic has become too small to probe.
+    fn full_return_fits(&self, now: Instant) -> bool {
+        let cap_crf = self.cfg.base_crf + self.ladder.rungs[self.ladder.cap].crf_add;
+        let kbps = self
+            .capacity_kbps(now)
+            .or_else(|| self.capacity.back().map(|&(_, kbps)| kbps));
+        self.estimate(cap_crf)
+            .zip(kbps)
+            .is_none_or(|(bytes, kbps)| bytes * 8.0 <= 300.0 * kbps)
     }
 
     fn sharp_budget(&self, now: Instant) -> Option<(u8, Duration)> {
@@ -788,6 +806,10 @@ impl Picture {
         if link.delivered_kbps == 0.0 {
             return link.sent_kbps > 0.0;
         }
+        // A nonzero queue is measured from this pacer's acknowledgements in this interval.
+        if link.queue_ms > 300 {
+            return true;
+        }
         let remaining =
             self.ladder.rungs[self.ladder.cap].crf_add - self.ladder.rungs[self.link.at].crf_add;
         let cap_bytes = mean_bytes * 2.0_f32.powf(-remaining / 6.0);
@@ -795,10 +817,12 @@ impl Picture {
     }
 
     fn observe_link(&mut self, now: Instant, link: &Link, congested: bool) {
-        while self
-            .capacity
-            .front()
-            .is_some_and(|(at, _)| now.saturating_duration_since(*at) > CAPACITY_WINDOW)
+        // The motion IDR budget can still use the last observation after the window expires.
+        while self.capacity.len() > 1
+            && self
+                .capacity
+                .front()
+                .is_some_and(|(at, _)| now.saturating_duration_since(*at) > CAPACITY_WINDOW)
         {
             self.capacity.pop_front();
         }
@@ -851,6 +875,7 @@ impl Picture {
                 .capacity_kbps(now)
                 .zip(self.demand_kbps)
                 .is_none_or(|(cap, demand)| cap >= 1.2 * demand)
+            && self.full_return_fits(now)
         {
             self.last_full = Some(now);
             return Some((cap, Why::Capacity));
@@ -1360,9 +1385,16 @@ mod tests {
     fn tests_that_a_severe_jam_reaches_half_on_the_second_tick() {
         let t = Instant::now();
         let mut p = picture(t);
-        for (n, bytes) in [(1, 240_000), (2, 200_000)] {
-            sized_motion(&mut p, at(t, n), bytes, 3);
-            let moves = p.tick(at(t, n), jam(), Cpu::default());
+        for n in 1..=2 {
+            sized_motion(&mut p, at(t, n), 200_000, 3);
+            let moves = p.tick(
+                at(t, n),
+                Link {
+                    queue_ms: if n == 1 { 350 } else { 250 },
+                    ..jam()
+                },
+                Cpu::default(),
+            );
             assert_eq!(moves[0].why, Why::Severe);
             assert_eq!((p.fps(), p.crf()), (15.0, 30.0));
             assert_eq!(
@@ -1384,6 +1416,91 @@ mod tests {
             assert_eq!(moves[0].why, Why::Severe);
         }
         assert_eq!(stalled.motion_scale(), Scale::Half);
+    }
+
+    #[test]
+    fn tests_that_a_late_queue_tick_is_severe() {
+        let t = Instant::now();
+        for (queue_ms, delivered_kbps, blocked, expected) in [
+            (300, 3000.0, 0.6, Some(Why::Congested)),
+            (301, 3000.0, 0.6, Some(Why::Severe)),
+            (301, 0.0, 0.6, Some(Why::Congested)),
+            (301, 3000.0, 0.1, None),
+        ] {
+            let mut p = picture(t);
+            let moves = p.tick(
+                at(t, 1),
+                Link {
+                    queue_ms,
+                    delivered_kbps,
+                    blocked,
+                    ..Link::default()
+                },
+                Cpu::default(),
+            );
+            assert_eq!(moves.first().map(|m| m.why), expected);
+        }
+    }
+
+    fn costly_half_key(p: &mut Picture, t: Instant) {
+        let mut f = frame(Scale::Half, 10);
+        f.key = true;
+        f.bytes = 80_000; // A full IDR at the same QP is 320 kB, or 853 ms on 3 Mb/s.
+        p.encoded(t, f);
+    }
+
+    #[test]
+    fn tests_that_a_jammed_link_keeps_half_while_small_damage_continues() {
+        let t = Instant::now();
+        let mut p = picture(t);
+        let half = to_link_half(&mut p, t);
+        costly_half_key(&mut p, half);
+        for n in 1..=25 {
+            let now = at(half, n);
+            p.tick(now, active(15), Cpu::default());
+            let plan = p.plan(now, Some((10, 26, 16)));
+            assert_eq!(
+                plan,
+                Plan {
+                    scale: Scale::Half,
+                    sharp_qp: None
+                }
+            );
+            send(&mut p, now, plan);
+        }
+        assert_eq!(p.capacity_kbps(at(half, 25)), None);
+        assert!(
+            !p.full_return_fits(at(half, 25)),
+            "the last known link still prices the IDR"
+        );
+    }
+
+    #[test]
+    fn tests_that_a_truly_still_screen_still_returns_full_on_a_jam() {
+        let t = Instant::now();
+        let mut p = picture(t);
+        let half = to_link_half(&mut p, t);
+        costly_half_key(&mut p, half);
+        assert!(!p.full_return_fits(at(half, 1)));
+        assert_eq!(p.still(at(half, 1)).unwrap().scale, Scale::Full);
+    }
+
+    #[test]
+    fn tests_that_half_returns_to_full_once_a_probe_shows_capacity() {
+        let t = Instant::now();
+        let mut p = picture(t);
+        let half = to_link_half(&mut p, t);
+        costly_half_key(&mut p, half);
+        p.tick(at(half, 2), active(15), Cpu::default());
+        assert_eq!(p.motion_scale(), Scale::Half);
+        capacity(&mut p, at(half, 3), 9000.0);
+        assert!(p.full_return_fits(at(half, 3)));
+        let moves = p.tick(at(half, 3), active(15), Cpu::default());
+        assert_eq!(moves[0].why, Why::Capacity);
+        assert_eq!(
+            (p.motion_scale(), p.fps(), p.crf()),
+            (Scale::Full, 15.0, 30.0)
+        );
     }
 
     #[test]
