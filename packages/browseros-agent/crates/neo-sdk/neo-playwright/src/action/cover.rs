@@ -112,13 +112,14 @@ impl CoverWatch {
             standing.checks += 1;
             // The place stays the first sighting's, so a cover drifting under the tolerance at
             // every check still moves; whether it says it is loading is the latest sighting's.
-            match (standing.mark.as_mut(), mark) {
-                (None, Some(_)) => {
-                    standing.mark = mark;
-                    standing.mark_at = seat.point;
+            if let Some(seen) = mark {
+                match standing.mark.as_mut() {
+                    Some(held) => held.busy = seen.busy,
+                    None => {
+                        standing.mark = Some(seen);
+                        standing.mark_at = seat.point;
+                    }
                 }
-                (Some(held), Some(seen)) => held.busy = seen.busy,
-                (_, None) => {}
             }
             standing.seat = seat;
             return;
@@ -161,8 +162,10 @@ fn near(a: f64, b: f64) -> bool {
 /// the control's click point (a cover that moves with its control under any scroll, the page's
 /// or a nested scroller's, as the runner's retries scroll it). One that changes in both ways is
 /// moving. A sighting with no mark (a verdict's miss) is of whatever stands there.
-fn same_cover(standing: (Point, Option<CoverMark>), seen: (Point, Option<CoverMark>)) -> bool {
-    let ((at, standing), (now, seen)) = (standing, seen);
+fn same_cover(
+    (at, standing): (Point, Option<CoverMark>),
+    (now, seen): (Point, Option<CoverMark>),
+) -> bool {
     match (standing, seen) {
         (Some(a), Some(b)) => {
             let (a_box, b_box) = (a.rect, b.rect);
