@@ -446,6 +446,13 @@ paths:
         reports the closure. Capture runs only while someone watches;
         viewers of one tab and quality share one capture. A capture that cannot start is
         `503 browser_unavailable`, before any byte is sent.
+
+        A successful fit answers once the screen, the window and the device settings are
+        applied. It does not wait for a frame: the screencast may still send a picture of the
+        previous size after the fit's answer, and a new reader first receives the newest
+        cached frame. A client that needs the new geometry keeps reading frames until one
+        matches the fitted page's geometry, accounting for the screencast's quality scaling.
+        `Fit.screen` describes the physical framebuffer, not the encoded frame's dimensions.
       parameters:
         - $ref: '#/components/parameters/TabId'
         - $ref: '#/components/parameters/Quality'
@@ -926,6 +933,14 @@ paths:
         a desktop, including an inherited 2, is 400 `invalid_request`. Logical sides and scaled
         physical sides must each be at most 4096. The owner viewer should fit locally or send
         physical scaled dimensions when requesting a remote framebuffer resize.
+
+        A successful fit answers once the screen, the window and the device settings are
+        applied. It does not wait for a frame: the screencast may still send a picture of the
+        previous size after the fit's answer, and a new reader first receives the newest
+        cached frame. A client that needs the new geometry keeps reading frames until one
+        matches the fitted page's geometry, accounting for the screencast's quality scaling.
+        `Fit.screen` describes the physical framebuffer, not the encoded frame's dimensions.
+
         Neo has one screen and one window, so the window's state is recorded once, by the first
         fit while no other is active, and put back at the last restore. Each tab's viewport mode
         is recorded by its own first fit. The first fit of a tab returns a new fit; while that

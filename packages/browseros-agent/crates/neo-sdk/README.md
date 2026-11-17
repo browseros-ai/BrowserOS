@@ -104,6 +104,13 @@ framebuffer before sending RFB pointer coordinates. Agent locator boxes and mous
 remain logical CSS coordinates. Screenshot density follows the page's DPR and the screenshot's
 own `scale` option, independently of the viewer scale.
 
+A successful fit answers once the screen, the window and the device settings are applied.
+It does not wait for a frame: the screencast may still send a picture of the previous size
+after the fit's answer, and a new reader first receives the newest cached frame. A client
+that needs the new geometry keeps reading frames until one matches the fitted page's
+geometry, accounting for the screencast's quality scaling. `Fit.screen` describes the
+physical framebuffer, not the encoded frame's dimensions.
+
 Refit an active tab through `POST /v1/tabs/{tabId}/fit`. Omitting `scale` preserves its active
 scale, and an explicit 1 returns it to 1x. Repeating takeover start returns the existing
 takeover without refitting it. All active fits follow the latest shared display layout.
