@@ -423,6 +423,9 @@ pub struct PlanSavings {
     /// The newest of those tasks, newest first, each with what neo measured (`ultrafast`) and what it did with pursue (`pursue`) where recorded.
     #[serde(rename = "latest")]
     pub latest: Vec<models::SessionSummary>,
+    /// Present only once ultrafast has been on for this computer: what the Home meter shows since then.
+    #[serde(rename = "meter", skip_serializing_if = "Option::is_none")]
+    pub meter: Option<Box<models::PlanSavingsMeter>>,
 }
 
 impl PlanSavings {
@@ -436,7 +439,165 @@ impl PlanSavings {
             totals: Box::new(totals),
             tasks,
             latest,
+            meter: None,
         }
+    }
+}
+
+/// PlanSavingsMeter : The Home meter for an ultrafast customer, counted from the day this computer got ultrafast.
+#[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PlanSavingsMeter {
+    /// When this computer got ultrafast, in epoch milliseconds: the first time it was on here, or the first ultrafast run if that came earlier.
+    #[serde(rename = "since")]
+    pub since: i64,
+    /// Estimated tokens neo kept off the agent since then: page descriptions instead of screenshots, plus the page text neo read itself during ultrafast runs. The two are measured differently, so this is an estimate.
+    #[serde(rename = "tokensSaved")]
+    pub tokens_saved: i64,
+    /// When each ultrafast task of the last 7 days last ran, in epoch milliseconds, newest first, for a by-day chart in local time.
+    #[serde(rename = "runTimes")]
+    pub run_times: Vec<i64>,
+    /// In tasks that used pursue, the average share of browser steps neo took itself, as a whole percent. Absent until such a task recorded a step.
+    #[serde(rename = "neoStepShare", skip_serializing_if = "Option::is_none")]
+    pub neo_step_share: Option<i32>,
+    /// The shortest single ultrafast run: a skill that finished without the agent, or a pursue that finished or handed back. Absent before the first one.
+    #[serde(rename = "fastestRunMs", skip_serializing_if = "Option::is_none")]
+    pub fastest_run_ms: Option<i64>,
+    /// The meter's Details, for each period it can show.
+    #[serde(rename = "periods")]
+    pub periods: Box<models::PlanSavingsPeriods>,
+}
+
+impl PlanSavingsMeter {
+    /// The Home meter for an ultrafast customer, counted from the day this computer got ultrafast.
+    pub fn new(
+        since: i64,
+        tokens_saved: i64,
+        run_times: Vec<i64>,
+        periods: models::PlanSavingsPeriods,
+    ) -> PlanSavingsMeter {
+        PlanSavingsMeter {
+            since,
+            tokens_saved,
+            run_times,
+            neo_step_share: None,
+            fastest_run_ms: None,
+            periods: Box::new(periods),
+        }
+    }
+}
+
+/// PlanSavingsPeriod : What ultrafast and neo did in one period.
+#[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PlanSavingsPeriod {
+    /// neo's page-description saving from sessions that ended in the period, plus the page text neo read itself in the period's ultrafast tasks.
+    #[serde(rename = "tokensSaved")]
+    pub tokens_saved: i64,
+    /// Ultrafast tasks in the period.
+    #[serde(rename = "runs")]
+    pub runs: i64,
+    /// Pages neo read itself in those tasks.
+    #[serde(rename = "pagesRead")]
+    pub pages_read: i64,
+    /// Time neo's ultrafast runs took in those tasks.
+    #[serde(rename = "durationMs")]
+    pub duration_ms: i64,
+    /// The shortest single run in the period. Absent without one.
+    #[serde(rename = "fastestRunMs", skip_serializing_if = "Option::is_none")]
+    pub fastest_run_ms: Option<i64>,
+    /// In the period's tasks that used pursue, the average share of browser steps neo took. Absent without one.
+    #[serde(rename = "neoStepShare", skip_serializing_if = "Option::is_none")]
+    pub neo_step_share: Option<i32>,
+    /// The period's tasks that used pursue.
+    #[serde(rename = "siteTasks")]
+    pub site_tasks: i64,
+    /// Of those, the ones pursue finished without handing back.
+    #[serde(rename = "siteTasksFinished")]
+    pub site_tasks_finished: i64,
+    /// Sites with the most ultrafast tasks in the period, most first.
+    #[serde(rename = "topSites")]
+    pub top_sites: Vec<models::PlanSavingsSite>,
+    /// Time saved by every task that ended in the period.
+    #[serde(rename = "timeSavedMs")]
+    pub time_saved_ms: i64,
+    /// Tasks that ended in the period.
+    #[serde(rename = "tasksFinished")]
+    pub tasks_finished: i64,
+    /// When each of the period's ultrafast tasks last ran, in epoch milliseconds, newest first, for a chart by local day or week.
+    #[serde(rename = "runTimes")]
+    pub run_times: Vec<i64>,
+}
+
+impl PlanSavingsPeriod {
+    /// What ultrafast and neo did in one period.
+    pub fn new(
+        tokens_saved: i64,
+        runs: i64,
+        pages_read: i64,
+        duration_ms: i64,
+        site_tasks: i64,
+        site_tasks_finished: i64,
+        top_sites: Vec<models::PlanSavingsSite>,
+        time_saved_ms: i64,
+        tasks_finished: i64,
+        run_times: Vec<i64>,
+    ) -> PlanSavingsPeriod {
+        PlanSavingsPeriod {
+            tokens_saved,
+            runs,
+            pages_read,
+            duration_ms,
+            fastest_run_ms: None,
+            neo_step_share: None,
+            site_tasks,
+            site_tasks_finished,
+            top_sites,
+            time_saved_ms,
+            tasks_finished,
+            run_times,
+        }
+    }
+}
+
+/// PlanSavingsPeriods : The Details numbers since this computer got ultrafast, and for the last 30 and 7 days. A task counts in a period when its last ultrafast run started in it; neo's own saving, time saved and tasks finished follow the cockpit's windows.
+#[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PlanSavingsPeriods {
+    /// Since this computer got ultrafast. Its tokensSaved is the meter's tokensSaved.
+    #[serde(rename = "since")]
+    pub since: Box<models::PlanSavingsPeriod>,
+    #[serde(rename = "last30Days")]
+    pub last30_days: Box<models::PlanSavingsPeriod>,
+    #[serde(rename = "last7Days")]
+    pub last7_days: Box<models::PlanSavingsPeriod>,
+}
+
+impl PlanSavingsPeriods {
+    /// The Details numbers since this computer got ultrafast, and for the last 30 and 7 days. A task counts in a period when its last ultrafast run started in it; neo's own saving, time saved and tasks finished follow the cockpit's windows.
+    pub fn new(
+        since: models::PlanSavingsPeriod,
+        last30_days: models::PlanSavingsPeriod,
+        last7_days: models::PlanSavingsPeriod,
+    ) -> PlanSavingsPeriods {
+        PlanSavingsPeriods {
+            since: Box::new(since),
+            last30_days: Box::new(last30_days),
+            last7_days: Box::new(last7_days),
+        }
+    }
+}
+
+#[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PlanSavingsSite {
+    /// The site, as the task list shows it.
+    #[serde(rename = "site")]
+    pub site: String,
+    /// Ultrafast tasks on that site in the period.
+    #[serde(rename = "runs")]
+    pub runs: i64,
+}
+
+impl PlanSavingsSite {
+    pub fn new(site: String, runs: i64) -> PlanSavingsSite {
+        PlanSavingsSite { site, runs }
     }
 }
 

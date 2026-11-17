@@ -1848,6 +1848,108 @@ export interface components {
       tasks: number
       /** @description The newest of those tasks, newest first, each with what neo measured (`ultrafast`) and what it did with pursue (`pursue`) where recorded. */
       latest: components['schemas']['SessionSummary'][]
+      /** @description Present only once ultrafast has been on for this computer: what the Home meter shows since then. */
+      meter?: components['schemas']['PlanSavingsMeter']
+    }
+    /** @description The Home meter for an ultrafast customer, counted from the day this computer got ultrafast. */
+    PlanSavingsMeter: {
+      /**
+       * Format: int64
+       * @description When this computer got ultrafast, in epoch milliseconds: the first time it was on here, or the first ultrafast run if that came earlier.
+       */
+      since: number
+      /**
+       * Format: int64
+       * @description Estimated tokens neo kept off the agent since then: page descriptions instead of screenshots, plus the page text neo read itself during ultrafast runs. The two are measured differently, so this is an estimate.
+       */
+      tokensSaved: number
+      /** @description When each ultrafast task of the last 7 days last ran, in epoch milliseconds, newest first, for a by-day chart in local time. */
+      runTimes: number[]
+      /**
+       * Format: int32
+       * @description In tasks that used pursue, the average share of browser steps neo took itself, as a whole percent. Absent until such a task recorded a step.
+       */
+      neoStepShare?: number
+      /**
+       * Format: int64
+       * @description The shortest single ultrafast run: a skill that finished without the agent, or a pursue that finished or handed back. Absent before the first one.
+       */
+      fastestRunMs?: number
+      /** @description The meter's Details, for each period it can show. */
+      periods: components['schemas']['PlanSavingsPeriods']
+    }
+    /** @description What ultrafast and neo did in one period. */
+    PlanSavingsPeriod: {
+      /**
+       * Format: int64
+       * @description neo's page-description saving from sessions that ended in the period, plus the page text neo read itself in the period's ultrafast tasks.
+       */
+      tokensSaved: number
+      /**
+       * Format: int64
+       * @description Ultrafast tasks in the period.
+       */
+      runs: number
+      /**
+       * Format: int64
+       * @description Pages neo read itself in those tasks.
+       */
+      pagesRead: number
+      /**
+       * Format: int64
+       * @description Time neo's ultrafast runs took in those tasks.
+       */
+      durationMs: number
+      /**
+       * Format: int64
+       * @description The shortest single run in the period. Absent without one.
+       */
+      fastestRunMs?: number
+      /**
+       * Format: int32
+       * @description In the period's tasks that used pursue, the average share of browser steps neo took. Absent without one.
+       */
+      neoStepShare?: number
+      /**
+       * Format: int64
+       * @description The period's tasks that used pursue.
+       */
+      siteTasks: number
+      /**
+       * Format: int64
+       * @description Of those, the ones pursue finished without handing back.
+       */
+      siteTasksFinished: number
+      /** @description Sites with the most ultrafast tasks in the period, most first. */
+      topSites: components['schemas']['PlanSavingsSite'][]
+      /**
+       * Format: int64
+       * @description Time saved by every task that ended in the period.
+       */
+      timeSavedMs: number
+      /**
+       * Format: int64
+       * @description Tasks that ended in the period.
+       */
+      tasksFinished: number
+      /** @description When each of the period's ultrafast tasks last ran, in epoch milliseconds, newest first, for a chart by local day or week. */
+      runTimes: number[]
+    }
+    /** @description The Details numbers since this computer got ultrafast, and for the last 30 and 7 days. A task counts in a period when its last ultrafast run started in it; neo's own saving, time saved and tasks finished follow the cockpit's windows. */
+    PlanSavingsPeriods: {
+      /** @description Since this computer got ultrafast. Its tokensSaved is the meter's tokensSaved. */
+      since: components['schemas']['PlanSavingsPeriod']
+      last30Days: components['schemas']['PlanSavingsPeriod']
+      last7Days: components['schemas']['PlanSavingsPeriod']
+    }
+    PlanSavingsSite: {
+      /** @description The site, as the task list shows it. */
+      site: string
+      /**
+       * Format: int64
+       * @description Ultrafast tasks on that site in the period.
+       */
+      runs: number
     }
   }
   responses: {

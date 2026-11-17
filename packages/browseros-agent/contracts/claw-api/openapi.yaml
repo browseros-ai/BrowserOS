@@ -352,3 +352,11 @@ components:
       $ref: ./schemas/plan.yaml#/PlanPortal
     PlanSavings:
       $ref: ./schemas/plan.yaml#/PlanSavings
+    PlanSavingsMeter:
+      $ref: ./schemas/plan.yaml#/PlanSavingsMeter
+    PlanSavingsPeriod:
+      $ref: ./schemas/plan.yaml#/PlanSavingsPeriod
+    PlanSavingsPeriods:
+      $ref: ./schemas/plan.yaml#/PlanSavingsPeriods
+    PlanSavingsSite:
+      $ref: ./schemas/plan.yaml#/PlanSavingsSite

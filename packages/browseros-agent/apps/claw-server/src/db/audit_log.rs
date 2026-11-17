@@ -7,10 +7,11 @@ use crate::{
             prelude::{AgentSessionEnds, AgentSessionStarts, Tasks, ToolDispatches},
             tasks, tool_dispatches,
         },
-        pursue_runs::{PursueRun, pursue_outcome, pursue_run},
+        pursue_runs::{PursueRun, pursue_outcome, pursue_run, pursue_step_share},
         session_efficiency_stats::ELIGIBLE_TOKEN_ESTIMATOR_VERSION,
         ultrafast_runs::{
             UltrafastRunStats, finished_without_agent, pursue_reads, ultrafast_run_stats,
+            ultrafast_runs,
         },
     },
     error::AppResult,
@@ -40,7 +41,15 @@ pub struct UltrafastSession {
     pub totals: UltrafastRunStats,
     pub measured: Option<UltrafastRunStats>,
     pub pursue: Option<PursueRun>,
+    /// How long each ultrafast run in the session took.
+    pub run_durations: Vec<i64>,
+    /// neo's browser steps during pursue and every browser step in the session, when neo took any.
+    pub pursue_step_share: Option<(i64, i64)>,
+    /// When neo's first and last ultrafast runs in the session started, not the agent's calls.
+    pub first_run_at: i64,
     pub last_run_at: i64,
+    /// The site the task ran on, as the task list shows it.
+    pub site: Option<String>,
 }
 
 const ARGS_JSON_MAX: usize = 4096;
@@ -861,6 +870,22 @@ impl AuditLog {
         Ok(sessions)
     }
 
+    /// The listed sessions where ultrafast did work, such as the ones about to be deleted.
+    pub async fn ultrafast_sessions_in(
+        &self,
+        session_ids: &[String],
+    ) -> AppResult<Vec<UltrafastSession>> {
+        if session_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let candidates = ToolDispatches::find()
+            .filter(tool_dispatches::Column::SessionId.is_in(session_ids.iter().cloned()))
+            .filter(tool_dispatches::Column::ToolName.is_in(["run_skill", "pursue"]))
+            .all(self.db.connection())
+            .await?;
+        self.ultrafast_sessions(candidates).await
+    }
+
     /// Loads the sessions whose `run_skill` or `pursue` rows show ultrafast did work and derives
     /// each one's stats and pursue steps from all of its rows.
     async fn ultrafast_sessions(
@@ -881,6 +906,13 @@ impl AuditLog {
             return Ok(sessions);
         }
         let conn = self.db.connection();
+        let sites = Tasks::find()
+            .filter(tasks::Column::SessionId.is_in(with_runs.iter().cloned()))
+            .all(conn)
+            .await?
+            .into_iter()
+            .filter_map(|task| Some((task.session_id, task.site?)))
+            .collect::<HashMap<_, _>>();
         let rows = ToolDispatches::find()
             .filter(tool_dispatches::Column::SessionId.is_in(with_runs))
             .order_by_asc(tool_dispatches::Column::CreatedAt)
@@ -905,12 +937,18 @@ impl AuditLog {
                 .fold(0_i64, i64::saturating_add);
             let mut totals = measured.unwrap_or_default();
             totals.duration_ms = totals.duration_ms.saturating_add(unmeasured_ms);
-            let last_run_at = dispatches.last().map_or(0, |row| row.created_at);
+            let runs = ultrafast_runs(&dispatches);
+            let first_run_at = runs.iter().map(|run| run.at).min().unwrap_or(0);
+            let last_run_at = runs.iter().map(|run| run.at).max().unwrap_or(0);
             sessions.push(UltrafastSession {
+                site: sites.get(&session_id).cloned(),
                 session_id,
                 totals,
                 measured,
                 pursue,
+                run_durations: runs.iter().map(|run| run.duration_ms).collect(),
+                pursue_step_share: pursue_step_share(&dispatches),
+                first_run_at,
                 last_run_at,
             });
         }

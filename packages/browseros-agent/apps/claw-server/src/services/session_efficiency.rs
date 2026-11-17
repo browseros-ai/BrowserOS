@@ -173,6 +173,17 @@ impl SessionEfficiencyService {
         Ok(aggregate_rows(&rows, now_ms))
     }
 
+    /// Totals for the sessions that ended at or after `since_ms`, such as the day this computer
+    /// got ultrafast.
+    pub async fn window_since(&self, since_ms: i64) -> AppResult<SessionEfficiencyWindow> {
+        let rows = self.repository.all_rows().await?;
+        let mut accumulator = WindowAccumulator::default();
+        for row in rows.iter().filter(|row| row.ended_at >= since_ms) {
+            accumulator.add(row);
+        }
+        Ok(accumulator.finish())
+    }
+
     /// Aggregates the efficiency of a specific set of sessions (e.g. one skill's
     /// run sessions). Sessions with no projected efficiency row (unmeasured or
     /// still live) are skipped; the count of matched sessions is returned so
@@ -1053,6 +1064,23 @@ mod tests {
         assert_eq!(aggregate.last_7_days.human_time_saved_ms, 300);
         assert_eq!(aggregate.last_7_days.session_count, 1);
         assert_eq!(aggregate.last_7_days.tool_call_count, 3);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn the_window_since_a_date_counts_sessions_ending_on_or_after_it() -> anyhow::Result<()> {
+        let (_dir, _audit, service, repository) = test_services().await?;
+        for row in [
+            stats_row("before", 999, 1, 100, 10, 20, 30),
+            stats_row("on", 1_000, 2, 200, 20, 50, 40),
+            stats_row("after", 5_000, 3, 300, 30, 10, 60),
+        ] {
+            assert!(repository.insert_if_absent(&row).await?);
+        }
+        let window = service.window_since(1_000).await?;
+        assert_eq!(window.raw_token_savings_estimate, 40);
+        assert_eq!(window.session_count, 2);
+        assert_eq!(service.window_since(9_000).await?.session_count, 0);
         Ok(())
     }
 

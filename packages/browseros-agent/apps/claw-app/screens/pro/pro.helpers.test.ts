@@ -23,7 +23,6 @@ import {
   pickPeriod,
   proPrices,
   savingsTime,
-  savingsTokens,
 } from './pro.helpers'
 
 const spaces = (text: string) => text.replace(/\s/g, ' ')
@@ -251,16 +250,6 @@ describe('computers', () => {
 })
 
 describe('savings numbers', () => {
-  it('tests that tokens read as people say them', () => {
-    expect(savingsTokens(0)).toBe('0')
-    expect(savingsTokens(640)).toBe('640')
-    expect(savingsTokens(4_180)).toBe('4.2k')
-    expect(savingsTokens(61_942)).toBe('62k')
-    expect(savingsTokens(972_900)).toBe('973k')
-    expect(savingsTokens(999_600)).toBe('1.0M')
-    expect(savingsTokens(1_240_000)).toBe('1.2M')
-  })
-
   it('tests that time reads in seconds, minutes, then hours', () => {
     expect(savingsTime(0)).toBe('0 sec')
     expect(savingsTime(40_200)).toBe('40 sec')

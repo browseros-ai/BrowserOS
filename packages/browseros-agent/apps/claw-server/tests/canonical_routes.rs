@@ -892,6 +892,279 @@ async fn savings_sum_every_ultrafast_task_and_list_the_newest_first() -> anyhow:
 }
 
 #[tokio::test]
+async fn the_meter_counts_from_the_day_ultrafast_was_first_on() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_millis() as i64;
+    let day = 24 * 60 * 60 * 1000;
+    let done = json!({ "status": "done", "output": {}, "steps": 3, "durationMs": 15_000 });
+    let pursued = json!({ "outcome": "handed_back", "pagesRead": 4, "pageTokens": 10_000 });
+    let click = |at: i64| RecordToolDispatchInput {
+        args_json: bounded_args_json(&json!({ "kind": "click" })),
+        ..in_session(
+            "pursue-session",
+            ultrafast_dispatch("act", at, 200, &json!({}), DispatchId::new(), None, 10),
+        )
+    };
+    let first_run = now - 10 * day;
+    for row in [
+        ultrafast_dispatch(
+            "run_skill",
+            first_run,
+            15_354,
+            &done,
+            DispatchId::new(),
+            None,
+            1_701,
+        ),
+        in_session(
+            "pursue-session",
+            ultrafast_dispatch(
+                "pursue",
+                now - day,
+                6_000,
+                &pursued,
+                DispatchId::new(),
+                None,
+                100,
+            ),
+        ),
+        click(now - day + 1_000),
+        click(now - day + 2_000),
+        click(now - day + 20_000),
+    ] {
+        app.state.audit_log.record_tool_dispatch(row).await?;
+    }
+
+    // Before ultrafast has been on here, there is nothing to count from.
+    let savings = get_json(&app, "/api/v1/plan/savings").await?;
+    assert!(savings.get("meter").is_none(), "{savings}");
+
+    app.state.ultrafast.set(true);
+    let savings = get_json(&app, "/api/v1/plan/savings").await?;
+    let meter = &savings["meter"];
+    // The computer used ultrafast before the date was recorded, so it counts from that first run.
+    assert_eq!(meter["since"], first_run);
+    assert_eq!(meter["tokensSaved"], 10_000);
+    // The week counts when neo's run started, not the agent's later click.
+    assert_eq!(meter["runTimes"], json!([now - day]));
+    // Two of the three clicks fell inside pursue.
+    assert_eq!(meter["neoStepShare"], 67);
+    assert_eq!(meter["fastestRunMs"], 6_000);
+
+    // The date stays when ultrafast goes off and comes back, as on a lapse or a renewal.
+    app.state.ultrafast.set(false);
+    let savings = get_json(&app, "/api/v1/plan/savings").await?;
+    assert_eq!(savings["meter"]["since"], first_run);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_task_over_several_days_dates_the_meter_by_neos_run() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_millis() as i64;
+    let day = 24 * 60 * 60 * 1000;
+    let pursued = json!({ "outcome": "completed", "pagesRead": 2, "pageTokens": 4_000 });
+    let agent = |at: i64| RecordToolDispatchInput {
+        args_json: bounded_args_json(&json!({ "kind": "click" })),
+        ..ultrafast_dispatch("act", at, 200, &json!({}), DispatchId::new(), None, 10)
+    };
+    let run_at = now - 3 * day;
+    for row in [
+        // The agent works on its own for a day before handing neo the goal...
+        agent(now - 4 * day),
+        ultrafast_dispatch(
+            "pursue",
+            run_at,
+            5_000,
+            &pursued,
+            DispatchId::new(),
+            None,
+            100,
+        ),
+        // ...and keeps going in the same task two days later.
+        agent(now - day),
+    ] {
+        app.state.audit_log.record_tool_dispatch(row).await?;
+    }
+
+    app.state.ultrafast.set(true);
+    let meter = get_json(&app, "/api/v1/plan/savings").await?["meter"].clone();
+    assert_eq!(meter["since"], run_at);
+    assert_eq!(meter["runTimes"], json!([run_at]));
+    Ok(())
+}
+
+async fn sweep_history(app: &TestApp) -> anyhow::Result<i64> {
+    let (status, _, bytes) = request(
+        &app.router,
+        "POST",
+        "/api/v1/audit/cleanup",
+        None,
+        Body::empty(),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    Ok(json_body(&bytes)?["sessionsDeleted"]
+        .as_i64()
+        .unwrap_or_default())
+}
+
+#[tokio::test]
+async fn ultrafast_savings_outlast_the_history_retention() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_millis() as i64;
+    let day = 24 * 60 * 60 * 1000;
+    let pursued = json!({ "outcome": "completed", "pagesRead": 3, "pageTokens": 9_000 });
+    for (session, at) in [("aged-out", now - 30 * day), ("recent", now - day)] {
+        app.state
+            .audit_log
+            .record_tool_dispatch(in_session(
+                session,
+                ultrafast_dispatch("pursue", at, 4_000, &pursued, DispatchId::new(), None, 100),
+            ))
+            .await?;
+    }
+    app.state.ultrafast.set(true);
+    let before = get_json(&app, "/api/v1/plan/savings").await?;
+    assert_eq!(before["tasks"], 2);
+
+    // The default 7-day retention deletes the older task's history.
+    assert_eq!(sweep_history(&app).await?, 1);
+    let after = get_json(&app, "/api/v1/plan/savings").await?;
+    assert_eq!(after["meter"], before["meter"]);
+    assert_eq!(after["totals"], before["totals"]);
+    // Still a customer with runs, so Home keeps the meter rather than the first-task prompt.
+    assert_eq!(after["tasks"], 2);
+    let listed = after["latest"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("latest missing"))?
+        .iter()
+        .map(|item| item["sessionId"].as_str().unwrap_or_default())
+        .collect::<Vec<_>>();
+    assert_eq!(listed, ["recent"]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn the_sweep_keeps_a_runs_savings_even_if_home_never_read_them() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_millis() as i64;
+    let pursued = json!({ "outcome": "completed", "pagesRead": 3, "pageTokens": 9_000 });
+    app.state
+        .audit_log
+        .record_tool_dispatch(ultrafast_dispatch(
+            "pursue",
+            now - 20 * 24 * 60 * 60 * 1000,
+            4_000,
+            &pursued,
+            DispatchId::new(),
+            None,
+            100,
+        ))
+        .await?;
+    assert_eq!(sweep_history(&app).await?, 1);
+
+    app.state.ultrafast.set(true);
+    let savings = get_json(&app, "/api/v1/plan/savings").await?;
+    assert_eq!(savings["tasks"], 1);
+    assert_eq!(savings["totals"]["tokensSaved"], 9_000);
+    assert_eq!(savings["meter"]["tokensSaved"], 9_000);
+    assert_eq!(savings["meter"]["fastestRunMs"], 4_000);
+    Ok(())
+}
+
+#[tokio::test]
+async fn the_details_periods_count_sites_and_site_tasks() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_millis() as i64;
+    let day = 24 * 60 * 60 * 1000;
+    let on_site = |session: &str, url: &str, at: i64, outcome: &str, tokens: i64| {
+        let mut row = in_session(
+            session,
+            ultrafast_dispatch(
+                "pursue",
+                at,
+                4_000,
+                &json!({ "outcome": outcome, "pagesRead": 2, "pageTokens": tokens }),
+                DispatchId::new(),
+                None,
+                100,
+            ),
+        );
+        row.url = Some(url.to_string());
+        row
+    };
+    for row in [
+        on_site(
+            "old",
+            "https://www.flipkart.com/",
+            now - 20 * day,
+            "completed",
+            40_000,
+        ),
+        on_site(
+            "recent",
+            "https://www.flipkart.com/",
+            now - 2 * day,
+            "handed_back",
+            5_000,
+        ),
+        on_site(
+            "today",
+            "https://www.google.com/travel",
+            now - 1_000,
+            "completed",
+            1_000,
+        ),
+    ] {
+        app.state.audit_log.record_tool_dispatch(row).await?;
+    }
+    app.state.ultrafast.set(true);
+    let meter = get_json(&app, "/api/v1/plan/savings").await?["meter"].clone();
+    let periods = &meter["periods"];
+
+    // The since period is the meter's own number.
+    assert_eq!(periods["since"]["tokensSaved"], meter["tokensSaved"]);
+    assert_eq!(periods["since"]["runs"], 3);
+    assert_eq!(periods["since"]["siteTasks"], 3);
+    assert_eq!(periods["since"]["siteTasksFinished"], 2);
+    let sites = periods["since"]["topSites"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("topSites missing"))?
+        .iter()
+        .map(|site| {
+            (
+                site["site"].as_str().unwrap_or_default().to_string(),
+                site["runs"].clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(sites[0].1, 2, "{sites:?}");
+    assert!(sites[0].0.contains("flipkart"), "{sites:?}");
+
+    // The 20-day-old task is in 30 days but not in 7.
+    assert_eq!(periods["last30Days"]["runs"], 3);
+    assert_eq!(periods["last7Days"]["runs"], 2);
+    assert_eq!(periods["last7Days"]["pagesRead"], 4);
+    assert_eq!(periods["last7Days"]["siteTasksFinished"], 1);
+    assert_eq!(
+        periods["last7Days"]["runTimes"].as_array().map(Vec::len),
+        Some(2)
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn savings_start_at_zero() -> anyhow::Result<()> {
     let app = test_app().await?;
     seed_dispatch(&app, "ordinary-session").await?;

@@ -296,6 +296,54 @@ async fn a_read_only_skill_has_nothing_to_choose() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn the_meter_starts_the_moment_ultrafast_turns_on() -> anyhow::Result<()> {
+    let gateway = FakeGateway::start().await?;
+    let app = app(false, Some(&gateway)).await?;
+    let since_file = app
+        .state
+        .config
+        .browserclaw_dir
+        .join("billing/ultrafast-since.json");
+    app.state.sync_ultrafast_with_plan().await;
+    assert!(!since_file.exists(), "no date before ultrafast is on");
+
+    let (_, started) = app
+        .call(
+            "POST",
+            "/api/v1/plan/checkout",
+            Some(json!({"plan": "ultrafast", "interval": "month"})),
+        )
+        .await?;
+    let id = started["checkoutId"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    gateway.complete_checkout(&id);
+    app.call("GET", &format!("/api/v1/plan/checkout/{id}"), None)
+        .await?;
+    let before = now_ms();
+    assert!(app.state.sync_ultrafast_with_plan().await);
+    let after = now_ms();
+
+    // Saved by the switch itself, before Home has asked for anything.
+    let saved: Value = serde_json::from_slice(&std::fs::read(&since_file)?)?;
+    let since = saved["since"].as_i64().unwrap_or_default();
+    assert!(
+        (before..=after).contains(&since),
+        "{since} not in {before}..={after}"
+    );
+    let (_, savings) = app.call("GET", "/api/v1/plan/savings", None).await?;
+    assert_eq!(savings["meter"]["since"], since);
+    Ok(())
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_millis() as i64)
+}
+
+#[tokio::test]
 async fn the_plan_turns_ultrafast_on_and_an_ended_plan_locks_running_without_the_agent()
 -> anyhow::Result<()> {
     let gateway = FakeGateway::start().await?;

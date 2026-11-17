@@ -9,6 +9,11 @@ import type { UseQueryResult } from '@tanstack/react-query'
 import { ArrowRight, Info, Play } from 'lucide-react'
 import { Link, useLocation } from 'react-router'
 import { UltrafastRunBadge } from '@/components/audit/UltrafastRunBadge'
+import {
+  HOW_WE_COUNT,
+  meterTokens,
+  tokensSavedSinceUltrafast,
+} from '@/components/cockpit/energy-meter.helpers'
 import { Button } from '@/components/motion/button/base'
 import {
   Tooltip,
@@ -24,10 +29,7 @@ import {
   taskWhen,
   ultrafastTime,
 } from '@/screens/audit/audit.helpers'
-import { savingsTime, savingsTokens } from './pro.helpers'
-
-const TOKEN_GLOSS =
-  'Page text neo read itself that never went to your AI agent, in tokens, which is what your agent’s plan charges for. Browsing tasks from before neo counted pages add their time only.'
+import { savingsTime } from './pro.helpers'
 
 /** What ultrafast has done on this computer, from the task history. */
 export function SavingsHero({
@@ -66,7 +68,9 @@ export function SavingsHero({
   }
 
   const { totals, tasks, latest } = savings.data
-  if (tasks === 0) {
+  // The same figure as Home's meter, so the two never show different numbers.
+  const tokensSaved = tokensSavedSinceUltrafast(savings.data)
+  if (tasks === 0 || tokensSaved === null) {
     return (
       <section
         aria-label="What ultrafast has saved"
@@ -91,17 +95,17 @@ export function SavingsHero({
         className="flex flex-col items-start gap-5"
       >
         <BigNumber
-          value={savingsTokens(totals.tokensSaved)}
-          label="tokens saved"
+          value={meterTokens(tokensSaved)}
+          label="tokens saved since you got ultrafast"
         />
         <dl className="flex flex-wrap gap-x-10 gap-y-3">
           <Total
             value={totals.pagesRead.toLocaleString('en-US')}
-            label="pages read"
+            label="pages neo accelerated"
           />
           <Total
             value={tasks.toLocaleString('en-US')}
-            label={tasks === 1 ? 'task' : 'tasks'}
+            label={tasks === 1 ? 'ultrafast run' : 'ultrafast runs'}
           />
           <Total value={savingsTime(totals.durationMs)} label="neo working" />
         </dl>
@@ -162,13 +166,13 @@ function BigNumber({
           <TooltipTrigger asChild>
             <button
               type="button"
-              aria-label={TOKEN_GLOSS}
+              aria-label="How tokens saved is counted"
               className="grid size-6 place-items-center rounded-full text-ink-3 hover:text-ink-2 focus-visible:outline-2 focus-visible:outline-ring"
             >
               <Info aria-hidden className="size-4" />
             </button>
           </TooltipTrigger>
-          <TooltipContent>{TOKEN_GLOSS}</TooltipContent>
+          <TooltipContent>{HOW_WE_COUNT}</TooltipContent>
         </Tooltip>
       </span>
     </div>

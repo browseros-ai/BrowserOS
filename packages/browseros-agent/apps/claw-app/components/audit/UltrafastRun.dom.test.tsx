@@ -134,14 +134,16 @@ function text(): string {
 }
 
 describe('ultrafast run', () => {
-  it('marks the History card with how long ultrafast ran', async () => {
+  it('writes what ultrafast did under the History card', async () => {
     await render(<TaskRow task={session()} now={Date.now()} />)
-    expect(text()).toContain('ultrafast · 15 sec')
+    expect(text()).toContain('ultrafastneo ran it in 15 sec, read 9 pages')
   })
 
-  it('shows time, pages and tokens saved beside the status on the task page', async () => {
+  it('adds the tokens saved on the task page', async () => {
     await render(<TaskPageHeader session={session()} />)
-    expect(text()).toContain('15 sec · 9 pages, 62k tokens saved')
+    expect(text()).toContain(
+      'ultrafastneo ran it in 15 sec, read 9 pages, 62k tokens saved',
+    )
   })
 
   it('says one page, not one pages', async () => {
@@ -152,22 +154,7 @@ describe('ultrafast run', () => {
         })}
       />,
     )
-    expect(text()).toContain('8 sec · 1 page, 4.2k tokens saved')
-  })
-
-  it('marks a task neo browsed with pursue the same way, card and page', async () => {
-    const browsed = session({
-      name: 'Search flights to Singapore',
-      ultrafast: { durationMs: 72_400, pagesRead: 5, tokensSaved: 18_204 },
-    })
-    await render(
-      <>
-        <TaskRow task={browsed} now={Date.now()} />
-        <TaskPageHeader session={browsed} />
-      </>,
-    )
-    expect(text()).toContain('ultrafast · 1 min')
-    expect(text()).toContain('1 min · 5 pages, 18k tokens saved')
+    expect(text()).toContain('read 1 page, 4.2k tokens saved')
   })
 
   it('says nothing about ultrafast on a task that ran the normal way', async () => {
@@ -204,7 +191,7 @@ const colgate = {
 } as const satisfies NonNullable<SessionSummary['pursue']>
 
 describe('a task neo drove with pursue', () => {
-  it('says how many steps neo did when it handed back', async () => {
+  it('says how many steps neo did and that it handed back', async () => {
     const task = session({ ultrafast: undefined, pursue: flights })
     await render(
       <>
@@ -212,8 +199,7 @@ describe('a task neo drove with pursue', () => {
         <TaskPageHeader session={task} />
       </>,
     )
-    expect(text()).toContain('ultrafast · neo did 3 steps')
-    expect(text()).toContain('ultrafast · neo did 3 steps in 6 sec')
+    expect(text()).toContain('neo did 3 steps in 6 sec, then handed back')
     expect(text()).not.toContain('tokens saved')
   })
 
@@ -225,7 +211,7 @@ describe('a task neo drove with pursue', () => {
         <TaskPageHeader session={task} />
       </>,
     )
-    expect(text()).toContain('ultrafast · neo did it in 7 sec')
+    expect(text()).toContain('neo finished it in 7 sec')
     expect(text()).not.toContain('steps')
   })
 
@@ -236,7 +222,7 @@ describe('a task neo drove with pursue', () => {
     })
     await render(<TaskPageHeader session={task} />)
     expect(text()).toContain(
-      'ultrafast · neo did 3 steps in 6 sec · 4 pages, 12k tokens saved',
+      'neo did 3 steps in 6 sec, then handed back, read 4 pages, 12k tokens saved',
     )
   })
 
@@ -259,5 +245,74 @@ describe('a task neo drove with pursue', () => {
     expect(steps).toEqual(['Typed "colgate toothpaste"', 'Pressed Enter'])
     expect(text()).toContain('neo reached the goal on its own.')
     expect(text()).not.toContain('handed')
+  })
+})
+
+describe('the margin rule on ultrafast tasks', () => {
+  const rule = () => body.querySelectorAll('[data-ultrafast-rail]').length
+  const rows = () =>
+    [...body.querySelectorAll('[data-task-row]')].map((row) =>
+      row.hasAttribute('data-ultrafast'),
+    )
+
+  it('rules a skill run card and writes its line, with no badge or pill', async () => {
+    await render(<TaskRow task={session()} now={Date.now()} />)
+    expect(rule()).toBe(1)
+    expect(text()).toContain('ultrafastneo ran it in 15 sec')
+    expect(text()).not.toContain('ultrafast ·')
+  })
+
+  it('rules a pursue card the same way', async () => {
+    await render(
+      <TaskRow
+        task={session({ ultrafast: undefined, pursue: flights })}
+        now={Date.now()}
+      />,
+    )
+    expect(rule()).toBe(1)
+    expect(text()).toContain('neo did 3 steps')
+  })
+
+  it('leaves a task that ran the normal way as it was', async () => {
+    await render(
+      <TaskRow task={session({ ultrafast: undefined })} now={Date.now()} />,
+    )
+    expect(rule()).toBe(0)
+    expect(rows()).toEqual([false])
+  })
+
+  it('flags each ultrafast row so a run of them reads as one rule', async () => {
+    await render(
+      <div>
+        <TaskRow task={session({ sessionId: 'a' })} now={Date.now()} />
+        <TaskRow
+          task={session({ sessionId: 'b', pursue: colgate })}
+          now={Date.now()}
+        />
+        <TaskRow
+          task={session({ sessionId: 'c', ultrafast: undefined })}
+          now={Date.now()}
+        />
+      </div>,
+    )
+    expect(rows()).toEqual([true, true, false])
+    expect(rule()).toBe(2)
+  })
+
+  it('writes the line on an ultrafast task page only', async () => {
+    await render(<TaskPageHeader session={session()} />)
+    expect(text()).toContain('ultrafastneo ran it in 15 sec')
+    await render(<TaskPageHeader session={session({ ultrafast: undefined })} />)
+    expect(text()).not.toContain('ultrafast')
+  })
+
+  it('rules the list of steps neo took and numbers them plainly', async () => {
+    await render(<NeoSteps pursue={flights} />)
+    expect(rule()).toBe(1)
+    expect(
+      [...body.querySelectorAll('li')].map(
+        (item) => item.firstElementChild?.textContent,
+      ),
+    ).toEqual(['1', '2', '3'])
   })
 })

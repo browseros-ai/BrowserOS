@@ -3,7 +3,7 @@
 //! dispatched internally, and the primitives that script recorded as its children. For ultrafast
 //! browsing: each `pursue` dispatch, which keeps the pages it read and their token estimate.
 
-use crate::db::audit_log::ToolDispatchRow;
+use crate::db::{audit_log::ToolDispatchRow, pursue_runs::pursue_outcome};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct UltrafastRunStats {
@@ -63,6 +63,32 @@ pub fn ultrafast_run_stats(dispatches: &[ToolDispatchRow]) -> Option<UltrafastRu
         }
     }
     stats
+}
+
+/// One ultrafast run in a session: when it started and how long it took.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UltrafastRun {
+    pub at: i64,
+    pub duration_ms: i64,
+}
+
+/// Each ultrafast run in the session, in recorded order: every `run_skill` that finished without
+/// the agent, and every `pursue` that finished, handed back or read a page. The agent's own calls
+/// around them are not runs, so a task's run times are neo's and not the agent's.
+#[must_use]
+pub fn ultrafast_runs(dispatches: &[ToolDispatchRow]) -> Vec<UltrafastRun> {
+    dispatches
+        .iter()
+        .filter(|row| {
+            (row.tool_name == "run_skill" && finished_without_agent(row))
+                || pursue_outcome(row).is_some()
+                || pursue_reads(row).is_some()
+        })
+        .map(|row| UltrafastRun {
+            at: row.created_at,
+            duration_ms: row.duration_ms.unwrap_or(0).max(0),
+        })
+        .collect()
 }
 
 /// The pages a `pursue` call read itself and their token estimate, when it read any. Calls
@@ -352,5 +378,28 @@ mod tests {
                 tokens_saved: 70_942,
             })
         );
+    }
+
+    #[test]
+    fn each_finished_skill_and_each_pursue_with_an_outcome_is_one_run() {
+        let mut rows = phone_deals_run(DONE);
+        rows.push(pursue(
+            900,
+            90_000,
+            6_000,
+            r#"{"isError":false,"outcome":"handed_back","structuredKeys":[]}"#,
+        ));
+        rows.push(pursue(
+            901,
+            99_000,
+            800,
+            r#"{"isError":true,"outcome":"completed","structuredKeys":[]}"#,
+        ));
+        let durations = ultrafast_runs(&rows)
+            .iter()
+            .map(|run| (run.at, run.duration_ms))
+            .collect::<Vec<_>>();
+        assert_eq!(durations, vec![(1_000, 15_354), (90_000, 6_000)]);
+        assert!(ultrafast_runs(&phone_deals_run(HANDED_BACK)).is_empty());
     }
 }
