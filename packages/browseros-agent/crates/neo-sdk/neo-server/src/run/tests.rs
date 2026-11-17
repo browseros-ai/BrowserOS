@@ -44,6 +44,7 @@ fn target_crashed_real_page_op_precedes_failed_native_refresh_on_the_wire() -> R
 
     use crate::builtins::{self, PlaywrightFacade};
     use crate::dispatch::{Dispatcher, Observer, RegistryBuilder};
+    use crate::test_rig::Gate;
 
     on_neo_runtime(async {
         for failure in [
@@ -71,7 +72,7 @@ fn target_crashed_real_page_op_precedes_failed_native_refresh_on_the_wire() -> R
                     playwright: Arc::clone(&facade),
                 },
             )?;
-            registry.define(crate::test_rig::Gate(Arc::clone(&rig.gate)))?;
+            registry.define(Gate(Arc::clone(&rig.gate)))?;
             rig.dispatcher = Arc::new(Dispatcher::new(
                 registry.build(),
                 Vec::new(),
