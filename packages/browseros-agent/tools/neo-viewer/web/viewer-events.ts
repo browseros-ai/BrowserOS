@@ -126,8 +126,10 @@ export function listenToViewerEvents(
       return
     }
     if (role.kind !== 'following') return
+    // A hello that crosses the leader's broadcast `open` is answered with that same opening.
     if (
       message.kind === 'open' &&
+      message.epoch !== role.epoch &&
       (message.tab === undefined || message.tab === tab)
     ) {
       role = { kind: 'following', epoch: message.epoch }

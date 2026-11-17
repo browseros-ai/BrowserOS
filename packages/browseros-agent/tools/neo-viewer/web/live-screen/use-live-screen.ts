@@ -151,39 +151,46 @@ export function useLiveScreen(): LiveScreenController {
 
 /**
  * Reads the status now and every `everyMs`, one read at a time: a tick while a read is pending
- * starts nothing, so a read stuck waiting for a connection does not queue more behind it. The
- * returned function stops; a read still pending then delivers nothing.
+ * starts nothing, so a read stuck waiting for a connection does not queue more behind it. A read
+ * not answered within `FOLLOW_STALE_MS` is aborted, and the next tick reads afresh; one stuck
+ * request would otherwise hold back every later check. The returned function stops and aborts the
+ * read pending: React's StrictMode stops the poll and starts it again at once, and the first read
+ * would otherwise stay queued beside the second. An aborted read delivers nothing, not an
+ * unreachable host: the follow line already says the agent's tab is unconfirmed.
  */
 export function startStatusPoll(
-  read: () => Promise<LiveStatus>,
+  read: (signal: AbortSignal) => Promise<LiveStatus>,
   deliver: (status: LiveStatus) => void,
   everyMs: number,
 ): () => void {
-  let current = true
-  let pending = false
+  let pending: AbortController | null = null
   const tick = () => {
-    if (pending) return
-    pending = true
-    void read()
+    if (pending && !pending.signal.aborted) return
+    const reading = new AbortController()
+    pending = reading
+    const deadline = setTimeout(() => reading.abort(), FOLLOW_STALE_MS)
+    void read(reading.signal)
       .then((status) => {
-        if (current) deliver(status)
+        if (!reading.signal.aborted) deliver(status)
       })
       .finally(() => {
-        pending = false
+        clearTimeout(deadline)
+        // An aborted read settles late, after the next one started.
+        if (pending === reading) pending = null
       })
   }
   tick()
   const timer = setInterval(tick, everyMs)
   return () => {
-    current = false
     clearInterval(timer)
+    pending?.abort()
   }
 }
 
 /** The viewer's answer; a viewer that does not answer is reported as an unreachable host. */
-async function readStatus(): Promise<LiveStatus> {
+async function readStatus(signal: AbortSignal): Promise<LiveStatus> {
   try {
-    const response = await fetch(liveRoutes.status)
+    const response = await fetch(liveRoutes.status, { signal })
     if (!response.ok) throw new Error(`HTTP ${response.status}`)
     return (await response.json()) as LiveStatus
   } catch (cause) {

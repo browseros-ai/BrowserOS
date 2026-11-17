@@ -5,10 +5,10 @@
  */
 
 import { afterEach, beforeEach, expect, jest, test } from 'bun:test'
-import { act } from 'react'
+import { act, StrictMode } from 'react'
 import type { LiveStatus } from '../../shared/live-screen'
 import { installDom, type TestDom } from '../test-support/dom'
-import { modeLine } from './live-screen-model'
+import { FOLLOW_STALE_MS, modeLine } from './live-screen-model'
 import { startStatusPoll, useLiveScreen } from './use-live-screen'
 
 const UP: LiveStatus = {
@@ -56,6 +56,75 @@ test('the status poll keeps one read in flight: a read that hangs is the only on
   jest.advanceTimersByTime(100)
   expect(delivered).toEqual([UP])
   expect(answers).toHaveLength(2)
+})
+
+test('a status read that never answers is aborted at its 5 s deadline, delivers nothing, and the next tick reads again', async () => {
+  const reads: Array<{
+    signal: AbortSignal
+    answer: (status: LiveStatus) => void
+  }> = []
+  const delivered: LiveStatus[] = []
+  const stop = startStatusPoll(
+    (signal) => new Promise((answer) => reads.push({ signal, answer })),
+    (status) => delivered.push(status),
+    1_500,
+  )
+  jest.advanceTimersByTime(FOLLOW_STALE_MS - 1)
+  expect(reads.map((read) => read.signal.aborted)).toEqual([false])
+  jest.advanceTimersByTime(1)
+  expect(reads.map((read) => read.signal.aborted)).toEqual([true])
+
+  // The tick at 6 s reads again, with the stuck read still unsettled.
+  jest.advanceTimersByTime(1_000)
+  expect(reads.map((read) => read.signal.aborted)).toEqual([true, false])
+
+  // The stuck read settles late: it delivers nothing, and the read after it is still the only one.
+  reads[0]?.answer({
+    host: { state: 'unreachable', message: 'The viewer did not answer' },
+    agent: null,
+    takeover: null,
+  })
+  await microtasks()
+  jest.advanceTimersByTime(1_500)
+  expect(reads).toHaveLength(2)
+  reads[1]?.answer(UP)
+  await microtasks()
+  expect(delivered).toEqual([UP])
+  stop()
+})
+
+test('under StrictMode the panel keeps one status read pending, and unmounting aborts it', async () => {
+  const dom: TestDom = await installDom()
+  // Each status read waits for a connection until it is aborted, as a fetch does.
+  const reads: Array<AbortSignal | undefined> = []
+  globalThis.fetch = ((_input: string, init?: RequestInit) => {
+    const signal = init?.signal ?? undefined
+    reads.push(signal)
+    return new Promise((_resolve, reject) =>
+      signal?.addEventListener('abort', () => reject(signal.reason)),
+    )
+  }) as unknown as typeof fetch
+  const pending = () => reads.filter((signal) => !signal?.aborted).length
+  function FollowLine() {
+    return <p>{modeLine(useLiveScreen().state)}</p>
+  }
+  const { createRoot } = await import('react-dom/client')
+  const root = createRoot(document.createElement('div'))
+  await act(async () => {
+    root.render(
+      <StrictMode>
+        <FollowLine />
+      </StrictMode>,
+    )
+    await microtasks()
+  })
+  // StrictMode started the poll, stopped it and started it again.
+  expect(reads).toHaveLength(2)
+  expect(pending()).toBe(1)
+
+  await act(async () => root.unmount())
+  expect(pending()).toBe(0)
+  await dom.restore()
 })
 
 test('the follow line says it is behind once no status has confirmed the agent’s tab for 5 s, and catches up when one does', async () => {

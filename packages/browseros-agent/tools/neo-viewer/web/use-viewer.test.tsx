@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { apiRoutes, type RunDetail } from '../shared/api'
+import { apiRoutes, type RunDetail, type RunsResponse } from '../shared/api'
 import { installDom } from './test-support/dom'
 import { runDetail, runSummary } from './test-support/runs'
 import { FakeOrigin } from './test-support/tabs'
@@ -63,6 +63,49 @@ describe('the event stream', () => {
     )
     expect(dom.container.textContent).toBe('a: 1 2b: 1 2')
     expect(origin.streams).toHaveLength(1)
+    uninstall()
+    await dom.restore()
+  })
+
+  it('a snapshot taken for an earlier opening that answers after a later one changes nothing', async () => {
+    const dom = await installDom()
+    const origin = new FakeOrigin()
+    const uninstall = origin.tab().install()
+    type Snapshot = Omit<RunsResponse, 'log'>
+    const snapshots: Array<(answer: Snapshot) => void> = []
+    globalThis.fetch = (async (input: string | URL) =>
+      String(input) === apiRoutes.runs
+        ? Response.json({
+            log: null,
+            ...(await new Promise<Snapshot>((resolve) =>
+              snapshots.push(resolve),
+            )),
+          })
+        : Response.json({})) as typeof fetch
+    function Runs() {
+      const { runs } = useViewer()
+      return <p>{runs.map((run) => run.seq).join(' ')}</p>
+    }
+    await dom.render(<Runs />)
+    const [stream] = origin.openStreams()
+    await dom.interact(() => stream?.open())
+    // The stream drops and reopens before the first snapshot answers.
+    await dom.interact(() => {
+      stream?.drop()
+      stream?.open()
+    })
+    expect(snapshots).toHaveLength(2)
+    await dom.interact(() =>
+      snapshots[1]?.({ runs: [runSummary(1), runSummary(2)], version: 2 }),
+    )
+    await dom.interact(() =>
+      stream?.send({ version: 3, type: 'run', run: runSummary(3) }),
+    )
+    expect(dom.container.textContent).toBe('1 2 3')
+    await dom.interact(() =>
+      snapshots[0]?.({ runs: [runSummary(1)], version: 1 }),
+    )
+    expect(dom.container.textContent).toBe('1 2 3')
     uninstall()
     await dom.restore()
   })

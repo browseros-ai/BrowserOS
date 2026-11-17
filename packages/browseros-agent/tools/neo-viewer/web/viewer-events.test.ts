@@ -77,6 +77,22 @@ test('a tab that joins an open stream takes its own snapshot; the others take no
   expect(origin.streams).toHaveLength(1)
 })
 
+test('a hello that crosses the leader’s announcement of its opening: that tab takes one snapshot, not two', async () => {
+  const origin = new FakeOrigin()
+  const a = listen(origin.tab().deps)
+  await settle()
+  const [stream] = origin.openStreams()
+  // b's hello is still on its way when the stream opens: the leader announces the opening to
+  // every tab, then answers b's hello with the same opening.
+  const b = listen(origin.tab().deps)
+  stream?.open()
+  await settle()
+  stream?.send(run(1))
+  await settle()
+  expect(a.heard).toEqual(['opened', 'v1'])
+  expect(b.heard).toEqual(['opened', 'v1'])
+})
+
 test('the leading tab closes: the next tab opens a new stream, and every tab starts again from it', async () => {
   const origin = new FakeOrigin()
   const tabs = [origin.tab(), origin.tab(), origin.tab()]

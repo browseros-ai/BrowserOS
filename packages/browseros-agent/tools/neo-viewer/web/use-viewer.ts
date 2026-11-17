@@ -101,16 +101,25 @@ export function useViewer(): ViewerState {
 
   useEffect(() => {
     if (opened === 0) return
+    // A later opening emptied `recent` and took its own snapshot: this one, landing after it,
+    // would roll the list back to before that opening.
+    let current = true
     getJson<RunsResponse>(apiRoutes.runs).then(
       ({ runs, log, version }) => {
+        if (!current) return
         let next: { runs: RunSummary[]; log: LogSummary | null } = { runs, log }
         for (const event of recent.current) {
           if (event.version > version) next = apply(next, event)
         }
         setState(next)
       },
-      (cause) => setError(String(cause)),
+      (cause) => {
+        if (current) setError(String(cause))
+      },
     )
+    return () => {
+      current = false
+    }
   }, [opened])
 
   const clear = useCallback(async () => {
