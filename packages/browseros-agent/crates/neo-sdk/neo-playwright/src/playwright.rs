@@ -84,7 +84,7 @@ impl Playwright {
         let attach_log = Arc::new(FrameAttachLog::default());
         let progress = Arc::new(WatcherProgress::default());
         let snapshot_baselines = Arc::new(SnapshotBaselines::default());
-        let crashes = Arc::new(TargetCrashes::default());
+        let crashes = Arc::new(TargetCrashes::observed(Arc::clone(&progress)));
         let watcher = TargetWatcher::spawn(
             Arc::clone(&browser),
             writer,

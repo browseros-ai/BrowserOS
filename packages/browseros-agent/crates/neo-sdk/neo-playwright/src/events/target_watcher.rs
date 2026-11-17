@@ -111,6 +111,10 @@ const SYNCHRONIZE_BOUND: Duration = Duration::from_secs(2);
 /// is busy with ad script answers in 100 ms to over a second (measured), so the wait is short.
 const TREE_READ_WAIT: Duration = Duration::from_millis(200);
 
+/// Bounds passive recovery setup off the event loop. Failure leaves refusal in place and
+/// permits the next observation pass to retry; it is not an operation deadline.
+const RECOVERY_OBSERVE_WAIT: Duration = Duration::from_secs(1);
+
 /// A position in the connection's broadcast event stream: how many events the CDP client had
 /// broadcast when it was taken (`BrowserSession::cdp_events_broadcast`), on the numbering
 /// [`WatcherProgress`] counts the watcher's work in. A synchronize to a fence waits for exactly
@@ -338,7 +342,8 @@ struct Watcher {
     recorded: RecordedReports,
     /// Older Chromium has no workerScriptLoaded event and uses context creation instead.
     worker_script_events: Option<bool>,
-    /// Watcher-owned root sessions only auto-attach descendants; page Runtime stays off.
+    /// Watcher-owned root sessions auto-attach descendants. Crash recovery may also observe
+    /// Page commits on one, including after reconnect; page Runtime always stays off.
     root_observers: HashMap<SessionId, RootObserver>,
     /// Core may attach concurrently. One source per native target prevents each CDP session
     /// from publishing the same lifecycle transition; OOPIFs have their own native target.
@@ -441,6 +446,23 @@ enum FrameLog {
 struct RootObserver {
     target: TargetId,
     root: ProtocolSession,
+    recovery: RecoveryObservation,
+}
+
+/// Page-only observation survives renderer failure without putting renderer setup on the
+/// event owner's loop. Failed enables are retried; dropping the attachment cancels its work.
+enum RecoveryObservation {
+    Off,
+    Enabling(JoinHandle<bool>),
+    On,
+}
+
+impl Drop for RootObserver {
+    fn drop(&mut self) {
+        if let RecoveryObservation::Enabling(task) = &self.recovery {
+            task.abort();
+        }
+    }
 }
 
 impl Drop for Watcher {
@@ -1754,9 +1776,16 @@ impl Watcher {
             parent_id: Option<FrameId>,
         }
 
+        self.crashes
+            .apply_replies(self.browser.connection().connection_epoch());
+
+        // Stopping the watcher releases operation waiters with a sentinel; it supplies no
+        // recovery evidence. Only events actually applied by this owner satisfy the fence.
+        let live = self.progress.events_handled() != u64::MAX;
+        let applied = self.progress.applied_through();
         let (ready, pending): (Vec<_>, Vec<_>) = mem::take(&mut self.recovery_replies)
             .into_iter()
-            .partition(|proof| self.progress.live_through(proof.fence));
+            .partition(|proof| live && applied >= proof.fence);
         self.recovery_replies = pending;
         for proof in ready {
             let Some(tree) = proof.tree.and_then(parse::<Tree>) else {
@@ -1803,6 +1832,7 @@ impl Watcher {
                 // Existing observer sessions keep reporting external main-document commits.
                 // A known crash must not make background renderer setup stall the event owner.
                 if self.crashes.is_crashed(&page.target_id) {
+                    self.observe_recovery(&page.target_id).await;
                     continue;
                 }
                 if self.browser.pages.is_agent_created(&page.page_id).await
@@ -1851,6 +1881,7 @@ impl Watcher {
             RootObserver {
                 target: target.clone(),
                 root,
+                recovery: RecoveryObservation::Off,
             },
         );
         self.sessions.insert(observed.session_id.clone(), target);
@@ -1871,6 +1902,88 @@ impl Watcher {
                     "filter": [{"type":"worker"}, {"type":"iframe"}, {"exclude":true}]}),
             )
             .await;
+    }
+
+    /// Reconnect loses every session, but keeps crash facts. Reattach a minimal observer so
+    /// an external reload can supply a later main-document commit. This never enables Runtime,
+    /// installs a world, or waits for Page.enable on the event owner's loop.
+    async fn observe_recovery(&mut self, target: &TargetId) {
+        if self
+            .lifecycle_sources
+            .primary
+            .get(target)
+            .is_some_and(|session| !self.root_observers.contains_key(session))
+        {
+            // A surviving foreground Page session already observes external recovery.
+            return;
+        }
+        let existing = self
+            .root_observers
+            .iter()
+            .find_map(|(id, observer)| (observer.target == *target).then(|| id.clone()));
+        let session = if let Some(session) = existing {
+            session
+        } else {
+            #[derive(Deserialize)]
+            #[serde(rename_all = "camelCase")]
+            struct Observed {
+                session_id: SessionId,
+            }
+            let root = ProtocolSession::root(self.browser.connection()).at_connection_epoch();
+            let reply = time::timeout(
+                RECOVERY_OBSERVE_WAIT,
+                root.send_value(
+                    "Target.attachToTarget",
+                    json!({"targetId": target.as_str(), "flatten": true}),
+                ),
+            )
+            .await;
+            let Some(observed) = reply.ok().and_then(Result::ok).and_then(parse::<Observed>) else {
+                return;
+            };
+            self.root_observers.insert(
+                observed.session_id.clone(),
+                RootObserver {
+                    target: target.clone(),
+                    root,
+                    recovery: RecoveryObservation::Off,
+                },
+            );
+            self.sessions
+                .insert(observed.session_id.clone(), target.clone());
+            observed.session_id
+        };
+        let Some(observer) = self.root_observers.get_mut(&session) else {
+            return;
+        };
+        if let RecoveryObservation::Enabling(task) = &mut observer.recovery {
+            if !task.is_finished() {
+                return;
+            }
+            // A finished task has no renderer wait left. Failure permits a later retry.
+            let RecoveryObservation::Enabling(task) =
+                mem::replace(&mut observer.recovery, RecoveryObservation::Off)
+            else {
+                return;
+            };
+            if task.await.unwrap_or(false) {
+                observer.recovery = RecoveryObservation::On;
+            }
+        }
+        if matches!(observer.recovery, RecoveryObservation::Off) {
+            self.lifecycle_sources.attach(&session, target);
+            let protocol = self.browser.protocol_session(session).at_connection_epoch();
+            observer.recovery = RecoveryObservation::Enabling(tokio::spawn(async move {
+                matches!(
+                    time::timeout(
+                        RECOVERY_OBSERVE_WAIT,
+                        protocol.send_value("Page.enable", json!({}))
+                    )
+                    .await,
+                    Ok(Ok(_))
+                )
+            }));
+        }
     }
 
     /// Sessions can attach to a tab whose documents existed before this watcher. Remember
@@ -2128,6 +2241,9 @@ impl Watcher {
         if self.deferred.is_empty() {
             return;
         }
+        // Publish crash facts before waking operations whose event prefix is now applied.
+        self.crashes
+            .apply_replies(self.browser.connection().connection_epoch());
         let applied = self.progress.applied_through();
         let (ready, waiting): (Vec<_>, Vec<_>) = mem::take(&mut self.deferred)
             .into_iter()
@@ -3679,7 +3795,7 @@ mod crash_tests {
     use browseros_core::{BrowserSession, BrowserSessionHooks, CdpConnection, SessionId, TargetId};
     use serde_json::{Value, json};
     use tokio::sync::mpsc;
-    use tokio::time;
+    use tokio::{task, time};
 
     use super::{LineItem, TreeAnswer, Watcher};
     use crate::events::{EventHub, PageEvent, WatcherProgress};
@@ -3722,6 +3838,96 @@ mod crash_tests {
         }
         watcher.progress.handled(1);
         watcher.apply_recoveries();
+    }
+
+    #[tokio::test]
+    async fn target_crashed_reconnect_observes_an_external_reload_without_runtime_setup()
+    -> Result<(), Box<dyn Error>> {
+        let connection = TestConnection::new([]);
+        for (method, reply) in [
+            (
+                "Target.getTargets",
+                json!({"targetInfos":[{"targetId":"page", "type":"page", "url":"https://a.test/"}]}),
+            ),
+            ("Target.setDiscoverTargets", json!({})),
+            ("Browser.setDownloadBehavior", json!({})),
+            (
+                "Browser.getTabs",
+                json!({"tabs":[{"tabId":7, "targetId":"page", "windowId":1, "url":"https://a.test/", "title":"A", "isActive":true}]}),
+            ),
+            ("Page.enable", json!({})),
+            (
+                "Page.getFrameTree",
+                json!({"frameTree":{"frame":{"id":"page", "loaderId":"recovered", "url":"https://a.test/"}}}),
+            ),
+        ] {
+            connection.always(method, reply)?;
+        }
+        let mut watcher = watcher(Arc::clone(&connection));
+        let target = TargetId("page".to_owned());
+        let old = SessionId::from("old-session");
+        watcher.sessions.insert(old.clone(), target.clone());
+        watcher.lifecycle_sources.attach(&old, &target);
+        read(
+            &mut watcher,
+            event("Target.targetCrashed", json!({"targetId":"page"}), None),
+        )
+        .await;
+        watcher.discover(true).await?;
+        assert!(
+            !watcher.sessions.contains_key(&old),
+            "reconnect retires old sessions"
+        );
+        watcher.observe_context().await;
+        let observer = watcher
+            .root_observers
+            .keys()
+            .next()
+            .cloned()
+            .ok_or("recovery observation reattaches the crashed target")?;
+        time::timeout(RECOVERY_REPLY_WATCHDOG, async {
+            loop {
+                if connection
+                    .calls()?
+                    .iter()
+                    .any(|call| call.method == "Page.enable")
+                {
+                    return Ok::<(), Box<dyn Error>>(());
+                }
+                task::yield_now().await;
+            }
+        })
+        .await??;
+        let (sender, mut replies) = mpsc::unbounded_channel();
+        watcher.recovering = Some(sender);
+        read(
+            &mut watcher,
+            event(
+                "Page.frameNavigated",
+                json!({"frame":{"id":"page", "loaderId":"recovered", "url":"https://a.test/"}}),
+                Some(&observer),
+            ),
+        )
+        .await;
+        watcher.recovery_replies.push(
+            time::timeout(RECOVERY_REPLY_WATCHDOG, replies.recv())
+                .await?
+                .ok_or("fresh recovery proof")?,
+        );
+        watcher.apply_recoveries();
+        assert!(
+            !watcher.crashes.is_crashed(&target),
+            "an external reload can clear remembered refusal after reconnect"
+        );
+        assert!(
+            !connection
+                .calls()?
+                .iter()
+                .any(|call| call.method.starts_with("Runtime.")
+                    || call.method == "Page.createIsolatedWorld"),
+            "the observer installs no runtime or world"
+        );
+        Ok(())
     }
 
     #[tokio::test]

@@ -9,7 +9,7 @@ use browseros_cdp::CdpError;
 use browseros_core::pages::NewPageOptions;
 use browseros_core::{
     BrowserProfileId, BrowserSession, BrowserSessionHooks, BrowserView, CdpConnection, CoreError,
-    NativeCapabilities, TargetBinding, TargetId, TargetIntent,
+    FrameId, NativeCapabilities, TargetBinding, TargetId, TargetIntent,
 };
 use futures_util::FutureExt;
 use serde_json::{Value, json};
@@ -273,6 +273,57 @@ async fn target_crashed_protocol_reply_refuses_renderer_work_in_a_fresh_run() ->
         json!({ "call": { "timeoutMs": 10_000 }, "page": run.page, "x": 1, "y": 2 }),
     )
     .await
+}
+
+#[tokio::test]
+async fn target_crashed_later_requests_in_one_operation_follow_a_new_document() -> TestResult {
+    let tab = ScriptedTab::new(CrashedTab::default());
+    let run = ScriptedRun::over(&tab).await?;
+    settle_watcher(&run).await?;
+    let browser = run.playwright.browser();
+    let scope = OpScope::new(
+        &run.env,
+        Op::from_name("page.waitForFunction").ok_or("page.waitForFunction")?,
+        CallHeader::default(),
+    )
+    .tracking(run.playwright.crashes(), browser);
+    let admitted = scope.admit(browser, run.page.tab()).await?;
+    let session = browser.protocol_session(admitted.session.session_id.clone());
+    let earlier = scope.begin_protocol(&session);
+    let _ = run.playwright.crashes().main_document(
+        &admitted.session.target_id,
+        FrameId(SCRIPTED_MAIN.to_owned()),
+        "next-document".to_owned(),
+        run.playwright.event_fence(),
+        browser.connection().connection_epoch(),
+    );
+    let later = scope.begin_protocol(&session);
+    let error = CoreError::Cdp(CdpError::Protocol {
+        code: -32000,
+        message: "Target crashed".to_owned(),
+    });
+    earlier.record(&error);
+    assert!(
+        !run.playwright
+            .crashes()
+            .is_crashed(&admitted.session.target_id)
+    );
+    later.record(&error);
+    assert!(
+        run.playwright
+            .crashes()
+            .is_crashed(&admitted.session.target_id)
+    );
+    drop(scope);
+    let run = next_run(run);
+    assert_cached_refusal(
+        &run,
+        &tab,
+        "mouse.move",
+        json!({"page": run.page, "x": 1, "y": 1}),
+    )
+    .await?;
+    Ok(())
 }
 
 #[tokio::test(start_paused = true)]

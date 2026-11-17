@@ -589,7 +589,7 @@ impl Method for Crashed {
         }
         let error = OperationError::neo(
             ErrorCode::INTERNAL_ERROR,
-            "The tab's page crashed. Close or reload the tab before retrying.",
+            "The tab's page crashed. Close it with page.close() and open a new page with context.newPage().",
         )
         .with_diagnostic(Some(DiagnosticCode::TargetCrashed));
         future::ready(Err(if input.uncertain {

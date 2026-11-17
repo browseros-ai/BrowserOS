@@ -83,7 +83,7 @@ fn target_crashed_diagnostic_survives_caught_uncaught_and_stored_errors() -> Res
             assert_eq!(error.retryable, !sent);
             assert_eq!(
                 error.message,
-                "The tab's page crashed. Close or reload the tab before retrying."
+                "The tab's page crashed. Close it with page.close() and open a new page with context.newPage()."
             );
 
             rig.sink.flush().await?;

@@ -32,8 +32,7 @@ use crate::Refusal;
 use crate::listed_enum::listed_enum;
 
 /// Recovery guidance shared by operations and wrappers that replace their error messages.
-pub(crate) const TARGET_CRASH_MESSAGE: &str =
-    "The tab's page crashed. Close or reload the tab before retrying.";
+pub(crate) const TARGET_CRASH_MESSAGE: &str = "The tab's page crashed. Close it with page.close() and open a new page with context.newPage().";
 
 listed_enum! {
     /// The crate's error vocabulary. [`ErrorCode::as_str`] is the stable wire name.
@@ -783,7 +782,7 @@ mod tests {
         assert_eq!(crashed.code(), "target_crashed");
         assert!(
             crashed.message().starts_with(
-                "page.goto: The tab's page crashed. Close or reload the tab before retrying."
+                "page.goto: The tab's page crashed. Close it with page.close() and open a new page with context.newPage()."
             ),
             "the caller needs plain recovery guidance: {crashed}"
         );
@@ -832,7 +831,7 @@ mod tests {
         assert_eq!(crashed.code(), "target_crashed");
         assert_eq!(
             crashed.message(),
-            "keyboard.insertText: The tab's page crashed. Close or reload the tab before retrying."
+            "keyboard.insertText: The tab's page crashed. Close it with page.close() and open a new page with context.newPage()."
         );
         Ok(())
     }

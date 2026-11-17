@@ -985,7 +985,7 @@ mod tests {
     fn target_crashed_partial_snapshot_keeps_plain_recovery_guidance() {
         assert_eq!(
             Unread::Failed(ErrorCode::TargetCrashed).to_string(),
-            "The tab's page crashed. Close or reload the tab before retrying."
+            "The tab's page crashed. Close it with page.close() and open a new page with context.newPage()."
         );
     }
 

@@ -16,6 +16,7 @@ mod live_run;
 #[path = "support/page_server.rs"]
 mod page_server;
 
+use std::error::Error;
 use std::future::Future;
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -768,6 +769,103 @@ async fn a_tab_handle_survives_a_playwright_restart() -> TestResult {
                 .await?;
             assert_eq!(title, "surviving native tab");
             Ok(())
+        }
+        .await;
+        (run, result)
+    })
+    .await
+}
+
+/// A fixture progress bound, independent of operation deadlines.
+const CRASH_PROGRESS_WATCHDOG: Duration = Duration::from_secs(30);
+const CRASH_COMMAND_REPLY_WAIT: Duration = Duration::from_secs(1);
+
+/// The diagnostic must name a recovery a script can actually complete. This kills only this
+/// fixture's renderer, waits for the browser's native crash event, then follows the message
+/// through the SDK rather than replacing the dead target through a raw browser command.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn target_crashed_message_recovery_closes_and_opens_a_working_page() -> TestResult {
+    with_page(|mut run, _server, page| async move {
+        let result = async {
+            run.bind(&[page.tab]);
+            goto(
+                &run,
+                &page,
+                "data:text/html,<title>before crash</title>",
+                "load",
+            )
+            .await?;
+            let core_page = run.core_page(&page).await?;
+            let attached = run.browser().pages.get_session(core_page).await?;
+            let target = attached.target_id;
+            let session = attached.session;
+            let mut events = run.browser().cdp_events();
+            // A crash command may itself lose its reply. The independently observed native
+            // event proves an actual crashed renderer; an injected protocol error does not.
+            let observed = async {
+                loop {
+                    let event = events.recv().await?;
+                    if event.method == "Target.targetCrashed"
+                        && event.params["targetId"].as_str() == Some(target.as_str())
+                    {
+                        return Ok::<Value, Box<dyn Error>>(event.params);
+                    }
+                }
+            };
+            let (crash_event, _crash_reply) = tokio::join!(
+                time::timeout(CRASH_PROGRESS_WATCHDOG, observed),
+                time::timeout(
+                    CRASH_COMMAND_REPLY_WAIT,
+                    session.send_value("Page.crash", json!({}))
+                ),
+            );
+            let crash_event = crash_event??;
+            assert_eq!(crash_event["targetId"], json!(target.as_str()));
+            run.next_run();
+            let failed = run
+                .invoke(
+                    "page.title",
+                    json!({"page": brand(&page), "call":{"timeoutMs": 5_000}}),
+                )
+                .await;
+            let error = failed
+                .err()
+                .ok_or("a crashed renderer must fail the read")?;
+            assert_eq!(error.error_code(), Some(ErrorCode::TargetCrashed));
+            let message = error.to_string();
+            assert!(
+                message.contains("page.close()") && message.contains("context.newPage()"),
+                "the script needs executable recovery guidance: {message}"
+            );
+            assert!(
+                !message.contains("reload"),
+                "the message must not direct a script into a refused reload"
+            );
+            run.invoke("page.close", json!({"page": brand(&page)}))
+                .await?;
+            let replacement = run.new_page().await?;
+            let recovered = async {
+                goto(
+                    &run,
+                    &replacement,
+                    "data:text/html,<title>recovered</title>",
+                    "load",
+                )
+                .await?;
+                let title = run
+                    .invoke("page.title", json!({"page": brand(&replacement)}))
+                    .await?;
+                assert_eq!(
+                    title,
+                    json!("recovered"),
+                    "the named recovery must leave a usable renderer"
+                );
+                Ok::<(), Box<dyn Error>>(())
+            }
+            .await;
+            run.close_page(&replacement).await;
+            recovered
         }
         .await;
         (run, result)

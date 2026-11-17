@@ -533,6 +533,7 @@ pub(super) async fn enter_iframe(
         key,
         visible,
     } = iframe;
+    let crash = scope.begin_protocol(parent.session());
     let described: Described = match parent
         .session()
         .send(
@@ -543,7 +544,7 @@ pub(super) async fn enter_iframe(
     {
         Ok(described) => described,
         Err(error) => {
-            scope.record_protocol_error(parent.session(), &error);
+            crash.record(&error);
             return match ProbeFailure::from_core(error) {
                 ProbeFailure::Gone(_) => Ok(Hopped::ParentGone),
                 failure => Err(failed(scope, failure)),

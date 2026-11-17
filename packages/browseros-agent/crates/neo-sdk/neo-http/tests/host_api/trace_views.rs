@@ -376,7 +376,7 @@ async fn target_crashed_diagnostic_survives_full_and_summary_http_views() -> Tes
         owner: ErrorOwner::Neo,
         code: "internal_error".to_owned(),
         diagnostic_code: Some(DiagnosticCode::TargetCrashed),
-        message: "The tab's page crashed. Close or reload the tab before retrying.".to_owned(),
+        message: "The tab's page crashed. Close it with page.close() and open a new page with context.newPage().".to_owned(),
         host_code: None,
         retryable: false,
         operation_id: Some(id),

@@ -186,8 +186,9 @@ A renderer crash keeps primary code `internal_error` and adds optional
 full and summary HTTP views. Older clients can continue handling `internal_error`. A write
 already sent retains its delivery under the existing rules; later renderer operations on the
 same native target are refused as `not_sent`, across runs, without waiting for its renderer.
-The host should close the tab or have it reloaded in the browser. Default `page.close()` remains
-available; SDK `goto` and `reload` are refused while the crash is remembered. Refusal clears
+A script should close the crashed tab with `page.close()` and open a replacement with
+`context.newPage()`, as the diagnostic says. A host or person may instead reload it in the
+browser. SDK `goto` and `reload` remain refused while the crash is remembered. Refusal clears
 after a later main-document commit has a fresh matching frame-tree reply and all events through
 that reply have been applied, or after confirmed closure. Without that proof it remains in place.
 

@@ -517,7 +517,7 @@ mod tests {
             assert_eq!(wire["diagnosticCode"], "target_crashed");
             assert_eq!(
                 wire["message"],
-                "The tab's page crashed. Close or reload the tab before retrying."
+                "The tab's page crashed. Close it with page.close() and open a new page with context.newPage()."
             );
         }
         Ok(())

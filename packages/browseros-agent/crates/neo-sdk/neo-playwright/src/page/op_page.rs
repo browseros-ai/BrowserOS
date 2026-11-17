@@ -34,10 +34,14 @@ impl<'op> OpPage<'op> {
         let session = pw
             .browser()
             .protocol_session(admitted.session.session_id.clone());
-        pw.media()
-            .ensure_root(&admitted.core_page, &session, state.media())
+        scope
+            .protocol_request(
+                &session,
+                pw.media()
+                    .ensure_root(&admitted.core_page, &session, state.media()),
+            )
             .await
-            .map_err(|error| scope.protocol_error(&session, &error))?;
+            .map_err(|error| scope.core_error(&error))?;
         Ok(Self {
             pw,
             scope,
@@ -109,14 +113,6 @@ impl<'op> OpPage<'op> {
         self.pw.browser()
     }
 
-    /// Installs and probe calls retain their endpoint here. Same-process children share the
-    /// root session; an independent child renderer's failure stays local to that renderer.
-    pub(crate) fn record_failure(&self, source: &ProtocolSession, failure: &ProbeFailure) {
-        if let ProbeFailure::Cdp(error) = failure {
-            self.scope.record_protocol_error(source, error);
-        }
-    }
-
     /// The main frame on the page's own session. A page target's main frame id is its target
     /// id, and stays so across cross-process navigations (measured).
     pub(crate) fn main_endpoint(&self) -> Endpoint {
@@ -144,20 +140,22 @@ impl<'op> OpPage<'op> {
     ) -> Result<IsolatedWorld, ProbeFailure> {
         // A new OOPIF may be discovered before its attachment event is replayed. Synchronize
         // its page preferences before its first frame query or main-world script.
+        let media = self.scope.begin_protocol(&endpoint.session);
         self.pw
             .media()
             .ensure(&endpoint.session, self.state.media())
             .await
             .map_err(ProbeFailure::from_core)
-            .inspect_err(|failure| self.record_failure(&endpoint.session, failure))?;
+            .inspect_err(|failure| media.probe_failure(failure))?;
         let installer = Installer {
             browser: self.pw.browser(),
             epoch: self.pw.epoch(),
         };
+        let install = self.scope.begin_protocol(&endpoint.session);
         self.state
             .frames()
             .world(installer, endpoint, place)
             .await
-            .inspect_err(|failure| self.record_failure(&endpoint.session, failure))
+            .inspect_err(|failure| install.probe_failure(failure))
     }
 }

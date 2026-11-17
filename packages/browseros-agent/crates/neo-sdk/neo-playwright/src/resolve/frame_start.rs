@@ -156,11 +156,12 @@ async fn enter_child(
     parent: &IsolatedWorld,
     child: &FrameId,
 ) -> Result<Hopped, PlaywrightError> {
+    let crash = scope.begin_protocol(parent.session());
     let owner = parent
         .session()
         .send::<_, FrameOwner>("DOM.getFrameOwner", json!({ "frameId": child.as_str() }))
         .await
-        .inspect_err(|error| scope.record_protocol_error(parent.session(), error));
+        .inspect_err(|error| crash.record(error));
     let owner = match owner {
         Ok(owner) => owner.backend_node_id,
         Err(error) if ErrorCode::from_core(&error) == ErrorCode::TargetCrashed => {
@@ -177,11 +178,12 @@ async fn enter_child(
         "executionContextId": parent.context(),
         "objectGroup": scope.object_group(parent.session()),
     });
+    let crash = scope.begin_protocol(parent.session());
     let resolved = parent
         .session()
         .send::<_, ResolvedNode>("DOM.resolveNode", params)
         .await
-        .inspect_err(|error| scope.record_protocol_error(parent.session(), error));
+        .inspect_err(|error| crash.record(error));
     let object = match resolved {
         Ok(resolved) => resolved.object.object_id,
         Err(error) => return gone_or(scope, error),

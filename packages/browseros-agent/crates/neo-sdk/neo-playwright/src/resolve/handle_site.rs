@@ -65,11 +65,12 @@ impl<'a> HandleSite<'a> {
             "executionContextId": world.context(),
             "objectGroup": scope.object_group(world.session()),
         });
+        let crash = scope.begin_protocol(world.session());
         let resolved = world
             .session()
             .send::<_, ResolvedNode>("DOM.resolveNode", params)
             .await
-            .inspect_err(|error| scope.record_protocol_error(world.session(), error));
+            .inspect_err(|error| crash.record(error));
         match resolved {
             Ok(resolved) => Ok(Some(Self {
                 page,

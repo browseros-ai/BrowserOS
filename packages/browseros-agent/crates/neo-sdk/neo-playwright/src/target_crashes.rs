@@ -3,16 +3,18 @@
 //! document or recreate a closed target. Every transition is synchronous; no lock crosses an await.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::mem;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use browseros_core::{FrameId, TargetId};
 
-use crate::events::EventFence;
+use crate::events::{EventFence, WatcherProgress};
 
 /// The single admission authority shared by foreground operations and the event watcher.
 #[derive(Default)]
 pub(crate) struct TargetCrashes {
     records: Mutex<Records>,
+    progress: Option<Arc<WatcherProgress>>,
 }
 
 #[derive(Default)]
@@ -20,9 +22,17 @@ struct Records {
     revision: u64,
     observer: u64,
     targets: HashMap<TargetId, TargetRecord>,
+    pending: Vec<PendingCrash>,
+}
+
+/// A protocol reply cannot outrun document commits already received on its connection.
+struct PendingCrash {
+    ticket: TargetTicket,
+    fence: EventFence,
 }
 
 struct TargetRecord {
+    lifetime: u64,
     revision: u64,
     crashed: Option<EventFence>,
     main_loader: Option<String>,
@@ -32,6 +42,7 @@ struct TargetRecord {
 #[derive(Clone, Debug)]
 pub(crate) struct TargetTicket {
     target: TargetId,
+    lifetime: u64,
     revision: u64,
     epoch: u64,
 }
@@ -59,27 +70,50 @@ impl Records {
 }
 
 impl TargetCrashes {
+    pub(crate) fn observed(progress: Arc<WatcherProgress>) -> Self {
+        Self {
+            records: Mutex::default(),
+            progress: Some(progress),
+        }
+    }
+
     pub(crate) fn ticket(&self, target: &TargetId, epoch: u64) -> TargetTicket {
         let mut records = self.lock();
-        let revision = if let Some(record) = records.targets.get(target) {
-            record.revision
+        let (lifetime, revision) = if let Some(record) = records.targets.get(target) {
+            (record.lifetime, record.revision)
         } else {
             let revision = records.advance();
             records.targets.insert(
                 target.clone(),
                 TargetRecord {
+                    lifetime: revision,
                     revision,
                     crashed: None,
                     main_loader: None,
                 },
             );
-            revision
+            (revision, revision)
         };
         TargetTicket {
             target: target.clone(),
+            lifetime,
             revision,
             epoch,
         }
+    }
+
+    /// A later poll may address a new document in the same admitted native target. Capture
+    /// its revision before dispatch, never when its reply arrives. Closure or reconnect ends
+    /// the original admission's authority, even if an identifier is subsequently reused.
+    pub(crate) fn request(&self, admitted: &TargetTicket, epoch: u64) -> Option<TargetTicket> {
+        let records = self.lock();
+        let record = records.targets.get(&admitted.target)?;
+        (admitted.epoch == epoch && admitted.lifetime == record.lifetime).then(|| TargetTicket {
+            target: admitted.target.clone(),
+            lifetime: record.lifetime,
+            revision: record.revision,
+            epoch,
+        })
     }
 
     pub(crate) fn is_crashed(&self, target: &TargetId) -> bool {
@@ -99,6 +133,7 @@ impl TargetCrashes {
         let mut records = self.lock();
         let revision = records.advance();
         let record = records.targets.entry(target).or_insert(TargetRecord {
+            lifetime: revision,
             revision,
             crashed: None,
             main_loader: None,
@@ -124,6 +159,52 @@ impl TargetCrashes {
             record.revision = revision;
             record.crashed = Some(record.crashed.map_or(fence, |old| old.max(fence)));
         }
+    }
+
+    /// Classification can answer now, but cache admission only after the watcher applies
+    /// this reply's event prefix. A replacement commit still queued or held behind a tree
+    /// must invalidate an old request before its delayed error can poison the new document.
+    pub(crate) fn reply_after_events(&self, ticket: &TargetTicket, epoch: u64, fence: EventFence) {
+        if ticket.epoch != epoch {
+            return;
+        }
+        if let Some(progress) = &self.progress {
+            if progress.events_handled() == u64::MAX {
+                return;
+            }
+            if progress.applied_through() < fence.0 {
+                self.lock().pending.push(PendingCrash {
+                    ticket: ticket.clone(),
+                    fence,
+                });
+                return;
+            }
+        }
+        self.crashed_reply(ticket, epoch, fence);
+    }
+
+    /// The event owner calls this after applying events and releasing held tree reads.
+    pub(crate) fn apply_replies(&self, epoch: u64) {
+        let Some(progress) = &self.progress else {
+            return;
+        };
+        if progress.events_handled() == u64::MAX {
+            return;
+        }
+        let applied = progress.applied_through();
+        let pending = mem::take(&mut self.lock().pending);
+        let mut waiting = Vec::new();
+        for reply in pending {
+            if reply.ticket.epoch != epoch {
+                continue;
+            }
+            if applied < reply.fence.0 {
+                waiting.push(reply);
+            } else {
+                self.crashed_reply(&reply.ticket, epoch, reply.fence);
+            }
+        }
+        self.lock().pending.extend(waiting);
     }
 
     /// Only a later main-document commit can request proof. Keep its original ingress fence:
@@ -157,6 +238,7 @@ impl TargetCrashes {
         Some(RecoveryTicket {
             target: TargetTicket {
                 target: target.clone(),
+                lifetime: record.lifetime,
                 revision,
                 epoch,
             },
@@ -235,11 +317,12 @@ impl TargetCrashes {
 mod tests {
     use std::collections::HashSet;
     use std::error::Error;
+    use std::sync::Arc;
 
     use browseros_core::{FrameId, TargetId};
 
     use super::TargetCrashes;
-    use crate::events::EventFence;
+    use crate::events::{EventFence, WatcherProgress};
 
     #[test]
     fn late_request_replies_cannot_poison_recovery_or_a_closed_target() -> Result<(), Box<dyn Error>>
@@ -271,6 +354,88 @@ mod tests {
         assert!(
             !crashes.refuses(&replacement),
             "retired tickets cannot recreate an old lifetime"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn queued_and_held_commits_precede_a_protocol_crash_fact() {
+        let progress = Arc::new(WatcherProgress::default());
+        progress.start(0, 0);
+        let crashes = TargetCrashes::observed(Arc::clone(&progress));
+        let target = TargetId("page".to_owned());
+        let admission = crashes.ticket(&target, 1);
+        crashes.reply_after_events(&admission, 1, EventFence(1));
+        assert!(
+            !crashes.is_crashed(&target),
+            "the queued event prefix may contain a newer document"
+        );
+        progress.hold_from(Some(0));
+        progress.handled(1);
+        crashes.apply_replies(1);
+        assert!(
+            !crashes.is_crashed(&target),
+            "reading a held commit has not applied it"
+        );
+        let _ = crashes.main_document(
+            &target,
+            FrameId(target.0.clone()),
+            "new".to_owned(),
+            EventFence(1),
+            1,
+        );
+        progress.hold_from(None);
+        crashes.apply_replies(1);
+        assert!(
+            !crashes.is_crashed(&target),
+            "the queued replacement invalidates the old reply"
+        );
+        let current = crashes.ticket(&target, 1);
+        crashes.reply_after_events(&current, 1, EventFence(2));
+        progress.handled(1);
+        crashes.apply_replies(1);
+        assert!(
+            crashes.is_crashed(&target),
+            "a current request still records its confirmed crash"
+        );
+    }
+
+    #[test]
+    fn later_requests_renew_documents_but_never_admission_lifetimes() -> Result<(), Box<dyn Error>>
+    {
+        let crashes = TargetCrashes::default();
+        let target = TargetId("page".to_owned());
+        let admission = crashes.ticket(&target, 1);
+        let before = crashes.request(&admission, 1).ok_or("initial request")?;
+        let _ = crashes.main_document(
+            &target,
+            FrameId(target.0.clone()),
+            "next".to_owned(),
+            EventFence(2),
+            1,
+        );
+        let after = crashes
+            .request(&admission, 1)
+            .ok_or("later request on the same target")?;
+        crashes.crashed_reply(&before, 1, EventFence(3));
+        assert!(
+            !crashes.is_crashed(&target),
+            "an earlier in-flight reply cannot stamp the new document"
+        );
+        crashes.crashed_reply(&after, 1, EventFence(4));
+        assert!(
+            crashes.is_crashed(&target),
+            "the later request belongs to the new document"
+        );
+        assert!(
+            crashes.request(&admission, 2).is_none(),
+            "reconnect requires new admission"
+        );
+        crashes.confirmed_closed(&target);
+        let _replacement = crashes.ticket(&target, 1);
+        assert!(
+            crashes.request(&admission, 1).is_none(),
+            "reusing an identifier cannot renew an old lifetime"
         );
         Ok(())
     }

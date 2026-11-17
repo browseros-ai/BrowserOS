@@ -330,6 +330,10 @@ fn main_frame(admitted: &AdmittedPage) -> FrameId {
 }
 
 /// The command and every wait after it, all inside the op's timeout.
+#[expect(
+    clippy::too_many_lines,
+    reason = "the navigation variants share one document watch and preserve command-before-renderer-wait ordering"
+)]
 async fn drive(
     scope: &OpScope<'_>,
     session: &ProtocolSession,
@@ -339,7 +343,7 @@ async fn drive(
     wait_until: LoadState,
 ) -> Result<Option<Response>, PlaywrightError> {
     let failed = |error: WatchError| watch_error(scope, &error);
-    let core = |error: CoreError| scope.protocol_error(session, &error);
+    let core = |error: CoreError| scope.core_error(&error);
     let arrival = match navigation {
         Navigation::Goto { url, referer, .. } => {
             let sent = scope.send_effect()?;
@@ -363,7 +367,10 @@ async fn drive(
             };
             let (enabled, reply) = tokio::join!(
                 setup,
-                send_navigate(&target.command, &sent, &target.id, &url, referer.as_deref())
+                scope.protocol_request(
+                    &target.command,
+                    send_navigate(&target.command, &sent, &target.id, &url, referer.as_deref())
+                )
             );
             match enabled {
                 Ok(true) => {}
@@ -371,7 +378,7 @@ async fn drive(
                 Err(error) if moved(&error) => watch.replay_lifecycle(),
                 Err(error) => return Err(failed(error)),
             }
-            let reply = reply.map_err(|error| scope.protocol_error(&target.command, &error))?;
+            let reply = reply.map_err(core)?;
             // A download is answered with an error text too, so it goes first, as upstream.
             if reply.is_download {
                 return Err(scope.fail(ErrorCode::NavigationFailed, "Download is starting"));
@@ -407,8 +414,10 @@ async fn drive(
         }
         Navigation::Reload => {
             let sent = scope.send_effect()?;
-            let (enabled, reloaded) =
-                tokio::join!(watch.enable_lifecycle(), send_reload(session, &sent));
+            let (enabled, reloaded) = tokio::join!(
+                watch.enable_lifecycle(),
+                scope.protocol_request(session, send_reload(session, &sent))
+            );
             enabled.map_err(failed)?;
             reloaded.map_err(core)?;
             watch.arrived(Expect::NewDocument).await.map_err(failed)?
@@ -417,12 +426,17 @@ async fn drive(
             // The current document's states, for a same-document step that keeps it.
             watch.read_current().await.map_err(failed)?;
             watch.enable_lifecycle().await.map_err(failed)?;
-            let Some(entry) = history_entry(session, delta).await.map_err(core)? else {
+            let Some(entry) = scope
+                .protocol_request(session, history_entry(session, delta))
+                .await
+                .map_err(core)?
+            else {
                 // Nothing to go to: upstream returns null without navigating.
                 return Ok(None);
             };
             let sent = scope.send_effect()?;
-            send_history_step(session, &sent, entry)
+            scope
+                .protocol_request(session, send_history_step(session, &sent, entry))
                 .await
                 .map_err(core)?;
             watch.arrived(Expect::AnyNavigation).await.map_err(failed)?

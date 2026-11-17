@@ -183,6 +183,7 @@ pub(crate) async fn insert(
         .await
         .map_err(|failure| resolve::failed(scope, failure))?;
     let session = world.session();
+    let crash = scope.begin_protocol(session);
     // The broadcast, not a targeted channel: that would take `Log.entryAdded` off the broadcast,
     // where the event watcher passes entries on as console messages, for every tab meanwhile.
     let mut events = pw.browser().cdp_events();
@@ -197,7 +198,7 @@ pub(crate) async fn insert(
         .log_leases()
         .acquire(session, now_ms() as f64)
         .await
-        .map_err(|error| scope.protocol_error(session, &error))?;
+        .map_err(|error| scope.protocol_error(&crash, &error))?;
     // Log.enable replays retained entries. They belong to earlier actions, so only messages
     // arriving after this barrier participate in this insertion's upstream-style CSP race.
     while let Ok(Some(_)) | Err(Lagged) = queued(&mut events) {}
@@ -240,10 +241,11 @@ pub(crate) async fn insert(
     // Chromium does. Prefer their useful browser wording over a generic load-event failure.
     received_report(scope, &mut events, world.session_id())?;
     let object = node?;
+    let crash = scope.begin_protocol(session);
     let described: Described = session
         .send("DOM.describeNode", json!({ "objectId": object }))
         .await
-        .map_err(|error| scope.protocol_error(session, &error))?;
+        .map_err(|error| scope.protocol_error(&crash, &error))?;
     let element = TagElement {
         brand: "element",
         page: page_ref.clone(),

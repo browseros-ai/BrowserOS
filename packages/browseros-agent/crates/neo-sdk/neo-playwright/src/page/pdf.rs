@@ -200,13 +200,14 @@ pub(crate) async fn print(
     let session = pw
         .browser()
         .protocol_session(admitted.session.session_id.clone());
+    let crash = scope.begin_protocol(&session);
     let reply: PrintReply = session
         .send_value("Page.printToPDF", params)
         .await
         .and_then(decode)
         .map_err(|error| match &error {
             _ if ErrorCode::from_core(&error) == ErrorCode::TargetCrashed => {
-                scope.protocol_error(&session, &error)
+                scope.protocol_error(&crash, &error)
             }
             // The browser itself refused to print (headed Chrome cannot): not Neo's bug.
             CoreError::Cdp(CdpError::Protocol { message, .. }) => scope.fail(

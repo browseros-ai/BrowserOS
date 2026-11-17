@@ -539,13 +539,14 @@ async fn lease_runtime(
     let floor = since_ms as f64;
     let admitted = scope.admit(pw.browser(), *tab).await?;
     let session = &admitted.session.session;
+    let crash = scope.begin_protocol(session);
     let runtime = pw
         .browser()
         .page_signals
         .runtime_leases()
         .acquire(session, floor)
         .await
-        .map_err(|error| scope.protocol_error(session, &error))?;
+        .map_err(|error| scope.protocol_error(&crash, &error))?;
     if *event != PageEventKind::Console {
         return Ok(vec![runtime.into()]);
     }
@@ -1039,9 +1040,10 @@ async fn answer(
         Answer::Dismiss => (false, None),
     };
     let sent = scope.send_effect()?;
+    let crash = scope.begin_protocol(&session);
     send_answer(&session, &sent, accept, prompt.as_deref())
         .await
-        .map_err(|error| scope.protocol_error(&session, &error))?;
+        .map_err(|error| scope.protocol_error(&crash, &error))?;
     answering.answered();
     Ok(())
 }

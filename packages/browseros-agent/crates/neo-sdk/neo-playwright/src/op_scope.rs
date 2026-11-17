@@ -108,6 +108,27 @@ struct RendererAdmission {
     session: SessionId,
 }
 
+/// One request's crash authority, captured before dispatch and held until its reply. Long
+/// operations renew between requests; replies already in flight retain their old document.
+pub(crate) struct ProtocolRequest<'a> {
+    tracking: Option<CrashTracking<'a>>,
+    ticket: Option<TargetTicket>,
+}
+
+impl ProtocolRequest<'_> {
+    pub(crate) fn record(&self, error: &CoreError) {
+        if ErrorCode::from_core(error) == ErrorCode::TargetCrashed
+            && let (Some(tracking), Some(ticket)) = (self.tracking, &self.ticket)
+        {
+            tracking.crashes.reply_after_events(
+                ticket,
+                tracking.browser.connection().connection_epoch(),
+                EventFence(tracking.browser.cdp_events_broadcast()),
+            );
+        }
+    }
+}
+
 /// Core owns policy and calls this hook with fresh facts before and after attachment. The
 /// side channel distinguishes our refusal from a Core failure without widening `CoreError`.
 struct CrashAdmission<'a> {
@@ -688,27 +709,44 @@ impl<'env> OpScope<'env> {
         }
     }
 
-    /// Only a reply whose originating session matches this root may update its crash facts.
-    /// Generic and multi-session Core errors remain typed without guessing their provenance.
-    pub(crate) fn record_protocol_error(&self, source: &ProtocolSession, error: &CoreError) {
-        if ErrorCode::from_core(error) == ErrorCode::TargetCrashed
-            && let (Some(tracking), Some(renderer)) = (self.crashes, self.renderer.get())
-            && source.session_id() == Some(&renderer.session)
-        {
-            tracking.crashes.crashed_reply(
-                &renderer.ticket,
-                tracking.browser.connection().connection_epoch(),
-                EventFence(tracking.browser.cdp_events_broadcast()),
-            );
+    /// Only the admitted root session can stamp this native target. The request's fresh
+    /// revision is captured before any await, so a later poll follows a replacement document
+    /// without letting an earlier request's delayed error poison it.
+    pub(crate) fn begin_protocol(&self, source: &ProtocolSession) -> ProtocolRequest<'env> {
+        let ticket = self.crashes.and_then(|tracking| {
+            let renderer = self.renderer.get()?;
+            (source.session_id() == Some(&renderer.session))
+                .then(|| {
+                    tracking.crashes.request(
+                        &renderer.ticket,
+                        tracking.browser.connection().connection_epoch(),
+                    )
+                })
+                .flatten()
+        });
+        ProtocolRequest {
+            tracking: self.crashes,
+            ticket,
         }
+    }
+
+    /// Source-known helpers use the same pre-dispatch capture without changing their error
+    /// type. Opaque helpers retain stateless classification rather than guessing a target.
+    pub(crate) async fn protocol_request<T>(
+        &self,
+        source: &ProtocolSession,
+        request: impl Future<Output = Result<T, CoreError>>,
+    ) -> Result<T, CoreError> {
+        let authority = self.begin_protocol(source);
+        request.await.inspect_err(|error| authority.record(error))
     }
 
     pub(crate) fn protocol_error(
         &self,
-        source: &ProtocolSession,
+        request: &ProtocolRequest<'_>,
         error: &CoreError,
     ) -> PlaywrightError {
-        self.record_protocol_error(source, error);
+        request.record(error);
         self.core_error(error)
     }
 
