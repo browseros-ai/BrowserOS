@@ -240,14 +240,20 @@ impl Playwright {
     /// Lets a host refuse remembered renderer crashes before its own native-tab reads.
     /// Call only for renderer operations, after host policy. Unknown targets perform no CDP
     /// work and pass through, so the host must still run every ordinary guard afterwards.
+    /// `api` preserves the caller's method name when several public methods share one op.
     pub async fn check_cached_crash(
         &self,
         env: &dyn OpEnv,
         op: Op,
         tab: TabId,
+        api: Option<&str>,
     ) -> Result<(), PlaywrightError> {
         if let Some(info) = self.browser.pages.get_info_by_tab(tab).await {
-            OpScope::new(env, op, CallHeader::default())
+            let call = CallHeader {
+                api: api.map(str::to_owned),
+                ..CallHeader::default()
+            };
+            OpScope::new(env, op, call)
                 .tracking(&self.crashes, &self.browser)
                 .check_cached_crash(&info)?;
         }

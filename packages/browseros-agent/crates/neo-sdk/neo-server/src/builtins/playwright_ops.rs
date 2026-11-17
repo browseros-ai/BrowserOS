@@ -219,7 +219,12 @@ impl Method for PlaywrightOp {
             && self.spec.name != "page.opener"
             && let Some(page) = page
         {
-            op.race_classified(playwright.check_cached_crash(&env, self.op, page.tab))
+            let api = input
+                .json
+                .get("call")
+                .and_then(|call| call.get("api"))
+                .and_then(Value::as_str);
+            op.race_classified(playwright.check_cached_crash(&env, self.op, page.tab, api))
                 .await?
                 .map_err(|error| leaf_error(&error))?;
         }

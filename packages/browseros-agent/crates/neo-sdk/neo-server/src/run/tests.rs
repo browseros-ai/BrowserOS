@@ -110,12 +110,36 @@ fn target_crashed_real_page_op_precedes_failed_native_refresh_on_the_wire() -> R
             // No crash injection or synthetic method is used after this boundary. The next
             // fresh run reaches the production Playwright adapter over QuickJS's real bridge.
             time::sleep(Duration::from_millis(1)).await;
-            let input = json!({ "page": { "$neo": "page", "tab": page.tab } });
+            let expect_title = matches!(&failure, CdpError::ConnectionLost);
+            let operation = if expect_title {
+                "expect.page"
+            } else {
+                "page.title"
+            };
+            let public_api = if expect_title {
+                "expect.toHaveTitle"
+            } else {
+                "page.title"
+            };
+            let input = if expect_title {
+                json!({
+                    "call": { "api": public_api, "timeoutMs": 5000 },
+                    "page": { "$neo": "page", "tab": page.tab },
+                    "expression": "to.have.title",
+                    "expectedText": [{ "string": "x", "normalizeWhiteSpace": true }],
+                    "isNot": false,
+                    "matcher": "toHaveTitle",
+                    "expectation": "expected",
+                    "expected": "Expected: \"x\"",
+                })
+            } else {
+                json!({ "page": { "$neo": "page", "tab": page.tab } })
+            };
             let service = rig.run_service(GRACE);
             let initial_tabs = rig.fake.count("Browser.getTabs");
             rig.fake.hold_next("Browser.getTabs");
             let request = request(
-                &format!("await __neo.invoke('page.title', {input});"),
+                &format!("await __neo.invoke('{operation}', {input});"),
                 RunMeta::default(),
             )?;
             let pending = task::spawn(async move { service.run(request).await });
@@ -141,8 +165,8 @@ fn target_crashed_real_page_op_precedes_failed_native_refresh_on_the_wire() -> R
             assert_eq!(error.delivery, Some(ReplyDelivery::NotSent));
             assert!(error.retryable, "unsent real builtin failure: {failure}");
             assert!(
-                error.message.starts_with("page.title:"),
-                "the error keeps the source operation: {}",
+                error.message.starts_with(&format!("{public_api}:")),
+                "the error keeps the public API name instead of the shared wire op: {}",
                 error.message
             );
             let wire = serde_json::to_value(&*failed)?;
@@ -169,11 +193,16 @@ fn target_crashed_real_page_op_precedes_failed_native_refresh_on_the_wire() -> R
             let operation = stored
                 .operations
                 .iter()
-                .find(|operation| operation.name == "page.title")
+                .find(|recorded| recorded.name == operation)
                 .ok_or("the real builtin operation is traced")?;
             assert_eq!(operation.delivery, Some(Delivery::NotSent));
             let stored_error = operation.error.as_ref().ok_or("stored builtin error")?;
             assert_eq!(stored_error.code, "internal_error");
+            assert!(
+                stored_error.message.starts_with(&format!("{public_api}:")),
+                "the trace keeps the same public API context: {}",
+                stored_error.message
+            );
             assert_eq!(
                 stored_error.diagnostic_code,
                 Some(DiagnosticCode::TargetCrashed)
