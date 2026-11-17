@@ -3853,7 +3853,7 @@ mod crash_tests {
             ("Browser.setDownloadBehavior", json!({})),
             (
                 "Browser.getTabs",
-                json!({"tabs":[{"tabId":7, "targetId":"page", "windowId":1, "url":"https://a.test/", "title":"A", "isActive":true}]}),
+                json!({"tabs":[{"tabId":7, "targetId":"page", "windowId":1, "url":"https://a.test/", "title":"A", "isActive":true, "isLoading":false, "loadProgress":1.0, "isPinned":false, "isHidden":false}]}),
             ),
             ("Page.enable", json!({})),
             (
@@ -3877,6 +3877,12 @@ mod crash_tests {
         assert!(
             !watcher.sessions.contains_key(&old),
             "reconnect retires old sessions"
+        );
+        let listing = watcher.view.list_pages().await?;
+        assert_eq!(
+            listing.pages.len(),
+            1,
+            "the reconnect fixture supplies a valid native tab"
         );
         watcher.observe_context().await;
         let observer = watcher
