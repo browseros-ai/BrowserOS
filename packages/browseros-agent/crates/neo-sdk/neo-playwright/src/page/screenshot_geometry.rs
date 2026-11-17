@@ -616,9 +616,9 @@ mod tests {
         let connection = TestConnection::new([]);
         connection.always(
             "Runtime.callFunctionOn",
-            json!({"result":{"type":"object","value":{
+            json!({"result":{"type":"string","value":json!({
                 "kind":"read","value":{"x":0,"y":0,"scaleX":1e308,"scaleY":1}
-            }}}),
+            }).to_string()}}),
         )?;
         let parent = IsolatedWorld::for_tests(
             ProtocolSession::for_session(
