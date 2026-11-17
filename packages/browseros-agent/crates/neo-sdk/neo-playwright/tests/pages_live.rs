@@ -6,6 +6,13 @@
 //! `bun run test:browser -- cargo test -p neo-playwright --test pages_live -- --ignored`.
 //! Every test opens its own tabs and closes them.
 
+#[path = "support/js_runner.rs"]
+#[expect(
+    dead_code,
+    reason = "this suite runs one script through the real prelude; the runner's gestures and \
+              refusals serve prelude_live"
+)]
+mod js_runner;
 #[path = "support/live_run.rs"]
 #[expect(
     dead_code,
@@ -19,10 +26,13 @@ mod page_server;
 use std::error::Error;
 use std::future::Future;
 use std::path::Path;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use browseros_cdp::CdpEvent;
 use browseros_core::TabId;
+use futures_util::future::BoxFuture;
+use js_runner::OpHost;
 use live_run::{EnvCall, LiveRun, TestPage, TestResult, brand, test_page};
 use neo_playwright::{Answer, ErrorCode, PlaywrightError, TimedOut};
 use neo_trace::ErrorOwner;
@@ -30,6 +40,7 @@ use page_server::{PageServer, SLOW};
 use serde_json::{Value, json};
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::broadcast::error::TryRecvError;
+use tokio::sync::{Notify, Semaphore};
 use tokio::time;
 
 /// Opens a tab, runs `body` on it, and closes the tab whatever happened.
@@ -1005,4 +1016,306 @@ async fn target_crashed_message_recovery_closes_and_opens_a_working_page() -> Te
         (run, result)
     })
     .await
+}
+
+/// The longest a run of `ariaSnapshot()` and one click on a healthy tab may take beside tabs whose
+/// renderer is busy, in the best of [`BESIDE_BUSY_TABS_TRIES`] tries. The wait it guards is
+/// deterministic: a run that waits for a busy tab's frame tree pays the native read's whole
+/// budget (one second, `frame_tree.rs` `SNAPSHOT_BUDGET`), and with the start hold back a run
+/// cannot go under 2.1 s, so every try fails and the best of three cannot hide it. The run itself
+/// takes about 150 ms on the pool's debug build (main took 5.3 s), plus the start's one grace for
+/// listed tabs (`LISTED_START_GRACE_MS` in context.ts, 300 ms, one window for all of them): three
+/// busy tabs paying it one after another would come to 1,050 ms and fail too. The rest, and the
+/// tries, absorb the seconds-long CPU stalls of a debug test thread on a loaded machine.
+const BESIDE_BUSY_TABS_BOUND: Duration = Duration::from_millis(900);
+
+/// Tries per case before [`BESIDE_BUSY_TABS_BOUND`] fails it. The busy tabs stay busy for 20 s,
+/// longer than three tries of a run that waits for them.
+const BESIDE_BUSY_TABS_TRIES: usize = 3;
+
+/// The script of [`tests_that_a_run_beside_busy_tabs_never_waits_for_their_frames`]: two of the
+/// script's own operations on the healthy tab, each followed by the prelude's settle step.
+const BESIDE_BUSY_TABS_SCRIPT: &str = "const text = await page.ariaSnapshot()\n\
+    await page.getByRole('button', { name: 'Frame button' }).click()\n\
+    return text";
+
+/// A run never waits for the frame tree of a tab it does not use. The run's init lists every tab,
+/// as a host whose runs see the whole browser does, so the prelude reads the busy tabs' trees too;
+/// their renderer answers nothing, and each read waits out its budget. The script never names
+/// them, so it pays nothing for them, whether one, two or three are busy.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+#[expect(
+    clippy::print_stderr,
+    reason = "each case prints its tries, the measure its bound is checked against"
+)]
+async fn tests_that_a_run_beside_busy_tabs_never_waits_for_their_frames() -> TestResult {
+    let _alone = BUSY_TABS.acquire().await?;
+    let run = Arc::new(LiveRun::connect().await?);
+    let server = PageServer::start().await?;
+    let healthy = run.new_page().await?;
+    let mut busy = Vec::new();
+    let result = async {
+        goto(&run, &healthy, &server.url("/child.html"), "load").await?;
+        // Another site than the healthy tab's, so Chromium never puts them in its renderer.
+        let busy_url = server
+            .url("/busy.html")
+            .replacen("127.0.0.1", "localhost", 1);
+        for _ in 0..3 {
+            let page = run.new_page().await?;
+            busy.push(page.clone());
+            goto(&run, &page, &busy_url, "load").await?;
+        }
+        // Each page's loop starts 300 ms after it loaded.
+        time::sleep(Duration::from_millis(600)).await;
+        let host: Arc<dyn OpHost> = Arc::clone(&run) as Arc<dyn OpHost>;
+        for count in 1..=busy.len() {
+            let mut tabs = vec![healthy.tab];
+            tabs.extend(busy.iter().take(count).map(|page| page.tab));
+            let init = json!({ "page": brand(&healthy), "pages": run.page_facts(tabs).await });
+            let mut tries = Vec::new();
+            while tries.len() < BESIDE_BUSY_TABS_TRIES {
+                let started = Instant::now();
+                let text = js_runner::run_script(&host, &init, BESIDE_BUSY_TABS_SCRIPT).await?;
+                let took = started.elapsed();
+                tries.push(took);
+                assert!(
+                    text.as_str()
+                        .is_some_and(|text| text.contains("Frame button")),
+                    "the healthy tab's snapshot: {text}"
+                );
+                if took < BESIDE_BUSY_TABS_BOUND {
+                    break;
+                }
+            }
+            eprintln!("BESIDE_BUSY_TABS busy={count} tries={tries:?}");
+            assert!(
+                tries.iter().any(|took| *took < BESIDE_BUSY_TABS_BOUND),
+                "beside {count} busy tabs, every try took {BESIDE_BUSY_TABS_BOUND:?} or more: \
+                 {tries:?}"
+            );
+        }
+        Ok::<(), Box<dyn Error>>(())
+    }
+    .await;
+    let closing = Instant::now();
+    for page in &busy {
+        run.close_page(page).await;
+    }
+    eprintln!(
+        "BESIDE_BUSY_TABS closed the busy tabs in {:?}",
+        closing.elapsed()
+    );
+    run.close_page(&healthy).await;
+    result
+}
+
+/// The two rows with busy tabs, one at a time. A run sees every tab of the browser, so the other
+/// row's busy tabs would cost this row's run waits that are not the ones it measures.
+static BUSY_TABS: Semaphore = Semaphore::const_new(1);
+
+/// The longest the run may take from the moment another client opened a busy tab to the end of
+/// its next five statements, in the best of [`BESIDE_BUSY_TABS_TRIES`] tries. A tab the
+/// run first sees mid-run holds the script for its reads until one goes unanswered, so such a tab
+/// may cost the run one wait in all: one native read's whole budget (one second,
+/// `frame_tree.rs` `SNAPSHOT_BUDGET`). The bound is that one wait plus the room
+/// [`BESIDE_BUSY_TABS_BOUND`] gives a run. A tab that held every statement would cost five or
+/// more, so every try would fail.
+const MID_RUN_BUSY_TAB_BOUND: Duration = Duration::from_millis(1_900);
+
+/// The script of [`tests_that_a_busy_tab_another_client_opens_mid_run_costs_one_wait_at_most`]:
+/// it waits for the tab the owner opens from its page, then runs five statements on its own tab,
+/// and returns the URLs its wait saw and the busy tab's id. It waits on its page's `popup` event:
+/// a context-level `page` wait makes the target watcher try to attach to every tab of the
+/// browser on its own loop, which a busy tab stalls, so that row would measure the watcher.
+const MID_RUN_BUSY_TAB_SCRIPT: &str = "const seen = []\n\
+    let busy\n\
+    try {\n\
+        busy = await page.waitForEvent('popup', {\n\
+            predicate: (other) => {\n\
+                seen.push(other.url())\n\
+                return other.url().includes('busy.html')\n\
+            },\n\
+            timeout: 15000,\n\
+        })\n\
+    } catch (error) {\n\
+        return { seen, error: String(error) }\n\
+    }\n\
+    for (let i = 0; i < 5; i++) await page.title()\n\
+    return { seen, tab: busy.tabId }";
+
+/// The live run's ops, with how long each `page.frames` read took and on which tab, and a signal
+/// once the script's `waitForEvent` went out (`events.wait`).
+struct FrameReads {
+    run: Arc<LiveRun>,
+    reads: Mutex<Vec<(i64, Duration)>>,
+    waiting: Notify,
+}
+
+impl OpHost for FrameReads {
+    fn invoke<'a>(
+        &'a self,
+        name: &'a str,
+        input: Value,
+    ) -> BoxFuture<'a, Result<Value, PlaywrightError>> {
+        Box::pin(async move {
+            let tab = input
+                .get("page")
+                .and_then(|page| page.get("tab"))
+                .and_then(Value::as_i64);
+            if name == "events.wait" {
+                self.waiting.notify_one();
+            }
+            let started = Instant::now();
+            let answer = OpHost::invoke(&*self.run, name, input).await;
+            if name == "page.frames"
+                && let Some(tab) = tab
+            {
+                self.reads
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .push((tab, started.elapsed()));
+            }
+            answer
+        })
+    }
+
+    fn event_head(&self) -> u64 {
+        OpHost::event_head(&*self.run)
+    }
+
+    fn page_facts(&self, tabs: Vec<TabId>) -> BoxFuture<'_, Vec<Value>> {
+        OpHost::page_facts(&*self.run, tabs)
+    }
+
+    fn gesture(&self, page: TestPage, expression: String) -> BoxFuture<'_, Result<Value, String>> {
+        OpHost::gesture(&*self.run, page, expression)
+    }
+}
+
+/// A tab another client opens while a run is going, and that never answers, costs the run one
+/// wait at most, never one per statement. Here the owner opens it from the run's page, as a
+/// click on a link that opens a tab would. The run first sees it mid-run, so its first read holds
+/// the script; that read goes unanswered, and from then on the tab is read only in the background.
+/// The row also checks that the run did read the tab while it was busy, so it cannot pass by never
+/// meeting the busy tab.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+#[expect(
+    clippy::print_stderr,
+    reason = "each try prints its time, the measure its bound is checked against"
+)]
+async fn tests_that_a_busy_tab_another_client_opens_mid_run_costs_one_wait_at_most() -> TestResult {
+    let _alone = BUSY_TABS.acquire().await?;
+    let run = Arc::new(LiveRun::connect().await?);
+    let server = PageServer::start().await?;
+    let healthy = run.new_page().await?;
+    let result = async {
+        goto(&run, &healthy, &server.url("/child.html"), "load").await?;
+        let busy_url = server
+            .url("/busy.html?at=now")
+            .replacen("127.0.0.1", "localhost", 1);
+        let init =
+            json!({ "page": brand(&healthy), "pages": run.page_facts(vec![healthy.tab]).await });
+        let mut tries = Vec::new();
+        while tries.len() < BESIDE_BUSY_TABS_TRIES {
+            let recorder = Arc::new(FrameReads {
+                run: Arc::clone(&run),
+                reads: Mutex::new(Vec::new()),
+                waiting: Notify::new(),
+            });
+            let host: Arc<dyn OpHost> = Arc::clone(&recorder) as Arc<dyn OpHost>;
+            let script = async {
+                let outcome = js_runner::run_script(&host, &init, MID_RUN_BUSY_TAB_SCRIPT).await;
+                (outcome, Instant::now())
+            };
+            // The owner opens the tab once the script's `waitForEvent` went out, from the run's
+            // page with a user gesture: nothing of the run's opened it. Opened sooner, its event
+            // could come before the wait's start and never reach the script.
+            let open = async {
+                let _waiting =
+                    time::timeout(Duration::from_secs(10), recorder.waiting.notified()).await;
+                let opened = run
+                    .eval(&healthy, &format!("window.open({busy_url:?}); ''"))
+                    .await;
+                (opened, Instant::now())
+            };
+            let ((outcome, ended), (opened, opened_at)) = tokio::join!(script, open);
+            opened?;
+            let outcome = outcome?;
+            if let Some(tab) = outcome.get("tab").and_then(Value::as_i64) {
+                // At once, so its loop does not load the machine for the next try or other rows.
+                run.close_page(&TestPage { tab: TabId(tab) }).await;
+            }
+            let took = ended.saturating_duration_since(opened_at);
+            let reads = recorder
+                .reads
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone();
+            let unanswered = reads
+                .iter()
+                .filter(|(tab, read)| *tab != healthy.tab.0 && *read >= Duration::from_millis(900))
+                .count();
+            eprintln!("MID_RUN_BUSY_TAB took={took:?} reads={reads:?} script={outcome}");
+            assert!(
+                outcome.get("error").is_none(),
+                "the script never met the busy tab's page event: {outcome}"
+            );
+            assert!(
+                unanswered >= 1,
+                "the run never met the busy tab unanswered, so this try tested nothing: {reads:?}"
+            );
+            tries.push(took);
+            if took < MID_RUN_BUSY_TAB_BOUND {
+                break;
+            }
+        }
+        assert!(
+            tries.iter().any(|took| *took < MID_RUN_BUSY_TAB_BOUND),
+            "every try took {MID_RUN_BUSY_TAB_BOUND:?} or more: {tries:?}"
+        );
+        Ok::<(), Box<dyn Error>>(())
+    }
+    .await;
+    run.close_page(&healthy).await;
+    result
+}
+
+/// A run lists a listed tab's whole frame tree from its first statement, as a host's observer
+/// reads it: `context.pages()` names another tab, and the script walks its frames before any
+/// await, cross-site ones included. Nothing in the run touched that tab; the start waits for its
+/// first read within the grace for listed tabs (`LISTED_START_GRACE_MS` in context.ts), which a
+/// tab that answers needs only milliseconds of.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_listed_tab_lists_its_whole_frame_tree_from_the_first_statement() -> TestResult
+{
+    let run = Arc::new(LiveRun::connect().await?);
+    let server = PageServer::start().await?;
+    let own = run.new_page().await?;
+    let other = run.new_page().await?;
+    let result = async {
+        goto(&run, &own, &server.url("/child.html"), "load").await?;
+        goto(&run, &other, &server.url("/frames.html"), "load").await?;
+        let init =
+            json!({ "page": brand(&own), "pages": run.page_facts(vec![own.tab, other.tab]).await });
+        let host: Arc<dyn OpHost> = Arc::clone(&run) as Arc<dyn OpHost>;
+        let script = format!(
+            "const p = context.pages().find((q) => q.tabId === {})\n\
+             return p.frames().map((frame) => frame.name()).sort()",
+            other.tab.0
+        );
+        let names = js_runner::run_script(&host, &init, &script).await?;
+        assert_eq!(
+            names,
+            json!(["", "cross", "deep", "same"]),
+            "the other tab's whole tree at the first statement"
+        );
+        Ok::<(), Box<dyn Error>>(())
+    }
+    .await;
+    run.close_page(&other).await;
+    run.close_page(&own).await;
+    result
 }

@@ -22,8 +22,9 @@ use tokio::time;
 pub(crate) const SLOW: Duration = Duration::from_millis(1500);
 
 /// The fixture pages, by path.
-const PAGES: [(&str, &str); 5] = [
+const PAGES: [(&str, &str); 6] = [
     ("/slow.html", include_str!("../data/slow.html")),
+    ("/busy.html", include_str!("../data/busy.html")),
     ("/child.html", include_str!("../data/child.html")),
     ("/frames.html", include_str!("../data/frames.html")),
     ("/nested.html", include_str!("../data/nested.html")),

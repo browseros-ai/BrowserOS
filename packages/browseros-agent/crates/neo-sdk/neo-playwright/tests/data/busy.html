@@ -1,0 +1,12 @@
+<!doctype html><html><head><meta charset="utf-8"><title>busy</title></head>
+<body><p>Busy</p>
+<script>
+  // A page running a long script of its own: its renderer answers no command for `ms`
+  // milliseconds, 20 s at most, from 300 ms after it loads (so a navigation to it completes), or
+  // with `at=now` from the moment this script runs (the navigation commits, its load never comes).
+  const params = new URLSearchParams(location.search);
+  const ms = Math.min(Number(params.get('ms') || 20000), 20000);
+  const spin = () => { const end = Date.now() + ms; while (Date.now() < end) {} };
+  if (params.get('at') === 'now') spin(); else setTimeout(spin, 300);
+</script>
+</body></html>
