@@ -32,7 +32,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use std::{env, thread};
+use std::{env, fs, process, thread};
 
 use browseros_cdp::{CdpClient, CdpError, CdpEvent};
 use browseros_core::{CdpConnection, SessionId};
@@ -76,6 +76,13 @@ async fn open(run: &LiveRun, page: &TestPage, url: &str) -> Result<Value, Playwr
         json!({ "call": { "timeoutMs": 30_000 }, "page": brand(page), "url": url }),
     )
     .await
+}
+
+/// Linux's native thread identity correlates opt-in observations with its `/proc` task data.
+fn native_thread_id() -> Option<u32> {
+    fs::read_link("/proc/thread-self")
+        .ok()
+        .and_then(|path| path.file_name()?.to_str()?.parse().ok())
 }
 
 /// `page.waitForEvent(event)` stamped at `since`, with a 5 s timeout.
@@ -1162,6 +1169,7 @@ async fn tests_that_a_click_that_logs_completes_under_a_console_listener_and_is_
                 "LIVE_CONSOLE {}",
                 json!({ "phase": phase, "wallMs": now_ms().ok(),
                     "elapsedMs": started.elapsed().as_millis(),
+                    "pid": process::id(), "tid": native_thread_id(),
                     "thread": format!("{:?}", thread::current().id()),
                     "runtime": format!("{:?}", Handle::current().runtime_flavor()) })
             );
@@ -1182,10 +1190,17 @@ async fn tests_that_a_click_that_logs_completes_under_a_console_listener_and_is_
             loop {
                 time::sleep(Duration::from_millis(100)).await;
                 let now = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-                gap.fetch_max(
-                    now.saturating_sub(tick.swap(now, Ordering::Relaxed)),
-                    Ordering::Relaxed,
-                );
+                let previous = tick.swap(now, Ordering::Relaxed);
+                let elapsed = now.saturating_sub(previous);
+                gap.fetch_max(elapsed, Ordering::Relaxed);
+                if elapsed > 500 {
+                    eprintln!(
+                        "LIVE_EXECUTOR_GAP {}",
+                        json!({ "wallMs": now_ms().ok(), "startElapsedMs": previous,
+                            "endElapsedMs": now, "gapMs": elapsed,
+                            "pid": process::id(), "tid": native_thread_id() })
+                    );
+                }
             }
         })
     });
@@ -1223,16 +1238,22 @@ async fn tests_that_a_click_that_logs_completes_under_a_console_listener_and_is_
     // Include a final occupied interval even if the observer has not been polled again
     // before the operation reports its error. Snapshot before cleanup so cleanup latency
     // cannot be mistaken for the scheduling gap that preceded the original failure.
-    scheduler_gap.fetch_max(
-        u64::try_from(started.elapsed().as_millis())
-            .unwrap_or(u64::MAX)
-            .saturating_sub(last_tick.load(Ordering::Relaxed)),
-        Ordering::Relaxed,
+    let end = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    let previous = last_tick.load(Ordering::Relaxed);
+    let final_gap = end.saturating_sub(previous);
+    scheduler_gap.fetch_max(final_gap, Ordering::Relaxed);
+    if monitor.is_some() && final_gap > 500 {
+        eprintln!(
+            "LIVE_EXECUTOR_GAP {}",
+            json!({ "wallMs": now_ms().ok(), "startElapsedMs": previous,
+                "endElapsedMs": end, "gapMs": final_gap,
+                "pid": process::id(), "tid": native_thread_id(), "phase": phase })
+        );
+    }
+    let observed_gap = monitor.as_ref().map_or_else(
+        || "not recorded".to_owned(),
+        |_| format!("{} ms", scheduler_gap.load(Ordering::Relaxed)),
     );
-    let observed_gap = monitor
-        .as_ref()
-        .map(|_| format!("{} ms", scheduler_gap.load(Ordering::Relaxed)))
-        .unwrap_or_else(|| "not recorded".to_owned());
     trace("cleanup");
     run.close_page(&page).await;
     if let Some(monitor) = monitor {

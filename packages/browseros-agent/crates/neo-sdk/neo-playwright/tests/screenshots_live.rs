@@ -35,7 +35,7 @@ const TALL_PNG_SETUP: &str = r#"
 
 /// Compare joined rows with small native captures of a changing row pattern. Every capture
 /// runs with activation disabled, after the fixture has returned the foreground to another tab.
-const TALL_PNG_PROGRAM: &str = r#"
+const TALL_PNG_PROGRAM: &str = r"
                 const viewport = await page.evaluate(() => [innerWidth,innerHeight,devicePixelRatio,scrollX,scrollY]);
                 async function sample(scale, ys, joins) {
                     const bytes = await page.screenshot({ fullPage: true, omitBackground: true, scale, timeout: 60000 });
@@ -86,7 +86,7 @@ const TALL_PNG_PROGRAM: &str = r#"
                 const device = await sample('device', [3123,3124,10415,10416,14999,15000,19999,20000,22000*viewport[2]-1], viewport[2] === 1.5 ? [10374,20748,31122] : [3124,6248,9372]);
                 const css = await sample('css', [9999,10000,15624,15625,21999], viewport[2] === 1.5 ? [15564] : [6250,12500,18750]);
                 return { device,css,viewport,after: await page.evaluate(() => [innerWidth,innerHeight,devicePixelRatio,scrollX,scrollY]) };
-            "#;
+            ";
 
 #[tokio::test]
 #[ignore = "needs an owned BrowserOS on BROWSEROS_CDP_PORT"]

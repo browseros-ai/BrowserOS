@@ -188,10 +188,7 @@ async fn measure_detector() -> Result<(), String> {
             // A disconnected diagnostic read must not replace the script failure that
             // preceded it. Record and return that first error before doing more browser IO.
             if let Err(error) = &value {
-                eprintln!(
-                    "DETECTION {}",
-                    json!({ "phase": name, "error": error.to_string() })
-                );
+                eprintln!("DETECTION {}", json!({ "phase": name, "error": error }));
             }
             let value = value.map_err(|error| format!("{name}: {error}"))?;
             time::sleep(Duration::from_millis(1500)).await;
