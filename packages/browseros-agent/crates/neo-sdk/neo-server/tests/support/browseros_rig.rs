@@ -507,7 +507,7 @@ fn log_sink(path: &Path) -> Result<Stdio, Box<dyn Error>> {
 
 #[expect(
     clippy::print_stderr,
-    reason = "a skipped e2e says so in the test output; nothing else reads it"
+    reason = "live runner counts explicit precondition returns"
 )]
 fn skipped() {
     // The live runner separates this precondition return from an exercised libtest pass.
