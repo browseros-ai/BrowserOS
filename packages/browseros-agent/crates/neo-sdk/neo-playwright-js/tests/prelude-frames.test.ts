@@ -820,6 +820,48 @@ it('tests that a listed tab the script acts on while its start read is in flight
   expect(reads1009).toEqual(2)
 })
 
+// A page the run first sees after it started holds the script for its reads, so a popup or a new
+// page has its whole tree when the call that handed it out resolves. One that does not answer, a
+// busy tab another client opened, costs the run that one wait in all: its unanswered read must not
+// leave it holding every later statement, which is how the old wait came back for listed tabs.
+it('tests that a page first seen mid-run that does not answer costs the run one wait, never one per statement', async () => {
+  const timeline: string[] = []
+  let titles = 0
+  const runtime = loadPrelude({
+    seed: SEED,
+    answer: async (call) => {
+      if (call.name === 'page.frames') {
+        if (tabOf(call) !== 1011) return TREE
+        await new Promise((resolve) => setTimeout(resolve, 40))
+        timeline.push('1011 read got no tree')
+        return {}
+      }
+      titles += 1
+      timeline.push(`title ${titles}`)
+      // The first title's reply names a tab the run had not seen, opened by another client.
+      return titles === 1
+        ? {
+            ok: 'A',
+            pages: [{ tab: 1011, url: 'https://c.example/', title: 'C' }],
+          }
+        : 'A'
+    },
+  })
+  await runtime.run('for (let i = 0; i < 6; i++) await page.title()')
+  expect(timeline).toEqual([
+    'title 1',
+    '1011 read got no tree',
+    'title 2',
+    'title 3',
+    'title 4',
+    'title 5',
+    'title 6',
+  ])
+  expect(reads(runtime.calls).filter(([tab]) => tab === 1011)).toEqual([
+    [1011, 'page.frames'],
+  ])
+})
+
 it('tests that a page first seen mid-run has its whole tree when the operation that handed it out resolves', async () => {
   const runtime = loadPrelude({
     seed: SEED,

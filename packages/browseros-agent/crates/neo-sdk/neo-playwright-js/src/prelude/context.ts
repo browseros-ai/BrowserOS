@@ -62,7 +62,10 @@ export class BrowserContext extends EventEmitter {
    * binds `page` only to a tab whose object is not among these (`_applyReply`).
    */
   readonly #handed = new WeakSet<Page>()
-  /** Set once the run's page exists: a page first seen after it is working (`Page._working`). */
+  /**
+   * Set once the run's page exists: a page first seen after it is new in the run
+   * (`Page._newInRun`).
+   */
   #started = false
   /** The frame versions of the reply `_applyReply` is applying, for the pages it makes. */
   #replyVersions: Map<number, number> | null = null
@@ -219,7 +222,7 @@ export class BrowserContext extends EventEmitter {
     const fresh = !page
     if (!page) {
       page = new Page(this, fact.tab, fact.url)
-      page._working = this.#started
+      page._newInRun = this.#started
       this.#byTab.set(fact.tab, page)
       // The version the reply that names it gave, taken before its first read, so that read
       // counts as current and the next reply does not read it again.
@@ -229,8 +232,8 @@ export class BrowserContext extends EventEmitter {
     page._applyFact(fact, at, approved)
     // A page first seen once the run started (a popup, a new page, an op's result, a tab
     // another run opened, one a start read's reply listed) has its tree read now. Such a page
-    // is working, so the next settle step joins this read and its tree is there by the script's
-    // next await. A sync getter cannot wait for it, so in the instant it is handed out (a popup
+    // holds the script until it leaves a read unanswered (`Page._newInRun`), so the next settle
+    // step joins this read and its tree is there by the script's next await. A sync getter cannot wait for it, so in the instant it is handed out (a popup
     // listener) `frames()` lists what was read so far, as upstream's does as a popup opens.
     if (fresh && this.#started && !page.isClosed())
       void page._readInitialFrames(LISTED_FRAMES_TIMEOUT_MS)
@@ -283,7 +286,8 @@ export class BrowserContext extends EventEmitter {
   //   a script op settles   every page whose tree is stale  _settleFrames (bridge.ts onSettle)
   //   waitForTimeout ends   every page the script used     _refreshUsedFrames
   //
-  // The script waits only for the pages it used in this run (`Page._used`). Every other page is
+  // The script waits only for the pages it used in this run, and for a page the run first saw
+  // after it started until that page leaves a read unanswered (`Page._used`). Every other page is
   // read in the background, and one that did not answer is asked again only once its frame
   // version moves (`Page._askIfChanged`). A page whose renderer is busy answers no read until the
   // native read gives up after a second; when the script waited on every page, each statement

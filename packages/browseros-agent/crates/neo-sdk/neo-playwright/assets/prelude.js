@@ -11325,6 +11325,8 @@ ${changes}`;
     #approvedClose = null;
     _working = false;
     _framesWatched = false;
+    _newInRun = false;
+    #unanswered = false;
     _framesChanged = 0;
     #framesReadAt = 0;
     #framesAskedAt = 0;
@@ -11866,7 +11868,7 @@ ${changes}`;
     async _settle(timeoutMs) {
       if (this.#firstRead)
         await this.#firstRead;
-      if (this._framesStale())
+      if (this._used() && this._framesStale())
         await this._readFrames(timeoutMs);
     }
     _askIfChanged(timeoutMs) {
@@ -11878,6 +11880,7 @@ ${changes}`;
       if (this.#framesRead)
         return this.#framesRead;
       const read = this._refreshFrames("page.frames", timeoutMs).catch(() => {
+        this.#unanswered = true;
         this._framesUnknown();
         return false;
       }).finally(() => {
@@ -11896,17 +11899,21 @@ ${changes}`;
         this._applyFrames(tree.frames, observed);
         this.#framesReadAt = version;
         this.#framesIncomplete = tree.incomplete === true;
+        this.#unanswered = false;
         return !this.#framesIncomplete;
       }
-      if (tree !== null && typeof tree === "object" && observed !== null && !this._closed)
-        this._framesUnknown();
+      if (tree === null || typeof tree !== "object" || observed === null || this._closed)
+        return false;
+      if (this.#payloadCurrent(observed))
+        this.#unanswered = true;
+      this._framesUnknown();
       return false;
     }
     _framesUnknown() {
       this.#framesIncomplete = true;
     }
     _used() {
-      return this._working || this._framesWatched;
+      return this._working || this._framesWatched || this._newInRun && !this.#unanswered;
     }
     _frameVersion(version) {
       this._framesChanged = Math.max(this._framesChanged, version);
@@ -12361,7 +12368,7 @@ ${changes}`;
       const fresh = !page;
       if (!page) {
         page = new Page(this, fact.tab, fact.url);
-        page._working = this.#started;
+        page._newInRun = this.#started;
         this.#byTab.set(fact.tab, page);
         const version = this.#replyVersions?.get(fact.tab);
         if (version !== undefined)

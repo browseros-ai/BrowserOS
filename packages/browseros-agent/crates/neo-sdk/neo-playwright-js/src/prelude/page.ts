@@ -150,14 +150,14 @@ export class Page extends EventEmitter {
   /** Host-approved close, deferred until that record's position in its own reply. */
   #approvedClose: { seq: number; observed: number } | null = null
   /**
-   * Whether the script works on this page in this run (FR-1): the run's page, a page the run
-   * opened or learned of after it started (a popup, a new page), and a tab the run's init listed
-   * once the script ran an op on it or listened to it. A listed tab the script never touched is
+   * Whether the script works on this page in this run (FR-1): the run's page, and any other
+   * page once the script ran an op on it or listened to it. A tab the script never touched is
    * not: Neo's own worker-state subscription on every listed tab brands it with
-   * `working: false` (`_brand`, `EventHub.sendListen`). With `_framesWatched` it decides whether
-   * Neo's reads of this page's tree hold the script (`_used`). Each refresh is also an op on its
-   * tab, and a view that follows the run's task goes to the tab of the task's latest op, so
-   * marking every listed tab would send that view across all of them after each wait.
+   * `working: false` (`_brand`, `EventHub.sendListen`). It decides, with `_framesWatched` and
+   * `_newInRun`, whether Neo's reads of this page's tree hold the script (`_used`). Each refresh
+   * is also an op on its tab, and a view that follows the run's task goes to the tab of the
+   * task's latest op, so marking every listed tab would send that view across all of them after
+   * each wait.
    */
   _working = false
   /**
@@ -170,6 +170,16 @@ export class Page extends EventEmitter {
    * it.
    */
   _framesWatched = false
+  /**
+   * Whether the run first saw this page after it started: a popup or a new page the script
+   * caused, or a tab another client opened. Neo's reads of its tree hold the script (`_used`)
+   * until one goes unanswered, so the call that hands out a popup or a new page resolves with its
+   * whole tree, while a page that does not answer costs the run one wait in all, never one per
+   * statement. Once the script acts on the page or reads its frames, it holds as any used page.
+   */
+  _newInRun = false
+  /** Whether the last read of this tab got no answer: it failed, or the native read got no tree. */
+  #unanswered = false
   /** The newest frame-tree version a reply gave this tab (`Envelope.frames`). */
   _framesChanged = 0
   /** The version the cached tree was read at; the tree is stale once `_framesChanged` passes it. */
@@ -1335,11 +1345,14 @@ export class Page extends EventEmitter {
 
   /**
    * This tab's part of a settle step (`BrowserContext._settleFrames`): its first read, retry and
-   * all, if one is in flight, then one read if its tree is still stale.
+   * all, if one is in flight, then one read if its tree is still stale and the page still holds
+   * the script (`_used`).
    */
   async _settle(timeoutMs: number): Promise<void> {
     if (this.#firstRead) await this.#firstRead
-    if (this._framesStale()) await this._readFrames(timeoutMs)
+    // A page new in the run whose first read went unanswered no longer holds the script: it
+    // was its one wait.
+    if (this._used() && this._framesStale()) await this._readFrames(timeoutMs)
   }
 
   /**
@@ -1363,6 +1376,7 @@ export class Page extends EventEmitter {
     if (this.#framesRead) return this.#framesRead
     const read = this._refreshFrames('page.frames', timeoutMs)
       .catch(() => {
+        this.#unanswered = true
         this._framesUnknown()
         return false
       })
@@ -1398,6 +1412,7 @@ export class Page extends EventEmitter {
       this._applyFrames(tree.frames, observed)
       this.#framesReadAt = version
       this.#framesIncomplete = tree.incomplete === true
+      this.#unanswered = false
       return !this.#framesIncomplete
     }
     // The host answers an object, `{}` when its bounded read got no tree; `null` is no answer at
@@ -1407,12 +1422,14 @@ export class Page extends EventEmitter {
     // the cache other than what its counters say was read, so it is marked unknown, and a page
     // the script uses is read again before its next operation settles.
     if (
-      tree !== null &&
-      typeof tree === 'object' &&
-      observed !== null &&
-      !this._closed
+      tree === null ||
+      typeof tree !== 'object' ||
+      observed === null ||
+      this._closed
     )
-      this._framesUnknown()
+      return false
+    if (this.#payloadCurrent(observed)) this.#unanswered = true
+    this._framesUnknown()
     return false
   }
 
@@ -1428,14 +1445,19 @@ export class Page extends EventEmitter {
   }
 
   /**
-   * Whether the script used this page in this run (`_working`, `_framesWatched`), so Neo's reads
-   * of its tree hold the script's next statement (`BrowserContext._readInitialFrames`,
-   * `_settleFrames`, `_refreshUsedFrames`). The reads of every other page go on in the
-   * background: holding the script for a page it never touched only spends its time, a second
-   * per statement while that page's renderer is busy.
+   * Whether Neo's reads of this page's tree hold the script's next statement
+   * (`BrowserContext._readInitialFrames`, `_settleFrames`, `_refreshUsedFrames`): the script used
+   * this page in this run (`_working`, `_framesWatched`), or the run first saw it after it
+   * started and it has not left a read unanswered (`_newInRun`). The reads of every other page
+   * go on in the background: holding the script for a page it never touched only spends its
+   * time, a second per statement while that page's renderer is busy.
    */
   _used(): boolean {
-    return this._working || this._framesWatched
+    return (
+      this._working ||
+      this._framesWatched ||
+      (this._newInRun && !this.#unanswered)
+    )
   }
 
   /** Records `version`, this tab's frame-tree version from a reply (`Envelope.frames`). */

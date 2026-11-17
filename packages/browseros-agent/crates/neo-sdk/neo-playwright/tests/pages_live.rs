@@ -26,11 +26,12 @@ mod page_server;
 use std::error::Error;
 use std::future::Future;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use browseros_cdp::CdpEvent;
 use browseros_core::TabId;
+use futures_util::future::BoxFuture;
 use js_runner::OpHost;
 use live_run::{EnvCall, LiveRun, TestPage, TestResult, brand, test_page};
 use neo_playwright::{Answer, ErrorCode, PlaywrightError, TimedOut};
@@ -1101,6 +1102,155 @@ async fn tests_that_a_run_beside_busy_tabs_never_waits_for_their_frames() -> Tes
         "BESIDE_BUSY_TABS closed the busy tabs in {:?}",
         closing.elapsed()
     );
+    run.close_page(&healthy).await;
+    result
+}
+
+/// The longest the five statements after another client opened a busy tab may take, from the
+/// moment the run learned of the tab, in the best of [`BESIDE_BUSY_TABS_TRIES`] tries. A tab the
+/// run first sees mid-run holds the script for its reads until one goes unanswered, so such a tab
+/// may cost the run one wait in all: one native read's whole budget (one second,
+/// `frame_tree.rs` `SNAPSHOT_BUDGET`). The bound is that one wait plus the room
+/// [`BESIDE_BUSY_TABS_BOUND`] gives a run. A tab that held every statement would cost five or
+/// more, so every try would fail.
+const MID_RUN_BUSY_TAB_BOUND: Duration = Duration::from_millis(1_900);
+
+/// The script of [`tests_that_a_busy_tab_another_client_opens_mid_run_costs_one_wait_at_most`]:
+/// it learns of the other client's tab through the context's `page` event, then runs five
+/// statements on its own tab, and returns how long that took from the moment the tab reached it.
+const MID_RUN_BUSY_TAB_SCRIPT: &str = "let seenAt = 0\n\
+    context.on('page', () => { if (seenAt === 0) seenAt = Date.now() })\n\
+    await context.waitForEvent('page', { timeout: 15000 })\n\
+    const afterWait = Date.now()\n\
+    for (let i = 0; i < 5; i++) await page.title()\n\
+    return Date.now() - (seenAt === 0 ? afterWait : Math.min(seenAt, afterWait))";
+
+/// The live run's ops, with how long each `page.frames` read took and on which tab.
+struct FrameReads {
+    run: Arc<LiveRun>,
+    reads: Mutex<Vec<(i64, Duration)>>,
+}
+
+impl OpHost for FrameReads {
+    fn invoke<'a>(
+        &'a self,
+        name: &'a str,
+        input: Value,
+    ) -> BoxFuture<'a, Result<Value, PlaywrightError>> {
+        Box::pin(async move {
+            let tab = input
+                .get("page")
+                .and_then(|page| page.get("tab"))
+                .and_then(Value::as_i64);
+            let started = Instant::now();
+            let answer = OpHost::invoke(&*self.run, name, input).await;
+            if name == "page.frames"
+                && let Some(tab) = tab
+            {
+                self.reads
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .push((tab, started.elapsed()));
+            }
+            answer
+        })
+    }
+
+    fn event_head(&self) -> u64 {
+        OpHost::event_head(&*self.run)
+    }
+
+    fn page_facts(&self, tabs: Vec<TabId>) -> BoxFuture<'_, Vec<Value>> {
+        OpHost::page_facts(&*self.run, tabs)
+    }
+
+    fn gesture(&self, page: TestPage, expression: String) -> BoxFuture<'_, Result<Value, String>> {
+        OpHost::gesture(&*self.run, page, expression)
+    }
+}
+
+/// A tab another client opens while a run is going, and that never answers, costs the run one
+/// wait at most, never one per statement. The run first sees it mid-run, so its first read holds
+/// the script, as a popup's or a new page's does; that read goes unanswered, and from then on the
+/// tab is read only in the background. The row also checks that the run did read the tab while it
+/// was busy, so it cannot pass by never meeting the busy tab.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+#[expect(
+    clippy::print_stderr,
+    reason = "each try prints its time, the measure its bound is checked against"
+)]
+async fn tests_that_a_busy_tab_another_client_opens_mid_run_costs_one_wait_at_most() -> TestResult {
+    let run = Arc::new(LiveRun::connect().await?);
+    let server = PageServer::start().await?;
+    let healthy = run.new_page().await?;
+    let mut others = Vec::new();
+    let result = async {
+        goto(&run, &healthy, &server.url("/child.html"), "load").await?;
+        let busy_url = server
+            .url("/busy.html?at=now")
+            .replacen("127.0.0.1", "localhost", 1);
+        let init =
+            json!({ "page": brand(&healthy), "pages": run.page_facts(vec![healthy.tab]).await });
+        let mut tries = Vec::new();
+        while tries.len() < BESIDE_BUSY_TABS_TRIES {
+            let recorder = Arc::new(FrameReads {
+                run: Arc::clone(&run),
+                reads: Mutex::new(Vec::new()),
+            });
+            let host: Arc<dyn OpHost> = Arc::clone(&recorder) as Arc<dyn OpHost>;
+            // Another client opens the tab once the run waits for it, the way the owner or another
+            // session opens one: nothing of the run's names it.
+            let open = async {
+                time::sleep(Duration::from_millis(300)).await;
+                run.browser()
+                    .cdp(
+                        "Target.createTarget",
+                        json!({ "url": busy_url, "background": true }),
+                        None,
+                    )
+                    .await
+            };
+            let (took, opened) = tokio::join!(
+                js_runner::run_script(&host, &init, MID_RUN_BUSY_TAB_SCRIPT),
+                open
+            );
+            if let Some(target) = opened?.get("targetId").and_then(Value::as_str) {
+                others.push(target.to_owned());
+            }
+            let took = Duration::from_millis(took?.as_u64().ok_or("the script returns its time")?);
+            let reads = recorder
+                .reads
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone();
+            let unanswered = reads
+                .iter()
+                .filter(|(tab, read)| *tab != healthy.tab.0 && *read >= Duration::from_millis(900))
+                .count();
+            eprintln!("MID_RUN_BUSY_TAB took={took:?} reads={reads:?}");
+            assert!(
+                unanswered >= 1,
+                "the run never met the busy tab unanswered, so this try tested nothing: {reads:?}"
+            );
+            tries.push(took);
+            if took < MID_RUN_BUSY_TAB_BOUND {
+                break;
+            }
+        }
+        assert!(
+            tries.iter().any(|took| *took < MID_RUN_BUSY_TAB_BOUND),
+            "every try took {MID_RUN_BUSY_TAB_BOUND:?} or more: {tries:?}"
+        );
+        Ok::<(), Box<dyn Error>>(())
+    }
+    .await;
+    for target in &others {
+        let _closed = run
+            .browser()
+            .cdp("Target.closeTarget", json!({ "targetId": target }), None)
+            .await;
+    }
     run.close_page(&healthy).await;
     result
 }
