@@ -57,6 +57,7 @@ use browseros_core::{
     BrowserSession, BrowserView, CoreError, FrameId, ProtocolSession, RuntimeLease, SessionId,
     TabId, TargetId,
 };
+use futures_util::future;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -2021,21 +2022,26 @@ impl Watcher {
         let protocol = self.browser.protocol_session(session.clone());
         let session = session.clone();
         drop(tokio::spawn(async move {
-            let tree = time::timeout(TREE_READ_WAIT, async {
-                // A frame's own commits reach the watcher only from its own session, and only
-                // once `Page` is on there. Core turns it on only on tabs it created, for its file
-                // chooser interception; on an adopted tab (the owner's, another session's) only a
-                // frames read would (`frame_tree::oopif_tree`). `Page` goes first and the tree
-                // second, on this one session and within one deadline, and the frame's renderer
-                // answers in order: a commit made before `Page` was on is in the tree
-                // (`FrameLifecycleTracker::seed` gives it to the frame), and one made after sends
-                // its own event, which waits in the tab's line until this read is applied.
-                let _ = protocol.send_value("Page.enable", json!({})).await;
-                protocol.send_value("Page.getFrameTree", json!({})).await
-            })
-            .await
-            .ok()
-            .and_then(Result::ok);
+            // A frame's own commits reach the watcher only from its own session, and only once
+            // `Page` is on there. Core turns it on only on tabs it created, for its file chooser
+            // interception; on an adopted tab (the owner's, another session's) only a frames read
+            // would (`frame_tree::oopif_tree`). Both commands go out together, `Page.enable`
+            // first: `join` polls them in order and the client writes through a fair lock, so the
+            // frame's renderer gets the enable first and answers in that order. A commit made
+            // before `Page` was on is in the tree (`FrameLifecycleTracker::seed` gives it to the
+            // frame), and one made after sends its own event, which waits in the tab's line until
+            // this read is applied. Awaiting the enable before sending the read measured worse:
+            // on an adopted tab, whose frames all attach at once, one frame's read missed the
+            // deadline in each of two runs. Sent together, the read keeps its place in the
+            // renderer's queue, likely ahead of core's own setup of the frame (inferred).
+            let read = future::join(
+                protocol.send_value("Page.enable", json!({})),
+                protocol.send_value("Page.getFrameTree", json!({})),
+            );
+            let tree = time::timeout(TREE_READ_WAIT, read)
+                .await
+                .ok()
+                .and_then(|(_enabled, tree)| tree.ok());
             let _ = seeded.send(SeededTree { session, tree });
         }));
     }
