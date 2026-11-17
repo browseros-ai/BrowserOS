@@ -92,8 +92,6 @@ const ABOUT = [
   'Lone halves of a character are written as U+FFFD: the covered block’s cut is JavaScript’s own, and U+FFFD is what every reader outside the script engine receives (design 1.9). No other text holds one.',
 ]
 
-type Output = { path: string; text: string }
-
 /** The tree as Rust will hand it to the renderer: a fresh copy, so no render sees another's. */
 function result(snapshot: Snapshot): SnapshotResult {
   const { json, chain, ...facts } = snapshot
@@ -207,7 +205,14 @@ function whole(text: string | null, call: Call, name: string): string | null {
   return text.toWellFormed()
 }
 
-function written(def: CaseDef, snapshots: Record<string, Snapshot>): Case {
+/**
+ * One case as today's renderer answers it. Exported, with `caseDocument`, so the saved real
+ * pages kept outside the repository are written in this same shape by this same code.
+ */
+export function writeCase(
+  def: CaseDef,
+  snapshots: Record<string, Snapshot>,
+): Case {
   const snapshot = def.snapshot === null ? null : snapshots[def.snapshot]
   if (snapshot === undefined)
     throw new Error(`${def.name} names no snapshot ${def.snapshot}`)
@@ -249,7 +254,10 @@ function written(def: CaseDef, snapshots: Record<string, Snapshot>): Case {
 }
 
 /** One file: its own snapshots, so each file reads alone, then one case per line. */
-function document(cases: Case[], snapshots: Record<string, Snapshot>): string {
+export function caseDocument(
+  cases: Case[],
+  snapshots: Record<string, Snapshot>,
+): string {
   const used = [
     ...new Set(
       cases.flatMap((each) => (each.snapshot === null ? [] : [each.snapshot])),
@@ -277,7 +285,7 @@ function document(cases: Case[], snapshots: Record<string, Snapshot>): string {
 /** Both files, from every gap's cases. Throws on a duplicate name or past the size limit. */
 export function snapshotCaseOutputs(
   gaps: Record<string, Gap> = GAPS,
-): Output[] {
+): { path: string; text: string }[] {
   const snapshots: Record<string, Snapshot> = {}
   const defs: CaseDef[] = []
   for (const [key, gap] of Object.entries(gaps)) {
@@ -301,15 +309,18 @@ export function snapshotCaseOutputs(
   for (const def of defs) {
     if (names.has(def.name)) throw new Error(`two cases are named ${def.name}`)
     names.add(def.name)
-    const each = written(def, snapshots)
+    const each = writeCase(def, snapshots)
     const snapshot = def.snapshot === null ? null : snapshots[def.snapshot]
     if ('playwright' in each.call && snapshot && factless(snapshot))
       vendored.push(each)
     else neo.push(each)
   }
   const outputs = [
-    { path: `${FOLDER}/playwright.json`, text: document(vendored, snapshots) },
-    { path: `${FOLDER}/neo.json`, text: document(neo, snapshots) },
+    {
+      path: `${FOLDER}/playwright.json`,
+      text: caseDocument(vendored, snapshots),
+    },
+    { path: `${FOLDER}/neo.json`, text: caseDocument(neo, snapshots) },
   ]
   const bytes = outputs.reduce(
     (sum, output) => sum + Buffer.byteLength(output.text),
