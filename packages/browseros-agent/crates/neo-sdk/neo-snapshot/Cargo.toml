@@ -13,6 +13,12 @@ serde.workspace = true
 # double JavaScript's `JSON.parse` makes of it, also when this crate is built alone.
 serde_json = { workspace = true, features = ["float_roundtrip"] }
 
+[dev-dependencies]
+# The judge of JavaScript's semantics: src/js/tests.rs runs each expression in QuickJS, the engine
+# the TypeScript renderer runs in, at the workspace pin. Dev-only: the crate never runs JS
+# (STYLE P1).
+rquickjs.workspace = true
+
 # claw-sdk's lint table, restated as neo-server and neo-playwright restate it (check.sh puts a
 # crate with both tables on claw-sdk's lint set).
 #
