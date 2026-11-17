@@ -33,7 +33,247 @@ impl MigratorTrait for Migrator {
             Box::new(m0024_add_write_consent_to_skill_flows::Migration),
             Box::new(m0025_add_ultrafast_sessions::Migration),
             Box::new(m0026_add_site_and_outcome_to_ultrafast_sessions::Migration),
+            Box::new(m0027_backfill_task_active_duration::Migration),
+            Box::new(m0028_align_efficiency_active_duration::Migration),
         ]
+    }
+}
+
+mod m0027_backfill_task_active_duration {
+    use super::*;
+
+    pub struct Migration;
+
+    impl MigrationName for Migration {
+        fn name(&self) -> &str {
+            "m0027_backfill_task_active_duration"
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl MigrationTrait for Migration {
+        async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            // tasks.duration_ms is only rewritten when a session recomputes, so rows projected under
+            // the old wall-clock formula keep the idle tail (session end minus start). Rewrite every
+            // row to the active span: first activity to the last tool finishing.
+            // Child steps inside a script stamp their write (completion) time, so created_at is
+            // already their end; adding duration would double-count a slow child. Top-level rows
+            // stamp the tool start, so their end is created_at + duration.
+            manager
+                .get_connection()
+                .execute_unprepared(
+                    r#"
+                    UPDATE tasks
+                    SET duration_ms = MAX(0,
+                      COALESCE(
+                        (SELECT MAX(CASE WHEN d.parent_dispatch_id IS NOT NULL THEN d.created_at ELSE d.created_at + COALESCE(d.duration_ms, 0) END) FROM tool_dispatches d WHERE d.session_id = tasks.session_id),
+                        started_at
+                      ) - started_at)
+                    "#,
+                )
+                .await?;
+            Ok(())
+        }
+
+        async fn down(&self, _manager: &SchemaManager) -> Result<(), DbErr> {
+            // Retained audit history cannot reconstruct the old wall-clock span.
+            Ok(())
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use sea_orm_migration::sea_orm::{
+            ConnectionTrait, Database as SeaDatabase, DbBackend, Statement,
+        };
+
+        #[tokio::test]
+        async fn backfill_rewrites_tasks_to_active_span() -> anyhow::Result<()> {
+            let connection = SeaDatabase::connect("sqlite::memory:").await?;
+            super::super::Migrator::up(&connection, Some(26)).await?;
+            for statement in [
+                // Idle tail: end at 9000 but last tool finishes at 1000 + 200 = 1200.
+                "INSERT INTO tasks (session_id, agent_id, slug, agent_label, title, started_at, ended_at, duration_ms, dispatch_count, tool_sequence_json, status, error_count, cursor_id, has_screenshots, updated_at) VALUES ('tail', 'agent', 'agent', 'Agent', 'Session', 100, 9000, 8900, 2, '[]', 'done', 0, 0, 0, 0)",
+                // No dispatches: falls back to started_at, so duration collapses to 0.
+                "INSERT INTO tasks (session_id, agent_id, slug, agent_label, title, started_at, ended_at, duration_ms, dispatch_count, tool_sequence_json, status, error_count, cursor_id, has_screenshots, updated_at) VALUES ('empty', 'agent', 'agent', 'Agent', 'Session', 500, 4000, 3500, 0, '[]', 'done', 0, 0, 0, 0)",
+                // Slow completion-stamped child: top-level script ends at 1000 + 200 = 1200; the
+                // child stamps its created_at (1150) at completion and carries a 30s duration, so a
+                // naive created_at + duration would overshoot to 31150. The active span must use the
+                // top-level end: 1200 - 200 = 1000.
+                "INSERT INTO tasks (session_id, agent_id, slug, agent_label, title, started_at, ended_at, duration_ms, dispatch_count, tool_sequence_json, status, error_count, cursor_id, has_screenshots, updated_at) VALUES ('child', 'agent', 'agent', 'Agent', 'Session', 200, 9000, 8800, 2, '[]', 'done', 0, 0, 0, 0)",
+                "INSERT INTO tool_dispatches (created_at, agent_id, slug, agent_label, session_id, tool_name, duration_ms, has_screenshot) VALUES (300, 'agent', 'agent', 'Agent', 'tail', 'navigate', 100, 0), (1000, 'agent', 'agent', 'Agent', 'tail', 'click', 200, 0)",
+                // Top-level script row (parent_dispatch_id NULL): end is created_at + duration.
+                "INSERT INTO tool_dispatches (created_at, agent_id, slug, agent_label, session_id, tool_name, duration_ms, has_screenshot) VALUES (1000, 'agent', 'agent', 'Agent', 'child', 'run', 200, 0)",
+                // Slow child row stamped at completion (parent_dispatch_id set): end is created_at.
+                "INSERT INTO tool_dispatches (created_at, agent_id, slug, agent_label, session_id, tool_name, duration_ms, has_screenshot, parent_dispatch_id) VALUES (1150, 'agent', 'agent', 'Agent', 'child', 'wait', 30000, 0, 'child-parent')",
+            ] {
+                connection.execute_unprepared(statement).await?;
+            }
+            super::super::Migrator::up(&connection, None).await?;
+            let rows = connection
+                .query_all(Statement::from_string(
+                    DbBackend::Sqlite,
+                    "SELECT session_id, duration_ms FROM tasks ORDER BY session_id",
+                ))
+                .await?;
+            assert_eq!(
+                rows.into_iter()
+                    .map(|row| Ok((
+                        row.try_get::<String>("", "session_id")?,
+                        row.try_get::<i64>("", "duration_ms")?,
+                    )))
+                    .collect::<Result<Vec<_>, DbErr>>()?,
+                [
+                    ("child".to_owned(), 1000),
+                    ("empty".to_owned(), 0),
+                    ("tail".to_owned(), 1100)
+                ]
+            );
+            Ok(())
+        }
+    }
+}
+
+mod m0028_align_efficiency_active_duration {
+    use super::*;
+    use sea_orm_migration::sea_orm::{DbBackend, Statement};
+
+    const SOURCE_EFFICIENCY_ESTIMATOR_VERSION: i64 = 4;
+    const EFFICIENCY_ESTIMATOR_VERSION: i64 = 5;
+
+    pub struct Migration;
+
+    impl MigrationName for Migration {
+        fn name(&self) -> &str {
+            "m0028_align_efficiency_active_duration"
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl MigrationTrait for Migration {
+        async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            // active_duration_ms mirrored the old wall-clock task duration (session end minus
+            // start). m0027 rewrote tasks.duration_ms to the active span, so re-point matching
+            // projections at it. Retained projections can outlive tasks and session ids can be
+            // reused, so the end timestamp and dispatch count identify the same materialized task.
+            manager
+                .get_connection()
+                .execute(Statement::from_sql_and_values(
+                    DbBackend::Sqlite,
+                    r#"
+                    UPDATE session_efficiency_stats
+                    SET active_duration_ms = MAX((
+                            SELECT task.duration_ms
+                            FROM tasks AS task
+                            WHERE task.session_id = session_efficiency_stats.session_id
+                                AND task.ended_at = session_efficiency_stats.ended_at
+                                AND task.dispatch_count = session_efficiency_stats.dispatch_count
+                        ), 0),
+                        efficiency_estimator_version = ?
+                    WHERE efficiency_estimator_version = ?
+                        AND EXISTS (
+                            SELECT 1
+                            FROM tasks AS task
+                            WHERE task.session_id = session_efficiency_stats.session_id
+                                AND task.ended_at = session_efficiency_stats.ended_at
+                                AND task.dispatch_count = session_efficiency_stats.dispatch_count
+                        )
+                    "#,
+                    [
+                        EFFICIENCY_ESTIMATOR_VERSION.into(),
+                        SOURCE_EFFICIENCY_ESTIMATOR_VERSION.into(),
+                    ],
+                ))
+                .await?;
+            Ok(())
+        }
+
+        async fn down(&self, _manager: &SchemaManager) -> Result<(), DbErr> {
+            // Retained audit history cannot reconstruct the old wall-clock span.
+            Ok(())
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use sea_orm_migration::sea_orm::{
+            ConnectionTrait, Database as SeaDatabase, DatabaseConnection, DbBackend, Statement,
+        };
+
+        async fn insert_projection(
+            connection: &DatabaseConnection,
+            session_id: &str,
+            ended_at: i64,
+            dispatch_count: i64,
+        ) -> Result<(), DbErr> {
+            connection
+                .execute_unprepared(&format!(
+                    "INSERT INTO session_efficiency_stats VALUES ('{session_id}', {ended_at}, {dispatch_count}, 900, 0, 0, 0, 4, 0)"
+                ))
+                .await?;
+            Ok(())
+        }
+
+        async fn insert_task(
+            connection: &DatabaseConnection,
+            session_id: &str,
+            ended_at: i64,
+            dispatch_count: i64,
+            duration_ms: i64,
+        ) -> Result<(), DbErr> {
+            connection
+                .execute_unprepared(&format!(
+                    "INSERT INTO tasks (session_id, agent_id, slug, agent_label, title, started_at, ended_at, duration_ms, dispatch_count, tool_sequence_json, status, error_count, cursor_id, has_screenshots, updated_at) VALUES ('{session_id}', 'agent', 'agent', 'Agent', 'Session', 0, {ended_at}, {duration_ms}, {dispatch_count}, '[]', 'done', 0, 0, 0, 0)"
+                ))
+                .await?;
+            Ok(())
+        }
+
+        async fn projection(
+            connection: &DatabaseConnection,
+            session_id: &str,
+        ) -> Result<(i64, i64), DbErr> {
+            let row = connection
+                .query_one(Statement::from_string(
+                    DbBackend::Sqlite,
+                    format!(
+                        "SELECT active_duration_ms, efficiency_estimator_version FROM session_efficiency_stats WHERE session_id = '{session_id}'"
+                    ),
+                ))
+                .await?
+                .ok_or_else(|| DbErr::RecordNotFound(session_id.to_owned()))?;
+            Ok((
+                row.try_get("", "active_duration_ms")?,
+                row.try_get("", "efficiency_estimator_version")?,
+            ))
+        }
+
+        #[tokio::test]
+        async fn upgrade_repoints_matching_projections_at_active_span() -> anyhow::Result<()> {
+            let connection = SeaDatabase::connect("sqlite::memory:").await?;
+            super::super::Migrator::up(&connection, Some(27)).await?;
+
+            insert_projection(&connection, "matching", 10, 2).await?;
+            insert_task(&connection, "matching", 10, 2, 1_234).await?;
+
+            insert_projection(&connection, "negative", 20, 1).await?;
+            insert_task(&connection, "negative", 20, 1, -5).await?;
+
+            insert_projection(&connection, "end-mismatch", 30, 1).await?;
+            insert_task(&connection, "end-mismatch", 31, 1, 300).await?;
+
+            insert_projection(&connection, "absent-task", 50, 1).await?;
+
+            super::super::Migrator::up(&connection, None).await?;
+
+            assert_eq!(projection(&connection, "matching").await?, (1_234, 5));
+            assert_eq!(projection(&connection, "negative").await?, (0, 5));
+            assert_eq!(projection(&connection, "end-mismatch").await?, (900, 4));
+            assert_eq!(projection(&connection, "absent-task").await?, (900, 4));
+            Ok(())
+        }
     }
 }
 
@@ -1272,7 +1512,9 @@ mod m0011_use_session_durations_for_efficiency {
 
             insert_projection(&connection, "absent-task", 50, 1).await?;
 
-            super::super::Migrator::up(&connection, None).await?;
+            // Apply only m0011 (the next pending after the 10 above); a later migration that
+            // also re-points these projections would otherwise run under `None` and bump them on.
+            super::super::Migrator::up(&connection, Some(1)).await?;
 
             assert_eq!(projection(&connection, "matching").await?, (1_234, 4));
             assert_eq!(projection(&connection, "negative").await?, (0, 4));
