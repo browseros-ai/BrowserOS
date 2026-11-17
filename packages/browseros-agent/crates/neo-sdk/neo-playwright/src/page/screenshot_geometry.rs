@@ -532,6 +532,7 @@ mod tests {
                     api: Some("locator.screenshot".to_owned()),
                     timeout_ms: Some(if found { 2_000 } else { 50 }),
                     conformance: false,
+                    timeout_built_in: false,
                 },
             );
             let bound = ScreenshotGeometry::bind(

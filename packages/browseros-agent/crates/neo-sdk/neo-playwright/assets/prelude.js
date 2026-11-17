@@ -7449,7 +7449,7 @@ ${value.stack}`;
       const script = pageCall(api, "query", pageFunction, arg);
       const wait = this._frame._wait(api, options ?? {});
       const addressed = await this._frame._targetArgs(api, this._selector, true);
-      await send["locator.waitForFunction"](site, this._frame._call(api, wait.timeout), { ...addressed, ...script }, wait.signal);
+      await send["locator.waitForFunction"](site, this._frame._call(api, wait), { ...addressed, ...script }, wait.signal);
     }
     async evaluateAll(pageFunction, arg) {
       const api = "locator.evaluateAll";
@@ -8594,6 +8594,14 @@ ${changes}`;
       throw clientError(api, `timeout: expected a non-negative number, got ${timeout}`);
     return Math.ceil(timeout);
   }
+  function headerTimeout(api, resolved) {
+    if (typeof resolved === "number")
+      return { timeoutMs: timeoutMs(api, resolved) };
+    return {
+      timeoutMs: timeoutMs(api, resolved.timeout),
+      ...resolved.builtIn ? { timeoutBuiltIn: true } : {}
+    };
+  }
 
   class TimeoutSettings {
     parent;
@@ -8609,17 +8617,21 @@ ${changes}`;
       this.defaultNavigationTimeout = timeout;
     }
     timeout(options) {
+      return this.resolved(options).timeout;
+    }
+    resolved(options) {
       if (typeof options?.timeout === "number")
-        return options.timeout;
-      return this.inherited();
+        return { timeout: options.timeout };
+      const set = this.set();
+      return set === undefined ? { timeout: DEFAULT_TIMEOUT, builtIn: true } : { timeout: set };
     }
     navigationTimeout(options) {
       if (typeof options?.timeout === "number")
         return options.timeout;
       return this.inheritedNavigation();
     }
-    inherited() {
-      return this.defaultTimeout ?? this.parent?.inherited() ?? DEFAULT_TIMEOUT;
+    set() {
+      return this.defaultTimeout ?? this.parent?.set();
     }
     inheritedNavigation() {
       return this.defaultNavigationTimeout ?? this.defaultTimeout ?? this.parent?.inheritedNavigation() ?? DEFAULT_NAVIGATION_TIMEOUT;
@@ -8891,13 +8903,16 @@ ${changes}`;
       await this._page._context._refreshWorkingFrames("frame.waitForTimeout");
     }
     _call(api, timeout) {
-      return { api, timeoutMs: timeoutMs(api, timeout) };
+      return { api, ...headerTimeout(api, timeout) };
     }
     _timeout(options) {
       return this._page._timeoutSettings.timeout(options);
     }
     _wait(api, options) {
-      return { timeout: this._timeout(options), signal: signalOf(api, options) };
+      return {
+        ...this._page._timeoutSettings.resolved(options),
+        signal: signalOf(api, options)
+      };
     }
     _navigationTimeout(options) {
       return this._page._timeoutSettings.navigationTimeout(options);
@@ -8922,7 +8937,7 @@ ${changes}`;
         ...await this._targetArgs(api, selector, strict),
         ...args
       };
-      return await invoke(op, site, this._call(api, wait.timeout), input, wait.signal);
+      return await invoke(op, site, this._call(api, wait), input, wait.signal);
     }
     async _click(api, selector, options = {}) {
       const site = captureSite();
@@ -8931,7 +8946,7 @@ ${changes}`;
       const strict = options.strict;
       const picked = pick(options, OPTION_KEYS["locator.click"]);
       const addressed = await this._targetArgs(api, selector, strict);
-      const result = await send["locator.click"](site, this._call(api, wait.timeout), { ...addressed, ...picked }, wait.signal);
+      const result = await send["locator.click"](site, this._call(api, wait), { ...addressed, ...picked }, wait.signal);
       if (result?.navigation) {
         try {
           await this._page._context._events.publishNavigation(this._page, result.navigation, api, deadline, wait.signal);
@@ -8948,7 +8963,7 @@ ${changes}`;
       const wait = this._wait(api, options);
       const picked = pick(options, OPTION_KEYS["locator.dblclick"]);
       const addressed = await this._targetArgs(api, selector, strict);
-      await send["locator.dblclick"](site, this._call(api, wait.timeout), { ...addressed, ...picked }, wait.signal);
+      await send["locator.dblclick"](site, this._call(api, wait), { ...addressed, ...picked }, wait.signal);
     }
     async _hover(api, selector, options = {}) {
       const site = captureSite();
@@ -8956,7 +8971,7 @@ ${changes}`;
       const wait = this._wait(api, options);
       const picked = pick(options, OPTION_KEYS["locator.hover"]);
       const addressed = await this._targetArgs(api, selector, strict);
-      await send["locator.hover"](site, this._call(api, wait.timeout), { ...addressed, ...picked }, wait.signal);
+      await send["locator.hover"](site, this._call(api, wait), { ...addressed, ...picked }, wait.signal);
     }
     async _check(api, selector, checked, options = {}) {
       const site = captureSite();
@@ -8965,7 +8980,7 @@ ${changes}`;
       const wait = this._wait(api, options);
       const picked = pick(options, OPTION_KEYS[op]);
       const addressed = await this._targetArgs(api, selector, strict);
-      await send[op](site, this._call(api, wait.timeout), { ...addressed, ...picked }, wait.signal);
+      await send[op](site, this._call(api, wait), { ...addressed, ...picked }, wait.signal);
     }
     async _dragAndDrop(api, source, target, options = {}) {
       const site = captureSite();
@@ -8974,7 +8989,7 @@ ${changes}`;
       const strict = options.strict;
       const picked = pick(options, OPTION_KEYS["locator.dragTo"]);
       const addressed = await this._targetArgs(api, source, strict);
-      await send["locator.dragTo"](site, this._call(api, wait.timeout), { ...addressed, to, ...picked }, wait.signal);
+      await send["locator.dragTo"](site, this._call(api, wait), { ...addressed, to, ...picked }, wait.signal);
     }
     async _fill(api, selector, value, options = {}) {
       const site = captureSite();
@@ -8984,7 +8999,7 @@ ${changes}`;
       const wait = this._wait(api, options);
       const picked = pick(options, OPTION_KEYS["locator.fill"]);
       const addressed = await this._targetArgs(api, selector, strict);
-      await send["locator.fill"](site, this._call(api, wait.timeout), { ...addressed, value, ...picked }, wait.signal);
+      await send["locator.fill"](site, this._call(api, wait), { ...addressed, value, ...picked }, wait.signal);
     }
     async _press(api, selector, key, options = {}) {
       const site = captureSite();
@@ -8992,7 +9007,7 @@ ${changes}`;
       const wait = this._wait(api, options);
       const picked = pick(options, OPTION_KEYS["locator.press"]);
       const addressed = await this._targetArgs(api, selector, strict);
-      await send["locator.press"](site, this._call(api, wait.timeout), { ...addressed, key, ...picked }, wait.signal);
+      await send["locator.press"](site, this._call(api, wait), { ...addressed, key, ...picked }, wait.signal);
     }
     async _type(api, selector, text, options = {}) {
       const site = captureSite();
@@ -9000,21 +9015,21 @@ ${changes}`;
       const wait = this._wait(api, options);
       const picked = pick(options, OPTION_KEYS["locator.pressSequentially"]);
       const addressed = await this._targetArgs(api, selector, strict);
-      await send["locator.pressSequentially"](site, this._call(api, wait.timeout), { ...addressed, text, ...picked }, wait.signal);
+      await send["locator.pressSequentially"](site, this._call(api, wait), { ...addressed, text, ...picked }, wait.signal);
     }
     async _focus(api, selector, options = {}) {
       const site = captureSite();
       const strict = options.strict;
       const wait = this._wait(api, options);
       const addressed = await this._targetArgs(api, selector, strict);
-      await send["locator.focus"](site, this._call(api, wait.timeout), { ...addressed }, wait.signal);
+      await send["locator.focus"](site, this._call(api, wait), { ...addressed }, wait.signal);
     }
     async _blur(api, selector, options = {}) {
       const site = captureSite();
       const strict = options.strict;
       const wait = this._wait(api, options);
       const addressed = await this._targetArgs(api, selector, strict);
-      await send["locator.blur"](site, this._call(api, wait.timeout), { ...addressed }, wait.signal);
+      await send["locator.blur"](site, this._call(api, wait), { ...addressed }, wait.signal);
     }
     async _selectOption(api, selector, values, options = {}) {
       const site = captureSite();
@@ -9023,7 +9038,7 @@ ${changes}`;
       const converted = selectOptionValues(api, values);
       const picked = pick(options, ["force"]);
       const addressed = await this._targetArgs(api, selector, strict);
-      return await send["locator.selectOption"](site, this._call(api, wait.timeout), {
+      return await send["locator.selectOption"](site, this._call(api, wait), {
         ...addressed,
         options: converted.options.length ? converted.options : undefined,
         elements: converted.elements.length ? converted.elements : undefined,
@@ -9036,7 +9051,7 @@ ${changes}`;
       const wait = this._wait(api, options);
       const picked = pick(options, ["force"]);
       const addressed = await this._targetArgs(api, selector, strict);
-      await send["locator.selectText"](site, this._call(api, wait.timeout), { ...addressed, ...picked }, wait.signal);
+      await send["locator.selectText"](site, this._call(api, wait), { ...addressed, ...picked }, wait.signal);
     }
     async _drop(selector, payload, options) {
       const site = captureSite();
@@ -9050,7 +9065,7 @@ ${changes}`;
         }));
         const position = options.position;
         const addressed = await this._targetArgs(api, selector, true);
-        return await send["locator.drop"](site, this._call(api, wait.timeout), { ...addressed, files, data, position }, wait.signal);
+        return await send["locator.drop"](site, this._call(api, wait), { ...addressed, files, data, position }, wait.signal);
       });
     }
     async _setInputFiles(api, selector, files, options = {}) {
@@ -9060,7 +9075,7 @@ ${changes}`;
         const strict = options.strict;
         const wait = this._wait(api, options);
         const addressed = await this._targetArgs(api, selector, strict);
-        return await send["locator.setInputFiles"](site, this._call(api, wait.timeout), { ...addressed, files: input }, wait.signal);
+        return await send["locator.setInputFiles"](site, this._call(api, wait), { ...addressed, files: input }, wait.signal);
       });
     }
     async _dispatchEvent(api, selector, type, eventInit, options = {}) {
@@ -9069,28 +9084,28 @@ ${changes}`;
       const wait = this._wait(api, options);
       const init = eventInit ?? {};
       const addressed = await this._targetArgs(api, selector, strict);
-      await send["locator.dispatchEvent"](site, this._call(api, wait.timeout), { ...addressed, type, eventInit: init }, wait.signal);
+      await send["locator.dispatchEvent"](site, this._call(api, wait), { ...addressed, type, eventInit: init }, wait.signal);
     }
     async _scrollIntoViewIfNeeded(api, selector, options = {}) {
       const site = captureSite();
       const strict = options.strict;
       const wait = this._wait(api, options);
       const addressed = await this._targetArgs(api, selector, strict);
-      await send["locator.scrollIntoViewIfNeeded"](site, this._call(api, wait.timeout), { ...addressed }, wait.signal);
+      await send["locator.scrollIntoViewIfNeeded"](site, this._call(api, wait), { ...addressed }, wait.signal);
     }
     async _read(op, api, selector, options = {}) {
       const site = captureSite();
       const strict = options.strict;
       const wait = this._wait(api, options);
       const addressed = await this._targetArgs(api, selector, strict);
-      return await send[op](site, this._call(api, wait.timeout), { ...addressed }, wait.signal);
+      return await send[op](site, this._call(api, wait), { ...addressed }, wait.signal);
     }
     async _getAttribute(api, selector, name, options = {}) {
       const site = captureSite();
       const strict = options.strict;
       const wait = this._wait(api, options);
       const addressed = await this._targetArgs(api, selector, strict);
-      return await send["locator.getAttribute"](site, this._call(api, wait.timeout), { ...addressed, name }, wait.signal);
+      return await send["locator.getAttribute"](site, this._call(api, wait), { ...addressed, name }, wait.signal);
     }
     async _isVisible(op, api, selector, options = {}) {
       const site = captureSite();
@@ -9116,7 +9131,7 @@ ${changes}`;
       const site = captureSite();
       const wait = this._wait(api, options);
       const addressed = await this._targetArgs(api, selector, true);
-      return await send["locator.boundingBox"](site, this._call(api, wait.timeout), { ...addressed }, wait.signal);
+      return await send["locator.boundingBox"](site, this._call(api, wait), { ...addressed }, wait.signal);
     }
     async _waitForSelector(api, selector, options = {}, omitReturnValue) {
       const site = captureSite();
@@ -9130,14 +9145,14 @@ ${changes}`;
       const strict = options.strict;
       const wait = this._wait(api, options);
       const addressed = await this._targetArgs(api, selector, strict);
-      const handle = await send["locator.waitFor"](site, this._call(api, wait.timeout), { ...addressed, state, omitReturnValue }, wait.signal);
+      const handle = await send["locator.waitFor"](site, this._call(api, wait), { ...addressed, state, omitReturnValue }, wait.signal);
       return this._page._handle(handle);
     }
     async _elementHandle(api, selector, strict, immediate, options = {}) {
       const site = captureSite();
       const wait = immediate ? { timeout: 0 } : this._wait(api, options);
       const addressed = await this._targetArgs(api, selector, strict);
-      const handle = immediate ? await send["locator.elementHandle"](site, this._call(api, wait.timeout), { ...addressed }, wait.signal) : await send["locator.waitFor"](site, this._call(api, wait.timeout), { ...addressed, state: "attached", omitReturnValue: false }, wait.signal);
+      const handle = immediate ? await send["locator.elementHandle"](site, this._call(api, wait), { ...addressed }, wait.signal) : await send["locator.waitFor"](site, this._call(api, wait), { ...addressed, state: "attached", omitReturnValue: false }, wait.signal);
       return this._page._handle(handle);
     }
     async _elementHandles(api, selector) {
@@ -9154,7 +9169,7 @@ ${changes}`;
     async _evaluateOn(api, site, selector, strict, script, noWait, options = {}) {
       const wait = noWait ? { timeout: 0 } : this._wait(api, options);
       const addressed = await this._targetArgs(api, selector, strict);
-      const call = this._call(api, wait.timeout);
+      const call = this._call(api, wait);
       const value = noWait ? await send["page.evalOnSelector"](site, call, {
         ...addressed,
         selector,
@@ -9178,11 +9193,11 @@ ${changes}`;
       const wait = this._wait(api, options);
       if (selector !== null) {
         const addressed = await this._targetArgs(api, selector, true);
-        return await send["locator.ariaSnapshot"](site, this._call(api, wait.timeout), { ...addressed, mode, depth, boxes, ...marking }, wait.signal);
+        return await send["locator.ariaSnapshot"](site, this._call(api, wait), { ...addressed, mode, depth, boxes, ...marking }, wait.signal);
       }
       if (this._id !== null)
         throw unsupportedError(api, "snapshot a child frame through its iframe: page.locator('iframe').contentFrame().locator('body').ariaSnapshot()");
-      return await send["page.ariaSnapshot"](site, this._call(api, wait.timeout), {
+      return await send["page.ariaSnapshot"](site, this._call(api, wait), {
         page: await this._page._brand(api),
         mode,
         depth,
@@ -9367,7 +9382,7 @@ ${changes}`;
       const script = pageCall(api, "frame", pageFunction, arg);
       const wait = this._wait(api, options);
       const { page, frame } = await this._frameArgs(api);
-      const { value, preview } = await send["page.waitForFunction"](site, this._call(api, wait.timeout), {
+      const { value, preview } = await send["page.waitForFunction"](site, this._call(api, wait), {
         page,
         frame,
         ...script,
@@ -9499,15 +9514,15 @@ ${changes}`;
         strict: "strict",
         ...args
       };
-      return await invoke(op, site, { api, timeoutMs: timeoutMs(api, timeout) }, input);
+      return await invoke(op, site, { api, ...headerTimeout(api, timeout) }, input);
     }
     async#read(op, site, api) {
       this.#live(api);
       const target = this._brand;
-      return await send[op](site, { api, timeoutMs: timeoutMs(api, 0) }, { target, strict: "strict" });
+      return await send[op](site, { api, ...headerTimeout(api, 0) }, { target, strict: "strict" });
     }
     #timeout(options) {
-      return this._page._timeoutSettings.timeout(options);
+      return this._page._timeoutSettings.resolved(options);
     }
     #rooted(api, selector) {
       this.#live(api);
@@ -9521,7 +9536,7 @@ ${changes}`;
     async $(selector) {
       const site = captureSite();
       const api = "elementHandle.$";
-      const handle = await send["locator.elementHandle"](site, { api, timeoutMs: timeoutMs(api, 0) }, {
+      const handle = await send["locator.elementHandle"](site, { api, ...headerTimeout(api, 0) }, {
         target: this.#rooted(api, selector),
         strict: "firstMatch"
       });
@@ -9530,7 +9545,7 @@ ${changes}`;
     async $$(selector) {
       const site = captureSite();
       const api = "elementHandle.$$";
-      const handles = await send["locator.elementHandles"](site, { api, timeoutMs: timeoutMs(api, 0) }, { target: this.#rooted(api, selector) });
+      const handles = await send["locator.elementHandles"](site, { api, ...headerTimeout(api, 0) }, { target: this.#rooted(api, selector) });
       return handles.flatMap((handle) => {
         const element = this._page._handle(handle);
         return element ? [element] : [];
@@ -9542,7 +9557,7 @@ ${changes}`;
       const timeout = this.#timeout(options);
       const picked = pick(options, OPTION_KEYS["locator.click"]);
       this.#live(api);
-      await send["locator.click"](site, { api, timeoutMs: timeoutMs(api, timeout) }, { target: this._brand, strict: "strict", ...picked });
+      await send["locator.click"](site, { api, ...headerTimeout(api, timeout) }, { target: this._brand, strict: "strict", ...picked });
     }
     async dblclick(options = {}) {
       const site = captureSite();
@@ -9550,7 +9565,7 @@ ${changes}`;
       const timeout = this.#timeout(options);
       const picked = pick(options, OPTION_KEYS["locator.dblclick"]);
       this.#live(api);
-      await send["locator.dblclick"](site, { api, timeoutMs: timeoutMs(api, timeout) }, { target: this._brand, strict: "strict", ...picked });
+      await send["locator.dblclick"](site, { api, ...headerTimeout(api, timeout) }, { target: this._brand, strict: "strict", ...picked });
     }
     async hover(options = {}) {
       const site = captureSite();
@@ -9558,7 +9573,7 @@ ${changes}`;
       const timeout = this.#timeout(options);
       const picked = pick(options, OPTION_KEYS["locator.hover"]);
       this.#live(api);
-      await send["locator.hover"](site, { api, timeoutMs: timeoutMs(api, timeout) }, { target: this._brand, strict: "strict", ...picked });
+      await send["locator.hover"](site, { api, ...headerTimeout(api, timeout) }, { target: this._brand, strict: "strict", ...picked });
     }
     async check(options = {}) {
       const site = captureSite();
@@ -9566,7 +9581,7 @@ ${changes}`;
       const timeout = this.#timeout(options);
       const picked = pick(options, OPTION_KEYS["locator.check"]);
       this.#live(api);
-      await send["locator.check"](site, { api, timeoutMs: timeoutMs(api, timeout) }, { target: this._brand, strict: "strict", ...picked });
+      await send["locator.check"](site, { api, ...headerTimeout(api, timeout) }, { target: this._brand, strict: "strict", ...picked });
     }
     async uncheck(options = {}) {
       const site = captureSite();
@@ -9574,7 +9589,7 @@ ${changes}`;
       const timeout = this.#timeout(options);
       const picked = pick(options, OPTION_KEYS["locator.uncheck"]);
       this.#live(api);
-      await send["locator.uncheck"](site, { api, timeoutMs: timeoutMs(api, timeout) }, { target: this._brand, strict: "strict", ...picked });
+      await send["locator.uncheck"](site, { api, ...headerTimeout(api, timeout) }, { target: this._brand, strict: "strict", ...picked });
     }
     async setChecked(checked, options = {}) {
       const site = captureSite();
@@ -9583,7 +9598,7 @@ ${changes}`;
       const timeout = this.#timeout(options);
       const picked = pick(options, OPTION_KEYS[op]);
       this.#live(api);
-      await send[op](site, { api, timeoutMs: timeoutMs(api, timeout) }, { target: this._brand, strict: "strict", ...picked });
+      await send[op](site, { api, ...headerTimeout(api, timeout) }, { target: this._brand, strict: "strict", ...picked });
     }
     async fill(value, options = {}) {
       const site = captureSite();
@@ -9591,7 +9606,7 @@ ${changes}`;
       const timeout = this.#timeout(options);
       const picked = pick(options, OPTION_KEYS["locator.fill"]);
       this.#live(api);
-      await send["locator.fill"](site, { api, timeoutMs: timeoutMs(api, timeout) }, { target: this._brand, strict: "strict", value, ...picked });
+      await send["locator.fill"](site, { api, ...headerTimeout(api, timeout) }, { target: this._brand, strict: "strict", value, ...picked });
     }
     async press(key, options = {}) {
       const site = captureSite();
@@ -9599,7 +9614,7 @@ ${changes}`;
       const timeout = this.#timeout(options);
       const picked = pick(options, OPTION_KEYS["locator.press"]);
       this.#live(api);
-      await send["locator.press"](site, { api, timeoutMs: timeoutMs(api, timeout) }, { target: this._brand, strict: "strict", key, ...picked });
+      await send["locator.press"](site, { api, ...headerTimeout(api, timeout) }, { target: this._brand, strict: "strict", key, ...picked });
     }
     async type(text, options = {}) {
       const site = captureSite();
@@ -9607,7 +9622,7 @@ ${changes}`;
       const timeout = this.#timeout(options);
       const picked = pick(options, OPTION_KEYS["locator.pressSequentially"]);
       this.#live(api);
-      await send["locator.pressSequentially"](site, { api, timeoutMs: timeoutMs(api, timeout) }, { target: this._brand, strict: "strict", text, ...picked });
+      await send["locator.pressSequentially"](site, { api, ...headerTimeout(api, timeout) }, { target: this._brand, strict: "strict", text, ...picked });
     }
     async selectOption(values, options = {}) {
       const site = captureSite();
@@ -9616,7 +9631,7 @@ ${changes}`;
       const converted = selectOptionValues(api, values);
       const picked = pick(options, ["force"]);
       this.#live(api);
-      return await send["locator.selectOption"](site, { api, timeoutMs: timeoutMs(api, timeout) }, {
+      return await send["locator.selectOption"](site, { api, ...headerTimeout(api, timeout) }, {
         target: this._brand,
         strict: "strict",
         options: converted.options.length ? converted.options : undefined,
@@ -9630,7 +9645,7 @@ ${changes}`;
       const timeout = this.#timeout(options);
       const picked = pick(options, ["force"]);
       this.#live(api);
-      await send["locator.selectText"](site, { api, timeoutMs: timeoutMs(api, timeout) }, { target: this._brand, strict: "strict", ...picked });
+      await send["locator.selectText"](site, { api, ...headerTimeout(api, timeout) }, { target: this._brand, strict: "strict", ...picked });
     }
     async setInputFiles(files, options = {}) {
       const site = captureSite();
@@ -9639,7 +9654,7 @@ ${changes}`;
       await withClientErrors(api, async () => {
         const timeout = this.#timeout(options);
         this.#live(api);
-        return await send["locator.setInputFiles"](site, { api, timeoutMs: timeoutMs(api, timeout) }, { target: this._brand, strict: "strict", files: input });
+        return await send["locator.setInputFiles"](site, { api, ...headerTimeout(api, timeout) }, { target: this._brand, strict: "strict", files: input });
       });
     }
     async focus() {
@@ -9647,21 +9662,21 @@ ${changes}`;
       const api = "elementHandle.focus";
       const timeout = 0;
       this.#live(api);
-      await send["locator.focus"](site, { api, timeoutMs: timeoutMs(api, timeout) }, { target: this._brand, strict: "strict" });
+      await send["locator.focus"](site, { api, ...headerTimeout(api, timeout) }, { target: this._brand, strict: "strict" });
     }
     async dispatchEvent(type, eventInit = {}) {
       const site = captureSite();
       const api = "elementHandle.dispatchEvent";
       const timeout = 0;
       this.#live(api);
-      await send["locator.dispatchEvent"](site, { api, timeoutMs: timeoutMs(api, timeout) }, { target: this._brand, strict: "strict", type, eventInit });
+      await send["locator.dispatchEvent"](site, { api, ...headerTimeout(api, timeout) }, { target: this._brand, strict: "strict", type, eventInit });
     }
     async scrollIntoViewIfNeeded(options = {}) {
       const site = captureSite();
       const api = "elementHandle.scrollIntoViewIfNeeded";
       const timeout = this.#timeout(options);
       this.#live(api);
-      await send["locator.scrollIntoViewIfNeeded"](site, { api, timeoutMs: timeoutMs(api, timeout) }, { target: this._brand, strict: "strict" });
+      await send["locator.scrollIntoViewIfNeeded"](site, { api, ...headerTimeout(api, timeout) }, { target: this._brand, strict: "strict" });
     }
     async waitForElementState(state, options = {}) {
       const site = captureSite();
@@ -9669,7 +9684,7 @@ ${changes}`;
       const timeout = this.#timeout(options);
       this.#live(api);
       const target = this._brand;
-      await send["locator.waitFor"](site, { api, timeoutMs: timeoutMs(api, timeout) }, { target, strict: "strict", state, omitReturnValue: true });
+      await send["locator.waitFor"](site, { api, ...headerTimeout(api, timeout) }, { target, strict: "strict", state, omitReturnValue: true });
     }
     textContent() {
       const site = captureSite();
@@ -9692,7 +9707,7 @@ ${changes}`;
       const api = "elementHandle.getAttribute";
       this.#live(api);
       const target = this._brand;
-      return await send["locator.getAttribute"](site, { api, timeoutMs: timeoutMs(api, 0) }, { target, strict: "strict", name });
+      return await send["locator.getAttribute"](site, { api, ...headerTimeout(api, 0) }, { target, strict: "strict", name });
     }
     isChecked() {
       const site = captureSite();
@@ -9728,13 +9743,13 @@ ${changes}`;
       this.#live(api);
       const script = await this._page._evaluationScript(api, site, "handle", pageFunction, arg, options);
       this.#live(api);
-      return fromPageValue(api, await send["locator.evaluate"](site, { api, timeoutMs: timeoutMs(api, 0) }, { target: this._brand, strict: "strict", ...script }));
+      return fromPageValue(api, await send["locator.evaluate"](site, { api, ...headerTimeout(api, 0) }, { target: this._brand, strict: "strict", ...script }));
     }
     async $eval(selector, pageFunction, arg) {
       const site = captureSite();
       const api = "elementHandle.$eval";
       const script = pageCall(api, "query", pageFunction, arg);
-      const value = await send["page.evalOnSelector"](site, { api, timeoutMs: timeoutMs(api, 0) }, {
+      const value = await send["page.evalOnSelector"](site, { api, ...headerTimeout(api, 0) }, {
         target: this.#rooted(api, selector),
         strict: "firstMatch",
         selector,
@@ -9746,7 +9761,7 @@ ${changes}`;
       const site = captureSite();
       const api = "elementHandle.$$eval";
       const script = pageCall(api, "query", pageFunction, arg);
-      const value = await send["locator.evaluateAll"](site, { api, timeoutMs: timeoutMs(api, 0) }, { target: this.#rooted(api, selector), ...script });
+      const value = await send["locator.evaluateAll"](site, { api, ...headerTimeout(api, 0) }, { target: this.#rooted(api, selector), ...script });
       return fromPageValue(api, value);
     }
     async screenshot(options = {}) {
@@ -9756,7 +9771,7 @@ ${changes}`;
       if (!wire.type && options.path)
         wire.type = screenshotType({ api, path: options.path });
       const signal = signalOf(api, options);
-      const image = await send["page.screenshot"](site, { api, timeoutMs: timeoutMs(api, this.#timeout(options)) }, {
+      const image = await send["page.screenshot"](site, { api, ...headerTimeout(api, this.#timeout(options)) }, {
         page: await this._page._brand(api),
         target: this._brand,
         strict: "strict",

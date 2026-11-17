@@ -225,6 +225,7 @@ fn scope_until(env: &dyn OpEnv, spec: OpSpec, deadline: Instant) -> OpScope<'_> 
         api: None,
         timeout_ms: Some(u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX)),
         conformance: false,
+        timeout_built_in: false,
     };
     OpScope::of_spec(env, spec, call)
 }

@@ -90,6 +90,7 @@ mod tests {
                 api: Some("page.click".to_owned()),
                 timeout_ms: Some(250),
                 conformance: false,
+                timeout_built_in: false,
             }
         );
         assert_eq!(input.args.0.get("strict"), Some(&json!("firstMatch")));

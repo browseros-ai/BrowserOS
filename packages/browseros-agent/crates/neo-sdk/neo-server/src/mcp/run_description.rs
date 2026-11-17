@@ -62,18 +62,21 @@ const SNAPSHOT_ON_TOP: &str = r"A line `# on top: …` at the snapshot's top nam
 /// when the target is uncertain. Timeout settings live in the prelude, which every run starts
 /// afresh, hence "for the rest of the run".
 const WAITS: &str = r"A wait (an action, a read, a snapshot, a navigation) gives up after 30 s and an `expect` after 5 s (`toPass` never), unless given a `timeout`.
-Waiting longer does not bring a missing or covered element: when you are not sure an element is there and free, pass `{ timeout: 5000 }`.
+Waiting longer does not bring a missing element: when you are not sure an element is there, pass `{ timeout: 5000 }`.
 `page.setDefaultTimeout(ms)` sets the wait for that page for the rest of the run, navigations included.";
 
-/// A pointer action under a cover: it waits out its timeout, then fails `covered`, and its
-/// message names the cover with its ref, its snapshot and its controls, and one line of what to
-/// do (`neo-playwright/src/action/cover.rs`). When a covered click comes to answer early, the pull
-/// request that builds it rewrites this sentence. A press whose cover is the target's own label,
-/// wrapper or drawing, or that finds a clear point of the target, lands by itself and the call log
-/// says which, so the text says nothing of it; a label that is all link gets this answer, whose Do
-/// line says to press Space.
-const COVERED_CLICK: &str = r"A click on an element that another element covers waits out its timeout and fails `covered`; its message says what is `On top:`, with its ref and its controls, and what to do.
-Answer or close it with one of those controls (in a script: `error.cover.controls`), then click again; if the message says the same layer covered your last click, closing it again will not help.";
+/// A pointer action under a cover fails `covered`, and its message names the cover with its ref,
+/// its snapshot and its controls, and one line of what to do (`neo-playwright/src/action/cover.rs`).
+/// Under Neo's own timeout it stops once the same cover has stayed 5 s (`EARLY_STOP` in that
+/// file); a timeout someone chose, a cover that moves, fades or says it is loading, and `force`
+/// keep the whole wait. The text names those covers so a script does not lengthen its timeout for
+/// them, and names `page.setDefaultTimeout(30_000)`, the prelude's default set by hand, as the way
+/// back. A press whose cover is the target's own label, wrapper or drawing, or that finds a clear
+/// point of the target, lands by itself and the call log says which, so the text says nothing of
+/// it; a label that is all link gets this answer, whose Do line says to press Space.
+const COVERED_CLICK: &str = r"A click on an element that another element covers fails `covered`; its message says what is `On top:`, with its ref and its controls, and what to do.
+Answer or close it with one of those controls (in a script: `error.cover.controls`), then click again; if the message says the same layer covered your last click, closing it again will not help.
+Unless you set a timeout, a click stops waiting after 5 s if the same cover stays on top and is not moving, fading or loading; to wait for a cover that leaves on its own, set one: `page.setDefaultTimeout(30_000)`, or `timeout` on the call.";
 
 /// The error model, which the agent needs before it retries anything. The model reads
 /// `retryable` inside its script, so the text says it means "safe to repeat", never "will
@@ -294,7 +297,8 @@ mod tests {
             "Return each snapshot whole, as the string it is.",
             "only a block with a dialog or alert role survives the cut.",
             "`fill` waits out its timeout on one with no size.",
-            "when you are not sure an element is there and free, pass `{ timeout: 5000 }`.",
+            "when you are not sure an element is there, pass `{ timeout: 5000 }`.",
+            "Unless you set a timeout, a click stops waiting after 5 s if the same cover stays on top and is not moving, fading or loading; to wait for a cover that leaves on its own, set one: `page.setDefaultTimeout(30_000)`, or `timeout` on the call.",
             "if the message says the same layer covered your last click, closing it again will not help.",
         ] {
             assert!(description.contains(sentence), "{sentence}: {description}");
@@ -401,6 +405,36 @@ mod tests {
         assert!(
             prose(AGENT_D_TS).contains(&handout),
             "agent.d.ts says: {handout}"
+        );
+        Ok(())
+    }
+
+    /// The covered click's stop is covered-click B's own constant (`EARLY_STOP` in `cover.rs`), and
+    /// its way back is the prelude's `DEFAULT_TIMEOUT` set by hand, read rather than repeated, so
+    /// neither sentence can drift from the code.
+    #[test]
+    fn tests_that_the_covered_stop_and_its_way_back_are_the_codes() -> Result<(), Box<dyn Error>> {
+        const COVER: &str = include_str!("../../../neo-playwright/src/action/cover.rs");
+        const TIMEOUTS: &str = include_str!("../../../neo-playwright-js/src/prelude/timeouts.ts");
+        let stop = COVER
+            .split_once("const EARLY_STOP: Duration = Duration::from_secs(")
+            .and_then(|(_, rest)| rest.split_once(')'))
+            .map(|(seconds, _)| seconds)
+            .ok_or("cover.rs gives EARLY_STOP in whole seconds")?;
+        let said = format!("a click stops waiting after {stop} s");
+        assert!(
+            COVERED_CLICK.contains(&said),
+            "the run description says: {said}"
+        );
+        let default = ts_number(TIMEOUTS, "DEFAULT_TIMEOUT")?;
+        let way_back = format!(
+            "`page.setDefaultTimeout({}_{:03})`",
+            default / 1000,
+            default % 1000
+        );
+        assert!(
+            COVERED_CLICK.contains(&way_back),
+            "the way back is the prelude's default: {way_back}"
         );
         Ok(())
     }

@@ -1464,9 +1464,13 @@ components:
             fill (`POST /v1/tabs/{tabId}/fill`) while the host's `fill.pictures` is `never`. A
             repeat fails the same way while that setting stands. `website / covered`: a pointer
             action's element stayed under something else that takes the pointer until its
-            timeout ran out; the message names it, says what it shows and what to do, and
-            `cover` holds it. Under the spec harness's conformance switch the same wait answers
-            `not_actionable`, with Playwright's own message.
+            timeout ran out, or, under Neo's own built-in timeout (no timeout on the call, the
+            page or the context), until the same cover had stood 5 s without moving, fading or
+            saying it is loading: then the message starts `Timeout cut short: the same cover
+            stayed on top for …`, and `page.setDefaultTimeout(30_000)` or a timeout on the call
+            keeps the whole wait. The message names the cover, says what it shows and what to
+            do, and `cover` holds it. Under the spec harness's conformance switch the same wait
+            answers `not_actionable`, with Playwright's own message, and never stops early.
         diagnosticCode:
           type: string
           description: >-
@@ -1494,8 +1498,8 @@ components:
     Cover:
       type: object
       description: >-
-        Only on `covered`: what covered the element at the action's point when its timeout ran
-        out. The element's own wrapper, its label or the page's root can be the cover; `kind`
+        Only on `covered`: what covered the element at the action's point when it stopped
+        waiting. The element's own wrapper, its label or the page's root can be the cover; `kind`
         says how it stands to the element.
       required: [ref, role, name, kind, controls]
       properties:
@@ -1525,6 +1529,16 @@ components:
           description: Up to eight of the cover's controls that take the pointer, in page order.
           items:
             $ref: '#/components/schemas/CoverControl'
+        stoodMs:
+          type: integer
+          description: >-
+            Only when the action stopped early under Neo's built-in timeout: how long the same
+            cover had stood, in milliseconds.
+        checks:
+          type: integer
+          description: >-
+            Only when the action stopped early under Neo's built-in timeout: how many checks saw
+            the same cover.
     CoverControl:
       type: object
       required: [ref, role, name]

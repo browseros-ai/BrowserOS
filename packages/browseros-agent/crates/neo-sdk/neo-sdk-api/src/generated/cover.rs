@@ -11,7 +11,7 @@
 use crate::models;
 use serde::{Deserialize, Serialize};
 
-/// Cover : Only on `covered`: what covered the element at the action's point when its timeout ran out. The element's own wrapper, its label or the page's root can be the cover; `kind` says how it stands to the element.
+/// Cover : Only on `covered`: what covered the element at the action's point when it stopped waiting. The element's own wrapper, its label or the page's root can be the cover; `kind` says how it stands to the element.
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Cover {
     /// The cover's ref: the one a snapshot printed for it, else one minted for it (`n4`, `f3n4` in a frame), which `page.getByRef` resolves the same way.
@@ -29,10 +29,16 @@ pub struct Cover {
     /// Up to eight of the cover's controls that take the pointer, in page order.
     #[serde(rename = "controls")]
     pub controls: Vec<models::CoverControl>,
+    /// Only when the action stopped early under Neo's built-in timeout: how long the same cover had stood, in milliseconds.
+    #[serde(rename = "stoodMs", skip_serializing_if = "Option::is_none")]
+    pub stood_ms: Option<i32>,
+    /// Only when the action stopped early under Neo's built-in timeout: how many checks saw the same cover.
+    #[serde(rename = "checks", skip_serializing_if = "Option::is_none")]
+    pub checks: Option<i32>,
 }
 
 impl Cover {
-    /// Only on `covered`: what covered the element at the action's point when its timeout ran out. The element's own wrapper, its label or the page's root can be the cover; `kind` says how it stands to the element.
+    /// Only on `covered`: what covered the element at the action's point when it stopped waiting. The element's own wrapper, its label or the page's root can be the cover; `kind` says how it stands to the element.
     pub fn new(
         r#ref: String,
         role: String,
@@ -46,6 +52,8 @@ impl Cover {
             name,
             kind,
             controls,
+            stood_ms: None,
+            checks: None,
         }
     }
 }

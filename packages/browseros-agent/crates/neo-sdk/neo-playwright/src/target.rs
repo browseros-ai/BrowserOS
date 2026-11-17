@@ -300,6 +300,13 @@ pub(crate) struct CallHeader {
     /// operation retains this decision across frame hops; no method option can override it.
     #[serde(default)]
     pub(crate) conformance: bool,
+    /// Covered-click B: the prelude found no timeout on the call, the page or the context, so
+    /// Playwright's own 30 s applies (`timeouts.ts`'s `headerTimeout`). Only then may a pointer
+    /// action stop early under a cover that stands. Absent means chosen: a host's own calls carry
+    /// none, with or without `timeout_ms`, and a default that anyone but Neo's own prelude set is
+    /// a choice, a settings key included if Neo ever gets one.
+    #[serde(default)]
+    pub(crate) timeout_built_in: bool,
 }
 
 /// Whether a resolution that matches several elements fails. The probe protocol carries it
