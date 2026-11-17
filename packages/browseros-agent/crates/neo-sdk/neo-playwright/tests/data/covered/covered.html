@@ -134,6 +134,17 @@ const shapes = {
     stage.innerHTML = `<div tabindex="-1">${termsOver('<a href="/elsewhere/terms" id="info" style="position: relative; display: inline-block; width: 60px; height: 24px; background: #eef">Terms</a>')}</div>`
     pressLogged()
   },
+  linksshadow() {
+    // The same label inside an open shadow root: what is hit there is asked in that root, as the
+    // document's own answer is the root's host.
+    const host = document.createElement('div')
+    host.id = 'host'
+    stage.append(host)
+    const root = host.attachShadow({ mode: 'open' })
+    root.innerHTML = termsOver('<a href="/elsewhere/terms" id="info" style="position: relative; display: inline-block; width: 60px; height: 24px; background: #eef">Terms</a>')
+    root.getElementById('target').addEventListener('click', log('target'))
+    root.getElementById('info').addEventListener('click', log('info'))
+  },
   alllink() {
     // A checkbox under its own label that is all link: no point of the label is plain.
     stage.innerHTML = `<label id="own" style="position: relative; display: inline-block; width: 320px">

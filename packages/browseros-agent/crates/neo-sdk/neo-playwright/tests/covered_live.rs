@@ -544,36 +544,42 @@ async fn tests_that_a_label_that_is_all_link_is_never_pressed() -> TestResult {
     result
 }
 
+/// The target's `checked`, in the document or in the open shadow root of `#host`.
+const SHADOWED_TARGET_CHECKED: &str = "(document.getElementById('target') ?? \
+     document.getElementById('host').shadowRoot.getElementById('target')).checked";
+
 /// A press of the target's own label goes where the label is plain: never on a custom control
-/// in it (a `span role="button"` with no tabindex runs its own click handler), and a label
-/// inside a container with a tabindex, as a dialog's body has, still has plain points. The box is
-/// checked, the label's own control saw no click, and the page stayed.
+/// in it (a `span role="button"` with no tabindex runs its own click handler); a label inside a
+/// container with a tabindex, as a dialog's body has, still has plain points; and so has one
+/// inside an open shadow root, whose hits are asked in that root. The box is checked, the
+/// label's own control saw no click, and the page stayed.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_a_label_press_goes_where_the_label_is_plain() -> TestResult {
-    each_shape(&["labelrole", "linksdialog"], |shape, name| async move {
-        let result = async {
-            shape.click("#target").await?;
-            if !noted(&shape, "  its own label takes the press: <label") || presses(&shape) != 1 {
-                return Err(format!("one label press: {:?}", notes(&shape)).into());
+    each_shape(
+        &["labelrole", "linksdialog", "linksshadow"],
+        |shape, name| async move {
+            let result = async {
+                shape.click("#target").await?;
+                if !noted(&shape, "  its own label takes the press: <label") || presses(&shape) != 1
+                {
+                    return Err(format!("one label press: {:?}", notes(&shape)).into());
+                }
+                let log = shape.log().await?;
+                if log.iter().any(|what| what == "info") {
+                    return Err(format!("the label's own control was pressed: {log:?}").into());
+                }
+                let checked = shape.run.eval(&shape.page, SHADOWED_TARGET_CHECKED).await?;
+                let path = shape.run.eval(&shape.page, "location.pathname").await?;
+                if checked != json!(true) || path != json!("/covered/covered.html") {
+                    return Err(format!("checked {checked}, at {path}, for {name}").into());
+                }
+                TestResult::Ok(())
             }
-            let log = shape.log().await?;
-            if log.iter().any(|what| what == "info") {
-                return Err(format!("the label's own control was pressed: {log:?}").into());
-            }
-            let checked = shape
-                .run
-                .eval(&shape.page, "document.getElementById('target').checked")
-                .await?;
-            let path = shape.run.eval(&shape.page, "location.pathname").await?;
-            if checked != json!(true) || path != json!("/covered/covered.html") {
-                return Err(format!("checked {checked}, at {path}, for {name}").into());
-            }
-            TestResult::Ok(())
-        }
-        .await;
-        (shape, result)
-    })
+            .await;
+            (shape, result)
+        },
+    )
     .await
 }
 
