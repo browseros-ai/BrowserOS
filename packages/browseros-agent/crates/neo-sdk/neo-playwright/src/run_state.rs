@@ -32,8 +32,9 @@ pub struct RunState {
     pub(crate) frames: FrameRoutes,
     /// Returned tags and chooser inputs retained until the script and all its handles end.
     pub(crate) objects: ObjectGroup,
-    /// The run's init scripts. Dropping them removes each from the tabs it was added to, which
-    /// is how a script ends with the run that registered it.
+    /// The run's init scripts. Dropping them starts removing each from the tab it was added to,
+    /// fencing that tab until the removal ends, which is how a script ends with the run that
+    /// registered it.
     pub(crate) init_scripts: InitScripts,
     pub(crate) downloads: RunDownloads,
     /// `page.addLocatorHandler` registrations; dropping them wakes any action still paused.
@@ -111,12 +112,16 @@ impl RunState {
         self.pending_baselines.settle(ended_ok, given);
     }
 
-    /// Removes every init script the run registered, from every tab, and awaits each removal.
-    /// The host calls it after the run's ops drained and before it answers, so once the run's
-    /// reply is out no document loads with the run's scripts, not even one the next run or the
-    /// owner navigates to at once. Whatever it does not reach (a removal cut off, a straggling
-    /// op's add) is removed when the state drops.
-    pub async fn remove_init_scripts(&self) {
-        self.init_scripts.remove_all().await;
+    /// Starts removing every init script and binding the run registered, from every tab, and
+    /// returns without waiting for any renderer. The host calls it after the run's ops drained
+    /// and before it answers. Each removal holds its tab's fence until it ends (answered,
+    /// failed, the tab closed, or its renderer crashed), and the next op admitted on that tab,
+    /// by any run, waits for it, so a later run never loads this run's script or calls its
+    /// binding, while a run whose last op was on a healthy tab answers at once. An owner's own
+    /// navigation on that tab before the browser applies the already-sent removal can run the
+    /// script once. Whatever this does not reach (a straggling op's add) is removed, and fenced
+    /// the same way, when the state drops. Needs a tokio runtime, as `Playwright::new` does.
+    pub fn remove_init_scripts(&self) {
+        self.init_scripts.remove_all();
     }
 }

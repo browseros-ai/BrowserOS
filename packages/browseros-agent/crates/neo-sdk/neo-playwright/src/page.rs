@@ -23,7 +23,8 @@
 //!  page.waitForNavigation ─ journal cursor ─ URL match ─ DocumentWatch lifecycle ─ timing entry
 //!  page.waitForURL ─ wait_for_url: each navigation matched in the isolated world, the load state
 //!  page.addInitScript, context.addInitScript ─ init_script: main-world scripts every new
-//!                    document of a tab runs, registered for the run and removed when it ends
+//!                    document of a tab runs, registered for the run and removed when it ends;
+//!                    removal_fences: the tab's next op, by any run, waits for that removal
 //! ```
 
 mod add_tag;
@@ -51,6 +52,7 @@ mod page_value;
 pub(crate) use neo_trace::json_value_depth as json_depth;
 pub(crate) use page_value::MAX_DEPTH as MAX_VALUE_DEPTH;
 mod pdf;
+mod removal_fences;
 mod save_screenshot;
 mod screenshot;
 mod screenshot_document;
@@ -80,3 +82,4 @@ pub(crate) use page_handle::PageHandle;
 pub(crate) use page_op::PageOp;
 pub(crate) use page_registry::PageRegistry;
 pub(crate) use page_state::{LastCover, PageState};
+pub(crate) use removal_fences::{RemovalFences, TabFence};
