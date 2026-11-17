@@ -131,6 +131,99 @@ async fn wait_for(
     run.invoke("events.wait", input).await
 }
 
+/// The first `framenavigated` on `page` recorded at or after `since` whose frame is at `url`.
+/// Another frame's event (the new frame's first `about:blank`, say) is skipped by asking again
+/// after its `seq`, as the prelude does for a predicate that rejects an event. Each ask waits
+/// `wait_for`'s 5 s.
+async fn navigated_to(run: &LiveRun, page: &TestPage, since: u64, url: &str) -> TestResult<Value> {
+    let mut after: Option<u64> = None;
+    loop {
+        let mut input = json!({ "call": { "api": "page.waitForEvent", "timeoutMs": 5000 },
+                                "event": "framenavigated", "since": since, "page": brand(page) });
+        if let (Some(seq), Some(fields)) = (after, input.as_object_mut()) {
+            fields.insert("after".to_owned(), json!(seq));
+        }
+        let event = run
+            .invoke("events.wait", input)
+            .await
+            .map_err(|error| format!("no framenavigated to {url}: {error}"))?;
+        if event.pointer("/frame/url") == Some(&json!(url)) {
+            return Ok(event);
+        }
+        after = Some(
+            event
+                .get("seq")
+                .and_then(Value::as_u64)
+                .ok_or("a frame event has a seq")?,
+        );
+    }
+}
+
+/// A cross-site iframe reports its own navigations only from its own session, and only once
+/// `Page` is on there. Core turns it on only on tabs it created (its file chooser interception),
+/// so this runs on an adopted tab, one the owner or another session opened, where until now only
+/// a frames read did (`frame_tree::oopif_tree`). The frame attaches after the tab loaded and is
+/// never read, so its event arrives only because the watcher turns `Page` on as the frame's
+/// session attaches. It navigates once its first document loaded, inside its own process: its
+/// first commit can race the enable, and the watcher's seed read, not an event, covers that one.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_cross_site_iframe_reports_its_own_navigation_without_a_frames_read()
+-> TestResult {
+    let run = LiveRun::connect().await?;
+    let server = PageServer::start().await?;
+    let page = run.open_adopted(&server.url("/child.html")).await?;
+    let result = async {
+        // `localhost` on the server's port is another site than `127.0.0.1`
+        // (page_server.rs), so this frame is out of process.
+        let cross = |query: &str| {
+            server
+                .url(&format!("/child.html?{query}"))
+                .replacen("127.0.0.1", "localhost", 1)
+        };
+        let first = cross("first");
+        run.eval(
+            &page,
+            &format!(
+                "new Promise((loaded) => {{ const frame = document.createElement('iframe'); \
+                 frame.id = 'late'; frame.onload = () => loaded(true); frame.src = {}; \
+                 document.body.append(frame); }})",
+                json!(first)
+            ),
+        )
+        .await?;
+        // The watcher turns `Page` on as the frame's session attaches, on a task of its own, so
+        // a navigation started at once can still beat it. The frame navigates up to three times:
+        // once `Page` is on, the next navigation is heard; without the watcher's enable, none is.
+        let mut heard = None;
+        for attempt in 1..=3 {
+            let next = cross(&format!("next{attempt}"));
+            let since = now_ms()?;
+            run.eval(
+                &page,
+                &format!("document.getElementById('late').src = {}", json!(next)),
+            )
+            .await?;
+            if let Ok(event) = navigated_to(&run, &page, since, &next).await {
+                heard = Some(event);
+                break;
+            }
+        }
+        let navigated =
+            heard.ok_or("no framenavigated for any of three navigations of the frame")?;
+        assert!(
+            navigated
+                .pointer("/frame/parentId")
+                .is_some_and(|parent| !parent.is_null()),
+            "the child frame navigated, not the tab: {navigated}"
+        );
+        Ok(())
+    }
+    .await;
+    run.close_page(&page).await;
+    result
+}
+
 /// A trusted click that starts once a concurrent wait is surely listening, as a script's
 /// `const p = page.waitForEvent(..); await page.click(..)` would.
 async fn click_soon(run: &LiveRun, page: &TestPage, selector: &str) -> TestResult {

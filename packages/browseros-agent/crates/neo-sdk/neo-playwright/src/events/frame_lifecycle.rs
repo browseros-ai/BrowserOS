@@ -124,8 +124,22 @@ impl FrameLifecycleTracker {
                 frame.parent_id = parent;
             }
             let id = frame.id.clone();
-            if !frames.iter().any(|known| known.id == id) {
-                frame.url.push_str(&frame.url_fragment);
+            frame.url.push_str(&frame.url_fragment);
+            if let Some(known) = frames.iter_mut().find(|known| known.id == id) {
+                // An event announced this frame before the read, often only its parent's
+                // attach, with no document yet. The read is newer than every event applied for
+                // the tab: the watcher holds a tab's events behind a frame session's read
+                // (`TabLine`) and awaits the others in place, so the frame takes the read's
+                // document. Its parent stays the one its events gave. Without this, a frame
+                // that committed before its session's `Page` was on keeps an empty URL, and its
+                // later removal reports that.
+                known.url = frame.url;
+                known.name = frame.name;
+                known.loader_id = frame.loader_id;
+                if known.parent_id.is_none() {
+                    known.parent_id = frame.parent_id;
+                }
+            } else {
                 frames.push(frame);
             }
             pending.extend(
@@ -160,8 +174,13 @@ impl FrameLifecycleTracker {
                         ..EventFrame::default()
                     };
                     if let Some(known) = frames.iter_mut().find(|known| known.id == frame.id) {
-                        frame.loader_id.clone_from(&known.loader_id);
-                        *known = frame.clone();
+                        // A seed listed this frame before its queued attach arrived (the read
+                        // ran ahead of the events). The attach still announces it once, under
+                        // the parent it names, but keeps the document the seed gave it: an
+                        // attach carries no document, and taking its empty URL lost the seed's
+                        // until the frame's next commit.
+                        known.parent_id = frame.parent_id;
+                        frame = known.clone();
                     } else {
                         frames.push(frame.clone());
                     }
@@ -359,6 +378,84 @@ mod tests {
             tracker.owner(&FrameId("main".to_owned())),
             None,
             "forgetting the page clears its remaining frame ownership"
+        );
+        Ok(())
+    }
+
+    /// A frame its parent's attach announced, which committed a document before its own session
+    /// reported events, takes that document from its session's seed read, so its removal
+    /// reports the document it had rather than an empty one.
+    #[test]
+    fn tests_that_a_seed_gives_an_announced_frame_its_document() -> Result<(), Box<dyn Error>> {
+        let mut tracker = FrameLifecycleTracker::default();
+        let target = TargetId("main".to_owned());
+        tracker.seed(
+            &target,
+            json!({"frameTree": {"frame": {"id":"main", "loaderId":"document", "url":"https://a.test/"}}}),
+        );
+        let attached = tracker.record(
+            &target,
+            "Page.frameAttached",
+            &json!({"frameId":"ad", "parentFrameId":"main"}),
+        );
+        assert_eq!(attached.len(), 1, "the parent's attach announces the frame");
+        tracker.seed(
+            &target,
+            json!({"frameTree": {"frame": {"id":"ad", "parentId":"main", "loaderId":"ad-document",
+                "url":"https://ad.test/", "name":"slot"}}}),
+        );
+        let removed = tracker.record(
+            &target,
+            "Page.frameDetached",
+            &json!({"frameId":"ad", "reason":"remove"}),
+        );
+        let frame = &removed.first().ok_or("the removal is reported")?.frame;
+        assert_eq!(
+            (
+                frame.url.as_str(),
+                frame.name.as_str(),
+                frame.parent_id.as_ref().map(|parent| parent.0.as_str()),
+            ),
+            ("https://ad.test/", "slot", Some("main")),
+            "the seed's document, under the parent the attach gave"
+        );
+        Ok(())
+    }
+
+    /// A seed that read a frame before its queued attach arrived keeps that frame's document:
+    /// the attach announces the frame once, under its parent, and takes nothing from it.
+    #[test]
+    fn tests_that_a_late_attach_keeps_the_document_a_seed_gave() -> Result<(), Box<dyn Error>> {
+        let mut tracker = FrameLifecycleTracker::default();
+        let target = TargetId("main".to_owned());
+        tracker.seed(
+            &target,
+            json!({"frameTree": {
+                "frame": {"id":"main", "loaderId":"document", "url":"https://a.test/"},
+                "childFrames": [{"frame":{"id":"child", "loaderId":"child-document",
+                    "url":"https://a.test/child", "name":"slot"}}]
+            }}),
+        );
+        let attached = tracker.record(
+            &target,
+            "Page.frameAttached",
+            &json!({"frameId":"child", "parentFrameId":"main"}),
+        );
+        assert_eq!(
+            attached.len(),
+            1,
+            "the queued attach still announces the frame once"
+        );
+        let removed = tracker.record(
+            &target,
+            "Page.frameDetached",
+            &json!({"frameId":"child", "reason":"remove"}),
+        );
+        let frame = &removed.first().ok_or("the removal is reported")?.frame;
+        assert_eq!(
+            (frame.url.as_str(), frame.name.as_str()),
+            ("https://a.test/child", "slot"),
+            "the attach left the seeded document in place"
         );
         Ok(())
     }

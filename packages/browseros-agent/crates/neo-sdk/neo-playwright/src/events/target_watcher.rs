@@ -22,7 +22,9 @@
 //!   closes held dialogs whose runs all ended (`dialog_table.rs`).
 //! - **Frames.** `Page.frameAttached`, a removing `Page.frameDetached` and the main frame's
 //!   `Page.frameNavigated` go to the `FrameAttachLog`, from one session per native target, so frames are
-//!   numbered in the order Playwright numbers them (`world/frame_attach_log.rs`). That commit
+//!   numbered in the order Playwright numbers them (`world/frame_attach_log.rs`). Each
+//!   out-of-process frame's session gets `Page` on as it attaches (`seed_frame_session`), so its
+//!   own commits arrive whether or not anything read its frames. That commit
 //!   and a closed tab also drop the tab's snapshot baseline, and a lag or a new connection drops
 //!   all of them (`SnapshotBaselines`), so a delta never diffs a new document against the one it
 //!   replaced.
@@ -55,6 +57,7 @@ use browseros_core::{
     BrowserSession, BrowserView, CoreError, FrameId, ProtocolSession, RuntimeLease, SessionId,
     TabId, TargetId,
 };
+use futures_util::future;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -104,11 +107,12 @@ const TICK: Duration = Duration::from_millis(250);
 /// How long a synchronize waits for the watcher's answer before the asker goes on without it.
 const SYNCHRONIZE_BOUND: Duration = Duration::from_secs(2);
 
-/// How long a new frame session's tree read may take ([`TabLine`]). The tree only seeds the
-/// frame tracker with frames that existed before the session reported events, and a read that
-/// fails or misses this leaves it unseeded, as a failed read always did. It was 1 s while the
-/// whole watcher waited for it; its tab's events wait for it now, and a frame whose renderer
-/// is busy with ad script answers in 100 ms to over a second (measured), so the wait is short.
+/// How long a new frame session's `Page.enable` and tree read may take together ([`TabLine`]).
+/// The tree only seeds the frame tracker with frames that existed before the session reported
+/// events, and a read that fails or misses this leaves it unseeded, as a failed read always
+/// did. It was 1 s while the whole watcher waited for it; its tab's events wait for it now, and
+/// a frame whose renderer is busy with ad script answers in 100 ms to over a second (measured),
+/// so the wait is short. A healthy frame answers the enable in about one round trip.
 const TREE_READ_WAIT: Duration = Duration::from_millis(200);
 
 /// Bounds passive recovery setup off the event loop. Failure leaves refusal in place and
@@ -2000,9 +2004,9 @@ impl Watcher {
         }
     }
 
-    /// [`Self::seed_lifecycle`] for a new out-of-process frame session, off the loop: the read
-    /// goes out now, and the tab's later events wait in its line until the answer is applied
-    /// ([`TabLine`]).
+    /// [`Self::seed_lifecycle`] for a new out-of-process frame session, off the loop: `Page` is
+    /// turned on and the read goes out now, and the tab's later events wait in its line until
+    /// the answer is applied ([`TabLine`]).
     async fn seed_frame_session(&mut self, tab: &TargetId, session: &SessionId) {
         let Some(seeded) = self.seeded.clone() else {
             self.seed_lifecycle(tab, session).await;
@@ -2018,13 +2022,26 @@ impl Watcher {
         let protocol = self.browser.protocol_session(session.clone());
         let session = session.clone();
         drop(tokio::spawn(async move {
-            let tree = time::timeout(
-                TREE_READ_WAIT,
+            // A frame's own commits reach the watcher only from its own session, and only once
+            // `Page` is on there. Core turns it on only on tabs it created, for its file chooser
+            // interception; on an adopted tab (the owner's, another session's) only a frames read
+            // would (`frame_tree::oopif_tree`). Both commands go out together, `Page.enable`
+            // first: `join` polls them in order and the client writes through a fair lock, so the
+            // frame's renderer gets the enable first and answers in that order. A commit made
+            // before `Page` was on is in the tree (`FrameLifecycleTracker::seed` gives it to the
+            // frame), and one made after sends its own event, which waits in the tab's line until
+            // this read is applied. Awaiting the enable before sending the read measured worse:
+            // on an adopted tab, whose frames all attach at once, one frame's read missed the
+            // deadline in each of two runs. Sent together, the read keeps its place in the
+            // renderer's queue, likely ahead of core's own setup of the frame (inferred).
+            let read = future::join(
+                protocol.send_value("Page.enable", json!({})),
                 protocol.send_value("Page.getFrameTree", json!({})),
-            )
-            .await
-            .ok()
-            .and_then(Result::ok);
+            );
+            let tree = time::timeout(TREE_READ_WAIT, read)
+                .await
+                .ok()
+                .and_then(|(_enabled, tree)| tree.ok());
             let _ = seeded.send(SeededTree { session, tree });
         }));
     }
@@ -2718,6 +2735,8 @@ mod worker_observation_tests {
     use std::error::Error;
     use std::sync::Arc;
 
+    use std::time::Duration;
+
     use browseros_cdp::CdpEvent;
     use browseros_core::testing::{TestCall, TestConnection};
     use browseros_core::{
@@ -2725,7 +2744,7 @@ mod worker_observation_tests {
     };
     use serde_json::json;
     use tokio::sync::{broadcast, mpsc, oneshot};
-    use tokio::task;
+    use tokio::{task, time};
 
     use std::collections::VecDeque;
 
@@ -2786,6 +2805,67 @@ mod worker_observation_tests {
             watcher.handle(event).await;
         }
         watcher.progress.handled(1);
+    }
+
+    /// A new out-of-process frame's session is asked to turn `Page` on before its tree is read,
+    /// on that session: the frame's renderer answers in order, so a commit it makes in between
+    /// is either in the tree or reported as its own `Page.frameNavigated`, never lost.
+    #[tokio::test]
+    async fn a_frame_session_turns_page_on_before_its_tree_is_read() -> Result<(), Box<dyn Error>> {
+        let connection = TestConnection::new([]);
+        connection.always("Page.enable", json!({}))?;
+        connection.always(
+            "Page.getFrameTree",
+            json!({ "frameTree": { "frame": { "id": "ad", "url": "https://ad.test/" } } }),
+        )?;
+        let browser = BrowserSession::new(
+            Arc::clone(&connection) as Arc<dyn CdpConnection>,
+            BrowserSessionHooks::default(),
+        );
+        let (_hub, writer) = EventHub::new();
+        let progress = Arc::new(WatcherProgress::default());
+        let (mut watcher, _found) = Watcher::new(
+            browser,
+            writer,
+            Arc::new(FrameAttachLog::default()),
+            Arc::clone(&progress),
+            Arc::new(SnapshotBaselines::default()),
+            Arc::default(),
+        );
+        progress.start(0, 0);
+        let (seeded, mut answers) = mpsc::unbounded_channel();
+        watcher.seeded = Some(seeded);
+        let (tab, page) = (TargetId("tab".to_owned()), SessionId::from("page"));
+        watcher.sessions.insert(page.clone(), tab.clone());
+        watcher.lifecycle_sources.attach(&page, &tab);
+        read(
+            &mut watcher,
+            CdpEvent {
+                method: "Target.attachedToTarget".to_owned(),
+                params: json!({ "sessionId": "ad",
+                    "targetInfo": { "targetId": "ad", "type": "iframe", "url": "https://ad.test/" } }),
+                session_id: Some(page),
+            },
+        )
+        .await;
+        let answer = time::timeout(Duration::from_secs(30), answers.recv())
+            .await?
+            .ok_or("the frame's tree read answers")?;
+        assert!(answer.tree.is_some(), "the frame's tree was read");
+        let ad = Some(SessionId::from("ad"));
+        let asked: Vec<String> = connection
+            .calls()?
+            .into_iter()
+            .filter(|call: &TestCall| call.session == ad)
+            .map(|call| call.method)
+            .filter(|method| method.starts_with("Page."))
+            .collect();
+        assert_eq!(
+            asked,
+            ["Page.enable", "Page.getFrameTree"],
+            "Page on first, then the tree, on the frame's own session"
+        );
+        Ok(())
     }
 
     /// While a new frame session's tree read is out, the tab's later events wait behind it and
