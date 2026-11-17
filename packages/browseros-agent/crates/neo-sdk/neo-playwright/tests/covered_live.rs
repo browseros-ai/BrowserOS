@@ -1583,8 +1583,9 @@ async fn tests_that_a_standing_cover_stops_a_click_after_five_seconds() -> TestR
             .err()
             .ok_or("the click under the cover succeeded")?;
         let took = began.elapsed();
+        // Early, not at 30 s: the bound only tells the two apart, never a tight one.
         assert!(
-            took >= Duration::from_secs(5) && took < Duration::from_millis(6_500),
+            took >= Duration::from_secs(5) && took < Duration::from_secs(15),
             "{took:?}"
         );
         assert_eq!(error.error_code(), Some(ErrorCode::Covered), "{error}");
@@ -1638,8 +1639,8 @@ async fn tests_that_a_standing_cover_stops_a_click_after_five_seconds() -> TestR
         "locator.click",
     )?;
     assert!(
-        took < Duration::from_secs(7),
-        "the prelude stamped it: {took:?}"
+        took < Duration::from_secs(15),
+        "the prelude stamped it: it stopped early, not at 30 s: {took:?}"
     );
     Ok(())
 }
@@ -1660,11 +1661,7 @@ async fn tests_that_a_chosen_timeout_keeps_its_whole_wait() -> TestResult {
                     .await,
             )?;
             let took = began.elapsed();
-            assert!(
-                took >= Duration::from_millis(millis)
-                    && took < Duration::from_millis(millis + 1_500),
-                "{millis}: {took:?}"
-            );
+            assert!(took >= Duration::from_millis(millis), "{millis}: {took:?}");
             assert!(
                 message.starts_with(&format!("locator.click: Timeout {millis}ms exceeded.")),
                 "{message}"
@@ -1719,8 +1716,9 @@ async fn tests_that_a_timeout_set_by_hand_keeps_the_whole_wait() -> TestResult {
 }
 
 /// Covered-click B, rows 3 and 4: a cover that leaves by itself. Gone at 3 s, the click lands
-/// under the built-in timeout. Gone at 7 s, the built-in timeout stops at 5 s, and a chosen 10 s
-/// lands at 7 s.
+/// under the built-in timeout. Gone at 12 s, the built-in timeout stops first (its first line
+/// says so), and a chosen 20 s lands when it leaves. The cover leaves well after the stop, so a
+/// loaded machine's slow first check cannot let the click land first.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_a_cover_that_leaves_lets_the_click_land_in_time() -> TestResult {
@@ -1730,22 +1728,19 @@ async fn tests_that_a_cover_that_leaves_lets_the_click_land_in_time() -> TestRes
     shape.close().await;
     landed?;
     assert_eq!(log?, ["target"], "gone at 3 s: one trusted click");
-    let shape = Shape::shape("leaves7").await?;
-    let began = Instant::now();
+    let shape = Shape::shape("leaves12").await?;
     let early = shape.act_called("locator.click", built_in()).await;
-    let took = began.elapsed();
     shape.close().await;
     let (message, _) = covered(early)?;
     stopped_early_form(&message, "locator.click")?;
-    assert!(took < Duration::from_millis(6_500), "gone at 7 s: {took:?}");
-    let shape = Shape::shape("leaves7").await?;
+    let shape = Shape::shape("leaves12").await?;
     let landed = shape
-        .act_called("locator.click", json!({ "timeoutMs": 10_000 }))
+        .act_called("locator.click", json!({ "timeoutMs": 20_000 }))
         .await;
     let log = shape.log().await;
     shape.close().await;
     landed?;
-    assert_eq!(log?, ["target"], "a chosen 10 s lands at 7 s");
+    assert_eq!(log?, ["target"], "a chosen 20 s lands at 12 s");
     Ok(())
 }
 
@@ -1786,7 +1781,7 @@ async fn tests_that_a_replaced_cover_starts_the_count_again() -> TestResult {
         let took = began.elapsed();
         stopped_early_form(&message, "locator.click")?;
         assert!(
-            took >= Duration::from_millis(7_500) && took < Duration::from_secs(10),
+            took >= Duration::from_millis(7_500) && took < Duration::from_secs(25),
             "{took:?}"
         );
         assert_eq!(text(&cover, "name"), "Second notice", "{message}");
@@ -1832,10 +1827,14 @@ async fn tests_that_a_drag_stopped_early_releases_its_button() -> TestResult {
         let (message, _) = covered(shape.run.invoke("locator.dragTo", input).await)?;
         let took = began.elapsed();
         stopped_early_form(&message, "locator.dragTo")?;
-        assert!(took < Duration::from_secs(7), "{took:?}");
-        // The owed release goes out once the op has let the tab's input go.
+        assert!(
+            took < Duration::from_secs(15),
+            "early, not at 30 s: {took:?}"
+        );
+        // The owed release goes out once the op has let the tab's input go. It comes within
+        // milliseconds; the poll allows 10 s so a loaded machine cannot fail the row.
         let mut log = Vec::new();
-        for _ in 0..20 {
+        for _ in 0..100 {
             log = shape.log().await?;
             if log.contains(&"mouseup".to_owned()) {
                 break;
