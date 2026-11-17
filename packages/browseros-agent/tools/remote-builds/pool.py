@@ -63,6 +63,25 @@ def queue_order(row: dict) -> tuple:
     return PRIORITY[row["kind"]], row["submitted"], row["id"]
 
 
+def host_names(message: dict) -> list[str] | None:
+    """An optional allowlist keeps one client's jobs off machines it must not use.
+
+    The GitHub runner dispatcher sends one so member jobs never run on the coordinator,
+    which holds the pool's keys. Developer clients send none and may take any host.
+    """
+    value = message.get("hosts")
+    if value is None:
+        return None
+    if (not isinstance(value, list) or not 1 <= len(value) <= 16
+            or not all(isinstance(name, str) and 0 < len(name) <= 64 for name in value)):
+        raise ValueError("hosts must be a list of host names")
+    return value
+
+
+def accepts(row: dict, host: dict) -> bool:
+    return row.get("hosts") is None or host["name"] in row["hosts"]
+
+
 def submission(message: dict) -> dict | None:
     """Keep job identity/display metadata separate from SSH and cloud credentials."""
     value = message.get("submission")
@@ -201,34 +220,40 @@ def request(path: Path, message: dict) -> dict:
                 state["waiting"] = [row for row in waiting if row["id"] != job]
                 write_state(path, state)
                 raise ValueError("This waiting client predates queue identity. No check ran: rerun the same shared launcher command to use the two-job limit.")
-            if metadata is not None:
-                queued = next((row for row in waiting if row["id"] == job), None)
-                if queued is None:
-                    existing = worker_jobs(state, metadata["worker"])
-                    if len(existing) >= WORKER_LIMIT:
-                        reason = refusal(metadata["label"], existing[:2])
-                        state["rejected"][job] = {"reason": reason, "until": now + 3600}
-                        write_state(path, state)
-                        raise ValueError(reason)
-                    queued = {"id": job, "submitted": now, **metadata}
-                    waiting.append(queued)
-                queued["until"] = now + WAITER_SECONDS
-                metadata = {**{name: queued[name] for name in ("kind", "worker", "label", "clientPid", "clientMachine")},
-                            "protocol": queued.get("protocol", 0)}
-            free = next((host for host in hosts if not host.get("job")
-                         and not host.get("maintenance")
-                         and host.get("unavailableUntil", 0) <= time.time()), None)
+            queued = next((row for row in waiting if row["id"] == job), None)
+            if queued is None:
+                existing = worker_jobs(state, metadata["worker"])
+                if len(existing) >= WORKER_LIMIT:
+                    reason = refusal(metadata["label"], existing[:2])
+                    state["rejected"][job] = {"reason": reason, "until": now + 3600}
+                    write_state(path, state)
+                    raise ValueError(reason)
+                queued = {"id": job, "submitted": now, **metadata}
+                waiting.append(queued)
+            queued["until"] = now + WAITER_SECONDS
+            allowed = host_names(message)
+            if allowed is not None:
+                queued["hosts"] = allowed
+            metadata = {**{name: queued[name] for name in ("kind", "worker", "label", "clientPid", "clientMachine")},
+                        "protocol": queued.get("protocol", 0)}
+            free_hosts = [host for host in hosts if not host.get("job")
+                          and not host.get("maintenance")
+                          and host.get("unavailableUntil", 0) <= time.time()]
+            free = next((host for host in free_hosts if accepts(queued, host)), None)
             if free is None:
                 write_state(path, state)
                 return {"host": None}
-            if waiting:
-                # Only the highest-priority live waiter can claim a free host.
-                # We do not reserve on somebody else's behalf: their next poll
-                # claims it, or their waiter expiry removes the dead client.
-                # FIFO within each class avoids racing clients jumping the queue.
-                if min(waiting, key=queue_order)["id"] != job:
-                    write_state(path, state)
-                    return {"host": None}
+            # Only the highest-priority live waiter that accepts some free host can
+            # claim one. We do not reserve on somebody else's behalf: their next poll
+            # claims it, or their waiter expiry removes the dead client. FIFO within
+            # each class avoids racing clients jumping the queue. A waiter restricted
+            # to busy hosts does not block the waiters behind it. Without restrictions
+            # this is the plain highest-priority waiter.
+            head = min((row for row in waiting if any(accepts(row, host) for host in free_hosts)),
+                       key=queue_order)
+            if head["id"] != job:
+                write_state(path, state)
+                return {"host": None}
             state["waiting"] = [row for row in waiting if row["id"] != job]
             free["job"] = {"id": job, "started": now, "state": "reserved", **(metadata or {}),
                            "wallUntil": now + wall_seconds(state, metadata["kind"])}
