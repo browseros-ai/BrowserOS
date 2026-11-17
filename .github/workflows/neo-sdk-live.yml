@@ -46,7 +46,8 @@ jobs:
       CARGO_PROFILE_DEV_OPT_LEVEL: "2"
       CARGO_PROFILE_TEST_DEBUG: "0"
       CARGO_PROFILE_DEV_DEBUG: "0"
-      CARGO_BUILD_JOBS: "4"
+      # Use the existing 32-vCPU runner for more parallel compilation; forks stay small.
+      CARGO_BUILD_JOBS: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && '2' || '8' }}
       CARGO_BUILD_BUILD_DIR: ${{ github.workspace }}/packages/browseros-agent/target/build-private
       BROWSERCLAW_HOSTED_MODE: "0"
       NEO_LIVE_DIAGNOSTICS: "1"
@@ -94,7 +95,9 @@ jobs:
       - name: Verify the private browser's CDP version
         run: |
           mkdir -p "$RUNNER_TEMP/neo-sdk-live"
-          bun run test:browser -- node --input-type=module -e '
+          # Keep JavaScript templates literal while probing the owned launcher directly.
+          # shellcheck disable=SC2016
+          node tools/test-browser.mjs node --input-type=module -e '
           import { writeFileSync } from "node:fs";
           import { execFileSync } from "node:child_process";
           const executable = process.env.NEO_E2E_BROWSER;
