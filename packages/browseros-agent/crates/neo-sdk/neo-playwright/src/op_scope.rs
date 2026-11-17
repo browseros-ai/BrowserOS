@@ -410,7 +410,15 @@ impl<'env> OpScope<'env> {
     /// hold every other tab's events, and they load no document and run nothing in the main
     /// world. Nor does [`OpScope::admit_target`], whose ops the browser carries out alone, nor a
     /// dialog's answer ([`OpScope::admit_past_removals`]), which a held removal may be waiting on.
+    ///
+    /// Only an op that could meet the leftover waits: a write, which may load a document, or an
+    /// op that runs script in the main world. A read that does neither, a listener's subscription
+    /// above all, goes on: a `dialog` listener held here while the page opens a dialog would leave
+    /// Neo to dismiss it as unheard, and the removal it waits for may be the one that dialog holds.
     async fn removals_settled(&self, tab: TabId) -> Result<(), PlaywrightError> {
+        if self.spec.effect != Effect::Write && !self.spec.uses(Capability::MainWorld) {
+            return Ok(());
+        }
         let Some(fences) = self.removals.filter(|fences| fences.holds(tab)) else {
             return Ok(());
         };

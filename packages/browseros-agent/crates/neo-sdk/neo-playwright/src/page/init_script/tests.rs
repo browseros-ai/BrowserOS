@@ -746,6 +746,39 @@ async fn tests_that_a_removal_in_flight_holds_only_its_own_tabs_next_op() -> Tes
     Ok(())
 }
 
+/// A read that loads no document and runs nothing in the main world, here a `dialog` listener's
+/// subscription, is admitted on a tab whose removal is held: only an op that could meet the
+/// leftover script or binding waits, and a held listener would let Neo dismiss the dialog unheard.
+#[tokio::test(start_paused = true)]
+async fn tests_that_a_dialog_subscription_on_a_held_tab_does_not_wait() -> TestResult {
+    let tab = HeldTab::after(RunEnd::Host).await?;
+    let next = tab.next_run();
+    time::timeout(
+        ANSWERS,
+        invoke(
+            &tab.playwright,
+            &next,
+            "events.listen",
+            json!({ "call": { "api": "page.on", "timeoutMs": 0 },
+                    "page": { "$neo": "page", "tab": 7 }, "event": "dialog", "enabled": true, "since": 0 }),
+        ),
+    )
+    .await??;
+    let mut write = pin!(invoke(
+        &tab.playwright,
+        &next,
+        "page.requestGC",
+        collect_garbage(7)
+    ));
+    assert!(
+        time::timeout(WAITS, write.as_mut()).await.is_err(),
+        "a write on the same tab still waits for the removal"
+    );
+    tab.held.release(Removal::Answered);
+    time::timeout(ANSWERS, write).await??;
+    Ok(())
+}
+
 /// A tab closed under a held removal lets the tab's next op go on: the CDP client fails the
 /// removal `SessionGone` at the detach, which ends it.
 #[tokio::test(start_paused = true)]
