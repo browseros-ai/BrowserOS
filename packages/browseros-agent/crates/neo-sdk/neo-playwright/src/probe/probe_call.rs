@@ -623,6 +623,7 @@ mod tests {
 
     use browseros_cdp::CdpError;
     use browseros_core::CoreError;
+    use neo_snapshot::AriaChild;
     use serde_json::{Value, json};
 
     use super::{CALL_FUNCTION, Handed, ProbeFailure, Ran, call_arguments, reply_of};
@@ -781,7 +782,8 @@ mod tests {
         ));
     }
 
-    /// Exercise the real decoder beyond serde's default cap, not merely the scanner.
+    /// Exercise the real decoder beyond serde's default cap, not merely the scanner: the reply's
+    /// text becomes typed nodes all the way down.
     #[test]
     fn probe_reply_text_admits_147_groups_and_refuses_148() {
         // The advice is in tree levels: an arbitrary leaf adds two JSON levels to each pair
@@ -797,9 +799,19 @@ mod tests {
             );
             let reply = reply_of(json!({ "result": { "type": "string", "value": text } }));
             if groups <= 147 {
-                assert!(
-                    matches!(reply, Ok(ProbeReply::Snapshot { .. })),
-                    "{groups}: {reply:?}"
+                let Ok(ProbeReply::Snapshot { json, .. }) = reply else {
+                    panic!("{groups}: {reply:?}")
+                };
+                let mut node = &json[0];
+                let mut levels = 0;
+                while let [AriaChild::Node(child)] = node.children.as_slice() {
+                    node = child;
+                    levels += 1;
+                }
+                assert_eq!(
+                    (levels, node.role.as_str(), node.name.as_deref()),
+                    (groups, "button", Some("End")),
+                    "{groups} groups read as typed nodes, the button at the bottom"
                 );
             } else {
                 let Err(ProbeFailure::Broken(message)) = reply else {
@@ -809,15 +821,48 @@ mod tests {
                 assert!(message.contains("{ depth: n }"));
             }
         }
-        for depth in [297, 298] {
+        // 147 groups and a button are 297 levels of JSON; a box on the button makes 298.
+        for (depth, leaf) in [
+            (297, r#"{"role":"button"}"#),
+            (
+                298,
+                r#"{"role":"button","box":{"x":0,"y":0,"width":1,"height":1}}"#,
+            ),
+        ] {
             let text = format!(
-                "{{\"kind\":\"snapshot\",\"json\":{}0{},\"iframes\":[]}}",
-                "[".repeat(depth - 1),
-                "]".repeat(depth - 1)
+                "{{\"kind\":\"snapshot\",\"json\":[{}{leaf}{}],\"iframes\":[]}}",
+                "{\"role\":\"group\",\"children\":[".repeat(147),
+                "]}".repeat(147),
             );
             assert_eq!(page::json_depth(&text), depth);
             let reply = reply_of(json!({ "result": { "type": "string", "value": text } }));
             assert_eq!(reply.is_ok(), depth == 297, "depth {depth}: {reply:?}");
         }
+    }
+
+    /// A node's values are the page's text, and serde's own message quotes the value it could not
+    /// read, so an unreadable node fails the reply in Neo's words alone.
+    #[test]
+    fn tests_that_an_unreadable_snapshot_node_fails_without_quoting_page_text()
+    -> Result<(), Box<dyn Error>> {
+        let text = r#"{"kind":"snapshot","json":[{"role":"button","name":"Pay now","disabled":"PAGE-SECRET"}],"iframes":[]}"#;
+        let reply = reply_of(json!({ "result": { "type": "string", "value": text } }));
+        let Err(ProbeFailure::Broken(message)) = reply else {
+            return Err(format!("an unreadable node is a broken asset, not {reply:?}").into());
+        };
+        assert!(
+            !message.contains("PAGE-SECRET") && !message.contains("Pay now"),
+            "no page text: {message}"
+        );
+        assert!(
+            !message.contains('"') && !message.contains('`'),
+            "no value is quoted: {message}"
+        );
+        assert!(
+            message.contains("snapshot has a node this build cannot read")
+                && message.contains("rebuild crates/neo-sdk/neo-playwright-js"),
+            "it says what failed and what fixes it: {message}"
+        );
+        Ok(())
     }
 }

@@ -2,6 +2,9 @@
 //! it (`ariaSnapshotJSONForFrame`, server/page.ts at v1.64.1), then Neo's name rule. Pure: the
 //! snapshot leaf reads each frame through its probe and hands the results here.
 //!
+//! The nodes are `neo_snapshot::AriaNode`, typed once where each probe reply's text is read
+//! (`probe_reply.rs`). This module moves them between frames and never decodes.
+//!
 //! ```text
 //!  FrameSnapshot { json, children }                 one per frame the leaf read
 //!    ChildFrame::Read { iframe_ref, snapshot }      stitched under the iframe node `iframe_ref`
@@ -16,82 +19,13 @@
 
 use std::collections::{HashMap, HashSet};
 
+use neo_snapshot::{AriaChild, AriaNode};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use ts_rs::TS;
 
 use super::snapshot_rules;
 use crate::page::{self, MAX_VALUE_DEPTH};
 use crate::probe;
-
-/// One node of `ariaSnapshotJSON`: upstream's `AriaNodeJSON` (isomorphic/ariaSnapshot.ts).
-///
-/// The strings a page controls are typed (`name`, `text`, `url`, `placeholder`, string
-/// children). The rest is vocabulary or numbers and passes through as upstream wrote it.
-/// Decoding rejects unknown fields, so a field a Playwright upgrade adds fails until the
-/// stitch and the name rule are checked against it.
-#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct AriaNode {
-    /// An ARIA role, or `iframe` or `text`: never free text, because roleUtils only returns
-    /// roles from its own list.
-    pub(crate) role: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) name: Option<String>,
-    /// `true` or `"mixed"`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) checked: Option<Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) disabled: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) expanded: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) active: Option<bool>,
-    /// Browser-declared inert subtree, only on Neo-format reads; live modal descendants are never enclosed.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) inert: Option<bool>,
-    /// Topmost content of this whole-view layer; only the default renderer moves it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) on_top: Option<String>,
-    /// `true`, `"grammar"` or `"spelling"`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) invalid: Option<Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) level: Option<Value>,
-    /// `true` or `"mixed"`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) pressed: Option<Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) selected: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) aria_hidden: Option<bool>,
-    /// Minted by the engine (`e5`, `f3e5`), never page text, so the mask leaves it whole.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) r#ref: Option<String>,
-    /// `"pointer"`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) cursor: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) r#box: Option<Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) url: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) placeholder: Option<String>,
-    /// The node's only content, when it is one string.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) text: Option<String>,
-    /// Upstream writes no `children` rather than an empty list, and so does this.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub(crate) children: Vec<AriaChild>,
-}
-
-/// An item of a node's `children`: text, or a node.
-#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
-#[serde(untagged)]
-pub(crate) enum AriaChild {
-    Text(String),
-    Node(Box<AriaNode>),
-}
 
 /// One frame's own snapshot, as its probe returned it, and what became of each iframe it
 /// printed. The snapshot leaf builds this tree as it reads the frames; `stitch` folds it.
@@ -156,8 +90,9 @@ pub(crate) struct PartialFrame {
 /// and of `mode: 'full'`.
 #[derive(Debug, PartialEq, Serialize, TS)]
 pub(crate) struct SnapshotResult {
-    // The probe and the renderer already share upstream's recursive node format, pinned by
-    // snapshot-output.json. Name that type instead of deriving the nodes' opaque JSON fields.
+    // The nodes' Rust type lives in neo-snapshot, which knows nothing of ts-rs. The probe and the
+    // renderer already share upstream's recursive node format, pinned by snapshot-output.json, so
+    // the generated TypeScript names that type.
     #[ts(type = "import('../../vendored').AriaSnapshotJSON")]
     pub(crate) json: Vec<AriaNode>,
     pub(crate) partial: Vec<PartialFrame>,
@@ -454,18 +389,6 @@ pub(crate) mod tests {
         );
         assert!(find(&result.json, "f3e2").is_none());
         Ok(())
-    }
-
-    #[test]
-    fn tests_that_a_field_upstream_does_not_write_fails_to_decode() {
-        let unknown = serde_json::from_value::<AriaNode>(json!({
-            "role": "button",
-            "description": "a field 1.64.1 does not have",
-        }));
-        assert!(
-            unknown.is_err(),
-            "a field the stitch has not been checked against fails"
-        );
     }
 
     #[test]
