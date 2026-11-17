@@ -552,9 +552,9 @@ export class EventHub {
           { api, timeoutMs: 0 },
           {
             // Neo's own subscription (`observeWorkers`, on every page that comes with worker
-            // facts, listed tabs included) is not the script using the page, so it leaves the
-            // page out of `waitForTimeout`'s frame refresh (FR-1, `Page._working`). A
-            // listener the script added makes its page working.
+            // facts, listed tabs included) is not the script using the page, so the script
+            // never waits for that page's frame reads (FR-1, `Page._used`). A listener the
+            // script added makes its page working.
             page:
               page === null
                 ? null

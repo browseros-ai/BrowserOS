@@ -725,10 +725,13 @@ export class Frame extends EventEmitter {
     )
   }
 
-  /** The same as `page.waitForTimeout`: a sleep, then the working pages' trees (FR-1). */
+  /**
+   * The same as `page.waitForTimeout`: a sleep, then the trees of the pages the script used
+   * (FR-1).
+   */
   async waitForTimeout(timeout: number): Promise<void> {
     await sleep('frame.waitForTimeout', timeout)
-    await this._page._context._refreshWorkingFrames('frame.waitForTimeout')
+    await this._page._context._refreshUsedFrames('frame.waitForTimeout')
   }
 
   // ---- internals shared with Page and Locator -----------------------------------------

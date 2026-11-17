@@ -1,0 +1,9 @@
+<!doctype html><html><head><meta charset="utf-8"><title>busy</title></head>
+<body><p>Busy</p>
+<script>
+  // A page running a long script of its own: from 300 ms after it loads (so the navigation to it
+  // completes) its renderer answers no command for `ms` milliseconds, 20 s at most.
+  const ms = Math.min(Number(new URLSearchParams(location.search).get('ms') || 20000), 20000);
+  setTimeout(() => { const end = Date.now() + ms; while (Date.now() < end) {} }, 300);
+</script>
+</body></html>

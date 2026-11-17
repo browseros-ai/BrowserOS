@@ -2002,9 +2002,9 @@ async fn every_playwright_op_is_one_listed_script_method_with_the_crates_spec()
             spec.lifetime == Lifetime::Background,
             matches!(
                 spec.name,
-                "events.listen" | "events.next" | "page.locatorHandlerTriggered"
+                "events.listen" | "events.next" | "page.locatorHandlerTriggered" | "page.frames"
             ),
-            "{}: only the prelude's event work is cut quietly when the run ends",
+            "{}: only the prelude's own work is cut quietly when the run ends",
             spec.name
         );
         let Listing::Grouped(line) = spec.listing else {

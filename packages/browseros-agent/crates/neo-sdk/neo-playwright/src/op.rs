@@ -453,14 +453,15 @@ mod tests {
         }
     }
 
-    /// Only prelude-owned listener setup and pulls are exempt from unawaited-op notices.
+    /// Only prelude-owned listener setup, pulls and frame-tree reads are exempt from unawaited-op
+    /// notices.
     #[test]
-    fn tests_that_only_prelude_owned_event_work_runs_in_the_background() {
+    fn tests_that_only_prelude_owned_work_runs_in_the_background() {
         for op in Op::all() {
             let spec = op.spec();
             let expected = if matches!(
                 spec.name,
-                "events.listen" | "events.next" | "page.locatorHandlerTriggered"
+                "events.listen" | "events.next" | "page.locatorHandlerTriggered" | "page.frames"
             ) {
                 OpLifetime::Background
             } else {

@@ -307,36 +307,48 @@ it("tests that a frame added to a tab the script only reads shows after the scri
   expect(counts).toEqual([3, 4])
 })
 
-it('tests that a listed tab whose start read failed is read again at the next wait', async () => {
+// A tab the script has not used is read in the background (context.ts, `_readInitialFrames`). One
+// whose read failed is not the script using it: a wait leaves it alone, and only the script's own
+// use reads it again, holding the script for that read as for any page it uses.
+it('tests that a listed tab whose start read failed is read again only once the script uses it', async () => {
   let reads1009 = 0
   const runtime = loadPrelude({
     seed: OBSERVER,
-    answer: (call) => {
+    answer: async (call) => {
+      if (call.name === 'page.title') return 'Other'
       if (call.name !== 'page.frames') return null
-      if (tabOf(call) !== 1009 || reads1009++ > 0) return TREE
-      return {
-        err: {
-          code: 'timeout',
-          owner: 'host',
-          delivery: 'unknown',
-          retryable: true,
-          operationId: 'run.2',
-          timeout: true,
-          message: 'page.frames: Timeout 1000ms exceeded',
-        },
-      }
+      if (tabOf(call) !== 1009) return TREE
+      // The start read fails, and is not retried for a tab the script has not used; the read
+      // after the script's own op answers late.
+      if (reads1009++ === 0)
+        return {
+          err: {
+            code: 'timeout',
+            owner: 'host',
+            delivery: 'unknown',
+            retryable: true,
+            operationId: 'run.2',
+            timeout: true,
+            message: 'page.frames: Timeout 1000ms exceeded',
+          },
+        }
+      await new Promise((resolve) => setTimeout(resolve, 30))
+      return TREE
     },
   })
-  const count = json(
+  const counts = json(
     await runtime.run(`
-      await page.waitForTimeout(1)
-      return ${OTHER}.frames().length
+      await page.waitForTimeout(150)
+      const p = ${OTHER}
+      const before = p.frames().length
+      await p.title()
+      return [before, p.frames().length]
     `),
   )
-  expect(count).toEqual(3)
+  expect(counts).toEqual([1, 3])
   expect(reads(runtime.calls)).toEqual([
     [1007, 'page.waitForTimeout'],
-    [1009, 'page.waitForTimeout'],
+    [1009, 'page.frames'],
   ])
 })
 
@@ -516,23 +528,33 @@ it("tests that a frame added to another task's tab mid-run shows after the scrip
   expect(counts).toEqual([3, 4])
 })
 
-it('tests that a tab the script never used shows a frame added mid-run at its first read after an operation', async () => {
+// The one change a script can see: a tab it has not used is read in the background when a reply
+// says its frames changed, so a synchronous read right after that operation still lists the tree
+// from before. Reading its frames makes the tab used, and the next operation waits for its read.
+it('tests that a tab the script never used is read in the background when its frames change', async () => {
   let reads = 0
   const runtime = loadPrelude({
     seed: OBSERVER,
-    answer: (call) => {
-      if (call.name === 'page.frames')
-        return tabOf(call) === 1009 && reads++ > 0 ? ADDED : TREE
+    answer: async (call) => {
+      if (call.name === 'page.frames') {
+        if (tabOf(call) !== 1009 || reads++ === 0) return TREE
+        await new Promise((resolve) => setTimeout(resolve, 20))
+        return ADDED
+      }
       return { ok: 'Agent', frames: [{ tab: 1009, version: 3 }] }
     },
   })
-  const count = json(
+  const counts = json(
     await runtime.run(`
       await page.title()
-      return ${OTHER}.frames().length
+      const p = ${OTHER}
+      const right = p.frames().length
+      await page.title()
+      return [right, p.frames().length]
     `),
   )
-  expect(count).toEqual(4)
+  expect(counts).toEqual([3, 4])
+  expect(reads).toEqual(2)
 })
 
 // An evaluate's reply holds the page's whole tree as the script left it. The settle read that
@@ -592,10 +614,10 @@ it("tests that a load-state wait's whole tree stays applied when the settle read
   expect(count).toEqual(4)
 })
 
-// A wait's read of a tab the script never acted on (marked for a read because its start read
-// failed, or because the script read its frames) is bounded as a start read is: a tab whose
-// attach stalls, one another run is navigating say, must not hold the script's timer.
-it('tests that a wait reads a tab the script never acted on within the start read bound', async () => {
+// A wait's read of a tab the script never acted on but whose frames it read is bounded as a
+// listed tab's start read is: a tab whose attach stalls, one another run is navigating say, must
+// not hold the script's timer.
+it('tests that a wait reads a tab the script only read the frames of within the start read bound', async () => {
   let reads1009 = 0
   const runtime = loadPrelude({
     seed: OBSERVER,
@@ -615,7 +637,9 @@ it('tests that a wait reads a tab the script never acted on within the start rea
       }
     },
   })
-  await runtime.run('await page.title(); await page.waitForTimeout(1)')
+  await runtime.run(
+    `${OTHER}.frames(); await page.title(); await page.waitForTimeout(1)`,
+  )
   const waits = runtime.calls
     .filter(
       (call) =>
@@ -632,7 +656,7 @@ it('tests that a wait reads a tab the script never acted on within the start rea
   ])
 })
 
-it('tests that a rejected operation also leaves every changed tree read before the script catches it', async () => {
+it('tests that a rejected operation also leaves the changed tree of a page the script uses read before the script catches it', async () => {
   let reads = 0
   const runtime = loadPrelude({
     seed: OBSERVER,
@@ -655,8 +679,10 @@ it('tests that a rejected operation also leaves every changed tree read before t
   })
   const count = json(
     await runtime.run(`
+      const p = ${OTHER}
+      p.frames()
       try { await page.locator('#go').click() } catch {}
-      return ${OTHER}.frames().length
+      return p.frames().length
     `),
   )
   expect(count).toEqual(4)
@@ -688,6 +714,7 @@ it('tests that a page whose frames change between every two operations has its c
   const counts = json(
     await runtime.run(`
       const p = ${OTHER}
+      p.frames()
       const counts = []
       for (let i = 0; i < 4; i++) {
         await page.title()
@@ -699,6 +726,98 @@ it('tests that a page whose frames change between every two operations has its c
   // One read of the tab per operation: each sees the frames that operation's reply announced.
   expect(counts).toEqual([2, 3, 4, 5])
   expect(reads(runtime.calls).filter(([tab]) => tab === 1009)).toHaveLength(4)
+})
+
+// A host measured a run on a healthy tab at about four seconds while another tab of the browser
+// was busy: the start waited for the busy tab's read, then its retry, then every statement waited
+// for it again, a second each (the native read's budget). The script never touched that tab.
+it('tests that a tab whose frames read never answers holds neither the run start nor its operations', async () => {
+  const runtime = loadPrelude({
+    seed: OBSERVER,
+    answer: (call) => {
+      if (call.name === 'page.frames')
+        return tabOf(call) === 1009 ? new Promise(() => {}) : TREE
+      // Each reply says the busy tab's frames changed, as one still loading would.
+      return { ok: 'Agent', frames: [{ tab: 1009, version: 2 }] }
+    },
+  })
+  const outcome = await Promise.race([
+    runtime.run(
+      'return [await page.title(), await page.title(), page.frames().length]',
+    ),
+    new Promise((resolve) =>
+      setTimeout(() => resolve('held by the tab that never answers'), 2_000),
+    ),
+  ])
+  expect(json(outcome)).toEqual(['Agent', 'Agent', 3])
+  // Its start read went out and is still in flight, so no statement asked it again.
+  expect(
+    reads([...runtime.startCalls, ...runtime.calls]).filter(
+      ([tab]) => tab === 1009,
+    ),
+  ).toEqual([[1009, 'page.frames']])
+})
+
+it('tests that a tab the script never used whose read got no tree is asked again only once its frames change', async () => {
+  let titles = 0
+  const runtime = loadPrelude({
+    seed: OBSERVER,
+    answer: (call) => {
+      if (call.name === 'page.frames') return tabOf(call) === 1009 ? {} : TREE
+      titles += 1
+      return titles < 3
+        ? 'Agent'
+        : { ok: 'Agent', frames: [{ tab: 1009, version: 5 }] }
+    },
+  })
+  await runtime.run(`
+    await page.waitForTimeout(150)
+    await page.title()
+    await page.title()
+    await page.title()
+    await page.waitForTimeout(1)
+  `)
+  // The start read, with no retry, and one read once the third reply moved its version: neither
+  // the wait nor the first two operations asked it again.
+  expect(
+    reads([...runtime.startCalls, ...runtime.calls]).filter(
+      ([tab]) => tab === 1009,
+    ),
+  ).toEqual([
+    [1009, 'page.frames'],
+    [1009, 'page.frames'],
+  ])
+})
+
+// The script can act on a listed tab while that tab's start read is still in flight. The read then
+// answers against an older observation of the tab than the op's reply, so its tree is not applied;
+// the tab is marked unknown and read again before the op resolves.
+it('tests that a listed tab the script acts on while its start read is in flight has its whole tree when that op resolves', async () => {
+  let reads1009 = 0
+  const runtime = loadPrelude({
+    seed: OBSERVER,
+    answer: async (call) => {
+      if (call.name === 'page.title')
+        return { ok: 'Other', pages: [{ tab: 1009 }] }
+      if (call.name !== 'page.frames') return null
+      if (tabOf(call) !== 1009 || reads1009++ > 0) return TREE
+      await new Promise((resolve) => setTimeout(resolve, 30))
+      return {
+        ok: TREE,
+        pages: [{ tab: 1009 }],
+        observed: { seq: 1, events: 0, payloadCurrent: true },
+      }
+    },
+  })
+  const count = json(
+    await runtime.run(`
+      const p = ${OTHER}
+      await p.title()
+      return p.frames().length
+    `),
+  )
+  expect(count).toEqual(3)
+  expect(reads1009).toEqual(2)
 })
 
 it('tests that a page first seen mid-run has its whole tree when the operation that handed it out resolves', async () => {

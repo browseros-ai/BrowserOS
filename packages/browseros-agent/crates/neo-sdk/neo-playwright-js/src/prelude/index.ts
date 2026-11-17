@@ -80,10 +80,11 @@ onSettle(() => context._settleFrames())
 
 // The agent function's parameters, after the bootstrap's own. claw-sdk's placeholder page
 // prelude provides `page` and `context` too; these replace them when both are loaded.
-// With a bootstrap that awaits its providers (FR/RC C5), the run's page and every listed tab
-// read their frame trees before the agent's first statement, so `frames()` of any page the
-// script reaches lists its iframes from the start, as upstream's does (FR-1). An older bootstrap
-// would hand the script the promise instead.
+// With a bootstrap that awaits its providers (FR/RC C5), the run's page reads its frame tree
+// before the agent's first statement, so `page.frames()` lists its iframes from the start, as
+// upstream's does (FR-1). Every listed tab's read starts at the same time and goes on in the
+// background (`BrowserContext._readInitialFrames`). An older bootstrap would hand the script
+// the promise instead.
 provide(
   'page',
   awaitsProviders()

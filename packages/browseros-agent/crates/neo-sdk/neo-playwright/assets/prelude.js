@@ -369,7 +369,7 @@
     "page.frames": {
       effect: "read",
       target: "page",
-      lifetime: "operation"
+      lifetime: "background"
     },
     "page.evaluate": {
       effect: "write",
@@ -8900,7 +8900,7 @@ ${changes}`;
     }
     async waitForTimeout(timeout) {
       await sleep("frame.waitForTimeout", timeout);
-      await this._page._context._refreshWorkingFrames("frame.waitForTimeout");
+      await this._page._context._refreshUsedFrames("frame.waitForTimeout");
     }
     _call(api, timeout) {
       return { api, ...headerTimeout(api, timeout) };
@@ -11327,6 +11327,7 @@ ${changes}`;
     _framesWatched = false;
     _framesChanged = 0;
     #framesReadAt = 0;
+    #framesAskedAt = 0;
     #framesIncomplete = false;
     #framesRead = null;
     #firstRead = null;
@@ -11689,7 +11690,7 @@ ${changes}`;
     }
     async waitForTimeout(timeout) {
       await sleep("page.waitForTimeout", timeout);
-      await this._context._refreshWorkingFrames("page.waitForTimeout");
+      await this._context._refreshUsedFrames("page.waitForTimeout");
     }
     ariaSnapshot(options) {
       return this._mainFrame._ariaSnapshot("page.ariaSnapshot", null, options);
@@ -11851,7 +11852,7 @@ ${changes}`;
       const first = (async () => {
         if (await this._readFrames(timeoutMs))
           return;
-        if (this.#framesIncomplete && !this._closed) {
+        if (this.#framesIncomplete && !this._closed && this._used()) {
           await sleep("page.frames", FRAMES_RETRY_MS).catch(() => {});
           await this._readFrames(timeoutMs);
         }
@@ -11867,6 +11868,11 @@ ${changes}`;
         await this.#firstRead;
       if (this._framesStale())
         await this._readFrames(timeoutMs);
+    }
+    _askIfChanged(timeoutMs) {
+      if (this.#firstRead || this._framesChanged <= this.#framesAskedAt)
+        return;
+      this._readFrames(timeoutMs);
     }
     _readFrames(timeoutMs) {
       if (this.#framesRead)
@@ -11884,6 +11890,7 @@ ${changes}`;
     async _refreshFrames(api, timeoutMs = 0) {
       const site = INTERNAL_SITE;
       const version = this._framesChanged;
+      this.#framesAskedAt = version;
       const { value: tree, observed } = await invokeObserved("page.frames", site, { api, timeoutMs }, { page: await this._brand(api, { working: false }) });
       if (this.#payloadCurrent(observed) && Array.isArray(tree?.frames)) {
         this._applyFrames(tree.frames, observed);
@@ -11891,13 +11898,15 @@ ${changes}`;
         this.#framesIncomplete = tree.incomplete === true;
         return !this.#framesIncomplete;
       }
-      if (tree !== null && typeof tree === "object" && this.#payloadCurrent(observed))
+      if (tree !== null && typeof tree === "object" && observed !== null && !this._closed)
         this._framesUnknown();
       return false;
     }
     _framesUnknown() {
       this.#framesIncomplete = true;
-      this._framesWatched = true;
+    }
+    _used() {
+      return this._working || this._framesWatched;
     }
     _frameVersion(version) {
       this._framesChanged = Math.max(this._framesChanged, version);
@@ -12388,18 +12397,30 @@ ${changes}`;
       return page;
     }
     async _readInitialFrames(runPage) {
-      const pages = new Set([runPage, ...this._knownPages()]);
-      await Promise.all([...pages].map((page) => page._readInitialFrames(page === runPage ? 0 : LISTED_FRAMES_TIMEOUT_MS)));
+      const held = [];
+      for (const page of new Set([runPage, ...this._knownPages()])) {
+        const read = page._readInitialFrames(page === runPage ? 0 : LISTED_FRAMES_TIMEOUT_MS);
+        if (page._used())
+          held.push(read);
+      }
+      await Promise.all(held);
     }
     async _settleFrames() {
-      const stale = this._knownPages().filter((page) => page._framesStale());
-      if (stale.length === 0)
-        return;
-      await Promise.all(stale.map((page) => page._settle(LISTED_FRAMES_TIMEOUT_MS)));
+      const held = [];
+      for (const page of this._knownPages()) {
+        if (!page._framesStale())
+          continue;
+        if (page._used())
+          held.push(page._settle(LISTED_FRAMES_TIMEOUT_MS));
+        else
+          page._askIfChanged(LISTED_FRAMES_TIMEOUT_MS);
+      }
+      if (held.length > 0)
+        await Promise.all(held);
     }
-    async _refreshWorkingFrames(api) {
-      const working = this._knownPages().filter((page) => (page._working || page._framesWatched) && page._tab !== null && page._navigationsInFlight === 0);
-      await Promise.all(working.map((page) => page._refreshFrames(api, page._working ? 0 : LISTED_FRAMES_TIMEOUT_MS).catch(() => {
+    async _refreshUsedFrames(api) {
+      const used = this._knownPages().filter((page) => page._used() && page._tab !== null && page._navigationsInFlight === 0);
+      await Promise.all(used.map((page) => page._refreshFrames(api, page._working ? 0 : LISTED_FRAMES_TIMEOUT_MS).catch(() => {
         return;
       })));
     }

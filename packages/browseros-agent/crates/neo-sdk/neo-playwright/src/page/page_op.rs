@@ -168,11 +168,16 @@ impl PageOp {
                 "run beforeunload handlers and request a close without waiting for it",
             ),
             Self::Opener => OpSpec::read("page.opener", PAGE, "the page that opened this one"),
+            // Only the prelude sends it, and for a tab the script has not used it waits for no
+            // answer (context.ts, `_readInitialFrames`): a read still running when the script
+            // returns is the prelude's, so the run's end cuts it quietly instead of telling the
+            // model a `page.frames` call was not awaited.
             Self::Frames => OpSpec::read(
                 "page.frames",
                 PAGE,
                 "the frame tree, for the prelude's synchronous frames() and mainFrame()",
-            ),
+            )
+            .background(),
             Self::Evaluate => OpSpec::write(
                 "page.evaluate",
                 PAGE,
