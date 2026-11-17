@@ -22,23 +22,20 @@ async fn value(client: &Client, task: &str, code: &str) -> Result<Value, Box<dyn
         .ok_or_else(|| "run value missing".into())
 }
 
-/// Prime the isolated world before holding its renderer busy: an install queued behind the
-/// loop would consume the hold before the clickable capture's own budget even begins.
+/// Prime both worlds before starting the hold. The busy evaluate stays in flight until the
+/// snapshot returns: awaiting it first would consume the hold before the capture starts.
 const BUSY_PAGE: &str = r#"
 await page.goto('data:text/html,'+encodeURIComponent(`<meta charset=utf-8>
 <button>Native action</button><div id=listener style="display:inline-block;padding:8px">Script only</div>
 <script>document.getElementById('listener').addEventListener('click',()=>{});</script>`));
 await page.ariaSnapshotJSON();
-const started=page.waitForEvent('console',{predicate:m=>m.text()==='snapshot-check-loop-start'});
-const ended=page.waitForEvent('console',{predicate:m=>m.text()==='snapshot-check-loop-end'});
-await page.evaluate(()=>{setTimeout(()=>{
- console.log('snapshot-check-loop-start');
+await page.evaluate(()=>0);
+const busy=page.evaluate(()=>{
  const until=performance.now()+3000;while(performance.now()<until){}
- console.log('snapshot-check-loop-end');
-},0)});
-await started;
+});
+await new Promise(resolve=>setTimeout(resolve,200));
 const at=Date.now();const snapshot=await page.ariaSnapshot();const elapsed=Date.now()-at;
-await ended;
+await busy;
 return {snapshot,elapsed,listener:snapshot.split('\n').find(l=>l.includes('Script only'))};
 "#;
 
@@ -47,8 +44,10 @@ async fn busy_snapshot_check_explains_missing_script_only_refs_and_recovers() ->
     let Some(browser) = browseros_rig::browser_or_skip() else {
         return Ok(());
     };
-    // This rig starts the ordinary local server, which receives console events. Hosted mode
-    // intentionally does not; using this synchronization there must fail, never skip a row.
+    // The rig runs hosted mode, which emits no console events, so this row cannot use them.
+    // The bare script timer sends no renderer request; page.waitForTimeout refreshes frames.
+    // If the evaluate began late, the check would finish and the notice assertion would fail
+    // rather than pass a false proof. No elapsed-time assertion depends on machine speed.
     let rig = Rig::start(&browser, CaptchaKey::Absent)?;
     rig.until_ready().await?;
     let client = rig.client().await?;
@@ -61,8 +60,8 @@ async fn busy_snapshot_check_explains_missing_script_only_refs_and_recovers() ->
         .as_str()
         .ok_or("script-only content remains listed")?;
     assert!(!listener.contains("[ref="), "{listener}");
-    // The first run awaited the loop's own end event, so this read observes recovery rather
-    // than relying on a sleep or on the test machine's speed. Its DOM has not changed.
+    // The busy snapshot's tree needs the main thread: its return proves the loop has ended.
+    // This idle read needs no further wait and observes the same DOM with its check restored.
     let idle = value(
         &client,
         "snapshot-check-busy",
