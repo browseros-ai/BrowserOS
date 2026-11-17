@@ -35,7 +35,7 @@
 //!      ① act { chunk | pin, states, scroll }        ─ measured { rect } │ state │ detached
 //!         if needed: act with no scroll, then DOM.scrollIntoViewIfNeeded, then act again
 //!         (`protocol_scroll.rs`: the protocol's scroll is instant, the page's may animate)
-//!         16 ms on Rust's clock (never page rAF, which a background tab never runs)
+//!         STABLE_GAP (17 ms) on Rust's clock (never page rAF, which a background tab never runs)
 //!      ── the tab's input lock ──────────────────────────────────────────────────────────
 //!      parents (child frames only): every iframe's origin, then its hit test │ covered
 //!      ② act { pin, arm { expectRect, token } }     ─ armed │ measured (moved) │ covered

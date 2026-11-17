@@ -35,7 +35,7 @@ use crate::action::pointer_quads::{self, Placement as QuadPlacement};
 use crate::action::protocol_scroll;
 use crate::action::requested_navigations::{NavigationCut, RequestedNavigations};
 use crate::action::subject::Subject;
-use crate::backoff::Backoff;
+use crate::backoff::{Backoff, STABLE_GAP};
 use crate::input::{
     self, BurstFailure, ClickOptions, InputDevices, InputStep, Modifiers, MouseButton, PageInput,
     Point as PagePoint, UnknownKey,
@@ -52,10 +52,6 @@ use crate::resolve::{self, Resolved};
 use crate::target::{Strictness, Target};
 use crate::world::Pin;
 use crate::{ErrorCode, Playwright, PlaywrightError, TimedOut};
-
-/// Two measurements at least this far apart, with the same rect, make an element stable. One
-/// animation frame, as upstream's `stableRafCount: 1` waits, but on Rust's clock.
-const STABLE_GAP: Duration = Duration::from_millis(16);
 
 /// The route check's tries before the attempt starts over, and the gap between them: the
 /// browser's copy of the layout moves on when the scrolled frame's process draws again, a

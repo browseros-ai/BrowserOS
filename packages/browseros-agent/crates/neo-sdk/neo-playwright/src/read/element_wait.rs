@@ -1,9 +1,7 @@
 //! `elementHandle.waitForElementState`: upstream's `_retryAction` around `checkElementStates`
 //! (server/dom.ts at v1.64.1), on one element handle's node.
 
-use std::time::Duration;
-
-use crate::backoff::Backoff;
+use crate::backoff::{Backoff, STABLE_GAP};
 use crate::op_scope::OpScope;
 use crate::page::OpPage;
 use crate::probe::{ProbeReply, ProbeRequest, ProbeTarget, QueryState, Read, Rect};
@@ -12,11 +10,6 @@ use crate::resolve::{self, HandleSite};
 use crate::target::{ElementTarget, Strictness};
 use crate::wire::Nothing;
 use crate::{ErrorCode, Playwright, PlaywrightError};
-
-/// The gap between the two measurements of the `stable` check, on Rust's clock: about one
-/// frame, as upstream's two animation frames at `stableRafCount: 1`, without the page's rAF,
-/// which stalls in a background tab.
-const STABLE_GAP: Duration = Duration::from_millis(16);
 
 /// The states a handle waits for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
