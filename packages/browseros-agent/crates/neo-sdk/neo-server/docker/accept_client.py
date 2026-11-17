@@ -423,11 +423,16 @@ try {
     : await waiting;
   facts.event = event.download ? { name: event.download.suggestedFilename(), url: event.download.url() } : event;
   if (args.mode === 'inline') {
-    // Chromium's PDF embed is hidden from document queries. Its generated document
-    // references the viewer's extension stylesheet even when no download exists.
-    facts.viewer = await p.evaluate(() => ({ contentType: document.contentType,
-      stylesheet: [...document.querySelectorAll('link[rel="stylesheet"]')].some(link =>
-        link.href.startsWith('chrome-extension://') && link.href.endsWith('/pdf_embedder.css')) }));
+    // The PDF embed lives in user-agent shadow DOM. Chromium 158 styles that
+    // document inline; the SDK snapshot still reads the actual viewer's frame.
+    // Check its controls instead of depending on a packaged stylesheet filename.
+    const viewer = await p.ariaSnapshot();
+    facts.viewer = {
+      contentType: await p.evaluate(() => document.contentType),
+      pageNumber: viewer.includes('textbox "Page number"'),
+      download: viewer.includes('button "Download"'),
+      print: viewer.includes('button "Print"'),
+    };
   } else if (event.download) {
     // These methods have no timeout option. Observe each independently so a stuck artifact
     // still returns evidence. Ending the run cancels operations left behind by the races.
@@ -468,7 +473,7 @@ def pdf_downloads(url: str, socket_path: str, token_file: str) -> dict:
                 if mode == "inline":
                     assert not value.get("triggerError"), str(value)
                     assert value.get("event") == {"error": "no event after load"} and not listed, str(value)
-                    assert value.get("viewer") == {"contentType": "application/pdf", "stylesheet": True}, str(value)
+                    assert value.get("viewer") == {"contentType": "application/pdf", "pageNumber": True, "download": True, "print": True}, str(value)
                 else:
                     path = (value.get("path") or {}).get("value") or ""
                     assert path.startswith("/data/downloads/"), str(value)
