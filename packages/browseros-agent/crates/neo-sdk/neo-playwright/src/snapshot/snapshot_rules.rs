@@ -2,7 +2,7 @@
 //! ARIA prohibits naming never prints a quoted name, so every name an agent reads in a
 //! snapshot is one `getByRole(role, { name })` can find.
 
-use super::aria_snapshot::{AriaChild, AriaNode};
+use neo_snapshot::{AriaChild, AriaNode};
 
 /// The roles ARIA prohibits naming: `getByRole(role, { name })` never matches a name on them.
 /// The snapshot still names a role-less element (which it prints as `generic`) from its
@@ -55,10 +55,10 @@ pub(crate) fn drop_prohibited_names(node: &mut AriaNode) {
 mod tests {
     use std::error::Error;
 
+    use neo_snapshot::AriaNode;
     use serde_json::json;
 
     use super::drop_prohibited_names;
-    use crate::snapshot::aria_snapshot::AriaNode;
     use crate::snapshot::aria_snapshot::tests::{find, recorded};
 
     /// The recorded top frame, after the rule. Upstream printed `generic "Chrome 1" [ref=e4]`

@@ -2000,6 +2000,7 @@ dependencies = [
  "browseros-cdp",
  "browseros-core",
  "futures-util",
+ "neo-snapshot",
  "neo-trace",
  "png",
  "rquickjs",
