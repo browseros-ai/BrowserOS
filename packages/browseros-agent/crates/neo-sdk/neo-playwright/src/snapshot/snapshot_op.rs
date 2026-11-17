@@ -535,7 +535,7 @@ enum Unread {
     /// CDP or the probe failed there in the way the code names.
     Failed(ErrorCode),
     /// The child replied promptly, but its tree cannot fit the admitted JSON depth.
-    Depth,
+    Depth(usize),
 }
 
 impl fmt::Display for Unread {
@@ -544,10 +544,7 @@ impl fmt::Display for Unread {
             Self::Timeout => write!(f, "timeout after {} ms", FRAME_BUDGET.as_millis()),
             Self::Detached => f.write_str("frame detached"),
             Self::Loading => f.write_str("frame not loaded"),
-            Self::Depth => write!(
-                f,
-                "snapshot exceeds JSON depth {MAX_VALUE_DEPTH}; pass {{ depth: n }} or take a locator's snapshot of a section"
-            ),
+            Self::Depth(levels) => f.write_str(&probe::depth_error(*levels)),
             Self::Failed(ErrorCode::TargetCrashed) => f.write_str(TARGET_CRASH_MESSAGE),
             Self::Failed(code) => f.write_str(&code.as_str().replace('_', " ")),
         }
@@ -778,9 +775,10 @@ impl Snapshotter<'_> {
         })?;
         let nesting = page::json_depth(&encoded);
         if nesting > MAX_VALUE_DEPTH {
-            return Err(self.scope.fail(ErrorCode::Unsupported, &format!(
-                "The stitched snapshot reaches JSON depth {nesting}, above the limit of {MAX_VALUE_DEPTH}. Pass {{ depth: n }} or take a locator's snapshot of a section."
-            )));
+            return Err(self.scope.fail(
+                ErrorCode::Unsupported,
+                &probe::depth_error(nesting.saturating_sub(1) / 2),
+            ));
         }
         result.on_top = on_top;
         let count = |seeds: usize| u32::try_from(seeds).unwrap_or(u32::MAX);
@@ -893,11 +891,9 @@ impl Snapshotter<'_> {
                 Ok(ProbeReply::None { .. }) => return Ok(FrameReply::empty()),
                 Ok(ProbeReply::Error {
                     class: ErrorClass::Unsupported,
-                    message,
+                    tree_depth: Some(levels),
                     ..
-                }) if message.starts_with("The snapshot reply reaches JSON depth ") => {
-                    return Err(Unread::Depth);
-                }
+                }) => return Err(Unread::Depth(levels)),
                 Ok(other) => {
                     let refused = resolve::refused(self.scope, other);
                     return Err(Unread::Failed(
@@ -1073,5 +1069,13 @@ mod tests {
             assert_eq!(frame.json.len(), 1);
         }
         Ok(())
+    }
+    #[test]
+    fn a_child_depth_reason_uses_tree_levels_and_an_actionable_cut() {
+        let reason = Unread::Depth(149).to_string();
+        assert!(reason.contains("149 levels deep"));
+        assert!(reason.contains("about 147"));
+        assert!(reason.contains("140 or less"));
+        assert!(reason.contains("locator's snapshot"));
     }
 }

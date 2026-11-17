@@ -10683,6 +10683,7 @@ ${value.stack}`;
 
   // crates/neo-sdk/neo-playwright-js/src/probe/generated.ts
   var MAX_REPLY_DEPTH = 297;
+  var SNAPSHOT_DEPTH_ERROR = "This tree is nested about {levels} levels deep, more than a snapshot carries (about 147). Pass { depth: n } with n of 140 or less to cut it there, or take a locator's snapshot of a smaller section.";
 
   // crates/neo-sdk/neo-playwright-js/src/probe/protocol.ts
   var PROTOCOL = 53;
@@ -10914,10 +10915,12 @@ ${value.stack}`;
     return text.replace(/\\\\|\\u[dD][89a-fA-F][0-9a-fA-F]{2}/g, (token) => token === "\\\\" ? token : "�");
   }
   function depthError(depth) {
+    const treeDepth = Math.floor((depth - 1) / 2);
     return JSON.stringify({
       kind: "error",
       class: "unsupported",
-      message: `The snapshot reply reaches JSON depth ${depth}, above the limit of ${MAX_REPLY_DEPTH}. Pass { depth: n } or take a locator's snapshot of a section.`
+      treeDepth,
+      message: SNAPSHOT_DEPTH_ERROR.replace("{levels}", String(treeDepth))
     });
   }
   function replyText(reply) {

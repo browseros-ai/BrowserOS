@@ -28,17 +28,19 @@ const ENGINE_JS: &str = include_str!("../../assets/injected.js");
 /// The guard on `__neoProbe` keeps one engine per world, because a second copy carries its own module
 /// state and would mint colliding refs. Every protocol version keeps `boot` and the
 /// `protocol` and `retired` fields of its reply, since a newer build re-keys an older probe
-/// through them and must still learn the seq the older one numbered the document with.
+/// through them and must still learn the seq the older one numbered the document with. A failed
+/// boot is returned without replacement: it identifies neither a version nor a completed re-key,
+/// so installing another engine over it could leave the old refs alive.
 pub(crate) fn install_function() -> &'static str {
     static SOURCE: OnceLock<String> = OnceLock::new();
     SOURCE.get_or_init(|| {
         format!(
             "function (options) {{\nconst held = globalThis.__neoProbe;\nlet retired;\n\
-             if (held) {{\n  const previous = held.boot(options);\n  const described = typeof previous === \"string\" ? JSON.parse(previous) : previous;\n  if (described.protocol \
+             if (held) {{\n  const previous = held.boot(options);\n  const described = typeof previous === \"string\" ? JSON.parse(previous) : previous;\n  if (described?.kind !== \"described\") return typeof previous === \"string\" ? previous : JSON.stringify(described);\n  if (described.protocol \
              === {PROBE_PROTOCOL}) return previous;\n  retired = described.retired;\n  delete \
              globalThis.__neoProbe;\n}}\n{ENGINE_JS}\nconst booted = \
-             globalThis.__neoProbe.boot(options);\nreturn retired === undefined ? booted : JSON.stringify({{ \
-             ...JSON.parse(booted), retired }});\n}}"
+             globalThis.__neoProbe.boot(options);\nconst fresh = JSON.parse(booted);\nreturn retired === undefined || fresh.kind !== \"described\" ? booted : JSON.stringify({{ \
+             ...fresh, retired }});\n}}"
         )
     })
 }
@@ -91,8 +93,7 @@ mod tests {
         );
         assert!(
             install.trim_end().ends_with(
-                "const booted = globalThis.__neoProbe.boot(options);\nreturn retired === \
-                 undefined ? booted : JSON.stringify({ ...JSON.parse(booted), retired });\n}"
+                "const booted = globalThis.__neoProbe.boot(options);\nconst fresh = JSON.parse(booted);\nreturn retired === undefined || fresh.kind !== \"described\" ? booted : JSON.stringify({ ...fresh, retired });\n}"
             ),
             "the install ends by booting whichever probe is in charge"
         );

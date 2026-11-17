@@ -3,7 +3,7 @@
  * out of the shared transport's JSON reader; Rust checks the same nesting bound before parsing.
  * Node-handle replies bypass this codec and retain their remote identity.
  */
-import { MAX_REPLY_DEPTH } from './generated'
+import { MAX_REPLY_DEPTH, SNAPSHOT_DEPTH_ERROR } from './generated'
 
 const FALLBACK =
   '{"kind":"error","class":"internal","message":"Neo could not serialize the probe reply."}'
@@ -38,10 +38,12 @@ export function wellFormedReply(text: string): string {
 }
 
 function depthError(depth: number): string {
+  const treeDepth = Math.floor((depth - 1) / 2)
   return JSON.stringify({
     kind: 'error',
     class: 'unsupported',
-    message: `The snapshot reply reaches JSON depth ${depth}, above the limit of ${MAX_REPLY_DEPTH}. Pass { depth: n } or take a locator's snapshot of a section.`,
+    treeDepth,
+    message: SNAPSHOT_DEPTH_ERROR.replace('{levels}', String(treeDepth)),
   })
 }
 

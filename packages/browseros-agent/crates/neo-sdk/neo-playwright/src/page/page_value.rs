@@ -568,7 +568,8 @@ pub(crate) fn js_number(number: f64) -> String {
 
 /// The deepest `[`/`{` nesting in `text` outside its strings, in one pass over the bytes. A
 /// multi-byte character never holds a quote, a backslash or a bracket byte.
-pub(crate) fn depth_of(text: &str) -> usize {
+#[must_use]
+pub fn depth_of(text: &str) -> usize {
     let (mut depth, mut deepest) = (0_usize, 0_usize);
     let (mut in_string, mut escaped) = (false, false);
     for byte in text.bytes() {

@@ -23,7 +23,7 @@ use serde_json::{Value, json};
 use crate::op_scope::{OpScope, ProtocolRequest};
 use crate::page::{self, MAX_VALUE_DEPTH, OpPage};
 use crate::private_entry::PrivateStep;
-use crate::probe::probe_reply::ProbeReply;
+use crate::probe::probe_reply::{self, ProbeReply};
 use crate::probe::probe_request::{ProbeCall, ProbePolicy, ProbeRequest};
 use crate::world::{BackendNodeId, IsolatedWorld, Pin};
 
@@ -451,8 +451,8 @@ pub(crate) fn reply_of(called: Value) -> Result<ProbeReply, ProbeFailure> {
         })?;
     let depth = page::json_depth(text);
     if depth > MAX_VALUE_DEPTH {
-        return Err(ProbeFailure::Broken(format!(
-            "the probe reply reaches JSON depth {depth}, above limit {MAX_VALUE_DEPTH}. Pass {{ depth: n }} or take a locator's snapshot of a section."
+        return Err(ProbeFailure::Broken(probe_reply::depth_error(
+            depth.saturating_sub(1) / 2,
         )));
     }
     let mut reader = serde_json::Deserializer::from_str(text);
@@ -785,7 +785,7 @@ mod tests {
                 let Err(ProbeFailure::Broken(message)) = reply else {
                     panic!("overdeep text must fail promptly")
                 };
-                assert!(message.contains("299"));
+                assert!(message.contains("149 levels deep"));
                 assert!(message.contains("{ depth: n }"));
             }
         }

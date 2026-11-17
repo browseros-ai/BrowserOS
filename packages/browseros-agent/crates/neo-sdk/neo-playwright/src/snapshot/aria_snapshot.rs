@@ -22,6 +22,7 @@ use ts_rs::TS;
 
 use super::snapshot_rules;
 use crate::page::{self, MAX_VALUE_DEPTH};
+use crate::probe;
 
 /// One node of `ariaSnapshotJSON`: upstream's `AriaNodeJSON` (isomorphic/ariaSnapshot.ts).
 ///
@@ -283,10 +284,7 @@ fn attach(
                 partial.push(PartialFrame {
                     r#ref: iframe_ref.clone(),
                     frame: child.src,
-                    reason: format!(
-                        "stitched snapshot reaches JSON depth {}, above the limit of {MAX_VALUE_DEPTH}; pass {{ depth: n }} or take a locator's snapshot of a section",
-                        depth + deepest
-                    ),
+                    reason: probe::depth_error((depth + deepest).saturating_sub(1) / 2),
                 });
             } else {
                 node.children = child
@@ -527,7 +525,7 @@ pub(crate) mod tests {
         assert!(result.json[1].children.is_empty());
         assert_eq!(result.partial.len(), 1);
         assert_eq!(result.partial[0].r#ref, "e2");
-        assert!(result.partial[0].reason.contains("299"));
+        assert!(result.partial[0].reason.contains("149 levels deep"));
         assert!(result.partial[0].reason.contains("{ depth: n }"));
         Ok(())
     }

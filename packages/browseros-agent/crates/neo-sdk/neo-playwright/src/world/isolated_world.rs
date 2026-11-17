@@ -258,6 +258,11 @@ impl IsolatedWorld {
                      speaks {PROBE_PROTOCOL}; rebuild crates/neo-sdk/neo-playwright-js"
                 )));
             }
+            Ok(ProbeReply::Error { message, .. }) => {
+                return Err(ProbeFailure::Broken(format!(
+                    "the engine failed to install: {message}"
+                )));
+            }
             Ok(_) => {
                 return Err(ProbeFailure::Broken(
                     "boot answered something other than `described`".to_owned(),
@@ -844,6 +849,19 @@ mod tests {
         assert!(
             broadcast.try_recv().is_err(),
             "a method with a live targeted subscriber must bypass the broadcast"
+        );
+        Ok(())
+    }
+    #[tokio::test]
+    async fn a_probe_boot_error_keeps_its_message_at_the_install_boundary()
+    -> Result<(), Box<dyn Error>> {
+        let browser = Browser::answering(
+            handle(),
+            &json!({"kind":"error","class":"internal","message":"boot diagnostic"}),
+        );
+        let failure = install(&browser).await.err().ok_or("boot must fail")?;
+        assert!(
+            matches!(failure, ProbeFailure::Broken(message) if message == "the engine failed to install: boot diagnostic")
         );
         Ok(())
     }

@@ -48,7 +48,10 @@ it('keeps an allowed reply and answers an overdeep snapshot with the two ways ou
     replyText({ kind: 'snapshot', json: nested(MAX_REPLY_DEPTH) }),
   )
   expect(refused).toMatchObject({ kind: 'error', class: 'unsupported' })
-  expect(refused.message).toContain('298')
+  expect(refused.treeDepth).toBe(148)
+  expect(refused.message).toContain('nested about 148 levels deep')
+  expect(refused.message).toContain('about 147')
+  expect(refused.message).toContain('140 or less')
   expect(refused.message).toContain('{ depth: n }')
   expect(refused.message).toContain("locator's snapshot")
 })

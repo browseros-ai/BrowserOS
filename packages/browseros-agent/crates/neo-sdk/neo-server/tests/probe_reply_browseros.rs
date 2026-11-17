@@ -78,7 +78,7 @@ async fn malformed_utf16_page_text_and_locator_actions_return_through_mcp() -> T
         rig.until_ready().await?;
         let client = rig.client().await?;
         let (control, _) = returned(&client, "probe-valid-pair", r"
-await page.goto('data:text/html,'+encodeURIComponent('<button>Before 😀 After</button>'));
+await page.goto('data:text/html,'+encodeURIComponent('<meta charset=utf-8><button>Before 😀 After</button>'));
 const snapshot=await page.ariaSnapshot();await page.getByRole('button').click();
 return {snapshot,text:await page.getByRole('button').textContent()};
 ").await?;
@@ -127,13 +127,14 @@ page.setDefaultTimeout(3000);
 const nested='<div role="group" aria-label="Level">'.repeat(DEPTH)+'<button>Deep target</button>'+'</div>'.repeat(DEPTH);
 await page.goto('data:text/html,'+encodeURIComponent(nested));
 const forms={
- default:()=>page.ariaSnapshot(), full:()=>page.ariaSnapshot({mode:'full'}),
+ default:()=>page.ariaSnapshot(), upstream:()=>page.ariaSnapshot({mode:'default'}), full:()=>page.ariaSnapshot({mode:'full'}),
  delta:()=>page.ariaSnapshot({delta:true}), json:()=>page.ariaSnapshotJSON(),
  locator:()=>page.locator('body').ariaSnapshot()
 };
 const values={};for(const [name,read] of Object.entries(forms)){const start=Date.now();try{
  const value=await read();values[name]={ok:true,ms:Date.now()-start,found:JSON.stringify(value).includes('Deep target')};
 }catch(e){values[name]={ok:false,ms:Date.now()-start,code:e.code,message:String(e.message)}}}
+if(DEPTH===148){const start=Date.now();const cut=await page.ariaSnapshot({depth:140});values.cut140={ok:true,ms:Date.now()-start,found:cut.includes('Deep target')}}
 return values;
 "#;
 
@@ -152,7 +153,7 @@ async fn deep_aria_trees_return_or_refuse_promptly_in_every_snapshot_form() -> T
             &DEEP_PAGE.replace("DEPTH", &depth.to_string()),
         )
         .await?;
-        for form in ["default", "full", "delta", "json", "locator"] {
+        for form in ["default", "upstream", "full", "delta", "json", "locator"] {
             let observed = &value[form];
             assert_eq!(
                 observed["ok"],
@@ -179,6 +180,46 @@ async fn deep_aria_trees_return_or_refuse_promptly_in_every_snapshot_form() -> T
                 io::stderr(),
                 "PROBE_REPLY depth={depth} form={form} {observed}"
             )?;
+        }
+        if depth == 130 {
+            let task = format!("probe-depth-{depth}");
+            let refused = browseros_rig::run(
+                &client,
+                "return await page.ariaSnapshotJSON();",
+                &json!({"taskId": task}),
+            )
+            .await?;
+            let error = refused
+                .structured_content
+                .as_ref()
+                .and_then(|content| content.get("error"))
+                .ok_or("a deep return has its own plain error")?;
+            assert_eq!(error["owner"], "script");
+            assert_eq!(error["code"], "result_too_large");
+            assert!(error["message"].as_str().is_some_and(
+                |text| text.contains("at most 126") && text.contains("JSON.stringify")
+            ));
+            let (encoded, _) = returned(
+                &client,
+                &task,
+                "return JSON.stringify(await page.ariaSnapshotJSON());",
+            )
+            .await?;
+            assert!(
+                encoded
+                    .as_str()
+                    .is_some_and(|text| text.contains("Deep target") && text.starts_with('['))
+            );
+        }
+        if depth == 148 {
+            assert_eq!(
+                value["cut140"]["ok"], true,
+                "the error's suggested cut succeeds"
+            );
+            assert_eq!(
+                value["cut140"]["found"], false,
+                "the tree was cut before its end"
+            );
         }
     }
     client.cancel().await?;
