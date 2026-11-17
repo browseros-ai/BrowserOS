@@ -165,7 +165,9 @@ export function surveyCovers(
     }
   }
   const naming = performance.now()
-  const counting = phases.count
+  // Isolate guard time spent while naming: a carrier's guard belongs to count, not both phases.
+  const countedBeforeNaming = phases.count
+  phases.count = 0
   const centre = { x: innerWidth / 2, y: innerHeight / 2 }
   for (const face of found.values())
     face.named = shownAs(world, output, face.named, centre)
@@ -196,10 +198,8 @@ export function surveyCovers(
     )
     .slice(0, MAX_LAYERS)
   memory.set(document, next)
-  phases.naming += Math.max(
-    0,
-    performance.now() - naming - (phases.count - counting),
-  )
+  phases.naming += Math.max(0, performance.now() - naming - phases.count)
+  phases.count += countedBeforeNaming
   const marksSkipped = markBlocks(world, json, layers, inside, phases)
   return {
     layers: layers.map(({ note }) => note),
