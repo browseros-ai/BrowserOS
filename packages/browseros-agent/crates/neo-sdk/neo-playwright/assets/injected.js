@@ -11118,17 +11118,20 @@ ${value.stack}`;
       };
     }
     const naming = performance.now();
+    const countedBeforeNaming = phases.count;
+    phases.count = 0;
     const centre = { x: innerWidth / 2, y: innerHeight / 2 };
     for (const face of found.values())
       face.named = shownAs(world, output, face.named, centre);
     const groups = joinFaces(found, inside).map((faces) => ({
       faces,
-      held: holdersOf(faces, inside)
+      ...holdersOf(faces, inside, page)
     }));
     const next = [];
     const layers = groups.map((group) => describeLayer(world, output, group, groups, remembered, next, tested, samples, inside)).filter((layer) => layer !== undefined).sort((a, b) => Number(b.note.wholeView) - Number(a.note.wholeView) || a.order - b.order).slice(0, MAX_LAYERS);
     memory.set(document2, next);
-    phases.naming += performance.now() - naming;
+    phases.naming += Math.max(0, performance.now() - naming - phases.count);
+    phases.count += countedBeforeNaming;
     const marksSkipped = markBlocks(world, json, layers, inside, phases);
     return {
       layers: layers.map(({ note }) => note),
@@ -11304,16 +11307,29 @@ ${value.stack}`;
     }
     return groups;
   }
-  function holdersOf(faces, inside) {
+  function holdersOf(faces, inside, page) {
     const shared = [...new Set(faces.flatMap((face) => [...face.roots]))].filter((root) => faces.filter((face) => face.roots.has(root)).length > 1);
     const held = shared.length ? shared : faces.map((face) => face.element);
-    for (const { named } of faces)
-      if (!held.some((root) => inside(root, named)))
-        held.push(named);
-    return held;
+    const controlsFrom = [...held];
+    for (const { named } of faces) {
+      if (!controlsFrom.some((root) => inside(root, named)))
+        controlsFrom.push(named);
+      if (held.some((root) => inside(root, named)))
+        continue;
+      const path = [];
+      for (let at = named;at; at = at.assignedSlot ?? parentOrHost2(at))
+        path.push(at);
+      let carrier = coverFace(path);
+      while (carrier && page(carrier)) {
+        path.splice(path.indexOf(carrier));
+        carrier = coverFace(path);
+      }
+      held.push(carrier ?? named);
+    }
+    return { held, controlsFrom };
   }
   function describeLayer(world, output, group, groups, remembered, next, tested, samples, inside) {
-    const { faces, held } = group;
+    const { faces, held, controlsFrom } = group;
     const face = faces.find((face) => isBlank(world, output, face.element)) ?? faces[0];
     if (!face)
       return;
@@ -11323,7 +11339,7 @@ ${value.stack}`;
     const belongs = (element) => held.some((root) => inside(root, element));
     const ownOfAny = (element) => groups.some(({ held }) => held.some((root) => inside(root, element)));
     const wholeView = samples.every(({ deepest }) => deepest && belongs(deepest)) && tested.every(({ element, clear }) => !clear || ownOfAny(element)) && tested.some(({ element, clear }) => !clear && !belongs(element));
-    const controls = Array.from(new Map(held.flatMap((root) => controlsOf(world, output, root)).map((control) => [control.ref, control])).values());
+    const controls = Array.from(new Map(controlsFrom.flatMap((root) => controlsOf(world, output, root)).map((control) => [control.ref, control])).values());
     const words = output.tree(named, () => renderedText(named).trim().replace(/\s+/g, " "));
     const blank = !inClosedPart(named) && controls.length === 0 && !words && isBlank(world, output, named);
     for (const member of faces)
@@ -11341,7 +11357,7 @@ ${value.stack}`;
         name: nameOf(world, output, named),
         ref: world.refs.forElement(named, world.seq),
         blank,
-        loading: held.some(saysLoading),
+        loading: controlsFrom.some(saysLoading),
         wholeView,
         controls,
         ...words ? { firstWords: Array.from(words).slice(0, 61).join("") } : {}

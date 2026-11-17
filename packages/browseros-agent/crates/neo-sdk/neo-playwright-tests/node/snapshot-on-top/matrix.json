@@ -1008,5 +1008,51 @@
     "expectedNotes": [],
     "zeroCountPhase": true,
     "why": "Samples hit the fixed shell, but every control is clear: no layer exists and the lazy document count never runs."
+  },
+  {
+    "id": "e25-dialog-carrier",
+    "title": "Dialog inside a larger fixed carrier beside its dimmer",
+    "file": "pages/e25-dialog-carrier.html",
+    "viewport": {
+      "width": 1280,
+      "height": 800
+    },
+    "expectedControls": 9,
+    "expectedNotes": [
+      {
+        "role": "dialog",
+        "name": "Inner dialog",
+        "extent": "whole",
+        "selector": "[role=dialog]",
+        "controls": ["OK", "Cancel"],
+        "flags": [],
+        "forbidControls": ["Close box"]
+      }
+    ],
+    "bodyOrder": ["Words here", "Close box", "One"],
+    "why": "The backdrop names the inner dialog, and its pointer-taking fixed carrier belongs to that layer: the centre lands on the carrier, so the dialog content prints first."
+  },
+  {
+    "id": "e26-busy-dialog-carrier",
+    "title": "Busy inner dialog keeps its loading flag through its carrier",
+    "file": "pages/e26-busy-dialog-carrier.html",
+    "viewport": {
+      "width": 1280,
+      "height": 800
+    },
+    "expectedControls": 9,
+    "expectedNotes": [
+      {
+        "role": "dialog",
+        "name": "Inner dialog",
+        "extent": "whole",
+        "selector": "[role=dialog]",
+        "controls": ["OK", "Cancel"],
+        "flags": ["loading"],
+        "forbidControls": ["Close box"]
+      }
+    ],
+    "bodyOrder": ["Words here", "Close box", "One"],
+    "why": "Loading stays a fact of the original named dialog even when its larger fixed carrier supplies reach and first content."
   }
 ]
