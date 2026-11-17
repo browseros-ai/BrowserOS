@@ -796,22 +796,26 @@ async fn start_keepalive(inner: Arc<Inner>) {
 /// other owns the retry, and the link stays down with nothing retrying it.
 ///
 /// Only the first report of a loss counts: the keepalive and the reader can both see one
-/// socket die, and the later report would only repeat it. The cause is stored before the
-/// cut-off requests fail, so a caller that asks as soon as it gets
-/// [`CdpError::ConnectionLost`] reads this loss, not the one before.
+/// socket die, on different threads, and the later report would only repeat it. Each report
+/// takes the cause's lock before it reads `connected`, and the first stores its cause under
+/// that lock. So no report fails the cut-off requests before the cause is stored, and a
+/// caller that asks as soon as it gets [`CdpError::ConnectionLost`] reads this loss, not the
+/// one before.
 async fn mark_connection_lost(inner: Arc<Inner>, loss: ConnectionLoss) {
-    let was_connected = inner.connected.swap(false, Ordering::SeqCst);
-    if was_connected {
-        warn!(
-            epoch = inner.epoch.load(Ordering::SeqCst),
-            "CDP link lost: {loss}"
-        );
-        *inner
+    {
+        let mut last_loss = inner
             .last_loss
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(loss);
-        if let Ok(mut since) = inner.down_since.lock() {
-            since.get_or_insert_with(Instant::now);
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if inner.connected.swap(false, Ordering::SeqCst) {
+            warn!(
+                epoch = inner.epoch.load(Ordering::SeqCst),
+                "CDP link lost: {loss}"
+            );
+            *last_loss = Some(loss);
+            if let Ok(mut since) = inner.down_since.lock() {
+                since.get_or_insert_with(Instant::now);
+            }
         }
     }
     *inner.sink.lock().await = None;
