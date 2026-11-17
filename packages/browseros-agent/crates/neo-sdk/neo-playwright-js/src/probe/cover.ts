@@ -927,10 +927,17 @@ export function ownPress(
   if (kind.is === 'wrapper') {
     if (coverNumber(coverRoot(target, chain)) !== allowed.wrapper)
       return undefined
-    // The wrapper is what was hit, so `ownSurface` asks nothing of it: a wrapper that is a shadow
-    // host (a radio card built as a component, the radio slotted in) draws what is not seen here
-    // over the control, and takes no press.
-    if (drawsUnseen(onTop)) return undefined
+    // What takes the press as a wrapper is nothing in itself: the element pressed, and each parent
+    // of it below the one that holds the control, is plain by `ownSurface`'s one list. A `span
+    // role="button"` drawing the control's name, a radio card that is a link, or a component
+    // whose root draws over the radio would run its own action instead.
+    if (!plainElement(onTop)) return undefined
+    for (
+      let at = onTop.parentElement;
+      at && !at.contains(target);
+      at = at.parentElement
+    )
+      if (!plainElement(at)) return undefined
     const checked = checkedState(world, target)
     if (checked === undefined) return undefined
     return {
@@ -983,13 +990,20 @@ export function shownOwnLabel(
  */
 function ownSurface(owner: Element, hit: Element): boolean {
   for (let at: Element | null = hit; at && at !== owner; at = at.parentElement)
-    if (
-      at.matches(`a[href], ${CONTROLS}`) ||
-      explicitControl(at) ||
-      drawsUnseen(at)
-    )
-      return false
+    if (!plainElement(at)) return false
   return owner.contains(hit)
+}
+
+/**
+ * `ownSurface`'s one list: no link, no control (native, with a tabindex, or by a declared role),
+ * no frame (a frame is a control) and no shadow host.
+ */
+function plainElement(element: Element): boolean {
+  return !(
+    element.matches(`a[href], ${CONTROLS}`) ||
+    explicitControl(element) ||
+    drawsUnseen(element)
+  )
 }
 
 /**
@@ -1008,14 +1022,8 @@ function drawsUnseen(element: Element): boolean {
 
 /** The label's first plain point (`pointOffLinks`), in the frame's pixels. */
 export function labelPlainPoint(label: Element): Point | undefined {
-  const offset = pointOffLinks(label)
-  if (!offset) return undefined
-  const box = label.getBoundingClientRect()
-  const style = getComputedStyle(label)
-  return {
-    x: box.x + (Number.parseFloat(style.borderLeftWidth) || 0) + offset.x,
-    y: box.y + (Number.parseFloat(style.borderTopWidth) || 0) + offset.y,
-  }
+  const position = pointOffLinks(label)
+  return position && positionPoint(label, position).point
 }
 
 /** A checkbox's, radio's or switch's state; `undefined` for any other control. */
@@ -1043,21 +1051,18 @@ function labelKind(label: Element): CoverKind {
  * top: no link and no control inside it. Tried on a 5 by 3 grid over its box.
  */
 function pointOffLinks(label: Element): Point | undefined {
-  const box = label.getBoundingClientRect()
-  const style = getComputedStyle(label)
-  const left = box.x + (Number.parseFloat(style.borderLeftWidth) || 0)
-  const topEdge = box.y + (Number.parseFloat(style.borderTopWidth) || 0)
   // Hit-tested in the label's own root, so one inside a shadow root is not retargeted to its host.
   const root = label.getRootNode()
   const scope = root instanceof ShadowRoot ? root : document
   for (const fy of [0.5, 0.25, 0.75])
     for (const fx of [0.1, 0.3, 0.5, 0.7, 0.9]) {
-      const point = { x: box.x + box.width * fx, y: box.y + box.height * fy }
+      const position = samplePosition(label, fx, fy)
+      const { point } = positionPoint(label, position)
       const chain = hitChain(label, point)
       if (chain !== null) continue
       const on = scope.elementFromPoint(point.x, point.y)
       if (on && !ownSurface(label, on)) continue
-      return { x: point.x - left, y: point.y - topEdge }
+      return position
     }
   return undefined
 }
@@ -1074,17 +1079,46 @@ function labelledControl(
 }
 
 /**
+ * A script's `position` as a point of the frame: from the element's padding edge, its border
+ * widths read as upstream reads them (`parseInt`). `clickPoint` converts a script's position with
+ * it, and `clearPoint` and the label's plain point test the very point it gives, so the point
+ * that is tested is the point that is pressed.
+ */
+export function positionPoint(
+  element: Element,
+  position: Point,
+): { point: Point; borderOffset: Point } {
+  const style = getComputedStyle(element)
+  const box = element.getBoundingClientRect()
+  const borderOffset = {
+    x: Number.parseInt(style.borderLeftWidth || '0', 10) + position.x,
+    y: Number.parseInt(style.borderTopWidth || '0', 10) + position.y,
+  }
+  return {
+    point: { x: box.x + borderOffset.x, y: box.y + borderOffset.y },
+    borderOffset,
+  }
+}
+
+/** A sample of `element`'s box at the fractions `fx`, `fy`, as a whole-pixel position. */
+function samplePosition(element: Element, fx: number, fy: number): Point {
+  const box = element.getBoundingClientRect()
+  const origin = positionPoint(element, { x: 0, y: 0 }).point
+  return {
+    x: Math.round(box.x + box.width * fx - origin.x),
+    y: Math.round(box.y + box.height * fy - origin.y),
+  }
+}
+
+/**
  * One of eight other points of the control where it is on top, on its own surface
- * (`ownSurface`: no link, control, frame or component nested in it), from its padding edge, as
- * `click({ position })` takes it. Only points inside the viewport count. Both a press of the
- * target's own and the covered answer's point come from here, so neither lands on a control
- * inside the target; one whose only clear parts are such controls has no clear point.
+ * (`ownSurface`: no link, control, frame or component nested in it), as `click({ position })`
+ * takes it. Each sample is rounded to the whole-pixel position first, and the point that
+ * position gives (`positionPoint`) is the one tested: in the view, on top, the target's own.
+ * Both a press of the target's own and the covered answer's point come from here, so neither
+ * lands on a control inside the target; one whose only clear parts are such controls has none.
  */
 function clearPoint(subject: Element): Point | undefined {
-  const box = subject.getBoundingClientRect()
-  const style = getComputedStyle(subject)
-  const left = box.x + (Number.parseFloat(style.borderLeftWidth) || 0)
-  const topEdge = box.y + (Number.parseFloat(style.borderTopWidth) || 0)
   for (const [fx, fy] of [
     [0.25, 0.25],
     [0.5, 0.25],
@@ -1095,7 +1129,8 @@ function clearPoint(subject: Element): Point | undefined {
     [0.5, 0.75],
     [0.75, 0.75],
   ] as const) {
-    const point = { x: box.x + box.width * fx, y: box.y + box.height * fy }
+    const position = samplePosition(subject, fx, fy)
+    const { point } = positionPoint(subject, position)
     if (
       point.x < 0 ||
       point.y < 0 ||
@@ -1104,11 +1139,7 @@ function clearPoint(subject: Element): Point | undefined {
     )
       continue
     const hit = hitAt(subject, point)
-    if (hit && ownSurface(subject, hit))
-      return {
-        x: Math.round(point.x - left),
-        y: Math.round(point.y - topEdge),
-      }
+    if (hit && ownSurface(subject, hit)) return position
   }
   return undefined
 }

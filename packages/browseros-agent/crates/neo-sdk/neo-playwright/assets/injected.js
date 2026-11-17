@@ -9329,8 +9329,11 @@ ${value.stack}`;
     if (kind.is === "wrapper") {
       if (coverNumber(coverRoot(target, chain)) !== allowed.wrapper)
         return;
-      if (drawsUnseen(onTop))
+      if (!plainElement(onTop))
         return;
+      for (let at = onTop.parentElement;at && !at.contains(target); at = at.parentElement)
+        if (!plainElement(at))
+          return;
       const checked = checkedState(world, target);
       if (checked === undefined)
         return;
@@ -9365,23 +9368,19 @@ ${value.stack}`;
   }
   function ownSurface(owner, hit) {
     for (let at = hit;at && at !== owner; at = at.parentElement)
-      if (at.matches(`a[href], ${CONTROLS}`) || explicitControl(at) || drawsUnseen(at))
+      if (!plainElement(at))
         return false;
     return owner.contains(hit);
+  }
+  function plainElement(element) {
+    return !(element.matches(`a[href], ${CONTROLS}`) || explicitControl(element) || drawsUnseen(element));
   }
   function drawsUnseen(element) {
     return element.shadowRoot !== null || element.localName.includes("-") && mayCarryRoot(element);
   }
   function labelPlainPoint(label) {
-    const offset = pointOffLinks(label);
-    if (!offset)
-      return;
-    const box = label.getBoundingClientRect();
-    const style = getComputedStyle(label);
-    return {
-      x: box.x + (Number.parseFloat(style.borderLeftWidth) || 0) + offset.x,
-      y: box.y + (Number.parseFloat(style.borderTopWidth) || 0) + offset.y
-    };
+    const position = pointOffLinks(label);
+    return position && positionPoint(label, position).point;
   }
   function checkedState(world, control) {
     const role = world.injected.utils.getAriaRole(control) ?? "";
@@ -9401,22 +9400,19 @@ ${value.stack}`;
     return position ? { is: "label", links, position } : { is: "label", links };
   }
   function pointOffLinks(label) {
-    const box = label.getBoundingClientRect();
-    const style = getComputedStyle(label);
-    const left = box.x + (Number.parseFloat(style.borderLeftWidth) || 0);
-    const topEdge = box.y + (Number.parseFloat(style.borderTopWidth) || 0);
     const root = label.getRootNode();
     const scope = root instanceof ShadowRoot ? root : document;
     for (const fy of [0.5, 0.25, 0.75])
       for (const fx of [0.1, 0.3, 0.5, 0.7, 0.9]) {
-        const point = { x: box.x + box.width * fx, y: box.y + box.height * fy };
+        const position = samplePosition(label, fx, fy);
+        const { point } = positionPoint(label, position);
         const chain = hitChain(label, point);
         if (chain !== null)
           continue;
         const on = scope.elementFromPoint(point.x, point.y);
         if (on && !ownSurface(label, on))
           continue;
-        return { x: point.x - left, y: point.y - topEdge };
+        return position;
       }
     return;
   }
@@ -9428,11 +9424,27 @@ ${value.stack}`;
       return;
     return control === onTop || control.contains(onTop) ? control : undefined;
   }
+  function positionPoint(element, position) {
+    const style = getComputedStyle(element);
+    const box = element.getBoundingClientRect();
+    const borderOffset = {
+      x: Number.parseInt(style.borderLeftWidth || "0", 10) + position.x,
+      y: Number.parseInt(style.borderTopWidth || "0", 10) + position.y
+    };
+    return {
+      point: { x: box.x + borderOffset.x, y: box.y + borderOffset.y },
+      borderOffset
+    };
+  }
+  function samplePosition(element, fx, fy) {
+    const box = element.getBoundingClientRect();
+    const origin = positionPoint(element, { x: 0, y: 0 }).point;
+    return {
+      x: Math.round(box.x + box.width * fx - origin.x),
+      y: Math.round(box.y + box.height * fy - origin.y)
+    };
+  }
   function clearPoint(subject) {
-    const box = subject.getBoundingClientRect();
-    const style = getComputedStyle(subject);
-    const left = box.x + (Number.parseFloat(style.borderLeftWidth) || 0);
-    const topEdge = box.y + (Number.parseFloat(style.borderTopWidth) || 0);
     for (const [fx, fy] of [
       [0.25, 0.25],
       [0.5, 0.25],
@@ -9443,15 +9455,13 @@ ${value.stack}`;
       [0.5, 0.75],
       [0.75, 0.75]
     ]) {
-      const point = { x: box.x + box.width * fx, y: box.y + box.height * fy };
+      const position = samplePosition(subject, fx, fy);
+      const { point } = positionPoint(subject, position);
       if (point.x < 0 || point.y < 0 || point.x >= innerWidth || point.y >= innerHeight)
         continue;
       const hit = hitAt(subject, point);
       if (hit && ownSurface(subject, hit))
-        return {
-          x: Math.round(point.x - left),
-          y: Math.round(point.y - topEdge)
-        };
+        return position;
     }
     return;
   }
@@ -9768,17 +9778,8 @@ ${value.stack}`;
     if (!first)
       return;
     if (position) {
-      const style = getComputedStyle(element);
-      const box = element.getBoundingClientRect();
-      const borderOffset = {
-        x: parseInt(style.borderLeftWidth || "0", 10) + position.x,
-        y: parseInt(style.borderTopWidth || "0", 10) + position.y
-      };
-      return {
-        point: { x: box.x + borderOffset.x, y: box.y + borderOffset.y },
-        inView: true,
-        borderOffset
-      };
+      const { point, borderOffset } = positionPoint(element, position);
+      return { point, inView: true, borderOffset };
     }
     const width = innerWidth;
     const height = innerHeight;

@@ -20,7 +20,13 @@
  * expiry past the last event its op can still send, so an expiry never lets an event of the
  * action through.
  */
-import { coverMark, labelPlainPoint, ownPress, shownOwnLabel } from './cover'
+import {
+  coverMark,
+  labelPlainPoint,
+  ownPress,
+  positionPoint,
+  shownOwnLabel,
+} from './cover'
 import type { FailureOutput } from './failure-output'
 import { lookFrameBox } from './private-frame'
 import type {
@@ -424,17 +430,8 @@ function clickPoint(
   const [first] = boxes
   if (!first) return undefined
   if (position) {
-    const style = getComputedStyle(element)
-    const box = element.getBoundingClientRect()
-    const borderOffset = {
-      x: parseInt(style.borderLeftWidth || '0', 10) + position.x,
-      y: parseInt(style.borderTopWidth || '0', 10) + position.y,
-    }
-    return {
-      point: { x: box.x + borderOffset.x, y: box.y + borderOffset.y },
-      inView: true,
-      borderOffset,
-    }
+    const { point, borderOffset } = positionPoint(element, position)
+    return { point, inView: true, borderOffset }
   }
   const width = innerWidth
   const height = innerHeight

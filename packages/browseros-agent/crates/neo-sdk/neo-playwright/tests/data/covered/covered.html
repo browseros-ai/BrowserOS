@@ -111,6 +111,19 @@ const shapes = {
     widget.setAttribute('style', 'position: absolute; z-index: 5; left: 110px; top: 0; width: 80px; height: 48px; background: #ffe')
     stage.append(widget)
   },
+  partialround() {
+    // A button 43 px wide whose first clear sample lies at 10.75 px, a nested link starting at
+    // 10.9 px in its top part, and a widget over its middle: a position rounded after the test
+    // would press the link. The point that is tested is the point that is pressed.
+    const target = button()
+    target.style.cssText = 'position: relative; display: inline-block; width: 43px; height: 48px; margin: 0; padding: 0; border: 0'
+    target.innerHTML = '<a href="/elsewhere/more" id="info" style="position: absolute; left: 10.9px; top: 0; width: 32.1px; height: 20px">i</a>'
+    document.getElementById('info').addEventListener('click', log('info'))
+    const widget = document.createElement('div')
+    widget.id = 'widget'
+    widget.setAttribute('style', 'position: absolute; z-index: 5; left: 16px; top: 18px; width: 12px; height: 12px; background: #ffe')
+    stage.append(widget)
+  },
   partialslider() {
     // A slider half under the same widget: a press at whatever point is clear would move its
     // value, so no clear point of it is pressed for the agent.
@@ -221,6 +234,21 @@ const shapes = {
     root.innerHTML = '<slot></slot><button id="remove" style="position: absolute; inset: 0; opacity: 0.01">Remove</button>'
     document.getElementById('target').addEventListener('click', log('target'))
     root.getElementById('remove').addEventListener('click', log('remove'))
+  },
+  wrapperrole() {
+    // A sibling span that declares a button and draws the checkbox's name over it: it reads as
+    // the checkbox's drawing, but it runs its own click handler.
+    stage.innerHTML = `<div style="position: relative; width: 220px; height: 40px">
+      <input type="checkbox" id="target" aria-label="Gift wrap" style="position: absolute; left: 8px; top: 12px; margin: 0; width: 13px; height: 13px">
+      <span role="button" id="info" style="position: absolute; left: 2px; top: 6px; width: 24px; height: 24px; overflow: hidden">Gift wrap</span></div>`
+    document.getElementById('target').addEventListener('click', log('target'))
+    document.getElementById('info').addEventListener('click', log('info'))
+  },
+  wrapperlink() {
+    // A radio card that is a link: its own box lies over the radio, and a press on it leaves.
+    stage.innerHTML = `<style>#card::after { content: ''; position: absolute; inset: 0 }</style>
+      <a href="/elsewhere/card" id="card" style="position: relative; display: block; width: 200px; height: 40px"><input type="radio" id="target" name="size" style="margin: 12px; width: 13px; height: 13px"></a>`
+    document.getElementById('target').addEventListener('click', log('target'))
   },
   wrapperdead() {
     // The same blank wrapper with nothing behind it: a press on it changes nothing.

@@ -375,6 +375,10 @@ async fn tests_that_a_press_on_the_targets_own_lands_by_itself() -> TestResult {
             "partiallink",
             "  a clear point of it takes the press: { x: ",
         ),
+        (
+            "partialround",
+            "  a clear point of it takes the press: { x: ",
+        ),
         ("label", "  its own label takes the press: <label"),
         ("links", "  its own label takes the press: <label"),
         ("wrapper", "  its own wrapper takes the press: <div"),
@@ -459,30 +463,41 @@ async fn tests_that_a_dead_wrapper_says_the_state_did_not_change() -> TestResult
     result
 }
 
-/// A radio slotted into a component whose own root draws a Remove button over it: the host is
-/// its wrapper, but what a host draws is not seen, so it takes no press. The covered answer comes
-/// with the wrapper's line; Remove saw no click and the radio stays as it was.
+/// What takes the press as a wrapper is nothing in itself: a radio slotted into a component whose
+/// own root draws a Remove button over it, a sibling `span role="button"` drawing the checkbox's
+/// name over it, and a radio card that is a link. Each is the control's wrapper, and none is
+/// pressed: the covered answer comes with the wrapper's line, nothing saw a click, the control
+/// stays as it was, and the page stays.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
-async fn tests_that_a_wrapper_that_is_a_shadow_host_is_not_pressed() -> TestResult {
-    let shape = Shape::shape("wrappershadow").await?;
-    let result = async {
-        let (message, cover) = covered(shape.click("#target").await)?;
-        assert_eq!(text(&cover, "kind"), "wrapper", "{message}");
-        assert_eq!(presses(&shape), 0, "{:?}", notes(&shape));
-        assert!(shape.log().await?.is_empty(), "nothing saw a click");
-        assert_eq!(
-            shape
-                .run
-                .eval(&shape.page, "document.getElementById('target').checked")
-                .await?,
-            json!(false)
-        );
-        TestResult::Ok(())
-    }
-    .await;
-    shape.close().await;
-    result
+async fn tests_that_a_wrapper_that_is_something_in_itself_is_not_pressed() -> TestResult {
+    each_shape(
+        &["wrappershadow", "wrapperrole", "wrapperlink"],
+        |shape, name| async move {
+            let result = async {
+                let (message, cover) = covered(shape.click("#target").await)?;
+                if text(&cover, "kind") != "wrapper" || presses(&shape) != 0 {
+                    return Err(format!("{message}\n{:?}", notes(&shape)).into());
+                }
+                let log = shape.log().await?;
+                let checked = shape
+                    .run
+                    .eval(&shape.page, "document.getElementById('target').checked")
+                    .await?;
+                let path = shape.run.eval(&shape.page, "location.pathname").await?;
+                if !log.is_empty()
+                    || checked != json!(false)
+                    || path != json!("/covered/covered.html")
+                {
+                    return Err(format!("{name}: saw {log:?}, checked {checked}, at {path}").into());
+                }
+                TestResult::Ok(())
+            }
+            .await;
+            (shape, result)
+        },
+    )
+    .await
 }
 
 /// A slider half under a widget: a clear point of it would take a press for a button, but a
