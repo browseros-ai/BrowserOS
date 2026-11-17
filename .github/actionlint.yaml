@@ -2,3 +2,4 @@ self-hosted-runner:
   labels:
     - warp-*
     - browseros-builder
+    - browseros-pool

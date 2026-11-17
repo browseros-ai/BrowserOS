@@ -108,6 +108,17 @@ def cleanup_docker(job: str, cancelled: bool = False) -> None:
                             *created], check=True, capture_output=True, timeout=30)
 
 
+def sweep_runner(job: str) -> None:
+    """Remove what a GitHub runner job's account left, while this job still owns the host.
+
+    runner.sh sweeps on exit, but a cancelled service can die before that sweep runs.
+    Callers hold host_guard, before any receipt says the host is safe to release. A
+    developer's job has no runner marker, so this does nothing for it.
+    """
+    if (ROOT / (job + ".runner")).exists():
+        subprocess.run(["bash", RUNNER_LAUNCHER, "--sweep"], check=True, capture_output=True, timeout=600)
+
+
 def finish(job: str, receipt: dict) -> dict:
     """Commit the terminal fence before a client may return this host to the pool."""
     log = ROOT / (job + ".log")
@@ -190,6 +201,7 @@ def cancel(job: str, interrupt_streamer: bool = False) -> dict:
                 if not active(unit):
                     with host_guard(job):
                         cleanup_docker(job, cancelled=True)
+                        sweep_runner(job)
                         receipt = {"safeToRelease": True, "job": job, "exitCode": 130, "cancelled": True}
                         info = ROOT / (job + ".info.json")
                         if info.exists():
@@ -294,6 +306,7 @@ def run(arguments: argparse.Namespace) -> int:
                     break
                 time.sleep(0.1)
         cleanup_docker(arguments.job)
+        sweep_runner(arguments.job)
         receipt = {"job": arguments.job, "exitCode": process.returncode,
                    "seconds": time.monotonic() - started, "safeToRelease": not active(unit),
                    "sourceRoot": str(source)}
@@ -334,6 +347,77 @@ def payload(arguments: argparse.Namespace) -> int:
     return code
 
 
+RUNNER_LAUNCHER = "/usr/local/lib/browseros-remote-builds/runner.sh"
+RUNNER_WORK = Path("/work/pool-runner")
+RUNNER_REQUEST = {"jitconfig", "repository", "workflows"}
+
+
+def runner_request(job: str) -> dict:
+    """Read and check what the dispatcher sends with a start, before anything runs."""
+    request = json.loads(sys.stdin.read(65537))
+    if (not isinstance(request, dict) or set(request) != RUNNER_REQUEST
+            or not isinstance(request["jitconfig"], str) or not 0 < len(request["jitconfig"]) <= 32768
+            or not isinstance(request["repository"], str)
+            or not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", request["repository"])
+            or not isinstance(request["workflows"], list) or not 1 <= len(request["workflows"]) <= 8
+            or not all(isinstance(ref, str) and re.fullmatch(r"[^\s]{1,300}", ref)
+                       for ref in request["workflows"])):
+        raise ValueError("invalid runner start request")
+    for leftover in (".runner", ".runner.json", ".info.json", ".result.json"):
+        if (ROOT / (job + leftover)).exists():
+            raise ValueError("job was already admitted; recover instead of starting it twice")
+    return request
+
+
+def runner_rpc(command: str) -> int:
+    """The GitHub runner dispatcher's forced command: one-job runners and nothing else.
+
+    The dispatcher's key cannot open a shell. A start stores the runner's one-job
+    registration where only this account can read it, then runs the fixed launcher
+    through run(): the same systemd service, durable log, receipts and cancellation
+    as every pool job. The coordinator's reaper and `remote recover` therefore treat
+    a runner job like any other UUID. runner.sh hands the job to the unprivileged
+    runner account and removes the registration file.
+    """
+    words = command.split()
+    if len(words) != 2 or words[0] not in {"runner-start", "result", "cancel", "cleanup"}:
+        raise ValueError("restricted runner command")
+    operation, job = words
+    unit_name(job)
+    if operation == "runner-start":
+        request = runner_request(job)
+        ROOT.mkdir(parents=True, exist_ok=True)
+        # The marker outlives the registration file runner.sh deletes. It tells cancel()
+        # and run() to sweep the runner account before the host is released.
+        atomic_json(ROOT / (job + ".runner"), {"job": job})
+        atomic_json(ROOT / (job + ".runner.json"), request)
+        # run() requires a source root inside this UUID's namespace and a revision. A
+        # runner job uploads no source: the runner checks out its own ref as the runner
+        # account, so the namespace stays empty and the revision is a placeholder.
+        source = Path("/work/remote-builds") / job / "runner"
+        source.mkdir(parents=True, exist_ok=True)
+        return run(argparse.Namespace(job=job, source_root=source, cwd=".", revision="0" * 40,
+                                      dirty="false", command=["bash", RUNNER_LAUNCHER]))
+    if operation == "result":
+        print((ROOT / (job + ".result.json")).read_text())
+        return 0
+    if operation == "cancel":
+        print(json.dumps(cancel(job)))
+        return 0
+    receipt = json.loads((ROOT / (job + ".result.json")).read_text())
+    if not receipt["safeToRelease"]:
+        raise ValueError("job cleanup has not been confirmed")
+    # After release another job may already own this host, so remove only this UUID's
+    # directories. runner.sh normally removes its own; this covers a cancelled job.
+    with contextlib.suppress(FileNotFoundError):
+        shutil.rmtree(Path("/work/remote-builds") / job)
+    (ROOT / (job + ".runner.json")).unlink(missing_ok=True)
+    subprocess.run(["sudo", "-n", "rm", "-rf", "--one-file-system", "--", str(RUNNER_WORK / job)],
+                   check=True, capture_output=True, timeout=600)
+    print(json.dumps({"cleaned": True}))
+    return 0
+
+
 def main() -> int:
     global ROOT
     parser = argparse.ArgumentParser(description=__doc__)
@@ -354,6 +438,7 @@ def main() -> int:
     read = sub.add_parser("result")
     read.add_argument("--job", required=True)
     sub.add_parser("lease-rpc")
+    sub.add_parser("runner-rpc")
     for operation in ("artifacts", "cleanup", "image"):
         extra = sub.add_parser(operation)
         extra.add_argument("--job", required=True)
@@ -370,6 +455,8 @@ def main() -> int:
                 raise ValueError("expected a job identifier only")
             print(json.dumps(cancel(request["job"], interrupt_streamer=True)))
             return 0
+        if arguments.operation == "runner-rpc":
+            return runner_rpc(os.environ.get("SSH_ORIGINAL_COMMAND", ""))
         if arguments.operation == "run":
             return run(arguments)
         if arguments.operation == "payload":
