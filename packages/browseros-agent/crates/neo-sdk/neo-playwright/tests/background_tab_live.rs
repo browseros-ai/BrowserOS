@@ -4,7 +4,7 @@
 //! browser, not the SDK, which brings an agent tab forward before input or a capture
 //! (neo-server's `AgentFront`).
 //!
-//! **It does not on Linux, so there this test is expected to fail.** Two separate slow paths:
+//! The pinned Linux browser is expected to pass both parts. Historically it had two slow paths:
 //! - Input. Focus emulation keeps the background tab "visible", so its renderer submits frames
 //!   that no window draws, and after more than three of them viz sends that tab one `BeginFrame`
 //!   a second (`ThrottleUndrawnFrames` in `CompositorFrameSinkSupport::ShouldSendBeginFrame`). A
@@ -13,9 +13,8 @@
 //!   never headless. That wait is not the throttle (measured at 1.2 s with no `BeginFrame`
 //!   throttled); its cause is not yet found.
 //!
-//! macOS draws background tabs and passes. Both halves must be fast for this to pass on Linux:
-//! a browser patch that only lifts the throttle leaves captures slow. When it passes, take the
-//! mark off. `AgentFront`'s activation is not kept for this alone: a background tab's cross-site
+//! Both halves must stay fast on Linux: lifting the throttle alone leaves captures slow.
+//! `AgentFront`'s activation is not kept for this alone: a background tab's cross-site
 //! frames also take focus only from it (neo-server `tests/cross_site_focus_browseros.rs`), and
 //! its TODO lists everything that must hold before it goes.
 //!
@@ -67,17 +66,13 @@ const FAST: Duration = Duration::from_millis(500);
 
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
-#[cfg_attr(
-    target_os = "linux",
-    should_panic(expected = "a background agent tab got slow")
-)]
 async fn a_background_agent_tab_stays_fast_on_linux() {
     let times = match measure().await {
         Ok(times) => times,
         Err(error) => panic!("the measurement did not run: {error}"),
     };
-    // Only a Playwright timeout is the slowness measured here (a stalled screenshot); any other
-    // failure means the test itself broke, which must not pass for the expected Linux failure.
+    // Only a Playwright timeout is measured slowness (a stalled screenshot). Other failures
+    // mean the measurement itself broke and must be reported separately.
     let broken: Vec<String> = times
         .iter()
         .filter(|call| call.failed.is_some() && !call.timed_out)
@@ -137,7 +132,7 @@ impl Call {
 
 /// Every hover, click and screenshot on one background agent tab, timed.
 async fn measure() -> TestResult<Vec<Call>> {
-    let run = LiveRun::connect().await?;
+    let run = LiveRun::connect().await?.without_activation();
     let pages = HashMap::from([("/page.html".to_owned(), Page::html(PAGE))]);
     let server = FixtureServer::start(pages).await?;
     // `context.newPage`: a background tab, as core opens every agent tab.

@@ -17,15 +17,25 @@ mod live_run;
 
 use std::error::Error;
 use std::sync::Arc;
+use std::time::Duration;
 
 use browseros_core::ProtocolSession;
 use js_runner::OpHost;
 use live_run::{Intercept, LiveRun, TestResult, brand};
 use serde_json::{Value, json};
+use tokio::time;
 
-/// Browser fixture: compare joined rows with small native captures of a changing row pattern.
-const TALL_PNG_PROGRAM: &str = r#"
-                await page.setContent('<style>html,body{margin:0;background:transparent}</style><div style="height:10000px;background:red"></div><div style="width:2px;height:12000px;background:blue"></div><div style="position:absolute;left:200px;top:0;width:2px;height:22000px;background:repeating-linear-gradient(red 0px,blue 20px,red 40px)"></div>');
+/// Present the fixture once before putting it behind another tab. A never-presented native
+/// surface can wait indefinitely for presentation when a background screenshot forces a frame.
+/// The explicit document width keeps classic scrollbars out of the strip-boundary arithmetic.
+const TALL_PNG_SETUP: &str = r#"
+                await page.setContent('<style>html,body{margin:0;background:transparent}body{width:100vw}</style><div style="height:10000px;background:red"></div><div style="width:2px;height:12000px;background:blue"></div><div style="position:absolute;left:200px;top:0;width:2px;height:22000px;background:repeating-linear-gradient(red 0px,blue 20px,red 40px)"></div>');
+                await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+            "#;
+
+/// Compare joined rows with small native captures of a changing row pattern. Every capture
+/// runs with activation disabled, after the fixture has returned the foreground to another tab.
+const TALL_PNG_PROGRAM: &str = r"
                 const viewport = await page.evaluate(() => [innerWidth,innerHeight,devicePixelRatio,scrollX,scrollY]);
                 async function sample(scale, ys, joins) {
                     const bytes = await page.screenshot({ fullPage: true, omitBackground: true, scale, timeout: 60000 });
@@ -76,7 +86,7 @@ const TALL_PNG_PROGRAM: &str = r#"
                 const device = await sample('device', [3123,3124,10415,10416,14999,15000,19999,20000,22000*viewport[2]-1], viewport[2] === 1.5 ? [10374,20748,31122] : [3124,6248,9372]);
                 const css = await sample('css', [9999,10000,15624,15625,21999], viewport[2] === 1.5 ? [15564] : [6250,12500,18750]);
                 return { device,css,viewport,after: await page.evaluate(() => [innerWidth,innerHeight,devicePixelRatio,scrollX,scrollY]) };
-            "#;
+            ";
 
 #[tokio::test]
 #[ignore = "needs an owned BrowserOS on BROWSEROS_CDP_PORT"]
@@ -192,7 +202,8 @@ async fn encodings_preserve_alpha_and_restore_the_default_background() -> TestRe
 #[tokio::test]
 #[ignore = "needs an owned BrowserOS on BROWSEROS_CDP_PORT"]
 async fn tall_pngs_preserve_rows_without_activating_or_resizing_the_tab() -> TestResult {
-    let run = Arc::new(LiveRun::connect().await?);
+    const BUDGET: Duration = Duration::from_secs(90);
+    let run = Arc::new(LiveRun::connect().await?.without_activation());
     let page = run.new_page().await?;
     let session = run
         .browser()
@@ -201,27 +212,48 @@ async fn tall_pngs_preserve_rows_without_activating_or_resizing_the_tab() -> Tes
         .await?
         .session;
     let root = ProtocolSession::root(run.browser().connection());
+    let foreground = run.new_page().await?;
+    root.send::<_, Value>("Browser.activateTab", json!({ "tabId": foreground.tab.0 }))
+        .await?;
     let active: Value = root.send("Browser.getActiveTab", json!({})).await?;
-    let measured = async {
+    let measured = time::timeout(BUDGET, async {
+        if active.pointer("/tab/tabId") != Some(&json!(foreground.tab.0)) {
+            return Err(format!("the foreground must belong to fixture tab {}: {active}", foreground.tab.0).into());
+        }
         let mut results = Vec::new();
         for (width, density) in [(514, 1.5), (1280, 2.0)] {
             session.send::<_, Value>("Emulation.setDeviceMetricsOverride", json!({
                 "width": width, "height": 600, "deviceScaleFactor": density, "mobile": false,
             })).await?;
             let host: Arc<dyn OpHost> = Arc::clone(&run) as Arc<dyn OpHost>;
+            // Only fixture setup may present the tab. The complete sampling program below
+            // then exercises the background surface, not a host that activates for captures.
+            root.send::<_, Value>("Browser.activateTab", json!({ "tabId": page.tab.0 }))
+                .await?;
+            js_runner::run_script(&host, &json!({ "page": brand(&page) }), TALL_PNG_SETUP).await?;
+            root.send::<_, Value>("Browser.activateTab", json!({ "tabId": foreground.tab.0 }))
+                .await?;
             let value =
                 js_runner::run_script(&host, &json!({ "page": brand(&page) }), TALL_PNG_PROGRAM)
                     .await?;
+            let after: Value = root.send("Browser.getActiveTab", json!({})).await?;
+            // Return through the fixture's reset/close path before reporting a regression.
+            if active != after {
+                return Err(format!("captures at density {density} changed the foreground: expected {active}, got {after}").into());
+            }
             results.push(value);
         }
         Ok::<_, Box<dyn Error>>(results)
-    }
+    })
     .await;
-    let after_active: Value = root.send("Browser.getActiveTab", json!({})).await?;
+    let after_active = root
+        .send::<_, Value>("Browser.getActiveTab", json!({}))
+        .await;
     let _reset = session
         .send::<_, Value>("Emulation.clearDeviceMetricsOverride", json!({}))
         .await;
     run.close_page(&page).await;
+    run.close_page(&foreground).await;
     let red = json!([[255, 0, 0, 255], [255, 0, 0, 255]]);
     let blue = json!([[0, 0, 255, 255], [0, 0, 0, 0]]);
     let expected = [(514, 1.5, 771, 33000), (1280, 2.0, 2560, 44000)].map(
@@ -254,9 +286,12 @@ async fn tall_pngs_preserve_rows_without_activating_or_resizing_the_tab() -> Tes
             })
         },
     );
-    assert_eq!(measured?, expected);
     assert_eq!(
-        active, after_active,
+        measured.map_err(|error| format!("tall PNG workflow exceeded {BUDGET:?}: {error}"))??,
+        expected
+    );
+    assert_eq!(
+        active, after_active?,
         "captures must not activate their native tab"
     );
     Ok(())
