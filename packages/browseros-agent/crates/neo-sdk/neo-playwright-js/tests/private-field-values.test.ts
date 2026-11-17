@@ -14,10 +14,10 @@ beforeEach(() => {
 })
 afterEach(() => page.close())
 
-/** Existing local-realm cases keep the ordinary no-neighbour snapshot path. */
+/** Local-realm cases disable document-wide discovery and retain their local guards. */
 function masked<T>(walk: () => T, options: { declared?: boolean } = {}): T {
   return withMaskedFieldValues(
-    { root: page.document.body, mayHaveOtherFrame: false },
+    { root: page.document.body, discoverMovedFields: false },
     walk,
     options,
   )
@@ -57,22 +57,6 @@ function retainedField(
   const prototype = siblingPrototype(Object.getPrototypeOf(element))
   Object.setPrototypeOf(element, prototype)
   return { element, prototype }
-}
-
-function withOpener<T>(descriptor: PropertyDescriptor, walk: () => T): T {
-  const view = page.document.defaultView
-  if (!view) throw new Error('the fixture supplies a window')
-  const original = Object.getOwnPropertyDescriptor(view, 'opener')
-  Object.defineProperty(view, 'opener', {
-    configurable: true,
-    ...descriptor,
-  })
-  try {
-    return walk()
-  } finally {
-    if (original) Object.defineProperty(view, 'opener', original)
-    else Reflect.deleteProperty(view, 'opener')
-  }
 }
 
 const descriptors = () => ({
@@ -211,8 +195,18 @@ it('masks a box Neo typed into under the conformance switch, where declared fiel
   })
   privateStep(world, { op: 'private', pin: 8, step: { kind: 'forget' } })
   // The reads outside main's masking (a failed expect's snapshot) mask the mark alone.
-  expect(withMarkedFieldsMasked(() => typed.value)).toBe('••••')
-  expect(withMarkedFieldsMasked(() => declared.value)).toBe('hunter2')
+  expect(
+    withMarkedFieldsMasked(
+      { root: page.document.documentElement, discoverMovedFields: false },
+      () => typed.value,
+    ),
+  ).toBe('••••')
+  expect(
+    withMarkedFieldsMasked(
+      { root: page.document.documentElement, discoverMovedFields: false },
+      () => declared.value,
+    ),
+  ).toBe('hunter2')
   const conformance = { declared: false }
   expect(masked(() => typed.value, conformance)).toBe('••••')
   expect(masked(() => declared.value, conformance)).toBe('hunter2')
@@ -641,7 +635,7 @@ it('discovers an external retained input from the scoped root owner document', (
   const scopedQuery = spyOn(button, 'querySelectorAll')
   try {
     expect(
-      withMaskedFieldValues({ root: button, mayHaveOtherFrame: true }, () => [
+      withMaskedFieldValues({ root: button, discoverMovedFields: true }, () => [
         element.value,
         element.defaultValue,
         element.getAttribute('value'),
@@ -661,30 +655,28 @@ it('discovers an external retained input from the scoped root owner document', (
 })
 
 it('always collects a retained field root while document discovery is skipped', () => {
-  withOpener({ value: null }, () => {
-    const query = spyOn(page.document, 'querySelectorAll')
-    try {
-      for (const tag of ['input', 'textarea'] as const) {
-        const { element, prototype } = retainedField(
-          tag,
-          { autocomplete: 'one-time-code' },
-          'RootSecret',
-        )
-        const before = Object.getOwnPropertyDescriptors(prototype)
-        expect(
-          withMaskedFieldValues(
-            { root: element, mayHaveOtherFrame: false },
-            () => element.value,
-          ),
-        ).toBe('••••••••••')
-        expect(element.value).toBe('RootSecret')
-        expect(Object.getOwnPropertyDescriptors(prototype)).toEqual(before)
-      }
-      expect(query).not.toHaveBeenCalled()
-    } finally {
-      query.mockRestore()
+  const query = spyOn(page.document, 'querySelectorAll')
+  try {
+    for (const tag of ['input', 'textarea'] as const) {
+      const { element, prototype } = retainedField(
+        tag,
+        { autocomplete: 'one-time-code' },
+        'RootSecret',
+      )
+      const before = Object.getOwnPropertyDescriptors(prototype)
+      expect(
+        withMaskedFieldValues(
+          { root: element, discoverMovedFields: false },
+          () => element.value,
+        ),
+      ).toBe('••••••••••')
+      expect(element.value).toBe('RootSecret')
+      expect(Object.getOwnPropertyDescriptors(prototype)).toEqual(before)
     }
-  })
+    expect(query).not.toHaveBeenCalled()
+  } finally {
+    query.mockRestore()
+  }
 })
 
 for (const retainedTextarea of [false, true]) {
@@ -712,7 +704,7 @@ for (const retainedTextarea of [false, true]) {
     )
     expect(
       withMaskedFieldValues(
-        { root: page.document.body, mayHaveOtherFrame: true },
+        { root: page.document.body, discoverMovedFields: true },
         () => ({
           value: element.value,
           ownText: [
@@ -742,35 +734,33 @@ for (const retainedTextarea of [false, true]) {
   })
 }
 
-it('skips document and shadow searches on a large page without a neighbour or opener', () => {
+it('skips document and shadow searches on a large page when discovery is disabled', () => {
   page.document.body.innerHTML = '<div>ordinary</div>'.repeat(10_000)
   const host = page.document.createElement('section')
   const shadow = host.attachShadow({ mode: 'open' })
   const secret = field('input', { type: 'password' }, 'local')
   shadow.append(secret)
   page.document.body.append(host)
-  withOpener({ value: null }, () => {
-    const queries = [
-      spyOn(page.document, 'querySelectorAll'),
-      spyOn(page.document.body, 'querySelectorAll'),
-      spyOn(shadow, 'querySelectorAll'),
-    ]
-    try {
-      expect(
-        withMaskedFieldValues(
-          { root: page.document.body, mayHaveOtherFrame: false },
-          () => secret.value,
-        ),
-      ).toBe('•••••')
-      for (const query of queries) expect(query).not.toHaveBeenCalled()
-      expect(secret.value).toBe('local')
-    } finally {
-      for (const query of queries) query.mockRestore()
-    }
-  })
+  const queries = [
+    spyOn(page.document, 'querySelectorAll'),
+    spyOn(page.document.body, 'querySelectorAll'),
+    spyOn(shadow, 'querySelectorAll'),
+  ]
+  try {
+    expect(
+      withMaskedFieldValues(
+        { root: page.document.body, discoverMovedFields: false },
+        () => secret.value,
+      ),
+    ).toBe('•••••')
+    for (const query of queries) expect(query).not.toHaveBeenCalled()
+    expect(secret.value).toBe('local')
+  } finally {
+    for (const query of queries) query.mockRestore()
+  }
 })
 
-it('recurses through every open and exposed closed shadow root when the hint is true', () => {
+it('recurses through every open and exposed closed shadow root when receiving-tab discovery is enabled', () => {
   const host = page.document.createElement('section')
   const open = host.attachShadow({ mode: 'open' })
   const closedHost = page.document.createElement('section')
@@ -797,7 +787,7 @@ it('recurses through every open and exposed closed shadow root when the hint is 
   const queries = scopes.map((scope) => spyOn(scope, 'querySelectorAll'))
   try {
     expect(
-      withMaskedFieldValues({ root: host, mayHaveOtherFrame: true }, () =>
+      withMaskedFieldValues({ root: host, discoverMovedFields: true }, () =>
         secrets.map((secret) => secret.value),
       ),
     ).toEqual(Array(4).fill('••••••'))
@@ -809,79 +799,6 @@ it('recurses through every open and exposed closed shadow root when the hint is 
   } finally {
     for (const query of queries) query.mockRestore()
   }
-})
-
-it('enables discovery for a SOP-readable opener without consulting origin strings', () => {
-  const { element } = retainedField('input', { type: 'password' }, 'secret')
-  page.document.body.append(element)
-  let documentReads = 0
-  const opener = {
-    get document() {
-      documentReads++
-      return page.document
-    },
-    get location() {
-      throw new Error('URL strings do not establish SOP access')
-    },
-  }
-  withOpener({ value: opener }, () => {
-    const query = spyOn(page.document, 'querySelectorAll')
-    try {
-      expect(
-        withMaskedFieldValues(
-          { root: page.document.body, mayHaveOtherFrame: false },
-          () => element.value,
-        ),
-      ).toBe('••••••')
-      expect(documentReads).toBe(1)
-      expect(query.mock.calls).toEqual([['input,textarea'], ['*']])
-    } finally {
-      query.mockRestore()
-    }
-  })
-})
-
-it('skips discovery for a SOP-denied opener and retains the explicit field-root guard', () => {
-  const { element } = retainedField('input', { type: 'password' }, 'secret')
-  const opener = {
-    get document() {
-      throw new DOMException('cross-origin access denied', 'SecurityError')
-    },
-  }
-  withOpener({ value: opener }, () => {
-    const query = spyOn(page.document, 'querySelectorAll')
-    try {
-      expect(
-        withMaskedFieldValues(
-          { root: element, mayHaveOtherFrame: false },
-          () => element.value,
-        ),
-      ).toBe('••••••')
-      expect(query).not.toHaveBeenCalled()
-    } finally {
-      query.mockRestore()
-    }
-  })
-})
-
-it('discovers conservatively when opener inspection fails unexpectedly', () => {
-  const { element } = retainedField('input', { type: 'password' }, 'secret')
-  page.document.body.append(element)
-  withOpener(
-    {
-      get() {
-        throw new Error('opener inspection failed')
-      },
-    },
-    () => {
-      expect(
-        withMaskedFieldValues(
-          { root: page.document.body, mayHaveOtherFrame: false },
-          () => element.value,
-        ),
-      ).toBe('••••••')
-    },
-  )
 })
 
 it('rejects input and textarea tag names outside the HTML namespace in every guard', () => {
@@ -902,7 +819,7 @@ it('rejects input and textarea tag names outside the HTML namespace in every gua
   )
   try {
     expect(
-      withMaskedFieldValues({ root: input, mayHaveOtherFrame: true }, () => [
+      withMaskedFieldValues({ root: input, discoverMovedFields: true }, () => [
         input.getAttribute('value'),
         textarea.getAttribute('value'),
         textarea.textContent,
@@ -912,7 +829,7 @@ it('rejects input and textarea tag names outside the HTML namespace in every gua
         text.wholeText,
       ]),
     ).toEqual(Array(7).fill('public'))
-    withMaskedFieldValues({ root: textarea, mayHaveOtherFrame: true }, () => {
+    withMaskedFieldValues({ root: textarea, discoverMovedFields: true }, () => {
       expect(getComputedStyle(input)).toBe(nativeStyle)
       expect(getComputedStyle(textarea, '::before')).toBe(nativeStyle)
     })
@@ -938,7 +855,7 @@ it('deduplicates actual prototypes and restores foreign shadows across nested sc
   const define = spyOn(Object, 'defineProperty')
   try {
     withMaskedFieldValues(
-      { root: input.element, mayHaveOtherFrame: true },
+      { root: input.element, discoverMovedFields: true },
       () => {
         for (const [index, count] of [3, 6, 4].entries())
           expect(
@@ -949,7 +866,7 @@ it('deduplicates actual prototypes and restores foreign shadows across nested sc
         )
         expect(
           withMaskedFieldValues(
-            { root: textarea.element, mayHaveOtherFrame: true },
+            { root: textarea.element, discoverMovedFields: true },
             () => [
               input.element.value,
               duplicate.value,
@@ -992,7 +909,7 @@ it('validates a foreign accessor before installing any local or foreign override
   try {
     expect(() =>
       withMaskedFieldValues(
-        { root: page.document.body, mayHaveOtherFrame: true },
+        { root: page.document.body, discoverMovedFields: true },
         () => {
           throw new Error('walk must not run')
         },
@@ -1018,9 +935,12 @@ it('refuses non-overridable foreign descriptors before installing any guard', ()
   const define = spyOn(Object, 'defineProperty')
   try {
     expect(() =>
-      withMaskedFieldValues({ root: element, mayHaveOtherFrame: false }, () => {
-        throw new Error('walk must not run')
-      }),
+      withMaskedFieldValues(
+        { root: element, discoverMovedFields: false },
+        () => {
+          throw new Error('walk must not run')
+        },
+      ),
     ).toThrow('snapshot field getAttribute cannot be overridden')
     expect(define).not.toHaveBeenCalled()
     expect(descriptors()).toEqual(before)
@@ -1071,7 +991,7 @@ it('restores all earlier local and foreign guards if any foreign installation fa
     try {
       expect(() =>
         withMaskedFieldValues(
-          { root: input.element, mayHaveOtherFrame: true },
+          { root: input.element, discoverMovedFields: true },
           () => {
             throw new Error('walk must not run')
           },
@@ -1135,7 +1055,7 @@ it('attempts every local and foreign restoration in reverse after a foreign clea
   try {
     expect(() =>
       withMaskedFieldValues(
-        { root: input.element, mayHaveOtherFrame: true },
+        { root: input.element, discoverMovedFields: true },
         () => {
           expect([input.element.value, textarea.element.value]).toEqual([
             '••••••',
@@ -1172,8 +1092,18 @@ it('keeps mark-only reads masked after the page removes its document element', a
   privateStep(world, { op: 'private', pin: 91, step: { kind: 'forget' } })
   page.document.documentElement.remove()
   expect(page.document.documentElement).toBeNull()
-  expect(withMarkedFieldsMasked(() => 'walked')).toBe('walked')
-  expect(withMarkedFieldsMasked(() => typed.value)).toBe('••••••••••••••')
+  expect(
+    withMarkedFieldsMasked(
+      { root: page.document.documentElement, discoverMovedFields: false },
+      () => 'walked',
+    ),
+  ).toBe('walked')
+  expect(
+    withMarkedFieldsMasked(
+      { root: page.document.documentElement, discoverMovedFields: false },
+      () => typed.value,
+    ),
+  ).toBe('••••••••••••••')
   expect(typed.value).toBe('RootlessCanary')
 })
 
@@ -1191,11 +1121,26 @@ it('never lowers a full walk to mark-only when diagnostic scopes nest', async ()
     step: { kind: 'focus', text: 'MarkedCanary', spaced: false },
   })
   privateStep(world, { op: 'private', pin: 92, step: { kind: 'forget' } })
-  expect(withMarkedFieldsMasked(() => declared.value)).toBe('DeclaredCanary')
   expect(
-    masked(() => withMarkedFieldsMasked(() => [typed.value, declared.value])),
+    withMarkedFieldsMasked(
+      { root: page.document.documentElement, discoverMovedFields: false },
+      () => declared.value,
+    ),
+  ).toBe('DeclaredCanary')
+  expect(
+    masked(() =>
+      withMarkedFieldsMasked(
+        { root: page.document.documentElement, discoverMovedFields: false },
+        () => [typed.value, declared.value],
+      ),
+    ),
   ).toEqual(['••••••••••••', '••••••••••••••'])
-  expect(withMarkedFieldsMasked(() => declared.value)).toBe('DeclaredCanary')
+  expect(
+    withMarkedFieldsMasked(
+      { root: page.document.documentElement, discoverMovedFields: false },
+      () => declared.value,
+    ),
+  ).toBe('DeclaredCanary')
   expect(declared.value).toBe('DeclaredCanary')
 })
 
@@ -1218,9 +1163,12 @@ it("collects a detached marked field's own foreign prototype for a mark-only rea
   privateStep(world, { op: 'private', pin: 93, step: { kind: 'forget' } })
   element.remove()
   const before = Object.getOwnPropertyDescriptors(prototype)
-  expect(withMarkedFieldsMasked(() => element.value, element)).toBe(
-    '••••••••••••',
-  )
+  expect(
+    withMarkedFieldsMasked(
+      { root: element, discoverMovedFields: false },
+      () => element.value,
+    ),
+  ).toBe('••••••••••••')
   expect(element.value).toBe('MarkedCanary')
   expect(Object.getOwnPropertyDescriptors(prototype)).toEqual(before)
 })

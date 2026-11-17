@@ -872,10 +872,6 @@ pub(crate) struct PrivateTabs {
     /// Every tab counts, for this instance's life: the host's record could not be read back
     /// (`Playwright::keep_every_tab`).
     every: AtomicBool,
-    /// A marked box can move into a different tab before its source closes. Keep the history
-    /// used by adopted-field discovery separate from the set, so future closed-tab pruning
-    /// cannot disable the scan in the receiving tab (ruling R59).
-    any_entry: AtomicBool,
     /// The host's `fill.pictures` is `never` (ruling R58): no picture of a tab that took a
     /// private entry. `false`, the default, pictures it like any other tab. The host sets it from
     /// its settings and again on every change, so a picture reads it as it is asked for.
@@ -884,17 +880,10 @@ pub(crate) struct PrivateTabs {
 
 impl PrivateTabs {
     pub(crate) fn mark(&self, tab: TabId) {
-        self.any_entry.store(true, Ordering::Release);
         self.tabs
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .insert(tab);
-    }
-
-    /// Whether private-entry history requires browser-wide discovery, including restored or
-    /// unknown history. Sticky for this instance's life, even after the source tab closes.
-    pub(crate) fn any(&self) -> bool {
-        self.any_entry.load(Ordering::Acquire)
     }
 
     pub(crate) fn took(&self, tab: TabId) -> bool {
@@ -907,7 +896,6 @@ impl PrivateTabs {
     }
 
     pub(crate) fn mark_every(&self) {
-        self.any_entry.store(true, Ordering::Release);
         self.every.store(true, Ordering::Release);
     }
 
@@ -952,8 +940,6 @@ const PRIVATE_TAB_MESSAGE: &str = "This tab took a private fill, and the host se
 
 #[cfg(test)]
 mod tests {
-    use std::error::Error;
-
     use browseros_cdp::CdpError;
     use browseros_core::{CoreError, TabId};
     use neo_trace::ErrorOwner;
@@ -961,7 +947,6 @@ mod tests {
     use super::{PRIVATE_TAB_MESSAGE, PrivateTabs};
     use crate::input::BurstFailure;
     use crate::private_entry::EntryCode;
-    use crate::{Playwright, test_env};
 
     #[test]
     fn target_crashed_input_burst_retains_the_private_entry_diagnostic() {
@@ -970,51 +955,6 @@ mod tests {
             message: "Target crashed".to_owned(),
         }));
         assert_eq!(super::burst_code(&failure), EntryCode::TargetCrashed);
-    }
-
-    #[tokio::test]
-    async fn restored_private_entry_history_outlives_tab_pruning_without_changing_picture_rules()
-    -> Result<(), Box<dyn Error>> {
-        let pw = Playwright::new(test_env::offline_session());
-        let tabs = pw.private_tabs();
-        assert!(
-            !tabs.any(),
-            "an instance that never entered privately has no extra scan"
-        );
-        pw.keep_private_tab(TabId(3));
-        assert!(tabs.any());
-        assert!(tabs.took(TabId(3)));
-        assert!(!tabs.took(TabId(4)));
-        assert!(
-            tabs.refuse_picture(TabId(4)).is_ok(),
-            "other tabs remain picturable"
-        );
-
-        // Simulate future pruning after the source tab closed; its box may live in another tab.
-        tabs.tabs
-            .lock()
-            .map_err(|poison| format!("private tab set poisoned: {poison}"))?
-            .clear();
-        assert!(
-            tabs.any(),
-            "browser-wide discovery must outlive the source tab"
-        );
-        assert!(
-            !tabs.took(TabId(3)),
-            "per-tab decisions still follow the tab record"
-        );
-
-        let unknown = Playwright::new(test_env::offline_session());
-        unknown.keep_every_tab();
-        assert!(
-            unknown.private_tabs().any(),
-            "an unknown filled-tab history also enables discovery"
-        );
-        assert!(
-            unknown.took_private_text(TabId(4)),
-            "camera policy still fails closed"
-        );
-        Ok(())
     }
 
     /// Ruling R58: a tab that took a fill is pictured by default, and refused, every time, only
@@ -1026,10 +966,7 @@ mod tests {
         let tabs = PrivateTabs::default();
         tabs.mark(TabId(3));
         assert!(tabs.refuse_picture(TabId(3)).is_ok(), "pictured by default");
-        assert!(
-            tabs.took(TabId(3)) && tabs.any(),
-            "the tab is kept under either value"
-        );
+        assert!(tabs.took(TabId(3)), "the tab is kept under either value");
         tabs.set_pictures_never(true);
         for _repeat in 0..2 {
             let refused = tabs.refuse_picture(TabId(3)).err();

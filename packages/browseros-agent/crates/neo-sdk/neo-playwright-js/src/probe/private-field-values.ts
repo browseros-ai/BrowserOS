@@ -18,10 +18,10 @@ type Field = HTMLInputElement | HTMLTextAreaElement
 const HTML_NAMESPACE = 'http://www.w3.org/1999/xhtml'
 const FIELD_TAGS: ReadonlySet<string> = new Set(['input', 'textarea'])
 
-/** The resolved walk root and Rust's conservative other-frame hint. */
+/** The resolved read root and Rust's receiving-tab fill permission. */
 type FieldDiscovery = {
   readonly root: Element | null
-  readonly mayHaveOtherFrame: boolean
+  readonly discoverMovedFields: boolean
 }
 
 /** Actual wrapper prototypes for this walk only. A textarea and its Text can come from different realms. */
@@ -69,38 +69,15 @@ function isHtmlTextarea(node: Node | null): node is HTMLTextAreaElement {
   )
 }
 
-/** SOP document access also recognizes inherited about:blank origins without comparing URL strings. */
-function hasReadableOpener(document: Document): boolean {
-  try {
-    const view = document.defaultView
-    if (!view) return true
-    const opener: unknown = view.opener
-    if (opener === null || opener === undefined) return false
-    if (typeof opener !== 'object' && typeof opener !== 'function') return true
-    // Access is the test: SecurityError, rather than the document's contents, decides it.
-    const _openerDocument: unknown = Reflect.get(opener, 'document')
-    return true
-  } catch (error: unknown) {
-    // A denied opener is not a source realm. Other failures cannot establish its absence.
-    return !(
-      typeof error === 'object' &&
-      error !== null &&
-      'name' in error &&
-      error.name === 'SecurityError'
-    )
-  }
-}
-
 /**
  * Whole-document discovery covers ARIA names and ownership outside a scoped walk root. Query
  * each exposed shadow root through the same getter the engine uses, without entering frames.
- * The hint avoids a document scan on ordinary single-frame snapshots. That skip can miss a
- * retained source prototype after its frame disappears and no neighbour or opener remains.
- * Local guards and an actual field root always apply.
+ * Only a tab that took a private fill searches for foreign prototypes. Local guards and an
+ * explicit field root always apply, even when the page moved that root from another frame.
  */
 function collectFieldPrototypes({
   root,
-  mayHaveOtherFrame,
+  discoverMovedFields,
 }: FieldDiscovery): FieldPrototypes {
   const prototypes: FieldPrototypes = {
     inputs: new Set([HTMLInputElement.prototype]),
@@ -129,7 +106,7 @@ function collectFieldPrototypes({
   // Document and local prototypes survive, so a mark-only diagnostic must still be guarded.
   const ownerDocument = root?.ownerDocument ?? document
   if (root) collect(root)
-  if (!mayHaveOtherFrame && !hasReadableOpener(ownerDocument)) return prototypes
+  if (!discoverMovedFields) return prototypes
   const roots: (Document | ShadowRoot)[] = [ownerDocument]
   for (const tree of roots) {
     for (const element of tree.querySelectorAll('input,textarea'))
@@ -332,13 +309,12 @@ function restoreOverrides(installed: PropertyOverride[]): void {
  * the frame it came from, is guarded with this document's.
  */
 export function withMarkedFieldsMasked<T>(
+  discovery: FieldDiscovery,
   walk: () => T,
-  root: Element | null = document.documentElement,
 ): T {
+  const { root } = discovery
   return anyPrivatelyTyped() || (root !== null && privatelyTyped(root))
-    ? withMaskedFieldValues({ root, mayHaveOtherFrame: true }, walk, {
-        declared: false,
-      })
+    ? withMaskedFieldValues(discovery, walk, { declared: false })
     : walk()
 }
 

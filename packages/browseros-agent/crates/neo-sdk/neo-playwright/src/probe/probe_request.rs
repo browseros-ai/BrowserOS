@@ -94,8 +94,8 @@ pub(crate) struct BootOptions<'a> {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct ProbePolicy {
     pub(crate) conformance: bool,
-    /// Only a current, complete observation can prove the frame has no adoption sources.
-    pub(crate) may_have_other_frame: bool,
+    /// Search for foreign field prototypes only on a receiving tab that took a private fill.
+    pub(crate) discover_moved_fields: bool,
 }
 
 /// The common private call envelope. Keeping the policy outside request variants prevents a
@@ -634,7 +634,7 @@ mod tests {
         let request: ProbeRequest = serde_json::from_value(snapshot.clone())?;
         let policy = ProbePolicy {
             conformance: false,
-            may_have_other_frame: false,
+            discover_moved_fields: false,
         };
         assert_eq!(
             serde_json::to_value(ProbeCall {
@@ -643,13 +643,13 @@ mod tests {
             })?,
             json!({
                 "request": snapshot,
-                "policy": { "conformance": false, "mayHaveOtherFrame": false },
+                "policy": { "conformance": false, "discoverMovedFields": false },
             }),
             "false remains explicit in the common envelope"
         );
         for obsolete in [
             json!({"op": "snapshot", "root": "document", "mode": "ai", "conformance": true}),
-            json!({"op": "snapshot", "root": "document", "mode": "ai", "mayHaveOtherFrame": false}),
+            json!({"op": "snapshot", "root": "document", "mode": "ai", "discoverMovedFields": false}),
         ] {
             assert!(serde_json::from_value::<ProbeRequest>(obsolete).is_err());
         }

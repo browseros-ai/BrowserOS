@@ -1021,7 +1021,7 @@ mod tests {
             json!({ "page": { "$neo": "page", "tab": 1007 }, "mode": "codegen" }),
             json!({ "page": { "$neo": "page", "tab": 1007 }, "mode": "ai", "depth": 1.5 }),
             json!({ "page": { "$neo": "page", "tab": 1007 }, "mode": "ai", "conformance": true }),
-            json!({ "page": { "$neo": "page", "tab": 1007 }, "mode": "ai", "mayHaveOtherFrame": false }),
+            json!({ "page": { "$neo": "page", "tab": 1007 }, "mode": "ai", "discoverMovedFields": false }),
         ] {
             assert!(
                 serde_json::from_value::<PageInput>(bad.clone()).is_err(),

@@ -171,8 +171,8 @@ impl FrameTree {
     }
 
     /// Keep endpoint hints only after a complete admitted discovery, stamped at its start.
-    /// An incomplete read leaves the previous tree and journal position intact: advancing that
-    /// position could hide the event that invalidates a cached "only frame" result.
+    /// An incomplete read leaves the previous routes and journal position intact. Advancing
+    /// that position could hide an ancestor transition that invalidates a cached endpoint.
     pub(crate) fn remember(
         &self,
         pw: &Playwright,
@@ -579,17 +579,17 @@ mod tests {
     use serde_json::json;
 
     use super::{FrameTree, PageFrames, answer, sample_tree};
-    use crate::events::{EventHub, PageEvent};
+    use crate::events::EventHub;
     use crate::op_scope::OpScope;
     use crate::page::document_watch::FrameTreeReply;
     use crate::target::CallHeader;
     use crate::test_env::{self, EnvCall, TestEnv};
     use crate::{Op, Playwright};
 
-    /// An unread OOPIF leaves only the main frame in this tree. It cannot establish a negative
-    /// hint or advance an older tree's journal position past the event that invalidates it.
+    /// Ordinary frame dispatch keeps a previously discovered endpoint while a refresh lacks
+    /// an OOPIF. Replacing the routes with that short tree would lose a usable child session.
     #[tokio::test]
-    async fn an_incomplete_tree_never_establishes_a_negative_adoption_hint()
+    async fn an_incomplete_tree_preserves_previously_discovered_endpoints()
     -> Result<(), Box<dyn Error>> {
         let pw = Playwright::new(test_env::offline_session());
         let env = TestEnv::new();
@@ -609,37 +609,7 @@ mod tests {
         short
             .unread
             .push(("unread-child".to_owned(), "session attaching".to_owned()));
-        let (events, mut writer) = EventHub::new();
-        let hint = || {
-            scope.run_state().frames.may_have_other_frame(
-                TabId(7),
-                &attachment,
-                &main,
-                &session,
-                &events,
-            )
-        };
-        short.remember(&pw, &scope, TabId(7), &root, events.head());
-        assert!(
-            hint(),
-            "an unread child cannot prove that the main frame is alone"
-        );
-
-        short.unread.clear();
-        short.remember(&pw, &scope, TabId(7), &root, events.head());
-        assert!(!hint(), "a whole singleton tree still proves absence");
-
-        writer.record(PageEvent::FrameSwapped(FrameId("unread-child".to_owned())));
-        assert!(hint(), "the old journal position sees the topology change");
-        short
-            .unread
-            .push(("unread-child".to_owned(), "session attaching".to_owned()));
-        short.remember(&pw, &scope, TabId(7), &root, events.head());
-        assert!(
-            hint(),
-            "an incomplete refresh must not hide the earlier topology event"
-        );
-
+        let (events, _writer) = EventHub::new();
         let mut previous = sample_tree()?;
         for frame in &previous.frames {
             previous.hosts.insert(frame.id.clone(), root.clone());
