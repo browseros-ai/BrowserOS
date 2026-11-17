@@ -498,7 +498,9 @@ fn tests_that_a_cover_stands_in_the_view_or_over_its_control() {
 #[test]
 fn tests_that_a_pointer_action_stops_waiting_at_five_seconds_and_four_checks() {
     let ms = Duration::from_millis;
-    // A chosen timeout and the conformance flag both keep the whole wait (`Waiting::of`).
+    // The wait is given here. `Waiting::of` gives `Whole` for a chosen timeout and under the
+    // conformance flag; the live rows `tests_that_a_chosen_timeout_keeps_its_whole_wait` and
+    // `tests_that_conformance_never_stops_early` hold it there.
     for (stood, checks, loading, waiting, stops) in [
         (ms(5_000), 4, false, Waiting::BuiltIn, true),
         (ms(6_500), 13, false, Waiting::BuiltIn, true),

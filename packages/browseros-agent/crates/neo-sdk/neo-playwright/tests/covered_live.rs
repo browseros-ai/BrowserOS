@@ -1683,6 +1683,30 @@ async fn tests_that_a_chosen_timeout_keeps_its_whole_wait() -> TestResult {
     result
 }
 
+/// Covered-click B: under the spec harness's conformance switch a covered wait never stops early,
+/// though the prelude stamps the call there too (`headerTimeout` does not know the switch, and the
+/// bridge adds it to the same header). Only `Waiting::of`'s conformance test keeps the wait whole,
+/// so this row sends the stamp with the switch and finds the click still waiting at 12 s. The
+/// window is a lower bound; its width only gives a wrong early stop at 5 s room to show.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_conformance_never_stops_early() -> TestResult {
+    let shape = Shape::shape("dialog").await?;
+    let mut call = built_in();
+    call["conformance"] = json!(true);
+    let waiting = time::timeout(
+        Duration::from_secs(12),
+        shape.act_called("locator.click", call),
+    )
+    .await;
+    shape.close().await;
+    assert!(
+        waiting.is_err(),
+        "stamped under the conformance switch, the click is still waiting at 12 s: {waiting:?}"
+    );
+    Ok(())
+}
+
 /// Covered-click B: a default anyone but Neo's own prelude set is a choice. A script that sets
 /// `page.setDefaultTimeout(30_000)`, `context.setDefaultTimeout(30_000)` or `timeout` on the call
 /// keeps the whole wait under a cover that stands until 8 s: the click lands after it, with one
