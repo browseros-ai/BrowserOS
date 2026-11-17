@@ -772,7 +772,7 @@
     },
     "expectedControls": 4,
     "expectedNotes": [],
-    "why": "A plain fixed shell holds most document controls and is the page even without a main landmark."
+    "why": "A plain fixed shell holds most document controls and is the page even without a main landmark. Peeling this page shell leaves no fixed face, so no line is printed."
   },
   {
     "id": "e14-portal-frame",
@@ -895,5 +895,105 @@
     ],
     "firstText": "Read this first",
     "why": "The fixed dimmer and dialog join through their plain portal; its clear corner Close is its own control."
+  },
+  {
+    "id": "e20-wrapped-dialog",
+    "title": "e20-wrapped-dialog",
+    "file": "pages/e20-wrapped-dialog.html",
+    "viewport": {
+      "width": 1280,
+      "height": 800
+    },
+    "expectedControls": 6,
+    "expectedNotes": [
+      {
+        "role": "dialog",
+        "name": "Wrapped sign in",
+        "extent": "whole",
+        "selector": "[role=dialog]",
+        "controls": ["Close", "Option 1", "Option 2", "Option 3", "Option 4"],
+        "flags": []
+      }
+    ],
+    "why": "Dialog ancestry, including a dialog with no ref, does not make its plain carrier the page.",
+    "firstText": "Read this first"
+  },
+  {
+    "id": "e21-dialog-ancestor",
+    "title": "e21-dialog-ancestor",
+    "file": "pages/e21-dialog-ancestor.html",
+    "viewport": {
+      "width": 1280,
+      "height": 800
+    },
+    "expectedControls": 6,
+    "expectedNotes": [
+      {
+        "role": "dialog",
+        "name": "Outer dialog",
+        "extent": "whole",
+        "selector": "[role=dialog]",
+        "controls": ["Close", "Option 1", "Option 2", "Option 3", "Option 4"],
+        "flags": []
+      }
+    ],
+    "why": "Dialog ancestry, including a dialog with no ref, does not make its plain carrier the page.",
+    "firstText": "Read this first",
+    "noRefDialog": "Outer dialog"
+  },
+  {
+    "id": "e22-shell-dialog",
+    "title": "e22-shell-dialog",
+    "file": "pages/e22-shell-dialog.html",
+    "viewport": {
+      "width": 1280,
+      "height": 800
+    },
+    "expectedControls": 14,
+    "expectedNotes": [
+      {
+        "role": "dialog",
+        "name": "Shell dialog",
+        "extent": "part",
+        "selector": "[role=dialog]",
+        "controls": ["Close", "Option 1", "Option 2", "Option 3", "Option 4"],
+        "flags": [],
+        "forbidControls": [
+          "Shell action 0",
+          "Shell action 1",
+          "Shell action 2",
+          "Shell action 3",
+          "Shell action 4",
+          "Shell action 5",
+          "Shell action 6",
+          "Shell action 7"
+        ]
+      }
+    ],
+    "why": "The shell stays the page by eight own controls; peel its face and find only the fixed dialog. Its root joins no shell content.",
+    "bodyOrder": ["Outside box", "Shell own content", "Dialog content"]
+  },
+  {
+    "id": "e23-boxless-dialog",
+    "title": "e23-boxless-dialog",
+    "file": "pages/e23-boxless-dialog.html",
+    "viewport": {
+      "width": 1280,
+      "height": 800
+    },
+    "expectedControls": 6,
+    "expectedNotes": [
+      {
+        "role": "dialog",
+        "name": "Boxless sign in",
+        "extent": "whole",
+        "selector": "[role=dialog]",
+        "controls": ["Close", "Option 1", "Option 2", "Option 3", "Option 4"],
+        "flags": []
+      }
+    ],
+    "why": "Dialog ancestry, including a dialog with no ref, does not make its plain carrier the page.",
+    "firstText": "Read this first",
+    "noRefDialog": "Boxless sign in"
   }
 ]

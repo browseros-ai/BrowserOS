@@ -57,6 +57,8 @@ function checkNotes(text, notes, withBody = false) {
         )
       }
     } else assert.ok(!following.startsWith('#   its controls: '), text)
+    for (const name of note.forbidControls ?? [])
+      assert.ok(!following.includes(JSON.stringify(name)), text)
   }
 }
 
@@ -104,6 +106,11 @@ export async function driveSnapshotRow(page, row, url) {
       initial,
     )
   }
+  for (let i = 1; i < (row.bodyOrder?.length ?? 0); i++) {
+    const previous = initial.indexOf(row.bodyOrder[i - 1])
+    const current = initial.indexOf(row.bodyOrder[i])
+    assert.ok(previous >= 0 && previous < current, initial)
+  }
   const full = await snap(row.expectedControls, { mode: 'full' })
   checkNotes(full, row.expectedNotes)
   const json = await page.ariaSnapshotJSON({ mode: 'ai' })
@@ -111,6 +118,23 @@ export async function driveSnapshotRow(page, row, url) {
     !JSON.stringify(json).includes('"onTop":'),
     'JSON mode must not carry Neo content marks',
   )
+  if (row.noRefDialog) {
+    const pending = [...json]
+    let dialog
+    while (pending.length) {
+      const node = pending.pop()
+      if (!node || typeof node !== 'object') continue
+      if (node.role === 'dialog' && node.name === row.noRefDialog) dialog = node
+      for (const child of node.children ?? [])
+        if (typeof child === 'object') pending.push(child)
+    }
+    assert.ok(dialog, 'the engine must list the no-box dialog')
+    assert.equal(
+      dialog.ref,
+      undefined,
+      'the fixture must exercise a dialog with no ref',
+    )
+  }
   assert.equal(
     await page.ariaSnapshot({ mode: 'default' }),
     original,

@@ -45,6 +45,16 @@ const DIALOGS = new Set([
 ])
 type Inside = (root: Element, element: Element) => boolean
 type Sample = { point: Point; hit: Element | undefined; deepest?: Element }
+/** One cached click path can be reclassified after the lazy guard without another page hit. */
+type Hit = {
+  path: Element[]
+  chain: Element[]
+  root: Element
+  point: Point
+  face: Element
+  observed: boolean
+  subject?: Element
+}
 type Face = {
   element: Element
   named: Element
@@ -112,7 +122,7 @@ export function surveyCovers(
     point,
     hit: hitAtRoots([document], point),
   }))
-  const { found, tested, main } = findFaces(
+  const { hits, tested, main } = findFaces(
     world,
     refs,
     samples,
@@ -131,7 +141,16 @@ export function surveyCovers(
       if (at === root) return true
     return false
   }
-  const page = pageGuard(world, refs, inside, phases, main)
+  const page = pageGuard(world, refs, phases, main)
+  const resolving = performance.now()
+  const counting = phases.count
+  const found = facesFromHits(world, hits, page)
+  // Guard initialization is measured as counting, even when face resolution triggers it.
+  if (hits.length)
+    phases.naming += Math.max(
+      0,
+      performance.now() - resolving - (phases.count - counting),
+    )
   const remembered = memory.get(document) ?? []
   retainFaces(world, found, remembered, page)
   for (const [element, face] of found) {
@@ -179,7 +198,7 @@ export function surveyCovers(
     )
     .slice(0, MAX_LAYERS)
   memory.set(document, next)
-  phases.naming = performance.now() - naming
+  phases.naming += performance.now() - naming
   const marksSkipped = markBlocks(world, json, layers, inside, phases)
   return {
     layers: layers.map(({ note }) => note),
@@ -199,7 +218,7 @@ function findFaces(
   phases: Phases,
 ) {
   const main = world.injected.document.querySelector('main, [role="main"]')
-  const found = new Map<Element, Face>()
+  const hits: Hit[] = []
   const tested: Tested[] = []
   for (const sample of samples) {
     const { point, hit } = sample
@@ -207,8 +226,7 @@ function findFaces(
     for (let at = hit; at; at = at.assignedSlot ?? parentOrHost(at))
       chain.push(at)
     const top = chain.at(-1)
-    if (top)
-      sample.deepest = addFace(world, found, chain, top, point, false, main)
+    if (top) sample.deepest = rememberHit(hits, chain, top, point, false, main)
   }
   // The engine's ref map has tree order. Filtering and testing in one pass means a budget
   // stop leaves a tested prefix, never a selected list whose tail was silently untested.
@@ -236,71 +254,145 @@ function findFaces(
     const covered = kind === 'page' || kind === 'frame'
     tested.push({ element, clear: !covered })
     if (chain && covered)
-      addFace(world, found, chain, coverRoot(subject, chain), point, true, main)
+      rememberHit(
+        hits,
+        chain,
+        coverRoot(subject, chain),
+        point,
+        true,
+        main,
+        subject,
+      )
   }
-  return { found, tested, main }
+  return { hits, tested, main }
 }
 
-function addFace(
-  world: World,
-  found: Map<Element, Face>,
+/** Retain the click's path so a page face can be peeled after the lazy guard, without a new hit. */
+function rememberHit(
+  hits: Hit[],
   chain: Element[],
   root: Element,
   point: Point,
   observed: boolean,
   main: Element | null,
+  subject?: Element,
 ): Element | undefined {
-  // Reuse the click's existing shadow descent for reach; the raw document sample is a host.
   const path = coverPath(chain, root, point)
-  const deepest = path[0]
-  const element = coverFace(
-    path.filter((element) => !pageElement(element, main)),
-  )
-  if (!element || edgeBar(element)) return deepest
-  const known = found.get(element)
-  if (known) {
-    known.observed ||= observed
-    if (observed) known.roots.add(root)
-    return deepest
+  const filtered = path.filter((element) => !pageElement(element, main))
+  const face = coverFace(filtered)
+  if (face && !edgeBar(face))
+    hits.push({ path: filtered, chain, root, point, face, observed, subject })
+  return path[0]
+}
+
+/** A page shell can carry another fixed layer. Peeling it preserves that layer's own root. */
+function facesFromHits(
+  world: World,
+  hits: Hit[],
+  page: (element: Element) => boolean,
+): Map<Element, Face> {
+  const found = new Map<Element, Face>()
+  for (const hit of hits) {
+    let path = hit.path
+    let element: Element | undefined = hit.face
+    let peeled = false
+    while (element && page(element)) {
+      path = path.slice(0, path.indexOf(element))
+      element = coverFace(path)
+      peeled = true
+    }
+    if (!element || edgeBar(element)) continue
+    const root = peeled
+      ? hit.subject
+        ? coverRoot(hit.subject, path)
+        : (path.at(-1) ?? element)
+      : hit.root
+    const known = found.get(element)
+    if (known) {
+      known.observed ||= hit.observed
+      if (hit.observed && !page(root)) known.roots.add(root)
+      continue
+    }
+    const named = whichDialog(world, hit.chain, root, hit.point)
+    found.set(element, {
+      element,
+      named: page(named) ? element : named,
+      roots: new Set(hit.observed && !page(root) ? [root] : []),
+      observed: hit.observed,
+    })
   }
-  found.set(element, {
-    element,
-    named: whichDialog(world, chain, root, point),
-    roots: new Set(observed ? [root] : []),
-    observed,
-  })
-  return deepest
+  return found
 }
 
 /** The expensive majority clause is lazy: ordinary pages never count the whole document. */
 function pageGuard(
   world: World,
   refs: ReturnType<typeof lastSnapshotRefs>,
-  inside: Inside,
   phases: Phases,
   main: Element | null,
 ): (element: Element) => boolean {
   let controls: Element[] | undefined
   const cached = new Map<Element, boolean>()
+  // Dialog ancestry shields its controls; a menu or listbox does not stop its app shell
+  // from being the page. Keep the broader naming exemption separate from that test.
+  const meanings = new Map<Element, { dialog: boolean; exempt: boolean }>()
+  const meaning = (element: Element) => {
+    let known = meanings.get(element)
+    if (!known) {
+      const role = world.injected.utils.getAriaRole(element) ?? ''
+      const top = inTopLayer(element)
+      known = {
+        dialog: role === 'dialog' || role === 'alertdialog' || top,
+        exempt: DIALOGS.has(role) || top,
+      }
+      meanings.set(element, known)
+    }
+    return known
+  }
+  // Ref-less dialog ancestors count too. Membership and the intervening dialog are one
+  // flat-tree walk; no descendant query or second snapshot is needed to find either.
+  const ownControl = (root: Element, control: Element) => {
+    let inDialog = false
+    for (
+      let at: Element | undefined = control;
+      at;
+      at = at.assignedSlot ?? parentOrHost(at)
+    ) {
+      if (at === root) return !inDialog
+      inDialog ||= meaning(at).dialog
+    }
+    return false
+  }
   return (element) => {
-    if (
-      DIALOGS.has(world.injected.utils.getAriaRole(element) ?? '') ||
-      inTopLayer(element)
-    )
-      return false
-    if (pageElement(element, main)) return true
     const known = cached.get(element)
     if (known !== undefined) return known
     const started = performance.now()
-    controls ??= Array.from(refs.values(), ({ element }) => element).filter(
-      (element) => coverControl(world, element),
-    )
-    const page =
-      controls.filter((control) => inside(element, control)).length >
-      controls.length / 2
-    phases.count += performance.now() - started
-    cached.set(element, page)
-    return page
+    let page = false
+    try {
+      if (meaning(element).exempt) return false
+      for (
+        let at = element.assignedSlot ?? parentOrHost(element);
+        at;
+        at = at.assignedSlot ?? parentOrHost(at)
+      )
+        if (meaning(at).dialog) return false
+      if (pageElement(element, main)) {
+        page = true
+        return true
+      }
+      controls ??= Array.from(refs.values(), ({ element }) => element).filter(
+        (element) => coverControl(world, element),
+      )
+      // A dialog's controls cannot turn its carrier into the page. The denominator remains
+      // the whole document, so a fixed app shell is still judged by its own controls.
+      page =
+        controls.filter((control) => ownControl(element, control)).length >
+        controls.length / 2
+      return page
+    } finally {
+      cached.set(element, page)
+      phases.count += performance.now() - started
+    }
   }
 }
 
