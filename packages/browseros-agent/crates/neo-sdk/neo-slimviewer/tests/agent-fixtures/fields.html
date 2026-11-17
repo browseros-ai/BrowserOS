@@ -1,0 +1,60 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Input agent behavior fixture</title>
+<style>
+body { margin: 24px; font: 16px sans-serif; }
+input, textarea, [contenteditable] { display: block; width: 280px; margin: 10px; min-height: 28px; }
+#otp { display: flex; } #otp input { width: 32px; }
+#editor { min-height: 60px; } #spacer { height: 1500px; }
+</style>
+<input id="plain" value="abcdef">
+<textarea id="textarea">abcdef</textarea>
+<input id="password" type="password" value="abcdef">
+<div id="editable" contenteditable="true">abcdef</div>
+<form id="otp"><input id="otp0" maxlength="1"><input maxlength="1"><input maxlength="1"><input maxlength="1"><input maxlength="1"><input maxlength="1"></form>
+<input id="blocker" value="abcdef">
+<input id="delayed" value="abcdef">
+<button id="elsewhere">Elsewhere</button>
+<div id="pm"></div>
+<div id="shadow"></div>
+<div id="spacer"></div>
+<script>
+window.probe = { pastes: 0, sawText: false, untrusted: false, composed: false, inputTrusted: false, beforeInputs: 0, inputs: 0 };
+document.addEventListener('paste', event => {
+  probe.pastes++;
+  probe.sawText = event.clipboardData?.getData('text/plain') === 'Z';
+  probe.untrusted = !event.isTrusted;
+  probe.composed = event.composed;
+});
+document.addEventListener('beforeinput', () => { probe.beforeInputs++; });
+document.addEventListener('input', event => { probe.inputs++; probe.inputTrusted ||= event.isTrusted; });
+document.querySelector('#otp').addEventListener('paste', event => {
+  event.preventDefault();
+  const inputs = [...document.querySelectorAll('#otp input')];
+  [...event.clipboardData.getData('text/plain')].slice(0, 6).forEach((char, index) => { inputs[index].value = char; });
+});
+document.querySelector('#blocker').addEventListener('paste', event => { event.preventDefault(); });
+document.querySelector('#delayed').addEventListener('paste', event => {
+  event.preventDefault();
+  setTimeout(() => { event.target.value += event.clipboardData.getData('text/plain'); }, 90);
+});
+const shadow = document.querySelector('#shadow').attachShadow({mode: 'open'});
+shadow.innerHTML = '<input id="shadow-input" value="abcdef">';
+window.loadProseMirror = async () => {
+  try {
+    const [{EditorState, TextSelection}, {EditorView}, {schema}] = await Promise.all([
+      import('https://esm.sh/prosemirror-state@1.4.3'),
+      import('https://esm.sh/prosemirror-view@1.41.3'),
+      import('https://esm.sh/prosemirror-schema-basic@1.2.4')
+    ]);
+    window.pmview = new EditorView(document.querySelector('#pm'), {state: EditorState.create({
+      doc: schema.node('doc', null, [schema.node('paragraph', null, [schema.text('abcdef')])])
+    })});
+    pmview.dom.id = 'prosemirror';
+    window.selectProseMirrorText = (from, to) => {
+      pmview.dispatch(pmview.state.tr.setSelection(TextSelection.create(pmview.state.doc, from, to)));
+    };
+    return true;
+  } catch { return false; }
+};
+</script>

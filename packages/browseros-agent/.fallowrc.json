@@ -67,7 +67,8 @@
     ".claude/skills/**",
     "packages/agent-cursor/playground/**",
     "crates/neo-sdk/neo-playwright/third_party/**",
-    "crates/neo-sdk/neo-playwright/assets/**"
+    "crates/neo-sdk/neo-playwright/assets/**",
+    "crates/neo-sdk/neo-slimviewer/**"
   ],
   "rules": {
     "unused-files": "warn",
