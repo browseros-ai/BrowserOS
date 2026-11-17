@@ -135,8 +135,11 @@ async fn meets(
         let Some(before) = border_box(scope, site).await? else {
             return Ok(None);
         };
-        // The sleep is cut short by the op's timeout, which `wait_for_element_state` reports.
-        let _expired = scope.sleep(STABLE_GAP).await;
+        // A sleep the op's timeout cut short leaves the two reads closer than `STABLE_GAP`, where a
+        // moving box can read the same twice: it proves nothing, so the wait times out here.
+        if scope.sleep(STABLE_GAP).await.is_err() {
+            return Err(scope.timed_out(state.timed_out()));
+        }
         let Some(after) = border_box(scope, site).await? else {
             return Ok(None);
         };

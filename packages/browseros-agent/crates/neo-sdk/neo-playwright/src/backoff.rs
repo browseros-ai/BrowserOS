@@ -20,11 +20,12 @@ const INNER_MS: [u64; 6] = [0, 0, 20, 100, 100, 500];
 /// apart mean it did not move. Upstream waits one animation frame between them
 /// (`stableRafCount: 1`); Neo waits on Rust's clock instead, since a background tab's rAF stalls.
 ///
-/// A page lays out once per frame: its animation clock steps every 16.67 ms at 60 Hz, as an
-/// agent's tab measures. Two reads closer together than one step can fall within it and read the
-/// same layout twice, so a moving element looks still. The second read leaves only after the
-/// first one's reply and this sleep, so the page's gap between them is never shorter than this
-/// constant. 17 ms, the first whole millisecond above one step, therefore always spans a step,
+/// An animated box moves only when the page's animation clock steps, every 16.67 ms at 60 Hz, as
+/// an agent's tab measures. Two reads inside one step read the same position twice, so a moving
+/// element looks still. The second read leaves only after the first one's reply and this sleep,
+/// so the page's gap between them is never shorter than this constant; every user of it answers
+/// the timeout instead when the op's deadline cuts the sleep short, since a shorter gap proves
+/// nothing. 17 ms, the first whole millisecond above one step, therefore always spans a step,
 /// whatever the machine's round trip. A gap below one step would hold only while the timer ran
 /// long and the transport took time, and a fast machine has neither to spare.
 pub(crate) const STABLE_GAP: Duration = Duration::from_millis(17);
