@@ -26,6 +26,7 @@ const INFO: ViewerInfo = {
 
 const AGENT_ON_A_TAB: LiveScreenAction = {
   type: 'status',
+  at: 0,
   status: {
     host: { state: 'up' },
     agent: {

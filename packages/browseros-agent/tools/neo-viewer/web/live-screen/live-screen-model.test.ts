@@ -10,6 +10,7 @@ import {
   type LiveScreenAction,
   type LiveScreenState,
   liveScreenReducer,
+  modeLine,
   retryDelayMs,
   screenNotice,
   takeOverAvailability,
@@ -37,13 +38,14 @@ function run(...actions: LiveScreenAction[]): LiveScreenState {
 
 test('follow keeps the agent’s tab in front: by tab, or by task when its run named one', () => {
   expect(displayRequestFor(initialLiveScreen)).toEqual({ mode: 'view' })
-  const byTab = run({ type: 'status', status: UP })
+  const byTab = run({ type: 'status', at: 0, status: UP })
   expect(displayRequestFor(byTab)).toEqual({
     mode: 'view',
     follow: { tabId: 12 },
   })
   const byTask = liveScreenReducer(byTab, {
     type: 'status',
+    at: 0,
     status: { ...UP, agent: { tab: TWO, taskId: 'host-7' } },
   })
   expect(displayRequestFor(byTask)).toEqual({
@@ -59,17 +61,19 @@ test('follow keeps the agent’s tab in front: by tab, or by task when its run n
 })
 
 test('the follow target moves with the agent and survives a status from an unreachable Neo', () => {
-  const onTwo = run({ type: 'status', status: UP })
+  const onTwo = run({ type: 'status', at: 0, status: UP })
   // The same target keeps its object: an unchanged status opens no new display.
-  const again = liveScreenReducer(onTwo, { type: 'status', status: UP })
+  const again = liveScreenReducer(onTwo, { type: 'status', at: 0, status: UP })
   expect(again.follow).toBe(onTwo.follow)
   const onOne = liveScreenReducer(onTwo, {
     type: 'status',
+    at: 0,
     status: { ...UP, agent: { tab: { ...TWO, tabId: 11 }, taskId: null } },
   })
   expect(onOne.follow).toEqual({ tabId: 11 })
   const down = liveScreenReducer(onOne, {
     type: 'status',
+    at: 0,
     status: {
       host: { state: 'unreachable', message: 'nothing answered' },
       agent: null,
@@ -79,8 +83,11 @@ test('the follow target moves with the agent and survives a status from an unrea
   expect(down.follow).toBe(onOne.follow)
   // Neo answered: the agent's tab closed, so there is nothing to follow.
   expect(
-    liveScreenReducer(down, { type: 'status', status: { ...UP, agent: null } })
-      .follow,
+    liveScreenReducer(down, {
+      type: 'status',
+      at: 0,
+      status: { ...UP, agent: null },
+    }).follow,
   ).toBeNull()
 })
 
@@ -137,7 +144,11 @@ test('a takeover Neo no longer knows is dropped instead of retried', () => {
 })
 
 test('a reloaded page adopts the takeover the viewer still holds', () => {
-  const adopted = run({ type: 'status', status: { ...UP, takeover: TAKEOVER } })
+  const adopted = run({
+    type: 'status',
+    at: 0,
+    status: { ...UP, takeover: TAKEOVER },
+  })
   expect(adopted).toMatchObject({ takeover: TAKEOVER, mode: 'control' })
 })
 
@@ -190,6 +201,7 @@ test('a failed display backs off and says what is wrong', () => {
 test('no container shows even before a display has failed', () => {
   const state = run({
     type: 'status',
+    at: 0,
     status: {
       host: { state: 'unreachable', message: 'Unable to connect' },
       agent: null,
@@ -207,10 +219,10 @@ test('take over is offered once the agent has an open tab', () => {
   })
   expect(
     takeOverAvailability(
-      run({ type: 'status', status: { ...UP, agent: null } }),
+      run({ type: 'status', at: 0, status: { ...UP, agent: null } }),
     ).enabled,
   ).toBe(false)
-  const ready = run({ type: 'status', status: UP })
+  const ready = run({ type: 'status', at: 0, status: UP })
   expect(takeOverAvailability(ready)).toMatchObject({
     label: 'Take over',
     enabled: true,
@@ -238,4 +250,40 @@ test('the screen size from the last display is kept for the takeover’s fit', (
   expect(
     liveScreenReducer(state, { type: 'connected', screen: null }).screen,
   ).toEqual(size)
+})
+
+test('the follow line says the screen may be behind once the agent’s tab goes unconfirmed for over 5 s', () => {
+  const following = 'Following the agent’s tab.'
+  const behind = 'Following is behind:'
+  const confirmed = run({ type: 'status', at: 1_000, status: UP })
+  expect(modeLine(confirmed)).toStartWith(following)
+  const atBound = liveScreenReducer(confirmed, { type: 'tick', at: 6_000 })
+  expect(modeLine(atBound)).toStartWith(following)
+  const past = liveScreenReducer(atBound, { type: 'tick', at: 6_001 })
+  expect(modeLine(past)).toStartWith(behind)
+
+  // A status from an unreachable Neo confirms nothing; the next one that reaches it does.
+  const unreachable = liveScreenReducer(past, {
+    type: 'status',
+    at: 7_000,
+    status: {
+      host: { state: 'unreachable', message: 'nothing answered' },
+      agent: null,
+      takeover: null,
+    },
+  })
+  expect(modeLine(unreachable)).toStartWith(behind)
+  expect(
+    modeLine(
+      liveScreenReducer(unreachable, { type: 'status', at: 8_000, status: UP }),
+    ),
+  ).toStartWith(following)
+
+  // Control and a takeover say what the owner's clicks do, however old the status is.
+  expect(
+    modeLine(liveScreenReducer(past, { type: 'mode', mode: 'control' })),
+  ).toStartWith('Control:')
+  expect(
+    modeLine(liveScreenReducer(past, { type: 'taken', takeover: TAKEOVER })),
+  ).toStartWith('You have the agent’s tab.')
 })

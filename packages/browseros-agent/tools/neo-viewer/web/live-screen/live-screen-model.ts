@@ -1,7 +1,8 @@
 /**
  * What the live-screen panel is doing, as plain data and one reducer, so every state the panel
  * can show is a value a test can build. `use-live-screen.ts` feeds it events (the status poll,
- * the owner's clicks, the display socket opening and closing); `LiveScreen.tsx` renders it.
+ * the owner's clicks, the display socket opening and closing, the clock); `LiveScreen.tsx`
+ * renders it. Time is data too: each status and tick carries the time it happened.
  *
  * Three ways to look at Neo's screen, one display at a time:
  *   follow   view display that keeps the agent's tab in front: `followTask` when the latest
@@ -23,6 +24,13 @@ import {
 } from '../../shared/live-screen'
 
 export type ScreenMode = 'follow' | 'control'
+
+/**
+ * How long the follow target may go without a status that reached Neo before the panel says the
+ * screen may be behind: about three polls. A healthy status answers in about 15 ms; a poll that
+ * waits longer is stuck (every connection to the viewer busy, or the viewer gone).
+ */
+export const FOLLOW_STALE_MS = 5_000
 
 export type Connection =
   | { kind: 'connecting' }
@@ -57,10 +65,16 @@ export interface LiveScreenState {
    * unreachable, so a lost status does not reopen the display on nothing and back.
    */
   follow: Follow | null
+  /** When a status last reached Neo (`host.state` up): the follow target is confirmed as of then. */
+  confirmedAt: number | null
+  /** The panel's clock: when the last status or tick happened. */
+  now: number
 }
 
 export type LiveScreenAction =
-  | { type: 'status'; status: LiveStatus }
+  | { type: 'status'; status: LiveStatus; at: number }
+  /** No status came: the clock moves on, so the line can say the follow target is not confirmed. */
+  | { type: 'tick'; at: number }
   | { type: 'mode'; mode: ScreenMode }
   | { type: 'busy' }
   | { type: 'taken'; takeover: LiveTakeover }
@@ -81,6 +95,8 @@ export const initialLiveScreen: LiveScreenState = {
   actionError: null,
   screen: null,
   follow: null,
+  confirmedAt: null,
+  now: 0,
 }
 
 /** 0.5 s, 1 s, 2 s, 4 s, then every 5 s: quick after a blip, calm while a container is down. */
@@ -108,13 +124,13 @@ export function liveScreenReducer(
 ): LiveScreenState {
   switch (action.type) {
     case 'status': {
+      const up = action.status.host.state === 'up'
       const next = {
         ...state,
         status: action.status,
-        follow:
-          action.status.host.state === 'up'
-            ? followOf(action.status, state.follow)
-            : state.follow,
+        follow: up ? followOf(action.status, state.follow) : state.follow,
+        confirmedAt: up ? action.at : state.confirmedAt,
+        now: action.at,
       }
       // A reloaded page learns from the viewer that it still holds a takeover.
       if (action.status.takeover && !state.takeover && !state.busy)
@@ -125,6 +141,8 @@ export function liveScreenReducer(
         })
       return next
     }
+    case 'tick':
+      return { ...state, now: action.at }
     case 'mode':
       if (state.takeover || state.mode === action.mode) return state
       return reopen({ ...state, mode: action.mode })
@@ -290,5 +308,12 @@ export function modeLine(state: LiveScreenState): string {
     return 'Control: your clicks and keys reach the browser. The agent is not held; the front tab stops following it.'
   if (!state.follow)
     return 'Watching the screen. It follows the agent once the agent acts on a tab.'
+  // The follow target is whatever the last status that reached Neo said; the screen shows that
+  // tab, so when no status has come for a while it may show the agent's old tab.
+  if (
+    state.confirmedAt !== null &&
+    state.now - state.confirmedAt > FOLLOW_STALE_MS
+  )
+    return `Following is behind: the agent’s tab has not been confirmed for over ${FOLLOW_STALE_MS / 1000} s, so the screen may show an older tab. It catches up when a status check answers.`
   return 'Following the agent’s tab. Control lets you click and type; Take over also holds the agent on this tab.'
 }

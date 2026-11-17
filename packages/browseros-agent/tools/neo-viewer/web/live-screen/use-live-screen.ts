@@ -3,6 +3,11 @@
  * pop-up, a Take over button in a top bar), so they agree on the mode and the takeover. It polls
  * the viewer for the task's tab and the host's state, reopens the display after a failure, and
  * calls the viewer's takeover routes. `live-screen-model.ts` holds the rules.
+ *
+ * The poll shares the browser's few connections to the viewer with everything else the page and
+ * the viewer's other tabs load, so a status can be slow to come. One read is in flight at a time,
+ * and the panel's clock ticks once the follow target has gone `FOLLOW_STALE_MS` unconfirmed, so
+ * the line under the screen says so instead of claiming to follow.
  */
 
 import { useCallback, useEffect, useMemo, useReducer } from 'react'
@@ -17,6 +22,7 @@ import {
 } from '../../shared/live-screen'
 import {
   displayRequestFor,
+  FOLLOW_STALE_MS,
   initialLiveScreen,
   type LiveScreenState,
   liveScreenReducer,
@@ -45,36 +51,27 @@ export interface LiveScreenController {
 export function useLiveScreen(): LiveScreenController {
   const [state, dispatch] = useReducer(liveScreenReducer, initialLiveScreen)
 
+  useEffect(
+    () =>
+      startStatusPoll(
+        readStatus,
+        (status) => dispatch({ type: 'status', status, at: Date.now() }),
+        STATUS_POLL_MS,
+      ),
+    [],
+  )
+
+  const { confirmedAt } = state
   useEffect(() => {
-    let current = true
-    const poll = async () => {
-      try {
-        const response = await fetch(liveRoutes.status)
-        if (!response.ok) throw new Error(`HTTP ${response.status}`)
-        const status = (await response.json()) as LiveStatus
-        if (current) dispatch({ type: 'status', status })
-      } catch (cause) {
-        if (current)
-          dispatch({
-            type: 'status',
-            status: {
-              host: {
-                state: 'unreachable',
-                message: `The viewer did not answer (${String(cause)})`,
-              },
-              agent: null,
-              takeover: null,
-            },
-          })
-      }
-    }
-    void poll()
-    const timer = setInterval(poll, STATUS_POLL_MS)
-    return () => {
-      current = false
-      clearInterval(timer)
-    }
-  }, [])
+    if (confirmedAt === null) return
+    // Every status that reaches Neo moves `confirmedAt` and so reschedules this: it fires only
+    // when none has come for the whole bound.
+    const timer = setTimeout(
+      () => dispatch({ type: 'tick', at: Date.now() }),
+      confirmedAt + FOLLOW_STALE_MS + 1 - Date.now(),
+    )
+    return () => clearTimeout(timer)
+  }, [confirmedAt])
 
   const { connection } = state
   useEffect(() => {
@@ -149,6 +146,55 @@ export function useLiveScreen(): LiveScreenController {
     giveBack,
     connected,
     closed,
+  }
+}
+
+/**
+ * Reads the status now and every `everyMs`, one read at a time: a tick while a read is pending
+ * starts nothing, so a read stuck waiting for a connection does not queue more behind it. The
+ * returned function stops; a read still pending then delivers nothing.
+ */
+export function startStatusPoll(
+  read: () => Promise<LiveStatus>,
+  deliver: (status: LiveStatus) => void,
+  everyMs: number,
+): () => void {
+  let current = true
+  let pending = false
+  const tick = () => {
+    if (pending) return
+    pending = true
+    void read()
+      .then((status) => {
+        if (current) deliver(status)
+      })
+      .finally(() => {
+        pending = false
+      })
+  }
+  tick()
+  const timer = setInterval(tick, everyMs)
+  return () => {
+    current = false
+    clearInterval(timer)
+  }
+}
+
+/** The viewer's answer; a viewer that does not answer is reported as an unreachable host. */
+async function readStatus(): Promise<LiveStatus> {
+  try {
+    const response = await fetch(liveRoutes.status)
+    if (!response.ok) throw new Error(`HTTP ${response.status}`)
+    return (await response.json()) as LiveStatus
+  } catch (cause) {
+    return {
+      host: {
+        state: 'unreachable',
+        message: `The viewer did not answer (${String(cause)})`,
+      },
+      agent: null,
+      takeover: null,
+    }
   }
 }
 
