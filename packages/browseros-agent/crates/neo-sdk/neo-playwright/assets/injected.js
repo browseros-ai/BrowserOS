@@ -11089,7 +11089,7 @@ ${value.stack}`;
       point,
       hit: hitAtRoots([document2], point)
     }));
-    const { found, tested, main } = findFaces(world, refs, samples, started, phases);
+    const { hits, tested, main } = findFaces(world, refs, samples, started, phases);
     phases.hits = performance.now() - started;
     const inside = (root, element) => {
       for (let at = element;at; at = at.assignedSlot ?? parentOrHost2(at))
@@ -11097,7 +11097,12 @@ ${value.stack}`;
           return true;
       return false;
     };
-    const page = pageGuard(world, refs, inside, phases, main);
+    const page = pageGuard(world, refs, phases, main);
+    const resolving = performance.now();
+    const counting = phases.count;
+    const found = facesFromHits(world, hits, page);
+    if (hits.length)
+      phases.naming += Math.max(0, performance.now() - resolving - (phases.count - counting));
     const remembered = memory.get(document2) ?? [];
     retainFaces(world, found, remembered, page);
     for (const [element, face] of found) {
@@ -11129,7 +11134,7 @@ ${value.stack}`;
     const next = [];
     const layers = groups.map((group) => describeLayer(world, output, group, groups, remembered, next, tested, samples, inside)).filter((layer) => layer !== undefined).sort((a, b) => Number(b.note.wholeView) - Number(a.note.wholeView) || a.order - b.order).slice(0, MAX_LAYERS);
     memory.set(document2, next);
-    phases.naming = performance.now() - naming;
+    phases.naming += performance.now() - naming;
     const marksSkipped = markBlocks(world, json, layers, inside, phases);
     return {
       layers: layers.map(({ note }) => note),
@@ -11141,7 +11146,7 @@ ${value.stack}`;
   }
   function findFaces(world, refs, samples, started, phases) {
     const main = world.injected.document.querySelector('main, [role="main"]');
-    const found = new Map;
+    const hits = [];
     const tested = [];
     for (const sample of samples) {
       const { point, hit } = sample;
@@ -11150,7 +11155,7 @@ ${value.stack}`;
         chain.push(at);
       const top = chain.at(-1);
       if (top)
-        sample.deepest = addFace(world, found, chain, top, point, false, main);
+        sample.deepest = rememberHit(hits, chain, top, point, false, main);
     }
     for (const { element } of refs.values()) {
       if (tested.length >= MAX_CONTROLS2 || performance.now() - started >= BUDGET_MS) {
@@ -11170,48 +11175,98 @@ ${value.stack}`;
       const covered = kind === "page" || kind === "frame";
       tested.push({ element, clear: !covered });
       if (chain && covered)
-        addFace(world, found, chain, coverRoot(subject, chain), point, true, main);
+        rememberHit(hits, chain, coverRoot(subject, chain), point, true, main, subject);
     }
-    return { found, tested, main };
+    return { hits, tested, main };
   }
-  function addFace(world, found, chain, root, point, observed, main) {
+  function rememberHit(hits, chain, root, point, observed, main, subject) {
     const path = coverPath(chain, root, point);
-    const deepest = path[0];
-    const element = coverFace(path.filter((element) => !pageElement(element, main)));
-    if (!element || edgeBar(element))
-      return deepest;
-    const known = found.get(element);
-    if (known) {
-      known.observed ||= observed;
-      if (observed)
-        known.roots.add(root);
-      return deepest;
-    }
-    found.set(element, {
-      element,
-      named: whichDialog(world, chain, root, point),
-      roots: new Set(observed ? [root] : []),
-      observed
-    });
-    return deepest;
+    const filtered = path.filter((element) => !pageElement(element, main));
+    const face = coverFace(filtered);
+    if (face && !edgeBar(face))
+      hits.push({ path: filtered, chain, root, point, face, observed, subject });
+    return path[0];
   }
-  function pageGuard(world, refs, inside, phases, main) {
+  function facesFromHits(world, hits, page) {
+    const found = new Map;
+    for (const hit of hits) {
+      let path = hit.path;
+      let element = hit.face;
+      let peeled = false;
+      while (element && page(element)) {
+        path = path.slice(0, path.indexOf(element));
+        element = coverFace(path);
+        peeled = true;
+      }
+      if (!element || edgeBar(element))
+        continue;
+      const root = peeled ? hit.subject ? coverRoot(hit.subject, path) : path.at(-1) ?? element : hit.root;
+      const known = found.get(element);
+      if (known) {
+        known.observed ||= hit.observed;
+        if (hit.observed && !page(root))
+          known.roots.add(root);
+        continue;
+      }
+      const named = whichDialog(world, hit.chain, root, hit.point);
+      found.set(element, {
+        element,
+        named: page(named) ? element : named,
+        roots: new Set(hit.observed && !page(root) ? [root] : []),
+        observed: hit.observed
+      });
+    }
+    return found;
+  }
+  function pageGuard(world, refs, phases, main) {
     let controls;
     const cached = new Map;
+    const meanings = new Map;
+    const meaning = (element) => {
+      let known = meanings.get(element);
+      if (!known) {
+        const role = world.injected.utils.getAriaRole(element) ?? "";
+        const top = inTopLayer(element);
+        known = {
+          dialog: role === "dialog" || role === "alertdialog" || top,
+          exempt: DIALOGS2.has(role) || top
+        };
+        meanings.set(element, known);
+      }
+      return known;
+    };
+    const ownControl = (root, control) => {
+      let inDialog = false;
+      for (let at = control;at; at = at.assignedSlot ?? parentOrHost2(at)) {
+        if (at === root)
+          return !inDialog;
+        inDialog ||= meaning(at).dialog;
+      }
+      return false;
+    };
     return (element) => {
-      if (DIALOGS2.has(world.injected.utils.getAriaRole(element) ?? "") || inTopLayer(element))
-        return false;
-      if (pageElement(element, main))
-        return true;
       const known = cached.get(element);
       if (known !== undefined)
         return known;
       const started = performance.now();
-      controls ??= Array.from(refs.values(), ({ element }) => element).filter((element) => coverControl(world, element));
-      const page = controls.filter((control) => inside(element, control)).length > controls.length / 2;
-      phases.count += performance.now() - started;
-      cached.set(element, page);
-      return page;
+      let page = false;
+      try {
+        if (meaning(element).exempt)
+          return false;
+        for (let at = element.assignedSlot ?? parentOrHost2(element);at; at = at.assignedSlot ?? parentOrHost2(at))
+          if (meaning(at).dialog)
+            return false;
+        if (pageElement(element, main)) {
+          page = true;
+          return true;
+        }
+        controls ??= Array.from(refs.values(), ({ element }) => element).filter((element) => coverControl(world, element));
+        page = controls.filter((control) => ownControl(element, control)).length > controls.length / 2;
+        return page;
+      } finally {
+        cached.set(element, page);
+        phases.count += performance.now() - started;
+      }
     };
   }
   function retainFaces(world, found, remembered, page) {
