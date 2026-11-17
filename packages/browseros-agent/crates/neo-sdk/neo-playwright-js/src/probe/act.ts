@@ -23,6 +23,7 @@
 import {
   coverMark,
   labelPlainPoint,
+  notOwnAt,
   ownPress,
   positionPoint,
   shownOwnLabel,
@@ -63,6 +64,8 @@ type Slot = {
     token: number
     interception: Interception
     expiry: ReturnType<typeof setTimeout>
+    /** Neo's own check at delivery, for a press of the target's own (`guardPress`). */
+    guard?: PressGuard
   }
   /**
    * The last interceptor stopped by its verdict or its expiry, until the next arming, so a
@@ -104,15 +107,77 @@ export function listenForMoves(): void {
     window.addEventListener(type, countMove, { capture: true, passive: true })
 }
 
-/** Stops the armed interceptor, if any, and returns what it saw. */
+/** The events of a press the vendored interceptor checks for a mouse action, and so does Neo's guard. */
+const PRESS_EVENTS = [
+  'pointerdown',
+  'mousedown',
+  'pointerup',
+  'mouseup',
+  'click',
+  'auxclick',
+  'dblclick',
+  'contextmenu',
+] as const
+
+/** What `guardPress` refused, if anything, and how its listeners go. */
+type PressGuard = { refused(): string | undefined; stop(): void }
+
+/**
+ * Neo's own check at delivery of a press of the target's own (covered-click C). The vendored
+ * interceptor swallows a press that lands outside the armed element, but accepts anything inside
+ * it: a link nested in the label, a quick-add button a card shows under the pointer on hover after
+ * Neo chose the point. At the press's first trusted event this asks the one predicate of what is on
+ * top at the event's point (`notOwnAt`); a no swallows every event of the press, and the verdict
+ * reports a miss with that element's preview, which costs a retry. Its listeners are added at
+ * arming, so they run after the vendored dispatcher's (a press it swallowed never reaches them)
+ * and after any the page added to the window before; `stopArmed` removes them on every path.
+ */
+function guardPress(owner: Element, output: FailureOutput): PressGuard {
+  let asked = false
+  let refused: string | undefined
+  const listener = (event: Event) => {
+    if (!event.isTrusted) return
+    if (!asked) {
+      asked = true
+      const off =
+        event instanceof MouseEvent
+          ? notOwnAt(owner, { x: event.clientX, y: event.clientY })
+          : undefined
+      if (off) refused = output.previewNode(off)
+    }
+    if (refused === undefined) return
+    event.preventDefault()
+    event.stopImmediatePropagation()
+  }
+  for (const type of PRESS_EVENTS)
+    window.addEventListener(type, listener, { capture: true })
+  return {
+    refused: () => refused,
+    stop: () => {
+      for (const type of PRESS_EVENTS)
+        window.removeEventListener(type, listener, { capture: true })
+    },
+  }
+}
+
+/**
+ * Stops the armed interceptor, if any, and returns what it saw. A press of the target's own that
+ * its guard refused is a miss, whatever the vendored interceptor saw.
+ */
 function stopArmed(slot: Slot): Stopped | undefined {
   const armed = slot.armed
   if (!armed) return undefined
   slot.armed = undefined
   clearTimeout(armed.expiry)
+  const seen = armed.interception.stop()
+  armed.guard?.stop()
+  const refused = armed.guard?.refused()
   return {
     token: armed.token,
-    hit: armed.interception.stop(),
+    hit:
+      refused !== undefined && seen === 'done'
+        ? { hitTargetDescription: refused }
+        : seen,
     expired: false,
   }
 }
@@ -174,7 +239,15 @@ export function act(
   )
   if (interception === 'error:notconnected') return { kind: 'detached' }
   if (typeof interception !== 'string')
-    return armSlot(world, arm, interception, box, place.point, own)
+    return armSlot(
+      world,
+      arm,
+      interception,
+      box,
+      place.point,
+      own,
+      own ? guardPress(subject, output) : undefined,
+    )
   if (own) return coveredReply(world, element, place.point, interception)
   return armOwn(world, request, output, element, place.point, box, interception)
 }
@@ -228,12 +301,14 @@ function armSlot(
   box: Rect,
   point: Point,
   press: OwnPress | undefined,
+  guard?: PressGuard,
 ): ReplyTo<'act'> {
   const slot = slotOf(world)
   slot.stopped = undefined
   slot.armed = {
     token: arm.token,
     interception: taken,
+    ...(guard ? { guard } : {}),
     // Only a Rust that lost the page lets this fire: it bounds how long the page's own
     // clicks stay blocked after a lost connection.
     expiry: setTimeout(() => {
@@ -278,7 +353,15 @@ function armOwn(
     const again = output.arm(choice.element, arm.action, at, arm.blockAll)
     if (again === 'error:notconnected') return { kind: 'detached' }
     if (typeof again !== 'string')
-      return armSlot(world, arm, again, box, at, choice.press)
+      return armSlot(
+        world,
+        arm,
+        again,
+        box,
+        at,
+        choice.press,
+        guardPress(choice.element, output),
+      )
   }
   return coveredReply(world, element, point, interception)
 }

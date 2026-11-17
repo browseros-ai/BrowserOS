@@ -995,6 +995,18 @@ function ownSurface(owner: Element, hit: Element): boolean {
 }
 
 /**
+ * What is on top at `point` when it is not `owner`'s own surface (`ownSurface`), hit-tested in
+ * the owner's own chain of roots as `hitChain` reads it, never taken from an event's target,
+ * which hides what is inside a closed root. `undefined` when the point is the owner's own. The
+ * guard at delivery (`act.ts`'s `guardPress`) asks it where a press arrives.
+ */
+export function notOwnAt(owner: Element, point: Point): Element | undefined {
+  const hit = hitAt(owner, point)
+  if (!hit) return owner.ownerDocument.documentElement
+  return ownSurface(owner, hit) ? undefined : hit
+}
+
+/**
  * `ownSurface`'s one list: no link, no control (native, with a tabindex, or by a declared role),
  * no frame (a frame is a control) and no shadow host.
  */

@@ -9372,6 +9372,12 @@ ${value.stack}`;
         return false;
     return owner.contains(hit);
   }
+  function notOwnAt(owner, point) {
+    const hit = hitAt(owner, point);
+    if (!hit)
+      return owner.ownerDocument.documentElement;
+    return ownSurface(owner, hit) ? undefined : hit;
+  }
   function plainElement(element) {
     return !(element.matches(`a[href], ${CONTROLS}`) || explicitControl(element) || drawsUnseen(element));
   }
@@ -9586,15 +9592,55 @@ ${value.stack}`;
     for (const type of ["pointermove", "mousemove"])
       window.addEventListener(type, countMove, { capture: true, passive: true });
   }
+  var PRESS_EVENTS = [
+    "pointerdown",
+    "mousedown",
+    "pointerup",
+    "mouseup",
+    "click",
+    "auxclick",
+    "dblclick",
+    "contextmenu"
+  ];
+  function guardPress(owner, output) {
+    let asked = false;
+    let refused;
+    const listener = (event) => {
+      if (!event.isTrusted)
+        return;
+      if (!asked) {
+        asked = true;
+        const off = event instanceof MouseEvent ? notOwnAt(owner, { x: event.clientX, y: event.clientY }) : undefined;
+        if (off)
+          refused = output.previewNode(off);
+      }
+      if (refused === undefined)
+        return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    };
+    for (const type of PRESS_EVENTS)
+      window.addEventListener(type, listener, { capture: true });
+    return {
+      refused: () => refused,
+      stop: () => {
+        for (const type of PRESS_EVENTS)
+          window.removeEventListener(type, listener, { capture: true });
+      }
+    };
+  }
   function stopArmed(slot) {
     const armed = slot.armed;
     if (!armed)
       return;
     slot.armed = undefined;
     clearTimeout(armed.expiry);
+    const seen = armed.interception.stop();
+    armed.guard?.stop();
+    const refused = armed.guard?.refused();
     return {
       token: armed.token,
-      hit: armed.interception.stop(),
+      hit: refused !== undefined && seen === "done" ? { hitTargetDescription: refused } : seen,
       expired: false
     };
   }
@@ -9640,7 +9686,7 @@ ${value.stack}`;
     if (interception === "error:notconnected")
       return { kind: "detached" };
     if (typeof interception !== "string")
-      return armSlot(world, arm, interception, box, place.point, own);
+      return armSlot(world, arm, interception, box, place.point, own, own ? guardPress(subject, output) : undefined);
     if (own)
       return coveredReply(world, element, place.point, interception);
     return armOwn(world, request, output, element, place.point, box, interception);
@@ -9670,12 +9716,13 @@ ${value.stack}`;
       own: { case: "label", markup: output.previewNode(label) }
     } : { subject: element };
   }
-  function armSlot(world, arm, taken, box, point, press) {
+  function armSlot(world, arm, taken, box, point, press, guard) {
     const slot = slotOf(world);
     slot.stopped = undefined;
     slot.armed = {
       token: arm.token,
       interception: taken,
+      ...guard ? { guard } : {},
       expiry: setTimeout(() => {
         const stopped = stopArmed(slot);
         if (stopped)
@@ -9700,7 +9747,7 @@ ${value.stack}`;
       if (again === "error:notconnected")
         return { kind: "detached" };
       if (typeof again !== "string")
-        return armSlot(world, arm, again, box, at, choice.press);
+        return armSlot(world, arm, again, box, at, choice.press, guardPress(choice.element, output));
     }
     return coveredReply(world, element, point, interception);
   }

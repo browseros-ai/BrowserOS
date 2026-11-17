@@ -124,6 +124,24 @@ const shapes = {
     widget.setAttribute('style', 'position: absolute; z-index: 5; left: 16px; top: 18px; width: 12px; height: 12px; background: #ffe')
     stage.append(widget)
   },
+  partialhover() {
+    // A product card that declares a link, half under the widget, whose quick-add button shows on
+    // hover over the card's first clear point: the point is plain when it is chosen and a nested
+    // button when the press arrives, after the pointer moved there. Only a check at delivery sees it.
+    stage.innerHTML = `<style>#target .add { display: none; position: absolute; left: 60px; top: 0; width: 40px; height: 24px }
+      #target:hover .add { display: block }</style>
+      <div role="link" tabindex="0" id="target" style="position: relative; width: 300px; height: 48px; background: #eef">Wireless mouse<button class="add" id="add">Add</button></div>`
+    document.getElementById('target').addEventListener('click', log('target'))
+    document.getElementById('add').addEventListener('click', (event) => {
+      if (event.isTrusted) window.__log.push('add')
+      event.stopPropagation()
+    })
+    const widget = document.createElement('div')
+    widget.id = 'widget'
+    widget.textContent = 'EN'
+    widget.setAttribute('style', 'position: absolute; z-index: 5; left: 110px; top: 0; width: 80px; height: 48px; background: #ffe')
+    stage.append(widget)
+  },
   partialslider() {
     // A slider half under the same widget: a press at whatever point is clear would move its
     // value, so no clear point of it is pressed for the agent.
