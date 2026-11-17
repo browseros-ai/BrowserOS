@@ -36,8 +36,10 @@ const PURSUE_DESCRIPTION: &str = "\
 Start here for any task that does something on a site: filling a form, searching and narrowing \
 results, adding to a cart, working through a checkout or sign-up step. Open or find the page, then \
 give neo that page and the whole outcome, not a single step: \"add Sensodyne Fresh Mint 150g to \
-the cart\", not \"click the search box\". neo decides each step and does it. For reading or \
-collecting data, use run instead. Put text you \
+the cart\", not \"click the search box\". neo decides each step and does it. Use it even when \
+you only want to read what is at the end of a flow: give the destination (\"open the seat map for \
+tonight's 7 pm show\", not \"are any corner seats free?\"), then read the page with run. Use run \
+instead only for a page you already have or for extraction across known urls. Put text you \
 already know in `values`, named by what it is; neo writes anything else it needs, but never \
 passwords, card numbers, IDs or one-time codes. It will not invent a url: list the pages it may \
 go to in `destinations`.
@@ -120,7 +122,7 @@ pub(super) fn pursue_tool() -> Tool {
 
 /// Put in front of run's description while pursue is listed, so the order holds even for an
 /// agent that connected before ultrafast came on and still has the old instructions.
-const RUN_AFTER_PURSUE: &str = "With pursue listed, call pursue first for tasks that act on a page, and use run to finish what pursue hands back. Go straight to run for reading or collecting data and for work across many pages.\n\n";
+const RUN_AFTER_PURSUE: &str = "With pursue listed, pick by the path, not the goal: if getting to the data means clicking through a site (search, filters, pickers, booking, checkout), call pursue first, then use run to read the result or finish what pursue hands back. Go straight to run only when you already have a url that shows the data, or for work across many known pages.\n\n";
 
 /// run's listing while pursue is offered: the same tool, with pursue named first.
 pub(super) fn with_pursue_first(mut tool: Tool) -> Tool {
@@ -566,7 +568,7 @@ mod tests {
         let run = with_pursue_first(Tool::new("run", "Run a script.", schema.clone()));
         let description = run.description.as_deref().unwrap_or_default();
         assert!(
-            description.starts_with("With pursue listed, call pursue first"),
+            description.starts_with("With pursue listed, pick by the path, not the goal"),
             "{description}"
         );
         assert!(description.ends_with("Run a script."), "{description}");
@@ -579,7 +581,8 @@ mod tests {
         let tool = pursue_tool();
         let description = tool.description.as_deref().unwrap_or_default();
         assert!(description.starts_with("Start here for any task that does something on a site"));
-        assert!(description.contains("For reading or collecting data, use run instead."));
+        assert!(description.contains("Use it even when you only want to read what is at the end"));
+        assert!(!description.contains("For reading or collecting data, use run instead."));
     }
 
     #[test]

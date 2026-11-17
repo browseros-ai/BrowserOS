@@ -404,7 +404,7 @@ async fn agents_are_taught_pursue_only_when_it_is_offered() -> anyhow::Result<()
     let offered = test_app(ULTRAFAST_DESKTOP).await?;
     let (_, instructions) = connect_reading_instructions(&offered).await?;
     assert!(
-        instructions.contains("Start each task that does something on a site with pursue"),
+        instructions.contains("Pick the tool by the path, not the goal."),
         "{instructions}"
     );
     assert!(

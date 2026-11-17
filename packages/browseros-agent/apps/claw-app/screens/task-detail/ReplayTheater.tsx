@@ -27,6 +27,8 @@ interface ReplayTheaterProps {
   replay: ReplaySession
   /** The page's step list, laid out as a rail. */
   steps: ReactNode
+  /** Where neo drove, marked under the scrubber as on the page's player. */
+  neoMarks?: readonly { startAt: number; endAt: number }[]
 }
 
 // Anything that takes typing, and other dialogs, keep F for themselves.
@@ -45,6 +47,7 @@ export function ReplayTheater({
   session,
   replay,
   steps,
+  neoMarks,
 }: ReplayTheaterProps) {
   const reduce = useReducedMotion() ?? false
   const portal = useRef<HTMLDivElement>(null)
@@ -135,6 +138,7 @@ export function ReplayTheater({
                           session={replay}
                           fullScreen
                           onToggleFullScreen={close}
+                          neoMarks={neoMarks}
                         />
                       </div>
                       <div className="flex min-h-0 flex-col gap-1 border-border-2 border-t bg-bg-canvas p-5 lg:border-t-0 lg:border-l">

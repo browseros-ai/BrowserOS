@@ -228,7 +228,8 @@ fn normalize_token(value: &Value, accepted: &[&str]) -> Option<Value> {
 
 /// Tools the server registers next to the shared browser catalog. Daily counts keep their names;
 /// anything else is reported as `other`.
-const SERVER_TOOL_NAMES: [&str; 6] = [
+const SERVER_TOOL_NAMES: [&str; 7] = [
+    "pursue",
     "save_skill",
     "mark_skill_run",
     "run_skill",

@@ -41,7 +41,6 @@ mock.module('@/modules/api/client', () => ({
 
 const { TaskRow } = await import('./TaskRow')
 const { TaskPageHeader } = await import('@/screens/task-detail/TaskPageHeader')
-const { NeoSteps } = await import('@/screens/task-detail/NeoSteps')
 
 /** A finished task where a skill ran without the agent, shaped like a real run. */
 function session(overrides: Partial<SessionSummary> = {}): SessionSummary {
@@ -139,11 +138,17 @@ describe('ultrafast run', () => {
     expect(text()).toContain('ultrafastneo ran it in 15 sec, read 9 pages')
   })
 
-  it('adds the tokens saved on the task page', async () => {
+  it('says on the task page that neo read the pages itself, with what it saved', async () => {
     await render(<TaskPageHeader session={session()} />)
-    expect(text()).toContain(
-      'ultrafastneo ran it in 15 sec, read 9 pages, 62k tokens saved',
+    const line = body.querySelector('[role="note"]')
+    expect(line?.getAttribute('aria-label')).toBe(
+      'What ultrafast did in this task',
     )
+    expect(text()).toContain(
+      'ultrafastneo read the pages itself in 15 sec, so Claude didn’t have to.',
+    )
+    expect(text()).toContain('62ktokens saved')
+    expect(text()).toContain('9pages read')
   })
 
   it('says one page, not one pages', async () => {
@@ -154,7 +159,8 @@ describe('ultrafast run', () => {
         })}
       />,
     )
-    expect(text()).toContain('read 1 page, 4.2k tokens saved')
+    expect(text()).toContain('4.2ktokens saved')
+    expect(text()).toContain('1page read')
   })
 
   it('says nothing about ultrafast on a task that ran the normal way', async () => {
@@ -191,28 +197,24 @@ const colgate = {
 } as const satisfies NonNullable<SessionSummary['pursue']>
 
 describe('a task neo drove with pursue', () => {
-  it('says how many steps neo did and that it handed back', async () => {
+  it('says how many steps neo did and who it handed the page back to', async () => {
     const task = session({ ultrafast: undefined, pursue: flights })
-    await render(
-      <>
-        <TaskRow task={task} now={Date.now()} />
-        <TaskPageHeader session={task} />
-      </>,
-    )
+    await render(<TaskRow task={task} now={Date.now()} />)
     expect(text()).toContain('neo did 3 steps in 6 sec, then handed back')
+    await render(<TaskPageHeader session={task} />)
+    expect(text()).toContain(
+      'ultrafastneo did 3 steps in 6 sec, then handed the page back to Claude.',
+    )
     expect(text()).not.toContain('tokens saved')
   })
 
-  it('says how long neo took when it finished', async () => {
+  it('says neo finished on its own, and how many steps it took', async () => {
     const task = session({ ultrafast: undefined, pursue: colgate })
-    await render(
-      <>
-        <TaskRow task={task} now={Date.now()} />
-        <TaskPageHeader session={task} />
-      </>,
-    )
+    await render(<TaskRow task={task} now={Date.now()} />)
     expect(text()).toContain('neo finished it in 7 sec')
-    expect(text()).not.toContain('steps')
+    await render(<TaskPageHeader session={task} />)
+    expect(text()).toContain('neo finished the task on its own in 7 sec.')
+    expect(text()).toContain('2steps by neo')
   })
 
   it('adds pages and tokens on the task page once neo counted them', async () => {
@@ -221,30 +223,10 @@ describe('a task neo drove with pursue', () => {
       ultrafast: { durationMs: 5_662, pagesRead: 4, tokensSaved: 12_310 },
     })
     await render(<TaskPageHeader session={task} />)
-    expect(text()).toContain(
-      'neo did 3 steps in 6 sec, then handed back, read 4 pages, 12k tokens saved',
-    )
-  })
-
-  it('lists the steps neo took and where it handed back', async () => {
-    await render(<NeoSteps pursue={flights} />)
-    const heading = body.querySelector('h2')
-    expect(heading?.textContent).toBe('What neo did for your agent')
-    const steps = [...body.querySelectorAll('li')].map((item) =>
-      (item.textContent ?? '').replace(/^\d+/, ''),
-    )
-    expect(steps).toEqual(['Clicked', 'Clicked', 'Typed "Singapore"'])
-    expect(text()).toContain('Then neo handed the page back to your agent.')
-  })
-
-  it('lists the steps of a finished run without a hand-back line', async () => {
-    await render(<NeoSteps pursue={colgate} />)
-    const steps = [...body.querySelectorAll('li')].map((item) =>
-      (item.textContent ?? '').replace(/^\d+/, ''),
-    )
-    expect(steps).toEqual(['Typed "colgate toothpaste"', 'Pressed Enter'])
-    expect(text()).toContain('neo reached the goal on its own.')
-    expect(text()).not.toContain('handed')
+    expect(text()).toContain('then handed the page back to Claude.')
+    expect(text()).toContain('12ktokens saved')
+    expect(text()).toContain('4pages read')
+    expect(text()).not.toContain('steps by neo')
   })
 })
 
@@ -301,18 +283,8 @@ describe('the margin rule on ultrafast tasks', () => {
 
   it('writes the line on an ultrafast task page only', async () => {
     await render(<TaskPageHeader session={session()} />)
-    expect(text()).toContain('ultrafastneo ran it in 15 sec')
+    expect(text()).toContain('ultrafastneo read the pages itself in 15 sec')
     await render(<TaskPageHeader session={session({ ultrafast: undefined })} />)
     expect(text()).not.toContain('ultrafast')
-  })
-
-  it('rules the list of steps neo took and numbers them plainly', async () => {
-    await render(<NeoSteps pursue={flights} />)
-    expect(rule()).toBe(1)
-    expect(
-      [...body.querySelectorAll('li')].map(
-        (item) => item.firstElementChild?.textContent,
-      ),
-    ).toEqual(['1', '2', '3'])
   })
 })

@@ -199,13 +199,10 @@ describe('the ultrafast line under a task', () => {
     )
   })
 
-  it('says how long neo ran and what it read, with tokens only when asked', () => {
+  it('says how long neo ran and what it read', () => {
     const run = { durationMs: 15_354, pagesRead: 9, tokensSaved: 61_942 }
     expect(ultrafastNote(undefined, run)).toBe(
       'neo ran it in 15 sec, read 9 pages',
-    )
-    expect(ultrafastNote(undefined, run, { withTokens: true })).toBe(
-      'neo ran it in 15 sec, read 9 pages, 62k tokens saved',
     )
     expect(ultrafastNote(flights, run)).toBe(
       'neo did 3 steps in 6 sec, then handed back, read 9 pages',
