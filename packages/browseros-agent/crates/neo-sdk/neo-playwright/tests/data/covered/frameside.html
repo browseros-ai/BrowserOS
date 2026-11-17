@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Frame side</title></head>
+<body style="margin: 0">
+<iframe id="inner" src="covered.html#partial" style="width: 900px; height: 500px; border: 0"></iframe>
+<script>
+// The partial shape in a same-origin frame (the same process, so no route check), and two layers
+// of this page over the button's clear sides. Its covered middle stays clear here, so the first
+// placement passes, and the clear point the frame offers lies under this page's layer.
+window.__log = []
+for (const [left, width] of [[0, 228], [312, 588]]) {
+  const layer = document.createElement('div')
+  layer.style.cssText = `position: fixed; left: ${left}px; top: 100px; width: ${width}px; height: 90px; background: rgba(0, 0, 0, 0.2); z-index: 10`
+  layer.addEventListener('click', (event) => { if (event.isTrusted) window.__log.push('layer') })
+  document.body.append(layer)
+}
+</script>
+</body>
+</html>

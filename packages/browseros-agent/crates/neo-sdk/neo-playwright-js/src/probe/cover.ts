@@ -940,7 +940,9 @@ export function ownPress(
 
 /**
  * A checkbox or radio that is not shown, and a label of its own that is: the label a click
- * through it goes to (a label's state two). Checkboxes and radios only.
+ * through it goes to (a label's state two). Checkboxes and radios only. One with a plain point
+ * in the view comes first; else the first shown one, which the attempt scrolls into the view
+ * before `labelPlace` looks for its plain point (a terms box at the foot of a long form).
  */
 export function shownOwnLabel(
   world: World,
@@ -951,17 +953,19 @@ export function shownOwnLabel(
   if (type !== 'checkbox' && type !== 'radio') return undefined
   const labels: unknown = Reflect.get(control, 'labels')
   if (!(labels instanceof NodeList)) return undefined
-  return Array.from(labels).find(
+  const shown = Array.from(labels).filter(
     (label): label is Element =>
-      label instanceof Element &&
-      world.injected.utils.isElementVisible(label) &&
-      labelPlainPoint(label) !== undefined,
+      label instanceof Element && world.injected.utils.isElementVisible(label),
   )
+  return shown.find((label) => labelPlainPoint(label) !== undefined) ?? shown[0]
 }
 
 /**
- * What is on top lies in the label itself or its plain content: neither a link nor a control
- * of the label's own holds it, so a press there is the label's.
+ * What is on top lies in the label itself or its plain content: no link or control of the
+ * label's own holds it, so a press there is the label's. A control is a native one, one with a
+ * tabindex, or one whose role attribute names a control (a `span role="button"` runs its own
+ * click handler). The walk stops at the label: a container around it, such as a dialog's body
+ * with its tabindex, is not the label's.
  */
 function plainAt(label: Element, onTop: Element): boolean {
   for (
@@ -969,7 +973,7 @@ function plainAt(label: Element, onTop: Element): boolean {
     at && at !== label;
     at = at.parentElement
   )
-    if (at.matches(`a[href], ${CONTROLS}`)) return false
+    if (at.matches(`a[href], ${CONTROLS}`) || explicitControl(at)) return false
   return label.contains(onTop)
 }
 
@@ -1014,13 +1018,16 @@ function pointOffLinks(label: Element): Point | undefined {
   const style = getComputedStyle(label)
   const left = box.x + (Number.parseFloat(style.borderLeftWidth) || 0)
   const topEdge = box.y + (Number.parseFloat(style.borderTopWidth) || 0)
+  // Hit-tested in the label's own root, so one inside a shadow root is not retargeted to its host.
+  const root = label.getRootNode()
+  const scope = root instanceof ShadowRoot ? root : document
   for (const fy of [0.5, 0.25, 0.75])
     for (const fx of [0.1, 0.3, 0.5, 0.7, 0.9]) {
       const point = { x: box.x + box.width * fx, y: box.y + box.height * fy }
       const chain = hitChain(label, point)
       if (chain !== null) continue
-      const on = document.elementFromPoint(point.x, point.y)
-      if (on?.closest(`a[href], ${CONTROLS}`)) continue
+      const on = scope.elementFromPoint(point.x, point.y)
+      if (on && !plainAt(label, on)) continue
       return { x: point.x - left, y: point.y - topEdge }
     }
   return undefined

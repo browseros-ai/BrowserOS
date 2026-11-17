@@ -51,6 +51,14 @@ const consentHost = (mode, place) => {
   root.getElementById('none').addEventListener('click', () => host.remove())
   document.body.append(host)
 }
+// A checkbox under its own label whose first part, `over`, lies over the box, and whose plain
+// text follows it: a press of the label must go where it is plain.
+const termsOver = (over) => `<label id="own" style="position: relative; display: inline-block; padding: 8px; width: 320px">
+  <input type="checkbox" id="target" style="position: absolute; left: 8px; top: 8px; margin: 0; width: 13px; height: 13px">${over}<span style="display: inline-block; height: 24px; padding-left: 8px">I agree to these terms</span></label>`
+const pressLogged = () => {
+  document.getElementById('target').addEventListener('click', log('target'))
+  document.getElementById('info').addEventListener('click', log('info'))
+}
 const shapes = {
   plain() {
     button()
@@ -114,6 +122,18 @@ const shapes = {
       of this shop</span></label>`
     document.getElementById('target').addEventListener('click', log('target'))
   },
+  labelrole() {
+    // A custom control in the label: a span with role="button" and no tabindex runs its own
+    // click handler, so it is no plain part of the label.
+    stage.innerHTML = termsOver('<span role="button" id="info" style="position: relative; display: inline-block; width: 60px; height: 24px; background: #fee">Info</span>')
+    pressLogged()
+  },
+  linksdialog() {
+    // The label inside a container with a tabindex, as a dialog's body has, with a link over the
+    // box: the label's plain text is still its own.
+    stage.innerHTML = `<div tabindex="-1">${termsOver('<a href="/elsewhere/terms" id="info" style="position: relative; display: inline-block; width: 60px; height: 24px; background: #eef">Terms</a>')}</div>`
+    pressLogged()
+  },
   alllink() {
     // A checkbox under its own label that is all link: no point of the label is plain.
     stage.innerHTML = `<label id="own" style="position: relative; display: inline-block; width: 320px">
@@ -125,6 +145,12 @@ const shapes = {
     // A checkbox that is not shown, and its own label that is: a styled box drawn by the label.
     stage.innerHTML = `<input type="checkbox" id="target" style="display: none">
       <label id="own" for="target" style="display: inline-block; padding: 8px; background: #eef">Subscribe to the newsletter</label>`
+    document.getElementById('target').addEventListener('click', log('target'))
+  },
+  hiddenboxfar() {
+    // The same at the foot of a long form: the label lies below the view until it is scrolled.
+    stage.innerHTML = `<div style="height: 2000px"></div><input type="checkbox" id="target" style="display: none">
+      <label id="own" for="target" style="display: inline-block; padding: 8px; background: #eef">Accept the terms</label>`
     document.getElementById('target').addEventListener('click', log('target'))
   },
   wrapper() {

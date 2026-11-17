@@ -705,6 +705,9 @@ impl<'a> PointerRunner<'a> {
 
             // ② Arm the interceptor while the element still has ①'s rect.
             let mut guard = None;
+            // Covered-click C's line for a press of the target's own, logged once the press has
+            // landed: a refused send or a missed verdict logs none, and a retry no second one.
+            let mut own_note = None;
             if !action.force {
                 let token = self.page.state().next_token();
                 let plan = ArmPlan {
@@ -727,7 +730,6 @@ impl<'a> PointerRunner<'a> {
                     Called::Reply(ProbeReply::Armed {
                         point, own: press, ..
                     }) => {
-                        self.covers.cleared();
                         // From every armed reply, so a retry that arms on the control itself does
                         // not keep an earlier attempt's own press for the checking error or the
                         // wrapper's state read.
@@ -736,28 +738,57 @@ impl<'a> PointerRunner<'a> {
                             .as_ref()
                             .and_then(|press| press.checked)
                             .map(|checked| (pin, checked));
-                        if let Some(press) = press {
-                            // Covered-click C: the interceptor is armed on what is the target's
-                            // own, at that case's point, and the input goes there. A point of the
-                            // same frame moves on the page by the same offset (a transformed frame
-                            // gets no such press).
-                            if point != measured.point {
-                                let moved = PagePoint {
-                                    x: page_point.x + point.x - measured.point.x,
-                                    y: page_point.y + point.y - measured.point.y,
-                                };
-                                planned = input.plan();
-                                burst = self::burst(&mut planned, moved, action)?;
-                            }
-                            self.scope.log(own_line(&press));
-                        }
-                        guard = Some(ArmGuard::new(
+                        let armed = ArmGuard::new(
                             self.scope,
                             located.world().clone(),
                             token,
                             Arc::clone(self.page.state().input()),
                             scale,
-                        ));
+                        );
+                        // Covered-click C: the interceptor is armed on what is the target's own,
+                        // at that case's point, and the input goes there (a transformed frame gets
+                        // no such press).
+                        if press.is_some() && point != measured.point {
+                            let moved = if located.path().hops().is_empty() {
+                                // A point of the same frame moves on the page by the same offset.
+                                PagePoint {
+                                    x: page_point.x + point.x - measured.point.x,
+                                    y: page_point.y + point.y - measured.point.y,
+                                }
+                            } else {
+                                // The parent pages were hit-tested at the measured point, and a
+                                // same-process frame gets no route check: the new point is placed
+                                // again, with every parent's hit test, before any input. A cover
+                                // above it is a sighting like the first placement's, so the watch
+                                // is cleared only once the point is clear.
+                                let at = Measurement { point, ..measured };
+                                match self.place(located, pin, at, action).await? {
+                                    Placed::At { point, .. } => point,
+                                    Placed::Covered { by, cover, hop, at } => {
+                                        drop(armed);
+                                        self.log_hit_refused(&req, by);
+                                        self.saw_above(located, hop, at, cover)?;
+                                        continue;
+                                    }
+                                    Placed::Outside => {
+                                        drop(armed);
+                                        self.covers.cleared();
+                                        self.scope
+                                            .log("  element is outside of the viewport".to_owned());
+                                        continue;
+                                    }
+                                    Placed::Reresolve => {
+                                        drop(armed);
+                                        return Ok(Inner::Reresolve);
+                                    }
+                                }
+                            };
+                            planned = input.plan();
+                            burst = self::burst(&mut planned, moved, action)?;
+                        }
+                        self.covers.cleared();
+                        own_note = press.as_ref().map(own_line);
+                        guard = Some(armed);
                     }
                     Called::Reply(ProbeReply::Measured { in_view, .. }) => {
                         self.covers.cleared();
@@ -944,6 +975,9 @@ impl<'a> PointerRunner<'a> {
                 }
             }
             drop(own);
+            if let Some(line) = own_note {
+                self.scope.log(line);
+            }
             let done = if action.trial { "trial " } else { "" };
             self.scope.log(format!("  {done}{} action done", req.name));
             self.scope

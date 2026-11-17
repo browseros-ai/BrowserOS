@@ -49,6 +49,10 @@ fn pages() -> HashMap<String, Page> {
             "/covered/banner.html".to_owned(),
             Page::html(include_str!("data/covered/banner.html")),
         ),
+        (
+            "/covered/frameside.html".to_owned(),
+            Page::html(include_str!("data/covered/frameside.html")),
+        ),
     ])
 }
 
@@ -326,6 +330,36 @@ fn noted(shape: &Shape, start: &str) -> bool {
     notes(shape).iter().any(|line| line.starts_with(start))
 }
 
+/// How many presses of the target's own the call log counts: a host counts the same match.
+fn presses(shape: &Shape) -> usize {
+    notes(shape)
+        .iter()
+        .filter(|line| line.contains("takes the press: "))
+        .count()
+}
+
+/// Runs `row` on each shape, each in its own tab, and fails with every shape's failure, so one
+/// failing shape does not hide another's.
+async fn each_shape<F, Fut>(names: &[&str], row: F) -> TestResult
+where
+    F: Fn(Shape, String) -> Fut,
+    Fut: Future<Output = (Shape, TestResult)>,
+{
+    let mut failures = Vec::new();
+    for name in names {
+        let (shape, result) = row(Shape::shape(name).await?, (*name).to_owned()).await;
+        shape.close().await;
+        if let Err(error) = result {
+            failures.push(format!("{name}: {error}"));
+        }
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(failures.join("\n").into())
+    }
+}
+
 /// Covered-click C: a press whose cover is the target's own lands by itself, with one trusted
 /// press, and the call log says which in one fixed form: a clear point of a button half under
 /// a widget, a checkbox under its own label, a terms checkbox whose label holds two links (the
@@ -347,6 +381,7 @@ async fn tests_that_a_press_on_the_targets_own_lands_by_itself() -> TestResult {
                 .await
                 .map_err(|error| format!("{name}: {error}"))?;
             assert!(noted(&shape, line), "{name}: {:?}", notes(&shape));
+            assert_eq!(presses(&shape), 1, "{name}: one press, one line");
             if name == "partial" {
                 assert_eq!(shape.log().await?, ["target"], "{name}");
             } else {
@@ -509,28 +544,97 @@ async fn tests_that_a_label_that_is_all_link_is_never_pressed() -> TestResult {
     result
 }
 
+/// A press of the target's own label goes where the label is plain: never on a custom control
+/// in it (a `span role="button"` with no tabindex runs its own click handler), and a label
+/// inside a container with a tabindex, as a dialog's body has, still has plain points. The box is
+/// checked, the label's own control saw no click, and the page stayed.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_label_press_goes_where_the_label_is_plain() -> TestResult {
+    each_shape(&["labelrole", "linksdialog"], |shape, name| async move {
+        let result = async {
+            shape.click("#target").await?;
+            if !noted(&shape, "  its own label takes the press: <label") || presses(&shape) != 1 {
+                return Err(format!("one label press: {:?}", notes(&shape)).into());
+            }
+            let log = shape.log().await?;
+            if log.iter().any(|what| what == "info") {
+                return Err(format!("the label's own control was pressed: {log:?}").into());
+            }
+            let checked = shape
+                .run
+                .eval(&shape.page, "document.getElementById('target').checked")
+                .await?;
+            let path = shape.run.eval(&shape.page, "location.pathname").await?;
+            if checked != json!(true) || path != json!("/covered/covered.html") {
+                return Err(format!("checked {checked}, at {path}, for {name}").into());
+            }
+            TestResult::Ok(())
+        }
+        .await;
+        (shape, result)
+    })
+    .await
+}
+
 /// A label's state two: a checkbox that is not shown, whose own label is. `check` waits on the
-/// label, presses it, and the box is checked.
+/// label, presses it, and the box is checked; also when the label lies below the view, at the
+/// foot of a long form, until the attempt scrolls it.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_a_hidden_checkbox_is_checked_through_its_label() -> TestResult {
-    let shape = Shape::shape("hiddenbox").await?;
-    let result = async {
-        shape
-            .act("locator.check", &shape.at("#target"), json!({}))
-            .await?;
-        assert!(
-            noted(&shape, "  its own label takes the press: <label"),
-            "{:?}",
-            notes(&shape)
-        );
-        assert_eq!(
+    each_shape(&["hiddenbox", "hiddenboxfar"], |shape, name| async move {
+        let result = async {
             shape
+                .act("locator.check", &shape.at("#target"), json!({}))
+                .await?;
+            if !noted(&shape, "  its own label takes the press: <label") || presses(&shape) != 1 {
+                return Err(format!("one label press: {:?}", notes(&shape)).into());
+            }
+            let checked = shape
                 .run
                 .eval(&shape.page, "document.getElementById('target').checked")
-                .await?,
-            json!(true)
+                .await?;
+            if checked != json!(true) {
+                return Err(format!("checked {checked} for {name}").into());
+            }
+            TestResult::Ok(())
+        }
+        .await;
+        (shape, result)
+    })
+    .await
+}
+
+/// A button in a same-process frame, half under a widget of its own page, whose clear point
+/// lies under a layer of the page above: the frame offers the point, the page above covers it,
+/// and nothing is pressed there. The covered answer names that page's layer, which has stood
+/// since the click began, and no press of the target's own is logged.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_clear_point_under_the_page_above_is_not_pressed() -> TestResult {
+    let shape = Shape::open("/covered/frameside.html").await?;
+    let result = async {
+        let target = locator(
+            &shape.page,
+            &[css("#inner"), enter_frame(), css("#target")],
+            "frameLocator('#inner').locator('#target')",
         );
+        let (message, _cover) = covered(shape.act("locator.click", &target, json!({})).await)?;
+        assert!(
+            message.contains("\n  It has been there since this click began."),
+            "{message}"
+        );
+        assert_eq!(presses(&shape), 0, "{:?}", notes(&shape));
+        assert!(shape.log().await?.is_empty(), "the page above saw no click");
+        let inner = shape
+            .run
+            .eval(
+                &shape.page,
+                "document.getElementById('inner').contentWindow.__log",
+            )
+            .await?;
+        assert_eq!(inner, json!([]), "the button saw no click");
         TestResult::Ok(())
     }
     .await;
