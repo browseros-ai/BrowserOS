@@ -73,6 +73,11 @@ On other tabs, a name derived from a box moved in from another frame or window c
 its value. Local fields and an explicit field root remain guarded; a moved marked box's
 `inputValue()` and value assertions still read bullets.
 
+A page's copy of a typed secret into an unmarked box reads in clear through `inputValue()`.
+Ordinary snapshots and error previews mask that copy only if the page declares its box
+private. The original node and any already marked destination keep their marks; copying
+the value does not copy the mark.
+
 `neo-server/docker/` builds the Neo SDK image, the browser plus this server.
 See [the image's README](neo-server/docker/README.md) for host integration.
 

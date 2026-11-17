@@ -10162,161 +10162,6 @@ ${value.stack}`;
     };
   }
 
-  // crates/neo-sdk/neo-playwright-js/src/probe/private-digest.ts
-  var key;
-  var kept = new Map;
-  var holders = new WeakSet;
-  function setAside(text) {
-    return text.replace(/[\s\-/]/g, "");
-  }
-  function keepDigest(text) {
-    const bare = setAside(text);
-    if (!bare)
-      return;
-    key ??= crypto.getRandomValues(new Uint32Array(4));
-    kept.set(digest(key, bare), bare.length);
-  }
-  function keepsDigests() {
-    return kept.size > 0;
-  }
-  function noteHolders(document2) {
-    holders = new WeakSet;
-    if (!key || kept.size === 0)
-      return;
-    const lengths = new Set(kept.values());
-    const held = new Set;
-    for (const control of textControls(document2)) {
-      const bare = setAside(control.value);
-      if (!lengths.has(bare.length))
-        continue;
-      const found = digest(key, bare);
-      if (!kept.has(found))
-        continue;
-      held.add(found);
-      holders.add(control);
-    }
-    for (const known of kept.keys())
-      if (!held.has(known))
-        kept.delete(known);
-  }
-  function holdsKeptValue(element) {
-    return holders.has(element);
-  }
-  var NOT_TEXT = new Set([
-    "button",
-    "checkbox",
-    "color",
-    "file",
-    "image",
-    "radio",
-    "range",
-    "reset",
-    "submit"
-  ]);
-  function* textControls(document2) {
-    const roots = [document2];
-    for (const root of roots) {
-      for (const element of root.querySelectorAll("*")) {
-        if (element instanceof HTMLTextAreaElement)
-          yield element;
-        else if (element instanceof HTMLInputElement && !NOT_TEXT.has(element.type))
-          yield element;
-        const shadow = element.shadowRoot;
-        if (shadow)
-          roots.push(shadow);
-      }
-    }
-  }
-  function digest(secret, text) {
-    const bytes = new Uint8Array(text.length * 2);
-    for (let index = 0;index < text.length; index++) {
-      const unit = text.charCodeAt(index);
-      bytes[index * 2] = unit & 255;
-      bytes[index * 2 + 1] = unit >>> 8;
-    }
-    const [hash0, hash1] = sipHash24(secret, bytes);
-    return `${hash1.toString(16)}:${hash0.toString(16)}`;
-  }
-  function sipHash24(secret, bytes) {
-    const k0lo = secret[0] ?? 0;
-    const k0hi = secret[1] ?? 0;
-    const k1lo = secret[2] ?? 0;
-    const k1hi = secret[3] ?? 0;
-    const v = new Uint32Array([
-      (k0lo ^ 1886610805) >>> 0,
-      (k0hi ^ 1936682341) >>> 0,
-      (k1lo ^ 1852075885) >>> 0,
-      (k1hi ^ 1685025377) >>> 0,
-      (k0lo ^ 1852142177) >>> 0,
-      (k0hi ^ 1819895653) >>> 0,
-      (k1lo ^ 2037671283) >>> 0,
-      (k1hi ^ 1952801890) >>> 0
-    ]);
-    const word = (at) => ((bytes[at] ?? 0) | (bytes[at + 1] ?? 0) << 8 | (bytes[at + 2] ?? 0) << 16 | (bytes[at + 3] ?? 0) << 24) >>> 0;
-    const absorb = (lo, hi) => {
-      v[6] = (v[6] ?? 0) ^ lo;
-      v[7] = (v[7] ?? 0) ^ hi;
-      round(v);
-      round(v);
-      v[0] = (v[0] ?? 0) ^ lo;
-      v[1] = (v[1] ?? 0) ^ hi;
-    };
-    const whole = bytes.length - bytes.length % 8;
-    for (let at = 0;at < whole; at += 8)
-      absorb(word(at), word(at + 4));
-    const last = new Uint8Array(8);
-    last.set(bytes.subarray(whole));
-    last[7] = bytes.length & 255;
-    const lastLo = ((last[0] ?? 0) | (last[1] ?? 0) << 8 | (last[2] ?? 0) << 16 | (last[3] ?? 0) << 24) >>> 0;
-    const lastHi = ((last[4] ?? 0) | (last[5] ?? 0) << 8 | (last[6] ?? 0) << 16 | (last[7] ?? 0) << 24) >>> 0;
-    absorb(lastLo, lastHi);
-    v[4] = (v[4] ?? 0) ^ 255;
-    round(v);
-    round(v);
-    round(v);
-    round(v);
-    const lo = ((v[0] ?? 0) ^ (v[2] ?? 0) ^ (v[4] ?? 0) ^ (v[6] ?? 0)) >>> 0;
-    const hi = ((v[1] ?? 0) ^ (v[3] ?? 0) ^ (v[5] ?? 0) ^ (v[7] ?? 0)) >>> 0;
-    return [lo, hi];
-  }
-  function round(v) {
-    add(v, 0, 2);
-    rotate(v, 2, 13);
-    xor(v, 2, 0);
-    rotate(v, 0, 32);
-    add(v, 4, 6);
-    rotate(v, 6, 16);
-    xor(v, 6, 4);
-    add(v, 0, 6);
-    rotate(v, 6, 21);
-    xor(v, 6, 0);
-    add(v, 4, 2);
-    rotate(v, 2, 17);
-    xor(v, 2, 4);
-    rotate(v, 4, 32);
-  }
-  function add(v, into, from) {
-    const lo = (v[into] ?? 0) + (v[from] ?? 0);
-    const carry = lo > 4294967295 ? 1 : 0;
-    v[into] = lo >>> 0;
-    v[into + 1] = (v[into + 1] ?? 0) + (v[from + 1] ?? 0) + carry >>> 0;
-  }
-  function xor(v, into, from) {
-    v[into] = ((v[into] ?? 0) ^ (v[from] ?? 0)) >>> 0;
-    v[into + 1] = ((v[into + 1] ?? 0) ^ (v[from + 1] ?? 0)) >>> 0;
-  }
-  function rotate(v, at, bits) {
-    const lo = v[at] ?? 0;
-    const hi = v[at + 1] ?? 0;
-    if (bits === 32) {
-      v[at] = hi;
-      v[at + 1] = lo;
-      return;
-    }
-    v[at] = (lo << bits | hi >>> 32 - bits) >>> 0;
-    v[at + 1] = (hi << bits | lo >>> 32 - bits) >>> 0;
-  }
-
   // crates/neo-sdk/neo-playwright-js/src/probe/private-entry.ts
   var MARK = Symbol.for("neo.privatelyTyped");
   var anyMarked = false;
@@ -10325,10 +10170,10 @@ ${value.stack}`;
   var active = new Map;
   var drawnSlot;
   function privatelyTyped(element) {
-    return Object.hasOwn(element, MARK) || holdsKeptValue(element);
+    return Object.hasOwn(element, MARK);
   }
   function anyPrivatelyTyped() {
-    return anyMarked || keepsDigests();
+    return anyMarked;
   }
   function mark(element) {
     if (!Object.hasOwn(element, MARK))
@@ -10392,7 +10237,6 @@ ${value.stack}`;
     if (name !== "input" && name !== "textarea")
       return false;
     mark(holder);
-    keepDigest(heldText(holder));
     return true;
   }
   async function focus(world, pin, box, text, spaced) {
@@ -10478,10 +10322,6 @@ ${value.stack}`;
       state = "holds";
     else
       state = "other";
-    if (state !== "left")
-      keepDigest(heldText(box));
-    if (entry)
-      keepDigest(entry.text);
     if (state === "other")
       markFocused(box);
     const leaving = moving(entry);
@@ -11920,7 +11760,6 @@ ${value.stack}`;
     };
   }
   function dispatch(world, op, request, root, nodes, output) {
-    noteHolders(document);
     const handler = HANDLERS[op];
     return handler(world, request, root, nodes, output);
   }
