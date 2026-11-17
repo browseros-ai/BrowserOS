@@ -95,10 +95,17 @@ enum HandlelessStart {
     Ephemeral,
 }
 
-/// How a handle-less call of `tool` should start. A pure-utility probe that arrives with
-/// no session handle must not mint a standalone task: it carries no task intent, so an
-/// isolated one would otherwise become a one-call orphan in the cockpit. Everything else,
-/// `name_session`, `run_skill` and the first real browser action, opens a task.
+/// How a handle-less call of `tool` should start. A call that carries no task intent must
+/// not mint a standalone task: an isolated one would otherwise become a one-call orphan in
+/// the cockpit. A pure-utility probe (`browser_target`, `mark_skill_run`, a read-only
+/// `tabs`) and `name_session` stay ephemeral; `run_skill` and the first real browser action
+/// open a task.
+///
+/// `name_session` only annotates. A client can name a session on one connection and do the
+/// real work on another, so a lone `name_session` must not surface as a task. When work
+/// follows it on the same connection (which carries the handle), the first opener promotes
+/// the session to a real task and the name carries over; when nothing follows, there is no
+/// task.
 ///
 /// `tabs` is split by its action: `list` and `active` only read, so they stay ephemeral,
 /// but `new` and `close` mutate browser state and must leave a task record rather than run
@@ -110,7 +117,9 @@ fn handleless_start_for(tool: &str, raw_args: &Value) -> HandlelessStart {
             Some("new") | Some("close") => HandlelessStart::OpenTask,
             _ => HandlelessStart::Ephemeral,
         },
-        "browser_target" | MARK_SKILL_RUN_TOOL_NAME => HandlelessStart::Ephemeral,
+        "browser_target" | MARK_SKILL_RUN_TOOL_NAME | NAME_SESSION_TOOL_NAME => {
+            HandlelessStart::Ephemeral
+        }
         _ => HandlelessStart::OpenTask,
     }
 }
@@ -4332,12 +4341,13 @@ mod tests {
                 HandlelessStart::OpenTask
             );
         }
-        for opener in [
-            NAME_SESSION_TOOL_NAME,
-            RUN_SKILL_TOOL_NAME,
-            "navigate",
-            "act",
-        ] {
+        // name_session only annotates; a lone one must not open a task. Work that follows it
+        // on the same connection promotes the session to a real task.
+        assert_eq!(
+            handleless_start_for(NAME_SESSION_TOOL_NAME, &no_args),
+            HandlelessStart::Ephemeral
+        );
+        for opener in [RUN_SKILL_TOOL_NAME, "navigate", "act"] {
             assert_eq!(
                 handleless_start_for(opener, &no_args),
                 HandlelessStart::OpenTask
