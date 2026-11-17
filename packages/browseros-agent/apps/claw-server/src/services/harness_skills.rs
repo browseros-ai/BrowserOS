@@ -163,6 +163,9 @@ mod tests {
         embedded_browserclaw_skill, load_browserclaw_skill, with_ultrafast,
     };
 
+    const ROOT_ULTRAFAST_HEADING: &str = "## With ultrafast: start with pursue";
+    const ROOT_AFTER_ULTRAFAST_HEADING: &str = "## Writing a `run` script";
+
     /// Each promise is removed by an exact string replace, so a reword of the shipped guide
     /// would silently keep it in the explicit-grouping install.
     #[test]
@@ -196,6 +199,51 @@ mod tests {
         let content = embedded_browserclaw_skill();
         assert_eq!(content.matches(SKILL_RUN_FIRST.0).count(), 1);
         assert_eq!(content.matches(SKILL_PURSUE_ANCHOR).count(), 1);
+    }
+
+    /// The guide installed without ultrafast stays as it was before pursue steering, for both
+    /// grouping modes.
+    #[test]
+    fn the_guide_without_ultrafast_stays_as_it_was() -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempdir()?;
+        for (name, grouping) in [
+            ("skill-auto.md", TabGrouping::Automatic),
+            ("skill-explicit.md", TabGrouping::Explicit),
+        ] {
+            let plain = load_browserclaw_skill(root.path(), grouping)?;
+            crate::free_path::assert_unchanged(name, plain.content())?;
+        }
+        Ok(())
+    }
+
+    /// The copy agents install by hand serves everyone, so pursue steering lives only in its
+    /// ultrafast section, which tells an agent without pursue to skip it.
+    #[test]
+    fn the_hand_installed_guide_changes_only_inside_its_ultrafast_section()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../../skills/browseros-neo/SKILL.md");
+        let content = fs::read_to_string(&path)?;
+        let start = content
+            .find(ROOT_ULTRAFAST_HEADING)
+            .ok_or("no ultrafast section")?;
+        let end = start
+            + content[start..]
+                .find(ROOT_AFTER_ULTRAFAST_HEADING)
+                .ok_or("no section after the ultrafast one")?;
+        let section = &content[start..end];
+        assert!(
+            section.contains("If your BrowserOS neo lists a tool named `pursue`"),
+            "{section}"
+        );
+        assert!(
+            section
+                .trim_end()
+                .ends_with("Without `pursue` in your tool list, skip this section."),
+            "{section}"
+        );
+        let outside = format!("{}{}", &content[..start], &content[end..]);
+        crate::free_path::assert_unchanged("root-skill-outside-ultrafast.md", &outside)
     }
 
     #[test]

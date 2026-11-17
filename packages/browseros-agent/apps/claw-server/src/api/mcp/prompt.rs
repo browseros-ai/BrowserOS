@@ -289,6 +289,40 @@ mod tests {
         assert!(!absent.contains("run_skill"));
     }
 
+    /// Without pursue an agent reads exactly what it read before pursue steering existed, in
+    /// every mode, help setting and grouping, and on a browser without profile targeting.
+    /// Ultrafast without pursue (no decisions worker) is included: it keeps run first.
+    #[test]
+    fn instructions_without_pursue_stay_as_they_were() -> Result<(), Box<dyn std::error::Error>> {
+        let mut cases = Vec::new();
+        for mode in [ServerMode::Desktop, ServerMode::Hosted] {
+            for help in [HumanHelp::On, HumanHelp::Off] {
+                for grouping in [TabGrouping::Automatic, TabGrouping::Explicit] {
+                    for ultrafast in [false, true] {
+                        cases.push((mode, help, grouping, "current", current(), ultrafast));
+                    }
+                }
+            }
+        }
+        cases.push((
+            ServerMode::Desktop,
+            HumanHelp::On,
+            TabGrouping::Automatic,
+            "unknown",
+            NativeCapabilities::from_browseros_version(None),
+            false,
+        ));
+        let mut all = String::new();
+        for (mode, help, grouping, browser, native, ultrafast) in cases {
+            all.push_str(&format!(
+                "=== {mode:?} {help:?} {grouping:?} {browser} ultrafast={ultrafast}\n"
+            ));
+            all.push_str(&mcp_instructions(mode, help, ultrafast, native, grouping));
+            all.push_str("\n\n");
+        }
+        crate::free_path::assert_unchanged("instructions.txt", &all)
+    }
+
     #[test]
     fn pursue_is_taught_only_where_it_is_offered() {
         let plain = mcp_instructions(

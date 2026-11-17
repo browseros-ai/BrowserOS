@@ -4145,6 +4145,45 @@ mod tests {
         Ok(())
     }
 
+    /// The tools, descriptions and instructions an agent without pursue sees stay as they were
+    /// before pursue steering: off the plan, and on it without a decisions worker.
+    #[tokio::test]
+    async fn tools_without_pursue_stay_as_they_were() -> anyhow::Result<()> {
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let mut state = call.state.clone();
+        let surface = |service: &ClawMcpService| -> anyhow::Result<String> {
+            let mut text = String::new();
+            for tool in service.listed_tools(false) {
+                text.push_str(&format!(
+                    "## {}\n{}\n{}\n\n",
+                    tool.name,
+                    tool.description.as_deref().unwrap_or_default(),
+                    serde_json::to_string(&tool.input_schema)?
+                ));
+            }
+            let instructions = service.get_info().instructions.unwrap_or_default();
+            Ok(format!("{text}=== instructions\n{instructions}\n"))
+        };
+
+        state.decisions = Arc::new(crate::services::decisions::Decisions::new(Some(
+            "http://127.0.0.1:9/".parse()?,
+        )));
+        let free = ClawMcpService::new(state.clone());
+        assert!(free.get_tool(PURSUE_TOOL_NAME).is_none());
+        crate::free_path::assert_unchanged("tools.txt", &surface(&free)?)
+            .map_err(|error| anyhow::anyhow!("{error}"))?;
+
+        state.decisions = Arc::new(crate::services::decisions::Decisions::new(None));
+        state.ultrafast.set(true);
+        let without_worker = ClawMcpService::new(state);
+        assert!(without_worker.get_tool(PURSUE_TOOL_NAME).is_none());
+        crate::free_path::assert_unchanged(
+            "tools-ultrafast-without-pursue.txt",
+            &surface(&without_worker)?,
+        )
+        .map_err(|error| anyhow::anyhow!("{error}"))
+    }
+
     #[tokio::test]
     async fn save_skill_saves_in_one_call_while_ultrafast_is_off() -> anyhow::Result<()> {
         let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
