@@ -5,7 +5,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::task::Poll;
 use std::time::Duration;
-use std::{fs, future};
+use std::{fs, future, io};
 
 use neo_trace::{RunId, RunStatus, TraceStore};
 use serde_json::{Value, json};
@@ -18,6 +18,26 @@ use crate::browser::BrowserLink;
 use crate::config::HostedMode;
 use crate::test_rig::ManualClock;
 use crate::test_support::FakeCdp;
+
+/// Fixture persistence is readiness, not the product's one-second shutdown policy. Under
+/// pool load SQLite may need longer; no run, action or production shutdown deadline changes.
+const TRACE_READINESS_WATCHDOG: Duration = Duration::from_secs(30);
+
+/// Consume a behavior fixture only after its finished runs are durable. Dropping the owned
+/// runtime then cancels background work and releases its executor, including on an error.
+async fn finish_fixture(runtime: HostedRuntime, stage: &str) -> Result<(), Box<dyn Error>> {
+    time::timeout(TRACE_READINESS_WATCHDOG, runtime.settle_fixture_trace())
+        .await
+        .map_err(|error| {
+            io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!(
+                    "hosted {stage}: trace flush exceeded {TRACE_READINESS_WATCHDOG:?}: {error}"
+                ),
+            )
+        })??;
+    Ok(())
+}
 
 async fn connect(dir: &TempDir, fake: Arc<FakeCdp>) -> Result<HostedRuntime, Box<dyn Error>> {
     Ok(HostedRuntime::start(
@@ -247,7 +267,7 @@ async fn hosted_runs_start_unowned_and_attach_tabs_only_after_picking_a_task()
         second_reply["tasks"][0]["tabs"][0]["tabId"],
         owned["ok"]["page"]["tab"]
     );
-    runtime.close().await?;
+    finish_fixture(runtime, "task adoption fixture").await?;
     Ok(())
 }
 
@@ -304,7 +324,7 @@ async fn hosted_file_reads_use_default_explicit_and_empty_lists_and_protect_stat
         assert_eq!(answer["err"]["delivery"], "not_sent");
         assert!(!protected.exists());
         run.finish().await?;
-        runtime.close().await?;
+        finish_fixture(runtime, &format!("{name} file-read fixture")).await?;
     }
     let fake = FakeCdp::new();
     let invalid = HostedRuntime::start(

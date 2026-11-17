@@ -5,7 +5,7 @@
 
 use crate::browser::ScriptedBrowser;
 use axum::Router;
-use axum::body::{Body, BodyDataStream, to_bytes};
+use axum::body::{Body, BodyDataStream, Bytes, to_bytes};
 use axum::extract::connect_info::MockConnectInfo;
 use axum::http::{HeaderMap, HeaderValue, Method, Request, StatusCode, header};
 use axum::middleware::map_request;
@@ -38,8 +38,10 @@ pub(crate) type TestResult = Result<(), BoxError>;
 /// Service startup still uses wall time, before a screenshot fixture freezes Tokio's clock.
 /// This is a readiness watchdog, independent of the camera's eight-second capture budget.
 pub(crate) const READINESS_WATCHDOG: Duration = Duration::from_secs(30);
-/// Progress witnesses keep their existing bound; their errors identify the stalled stage.
-pub(crate) const PROGRESS_WATCHDOG: Duration = Duration::from_secs(5);
+/// Event delivery, capture witnesses and persisted JPEGs prove progress, not latency. Allow
+/// loaded runners the same finite window as fixture readiness; product timing stays separate
+/// and its camera-budget assertions keep using the manual clock.
+pub(crate) const PROGRESS_WATCHDOG: Duration = Duration::from_secs(30);
 
 /// Bounds fixture progress without turning an operational stall into an anonymous `Elapsed`.
 pub(crate) async fn watchdog<T>(
@@ -582,7 +584,7 @@ impl Sse {
     }
 }
 
-/// `GET /v1/events`, read one event at a time, each within a few seconds.
+/// `GET /v1/events`, read one complete event within the fixture's progress watchdog.
 pub(crate) struct EventStream {
     body: BodyDataStream,
     buffer: String,
@@ -618,23 +620,22 @@ impl EventStream {
     }
 
     pub(crate) async fn next(&mut self) -> Result<Sse, BoxError> {
-        loop {
-            if let Some(end) = self.buffer.find("\n\n") {
-                let block = self.buffer.drain(..end + 2).collect::<String>();
-                if let Some(event) = parse_sse(&block)? {
-                    return Ok(event);
+        // Keep-alive comments are not the event the test awaits. One deadline covers the
+        // whole witness so repeated comments cannot turn a missing event into an endless wait.
+        watchdog("event-stream event progress", PROGRESS_WATCHDOG, async {
+            loop {
+                if let Some(end) = self.buffer.find("\n\n") {
+                    let block = self.buffer.drain(..end + 2).collect::<String>();
+                    if let Some(event) = parse_sse(&block)? {
+                        return Ok(event);
+                    }
+                    continue;
                 }
-                continue;
+                let chunk = self.body.next().await.ok_or("the event stream ended")??;
+                self.buffer.push_str(std::str::from_utf8(&chunk)?);
             }
-            let chunk = watchdog(
-                "event-stream chunk progress",
-                PROGRESS_WATCHDOG,
-                self.body.next(),
-            )
-            .await?
-            .ok_or("the event stream ended")??;
-            self.buffer.push_str(std::str::from_utf8(&chunk)?);
-        }
+        })
+        .await?
     }
 
     /// The next `count` events.
@@ -645,6 +646,29 @@ impl EventStream {
         }
         Ok(events)
     }
+}
+
+#[tokio::test(start_paused = true)]
+async fn keep_alive_does_not_renew_the_event_progress_watchdog() -> TestResult {
+    let keep_alive = futures_util::stream::once(async {
+        tokio::time::sleep(PROGRESS_WATCHDOG / 2).await;
+        Ok::<_, io::Error>(Bytes::from_static(b": keep-alive\n\n"))
+    });
+    let mut stream = EventStream {
+        body: Body::from_stream(keep_alive.chain(futures_util::stream::pending()))
+            .into_data_stream(),
+        buffer: String::new(),
+    };
+    // A per-chunk timer would restart halfway through and hit this outer guard instead.
+    let error = tokio::time::timeout(PROGRESS_WATCHDOG + Duration::from_secs(1), stream.next())
+        .await?
+        .err()
+        .ok_or("the event-progress watchdog did not fail")?;
+    let error = error
+        .downcast_ref::<io::Error>()
+        .ok_or("the event-progress watchdog did not return an I/O error")?;
+    assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+    Ok(())
 }
 
 /// One SSE block; `None` for a keep-alive comment.
