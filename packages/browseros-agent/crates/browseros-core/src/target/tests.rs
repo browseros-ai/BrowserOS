@@ -12,9 +12,10 @@ use std::{
     collections::VecDeque,
     error::Error,
     sync::{
-        Mutex, MutexGuard,
+        Mutex, MutexGuard, PoisonError,
         atomic::{AtomicU64, Ordering},
     },
+    time::Duration,
 };
 use tokio::sync::mpsc;
 
@@ -1414,6 +1415,211 @@ async fn method_specific_target_creation_translates_placement_and_rejects_unsupp
     assert_eq!(native.calls("Browser.createTab")[0].params["windowId"], 12);
     Ok(())
 }
+/// Records the incarnation and attachment boundary visible to a caller's acquisition hook.
+#[derive(Clone)]
+struct AdmissionObservation {
+    page: PageInfo,
+    attachments: usize,
+}
+
+/// A caller may refuse a native target without taking ownership of Core's scope policy.
+struct SessionAdmissionProbe {
+    native: Arc<Native>,
+    rejected: Option<TargetId>,
+    seen: Mutex<Vec<AdmissionObservation>>,
+}
+impl SessionAdmissionProbe {
+    fn new(native: Arc<Native>, rejected: Option<TargetId>) -> Self {
+        Self {
+            native,
+            rejected,
+            seen: Mutex::new(Vec::new()),
+        }
+    }
+    fn observations(&self) -> Vec<AdmissionObservation> {
+        self.seen
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+}
+impl PageAdmission for SessionAdmissionProbe {
+    fn admit(&self, fresh: &PageInfo) -> Result<(), CoreError> {
+        self.seen
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(AdmissionObservation {
+                page: fresh.clone(),
+                attachments: self.native.calls("Target.attachToTarget").len(),
+            });
+        if self.rejected.as_ref() == Some(&fresh.target_id) {
+            return Err(CoreError::Message("additional admission refused".into()));
+        }
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn additional_page_admission_sees_the_target_replaced_during_acquisition() -> TestResult {
+    for bound in [false, true] {
+        let native = Native::new();
+        let captured = view(native.clone(), None).await;
+        let view = if bound {
+            captured
+        } else {
+            BrowserView::unbound(captured.session.clone(), None)
+        };
+        let page = page_id(&view, 1).await?;
+        let probe = Arc::new(SessionAdmissionProbe::new(
+            native.clone(),
+            Some(TargetId("replacement-b".into())),
+        ));
+        let release = Arc::new(tokio::sync::Notify::new());
+        *native
+            .dispatch_hold
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) =
+            Some(("Browser.getTabInfo".into(), release.clone()));
+        let caller_probe = probe.clone();
+        let acquire = tokio::spawn(async move {
+            view.page_session_admitted(page, caller_probe.as_ref())
+                .await
+        });
+        // Hold the acquisition's fresh read after the reusable ID previously named A.
+        tokio::time::timeout(Duration::from_secs(30), native.dispatch_started.notified()).await?;
+        native.lock().tabs[0]["targetId"] = json!("replacement-b");
+        *native
+            .dispatch_hold
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = None;
+        release.notify_one();
+        let result = tokio::time::timeout(Duration::from_secs(30), acquire).await??;
+        assert!(
+            matches!(result, Err(CoreError::Message(message)) if message == "additional admission refused"),
+            "bound={bound}"
+        );
+        let seen = probe.observations();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].page.target_id.as_str(), "replacement-b");
+        assert_eq!(seen[0].attachments, 0);
+        assert!(native.calls("Target.attachToTarget").is_empty());
+        assert!(native.calls("Page.enable").is_empty());
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn additional_page_admission_refuses_before_attachment_and_domain_setup() -> TestResult {
+    for bound in [false, true] {
+        let native = Native::new();
+        native.lock().tabs[0]["targetId"] = json!("refused-target");
+        let captured = view(native.clone(), None).await;
+        let view = if bound {
+            captured
+        } else {
+            BrowserView::unbound(captured.session.clone(), None)
+        };
+        let page = page_id(&view, 1).await?;
+        let probe =
+            SessionAdmissionProbe::new(native.clone(), Some(TargetId("refused-target".into())));
+        let result = view.page_session_admitted(page.clone(), &probe).await;
+        assert!(
+            matches!(result, Err(CoreError::Message(message)) if message == "additional admission refused")
+        );
+        assert_eq!(probe.observations().len(), 1);
+        if bound {
+            let probe = SessionAdmissionProbe::new(native.clone(), None);
+            {
+                let mut state = native.lock();
+                state.tabs[0]["windowId"] = json!(20);
+                state.tabs[0]["browserProfileId"] = json!("sales");
+                state.tabs[0]["liveBrowserContextId"] = json!("live-sales");
+            }
+            assert!(view.page_session_admitted(page, &probe).await.is_err());
+            assert!(
+                probe.observations().is_empty(),
+                "Core refuses its foreign page before exposing it to the caller's hook"
+            );
+        }
+        for method in [
+            "Target.attachToTarget",
+            "Page.enable",
+            "DOM.enable",
+            "Runtime.enable",
+            "Network.enable",
+        ] {
+            assert!(native.calls(method).is_empty(), "bound={bound}: {method}");
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn additional_page_admission_allows_a_created_target_to_move_within_its_scope() -> TestResult
+{
+    for bound in [false, true] {
+        let native = Native::new();
+        let captured = view(native.clone(), None).await;
+        let view = if bound {
+            captured
+        } else {
+            BrowserView::unbound(captured.session.clone(), None)
+        };
+        let created = view
+            .new_page(
+                "about:blank",
+                NewPageOptions {
+                    window_id: Some(WindowId(11)),
+                    ..NewPageOptions::default()
+                },
+            )
+            .await?;
+        {
+            let mut state = native.lock();
+            let tab = state
+                .tabs
+                .iter_mut()
+                .find(|tab| tab["tabId"] == created.tab_id.0)
+                .ok_or("created fixture tab missing")?;
+            tab["windowId"] = json!(12);
+        }
+        let probe = SessionAdmissionProbe::new(native.clone(), None);
+        let before = native.calls("Target.attachToTarget").len();
+        let session = view.page_session_admitted(created.page_id, &probe).await?;
+        assert_eq!(session.target_id, created.target_id);
+        let seen = probe.observations();
+        assert_eq!(seen.len(), 2, "checks bracket native attachment");
+        for observation in &seen {
+            assert_eq!(observation.page.target_id, created.target_id);
+            assert_eq!(observation.page.window_id, Some(WindowId(12)));
+        }
+        assert_eq!(seen[0].attachments, before);
+        assert_eq!(seen[1].attachments, before + 1);
+        if bound {
+            assert!(
+                session
+                    .session
+                    .send_value("Browser.closeWindow", json!({"windowId":12}))
+                    .await
+                    .is_err(),
+                "the new path retains Core's per-protocol policy"
+            );
+            assert!(native.calls("Browser.closeWindow").is_empty());
+            native.reconnect();
+            assert!(
+                session
+                    .session
+                    .send_value("Runtime.evaluate", json!({"expression":"1"}))
+                    .await
+                    .is_err(),
+                "the returned session retains the captured epoch"
+            );
+            assert!(native.calls("Runtime.evaluate").is_empty());
+        }
+    }
+    Ok(())
+}
+
 #[tokio::test]
 async fn admission_retries_one_target_replacement_and_rejects_a_second() -> TestResult {
     struct Permit;
