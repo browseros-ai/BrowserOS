@@ -318,8 +318,7 @@ async fn capture_annotated_screenshot(
             overlay_injected = true;
         }
         let overlay_hidden = overlay::hide_for_capture(&page_session).await;
-        let captured =
-            without_pointer(&page_session, capture_image(&page_session, &options)).await;
+        let captured = without_pointer(&page_session, capture_image(&page_session, &options)).await;
         if overlay_hidden {
             overlay::restore_after_capture(&page_session).await;
         }

@@ -270,7 +270,7 @@ pub async fn restore_after_capture(session: &ProtocolSession) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{TestCall, TestConnection};
+    use crate::testing::{TestCall, TestConnection};
 
     fn expression(call: &TestCall) -> &str {
         call.params["expression"].as_str().unwrap_or_default()
