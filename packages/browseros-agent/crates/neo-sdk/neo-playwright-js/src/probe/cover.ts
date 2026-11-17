@@ -110,13 +110,7 @@ function hitAt(target: Element, point: Point): Element | undefined {
     if (root.nodeType === 9) break
     at = (root as ShadowRoot).host
   }
-  let hit = hitAtRoots(roots, point)
-  const chain: Element[] = []
-  while (hit && hit !== target) {
-    chain.push(hit)
-    hit = hit.assignedSlot ?? parentOrHost(hit)
-  }
-  return hit === target ? null : chain
+  return hitAtRoots(roots, point)
 }
 
 /**
@@ -349,8 +343,6 @@ function frameKind(
   kind: CoverKind,
   taking: readonly Element[],
 ): CoverKind {
-  const isFrame = (element: Element) =>
-    element.localName === 'iframe' || element.localName === 'frame'
   if (isFrame(shown)) return kind
   if (kind.is !== 'page' && kind.is !== 'frame') return kind
   const frames = taking.filter(isFrame)
