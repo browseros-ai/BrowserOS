@@ -1,5 +1,7 @@
 use crate::{
-    CdpError, CdpEvent, EventStream, SessionId, TargetedEvents, discovery::discover_websocket_url,
+    CdpError, CdpEvent, ConnectionLoss, EventStream, SessionId, TargetedEvents,
+    discovery::discover_websocket_url,
+    inbound::{self, Envelope, Unreadable},
 };
 use futures_util::{
     SinkExt, StreamExt,
@@ -113,7 +115,12 @@ struct Inner {
     /// Serializes socket publication with dispatch. An epoch-bound request must
     /// validate under this guard so reused browser IDs cannot reach a replacement.
     sink: Mutex<Option<WsSink>>,
+    /// Every event no targeted subscriber took, for [`CdpClient::events`]. Each receiver gets
+    /// its own deep copy of each event; see `events_shared` for the stream that does not.
     events_tx: broadcast::Sender<CdpEvent>,
+    /// The same events, carried once behind an `Arc` for [`EventStream`]s, which drop the
+    /// methods they do not read without copying them. Fed only while a stream is live.
+    events_shared: broadcast::Sender<Arc<CdpEvent>>,
     /// How many events the reader has put on `events_tx`, ever. The reader handles one message
     /// at a time, so once a command's reply arrived, every event that came before it is
     /// counted: a consumer that numbers what its receiver took can tell when it has seen them.
@@ -130,6 +137,9 @@ struct Inner {
     /// When the link went down, so an outage can be reported and logged. `None`
     /// while the link is up. Never held across an await.
     down_since: std::sync::Mutex<Option<Instant>>,
+    /// Why the link went down most recently. Kept after the link is restored, so a caller that
+    /// got [`CdpError::ConnectionLost`] can still learn why. Never held across an await.
+    last_loss: std::sync::Mutex<Option<ConnectionLoss>>,
     /// Prompts the link supervisor to look again. Losing a wake-up only costs
     /// `link_check_interval`, because the supervisor also re-reads on a timer.
     link_wake: Notify,
@@ -142,18 +152,21 @@ struct Inner {
 impl CdpClient {
     pub async fn connect(opts: ConnectOptions) -> Result<Self, CdpError> {
         let (events_tx, _) = broadcast::channel(4096);
+        let (events_shared, _) = broadcast::channel(4096);
         let inner = Arc::new(Inner {
             opts,
             next_id: AtomicU64::new(1),
             pending: Mutex::new(HashMap::new()),
             sink: Mutex::new(None),
             events_tx,
+            events_shared,
             events_broadcast: std::sync::Mutex::new(0),
             targeted: TargetedEvents::default(),
             connected: AtomicBool::new(false),
             disconnecting: AtomicBool::new(false),
             epoch: AtomicU64::new(0),
             down_since: std::sync::Mutex::new(None),
+            last_loss: std::sync::Mutex::new(None),
             link_wake: Notify::new(),
             last_host: Mutex::new(None),
             reader_task: Mutex::new(None),
@@ -206,6 +219,18 @@ impl CdpClient {
     #[must_use]
     pub fn epoch(&self) -> u64 {
         self.inner.epoch.load(Ordering::SeqCst)
+    }
+
+    /// Why the link went down most recently, or `None` if it never has. A request the loss cut
+    /// off fails with [`CdpError::ConnectionLost`]; its cause is recorded here first, and stays
+    /// until the next loss replaces it, after the link is restored too.
+    #[must_use]
+    pub fn last_connection_loss(&self) -> Option<ConnectionLoss> {
+        self.inner
+            .last_loss
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     /// How long the link has been down, or `None` while it is up.
@@ -364,7 +389,7 @@ impl CdpClient {
     }
 
     pub fn on_event(&self, method: &str) -> EventStream {
-        EventStream::new(method, self.events())
+        EventStream::new(method, self.inner.events_shared.subscribe())
     }
 
     /// Subscribes to one event method on a dedicated, unbounded channel, for events too large
@@ -583,46 +608,65 @@ async fn connect_websocket(url: &Url, connect_timeout: Duration) -> Result<WsStr
 }
 
 async fn reader_loop(inner: Arc<Inner>, mut reader: WsReader) {
-    while let Some(message) = reader.next().await {
+    let loss = loop {
+        let Some(message) = reader.next().await else {
+            break ConnectionLoss::Ended;
+        };
         match message {
             Ok(Message::Text(text)) => handle_text_message(&inner, text.as_str()).await,
             Ok(Message::Binary(bytes)) => match std::str::from_utf8(&bytes) {
                 Ok(text) => handle_text_message(&inner, text).await,
                 Err(err) => debug!("ignoring non-utf8 CDP binary frame: {err}"),
             },
-            Ok(Message::Close(_)) => break,
+            Ok(Message::Close(frame)) => break closed(frame),
             Ok(Message::Ping(_)) | Ok(Message::Pong(_)) | Ok(Message::Frame(_)) => {}
-            Err(err) => {
-                warn!("CDP reader error: {err}");
-                break;
-            }
+            Err(err) => break ConnectionLoss::Read(err.to_string()),
         }
-    }
+    };
 
     if inner.disconnecting.load(Ordering::SeqCst) {
         reject_all_pending(&inner, CdpError::NotConnected).await;
         return;
     }
-    mark_connection_lost(inner).await;
+    mark_connection_lost(inner, loss).await;
 }
 
+/// The loss a close frame reports. The public type stays free of the WebSocket library's.
+fn closed(frame: Option<CloseFrame>) -> ConnectionLoss {
+    match frame {
+        Some(frame) => ConnectionLoss::Closed {
+            code: frame.code.into(),
+            reason: frame.reason.to_string(),
+        },
+        None => ConnectionLoss::Closed {
+            code: 1005,
+            reason: String::new(),
+        },
+    }
+}
+
+/// Routes one message from the browser: a reply to its pending request, an event to its
+/// targeted subscribers or else the broadcasts. The parsed tree is taken apart, not copied: a
+/// reply's `result` and an event's `params` move out of it whole.
 async fn handle_text_message(inner: &Arc<Inner>, text: &str) {
-    let parsed = serde_json::from_str::<Value>(text);
-    let Ok(value) = parsed else {
-        return;
+    let mut message = match inbound::read(text) {
+        Ok(Value::Object(message)) => message,
+        Ok(_) => return,
+        Err(unreadable) => return fail_unreadable(inner, text.len(), unreadable).await,
     };
 
-    if let Some(id) = value.get("id").and_then(Value::as_u64) {
-        let result = if let Some(error) = value.get("error") {
-            let code = error.get("code").and_then(Value::as_i64).unwrap_or(0);
-            let message = error
-                .get("message")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown CDP protocol error")
-                .to_string();
-            Err(CdpError::from_protocol(code, message))
-        } else {
-            Ok(value.get("result").cloned().unwrap_or_else(|| json!({})))
+    if let Some(id) = message.get("id").and_then(Value::as_u64) {
+        let result = match message.remove("error") {
+            Some(error) => {
+                let code = error.get("code").and_then(Value::as_i64).unwrap_or(0);
+                let message = error
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown CDP protocol error")
+                    .to_string();
+                Err(CdpError::from_protocol(code, message))
+            }
+            None => Ok(message.remove("result").unwrap_or_else(|| json!({}))),
         };
         if let Some(pending) = inner.pending.lock().await.remove(&id) {
             let _ = pending.reply.send(result);
@@ -630,21 +674,21 @@ async fn handle_text_message(inner: &Arc<Inner>, text: &str) {
         return;
     }
 
-    let Some(method) = value.get("method").and_then(Value::as_str) else {
+    let Some(Value::String(method)) = message.remove("method") else {
         return;
     };
-    let params = value.get("params").cloned().unwrap_or_else(|| json!({}));
-    let session_id = value
-        .get("sessionId")
-        .and_then(Value::as_str)
-        .map(SessionId::from);
+    let params = message.remove("params").unwrap_or_else(|| json!({}));
+    let session_id = match message.remove("sessionId") {
+        Some(Value::String(session)) => Some(SessionId(session)),
+        _ => None,
+    };
     if method == "Target.detachedFromTarget"
         && let Some(detached) = params.get("sessionId").and_then(Value::as_str)
     {
         reject_detached(inner, detached).await;
     }
     let event = CdpEvent {
-        method: method.to_string(),
+        method,
         params,
         session_id,
     };
@@ -656,7 +700,52 @@ async fn handle_text_message(inner: &Arc<Inner>, text: &str) {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     *count += 1;
-    let _ = inner.events_tx.send(event);
+    // Sent under the count's lock, so `events_counted` subscribes between two events. With no
+    // live stream the shared channel costs nothing; with streams and broadcast readers both,
+    // the broadcast gets one copy and the streams share the original.
+    if inner.events_shared.receiver_count() == 0 {
+        let _ = inner.events_tx.send(event);
+        return;
+    }
+    if inner.events_tx.receiver_count() > 0 {
+        let _ = inner.events_tx.send(event.clone());
+    }
+    let _ = inner.events_shared.send(Arc::new(event));
+}
+
+/// JSON-RPC's "Parse error", the code Chromium gives a command it cannot parse; here the client
+/// could not parse the browser's reply.
+const UNREADABLE_REPLY: i64 = -32700;
+
+/// A message that stays unreadable after [`inbound::read`]'s repair cannot be delivered. Its
+/// request fails now, with serde's reason, instead of waiting out its timeout for an answer
+/// that already came; an event is dropped with a warning that names its method. Neither logs
+/// the text: it is page content, and can be megabytes.
+async fn fail_unreadable(inner: &Arc<Inner>, bytes: usize, unreadable: Unreadable<'_>) {
+    let Unreadable { error, envelope } = unreadable;
+    match envelope {
+        Envelope::Reply(id) => {
+            warn!(id, bytes, "CDP reply could not be read: {error}");
+            if let Some(pending) = inner.pending.lock().await.remove(&id) {
+                let _ = pending.reply.send(Err(CdpError::Protocol {
+                    code: UNREADABLE_REPLY,
+                    message: format!("the browser's reply could not be read: {error}"),
+                }));
+            }
+        }
+        Envelope::Event(method) => {
+            warn!(
+                method,
+                bytes, "dropped a CDP event that could not be read: {error}"
+            );
+        }
+        Envelope::Unknown => {
+            warn!(
+                bytes,
+                "dropped a CDP message that could not be read: {error}"
+            );
+        }
+    }
 }
 
 async fn start_keepalive(inner: Arc<Inner>) {
@@ -691,27 +780,46 @@ async fn start_keepalive(inner: Arc<Inner>) {
                 .await
                 .is_err()
             {
-                mark_connection_lost(task_inner.clone()).await;
+                mark_connection_lost(task_inner.clone(), ConnectionLoss::KeepaliveTimeout).await;
             }
         }
     });
     *guard = Some(handle);
 }
 
-/// Records that the link is down and asks the supervisor to look.
+/// Records that the link is down and why, and asks the supervisor to look.
 ///
 /// It deliberately decides nothing else. The previous version armed the repair
 /// here, guarded by a flag that meant both "a repair loop is running" and "a
 /// further attempt is guaranteed". Those come apart when a freshly opened socket
 /// fails before the arming path clears the flag: both sides then believe the
 /// other owns the retry, and the link stays down with nothing retrying it.
-async fn mark_connection_lost(inner: Arc<Inner>) {
-    let was_connected = inner.connected.swap(false, Ordering::SeqCst);
+///
+/// Only the first report of a loss counts: the keepalive and the reader can both see one
+/// socket die, on different threads, and the later report would only repeat it. Each report
+/// takes the cause's lock before it reads `connected`, and the first stores its cause under
+/// that lock. So no report fails the cut-off requests before the cause is stored, and a
+/// caller that asks as soon as it gets [`CdpError::ConnectionLost`] reads this loss, not the
+/// one before.
+async fn mark_connection_lost(inner: Arc<Inner>, loss: ConnectionLoss) {
+    {
+        let mut last_loss = inner
+            .last_loss
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if inner.connected.swap(false, Ordering::SeqCst) {
+            warn!(
+                epoch = inner.epoch.load(Ordering::SeqCst),
+                "CDP link lost: {loss}"
+            );
+            *last_loss = Some(loss);
+            if let Ok(mut since) = inner.down_since.lock() {
+                since.get_or_insert_with(Instant::now);
+            }
+        }
+    }
     *inner.sink.lock().await = None;
     reject_all_pending(&inner, CdpError::ConnectionLost).await;
-    if was_connected && let Ok(mut since) = inner.down_since.lock() {
-        since.get_or_insert_with(Instant::now);
-    }
     inner.link_wake.notify_one();
 }
 

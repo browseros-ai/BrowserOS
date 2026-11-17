@@ -321,3 +321,71 @@ return {failed,ms:Date.now()-start,pressed:await page.evaluate(()=>window.presse
     client.cancel().await?;
     Ok(())
 }
+
+/// Chromium's own replies carry page text as well: the DOM capture behind the clickable check
+/// reads the whole document, and `DOM.describeNode` behind an element handle carries the
+/// element's attributes. With a lone half anywhere on the page, a target clickable only by a
+/// script listener must keep its ref, and a handle on the element that holds the half must
+/// answer. The whole emoji runs first, as the control.
+const SCRIPT_ONLY_PAGE: &str = r#"
+page.setDefaultTimeout(3000);
+const html=`<meta charset=utf-8><button id=native>Native action</button>
+<div id=listener style="display:inline-block;padding:8px">Script only</div><script>
+const bad='Before '+String.fromCodePoint(UNIT)+' After';
+const native=document.getElementById('native');
+native.textContent=bad;
+native.title=bad;
+document.body.dataset.clicks='0';
+document.getElementById('listener').addEventListener('click',()=>document.body.dataset.clicks=String(Number(document.body.dataset.clicks)+1));
+</script>`;
+await page.goto('data:text/html,'+encodeURIComponent(html));
+const start=Date.now();
+const snapshot=await page.ariaSnapshot();
+const ms=Date.now()-start;
+const line=snapshot.split('\n').find(l=>l.includes('Script only'))??null;
+const ref=/\[ref=([^\]]+)\]/.exec(line??'')?.[1]??null;
+let handled=null,handleError=null;
+try{const handle=await page.$('#native');handled=handle?await handle.evaluate(e=>e.id):null}catch(e){handleError=String(e.message)}
+if(ref)await page.getByRef(ref).click();
+return {snapshot,ms,line,ref,handled,handleError,clicks:await page.evaluate(()=>Number(document.body.dataset.clicks))};
+"#;
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_script_only_target_keeps_its_ref_and_a_handle_answers_beside_a_lone_half() -> TestResult
+{
+    let Some(browser) = browseros_rig::browser_or_skip() else {
+        return Ok(());
+    };
+    let rig = Rig::start(&browser, CaptchaKey::Absent)?;
+    let result = time::timeout(Duration::from_secs(120), async {
+        rig.until_ready().await?;
+        let client = rig.client().await?;
+        for unit in [0x1f600_u32, 0xd83d, 0xde00] {
+            let task = format!("script-only-{unit:x}");
+            let code = SCRIPT_ONLY_PAGE.replace("UNIT", &unit.to_string());
+            let (value, _) = returned(&client, &task, &code).await?;
+            assert!(
+                value["ref"].is_string(),
+                "{task}: the clickable check marks the script-only target: {value}"
+            );
+            assert_eq!(value["clicks"], 1, "{task}: its ref clicks it: {value}");
+            assert_eq!(
+                value["handled"], "native",
+                "{task}: a handle on the element that holds the text answers: {value}"
+            );
+            writeln!(
+                io::stderr(),
+                "SCRIPT_ONLY unit={unit:x} ref={} snapshot_ms={}",
+                value["ref"],
+                value["ms"]
+            )?;
+        }
+        client.cancel().await?;
+        Ok::<(), Box<dyn Error>>(())
+    })
+    .await;
+    match result {
+        Ok(Ok(())) => Ok(()),
+        other => Err(format!("{other:?}\n{}", rig.logs()).into()),
+    }
+}
