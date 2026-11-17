@@ -7,11 +7,13 @@ license.workspace = true
 repository.workspace = true
 description = "Hosted BrowserOS Neo's sidecar: one MCP tool, run, with every SDK operation behind one dispatcher"
 
-# Neo server's lint table is mirrored by neo-playwright; style_boundaries checks their parity.
+# Neo server's lint table is mirrored by neo-playwright and neo-snapshot; style_boundaries checks
+# their parity.
 #
 # Cargo forbids `[lints] workspace = true` plus extra lints in one crate, so the workspace's
 # lints are restated first. `tests/style_boundaries.rs` fails if a workspace lint is missing here
-# or if crates/neo-sdk/neo-playwright's table drifts from this one, so "keep in sync" is checked.
+# or if a twin's table (crates/neo-sdk/neo-playwright, crates/neo-sdk/neo-snapshot) drifts from
+# this one, so "keep in sync" is checked.
 #
 # Levels: additions are "warn"; check.sh and CI run clippy with `-D warnings`, so a warning
 # fails the gate while editing stays unblocked. The workspace's "deny" entries stay "deny".

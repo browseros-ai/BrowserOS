@@ -33,14 +33,13 @@ use std::time::Duration;
 use std::{fmt, mem};
 
 use futures_util::future::{self, BoxFuture};
+use neo_snapshot::AriaNode;
 use serde::Deserialize;
 use serde_json::Value;
 use tokio::time::{self, Instant};
 use ts_rs::TS;
 
-use super::aria_snapshot::{
-    self, AriaNode, ChildFrame, ClosedRoots, FrameSnapshot, PartialFrame, Unmarked,
-};
+use super::aria_snapshot::{self, ChildFrame, ClosedRoots, FrameSnapshot, PartialFrame, Unmarked};
 use super::clickable_targets::{Feed, Marking};
 use super::{Baseline, SnapshotForm};
 use crate::action::{self, OnTopNote};
@@ -398,8 +397,12 @@ async fn locator_snapshot(
         };
         match reply {
             ProbeReply::Snapshot { json, iframes, .. } => {
-                let root = frame_reply(json, iframes, unmarked)
-                    .map_err(|why| scope.fail(ErrorCode::Internal, why))?;
+                let root = FrameReply {
+                    json,
+                    iframes,
+                    on_top: Vec::new(),
+                    unmarked,
+                };
                 return snapshotter.stitched(root, input.depth).await;
             }
             ProbeReply::None { stale_ref: None } | ProbeReply::Detached => {}
@@ -792,12 +795,12 @@ impl Snapshotter<'_> {
                         ..
                     },
                 unmarked,
-            }) => frame_reply(json, iframes, unmarked)
-                .map(|mut frame| {
-                    frame.on_top = on_top.iter().map(top_note).collect();
-                    Some(frame)
-                })
-                .map_err(|why| self.scope.fail(ErrorCode::Internal, why)),
+            }) => Ok(Some(FrameReply {
+                json,
+                iframes,
+                on_top: on_top.iter().map(top_note).collect(),
+                unmarked,
+            })),
             Ok(SnapshotRead {
                 reply: ProbeReply::None { stale_ref: None },
                 ..
@@ -944,8 +947,12 @@ impl Snapshotter<'_> {
                     reply: ProbeReply::Snapshot { json, iframes, .. },
                     ..
                 }) => {
-                    return frame_reply(json, iframes, None)
-                        .map_err(|_why| Unread::Failed(ErrorCode::Internal));
+                    return Ok(FrameReply {
+                        json,
+                        iframes,
+                        on_top: Vec::new(),
+                        unmarked: None,
+                    });
                 }
                 Ok(SnapshotRead {
                     reply: ProbeReply::None { .. },
@@ -970,6 +977,7 @@ impl Snapshotter<'_> {
                 Err(ProbeFailure::Cdp(error)) => {
                     return Err(Unread::Failed(ErrorCode::from_core(&error)));
                 }
+                // A reply this build cannot read, a node of its tree included (`reply_of`).
                 Err(ProbeFailure::Broken(_why)) => {
                     return Err(Unread::Failed(ErrorCode::Internal));
                 }
@@ -977,25 +985,6 @@ impl Snapshotter<'_> {
         }
         Err(Unread::Detached)
     }
-}
-
-/// Decodes one frame's reply. The decode error is left out of the message, because serde quotes
-/// the value it could not read, which is page text.
-fn frame_reply(
-    json: Value,
-    iframes: Vec<SnapshotIframe>,
-    unmarked: Option<Unmarked>,
-) -> Result<FrameReply, &'static str> {
-    let json = serde_json::from_value(json).map_err(|_unreadable| {
-        "the probe's snapshot has a node this build cannot read; rebuild \
-         crates/neo-sdk/neo-playwright-js"
-    })?;
-    Ok(FrameReply {
-        json,
-        iframes,
-        on_top: Vec::new(),
-        unmarked,
-    })
 }
 
 /// A child frame's depth, as upstream computes it: the parent's minus the iframe's own depth
@@ -1120,24 +1109,6 @@ mod tests {
                 serde_json::from_value::<PageInput>(bad.clone()).is_err(),
                 "{bad} is not a page snapshot input"
             );
-        }
-        Ok(())
-    }
-    #[test]
-    fn a_probe_tree_at_the_reply_cap_still_decodes_as_typed_aria_nodes()
-    -> Result<(), Box<dyn Error>> {
-        use serde::Deserialize as _;
-        for groups in [70, 130, 147] {
-            let text = format!(
-                "[{}{{\"role\":\"button\",\"name\":\"End\"}}{}]",
-                "{\"role\":\"group\",\"children\":[".repeat(groups),
-                "]}".repeat(groups)
-            );
-            let mut reader = serde_json::Deserializer::from_str(&text);
-            reader.disable_recursion_limit();
-            let value = serde_json::Value::deserialize(&mut reader)?;
-            let frame = super::frame_reply(value, Vec::new(), None)?;
-            assert_eq!(frame.json.len(), 1);
         }
         Ok(())
     }

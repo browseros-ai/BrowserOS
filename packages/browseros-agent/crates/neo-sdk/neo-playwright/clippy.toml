@@ -2,7 +2,8 @@
 #
 # Clippy reads clippy.toml from the crate's manifest directory first, so this file applies to
 # claw-sdk alone, also under the workspace-wide `cargo clippy --workspace` in CI.
-# crates/neo-sdk/neo-playwright carries a copy; tests/style_boundaries.rs keeps the two equal.
+# crates/neo-sdk/neo-playwright and crates/neo-sdk/neo-snapshot carry copies;
+# tests/style_boundaries.rs keeps them equal.
 
 # Tests may panic and index: a failing assertion is the point of a test (Google allows it).
 allow-panic-in-tests = true

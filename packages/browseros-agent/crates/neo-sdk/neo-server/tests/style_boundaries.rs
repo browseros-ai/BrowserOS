@@ -392,9 +392,15 @@ fn collect_rust_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), Box<dyn 
     Ok(())
 }
 
-/// Checks that this crate restates every workspace lint at least as strictly, and that the twin
-/// crate on the same lint set (crates/neo-sdk/neo-playwright) has an identical `[lints]` table and
-/// clippy.toml. Cargo cannot share a lint table between two crates without the workspace's.
+/// The crates on claw-sdk's lint set beside this one, each with its own copy of the tables.
+const LINT_TWINS: &[&str] = &[
+    "crates/neo-sdk/neo-playwright",
+    "crates/neo-sdk/neo-snapshot",
+];
+
+/// Checks that this crate restates every workspace lint at least as strictly, and that each twin
+/// crate on the same lint set ([`LINT_TWINS`]) has an identical `[lints]` table and clippy.toml.
+/// Cargo cannot share a lint table between two crates without the workspace's.
 pub(crate) fn check_lint_tables(manifest_dir: &Path) -> Result<Vec<String>, Box<dyn Error>> {
     let mut violations = Vec::new();
     let manifest = read_toml(&manifest_dir.join("Cargo.toml"))?;
@@ -425,21 +431,22 @@ pub(crate) fn check_lint_tables(manifest_dir: &Path) -> Result<Vec<String>, Box<
         }
     }
 
-    let twin = workspace_root.join("crates/neo-sdk/neo-playwright");
-    if twin.join("Cargo.toml").is_file() {
+    for twin_path in LINT_TWINS {
+        let twin = workspace_root.join(twin_path);
+        if !twin.join("Cargo.toml").is_file() {
+            violations.push(format!("{twin_path} has no Cargo.toml; update LINT_TWINS"));
+            continue;
+        }
         let twin_lints = read_toml(&twin.join("Cargo.toml"))?.get("lints").cloned();
         if twin_lints.as_ref().and_then(Value::as_table) != Some(&lints) {
-            violations.push(
-                "crates/neo-sdk/neo-playwright/Cargo.toml [lints] differs from claw-sdk's"
-                    .to_owned(),
-            );
+            violations.push(format!(
+                "{twin_path}/Cargo.toml [lints] differs from claw-sdk's"
+            ));
         }
         if fs::read_to_string(twin.join("clippy.toml")).ok()
             != fs::read_to_string(manifest_dir.join("clippy.toml")).ok()
         {
-            violations.push(
-                "crates/neo-sdk/neo-playwright/clippy.toml differs from claw-sdk's".to_owned(),
-            );
+            violations.push(format!("{twin_path}/clippy.toml differs from claw-sdk's"));
         }
     }
     Ok(violations)
