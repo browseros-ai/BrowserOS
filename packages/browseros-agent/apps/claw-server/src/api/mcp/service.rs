@@ -86,6 +86,44 @@ const HUMAN_HELP_OFF_MESSAGE: &str = "Human help is turned off in BrowserOS neo 
 /// any reasonable client tool-call timeout so an agent that cannot hold a long call just re-calls.
 const HELP_WAIT_CHUNK: std::time::Duration = std::time::Duration::from_secs(75);
 
+/// Whether a handle-less modern call opens a task or runs ephemerally.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HandlelessStart {
+    /// A genuine opener may mint a persisted task session.
+    OpenTask,
+    /// A pure-utility probe runs without ever surfacing as a task.
+    Ephemeral,
+}
+
+/// How a handle-less call of `tool` should start. A call that carries no task intent must
+/// not mint a standalone task: an isolated one would otherwise become a one-call orphan in
+/// the cockpit. A pure-utility probe (`browser_target`, `mark_skill_run`, a read-only
+/// `tabs`) and `name_session` stay ephemeral; `run_skill` and the first real browser action
+/// open a task.
+///
+/// `name_session` only annotates. A client can name a session on one connection and do the
+/// real work on another, so a lone `name_session` must not surface as a task. When work
+/// follows it on the same connection (which carries the handle), the first opener promotes
+/// the session to a real task and the name carries over; when nothing follows, there is no
+/// task.
+///
+/// `tabs` is split by its action: `list` and `active` only read, so they stay ephemeral,
+/// but `new` and `close` mutate browser state and must leave a task record rather than run
+/// unrecorded. The action is read from the call arguments, defaulting to the tool's own
+/// `list` default when absent.
+fn handleless_start_for(tool: &str, raw_args: &Value) -> HandlelessStart {
+    match tool {
+        "tabs" => match raw_args.get("action").and_then(Value::as_str) {
+            Some("new") | Some("close") => HandlelessStart::OpenTask,
+            _ => HandlelessStart::Ephemeral,
+        },
+        "browser_target" | MARK_SKILL_RUN_TOOL_NAME | NAME_SESSION_TOOL_NAME => {
+            HandlelessStart::Ephemeral
+        }
+        _ => HandlelessStart::OpenTask,
+    }
+}
+
 /// Owns one MCP transport lifetime. Drop best-effort schedules removal of a started
 /// server session, which records its end and begins retained-group handling.
 pub struct ClawMcpService {
@@ -674,6 +712,7 @@ impl ClawMcpService {
         &self,
         session_id: SessionId,
         client: SessionClient,
+        persist: bool,
     ) -> Result<StartedSession, McpError> {
         let session = if let Some(session) = self.state.sessions.lookup(&session_id).await {
             session
@@ -691,6 +730,7 @@ impl ClawMcpService {
                     agent,
                     client.reported.clone(),
                     client.declared_product,
+                    persist,
                 )
                 .await
                 .map_err(|error| {
@@ -781,7 +821,7 @@ impl ClawMcpService {
         }
 
         let started = self
-            .start_session_in_store(session_id, SessionClient::resolve(Some(client), None))
+            .start_session_in_store(session_id, SessionClient::resolve(Some(client), None), true)
             .await?;
         lifecycle.started = true;
         Ok(started)
@@ -804,11 +844,67 @@ impl ClawMcpService {
     /// The redirect exists because the fix cannot rely on the agent adopting the handle it
     /// is handed back: the server already returns a fresh handle on every call, and agents
     /// have been observed resending the dead one anyway.
+    #[cfg(test)]
     async fn resolve_modern_session(
         &self,
         provided: Option<SessionId>,
         declared: Option<ClientInfo>,
         client: Option<ClientInfo>,
+    ) -> Result<(StartedSession, SessionId), McpError> {
+        self.resolve_modern_session_with_intent(
+            provided,
+            declared,
+            client,
+            HandlelessStart::OpenTask,
+        )
+        .await
+    }
+
+    /// Promotes a reused ephemeral session once real work begins. A probe's session echoes a
+    /// handle so a following `browser_target` selection or navigation can continue in it; when
+    /// that following call is a task opener, the session becomes a real task and its start is
+    /// recorded, so the now-unskipped dispatch surfaces it. A reused probe stays ephemeral.
+    async fn promote_reused_session(
+        &self,
+        session: &Arc<Session>,
+        start: HandlelessStart,
+    ) -> Result<(), McpError> {
+        if start != HandlelessStart::OpenTask || !session.promote() {
+            return Ok(());
+        }
+        self.state
+            .audit_log
+            .record_session_start(
+                session.id().as_str(),
+                session.convo_id().as_str(),
+                session.agent().slug(),
+                session.agent().label(),
+                session.client_name(),
+                session.client_version(),
+            )
+            .await
+            .map_err(|error| {
+                McpError::internal_error(
+                    format!("promoting an ephemeral session failed: {error}"),
+                    None,
+                )
+            })?;
+        // The ephemeral mint skipped the start analytics, so the promotion emits it now. Its
+        // teardown emits the matching end analytics once the session is no longer ephemeral,
+        // keeping the start/end analytics paired.
+        self.state.analytics.capture(
+            crate::analytics::events::AGENT_SESSION_STARTED,
+            json!({ "client_name": session.client_name() }),
+        );
+        Ok(())
+    }
+
+    async fn resolve_modern_session_with_intent(
+        &self,
+        provided: Option<SessionId>,
+        declared: Option<ClientInfo>,
+        client: Option<ClientInfo>,
+        start: HandlelessStart,
     ) -> Result<(StartedSession, SessionId), McpError> {
         let client = SessionClient::resolve(client, declared);
         if let Some(handle) = &provided {
@@ -820,6 +916,7 @@ impl ClawMcpService {
             if let Some(current) = self.state.targets.current_session(handle).await
                 && let Some(session) = self.state.sessions.lookup(&current).await
             {
+                self.promote_reused_session(&session, start).await?;
                 let agent_label = session.agent().label().to_string();
                 return Ok((
                     StartedSession {
@@ -837,6 +934,7 @@ impl ClawMcpService {
             // inline clientInfo is optional and may be absent or differ, so relabeling
             // from it would flip the same session's audit attribution between the real
             // client and "agent" across dispatches; take the label from the session.
+            self.promote_reused_session(&session, start).await?;
             let agent_label = session.agent().label().to_string();
             return Ok((
                 StartedSession {
@@ -848,8 +946,13 @@ impl ClawMcpService {
         }
         let Some(handle) = provided else {
             // No handle at all is a request to start something new, and the only honest
-            // reading of it. Nothing here guesses which session a caller "meant".
-            return self.mint_session(client).await;
+            // reading of it. Nothing here guesses which session a caller "meant". A
+            // pure-utility probe does not start a task, so it runs in an ephemeral session
+            // that never lands a task row; a genuine opener mints a real task session.
+            return match start {
+                HandlelessStart::Ephemeral => self.mint_ephemeral_session(client).await,
+                HandlelessStart::OpenTask => self.mint_session(client).await,
+            };
         };
         if matches!(
             self.state.sessions.retirement_of(&handle).await,
@@ -946,7 +1049,17 @@ impl ClawMcpService {
         &self,
         client: SessionClient,
     ) -> Result<(StartedSession, SessionId), McpError> {
-        self.mint_session_from(client, session_handle::candidate)
+        self.mint_session_from(client, true, session_handle::candidate)
+            .await
+    }
+
+    /// Mints a session that is never recorded as a task. A handle-less pure-utility probe
+    /// runs here so it stops minting a standalone task row on every stray call.
+    async fn mint_ephemeral_session(
+        &self,
+        client: SessionClient,
+    ) -> Result<(StartedSession, SessionId), McpError> {
+        self.mint_session_from(client, false, session_handle::candidate)
             .await
     }
 
@@ -956,6 +1069,7 @@ impl ClawMcpService {
     async fn mint_session_from(
         &self,
         client: SessionClient,
+        persist: bool,
         mut next: impl FnMut() -> SessionId,
     ) -> Result<(StartedSession, SessionId), McpError> {
         for _ in 0..session_handle::MAX_MINT_ATTEMPTS {
@@ -979,7 +1093,9 @@ impl ClawMcpService {
             {
                 continue;
             }
-            let started = self.start_session_in_store(handle.clone(), client).await?;
+            let started = self
+                .start_session_in_store(handle.clone(), client, persist)
+                .await?;
             return Ok((started, handle));
         }
         Err(McpError::internal_error(
@@ -1308,7 +1424,12 @@ impl ServerHandler for ClawMcpService {
                 .as_deref()
                 .map(client_info_from_declared_name);
             let (started, handle) = self
-                .resolve_modern_session(provided_handle, declared, modern_client)
+                .resolve_modern_session_with_intent(
+                    provided_handle,
+                    declared,
+                    modern_client,
+                    handleless_start_for(&request.name, &raw_args),
+                )
                 .await?;
             (started, Some(handle))
         } else {
@@ -2487,7 +2608,11 @@ mod tests {
         let service = ClawMcpService::new(call.state.clone());
         for value in ["00000001", "00000002"] {
             service
-                .start_session_in_store(SessionId::new(value), SessionClient::resolve(None, None))
+                .start_session_in_store(
+                    SessionId::new(value),
+                    SessionClient::resolve(None, None),
+                    true,
+                )
                 .await
                 .map_err(|error| anyhow::anyhow!("{error:?}"))?;
         }
@@ -2510,7 +2635,7 @@ mod tests {
 
         let mut candidate = 0_u32;
         let (started, handle) = service
-            .mint_session_from(SessionClient::resolve(None, None), || {
+            .mint_session_from(SessionClient::resolve(None, None), true, || {
                 candidate += 1;
                 SessionId::new(format!("{candidate:08x}"))
             })
@@ -2530,7 +2655,9 @@ mod tests {
         let service = ClawMcpService::new(call.state.clone());
         let before = call.state.sessions.count().await;
         let result = service
-            .mint_session_from(SessionClient::resolve(None, None), || SessionId::new("s1"))
+            .mint_session_from(SessionClient::resolve(None, None), true, || {
+                SessionId::new("s1")
+            })
             .await;
         assert!(result.is_err());
         assert_eq!(call.state.sessions.count().await, before);
@@ -2543,7 +2670,7 @@ mod tests {
         let service = ClawMcpService::new(call.state.clone());
         let legacy = SessionId::new("11111111-2222-4333-8444-555555555555");
         let original = service
-            .start_session_in_store(legacy.clone(), SessionClient::resolve(None, None))
+            .start_session_in_store(legacy.clone(), SessionClient::resolve(None, None), true)
             .await
             .map_err(|error| anyhow::anyhow!("{error:?}"))?;
         let (reused, handle) = service
@@ -4148,6 +4275,234 @@ mod tests {
         assert_eq!(
             rename_session(None, &json!({ "name": "invoice processing" })).await,
             Err("unable to resolve this session")
+        );
+        Ok(())
+    }
+
+    fn claude_client() -> ClientInfo {
+        ClientInfo {
+            name: "claude".to_string(),
+            version: "1".to_string(),
+            title: None,
+        }
+    }
+
+    async fn record_probe(
+        state: &AppState,
+        session: &Arc<Session>,
+        tool_name: &str,
+    ) -> anyhow::Result<()> {
+        record_local_tool_dispatch(
+            state,
+            LocalToolDispatch {
+                session,
+                agent_label: "Claude",
+                tool_name,
+                raw_args: &json!({}),
+                result: &ToolResult::text("ok", None),
+                duration_ms: 1,
+                dispatch_id: DispatchId::new(),
+            },
+        )
+        .await?;
+        state
+            .audit_worker
+            .flush_session(session.id().as_str())
+            .await?;
+        Ok(())
+    }
+
+    #[test]
+    fn pure_utility_probes_do_not_open_a_task() {
+        let no_args = json!({});
+        assert_eq!(
+            handleless_start_for("browser_target", &no_args),
+            HandlelessStart::Ephemeral
+        );
+        assert_eq!(
+            handleless_start_for(MARK_SKILL_RUN_TOOL_NAME, &no_args),
+            HandlelessStart::Ephemeral
+        );
+        // A read-only tabs probe (list is also the default when action is absent) stays ephemeral.
+        for read_only in [
+            json!({}),
+            json!({ "action": "list" }),
+            json!({ "action": "active" }),
+        ] {
+            assert_eq!(
+                handleless_start_for("tabs", &read_only),
+                HandlelessStart::Ephemeral
+            );
+        }
+        // A mutating tabs action changes browser state and must open a task.
+        for mutating in [json!({ "action": "new" }), json!({ "action": "close" })] {
+            assert_eq!(
+                handleless_start_for("tabs", &mutating),
+                HandlelessStart::OpenTask
+            );
+        }
+        // name_session only annotates; a lone one must not open a task. Work that follows it
+        // on the same connection promotes the session to a real task.
+        assert_eq!(
+            handleless_start_for(NAME_SESSION_TOOL_NAME, &no_args),
+            HandlelessStart::Ephemeral
+        );
+        for opener in [RUN_SKILL_TOOL_NAME, "navigate", "act"] {
+            assert_eq!(
+                handleless_start_for(opener, &no_args),
+                HandlelessStart::OpenTask
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_handle_less_probe_mints_an_ephemeral_session_without_a_task() -> anyhow::Result<()> {
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let service = ClawMcpService::new(call.state.clone());
+        let state = call.state.clone();
+
+        let (opener, _) = service
+            .resolve_modern_session_with_intent(
+                None,
+                None,
+                Some(claude_client()),
+                HandlelessStart::OpenTask,
+            )
+            .await
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        assert!(!opener.session.is_ephemeral());
+        record_probe(&state, &opener.session, NAME_SESSION_TOOL_NAME).await?;
+
+        let (probe, _) = service
+            .resolve_modern_session_with_intent(
+                None,
+                None,
+                Some(claude_client()),
+                HandlelessStart::Ephemeral,
+            )
+            .await
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        assert!(probe.session.is_ephemeral());
+        record_probe(&state, &probe.session, MARK_SKILL_RUN_TOOL_NAME).await?;
+
+        let tasks = state
+            .audit_log
+            .list_tasks(crate::db::audit_log::ListTasksQuery::default())
+            .await?;
+        let listed: Vec<&str> = tasks
+            .tasks
+            .iter()
+            .map(|task| task.session_id.as_str())
+            .collect();
+        assert!(
+            listed.contains(&opener.session.id().as_str()),
+            "a genuine opener still lands a task row"
+        );
+        assert!(
+            !listed.contains(&probe.session.id().as_str()),
+            "a handle-less probe must not surface as a task"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_reused_probe_session_promotes_to_a_task_when_real_work_begins() -> anyhow::Result<()>
+    {
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let service = ClawMcpService::new(call.state.clone());
+        let state = call.state.clone();
+
+        let (probe, handle) = service
+            .resolve_modern_session_with_intent(
+                None,
+                None,
+                Some(claude_client()),
+                HandlelessStart::Ephemeral,
+            )
+            .await
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        assert!(probe.session.is_ephemeral());
+        record_probe(&state, &probe.session, "tabs").await?;
+
+        let (reused, _) = service
+            .resolve_modern_session_with_intent(
+                Some(handle.clone()),
+                None,
+                Some(claude_client()),
+                HandlelessStart::OpenTask,
+            )
+            .await
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        assert_eq!(reused.session.id(), probe.session.id());
+        assert!(
+            !reused.session.is_ephemeral(),
+            "real work on a reused probe handle promotes its session"
+        );
+        record_probe(&state, &reused.session, "navigate").await?;
+
+        let tasks = state
+            .audit_log
+            .list_tasks(crate::db::audit_log::ListTasksQuery::default())
+            .await?;
+        assert!(
+            tasks
+                .tasks
+                .iter()
+                .any(|task| task.session_id == handle.as_str()),
+            "a promoted session surfaces as a task once its real work is recorded"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_mutating_tabs_call_opens_a_task_while_a_read_only_probe_does_not()
+    -> anyhow::Result<()> {
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let service = ClawMcpService::new(call.state.clone());
+        let state = call.state.clone();
+
+        // A read-only tabs probe runs ephemerally and lands no task row.
+        let (probe, _) = service
+            .resolve_modern_session_with_intent(
+                None,
+                None,
+                Some(claude_client()),
+                handleless_start_for("tabs", &json!({ "action": "list" })),
+            )
+            .await
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        assert!(probe.session.is_ephemeral());
+        record_probe(&state, &probe.session, "tabs").await?;
+
+        // A mutating tabs action opens a real task that is recorded.
+        let (mutating, _) = service
+            .resolve_modern_session_with_intent(
+                None,
+                None,
+                Some(claude_client()),
+                handleless_start_for("tabs", &json!({ "action": "new" })),
+            )
+            .await
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        assert!(!mutating.session.is_ephemeral());
+        record_probe(&state, &mutating.session, "tabs").await?;
+
+        let tasks = state
+            .audit_log
+            .list_tasks(crate::db::audit_log::ListTasksQuery::default())
+            .await?;
+        let listed: Vec<&str> = tasks
+            .tasks
+            .iter()
+            .map(|task| task.session_id.as_str())
+            .collect();
+        assert!(
+            listed.contains(&mutating.session.id().as_str()),
+            "a mutating tabs call must leave a task record"
+        );
+        assert!(
+            !listed.contains(&probe.session.id().as_str()),
+            "a read-only tabs probe must not surface as a task"
         );
         Ok(())
     }

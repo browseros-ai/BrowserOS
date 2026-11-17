@@ -288,6 +288,7 @@ async fn test_app() -> anyhow::Result<TestApp> {
         resources_dir: dir.path().join("resources"),
         browserclaw_dir: dir.path().join("browserclaw"),
         session_idle: Duration::from_secs(300),
+        session_complete_idle: Duration::from_secs(300),
         session_retention: Duration::from_secs(7_200),
         session_sweep_interval: Duration::from_secs(60),
         replay_retention_days: 7,
@@ -1718,6 +1719,7 @@ async fn canonical_cancel_stops_an_idle_zero_dispatch_session() -> anyhow::Resul
                 title: None,
             },
             None,
+            true,
         )
         .await?;
 

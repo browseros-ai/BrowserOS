@@ -17,6 +17,7 @@ use std::{
 const DEFAULT_SERVER_PORT: u16 = 9200;
 const DEFAULT_CDP_PORT: u16 = 49337;
 const DEFAULT_SESSION_IDLE_MS: u64 = 30 * 60 * 1000;
+const DEFAULT_SESSION_COMPLETE_IDLE_MS: u64 = 5 * 60 * 1000;
 const DEFAULT_SESSION_SWEEP_INTERVAL_MS: u64 = 60 * 1000;
 const DEFAULT_REPLAY_RETENTION_DAYS: u64 = 7;
 const BROWSERCLAW_DIR_NAME: &str = ".browserclaw";
@@ -74,6 +75,11 @@ pub struct Config {
     pub resources_dir: PathBuf,
     pub browserclaw_dir: PathBuf,
     pub session_idle: Duration,
+    /// How long a task's own dispatches may be quiet before it auto-completes (teardown ->
+    /// Done + tab-group clear), judged per session so concurrent conversations never retire
+    /// each other. Sits beneath `session_idle` (the 30-min abandonment ceiling). Set equal to
+    /// `session_idle` to disable early completion.
+    pub session_complete_idle: Duration,
     /// The resolved `behavior.tab_close_after`, shared by retained-session/group cleanup
     /// and durable individual-tab cleanup so neither can close tabs before the chosen grace.
     pub session_retention: Duration,
@@ -263,6 +269,11 @@ impl Config {
                 env,
                 "CLAW_SESSION_IDLE_MS",
                 DEFAULT_SESSION_IDLE_MS,
+            )),
+            session_complete_idle: Duration::from_millis(read_positive_ms(
+                env,
+                "CLAW_SESSION_COMPLETE_IDLE_MS",
+                DEFAULT_SESSION_COMPLETE_IDLE_MS,
             )),
             session_retention: behavior.tab_close_after,
             session_sweep_interval: Duration::from_millis(read_positive_ms(

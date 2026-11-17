@@ -300,6 +300,7 @@ async fn running_coordinator_reads_sessions_and_recovers_on_notification_and_tim
         resources_dir: dir.path().join("resources"),
         browserclaw_dir: dir.path().join("browserclaw"),
         session_idle: Duration::from_secs(300),
+        session_complete_idle: Duration::from_secs(300),
         session_retention: Duration::from_secs(300),
         session_sweep_interval: Duration::from_secs(60),
         replay_retention_days: 7,

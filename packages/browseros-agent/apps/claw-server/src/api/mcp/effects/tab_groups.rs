@@ -2387,6 +2387,7 @@ mod tests {
             Arc::new(SessionTabLedger::new(database)),
             Duration::from_secs(60),
             Duration::from_secs(60),
+            Duration::from_secs(60),
             Duration::from_secs(1),
         );
         let hook_browser = browser.clone();
