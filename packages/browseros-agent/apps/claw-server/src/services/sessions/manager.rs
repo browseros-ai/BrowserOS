@@ -345,6 +345,35 @@ impl Sessions {
         entry.replacement.get_or_insert(candidate).clone()
     }
 
+    /// Rebinds a retired handle's recorded successor when the recorded one is dead.
+    ///
+    /// `adopt_replacement` binds once and never updates, which is the convergence the
+    /// mechanism exists for — until the bound successor itself dies, at which point the
+    /// first bind becomes a dead end every later resend walks into. This moves the bind
+    /// only off `expected` under the same write lock, so a racer that already rebound to
+    /// a live session wins and its id comes back for the caller to adopt instead.
+    pub async fn rebind_replacement(
+        &self,
+        retired: &SessionId,
+        expected: &SessionId,
+        candidate: SessionId,
+    ) -> SessionId {
+        let mut entries = self.retired.write().await;
+        let entry = entries.entry(retired.clone()).or_insert_with(|| Retired {
+            at: Instant::now(),
+            cause: RetirementCause::Closed,
+            replacement: None,
+        });
+        if entry
+            .replacement
+            .as_ref()
+            .is_none_or(|current| current == expected)
+        {
+            entry.replacement = Some(candidate.clone());
+        }
+        entry.replacement.clone().unwrap_or(candidate)
+    }
+
     async fn retire(&self, id: &SessionId, cause: RetirementCause) {
         self.retired.write().await.insert(
             id.clone(),
@@ -534,17 +563,30 @@ impl Sessions {
             }
         }
         let mut removed = 0;
+        let mut first_error = None;
         for id in expired {
-            if self.remove(&id, "closed", Some("idle timeout")).await? {
-                removed += 1;
+            match self.remove(&id, "closed", Some("idle timeout")).await {
+                Ok(true) => removed += 1,
+                Ok(false) => {}
+                Err(error) => {
+                    if first_error.is_none() {
+                        first_error = Some(error);
+                    }
+                }
             }
         }
         self.reap_retained(now).await;
         self.reap_retired(now).await;
-        if let Some(targets) = self.target_bindings.get() {
-            targets.sweep(crate::clock::now_epoch_ms()).await?;
+        if let Some(targets) = self.target_bindings.get()
+            && let Err(error) = targets.sweep(crate::clock::now_epoch_ms()).await
+            && first_error.is_none()
+        {
+            first_error = Some(error);
         }
-        Ok(removed)
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(removed),
+        }
     }
 
     pub async fn shutdown(&self) -> AppResult<usize> {
@@ -593,17 +635,33 @@ impl Sessions {
         };
         let cancelled_dispatches = session.stop_dispatches().await;
         session.wait_for_dispatches().await;
-        if let Some(hook) = self.audit_flush_hook.get() {
-            hook(session.id().as_str().to_string()).await?;
+        // The session is already removed and retired, so nothing retries the
+        // steps below: a failed audit step must not skip the claims release or
+        // the retained record, or both leak for the life of the process.
+        let mut first_error = None;
+        if let Some(hook) = self.audit_flush_hook.get()
+            && let Err(error) = hook(session.id().as_str().to_string()).await
+        {
+            first_error = Some(error);
         }
         if operator_stop_requested {
             for dispatch_id in session.pending_operator_cancellation_audits().await {
-                self.audit_log
+                match self
+                    .audit_log
                     .mark_dispatch_operator_cancelled(&dispatch_id)
-                    .await?;
-                session
-                    .mark_operator_cancellation_audit_reconciled(&dispatch_id)
-                    .await;
+                    .await
+                {
+                    Ok(_) => {
+                        session
+                            .mark_operator_cancellation_audit_reconciled(&dispatch_id)
+                            .await;
+                    }
+                    Err(error) => {
+                        if first_error.is_none() {
+                            first_error = Some(error);
+                        }
+                    }
+                }
             }
         }
         self.session_tabs
@@ -612,8 +670,15 @@ impl Sessions {
             .audit_log
             .record_session_end(session.id().as_str(), kind, reason)
             .await;
-        self.finish_teardown(session, kind, audit_result).await?;
-        Ok(cancelled_dispatches)
+        if let Err(error) = self.finish_teardown(session, kind, audit_result).await
+            && first_error.is_none()
+        {
+            first_error = Some(error);
+        }
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(cancelled_dispatches),
+        }
     }
 
     async fn finish_teardown(
@@ -740,7 +805,10 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{RetainedGroupAction, RetirementCause, Session, Sessions, teardown_all};
+    use super::{
+        RetainedGroupAction, RetainedSession, Retired, RetirementCause, Session, Sessions,
+        teardown_all,
+    };
     use crate::{
         analytics::{AnalyticsSink, events},
         db::{AuditLog, DATABASE_FILENAME, Database, SessionTabLedger, audit_log::TaskStatus},
@@ -2079,6 +2147,150 @@ mod tests {
         assert_eq!(first.await?, 1);
         assert_eq!(registry.reap_retained(now).await, 0);
         assert_eq!(close_attempts.load(Ordering::SeqCst), 1);
+        Ok(())
+    }
+
+    /// Teardown keeps going after an early step fails: the claim release and the
+    /// retained record cannot be skipped, because the session is already retired
+    /// and nothing else will ever retry them. The error still reaches the caller.
+    #[tokio::test]
+    async fn a_failed_teardown_still_releases_claims_and_retains() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let (audit_log, session_tabs) = repositories(&dir).await?;
+        let registry = Sessions::new(
+            audit_log,
+            session_tabs.clone(),
+            Duration::from_secs(60),
+            Duration::from_secs(10),
+            Duration::from_secs(1),
+        );
+        registry.set_audit_flush_hook(Arc::new(|_| {
+            Box::pin(async {
+                Err(crate::error::AppError::Internal(
+                    "audit flush unavailable".to_string(),
+                ))
+            })
+        }));
+        let session = Session::new(
+            SessionId::new("flushed"),
+            ClientIdentity::Ephemeral {
+                slug: "codex".to_string(),
+                label: "Codex".to_string(),
+            },
+            ConversationIdentity::new("codex", "agile-alpaca".to_string()),
+            "Codex".to_string(),
+            Instant::now(),
+        );
+        registry.insert_for_testing(session.clone()).await;
+        session_tabs
+            .claim_target_for_session("target-a", session.id().as_str(), "codex", 1)
+            .await?;
+
+        let result = registry
+            .remove(session.id(), "closed", Some("idle timeout"))
+            .await;
+        assert!(result.is_err(), "the teardown failure must surface");
+        assert!(!registry.contains(session.id()).await);
+        assert_eq!(
+            registry.retirement_of(session.id()).await,
+            Some(RetirementCause::Closed),
+            "the handle still reports itself closed"
+        );
+
+        session_tabs.drain_writes().await;
+        assert!(
+            session_tabs
+                .all_legacy_claims_released_for_session(session.id().as_str())
+                .await?,
+            "the claim release must run even when teardown fails"
+        );
+        let key = session.convo_id().clone();
+        assert!(
+            registry.retained.read().await.contains_key(&key),
+            "finish_teardown must still record the conversation"
+        );
+        assert!(registry.reserved_keys.lock().await.contains(&key));
+
+        // With the retained entry recorded, a far-future reap finishes the job:
+        // the reserved key is freed instead of leaking for the process lifetime.
+        let far_future = Instant::now() + Duration::from_secs(7200);
+        assert_eq!(registry.reap_retained(far_future).await, 1);
+        assert!(!registry.reserved_keys.lock().await.contains(&key));
+        Ok(())
+    }
+
+    /// `sweep_idle` reports the first removal failure but keeps going: remaining
+    /// sessions are still removed, and the retained/retired reaps behind them
+    /// still run for that tick.
+    #[tokio::test]
+    async fn a_failed_removal_still_runs_the_rest_of_the_pass() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let (audit_log, session_tabs) = repositories(&dir).await?;
+        let registry = Sessions::new(
+            audit_log,
+            session_tabs,
+            Duration::from_secs(0),
+            Duration::from_secs(10),
+            Duration::from_secs(1),
+        );
+        registry.set_audit_flush_hook(Arc::new(|_| {
+            Box::pin(async {
+                Err(crate::error::AppError::Internal(
+                    "audit flush unavailable".to_string(),
+                ))
+            })
+        }));
+        for id in ["blocked-a", "blocked-b"] {
+            let session = Session::new(
+                SessionId::new(id),
+                ClientIdentity::Ephemeral {
+                    slug: "codex".to_string(),
+                    label: "Codex".to_string(),
+                },
+                ConversationIdentity::new("codex", format!("convo-{id}")),
+                "Codex".to_string(),
+                Instant::now() - Duration::from_secs(120),
+            );
+            registry.insert_for_testing(session).await;
+        }
+        // An already-expired retained entry and tombstone with no live session
+        // behind them: exactly the entries the reaps must collect this tick.
+        let ghost = ConvoId::new("codex-ghost-convo".to_string());
+        registry.retained.write().await.insert(
+            ghost.clone(),
+            RetainedSession {
+                ended_at: Instant::now() - Duration::from_secs(120),
+            },
+        );
+        registry.reserved_keys.lock().await.insert(ghost.clone());
+        registry.retired.write().await.insert(
+            SessionId::new("expired-handle"),
+            Retired {
+                at: Instant::now() - Duration::from_secs(120),
+                cause: RetirementCause::Closed,
+                replacement: None,
+            },
+        );
+
+        assert!(registry.sweep_idle().await.is_err());
+        assert!(
+            !registry.contains(&SessionId::new("blocked-a")).await
+                && !registry.contains(&SessionId::new("blocked-b")).await,
+            "one failing teardown must not stop the other removals"
+        );
+        assert!(
+            !registry.retained.read().await.contains_key(&ghost),
+            "the expired retained conversation must still be reaped"
+        );
+        assert!(!registry.reserved_keys.lock().await.contains(&ghost));
+        assert!(
+            !registry
+                .retired
+                .read()
+                .await
+                .contains_key(&SessionId::new("expired-handle")),
+            "the expired tombstone must still be reaped"
+        );
         Ok(())
     }
 }

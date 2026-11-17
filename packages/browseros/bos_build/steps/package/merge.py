@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Merge two architecture builds into one universal .app via the vendored universalizer."""
 
+import os
 import sys
 import shutil
 from pathlib import Path
@@ -53,10 +54,11 @@ def merge_architectures(
     # Create output directory if needed
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Remove existing output if present
-    if output_path.exists():
-        log_info(f"Removing existing output: {output_path}")
-        shutil.rmtree(output_path)
+    # Build into a sibling temp dir so a universalizer failure keeps an
+    # existing output; swap into place only on success.
+    tmp_output = output_path.with_name(output_path.name + ".tmp")
+    if tmp_output.exists():
+        shutil.rmtree(tmp_output)
 
     try:
         # Run universalizer
@@ -65,20 +67,26 @@ def merge_architectures(
             str(universalizer_script),
             str(arch1_path),
             str(arch2_path),
-            str(output_path),
+            str(tmp_output),
         ]
 
         log_info("Running universalizer...")
         log_info(f"Command: {' '.join(cmd)}")
         run_command(cmd)
 
-        if output_path.exists():
-            log_success(f"Universal binary created: {output_path}")
-            return True
-        else:
+        if not tmp_output.exists():
             log_error("Universal binary creation failed - output not found")
             return False
+
+        if output_path.exists():
+            shutil.rmtree(output_path)
+        os.replace(tmp_output, output_path)
+        log_success(f"Universal binary created: {output_path}")
+        return True
 
     except Exception as e:
         log_error(f"Failed to create universal binary: {e}")
         return False
+    finally:
+        if tmp_output.exists():
+            shutil.rmtree(tmp_output)

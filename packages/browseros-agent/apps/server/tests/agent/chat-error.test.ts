@@ -37,6 +37,28 @@ describe('toChatError', () => {
     expect(error.retryAfterSeconds).toBe(30)
   })
 
+  it('converts Retry-After-Ms to seconds when it is the only hint', () => {
+    const error = toChatError(
+      apiCallError({
+        statusCode: 429,
+        responseHeaders: { 'retry-after-ms': '1500' },
+      }),
+    )
+
+    expect(error.retryAfterSeconds).toBe(2)
+  })
+
+  it('does not divide the seconds header when both retry hints are present', () => {
+    const error = toChatError(
+      apiCallError({
+        statusCode: 429,
+        responseHeaders: { 'retry-after': '120', 'retry-after-ms': '60000' },
+      }),
+    )
+
+    expect(error.retryAfterSeconds).toBe(120)
+  })
+
   it.each([401, 403])('classifies %i as auth failure', (statusCode) => {
     const error = toChatError(
       apiCallError({ message: 'invalid api key', statusCode }),
@@ -44,6 +66,38 @@ describe('toChatError', () => {
 
     expect(error.code).toBe('auth_failed')
     expect(error.retryable).toBe(false)
+  })
+
+  it.each([
+    "This model's maximum context length is 200000 tokens. However, your messages resulted in 240000 tokens.",
+    'prompt is too long: 220000 tokens > 200000 maximum',
+  ])('classifies a 400 overflow message as context_length', (message) => {
+    const error = toChatError(apiCallError({ message, statusCode: 400 }))
+
+    expect(error.code).toBe('context_length')
+    expect(error.retryable).toBe(false)
+    expect(error.statusCode).toBe(400)
+  })
+
+  it('keeps Retry-After when a 4xx classifies by message text', () => {
+    const error = toChatError(
+      apiCallError({
+        message: 'upstream gateway failed to fetch the model',
+        statusCode: 400,
+        responseHeaders: { 'retry-after': '9' },
+      }),
+    )
+
+    expect(error.code).toBe('connection_failed')
+    expect(error.retryAfterSeconds).toBe(9)
+  })
+
+  it('keeps a non-overflow 400 as unknown', () => {
+    const error = toChatError(
+      apiCallError({ message: 'bad request', statusCode: 400 }),
+    )
+
+    expect(error.code).toBe('unknown')
   })
 
   it('classifies 5xx as a transient provider outage', () => {

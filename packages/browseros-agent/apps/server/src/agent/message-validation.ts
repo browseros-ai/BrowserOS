@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import type { UIMessage } from 'ai'
+import { isToolUIPart, type UIMessage } from 'ai'
 
 /**
  * Checks whether a UIMessage has meaningful content that can be sent
@@ -66,6 +66,53 @@ export function stripReasoningParts(messages: UIMessage[]): UIMessage[] {
         : { ...message, parts }
     })
     .filter(hasMessageContent)
+}
+
+/**
+ * Close out tool calls that can never produce a result.
+ *
+ * A turn can end while a tool call is still waiting on execution: the provider
+ * stream errors after emitting the complete call, or the abort signal fires
+ * while the call is pending. The part then sits in a non-terminal state and,
+ * replayed on the next turn, converts to an assistant tool-call with no
+ * matching tool result — the AI SDK rejects that prompt with
+ * MissingToolResultsError, so every later message in the conversation fails
+ * before it reaches the model. Marking the part `output-error` keeps the tool
+ * card visible and pairs the call with a result the wire format accepts. A
+ * denied approval already produces an `execution-denied` result, so it is left
+ * alone.
+ */
+export function closeDanglingToolCalls(messages: UIMessage[]): UIMessage[] {
+  return messages.map((message) => {
+    let touched = false
+    const parts = message.parts.map((part) => {
+      if (!isToolUIPart(part)) return part
+      if (
+        part.state !== 'input-streaming' &&
+        part.state !== 'input-available' &&
+        part.state !== 'approval-requested' &&
+        !(
+          part.state === 'approval-responded' &&
+          part.approval?.approved !== false
+        )
+      ) {
+        return part
+      }
+      touched = true
+      return {
+        ...part,
+        state: 'output-error' as const,
+        input: part.input,
+        errorText: 'Tool call interrupted before it could complete.',
+        approval:
+          part.state === 'approval-responded' &&
+          part.approval?.approved === true
+            ? { ...part.approval, approved: true as const }
+            : undefined,
+      }
+    })
+    return touched ? { ...message, parts } : message
+  })
 }
 
 /**
