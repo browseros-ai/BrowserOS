@@ -27,7 +27,7 @@ use std::time::{Duration, Instant};
 
 use fixture_server::{FixtureServer, Page};
 use js_runner::OpHost;
-use live_run::{LiveRun, TestPage, TestResult, brand};
+use live_run::{EnvCall, LiveRun, TestPage, TestResult, brand};
 use locator::{aria_ref, css, enter_frame, locator};
 use neo_playwright::{ErrorCode, PlaywrightError, TimedOut};
 use serde_json::{Value, json};
@@ -48,6 +48,10 @@ fn pages() -> HashMap<String, Page> {
         (
             "/covered/banner.html".to_owned(),
             Page::html(include_str!("data/covered/banner.html")),
+        ),
+        (
+            "/covered/frameside.html".to_owned(),
+            Page::html(include_str!("data/covered/frameside.html")),
         ),
     ])
 }
@@ -233,37 +237,67 @@ async fn tests_that_a_chosen_timeout_under_a_dialog_says_what_covers_it() -> Tes
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_each_kind_says_what_to_do() -> TestResult {
-    for (name, kind, line) in [
-        ("frame", "frame", "Do: a frame covers it."),
-        ("partial", "partial", "Do: only part of it is covered."),
+    // A press on the target's own lands by itself (the next row), unless the script chose the
+    // point: the partial, label and wrapper kinds answer at a covered point the script gave.
+    let at = |x: f64, y: f64| Some(json!({ "x": x, "y": y }));
+    for (name, kind, line, position) in [
+        ("frame", "frame", "Do: a frame covers it.", None),
+        (
+            "partial",
+            "partial",
+            "Do: only part of it is covered.",
+            at(150.0, 24.0),
+        ),
         (
             "label",
             "label",
             "Do: it sits under its own label. Press Space on it.",
+            at(6.0, 6.0),
         ),
         (
             "wrapper",
             "wrapper",
             "Do: its own wrapper takes the pointer.",
+            at(6.0, 6.0),
         ),
         (
             "labels",
             "labels",
             "Do: it labels the control on top. Act on that control:",
+            None,
         ),
         (
             "nothing",
             "nothing",
             "Do: it takes no pointer at its centre.",
+            None,
         ),
-        ("folded", "folded", "Do: it is not shown where it lies"),
+        (
+            "folded",
+            "folded",
+            "Do: it is not shown where it lies",
+            None,
+        ),
     ] {
         let shape = Shape::shape(name).await?;
+        let options = position.map_or_else(|| json!({}), |at| json!({ "position": at }));
         let result = async {
-            let (message, cover) = covered(shape.click("#target").await)
-                .map_err(|error| format!("{name}: {error}"))?;
+            let (message, cover) = covered(
+                shape
+                    .act("locator.click", &shape.at("#target"), options)
+                    .await,
+            )
+            .map_err(|error| format!("{name}: {error}"))?;
             assert_eq!(text(&cover, "kind"), kind, "{name}: {message}");
             assert!(message.contains(line), "{name}: {message}");
+            // These covers lie in the page's flow: the retries' scrolls move them in the view
+            // with their control, and they still stand from the click's first check.
+            if matches!(name, "partial" | "label" | "wrapper") {
+                assert!(
+                    message.contains("\n  It has been there since this click began."),
+                    "{name}: {message}"
+                );
+            }
             assert!(shape.resolves(text(&cover, "ref")).await?, "{name}");
             assert!(
                 shape.log().await?.is_empty(),
@@ -278,95 +312,436 @@ async fn tests_that_each_kind_says_what_to_do() -> TestResult {
     Ok(())
 }
 
-/// The ways out the lines give land: a click at the clear point, Space on a control under its
-/// own label, and a click on a label with links at the point given, which follows none.
+/// The call-log lines the run's ops left, which the trace keeps as their notes.
+fn notes(shape: &Shape) -> Vec<String> {
+    shape
+        .run
+        .calls()
+        .into_iter()
+        .filter_map(|call| match call {
+            EnvCall::Note(line) => Some(line),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Whether one of the run's call-log lines starts with `start`.
+fn noted(shape: &Shape, start: &str) -> bool {
+    notes(shape).iter().any(|line| line.starts_with(start))
+}
+
+/// How many presses of the target's own the call log counts: a host counts the same match.
+fn presses(shape: &Shape) -> usize {
+    notes(shape)
+        .iter()
+        .filter(|line| line.contains("takes the press: "))
+        .count()
+}
+
+/// Runs `row` on each shape, each in its own tab, and fails with every shape's failure, so one
+/// failing shape does not hide another's.
+async fn each_shape<F, Fut>(names: &[&str], row: F) -> TestResult
+where
+    F: Fn(Shape, String) -> Fut,
+    Fut: Future<Output = (Shape, TestResult)>,
+{
+    let mut failures = Vec::new();
+    for name in names {
+        let (shape, result) = row(Shape::shape(name).await?, (*name).to_owned()).await;
+        shape.close().await;
+        if let Err(error) = result {
+            failures.push(format!("{name}: {error}"));
+        }
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(failures.join("\n").into())
+    }
+}
+
+/// Covered-click C: a press whose cover is the target's own lands by itself, with one trusted
+/// press, and the call log says which in one fixed form. The shapes: a clear point of a button
+/// half under a widget; of one whose left part is a component drawing a link, which is not its
+/// own surface; of one whose first sample lies a quarter-pixel before a nested link, which pins
+/// where the press lands but not the order of test and rounding, since on a whole-pixel layout
+/// the old order passes too; of a card whose quick-add button shows on hover over its first clear
+/// point, which the guard at delivery swallows once before the press lands on the card's own
+/// part; a checkbox under its own label; a terms checkbox whose label holds two links (the press
+/// goes where the label is plain, and the page stays); and a radio under its own blank wrapper
+/// once that wrapper stood its four checks.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
-async fn tests_that_the_ways_out_land() -> TestResult {
-    let position = |message: &str| -> TestResult<Value> {
-        let after = message
-            .split("{ position: ")
-            .nth(1)
-            .ok_or("a position in the line")?;
-        let inner = after.split(" }").next().unwrap_or_default();
-        let number = |name: &str| -> TestResult<f64> {
-            Ok(inner
-                .split(&format!("{name}: "))
-                .nth(1)
-                .and_then(|rest| rest.split(',').next())
-                .ok_or("a coordinate")?
-                .trim()
-                .parse()?)
-        };
-        Ok(json!({ "x": number("x")?, "y": number("y")? }))
-    };
-    let partial = Shape::shape("partial").await?;
-    let result = async {
-        let (message, _) =
-            covered(partial.click("#target").await).map_err(|error| format!("partial: {error}"))?;
-        let at = position(&message)?;
-        partial
-            .act(
-                "locator.click",
-                &partial.at("#target"),
-                json!({ "position": at }),
-            )
-            .await?;
-        assert_eq!(partial.log().await?, ["target"]);
-        TestResult::Ok(())
+async fn tests_that_a_press_on_the_targets_own_lands_by_itself() -> TestResult {
+    for (name, line) in [
+        ("partial", "  a clear point of it takes the press: { x: "),
+        (
+            "partiallink",
+            "  a clear point of it takes the press: { x: ",
+        ),
+        (
+            "partialround",
+            "  a clear point of it takes the press: { x: ",
+        ),
+        (
+            "partialhover",
+            "  a clear point of it takes the press: { x: ",
+        ),
+        ("label", "  its own label takes the press: <label"),
+        ("links", "  its own label takes the press: <label"),
+        ("wrapper", "  its own wrapper takes the press: <div"),
+    ] {
+        let shape = Shape::shape(name).await?;
+        let result = async {
+            shape
+                .click("#target")
+                .await
+                .map_err(|error| format!("{name}: {error}"))?;
+            assert!(noted(&shape, line), "{name}: {:?}", notes(&shape));
+            assert_eq!(presses(&shape), 1, "{name}: one press, one line");
+            if name.starts_with("partial") {
+                assert_eq!(shape.log().await?, ["target"], "{name}");
+            } else {
+                let checked = shape
+                    .run
+                    .eval(&shape.page, "document.getElementById('target').checked")
+                    .await?;
+                assert_eq!(checked, json!(true), "{name}");
+            }
+            assert_eq!(
+                shape.run.eval(&shape.page, "location.pathname").await?,
+                json!("/covered/covered.html"),
+                "{name}: the page stayed"
+            );
+            TestResult::Ok(())
+        }
+        .await;
+        shape.close().await;
+        result?;
     }
-    .await;
-    partial.close().await;
-    result?;
+    Ok(())
+}
 
-    let label = Shape::shape("label").await?;
+/// A radio under its own blank wrapper that does nothing on a press: the press lands on the
+/// wrapper, the radio stays as it was, and the call log says that its state did not change. A
+/// `check` through it fails, and its error names the wrapper as what took the press.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_dead_wrapper_says_the_state_did_not_change() -> TestResult {
+    let shape = Shape::shape("wrapperdead").await?;
     let result = async {
-        covered(label.click("#target").await)?;
-        label
-            .act(
-                "locator.press",
-                &label.at("#target"),
-                json!({ "key": "Space" }),
-            )
-            .await?;
+        shape.click("#target").await?;
+        assert!(
+            noted(&shape, "  its own wrapper takes the press: <div"),
+            "{:?}",
+            notes(&shape)
+        );
+        assert!(
+            noted(
+                &shape,
+                "  its own wrapper took the press, and the control's state did not change"
+            ),
+            "{:?}",
+            notes(&shape)
+        );
         assert_eq!(
-            label
+            shape
                 .run
-                .eval(&label.page, "document.getElementById('target').checked")
+                .eval(&shape.page, "document.getElementById('target').checked")
                 .await?,
-            json!(true)
+            json!(false)
+        );
+        // A checking action still verifies after a press of the target's own: the state did
+        // not change, so `check` fails, and says which took the press.
+        let checked = shape
+            .act("locator.check", &shape.at("#target"), json!({}))
+            .await
+            .err()
+            .ok_or("check through a dead wrapper must fail")?;
+        assert!(
+            checked
+                .message()
+                .contains("did not change its state: its own wrapper took the press"),
+            "{checked}"
         );
         TestResult::Ok(())
     }
     .await;
-    label.close().await;
-    result?;
+    shape.close().await;
+    result
+}
 
-    let links = Shape::shape("links").await?;
+/// What takes the press as a wrapper is nothing in itself: a radio slotted into a component whose
+/// own root draws a Remove button over it, a sibling `span role="button"` drawing the checkbox's
+/// name over it, and a radio card that is a link. Each is the control's wrapper, and none is
+/// pressed: the covered answer comes with the wrapper's line, nothing saw a click, the control
+/// stays as it was, and the page stays.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_wrapper_that_is_something_in_itself_is_not_pressed() -> TestResult {
+    each_shape(
+        &["wrappershadow", "wrapperrole", "wrapperlink"],
+        |shape, name| async move {
+            let result = async {
+                let (message, cover) = covered(shape.click("#target").await)?;
+                if text(&cover, "kind") != "wrapper" || presses(&shape) != 0 {
+                    return Err(format!("{message}\n{:?}", notes(&shape)).into());
+                }
+                let log = shape.log().await?;
+                let checked = shape
+                    .run
+                    .eval(&shape.page, "document.getElementById('target').checked")
+                    .await?;
+                let path = shape.run.eval(&shape.page, "location.pathname").await?;
+                if !log.is_empty()
+                    || checked != json!(false)
+                    || path != json!("/covered/covered.html")
+                {
+                    return Err(format!("{name}: saw {log:?}, checked {checked}, at {path}").into());
+                }
+                TestResult::Ok(())
+            }
+            .await;
+            (shape, result)
+        },
+    )
+    .await
+}
+
+/// A dblclick under the target's own cover keeps the covered answer, as on main: on the
+/// half-covered button and on the checkbox under its own label, nothing is pressed and no
+/// `takes the press` line is logged.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_dblclick_keeps_the_covered_answer() -> TestResult {
+    each_shape(&["partial", "label"], |shape, name| async move {
+        let result = async {
+            let answer = shape
+                .act("locator.dblclick", &shape.at("#target"), json!({}))
+                .await;
+            let (message, _cover) = covered(answer)?;
+            let log = shape.log().await?;
+            if presses(&shape) != 0 || !log.is_empty() {
+                return Err(format!("{name}: saw {log:?}, {message}").into());
+            }
+            TestResult::Ok(())
+        }
+        .await;
+        (shape, result)
+    })
+    .await
+}
+
+/// A slider half under a widget: a clear point of it would take a press for a button, but a
+/// slider pressed anywhere moves its value, so only the point roles go through a clear point.
+/// The covered answer comes, with the kind and the clear point to act on; nothing is pressed.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_target_with_no_point_role_is_not_pressed_at_a_clear_point() -> TestResult {
+    let shape = Shape::shape("partialslider").await?;
     let result = async {
-        let (message, cover) = covered(links.click("#target").await)?;
-        assert!(message.contains("The label holds 2 links."), "{message}");
-        let at = position(&message)?;
-        let label = locator(&links.page, &[aria_ref(text(&cover, "ref"))], "the label");
-        links
-            .act("locator.click", &label, json!({ "position": at }))
-            .await?;
+        let (message, cover) = covered(shape.click("#target").await)?;
+        assert_eq!(text(&cover, "kind"), "partial", "{message}");
+        assert!(
+            message.contains("Act on it at a clear point: { position: { x: "),
+            "{message}"
+        );
+        assert!(
+            !noted(&shape, "  a clear point of it takes the press"),
+            "{message}"
+        );
+        assert!(shape.log().await?.is_empty(), "the slider saw no press");
         assert_eq!(
-            links
+            shape
                 .run
-                .eval(&links.page, "document.getElementById('target').checked")
+                .eval(&shape.page, "document.getElementById('target').value")
                 .await?,
-            json!(true)
+            json!("50")
+        );
+        TestResult::Ok(())
+    }
+    .await;
+    shape.close().await;
+    result
+}
+
+/// A button under its parent's blank veil: its own wrapper, but a button has no state to show
+/// what a press on the wrapper did, so nothing is pressed and the covered answer comes.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_veil_over_a_button_is_not_pressed() -> TestResult {
+    let shape = Shape::shape("veilbutton").await?;
+    let result = async {
+        let (message, cover) = covered(shape.click("#target").await)?;
+        assert_eq!(text(&cover, "kind"), "wrapper", "{message}");
+        assert!(
+            !noted(&shape, "  its own wrapper takes the press"),
+            "{message}"
+        );
+        assert!(shape.log().await?.is_empty(), "the button saw no click");
+        TestResult::Ok(())
+    }
+    .await;
+    shape.close().await;
+    result
+}
+
+/// A checkbox under its own label that is all link takes no press: a press on a link could
+/// leave the page. The covered answer comes, its line says to press Space, and the page stays.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_label_that_is_all_link_is_never_pressed() -> TestResult {
+    let shape = Shape::shape("alllink").await?;
+    let result = async {
+        let (message, cover) = covered(shape.click("#target").await)?;
+        assert_eq!(text(&cover, "kind"), "label", "{message}");
+        assert!(
+            message.contains("Do: it sits under its own label. Press Space on it."),
+            "{message}"
+        );
+        assert!(
+            !noted(&shape, "  its own label takes the press"),
+            "{message}"
         );
         assert_eq!(
-            links.run.eval(&links.page, "location.pathname").await?,
+            shape.run.eval(&shape.page, "location.pathname").await?,
             json!("/covered/covered.html"),
             "the page stayed"
         );
+        assert_eq!(
+            shape
+                .run
+                .eval(&shape.page, "document.getElementById('target').checked")
+                .await?,
+            json!(false)
+        );
         TestResult::Ok(())
     }
     .await;
-    links.close().await;
+    shape.close().await;
+    result
+}
+
+/// The target's `checked`, in the document or in the open shadow root of `#host`.
+const SHADOWED_TARGET_CHECKED: &str = "(document.getElementById('target') ?? \
+     document.getElementById('host').shadowRoot.getElementById('target')).checked";
+
+/// A press of the target's own label goes where the label is plain: never on a custom control
+/// in it (a `span role="button"` with no tabindex runs its own click handler), nor on what a
+/// component inside it draws in its own root (a link there); a label inside a container with a
+/// tabindex, as a dialog's body has, still has plain points; and so has one inside an open shadow
+/// root, whose hits are asked in that root. The box is checked, the label's own control saw no
+/// click, and the page stayed.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_label_press_goes_where_the_label_is_plain() -> TestResult {
+    each_shape(
+        &["labelrole", "linksdialog", "linksshadow", "linksnested"],
+        |shape, name| async move {
+            let result = async {
+                shape.click("#target").await?;
+                if !noted(&shape, "  its own label takes the press: <label") || presses(&shape) != 1
+                {
+                    return Err(format!("one label press: {:?}", notes(&shape)).into());
+                }
+                let log = shape.log().await?;
+                if log.iter().any(|what| what == "info") {
+                    return Err(format!("the label's own control was pressed: {log:?}").into());
+                }
+                let checked = shape.run.eval(&shape.page, SHADOWED_TARGET_CHECKED).await?;
+                let path = shape.run.eval(&shape.page, "location.pathname").await?;
+                if checked != json!(true) || path != json!("/covered/covered.html") {
+                    return Err(format!("checked {checked}, at {path}, for {name}").into());
+                }
+                TestResult::Ok(())
+            }
+            .await;
+            (shape, result)
+        },
+    )
+    .await
+}
+
+/// A label's state two: a checkbox that is not shown, whose own label is. `check` waits on the
+/// label, presses it, and the box is checked; also when the label lies below the view, at the
+/// foot of a long form, until the attempt scrolls it.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_hidden_checkbox_is_checked_through_its_label() -> TestResult {
+    each_shape(&["hiddenbox", "hiddenboxfar"], |shape, name| async move {
+        let result = async {
+            shape
+                .act("locator.check", &shape.at("#target"), json!({}))
+                .await?;
+            if !noted(&shape, "  its own label takes the press: <label") || presses(&shape) != 1 {
+                return Err(format!("one label press: {:?}", notes(&shape)).into());
+            }
+            let checked = shape
+                .run
+                .eval(&shape.page, "document.getElementById('target').checked")
+                .await?;
+            if checked != json!(true) {
+                return Err(format!("checked {checked} for {name}").into());
+            }
+            TestResult::Ok(())
+        }
+        .await;
+        (shape, result)
+    })
+    .await
+}
+
+/// A layer that holds nine frames and then a Close link is not a cover of frames only, though
+/// the eight controls the answer prints are all frames: its kind is `page`, without the frame's
+/// line, as the full list of what it takes the pointer with says.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_frames_and_a_link_are_not_frames_only() -> TestResult {
+    let shape = Shape::shape("manyframes").await?;
+    let result = async {
+        let (message, cover) = covered(shape.click("#target").await)?;
+        assert_eq!(text(&cover, "kind"), "page", "{message}");
+        assert!(!message.contains("its content is in a frame"), "{message}");
+        TestResult::Ok(())
+    }
+    .await;
+    shape.close().await;
+    result
+}
+
+/// A button in a same-process frame, half under a widget of its own page, whose clear point
+/// lies under a layer of the page above: the frame offers the point, the page above covers it,
+/// and nothing is pressed there. The covered answer names that page's layer, which has stood
+/// since the click began, and no press of the target's own is logged.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_clear_point_under_the_page_above_is_not_pressed() -> TestResult {
+    let shape = Shape::open("/covered/frameside.html").await?;
+    let result = async {
+        let target = locator(
+            &shape.page,
+            &[css("#inner"), enter_frame(), css("#target")],
+            "frameLocator('#inner').locator('#target')",
+        );
+        let (message, _cover) = covered(shape.act("locator.click", &target, json!({})).await)?;
+        assert!(
+            message.contains("\n  It has been there since this click began."),
+            "{message}"
+        );
+        assert_eq!(presses(&shape), 0, "{:?}", notes(&shape));
+        assert!(shape.log().await?.is_empty(), "the page above saw no click");
+        let inner = shape
+            .run
+            .eval(
+                &shape.page,
+                "document.getElementById('inner').contentWindow.__log",
+            )
+            .await?;
+        assert_eq!(inner, json!([]), "the button saw no click");
+        TestResult::Ok(())
+    }
+    .await;
+    shape.close().await;
     result
 }
 
@@ -1096,7 +1471,8 @@ async fn tests_that_a_sign_in_sheet_lists_only_its_ways_out() -> TestResult {
 /// A real sign-in sheet's second shape: a nameless portal in a carrier that takes no pointer,
 /// holding a dark backdrop on top at the click point, two focus guards and a dialog labelled
 /// "Log in or sign up" that holds only its frame. The answer shows that dialog: its role, name
-/// and ref, exactly one control (the frame), kind `page` and the ordinary line.
+/// and ref, and exactly one control, the frame; since that is its only control, the kind is
+/// `frame` and the line points into the frame.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_a_nameless_portal_is_shown_as_its_dialog() -> TestResult {
@@ -1117,9 +1493,14 @@ async fn tests_that_a_nameless_portal_is_shown_as_its_dialog() -> TestResult {
             [("iframe".to_owned(), "Log in or sign up".to_owned())],
             "{message}"
         );
-        assert_eq!(text(&cover, "kind"), "page", "{message}");
+        // Its one control is its frame, so its way out is in there: the frame's kind, with a
+        // line that points into the frame, though the backdrop lies at the point.
+        assert_eq!(text(&cover, "kind"), "frame", "{message}");
         assert!(
-            message.contains("\n  Do: answer or close it with one of its controls"),
+            message.contains(
+                "\n  Do: its content is in a frame: it is under the frame's ref in the snapshot. If \
+                 it is a bot check, use the solver."
+            ),
             "{message}"
         );
         assert!(shape.resolves(text(&cover, "ref")).await?, "{message}");

@@ -28,12 +28,12 @@ pub(crate) use probe_call::{
     call_with_nodes, cleanup, pinned_nodes, pinned_object, reply_of,
 };
 pub(crate) use probe_reply::{
-    CoverFacts, CoverKind, CoverMark, ErrorClass, Hit, PROBE_PROTOCOL, PageText, Point, ProbeReply,
-    Rect, Resolution, SnapshotIframe, SurveyLayer,
+    CoverFacts, CoverKind, CoverMark, ErrorClass, Hit, OwnCase, OwnPress, PROBE_PROTOCOL, PageText,
+    Point, ProbeReply, Rect, Resolution, SnapshotIframe, SurveyLayer,
 };
 pub(crate) use probe_request::{
     ArmPlan, BootOptions, DocumentPart, DropEntry, Edit, ElementState, ExpectParams, FilePayload,
-    FillValue, HitAction, ParsedSelector, ProbePolicy, ProbeRequest, ProbeTarget, QueryState, Read,
-    ReadAll, Retarget, ScrollPlan, SelectOption, SnapshotMode, StorageAction, StorageKind,
-    UrlPattern, Want,
+    FillValue, HitAction, OwnAllowed, ParsedSelector, ProbePolicy, ProbeRequest, ProbeTarget,
+    QueryState, Read, ReadAll, Retarget, ScrollPlan, SelectOption, SnapshotMode, StorageAction,
+    StorageKind, UrlPattern, Want,
 };

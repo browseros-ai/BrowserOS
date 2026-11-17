@@ -51,6 +51,14 @@ const consentHost = (mode, place) => {
   root.getElementById('none').addEventListener('click', () => host.remove())
   document.body.append(host)
 }
+// A checkbox under its own label whose first part, `over`, lies over the box, and whose plain
+// text follows it: a press of the label must go where it is plain.
+const termsOver = (over) => `<label id="own" style="position: relative; display: inline-block; padding: 8px; width: 320px">
+  <input type="checkbox" id="target" style="position: absolute; left: 8px; top: 8px; margin: 0; width: 13px; height: 13px">${over}<span style="display: inline-block; height: 24px; padding-left: 8px">I agree to these terms</span></label>`
+const pressLogged = () => {
+  document.getElementById('target').addEventListener('click', log('target'))
+  document.getElementById('info').addEventListener('click', log('info'))
+}
 const shapes = {
   plain() {
     button()
@@ -88,6 +96,66 @@ const shapes = {
     widget.setAttribute('style', 'position: absolute; z-index: 5; left: 110px; top: 0; width: 80px; height: 48px; background: #ffe')
     stage.append(widget)
   },
+  partiallink() {
+    // A button half under the same widget whose left part is a component drawing a link in its
+    // own root: a press of the button's own goes where the button itself is on top.
+    const target = button()
+    target.style.cssText = 'position: relative; width: 300px'
+    target.innerHTML = '<span id="more" style="position: absolute; left: 0; top: 0; width: 100px; height: 100%"></span>Buy'
+    const root = document.getElementById('more').attachShadow({ mode: 'open' })
+    root.innerHTML = '<a href="/elsewhere/more" id="info" style="display: block; height: 100%">More</a>'
+    root.getElementById('info').addEventListener('click', log('info'))
+    const widget = document.createElement('div')
+    widget.id = 'widget'
+    widget.textContent = 'EN'
+    widget.setAttribute('style', 'position: absolute; z-index: 5; left: 110px; top: 0; width: 80px; height: 48px; background: #ffe')
+    stage.append(widget)
+  },
+  partialround() {
+    // A button 43 px wide whose first clear sample lies at 10.75 px, a nested link starting at
+    // 10.9 px in its top part, and a widget over its middle. It pins the outcome (the press lands
+    // on the button's own part beside the link), not the order: on a whole-pixel layout it passes
+    // with test-then-round too. The rounding fix rests on its reasoning; a fractional-offset
+    // fixture is a follow-up.
+    const target = button()
+    target.style.cssText = 'position: relative; display: inline-block; width: 43px; height: 48px; margin: 0; padding: 0; border: 0'
+    target.innerHTML = '<a href="/elsewhere/more" id="info" style="position: absolute; left: 10.9px; top: 0; width: 32.1px; height: 20px">i</a>'
+    document.getElementById('info').addEventListener('click', log('info'))
+    const widget = document.createElement('div')
+    widget.id = 'widget'
+    widget.setAttribute('style', 'position: absolute; z-index: 5; left: 16px; top: 18px; width: 12px; height: 12px; background: #ffe')
+    stage.append(widget)
+  },
+  partialhover() {
+    // A product card that declares a link, half under the widget, whose quick-add button shows on
+    // hover over the card's first clear point: the point is plain when it is chosen and a nested
+    // button when the press arrives, after the pointer moved there. Only a check at delivery sees it.
+    stage.innerHTML = `<style>#target .add { display: none; position: absolute; left: 60px; top: 0; width: 40px; height: 24px }
+      #target:hover .add { display: block }</style>
+      <div role="link" tabindex="0" id="target" style="position: relative; width: 300px; height: 48px; background: #eef">Wireless mouse<button class="add" id="add">Add</button></div>`
+    document.getElementById('target').addEventListener('click', log('target'))
+    document.getElementById('add').addEventListener('click', (event) => {
+      if (event.isTrusted) window.__log.push('add')
+      event.stopPropagation()
+    })
+    const widget = document.createElement('div')
+    widget.id = 'widget'
+    widget.textContent = 'EN'
+    widget.setAttribute('style', 'position: absolute; z-index: 5; left: 110px; top: 0; width: 80px; height: 48px; background: #ffe')
+    stage.append(widget)
+  },
+  partialslider() {
+    // A slider half under the same widget: a press at whatever point is clear would move its
+    // value, so no clear point of it is pressed for the agent.
+    stage.innerHTML = '<input type="range" id="target" min="0" max="100" value="50" style="margin: 0; width: 300px; height: 48px">'
+    const target = document.getElementById('target')
+    for (const type of ['pointerdown', 'click', 'input']) target.addEventListener(type, log(type))
+    const widget = document.createElement('div')
+    widget.id = 'widget'
+    widget.textContent = 'EN'
+    widget.setAttribute('style', 'position: absolute; z-index: 5; left: 110px; top: 0; width: 80px; height: 48px; background: #ffe')
+    stage.append(widget)
+  },
   label() {
     stage.innerHTML = `<label id="own" style="position: relative; display: inline-block; padding: 8px">
       <input type="checkbox" id="target" style="position: absolute; left: 8px; top: 8px; margin: 0; width: 13px; height: 13px">
@@ -102,7 +170,108 @@ const shapes = {
       of this shop</span></label>`
     document.getElementById('target').addEventListener('click', log('target'))
   },
+  labelrole() {
+    // A custom control in the label: a span with role="button" and no tabindex runs its own
+    // click handler, so it is no plain part of the label.
+    stage.innerHTML = termsOver('<span role="button" id="info" style="position: relative; display: inline-block; width: 60px; height: 24px; background: #fee">Info</span>')
+    pressLogged()
+  },
+  linksdialog() {
+    // The label inside a container with a tabindex, as a dialog's body has, with a link over the
+    // box: the label's plain text is still its own.
+    stage.innerHTML = `<div tabindex="-1">${termsOver('<a href="/elsewhere/terms" id="info" style="position: relative; display: inline-block; width: 60px; height: 24px; background: #eef">Terms</a>')}</div>`
+    pressLogged()
+  },
+  linksnested() {
+    // A component inside the label: a host whose own root draws a link over the box, and the
+    // label's plain text after it. What the host draws is not the label's plain content.
+    stage.innerHTML = termsOver('<span id="terms" style="position: relative; display: inline-block; width: 140px; height: 24px"></span>')
+    const root = document.getElementById('terms').attachShadow({ mode: 'open' })
+    root.innerHTML = '<a href="/elsewhere/terms" id="info" style="display: block; width: 140px; height: 24px; background: #eef">Terms</a>'
+    document.getElementById('target').addEventListener('click', log('target'))
+    root.getElementById('info').addEventListener('click', log('info'))
+  },
+  linksshadow() {
+    // The same label inside an open shadow root: what is hit there is asked in that root, as the
+    // document's own answer is the root's host.
+    const host = document.createElement('div')
+    host.id = 'host'
+    stage.append(host)
+    const root = host.attachShadow({ mode: 'open' })
+    root.innerHTML = termsOver('<a href="/elsewhere/terms" id="info" style="position: relative; display: inline-block; width: 60px; height: 24px; background: #eef">Terms</a>')
+    root.getElementById('target').addEventListener('click', log('target'))
+    root.getElementById('info').addEventListener('click', log('info'))
+  },
+  alllink() {
+    // A checkbox under its own label that is all link: no point of the label is plain.
+    stage.innerHTML = `<label id="own" style="position: relative; display: inline-block; width: 320px">
+      <input type="checkbox" id="target" style="position: absolute; left: 8px; top: 8px; margin: 0; width: 13px; height: 13px">
+      <a href="/elsewhere/terms" style="position: relative; display: block; padding: 8px 8px 8px 24px; background: #eef">Read and accept the terms</a></label>`
+    document.getElementById('target').addEventListener('click', log('target'))
+  },
+  hiddenbox() {
+    // A checkbox that is not shown, and its own label that is: a styled box drawn by the label.
+    stage.innerHTML = `<input type="checkbox" id="target" style="display: none">
+      <label id="own" for="target" style="display: inline-block; padding: 8px; background: #eef">Subscribe to the newsletter</label>`
+    document.getElementById('target').addEventListener('click', log('target'))
+  },
+  hiddenboxfar() {
+    // The same at the foot of a long form: the label lies below the view until it is scrolled.
+    stage.innerHTML = `<div style="height: 2000px"></div><input type="checkbox" id="target" style="display: none">
+      <label id="own" for="target" style="display: inline-block; padding: 8px; background: #eef">Accept the terms</label>`
+    document.getElementById('target').addEventListener('click', log('target'))
+  },
+  manyframes() {
+    // A layer that holds nine frames and then a Close link: not frames only, though the eight
+    // controls an answer prints are all frames.
+    button()
+    const frames = '<iframe srcdoc="<p>ad</p>" style="width: 60px; height: 40px; border: 0"></iframe>'.repeat(9)
+    layer(`${frames}<a href="/elsewhere/close">Close</a>`)
+  },
   wrapper() {
+    // A radio card: its blank wrapper takes the pointer and selects the radio on a press.
+    stage.innerHTML = `<style>.option { position: relative; width: 200px; height: 40px }
+      .option::after { content: ''; position: absolute; inset: 0 }</style>
+      <div class="option"><input type="radio" id="target" name="size" style="margin: 12px; width: 13px; height: 13px"></div>`
+    document.getElementById('target').addEventListener('click', log('target'))
+    document.querySelector('.option').addEventListener('click', () => {
+      document.getElementById('target').checked = true
+    })
+  },
+  veilbutton() {
+    // A button under its parent's blank veil: the parent is its own wrapper, but only a state
+    // would show what a press on it did, and a button has none.
+    stage.innerHTML = `<style>.veiled { position: relative; width: 200px; height: 48px }
+      .veiled::after { content: ''; position: absolute; inset: 0 }</style>
+      <div class="veiled"><button id="target" style="width: 160px; height: 40px">Pay now</button></div>`
+    document.getElementById('target').addEventListener('click', log('target'))
+  },
+  wrappershadow() {
+    // A radio card built as a component: the radio slotted into a host whose own root draws a
+    // Remove button over it. What the host draws is not seen, so the wrapper takes no press.
+    stage.innerHTML = '<div id="card" style="position: relative; width: 200px; height: 40px"><input type="radio" id="target" name="size" style="margin: 12px; width: 13px; height: 13px"></div>'
+    const root = document.getElementById('card').attachShadow({ mode: 'open' })
+    root.innerHTML = '<slot></slot><button id="remove" style="position: absolute; inset: 0; opacity: 0.01">Remove</button>'
+    document.getElementById('target').addEventListener('click', log('target'))
+    root.getElementById('remove').addEventListener('click', log('remove'))
+  },
+  wrapperrole() {
+    // A sibling span that declares a button and draws the checkbox's name over it: it reads as
+    // the checkbox's drawing, but it runs its own click handler.
+    stage.innerHTML = `<div style="position: relative; width: 220px; height: 40px">
+      <input type="checkbox" id="target" aria-label="Gift wrap" style="position: absolute; left: 8px; top: 12px; margin: 0; width: 13px; height: 13px">
+      <span role="button" id="info" style="position: absolute; left: 2px; top: 6px; width: 24px; height: 24px; overflow: hidden">Gift wrap</span></div>`
+    document.getElementById('target').addEventListener('click', log('target'))
+    document.getElementById('info').addEventListener('click', log('info'))
+  },
+  wrapperlink() {
+    // A radio card that is a link: its own box lies over the radio, and a press on it leaves.
+    stage.innerHTML = `<style>#card::after { content: ''; position: absolute; inset: 0 }</style>
+      <a href="/elsewhere/card" id="card" style="position: relative; display: block; width: 200px; height: 40px"><input type="radio" id="target" name="size" style="margin: 12px; width: 13px; height: 13px"></a>`
+    document.getElementById('target').addEventListener('click', log('target'))
+  },
+  wrapperdead() {
+    // The same blank wrapper with nothing behind it: a press on it changes nothing.
     stage.innerHTML = `<style>.option { position: relative; width: 200px; height: 40px }
       .option::after { content: ''; position: absolute; inset: 0 }</style>
       <div class="option"><input type="radio" id="target" name="size" style="margin: 12px; width: 13px; height: 13px"></div>`

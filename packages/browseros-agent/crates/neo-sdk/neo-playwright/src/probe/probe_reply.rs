@@ -24,7 +24,7 @@ use crate::world::{FrameSeq, Pin};
 /// contract: a world keeps the probe an earlier build installed, and the install replaces that
 /// probe only when its number differs (`engine_source`), so a shape changed under the same
 /// number reaches this build in the old shape. The lock's test catches a change without a bump.
-pub(crate) const PROBE_PROTOCOL: u32 = 51;
+pub(crate) const PROBE_PROTOCOL: u32 = 52;
 
 /// One reply; `kind` is the tag. Any request may also answer `error`, and `uninstalled` when
 /// the world has no booted probe.
@@ -117,6 +117,11 @@ pub(crate) enum ProbeReply {
         rect: Rect,
         point: Point,
         token: u32,
+        /// The interceptor is armed on what is the target's own, at `point`: the press lands
+        /// there by itself (`OwnPress`).
+        #[serde(default)]
+        #[ts(optional)]
+        own: Option<OwnPress>,
     },
     Verdict {
         hit: Hit,
@@ -360,6 +365,35 @@ pub(crate) enum Hit {
     },
 }
 
+/// Which of the target's own takes a press that lands by itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum OwnCase {
+    Label,
+    Wrapper,
+    Point,
+}
+
+/// A press that lands by itself (covered-click C): what takes it, as the call log names it.
+#[derive(Clone, Debug, PartialEq, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct OwnPress {
+    pub(crate) case: OwnCase,
+    /// The label's or the wrapper's markup, as the call log prints an element.
+    #[serde(default)]
+    #[ts(optional)]
+    pub(crate) markup: Option<String>,
+    /// The clear point, relative to the target, as the covered answer prints it.
+    #[serde(default)]
+    #[ts(optional)]
+    pub(crate) position: Option<Point>,
+    /// A checkbox's, radio's or switch's state before a press through its own wrapper: the
+    /// runner reads it again after, since only the state shows what such a press did.
+    #[serde(default)]
+    #[ts(optional)]
+    pub(crate) checked: Option<bool>,
+}
+
 /// Which cover stood at one check of a pointer action (covered-click spec section 1): the root
 /// of its subtree as upstream's hit test finds it (`injectedScript.ts` `expectHitTarget`), with
 /// its box and how opaque it shows. The pointer runner counts a cover as standing while each
@@ -483,8 +517,13 @@ pub(crate) struct CoverControl {
 pub(crate) enum CoverKind {
     /// Another part of the page: a dialog, an overlay, a popup.
     Page,
-    /// What is on top is an `iframe`.
-    Frame,
+    /// What is on top is an `iframe`, or the cover lists nothing but frames. `inside`: the cover
+    /// is not the frame itself but holds only frames, so its way out is inside a frame.
+    Frame {
+        #[serde(default)]
+        #[ts(optional, as = "Option<bool>")]
+        inside: bool,
+    },
     /// Only part of the control is covered: `position` is a clear point of it, from its
     /// padding edge, as `click({ position })` takes it.
     Partial { position: Point },

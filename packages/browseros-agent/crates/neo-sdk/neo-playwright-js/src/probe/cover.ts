@@ -29,6 +29,8 @@ import type {
   CoverKind,
   CoverMark,
   CoverRequest,
+  OwnAllowed,
+  OwnPress,
   Point,
   ReplyTo,
 } from './protocol'
@@ -89,6 +91,17 @@ export function parentOrHost(element: Element): Element | undefined {
  * roots, and each root's hit leads into the next.
  */
 export function hitChain(target: Element, point: Point): Element[] | null {
+  let hit = hitAt(target, point)
+  const chain: Element[] = []
+  while (hit && hit !== target) {
+    chain.push(hit)
+    hit = hit.assignedSlot ?? parentOrHost(hit)
+  }
+  return hit === target ? null : chain
+}
+
+/** What is on top at `point` in the target's own chain of roots, as `hitChain` reads it. */
+function hitAt(target: Element, point: Point): Element | undefined {
   const roots: (Document | ShadowRoot)[] = []
   for (let at: Element | undefined = target; at; ) {
     const root = at.getRootNode()
@@ -97,13 +110,7 @@ export function hitChain(target: Element, point: Point): Element[] | null {
     if (root.nodeType === 9) break
     at = (root as ShadowRoot).host
   }
-  let hit = hitAtRoots(roots, point)
-  const chain: Element[] = []
-  while (hit && hit !== target) {
-    chain.push(hit)
-    hit = hit.assignedSlot ?? parentOrHost(hit)
-  }
-  return hit === target ? null : chain
+  return hitAtRoots(roots, point)
 }
 
 /**
@@ -246,7 +253,10 @@ function factsOf(
     snapshot = output.tree(shown, () => quietSnapshot(world, shown))
     words = holdsWords(snapshot)
   }
-  const controls = surrounds ? [] : controlsOf(world, output, shown)
+  // Every control the cover takes the pointer with, read in full: the list the answer prints is
+  // cut to eight, and what the cover is (frames only or not) is decided before that cut.
+  const taking = surrounds ? [] : takingControls(world, shown)
+  const controls = controlsOf(world, output, shown, taking)
   // The engine drops a textbox's own text, so a wordless snapshot is not a wordless cover.
   const drawn = words
     ? undefined
@@ -273,7 +283,7 @@ function factsOf(
     behind,
     closed,
     notice: !surrounds && inLiveRegion(world, shown),
-    kind: frameInCover(world, shown, kind) ? { is: 'page' } : kind,
+    kind: frameKind(shown, kind, taking),
   }
 }
 
@@ -318,15 +328,29 @@ function isFrame(element: Element): boolean {
 }
 
 /**
- * A frame at the point gets the frame's line only when the cover named is that frame, or lists
- * nothing but frames. A dialog with controls of its own, one of whose frames lies at the point
- * (a sign-in dialog that draws its form in a frame), is answered or closed with those controls:
- * the frame's line would send the agent to a bot-check solver with the dialog's Close listed above.
+ * The kind against the cover named and every control it takes the pointer with (not the list the
+ * answer prints, which is cut to eight), for the frame's line:
+ * - a cover that is a frame keeps its kind and its line;
+ * - a cover that lists nothing but frames, one or more, gets the frame's kind whatever lies at the
+ *   point, with a line that points into the frame (`inside`): its way out is in there, as on a
+ *   sign-in sheet whose Close is the frame's own;
+ * - a frame at the point of a cover with controls of its own (a sign-in dialog that draws its form
+ *   in a frame) is `page`: the frame's line would send the agent to a bot-check solver with the
+ *   dialog's Close listed above.
  */
-function frameInCover(world: World, shown: Element, kind: CoverKind): boolean {
-  if (kind.is !== 'frame') return false
-  if (isFrame(shown)) return false
-  return takingControls(world, shown).some((control) => !isFrame(control))
+function frameKind(
+  shown: Element,
+  kind: CoverKind,
+  taking: readonly Element[],
+): CoverKind {
+  if (isFrame(shown)) return kind
+  if (kind.is !== 'page' && kind.is !== 'frame') return kind
+  const frames = taking.filter(isFrame)
+  if (frames.length > 0 && frames.length === taking.length)
+    return { is: 'frame', inside: true }
+  return kind.is === 'frame' && frames.length < taking.length
+    ? { is: 'page' }
+    : kind
 }
 
 /**
@@ -682,6 +706,9 @@ function explicitControl(element: Element): boolean {
  * accessible name, and its composed tree holds exactly one shown element whose role is `dialog`
  * or `alertdialog` (an open `<dialog>` counts; `aria-modal` alone does not). None, or two or
  * more, a dialog nested in a dialog included: `undefined`, and the cover is shown as itself.
+ * The count runs inside the walk's bound (MAX_WALKED), a named limit: a second dialog past it is
+ * not seen. Giving up at the bound would take the name from every cover that holds one large
+ * dialog, which is commoner, and counting past it costs a second walk.
  */
 function soleDialog(world: World, cover: Element): Element | undefined {
   const { utils } = world.injected
@@ -705,22 +732,12 @@ const NATIVE_CONTROLS =
 
 /**
  * A cover's control, by what it is: a native control, a frame, an editable region, or an element
- * whose role attribute names a control. One that has only a tabindex counts when it is in the
- * tab order (0 or more) and has an accessible name: a `div` with `tabindex="0"` and a label
- * `Close` is a careless page's close button, while a dialog's focus guards, its off-screen focus
- * target and its title span are not. A dialog or alertdialog is never a control: it is what the
- * controls are in, and an answer that lists it hides the way out.
+ * whose role attribute names a control. An element with only a tabindex is not one: a dialog's
+ * container, its focus guards, an off-screen focus target and its title span all carry one, and
+ * an answer that lists them hides the way out among them.
  */
-export function coverControl(world: World, element: Element): boolean {
-  const { utils } = world.injected
-  const role = utils.getAriaRole(element)
-  if (role === 'dialog' || role === 'alertdialog') return false
-  if (element.matches(NATIVE_CONTROLS) || explicitControl(element)) return true
-  const tabindex = Number.parseInt(element.getAttribute('tabindex') ?? '', 10)
-  return (
-    tabindex >= 0 &&
-    utils.getElementAccessibleNameText(element, false).trim() !== ''
-  )
+export function coverControl(element: Element): boolean {
+  return element.matches(NATIVE_CONTROLS) || explicitControl(element)
 }
 
 /** A control's role as an answer prints it: a frame is an `iframe`, as a snapshot prints one. */
@@ -740,7 +757,7 @@ export function controlRole(world: World, control: Element): string {
 export function takingControls(world: World, shown: Element): Element[] {
   const { injected } = world
   return composedDescendants(shown).filter((control) => {
-    if (!coverControl(world, control)) return false
+    if (!coverControl(control)) return false
     if (!injected.utils.isElementVisible(control)) return false
     const box = control.getBoundingClientRect()
     const middle = { x: box.x + box.width / 2, y: box.y + box.height / 2 }
@@ -761,8 +778,8 @@ export function controlsOf(
   world: World,
   output: FailureOutput,
   shown: Element,
+  taking: readonly Element[] = takingControls(world, shown),
 ): CoverControl[] {
-  const taking = takingControls(world, shown)
   const roleOf = (control: Element) => controlRole(world, control)
   const kept = new Set<Element>(
     taking
@@ -849,6 +866,190 @@ function ownLabel(subject: Element, onTop: Element): Element | undefined {
   )
 }
 
+/** The roles whose press point cannot matter: a clear point of one is pressed by itself. */
+const POINT_ROLES: ReadonlySet<string> = new Set([
+  'link',
+  'button',
+  'checkbox',
+  'radio',
+  'switch',
+  'tab',
+  'menuitem',
+  'option',
+])
+
+/**
+ * What of the target's own takes a press its covered point refused: the element the interceptor
+ * arms on, and the frame point it expects, which the caller works out from `press.position` for
+ * a clear point (`act.ts`'s `clickPoint`, as a script's `position` is read).
+ */
+export type OwnChoice = {
+  element: Element
+  point?: Point
+  press: OwnPress
+}
+
+/**
+ * Covered-click C, the presses that land by themselves: what of `target`'s own may take a press
+ * the interceptor refused at `point`. It goes by the covered answer's own kinds (`kindOf`), so
+ * Neo presses where its answer would have told the agent to:
+ * - its own label: at `point` when the label or its plain content is on top there, else at the
+ *   label's first plain point; a label that is all link or control takes no press;
+ * - its own wrapper or drawing: only the cover `allowed.wrapper` names, and only for a checkbox, a
+ *   radio or a switch, whose state shows what the press did. Over any other control a wrapper
+ *   may be a blank veil, and a parent's text holds its button's own text, so no test of what
+ *   the wrapper draws tells the two apart: the answer comes;
+ * - a clear point of it, the one the answer prints, for a target whose point cannot matter.
+ * Never a frame, another control's label, or anything foreign. `undefined`: the answer comes.
+ */
+export function ownPress(
+  world: World,
+  output: FailureOutput,
+  target: Element,
+  point: Point,
+  allowed: OwnAllowed,
+): OwnChoice | undefined {
+  const chain = hitChain(target, point)
+  const onTop = chain?.[0]
+  if (!chain || !onTop) return undefined
+  const kind = kindOf(world, target, chain, point, false)
+  if (kind.is === 'label') {
+    const label = ownLabel(target, onTop)
+    if (!label) return undefined
+    const at = ownSurface(label, onTop) ? point : labelPlainPoint(label)
+    if (!at) return undefined
+    return {
+      element: label,
+      point: at,
+      press: { case: 'label', markup: output.previewNode(label) },
+    }
+  }
+  if (kind.is === 'wrapper') {
+    if (coverNumber(coverRoot(target, chain)) !== allowed.wrapper)
+      return undefined
+    // What takes the press as a wrapper is nothing in itself: the element pressed, and each parent
+    // of it below the one that holds the control, is plain by `ownSurface`'s one list. A `span
+    // role="button"` drawing the control's name, a radio card that is a link, or a component
+    // whose root draws over the radio would run its own action instead.
+    if (!plainElement(onTop)) return undefined
+    for (
+      let at = onTop.parentElement;
+      at && !at.contains(target);
+      at = at.parentElement
+    )
+      if (!plainElement(at)) return undefined
+    const checked = checkedState(world, target)
+    if (checked === undefined) return undefined
+    return {
+      element: onTop,
+      point,
+      press: { case: 'wrapper', markup: output.previewNode(onTop), checked },
+    }
+  }
+  if (kind.is === 'partial') {
+    const role = world.injected.utils.getAriaRole(target) ?? ''
+    if (!POINT_ROLES.has(role) && target.localName !== 'summary')
+      return undefined
+    return {
+      element: target,
+      press: { case: 'point', position: kind.position },
+    }
+  }
+  return undefined
+}
+
+/**
+ * A checkbox or radio that is not shown, and a label of its own that is: the label a click
+ * through it goes to (a label's state two). Checkboxes and radios only. One with a plain point
+ * in the view comes first; else the first shown one, which the attempt scrolls into the view
+ * before `labelPlace` looks for its plain point (a terms box at the foot of a long form).
+ */
+export function shownOwnLabel(
+  world: World,
+  control: Element,
+): Element | undefined {
+  if (control.localName !== 'input') return undefined
+  const type = control.getAttribute('type')?.toLowerCase()
+  if (type !== 'checkbox' && type !== 'radio') return undefined
+  const labels: unknown = Reflect.get(control, 'labels')
+  if (!(labels instanceof NodeList)) return undefined
+  const shown = Array.from(labels).filter(
+    (label): label is Element =>
+      label instanceof Element && world.injected.utils.isElementVisible(label),
+  )
+  return shown.find((label) => labelPlainPoint(label) !== undefined) ?? shown[0]
+}
+
+/**
+ * Whether `hit` lies on `owner`'s own surface: a point is the owner's own when nothing between
+ * what was hit there and the owner is a link, a control (native, with a tabindex, or by a
+ * declared role), a frame, or a shadow host, since what a host draws is not seen from here. The
+ * label, the clear point and the wrapper all ask it. The owner itself is not asked: a target that
+ * is a host keeps its insides as its own. The walk stops at the owner, so a container around it,
+ * such as a dialog's body with its tabindex, is not the owner's.
+ */
+function ownSurface(owner: Element, hit: Element): boolean {
+  for (let at: Element | null = hit; at && at !== owner; at = at.parentElement)
+    if (!plainElement(at)) return false
+  return owner.contains(hit)
+}
+
+/**
+ * What is on top at `point` when it is not `owner`'s own surface (`ownSurface`), hit-tested in
+ * the owner's own chain of roots as `hitChain` reads it, never taken from an event's target,
+ * which hides what is inside a closed root. `undefined` when the point is the owner's own. The
+ * guard at delivery (`act.ts`'s `guardPress`) asks it where a press arrives.
+ */
+export function notOwnAt(owner: Element, point: Point): Element | undefined {
+  const hit = hitAt(owner, point)
+  if (!hit) return owner.ownerDocument.documentElement
+  return ownSurface(owner, hit) ? undefined : hit
+}
+
+/**
+ * `ownSurface`'s one list: no link, no control (native, with a tabindex, or by a declared role),
+ * no frame (a frame is a control) and no shadow host.
+ */
+function plainElement(element: Element): boolean {
+  return !(
+    element.matches(`a[href], ${CONTROLS}`) ||
+    explicitControl(element) ||
+    drawsUnseen(element)
+  )
+}
+
+/**
+ * A shadow host: what it draws in its root (a link, perhaps) is not seen as plain, whether this
+ * world reads that root or not. A root this world reads shows as `shadowRoot`; one it cannot is
+ * known by `inClosedPart`'s test. Both a hit and the root's own hit answer the host for a point
+ * inside its root, so the host is always on a walk from what was hit. Slotted text needs nothing:
+ * its parent is the host.
+ */
+function drawsUnseen(element: Element): boolean {
+  return (
+    element.shadowRoot !== null ||
+    (element.localName.includes('-') && mayCarryRoot(element))
+  )
+}
+
+/** The label's first plain point (`pointOffLinks`), in the frame's pixels. */
+export function labelPlainPoint(label: Element): Point | undefined {
+  const position = pointOffLinks(label)
+  return position && positionPoint(label, position).point
+}
+
+/** A checkbox's, radio's or switch's state; `undefined` for any other control. */
+function checkedState(world: World, control: Element): boolean | undefined {
+  const role = world.injected.utils.getAriaRole(control) ?? ''
+  if (role !== 'checkbox' && role !== 'radio' && role !== 'switch')
+    return undefined
+  try {
+    return world.injected.elementState(control, 'checked', true).matches
+  } catch {
+    return undefined
+  }
+}
+
 /** The label's links, and a point of it on none of them when it has some. */
 function labelKind(label: Element): CoverKind {
   const links = label.querySelectorAll('a[href]').length
@@ -862,18 +1063,18 @@ function labelKind(label: Element): CoverKind {
  * top: no link and no control inside it. Tried on a 5 by 3 grid over its box.
  */
 function pointOffLinks(label: Element): Point | undefined {
-  const box = label.getBoundingClientRect()
-  const style = getComputedStyle(label)
-  const left = box.x + (Number.parseFloat(style.borderLeftWidth) || 0)
-  const topEdge = box.y + (Number.parseFloat(style.borderTopWidth) || 0)
+  // Hit-tested in the label's own root, so one inside a shadow root is not retargeted to its host.
+  const root = label.getRootNode()
+  const scope = root instanceof ShadowRoot ? root : document
   for (const fy of [0.5, 0.25, 0.75])
     for (const fx of [0.1, 0.3, 0.5, 0.7, 0.9]) {
-      const point = { x: box.x + box.width * fx, y: box.y + box.height * fy }
+      const position = samplePosition(label, fx, fy)
+      const { point } = positionPoint(label, position)
       const chain = hitChain(label, point)
       if (chain !== null) continue
-      const on = document.elementFromPoint(point.x, point.y)
-      if (on?.closest(`a[href], ${CONTROLS}`)) continue
-      return { x: point.x - left, y: point.y - topEdge }
+      const on = scope.elementFromPoint(point.x, point.y)
+      if (on && !ownSurface(label, on)) continue
+      return position
     }
   return undefined
 }
@@ -890,14 +1091,46 @@ function labelledControl(
 }
 
 /**
- * One of eight other points of the control where it is on top, from its padding edge, as
- * `click({ position })` takes it. Only points inside the viewport count.
+ * A script's `position` as a point of the frame: from the element's padding edge, its border
+ * widths read as upstream reads them (`parseInt`). `clickPoint` converts a script's position with
+ * it, and `clearPoint` and the label's plain point test the very point it gives, so the point
+ * that is tested is the point that is pressed.
+ */
+export function positionPoint(
+  element: Element,
+  position: Point,
+): { point: Point; borderOffset: Point } {
+  const style = getComputedStyle(element)
+  const box = element.getBoundingClientRect()
+  const borderOffset = {
+    x: Number.parseInt(style.borderLeftWidth || '0', 10) + position.x,
+    y: Number.parseInt(style.borderTopWidth || '0', 10) + position.y,
+  }
+  return {
+    point: { x: box.x + borderOffset.x, y: box.y + borderOffset.y },
+    borderOffset,
+  }
+}
+
+/** A sample of `element`'s box at the fractions `fx`, `fy`, as a whole-pixel position. */
+function samplePosition(element: Element, fx: number, fy: number): Point {
+  const box = element.getBoundingClientRect()
+  const origin = positionPoint(element, { x: 0, y: 0 }).point
+  return {
+    x: Math.round(box.x + box.width * fx - origin.x),
+    y: Math.round(box.y + box.height * fy - origin.y),
+  }
+}
+
+/**
+ * One of eight other points of the control where it is on top, on its own surface
+ * (`ownSurface`: no link, control, frame or component nested in it), as `click({ position })`
+ * takes it. Each sample is rounded to the whole-pixel position first, and the point that
+ * position gives (`positionPoint`) is the one tested: in the view, on top, the target's own.
+ * Both a press of the target's own and the covered answer's point come from here, so neither
+ * lands on a control inside the target; one whose only clear parts are such controls has none.
  */
 function clearPoint(subject: Element): Point | undefined {
-  const box = subject.getBoundingClientRect()
-  const style = getComputedStyle(subject)
-  const left = box.x + (Number.parseFloat(style.borderLeftWidth) || 0)
-  const topEdge = box.y + (Number.parseFloat(style.borderTopWidth) || 0)
   for (const [fx, fy] of [
     [0.25, 0.25],
     [0.5, 0.25],
@@ -908,7 +1141,8 @@ function clearPoint(subject: Element): Point | undefined {
     [0.5, 0.75],
     [0.75, 0.75],
   ] as const) {
-    const point = { x: box.x + box.width * fx, y: box.y + box.height * fy }
+    const position = samplePosition(subject, fx, fy)
+    const { point } = positionPoint(subject, position)
     if (
       point.x < 0 ||
       point.y < 0 ||
@@ -916,11 +1150,8 @@ function clearPoint(subject: Element): Point | undefined {
       point.y >= innerHeight
     )
       continue
-    if (hitChain(subject, point) === null)
-      return {
-        x: Math.round(point.x - left),
-        y: Math.round(point.y - topEdge),
-      }
+    const hit = hitAt(subject, point)
+    if (hit && ownSurface(subject, hit)) return position
   }
   return undefined
 }

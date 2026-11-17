@@ -235,7 +235,7 @@ function findFaces(
       phases.stopped = true
       break
     }
-    if (!coverControl(world, element)) continue
+    if (!coverControl(element)) continue
     if (
       !world.injected.elementState(element, 'visible', true).matches ||
       !world.injected.elementState(element, 'enabled', true).matches
@@ -381,7 +381,7 @@ function pageGuard(
         return true
       }
       controls ??= Array.from(refs.values(), ({ element }) => element).filter(
-        (element) => coverControl(world, element),
+        (element) => coverControl(element),
       )
       // A dialog's controls cannot turn its carrier into the page. The denominator remains
       // the whole document, so a fixed app shell is still judged by its own controls.

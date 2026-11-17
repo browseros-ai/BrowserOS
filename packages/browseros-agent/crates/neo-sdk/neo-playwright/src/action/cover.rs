@@ -52,11 +52,17 @@ pub(crate) struct Standing {
     /// `None` after a verdict's miss alone: the interceptor names no element, and the next
     /// covered check gives the cover its mark.
     mark: Option<CoverMark>,
+    /// The control's click point when `mark` was taken, in the same pixels: the place over the
+    /// control that a cover moving with it keeps under any scroll.
+    mark_at: Point,
     since: Instant,
     checks: u32,
     /// It was there at the action's first completed check.
     from_start: bool,
 }
+
+/// The checks a cover stands before a press may go through it as the target's own wrapper.
+const WRAPPER_CHECKS: u32 = 4;
 
 /// The record of a pointer action's completed checks, kept by its runner on Rust's clock.
 #[derive(Debug)]
@@ -101,16 +107,24 @@ impl CoverWatch {
         self.checks += 1;
         if let Some(standing) = self.standing.as_mut()
             && standing.seat.above == seat.above
-            && same_cover(standing.mark, mark)
+            && same_cover((standing.mark_at, standing.mark), (seat.point, mark))
         {
             standing.checks += 1;
-            if standing.mark.is_none() {
-                standing.mark = mark;
+            // The place stays the first sighting's, so a cover drifting under the tolerance at
+            // every check still moves; whether it says it is loading is the latest sighting's.
+            if let Some(seen) = mark {
+                if let Some(held) = standing.mark.as_mut() {
+                    held.busy = seen.busy;
+                } else {
+                    standing.mark = Some(seen);
+                    standing.mark_at = seat.point;
+                }
             }
             standing.seat = seat;
             return;
         }
         self.standing = Some(Standing {
+            mark_at: seat.point,
             seat,
             mark,
             since: Instant::now(),
@@ -119,18 +133,48 @@ impl CoverWatch {
         });
     }
 
+    /// The cover a press may go through as the target's own wrapper or drawing (covered-click
+    /// C): the one that has stood for [`WRAPPER_CHECKS`] checks and does not say it is loading.
+    /// A cover that just arrived may still be a page's veil on its way somewhere.
+    pub(crate) fn wrapper_allowed(&self) -> Option<u32> {
+        let standing = self.standing.as_ref()?;
+        let mark = standing.mark.as_ref()?;
+        (standing.checks >= WRAPPER_CHECKS && !mark.busy).then_some(mark.id)
+    }
+
     /// The cover the last completed check found, if it found one.
     pub(crate) fn standing(&self) -> Option<&Standing> {
         self.standing.as_ref()
     }
 }
 
-/// The same cover: the same root, box and opacity. A cover known only from a verdict's miss
-/// takes the next mark.
-fn same_cover(standing: Option<CoverMark>, seen: Option<CoverMark>) -> bool {
+/// Half a pixel: the same box measured after a scroll is not the same number bit for bit.
+const SAME_PLACE_PX: f64 = 0.5;
+
+fn near(a: f64, b: f64) -> bool {
+    (a - b).abs() < SAME_PLACE_PX
+}
+
+/// Two sightings of one standing cover, each with the control's click point it was seen at. The
+/// same cover keeps its root's number, its opacity (a fade is a change) and its size, and keeps
+/// its place in one of two ways: in the view (a fixed cover the control scrolls under), or over
+/// the control's click point (a cover that moves with its control under any scroll, the page's
+/// or a nested scroller's, as the runner's retries scroll it). One that changes in both ways is
+/// moving. A sighting with no mark (a verdict's miss) is of whatever stands there.
+fn same_cover(
+    (at, standing): (Point, Option<CoverMark>),
+    (now, seen): (Point, Option<CoverMark>),
+) -> bool {
     match (standing, seen) {
         (Some(a), Some(b)) => {
-            a.id == b.id && a.rect == b.rect && a.opacity.to_bits() == b.opacity.to_bits()
+            let (a_box, b_box) = (a.rect, b.rect);
+            a.id == b.id
+                && a.opacity.to_bits() == b.opacity.to_bits()
+                && near(a_box.width, b_box.width)
+                && near(a_box.height, b_box.height)
+                && ((near(a_box.x, b_box.x) && near(a_box.y, b_box.y))
+                    || (near(a_box.x - at.x, b_box.x - now.x)
+                        && near(a_box.y - at.y, b_box.y - now.y)))
         }
         (None, _) | (_, None) => true,
     }
@@ -404,8 +448,12 @@ fn todo(facts: &CoverFacts) -> String {
              wait for it: getByRef('{}').waitFor({{ state: 'hidden' }}).",
             facts.r#ref
         ),
-        CoverKind::Frame => "a frame covers it. Its content is under its ref in the snapshot. If \
-                             it is a bot check, use the solver."
+        CoverKind::Frame { inside: false } => "a frame covers it. Its content is under its ref in \
+                                               the snapshot. If it is a bot check, use the solver."
+            .to_owned(),
+        CoverKind::Frame { inside: true } => "its content is in a frame: it is under the frame's \
+                                              ref in the snapshot. If it is a bot check, use the \
+                                              solver."
             .to_owned(),
         CoverKind::Partial { position } => format!(
             "only part of it is covered. Act on it at a clear point: {{ position: {} }}.",
@@ -446,7 +494,7 @@ fn todo(facts: &CoverFacts) -> String {
     }
 }
 
-fn point_text(point: Point) -> String {
+pub(crate) fn point_text(point: Point) -> String {
     format!("{{ x: {}, y: {} }}", point.x.round(), point.y.round())
 }
 
@@ -470,7 +518,7 @@ fn field(facts: &CoverFacts) -> Value {
 fn kind_name(kind: &CoverKind) -> &'static str {
     match kind {
         CoverKind::Page => "page",
-        CoverKind::Frame => "frame",
+        CoverKind::Frame { .. } => "frame",
         CoverKind::Partial { .. } => "partial",
         CoverKind::Label { .. } => "label",
         CoverKind::Wrapper => "wrapper",

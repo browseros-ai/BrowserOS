@@ -140,6 +140,11 @@ pub(crate) enum ProbeRequest {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         arm: Option<ArmPlan>,
+        /// The presses that land by themselves: present when this action may press what is the
+        /// target's own, so a covered arming arms on it instead (`OwnAllowed`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        own: Option<OwnAllowed>,
     },
     /// Stops the interceptor armed with `token` and reports whether the trusted events hit.
     Verdict { token: u32 },
@@ -364,6 +369,20 @@ pub(crate) enum HitAction {
     Mouse,
     Hover,
     Drag,
+}
+
+/// Covered-click C, the presses that land by themselves: a click with no script `position`, not
+/// forced, not a trial and not under the conformance flag may land on what is the
+/// target's own when its point is covered: its own label, its own wrapper or drawing, or a clear
+/// point of it. The probe arms the same interceptor on that element at that point.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct OwnAllowed {
+    /// The one cover a wrapper may be: the cover that stood four checks and does not say it is
+    /// loading (the pointer runner's count). Absent: no wrapper takes the press.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub(crate) wrapper: Option<u32>,
 }
 
 /// Arms the hit-target interceptor. `block_all` is Playwright's `trial`.

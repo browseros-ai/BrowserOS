@@ -363,7 +363,7 @@ fn a_script_drives_a_page_through_the_playwright_api() -> TestResult {
             .and_then(|tool| tool.description.as_deref())
             .ok_or("run has a description")?;
         assert!(
-            description.contains("`getByRole`") && description.contains("page.getByRef('e5')"),
+            description.contains("`getByRole`") && description.contains("page.getByRef('e41')"),
             "the description lists the Playwright API and its ref hint: {description}"
         );
 

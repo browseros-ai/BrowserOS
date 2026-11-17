@@ -315,6 +315,7 @@ impl<'a> ElementRunner<'a> {
             scroll,
             position: None,
             arm: None,
+            own: None,
         };
         let mut reply = self.call(located, &act(target, ScrollPlan::None)).await?;
         if scroll && let Some(ProbeReply::Measured { pin, .. }) = reply {
