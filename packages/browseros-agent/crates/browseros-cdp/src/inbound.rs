@@ -184,7 +184,7 @@ mod tests {
     /// The SDK's page-side cases (`probe-reply-text.test.ts`), plus the pair Chromium escapes.
     #[test]
     fn tests_that_lone_halves_become_the_replacement_character_and_nothing_else_changes() {
-        let text = r#"{"high":"\ud83d","low":"\ude00","pair":"😀","upper":"😀","literal":"\\ud83d","prefixed":"\\\ud83d","\ud83d":"\ude00","high,high":"\ud83d😀","low,high":"\ude00\ud83d","plain":"éA"}"#;
+        let text = r#"{"high":"\ud83d","low":"\ude00","pair":"\ud83d\ude00","upper":"\uD83D\uDE00","literal":"\\ud83d","prefixed":"\\\ud83d","\ud83d":"\ude00","high,high":"\ud83d\ud83d\ude00","low,high":"\ude00\ud83d","plain":"\u00e9\u0041"}"#;
         assert_eq!(
             read_ok(text),
             json!({
@@ -204,10 +204,13 @@ mod tests {
 
     #[test]
     fn tests_that_text_without_a_lone_half_is_not_rewritten() {
-        assert_eq!(well_formed(r#"{"a":"😀 \\ud800 \n A"}"#), None);
+        assert_eq!(
+            well_formed(r#"{"a":"\ud83d\ude00 \\ud800 \n \u0041"}"#),
+            None
+        );
         assert_eq!(
             well_formed(r#"{"a":"x\udc00y"}"#).as_deref(),
-            Some(r#"{"a":"x�y"}"#)
+            Some(r#"{"a":"x\ufffdy"}"#)
         );
     }
 

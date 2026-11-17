@@ -638,7 +638,7 @@ async fn an_event_is_either_counted_before_a_subscription_or_received_by_it() {
 
 /// A message the browser writes with half of a UTF-16 pair: page text cut inside an emoji.
 /// Chromium escapes every non-ASCII unit, an intact pair as two escapes, a lone half as one.
-const HALVES: &str = r#""a\ud83db \ude00 😀 \\ud800""#;
+const HALVES: &str = r#""a\ud83db \ude00 \ud83d\ude00 \\ud800""#;
 const REPAIRED: &str = "a\u{fffd}b \u{fffd} \u{1f600} \\ud800";
 
 #[tokio::test]
