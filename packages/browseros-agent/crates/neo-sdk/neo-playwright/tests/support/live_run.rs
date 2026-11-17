@@ -258,6 +258,10 @@ impl OpEnv for LiveEnv {
         self.record(EnvCall::Note(line));
     }
 
+    #[expect(
+        clippy::panic,
+        reason = "the infallible OpEnv hook must fail the test if its owned tab cannot activate"
+    )]
     fn bring_forward(&self, tab: TabId) -> BoxFuture<'_, ()> {
         Box::pin(async move {
             if !self.activate_tabs {
