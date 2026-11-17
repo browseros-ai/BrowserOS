@@ -43,6 +43,18 @@ export function activeStepIndex(
   return index
 }
 
+/** The last replay action recorded for a step, where a folded step ends. */
+export function lastActionForStep(
+  step: DescribedStep,
+  actions: readonly ReplayAction[],
+): ReplayAction | undefined {
+  const ids = new Set(step.dispatchIds)
+  return actions.findLast(
+    (action) =>
+      action.frame.dispatchId != null && ids.has(action.frame.dispatchId),
+  )
+}
+
 /** The replay action to seek to for a step: the first one recorded for it. */
 export function actionForStep(
   step: DescribedStep,
@@ -141,14 +153,17 @@ export type RailItem =
   | { kind: 'step'; index: number }
   | { kind: 'run'; takeover: number; steps: number[] }
 
-/** The list's rows, with each neo run gathered behind the step where neo took over. */
+/**
+ * The list's rows, with each neo run gathered behind the step where neo took over. A pursue call
+ * that failed or was stopped from the cockpit stays an ordinary row, so its error still shows.
+ */
 export function railItems(steps: readonly DescribedStep[]): RailItem[] {
   const items: RailItem[] = []
   for (const [index, step] of steps.entries()) {
     const last = items.at(-1)
     if (step.neoOffsetMs !== undefined && last?.kind === 'run') {
       last.steps.push(index)
-    } else if (step.neoRun) {
+    } else if (step.neoRun && !step.isError && !step.cancelled) {
       items.push({ kind: 'run', takeover: index, steps: [] })
     } else {
       items.push({ kind: 'step', index })
@@ -179,11 +194,14 @@ export function neoRunMarks(
     const takeover = steps[item.takeover]
     const last = steps[runLastIndex(item)]
     const start = takeover && actionForStep(takeover, actions)
-    const end = last && actionForStep(last, actions)
+    const end = last && lastActionForStep(last, actions)
     if (!start) continue
     marks.push({
       startAt: start.startAt,
-      endAt: Math.max(start.startAt, end?.startAt ?? start.startAt),
+      endAt: Math.max(
+        start.startAt,
+        end ? Math.max(end.startAt, end.completionAt) : start.startAt,
+      ),
     })
   }
   return marks

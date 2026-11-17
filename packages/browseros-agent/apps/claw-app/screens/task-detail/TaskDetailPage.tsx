@@ -33,6 +33,7 @@ import {
   actionForStep,
   activeStepIndex,
   dispatchTimes,
+  lastActionForStep,
   neoRunMarks,
   railItems,
   runLastIndex,
@@ -117,7 +118,7 @@ export function TaskDetailPage({ focus }: { focus?: 'player' } = {}) {
     const lastStep =
       run?.kind === 'run' ? steps[runLastIndex(run)] : steps[takeover]
     if (!lastStep) return
-    const action = actionForStep(lastStep, replay.plan.actions)
+    const action = lastActionForStep(lastStep, replay.plan.actions)
     if (hasRecording && action) {
       replay.seek(Math.max(action.startAt, action.completionAt))
     } else {
@@ -139,6 +140,9 @@ export function TaskDetailPage({ focus }: { focus?: 'player' } = {}) {
 
   // Before the first step, a loading recording shows the first step's picture.
   const pictureStep = shownStep ?? steps[0]
+
+  // Where neo drove, for both scrubbers.
+  const neoMarks = neoRunMarks(steps, replay.plan.actions)
 
   // One step list, fed once: the page's rail and the full-screen one stay in step.
   const stepList: ComponentProps<typeof TaskSteps> = {
@@ -177,7 +181,7 @@ export function TaskDetailPage({ focus }: { focus?: 'player' } = {}) {
           }
           onFullScreen={() => setFullScreen(true)}
           fullScreen={fullScreen}
-          neoMarks={neoRunMarks(steps, replay.plan.actions)}
+          neoMarks={neoMarks}
         />
         <TaskSteps {...stepList} />
       </div>
@@ -188,6 +192,7 @@ export function TaskDetailPage({ focus }: { focus?: 'player' } = {}) {
           session={session}
           replay={replay}
           steps={<TaskSteps {...stepList} layout="rail" />}
+          neoMarks={neoMarks}
         />
       ) : null}
       <PagesVisited pages={data.pages} />

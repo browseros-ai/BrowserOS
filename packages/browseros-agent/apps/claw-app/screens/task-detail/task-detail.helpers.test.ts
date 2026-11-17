@@ -156,9 +156,20 @@ describe('neo runs in the step list', () => {
     expect(offsetFromTakeover(12_400)).toBe('+12s')
   })
 
+  it('keeps a pursue call that failed as an ordinary row', () => {
+    const failed = { ...takeover, isError: true }
+    expect(
+      railItems([step(500, [0]), failed]).map((item) => item.kind),
+    ).toEqual(['step', 'step'])
+  })
+
   it('marks the run on the scrubber from the takeover to neo’s last step', () => {
     const action = (dispatchId: number, startAt: number) =>
-      ({ frame: { dispatchId }, startAt }) as ReplayAction
+      ({
+        frame: { dispatchId },
+        startAt,
+        completionAt: startAt,
+      }) as ReplayAction
     expect(
       neoRunMarks(steps, [
         action(1, 40),
@@ -167,6 +178,29 @@ describe('neo runs in the step list', () => {
         action(4, 50),
       ]),
     ).toEqual([{ startAt: 40, endAt: 43 }])
+  })
+
+  it('ends the mark at the last call of a folded last step', () => {
+    const action = (dispatchId: number, startAt: number) =>
+      ({
+        frame: { dispatchId },
+        startAt,
+        completionAt: startAt,
+      }) as ReplayAction
+    const folded = [
+      ...steps.slice(0, 3),
+      { ...steps[3], dispatchIds: [3, 5] },
+      steps[4],
+    ]
+    expect(
+      neoRunMarks(folded, [
+        action(1, 40),
+        action(2, 41),
+        action(3, 43),
+        action(5, 44),
+        action(4, 50),
+      ]),
+    ).toEqual([{ startAt: 40, endAt: 44 }])
   })
 })
 
