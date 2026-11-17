@@ -802,7 +802,8 @@ async fn crash_renderer(
         loop {
             let event = events.recv().await?;
             if event.method == "Target.targetCrashed" {
-                let ours = event.params["targetId"].as_str() == Some(target.as_str());
+                let ours =
+                    event.params.get("targetId").and_then(Value::as_str) == Some(target.as_str());
                 crashes.push(event.params);
                 if ours {
                     return Ok::<(), Box<dyn Error>>(());
@@ -898,7 +899,7 @@ fn check_crash_scope(
     drained?;
     if crashes
         .iter()
-        .any(|event| event["targetId"].as_str() != Some(target))
+        .any(|event| event.get("targetId").and_then(Value::as_str) != Some(target))
     {
         return Err(format!("{stage}: a renderer outside {target} crashed: {crashes:?}").into());
     }
