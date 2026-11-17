@@ -11099,10 +11099,9 @@ ${value.stack}`;
     };
     const page = pageGuard(world, refs, phases, main);
     const resolving = performance.now();
-    const counting = phases.count;
     const found = facesFromHits(world, hits, page);
     if (hits.length)
-      phases.naming += Math.max(0, performance.now() - resolving - (phases.count - counting));
+      phases.naming += Math.max(0, performance.now() - resolving - phases.count);
     const remembered = memory.get(document2) ?? [];
     retainFaces(world, found, remembered, page);
     for (const [element, face] of found) {
@@ -11205,8 +11204,8 @@ ${value.stack}`;
       const root = peeled ? hit.subject ? coverRoot(hit.subject, path) : path.at(-1) ?? element : hit.root;
       const known = found.get(element);
       if (known) {
-        known.observed ||= hit.observed;
-        if (hit.observed && !page(root))
+        known.observed = true;
+        if (!page(root))
           known.roots.add(root);
         continue;
       }
@@ -11214,8 +11213,8 @@ ${value.stack}`;
       found.set(element, {
         element,
         named: page(named) ? element : named,
-        roots: new Set(hit.observed && !page(root) ? [root] : []),
-        observed: hit.observed
+        roots: new Set(!page(root) ? [root] : []),
+        observed: true
       });
     }
     return found;

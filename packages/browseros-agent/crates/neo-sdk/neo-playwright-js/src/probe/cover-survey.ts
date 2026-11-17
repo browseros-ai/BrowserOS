@@ -143,14 +143,11 @@ export function surveyCovers(
   }
   const page = pageGuard(world, refs, phases, main)
   const resolving = performance.now()
-  const counting = phases.count
   const found = facesFromHits(world, hits, page)
-  // Guard initialization is measured as counting, even when face resolution triggers it.
+  // This is the first use of the guard, so its entire count time belongs to this resolution.
+  // Charge that work to counting rather than to naming.
   if (hits.length)
-    phases.naming += Math.max(
-      0,
-      performance.now() - resolving - (phases.count - counting),
-    )
+    phases.naming += Math.max(0, performance.now() - resolving - phases.count)
   const remembered = memory.get(document) ?? []
   retainFaces(world, found, remembered, page)
   for (const [element, face] of found) {
@@ -312,16 +309,16 @@ function facesFromHits(
       : hit.root
     const known = found.get(element)
     if (known) {
-      known.observed ||= hit.observed
-      if (hit.observed && !page(root)) known.roots.add(root)
+      known.observed = true
+      if (!page(root)) known.roots.add(root)
       continue
     }
     const named = whichDialog(world, hit.chain, root, hit.point)
     found.set(element, {
       element,
       named: page(named) ? element : named,
-      roots: new Set(hit.observed && !page(root) ? [root] : []),
-      observed: hit.observed,
+      roots: new Set(!page(root) ? [root] : []),
+      observed: true,
     })
   }
   return found
