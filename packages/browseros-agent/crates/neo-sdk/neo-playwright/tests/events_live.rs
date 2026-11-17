@@ -103,6 +103,19 @@ fn trace_console_phase(started: Instant, phase: &str) {
     }
 }
 
+/// Libtest otherwise reports an unavailable console row's early Ok return as a pass.
+#[expect(
+    clippy::print_stderr,
+    reason = "live runner counts explicit precondition returns"
+)]
+fn console_skipped_in_hosted_mode() -> bool {
+    let hosted = env::var("BROWSERCLAW_HOSTED_MODE").is_ok_and(|mode| mode == "1");
+    if hosted {
+        eprintln!("LIVE_TEST_EARLY_RETURN console events are unavailable in hosted mode");
+    }
+    hosted
+}
+
 /// `page.waitForEvent(event)` stamped at `since`, with a 5 s timeout.
 async fn wait_for(
     run: &LiveRun,
@@ -879,7 +892,7 @@ impl CdpConnection for SlowWatcher {
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_an_op_answers_after_the_pump_took_the_console_message_it_caused() -> TestResult
 {
-    if env::var("BROWSERCLAW_HOSTED_MODE").is_ok_and(|mode| mode == "1") {
+    if console_skipped_in_hosted_mode() {
         return Ok(());
     }
     let run = LiveRun::connect_through(|client| {
@@ -1108,7 +1121,7 @@ async fn tests_that_a_popup_closed_at_once_still_reaches_its_waiter() -> TestRes
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_a_browser_log_entry_reaches_a_console_listener_as_a_message() -> TestResult {
-    if env::var("BROWSERCLAW_HOSTED_MODE").is_ok_and(|mode| mode == "1") {
+    if console_skipped_in_hosted_mode() {
         // Hosted mode sends no console events, so a listener leases nothing there.
         return Ok(());
     }
@@ -1176,7 +1189,7 @@ async fn tests_that_a_browser_log_entry_reaches_a_console_listener_as_a_message(
 )]
 async fn tests_that_a_click_that_logs_completes_under_a_console_listener_and_is_heard_once()
 -> TestResult {
-    if env::var("BROWSERCLAW_HOSTED_MODE").is_ok_and(|mode| mode == "1") {
+    if console_skipped_in_hosted_mode() {
         // Hosted mode sends no console events, so there is nothing to hear.
         return Ok(());
     }
@@ -1387,7 +1400,7 @@ async fn timed_out_wait(run: &LiveRun, page: &TestPage) -> TestResult<TimedOutWa
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_a_timed_out_wait_for_function_logs_nothing_after_its_error() -> TestResult {
-    if env::var("BROWSERCLAW_HOSTED_MODE").is_ok_and(|mode| mode == "1") {
+    if console_skipped_in_hosted_mode() {
         return Ok(());
     }
     let run = LiveRun::connect_through(|client| {

@@ -510,5 +510,8 @@ fn log_sink(path: &Path) -> Result<Stdio, Box<dyn Error>> {
     reason = "a skipped e2e says so in the test output; nothing else reads it"
 )]
 fn skipped() {
-    eprintln!("skipped: set {BROWSER_ENV} to a BrowserOS binary to run this test");
+    // The live runner separates this precondition return from an exercised libtest pass.
+    eprintln!(
+        "LIVE_TEST_EARLY_RETURN skipped: set {BROWSER_ENV} to a BrowserOS binary to run this test"
+    );
 }

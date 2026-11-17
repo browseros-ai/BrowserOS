@@ -106,6 +106,9 @@ jobs:
           console.log(`browser.lock ${identity.lockVersion}, CDP ${identity.cdp}`);
           '
 
+      - name: Verify live-result coverage guard
+        run: python3 -m unittest discover -s crates/neo-sdk/tests -p test_live.py
+
       - name: Run every live SDK suite
         run: python3 crates/neo-sdk/live.py --output "$RUNNER_TEMP/neo-sdk-live"
 

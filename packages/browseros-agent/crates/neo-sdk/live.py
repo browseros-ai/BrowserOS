@@ -7,6 +7,7 @@ that deliberately create multiple clients retain that coverage inside the case.
 """
 
 import argparse
+from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
@@ -22,6 +23,42 @@ SUMMARY = re.compile(
     r"test result: (ok|FAILED)\. (\d+) passed; (\d+) failed; (\d+) ignored; "
     r"(\d+) measured; (\d+) filtered out; finished in ([\d.]+)s"
 )
+
+EARLY_RETURN = "LIVE_TEST_EARLY_RETURN "
+
+
+@dataclass(frozen=True)
+class Suite:
+    """One integration target and the libtest selection that exercises its browser rows."""
+    package: str
+    target: str
+    ignored_only: bool = True
+
+
+def assess_result(result, text):
+    """Libtest counts an early Ok return as a pass; explicit receipts keep it out of coverage."""
+    checked = dict(result)
+    checked["earlyReturns"] = text.count(EARLY_RETURN)
+    summaries = list(SUMMARY.finditer(text))
+    if len(summaries) == 1:
+        match = summaries[0]
+        checked.update(
+            nativePassed=int(match[2]),
+            passed=max(0, int(match[2]) - checked["earlyReturns"]),
+            failed=int(match[3]),
+            ignored=int(match[4]),
+            filtered=int(match[6]),
+            testSeconds=float(match[7]),
+        )
+    checked["ok"] = (
+        checked["exitCode"] == 0
+        and not checked["timedOut"]
+        and checked.get("passed", 0) > 0
+        and checked.get("failed") == 0
+        and checked.get("ignored") == 0
+        and checked["earlyReturns"] == 0
+    )
+    return checked
 
 
 def stop(child):
@@ -92,12 +129,15 @@ def main():
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     suites = [
-        ("neo-playwright", path.stem)
+        Suite("neo-playwright", path.stem)
         for path in sorted((SDK / "neo-playwright/tests").glob("*_live.rs"))
     ]
     if not suites:
         parser.error("no live suites found")
-    suites.append(("neo-server", "acceptance_browseros"))
+    suites.extend([
+        Suite("neo-server", "acceptance_browseros"),
+        Suite("neo-server", "probe_reply_browseros", ignored_only=False),
+    ])
 
     environment = os.environ.copy()
     environment.setdefault("CARGO_BUILD_JOBS", "4")
@@ -108,6 +148,7 @@ def main():
     browser = environment.get("NEO_E2E_BROWSER") or environment.get("CLAW_SDK_E2E_BROWSER")
     if not browser or not Path(browser).is_file() or not os.access(browser, os.X_OK):
         parser.error("set NEO_E2E_BROWSER to the pinned browser executable")
+    browser = str(Path(browser).resolve())
     environment.update(NEO_E2E_BROWSER=browser, CLAW_SDK_E2E_BROWSER=browser)
     # CI selects test-profile optimisation through its environment: the live host must
     # parse and distribute large console events within the same deadlines as production.
@@ -117,18 +158,25 @@ def main():
         "+1.98.0",
         "test",
         "--locked",
+        # Keep both packages selected in every invocation. Their unified dependency
+        # features must match the precompile; --test still selects only this target.
+        "-p",
+        "neo-playwright",
+        "-p",
+        "neo-server",
         "--config",
         "profile.test.package.png.opt-level=3",
         "--config",
         "profile.test.package.miniz_oxide.opt-level=3",
     ]
-    compile_command = [
-        "nice", "-n", "10", *cargo, "--no-run", "-p", "neo-playwright", "-p", "neo-server"
-    ]
-    for _package, suite in suites:
-        compile_command.extend(["--test", suite])
+    compile_command = ["nice", "-n", "10", *cargo, "--no-run"]
+    for suite in suites:
+        compile_command.extend(["--test", suite.target])
     report = {
-        "suites": [{"package": package, "target": suite} for package, suite in suites],
+        "suites": [
+            {"package": suite.package, "target": suite.target, "ignoredOnly": suite.ignored_only}
+            for suite in suites
+        ],
         "testThreads": 1,
         "build": {
             "profile": "test",
@@ -152,17 +200,17 @@ def main():
     print(compile_note, flush=True)
     lines = [
         "## SDK live suites", "", compile_note, "",
-        "| Suite | Status | Pass | Fail | Ignored | Wall seconds |",
-        "| --- | --- | ---: | ---: | ---: | ---: |",
+        "| Suite | Status | Pass | Fail | Early return | Ignored | Wall seconds |",
+        "| --- | --- | ---: | ---: | ---: | ---: | ---: |",
     ]
     if report["compile"]["exitCode"]:
         print((output / "compile.log").read_text())
         publish_summary(output, lines, environment)
         return 1
     for repeat in range(1, args.repeat + 1):
-        for package, suite in suites:
+        for suite in suites:
             child_environment = environment.copy()
-            if suite == "expect_live":
+            if suite.target == "expect_live":
                 # This suite alone exercises the bundled takeover extension. The wrapper
                 # keeps test:browser's profile, port, server-disable flags and cleanup.
                 if browser:
@@ -170,7 +218,7 @@ def main():
                 child_environment["NEO_E2E_BROWSER"] = str(
                     SDK / "neo-playwright/tests/support/neo-with-takeover.sh"
                 )
-            label = f"{repeat}-{suite}"
+            label = f"{repeat}-{suite.target}"
             log = output / f"{label}.log"
             command = [
                 "bun",
@@ -178,44 +226,27 @@ def main():
                 "test:browser",
                 "--",
                 *cargo,
-                "-p",
-                package,
                 "--test",
-                suite,
+                suite.target,
                 "--",
-                "--ignored",
+                *(["--ignored"] if suite.ignored_only else []),
+                "--nocapture",
                 "--test-threads=1",
             ]
             print(f"SDK live: {label}", flush=True)
             result = execute(command, child_environment, log, 360)
             text = log.read_text(errors="replace")
             print(text, flush=True)
-            summaries = list(SUMMARY.finditer(text))
-            result.update(package=package, suite=suite, repeat=repeat)
-            if len(summaries) == 1:
-                match = summaries[0]
-                result.update(
-                    passed=int(match[2]),
-                    failed=int(match[3]),
-                    ignored=int(match[4]),
-                    filtered=int(match[6]),
-                    testSeconds=float(match[7]),
-                )
-            # An empty selection or a crashed harness is not a green suite. Preserve any
-            # later suite's evidence even when this one fails.
-            result["ok"] = (
-                result["exitCode"] == 0
-                and not result["timedOut"]
-                and result.get("passed", 0) > 0
-                and result.get("failed") == 0
-                and result.get("ignored") == 0
-            )
+            result.update(package=suite.package, suite=suite.target, repeat=repeat)
+            # Every selected row must exercise coverage: missing output, no tests, ignored
+            # rows and explicit precondition returns fail even when libtest returned zero.
+            result = assess_result(result, text)
             report["runs"].append(result)
             (output / "results.json").write_text(json.dumps(report, indent=2) + "\n")
             lines.append(
                 f"| {label} | {'PASS' if result['ok'] else 'FAIL'} | "
                 f"{result.get('passed', '?')} | {result.get('failed', '?')} | "
-                f"{result.get('ignored', '?')} | {result['wallSeconds']} |"
+                f"{result['earlyReturns']} | {result.get('ignored', '?')} | {result['wallSeconds']} |"
             )
             (output / "summary.md").write_text("\n".join(lines) + "\n")
     publish_summary(output, lines, environment)
