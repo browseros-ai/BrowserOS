@@ -71,10 +71,9 @@ Waiting longer does not bring a missing element: when you are not sure an elemen
 /// file); a timeout someone chose, a cover that moves, fades or says it is loading, and `force`
 /// keep the whole wait. The text names those covers so a script does not lengthen its timeout for
 /// them, and names `page.setDefaultTimeout(30_000)`, the prelude's default set by hand, as the way
-/// back. A press whose cover is the target's own label,
-/// wrapper or drawing, or that finds a clear point of the target, lands by itself and the call log
-/// says which, so the text says nothing of it; a label that is all link gets this answer, whose Do
-/// line says to press Space.
+/// back. A press whose cover is the target's own label, wrapper or drawing, or that finds a clear
+/// point of the target, lands by itself and the call log says which, so the text says nothing of
+/// it; a label that is all link gets this answer, whose Do line says to press Space.
 const COVERED_CLICK: &str = r"A click on an element that another element covers fails `covered`; its message says what is `On top:`, with its ref and its controls, and what to do.
 Answer or close it with one of those controls (in a script: `error.cover.controls`), then click again; if the message says the same layer covered your last click, closing it again will not help.
 Unless you set a timeout, a click stops waiting after 5 s if the same cover stays on top and is not moving, fading or loading; to wait for a cover that leaves on its own, set one: `page.setDefaultTimeout(30_000)`, or `timeout` on the call.";
