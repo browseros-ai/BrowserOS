@@ -22,6 +22,11 @@ export type DefaultPage = { tab: number, };
 export type Delivery = "not_sent" | "done" | "unknown";
 
 /**
+ * Additive machine-readable detail; the primary error code remains backward compatible.
+ */
+export type DiagnosticCode = "target_crashed";
+
+/**
  * The JS wire form of an `OpReply`: `{"ok": value, "pages": […]}` or `{"err": {…}, "pages":
  * […]}`, plus `defaultPage` once the call opened the run's own page, `pickedPage` once a task
  * pick bound it, and `pumped` once an op ordered its answer after event-pump replies. Protocol translation only: the door decided
@@ -109,6 +114,10 @@ export type ErrBody = {
  */
 code: string, 
 /**
+ * Optional diagnostic; the primary code remains compatible with older callers.
+ */
+diagnosticCode?: DiagnosticCode, 
+/**
  * Who must change to fix it.
  */
 owner: ErrorOwner, 
@@ -136,7 +145,12 @@ message: string,
  * A failed `expect` matcher's facts, which the bootstrap puts on the error as
  * `matcherResult` for the expect prelude to complete.
  */
-matcher?: unknown, };
+matcher?: unknown, 
+/**
+ * A `covered` pointer action's cover (`{ ref, role, name, kind, controls, snapshot }`): the
+ * bootstrap renders its snapshot into the message and puts the rest on the error as `cover`.
+ */
+cover?: unknown, };
 
 /**
  * Whose behavior must change to fix a failure.

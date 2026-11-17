@@ -30,6 +30,7 @@ test('tests that unsupported families are detections refused as unsupported, nev
     ['hcaptcha-test', 'hcaptcha'],
     ['hcaptcha-demo', 'hcaptcha'],
     ['cloudflare-wall', 'cloudflare_challenge'],
+    ['perimeterx-modal', 'unknown'],
   ]) {
     const page = pages.find((p) => p.id === id)
     expect(page).toMatchObject({
@@ -80,6 +81,8 @@ test('tests that the catalog contains every required page with unique ids and ex
     'cloudflare-wall',
     'no-captcha',
     'hcaptcha-test',
+    'perimeterx-modal',
+    'perimeterx-waiting',
   ])
   const pages = [...FIXTURE_PAGES, ...DEMO_PAGES]
   expect(new Set(pages.map((page) => page.id)).size).toBe(pages.length)
@@ -337,6 +340,9 @@ test('tests that standalone pages mirror their lifecycle state and wait for visi
     expect(html.match(/<form\b/g)).toHaveLength(1)
     expect(html).toContain('id="captcha-form"')
     expect(html).toContain('id="submit" type="submit"')
+    // The PerimeterX pages build their frame themselves and load no vendor script; the test
+    // below runs them in a real DOM's place.
+    if (page.id.startsWith('perimeterx-')) continue
     let visible = false
     let observe = () => {}
     let resize = () => {}
@@ -416,6 +422,21 @@ test('tests that standalone pages mirror their lifecycle state and wait for visi
     expect(JSON.parse(dataset.captchaFixture ?? '{}').errors).toContain(
       'test-error',
     )
+  }
+})
+
+test('tests that the PerimeterX pages mimic its frame and load nothing from anyone', async () => {
+  for (const [id, display] of [
+    ['perimeterx-modal', 'block'],
+    ['perimeterx-waiting', 'none'],
+  ]) {
+    const html = await Bun.file(`${import.meta.dir}/pages/${id}.html`).text()
+    expect(html).toContain(`action="/submit/${id}"`)
+    expect(html).toContain("modal.id = 'px-captcha-modal'")
+    expect(html).toContain('<div id="px-captcha"')
+    expect(html).toContain(`const shown = ${display === 'block'};`)
+    // No address of any kind: no vendor script, no real site.
+    expect(html).not.toMatch(/\bsrc=|https?:\/\//)
   }
 })
 

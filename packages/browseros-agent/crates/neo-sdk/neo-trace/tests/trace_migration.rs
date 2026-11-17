@@ -8,8 +8,8 @@ use browseros_core::TabId;
 use neo_trace::{
     Delivery, Effect, EpochMillis, OperationEnded, OperationId, OperationKind, OperationSite,
     OperationStarted, Outcome, PageState, RedactionLimits, Redactor, RequestId, RetentionPolicy,
-    RunEffects, RunQuery, RunStatus, ShotRead, ShotState, TailQuery, TaskId, TraceError,
-    TraceStore, WriterConfig, spawn_writer,
+    RunEffects, RunQuery, RunStatus, RunTabsScope, ShotRead, ShotState, TailQuery, TaskId,
+    TraceError, TraceStore, WriterConfig, spawn_writer,
 };
 use sea_orm::sqlx::sqlite::SqliteConnectOptions;
 use sea_orm::sqlx::{self, Connection, Row, SqliteConnection};
@@ -214,7 +214,8 @@ async fn expected_current_columns(path: &Path) -> TestResult {
         ALTER TABLE "operations" ADD COLUMN "values" varchar;
         ALTER TABLE "operations" ADD COLUMN "frames_incomplete" integer;
         ALTER TABLE "runs" ADD COLUMN "tabs_scope" varchar;
-        PRAGMA user_version = 6"#,
+        ALTER TABLE "runs" ADD COLUMN "access" varchar;
+        PRAGMA user_version = 7"#,
     )
     .execute(&mut conn)
     .await?;
@@ -341,8 +342,8 @@ async fn a_fresh_file_has_exactly_the_current_schema() -> TestResult {
     expected_current_columns(&old).await?;
     assert_eq!(shape(&path).await?, shape(&old).await?);
     let dump = logical_dump(&path).await?;
-    assert_eq!(dump.version, 6);
-    assert_eq!(dump.rows.get("seaql_migrations").map(Vec::len), Some(6));
+    assert_eq!(dump.version, 7);
+    assert_eq!(dump.rows.get("seaql_migrations").map(Vec::len), Some(7));
     assert_eq!(
         dump.rows["seaql_migrations"][0][0],
         "'m0001_trace_baseline'"
@@ -560,8 +561,8 @@ async fn a_session_era_file_is_refused_untouched() -> TestResult {
 async fn a_newer_user_version_is_refused_untouched() -> TestResult {
     let (_dir, path) = fixture("s5", true).await?;
     let mut conn = connection(&path).await?;
-    // One past this build's fence (`USER_VERSION_FENCE`, 6 since `m0006`).
-    sqlx::raw_sql("PRAGMA user_version = 7")
+    // One past this build's fence (`USER_VERSION_FENCE`, 7 since `m0007`).
+    sqlx::raw_sql("PRAGMA user_version = 8")
         .execute(&mut conn)
         .await?;
     conn.close().await?;
@@ -906,7 +907,7 @@ async fn a_site_era_file_gains_main_world_without_losing_its_operations() -> Tes
     let (_expected_dir, expected) = fixture("s5", false).await?;
     expected_current_columns(&expected).await?;
     assert_eq!(shape(&path).await?, shape(&expected).await?);
-    assert_eq!(logical_dump(&path).await?.version, 6);
+    assert_eq!(logical_dump(&path).await?.version, 7);
     let old = OperationId::new(A.parse()?, 1);
     assert_eq!(
         store
@@ -995,7 +996,7 @@ async fn a_values_era_file_gains_frames_incomplete_without_losing_its_operations
     expected_current_columns(&expected).await?;
     assert_eq!(shape(&path).await?, shape(&expected).await?);
     let after = logical_dump(&path).await?;
-    assert_eq!(after.version, 6);
+    assert_eq!(after.version, 7);
     assert_eq!(
         after.rows.get("operations").map(Vec::len),
         before.rows.get("operations").map(Vec::len),
@@ -1080,7 +1081,7 @@ async fn a_frames_era_file_gains_tabs_scope_without_losing_its_runs() -> TestRes
     expected_current_columns(&expected).await?;
     assert_eq!(shape(&path).await?, shape(&expected).await?);
     let after = logical_dump(&path).await?;
-    assert_eq!(after.version, 6);
+    assert_eq!(after.version, 7);
     assert_eq!(
         after.rows.get("runs").map(Vec::len),
         before.rows.get("runs").map(Vec::len),
@@ -1088,5 +1089,50 @@ async fn a_frames_era_file_gains_tabs_scope_without_losing_its_runs() -> TestRes
     );
     let old = store.run_summary(A.parse()?).await?.ok_or("old run")?;
     assert_eq!(old.tabs_scope, None, "a run from before the field has none");
+    Ok(())
+}
+
+/// Access was absent in schema 6. Upgrading must preserve task scope and stored rows without
+/// inventing a permission restriction for runs an older server already completed.
+#[tokio::test]
+async fn a_task_scope_era_file_gains_nullable_access_without_losing_its_runs() -> TestResult {
+    let (_dir, path) = fixture("s5", true).await?;
+    let mut conn = connection(&path).await?;
+    sqlx::raw_sql(
+        r#"ALTER TABLE "operations" ADD COLUMN "site" text;
+        ALTER TABLE "operations" ADD COLUMN "main_world" integer;
+        ALTER TABLE "runs" ADD COLUMN "values" varchar;
+        ALTER TABLE "operations" ADD COLUMN "values" varchar;
+        ALTER TABLE "operations" ADD COLUMN "frames_incomplete" integer;
+        ALTER TABLE "runs" ADD COLUMN "tabs_scope" varchar;
+        PRAGMA user_version = 6;
+        CREATE TABLE seaql_migrations (version TEXT PRIMARY KEY, applied_at BIGINT NOT NULL);
+        INSERT INTO seaql_migrations VALUES ('m0001_trace_baseline', 1), ('m0002_operation_site', 1),
+          ('m0003_operation_main_world', 1), ('m0004_trace_values', 1),
+          ('m0005_operation_frames_incomplete', 1), ('m0006_run_tabs_scope', 1)"#,
+    )
+    .execute(&mut conn)
+    .await?;
+    sqlx::query("UPDATE runs SET tabs_scope = 'task' WHERE id = ?")
+        .bind(A)
+        .execute(&mut conn)
+        .await?;
+    conn.close().await?;
+    let before = logical_dump(&path).await?;
+    let store = TraceStore::open(&path).await?;
+    let after = logical_dump(&path).await?;
+    assert_eq!(after.version, 7);
+    for table in ["runs", "operations"] {
+        assert_eq!(
+            after.rows.get(table).map(Vec::len),
+            before.rows.get(table).map(Vec::len),
+            "upgrading access preserves every {table} row"
+        );
+    }
+    let old = store.run_summary(A.parse()?).await?.ok_or("old run")?;
+    assert_eq!(old.tabs_scope, Some(RunTabsScope::Task));
+    assert_eq!(old.access, None, "old runs had no access restriction");
+    let detail = store.run(A.parse()?).await?.ok_or("old run detail")?;
+    assert_eq!(detail.summary.access, None);
     Ok(())
 }

@@ -1,86 +1,149 @@
 //! The `run` tool's description: what a model reads before it writes a script.
+//!
+//! Each constant is a raw string with one sentence per line, served exactly as written, so the
+//! source reads as the model reads it.
+//!
+//! A model reads this on every call, follows it literally and pays for every word, so each
+//! sentence is either true of every build and every caller, or says the condition it depends on.
+//! Behaviour a script meets rarely stays out: its refusal names what to do instead, and
+//! `agent.d.ts` and neo-server's README hold the detail. A host may copy this text into its own
+//! instructions, so a change of meaning here is named in the pull request that makes it.
 
 use crate::config::Defaults;
 use crate::dispatch::{Listing, Registry};
 
-/// How a script is written and what it gets, true of every build and every caller. It is one
-/// static text, never built from `tabs.scope` or the call: whether a run is bound to its task is
-/// the host's setting and the call's `taskId`, so the text says what binding does only as a
-/// condition ("when the host binds runs to their task"), and stays true under either scope and
-/// for a run without a task.
-const USAGE: &str = "Runs JavaScript against the user's browser and returns what the script \
-returns. `code` is the body of an async function: `await` each SDK call and `return` a JSON \
-value. Each run starts with fresh JavaScript. With no task, built-in `page` opens a new tab \
-on first use; `context.newPage()` opens another. Neither reuses a tab or creates a task.\n\n\
-To keep tabs across runs, create a task and return its id. First run: \
-`const task = await neo.createTask('hn top 5'); return task.id`. Start later scripts with \
-`await neo.task('<id>')`; then `page` uses the task's last-used open tab (else another open \
-tab, else a new one), and `context.newPage()` opens in the task. The latest task pick wins. \
-Use `task.pages()` (oldest first), `task.page(tabId)` or `task.newPage()` as needed. \
-When finished: `await task.close()`. Popups join their opener's task. `context.pages()` \
-lists the tabs this run may use, with `page.tabId` and `page.taskId` (null without a task); use \
-it to recover a lost task id. When the host binds runs to their task, that is only this task's \
-tabs (not the browser's tab count), and any other tab is refused with `page_not_in_task`.\n\n\
-The function's parameters are the SDK: Playwright's `page`, `context`, `browser`, `expect` and \
-`playwright` (`selectors.setTestIdAttribute`, `errors.TimeoutError`), Node's `Buffer` \
-(`screenshot` and `pdf` resolve to one, and a `setInputFiles` payload takes one), then `neo` \
-(the `neo.*` methods listed below), `console` (its lines come back with the result), \
-`setTimeout`, `clearTimeout`, `NeoError` and `TimeoutError`. The realm is QuickJS, which has no \
-`Intl`.";
+/// What a script is. True of every build and every caller.
+const USAGE: &str = r"Runs JavaScript in the user's browser and returns what the script returns.
+`code` is the body of an async function: `await` every SDK call and `return` a JSON value.
+Each run starts with fresh JavaScript; tabs stay open between runs.";
+
+/// The habit a host's evaluation (13 Nov) showed models lacked: look, act on a ref, look
+/// again. Shown once `page.ariaSnapshot` is registered. Every sentence answers a counted
+/// mistake: locators guessed where the snapshot printed a ref (308 actions, 20% failed), actions
+/// chained past a click that opened a dialog, snapshots sliced until the dialog was cut off.
+///
+/// What it says the snapshot prints is the snapshot design's, and its author approved each
+/// sentence. The prelude's v1 text (`neo-playwright-js/src/prelude/snapshot-v1.ts`) prints refs
+/// only on what can be acted on and on sections, and the page's text while the whole stays under
+/// `TEXT_LIMIT_CHARS` (a test reads the number from there). A field with no size or no pointer
+/// gets no ref, and `fill` waits out its whole timeout on one with no size and names nothing, so
+/// that sentence stays. The cap (`snapshot-cap.ts`) prints a dialog, alertdialog, alert or status
+/// block whole past its cut and drops every other cover, so the text says "popup" for what a page
+/// shows and names the roles for what survives.
+/// A ref resolves from `page` in any frame: the resolver jumps to the document that printed it
+/// (`neo-playwright/src/resolve/resolver.rs`). A model that knows Playwright doubts that for a
+/// frame's content, and in a real run guessed a locator beside a printed frame ref, so the text
+/// says it. `SNAPSHOT_ON_TOP`, right after this paragraph, says what the snapshot's `# on top:`
+/// lines mean.
+const LOOP: &str = r#"Work in a loop: look, act, look again.
+- Look: `return await page.ariaSnapshot()` lists what you can act on, each with a ref, such as `- button "Add to cart" [ref=e41]`.
+  It includes the page's text while the whole stays under about 3,000 tokens, and a line at its top says when it left the text out; `{ text: true }` always includes it.
+- Act on a ref from your latest snapshot: `await page.getByRef('e41').click()`.
+  A guessed locator (`getByRole`, `getByText`, `locator('main')`) can match nothing and wait out its timeout, or match two and fail; use one only for an element printed without a ref.
+  A ref works from `page` wherever the snapshot printed it, inside a frame too: `page.getByRef('f12e12')`.
+  `page.getByRef('e12').ariaSnapshot({ mode: 'full' })` prints section e12 with a ref on every visible element.
+  A field printed without a ref has no size or takes no pointer: `page.getByRole('textbox', { name: '…' }).pressSequentially('…')` types into it; `fill` waits out its timeout on one with no size.
+- Look again after an action that can open, close or load something (a click, Enter, a submit): end the script by returning a new snapshot, and choose the next action from it.
+  Fills of one form can share a script; the click that submits it ends the script.
+- Return each snapshot whole, as the string it is.
+  When its `# cut:` line says more was left out, snapshot the section it offers (`page.getByRef('e12').ariaSnapshot()`), or reach what you know is there with a locator.
+  Pages often list a popup last, where a slice, a line filter or a small `maxTokens` can cut it off; only a block with a dialog or alert role survives the cut."#;
+
+/// What the snapshot's `# on top:` lines mean. The snapshot prints them above everything else
+/// when a layer takes the pointer from controls (`neo-playwright/src/snapshot/snapshot_op.rs`,
+/// worded by `on_top_line` in `cover.rs`), and they ask the agent to act on that layer first, so
+/// they earn a sentence on every call; the inert rule's `# not listed:` line explains itself
+/// and has none.
+const SNAPSHOT_ON_TOP: &str = r"A line `# on top: …` at the snapshot's top names a layer that takes the pointer from the controls under it, with that layer's own controls: deal with it first.";
+
+/// The wait times, which a test reads from the prelude's `timeouts.ts` so the two cannot drift
+/// (this text once said 5 s while the prelude waited 30). None of the 71 waits in that evaluation
+/// that ran the full 30 s would have succeeded after 5 s, so the text advises a short timeout
+/// when the target is uncertain. Timeout settings live in the prelude, which every run starts
+/// afresh, hence "for the rest of the run".
+const WAITS: &str = r"A wait (an action, a read, a snapshot, a navigation) gives up after 30 s and an `expect` after 5 s (`toPass` never), unless given a `timeout`.
+Waiting longer does not bring a missing or covered element: when you are not sure an element is there and free, pass `{ timeout: 5000 }`.
+`page.setDefaultTimeout(ms)` sets the wait for that page for the rest of the run, navigations included.";
+
+/// A pointer action under a cover: it waits out its timeout, then fails `covered`, and its
+/// message names the cover with its ref, its snapshot and its controls, and one line of what to
+/// do (`neo-playwright/src/action/cover.rs`). When a covered click comes to answer early, the pull
+/// request that builds it rewrites this sentence.
+const COVERED_CLICK: &str = r"A click on an element that another element covers waits out its timeout and fails `covered`; its message says what is `On top:`, with its ref and its controls, and what to do.
+Answer or close it with one of those controls (in a script: `error.cover.controls`), then click again; if the message says the same layer covered your last click, closing it again will not help.";
+
+/// A checkbox or radio under its own label, which upstream Playwright refuses to click too, and
+/// the trusted ways that work today, as the cover rules' author measured them on a real browser:
+/// Space on a rendered control (a 1 px clipped one included) is one trusted press that no cover
+/// delays; on a control that is not rendered it returns without error and changes nothing, hence
+/// the read-back; on a box that is already checked it unchecks it (a host measured this), hence
+/// "only when `isChecked()` differs"; a click at a label's centre followed the link inside it, a
+/// click at its top-left corner did not. The text names no untrusted way (`dispatchEvent`): a
+/// model would read it as leave to press through any cover. Removed by the pull request that
+/// makes such a click land through its label; its pinning test fails until then.
+const OWN_LABEL_CLICK: &str = r"When a checkbox's or radio's own label covers it (`<label …> intercepts pointer events`), press Space on the control: `await page.getByRef('e5').press('Space')` is one trusted press and waits for no cover.
+Space toggles: press it only when `isChecked()` differs from the state you want.
+If the control is not rendered (only its label shows), click the label at its top-left corner, `click({ position: { x: 5, y: 5 } })`, and only when the label starts with plain words: a click at the centre of a label that holds a link can follow the link and lose the page.
+Read the state back with `isChecked()` either way: Space on a control that is not rendered changes nothing and says nothing.";
 
 /// The error model, which the agent needs before it retries anything. The model reads
 /// `retryable` inside its script, so the text says it means "safe to repeat", never "will
-/// succeed": a refusal that is permanent (such as `host / private_tab`) still reads `true`
-/// because nothing was sent, and a model that took it as a promise would loop.
-const ERRORS: &str = "An SDK call that fails throws a `NeoError` with `code`, `owner` (who must \
-fix it: neo, script, website or host), `delivery`, `retryable` and `operationId`; a timeout throws its \
-subclass `TimeoutError`. `delivery: \"unknown\"` means a write may have happened: look at the \
-page before repeating it. `retryable: true` means a repeat is safe (nothing was sent, or the \
-call only read); it is never a promise that a repeat will succeed, so read the `message` before \
-trying again.";
+/// succeed": a refusal that is permanent still reads `true` because nothing was sent, and a model
+/// that took it as a promise would loop. A host setting that limits what a run may do goes right
+/// after this paragraph, worded as a condition.
+const ERRORS: &str = r#"A failed SDK call throws a `NeoError` (a `TimeoutError` for a timeout) with `code`, `owner` (who must fix it: script, website, host or neo), `delivery` and `retryable`.
+`delivery: "unknown"` means a write may have happened: look at the page before repeating it.
+`retryable: true` means a repeat is safe, never that it will succeed: read the `message` first."#;
 
-/// sdk-playwright's ref hint, shown once its snapshot method is registered. The prelude's v1
-/// text is the default (`neo-playwright-js/src/prelude/snapshot-v1.ts`): refs only on what can
-/// be acted on and on sections, page text only while it is short. So the hint names the option
-/// that adds the text, and the two ways to reach an element printed without a ref: a locator,
-/// or `mode: 'full'`, Playwright's own text with a ref on each visible element
-/// (`neo-playwright-js/src/prelude/snapshot.ts`). Every agent follows this text literally, so it
-/// names one section: a whole page in that mode is 9k tokens at the median of 31 live pages and
-/// 52k on a big one, which the mode's `maxTokens` cap cuts, while one section fits in 196 of 212
-/// cases. It names that mode, not `ariaSnapshotJSON`: the JSON has no cap and no clickable
-/// marks, so it lacks refs the snapshot prints.
-const REF_HINT: &str = "`page.ariaSnapshot()` lists what you can act on, with refs; \
-`page.getByRef('e5')` acts on one; `{ text: true }` adds the page's text. An element without a \
-ref is reached with a locator (`page.getByText('…')`). \
-A field printed without a ref has no size or takes no pointer: reach it by role and name, \
-`page.getByRole('textbox', { name: '…' })`; `pressSequentially('…')` types into it and fails \
-if it cannot take the focus; `fill` works only if it has a size. \
-`page.getByRef('e12').ariaSnapshot({ mode: 'full' })` prints all of one section as Playwright \
-does, with its text and a ref on each visible element, up to `maxTokens`; a whole page that way \
-is several times larger.";
+/// A host's per-call restriction (`_meta` `access: "read"`), stated as a condition so this static
+/// text stays true for every run. The dispatch door refuses disallowed operations before any
+/// browser work, which is why the sentence can promise "nothing sent". The refusal explains the
+/// rejected operation, so the sentence lists only what a read-only script may do.
+const READ_ONLY: &str = r"A host may start a run read-only: then only reads, `context.newPage()`, a `goto` to an `http` or `https` address, and closing a tab this run opened are allowed; anything else fails `read_only_run` with nothing sent.";
+
+/// Tabs and tasks. One static text, never built from `tabs.scope` or the call: whether a run is
+/// bound to its task is the host's setting and the call's `taskId`, so the text says what binding
+/// does only as a condition, and stays true under either scope and for a run without a task. A
+/// host's `taskId` seeds the run's current task (`dispatch/run_ctx.rs`), and the lazy page takes
+/// that task's last-used open tab (`Dispatcher::open_default_page`), so the text names both ways
+/// a run gets a task.
+const TASKS: &str = r"A task is a set of tabs that later runs can return to.
+A run has one when the host gives it one or the script picks one.
+Built-in `page` is the task's last-used open tab (else another of its open tabs, else a new tab in it); with no task, `page` is a new tab every run.
+`context.newPage()` opens a tab, in the task if there is one.
+To keep tabs across runs yourself, create a task and return its id: `const task = await neo.createTask('flights'); return task.id`; start later runs with `await neo.task('<id>')`, and `await task.close()` when done.
+`context.pages()` lists the tabs this run may use, with `page.tabId` and `page.taskId`; use it to find a tab or a lost task id.
+When the host binds runs to their task, that is only this task's tabs (not the browser's tab count), and any other tab is refused with `page_not_in_task`.";
+
+/// The realm. A test runs it and fails when a parameter the prelude adds, or an `Intl` a QuickJS
+/// bump brings, is not said here.
+const GLOBALS: &str = r"The function's parameters are Playwright's `page`, `context`, `browser`, `expect` and `playwright`, then `neo`, Node's `Buffer` (what `screenshot` and `pdf` return), `console` (its lines come back with the result), `setTimeout`, `clearTimeout`, `NeoError` and `TimeoutError`.
+The engine is QuickJS, which has no `Intl`.";
+
 const SNAPSHOT_METHOD: &str = "page.ariaSnapshot";
 
-/// Usage, limits, the error model, then the registry's listed methods: each `Own` line, and
-/// each `Grouped` line once (the Playwright API is one line, not 120). Built once at startup;
-/// the registry is frozen, so it never changes while Neo runs.
+/// The description, in the order a model needs it: what a script is, the look-act loop with its
+/// waits and covers (once the snapshot method exists), the error model, tasks, the realm and its
+/// size limit, then the registry's listed methods: each `Own` line, and each `Grouped` line once
+/// (the Playwright API is one line, not 120). Built once at startup; the registry is frozen, so
+/// it never changes while Neo runs.
 #[must_use]
 pub(crate) fn run_description(registry: &Registry) -> String {
     let listed = registry.listed();
-    let mut lines = vec![
-        USAGE.to_owned(),
-        format!(
-            "`timeout` is in milliseconds: {} by default, at most {}. The returned value is at most {} KiB of JSON; \
-             bytes in it (a `Buffer`, such as a `screenshot` or `pdf`) that would take it over come back as \
-             `{{\"$neo\":\"blob\",\"id\",\"size\"}}`, which the host reads, so return large text as `Buffer.from(text)`.",
-            Defaults::RUN_TIMEOUT.as_millis(),
-            Defaults::RUN_TIMEOUT_MAX.as_millis(),
-            Defaults::MAX_RESULT_BYTES / 1024
-        ),
-        ERRORS.to_owned(),
-    ];
+    let mut lines = vec![USAGE.to_owned()];
     if listed.iter().any(|spec| spec.name == SNAPSHOT_METHOD) {
-        lines.push(REF_HINT.to_owned());
+        lines.push(LOOP.to_owned());
+        lines.push(SNAPSHOT_ON_TOP.to_owned());
+        lines.push(WAITS.to_owned());
+        lines.push(format!("{COVERED_CLICK}\n{OWN_LABEL_CLICK}"));
     }
+    lines.push(ERRORS.to_owned());
+    lines.push(READ_ONLY.to_owned());
+    lines.push(TASKS.to_owned());
+    lines.push(format!(
+        "{GLOBALS}\nA reply holds at most {} KiB of JSON.",
+        Defaults::MAX_RESULT_BYTES / 1024
+    ));
     let mut methods: Vec<&str> = Vec::new();
     for spec in &listed {
         match spec.listing {
@@ -98,15 +161,20 @@ pub(crate) fn run_description(registry: &Registry) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error;
     use std::future::{self, Future};
     use std::time::Duration;
 
     use neo_trace::Effect;
     use serde_json::Value;
 
-    use super::run_description;
+    use super::{
+        COVERED_CLICK, ERRORS, GLOBALS, LOOP, OWN_LABEL_CLICK, READ_ONLY, SNAPSHOT_ON_TOP, TASKS,
+        WAITS, run_description,
+    };
     use crate::dispatch::{
-        LeafError, Listing, Method, MethodSpec, OpCtx, PageTarget, RegistryBuilder, RegistryError,
+        ErrorCode, LeafError, Listing, Method, MethodSpec, OpCtx, PageTarget, RegistryBuilder,
+        RegistryError,
     };
     use crate::runtime::{Script, ScriptOutcome, run_script};
     use crate::test_rig::{TestError, TestRig, on_neo_runtime};
@@ -142,6 +210,57 @@ mod tests {
         })
     }
 
+    /// The description with the snapshot method registered, as a real server lists it.
+    fn with_snapshot() -> Result<String, RegistryError> {
+        let mut builder = RegistryBuilder::default();
+        builder.define(named(
+            "page.ariaSnapshot",
+            Listing::Grouped("Playwright's Page API"),
+        ))?;
+        Ok(run_description(&builder.build()))
+    }
+
+    /// The digits of `const {name} = …` in a TypeScript source, `_` separators dropped, so a
+    /// `;` or a comment after the literal changes nothing.
+    fn ts_number(source: &str, name: &str) -> Result<u64, Box<dyn Error>> {
+        let (_, value) = source
+            .lines()
+            .find_map(|line| line.split_once(&format!("const {name} = ")))
+            .ok_or(format!("no `const {name}`"))?;
+        Ok(value
+            .chars()
+            .take_while(|c| c.is_ascii_digit() || *c == '_')
+            .filter(char::is_ascii_digit)
+            .collect::<String>()
+            .parse()?)
+    }
+
+    /// A TypeScript file's words with comment markers and line breaks gone, so a sentence that
+    /// wraps across `*` lines reads as one.
+    fn prose(source: &str) -> String {
+        source
+            .lines()
+            .map(|line| line.trim().trim_start_matches(['/', '*']).trim())
+            .collect::<Vec<_>>()
+            .join(" ")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    /// `3000` as the text writes it, `3,000`.
+    fn grouped(number: u64) -> String {
+        let digits = number.to_string();
+        let mut out = String::new();
+        for (index, digit) in digits.chars().enumerate() {
+            if index > 0 && (digits.len() - index).is_multiple_of(3) {
+                out.push(',');
+            }
+            out.push(digit);
+        }
+        out
+    }
+
     #[test]
     fn grouped_methods_share_one_line_and_hidden_ones_stay_out() -> Result<(), RegistryError> {
         let mut builder = RegistryBuilder::default();
@@ -162,39 +281,178 @@ mod tests {
         assert!(!description.contains("neo.internal"), "hidden stays hidden");
         assert!(
             !description.contains("ariaSnapshot"),
-            "no ref hint before the method it names exists"
+            "no snapshot loop before the method it names exists"
         );
         Ok(())
     }
 
+    /// The loop is the habit the text exists to teach; a host reads its sentences to keep its
+    /// own instructions from contradicting them, so each is pinned whole.
     #[test]
-    fn the_ref_hint_appears_with_the_snapshot_method() -> Result<(), RegistryError> {
-        let mut builder = RegistryBuilder::default();
-        builder.define(named(
-            "page.ariaSnapshot",
-            Listing::Grouped("Playwright's Page API"),
-        ))?;
-        let description = run_description(&builder.build());
-        assert!(description.contains("`page.ariaSnapshot()` lists what you can act on"));
-        assert!(description.contains("page.getByRef('e5')"));
-        assert!(
-            description.contains(
-                "An element without a ref is reached with a locator (`page.getByText('…')`). \
-                 A field printed without a ref has no size or takes no pointer: reach it by role and name, \
-                 `page.getByRole('textbox', { name: '…' })`; `pressSequentially('…')` types into it and fails \
-                 if it cannot take the focus; `fill` works only if it has a size. \
-                 `page.getByRef('e12').ariaSnapshot({ mode: 'full' })` prints all of one section \
-                 as Playwright does, with its text and a ref on each visible element, up to \
-                 `maxTokens`; a whole page that way is several times larger."
-            ),
-            "v1 prints refs only on controls and sections, so the model learns how to reach the \
-             rest, one section at a time: {description}"
-        );
+    fn the_loop_waits_and_covers_appear_with_the_snapshot_method() -> Result<(), Box<dyn Error>> {
+        let description = with_snapshot()?;
+        for part in [LOOP, SNAPSHOT_ON_TOP, WAITS, COVERED_CLICK, OWN_LABEL_CLICK] {
+            assert!(description.contains(part), "{part}");
+        }
+        for sentence in [
+            "Work in a loop: look, act, look again.",
+            "A line `# on top: …` at the snapshot's top names a layer that takes the pointer from the controls under it, with that layer's own controls: deal with it first.",
+            "Act on a ref from your latest snapshot: `await page.getByRef('e41').click()`.",
+            "use one only for an element printed without a ref.",
+            "A ref works from `page` wherever the snapshot printed it, inside a frame too: `page.getByRef('f12e12')`.",
+            "end the script by returning a new snapshot, and choose the next action from it.",
+            "Fills of one form can share a script; the click that submits it ends the script.",
+            "Return each snapshot whole, as the string it is.",
+            "only a block with a dialog or alert role survives the cut.",
+            "`fill` waits out its timeout on one with no size.",
+            "when you are not sure an element is there and free, pass `{ timeout: 5000 }`.",
+            "if the message says the same layer covered your last click, closing it again will not help.",
+            "press Space on the control: `await page.getByRef('e5').press('Space')` is one trusted press and waits for no cover.",
+            "Space toggles: press it only when `isChecked()` differs from the state you want.",
+            "Read the state back with `isChecked()` either way:",
+        ] {
+            assert!(description.contains(sentence), "{sentence}: {description}");
+        }
         assert!(
             !description.contains("ariaSnapshotJSON"),
-            "the hint no longer sends the model to the uncapped, unmarked tree: {description}"
+            "the text never sends the model to the uncapped, unmarked tree: {description}"
+        );
+        assert!(
+            !description.contains("dispatchEvent"),
+            "the text names no untrusted press: a model reads it as leave to press through any \
+             cover: {description}"
+        );
+        let snapshot = description.find("Work in a loop").ok_or("no loop")?;
+        let errors = description.find(ERRORS).ok_or("no errors")?;
+        assert!(
+            snapshot < errors,
+            "the common path comes before the exceptions"
         );
         Ok(())
+    }
+
+    /// This text must ship with the snapshot's behaviour, not merely with an unused formatter.
+    #[test]
+    fn the_on_top_sentence_has_a_snapshot_caller() {
+        const SNAPSHOT: &str = include_str!("../../../neo-playwright/src/snapshot/snapshot_op.rs");
+        assert!(SNAPSHOT.contains("action::on_top_line(&note)"));
+        assert!(SNAPSHOT_ON_TOP.contains("`# on top: …`"));
+    }
+
+    /// The cap keeps these four roles whole past its cut, and only these: what the text says
+    /// survives a small `maxTokens` must be what the cap keeps.
+    #[test]
+    fn the_roles_said_to_survive_a_cut_are_the_caps() {
+        const V1: &str = include_str!("../../../neo-playwright-js/src/prelude/snapshot-v1.ts");
+        let kept = V1
+            .split("export const KEPT = new Set<string>([")
+            .nth(1)
+            .and_then(|rest| rest.split("])").next())
+            .unwrap_or_default();
+        for role in ["'dialog'", "'alertdialog'", "'alert'", "'status'"] {
+            assert!(kept.contains(role), "the cap keeps {role}: {kept}");
+        }
+        assert!(LOOP.contains("a dialog or alert role survives the cut"));
+    }
+
+    /// The text-length rule's number and the default cap are the prelude's, read rather than
+    /// repeated, here and in `agent.d.ts`. The limit is written there as tokens times
+    /// `CHARS_PER_TOKEN`; a change of that form fails here first.
+    #[test]
+    fn the_described_text_limit_is_the_preludes() -> Result<(), Box<dyn Error>> {
+        const V1: &str = include_str!("../../../neo-playwright-js/src/prelude/snapshot-v1.ts");
+        const AGENT_D_TS: &str = include_str!("../../../agent.d.ts");
+        let line = V1
+            .lines()
+            .find(|line| line.contains("const TEXT_LIMIT_CHARS = "))
+            .ok_or("snapshot-v1.ts has no TEXT_LIMIT_CHARS")?;
+        assert!(
+            line.trim_end().ends_with("* CHARS_PER_TOKEN"),
+            "the limit is tokens times CHARS_PER_TOKEN: {line}"
+        );
+        let tokens = ts_number(V1, "TEXT_LIMIT_CHARS")?;
+        let said = format!(
+            "while the whole stays under about {} tokens",
+            grouped(tokens)
+        );
+        assert!(LOOP.contains(&said), "the loop says: {said}");
+        let handout = prose(AGENT_D_TS);
+        let cap = ts_number(V1, "DEFAULT_MAX_TOKENS")?;
+        for said in [
+            format!(
+                "while the whole stays under about {} tokens",
+                grouped(tokens)
+            ),
+            format!("The cap, about {} tokens by default.", grouped(cap)),
+        ] {
+            assert!(handout.contains(&said), "agent.d.ts says: {said}");
+        }
+        Ok(())
+    }
+
+    /// The description's wait times are the prelude's defaults, read from `timeouts.ts` rather
+    /// than repeated, so the two cannot drift apart again (the text once said 5 s while the
+    /// prelude waited 30). neo-server's README and `agent.d.ts` say the same. `toPass` is the
+    /// one `expect` with no default limit (expect.ts), which the sentence names.
+    #[test]
+    fn tests_that_the_described_wait_times_are_the_preludes_defaults() -> Result<(), Box<dyn Error>>
+    {
+        const TIMEOUTS: &str = include_str!("../../../neo-playwright-js/src/prelude/timeouts.ts");
+        const README: &str = include_str!("../../README.md");
+        const AGENT_D_TS: &str = include_str!("../../../agent.d.ts");
+        let wait = ts_number(TIMEOUTS, "DEFAULT_TIMEOUT")? / 1000;
+        let expect = ts_number(TIMEOUTS, "DEFAULT_EXPECT_TIMEOUT")? / 1000;
+        assert_eq!(
+            ts_number(TIMEOUTS, "DEFAULT_NAVIGATION_TIMEOUT")? / 1000,
+            wait,
+            "the description gives a navigation the wait's time"
+        );
+        let said = format!("gives up after {wait} s and an `expect` after {expect} s");
+        assert!(WAITS.contains(&said), "the run description says: {said}");
+        let readme = README.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(readme.contains(&said), "neo-server's README says: {said}");
+        let handout = format!("wait up to {wait} s (expect: {expect} s, toPass: no limit)");
+        assert!(
+            prose(AGENT_D_TS).contains(&handout),
+            "agent.d.ts says: {handout}"
+        );
+        Ok(())
+    }
+
+    /// Every error code the text names is one Neo answers, and the cover lines it quotes are the
+    /// ones the covered answer writes.
+    #[test]
+    fn the_codes_and_the_cover_line_the_text_names_are_neos() {
+        const POINTER: &str = include_str!("../../../neo-playwright/src/action/pointer_action.rs");
+        const COVER: &str = include_str!("../../../neo-playwright/src/action/cover.rs");
+        for (code, part) in [
+            (ErrorCode::COVERED, COVERED_CLICK),
+            (ErrorCode::PAGE_NOT_IN_TASK, TASKS),
+            (ErrorCode::READ_ONLY_RUN, READ_ONLY),
+        ] {
+            assert!(part.contains(&format!("`{}`", code.as_str())), "{part}");
+        }
+        assert!(POINTER.contains("intercepts pointer events"));
+        assert!(OWN_LABEL_CLICK.contains("intercepts pointer events"));
+        assert!(COVER.contains("\\n  On top: "));
+        assert!(COVERED_CLICK.contains("`On top:`"));
+        assert!(COVER.contains("The same layer covered your last "));
+        assert!(COVERED_CLICK.contains("the same layer covered your last click"));
+    }
+
+    #[test]
+    fn the_read_only_sentence_is_conditional_and_follows_errors() {
+        const SENTENCE: &str = r"A host may start a run read-only: then only reads, `context.newPage()`, a `goto` to an `http` or `https` address, and closing a tab this run opened are allowed; anything else fails `read_only_run` with nothing sent.";
+        let description = run_description(&RegistryBuilder::default().build());
+        assert_eq!(
+            description.matches(SENTENCE).count(),
+            1,
+            "the host condition and refusal are stated once"
+        );
+        assert!(
+            description.contains(&format!("{ERRORS}\n\n{SENTENCE}")),
+            "read-only access follows the error model it relies on"
+        );
     }
 
     #[test]
@@ -202,18 +460,13 @@ mod tests {
         let description = run_description(&RegistryBuilder::default().build());
         for sentence in [
             "returns what the script returns.",
-            "Each run starts with fresh JavaScript.",
-            "With no task, built-in `page` opens a new tab on first use; `context.newPage()` opens another.",
-            "Neither reuses a tab or creates a task.",
-            "To keep tabs across runs, create a task and return its id.",
-            "First run: `const task = await neo.createTask('hn top 5'); return task.id`.",
-            "Start later scripts with `await neo.task('<id>')`",
-            "`page` uses the task's last-used open tab (else another open tab, else a new one)",
-            "`context.newPage()` opens in the task.",
-            "The latest task pick wins.",
-            "When finished: `await task.close()`.",
-            "Popups join their opener's task.",
-            "`context.pages()` lists the tabs this run may use, with `page.tabId` and `page.taskId` (null without a task); use it to recover a lost task id.",
+            "Each run starts with fresh JavaScript; tabs stay open between runs.",
+            "A run has one when the host gives it one or the script picks one.",
+            "Built-in `page` is the task's last-used open tab (else another of its open tabs, else a new tab in it); with no task, `page` is a new tab every run.",
+            "`context.newPage()` opens a tab, in the task if there is one.",
+            "To keep tabs across runs yourself, create a task and return its id: `const task = await neo.createTask('flights'); return task.id`;",
+            "start later runs with `await neo.task('<id>')`, and `await task.close()` when done.",
+            "`context.pages()` lists the tabs this run may use, with `page.tabId` and `page.taskId`; use it to find a tab or a lost task id.",
             "When the host binds runs to their task, that is only this task's tabs (not the browser's tab count), and any other tab is refused with `page_not_in_task`.",
         ] {
             assert!(
@@ -261,12 +514,13 @@ mod tests {
             let (parameters, intl): (String, String) = serde_json::from_value(value)?;
             for name in parameters.split(", ") {
                 assert!(
-                    description.contains(&format!("`{name}`")),
+                    GLOBALS.contains(&format!("`{name}`")),
                     "the description names the parameter `{name}`: {description}"
                 );
             }
             assert_eq!(intl, "undefined");
-            assert!(description.contains("no `Intl`"));
+            assert!(GLOBALS.contains("no `Intl`"));
+            assert!(description.contains(GLOBALS));
             Ok(())
         })
     }

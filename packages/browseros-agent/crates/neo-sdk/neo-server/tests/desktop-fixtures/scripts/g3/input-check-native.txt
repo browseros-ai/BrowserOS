@@ -1,0 +1,7 @@
+await page.goto(args.base + '/sdk-input.html');
+
+for (const [method, checked] of [['check', true], ['uncheck', false]]) {
+  await page.getByRef(await refFor(page, 'Native checkbox'))[method]();
+  equal(await page.evaluate(() => document.getElementById('native').checked), checked, `${method} updates the native checkbox`);
+}
+return { checked: await page.evaluate(() => document.getElementById('native').checked) };

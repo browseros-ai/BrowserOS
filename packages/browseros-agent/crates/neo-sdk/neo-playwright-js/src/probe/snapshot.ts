@@ -9,7 +9,9 @@
  * map. The map accumulates, so a ref printed by an earlier or a scoped snapshot still names its
  * element; iframe refs are in it too, which is how Rust's hop finds each iframe again.
  */
+
 import { parseSelector } from '../../../neo-playwright/third_party/playwright/packages/isomorphic/selectorParser'
+import { surveyCovers } from './cover-survey'
 import type { FailureOutput } from './failure-output'
 import {
   asPointerTargets,
@@ -19,6 +21,7 @@ import {
 import type { ReplyTo, SnapshotIframe, SnapshotRequest } from './protocol'
 import { type Found, resolveTarget } from './resolve'
 import { openClosedRoots } from './shadow-roots'
+import { markInert } from './snapshot-inert'
 import { frameSource, lastSnapshotRefs, type World } from './world'
 
 /**
@@ -74,10 +77,28 @@ export function snapshot(
   const take = () => marked(targets, engine, plain)
   const { result, skipped } = output.tree(element, take)
   const { json, iframeRefs, iframeDepths } = result
+  let inertMarkingMs: number | undefined
+  if (request.markInert && request.mode === 'ai' && output.neoSnapshot) {
+    const started = performance.now()
+    markInert(world, json)
+    inertMarkingMs = performance.now() - started
+  }
+  // Survey only the whole main page, after the engine's walk and inside this same read.
+  // Remember before diagnostics take any quiet subtree snapshots, so the printed refs win.
+  const minted = request.mode === 'ai' ? lastSnapshotRefs(injected) : undefined
+  if (minted) world.refs.remember(minted)
+  let survey: ReturnType<typeof surveyCovers> | undefined
+  let surveyFailed = false
+  if (request.surveyCovers && request.mode === 'ai' && output.neoSnapshot) {
+    // Cover hints are diagnostic: an unforeseen page shape must never take away its read.
+    try {
+      survey = surveyCovers(world, output, json)
+    } catch {
+      surveyFailed = true
+    }
+  }
   const iframes: SnapshotIframe[] = []
-  if (request.mode === 'ai') {
-    const minted = lastSnapshotRefs(injected)
-    world.refs.remember(minted)
+  if (minted) {
     // Only the iframes the depth limit rendered, as upstream's `renderedIframeRefs`.
     for (const ref of iframeRefs) {
       const depth = iframeDepths[ref]
@@ -88,6 +109,16 @@ export function snapshot(
   }
   return {
     kind: 'snapshot',
+    ...(survey
+      ? {
+          onTop: survey.layers,
+          surveyTested: survey.tested,
+          surveyMs: survey.phases.hits,
+          surveyPhases: survey.phases,
+        }
+      : {}),
+    ...(surveyFailed || survey?.marksSkipped ? { onTopSkipped: true } : {}),
+    ...(inertMarkingMs === undefined ? {} : { inertMarkingMs }),
     json,
     iframes,
     ...(skipped ? { marksSkipped: true } : {}),

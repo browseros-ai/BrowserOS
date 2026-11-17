@@ -22,6 +22,7 @@
  * prints lines the caller has seen or is seeing now. The notice line and the cut line are left
  * out of the comparison and of the result: they describe the snapshot's size, not the page.
  */
+import { isOnTopLine, onTopDelta, onTopHead } from './snapshot-on-top'
 import {
   type PassedV1Options,
   type RenderedV1,
@@ -79,14 +80,30 @@ export function renderDelta(
 ): DeltaResult {
   if (stored === null) {
     const whole = renderSnapshotV1(result, withDefaults(passed))
-    return { returned: `${NO_BASELINE}\n${whole.text}`, baseline: whole }
+    return {
+      returned: [
+        NO_BASELINE,
+        ...onTopHead(result),
+        withoutTop(whole.text),
+      ].join('\n'),
+      baseline: whole,
+    }
   }
   const { form } = stored
   if (agrees(passed, form)) {
     const current = renderSnapshotV1As(result, form)
     const changes = listChanges(stored.text, current)
-    if (changes !== null)
-      return { returned: changes, baseline: { text: current, form } }
+    if (changes !== null) {
+      // Hosts use the first line to distinguish unchanged, changed and whole-page reads.
+      // Layer facts follow that status and stay outside every diff hunk.
+      const [status, ...body] = changes.split('\n')
+      return {
+        returned: [status, ...onTopDelta(stored.text, result), ...body].join(
+          '\n',
+        ),
+        baseline: { text: current, form },
+      }
+    }
   }
   // The whole page: what the call passed, the rest from the baseline's form. A `text` neither
   // call passed goes back to the length rule, since a whole page is a new snapshot and that rule
@@ -95,8 +112,16 @@ export function renderDelta(
     text: passed.text ?? passedText(form.text),
     urls: passed.urls ?? form.urls,
     maxTokens: passed.maxTokens ?? form.maxTokens,
+    inert: passed.inert ?? form.inert ?? false,
   })
-  return { returned: `${TOO_MUCH}\n${whole.text}`, baseline: whole }
+  return {
+    returned: [
+      TOO_MUCH,
+      ...onTopDelta(stored.text, result),
+      withoutTop(whole.text),
+    ].join('\n'),
+    baseline: whole,
+  }
 }
 
 /**
@@ -108,7 +133,11 @@ export function renderUncompared(
   result: SnapshotResult,
   passed: PassedV1Options,
 ): string {
-  return `${NO_TIME}\n${renderSnapshotV1(result, withDefaults(passed)).text}`
+  return [
+    NO_TIME,
+    ...onTopHead(result),
+    withoutTop(renderSnapshotV1(result, withDefaults(passed)).text),
+  ].join('\n')
 }
 
 /**
@@ -119,7 +148,8 @@ function agrees(passed: PassedV1Options, form: SnapshotForm): boolean {
   return (
     (passed.text === undefined || passed.text === showsText(form.text)) &&
     (passed.urls === undefined || passed.urls === form.urls) &&
-    (passed.maxTokens === undefined || passed.maxTokens === form.maxTokens)
+    (passed.maxTokens === undefined || passed.maxTokens === form.maxTokens) &&
+    (passed.inert === undefined || passed.inert === (form.inert ?? false))
   )
 }
 
@@ -137,7 +167,12 @@ function passedText(text: TextForm): boolean | undefined {
 
 /** The lines that describe the snapshot's size: the notice and the cut line (snapshot-cap.ts). */
 function sizeLine(line: string): boolean {
-  return line.startsWith('# text left out: ') || line.startsWith('# cut: ')
+  return (
+    isOnTopLine(line) ||
+    line.startsWith('# text left out: ') ||
+    line.startsWith('# cut: ') ||
+    line.startsWith('# not listed: ')
+  )
 }
 
 /**
@@ -398,4 +433,12 @@ function blockLine(
 
 function indentOf(line: string): number {
   return line.length - line.trimStart().length
+}
+
+/** Layer facts follow the delta's status once; a whole-page body cannot repeat them. */
+function withoutTop(text: string): string {
+  return text
+    .split('\n')
+    .filter((line) => !isOnTopLine(line))
+    .join('\n')
 }

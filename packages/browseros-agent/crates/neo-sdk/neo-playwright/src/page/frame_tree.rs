@@ -363,19 +363,11 @@ pub(crate) async fn read(
     page: &PageId,
     root: &ProtocolSession,
 ) -> Result<FrameTree, CoreError> {
-    read_frames(browser, page, root, Subtrees::Skip).await
-}
-
-/// [`read`], failing where it skips: a cross-site frame that exists and whose own tree cannot be
-/// read fails the whole read. Neo's camera reads every frame before it may store a picture
-/// (protected-fill ruling R45), and a frame left out there could be the one showing a card
-/// number.
-pub(crate) async fn read_every(
-    browser: &BrowserSession,
-    page: &PageId,
-    root: &ProtocolSession,
-) -> Result<FrameTree, CoreError> {
-    read_frames(browser, page, root, Subtrees::Require).await
+    let mut tree = FrameTree::default();
+    tree.add_hosted(frame_tree(root).await?.frame_tree, None, root);
+    let iframes = list_iframes(browser).await?;
+    read_oopifs(browser, page, &mut tree, &iframes, Subtrees::Skip).await?;
+    Ok(tree)
 }
 
 /// What a read does with a cross-site frame whose own tree cannot be read.
@@ -388,20 +380,7 @@ enum Subtrees {
     Require,
 }
 
-async fn read_frames(
-    browser: &BrowserSession,
-    page: &PageId,
-    root: &ProtocolSession,
-    subtrees: Subtrees,
-) -> Result<FrameTree, CoreError> {
-    let mut tree = FrameTree::default();
-    tree.add_hosted(frame_tree(root).await?.frame_tree, None, root);
-    let iframes = list_iframes(browser).await?;
-    read_oopifs(browser, page, &mut tree, &iframes, subtrees).await?;
-    Ok(tree)
-}
-
-/// Ruling R63's read, for `look_op::frames_gone`: [`read_every`]'s, with one list of the
+/// The private look's complete frame read (ruling R63), with one list of the
 /// browser's out-of-process frames taken right before the root's tree and compared with the list
 /// the read takes right after it. `None` when the two differ: a frame out of process at the root's
 /// read and in its parent's process at the list is in neither, and the read would come back whole
@@ -409,7 +388,7 @@ async fn read_frames(
 /// tree cannot be read fails the read ([`Subtrees::Require`], after its tries). So the window is
 /// two adjacent calls. Only target ids are compared, as a target's address and title change with
 /// every navigation; the lists are the browser's, so frames moving in another tab answer `None`
-/// too, the safe side. The camera's read ([`read_every`]) stays as it is.
+/// too, the safe side.
 pub(crate) async fn read_steady(
     browser: &BrowserSession,
     page: &PageId,
@@ -562,9 +541,9 @@ async fn oopif_tree(
     // While the frame's own session is still attaching (its attach event has not landed, so
     // core's on-demand attach finds it in flight), core answers the parent's session instead,
     // whose tree is the parent's. Taken as the frame's, it would list the parent's frames again
-    // and leave this frame and its children out, with no error: a short tree, read as whole,
-    // that the camera too would take for every frame. It is a failed try, read again after a
-    // pause (`OOPIF_TRIES`). An OOPIF's target id is its frame id.
+    // and leave this frame and its children out, with no error: a short tree read as whole.
+    // It is a failed try, read again after a pause (`OOPIF_TRIES`). An OOPIF's target id is its
+    // frame id.
     if tree.frame_tree.frame.id != frame {
         return Err(CoreError::Message(format!(
             "frame {frame}'s own session is not attached yet"

@@ -37,6 +37,40 @@ const closedRoots = new WeakMap<Element, ShadowRoot>()
 let realShadowRoot: ((this: Element) => ShadowRoot | null) | undefined
 let installed = false
 
+const XHTML = 'http://www.w3.org/1999/xhtml'
+const SHADOW_HOSTS = new Set([
+  'article',
+  'aside',
+  'blockquote',
+  'body',
+  'div',
+  'footer',
+  'h1',
+  'h2',
+  'h3',
+  'h4',
+  'h5',
+  'h6',
+  'header',
+  'main',
+  'nav',
+  'p',
+  'section',
+  'span',
+])
+
+/**
+ * Whether a cover may hide an author shadow root this world's engine cannot read yet.
+ * The tag rule excludes browser-owned roots such as video controls. A marked snapshot can
+ * expose a closed root through this module's getter, after which its host is no longer unknown.
+ */
+export function mayCarryRoot(element: Element): boolean {
+  if (element.namespaceURI !== XHTML || isBrowserOSUi(element)) return false
+  const name = element.localName
+  if (!SHADOW_HOSTS.has(name) && !name.includes('-')) return false
+  return element.shadowRoot === null
+}
+
 type Getter<T, V> = (this: T) => V
 
 /**

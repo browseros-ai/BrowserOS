@@ -1,0 +1,16 @@
+await page.goto(args.base + '/sdk-drag.html');
+
+const centers = await page.evaluate(() => ['script-source', 'script-target'].map(id => { const r = document.getElementById(id).getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; }));
+await page.mouse.move(centers[0].x, centers[0].y);
+await page.mouse.down();
+await page.mouse.move(centers[1].x, centers[1].y, { steps: 12 });
+await page.mouse.up();
+
+const state = await page.evaluate(() => window.scriptDrag);
+const target = await page.evaluate(() => { const r = document.getElementById('script-target').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; });
+equal(state.down, true, 'the source receives left mousedown');
+assert(state.heldMoves > 0, 'mousemove keeps the left button held', state);
+equal(state.up, true, 'the drag releases the mouse button');
+assert(state.drop !== null, 'mouseup drops on the target', state);
+assert(Math.abs(state.drop.x - target.x) < 0.5 && Math.abs(state.drop.y - target.y) < 0.5, 'the drop reaches the target center', { state, target });
+return { state, target };

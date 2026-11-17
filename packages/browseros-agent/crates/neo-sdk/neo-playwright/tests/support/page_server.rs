@@ -7,6 +7,7 @@
 //! page that shows it; `/missing.html` is a 404 page; `/echo.html` prints the request's
 //! `Referer` header in `#referer`; `/stall.html` takes the request and never answers, so a
 //! navigation to it never commits; `/beforeunload.html` asks to stay whenever it is left.
+//! `/attachment.txt` downloads a text file instead of committing a frame document.
 
 use std::error::Error;
 use std::future;
@@ -90,6 +91,7 @@ async fn serve(mut stream: TcpStream, port: u16) {
             ("200 OK", "image/png", String::new())
         }
         "/missing.html" => ("404 Not Found", "text/html", "<p>missing</p>".to_owned()),
+        "/attachment.txt" => ("200 OK", "text/plain", "iframe attachment\n".to_owned()),
         "/echo.html" => (
             "200 OK",
             "text/html",
@@ -113,8 +115,13 @@ async fn serve(mut stream: TcpStream, port: u16) {
             None => ("404 Not Found", "text/html", String::new()),
         },
     };
+    let disposition = if path == "/attachment.txt" {
+        "Content-Disposition: attachment; filename=\"iframe-attachment.txt\"\r\n"
+    } else {
+        ""
+    };
     let response = format!(
-        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n{body}",
+        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\n{disposition}Content-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n{body}",
         body.len()
     );
     let _ = stream.write_all(response.as_bytes()).await;

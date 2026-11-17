@@ -21,7 +21,6 @@ use std::time::{Duration, Instant as StdInstant};
 
 use browseros_core::TabId;
 use futures_util::future::BoxFuture;
-use neo_http::PictureVerdict;
 use neo_playwright::{
     BoxFacts, BoxLook, Compared, CoverIn, Drawing, Entry, EntryCode, EntryError, EntryOutcome,
     EntryRequest, LookRequest, OpEnv, Sending,
@@ -99,8 +98,6 @@ pub(super) struct ScriptedEntry {
     entered: Mutex<Vec<Vec<usize>>>,
     /// The tabs an entry marked sent on, for the camera: never cleared, as the real entry's.
     took: Mutex<Vec<TabId>>,
-    /// The tabs whose page shows a private box's value, as the app's reading answers it.
-    shows: Mutex<Vec<TabId>>,
     looks: AtomicUsize,
     holding: Notify,
     release: Notify,
@@ -132,30 +129,6 @@ impl ScriptedEntry {
     /// How many times the entry ran: zero when the door refused every fill before it.
     pub(super) fn calls(&self) -> usize {
         self.calls.load(Ordering::SeqCst)
-    }
-
-    /// What `tab` shows, as the app's reading (`Playwright::picture_check`) answers it.
-    pub(super) fn verdict(&self, tab: TabId) -> PictureVerdict {
-        if self
-            .shows
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .contains(&tab)
-        {
-            PictureVerdict::Private
-        } else {
-            PictureVerdict::Clear {
-                reading: "the page".to_owned(),
-            }
-        }
-    }
-
-    /// Makes `tab`'s page show a private box's value, as a script's own fill of a card box does.
-    pub(super) fn show(&self, tab: TabId) {
-        self.shows
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .push(tab);
     }
 
     /// Whether an entry went past "sent" on `tab`: the real entry's `took_private_text`.
@@ -530,6 +503,7 @@ async fn script_call(
             deadline: Instant::now() + Duration::from_secs(10),
             default_page: None,
             tabs_scope: TabsScope::Browser,
+            access: None,
         },
     );
     let reply = host
@@ -1986,74 +1960,5 @@ async fn set_pictures(host: &Host, value: &str) -> TestResult {
     )
     .await?;
     assert_eq!(reply.status, 200, "{reply:?}");
-    Ok(())
-}
-
-/// Ruling R45: with no host fill at all, a tab whose page shows a private box's value painted in
-/// clear (a script's own fill of a card box) gets no stored picture while it does; another tab
-/// is not withheld. The app's reading is the scripted entry's; the camera asks it around each
-/// capture.
-#[tokio::test]
-async fn a_tab_that_shows_a_private_value_is_not_pictured_while_it_does() -> TestResult {
-    let (host, tab) = ready().await?;
-    let other = host.fake.open_tab("https://other.example/", "Other");
-    host.entry.show(tab);
-    let mut operations = Vec::new();
-    for on in [tab, other] {
-        let (run, written) = script_call(
-            &host,
-            "await page.click('#pay')",
-            "test.plainFill",
-            json!({ "page": { "$neo": "page", "tab": on.0 }, "value": "not secret" }),
-        )
-        .await?;
-        assert!(written.is_ok(), "{written:?}");
-        operations.push(format!("{run}.1"));
-    }
-    host.sink.flush().await?;
-    let message = |operation: &str| {
-        let path = format!("/v1/operations/{operation}/screenshot");
-        let socket = host.socket.clone();
-        async move {
-            request(&socket, "GET", &path, Some(TOKEN), None)
-                .await
-                .map(|reply| {
-                    reply.body["message"]
-                        .as_str()
-                        .unwrap_or_default()
-                        .to_owned()
-                })
-        }
-    };
-    within(async {
-        loop {
-            if message(&operations[0])
-                .await
-                .is_ok_and(|text| text.contains("withheld"))
-            {
-                return;
-            }
-            time::sleep(Duration::from_millis(20)).await;
-        }
-    })
-    .await
-    .map_err(|_unseen| "the tab that shows a private value records a withheld picture")?;
-    // The other tab's picture settled before it is read: its run is complete only once every
-    // picture it ordered answered. The fake browser cannot capture, so it is dropped, not
-    // withheld; the real-browser test shows such a tab pictured.
-    let other_run = operations[1].rsplit_once('.').map_or("", |(run, _)| run);
-    let settled = request(
-        &host.socket,
-        "GET",
-        &format!("/v1/runs/{other_run}?wait=10"),
-        Some(TOKEN),
-        None,
-    )
-    .await?;
-    assert_eq!(settled.body["complete"], true, "{settled:?}");
-    assert!(
-        !message(&operations[1]).await?.contains("withheld"),
-        "another tab is not withheld"
-    );
     Ok(())
 }

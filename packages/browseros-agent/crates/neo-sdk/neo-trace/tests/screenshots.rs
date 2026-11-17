@@ -55,6 +55,7 @@ fn start_run(sink: &TraceSink, millis: i64) -> RunId {
         task_id: None,
         host_data: None,
         tabs_scope: RunTabsScope::Browser,
+        access: None,
         at: at(millis),
     });
     run
@@ -101,12 +102,14 @@ fn operation(
         sent_at: None,
         result: None,
         error: owner.map(|owner| ErrorRecord {
+            diagnostic_code: None,
             owner,
             code: "no_match".into(),
             message: "nothing matched".into(),
             host_code: None,
             retryable: false,
             operation_id: None,
+            cover: None,
         }),
         page_after: None,
         main_world: false,
@@ -836,12 +839,14 @@ async fn a_protected_operation_and_its_tab_get_no_picture() -> TestResult {
             sent_at: None,
             result: None,
             error: owner.map(|owner| ErrorRecord {
+                diagnostic_code: None,
                 owner,
                 code: "focus_lost".into(),
                 message: "The focus left the box during the entry.".into(),
                 host_code: None,
                 retryable: false,
                 operation_id: None,
+                cover: None,
             }),
             page_after: Some(PageState {
                 tab_id: Some(TabId(3)),

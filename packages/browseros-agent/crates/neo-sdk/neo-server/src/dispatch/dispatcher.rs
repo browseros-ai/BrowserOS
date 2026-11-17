@@ -10,7 +10,7 @@ use crate::browser::Seen;
 use browseros_core::pages::PageInfo;
 use browseros_core::viewport::Size;
 use browseros_core::{BrowserView, PageId, TabId};
-use neo_trace::{Delivery, Effect, OperationId, PageState, TaskId, TraceSink};
+use neo_trace::{Delivery, Effect, OperationId, PageState, RunAccess, TaskId, TraceSink};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::{Mutex as AsyncMutex, oneshot};
@@ -31,6 +31,7 @@ use super::{
 };
 use crate::browser::{BrowserLink, PageRef, Sight, TabRegistry, TaskRecord};
 use crate::config::Defaults;
+use crate::url_scheme;
 
 /// A tab's refresh bookkeeping, a per-tab slot dropped with the tab: the event seq through which
 /// the door last refreshed its entry in core's page cache, so a navigation the page made itself
@@ -530,6 +531,15 @@ impl Dispatcher {
             decided => decided,
         };
         let spec = registered.map_or(UNKNOWN_METHOD, super::registry::Registered::spec);
+        // Access is checked before target resolution or even the start's tab is derived. A
+        // refusal therefore opens no lazy page, links no tab in the trace and sends nothing.
+        // Child calls take this same path: composition must never bypass host permission.
+        let decoded = decoded.and_then(|decoded| {
+            if run.access().is_some() {
+                read_only_admission(run, &spec, &input, decoded.target().as_ref(), &self.tabs)?;
+            }
+            Ok(decoded)
+        });
         let target = decoded.as_ref().ok().and_then(|decoded| decoded.target());
         // The tab the call names, unchecked: the record lists what the script asked for, even
         // when the door then refuses it. A lazy default page has no tab until it opens.
@@ -1119,6 +1129,237 @@ impl Dispatcher {
             facts.observed = None;
         }
         facts
+    }
+}
+
+/// The host's read restriction at admission, using only already-decoded facts and local books.
+/// This must stay synchronous: resolving an unknown page just to refuse it can open a tab.
+fn read_only_admission(
+    run: &RunCtx,
+    spec: &MethodSpec,
+    input: &Value,
+    target: Option<&PageTarget>,
+    tabs: &TabRegistry,
+) -> Result<(), OperationError> {
+    match run.access() {
+        None => return Ok(()),
+        Some(RunAccess::Read) => {}
+    }
+    // This read-labelled operation takes a native chooser lease and blocks the owner's picker.
+    // Its label stays unchanged; a read-only run cannot trigger a chooser or borrow that lease.
+    if spec.name != "events.interceptFileChooser"
+        && (spec.effect == Effect::Read
+            || matches!(
+                spec.name,
+                "context.newPage" | "task.newPage" | "disposable.dispose"
+            ))
+    {
+        return Ok(());
+    }
+    let tab = target.and_then(|target| match &target.0 {
+        TargetHandle::Page { tab } => Some(*tab),
+        TargetHandle::RunDefault => run.known_default_tab(),
+    });
+    if spec.name == "page.goto" {
+        let web = input
+            .get("url")
+            .and_then(Value::as_str)
+            .and_then(url_scheme::navigation_scheme)
+            .is_some_and(|scheme| matches!(scheme.as_str(), "http" | "https"));
+        // adoptable reads origin and holder together. Early naming proves this run's new tab
+        // before readiness updates its origin or holder; without that evidence it would look
+        // like the owner's during a concurrent open. Restored task-held Found tabs also pass.
+        // An unknown lazy page uses a held task tab or the opener, never adopts an owner's tab.
+        if web && tab.is_none_or(|tab| run.opened_it(tab) || !tabs.adoptable(tab)) {
+            return Ok(());
+        }
+    }
+    if spec.name == "page.close" {
+        if tab.is_some_and(|tab| run.opened_it(tab)) {
+            return Ok(());
+        }
+        return Err(OperationError::script(
+            ErrorCode::READ_ONLY_RUN,
+            "a read-only run may close only a tab it opened itself",
+        ));
+    }
+    Err(OperationError::script(
+        ErrorCode::READ_ONLY_RUN,
+        format_args!(
+            "this run is read-only: the host allows reads, newPage, and goto to an http(s) address; \
+             `{}` was not sent",
+            spec.name
+        ),
+    ))
+}
+
+#[cfg(test)]
+mod read_only_tests {
+    use std::time::Duration;
+
+    use neo_trace::{Delivery, Effect, RunAccess, RunId};
+    use serde_json::json;
+    use tokio::time::Instant;
+
+    use super::{PageTarget, RunCtx, read_only_admission};
+    use crate::browser::TabsScope;
+    use crate::dispatch::{Caller, ErrorCode, RunStart, Visibility};
+    use crate::test_rig::{TestError, TestRig};
+
+    // These labels are now an access boundary. A new Read must fail until its page/host effects
+    // have been audited, rather than silently joining read-only execution.
+    const SCRIPT_READS: &[&str] = &[
+        "context.pages",
+        "download.path",
+        "events.interceptFileChooser",
+        "events.listen",
+        "events.next",
+        "events.wait",
+        "expect.locator",
+        "expect.page",
+        "locator.allInnerTexts",
+        "locator.allTextContents",
+        "locator.ariaSnapshot",
+        "locator.boundingBox",
+        "locator.count",
+        "locator.elementHandle",
+        "locator.elementHandles",
+        "locator.getAttribute",
+        "locator.innerHTML",
+        "locator.innerText",
+        "locator.inputValue",
+        "locator.isChecked",
+        "locator.isDisabled",
+        "locator.isEditable",
+        "locator.isEnabled",
+        "locator.isHidden",
+        "locator.isVisible",
+        "locator.normalize",
+        "locator.ref",
+        "locator.scrollIntoViewIfNeeded",
+        "locator.textContent",
+        "locator.waitFor",
+        "neo.createTask",
+        "neo.task",
+        "page.addLocatorHandler",
+        "page.ariaSnapshot",
+        "page.content",
+        "page.frames",
+        "page.locatorHandlerTriggered",
+        "page.opener",
+        "page.pdf",
+        "page.removeLocatorHandler",
+        "page.resolveLocatorHandler",
+        "page.screenshot",
+        "page.snapshotBaseline",
+        "page.snapshotPending",
+        "page.title",
+        "page.waitForLoadState",
+        "page.waitForNavigation",
+        "page.waitForURL",
+        "webStorage.getItem",
+        "webStorage.items",
+    ];
+
+    #[tokio::test]
+    async fn read_only_admission_pins_the_exact_read_labels_and_admitted_methods()
+    -> Result<(), TestError> {
+        let rig = TestRig::new().await?;
+        let dispatcher = rig.builtin_dispatcher()?;
+        let page = rig.owner_tab("https://reading.example/").await?;
+        rig.tabs.opened_by_agent(&page, rig.tabs.seen());
+        let (run, _guard) = RunCtx::start(
+            &dispatcher,
+            RunStart {
+                id: RunId::new(),
+                code: String::new(),
+                request_id: None,
+                task_id: None,
+                host_data: None,
+                view: rig.link.view().ok_or("linked browser")?,
+                deadline: Instant::now() + Duration::from_secs(30),
+                default_page: None,
+                tabs_scope: TabsScope::Browser,
+                access: Some(RunAccess::Read),
+            },
+        );
+        run.opened(page.tab);
+        let target: PageTarget = serde_json::from_value(json!(page))?;
+        let registry = dispatcher.registry();
+        let specs = registry.all_specs();
+        let reads: Vec<_> = specs
+            .iter()
+            .filter(|spec| spec.effect == Effect::Read && spec.visibility == Visibility::Script)
+            .map(|spec| spec.name)
+            .collect();
+        assert_eq!(
+            reads, SCRIPT_READS,
+            "every newly labelled Read needs an access audit"
+        );
+        let all_reads: Vec<_> = specs
+            .iter()
+            .filter(|spec| spec.effect == Effect::Read)
+            .map(|spec| spec.name)
+            .collect();
+        let mut expected_reads = SCRIPT_READS.to_vec();
+        expected_reads.push("host.fillCheck");
+        expected_reads.sort_unstable();
+        assert_eq!(
+            all_reads, expected_reads,
+            "even a hidden registration must be audited"
+        );
+        let hidden = registry
+            .get("host.fillCheck")
+            .ok_or("internal read")?
+            .spec();
+        assert_eq!(hidden.effect, Effect::Read);
+        assert!(
+            !Caller::Script.may_call(hidden.visibility),
+            "host typing remains internal"
+        );
+        let admitted: Vec<_> = specs
+            .iter()
+            .filter(|spec| Caller::Script.may_call(spec.visibility))
+            .filter(|spec| {
+                read_only_admission(
+                    &run,
+                    spec,
+                    &json!({"url":"https://reading.example/"}),
+                    Some(&target),
+                    &rig.tabs,
+                )
+                .is_ok()
+            })
+            .map(|spec| spec.name)
+            .collect();
+        let mut expected: Vec<_> = SCRIPT_READS
+            .iter()
+            .copied()
+            .filter(|name| *name != "events.interceptFileChooser")
+            .collect();
+        expected.extend([
+            "context.newPage",
+            "task.newPage",
+            "disposable.dispose",
+            "page.goto",
+            "page.close",
+        ]);
+        expected.sort_unstable();
+        assert_eq!(
+            admitted, expected,
+            "only the audited reads and five design exceptions pass"
+        );
+        let child = dispatcher
+            .invoke_child(&run, None, "page.evaluate", json!({"page":page}))
+            .await
+            .err()
+            .ok_or("a composed write must be refused too")?;
+        assert_eq!(
+            (child.error.code(), child.delivery),
+            (ErrorCode::READ_ONLY_RUN, Delivery::NotSent),
+            "Caller::Neo must not bypass the run's access when a method composes another operation"
+        );
+        Ok(())
     }
 }
 

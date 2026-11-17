@@ -60,7 +60,7 @@ impl Method for CreateTask {
     fn spec(&self) -> MethodSpec {
         MethodSpec {
             listing: Listing::Own(
-                "neo.createTask(name?) -> Task: start a task, your own set of tabs; return task.id and keep it",
+                "neo.createTask(name?) → Task: starts a task and picks it; return `task.id` to come back to it.",
             ),
             ..MethodSpec::new("neo.createTask", Effect::Read)
         }
@@ -115,7 +115,7 @@ impl Method for FetchTask {
     fn spec(&self) -> MethodSpec {
         MethodSpec {
             listing: Listing::Own(
-                "neo.task(id) -> Task: a task from an earlier run (task.id, task.pages(), task.page(tabId), task.newPage(), task.close())",
+                "neo.task(id) → Task: picks a task from an earlier run. A Task has `id`, `pages()` (oldest first), `page(tabId)`, `newPage()` and `close()`, which closes its tabs.",
             ),
             ..MethodSpec::new("neo.task", Effect::Read)
         }

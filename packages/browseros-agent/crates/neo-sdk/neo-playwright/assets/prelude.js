@@ -568,6 +568,64 @@
     return pending.size ? Promise.all([...pending]) : null;
   }
 
+  // crates/neo-sdk/neo-playwright-js/src/prelude/cover.ts
+  var SNAPSHOT_CHARS = 1500;
+  var renderSnapshot;
+  function setCoverRenderer(render) {
+    renderSnapshot = render;
+  }
+  var ON_TOP = `
+  On top: `;
+  function shapeCovered(error) {
+    const cover = Reflect.get(error, "cover");
+    if (typeof cover !== "object" || cover === null)
+      return;
+    const snapshot = Reflect.get(cover, "snapshot");
+    const lines = snapshotLines(snapshot);
+    if (lines !== "")
+      error.message = underOnTop(error.message, lines);
+    const { snapshot: _left, ...kept } = cover;
+    Reflect.set(error, "cover", kept);
+  }
+  function snapshotLines(snapshot) {
+    if (typeof snapshot !== "object" || snapshot === null || !renderSnapshot)
+      return "";
+    let text;
+    try {
+      text = renderSnapshot(snapshot);
+    } catch {
+      return "";
+    }
+    const kept = [];
+    let used = 0;
+    for (const line of text.split(`
+`)) {
+      if (line.trim() === "")
+        continue;
+      if (used + line.length + 1 > SNAPSHOT_CHARS) {
+        const room = SNAPSHOT_CHARS - used - 1;
+        if (room > 0)
+          kept.push(`    ${line.slice(0, room)}…`);
+        kept.push("    … (the rest of its snapshot is cut)");
+        break;
+      }
+      used += line.length + 1;
+      kept.push(`    ${line}`);
+    }
+    return kept.join(`
+`);
+  }
+  function underOnTop(message, lines) {
+    const at = message.indexOf(ON_TOP);
+    if (at < 0)
+      return message;
+    const end = message.indexOf(`
+`, at + ON_TOP.length);
+    return end < 0 ? `${message}
+${lines}` : `${message.slice(0, end)}
+${lines}${message.slice(end)}`;
+  }
+
   // crates/neo-sdk/neo-playwright-js/src/prelude/host.ts
   function localTimeout(message) {
     const neo = Reflect.get(globalThis, "__neo");
@@ -593,6 +651,7 @@
   // crates/neo-sdk/neo-playwright-js/src/prelude/errors.ts
   var FIELDS = [
     "code",
+    "diagnosticCode",
     "owner",
     "delivery",
     "retryable",
@@ -648,6 +707,7 @@
     if (thrown instanceof Error) {
       if (!assertion)
         thrown.message = apiMessage(api, op, thrown.message);
+      shapeCovered(thrown);
       thrown.name = named;
       return withFields(thrown, { timeout: timedOut });
     }
@@ -7581,6 +7641,95 @@ ${value.stack}`;
     return;
   }
 
+  // crates/neo-sdk/neo-playwright-js/src/prelude/snapshot-inert.ts
+  function inertRoots(json) {
+    const roots = [];
+    const pending = [...json].reverse();
+    while (pending.length) {
+      const node = pending.pop();
+      if (!node)
+        continue;
+      if (node.inert)
+        roots.push(node);
+      else {
+        const children = node.children ?? [];
+        for (let index = children.length - 1;index >= 0; index--) {
+          const child = children[index];
+          if (child && typeof child !== "string")
+            pending.push(child);
+        }
+      }
+    }
+    return roots;
+  }
+
+  // crates/neo-sdk/neo-playwright-js/src/prelude/snapshot-on-top.ts
+  function onTopHead(result) {
+    return (result.onTop ?? []).flatMap((layer) => layer.line.split(`
+`));
+  }
+  function isOnTopLine(line) {
+    return line.startsWith("# on top: ") || line.startsWith("#   its controls: ") || line.startsWith("# no longer on top: ");
+  }
+  function onTopDelta(previous, result) {
+    const current = new Set((result.onTop ?? []).map((layer) => layer.ref));
+    const removed = [];
+    for (const line of previous.split(`
+`)) {
+      const match = /^# on top: (\S+ (?:"(?:[^"\\]|\\.)*" )?\[ref=([^\]]+)\])/.exec(line);
+      if (match && !current.has(match[2]))
+        removed.push(`# no longer on top: ${match[1]}`);
+    }
+    return [...onTopHead(result), ...removed];
+  }
+  function onTopContent(result) {
+    const layers = (result.onTop ?? []).filter((layer) => layer.wholeView);
+    if (!layers.length)
+      return { first: [], rest: result.json };
+    const front = new Map(layers.map((layer) => [layer.ref, []]));
+    const nodes = [];
+    const selected = new Set;
+    const pending = [...result.json].reverse();
+    while (pending.length) {
+      const node = pending.pop();
+      if (!node)
+        continue;
+      nodes.push(node);
+      if (node.inert)
+        continue;
+      const block = node.onTop ? front.get(node.onTop) : undefined;
+      if (block) {
+        selected.add(node);
+        block.push(node);
+      } else
+        for (const child of [...node.children ?? []].reverse())
+          if (typeof child !== "string")
+            pending.push(child);
+    }
+    const remaining = new Map;
+    for (const node of nodes.reverse()) {
+      if (selected.has(node)) {
+        remaining.set(node, undefined);
+        continue;
+      }
+      const children = node.children?.flatMap((child) => {
+        if (typeof child === "string" || !remaining.has(child))
+          return [child];
+        const kept = remaining.get(child);
+        return kept ? [kept] : [];
+      });
+      const changed = children && (children.length !== node.children?.length || children.some((child, index) => child !== node.children?.[index]));
+      remaining.set(node, changed ? { ...node, children } : node);
+    }
+    return {
+      first: layers.flatMap((layer) => front.get(layer.ref) ?? []),
+      rest: result.json.flatMap((node) => {
+        const kept = remaining.get(node);
+        return kept ? [kept] : [];
+      })
+    };
+  }
+
   // crates/neo-sdk/neo-playwright-js/src/prelude/snapshot-v1.ts
   var INTERACTIVE = new Set([
     "button",
@@ -7651,20 +7800,26 @@ ${value.stack}`;
     return {
       text: passed.text,
       urls: passed.urls ?? false,
-      maxTokens: passed.maxTokens ?? DEFAULT_MAX_TOKENS
+      maxTokens: passed.maxTokens ?? DEFAULT_MAX_TOKENS,
+      ...passed.inert ? { inert: true } : {}
     };
   }
   function renderSnapshotV1(result, options) {
     const { urls, maxTokens } = options;
-    const textForm = options.text === false ? null : walk(result, urls, true);
+    const textForm = options.text === false ? null : walk(result, urls, true, options.inert === true);
     let text;
     if (textForm === null)
       text = "never";
     else if (options.text === true)
       text = "always";
     else
-      text = joinedLength(textForm) <= TEXT_LIMIT_CHARS ? "kept" : "leftOut";
-    const form = { text, urls, maxTokens };
+      text = joinedLength(textForm.lines) <= TEXT_LIMIT_CHARS ? "kept" : "leftOut";
+    const form = {
+      text,
+      urls,
+      maxTokens,
+      ...options.inert ? { inert: true } : {}
+    };
     return { text: renderForm(result, form, textForm), form };
   }
   function renderSnapshotV1As(result, form) {
@@ -7672,28 +7827,61 @@ ${value.stack}`;
   }
   function renderForm(result, form, walked) {
     const limit = form.maxTokens * CHARS_PER_TOKEN;
+    const text = form.text === "kept" || form.text === "always";
+    const shown = text && walked ? walked : walk(result, form.urls, text, form.inert === true);
+    const omitted = shown.omitted;
+    const inertHead = shown.skipped ? [
+      `# not listed: ${omitted.length} lines (${omitted.filter((line) => line.ref).length} with refs) of this page are inert: nothing in them can be clicked or typed into now. Pass { inert: true } to list them.`
+    ] : [];
     const partial = partialHead(result);
-    if (form.text === "never")
-      return cap([], partial, walk(result, form.urls, false), limit);
-    const textForm = walked ?? walk(result, form.urls, true);
+    const finish = (head, lines) => {
+      const body = cap(head, partial, lines, limit);
+      return [...onTopHead(result), ...inertHead, ...body ? [body] : []].join(`
+`);
+    };
     if (form.text !== "leftOut")
-      return cap([], partial, textForm, limit);
-    const interactiveForm = walk(result, form.urls, false);
-    const left = joinedLength(textForm) - joinedLength(interactiveForm);
+      return finish([], shown.lines);
+    const textForm = walked ?? walk(result, form.urls, true, form.inert === true);
+    const left = joinedLength(textForm.lines) - joinedLength(shown.lines);
     const about = aboutTokens(left);
     const notice = `# text left out: about ${about} tokens. Pass { text: true } to include it.`;
-    return cap([notice], partial, interactiveForm, limit);
+    return finish([notice], shown.lines);
   }
-  function walk(result, urls, text) {
+  function walk(result, urls, text, inert) {
     const partials = new Map;
     for (const partial of result.partial)
       partials.set(partial.ref, [...partials.get(partial.ref) ?? [], partial]);
-    const printer = new Printer(urls, partials);
-    printer.walk(result.json, 0, text);
+    const omitted = [];
+    let segment;
+    let boundary;
+    let skipped = 0;
+    const printer = new Printer(urls, partials, inert, (node, text, level) => {
+      skipped++;
+      const line = printer.lines.at(-1);
+      if (!segment || !boundary || boundary.line !== line || boundary.body !== line?.body || boundary.length !== printer.lines.length || boundary.level !== level) {
+        segment = new Printer(urls, new Map, true);
+        omitted.push(segment);
+      }
+      segment.walk([node], level, text);
+      boundary = { line, body: line?.body, length: printer.lines.length, level };
+    });
+    const front = onTopContent(result);
+    if (front.first.length) {
+      printer.walk(front.first, 0, true);
+      printer.separateText();
+    }
+    printer.walk(front.rest, 0, text);
     for (const unplaced of partials.values())
       for (const partial of unplaced)
         printer.comment(partialComment(partial), 0);
-    return printer.finish().map((line) => ({
+    return {
+      lines: printedLines(printer.finish()),
+      omitted: omitted.flatMap((segment) => printedLines(segment.finish())),
+      skipped
+    };
+  }
+  function printedLines(lines) {
+    return lines.map((line) => ({
       text: "  ".repeat(line.level) + (line.textLine ? renderAriaSnapshotAsYaml([{ role: "text", text: line.body }]) : line.body),
       ref: line.ref,
       section: line.section,
@@ -7704,11 +7892,16 @@ ${value.stack}`;
   class Printer {
     urls;
     partials;
+    inert;
+    onOmit;
     lines = [];
     steps = [];
-    constructor(urls, partials) {
+    textBoundary = 0;
+    constructor(urls, partials, inert, onOmit) {
       this.urls = urls;
       this.partials = partials;
+      this.inert = inert;
+      this.onOmit = onOmit;
     }
     walk(children, level, text) {
       this.content({ children: [...children] }, level, text);
@@ -7722,6 +7915,9 @@ ${value.stack}`;
         else
           this.closeSection(step.node, step.header);
       }
+    }
+    separateText() {
+      this.textBoundary = this.lines.length;
     }
     comment(body, level) {
       this.lines.push({ level, body, textLine: false, comment: true, ref: false });
@@ -7743,7 +7939,25 @@ ${value.stack}`;
       }
       return printed;
     }
+    omit(root) {
+      const pending = [root];
+      while (pending.length) {
+        const node = pending.pop();
+        if (!node)
+          continue;
+        if (node.ref)
+          this.partials.delete(node.ref);
+        for (const child of node.children ?? [])
+          if (typeof child !== "string")
+            pending.push(child);
+      }
+    }
     node(child, level, text) {
+      if (typeof child !== "string" && child.inert && !this.inert) {
+        this.onOmit?.(child, text, level);
+        this.omit(child);
+        return;
+      }
       if (typeof child === "string")
         this.piece(child, level, text);
       else if (child.role === "text")
@@ -7780,7 +7994,7 @@ ${value.stack}`;
       if (!text || raw === "")
         return;
       const last = this.lines[this.lines.length - 1];
-      if (last?.textLine && last.level === level)
+      if (this.lines.length > this.textBoundary && last?.textLine && last.level === level)
         last.body += ` ${raw}`;
       else
         this.lines.push({
@@ -7824,7 +8038,7 @@ ${value.stack}`;
         };
     }
     heading(node, level) {
-      const own = node.name ? "" : ownText(node);
+      const own = node.name ? "" : ownText(node, this.inert);
       this.element(copy(node, {
         ref: actionable(node),
         urls: false,
@@ -7837,11 +8051,11 @@ ${value.stack}`;
       if (node.text !== undefined && node.text !== node.name)
         value = node.text;
       else if (FIELD.has(node.role) && node.text === undefined) {
-        const own = ownText(node);
+        const own = ownText(node, this.inert);
         if (own !== "" && own !== node.name)
           value = own;
       } else if (!node.name) {
-        const label = ownText(node) || (node.role === "link" && !this.urls ? node.url ?? "" : "");
+        const label = ownText(node, this.inert) || (node.role === "link" && !this.urls ? node.url ?? "" : "");
         if (label !== "")
           value = text ? label : clip(label, OWN_TEXT_CLIP);
       }
@@ -7962,7 +8176,7 @@ ${value.stack}`;
     }
     return true;
   }
-  function ownText(node) {
+  function ownText(node, inert) {
     const pieces = [];
     const stack = [node];
     for (let item = stack.pop();item !== undefined; item = stack.pop()) {
@@ -7976,6 +8190,8 @@ ${value.stack}`;
       const children = item.children ?? [];
       for (let index = children.length - 1;index >= 0; index--) {
         const child = children[index];
+        if (typeof child !== "string" && child.inert && !inert)
+          continue;
         if (typeof child === "string" || child.role === "text")
           stack.push(child);
         else if (!actionable(child) && !fieldWithoutRef(child))
@@ -7985,7 +8201,12 @@ ${value.stack}`;
     return pieces.filter((piece) => piece !== "").join(" ");
   }
   function clip(text, length) {
-    return text.length <= length ? text : `${text.slice(0, length).trimEnd()}…`;
+    if (text.length <= length)
+      return text;
+    const last = text.charCodeAt(length - 1);
+    if (last >= 55296 && last <= 56319)
+      length--;
+    return `${text.slice(0, length).trimEnd()}…`;
   }
   function partialComment(partial) {
     return `# partial: ${partial.frame} not read (${partial.reason})`;
@@ -8057,12 +8278,19 @@ ${value.stack}`;
     }
     return [...lines, ...unplaced];
   }
-  function renderSnapshot(result) {
+  function renderSnapshot2(result) {
     return yamlLines(result, true).map((line) => line.text).join(`
 `);
   }
   function renderFullSnapshot(result, maxTokens) {
-    return cap([], partialHead(result), printed(yamlLines(result, false)), maxTokens * CHARS_PER_TOKEN, FULL_CALL);
+    const roots = inertRoots(result.json);
+    const count = roots.length ? treeLines(roots, false).length : 0;
+    const head = count ? [
+      `# inert: ${count} lines of this page cannot be clicked or typed into now. page.ariaSnapshot() lists what can.`
+    ] : [];
+    const body = cap([], partialHead(result), printed(yamlLines(result, false)), maxTokens * CHARS_PER_TOKEN, FULL_CALL);
+    return [...onTopHead(result), ...head, ...body ? [body] : []].join(`
+`);
   }
   function printed(lines) {
     const ends = lines.map(() => lines.length);
@@ -8099,30 +8327,56 @@ ${value.stack}`;
   function renderDelta(stored, result, passed) {
     if (stored === null) {
       const whole = renderSnapshotV1(result, withDefaults(passed));
-      return { returned: `${NO_BASELINE}
-${whole.text}`, baseline: whole };
+      return {
+        returned: [
+          NO_BASELINE,
+          ...onTopHead(result),
+          withoutTop(whole.text)
+        ].join(`
+`),
+        baseline: whole
+      };
     }
     const { form } = stored;
     if (agrees(passed, form)) {
       const current = renderSnapshotV1As(result, form);
       const changes = listChanges(stored.text, current);
-      if (changes !== null)
-        return { returned: changes, baseline: { text: current, form } };
+      if (changes !== null) {
+        const [status, ...body] = changes.split(`
+`);
+        return {
+          returned: [status, ...onTopDelta(stored.text, result), ...body].join(`
+`),
+          baseline: { text: current, form }
+        };
+      }
     }
     const whole = renderSnapshotV1(result, {
       text: passed.text ?? passedText(form.text),
       urls: passed.urls ?? form.urls,
-      maxTokens: passed.maxTokens ?? form.maxTokens
+      maxTokens: passed.maxTokens ?? form.maxTokens,
+      inert: passed.inert ?? form.inert ?? false
     });
-    return { returned: `${TOO_MUCH}
-${whole.text}`, baseline: whole };
+    return {
+      returned: [
+        TOO_MUCH,
+        ...onTopDelta(stored.text, result),
+        withoutTop(whole.text)
+      ].join(`
+`),
+      baseline: whole
+    };
   }
   function renderUncompared(result, passed) {
-    return `${NO_TIME}
-${renderSnapshotV1(result, withDefaults(passed)).text}`;
+    return [
+      NO_TIME,
+      ...onTopHead(result),
+      withoutTop(renderSnapshotV1(result, withDefaults(passed)).text)
+    ].join(`
+`);
   }
   function agrees(passed, form) {
-    return (passed.text === undefined || passed.text === showsText(form.text)) && (passed.urls === undefined || passed.urls === form.urls) && (passed.maxTokens === undefined || passed.maxTokens === form.maxTokens);
+    return (passed.text === undefined || passed.text === showsText(form.text)) && (passed.urls === undefined || passed.urls === form.urls) && (passed.maxTokens === undefined || passed.maxTokens === form.maxTokens) && (passed.inert === undefined || passed.inert === (form.inert ?? false));
   }
   function showsText(text) {
     return text === "kept" || text === "always";
@@ -8135,7 +8389,7 @@ ${renderSnapshotV1(result, withDefaults(passed)).text}`;
     return;
   }
   function sizeLine(line) {
-    return line.startsWith("# text left out: ") || line.startsWith("# cut: ");
+    return isOnTopLine(line) || line.startsWith("# text left out: ") || line.startsWith("# cut: ") || line.startsWith("# not listed: ");
   }
   function listChanges(previous, current) {
     const before = previous.split(`
@@ -8308,6 +8562,11 @@ ${changes}`;
   function indentOf(line) {
     return line.length - line.trimStart().length;
   }
+  function withoutTop(text) {
+    return text.split(`
+`).filter((line) => !isOnTopLine(line)).join(`
+`);
+  }
 
   // crates/neo-sdk/neo-playwright-js/src/prelude/snapshot-late.ts
   var LATE_SNAPSHOT = "return";
@@ -8395,11 +8654,12 @@ ${changes}`;
     return known;
   }
   function snapshotV1Options(api, options) {
-    const { text, urls, maxTokens, delta } = options;
+    const { text, urls, maxTokens, delta, inert } = options;
     for (const [name, value] of [
       ["text", text],
       ["urls", urls],
-      ["delta", delta]
+      ["delta", delta],
+      ["inert", inert]
     ])
       if (value !== undefined && typeof value !== "boolean")
         throw clientError(api, `${name}: expected boolean, got ${typeof value}`);
@@ -8407,7 +8667,8 @@ ${changes}`;
       text,
       urls,
       maxTokens: maxTokensOption(api, maxTokens),
-      delta: delta ?? false
+      delta: delta ?? false,
+      inert
     };
   }
   function maxTokensOption(api, maxTokens) {
@@ -8933,9 +9194,9 @@ ${changes}`;
       const site = captureSite();
       const mode = options.mode ?? (upstreamSnapshots ? "default" : "ai");
       if (upstreamSnapshots)
-        return renderSnapshot(await this._snapshot(api, selector, options, mode));
+        return renderSnapshot2(await this._snapshot(api, selector, options, mode));
       if (mode === "default")
-        return renderSnapshot(await this._snapshot(api, selector, options, mode));
+        return renderSnapshot2(await this._snapshot(api, selector, options, mode));
       if (mode === "full") {
         const maxTokens = maxTokensOption(api, options.maxTokens) ?? DEFAULT_MAX_TOKENS;
         return renderFullSnapshot(await this._snapshot(api, selector, options, "ai", true), maxTokens);
@@ -19854,6 +20115,7 @@ Call Log:
   }
 
   // crates/neo-sdk/neo-playwright-js/src/prelude/index.ts
+  setCoverRenderer((json) => renderSnapshotV1({ json, partial: [] }, withDefaults({})).text);
   installUnsupported({
     Selectors,
     Browser,

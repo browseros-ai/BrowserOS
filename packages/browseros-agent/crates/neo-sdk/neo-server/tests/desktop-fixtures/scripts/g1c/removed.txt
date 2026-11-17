@@ -1,0 +1,24 @@
+/**
+ * Hosted port of desktop fill contracts at a7e536e152a4835abe9974498b27a5c927dd2e0d.
+ * The root runner owns this task and its cleanup. This body only uses its page.
+ */
+
+// locator.ref pins the same node for every action and read. Unlike an AI snapshot,
+// it can also name a covered field, so that the original refusal can be measured.
+async function g1cField(label, scope = page) {
+  const ref = await scope.getByLabel(label, { exact: true }).ref({ timeout: 5000 });
+  return { label, ref, target: page.getByRef(ref) };
+}
+
+await page.goto(args.base + '/fill.html');
+const field = await g1cField('Detached field');
+const result = await field.target.fill('', { timeout: 8000 });
+const exists = await page.evaluate(() => document.getElementById('detach') !== null);
+equal(exists, false, 'the input event removed the field');
+const failure = await rejected(() => field.target.inputValue({ timeout: 2500 }),
+  /detached|not on the page|no longer|stale/i);
+equal(failure.code, 'element_detached', 'the original ref reports a gone node');
+const snapshot = await page.ariaSnapshot({ mode: 'ai' });
+assert(!snapshot.split('\n').some(line => line.includes('"Detached field')),
+  'the removed field is absent from the current snapshot', { snapshot });
+return { exists, ref: field.ref, fillReturnType: typeof result, goneReadback: failure };

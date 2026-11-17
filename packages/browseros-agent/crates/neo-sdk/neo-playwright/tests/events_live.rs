@@ -8,6 +8,9 @@
 //! `BROWSERCLAW_HOSTED_MODE=1` when testing hosted mode; then the console test checks that
 //! nothing arrives. Run with `bun run test:browser -- cargo test -p neo-playwright --test
 //! events_live -- --ignored`. Every test opens and closes its own tabs.
+//! The hidden-iframe download regression has its own command: `bun run test:browser -- cargo
+//! test -p neo-playwright --test events_live
+//! tests_that_a_hidden_iframe_download_reaches_its_page_and_finishes -- --ignored --exact`.
 
 #[path = "support/js_runner.rs"]
 #[expect(
@@ -26,6 +29,7 @@ mod page_server;
 
 use std::env;
 use std::future::{self, Future};
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -39,6 +43,7 @@ use neo_playwright::{ErrorCode, PlaywrightError};
 use neo_trace::ErrorOwner;
 use page_server::PageServer;
 use serde_json::{Value, json};
+use tokio::fs::{read_to_string, remove_file};
 use tokio::sync::{Notify, broadcast, mpsc};
 use tokio::time;
 
@@ -92,6 +97,79 @@ async fn wait_for(
 async fn click_soon(run: &LiveRun, page: &TestPage, selector: &str) -> TestResult {
     time::sleep(Duration::from_millis(50)).await;
     run.click(page, selector).await
+}
+
+/// The attachment's iframe exists only after the trusted click, so the watcher's initial
+/// frame tree cannot supply its owner. A page waiter must receive it and its saved file.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_hidden_iframe_download_reaches_its_page_and_finishes() -> TestResult {
+    with_page(|run, server, page| async move {
+        let result = async {
+            open(&run, &page, &server.url("/child.html")).await?;
+            run.eval(
+                &page,
+                r"(() => {
+                    const button = document.createElement('button');
+                    button.id = 'download';
+                    button.textContent = 'Download attachment';
+                    button.addEventListener('click', event => {
+                        window.downloadClickTrusted = event.isTrusted;
+                        const frame = document.createElement('iframe');
+                        frame.hidden = true;
+                        frame.src = '/attachment.txt';
+                        document.body.append(frame);
+                    });
+                    document.body.append(button);
+                })()",
+            )
+            .await?;
+            let since = now_ms()?;
+            let (download, clicked) = tokio::join!(
+                wait_for(&run, Some(&page), "download", since),
+                click_soon(&run, &page, "#download")
+            );
+            clicked?;
+            assert_eq!(
+                run.eval(&page, "window.downloadClickTrusted").await?,
+                json!(true),
+                "the iframe must be created by a trusted click"
+            );
+            let download = download?;
+            assert_eq!(download["event"], json!("download"));
+            assert_eq!(download["page"], brand(&page), "{download}");
+            assert_eq!(
+                download["download"]["url"],
+                json!(server.url("/attachment.txt"))
+            );
+            assert_eq!(
+                download["download"]["suggestedFilename"],
+                json!("iframe-attachment.txt")
+            );
+            let finished = run
+                .invoke(
+                    "download.path",
+                    json!({ "call": { "timeoutMs": 5000 },
+                        "download": download["download"]["id"] }),
+                )
+                .await?;
+            assert_eq!(finished["failure"], Value::Null, "{finished}");
+            let path = finished["path"]
+                .as_str()
+                .ok_or("a completed download returns its saved path")?;
+            assert_eq!(
+                Path::new(path).file_name().and_then(|name| name.to_str()),
+                Some("iframe-attachment.txt"),
+                "the completed file keeps the attachment's filename"
+            );
+            assert_eq!(read_to_string(path).await?, "iframe attachment\n");
+            remove_file(path).await?;
+            Ok(())
+        }
+        .await;
+        (run, result)
+    })
+    .await
 }
 
 /// A run that sees only its family's tabs (as neo-server binds a run to its task) still hears
@@ -1091,6 +1169,158 @@ async fn tests_that_a_click_that_logs_completes_under_a_console_listener_and_is_
         .await?;
         assert_eq!(heard, json!(1), "the handler's message, exactly once");
         Ok(())
+    }
+    .await;
+    run.close_page(&page).await;
+    result
+}
+
+/// What one timed-out `waitForFunction` left behind, as the WA-005 row reads it.
+struct TimedOutWait {
+    /// The wait's error code; `None` when it answered.
+    code: Option<ErrorCode>,
+    /// How many polls ran, by the predicate's own page stamps.
+    polls: usize,
+    /// Polls whose page stamp is later than the reply's wall clock.
+    ran_after: usize,
+    /// The poll messages the pump took before the reply, in the order it took them.
+    heard_before: Vec<String>,
+    /// How many poll messages the pump took only after the reply.
+    heard_after: usize,
+}
+
+/// One `page.waitForFunction` that times out while its predicate logs at every 1 ms poll
+/// (upstream's "should avoid side effects after timeout", WA-005), with a console listener on.
+/// The pump reads until a marker logged 2 s after the reply, so every poll's message is counted
+/// on one side of the reply or the other.
+async fn timed_out_wait(run: &LiveRun, page: &TestPage) -> TestResult<TimedOutWait> {
+    let evaluate = |expression: &str| {
+        json!({ "page": brand(page), "expression": expression, "isFunction": true,
+                "arg": { "value": r#"{"v":"undefined"}"#, "handles": [] } })
+    };
+    run.invoke(
+        "page.evaluate",
+        evaluate("() => { window.__n = 0; window.__t = []; }"),
+    )
+    .await?;
+    let pump = async {
+        let mut pumped: Vec<(Instant, String)> = Vec::new();
+        loop {
+            let reply = time::timeout(
+                Duration::from_secs(10),
+                run.invoke("events.next", json!({})),
+            )
+            .await
+            .map_err(|_elapsed| "no event in 10 s")??;
+            let at = Instant::now();
+            let mut ended = false;
+            for event in reply
+                .get("events")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default()
+            {
+                let text = event
+                    .pointer("/message/text")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned();
+                ended |= text == "end-marker";
+                pumped.push((at, text));
+            }
+            if ended {
+                return TestResult::Ok(pumped);
+            }
+        }
+    };
+    let waited = async {
+        let input = json!({
+            "call": { "timeoutMs": 1000 }, "page": brand(page), "isFunction": true,
+            "expression": "() => { window.__n += 1; window.__t.push(Date.now()); \
+                           console.log('poll ' + window.__n); }",
+            "arg": { "value": r#"{"v":"undefined"}"#, "handles": [] }, "pollingInterval": 1,
+        });
+        let code = run
+            .invoke("page.waitForFunction", input)
+            .await
+            .err()
+            .and_then(|error| error.error_code());
+        let (replied, replied_ms) = (Instant::now(), now_ms()?);
+        // Upstream's test gives the page two seconds to log more.
+        time::sleep(Duration::from_secs(2)).await;
+        run.invoke("page.evaluate", evaluate("() => console.log('end-marker')"))
+            .await?;
+        TestResult::Ok((code, replied, replied_ms))
+    };
+    let (pumped, waited) = tokio::join!(pump, waited);
+    let (pumped, (code, replied, replied_ms)) = (pumped?, waited?);
+    let stamps = run
+        .invoke(
+            "page.evaluate",
+            evaluate("() => JSON.stringify(window.__t)"),
+        )
+        .await?;
+    let stamps: Vec<u64> = serde_json::from_str(stamps.as_str().unwrap_or("[]"))?;
+    let (before, after): (Vec<_>, Vec<_>) = pumped
+        .into_iter()
+        .filter(|(_, text)| text.starts_with("poll "))
+        .partition(|(at, _)| *at <= replied);
+    Ok(TimedOutWait {
+        code,
+        polls: stamps.len(),
+        ran_after: stamps.iter().filter(|stamp| **stamp > replied_ms).count(),
+        heard_before: before.into_iter().map(|(_, text)| text).collect(),
+        heard_after: after.len(),
+    })
+}
+
+/// WA-005: a `waitForFunction` that times out has no side effect a listener sees after its error.
+/// No poll runs after it (Neo releases the poller before the reply), and the console events of
+/// the polls that ran before it reach the listener before it, as upstream's do: its timeout awaits
+/// the poller's cancel, and protocol messages arrive in order. Here the watcher reads each event
+/// [`WATCHER_LAG`] behind the wire, as a loaded runner can: the timed-out reply must still wait
+/// for the events before it. Each round must time out with `WaitTimeout` and hear every poll
+/// that ran, in order, so it cannot pass on a wait that failed early or never polled. Fails on main
+/// every time: a timed-out op answered at once, and the last polls' events came after the error.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_timed_out_wait_for_function_logs_nothing_after_its_error() -> TestResult {
+    if env::var("BROWSERCLAW_HOSTED_MODE").is_ok_and(|mode| mode == "1") {
+        return Ok(());
+    }
+    let run = LiveRun::connect_through(|client| {
+        Arc::new(SlowWatcher { client }) as Arc<dyn CdpConnection>
+    })
+    .await?;
+    let server = PageServer::start().await?;
+    let page = run.new_page().await?;
+    let result = async {
+        open(&run, &page, &server.url("/popups.html")).await?;
+        run.invoke(
+            "events.listen",
+            json!({ "page": brand(&page), "event": "console", "enabled": true, "since": now_ms()? }),
+        )
+        .await?;
+        for round in 0..3 {
+            let wait = Box::pin(timed_out_wait(&run, &page)).await?;
+            assert_eq!(
+                wait.code,
+                Some(ErrorCode::WaitTimeout),
+                "round {round}: the wait timed out"
+            );
+            assert!(wait.polls > 1, "round {round}: the predicate polled ({} polls)", wait.polls);
+            assert_eq!(wait.ran_after, 0, "round {round}: no poll ran after the error");
+            assert_eq!(wait.heard_after, 0, "round {round}: no console event after the error");
+            let every_poll: Vec<String> = (1..=wait.polls).map(|n| format!("poll {n}")).collect();
+            assert!(
+                wait.heard_before == every_poll,
+                "round {round}: the listener heard every poll, in order, before the error \
+                 ({} heard, {} ran)",
+                wait.heard_before.len(),
+                wait.polls
+            );
+        }
+        TestResult::Ok(())
     }
     .await;
     run.close_page(&page).await;

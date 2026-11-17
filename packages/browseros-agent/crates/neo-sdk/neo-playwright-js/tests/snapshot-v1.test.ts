@@ -231,6 +231,28 @@ it('tests rule 5: an actionable node is one line with its value, or its own text
   )
 })
 
+for (const { letters, clipped } of [
+  { letters: 77, clipped: `${'a'.repeat(77)} 😀…` },
+  { letters: 78, clipped: `${'a'.repeat(78)}…` },
+  { letters: 79, clipped: `${'a'.repeat(79)}…` },
+]) {
+  it(`clips joined clickable text with an emoji after ${letters} letters without splitting the character`, () => {
+    // Separate children exercise gathered own text; one text piece is never clipped.
+    const json = [
+      generic(['a'.repeat(letters), '😀 and more words after the emoji'], {
+        ref: 'e1',
+        cursor: 'pointer',
+      }),
+    ]
+    const text = render(json, { text: false })
+    expect(text).toBe(`- generic [ref=e1] [cursor=pointer]: ${clipped}`)
+    expect(text.isWellFormed()).toBe(true)
+    expect(render(json, { text: true })).toBe(
+      `- generic [ref=e1] [cursor=pointer]: ${'a'.repeat(letters)} 😀 and more words after the emoji`,
+    )
+  })
+}
+
 it("tests rule 5: a nameless control's own text takes an image's alt text, never a nested control's name or a heading's", () => {
   const json = [
     // A link around a badge: the image's alt text is its only label.

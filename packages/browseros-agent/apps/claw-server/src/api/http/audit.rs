@@ -8,7 +8,7 @@ use super::{error, internal};
 use crate::{
     AppState,
     clock::now_epoch_ms,
-    db::DATABASE_FILENAME,
+    db::{DATABASE_FILENAME, ultrafast_ledger::UltrafastRecord},
     error::{AppResult, CanonicalError, RequestId},
     services::audit_settings::AuditRetention,
 };
@@ -140,6 +140,17 @@ pub(crate) async fn sweep_audit_retention(state: &AppState, now: i64) -> AppResu
         let cutoff = now.saturating_sub(i64::from(days).saturating_mul(MS_PER_DAY));
         let sessions = state.audit_log.sessions_older_than(cutoff).await?;
         if !sessions.is_empty() {
+            // Keep what ultrafast did in these tasks before their rows go.
+            let ultrafast = state.audit_log.ultrafast_sessions_in(&sessions).await?;
+            state
+                .ultrafast_ledger
+                .record(
+                    &ultrafast
+                        .iter()
+                        .map(UltrafastRecord::from)
+                        .collect::<Vec<_>>(),
+                )
+                .await?;
             let shots = state
                 .audit_log
                 .screenshot_dispatches_for_sessions(&sessions)

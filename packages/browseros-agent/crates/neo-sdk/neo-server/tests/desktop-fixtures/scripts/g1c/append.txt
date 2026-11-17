@@ -1,0 +1,33 @@
+/**
+ * Hosted port of desktop fill contracts at a7e536e152a4835abe9974498b27a5c927dd2e0d.
+ * The root runner owns this task and its cleanup. This body only uses its page.
+ */
+
+// locator.ref pins the same node for every action and read. Unlike an AI snapshot,
+// it can also name a covered field, so that the original refusal can be measured.
+async function g1cField(label, scope = page) {
+  const ref = await scope.getByLabel(label, { exact: true }).ref({ timeout: 5000 });
+  return { label, ref, target: page.getByRef(ref) };
+}
+
+await page.goto(args.base + '/fill.html');
+const measured = [];
+for (const [label, id, requested, expected] of [
+  ['Text field', 'text', '-suffix', 'original-suffix'],
+  ['Email field', 'email', '.test', 'old@example.com.test'],
+  ['Number field', 'number', '3', '423'],
+  ['Rich editor', 'rich', '-suffix', 'old content-suffix'],
+]) {
+  const field = await g1cField(label);
+  // fill always replaces. End places the caret without selecting the old value,
+  // and pressSequentially targets the same node while appending native keystrokes.
+  await field.target.press('ControlOrMeta+End', { timeout: 5000 });
+  await field.target.pressSequentially(requested, { timeout: 5000 });
+  const value = await page.evaluate(id => {
+    const element = document.getElementById(id);
+    return element.value ?? element.innerText;
+  }, id);
+  equal(value, expected, label + ' preserves the prefix and appends the suffix');
+  measured.push({ label, ref: field.ref, value });
+}
+return { measured, method: 'press(ControlOrMeta+End), pressSequentially' };

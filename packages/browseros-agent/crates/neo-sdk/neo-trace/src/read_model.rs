@@ -6,7 +6,8 @@
 
 use crate::{
     Delivery, Effect, EpochMillis, ErrorRecord, OperationId, OperationKind, OperationSite, Outcome,
-    PageState, RequestId, RunDownload, RunEffects, RunId, RunStatus, RunTabsScope, TaskId,
+    PageState, RequestId, RunAccess, RunDownload, RunEffects, RunId, RunStatus, RunTabsScope,
+    TaskId,
 };
 use browseros_core::TabId;
 use serde_json::Value;
@@ -140,8 +141,8 @@ impl ShotState {
 pub enum ShotRead {
     /// The JPEG.
     Jpeg(Vec<u8>),
-    /// Withheld: the tab had taken a host's private typing, or a frame showed a private box's
-    /// value (protected-fill ruling R45), or an older writer withheld it.
+    /// Withheld under `fill.pictures: never` after the tab took a host's private typing, or
+    /// withheld by an older writer's private-field check.
     Withheld,
     /// Deleted by the disk cap, or missing from the disk.
     Expired,
@@ -160,6 +161,8 @@ pub struct RunSummary {
     pub task_id: Option<TaskId>,
     /// Which tabs it saw; absent for runs recorded before Neo kept it, which saw every tab.
     pub tabs_scope: Option<RunTabsScope>,
+    /// The host's operation restriction; absent for ordinary runs and older records.
+    pub access: Option<RunAccess>,
     /// The tabs its operations targeted, ascending.
     pub tabs: Vec<TabId>,
     /// How it ended, or `Running`.

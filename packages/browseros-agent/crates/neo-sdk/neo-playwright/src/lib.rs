@@ -82,7 +82,7 @@ pub use prelude_source::PRELUDE_JS;
 pub use private_entry::{
     BoxFact, BoxFacts, BoxLook, BoxSpec, Compared, CoverIn, Drawing, Entry, EntryCode, EntryError,
     EntryOutcome, EntryRequest, Expect, LookCompare, LookField, LookRequest, MAX_PRIVATE_CHARS,
-    PictureCheck, PrivateField, PrivateText, PrivateTextRefused, Sending, Unread, delivery_of,
+    PrivateField, PrivateText, PrivateTextRefused, Sending, Unread, delivery_of,
 };
 pub use probe::protocol::render as render_probe_protocol;
 pub use run_state::RunState;

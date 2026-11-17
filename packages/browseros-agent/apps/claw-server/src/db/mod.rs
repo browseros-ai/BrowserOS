@@ -9,6 +9,7 @@ pub mod session_efficiency_stats;
 pub mod session_tabs;
 pub mod skills;
 pub mod tool_calls_daily;
+pub mod ultrafast_ledger;
 pub mod ultrafast_runs;
 
 pub use audit_log::AuditLog;
@@ -452,7 +453,7 @@ mod tests {
                 "SELECT version FROM seaql_migrations".to_string(),
             ))
             .await?;
-        assert_eq!(migrations.len(), 24);
+        assert_eq!(migrations.len(), 26);
         assert_eq!(
             migrations[0].try_get::<String>("", "version")?,
             "m0001_baseline"
@@ -683,7 +684,7 @@ mod tests {
         let migration_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM seaql_migrations")
             .fetch_one(&mut conn)
             .await?;
-        assert_eq!(migration_count, 24);
+        assert_eq!(migration_count, 26);
         conn.close().await?;
         Ok(())
     }
@@ -792,7 +793,7 @@ mod tests {
                 "SELECT version FROM seaql_migrations ORDER BY version".to_string(),
             ))
             .await?;
-        assert_eq!(migrations.len(), 24);
+        assert_eq!(migrations.len(), 26);
         assert_eq!(
             migrations
                 .iter()
@@ -815,7 +816,7 @@ mod tests {
             .await?
             .ok_or_else(|| anyhow::anyhow!("migration count missing"))?
             .try_get::<i64>("", "count")?;
-        assert_eq!(migration_count, 24);
+        assert_eq!(migration_count, 26);
         Ok(())
     }
 
@@ -951,7 +952,7 @@ mod tests {
                 "SELECT version FROM seaql_migrations".to_string(),
             ))
             .await?;
-        assert_eq!(migrations.len(), 24);
+        assert_eq!(migrations.len(), 26);
         Ok(())
     }
 
@@ -1009,7 +1010,7 @@ mod tests {
                 .await?;
             assert_eq!(
                 migrations.len(),
-                24,
+                26,
                 "doctor pass {attempt} was not repaired"
             );
 

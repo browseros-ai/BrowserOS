@@ -13,9 +13,10 @@ use std::{panic, process};
 use browseros_core::NativeCapabilities;
 use browseros_core::pages::NewPageOptions;
 use neo_http::{Settings, SettingsDefaults};
+use neo_playwright::FileAccess;
 use neo_trace::{
-    Effect, RedactionLimits, Redactor, RunId, TaskId, TraceSink, TraceStore, WriterConfig,
-    spawn_writer,
+    DiagnosticCode, Effect, RedactionLimits, Redactor, RunId, TaskId, TraceSink, TraceStore,
+    WriterConfig, spawn_writer,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -130,6 +131,36 @@ pub(crate) async fn within<T>(
 }
 
 impl TestRig {
+    /// The production builtin registry over this rig's browser and trace, for permission pins.
+    /// Ordinary lifecycle tests retain their synthetic methods and deterministic synchronization.
+    pub(crate) fn builtin_dispatcher(&self) -> Result<Arc<Dispatcher>, RegistryError> {
+        let file_access = Arc::new(FileAccess::new(Vec::new, Vec::new()));
+        let playwright = builtins::PlaywrightFacade::start(
+            Arc::clone(&self.link),
+            false,
+            Arc::default(),
+            file_access,
+            None,
+        );
+        let mut registry = RegistryBuilder::default();
+        builtins::builtin_set(
+            &mut registry,
+            builtins::BuiltinDeps {
+                solver: None,
+                claims: Arc::default(),
+                playwright: Arc::clone(&playwright),
+            },
+        )?;
+        Ok(Arc::new(Dispatcher::new(
+            registry.build(),
+            Vec::new(),
+            self.sink.clone(),
+            Arc::clone(&self.link),
+            Arc::clone(&self.tabs),
+            Observer::new(playwright as _),
+        )))
+    }
+
     /// A linked browser with target discovery on, a fresh store, and the test methods.
     pub(crate) async fn new() -> Result<Self, TestError> {
         Self::with_writer(WriterConfig::default()).await
@@ -314,6 +345,7 @@ impl TestRig {
             deadline: Instant::now() + budget,
             default_page: None,
             tabs_scope: scope,
+            access: None,
         };
         Ok(RunCtx::start(&self.dispatcher, start))
     }
@@ -385,6 +417,7 @@ fn test_methods(registry: &mut RegistryBuilder, gate: &Arc<Barrier>) -> Result<(
     registry.define(Title)?;
     registry.define(Gate(Arc::clone(gate)))?;
     registry.define(Fail)?;
+    registry.define(Crashed)?;
     registry.define(SlowAnswer)?;
     registry.define(Hang)?;
     registry.define(Abortable)?;
@@ -513,6 +546,55 @@ impl Method for Fail {
             ErrorCode::CDP_ERROR,
             "the page said no",
         ))))
+    }
+}
+
+/// A crash diagnostic passing through the real dispatcher and runtime. The inputs exercise
+/// existing delivery rules independently of classification, including uncertain sent input.
+struct Crashed;
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CrashInput {
+    #[serde(default)]
+    sent: bool,
+    #[serde(default)]
+    uncertain: bool,
+}
+
+impl Method for Crashed {
+    type Input = CrashInput;
+    type Output = Value;
+
+    fn spec(&self) -> MethodSpec {
+        MethodSpec::new("test.crashed", Effect::Write)
+    }
+
+    fn target(_input: &CrashInput) -> Option<&PageTarget> {
+        None
+    }
+
+    fn call(
+        &self,
+        op: &OpCtx<Self>,
+        input: CrashInput,
+    ) -> impl Future<Output = Result<Value, LeafError>> + Send {
+        if input.sent {
+            if let Err(failure) = op.recheck() {
+                return future::ready(Err(failure));
+            }
+            op.mark_sent();
+        }
+        let error = OperationError::neo(
+            ErrorCode::INTERNAL_ERROR,
+            "The tab's page crashed. Close or reload the tab before retrying.",
+        )
+        .with_diagnostic(Some(DiagnosticCode::TargetCrashed));
+        future::ready(Err(if input.uncertain {
+            LeafError::ambiguous(error)
+        } else {
+            LeafError::definite(error)
+        }))
     }
 }
 

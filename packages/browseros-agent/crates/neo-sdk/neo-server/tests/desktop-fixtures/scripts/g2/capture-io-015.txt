@@ -1,0 +1,20 @@
+/** Native chooser handles retain the exact input; event registration precedes the activating input. */
+function file(name, text) { return {name, mimeType:'text/plain', buffer:Buffer.from(text)}; }
+async function choose(p, action) {
+  const waiting = p.waitForEvent('filechooser', {timeout:5000});
+  await action();
+  const chooser = await waiting;
+  assert(chooser.page() === p, 'chooser belongs to the initiating page');
+  return chooser;
+}
+
+await page.goto(args.base + '/upload.html');
+const chooser = await choose(page, () => page.locator('#upload-button').click());
+assert(!chooser.isMultiple(),'the opener targets a single-file input');
+const first = file('single-first.txt','first');
+const second = file('single-second.txt','second');
+const error = await rejected(async () => await chooser.setFiles([first,second]), /./s);
+await chooser.setFiles([first]);
+const names = await chooser.element().evaluate(input => [...input.files].map(file => file.name));
+equal(names,['single-first.txt'],'the rejected chooser remains retryable for a single file');
+return {error,names};

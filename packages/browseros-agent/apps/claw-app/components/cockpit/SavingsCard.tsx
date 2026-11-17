@@ -6,7 +6,7 @@
 
 import type { CockpitStats } from '@browseros/claw-api'
 import { ArrowRight } from 'lucide-react'
-import { type ReactNode, useState } from 'react'
+import { type ReactElement, type ReactNode, useState } from 'react'
 import { Button } from '@/components/motion/button/base'
 import {
   CenterMorphModal,
@@ -108,7 +108,14 @@ function Stat({ value, label }: { value: string; label: ReactNode }) {
 
 // ---------------------------------------------------------------------------
 
-function SavingsDialog({ stats }: { stats: CockpitStats }) {
+/** The savings by period. `trigger` replaces the Details button, for the ultrafast meter. */
+export function SavingsDialog({
+  stats,
+  trigger,
+}: {
+  stats: CockpitStats
+  trigger?: ReactElement
+}) {
   const [windowKey, setWindowKey] = useState<SavingsWindowKey>('allTime')
   const window = stats[windowKey]
   const usage = usageComparison(stats, window)
@@ -116,14 +123,16 @@ function SavingsDialog({ stats }: { stats: CockpitStats }) {
   return (
     <CenterMorphModal>
       <CenterMorphModalTrigger>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="-my-[5px] -mr-2 h-[34px] shrink-0 font-semibold text-[13.5px] text-ink-2"
-        >
-          Details
-          <ArrowRight aria-hidden className="size-[15px]" />
-        </Button>
+        {trigger ?? (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="-my-[5px] -mr-2 h-[34px] shrink-0 font-semibold text-[13.5px] text-ink-2"
+          >
+            Details
+            <ArrowRight aria-hidden className="size-[15px]" />
+          </Button>
+        )}
       </CenterMorphModalTrigger>
       <CenterMorphModalContent
         ariaLabel="Your savings"

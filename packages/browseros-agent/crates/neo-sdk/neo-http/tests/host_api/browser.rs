@@ -6,7 +6,7 @@
 //! It is not core's scripted `TestConnection`: captures that a test holds and releases need a
 //! reply that waits, which a canned reply cannot do.
 
-use crate::support::BoxError;
+use crate::support::{self, BoxError, PROGRESS_WATCHDOG};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use browseros_cdp::{CdpError, CdpEvent, SessionId, TargetedEvents};
@@ -16,7 +16,6 @@ use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
-use std::time::Duration;
 use tokio::sync::{broadcast, mpsc, watch};
 
 /// What the `capture`-th capture returns: a JPEG's start and end markers around its number, so a
@@ -157,11 +156,12 @@ impl ScriptedBrowser {
             .push(number);
     }
 
-    /// Waits (up to 5 s) until `count` captures have started.
+    /// Waits within the fixture's progress watchdog until `count` captures have started.
     pub(crate) async fn captures_started(&self, count: usize) -> Result<(), BoxError> {
         let mut started = self.started.subscribe();
-        tokio::time::timeout(
-            Duration::from_secs(5),
+        support::watchdog(
+            "capture-start witness",
+            PROGRESS_WATCHDOG,
             started.wait_for(|started| *started >= count),
         )
         .await??;
@@ -172,8 +172,9 @@ impl ScriptedBrowser {
     /// this alone does not prove the enclosing camera attempt ended.
     pub(crate) async fn captures_cancelled(&self, count: usize) -> Result<(), BoxError> {
         let mut cancelled = self.cancelled.subscribe();
-        tokio::time::timeout(
-            Duration::from_secs(5),
+        support::watchdog(
+            "capture-cancellation witness",
+            PROGRESS_WATCHDOG,
             cancelled.wait_for(|cancelled| *cancelled >= count),
         )
         .await??;

@@ -45,6 +45,12 @@ pub(crate) struct AriaNode {
     pub(crate) expanded: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) active: Option<bool>,
+    /// Browser-declared inert subtree, only on Neo-format reads; live modal descendants are never enclosed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) inert: Option<bool>,
+    /// Topmost content of this whole-view layer; only the default renderer moves it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) on_top: Option<String>,
     /// `true`, `"grammar"` or `"spelling"`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) invalid: Option<Value>,
@@ -151,6 +157,10 @@ pub(crate) struct SnapshotResult {
     #[ts(type = "import('../../vendored').AriaSnapshotJSON")]
     pub(crate) json: Vec<AriaNode>,
     pub(crate) partial: Vec<PartialFrame>,
+    /// Pinned words from the main page alone; empty keeps every old output byte unchanged.
+    #[serde(rename = "onTop", skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional, as = "Option<Vec<SnapshotTop>>")]
+    pub(crate) on_top: Vec<SnapshotTop>,
     /// Set on `page.ariaSnapshot` only; a locator's snapshot never becomes a baseline.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -164,6 +174,15 @@ pub(crate) struct SnapshotResult {
     #[serde(rename = "closedRoots", skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub(crate) closed_roots: Option<ClosedRoots>,
+}
+
+/// Rust's shared wording and reach; the tree's marks identify the whole-view content.
+#[derive(Clone, Debug, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SnapshotTop {
+    pub(crate) r#ref: String,
+    pub(crate) line: String,
+    pub(crate) whole_view: bool,
 }
 
 /// How many of the seeds clickable marking found inside closed shadow roots reached a probe.
@@ -182,6 +201,7 @@ pub(crate) fn stitch(root: FrameSnapshot) -> SnapshotResult {
         snapshot_rules::drop_prohibited_names(node);
     }
     SnapshotResult {
+        on_top: Vec::new(),
         json,
         partial,
         document: None,
@@ -385,6 +405,28 @@ pub(crate) mod tests {
             unknown.is_err(),
             "a field the stitch has not been checked against fails"
         );
+    }
+
+    #[test]
+    fn inert_annotations_survive_frame_stitching_and_encoding() -> Result<(), Box<dyn Error>> {
+        let frame = FrameSnapshot {
+            json: serde_json::from_value(json!([{
+                "role": "iframe", "ref": "e2", "inert": true
+            }]))?,
+            children: vec![ChildFrame::Read {
+                iframe_ref: "e2".to_owned(),
+                snapshot: FrameSnapshot {
+                    json: serde_json::from_value(json!([{
+                        "role": "button", "ref": "f1e3", "name": "Inside", "inert": true
+                    }]))?,
+                    children: Vec::new(),
+                },
+            }],
+        };
+        let result = serde_json::to_value(stitch(frame))?;
+        assert_eq!(result["json"][0]["inert"], true);
+        assert_eq!(result["json"][0]["children"][0]["inert"], true);
+        Ok(())
     }
 
     /// tests/data/snapshot-output.json is what `stitch` returns for the recorded page, with the

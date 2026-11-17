@@ -21,7 +21,7 @@ info:
     unique among the browser's tabs until the browser restarts. An old number may then name
     a different tab. A host
     may send two optional ids of its own with a run
-    (`_meta["com.browseros.neo/run"] = {requestId?, taskId?, hostData?}`), each at most 128
+    (`_meta["com.browseros.neo/run"] = {requestId?, taskId?, hostData?, access?}`), each at most 128
     bytes. `requestId` names one call. Runs can be looked up by it, and a repeat of it never
     runs again (within its task when the run has a `taskId`, else across Neo; under the `task`
     tab scope, a request without a `taskId` repeats only a run without one), as long as Neo's
@@ -595,16 +595,16 @@ paths:
 
         - Its pictures follow the host's `fill.pictures` (`PUT /v1/settings`). Under the default,
           `allowed`, the tab is pictured like any other: a script's `page.screenshot()`,
-          `locator.screenshot()` and `page.pdf()` work, and Neo's own screenshots picture it,
-          except while a frame shows a private box's value in clear (`trace.screenshots`). What a
-          model can see by default: a script can take a picture of a tab after a private fill. A
+          `locator.screenshot()` and `page.pdf()` work, and Neo's own screenshots picture it.
+          Neo stores a picture even when a card number or a one-time code is visible in a box.
+          What a model can see by default: a script can take a picture of a tab after a private fill. A
           password box paints bullets. A card number, a security code and a one-time code are
           painted in clear, so a model that takes a screenshot can see one that Neo typed
           privately. It still cannot read it as text. A host that does not want that sets
           `fill.pictures` to `never` before the first fill.
         - Under `never`, Neo takes no picture of it. Its operations keep `hasScreenshot: false`,
           and their screenshot answers `404 not_found` with "this operation's picture was
-          withheld: its tab had taken a private fill or showed a private box's value". A fill
+          withheld". A fill
           made under `never` writes its tab, by target, into Neo's synced record beside the trace
           before the first key, so this holds across a Neo restart while the browser keeps the
           tab (a tab whose target the browser changes meanwhile, if it ever does, is not found
@@ -1470,7 +1470,17 @@ components:
             Stable snake_case, e.g. `owner_has_control`, `strict_mode_violation`, `target_closed`.
             `host / private_tab` refuses a script's own picture of a tab that took a private
             fill (`POST /v1/tabs/{tabId}/fill`) while the host's `fill.pictures` is `never`. A
-            repeat fails the same way while that setting stands.
+            repeat fails the same way while that setting stands. `website / covered`: a pointer
+            action's element stayed under something else that takes the pointer until its
+            timeout ran out; the message names it, says what it shows and what to do, and
+            `cover` holds it. Under the spec harness's conformance switch the same wait answers
+            `not_actionable`, with Playwright's own message.
+        diagnosticCode:
+          type: string
+          description: >-
+            Optional typed detail. A crashed renderer retains primary code internal_error and
+            adds target_crashed. Present in full and summary views; clients ignore unknown values.
+          x-extensible-enum: [target_crashed]
         hostCode:
           type: string
           description: The host's own code when `code` is `host_error`, e.g. `needs_owner`.
@@ -1487,6 +1497,53 @@ components:
         operationId:
           type: string
           description: On a run's error, the operation it came from.
+        cover:
+          $ref: '#/components/schemas/Cover'
+    Cover:
+      type: object
+      description: >-
+        Only on `covered`: what covered the element at the action's point when its timeout ran
+        out. The element's own wrapper, its label or the page's root can be the cover; `kind`
+        says how it stands to the element.
+      required: [ref, role, name, kind, controls]
+      properties:
+        ref:
+          type: string
+          description: >-
+            The cover's ref: the one a snapshot printed for it, else one minted for it
+            (`n4`, `f3n4` in a frame), which `page.getByRef` resolves the same way.
+        role:
+          type: string
+          description: Its ARIA role, `generic` when it has none; a frame's is `iframe`.
+        name:
+          type: string
+          description: Its accessible name, read as a snapshot reads it; may be empty.
+        kind:
+          type: string
+          description: >-
+            How it stands to the element: `page` (another part of the page, such as a dialog
+            or an overlay), `frame` (an iframe), `partial` (another point of the element is
+            clear), `label` (the element's own label), `wrapper` (its own wrapper or drawing),
+            `labels` (the element is the label of the control on top), `nothing` (an ancestor
+            or the page's root: nothing covers it) or `folded` (a closed panel or menu clips it
+            away).
+          x-extensible-enum: [page, frame, partial, label, wrapper, labels, nothing, folded]
+        controls:
+          type: array
+          description: Up to eight of the cover's controls that take the pointer, in page order.
+          items:
+            $ref: '#/components/schemas/CoverControl'
+    CoverControl:
+      type: object
+      required: [ref, role, name]
+      properties:
+        ref:
+          type: string
+        role:
+          type: string
+          description: Its ARIA role, `generic` when it has none; a frame's is `iframe`.
+        name:
+          type: string
     TabList:
       type: object
       required: [items]
@@ -1625,6 +1682,35 @@ components:
             `task` when the run was bound to its task's tabs, `browser` when it saw every tab, as
             its result's `_meta["com.browseros.neo/run"].tabsScope` said. Absent for runs recorded
             before Neo kept it, which saw every tab (`browser`).
+        access:
+          type: string
+          x-extensible-enum: [read]
+          description: >-
+            A host selects one read-only run with `_meta["com.browseros.neo/run"].access: "read"`.
+            Absent means ordinary execution; every other present request value, including null,
+            is host/invalid_meta. Older servers refuse the unknown metadata key.
+            The door admits reads except events.interceptFileChooser, newPage, disposable.dispose,
+            goto to a completed http(s) address on a tab that is not the owner's own, and
+            closing a tab the same run opened (not a popup or another run's tab).
+            Other operations fail script/read_only_run with delivery not_sent before browser work.
+            The owner's tab is one no agent opened and no task holds. Task scope separately limits
+            which tabs a run can reach. A requestId repeat retains the original run's access.
+            Effects still reports sent writes, including allowed navigation.
+            Screenshot/PDF buffers, snapshot text/delta and text locator waits are admitted.
+            Screenshot path captures first, then saveScreenshot is refused without saving a file;
+            PDF path keeps its existing unsupported refusal. A file chooser wait fails;
+            page.on('filechooser') registers nothing as its setup fails quietly.
+            Reads may scroll; screenshots may foreground a tab and temporarily change focus,
+            caret, animations or rendering, and PDF fires print events.
+            Site scripts run with the owner's cookies. A GET can sign out, unsubscribe, use a
+            one-time link or mark something read; responses set cookies and navigation adds history.
+            A goto may lose unsaved input and may download a file into Neo's own folder, as today;
+            the script cannot save it elsewhere or upload it.
+            Without a listener Neo dismisses confirm/prompt after 250 ms and accepts beforeunload.
+            A read-only dialog listener may read text but cannot answer dialog.*; it holds the page
+            and navigation while alive. Listeners end by run teardown, then the next reap applies
+            the same automatic answer within about a second of the listener ending.
+            Only read-only runs include this field; ordinary and older records omit it.
         tabs:
           type: array
           description: The tabs its operations targeted, ascending.
@@ -1695,6 +1781,12 @@ components:
             `task` when the run was bound to its task's tabs, `browser` when it saw every tab, as
             its result's `_meta["com.browseros.neo/run"].tabsScope` said. Absent for runs recorded
             before Neo kept it, which saw every tab (`browser`).
+        access:
+          type: string
+          x-extensible-enum: [read]
+          description: >-
+            The host's read-only restriction, as on RunSummary; retained from run start through
+            failure and request replay. Ordinary runs and older records omit it.
         tabs:
           type: array
           description: The tabs its operations targeted, ascending.
@@ -2793,14 +2885,17 @@ components:
             the first character (a fill whose record cannot be written is then refused,
             `trace_unavailable`, nothing typed). `never` covers every tab Neo knows took a fill:
             those filled in this run of the server, whatever the setting was, and after a restart
-            those filled while it was `never`. A host that wants it sets it before its first
+            those filled while it was `never`. Before the saved record is applied at startup,
+            `never` withholds every tab. A host that wants it sets it before its first
             fill. What a model can see by default: a script can take a picture of a tab after a
             private fill. A password box paints bullets. A card number, a security code and a
             one-time code are painted in clear, so a model that takes a screenshot can see one
             that Neo typed privately. It still cannot read it as text. A host that does not want
-            that sets `fill.pictures` to `never` before the first fill. Under either value Neo's
-            own picture is withheld while a frame shows a private box's value in clear
-            (`trace.screenshots`). A name this server does not have is skipped and listed in
+            that sets `fill.pictures` to `never` before the first fill. Neo stores a picture even
+            when a card number or a one-time code is visible in a box. A value typed by a script
+            or by the person at the keyboard does not mark its tab for this setting. After Neo
+            restarts, a tab filled under `allowed` is not known as filled, because that fill
+            wrote no record. A name this server does not have is skipped and listed in
             `unknownValues`: then `PUT` applies the default, `allowed`, and `PATCH` keeps the
             value it had, so a host that needs `never` checks `unknownValues`.
     FilesSettings:
@@ -2876,50 +2971,13 @@ components:
             or the script caused, and of each tab a run touched when it ends. `off`: none, from
             the next operation that ends (a screenshot already ordered is still taken). A
             script's own `page.screenshot()` is its result, whose storage follows trace.values. A name this
-            server does not have is skipped and listed in `unknownValues`. Neo stores no picture
-            of a tab while any frame of it shows a box masking treats as private (a card number
-            or a code the page declares, typed by a script or the owner), not empty and painted
-            in clear; a password box paints bullets, so sign-in pages keep their pictures. Neo
-            reads every frame before and after each picture for this. It drops a picture taken
-            while a frame that holds a private box came, went or moved to another document, or
-            while a private box took input. Frames that hold no private box do not count. A
-            frame or a reading that does not answer in time withholds the picture, and a box Neo
-            typed into privately counts as private there. A tab that took the host's private fill
-            (`POST /v1/tabs/{tabId}/fill`) is pictured like any other, unless `fill.pictures` is
-            `never`.
-            Measured on Stripe's card widgets. A widget that hides a complete number and shows its
-            last four digits keeps its pictures, and they show those four digits. Other providers'
-            widgets were not sampled. Limits: a private value that appears and disappears inside one
-            capture window, in a document that held no private box at the first look and is gone by
-            the second, can be in a stored picture. A box inside a closed shadow root is known to
-            Neo once typing reaches it (an input event, from a script's keyboard or the owner's),
-            once it holds the focus at one of Neo's readings, or once a `page.ariaSnapshot()` in
-            Neo's own format (no mode, `ai` or `full`) has walked its root; mode `default` and
-            `ariaSnapshotJSON()` do not walk. Neo then reads that root from its host, without
-            capturing the page, and drops the picture taken around the first input that reached it.
-            Until it has read a root that typing reached, Neo stores no picture of the tab, and
-            tries again at each reading, five readings at most: after five failed reads such a host
-            reads as on main. A key that types nothing (Tab, an arrow key, PageDown) changes
-            nothing. Not known, so a picture can show what such a box holds: a value that came with
-            no event and never held the focus (written by the page's own script, or there when the
-            document loaded); a value typed with the keyboard alone before Neo's first reading in
-            that document, in a box that no longer holds the focus at that reading; typing on a page
-            that stops its events at the window, before Neo's listener; a box whose page cancels the
-            key and writes the value itself, when that box no longer holds the focus at Neo's next
-            reading; and a box inside a closed root in an editable region, or whose host is itself
-            editable (a document in design mode included), which is known only through the focus:
-            once its host held the focus at one of Neo's readings and that one read went through.
-            Its typing is not counted before that, as no event inside an editable region tells a
-            closed root's typing from the editor's own. A host avoids the second by sending a
-            private value through the fill route: its box has a ref from a snapshot in Neo's own
-            format, which has read the box's closed root, so Neo knows the box before anything is
-            typed, and a box Neo typed into privately counts as private there. A root Neo found
-            through the focus alone and cannot read in time stays unknown, and is not asked again
-            unless typing then reaches it. A box in a closed root nested inside another is reached
-            through the focus, or through typing once Neo knows the outer root; one more than four
-            closed roots deep is read over more than one reading. Between its two readings around a
-            picture Neo counts typing and the owner's input, not a value a page's own script sets
-            itself: such a value shown and cleared again in between is not seen.
+            server does not have is skipped and listed in `unknownValues`. Neo stores a picture even when
+            a card number or a one-time code is visible in a box, including inside a closed
+            shadow root. A host that does not want pictures after private typing sets
+            `fill.pictures: never`, which stops pictures of a tab after the host's private
+            typing happened there. A value typed by a script or by the person at the keyboard
+            is not covered by that setting. Only a fill under `never` writes the filled-tab
+            record, so after Neo restarts a tab filled under the default is not known as filled.
         valueBytes:
           type: integer
           format: int64

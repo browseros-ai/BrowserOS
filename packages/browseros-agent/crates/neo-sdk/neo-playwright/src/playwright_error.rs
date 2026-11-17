@@ -31,6 +31,10 @@ use serde_json::Value;
 use crate::Refusal;
 use crate::listed_enum::listed_enum;
 
+/// Recovery guidance shared by operations and wrappers that replace their error messages.
+pub(crate) const TARGET_CRASH_MESSAGE: &str =
+    "The tab's page crashed. Close or reload the tab before retrying.";
+
 listed_enum! {
     /// The crate's error vocabulary. [`ErrorCode::as_str`] is the stable wire name.
     pub enum ErrorCode {
@@ -38,8 +42,14 @@ listed_enum! {
         StrictModeViolation,
         /// Nothing matched for the op's whole timeout; also `expect` with no element.
         NoMatch,
-        /// Matched, but stayed hidden, disabled, unstable, not editable or covered.
+        /// Matched, but stayed hidden, disabled, unstable or not editable; or covered, under the
+        /// conformance switch, where the answer stays upstream's.
         NotActionable,
+        /// A pointer action's element stayed under a cover until its timeout: another element
+        /// takes the pointer at its point. The error names the cover and what to do about it
+        /// (covered-click spec section 2), and the prelude throws `TimeoutError`, as for
+        /// `not_actionable`.
+        Covered,
         /// An `expect` matcher failed with its element present.
         AssertionFailed,
         /// A ref whose element or document is gone, or a detached element handle. Never waits.
@@ -67,6 +77,8 @@ listed_enum! {
         Unsupported,
         /// The page or frame closed, or left the run's view, under the op.
         TargetClosed,
+        /// The browser answered this operation with the exact `Target crashed` protocol error.
+        TargetCrashed,
         /// The CDP connection dropped, changed epoch or stopped answering.
         BrowserDisconnected,
         /// The script aborted the op through Playwright's `signal` option. Like a timeout, the
@@ -124,6 +136,7 @@ impl ErrorCode {
             Self::StrictModeViolation => row("strict_mode_violation", Script, No, Definite),
             Self::NoMatch => row("no_match", Script, Yes, Ambiguous),
             Self::NotActionable => row("not_actionable", Website, Yes, Ambiguous),
+            Self::Covered => row("covered", Website, Yes, Ambiguous),
             Self::AssertionFailed => row("assertion_failed", Website, Yes, Ambiguous),
             Self::ElementDetached => row("element_detached", Website, No, Definite),
             Self::NotFocused => row("not_focused", Website, No, Definite),
@@ -137,6 +150,7 @@ impl ErrorCode {
             Self::InvalidInput => row("invalid_input", Script, No, Definite),
             Self::Unsupported => row("unsupported", Neo, No, Definite),
             Self::TargetClosed => row("target_closed", Neo, No, Ambiguous),
+            Self::TargetCrashed => row("target_crashed", Neo, No, Definite),
             Self::BrowserDisconnected => row("browser_disconnected", Neo, No, Ambiguous),
             Self::Aborted => row("aborted", Script, No, Ambiguous),
             Self::Internal => row("internal", Neo, No, Definite),
@@ -175,6 +189,11 @@ impl ErrorCode {
         match error {
             CoreError::Cdp(cdp) => match cdp {
                 CdpError::SessionGone => Self::TargetClosed,
+                // This classifies only the reply in hand. Later operations still ask the
+                // browser, and retain the same delivery and retry rules as other protocol errors.
+                CdpError::Protocol { message, .. } if message == "Target crashed" => {
+                    Self::TargetCrashed
+                }
                 // Tab/target lookup can race a close before the detached event reaches the
                 // journal. These exact missing-identity replies are closure evidence; other
                 // protocol failures remain Internal.
@@ -225,6 +244,10 @@ pub struct PlaywrightError {
     /// the expect prelude completes into Playwright's `error.matcherResult`. Hosts pass it to
     /// the script as it is; boxed, so every other error stays small.
     matcher: Option<Box<Value>>,
+    /// A `covered` pointer action's cover (`{ ref, role, name, kind, controls, snapshot }`,
+    /// action/cover.rs): the prelude renders its snapshot under the message's "On top" line
+    /// and gives the script the rest as `error.cover`. Hosts pass it as they pass `matcher`.
+    cover: Option<Box<Value>>,
 }
 
 /// What failed: one of the crate's codes, or a host policy that refused.
@@ -249,6 +272,7 @@ impl PlaywrightError {
             message,
             outcome_lost: false,
             matcher: None,
+            cover: None,
         }
     }
 
@@ -327,6 +351,20 @@ impl PlaywrightError {
         self
     }
 
+    /// A `covered` pointer action's cover for the prelude and the script; `None` for every other
+    /// failure. Opaque to hosts, which pass it on and keep it in the operation's record.
+    #[must_use]
+    pub fn cover_details(&self) -> Option<&Value> {
+        self.cover.as_deref()
+    }
+
+    /// The same failure, carrying a cover's facts (see [`Self::cover_details`]).
+    #[must_use]
+    pub(crate) fn with_cover(mut self, details: Value) -> Self {
+        self.cover = Some(Box::new(details));
+        self
+    }
+
     /// The same failure, raised after the op sent input it can no longer account for, such as
     /// a click whose verdict came back unreadable: the answer becomes ambiguous.
     #[must_use]
@@ -353,6 +391,7 @@ impl From<Refusal> for PlaywrightError {
             message: refusal.message,
             outcome_lost: false,
             matcher: None,
+            cover: None,
         }
     }
 }
@@ -368,17 +407,21 @@ impl Error for PlaywrightError {}
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     use browseros_cdp::CdpError;
     use browseros_core::{CoreError, PageId, TargetError};
     use neo_trace::ErrorOwner;
+    use serde_json::{Value, json};
 
     use super::{Answer, ErrorCode, PlaywrightError, TimedOut};
-    use crate::Refusal;
+    use crate::test_env::EnvCall;
+    use crate::test_support::{ProbeAnswer, ScriptedRun, ScriptedTab, TabScript, TestResult};
+    use crate::{Op, Refusal};
 
     /// The error table as the sdk-playwright design states it, plus `wait_timeout`, written
     /// out apart from the code so a wrong row there fails here.
-    const TABLE: [(&str, ErrorOwner, TimedOut, Answer); 17] = [
+    const TABLE: [(&str, ErrorOwner, TimedOut, Answer); 19] = [
         (
             "strict_mode_violation",
             ErrorOwner::Script,
@@ -393,6 +436,12 @@ mod tests {
         ),
         (
             "not_actionable",
+            ErrorOwner::Website,
+            TimedOut::Yes,
+            Answer::Ambiguous,
+        ),
+        (
+            "covered",
             ErrorOwner::Website,
             TimedOut::Yes,
             Answer::Ambiguous,
@@ -462,6 +511,12 @@ mod tests {
             ErrorOwner::Neo,
             TimedOut::No,
             Answer::Ambiguous,
+        ),
+        (
+            "target_crashed",
+            ErrorOwner::Neo,
+            TimedOut::No,
+            Answer::Definite,
         ),
         (
             "browser_disconnected",
@@ -618,5 +673,162 @@ mod tests {
         for (error, code) in cases {
             assert_eq!(ErrorCode::from_core(&error), code, "{error}");
         }
+    }
+
+    #[test]
+    fn target_crashed_is_typed_without_changing_the_protocol_errors_delivery() {
+        let error = CoreError::Cdp(CdpError::Protocol {
+            code: -32000,
+            message: "Target crashed".to_owned(),
+        });
+        let code = ErrorCode::from_core(&error);
+        assert_eq!(code.answer(), Answer::Definite);
+        assert_eq!(code.timed_out(), TimedOut::No);
+        assert_eq!(code.owner(), ErrorOwner::Neo);
+        assert_eq!(
+            code.as_str(),
+            "target_crashed",
+            "the exact protocol reply must be distinguishable from other internal failures"
+        );
+    }
+
+    #[test]
+    fn target_crashed_near_misses_remain_generic_protocol_errors() {
+        for message in [
+            "target crashed",
+            "Target crashed.",
+            "Target crashed while navigating",
+            " Target crashed",
+            "Target crashed ",
+        ] {
+            let error = CoreError::Cdp(CdpError::Protocol {
+                code: -32000,
+                message: message.to_owned(),
+            });
+            assert_eq!(
+                ErrorCode::from_core(&error),
+                ErrorCode::Internal,
+                "{message}"
+            );
+        }
+        assert_eq!(
+            ErrorCode::from_core(&CoreError::Message("Target crashed".to_owned())),
+            ErrorCode::Internal,
+            "the diagnostic requires a CDP protocol reply, not arbitrary matching text"
+        );
+    }
+
+    /// One command fails once; the next operation sees the browser's ordinary answer. This
+    /// distinguishes an error diagnostic from remembered crash state that refuses later work.
+    struct OneCrashReply {
+        method: &'static str,
+        failed: AtomicBool,
+    }
+
+    impl OneCrashReply {
+        fn on(method: &'static str) -> Self {
+            Self {
+                method,
+                failed: AtomicBool::new(false),
+            }
+        }
+    }
+
+    impl TabScript for OneCrashReply {
+        fn probe(&self, _frame: &str, _request: &Value) -> ProbeAnswer {
+            ProbeAnswer::unexpected()
+        }
+
+        fn cdp_error(&self, method: &str, _params: &Value) -> Option<&'static str> {
+            (method == self.method && !self.failed.swap(true, Ordering::SeqCst))
+                .then_some("Target crashed")
+        }
+
+        fn cdp_reply(&self, method: &str, _params: &Value) -> Option<Value> {
+            (method == "Page.navigate").then(|| json!({ "errorText": "net::ERR_ABORTED" }))
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn target_crashed_goto_keeps_delivery_and_later_operations_reach_the_browser()
+    -> TestResult {
+        let tab = ScriptedTab::new(OneCrashReply::on("Page.navigate"));
+        let run = ScriptedRun::over(&tab).await?;
+        let goto = Op::from_name("page.goto").ok_or("page.goto is an op")?;
+        let input = json!({ "page": run.page, "url": "https://a.test/next" });
+        let crashed = run
+            .playwright
+            .invoke(&run.env, goto, input.clone())
+            .await
+            .err()
+            .ok_or("the browser fails the first navigation")?;
+        assert_eq!(crashed.answer(), Answer::Definite);
+        assert_eq!(crashed.timed_out(), TimedOut::No);
+        assert!(run.env.calls().contains(&EnvCall::MarkSent));
+        assert_eq!(tab.sent("Page.navigate"), 1, "a crash reply is not retried");
+
+        let later = run
+            .playwright
+            .invoke(&run.env, goto, input)
+            .await
+            .err()
+            .ok_or("the browser answers the later navigation with its net error")?;
+        assert_eq!(
+            tab.sent("Page.navigate"),
+            2,
+            "later work still reaches the browser"
+        );
+        assert_eq!(later.error_code(), Some(ErrorCode::NavigationFailed));
+        assert!(later.message().contains("net::ERR_ABORTED"));
+        assert_eq!(crashed.code(), "target_crashed");
+        assert!(
+            crashed.message().starts_with(
+                "page.goto: The tab's page crashed. Close or reload the tab before retrying."
+            ),
+            "the caller needs plain recovery guidance: {crashed}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn target_crashed_input_keeps_uncertainty_and_later_operations_reach_the_browser()
+    -> TestResult {
+        let tab = ScriptedTab::new(OneCrashReply::on("Input.insertText"));
+        let run = ScriptedRun::over(&tab).await?;
+        let insert = Op::from_name("keyboard.insertText").ok_or("keyboard.insertText is an op")?;
+        let input = json!({ "page": run.page, "text": "hello" });
+        let crashed = run
+            .playwright
+            .invoke(&run.env, insert, input.clone())
+            .await
+            .err()
+            .ok_or("the browser fails the first input")?;
+        assert_eq!(
+            crashed.answer(),
+            Answer::Ambiguous,
+            "the existing after-input override must still report possible delivery"
+        );
+        assert!(run.env.calls().contains(&EnvCall::MarkSent));
+        assert_eq!(
+            tab.sent("Input.insertText"),
+            1,
+            "input is not replayed after a crash reply"
+        );
+
+        assert_eq!(
+            run.playwright.invoke(&run.env, insert, input).await?,
+            Value::Null
+        );
+        assert_eq!(
+            tab.sent("Input.insertText"),
+            2,
+            "later work still reaches the browser"
+        );
+        assert_eq!(crashed.code(), "target_crashed");
+        assert_eq!(
+            crashed.message(),
+            "keyboard.insertText: The tab's page crashed. Close or reload the tab before retrying."
+        );
+        Ok(())
     }
 }

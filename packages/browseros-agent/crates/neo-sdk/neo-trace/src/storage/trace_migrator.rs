@@ -19,11 +19,12 @@ mod m0003_operation_main_world;
 mod m0004_trace_values;
 mod m0005_operation_frames_incomplete;
 mod m0006_run_tabs_scope;
+mod m0007_run_access;
 
 /// The ordered schema history, applied only inside prepare's owned SQLite transaction.
 pub(crate) struct TraceMigrator;
 
-const USER_VERSION_FENCE: i64 = 6;
+const USER_VERSION_FENCE: i64 = 7;
 
 #[async_trait::async_trait]
 impl MigratorTrait for TraceMigrator {
@@ -35,6 +36,7 @@ impl MigratorTrait for TraceMigrator {
             Box::new(m0004_trace_values::Migration),
             Box::new(m0005_operation_frames_incomplete::Migration),
             Box::new(m0006_run_tabs_scope::Migration),
+            Box::new(m0007_run_access::Migration),
         ]
     }
 }
@@ -116,9 +118,13 @@ pub(crate) async fn prepare(db: &DatabaseConnection) -> Result<(), TraceError> {
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error;
+
+    use sea_orm::{ConnectionTrait, Database, EntityTrait};
     use sea_orm_migration::MigratorTrait;
 
     use super::{TraceMigrator, USER_VERSION_FENCE};
+    use crate::storage::entities::runs;
 
     #[test]
     fn the_fence_moves_with_every_migration() {
@@ -127,5 +133,24 @@ mod tests {
             Some(TraceMigrator::migrations().len()),
             "every migration bumps the old-build fence so rollback always refuses newer files"
         );
+    }
+
+    #[tokio::test]
+    async fn upgrading_schema_six_keeps_ordinary_access_absent() -> Result<(), Box<dyn Error>> {
+        let db = Database::connect("sqlite::memory:").await?;
+        TraceMigrator::up(&db, Some(6)).await?;
+        db.execute_unprepared(
+            "INSERT INTO runs(id, started_at, status) VALUES ('old-run', 1, 'ok')",
+        )
+        .await?;
+        super::prepare(&db).await?;
+        let row = runs::Entity::find_by_id("old-run")
+            .one(&db)
+            .await?
+            .ok_or("old row survives")?;
+        assert_eq!(row.access, None, "NULL keeps the pre-access run ordinary");
+        assert_eq!(row.started_at, 1);
+        assert_eq!(row.status, "ok");
+        Ok(())
     }
 }

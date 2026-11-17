@@ -87,6 +87,9 @@ docs/plans/
 # Optional eslint cache
 .eslintcache
 
+# Fallow's generated binary analysis cache.
+.fallow/
+
 # Optional stylelint cache
 .stylelintcache
 
@@ -165,7 +168,7 @@ packages/*/dist
 .vscode-test
 
 # Stores VSCode specific settings
-.vscode
+**/.vscode/*
 !.vscode/*.template.json
 !.vscode/extensions.json
 
@@ -211,3 +214,8 @@ test-results/
 
 # Neo behavior programs and their browser fixtures are authored JavaScript sources.
 !crates/neo-sdk/neo-server/tests/behavior/**/*.js
+
+# Authored directories must remain visible under the broad build/environment rules.
+!crates/**/src/target/
+!packages/shared/src/env/
+!scripts/env/

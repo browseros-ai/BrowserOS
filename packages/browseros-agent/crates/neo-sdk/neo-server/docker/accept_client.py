@@ -153,7 +153,7 @@ STATEMENT = b"".join(b"2026-10-%02d,coffee,%d.50\r\n" % (day % 28 + 1, day) for 
 
 
 class FilesPage(http.server.BaseHTTPRequestHandler):
-    """A page with a download link and a file input, on 127.0.0.1: the check's network has no
+    """Download controls and a file input, on 127.0.0.1: the check's network has no
     route out. 127.0.0.1 is a secure context, so the page can hash what it was given."""
 
     def do_GET(self):
@@ -162,7 +162,18 @@ class FilesPage(http.server.BaseHTTPRequestHandler):
             disposition = f'attachment; filename="{STATEMENT_NAME}"'
         else:
             body, kind, disposition = (
-                b"<title>files</title><a id=get href=/statement>Statement</a><input type=file id=f>",
+                b"""<title>files</title><a id=get href=/statement>Statement</a><input type=file id=f>
+<button id=get-iframe>Statement in iframe</button>
+<script>
+document.querySelector('#get-iframe').addEventListener('click', event => {
+  if (!event.isTrusted) return;
+  // Delay frame creation until trusted input so earlier frame discovery cannot find it.
+  const frame = document.createElement('iframe');
+  frame.hidden = true;
+  frame.src = '/statement';
+  document.body.appendChild(frame);
+});
+</script>""",
                 "text/html",
                 None,
             )
@@ -197,6 +208,15 @@ const copyUpload = await facts();
 await download.saveAs('/tmp/neo-accept-saved.csv');
 return { path, copy, originalUpload, copyUpload,
          name: download.suggestedFilename(), failure: await download.failure() };
+"""
+
+IFRAME_DOWNLOAD_CODE = """\
+await page.goto('ORIGIN/');
+const pending = page.waitForEvent('download', { timeout: 10_000 });
+await page.locator('#get-iframe').click();
+const download = await pending;
+return { path: await download.path(), name: download.suggestedFilename(),
+         failure: await download.failure() };
 """
 
 UPLOAD_CODE = """\
@@ -266,6 +286,29 @@ def downloads(url: str, socket_path: str, token_file: str) -> dict:
     sent = (uploaded["value"] or {}).get("value") or {}
     if (sent.get("name"), sent.get("sha256")) != (os.path.basename(path), want):
         problems.append(f"upload: {uploaded['meta'].get('status')} {sent or uploaded['text'][:200]}")
+    # A newly created same-origin iframe has no separate target; its event must still reach
+    # this page and the host's record for the run that awaited it.
+    iframe = call_run(client, IFRAME_DOWNLOAD_CODE.replace("ORIGIN", origin), {"taskId": "accept-downloads"})
+    iframe_value = (iframe["value"] or {}).get("value") or {}
+    iframe_run = iframe["meta"].get("id", "")
+    iframe_path = iframe_value.get("path") or ""
+    if iframe["meta"].get("status") != "ok" or not iframe_path.startswith("/data/downloads/"):
+        problems.append(f"iframe download run: {iframe['meta'].get('status')} {iframe['text'][:200]}")
+    if iframe_value.get("name") != STATEMENT_NAME or iframe_value.get("failure") is not None:
+        problems.append(f"iframe download facts: {iframe_value}")
+    iframe_record = host(socket_path, token_file, f"/v1/runs/{iframe_run}?wait=10")
+    iframe_listed = (iframe_record.get("body") or {}).get("downloads") or []
+    if iframe_record.get("status") != 200 or len(iframe_listed) != 1 or (
+        iframe_listed[0].get("state"), iframe_listed[0].get("size"),
+        iframe_listed[0].get("path"), iframe_listed[0].get("suggestedFilename")
+    ) != ("completed", len(STATEMENT), iframe_path, STATEMENT_NAME):
+        problems.append(f"iframe record: {iframe_listed}")
+    raw = host_raw(socket_path, token_file, f"/v1/runs/{iframe_run}/downloads/0")
+    status, headers, body = raw if isinstance(raw, tuple) else (raw, {}, b"")
+    if status != 200 or len(body) != len(STATEMENT) or hashlib.sha256(body).hexdigest() != want:
+        problems.append(f"iframe bytes: {status}, {len(body)} bytes")
+    if STATEMENT_NAME not in headers.get("content-disposition", ""):
+        problems.append(f"iframe content-disposition: {headers.get('content-disposition')}")
     server.shutdown()
     return {
         "ok": not problems,
@@ -276,10 +319,12 @@ def downloads(url: str, socket_path: str, token_file: str) -> dict:
         "realPathInDefault": membership,
         "sha256": want,
         "uploads": {key: value.get(key) for key in ('originalUpload', 'copyUpload')},
+        "iframe": {"run": iframe_run, **iframe_value, "downloads": iframe_listed},
         "problems": problems,
         "detail": f"run {run_id}: download.path()={path}; copy={value.get('copy')}; "
         f"defaults={defaults}; real-path membership={membership}; {len(STATEMENT)} bytes, sha256={want}; "
-        "both paths uploaded in the downloading run, original uploaded again, /tmp save preserved",
+        "both paths uploaded in the downloading run, original uploaded again, /tmp save preserved; "
+        f"iframe run {iframe_run}: download.path()={iframe_path}, host bytes match SHA-256",
     }
 
 
@@ -378,11 +423,16 @@ try {
     : await waiting;
   facts.event = event.download ? { name: event.download.suggestedFilename(), url: event.download.url() } : event;
   if (args.mode === 'inline') {
-    // Chromium's PDF embed is hidden from document queries. Its generated document
-    // references the viewer's extension stylesheet even when no download exists.
-    facts.viewer = await p.evaluate(() => ({ contentType: document.contentType,
-      stylesheet: [...document.querySelectorAll('link[rel="stylesheet"]')].some(link =>
-        link.href.startsWith('chrome-extension://') && link.href.endsWith('/pdf_embedder.css')) }));
+    // The PDF embed lives in user-agent shadow DOM. Chromium 158 styles that
+    // document inline; the SDK snapshot still reads the actual viewer's frame.
+    // Check its controls instead of depending on a packaged stylesheet filename.
+    const viewer = await p.ariaSnapshot();
+    facts.viewer = {
+      contentType: await p.evaluate(() => document.contentType),
+      pageNumber: viewer.includes('textbox "Page number"'),
+      download: viewer.includes('button "Download"'),
+      print: viewer.includes('button "Print"'),
+    };
   } else if (event.download) {
     // These methods have no timeout option. Observe each independently so a stuck artifact
     // still returns evidence. Ending the run cancels operations left behind by the races.
@@ -423,7 +473,7 @@ def pdf_downloads(url: str, socket_path: str, token_file: str) -> dict:
                 if mode == "inline":
                     assert not value.get("triggerError"), str(value)
                     assert value.get("event") == {"error": "no event after load"} and not listed, str(value)
-                    assert value.get("viewer") == {"contentType": "application/pdf", "stylesheet": True}, str(value)
+                    assert value.get("viewer") == {"contentType": "application/pdf", "pageNumber": True, "download": True, "print": True}, str(value)
                 else:
                     path = (value.get("path") or {}).get("value") or ""
                     assert path.startswith("/data/downloads/"), str(value)

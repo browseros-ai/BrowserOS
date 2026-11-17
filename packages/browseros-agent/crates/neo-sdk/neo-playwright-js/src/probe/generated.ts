@@ -160,6 +160,97 @@ export type BoxState = "holds" | "other" | "left";
 export type Checkable = { checked: boolean, radio: boolean, };
 
 /**
+ * One control of a cover that takes the pointer.
+ */
+export type CoverControl = { role: string, name: string, ref: string, };
+
+/**
+ * What a covered pointer action says about its cover (covered-click spec section 2), read in
+ * the world that saw it. Its text comes from the snapshot's own reads, under the mask (R47).
+ */
+export type CoverFacts = { 
+/**
+ * The cover as named (`whichDialog`, before a blank layer is named after its dialog), by its
+ * number in this world: what "the same layer again" compares, since a banner's root can be
+ * `main` for one control and the banner for the next.
+ */
+layer: number, 
+/**
+ * The cover, "which dialog": walking up from what is on top, the first dialog-like role,
+ * else the first section role, else the root of its subtree. The ref the snapshot printed
+ * for it, else one minted for it (`RefMap.forElement`), which `getByRef` resolves.
+ */
+ref: string, role: string, name: string, 
+/**
+ * Upstream's markup line for it, as today's `intercepts pointer events` line prints.
+ */
+markup: string, 
+/**
+ * Its own snapshot (`ariaSnapshotJSON` in `default` mode, which mints no ref and moves
+ * nothing the agent's own snapshots depend on), which the prelude renders and cuts. `null`
+ * for a cover that holds the control: its snapshot would be the page's.
+ */
+snapshot: unknown, 
+/**
+ * Only when that snapshot holds no words: what the cover draws as text, cut at 300
+ * characters. The engine drops a `role=textbox` div's own text, so such a cover prints as
+ * a nameless textbox, and its words are here.
+ */
+text?: string, 
+/**
+ * Up to eight of its controls that take the pointer, a dialog's buttons kept.
+ */
+controls: Array<CoverControl>, 
+/**
+ * The cover holds no control and draws no text.
+ */
+blank: boolean, 
+/**
+ * The cover is a blank layer, and the ref, role, name, snapshot and controls are those of
+ * the dialog open over it, nearest the point; `markup` stays the layer's. The point lies
+ * under the layer: the dialog is not what takes the click.
+ */
+behind: boolean, 
+/**
+ * The cover is, or holds, a custom element whose closed shadow root this world does not
+ * know: it is not blank, and a new snapshot shows its content.
+ */
+closed: boolean, 
+/**
+ * A live region is on the cover or around it (a notice's role, `aria-live`): it may go by
+ * itself.
+ */
+notice: boolean, kind: CoverKind, };
+
+/**
+ * How the cover stands to the control, which picks the answer's line (spec section 2's table).
+ */
+export type CoverKind = { "is": "page" } | { "is": "frame" } | { "is": "partial", position: Point, } | { "is": "label", links: number, position?: Point, } | { "is": "wrapper" } | { "is": "labels", ref: string, } | { "is": "nothing" } | { "is": "folded" };
+
+/**
+ * Which cover stood at one check of a pointer action (covered-click spec section 1): the root
+ * of its subtree as upstream's hit test finds it (`injectedScript.ts` `expectHitTarget`), with
+ * its box and how opaque it shows. The pointer runner counts a cover as standing while each
+ * check finds the same number, box and opacity: a cover that moves or fades is one the page
+ * may still take away.
+ */
+export type CoverMark = { 
+/**
+ * The root's number in the world that tested, the same at every check while the element
+ * is the same (a weak map, as the ref map keeps frame keys). Not a pin: a pin is a new
+ * number at every call and spends one of the world's pin entries.
+ */
+id: number, rect: Rect, 
+/**
+ * Its own opacity times every ancestor's.
+ */
+opacity: number, 
+/**
+ * It says it is loading: `aria-busy="true"` on it or around it, or a progress bar in it.
+ */
+busy: boolean, };
+
+/**
  * Which text of the document a `document` request reads.
  */
 export type DocumentPart = "title" | "content" | "expectSnapshot";
@@ -391,13 +482,29 @@ retired?: FrameSeq, } | { "kind": "none", staleRef?: string, } | { "kind": "stri
 /**
  * The original element's border width plus explicit position, not a retarget's rect.
  */
-borderOffset?: Point, resolved?: Resolution, } | { "kind": "covered", by: string, } | { "kind": "armed", rect: Rect, point: Point, token: number, } | { "kind": "verdict", hit: Hit, } | { "kind": "moves", moves: number, } | { "kind": "frameBox", origin: Point | null, hit: Hit | null, 
+borderOffset?: Point, resolved?: Resolution, } | { "kind": "covered", by: string, 
+/**
+ * Absent when a second look found the element on top after all.
+ */
+cover?: CoverMark, } | { "kind": "armed", rect: Rect, point: Point, token: number, } | { "kind": "verdict", hit: Hit, } | { "kind": "moves", moves: number, } | { "kind": "frameBox", origin: Point | null, hit: Hit | null, 
 /**
  * Only for the private look (ruling R60): this page cannot show `point`, which lies
  * outside its viewport, or where the iframe is clipped away though it takes the
  * pointer. A click's `frameBox` always answers false.
  */
-unseen: boolean, } | { "kind": "value", value: PageText, } | { "kind": "notFocused", holder?: string, } | { "kind": "read", value: PageText, resolved?: Resolution, } | { "kind": "values", count: number, values: Array<PageText>, } | { "kind": "selector", selector: string, } | { "kind": "snapshot", json: import('../../../neo-playwright/third_party/playwright/packages/isomorphic/ariaSnapshot').AriaSnapshotJSON, iframes: Array<SnapshotIframe>, 
+unseen: boolean, 
+/**
+ * A click's hit test that missed: which cover of this page took the point.
+ */
+cover?: CoverMark, } | { "kind": "cover", facts: CoverFacts | null, } | { "kind": "value", value: PageText, } | { "kind": "notFocused", holder?: string, } | { "kind": "read", value: PageText, resolved?: Resolution, } | { "kind": "values", count: number, values: Array<PageText>, } | { "kind": "selector", selector: string, } | { "kind": "snapshot", 
+/**
+ * The main page's same-request cover survey; absent outside Neo's two text formats.
+ */
+onTop?: Array<SurveyLayer>, surveyTested?: number, surveyMs?: number, surveyPhases?: SurveyPhases, onTopSkipped?: boolean, 
+/**
+ * Isolated-world inert annotation time, for the operation trace only.
+ */
+inertMarkingMs?: number, json: import('../prelude/vendored').AriaSnapshotJSON, iframes: Array<SnapshotIframe>, 
 /**
  * Clickable marking threw on this page and the snapshot was taken again without it;
  * the op's call log says so.
@@ -421,14 +528,21 @@ frameVisible: boolean, scroll: ScrollPlan, position?: Point, arm?: ArmPlan, } | 
  * R60): a frame that is only shifted is placed by its corner, and a point that hits
  * nothing, or hits what holds the frame, is clear. A click keeps upstream's answer.
  */
-look: boolean, } | { "op": "edit", pin: Pin, edit: Edit, } | { "op": "look", pin: Pin, look: BoxAsk, } | { "op": "private", pin: Pin, step: PrivateStep, } | { "op": "privateShown", 
+look: boolean, } | { "op": "cover", target: ProbeTarget, point: Point, cover: number, 
 /**
- * The camera's walk of closed shadow roots on demand (ruling R65): the call's nodes are
- * closed roots Rust resolved into this world from the hosts `PrivateHosts` handed over.
- * The world keeps them for this question alone, never for its engine
- * (probe/private-shown.ts).
+ * The cover is in a page above the element's frame, and `target` is that page's
+ * iframe, tested as it is. Otherwise `target` is the element, retargeted as the
+ * interceptor retargets it.
  */
-walk?: boolean, } | { "op": "privateHosts", limit: number, } | { "op": "read", target: ProbeTarget, strictness: Strictness, frameVisible: boolean, read: Read, } | { "op": "readAll", target: ProbeTarget, read: ReadAll, } | { "op": "screenshotMask", target: ProbeTarget, color: string, } | { "op": "screenshotMaskCleanup" } | { "op": "selector", target: ProbeTarget, } | { "op": "snapshot", root: ProbeTarget, mode: SnapshotMode, 
+above: boolean, } | { "op": "edit", pin: Pin, edit: Edit, } | { "op": "look", pin: Pin, look: BoxAsk, } | { "op": "private", pin: Pin, step: PrivateStep, } | { "op": "read", target: ProbeTarget, strictness: Strictness, frameVisible: boolean, read: Read, } | { "op": "readAll", target: ProbeTarget, read: ReadAll, } | { "op": "screenshotMask", target: ProbeTarget, color: string, } | { "op": "screenshotMaskCleanup" } | { "op": "selector", target: ProbeTarget, } | { "op": "snapshot", 
+/**
+ * A whole main-frame page in a Neo format; children and locators never survey hits.
+ */
+surveyCovers?: boolean, 
+/**
+ * Annotate native inertness only for Neo text formats, never JSON or conformance.
+ */
+markInert?: boolean, root: ProbeTarget, mode: SnapshotMode, 
 /**
  * Any integer, as upstream passes it: a child frame's depth can come out zero or
  * negative, and the engine reads those differently from no depth.
@@ -544,6 +658,16 @@ export type StorageValue = Array<StorageItem> | string | null;
  * with the same names.
  */
 export type Strictness = "strict" | "firstMatch";
+
+/**
+ * A layer the main frame found in the snapshot's own request. The action module words it.
+ */
+export type SurveyLayer = { role: string, name: string, ref: string, blank: boolean, loading: boolean, wholeView: boolean, controls: Array<CoverControl>, firstWords?: string, };
+
+/**
+ * Each added read phase is measured separately so a large document cannot hide the hit budget.
+ */
+export type SurveyPhases = { hits: number, count: number, naming: number, linking: number, marks: number, stopped: boolean, };
 
 /**
  * A `setFiles` value other than null (protocol.ts `FilesSet`): what upstream's injected

@@ -1,0 +1,9 @@
+await page.goto(args.base + '/links.html');
+// Register before input so an immediate download cannot beat the event subscription.
+const waiting = page.waitForEvent('download', {timeout:8000});
+await page.getByRole('button',{name:'Download through new frame',exact:true}).click();
+const download = await waiting;
+const path = await download.path();
+const failure = await download.failure();
+equal(failure,null,'the native download completed successfully');
+return {path,failure,url:download.url(),suggestedFilename:download.suggestedFilename()};

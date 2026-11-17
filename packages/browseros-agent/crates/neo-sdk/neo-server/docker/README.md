@@ -203,6 +203,19 @@ returns bytes. Returning those bytes from `run` yields an inline result or a hos
 large. It does not create a download or accept a `path` option. For an actual download, await
 `download.path()` before importing its host endpoint.
 
+### Trace-store upgrades and rollback
+
+This image advances the trace-store fence from 6 to 7 for the nullable `runs.access` column.
+Opening a store at fence 6 upgrades it in place and preserves its runs and recorded request ids.
+Existing runs have no access value; the upgrade does not mark them read-only.
+
+An older image cannot read a store this image has written. At startup it moves that store to
+`trace.db.broken-<ms>` and starts a fresh, empty one. Request ids from before that replacement
+are forgotten, so retrying one can execute the script again. The old store remains beside the
+new one for inspection. This is the existing rollback rule for the stored trace, separate from
+the MCP protocol: no new wire protocol version is used, and older servers refuse the unknown
+`access` metadata key before executing a script.
+
 ### Stop and restart
 
 `tini` forwards SIGTERM to the entrypoint, which quits the browser over CDP (`neo-quit 9110`); the browser
@@ -238,10 +251,9 @@ New Tab, and "reopen closed tab" has nothing to reopen. It applies in hosted mod
 
 The SDK server, `browseros-claw-sdk`, sends no product analytics. The browser sends its own usage metrics
 to PostHog. In hosted mode the entrypoint starts it with `--disable-browseros-metrics`, which stops them
-only in a browser built with that switch. The browser `browser.lock` pins today (0.52.1.2) does not have it
-and ignores it, so its metrics still leave the container until a browser with the switch is pinned. Chromium's
-own background services (component updates, GCM, Safe Browsing, network time) are a separate matter: this
-switch does not touch them, and they stay on for now.
+only in a browser built with that switch. The previous 0.52.1.2 browser ignored it; support in the
+pinned browser must be verified separately. Chromium's own background services (component updates, GCM,
+Safe Browsing, network time) are a separate matter: this switch does not touch them, and they stay on for now.
 
 ## CAPTCHA keys
 
@@ -290,7 +302,7 @@ cached layer, and a keyless build never mounts a key at all.
 # in a BrowserOS checkout, packages/browseros-agent
 crates/neo-sdk/neo-server/docker/build.sh --platform linux/amd64
 # in the host's Dockerfile
-FROM neo-sdk:0.52.1.2-<commit>-amd64
+FROM neo-sdk:0.53.0-<commit>-amd64
 COPY settings.json /etc/neo/settings.json
 ```
 
@@ -465,7 +477,7 @@ curl -H "Authorization: Bearer $(cat neo-token)" http://127.0.0.1:9300/v1/settin
 values from the release's `release.json`:
 
 ```sh
-v=0.52.1.2
+v=0.53.0
 curl -fsSL "https://cdn.browseros.com/releases/browserclaw/$v/linux/release.json" \
   | jq '.artifacts | {amd64: .x64_deb, arm64: .arm64_deb} | map_values({url, sha256})'
 ```

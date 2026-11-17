@@ -141,6 +141,7 @@ impl TabJanitor {
                 deadline,
                 default_page: None,
                 tabs_scope: TabsScope::Browser,
+                access: None,
             },
         );
         let Swept { closed, kept } = self.close_each(&run, &idle, idle_time, now, deadline).await;

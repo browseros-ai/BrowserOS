@@ -27,6 +27,12 @@ neo-viewer proxy keep their existing behavior. Tasks live in memory (at most 409
 of Neo's server gives each task back the tabs it held, as long as the browser kept them; a browser
 restart forgets every task. The janitor closes agent-opened tabs nobody used for the host's `tabs.idleCloseSeconds`, 30 minutes by default.
 
+A host may select `access: "read"` for one run in `_meta["com.browseros.neo/run"]`. Neo refuses
+other page changes before sending them, while allowing reads, new pages, HTTP(S) navigation on
+tabs an agent opened or a task holds, and closing tabs the same run opened. Replies and run records retain
+the access marker. [Read-only access](neo-server/README.md#read-only-access) defines the boundary,
+including site scripts, cookies, dialogs, screenshots and native downloads.
+
 ```text
 host / MCP run
       |
@@ -55,11 +61,12 @@ host / MCP run
 A host types a secret into a page with `POST /v1/tabs/{tabId}/fill`, never in a script: the
 route lives in `neo-http`, and `neo-server` runs it as a run of its own with one `protected`
 operation that records no value, address or picture (`neo-server/src/host/fill_service.rs`;
-[the image's host typing guide](neo-server/docker/README.md#type-a-hosts-secret) describes its use). Neo also stores no picture of a
-tab while any frame of it shows a box masking treats as private, not empty and painted in clear,
-such as a card number a script typed; a password box paints bullets, so sign-in pages keep theirs.
-Otherwise a tab that took a host's fill is pictured like any other by default; a host that wants no
-picture of it sets `fill.pictures` to `never` ([the server's settings](neo-server/README.md#settings)).
+[the image's host typing guide](neo-server/docker/README.md#type-a-hosts-secret) describes its use). Neo stores a picture even when a card number
+or a one-time code is visible in a box. A host that does not want that sets `fill.pictures` to
+`never` ([the server's settings](neo-server/README.md#settings)), which stops pictures of a tab
+after the host's private typing happened there. A value typed by a script or by the person at
+the keyboard is not covered by that setting. Only a fill under `never` writes the filled-tab
+record, so after Neo restarts a tab filled under the default is not known as filled.
 
 `neo-server/docker/` builds the Neo SDK image, the browser plus this server.
 See [the image's README](neo-server/docker/README.md) for host integration.
@@ -144,7 +151,11 @@ CARGO_BUILD_BUILD_DIR="$PWD/target/build-private" crates/neo-sdk/check.sh
 
 The gate covers every Rust crate in this folder: rustfmt, clippy `-D warnings` and tests for each
 (not yet `neo-captcha`'s tests, which are flaky; `check.sh` says why), plus Google's rustfmt
-options and the forbidden-dependency check for `neo-server` and `neo-playwright`. Follow [STYLE.md](STYLE.md) and the workspace's
+options and the forbidden-dependency check for `neo-server` and `neo-playwright`, and
+`neo-server`'s `hosted-run` build. It also runs the SDK image's Python scripts' tests and imports
+(and ruff where uv is installed), the Bun suites of `neo-playwright-js`, `neo-server`'s
+conformance tables and `neo-captcha`'s test bed under the pinned Bun (`BUN=/path/to/bun` names one), and resolves the spec
+corpus add-on's lock file with `--locked`. Follow [STYLE.md](STYLE.md) and the workspace's
 contributor rules. Build the server with `cargo build -p neo-server --bin browseros-claw-sdk`.
 Use Bun 1.4.2 in `neo-playwright-js` for `bun run build`, `bun run build:check` and its tests.
 Regenerate the host contract from the agent root with `bun run codegen:neo-sdk-api`; never

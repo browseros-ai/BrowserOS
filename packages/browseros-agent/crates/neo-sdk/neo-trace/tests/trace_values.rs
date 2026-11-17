@@ -95,6 +95,7 @@ fn start_run(
         task_id: Some(TaskId::parse(TASK)?),
         host_data,
         tabs_scope: RunTabsScope::Browser,
+        access: None,
         at: at(0),
     });
     Ok(id)
@@ -146,12 +147,14 @@ fn run_ended(id: RunId) -> RunEnded {
 
 fn error(message: &str, operation_id: Option<OperationId>) -> ErrorRecord {
     ErrorRecord {
+        diagnostic_code: None,
         owner: ErrorOwner::Host,
         code: "host_error".to_owned(),
         message: message.to_owned(),
         host_code: Some("requires_owner".to_owned()),
         retryable: true,
         operation_id,
+        cover: None,
     }
 }
 

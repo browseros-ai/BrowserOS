@@ -1,0 +1,6 @@
+await page.goto(args.base + '/sdk-long-read.html');
+const originalLength = await page.evaluate(() => document.body.innerText.length);
+assert(originalLength > 20000, 'the fixture exceeds 20000 characters', { originalLength });
+const text = await page.locator('body').innerText();
+includes(text, 'SDK_FULL_READ_TAIL_20261029', 'the SDK text read includes the original long-page tail');
+return { originalLength, length: text.length, tail: text.includes('SDK_FULL_READ_TAIL_20261029') };

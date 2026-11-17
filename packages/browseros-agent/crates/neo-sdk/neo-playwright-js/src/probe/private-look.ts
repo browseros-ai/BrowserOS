@@ -298,7 +298,7 @@ function blocked(world: World, box: Element, keys: boolean): boolean {
 }
 
 /** An element that can take input or the focus, in a cover or as the cover itself. */
-const CONTROLS =
+export const CONTROLS =
   'input, textarea, select, button, a[href], iframe, frame, [contenteditable], [tabindex]'
 
 /**
@@ -318,7 +318,7 @@ const CONTROLS =
  *    digits do before any is typed; then only key by key (`keys`), as a host types a code.
  *    Other words cover the box.
  */
-function drawingOf(
+export function drawingOf(
   world: World,
   box: Element,
   blocker: Element,

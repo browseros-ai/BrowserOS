@@ -1,6 +1,6 @@
 // json-text.ts spells the main-world function's JSON without the page's globals; Rust's strict
-// parse reads what it writes, and it reads what the prelude's JSON.stringify wrote. Both must
-// agree with the realm's own JSON byte for byte on every value of Playwright's format.
+// parse reads what it writes, and it reads what the prelude's JSON.stringify wrote. The writer
+// replaces lone UTF-16 units for Rust; all other JSON bytes agree with the realm's own JSON.
 import { expect, it } from 'bun:test'
 import { readJson, writeJson } from '../src/main-world/json-text'
 
@@ -10,8 +10,7 @@ const TRICKY_STRINGS = [
   'quote " and backslash \\ and slash /',
   '\u0000\u0001\u0008\t\n\u000b\f\r\u001f\u007f',
   'emoji 😀 pair',
-  'lone high \ud800 and lone low \udc00, reversed \udc00\ud800',
-  'ends high \ud83d',
+  'literal \\ud800 and \\udc00',
   '   separators',
   'é ü 中文',
 ]
@@ -39,9 +38,29 @@ const VALUES: unknown[] = [
   Object.fromEntries(TRICKY_STRINGS.map((text, index) => [text, index])),
 ]
 
-it('tests that writeJson spells every value as JSON.stringify does', () => {
+it('tests that writeJson matches JSON.stringify for valid Unicode', () => {
   for (const value of VALUES)
     expect(writeJson(value)).toBe(JSON.stringify(value))
+})
+
+it('tests that writeJson replaces each unpaired UTF-16 unit for Rust', () => {
+  expect(writeJson('\ud800')).toBe('"�"')
+  expect(writeJson('\udfff')).toBe('"�"')
+  expect(writeJson('a\ud800b\udc00c')).toBe('"a�b�c"')
+  expect(writeJson('\udc00\ud800')).toBe('"��"')
+  expect(writeJson('\ud800\ud800\udc00\udc00')).toBe('"�𐀀�"')
+})
+
+it('tests that writeJson replaces lone units throughout a nested value', () => {
+  const value = {
+    '\ud800': {
+      value: 'before\udc00after',
+      items: ['\ud800', { '\udc00': '\ud800\udc00' }, '\\ud800'],
+    },
+  }
+  expect(writeJson(value)).toBe(
+    '{"�":{"value":"before�after","items":["�",{"�":"𐀀"},"\\\\ud800"]}}',
+  )
 })
 
 it('tests that writeJson writes a boxed primitive as JSON.stringify does', () => {
@@ -87,8 +106,14 @@ it('tests that readJson makes every member an own data property, __proto__ too',
 })
 
 it('tests that readJson keeps lone surrogates as JSON.parse does', () => {
-  const text = JSON.stringify('a\ud800b\udc00')
-  expect(readJson(text)).toBe(JSON.parse(text))
+  for (const value of [
+    'a\ud800b\udc00',
+    'ends high \ud83d',
+    { '\udc00\ud800': '\ud800' },
+  ]) {
+    const text = JSON.stringify(value)
+    expect(readJson(text)).toEqual(JSON.parse(text))
+  }
 })
 
 it('tests that readJson refuses text that is not JSON', () => {

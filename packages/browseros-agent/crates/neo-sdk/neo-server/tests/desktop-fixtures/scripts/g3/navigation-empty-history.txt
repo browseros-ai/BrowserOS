@@ -1,0 +1,13 @@
+const fresh = await context.newPage();
+try {
+  equal(fresh.url(), 'about:blank', 'the new tab starts blank');
+  const results = [];
+  for (const method of ['goBack', 'goForward']) {
+    const result = await fresh[method]();
+    equal(result, null, `${method} reports no history entry`);
+    const url = await fresh.evaluate(() => location.href);
+    equal(url, 'about:blank', `${method} preserves the blank document`);
+    results.push({ method, result, url });
+  }
+  return { results };
+} finally { await fresh.close(); }

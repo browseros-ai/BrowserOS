@@ -169,6 +169,23 @@ impl HostedStack {
         self.shutdown.cancel();
     }
 
+    /// Behavior fixtures finish their runs before waiting for persistence. Their watchdog
+    /// bounds test cleanup; the production close path keeps its one-second shutdown budget.
+    #[cfg(test)]
+    pub(super) async fn settle_fixture_trace(&self) -> Result<(), HostedError> {
+        if self
+            .completions
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .any(|completion| !completion.is_finished())
+        {
+            return Err(HostedError("fixture still has unfinished runs".to_owned()));
+        }
+        self.stop();
+        self.trace.flush().await.map_err(HostedError::from_error)
+    }
+
     pub(super) async fn close(&self) -> Result<(), HostedError> {
         self.stop();
         let completions = self

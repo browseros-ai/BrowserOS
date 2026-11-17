@@ -1,0 +1,12 @@
+const created = await context.newPage();
+try {
+  await created.goto(args.base + '/links.html');
+  const snapshot = await created.ariaSnapshot();
+  includes(snapshot, 'Form page', 'explicit context describes the created links page');
+  const tabId = created.tabId;
+  assert(typeof tabId === 'number', 'newPage returns a page with a dynamic tab id', tabId);
+  return { tabId, snapshot };
+} finally {
+  // Returning context does not transfer tab ownership out of this task's cleanup boundary.
+  await created.close();
+}

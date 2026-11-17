@@ -7,10 +7,13 @@
  * a field breaks loudly at the first request instead of resolving refs or emitting diagnostics
  * wrongly. Request-owned formatting scopes and arm-owned receivers retain the same engine.
  */
+
 import {
   type FrameExpectParams,
   InjectedScript,
 } from '../../../neo-playwright/third_party/playwright/packages/injected/src/injectedScript'
+import type { AriaNode } from '../../../neo-playwright/third_party/playwright/packages/isomorphic/ariaSnapshot'
+import type { AriaNodeJSON, AriaSnapshotJSON } from '../prelude/vendored'
 import type { RefMap } from './aria-ref'
 import type { ErrorClass, Pin } from './protocol'
 
@@ -168,6 +171,105 @@ export function lastSnapshotRefs(
       'the vendored InjectedScript keeps no _lastAriaSnapshotForQuery.info',
     )
   return info
+}
+
+/**
+ * Links this request's JSON to the engine walk that produced it, including nodes without refs.
+ * The vendor keeps the element under Symbol('element'); validate the complete parallel walk
+ * before callers annotate anything. Fragment roots, single-text children and depth cuts are
+ * the only structural differences in renderAriaTreeAsJSON at the pinned vendor version.
+ */
+export function lastSnapshotNodes(
+  injected: InjectedScript,
+  json: AriaSnapshotJSON,
+): {
+  nodes: Map<AriaNodeJSON, Element>
+} {
+  const snapshot: unknown = Reflect.get(injected, '_lastAriaSnapshotForQuery')
+  const root: unknown =
+    typeof snapshot === 'object' && snapshot !== null
+      ? Reflect.get(snapshot, 'root')
+      : undefined
+  const treeNode = (value: unknown): value is AriaNode =>
+    typeof value === 'object' &&
+    value !== null &&
+    typeof Reflect.get(value, 'role') === 'string' &&
+    Array.isArray(Reflect.get(value, 'children'))
+  if (!treeNode(root))
+    throw new ProbeError('internal', 'the engine keeps no snapshot root')
+  const elementOf = (node: AriaNode): Element | undefined => {
+    const symbol = Object.getOwnPropertySymbols(node).find(
+      (symbol) => symbol.description === 'element',
+    )
+    const element: unknown =
+      symbol === undefined ? undefined : Reflect.get(node, symbol)
+    if (element === undefined && node.role === 'fragment') return undefined
+    if (!(element instanceof Element))
+      throw new ProbeError(
+        'internal',
+        'the engine snapshot node has no element link',
+      )
+    return element
+  }
+  const nodes = new Map<AriaNodeJSON, Element>()
+  const roots = root.role === 'fragment' ? root.children : [root]
+  if (roots.length !== json.length)
+    throw new ProbeError(
+      'internal',
+      'the engine snapshot root and JSON disagree',
+    )
+  const pairs = roots.map((source, index) => ({
+    source,
+    rendered: json[index],
+  }))
+  while (pairs.length) {
+    const pair = pairs.pop()
+    if (!pair?.rendered)
+      throw new ProbeError(
+        'internal',
+        'the engine snapshot JSON has a missing node',
+      )
+    const { source, rendered } = pair
+    if (typeof source === 'string') {
+      if (rendered.role !== 'text' || rendered.text !== source)
+        throw new ProbeError(
+          'internal',
+          'the engine snapshot text and JSON disagree',
+        )
+      continue
+    }
+    if (source.role !== rendered.role)
+      throw new ProbeError(
+        'internal',
+        'the engine snapshot roles and JSON disagree',
+      )
+    const element = elementOf(source)
+    if (element) nodes.set(rendered, element)
+    // A lone text child becomes `text`; a depth cut has no children to link.
+    if (!rendered.children) continue
+    if (source.children.length !== rendered.children.length)
+      throw new ProbeError(
+        'internal',
+        'the engine snapshot children and JSON disagree',
+      )
+    source.children.forEach((child, index) => {
+      const childJson = rendered.children?.[index]
+      if (typeof child === 'string') {
+        if (child !== childJson)
+          throw new ProbeError(
+            'internal',
+            'the engine snapshot text child and JSON disagree',
+          )
+      } else if (typeof childJson === 'object' && childJson !== null)
+        pairs.push({ source: child, rendered: childJson })
+      else
+        throw new ProbeError(
+          'internal',
+          'the engine snapshot child and JSON disagree',
+        )
+    })
+  }
+  return { nodes }
 }
 
 /** What one of the engine's expect checks found: its own result, before `.not`. */

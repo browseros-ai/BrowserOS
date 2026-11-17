@@ -1,0 +1,4 @@
+// Earlier-run baseline for navigate-snapshot-015. The complete snapshot must be in the successful return value.
+await page.goto(args.base + '/links.html');
+const snapshot = await page.ariaSnapshot({ text: true, maxTokens: 4000 });
+return { snapshot, pageId: page.tabId, taskId: page.taskId, url: page.url() };

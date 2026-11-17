@@ -35,7 +35,7 @@ use std::{future::Future, sync::Arc, time::Duration};
 
 use browseros_core::{BrowserView, PageId};
 use futures_util::FutureExt;
-use serde_json::json;
+use serde_json::{Value, json};
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
@@ -49,6 +49,10 @@ use self::{
         FlowResult, PageError, SolveMethod, SolveOutcome, SolveReason, SolveStatus, SolveStep,
     },
 };
+
+/// How long one solve may run, from detection to its verdict. Hosts state it to their agents
+/// (neo-server's `run` description reads it from here), so it is one named number.
+pub const SOLVE_DEADLINE: Duration = Duration::from_secs(120);
 
 pub(crate) struct SolveCtx<'a, P: CaptchaPage, B: CaptchaBackend> {
     pub page: &'a P,
@@ -115,8 +119,9 @@ impl CaptchaSolver {
         &self.events
     }
 
-    /// Detects and solves the CAPTCHA on `page` within 120 s. `Err` only when the solve never
-    /// started; every started solve, cancelled or not, returns an outcome and frees the page.
+    /// Detects and solves the CAPTCHA on `page` within [`SOLVE_DEADLINE`]. `Err` only when the
+    /// solve never started; every started solve, cancelled or not, returns an outcome and frees
+    /// the page.
     pub async fn solve(
         &self,
         view: BrowserView,
@@ -125,7 +130,7 @@ impl CaptchaSolver {
         human_help: HumanHelp,
     ) -> Result<SolveOutcome, SolveRefusal> {
         let human_help_available = human_help == HumanHelp::Available;
-        let deadline = Instant::now() + Duration::from_secs(120);
+        let deadline = Instant::now() + SOLVE_DEADLINE;
         let live = LivePage::new(view, page.clone());
         let validation = tokio::select! {
             biased;
@@ -201,11 +206,20 @@ impl CaptchaSolver {
                 host = url::Url::parse(&detection.document.url)
                     .ok()
                     .and_then(|url| url.host_str().map(str::to_owned));
+                // PerimeterX's check covers the page, so a widget under it cannot be reached: it
+                // goes first, and the answer says a person must pass it.
                 let selected = detection
                     .challenges
                     .iter()
                     .find(|challenge| {
-                        challenge.kind.is_supported() && challenge.state == ChallengeState::Active
+                        challenge.kind == CaptchaKind::PerimeterX
+                            && challenge.state == ChallengeState::Active
+                    })
+                    .or_else(|| {
+                        detection.challenges.iter().find(|challenge| {
+                            challenge.kind.is_supported()
+                                && challenge.state == ChallengeState::Active
+                        })
                     })
                     .or_else(|| {
                         detection.challenges.iter().find(|challenge| {
@@ -241,7 +255,13 @@ impl CaptchaSolver {
                 }
                 if let Some(challenge) = selected {
                     lease.set_progress(Some(challenge.kind), SolveStep::Detecting);
-                    events.emit(CaptchaEventName::Detected, json!({"type":challenge.kind,"state":challenge.state,"complete":detection.complete,"challenges":detection.challenges.len()}));
+                    events.emit(
+                        CaptchaEventName::Detected,
+                        with_family(
+                            json!({"type":challenge.kind,"state":challenge.state,"complete":detection.complete,"challenges":detection.challenges.len()}),
+                            Some(challenge.kind),
+                        ),
+                    );
                     if challenge.kind.is_supported() && challenge.state == ChallengeState::Active {
                         let ctx = SolveCtx {
                             page,
@@ -267,7 +287,7 @@ impl CaptchaSolver {
                         return terminal(
                             SolveStatus::Unsupported,
                             SolveReason::UnsupportedType,
-                            "This CAPTCHA type is not supported.",
+                            unsupported_message(challenge.kind),
                         );
                     }
                 }
@@ -393,7 +413,10 @@ impl CaptchaSolver {
             ),
             SolveStatus::Failed | SolveStatus::Cancelled | SolveStatus::Unsupported => events.emit(
                 CaptchaEventName::Failed,
-                json!({"type":kind,"status":flow.status,"reason":flow.reason}),
+                with_family(
+                    json!({"type":kind,"status":flow.status,"reason":flow.reason}),
+                    kind,
+                ),
             ),
             SolveStatus::AlreadyClear => {}
         }
@@ -492,6 +515,28 @@ async fn wait_for_ready_detection<P: CaptchaPage>(
         }
     }
     Ok(detection)
+}
+
+/// The answer's first sentence for a family Neo detects and does not solve. The caller adds what
+/// to do next: ask for a person (claw-server's `request_human_help`), or stop and tell the user.
+fn unsupported_message(kind: CaptchaKind) -> &'static str {
+    match kind {
+        CaptchaKind::PerimeterX => {
+            "PerimeterX's press-and-hold human check covers the page, and only a person can pass it."
+        }
+        _ => "This CAPTCHA type is not supported.",
+    }
+}
+
+/// Event data that names the family when its wire `type` cannot: `PerimeterX`'s is `unknown` (see
+/// [`CaptchaKind::PerimeterX`]). Every other kind's data is left as it was.
+fn with_family(mut data: Value, kind: Option<CaptchaKind>) -> Value {
+    if kind == Some(CaptchaKind::PerimeterX)
+        && let Value::Object(fields) = &mut data
+    {
+        fields.insert("family".to_owned(), json!("perimeterx"));
+    }
+    data
 }
 
 fn terminal(status: SolveStatus, reason: SolveReason, message: &str) -> FlowResult {
@@ -959,6 +1004,66 @@ mod orchestration_tests {
                 .iter()
                 .all(|event| event.page == 42 && event.request_id == outcome.request_id)
         );
+        Ok(())
+    }
+
+    /// `PerimeterX`'s check covers the page: it wins over a solvable widget under it, even on an
+    /// incomplete scan, and is refused without a click or a provider call. Its wire `type` stays
+    /// `unknown` (claw-server's closed schema), so the message and the events name the family.
+    #[tokio::test]
+    async fn tests_that_perimeterx_is_refused_by_name_over_a_widget_it_covers() -> anyhow::Result<()>
+    {
+        for (human_help, next) in [
+            (true, "Call request_human_help with kind \"captcha\"."),
+            (
+                false,
+                "Stop and tell the user that this CAPTCHA needs their help.",
+            ),
+        ] {
+            let driver = FakeDriver::new(scan(
+                &[
+                    (CaptchaKind::Turnstile, ChallengeState::Active),
+                    (CaptchaKind::PerimeterX, ChallengeState::Active),
+                ],
+                false,
+            ));
+            let outcome = run(&driver, human_help).await?;
+            assert_eq!(
+                (outcome.status, outcome.reason, outcome.kind),
+                (
+                    SolveStatus::Unsupported,
+                    SolveReason::UnsupportedType,
+                    Some(CaptchaKind::PerimeterX)
+                )
+            );
+            assert_eq!(outcome.verdict(), types::Verdict::Unsolved);
+            assert_eq!(
+                outcome.message,
+                format!(
+                    "PerimeterX's press-and-hold human check covers the page, and only a person \
+                     can pass it. {next}"
+                )
+            );
+            assert_eq!(
+                (outcome.attempts, outcome.paid_tasks),
+                (Attempts::default(), 0)
+            );
+            let wire = serde_json::to_value(&outcome)?;
+            assert_eq!(wire.get("type"), Some(&json!("unknown")));
+            assert_eq!(
+                outcome
+                    .events
+                    .iter()
+                    .map(|event| event.data.clone())
+                    .collect::<Vec<_>>(),
+                [
+                    json!({"type":"unknown","state":"active","complete":false,"challenges":2,
+                           "family":"perimeterx"}),
+                    json!({"type":"unknown","status":"unsupported","reason":"unsupported_type",
+                           "family":"perimeterx"}),
+                ]
+            );
+        }
         Ok(())
     }
 

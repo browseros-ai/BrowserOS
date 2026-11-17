@@ -665,6 +665,7 @@ impl Writer {
                     at: event.at,
                     request_id: event.request_id.as_ref(),
                     tabs_scope: Some(event.tabs_scope),
+                    access: event.access,
                 })
                 .await?;
                 self.runs.insert(
@@ -708,6 +709,7 @@ impl Writer {
                 at: event.at,
                 request_id: None,
                 tabs_scope: None,
+                access: None,
             })
             .await?;
         }
@@ -792,6 +794,13 @@ impl Writer {
             } else {
                 String::new()
             };
+            // A covered error's cover holds page text (its name, its controls' names): stored
+            // only with values on, and clipped as the message is.
+            error.cover = error
+                .cover
+                .take()
+                .filter(|_| keep)
+                .map(|cover| redactor.texts(&cover));
             error
         });
         let page = event.page_after.map(|mut page| {
@@ -907,6 +916,13 @@ impl Writer {
             } else {
                 String::new()
             };
+            // A covered error's cover holds page text (its name, its controls' names): stored
+            // only with values on, and clipped as the message is.
+            error.cover = error
+                .cover
+                .take()
+                .filter(|_| keep)
+                .map(|cover| redactor.texts(&cover));
             error
         });
         let bounded = match open.as_ref().filter(|_| keep) {
@@ -1133,6 +1149,7 @@ mod tests {
                 task_id: None,
                 host_data: None,
                 tabs_scope: RunTabsScope::Browser,
+                access: None,
                 at: EpochMillis::from_millis(started),
             });
             sink.op_started(OperationStarted {
@@ -1189,6 +1206,7 @@ mod tests {
                 task_id: None,
                 host_data: None,
                 tabs_scope: RunTabsScope::Browser,
+                access: None,
                 at: EpochMillis::from_millis(started),
             });
             sink.run_ended(RunEnded {
@@ -1250,6 +1268,7 @@ mod tests {
             task_id: None,
             host_data: None,
             tabs_scope: RunTabsScope::Browser,
+            access: None,
             at: EpochMillis::from_millis(1),
         });
         assert!(sink.flush().await.is_ok());
@@ -1333,6 +1352,7 @@ mod tests {
             task_id: None,
             host_data: None,
             tabs_scope: RunTabsScope::Browser,
+            access: None,
             at: EpochMillis::from_millis(1),
         });
         let (first, second) = (OperationId::new(run, 1), OperationId::new(run, 2));
@@ -1462,6 +1482,7 @@ mod tests {
             task_id: None,
             host_data: None,
             tabs_scope: RunTabsScope::Browser,
+            access: None,
             at: EpochMillis::from_millis(1),
         });
         let first = sink.flush().await;

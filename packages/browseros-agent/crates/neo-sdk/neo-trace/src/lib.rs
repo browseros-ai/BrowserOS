@@ -57,7 +57,7 @@ mod trace_writer;
 
 pub use blob_id::{BlobId, NotABlobId};
 pub use epoch_millis::EpochMillis;
-pub use error_record::{ErrorOwner, ErrorRecord};
+pub use error_record::{DiagnosticCode, ErrorOwner, ErrorRecord};
 pub use ids::{IdError, OperationId, RequestId, RunId, TaskId};
 pub use operation_record::{
     Delivery, Effect, OperationEnded, OperationKind, OperationReached, OperationSite,
@@ -71,7 +71,7 @@ pub use record_policy::{RecordPolicy, Screenshots, Values};
 pub use redactor::{Bounded, RedactionLimits, Redactor, Truncation};
 pub use run_download::{DownloadStatus, RunDownload};
 pub use run_outputs::{KeptFile, RunOutputs};
-pub use run_record::{RunEffects, RunEnded, RunStarted, RunStatus, RunTabsScope};
+pub use run_record::{RunAccess, RunEffects, RunEnded, RunStarted, RunStatus, RunTabsScope};
 pub use salvage::{Loss, Recovery, Salvage};
 pub use screenshot_queue::{Shot, ShotAnswer, ShotJob, ShotJobs, ShotQueue, screenshot_queue};
 pub use trace_error::TraceError;

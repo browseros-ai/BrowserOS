@@ -2,8 +2,8 @@
 
 use std::fmt;
 
-use neo_trace::{IdError, RequestId, TaskId};
-use serde::Deserialize;
+use neo_trace::{IdError, RequestId, RunAccess, TaskId};
+use serde::{Deserialize, Deserializer};
 use serde_json::Value;
 
 use crate::config::Defaults;
@@ -23,6 +23,8 @@ pub(crate) struct RunMeta {
     pub(crate) task_id: Option<TaskId>,
     /// Stored with the run; Neo never reads it.
     pub(crate) host_data: Option<HostData>,
+    /// The host's restriction on this run's operations, independent of task reach.
+    pub(crate) access: Option<RunAccess>,
 }
 
 /// The host's own JSON, at most `Defaults::HOST_DATA_MAX_BYTES` serialized. The trace writer
@@ -41,6 +43,16 @@ struct WireMeta {
     task_id: Option<String>,
     #[serde(default)]
     host_data: Option<Value>,
+    #[serde(default, deserialize_with = "present_access")]
+    access: Option<RunAccess>,
+}
+
+// Only a missing key means ordinary access. Deserializing Option directly would also accept
+// explicit null, silently dropping a host's requested restriction instead of refusing it.
+fn present_access<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<RunAccess>, D::Error> {
+    RunAccess::deserialize(deserializer).map(Some)
 }
 
 impl RunMeta {
@@ -71,6 +83,7 @@ impl RunMeta {
             request_id,
             task_id,
             host_data,
+            access: wire.access,
         })
     }
 }
@@ -109,7 +122,8 @@ fn invalid(message: impl fmt::Display) -> OperationError {
 mod tests {
     use std::error::Error;
 
-    use neo_trace::{ErrorOwner, RequestId, TaskId};
+    use neo_trace::{ErrorOwner, RequestId, RunAccess, TaskId};
+    use serde::Deserialize;
     use serde_json::{Value, json};
 
     use super::RunMeta;
@@ -169,6 +183,61 @@ mod tests {
             "refused rather than stored cut: {big}"
         );
         refused(&json!("call_81f"))?;
+        Ok(())
+    }
+
+    #[test]
+    fn access_is_absent_or_exactly_read_never_null() -> Result<(), Box<dyn Error>> {
+        assert_eq!(RunMeta::parse(None)?.access, None);
+        assert_eq!(
+            RunMeta::parse(Some(&json!({ "access": "read" })))?.access,
+            Some(RunAccess::Read)
+        );
+        for access in [
+            Value::Null,
+            json!(false),
+            json!(0),
+            json!({}),
+            json!([]),
+            json!("all"),
+            json!("write"),
+            json!("Read"),
+            json!("read "),
+        ] {
+            let message = refused(&json!({ "access": access }))?;
+            assert!(
+                message.contains(".access"),
+                "the host sees the field: {message}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn an_older_metadata_parser_refuses_access_instead_of_ignoring_it() -> Result<(), Box<dyn Error>>
+    {
+        // The old server has exactly these keys and the same unknown-field refusal. This is
+        // the compatibility fence: a host cannot unknowingly get unrestricted execution.
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields, rename_all = "camelCase")]
+        struct OlderMeta {
+            request_id: Option<String>,
+            task_id: Option<String>,
+            host_data: Option<Value>,
+        }
+        let ordinary: OlderMeta = serde_json::from_value(json!({}))?;
+        assert!(
+            ordinary.request_id.is_none()
+                && ordinary.task_id.is_none()
+                && ordinary.host_data.is_none()
+        );
+        let error = serde_json::from_value::<OlderMeta>(json!({ "access": "read" }))
+            .err()
+            .ok_or("the older parser must refuse the unknown key")?;
+        assert!(
+            error.to_string().contains("unknown field `access`"),
+            "{error}"
+        );
         Ok(())
     }
 }

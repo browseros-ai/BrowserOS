@@ -1,0 +1,4 @@
+await page.goto(args.base + '/links.html');
+const text = await page.locator('body').innerText();
+includes(text, 'Section one', 'plain text read includes the first section');
+return {text};

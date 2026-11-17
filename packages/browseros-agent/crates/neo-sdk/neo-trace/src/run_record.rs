@@ -114,6 +114,34 @@ impl RunTabsScope {
     }
 }
 
+/// A host's restriction on one run, independent of the writes its operations actually sent.
+/// Absence preserves ordinary execution; the same value survives trace storage and replay.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RunAccess {
+    /// Reads and the explicitly permitted page lifecycle operations only.
+    Read,
+}
+
+impl RunAccess {
+    /// The stored and wire name.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Read => "read",
+        }
+    }
+
+    /// Reads a stored or wire name; absence is represented by `Option`, never another name.
+    #[must_use]
+    pub fn parse(name: &str) -> Option<Self> {
+        match name {
+            "read" => Some(Self::Read),
+            _ => None,
+        }
+    }
+}
+
 /// A run was admitted.
 #[derive(Clone, Debug)]
 pub struct RunStarted {
@@ -132,6 +160,8 @@ pub struct RunStarted {
     pub host_data: Option<Value>,
     /// Which tabs it saw. A refused run records what it would have seen.
     pub tabs_scope: RunTabsScope,
+    /// The host's restriction, if supplied; ordinary runs keep this absent.
+    pub access: Option<RunAccess>,
     /// When it was admitted.
     pub at: EpochMillis,
 }

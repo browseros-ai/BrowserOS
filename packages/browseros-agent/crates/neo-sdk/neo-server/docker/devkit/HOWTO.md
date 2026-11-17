@@ -92,7 +92,7 @@ For a field printed without a ref, call `const ref = await field.ref()` on its r
   - button "Frame action" [ref=f1e3]
 ```
 
-On a bigger page its first line says how much text it left out. `{ text: true }` always includes the text and `{ text: false }` never does; `{ urls: true }` prints each link's url; `{ maxTokens: 20000 }` raises the 8,000-token cap. `page.getByRef('e5').ariaSnapshot()` reads one section. `{ mode: 'default' }` uses Playwright's own default YAML with the private field values masked as described below.
+On a bigger page a line at its top says how much text it left out. `{ text: true }` always includes the text and `{ text: false }` never does; `{ urls: true }` prints each link's url; `{ maxTokens: 20000 }` raises the 8,000-token cap. `page.getByRef('e5').ariaSnapshot()` reads one section. `{ mode: 'default' }` uses Playwright's own default YAML with the private field values masked as described below.
 
 Snapshots mask an `input` or `textarea` value when the page declares `type="password"` or includes a whole `autocomplete` token of `current-password`, `new-password`, `cc-number`, `cc-csc` or `one-time-code`. Tokens ignore case and may appear alongside other whitespace-separated tokens. A nonempty private value prints one `•` (U+2022) per UTF-16 unit; an empty value stays empty. For example, `Pw🔒` prints `••••`. Masking happens before each frame's tree leaves Neo's isolated world, including cross-origin frames and open or already exposed closed shadow roots, so text with or without page text, full/default modes, JSON, deltas, stored delta baselines and snapshot operation results in the trace all receive masked values. The spec harness's conformance switch preserves upstream output.
 
@@ -116,7 +116,7 @@ Expiry fields (`cc-exp`, `cc-exp-month`, `cc-exp-year`), holder names (`cc-name`
 
 `page.getByRef('e12').ariaSnapshot({ mode: 'full' })` prints everything in one section as Playwright prints its `'ai'` snapshot: every element the engine keeps, all the text, each link's `/url`, and a ref on each visible element, including the ones the default list leaves without a ref (a plain `div` you want to hover). It carries Neo's clickable marks, so it prints every ref the default list prints. It obeys `maxTokens` (8,000 by default) with the same cut line, which offers a section in `{ mode: 'full' }`. A whole page that way is several times larger than the default list, and `text`, `urls` and `delta` are ignored.
 
-What sits inside a closed shadow root (a Cloudflare Turnstile widget, a closed web component) prints and is acted on like any other element once a snapshot has read its page: `page.ariaSnapshot()` and `{ mode: 'full' }` find each closed root, and from then on every snapshot, locator and action in that document sees inside it. A locator used before any such snapshot of the document does not, so take a snapshot first. The page's own scripts still see the root as closed. Neo's camera reads closed roots too, to keep a private box out of its pictures, but what it finds stays its own: no snapshot, locator or action sees more for it.
+What sits inside a closed shadow root (a Cloudflare Turnstile widget, a closed web component) prints and is acted on like any other element once a snapshot has read its page: `page.ariaSnapshot()` and `{ mode: 'full' }` find each closed root, and from then on every snapshot, locator and action in that document sees inside it. A locator used before any such snapshot of the document does not, so take a snapshot first. The page's own scripts still see the root as closed. Neo's camera does not inspect closed roots for private values. Pictures follow the host's `fill.pictures` setting.
 
 `page.ariaSnapshot({ delta: true })` returns only what changed since the last whole-page snapshot of the tab that a run gave you: one whose run ended ok with the snapshot (or its delta) inside a string it returned or a line it logged. A snapshot your script only inspected, or one from a run that failed, does not count, and neither does one taken earlier in the same run, or one whose page arrived after the call's timeout had passed (the call still returns it). Its first line says which case it is: `# whole page: no earlier snapshot of this page` (then the whole text), `# no change since your last snapshot of this tab`, `# whole page: too much differs from your last snapshot to list as changes` (then the whole text), `# whole page: no time was left to look for an earlier snapshot of this page` (then the whole text: the call's timeout passed before it could compare), or `# changes since your last snapshot of this tab: 1 added, 1 removed`, then the changes with three lines of context, each block headed by the section it is in:
 
@@ -129,7 +129,13 @@ What sits inside a closed shadow root (a Cloudflare Turnstile widget, a closed w
    - link "Checkout" [ref=e17]
 ```
 
+When a layer is on top, its `# on top:` lines follow that first status line; a layer that is gone gets `# no longer on top: ...` there.
+
 A new document in the tab (a navigation, a reload) starts over. A locator's snapshot, `{ mode: 'default' }` and `{ mode: 'full' }` ignore `delta` and never become the baseline. When a run takes a whole-page snapshot of a page you were already given, its reply ends with a one-line tip saying so, at most three times per task.
+
+`page.ariaSnapshot()` leaves out what the browser has made inert, such as the page behind a modal dialog. When it leaves anything out, a line at its top, `# not listed: ...`, reports how many lines were left out; `{ inert: true }` lists them. A host that parses or slices snapshot text must expect these explanatory lines.
+
+A `# on top: ...` line names a layer taking the pointer from controls, followed by up to four of its own controls. These lines survive every token cap; a whole-view layer's content prints before the rest of the default snapshot.
 
 ```sh
 ./dev.sh run --task howto-aria -f devkit/examples/aria-ref.js

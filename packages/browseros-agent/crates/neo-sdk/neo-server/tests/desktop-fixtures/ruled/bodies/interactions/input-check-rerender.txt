@@ -1,0 +1,19 @@
+await page.goto(args.base + '/sdk-input.html');
+const ref = await refFor(page, 'Re-rendered checkbox');
+const original = page.getByRef(ref);
+// check verifies the same pin after its click. The handler replaces that node,
+// so delivered detachment is required even though the replacement is checked.
+const failure = await rejected(() => original.check({timeout: 8000}), /^locator\.check:.*(?:not attached|not on the page)/s);
+equal({owner: failure.owner, code: failure.code, delivery: failure.delivery},
+  {owner: 'website', code: 'element_detached', delivery: 'done'},
+  'check reports detachment after its one delivered click');
+const state = await page.evaluate(() => ({
+  checked: document.querySelector('.rerendered').checked,
+  replacements: document.querySelectorAll('.rerendered').length,
+}));
+equal(state, {checked: true, replacements: 1}, 'the replacement retains the delivered checked state');
+const staleRead = await rejected(() => original.inputValue({timeout: 2500}), /detached|not on the page|no longer|stale/i);
+equal({owner: staleRead.owner, code: staleRead.code, delivery: staleRead.delivery},
+  {owner: 'website', code: 'element_detached', delivery: 'not_sent'},
+  'the original checkbox ref remains detached');
+return {ref, failure, staleRead, ...state};

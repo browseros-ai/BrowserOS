@@ -147,32 +147,12 @@ pub(crate) fn pages() -> HashMap<String, Page> {
         ("maxlength", include_str!("../data/private/maxlength.html")),
         ("compare", include_str!("../data/private/compare.html")),
         (
-            "huge-staggered",
-            include_str!("../data/private/huge-staggered.html"),
-        ),
-        (
-            "closed-frame",
-            include_str!("../data/private/closed-frame.html"),
-        ),
-        (
             "card-limits",
             include_str!("../data/private/card-limits.html"),
         ),
         (
             "frames-gone",
             include_str!("../data/private/frames-gone.html"),
-        ),
-        (
-            "closed-plain",
-            include_str!("../data/private/closed-plain.html"),
-        ),
-        (
-            "closed-nested",
-            include_str!("../data/private/closed-nested.html"),
-        ),
-        (
-            "closed-many",
-            include_str!("../data/private/closed-many.html"),
         ),
         (
             "pin-mirror",
@@ -248,20 +228,6 @@ pub(crate) fn pages() -> HashMap<String, Page> {
         ("swap", include_str!("../data/private/swap.html")),
         ("labelled", include_str!("../data/private/labelled.html")),
         ("moved-box", include_str!("../data/private/moved-box.html")),
-        (
-            "closed-card",
-            include_str!("../data/private/closed-card.html"),
-        ),
-        (
-            "ten-frames",
-            include_str!("../data/private/ten-frames.html"),
-        ),
-        (
-            "checkout-ads",
-            include_str!("../data/private/checkout-ads.html"),
-        ),
-        ("ad", include_str!("../data/private/ad.html")),
-        ("stall", include_str!("../data/private/stall.html")),
         ("stale", include_str!("../data/private/stale.html")),
         ("stray", include_str!("../data/private/stray.html")),
     ]

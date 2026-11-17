@@ -256,3 +256,35 @@ it("tests that a box the entry typed into prints bullets in the page's snapshot,
     )
   }
 })
+
+it('tests that a snapshot returns when the cover survey throws', () => {
+  const probe = booted()
+  showFixture(probe)
+  const request = { op: 'snapshot', root: 'document', mode: 'ai' }
+  const plain = probe.call(request)
+  const saved = ['innerWidth', 'innerHeight'].map(
+    (name) =>
+      [name, Object.getOwnPropertyDescriptor(globalThis, name)] as const,
+  )
+  let failed = false
+  Reflect.set(probe.document, 'elementsFromPoint', () => {
+    failed = true
+    throw new Error('unforeseen survey shape')
+  })
+  try {
+    Reflect.set(globalThis, 'innerWidth', 1280)
+    Reflect.set(globalThis, 'innerHeight', 800)
+    const read = probe.call({ ...request, surveyCovers: true })
+    expect(failed).toBe(true)
+    expect(read).toMatchObject({ kind: 'snapshot', onTopSkipped: true })
+    expect(read).not.toHaveProperty('onTop')
+    expect(Reflect.get(Object(read), 'json')).toEqual(
+      Reflect.get(Object(plain), 'json'),
+    )
+  } finally {
+    for (const [name, descriptor] of saved) {
+      if (descriptor) Object.defineProperty(globalThis, name, descriptor)
+      else Reflect.deleteProperty(globalThis, name)
+    }
+  }
+})

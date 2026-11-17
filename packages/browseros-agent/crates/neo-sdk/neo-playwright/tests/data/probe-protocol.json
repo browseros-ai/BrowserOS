@@ -1,5 +1,5 @@
 {
-  "protocol": 44,
+  "protocol": 50,
   "callFunction": "function (call, root, ...nodes) { const probe = globalThis.__neoProbe; return probe ? probe.call(call, root ?? this, nodes) : { kind: \"uninstalled\" }; }",
   "replyKinds": {
     "describe": [
@@ -37,6 +37,12 @@
       "none",
       "strict"
     ],
+    "cover": [
+      "cover",
+      "detached",
+      "none",
+      "strict"
+    ],
     "edit": [
       "value",
       "detached",
@@ -49,9 +55,6 @@
     "private": [
       "value",
       "detached"
-    ],
-    "privateShown": [
-      "value"
     ],
     "read": [
       "read",
@@ -107,8 +110,7 @@
     ]
   },
   "byHandle": [
-    "pinned",
-    "privateHosts"
+    "pinned"
   ],
   "anyRequest": [
     "error",
@@ -119,7 +121,8 @@
       "request": {
         "op": "snapshot",
         "root": "document",
-        "mode": "ai"
+        "mode": "ai",
+        "markInert": true
       },
       "policy": {
         "conformance": false,
@@ -194,17 +197,6 @@
     },
     {
       "op": "screenshotMaskCleanup"
-    },
-    {
-      "op": "privateShown"
-    },
-    {
-      "op": "privateShown",
-      "walk": true
-    },
-    {
-      "op": "privateHosts",
-      "limit": 16
     },
     {
       "op": "webStorage",
@@ -425,6 +417,18 @@
         "y": 12
       },
       "look": true
+    },
+    {
+      "op": "cover",
+      "target": {
+        "pin": 3
+      },
+      "point": {
+        "x": 40.5,
+        "y": 12
+      },
+      "cover": 7,
+      "above": false
     },
     {
       "op": "edit",
@@ -1080,7 +1084,8 @@
     {
       "op": "snapshot",
       "root": "document",
-      "mode": "ai"
+      "mode": "ai",
+      "markInert": true
     },
     {
       "op": "snapshot",
@@ -1130,7 +1135,8 @@
     {
       "op": "snapshot",
       "root": "document",
-      "mode": "ai"
+      "mode": "ai",
+      "surveyCovers": true
     },
     {
       "op": "snapshot",
@@ -1289,19 +1295,19 @@
   "replies": [
     {
       "kind": "described",
-      "protocol": 44,
+      "protocol": 50,
       "seq": 0,
       "url": "https://example.com/"
     },
     {
       "kind": "described",
-      "protocol": 44,
+      "protocol": 50,
       "seq": 347,
       "url": "https://pay.example/frame"
     },
     {
       "kind": "described",
-      "protocol": 44,
+      "protocol": 50,
       "seq": 512340,
       "url": "https://example.com/",
       "retired": 0
@@ -1406,6 +1412,21 @@
     },
     {
       "kind": "covered",
+      "by": "<div id=\"consent\">…</div> intercepts pointer events",
+      "cover": {
+        "id": 7,
+        "rect": {
+          "x": 8,
+          "y": 8,
+          "width": 60,
+          "height": 20
+        },
+        "opacity": 1,
+        "busy": false
+      }
+    },
+    {
+      "kind": "covered",
       "by": "<div id=\"consent\">…</div> intercepts pointer events"
     },
     {
@@ -1461,6 +1482,112 @@
         "hitTargetDescription": "<html></html>"
       },
       "unseen": true
+    },
+    {
+      "kind": "frameBox",
+      "origin": {
+        "x": 8,
+        "y": 120
+      },
+      "hit": {
+        "hitTargetDescription": "<div class=\"scrim\"></div>"
+      },
+      "unseen": false,
+      "cover": {
+        "id": 2,
+        "rect": {
+          "x": 8,
+          "y": 8,
+          "width": 60,
+          "height": 20
+        },
+        "opacity": 0.5,
+        "busy": true
+      }
+    },
+    {
+      "kind": "cover",
+      "facts": null
+    },
+    {
+      "kind": "cover",
+      "facts": {
+        "layer": 5,
+        "ref": "e7",
+        "role": "dialog",
+        "name": "Sign in",
+        "markup": "<div role=\"dialog\" class=\"modal\">…</div>",
+        "snapshot": {
+          "role": "dialog",
+          "name": "Sign in",
+          "ref": "e7",
+          "children": []
+        },
+        "controls": [
+          {
+            "role": "button",
+            "name": "Close",
+            "ref": "e9"
+          }
+        ],
+        "blank": false,
+        "behind": false,
+        "closed": false,
+        "notice": false,
+        "kind": {
+          "is": "page"
+        }
+      }
+    },
+    {
+      "kind": "cover",
+      "facts": {
+        "layer": 5,
+        "ref": "n4",
+        "role": "textbox",
+        "name": "",
+        "markup": "<div role=\"textbox\" id=\"modal-wrapper\">…</div>",
+        "snapshot": {
+          "role": "textbox"
+        },
+        "text": "Resale prices often exceed face value.",
+        "controls": [],
+        "blank": false,
+        "behind": false,
+        "closed": false,
+        "notice": false,
+        "kind": {
+          "is": "partial",
+          "position": {
+            "x": 12,
+            "y": 8
+          }
+        }
+      }
+    },
+    {
+      "kind": "cover",
+      "facts": {
+        "layer": 5,
+        "ref": "e12",
+        "role": "generic",
+        "name": "",
+        "markup": "<label for=\"terms\">…</label>",
+        "snapshot": null,
+        "controls": [],
+        "blank": false,
+        "behind": false,
+        "closed": false,
+        "notice": false,
+        "kind": {
+          "is": "label",
+          "links": 2,
+          "position": {
+            "x": 4,
+            "y": 9
+          }
+        }
+      }
     },
     {
       "kind": "value",
@@ -1755,6 +1882,53 @@
     },
     {
       "kind": "snapshot",
+      "json": [
+        {
+          "role": "dialog",
+          "name": "Read first",
+          "ref": "e9",
+          "onTop": "e9",
+          "children": [
+            {
+              "role": "button",
+              "name": "Close",
+              "ref": "e10"
+            }
+          ]
+        }
+      ],
+      "iframes": [],
+      "onTop": [
+        {
+          "role": "dialog",
+          "name": "Read first",
+          "ref": "e9",
+          "blank": false,
+          "loading": false,
+          "wholeView": true,
+          "controls": [
+            {
+              "role": "button",
+              "name": "Close",
+              "ref": "e10"
+            }
+          ]
+        }
+      ],
+      "surveyTested": 3,
+      "surveyMs": 1,
+      "surveyPhases": {
+        "hits": 1,
+        "count": 0,
+        "naming": 1,
+        "linking": 1,
+        "marks": 0.1,
+        "stopped": false
+      }
+    },
+    {
+      "kind": "snapshot",
+      "inertMarkingMs": 0.125,
       "json": [
         {
           "role": "heading",

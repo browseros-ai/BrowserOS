@@ -26,7 +26,7 @@ use neo_playwright::{
     Answer, ErrorCode as PlaywrightCode, FileAccess, Op, OpEnv, OpTarget, PlaywrightError, Refusal,
     RunState, TimedOut,
 };
-use neo_trace::ErrorOwner;
+use neo_trace::{DiagnosticCode, ErrorOwner};
 use serde::{Deserialize, Deserializer};
 use serde_json::{Map, Value, json};
 
@@ -39,93 +39,50 @@ use crate::dispatch::{
     RegistryBuilder, RegistryError, RunCtx,
 };
 use crate::host::AgentFront;
+use crate::url_scheme;
 
 /// neo-playwright's prelude, which the agent realm evaluates after its bootstrap: the
 /// `page`, `context`, `browser` and `expect` parameters of the agent's function, over these ops.
 /// Here so that `runtime/`, which never names a browser crate (STYLE.md P2), can install it.
 pub(crate) const PLAYWRIGHT_PRELUDE: &str = neo_playwright::PRELUDE_JS;
 
-/// The `run` description's one line for every served Playwright op: the families a model reaches
-/// for, what the prelude refuses, and then each op [`OpMarks`] holds and why ([`op_marks::held_clause`]),
+/// The `run` description's one item for every served Playwright op: the families, where Neo
+/// differs as a sublist, and last each op [`OpMarks`] holds and why ([`op_marks::held_clause`]),
 /// so a model does not spend a call finding out. Built once, when the first op registers; a
 /// `static`, so `Listing::Grouped` gets the `&'static str` it takes without a leak.
 static PLAYWRIGHT_LINE: LazyLock<String> = LazyLock::new(|| {
     let mut line = PLAYWRIGHT_API.to_owned();
     if let Some(held) = op_marks::held_clause(Op::all().map(Op::spec)) {
-        line.push(' ');
+        line.push_str("\n  - ");
         line.push_str(&held);
     }
     line
 });
 
-/// What [`PLAYWRIGHT_LINE`] says whatever is held: what Playwright 1.64.1 does, and then each way
-/// Neo's differs that a script would trip on. The main-world scripts' and `setContent`'s
-/// differences are the crate's (tier 1 `deviations.yaml`), but for the result depth, which the
-/// realm's stack bounds (`Defaults::JS_STACK_BYTES`, measured on BrowserOS in a debug build).
-const PLAYWRIGHT_API: &str = "Playwright's API on `page`, `context` and `browser`, as \
-    Playwright 1.64.1 behaves where this does not say otherwise: locators (`getByRole`, `getByText`, `getByLabel`, `getByTestId`, `locator`, \
-    `frameLocator`, `filter`, `nth`) that wait and are strict, frames (`page.frames()`, \
-    `frame.locator`), reads (`textContent`, `innerText`, `getAttribute`, `inputValue`, \
-    `count`, `isVisible`, `page.content()`, `page.title()`), actions that wait until the \
-    element is actionable (`click`, `dblclick`, `hover`, `fill`, `clear`, `press`, \
-    `pressSequentially`, `check`, `uncheck`, `setChecked`, `selectOption`, `selectText`, \
-    `focus`, `blur`, `dragTo`, `drop`, `dispatchEvent`, `scrollIntoViewIfNeeded`; no `tap`), \
-    `page.keyboard` (`press`, `type`, `insertText`, `down`, `up`), `page.mouse` (`move`, \
-    `down`, `up`, `click`, `dblclick`, `wheel`), navigation (`goto`, `reload`, `goBack`, \
-    `goForward`, `waitForURL`, `waitForLoadState`, `waitForNavigation`), scripts in the page's \
-    main world (`page.evaluate`, \
-    `page.waitForFunction`, `locator.evaluate`, `locator.evaluateAll`, \
-    `locator.waitForFunction`, `elementHandle.evaluate`, \
-    and `$eval` (`evalOnSelector`) and `$$eval` on a page, frame or element handle; a `frame` \
-    form runs in its \
-    frame, a child frame too) with Playwright's values, arguments, element handles and errors, \
-    `page.requestGC` (its main renderer's garbage collection), \
-    `page.emulateMedia` (per page across runs and navigations), `page.setViewportSize` (the \
-    tab keeps the size in later runs, until it closes), \
-    `page.addScriptTag` and `page.addStyleTag` (also on frames), returning element handles, \
-    `page.setContent` and `frame.setContent`, whose HTML's scripts run there too, init scripts \
-    (`page.addInitScript`, `context.addInitScript`) that every new document runs in its main \
-    world, bindings the page calls back into the script with (`exposeBinding`, \
-    `exposeFunction`, on a page or the context, and the `exposeFunctions` option of \
-    `addInitScript` and of `evaluate`; the prelude answers each call with \
-    `bindingCall.resolve`), \
-    `screenshot` and `pdf`, events (`page.on`, `waitForEvent`), downloads \
-    (`download.path()` waits for the file and returns where the browser saved it, which a later \
-    run can upload with `setInputFiles`; `saveAs(path)` copies it; `failure()`), and `expect`: \
-    retrying locator matchers (`toBeVisible`, `toBeChecked`, `toHaveText`, `toContainText`, \
-    `toHaveValue`, `toHaveCount`, `toHaveAttribute`, ...), page matchers (`toHaveTitle`, \
-    `toHaveURL`) and `toMatchAriaSnapshot` on either with the template as a YAML string, \
-    with `.not`, value matchers (`toBe`, `toEqual`, ...), `expect.poll` and `toPass`; soft \
-    assertions, `toBeOK`, screenshot comparisons and snapshot files are not available. In \
-    hosted BrowserOS, by design, a script receives no console messages, no page errors and \
-    no browser log entries: console and pageerror listeners are accepted but stay silent, \
-    and `page.waitForEvent` for either fails immediately with `neo/unsupported`; exposed \
-    bindings work. A call that waits gives up after 5 s unless given a `timeout`, \
-    and a navigation after 30 s. Unlike Playwright, `waitForFunction` \
-    polls every 100 ms for its default `polling: 'raf'`, since animation frames never fire in \
-    Neo's background tabs, and the handle it resolves to holds a snapshot of the value, which \
-    `jsonValue()` reads; `setContent` refuses `waitUntil: 'networkidle'`, which Neo cannot \
-    observe after a write, with nothing sent; and a result nested more than about 50 objects \
-    deep can fail `Maximum call stack size exceeded`, where Playwright allows 98. `goto` opens \
-    `http`, `https`, `data`, `about` and `javascript` URLs; Chromium executes a \
-    `javascript:` URL before reporting `net::ERR_ABORTED`. `reload` opens only `http`, `https`, \
-    `data` and `about` URLs. A script cannot open `file:` pages: `goto` refuses a `file:` URL, \
-    `goBack` and `goForward` a `file:` history entry, and every call on a tab that shows a \
-    `file:` page (one the owner opened) is refused, with nothing sent; a call whose tab moves \
-    onto one while it runs gets no answer from it. Write a local page with `page.setContent` \
-    instead. Path reads (`setInputFiles`, `drop`, script/style tags and init scripts) must \
-    be inside the host's `files.readDirs`, the downloads folder by default. Neo's own files \
-    are always protected from reads and writes. Use `download.path()` for downloaded files \
-    or ask the host to allow a staging folder. A relative path uses Neo's working directory. \
-    `{ name, mimeType, buffer }` payloads need no allowed folder and total under 10 MiB a \
-    call. A directory upload needs its tab in front, and the tabs Neo opens for an agent stay \
-    in the background (`bringToFront` is refused). An init script or a binding stays \
-    registered until the run ends, then its tab no longer has it; a context's reaches each tab \
-    before the run's first write to it, so a popup's first document and cross-site iframes run \
-    without it. A page's call of a binding reaches the script through the event pump, so a \
-    call the page does not await (from an event handler) may run after the op that caused it \
-    returned. A function `evaluate` passes stays exposed until the run ends; `evaluateHandle` \
-    has no `exposeFunctions`.";
+/// What [`PLAYWRIGHT_LINE`] says whatever is held. A model knows Playwright, so the line names
+/// the families and leaves the methods to it: every member Neo lacks fails `method_unavailable`
+/// with what to use instead (the prelude's `unsupported.ts`). It keeps a clause only for a
+/// difference a script would meet without being told: one that goes wrong silently (a context's
+/// init script missing from a popup's first document, a binding call answered after its op,
+/// media and viewport left on the tab) or fails with an error that names no fix (a result too
+/// deep for the realm's stack, `Defaults::JS_STACK_BYTES`; a `javascript:` URL that ran before
+/// it failed; a directory upload on a background tab). The rest is in neo-server's README and
+/// `agent.d.ts`. The main-world scripts are each named: a test requires it of every op that
+/// reaches past the isolated world. The hosted console's silence is the owner's decision
+/// (#3518), so the line says it is by design.
+const PLAYWRIGHT_API: &str = r"Playwright 1.64's API on `page`, `context` and `browser`: locators, actions, reads, navigation, frames, `keyboard`, `mouse`, `screenshot`, `pdf`, events, downloads and `expect`.
+  A method Neo lacks fails `method_unavailable` and names what to use instead.
+  Where Neo differs:
+  - Scripts run in the page's main world as in Playwright: `evaluate`, `evaluateAll`, `$eval` (`evalOnSelector`), `waitForFunction`, `setContent`, `addScriptTag` and `addStyleTag`.
+    A result nested more than about 50 objects deep fails `Maximum call stack size exceeded`.
+  - `addInitScript` and `exposeBinding` (answered through `bindingCall.resolve`) last until the run ends.
+    A context's reaches each tab at the run's first write to it, so not a popup's first document or a cross-site iframe.
+    A call the page does not await may run after the op that caused it returned.
+  - `emulateMedia` and `setViewportSize` stay on the tab in later runs.
+  - `goto('javascript:…')` runs the script, then fails `net::ERR_ABORTED`.
+  - `setInputFiles` and `drop` read files only inside the host's `files.readDirs` (the downloads folder by default); a `{ name, mimeType, buffer }` payload needs none.
+    A directory upload needs its tab in front, which the tabs Neo opens for a script never are.
+  - By design, hosted BrowserOS gives a script no console messages and no page errors: `console` and `pageerror` listeners stay silent.";
 
 /// At a run's end, after its ops drained: removes the init scripts its ops registered from every
 /// tab, awaiting each removal (neo-playwright's `RunState::remove_init_scripts`). The run service
@@ -360,12 +317,7 @@ impl OpInput {
     /// the entry it opens ([`refused_page`]).
     fn refused_navigation(&self) -> Option<OperationError> {
         let url = self.json.get("url")?.as_str()?;
-        // The engine's completeUserURL supplies http:// for bare local addresses.
-        // Validate that completed scheme rather than mistaking localhost:port for a scheme.
-        if url.starts_with("localhost") || url.starts_with("127.0.0.1") {
-            return None;
-        }
-        let which = match url_scheme(url) {
+        let which = match url_scheme::navigation_scheme(url) {
             Some(scheme) if scheme == "file" => {
                 return Some(file_page("Neo does not open this URL, a `file:` one"));
             }
@@ -428,7 +380,7 @@ async fn refused_page<M>(
     let Some(url) = shown_url(op).await? else {
         return Ok(None);
     };
-    let scheme = url_scheme(&url);
+    let scheme = url_scheme::url_scheme(&url);
     if scheme.as_deref() == Some("file") {
         return Ok(Some(file_page(
             "Neo does not act on this tab, which shows a `file:` page",
@@ -469,7 +421,7 @@ async fn refused_page<M>(
         .and_then(|index| usize::try_from(index).ok())
         .and_then(|index| history.entries.get(index));
     Ok(opens
-        .filter(|entry| url_scheme(&entry.url).as_deref() == Some("file"))
+        .filter(|entry| url_scheme::url_scheme(&entry.url).as_deref() == Some("file"))
         .map(|_| file_page("Neo does not take this step, whose history entry is a `file:` page")))
 }
 
@@ -495,7 +447,7 @@ async fn shown_url<M>(op: &OpCtx<M>) -> Result<Option<String>, LeafError> {
 async fn moved_to_file<M>(op: &OpCtx<M>) -> Result<bool, LeafError> {
     Ok(shown_url(op)
         .await?
-        .is_some_and(|url| url_scheme(&url).as_deref() == Some("file")))
+        .is_some_and(|url| url_scheme::url_scheme(&url).as_deref() == Some("file")))
 }
 
 /// `Page.getNavigationHistory`'s reply, as much of it as [`refused_page`] reads: the crate's own
@@ -555,28 +507,6 @@ fn replace_lazy_brands(value: &mut Value, resolved: &Value) {
         }
         Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
     }
-}
-
-/// The scheme of `url` as the URL Standard reads it: leading and trailing C0 controls and spaces
-/// dropped, tabs and newlines removed wherever they are, then an ASCII letter and letters,
-/// digits, `+`, `-` or `.` up to the first `:`, lowercased. `None` when there is none. Chromium
-/// trims, strips and lowercases the same way, so ` JavaScript:` and `java\tscript:` are
-/// `javascript:` to it too; a scheme with any other character is no URL it navigates to.
-fn url_scheme(url: &str) -> Option<String> {
-    let mut scheme = String::new();
-    let chars = url
-        .trim_matches(|c: char| c <= ' ')
-        .chars()
-        .filter(|c| !matches!(c, '\t' | '\n' | '\r'));
-    for c in chars {
-        match c {
-            ':' if !scheme.is_empty() => return Some(scheme),
-            'a'..='z' | 'A'..='Z' => scheme.push(c.to_ascii_lowercase()),
-            '0'..='9' | '+' | '-' | '.' if !scheme.is_empty() => scheme.push(c),
-            _ => return None,
-        }
-    }
-    None
 }
 
 /// What an op does to a page that the door keeps books on (`PageChange`): agent-opened marks
@@ -874,6 +804,10 @@ pub(super) fn leaf_error(error: &PlaywrightError) -> LeafError {
         // Neo and its crate disagree on the codes, whoever the refusal named.
         None => OperationError::neo(ErrorCode::INTERNAL_ERROR, message),
     };
+    let failure = failure.with_diagnostic(
+        (error.error_code() == Some(PlaywrightCode::TargetCrashed))
+            .then_some(DiagnosticCode::TargetCrashed),
+    );
     let failure = match error.timed_out() {
         TimedOut::Yes => failure.timed_out(),
         TimedOut::No => failure,
@@ -882,19 +816,24 @@ pub(super) fn leaf_error(error: &PlaywrightError) -> LeafError {
         Some(facts) => failure.with_matcher(facts.clone()),
         None => failure,
     };
+    let failure = match error.cover_details() {
+        Some(cover) => failure.with_cover(cover.clone()),
+        None => failure,
+    };
     match error.answer() {
         Answer::Definite => LeafError::definite(failure),
         Answer::Ambiguous => LeafError::ambiguous(failure),
     }
 }
 
-/// The crate's codes in claw-sdk's one list. Every name carries over as it is, except
-/// `internal`: a bug in Neo reads `internal_error` wherever it happens.
+/// The crate's codes in claw-sdk's one list. Internal failures and crash diagnostics keep
+/// the compatible primary `internal_error` code; the diagnostic is projected separately.
 fn error_code(code: PlaywrightCode) -> ErrorCode {
     match code {
         PlaywrightCode::StrictModeViolation => ErrorCode::STRICT_MODE_VIOLATION,
         PlaywrightCode::NoMatch => ErrorCode::NO_MATCH,
         PlaywrightCode::NotActionable => ErrorCode::NOT_ACTIONABLE,
+        PlaywrightCode::Covered => ErrorCode::COVERED,
         PlaywrightCode::AssertionFailed => ErrorCode::ASSERTION_FAILED,
         PlaywrightCode::ElementDetached => ErrorCode::ELEMENT_DETACHED,
         PlaywrightCode::NotFocused => ErrorCode::NOT_FOCUSED,
@@ -908,7 +847,7 @@ fn error_code(code: PlaywrightCode) -> ErrorCode {
         PlaywrightCode::TargetClosed => ErrorCode::TARGET_CLOSED,
         PlaywrightCode::BrowserDisconnected => ErrorCode::BROWSER_DISCONNECTED,
         PlaywrightCode::Aborted => ErrorCode::ABORTED,
-        PlaywrightCode::Internal => ErrorCode::INTERNAL_ERROR,
+        PlaywrightCode::Internal | PlaywrightCode::TargetCrashed => ErrorCode::INTERNAL_ERROR,
     }
 }
 
@@ -927,7 +866,7 @@ mod tests {
 
     use browseros_core::TabId;
     use neo_playwright::{ErrorCode as PlaywrightCode, Op, OpWire, PlaywrightError, Refusal};
-    use neo_trace::ErrorOwner;
+    use neo_trace::{DiagnosticCode, ErrorOwner};
     use serde_json::{Value, json};
 
     use super::{Hold, OpInput, PLAYWRIGHT_LINE, PageEffect, error_code, leaf_error, op_marks};
@@ -1034,12 +973,9 @@ mod tests {
     fn the_run_description_explains_hosted_console_and_pageerror_limits() {
         let description = PLAYWRIGHT_LINE.as_str();
         assert!(description.contains(
-            "In hosted BrowserOS, by design, a script receives no console messages, no page \
-             errors and no browser log entries"
+            "By design, hosted BrowserOS gives a script no console messages and no page errors: \
+             `console` and `pageerror` listeners stay silent."
         ));
-        assert!(description.contains("accepted but stay silent"));
-        assert!(description.contains("fails immediately with `neo/unsupported`"));
-        assert!(description.contains("exposed bindings work"));
     }
 
     #[test]
@@ -1292,11 +1228,25 @@ mod tests {
     fn every_crate_code_keeps_its_name_but_internal() {
         for &code in PlaywrightCode::ALL {
             let expected = match code {
-                PlaywrightCode::Internal => "internal_error",
+                PlaywrightCode::Internal | PlaywrightCode::TargetCrashed => "internal_error",
                 other => other.as_str(),
             };
             assert_eq!(error_code(code).as_str(), expected, "{code:?}");
         }
+    }
+
+    #[test]
+    fn target_crashed_leaf_retains_legacy_code_and_typed_detail() {
+        let leaf = leaf_error(&PlaywrightError::new(
+            PlaywrightCode::TargetCrashed,
+            "renderer crashed".to_owned(),
+        ));
+        assert_eq!(leaf.error().code(), ErrorCode::INTERNAL_ERROR);
+        assert_eq!(
+            leaf.error().diagnostic_code(),
+            Some(DiagnosticCode::TargetCrashed)
+        );
+        assert!(!leaf.error().is_timeout());
     }
 
     #[test]

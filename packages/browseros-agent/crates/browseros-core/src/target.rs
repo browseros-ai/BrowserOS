@@ -1057,6 +1057,24 @@ impl BrowserView {
             None => self.session.pages.get_session(page).await,
         }
     }
+    /// Acquires a session after this view's policy and a caller's native-incarnation check.
+    /// The additional check brackets attachment; returned sessions retain this view's existing
+    /// protocol guards. The callback is borrowed only for acquisition, not retained for sends.
+    pub async fn page_session_admitted(
+        &self,
+        page: PageId,
+        additional: &dyn PageAdmission,
+    ) -> Result<PageSession, CoreError> {
+        match self.page_access(page.clone()).await? {
+            Some(access) => access.session_admitted(Some(additional)).await,
+            None => {
+                self.session
+                    .pages
+                    .get_session_admitted(page, additional)
+                    .await
+            }
+        }
+    }
     /// Repairs an interrupted viewport before an SDK operation uses its admitted session.
     /// This configures no new request. Call before taking a viewport lease; legacy callers
     /// that already hold one continue using `prepare_viewport`'s existing repair path.

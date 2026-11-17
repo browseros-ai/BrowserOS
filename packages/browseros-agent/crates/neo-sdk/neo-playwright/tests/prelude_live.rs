@@ -25,6 +25,8 @@ mod js_runner;
 mod live_run;
 
 use std::collections::{HashMap, HashSet};
+use std::fmt::Write as _;
+use std::io::{self, Write as _};
 use std::path::Path;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -3207,6 +3209,34 @@ async fn snapshot_of(host: &Arc<dyn OpHost>, url: &str, options: &str) -> TestRe
     Ok(result.as_str().ok_or("the snapshot")?.to_owned())
 }
 
+/// The interactive snapshot crosses JSON twice: to retain its delta baseline and to return
+/// the run's result. A clip through an emoji must succeed at both boundaries without repair.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_clipped_snapshot_text_keeps_whole_characters_across_json() -> TestResult {
+    let _alone = ALONE.acquire().await?;
+    let title = "a".repeat(78);
+    let html = format!(
+        "<!doctype html><meta charset=\"utf-8\">\
+         <div style=\"cursor:pointer\" onclick=\"1\"><div>{title}</div>\
+         <div>😀 and more words after the emoji</div></div><button>Go</button>"
+    );
+    let server =
+        FixtureServer::start(HashMap::from([("/clip".to_owned(), Page::html(&html))])).await?;
+    let host: Arc<dyn OpHost> = Arc::new(LiveRun::connect().await?);
+    let text = snapshot_of(&host, &server.url("127.0.0.1", "/clip"), "{ text: false }").await?;
+    let ending = format!(": {title}…");
+    assert!(
+        text.lines().any(|line| line.ends_with(&ending)),
+        "all 78 title letters must survive, immediately followed by an ellipsis: {text}"
+    );
+    assert!(
+        !text.contains('\u{fffd}'),
+        "clipping must not replace a character: {text}"
+    );
+    Ok(())
+}
+
 /// A closed root that holds a list of 150 items, each a button in an `li`: one root, so one
 /// seed, since a list, an item and a button cannot host a root of their own. Every item prints.
 #[tokio::test]
@@ -3377,5 +3407,225 @@ async fn tests_that_closed_roots_slot_their_hosts_children_as_open_ones_do() -> 
         ai.find("\"Bee\"") < ai.find("\"Ay\""),
         "upstream reads a closed host's own drawn children in their own order, not the slots': {ai}"
     );
+    Ok(())
+}
+
+/// The pinned survey head follows the returned baseline across fresh realms, including a
+/// closed layer read that the script did not return and therefore must not commit.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_on_top_delta_heads_follow_the_returned_snapshot() -> TestResult {
+    let mut stories = String::new();
+    for n in 0..20 {
+        write!(&mut stories, "<p><a href='#story{n}'>Story {n}</a></p>")?;
+    }
+    let body = format!(
+        r#"<button id="open">Open</button>{stories}
+<div id="shade" style="display:none;position:fixed;inset:0;background:#8888;z-index:10"></div>
+<section id="box" role="dialog" aria-label="Read first" style="display:none;position:fixed;left:25%;top:25%;width:50%;height:50%;background:white;z-index:11"><p>Current cover</p><button id="close">Close</button></section>
+<script>document.querySelector('#open').onclick=()=>{{shade.style.display='block';box.style.display='block'}};document.querySelector('#close').onclick=()=>{{shade.style.display='none';box.style.display='none'}};</script>"#
+    );
+    let server =
+        FixtureServer::start(HashMap::from([("/on-top".to_owned(), Page::html(&body))])).await?;
+    let run = Arc::new(LiveRun::connect().await?);
+    let host: Arc<dyn OpHost> = Arc::clone(&run) as Arc<dyn OpHost>;
+    let url = json!(server.url("127.0.0.1", "/on-top"));
+    let opened = js_runner::run_script(&host, &json!({ "page": null }), &format!("await page.goto({url}); return {{ tab: page.toJSON().tab, text: await page.ariaSnapshot() }}")).await?;
+    run.end_run(Some(&opened));
+    let tab = opened["tab"].as_i64().ok_or("the page's tab")?;
+    let init = json!({ "page": { "$neo": "page", "tab": tab } });
+    let covered = js_runner::run_script(&host, &init, "await page.getByRole('button', {name:'Open', exact:true}).click(); return await page.ariaSnapshot({delta:true})").await?;
+    run.end_run(Some(&covered));
+    assert!(
+        covered
+            .as_str()
+            .and_then(|text| text.lines().nth(1))
+            .is_some_and(|line| line.starts_with("# on top: dialog \"Read first\"")),
+        "{covered}"
+    );
+    let unchanged =
+        js_runner::run_script(&host, &init, "return await page.ariaSnapshot({delta:true})").await?;
+    run.end_run(Some(&unchanged));
+    let text = unchanged.as_str().ok_or("the unchanged snapshot")?;
+    let mut lines = text.lines();
+    assert_eq!(
+        lines.next(),
+        Some("# no change since your last snapshot of this tab"),
+        "{text}"
+    );
+    assert!(
+        lines
+            .next()
+            .is_some_and(|line| line.starts_with("# on top: dialog \"Read first\"")),
+        "{text}"
+    );
+    let unread = js_runner::run_script(&host, &init, "await page.getByRole('button', {name:'Close', exact:true}).click(); await page.ariaSnapshot(); return 'not a page read'").await?;
+    run.end_run(Some(&unread));
+    let removed = js_runner::run_script(
+        &host,
+        &init,
+        "try { return await page.ariaSnapshot({delta:true}) } finally { await page.close() }",
+    )
+    .await?;
+    run.end_run(Some(&removed));
+    let text = removed.as_str().ok_or("the closed layer's snapshot")?;
+    assert!(
+        text.lines()
+            .nth(1)
+            .is_some_and(|line| line.starts_with("# no longer on top: dialog \"Read first\"")),
+        "{text}"
+    );
+    assert!(
+        !text
+            .lines()
+            .any(|line| line.starts_with("+# on top:") || line.starts_with("-# on top:")),
+        "{text}"
+    );
+    Ok(())
+}
+
+/// The Node host checks the printed text; this table checks the same pages' actual survey
+/// counts at `OpEnv::note`, before the server's debug-log policy can discard those lines.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_on_top_survey_counts_match_each_fixture() -> TestResult {
+    let folder =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../neo-playwright-tests/node/snapshot-on-top");
+    let rows: Vec<Value> = serde_json::from_str(&fs::read_to_string(folder.join("matrix.json"))?)?;
+    let mut pages = HashMap::new();
+    for row in &rows {
+        let file = row["file"].as_str().ok_or("fixture file")?;
+        let path = Path::new(file)
+            .file_name()
+            .ok_or("fixture filename")?
+            .to_string_lossy();
+        pages.insert(
+            format!("/{path}"),
+            Page::html(&fs::read_to_string(folder.join(file))?),
+        );
+    }
+    let server = FixtureServer::start(pages).await?;
+    let mut failures = Vec::new();
+    for row in rows {
+        let run = Arc::new(LiveRun::connect().await?.with_viewports());
+        let host: Arc<dyn OpHost> = Arc::clone(&run) as Arc<dyn OpHost>;
+        let file = row["file"].as_str().ok_or("fixture file")?;
+        let name = Path::new(file)
+            .file_name()
+            .ok_or("fixture filename")?
+            .to_string_lossy();
+        let url = server.url("127.0.0.1", &format!("/{name}"));
+        // This is the Node fixture's exact agent script, with only its module export removed.
+        let driver = include_str!("../../neo-playwright-tests/node/snapshot-on-top-row.mjs")
+            .replacen("export async function", "async function", 1);
+        let script = format!(
+            r"{driver}
+            try {{ return await driveSnapshotRow(page, {row}, {url}); }}
+            finally {{ await page.close(); }}
+        ",
+            row = row,
+            url = json!(url)
+        );
+        let output = match js_runner::run_script(&host, &json!({"page":null}), &script).await {
+            Ok(output) => output,
+            Err(error) => {
+                failures.push(format!("{}: {error}", row["id"]));
+                json!({"error":error})
+            }
+        };
+        let log = notes(&run);
+        let counts: Vec<u64> = log
+            .iter()
+            .filter_map(|line| {
+                line.trim()
+                    .strip_prefix("cover survey: ")?
+                    .split_whitespace()
+                    .next()?
+                    .parse()
+                    .ok()
+            })
+            .collect();
+        let initial = row["expectedControls"].as_u64().ok_or("fixture count")?;
+        let mut expected = vec![initial; 5];
+        for phase in row["phases"].as_array().into_iter().flatten() {
+            expected.push(phase["expectedControls"].as_u64().ok_or("phase count")?);
+        }
+        // The review artifact needs exact observations; an output failure fails the proof.
+        writeln!(
+            io::stdout().lock(),
+            "{}",
+            json!({"shape":row["id"],"output":output,"expected":expected,"tested":counts,"notes":log.iter().filter(|line|line.contains("cover survey") || line.contains("inert marking")).collect::<Vec<_>>()})
+        )?;
+        if counts != expected {
+            failures.push(format!(
+                "{} tested {counts:?}, expected {expected:?}",
+                row["id"]
+            ));
+        }
+        if row["zeroCountPhase"] == true {
+            let phases: Vec<_> = log
+                .iter()
+                .filter(|line| line.contains("cover survey phases:"))
+                .collect();
+            // A quiet fixed shell seeds samples, but no covered control authorizes the
+            // document-wide count. Zero is exact because that phase must never run.
+            if phases.len() != expected.len()
+                || phases
+                    .iter()
+                    .any(|line| !line.contains(", count 0.000 ms,"))
+            {
+                failures.push(format!(
+                    "{} quiet page must skip the document count: {phases:?}",
+                    row["id"]
+                ));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    Ok(())
+}
+
+/// Phase timings use the same note seam as fixture counts. Refused pages are reported as
+/// refusals; the named pages are never replaced by a smaller or more convenient page.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_on_top_survey_reports_named_page_phases() -> TestResult {
+    for url in [
+        "https://news.ycombinator.com/item?id=50467087",
+        "https://en.wikipedia.org/wiki/World_War_II",
+        "https://www.ag-grid.com/example/",
+    ] {
+        let run = Arc::new(LiveRun::connect().await?.with_viewports());
+        let host: Arc<dyn OpHost> = Arc::clone(&run) as Arc<dyn OpHost>;
+        let script = format!(
+            r"
+            try {{
+                await page.setViewportSize({{width:1280,height:800}});
+                const response = await page.goto({url}, {{waitUntil:'domcontentloaded',timeout:30000}});
+                await page.waitForTimeout(1000);
+                const text = await page.ariaSnapshot({{timeout:60000}});
+                const result = {{status:response?.status(),title:await page.title(),elements:await page.evaluate(()=>document.querySelectorAll('*').length),characters:text.length,head:text.slice(0,400)}};
+                if ({url}.includes('wikipedia.org')) {{
+                    await page.evaluate(()=>scrollTo(0,document.documentElement.scrollHeight/2));
+                    const middle = await page.ariaSnapshot({{timeout:60000}});
+                    result.middle = {{characters:middle.length,head:middle.slice(0,400)}};
+                }}
+                return result;
+            }} finally {{ await page.close(); }}
+        ",
+            url = json!(url)
+        );
+        let result = match js_runner::run_script(&host, &json!({"page":null}), &script).await {
+            Ok(result) => result,
+            Err(error) => json!({"error":error}),
+        };
+        let log = notes(&run);
+        // The review artifact needs exact observations; an output failure fails the proof.
+        writeln!(
+            io::stdout().lock(),
+            "{}",
+            json!({"url":url,"result":result,"notes":log.iter().filter(|line|line.contains("cover survey") || line.contains("inert marking")).collect::<Vec<_>>()})
+        )?;
+    }
     Ok(())
 }

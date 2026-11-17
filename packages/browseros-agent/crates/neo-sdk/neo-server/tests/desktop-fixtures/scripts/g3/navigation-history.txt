@@ -1,0 +1,9 @@
+const first = args.base + '/links.html';
+const second = args.base + '/form.html';
+await page.goto(first);
+await page.goto(second);
+await page.goBack();
+equal(await page.evaluate(() => location.href), first, 'back reaches the preceding document');
+await page.goForward();
+equal(await page.evaluate(() => location.href), second, 'forward returns to the next document');
+return { first, second, current: page.url() };

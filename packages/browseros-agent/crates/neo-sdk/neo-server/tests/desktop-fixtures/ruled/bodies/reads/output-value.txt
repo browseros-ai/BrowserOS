@@ -1,0 +1,2 @@
+// Both historical aliases execute this producer afresh; its string fits the SDK value budget.
+return 'R'.repeat(33000) + 'SDK_CAP_VALUE_TAIL';

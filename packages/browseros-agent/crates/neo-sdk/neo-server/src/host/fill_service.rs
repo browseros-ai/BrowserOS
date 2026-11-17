@@ -23,9 +23,7 @@
 
 use std::sync::Arc;
 
-use neo_http::{
-    ChecksPicture, FillAsk, FillDoor, FillRefusal, FillReply, FillVerb, TookPrivateText,
-};
+use neo_http::{FillAsk, FillDoor, FillRefusal, FillReply, FillVerb, TookPrivateText};
 use neo_sdk_api as api;
 use neo_takeover::NamedLock;
 use neo_trace::{ErrorOwner, RunId, RunStatus};
@@ -68,8 +66,6 @@ pub(crate) struct FillService {
     /// Which tabs the host API's camera withholds: a tab that took a fill while the host's
     /// `fill.pictures` is `never`.
     took: TookPrivateText,
-    /// The app's reading of what a tab shows, for the host API's camera (ruling R45).
-    checks: ChecksPicture,
 }
 
 /// What the fill service is built from. A plain data bag.
@@ -89,12 +85,9 @@ pub(crate) struct FillServiceParts {
     pub(crate) pictures_never: PicturesNever,
     /// Fires on SIGTERM.
     pub(crate) shutdown: CancellationToken,
-    /// Whether the camera withholds a picture of a tab: the entry's own answer
-    /// (`Playwright::withholds_picture`), true once the tab took a fill while the host's
-    /// `fill.pictures` is `never`.
+    /// The facade's camera callback combines the host's current setting with restored tab
+    /// membership, withholding every tab under `never` until recovery finishes.
     pub(crate) took: TookPrivateText,
-    /// What a tab shows now, read in every frame (`Playwright::picture_check`, ruling R45).
-    pub(crate) checks: ChecksPicture,
 }
 
 /// The check method's value, as the service reads it back.
@@ -116,7 +109,6 @@ impl FillService {
             pictures_never,
             shutdown,
             took,
-            checks,
         } = parts;
         Arc::new(Self {
             dispatcher,
@@ -127,14 +119,7 @@ impl FillService {
             pictures_never,
             shutdown,
             took,
-            checks,
         })
-    }
-
-    /// What the host API arms its camera's reading of a tab with (ruling R45).
-    #[must_use]
-    pub(crate) fn checks_picture(&self) -> ChecksPicture {
-        Arc::clone(&self.checks)
     }
 
     /// What the host API arms its camera with, so a tab this service typed into is not pictured
@@ -307,6 +292,7 @@ impl Fill {
                 // door does not count as a script's use (ruling R27).
                 default_page: Some(PageRef { tab }),
                 tabs_scope: TabsScope::Browser,
+                access: None,
             },
         );
         if let Some(lock) = lock {
@@ -378,6 +364,7 @@ impl Fill {
                 deadline: Instant::now() + timeout + ENTRY_BACKSTOP,
                 default_page: Some(PageRef { tab }),
                 tabs_scope: TabsScope::Browser,
+                access: None,
             },
         );
         if let Some(lock) = lock {
@@ -464,10 +451,12 @@ fn checked(value: Value, boxes: usize) -> Vec<api::FillBoxCheck> {
             let refusal = api::OperationError {
                 owner: owner_name(ErrorOwner::Neo),
                 code: ErrorCode::INTERNAL_ERROR.as_str().to_owned(),
+                diagnostic_code: None,
                 message: "Neo could not read the look's answer".to_owned(),
                 retryable: true,
                 host_code: None,
                 operation_id: None,
+                cover: None,
             };
             vec![
                 api::FillBoxCheck {
@@ -490,10 +479,15 @@ fn refused_box(failure: &OpFailure) -> api::FillBoxCheck {
         refusal: Some(Box::new(api::OperationError {
             owner: owner_name(failure.error.owner()),
             code: failure.error.code().as_str().to_owned(),
+            diagnostic_code: failure
+                .error
+                .diagnostic_code()
+                .map(|code| code.as_str().to_owned()),
             message: failure.error.message().to_owned(),
             retryable: failure.retryable,
             host_code: None,
             operation_id: Some(failure.operation.to_string()),
+            cover: None,
         })),
         holds: None,
         contains: None,

@@ -1,0 +1,19 @@
+// Rejoin the prior request's task before any page action. The document changes in this run,
+// so the earlier document's committed baseline must not be used to compare the new page.
+assert(Array.isArray(args.prior) && args.prior.length === 1, 'the caller supplies exactly the baseline run');
+const baseline = args.prior[0];
+assert(baseline && typeof baseline.snapshot === 'string' && typeof baseline.taskId === 'string' && typeof baseline.pageId === 'number', 'the earlier reply contains snapshot and ownership identities', baseline);
+includes(baseline.snapshot, 'Form page', 'the earlier reply contains the links snapshot');
+await neo.task(baseline.taskId);
+equal(page.taskId, baseline.taskId, 'navigation rejoins the baseline task');
+equal(page.tabId, baseline.pageId, 'navigation uses the baseline tab');
+equal(page.url(), baseline.url, 'navigation starts in the baseline document');
+await page.evaluate(() => { location.href = '/form.html'; return 'nav'; });
+await poll(async () => await page.evaluate(() => location.pathname) === '/form.html', 'the in-page navigation commits the form document');
+const path = await page.evaluate(() => location.pathname);
+equal(path, '/form.html', 'the new form document is current');
+const delta = await page.ariaSnapshot({ delta: true });
+assert(delta.startsWith('# whole page: no earlier snapshot of this page\n'), 'the new document has no earlier snapshot baseline', delta);
+includes(delta, 'Form fixture', 'the response includes the fresh form snapshot');
+includes(delta, 'Submit', 'the fresh snapshot contains form controls');
+return { path, delta, pageId: page.tabId, taskId: page.taskId };

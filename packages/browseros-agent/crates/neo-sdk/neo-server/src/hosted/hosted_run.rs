@@ -76,6 +76,7 @@ impl HostedRun {
                 deadline,
                 default_page: None,
                 tabs_scope,
+                access: None,
             },
         );
         let bridge = Arc::new(Bridge::new(Arc::clone(&context), Arc::clone(dispatcher)));

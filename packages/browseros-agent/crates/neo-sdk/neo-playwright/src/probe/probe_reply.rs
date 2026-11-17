@@ -24,7 +24,7 @@ use crate::world::{FrameSeq, Pin};
 /// contract: a world keeps the probe an earlier build installed, and the install replaces that
 /// probe only when its number differs (`engine_source`), so a shape changed under the same
 /// number reaches this build in the old shape. The lock's test catches a change without a bump.
-pub(crate) const PROBE_PROTOCOL: u32 = 44;
+pub(crate) const PROBE_PROTOCOL: u32 = 50;
 
 /// One reply; `kind` is the tag. Any request may also answer `error`, and `uninstalled` when
 /// the world has no booted probe.
@@ -102,10 +102,15 @@ pub(crate) enum ProbeReply {
         #[ts(optional)]
         resolved: Option<Resolution>,
     },
-    /// Upstream's description of what intercepts pointer events: the page's own markup.
+    /// Upstream's description of what intercepts pointer events: the page's own markup, and
+    /// which cover it is, for the pointer runner's count (covered-click spec section 1).
     Covered {
         #[ts(type = "string")]
         by: PageText,
+        /// Absent when a second look found the element on top after all.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        cover: Option<CoverMark>,
     },
     /// The interceptor is armed with `token`.
     Armed {
@@ -129,6 +134,15 @@ pub(crate) enum ProbeReply {
         /// pointer. A click's `frameBox` always answers false.
         #[serde(default)]
         unseen: bool,
+        /// A click's hit test that missed: which cover of this page took the point.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        cover: Option<CoverMark>,
+    },
+    /// The facts of a covered pointer action, from the world whose hit test found the cover
+    /// (covered-click spec section 2). `None` when nothing covers the point any more.
+    Cover {
+        facts: Option<Box<CoverFacts>>,
     },
     /// An edit's result: the probe's own words for most edits, and the options' values for
     /// `selectOptions`.
@@ -161,9 +175,27 @@ pub(crate) enum ProbeReply {
     },
     /// One frame's `ariaSnapshotJSON` and its rendered iframes.
     Snapshot {
-        #[ts(
-            type = "import('../../../neo-playwright/third_party/playwright/packages/isomorphic/ariaSnapshot').AriaSnapshotJSON"
-        )]
+        /// The main page's same-request cover survey; absent outside Neo's two text formats.
+        #[serde(default)]
+        #[ts(optional, as = "Option<Vec<SurveyLayer>>")]
+        on_top: Vec<SurveyLayer>,
+        #[serde(default)]
+        #[ts(optional)]
+        survey_tested: Option<u32>,
+        #[serde(default)]
+        #[ts(optional)]
+        survey_ms: Option<f64>,
+        #[serde(default)]
+        #[ts(optional)]
+        survey_phases: Option<SurveyPhases>,
+        #[serde(default)]
+        #[ts(optional, as = "Option<bool>")]
+        on_top_skipped: bool,
+        /// Isolated-world inert annotation time, for the operation trace only.
+        #[serde(default)]
+        #[ts(optional)]
+        inert_marking_ms: Option<f64>,
+        #[ts(type = "import('../prelude/vendored').AriaSnapshotJSON")]
         json: Value,
         iframes: Vec<SnapshotIframe>,
         /// Clickable marking threw on this page and the snapshot was taken again without it;
@@ -265,6 +297,7 @@ impl ProbeReply {
             Self::Verdict { .. } => "verdict",
             Self::Moves { .. } => "moves",
             Self::FrameBox { .. } => "frameBox",
+            Self::Cover { .. } => "cover",
             Self::Value { .. } => "value",
             Self::NotFocused { .. } => "notFocused",
             Self::Read { .. } => "read",
@@ -327,6 +360,152 @@ pub(crate) enum Hit {
     },
 }
 
+/// Which cover stood at one check of a pointer action (covered-click spec section 1): the root
+/// of its subtree as upstream's hit test finds it (`injectedScript.ts` `expectHitTarget`), with
+/// its box and how opaque it shows. The pointer runner counts a cover as standing while each
+/// check finds the same number, box and opacity: a cover that moves or fades is one the page
+/// may still take away.
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct CoverMark {
+    /// The root's number in the world that tested, the same at every check while the element
+    /// is the same (a weak map, as the ref map keeps frame keys). Not a pin: a pin is a new
+    /// number at every call and spends one of the world's pin entries.
+    pub(crate) id: u32,
+    pub(crate) rect: Rect,
+    /// Its own opacity times every ancestor's.
+    pub(crate) opacity: f64,
+    /// It says it is loading: `aria-busy="true"` on it or around it, or a progress bar in it.
+    pub(crate) busy: bool,
+}
+
+/// What a covered pointer action says about its cover (covered-click spec section 2), read in
+/// the world that saw it. Its text comes from the snapshot's own reads, under the mask (R47).
+#[derive(Debug, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "the page's reply: one flag per fact it read, each said by its own line"
+)]
+pub(crate) struct CoverFacts {
+    /// The cover as named (`whichDialog`, before a blank layer is named after its dialog), by its
+    /// number in this world: what "the same layer again" compares, since a banner's root can be
+    /// `main` for one control and the banner for the next.
+    pub(crate) layer: u32,
+    /// The cover, "which dialog": walking up from what is on top, the first dialog-like role,
+    /// else the first section role, else the root of its subtree. The ref the snapshot printed
+    /// for it, else one minted for it (`RefMap.forElement`), which `getByRef` resolves.
+    pub(crate) r#ref: String,
+    pub(crate) role: String,
+    #[ts(type = "string")]
+    pub(crate) name: PageText,
+    /// Upstream's markup line for it, as today's `intercepts pointer events` line prints.
+    #[ts(type = "string")]
+    pub(crate) markup: PageText,
+    /// Its own snapshot (`ariaSnapshotJSON` in `default` mode, which mints no ref and moves
+    /// nothing the agent's own snapshots depend on), which the prelude renders and cuts. `null`
+    /// for a cover that holds the control: its snapshot would be the page's.
+    #[ts(type = "unknown")]
+    pub(crate) snapshot: Value,
+    /// Only when that snapshot holds no words: what the cover draws as text, cut at 300
+    /// characters. The engine drops a `role=textbox` div's own text, so such a cover prints as
+    /// a nameless textbox, and its words are here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "string")]
+    pub(crate) text: Option<PageText>,
+    /// Up to eight of its controls that take the pointer, a dialog's buttons kept.
+    pub(crate) controls: Vec<CoverControl>,
+    /// The cover holds no control and draws no text.
+    pub(crate) blank: bool,
+    /// The cover is a blank layer, and the ref, role, name, snapshot and controls are those of
+    /// the dialog open over it, nearest the point; `markup` stays the layer's. The point lies
+    /// under the layer: the dialog is not what takes the click.
+    #[serde(default)]
+    pub(crate) behind: bool,
+    /// The cover is, or holds, a custom element whose closed shadow root this world does not
+    /// know: it is not blank, and a new snapshot shows its content.
+    #[serde(default)]
+    pub(crate) closed: bool,
+    /// A live region is on the cover or around it (a notice's role, `aria-live`): it may go by
+    /// itself.
+    #[serde(default)]
+    pub(crate) notice: bool,
+    pub(crate) kind: CoverKind,
+}
+
+/// Each added read phase is measured separately so a large document cannot hide the hit budget.
+#[derive(Debug, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SurveyPhases {
+    pub(crate) hits: f64,
+    pub(crate) count: f64,
+    pub(crate) naming: f64,
+    pub(crate) linking: f64,
+    pub(crate) marks: f64,
+    pub(crate) stopped: bool,
+}
+
+/// A layer the main frame found in the snapshot's own request. The action module words it.
+#[derive(Debug, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct SurveyLayer {
+    pub(crate) role: String,
+    #[ts(type = "string")]
+    pub(crate) name: PageText,
+    pub(crate) r#ref: String,
+    pub(crate) blank: bool,
+    pub(crate) loading: bool,
+    pub(crate) whole_view: bool,
+    pub(crate) controls: Vec<CoverControl>,
+    #[serde(default)]
+    #[ts(optional, type = "string")]
+    pub(crate) first_words: Option<PageText>,
+}
+
+/// One control of a cover that takes the pointer.
+#[derive(Debug, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CoverControl {
+    pub(crate) role: String,
+    #[ts(type = "string")]
+    pub(crate) name: PageText,
+    pub(crate) r#ref: String,
+}
+
+/// How the cover stands to the control, which picks the answer's line (spec section 2's table).
+#[derive(Debug, Deserialize, TS)]
+#[serde(
+    tag = "is",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub(crate) enum CoverKind {
+    /// Another part of the page: a dialog, an overlay, a popup.
+    Page,
+    /// What is on top is an `iframe`.
+    Frame,
+    /// Only part of the control is covered: `position` is a clear point of it, from its
+    /// padding edge, as `click({ position })` takes it.
+    Partial { position: Point },
+    /// The control's own label is on top. `links` counts the label's links, and `position`
+    /// is a point of the label on none of them, from its padding edge, when it has links.
+    Label {
+        links: u32,
+        #[serde(default)]
+        #[ts(optional)]
+        position: Option<Point>,
+    },
+    /// The control's own wrapper or drawing takes the pointer.
+    Wrapper,
+    /// The control is a label for the control on top, whose ref this is.
+    Labels { r#ref: String },
+    /// What is on top is a far ancestor or the page's root: nothing covers it.
+    Nothing,
+    /// A parent with `overflow: hidden` or `clip` clips the click point away.
+    Folded,
+}
+
 /// The string `"done"`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, TS)]
 pub(crate) enum HitDone {
@@ -356,8 +535,7 @@ impl PageText {
         self.0
     }
 
-    /// The value, read in place: the camera reads whether a reply names hosts waiting for its walk
-    /// and keeps the reply.
+    /// The value borrowed by the covered-action formatter, without consuming the reply.
     pub(crate) fn as_value(&self) -> &Value {
         &self.0
     }

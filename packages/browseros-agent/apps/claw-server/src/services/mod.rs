@@ -28,5 +28,6 @@ pub mod skill_runs;
 pub mod skills;
 pub mod tab_cleanup;
 pub mod tool_usage;
+pub mod ultrafast_meter;
 
 pub mod extension_updates;

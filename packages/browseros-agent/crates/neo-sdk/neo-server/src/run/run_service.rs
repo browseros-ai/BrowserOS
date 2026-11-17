@@ -146,7 +146,7 @@ impl RunService {
         } else {
             Duration::ZERO
         };
-        let handle = RunHandle::new(RunId::new(), grace);
+        let handle = RunHandle::new(RunId::new(), grace, request.meta.access);
         let waiter = handle.waiter();
         // Read once, here: the same setting decides what this call may repeat and, if it runs,
         // which tabs it sees. A change answered later applies to the next call, never this one.
@@ -204,6 +204,9 @@ impl RunService {
     /// make the store refuse that request's retry as a duplicate for good. Its code and host
     /// data are stored all the same.
     fn record_refused(&self, code: String, meta: RunMeta, reply: RunReply) -> Arc<RunReply> {
+        // This is a new refused call, never a joined/replayed reply: retain its validated
+        // metadata without overlaying a retry's access on the original run's answer.
+        let reply = reply.with_access(meta.access);
         let id = reply.id;
         self.trace.run_started(RunStarted {
             id,
@@ -212,6 +215,7 @@ impl RunService {
             task_id: meta.task_id,
             host_data: meta.host_data.map(HostData::into_value),
             tabs_scope: reply.tabs_scope,
+            access: reply.access,
             at: EpochMillis::now(),
         });
         let end = reply.trace_end(None);
@@ -269,6 +273,7 @@ impl RunService {
             request_id,
             task_id,
             host_data,
+            access,
         } = meta;
         let (run, guard) = RunCtx::start(
             &self.dispatcher,
@@ -282,6 +287,7 @@ impl RunService {
                 deadline: Instant::now() + timeout.get(),
                 default_page: page.clone(),
                 tabs_scope: setting,
+                access,
             },
         );
         #[cfg(test)]

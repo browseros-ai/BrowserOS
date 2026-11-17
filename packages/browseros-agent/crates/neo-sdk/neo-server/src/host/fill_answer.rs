@@ -185,10 +185,15 @@ fn wire_error(failure: &OpFailure) -> api::OperationError {
     api::OperationError {
         owner: owner_name(failure.error.owner()),
         code: failure.error.code().as_str().to_owned(),
+        diagnostic_code: failure
+            .error
+            .diagnostic_code()
+            .map(|code| code.as_str().to_owned()),
         message: failure.error.message().to_owned(),
         retryable: failure.retryable,
         host_code: None,
         operation_id: Some(failure.operation.to_string()),
+        cover: None,
     }
 }
 
@@ -196,10 +201,12 @@ fn neo_error(code: ErrorCode, message: &str) -> api::OperationError {
     api::OperationError {
         owner: owner_name(ErrorOwner::Neo),
         code: code.as_str().to_owned(),
+        diagnostic_code: None,
         message: message.to_owned(),
         retryable: false,
         host_code: None,
         operation_id: None,
+        cover: None,
     }
 }
 

@@ -1,0 +1,41 @@
+/** Chooser ownership follows its retained node, even when a replacement reuses that node's DOM id. */
+async function choose() {
+  const waiting = page.waitForEvent('filechooser', { timeout: 5000 });
+  await page.locator('#upload-button').click();
+  const chooser = await waiting;
+  assert(chooser.page() === page, 'the chooser belongs to the initiating page');
+  return chooser;
+}
+
+await page.goto(args.base + '/upload.html');
+const payload = { name: 'replacement-input.txt', mimeType: 'text/plain', buffer: Buffer.from('must go only to the replacement input') };
+const original = await choose();
+await page.evaluate(() => document.getElementById('hidden-file').remove());
+const detached = await original.element().evaluate(input => !input.isConnected);
+equal(detached, true, 'the original chooser input is detached before selection');
+let removedError = null;
+try { await original.setFiles(payload); }
+catch (error) { removedError = { owner: error.owner, code: error.code, delivery: error.delivery, message: String(error.message || error) }; }
+equal(removedError, null, 'the retained detached input still accepts its files');
+const detachedNames = await original.element().evaluate(input => Array.from(input.files, file => file.name));
+equal(detachedNames, ['replacement-input.txt'], 'the detached node itself received the selection');
+
+await page.evaluate(() => {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.id = 'hidden-file';
+  input.hidden = true;
+  document.body.appendChild(input);
+});
+equal(await page.locator('#hidden-file').evaluate(input => input.files.length), 0, 'the replacement begins with its own empty file list');
+const replacement = await choose();
+await replacement.setFiles(payload);
+const names = await replacement.element().evaluate(input => Array.from(input.files, file => file.name));
+equal(names, ['replacement-input.txt'], 'the fresh chooser selects the replacement input');
+equal(await page.locator('#hidden-file').evaluate(input => Array.from(input.files, file => file.name)), names, 'the replacement chooser names the connected input');
+
+// Clearing the old handle after replacement makes accidental id-based rebinding observable.
+await original.setFiles([]);
+equal(await original.element().evaluate(input => input.files.length), 0, 'the detached original can be cleared independently');
+equal(await replacement.element().evaluate(input => Array.from(input.files, file => file.name)), names, 'clearing the old chooser does not change the replacement');
+return { detached, detachedNames, removedError, names };

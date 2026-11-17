@@ -320,6 +320,7 @@ impl SurfaceCalls {
             task_id: TaskId::parse("surface").ok(),
             host_data: None,
             tabs_scope: RunTabsScope::Browser,
+            access: None,
             at: EpochMillis::now(),
         });
         calls.sink.run_ended(RunEnded {
@@ -405,6 +406,7 @@ impl SurfaceCalls {
             task_id: TaskId::parse("surface").ok(),
             host_data: None,
             tabs_scope: RunTabsScope::Browser,
+            access: None,
             at: EpochMillis::now(),
         });
         let last = colors.len();
@@ -627,6 +629,7 @@ async fn record_fake_writes(sink: TraceSink, tab: TabId) {
             task_id: TaskId::parse("surface").ok(),
             host_data: None,
             tabs_scope: RunTabsScope::Browser,
+            access: None,
             at: EpochMillis::now(),
         });
         sink.op_started(OperationStarted {
@@ -699,6 +702,7 @@ async fn record_fake_runs(sink: TraceSink) {
             task_id: TaskId::parse("demo").ok(),
             host_data: None,
             tabs_scope: RunTabsScope::Browser,
+            access: None,
             at: EpochMillis::now(),
         });
         for (seq, name, effect) in [

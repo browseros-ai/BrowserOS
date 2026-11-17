@@ -1,0 +1,6 @@
+// Source port of act-018 at a7e536e152a4835abe9974498b27a5c927dd2e0d. Execution is owned by the coordinator.
+await page.goto(args.base + '/scroll.html');
+await page.ariaSnapshot();
+await page.mouse.wheel(0, 300);
+await poll(async () => await page.evaluate(() => Math.round(window.scrollY)) > 100, 'the viewport scrolls down', 5000);
+return { y: await page.evaluate(() => Math.round(window.scrollY)), wheel: { deltaX: 0, deltaY: 300 } };

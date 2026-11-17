@@ -1,0 +1,30 @@
+await page.goto(args.base + '/links.html');
+const initialUrl = page.url();
+const file = await rejected(() => page.goto('file:///etc/hosts'));
+equal({ owner: file.owner, code: file.code, delivery: file.delivery }, { owner: 'script', code: 'invalid_input', delivery: 'not_sent' }, 'file navigation refuses before sending');
+includes(file.message, 'file:', 'file refusal names the blocked scheme');
+includes(file.message, 'page.setContent', 'file refusal explains the supported local-content API');
+equal(page.url(), initialUrl, 'refused file navigation preserves the current document');
+
+// JavaScript URLs execute before Chromium reports ERR_ABORTED. Keep both promises alive
+// until the observed dialog is dismissed so the post-execution error cannot hide its effect.
+const waiting = page.waitForEvent('dialog', { timeout: 5000 });
+const navigating = rejected(() => page.goto('javascript:alert(1)'));
+const dialog = await waiting;
+const alert = { type: dialog.type(), message: dialog.message() };
+await dialog.dismiss();
+const javascript = await navigating;
+equal(alert, { type: 'alert', message: '1' }, 'the original JavaScript URL executes its alert');
+equal({ owner: javascript.owner, code: javascript.code, delivery: javascript.delivery }, { owner: 'website', code: 'navigation_failed', delivery: 'done' }, 'the executed URL retains a definite navigation failure');
+includes(javascript.message, 'ERR_ABORTED', 'the failure preserves Chromium navigation diagnostics');
+
+const response = await page.goto('data:text/html,<b>x</b>');
+equal(response, null, 'a data URL has no HTTP response');
+const text = await page.locator('body').innerText();
+equal(text, 'x', 'the data document loads its original content');
+const dataUrl = page.url();
+const chrome = await rejected(() => page.goto('chrome://version'));
+equal({ owner: chrome.owner, code: chrome.code, delivery: chrome.delivery }, { owner: 'script', code: 'invalid_input', delivery: 'not_sent' }, 'browser-specific navigation refuses before sending');
+includes(chrome.message, 'chrome:', 'the browser-specific refusal names the URL');
+equal(page.url(), dataUrl, 'refused browser-specific navigation preserves the data document');
+return { file, javascript, alert, data: { response, text }, chrome };

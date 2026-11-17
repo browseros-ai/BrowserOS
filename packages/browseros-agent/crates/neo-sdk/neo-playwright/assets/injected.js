@@ -1461,255 +1461,428 @@
     return result;
   }
 
-  // crates/neo-sdk/neo-playwright/third_party/playwright/packages/injected/src/domUtils.ts
-  var globalOptions = {};
-  function setGlobalOptions(options) {
-    globalOptions = options;
+  // crates/neo-sdk/neo-playwright-js/src/probe/pointer-targets.ts
+  var INTERACTIVE_TAGS = new Set([
+    "a",
+    "button",
+    "input",
+    "select",
+    "textarea",
+    "details",
+    "summary"
+  ]);
+  var INTERACTIVE_ROLES = new Set([
+    "button",
+    "link",
+    "textbox",
+    "checkbox",
+    "radio",
+    "combobox",
+    "listbox",
+    "menuitem",
+    "menuitemcheckbox",
+    "menuitemradio",
+    "option",
+    "searchbox",
+    "slider",
+    "spinbutton",
+    "switch",
+    "tab",
+    "treeitem"
+  ]);
+  var SECTION_ROLES = new Set([
+    "banner",
+    "navigation",
+    "main",
+    "complementary",
+    "contentinfo",
+    "search",
+    "form",
+    "region",
+    "article"
+  ]);
+  var FRAME_TAGS = new Set(["iframe", "frame"]);
+  var pointerTargets = new Map;
+  var nearestTargets = new Map;
+  function leafTargets(targets, engine) {
+    const all = new Set(targets);
+    return targets.filter((target) => !holdsTarget(target, all, engine));
   }
-  function isInsideScope(scope, element) {
-    while (element) {
-      if (scope.contains(element))
+  function holdsTarget(target, targets, engine) {
+    const seen = new Set([target]);
+    const pending = [];
+    pushChildren(pending, seen, target);
+    for (let element = pending.pop();element; element = pending.pop()) {
+      if (engine.isVisible(element) && (targets.has(element) || isOwnTarget(element, engine)))
         return true;
-      element = enclosingShadowHost(element);
+      pushChildren(pending, seen, element);
     }
     return false;
   }
-  function parentElementOrShadowHost(element) {
+  function pushChildren(pending, seen, element) {
+    const push = (child) => {
+      if (seen.has(child))
+        return;
+      seen.add(child);
+      pending.push(child);
+    };
+    const assigned = typeof HTMLSlotElement !== "undefined" && element instanceof HTMLSlotElement ? element.assignedNodes() : [];
+    if (assigned.length) {
+      for (const node of assigned)
+        if (node.nodeType === Node.ELEMENT_NODE)
+          push(node);
+    } else {
+      for (const child of element.children)
+        if (!child.assignedSlot)
+          push(child);
+      const shadow = element.shadowRoot;
+      if (shadow)
+        for (const child of shadow.children)
+          push(child);
+    }
+    for (const id of element.getAttribute("aria-owns")?.split(/\s+/) ?? []) {
+      const owned = id ? element.ownerDocument.getElementById(id) : null;
+      if (owned)
+        push(owned);
+    }
+  }
+  function isOwnTarget(element, engine) {
+    const tag = element.localName;
+    if (INTERACTIVE_TAGS.has(tag) || FRAME_TAGS.has(tag))
+      return true;
+    const role = engine.roleOf(element);
+    if (role !== null && (INTERACTIVE_ROLES.has(role) || SECTION_ROLES.has(role)))
+      return true;
+    return getComputedStyle(element)?.cursor === "pointer";
+  }
+  function asPointerTargets(targets, snapshot) {
+    if (targets.length === 0)
+      return snapshot();
+    const read = globalThis.getComputedStyle;
+    if (typeof read !== "function")
+      return snapshot();
+    const own = Object.getOwnPropertyDescriptor(globalThis, "getComputedStyle");
+    for (const target of targets) {
+      const style = Reflect.apply(read, globalThis, [
+        target
+      ]);
+      pointerTargets.set(target, style?.cursor ?? "");
+    }
+    Object.defineProperty(globalThis, "getComputedStyle", {
+      configurable: true,
+      enumerable: own?.enumerable ?? true,
+      writable: true,
+      value: function getComputedStyle2(element, pseudo) {
+        const style = Reflect.apply(read, this, [
+          element,
+          pseudo
+        ]);
+        if (pseudo)
+          return style;
+        if (pointerTargets.has(element))
+          return pointerStyle(style);
+        const target = nearestTarget(element);
+        return target && style.cursor === pointerTargets.get(target) ? pointerStyle(style) : style;
+      }
+    });
+    try {
+      return snapshot();
+    } finally {
+      if (own)
+        Object.defineProperty(globalThis, "getComputedStyle", own);
+      else
+        Reflect.deleteProperty(globalThis, "getComputedStyle");
+      pointerTargets.clear();
+      nearestTargets.clear();
+    }
+  }
+  function nearestTarget(element) {
+    const chain = [];
+    let found = null;
+    for (let node = parentOrHost(element);node; node = parentOrHost(node)) {
+      if (pointerTargets.has(node)) {
+        found = node;
+        break;
+      }
+      const known = nearestTargets.get(node);
+      if (known !== undefined) {
+        found = known;
+        break;
+      }
+      chain.push(node);
+    }
+    nearestTargets.set(element, found);
+    for (const node of chain)
+      nearestTargets.set(node, found);
+    return found;
+  }
+  function parentOrHost(element) {
+    if (element.assignedSlot)
+      return element.assignedSlot;
     if (element.parentElement)
       return element.parentElement;
-    if (!element.parentNode)
-      return;
-    if (element.parentNode.nodeType === 11 && element.parentNode.host)
-      return element.parentNode.host;
+    const parent = element.parentNode;
+    return typeof ShadowRoot !== "undefined" && parent instanceof ShadowRoot ? parent.host : null;
   }
-  function enclosingShadowRootOrDocument(element) {
-    let node = element;
-    while (node.parentNode)
-      node = node.parentNode;
-    if (node.nodeType === 11 || node.nodeType === 9)
-      return node;
-  }
-  function enclosingShadowHost(element) {
-    while (element.parentElement)
-      element = element.parentElement;
-    return parentElementOrShadowHost(element);
-  }
-  function closestCrossShadow(element, css, scope) {
-    while (element) {
-      const closest = element.closest(css);
-      if (scope && closest !== scope && closest?.contains(scope))
-        return;
-      if (closest)
-        return closest;
-      element = enclosingShadowHost(element);
-    }
-  }
-  function getElementComputedStyle(element, pseudo) {
-    const cache = pseudo === "::before" ? cacheStyleBefore : pseudo === "::after" ? cacheStyleAfter : cacheStyle;
-    if (cache && cache.has(element))
-      return cache.get(element);
-    const style = element.ownerDocument && element.ownerDocument.defaultView ? element.ownerDocument.defaultView.getComputedStyle(element, pseudo) : undefined;
-    cache?.set(element, style);
-    return style;
-  }
-  function isElementStyleVisibilityVisible(element, style) {
-    const cached = cacheStyleVisibility?.get(element);
-    if (cached !== undefined)
-      return cached;
-    const result = computeElementStyleVisibilityVisible(element, style);
-    cacheStyleVisibility?.set(element, result);
-    return result;
-  }
-  function computeElementStyleVisibilityVisible(element, style) {
-    style = style ?? getElementComputedStyle(element);
-    if (!style)
-      return true;
-    if (!element.checkVisibility() && !isWebKitListBoxOptionVisible(element, style))
-      return false;
-    if (style.visibility !== "visible")
-      return false;
-    return true;
-  }
-  function isListBoxSelect(select) {
-    return select.multiple || select.size > 1;
-  }
-  function isWebKitListBoxOptionVisible(element, style) {
-    if (globalOptions.browserNameForWorkarounds !== "webkit" || element.nodeName !== "OPTION" || style.display === "none")
-      return false;
-    const select = element.closest("select");
-    if (!select || !isListBoxSelect(select))
-      return false;
-    for (let e = element.parentElement;e && e !== select; e = e.parentElement) {
-      if (getElementComputedStyle(e)?.display === "none")
-        return false;
-    }
-    return isElementStyleVisibilityVisible(select);
-  }
-  function computeBox(element) {
-    const style = getElementComputedStyle(element);
-    if (!style)
-      return { visible: true, inline: false };
-    const cursor = style.cursor;
-    if (style.display === "contents") {
-      for (let child = element.firstChild;child; child = child.nextSibling) {
-        if (child.nodeType === 1 && isElementVisible(child))
-          return { visible: true, inline: false, cursor };
-        if (child.nodeType === 3 && isVisibleTextNode(child))
-          return { visible: true, inline: true, cursor };
+  function pointerStyle(style) {
+    return new Proxy(style, {
+      get(target, key) {
+        if (key === "cursor")
+          return "pointer";
+        const value = Reflect.get(target, key);
+        return typeof value === "function" ? value.bind(target) : value;
       }
-      return { visible: false, inline: false, cursor };
-    }
-    if (!isElementStyleVisibilityVisible(element, style))
-      return { cursor, visible: false, inline: false };
-    const rect = element.getBoundingClientRect();
-    return { cursor, visible: rect.width > 0 && rect.height > 0, inline: style.display === "inline" };
-  }
-  function isElementVisible(element) {
-    return computeBox(element).visible;
-  }
-  var kTextNodeRange = Symbol("playwrightTextNodeRange");
-  function isVisibleTextNode(node) {
-    const document2 = node.ownerDocument;
-    const range = document2[kTextNodeRange] ??= document2.createRange();
-    range.selectNode(node);
-    const rect = range.getBoundingClientRect();
-    const result = rect.width > 0 && rect.height > 0;
-    range.setStart(document2, 0);
-    range.collapse(true);
-    return result;
-  }
-  function elementSafeTagName(element) {
-    const tagName = element.tagName;
-    if (typeof tagName === "string") {
-      const firstCharCode = tagName.charCodeAt(0);
-      if (firstCharCode >= 97 && firstCharCode <= 122)
-        return tagName.toUpperCase();
-      return tagName;
-    }
-    if (element instanceof HTMLFormElement)
-      return "FORM";
-    return element.tagName.toUpperCase();
-  }
-  var cacheStyle;
-  var cacheStyleBefore;
-  var cacheStyleAfter;
-  var cacheStyleVisibility;
-  var cachesCounter = 0;
-  function beginDOMCaches() {
-    ++cachesCounter;
-    cacheStyle ??= new Map;
-    cacheStyleBefore ??= new Map;
-    cacheStyleAfter ??= new Map;
-    cacheStyleVisibility ??= new Map;
-  }
-  function endDOMCaches() {
-    if (!--cachesCounter) {
-      cacheStyle = undefined;
-      cacheStyleBefore = undefined;
-      cacheStyleAfter = undefined;
-      cacheStyleVisibility = undefined;
-    }
+    });
   }
 
-  // crates/neo-sdk/neo-playwright-js/src/probe/private-frame.ts
-  var EPSILON = 0.000001;
-  function lookFrameBox(world, iframe, point) {
-    const view = iframe.ownerDocument.defaultView;
-    if (!iframe.isConnected || !view)
+  // crates/neo-sdk/neo-playwright-js/src/probe/private-look.ts
+  var TEXT_TYPES = new Set([
+    "text",
+    "password",
+    "tel",
+    "email",
+    "search",
+    "url",
+    "number"
+  ]);
+  var MAXLENGTH_TYPES = new Set([
+    "text",
+    "search",
+    "url",
+    "tel",
+    "email",
+    "password"
+  ]);
+  function look(world, request) {
+    const element = world.pins.live(request.pin);
+    if (!element)
       return { kind: "detached" };
-    const looked = point ? lookHit(world, iframe, point) : undefined;
+    return { kind: "value", value: lookAt(world, element, request.look) };
+  }
+  function lookAt(world, element, ask) {
+    coverWrappers.delete(element);
+    if (!isTextInput(element))
+      return { refusal: { code: "notAnInput" } };
+    if (ask.scroll === "centre")
+      element.scrollIntoView({
+        block: "center",
+        inline: "center",
+        behavior: "instant"
+      });
+    const facts = factsOf(element);
+    const refusal = firstRefusal(world, element, facts, ask);
+    const moved = ask.expect !== undefined && limitMove(facts, ask.expect, ask) === "fits";
     return {
-      kind: "frameBox",
-      origin: shiftedOrigin(view, iframe),
-      hit: looked?.hit ?? null,
-      unseen: looked?.unseen ?? false
+      facts,
+      ...refusal ? { refusal } : {},
+      ...moved ? { maxLengthMoved: true } : {}
     };
   }
-  function shiftedOrigin(view, iframe) {
-    for (let at = iframe;at; at = flatParent(at)) {
-      if (!onlyShifts(view.getComputedStyle(at)))
-        return null;
-    }
-    const drawn = iframe.getBoundingClientRect();
-    if (!(iframe instanceof HTMLElement) || Math.abs(drawn.width - iframe.offsetWidth) > 1 || Math.abs(drawn.height - iframe.offsetHeight) > 1)
-      return null;
-    const style = view.getComputedStyle(iframe);
+  function firstRefusal(world, element, facts, ask) {
+    const { expect } = ask;
+    if (expect && facts.origin !== expect.origin)
+      return { code: "wrongOrigin" };
+    if (expect?.type !== undefined && expect.type !== facts.type)
+      return { code: "wrongType" };
+    const fact = expect && changedFact(facts, expect, ask);
+    if (fact)
+      return { code: "boxChanged", fact };
+    if (element.disabled || element.readOnly || element.matches(":disabled"))
+      return { code: "boxNotEditable" };
+    if (!facts.sized) {
+      if (!ask.keys)
+        return { code: "boxHidden" };
+    } else if (!world.injected.elementState(element, "visible", ask.frameVisible).matches)
+      return { code: "boxHidden" };
+    else if (blocked(world, element, ask.keys))
+      return { code: "boxCovered" };
+    if (ask.length !== undefined && !ask.cut && facts.maxLength !== null && MAXLENGTH_TYPES.has(facts.type) && ask.length > facts.maxLength)
+      return { code: "valueTooLong" };
+    return;
+  }
+  function factsOf(input) {
+    const rect = input.getBoundingClientRect();
     return {
-      x: drawn.x + parseInt(style.borderLeftWidth || "", 10) + parseInt(style.paddingLeft || "", 10),
-      y: drawn.y + parseInt(style.borderTopWidth || "", 10) + parseInt(style.paddingTop || "", 10)
+      origin: originOf(input.ownerDocument),
+      type: input.type,
+      autocomplete: input.getAttribute("autocomplete") ?? "",
+      maxLength: input.maxLength >= 0 ? input.maxLength : null,
+      inputMode: input.getAttribute("inputmode") ?? "",
+      name: input.getAttribute("name") ?? "",
+      id: input.getAttribute("id") ?? "",
+      sized: rect.width > 0 && rect.height > 0,
+      empty: input.value === ""
     };
   }
-  function onlyShifts(style) {
-    if (style.scale !== "none" && style.scale !== "")
-      return false;
-    if (style.rotate !== "none" && style.rotate !== "")
-      return false;
-    if (style.zoom !== "1" && style.zoom !== "" && style.zoom !== "normal")
-      return false;
-    if (style.offsetPath !== "none" && style.offsetPath !== "")
-      return false;
-    if (style.transform === "none" || style.transform === "")
-      return true;
-    let matrix;
+  function originOf(document2) {
+    const origin = document2.defaultView ? Reflect.get(document2.defaultView, "origin") : undefined;
+    return typeof origin === "string" ? origin : document2.location.origin;
+  }
+  function changedFact(facts, expect, ask) {
+    if (expect.autocomplete !== undefined && expect.autocomplete !== facts.autocomplete)
+      return "autocomplete";
+    if (limitMove(facts, expect, ask) === "cuts")
+      return "maxLength";
+    if (expect.inputMode !== undefined && expect.inputMode !== facts.inputMode)
+      return "inputMode";
+    if (expect.name !== undefined && expect.name !== facts.name)
+      return "name";
+    if (expect.id !== undefined && expect.id !== facts.id)
+      return "id";
+    return;
+  }
+  function limitMove(facts, expect, ask) {
+    const approved = expect.maxLength;
+    if (approved === undefined)
+      return "same";
+    const now = facts.maxLength ?? -1;
+    if (approved === now)
+      return "same";
+    const { length } = ask;
+    if (length === undefined)
+      return "fits";
+    const fits = (limit) => limit === -1 || !MAXLENGTH_TYPES.has(facts.type) || length <= limit;
+    return fits(approved) && fits(now) ? "fits" : "cuts";
+  }
+  function isTextInput(element) {
+    return element.localName === "input" && element.namespaceURI === "http://www.w3.org/1999/xhtml" && TEXT_TYPES.has(String(Reflect.get(element, "type")));
+  }
+  function blockerOf(box) {
     try {
-      matrix = new DOMMatrixReadOnly(style.transform);
-    } catch {
-      return false;
-    }
-    const near = (value, wanted) => Math.abs(value - wanted) < EPSILON;
-    return near(matrix.m11, 1) && near(matrix.m12, 0) && near(matrix.m13, 0) && near(matrix.m14, 0) && near(matrix.m21, 0) && near(matrix.m22, 1) && near(matrix.m23, 0) && near(matrix.m24, 0) && near(matrix.m31, 0) && near(matrix.m32, 0) && near(matrix.m33, 1) && near(matrix.m34, 0) && near(matrix.m43, 0) && near(matrix.m44, 1);
-  }
-  function lookHit(world, iframe, point) {
-    const verdict = world.injected.expectHitTarget(point, iframe);
-    if (verdict === "done")
-      return { hit: verdict, unseen: false };
-    const top = topmostAt(iframe, point);
-    if (top === undefined)
-      return { hit: verdict, unseen: true };
-    if (!holds(top, iframe))
-      return { hit: verdict, unseen: false };
-    const view = iframe.ownerDocument.defaultView;
-    const through = view?.getComputedStyle(iframe).pointerEvents === "none";
-    const root = iframe.getRootNode();
-    const drawn = (root instanceof Document || root instanceof ShadowRoot) && root.elementsFromPoint(point.x, point.y).includes(iframe);
-    if (through || drawn)
-      return { hit: "done", unseen: false };
-    return { hit: verdict, unseen: true };
-  }
-  function topmostAt(iframe, point) {
-    const roots = [];
-    for (let at = iframe;at; ) {
-      const root = at.getRootNode();
-      if (root instanceof Document) {
-        roots.push(root);
-        break;
+      scrollIntoViewIfNeeded(box);
+      const rect = box.getBoundingClientRect();
+      let document2 = box.ownerDocument;
+      let x = rect.left + rect.width / 2;
+      let y = rect.top + rect.height / 2;
+      for (let frame = document2.defaultView?.frameElement;frame; frame = document2.defaultView?.frameElement) {
+        const frameRect = frame.getBoundingClientRect();
+        x += frameRect.x + frame.clientLeft;
+        y += frameRect.y + frame.clientTop;
+        document2 = frame.ownerDocument;
       }
-      if (!(root instanceof ShadowRoot))
-        break;
-      roots.push(root);
-      at = root.host;
+      return blockerAt(document2, box, x, y);
+    } catch {
+      return "unread";
     }
-    let top;
-    for (let index = roots.length - 1;index >= 0; index--) {
-      const inner = roots[index].elementsFromPoint(point.x, point.y)[0];
-      if (!inner)
-        break;
-      top = inner;
-      const next = roots[index - 1];
-      if (index && next instanceof ShadowRoot && inner !== next.host)
-        break;
-    }
-    return top;
   }
-  function holds(element, iframe) {
-    for (let at = iframe;at; at = flatParent(at)) {
-      if (at === element)
-        return true;
-    }
+  var coverWrappers = new WeakMap;
+  function coverWrapper(box) {
+    return coverWrappers.get(box);
+  }
+  function blocked(world, box, keys) {
+    const blocker = blockerOf(box);
+    if (blocker === null)
+      return false;
+    if (blocker === "unread")
+      return true;
+    const wrapper = drawingOf(world, box, blocker, keys);
+    if (!wrapper)
+      return true;
+    coverWrappers.set(box, wrapper);
     return false;
   }
-  function flatParent(element) {
-    return element.assignedSlot ?? parentElementOrShadowHost(element) ?? null;
+  var CONTROLS = "input, textarea, select, button, a[href], iframe, frame, [contenteditable], [tabindex]";
+  function drawingOf(world, box, blocker, keys) {
+    if (blocker.ownerDocument !== box.ownerDocument)
+      return null;
+    const parent = box.parentElement;
+    const grand = parent?.parentElement;
+    const wrapper = parent?.contains(blocker) ? parent : grand?.contains(blocker) ? grand : null;
+    if (!wrapper)
+      return null;
+    let cover = blocker;
+    while (cover.parentElement && cover.parentElement !== wrapper && !cover.parentElement.contains(box))
+      cover = cover.parentElement;
+    if (cover.contains(box) || cover.matches(CONTROLS) || cover.querySelector(CONTROLS) || labelsAnother(cover, box))
+      return null;
+    const own = box.getBoundingClientRect();
+    const drawn = cover.getBoundingClientRect();
+    const dx = own.width / 2;
+    const dy = own.height / 2;
+    if (drawn.left < own.left - dx || drawn.right > own.right + dx || drawn.top < own.top - dy || drawn.bottom > own.bottom + dy)
+      return null;
+    const text = renderedText(cover);
+    if (fold(text) === "")
+      return keys ? wrapper : null;
+    const name = world.injected.utils.getElementAccessibleNameText(box, false);
+    return sameName(text, name) ? wrapper : null;
+  }
+  function labelsAnother(cover, box) {
+    const labels = [cover, ...cover.querySelectorAll("label")];
+    return labels.some((label) => {
+      if (label.localName !== "label")
+        return false;
+      const control = Reflect.get(label, "control");
+      return isNode(control) && control !== box;
+    });
+  }
+  function renderedText(element) {
+    const text = Reflect.get(element, "innerText");
+    return typeof text === "string" ? text : "";
+  }
+  function sameName(drawn, name) {
+    const a = fold(drawn);
+    const b = fold(name);
+    if (!a || !b)
+      return false;
+    if (a === b)
+      return true;
+    const [shorter, longer] = a.length < b.length ? [a, b] : [b, a];
+    return shorter.length >= 3 && longer.includes(shorter);
+  }
+  function fold(text) {
+    return text.replace(/\s+/g, " ").trim().toLowerCase().replace(/[\s*:]+$/, "");
+  }
+  function scrollIntoViewIfNeeded(box) {
+    const scroll = Reflect.get(box, "scrollIntoViewIfNeeded");
+    if (typeof scroll === "function")
+      Reflect.apply(scroll, box, [true]);
+    else
+      box.scrollIntoView({ block: "center", inline: "center" });
+  }
+  function blockerAt(document2, box, pointX, pointY) {
+    let currentDocument = document2;
+    let x = pointX;
+    let y = pointY;
+    let hit = currentDocument.elementFromPoint(x, y);
+    while (hit && (hit.tagName === "IFRAME" || hit.tagName === "FRAME") && hit !== box) {
+      let child = null;
+      try {
+        child = Reflect.get(hit, "contentDocument");
+      } catch {
+        child = null;
+      }
+      if (!isDocument(child))
+        break;
+      const frameRect = hit.getBoundingClientRect();
+      x -= frameRect.x + hit.clientLeft;
+      y -= frameRect.y + hit.clientTop;
+      currentDocument = child;
+      hit = currentDocument.elementFromPoint(x, y);
+    }
+    if (!hit || hit === box || reaches(hit, box) || reaches(box, hit))
+      return null;
+    const hitLabel = hit.closest("label");
+    if (hitLabel && (hitLabel.control === box || hitLabel.contains(box)))
+      return null;
+    const boxLabel = box.closest("label");
+    return boxLabel?.contains(hit) ?? false ? null : hit;
+  }
+  function up(node) {
+    const next = node.parentNode ?? Reflect.get(node, "host") ?? Reflect.get(node.getRootNode(), "host");
+    return isNode(next) ? next : null;
+  }
+  function isNode(value) {
+    return typeof value === "object" && value !== null && typeof Reflect.get(value, "nodeType") === "number";
+  }
+  function isDocument(value) {
+    return isNode(value) && value.nodeType === Node.DOCUMENT_NODE;
+  }
+  function reaches(from, to) {
+    for (let node = from;node; node = up(node))
+      if (node === to)
+        return true;
+    return false;
   }
 
   // crates/neo-sdk/neo-playwright/third_party/playwright/packages/isomorphic/ariaSnapshot.ts
@@ -3260,6 +3433,156 @@
     removeNameRepeatingChild,
     unwrapSingleChildGenerics
   ];
+
+  // crates/neo-sdk/neo-playwright/third_party/playwright/packages/injected/src/domUtils.ts
+  var globalOptions = {};
+  function setGlobalOptions(options) {
+    globalOptions = options;
+  }
+  function isInsideScope(scope, element) {
+    while (element) {
+      if (scope.contains(element))
+        return true;
+      element = enclosingShadowHost(element);
+    }
+    return false;
+  }
+  function parentElementOrShadowHost(element) {
+    if (element.parentElement)
+      return element.parentElement;
+    if (!element.parentNode)
+      return;
+    if (element.parentNode.nodeType === 11 && element.parentNode.host)
+      return element.parentNode.host;
+  }
+  function enclosingShadowRootOrDocument(element) {
+    let node = element;
+    while (node.parentNode)
+      node = node.parentNode;
+    if (node.nodeType === 11 || node.nodeType === 9)
+      return node;
+  }
+  function enclosingShadowHost(element) {
+    while (element.parentElement)
+      element = element.parentElement;
+    return parentElementOrShadowHost(element);
+  }
+  function closestCrossShadow(element, css, scope) {
+    while (element) {
+      const closest = element.closest(css);
+      if (scope && closest !== scope && closest?.contains(scope))
+        return;
+      if (closest)
+        return closest;
+      element = enclosingShadowHost(element);
+    }
+  }
+  function getElementComputedStyle(element, pseudo) {
+    const cache = pseudo === "::before" ? cacheStyleBefore : pseudo === "::after" ? cacheStyleAfter : cacheStyle;
+    if (cache && cache.has(element))
+      return cache.get(element);
+    const style = element.ownerDocument && element.ownerDocument.defaultView ? element.ownerDocument.defaultView.getComputedStyle(element, pseudo) : undefined;
+    cache?.set(element, style);
+    return style;
+  }
+  function isElementStyleVisibilityVisible(element, style) {
+    const cached = cacheStyleVisibility?.get(element);
+    if (cached !== undefined)
+      return cached;
+    const result = computeElementStyleVisibilityVisible(element, style);
+    cacheStyleVisibility?.set(element, result);
+    return result;
+  }
+  function computeElementStyleVisibilityVisible(element, style) {
+    style = style ?? getElementComputedStyle(element);
+    if (!style)
+      return true;
+    if (!element.checkVisibility() && !isWebKitListBoxOptionVisible(element, style))
+      return false;
+    if (style.visibility !== "visible")
+      return false;
+    return true;
+  }
+  function isListBoxSelect(select) {
+    return select.multiple || select.size > 1;
+  }
+  function isWebKitListBoxOptionVisible(element, style) {
+    if (globalOptions.browserNameForWorkarounds !== "webkit" || element.nodeName !== "OPTION" || style.display === "none")
+      return false;
+    const select = element.closest("select");
+    if (!select || !isListBoxSelect(select))
+      return false;
+    for (let e = element.parentElement;e && e !== select; e = e.parentElement) {
+      if (getElementComputedStyle(e)?.display === "none")
+        return false;
+    }
+    return isElementStyleVisibilityVisible(select);
+  }
+  function computeBox(element) {
+    const style = getElementComputedStyle(element);
+    if (!style)
+      return { visible: true, inline: false };
+    const cursor = style.cursor;
+    if (style.display === "contents") {
+      for (let child = element.firstChild;child; child = child.nextSibling) {
+        if (child.nodeType === 1 && isElementVisible(child))
+          return { visible: true, inline: false, cursor };
+        if (child.nodeType === 3 && isVisibleTextNode(child))
+          return { visible: true, inline: true, cursor };
+      }
+      return { visible: false, inline: false, cursor };
+    }
+    if (!isElementStyleVisibilityVisible(element, style))
+      return { cursor, visible: false, inline: false };
+    const rect = element.getBoundingClientRect();
+    return { cursor, visible: rect.width > 0 && rect.height > 0, inline: style.display === "inline" };
+  }
+  function isElementVisible(element) {
+    return computeBox(element).visible;
+  }
+  var kTextNodeRange = Symbol("playwrightTextNodeRange");
+  function isVisibleTextNode(node) {
+    const document2 = node.ownerDocument;
+    const range = document2[kTextNodeRange] ??= document2.createRange();
+    range.selectNode(node);
+    const rect = range.getBoundingClientRect();
+    const result = rect.width > 0 && rect.height > 0;
+    range.setStart(document2, 0);
+    range.collapse(true);
+    return result;
+  }
+  function elementSafeTagName(element) {
+    const tagName = element.tagName;
+    if (typeof tagName === "string") {
+      const firstCharCode = tagName.charCodeAt(0);
+      if (firstCharCode >= 97 && firstCharCode <= 122)
+        return tagName.toUpperCase();
+      return tagName;
+    }
+    if (element instanceof HTMLFormElement)
+      return "FORM";
+    return element.tagName.toUpperCase();
+  }
+  var cacheStyle;
+  var cacheStyleBefore;
+  var cacheStyleAfter;
+  var cacheStyleVisibility;
+  var cachesCounter = 0;
+  function beginDOMCaches() {
+    ++cachesCounter;
+    cacheStyle ??= new Map;
+    cacheStyleBefore ??= new Map;
+    cacheStyleAfter ??= new Map;
+    cacheStyleVisibility ??= new Map;
+  }
+  function endDOMCaches() {
+    if (!--cachesCounter) {
+      cacheStyle = undefined;
+      cacheStyleBefore = undefined;
+      cacheStyleAfter = undefined;
+      cacheStyleVisibility = undefined;
+    }
+  }
 
   // crates/neo-sdk/neo-playwright/third_party/playwright/packages/injected/src/roleUtils.ts
   function hasExplicitAccessibleName(e) {
@@ -8102,6 +8425,61 @@ ${value.stack}`;
       throw new ProbeError("internal", "the vendored InjectedScript keeps no _lastAriaSnapshotForQuery.info");
     return info;
   }
+  function lastSnapshotNodes(injected, json) {
+    const snapshot = Reflect.get(injected, "_lastAriaSnapshotForQuery");
+    const root = typeof snapshot === "object" && snapshot !== null ? Reflect.get(snapshot, "root") : undefined;
+    const treeNode = (value) => typeof value === "object" && value !== null && typeof Reflect.get(value, "role") === "string" && Array.isArray(Reflect.get(value, "children"));
+    if (!treeNode(root))
+      throw new ProbeError("internal", "the engine keeps no snapshot root");
+    const elementOf = (node) => {
+      const symbol = Object.getOwnPropertySymbols(node).find((symbol) => symbol.description === "element");
+      const element = symbol === undefined ? undefined : Reflect.get(node, symbol);
+      if (element === undefined && node.role === "fragment")
+        return;
+      if (!(element instanceof Element))
+        throw new ProbeError("internal", "the engine snapshot node has no element link");
+      return element;
+    };
+    const nodes = new Map;
+    const roots = root.role === "fragment" ? root.children : [root];
+    if (roots.length !== json.length)
+      throw new ProbeError("internal", "the engine snapshot root and JSON disagree");
+    const pairs = roots.map((source, index) => ({
+      source,
+      rendered: json[index]
+    }));
+    while (pairs.length) {
+      const pair = pairs.pop();
+      if (!pair?.rendered)
+        throw new ProbeError("internal", "the engine snapshot JSON has a missing node");
+      const { source, rendered } = pair;
+      if (typeof source === "string") {
+        if (rendered.role !== "text" || rendered.text !== source)
+          throw new ProbeError("internal", "the engine snapshot text and JSON disagree");
+        continue;
+      }
+      if (source.role !== rendered.role)
+        throw new ProbeError("internal", "the engine snapshot roles and JSON disagree");
+      const element = elementOf(source);
+      if (element)
+        nodes.set(rendered, element);
+      if (!rendered.children)
+        continue;
+      if (source.children.length !== rendered.children.length)
+        throw new ProbeError("internal", "the engine snapshot children and JSON disagree");
+      source.children.forEach((child, index) => {
+        const childJson = rendered.children?.[index];
+        if (typeof child === "string") {
+          if (child !== childJson)
+            throw new ProbeError("internal", "the engine snapshot text child and JSON disagree");
+        } else if (typeof childJson === "object" && childJson !== null)
+          pairs.push({ source: child, rendered: childJson });
+        else
+          throw new ProbeError("internal", "the engine snapshot child and JSON disagree");
+      });
+    }
+    return { nodes };
+  }
   function expectChecks(injected) {
     const single = Reflect.get(injected, "expectSingleElement");
     const every = Reflect.get(injected, "expectArray");
@@ -8322,6 +8700,765 @@ ${value.stack}`;
     return world.pins.held(request.pin) ?? null;
   }
 
+  // crates/neo-sdk/neo-playwright-js/src/probe/browseros-ui.ts
+  var BROWSEROS_UI_HOSTS = new Set([
+    "browseros-neo-takeover"
+  ]);
+  function isBrowserOSUi(element) {
+    return BROWSEROS_UI_HOSTS.has(element.localName);
+  }
+
+  // crates/neo-sdk/neo-playwright-js/src/probe/shadow-roots.ts
+  var closedRoots = new WeakMap;
+  var realShadowRoot;
+  var installed = false;
+  var XHTML = "http://www.w3.org/1999/xhtml";
+  var SHADOW_HOSTS = new Set([
+    "article",
+    "aside",
+    "blockquote",
+    "body",
+    "div",
+    "footer",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "header",
+    "main",
+    "nav",
+    "p",
+    "section",
+    "span"
+  ]);
+  function mayCarryRoot(element) {
+    if (element.namespaceURI !== XHTML || isBrowserOSUi(element))
+      return false;
+    const name = element.localName;
+    if (!SHADOW_HOSTS.has(name) && !name.includes("-"))
+      return false;
+    return element.shadowRoot === null;
+  }
+  function getterOf(prototype, name) {
+    let owner = prototype;
+    while (owner) {
+      const descriptor = Object.getOwnPropertyDescriptor(owner, name);
+      if (descriptor) {
+        if (typeof descriptor.get !== "function")
+          throw new ProbeError("internal", `this world's ${name} is not an accessor`);
+        return descriptor.get;
+      }
+      owner = Object.getPrototypeOf(owner);
+    }
+    return;
+  }
+  function override(prototype, name, get) {
+    Object.defineProperty(prototype, name, {
+      configurable: true,
+      enumerable: true,
+      get
+    });
+  }
+  function installShadowRoots() {
+    if (installed)
+      return;
+    installed = true;
+    const read = getterOf(Element.prototype, "shadowRoot");
+    if (!read)
+      return;
+    realShadowRoot = read;
+    override(Element.prototype, "shadowRoot", function() {
+      if (isBrowserOSUi(this))
+        return null;
+      return Reflect.apply(read, this, []) ?? closedRoots.get(this) ?? null;
+    });
+    for (const prototype of [Element.prototype, Text.prototype]) {
+      const slot = getterOf(prototype, "assignedSlot");
+      if (!slot)
+        continue;
+      override(prototype, "assignedSlot", function() {
+        return Reflect.apply(slot, this, []) ?? closedSlotOf(this);
+      });
+    }
+  }
+  var slotMaps = new Map;
+  var dropScheduled = false;
+  function closedSlotOf(node) {
+    const host = node.parentElement;
+    const root = host ? closedRoots.get(host) : undefined;
+    if (!root)
+      return null;
+    let slots = slotMaps.get(root);
+    if (!slots) {
+      slots = new Map;
+      for (const slot of root.querySelectorAll("slot"))
+        for (const assigned of slot.assignedNodes())
+          if (!slots.has(assigned))
+            slots.set(assigned, slot);
+      slotMaps.set(root, slots);
+      if (!dropScheduled) {
+        dropScheduled = true;
+        queueMicrotask(() => {
+          dropScheduled = false;
+          slotMaps.clear();
+        });
+      }
+    }
+    return slots.get(node) ?? null;
+  }
+  function openClosedRoots(seeds) {
+    const read = realShadowRoot;
+    if (!read)
+      return;
+    for (const seed of seeds) {
+      if (!(seed instanceof Node))
+        continue;
+      const root = seed.getRootNode();
+      if (!(root instanceof ShadowRoot))
+        continue;
+      const host = root.host;
+      if (isBrowserOSUi(host))
+        continue;
+      if (Reflect.apply(read, host, []) !== root)
+        closedRoots.set(host, root);
+    }
+  }
+
+  // crates/neo-sdk/neo-playwright-js/src/probe/cover.ts
+  var DIALOG_ROLES = new Set([
+    "dialog",
+    "alertdialog",
+    "menu",
+    "listbox",
+    "tooltip"
+  ]);
+  var NOTICE_ROLES = new Set(["status", "alert", "log"]);
+  var MAX_CONTROLS = 8;
+  var MAX_TEXT = 300;
+  var coverNumbers = new WeakMap;
+  var nextCoverNumber = 1;
+  function coverNumber(element) {
+    let known = coverNumbers.get(element);
+    if (known === undefined) {
+      known = nextCoverNumber++;
+      coverNumbers.set(element, known);
+    }
+    return known;
+  }
+  function parentOrHost2(element) {
+    if (element.parentElement)
+      return element.parentElement;
+    const root = element.parentNode;
+    return root && root.nodeType === 11 ? root.host : undefined;
+  }
+  function hitChain(target, point) {
+    const roots = [];
+    for (let at = target;at; ) {
+      const root = at.getRootNode();
+      if (root.nodeType !== 9 && root.nodeType !== 11)
+        break;
+      roots.push(root);
+      if (root.nodeType === 9)
+        break;
+      at = root.host;
+    }
+    let hit = hitAtRoots(roots, point);
+    const chain = [];
+    while (hit && hit !== target) {
+      chain.push(hit);
+      hit = hit.assignedSlot ?? parentOrHost2(hit);
+    }
+    return hit === target ? null : chain;
+  }
+  function hitAtRoots(roots, point) {
+    let hit;
+    for (let index = roots.length - 1;index >= 0; index--) {
+      const root = roots[index];
+      if (!root)
+        break;
+      const elements = root.elementsFromPoint(point.x, point.y);
+      const single = root.elementFromPoint(point.x, point.y);
+      if (single && elements[0] && parentOrHost2(single) === elements[0] && getComputedStyle(single).display === "contents")
+        elements.unshift(single);
+      const inner = elements[0];
+      if (!inner)
+        break;
+      hit = inner;
+      const next = roots[index - 1];
+      if (index && next && inner !== next.host)
+        break;
+    }
+    return hit;
+  }
+  function coverRoot(target, chain) {
+    for (let at = target;at; at = parentOrHost2(at)) {
+      const index = chain.indexOf(at);
+      if (index > 0)
+        return chain[index - 1] ?? at;
+      if (index === 0)
+        return at;
+    }
+    return chain[chain.length - 1] ?? document.documentElement;
+  }
+  function shownOpacity(element) {
+    let opacity = 1;
+    for (let at = element;at; at = parentOrHost2(at)) {
+      const own = Number.parseFloat(getComputedStyle(at).opacity);
+      if (Number.isFinite(own))
+        opacity *= own;
+    }
+    return opacity;
+  }
+  function saysLoading(element) {
+    return element.closest('[aria-busy="true"]') !== null || element.querySelector('[role="progressbar"], progress') !== null;
+  }
+  function coverMark(target, point) {
+    const chain = hitChain(target, point);
+    if (!chain)
+      return;
+    const root = coverRoot(target, chain);
+    const box = root.getBoundingClientRect();
+    return {
+      id: coverNumber(root),
+      rect: { x: box.x, y: box.y, width: box.width, height: box.height },
+      opacity: shownOpacity(root),
+      busy: saysLoading(root)
+    };
+  }
+  function cover(world, request, root, _nodes, output) {
+    const found = resolveTarget(world, request.target, "firstMatch", root);
+    if (found.kind !== "one")
+      return found;
+    const { injected } = world;
+    const element = found.element;
+    const subject = request.above ? element : injected.retarget(element, "button-link") ?? element;
+    const chain = hitChain(subject, request.point);
+    if (!chain)
+      return { kind: "cover", facts: null };
+    const top = coverRoot(subject, chain);
+    if (coverNumber(top) !== request.cover)
+      return { kind: "cover", facts: null };
+    return {
+      kind: "cover",
+      facts: factsOf2(world, output, subject, chain, top, request)
+    };
+  }
+  function factsOf2(world, output, subject, chain, top, request) {
+    const kind = kindOf(world, subject, chain, request.point, request.above);
+    const layer = whichDialog(world, chain, top, request.point);
+    const { shown, behind, closed } = shownLayer(world, output, layer, request.point, subject);
+    const surrounds = shown.contains(subject) || shown === document.body;
+    let snapshot = null;
+    let words = true;
+    if (!surrounds) {
+      snapshot = output.tree(shown, () => quietSnapshot(world, shown));
+      words = holdsWords(snapshot);
+    }
+    const controls = surrounds ? [] : controlsOf(world, output, shown);
+    const drawn = words ? undefined : output.tree(shown, () => Array.from(renderedText(shown).trim()));
+    return {
+      layer: coverNumber(layer),
+      ref: world.refs.forElement(shown, world.seq),
+      role: controlRole(world, shown),
+      name: nameOf(world, output, shown),
+      markup: output.previewNode(behind ? layer : shown),
+      snapshot,
+      ...drawn && drawn.length > 0 ? { text: drawn.slice(0, MAX_TEXT).join("") } : {},
+      controls,
+      blank: !isFrame(shown) && !closed && controls.length === 0 && !words && !drawn?.length,
+      behind,
+      closed,
+      notice: !surrounds && inLiveRegion(world, shown),
+      kind: frameInCover(world, shown, kind) ? { is: "page" } : kind
+    };
+  }
+  function shownAs(world, output, layer, point, subject) {
+    return shownLayer(world, output, layer, point, subject).shown;
+  }
+  function shownLayer(world, output, layer, point, subject) {
+    const holds = subject ? layer.contains(subject) || layer === world.injected.document.body : pageElement(layer);
+    const closed = subject ? !layer.contains(subject) && inClosedPart(layer) : !holds && inClosedPart(layer);
+    if (holds || closed)
+      return { shown: layer, behind: false, closed };
+    const blank = isBlank(world, output, layer);
+    const shown = (blank ? dialogBehind(world, layer, point) : soleDialog(world, layer)) ?? layer;
+    return { shown, behind: blank && shown !== layer, closed };
+  }
+  function isFrame(element) {
+    return element.localName === "iframe" || element.localName === "frame";
+  }
+  function frameInCover(world, shown, kind) {
+    if (kind.is !== "frame")
+      return false;
+    if (isFrame(shown))
+      return false;
+    return takingControls(world, shown).some((control) => !isFrame(control));
+  }
+  function quietSnapshot(world, element) {
+    const { injected } = world;
+    const last = Reflect.get(injected, "_lastAriaSnapshotForQuery");
+    try {
+      return injected.ariaSnapshotJSON(element, { mode: "default" }).json;
+    } finally {
+      Reflect.set(injected, "_lastAriaSnapshotForQuery", last);
+    }
+  }
+  function whichDialog(world, chain, top, point) {
+    const path = coverPath(chain, top, point);
+    const main = top.ownerDocument.querySelector('main, [role="main"]');
+    const named = path.filter((at) => !pageElement(at, main));
+    const roleOf = (element) => world.injected.utils.getAriaRole(element);
+    const face = coverFace(named);
+    return named.find((at) => {
+      const role = roleOf(at) ?? "";
+      return DIALOG_ROLES.has(role) || NOTICE_ROLES.has(role);
+    }) ?? face ?? named.find((at) => SECTION_ROLES.has(roleOf(at) ?? "")) ?? (pageElement(top, main) ? path[0] ?? top : top);
+  }
+  function coverPath(chain, top, point) {
+    const [hit] = chain;
+    let deepest = hit;
+    for (let depth = 0;deepest?.shadowRoot && depth < MAX_DEPTH; depth++) {
+      const inner = deepest.shadowRoot.elementFromPoint(point.x, point.y);
+      if (!inner || inner === deepest)
+        break;
+      deepest = inner;
+    }
+    const path = [];
+    for (let at = deepest;at && at !== hit; at = at.assignedSlot ?? parentOrHost2(at))
+      path.push(at);
+    for (const at of chain) {
+      path.push(at);
+      if (at === top)
+        break;
+    }
+    return path;
+  }
+  function pageElement(at, main = at.ownerDocument.querySelector('main, [role="main"]')) {
+    const document2 = at.ownerDocument;
+    return at === document2.documentElement || at === document2.body || main !== null && at.contains(main);
+  }
+  function coverFace(named) {
+    const outermostFixed = named.findLastIndex((at) => getComputedStyle(at).position === "fixed" || inTopLayer(at));
+    return outermostFixed < 0 ? undefined : named.slice(0, outermostFixed + 1).findLast(takesPointer);
+  }
+  function isBlank(world, output, element) {
+    return !isFrame(element) && takingControls(world, element).length === 0 && !holdsWords(output.tree(element, () => quietSnapshot(world, element)));
+  }
+  function dialogBehind(world, backdrop, point) {
+    const { injected } = world;
+    const document2 = backdrop.ownerDocument;
+    const candidates = [
+      ...document2.querySelectorAll(DIALOGS),
+      ...inShadowRoots(document2).filter((element) => element.matches(DIALOGS))
+    ];
+    let nearest;
+    for (const candidate of candidates) {
+      if (backdrop.contains(candidate) || candidate.contains(backdrop))
+        continue;
+      if (!injected.utils.isElementVisible(candidate))
+        continue;
+      const role = injected.utils.getAriaRole(candidate) ?? "";
+      if (!DIALOG_ROLES.has(role) && !inTopLayer(candidate))
+        continue;
+      if (!standsOn(candidate, backdrop))
+        continue;
+      if (takingControls(world, candidate).length === 0)
+        continue;
+      const box = candidate.getBoundingClientRect();
+      const dx = Math.max(box.left - point.x, 0, point.x - box.right);
+      const dy = Math.max(box.top - point.y, 0, point.y - box.bottom);
+      const distance = Math.hypot(dx, dy);
+      if (!nearest || distance < nearest.distance)
+        nearest = { dialog: candidate, distance };
+    }
+    return nearest?.dialog;
+  }
+  function takesPointer(element) {
+    return getComputedStyle(element).pointerEvents !== "none";
+  }
+  function inLiveRegion(world, cover) {
+    for (let at = cover;at; at = at.assignedSlot ?? parentOrHost2(at)) {
+      if (NOTICE_ROLES.has(world.injected.utils.getAriaRole(at) ?? ""))
+        return true;
+      const live = at.getAttribute("aria-live");
+      if (live !== null && live !== "off")
+        return true;
+    }
+    return false;
+  }
+  function standsOn(dialog, backdrop) {
+    const box = dialog.getBoundingClientRect();
+    const left = Math.max(box.left, 0);
+    const right = Math.min(box.right, innerWidth);
+    const top = Math.max(box.top, 0);
+    const bottom = Math.min(box.bottom, innerHeight);
+    if (right <= left || bottom <= top)
+      return false;
+    const root = backdrop.getRootNode();
+    return root.elementsFromPoint((left + right) / 2, (top + bottom) / 2).some((element) => element === backdrop || backdrop.contains(element));
+  }
+  var DIALOGS = '[role="dialog"], [role="alertdialog"], [aria-modal="true"], dialog[open], [popover]';
+  var MAX_WALKED = 2000;
+  var MAX_DEPTH = 32;
+  function composedDescendants(root) {
+    const walk = { found: [], seen: new Set, scopes: [root] };
+    const own = root.nodeType === 1 ? root.shadowRoot : null;
+    if (own)
+      walk.scopes.push(own);
+    for (let index = 0;index < walk.scopes.length; index++) {
+      const scope = walk.scopes[index];
+      if (!scope)
+        continue;
+      for (const element of scope.querySelectorAll("*")) {
+        if (walk.found.length >= MAX_WALKED)
+          return walk.found;
+        if (!take(walk, element))
+          continue;
+        if (element.localName === "slot")
+          takeSlotted(walk, element);
+      }
+    }
+    return walk.found;
+  }
+  function take(walk, element) {
+    if (walk.seen.has(element))
+      return false;
+    walk.seen.add(element);
+    walk.found.push(element);
+    if (element.shadowRoot)
+      walk.scopes.push(element.shadowRoot);
+    return true;
+  }
+  function takeSlotted(walk, slot) {
+    for (const assigned of slot.assignedElements({ flatten: true })) {
+      if (walk.found.length >= MAX_WALKED)
+        return;
+      if (take(walk, assigned))
+        walk.scopes.push(assigned);
+    }
+  }
+  function inShadowRoots(document2) {
+    const roots = [];
+    for (const element of document2.querySelectorAll("*"))
+      if (element.shadowRoot)
+        roots.push(element.shadowRoot);
+    const found = [];
+    for (let index = 0;index < roots.length; index++) {
+      for (const element of roots[index]?.querySelectorAll("*") ?? []) {
+        if (found.length >= MAX_WALKED)
+          return found;
+        found.push(element);
+        if (element.shadowRoot)
+          roots.push(element.shadowRoot);
+      }
+    }
+    return found;
+  }
+  function inClosedPart(cover) {
+    const elements = [cover, ...composedDescendants(cover)];
+    return elements.some((element) => element.localName.includes("-") && mayCarryRoot(element));
+  }
+  function inTopLayer(element) {
+    try {
+      return element.matches(":modal") || element.matches(":popover-open");
+    } catch {
+      return false;
+    }
+  }
+  function holdsWords(node) {
+    if (typeof node === "string")
+      return node.trim() !== "";
+    if (Array.isArray(node))
+      return node.some(holdsWords);
+    if (typeof node !== "object" || node === null)
+      return false;
+    for (const key of ["name", "text", "children"])
+      if (holdsWords(Reflect.get(node, key)))
+        return true;
+    return false;
+  }
+  function nameOf(world, output, element) {
+    return output.tree(element, () => world.injected.utils.getElementAccessibleNameText(element, false));
+  }
+  var CONTROL_ROLES = new Set([
+    "button",
+    "link",
+    "checkbox",
+    "radio",
+    "switch",
+    "tab",
+    "menuitem",
+    "option"
+  ]);
+  function explicitControl(element) {
+    const [role] = (element.getAttribute("role") ?? "").trim().split(/\s+/);
+    return CONTROL_ROLES.has(role ?? "");
+  }
+  function soleDialog(world, cover) {
+    const { utils } = world.injected;
+    const role = utils.getAriaRole(cover) ?? "";
+    if (DIALOG_ROLES.has(role) || NOTICE_ROLES.has(role))
+      return;
+    if (utils.getElementAccessibleNameText(cover, false).trim() !== "")
+      return;
+    const dialogs = composedDescendants(cover).filter((element) => {
+      const its = utils.getAriaRole(element);
+      return (its === "dialog" || its === "alertdialog") && utils.isElementVisible(element);
+    });
+    return dialogs.length === 1 ? dialogs[0] : undefined;
+  }
+  var NATIVE_CONTROLS = "input, textarea, select, button, a[href], iframe, frame, [contenteditable]";
+  function coverControl(world, element) {
+    const { utils } = world.injected;
+    const role = utils.getAriaRole(element);
+    if (role === "dialog" || role === "alertdialog")
+      return false;
+    if (element.matches(NATIVE_CONTROLS) || explicitControl(element))
+      return true;
+    const tabindex = Number.parseInt(element.getAttribute("tabindex") ?? "", 10);
+    return tabindex >= 0 && utils.getElementAccessibleNameText(element, false).trim() !== "";
+  }
+  function controlRole(world, control) {
+    if (isFrame(control))
+      return "iframe";
+    const role = world.injected.utils.getAriaRole(control);
+    return !role || role === "presentation" || role === "none" ? "generic" : role;
+  }
+  function takingControls(world, shown) {
+    const { injected } = world;
+    return composedDescendants(shown).filter((control) => {
+      if (!coverControl(world, control))
+        return false;
+      if (!injected.utils.isElementVisible(control))
+        return false;
+      const box = control.getBoundingClientRect();
+      const middle = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+      const inView = middle.x >= 0 && middle.y >= 0 && middle.x < innerWidth && middle.y < innerHeight;
+      return !inView || hitChain(control, middle) === null;
+    });
+  }
+  function controlsOf(world, output, shown) {
+    const taking = takingControls(world, shown);
+    const roleOf = (control) => controlRole(world, control);
+    const kept = new Set(taking.filter((control) => roleOf(control) === "button").slice(0, MAX_CONTROLS));
+    for (const control of taking) {
+      if (kept.size >= MAX_CONTROLS)
+        break;
+      kept.add(control);
+    }
+    return taking.filter((control) => kept.has(control)).map((control) => ({
+      role: roleOf(control),
+      name: nameOf(world, output, control),
+      ref: world.refs.forElement(control, world.seq)
+    }));
+  }
+  function kindOf(world, subject, chain, point, above) {
+    const onTop = chain[0];
+    if (!onTop)
+      return { is: "nothing" };
+    if (folded(subject, point))
+      return { is: "folded" };
+    if (onTop.localName === "iframe" || onTop.localName === "frame")
+      return { is: "frame" };
+    if (above)
+      return { is: "page" };
+    const label = ownLabel(subject, onTop);
+    if (label)
+      return labelKind(label);
+    const labelled = labelledControl(subject, onTop);
+    if (labelled)
+      return { is: "labels", ref: world.refs.forElement(labelled, world.seq) };
+    const parent = parentOrHost2(subject);
+    if (onTop === parent || parent && onTop === parentOrHost2(parent) || drawingOf(world, subject, onTop, false) !== null)
+      return { is: "wrapper" };
+    if (onTop.contains(subject) || onTop === document.documentElement)
+      return { is: "nothing" };
+    const clear = clearPoint(subject);
+    if (clear)
+      return { is: "partial", position: clear };
+    return { is: "page" };
+  }
+  function folded(subject, point) {
+    for (let at = parentOrHost2(subject);at; at = parentOrHost2(at)) {
+      const style = getComputedStyle(at);
+      const clips = (value) => value === "hidden" || value === "clip";
+      if (!clips(style.overflowX) && !clips(style.overflowY))
+        continue;
+      const box = at.getBoundingClientRect();
+      if (point.x < box.left || point.x >= box.right || point.y < box.top || point.y >= box.bottom)
+        return true;
+    }
+    return false;
+  }
+  function ownLabel(subject, onTop) {
+    const labels = Reflect.get(subject, "labels");
+    if (!(labels instanceof NodeList))
+      return;
+    return Array.from(labels).find((label) => label instanceof Element && label.contains(onTop));
+  }
+  function labelKind(label) {
+    const links = label.querySelectorAll("a[href]").length;
+    if (links === 0)
+      return { is: "label", links: 0 };
+    const position = pointOffLinks(label);
+    return position ? { is: "label", links, position } : { is: "label", links };
+  }
+  function pointOffLinks(label) {
+    const box = label.getBoundingClientRect();
+    const style = getComputedStyle(label);
+    const left = box.x + (Number.parseFloat(style.borderLeftWidth) || 0);
+    const topEdge = box.y + (Number.parseFloat(style.borderTopWidth) || 0);
+    for (const fy of [0.5, 0.25, 0.75])
+      for (const fx of [0.1, 0.3, 0.5, 0.7, 0.9]) {
+        const point = { x: box.x + box.width * fx, y: box.y + box.height * fy };
+        const chain = hitChain(label, point);
+        if (chain !== null)
+          continue;
+        const on = document.elementFromPoint(point.x, point.y);
+        if (on?.closest(`a[href], ${CONTROLS}`))
+          continue;
+        return { x: point.x - left, y: point.y - topEdge };
+      }
+    return;
+  }
+  function labelledControl(subject, onTop) {
+    if (subject.localName !== "label")
+      return;
+    const control = Reflect.get(subject, "control");
+    if (!(control instanceof Element))
+      return;
+    return control === onTop || control.contains(onTop) ? control : undefined;
+  }
+  function clearPoint(subject) {
+    const box = subject.getBoundingClientRect();
+    const style = getComputedStyle(subject);
+    const left = box.x + (Number.parseFloat(style.borderLeftWidth) || 0);
+    const topEdge = box.y + (Number.parseFloat(style.borderTopWidth) || 0);
+    for (const [fx, fy] of [
+      [0.25, 0.25],
+      [0.5, 0.25],
+      [0.75, 0.25],
+      [0.25, 0.5],
+      [0.75, 0.5],
+      [0.25, 0.75],
+      [0.5, 0.75],
+      [0.75, 0.75]
+    ]) {
+      const point = { x: box.x + box.width * fx, y: box.y + box.height * fy };
+      if (point.x < 0 || point.y < 0 || point.x >= innerWidth || point.y >= innerHeight)
+        continue;
+      if (hitChain(subject, point) === null)
+        return {
+          x: Math.round(point.x - left),
+          y: Math.round(point.y - topEdge)
+        };
+    }
+    return;
+  }
+
+  // crates/neo-sdk/neo-playwright-js/src/probe/private-frame.ts
+  var EPSILON = 0.000001;
+  function lookFrameBox(world, iframe, point) {
+    const view = iframe.ownerDocument.defaultView;
+    if (!iframe.isConnected || !view)
+      return { kind: "detached" };
+    const looked = point ? lookHit(world, iframe, point) : undefined;
+    return {
+      kind: "frameBox",
+      origin: shiftedOrigin(view, iframe),
+      hit: looked?.hit ?? null,
+      unseen: looked?.unseen ?? false
+    };
+  }
+  function shiftedOrigin(view, iframe) {
+    for (let at = iframe;at; at = flatParent(at)) {
+      if (!onlyShifts(view.getComputedStyle(at)))
+        return null;
+    }
+    const drawn = iframe.getBoundingClientRect();
+    if (!(iframe instanceof HTMLElement) || Math.abs(drawn.width - iframe.offsetWidth) > 1 || Math.abs(drawn.height - iframe.offsetHeight) > 1)
+      return null;
+    const style = view.getComputedStyle(iframe);
+    return {
+      x: drawn.x + parseInt(style.borderLeftWidth || "", 10) + parseInt(style.paddingLeft || "", 10),
+      y: drawn.y + parseInt(style.borderTopWidth || "", 10) + parseInt(style.paddingTop || "", 10)
+    };
+  }
+  function onlyShifts(style) {
+    if (style.scale !== "none" && style.scale !== "")
+      return false;
+    if (style.rotate !== "none" && style.rotate !== "")
+      return false;
+    if (style.zoom !== "1" && style.zoom !== "" && style.zoom !== "normal")
+      return false;
+    if (style.offsetPath !== "none" && style.offsetPath !== "")
+      return false;
+    if (style.transform === "none" || style.transform === "")
+      return true;
+    let matrix;
+    try {
+      matrix = new DOMMatrixReadOnly(style.transform);
+    } catch {
+      return false;
+    }
+    const near = (value, wanted) => Math.abs(value - wanted) < EPSILON;
+    return near(matrix.m11, 1) && near(matrix.m12, 0) && near(matrix.m13, 0) && near(matrix.m14, 0) && near(matrix.m21, 0) && near(matrix.m22, 1) && near(matrix.m23, 0) && near(matrix.m24, 0) && near(matrix.m31, 0) && near(matrix.m32, 0) && near(matrix.m33, 1) && near(matrix.m34, 0) && near(matrix.m43, 0) && near(matrix.m44, 1);
+  }
+  function lookHit(world, iframe, point) {
+    const verdict = world.injected.expectHitTarget(point, iframe);
+    if (verdict === "done")
+      return { hit: verdict, unseen: false };
+    const top = topmostAt(iframe, point);
+    if (top === undefined)
+      return { hit: verdict, unseen: true };
+    if (!holds(top, iframe))
+      return { hit: verdict, unseen: false };
+    const view = iframe.ownerDocument.defaultView;
+    const through = view?.getComputedStyle(iframe).pointerEvents === "none";
+    const root = iframe.getRootNode();
+    const drawn = (root instanceof Document || root instanceof ShadowRoot) && root.elementsFromPoint(point.x, point.y).includes(iframe);
+    if (through || drawn)
+      return { hit: "done", unseen: false };
+    return { hit: verdict, unseen: true };
+  }
+  function topmostAt(iframe, point) {
+    const roots = [];
+    for (let at = iframe;at; ) {
+      const root = at.getRootNode();
+      if (root instanceof Document) {
+        roots.push(root);
+        break;
+      }
+      if (!(root instanceof ShadowRoot))
+        break;
+      roots.push(root);
+      at = root.host;
+    }
+    let top;
+    for (let index = roots.length - 1;index >= 0; index--) {
+      const inner = roots[index].elementsFromPoint(point.x, point.y)[0];
+      if (!inner)
+        break;
+      top = inner;
+      const next = roots[index - 1];
+      if (index && next instanceof ShadowRoot && inner !== next.host)
+        break;
+    }
+    return top;
+  }
+  function holds(element, iframe) {
+    for (let at = iframe;at; at = flatParent(at)) {
+      if (at === element)
+        return true;
+    }
+    return false;
+  }
+  function flatParent(element) {
+    return element.assignedSlot ?? parentElementOrShadowHost(element) ?? null;
+  }
+
   // crates/neo-sdk/neo-playwright-js/src/probe/act.ts
   var slots = new WeakMap;
   function slotOf(world) {
@@ -8404,8 +9541,14 @@ ${value.stack}`;
     const interception = output.arm(element, arm.action, arm.browserMapped ? undefined : place.point, arm.blockAll);
     if (interception === "error:notconnected")
       return { kind: "detached" };
-    if (typeof interception === "string")
-      return { kind: "covered", by: interception };
+    if (typeof interception === "string") {
+      const mark = coverMark(injected.retarget(element, "button-link") ?? element, place.point);
+      return {
+        kind: "covered",
+        by: interception,
+        ...mark ? { cover: mark } : {}
+      };
+    }
     const slot = slotOf(world);
     slot.stopped = undefined;
     slot.armed = {
@@ -8450,11 +9593,14 @@ ${value.stack}`;
     if (style === "error:notconnected")
       return { kind: "detached" };
     const box = iframe.getBoundingClientRect();
+    const hit = request.point ? world.injected.expectHitTarget(request.point, iframe) : null;
+    const mark = request.point && hit !== null && hit !== "done" ? coverMark(iframe, request.point) : undefined;
     return {
       kind: "frameBox",
       origin: style === "transformed" ? null : { x: box.x + style.left, y: box.y + style.top },
-      hit: request.point ? world.injected.expectHitTarget(request.point, iframe) : null,
-      unseen: false
+      hit,
+      unseen: false,
+      ...mark ? { cover: mark } : {}
     };
   }
   function scroll(element, plan) {
@@ -8975,256 +10121,6 @@ ${value.stack}`;
     v[at + 1] = (hi << bits | lo >>> 32 - bits) >>> 0;
   }
 
-  // crates/neo-sdk/neo-playwright-js/src/probe/private-look.ts
-  var TEXT_TYPES = new Set([
-    "text",
-    "password",
-    "tel",
-    "email",
-    "search",
-    "url",
-    "number"
-  ]);
-  var MAXLENGTH_TYPES = new Set([
-    "text",
-    "search",
-    "url",
-    "tel",
-    "email",
-    "password"
-  ]);
-  function look(world, request) {
-    const element = world.pins.live(request.pin);
-    if (!element)
-      return { kind: "detached" };
-    return { kind: "value", value: lookAt(world, element, request.look) };
-  }
-  function lookAt(world, element, ask) {
-    coverWrappers.delete(element);
-    if (!isTextInput(element))
-      return { refusal: { code: "notAnInput" } };
-    if (ask.scroll === "centre")
-      element.scrollIntoView({
-        block: "center",
-        inline: "center",
-        behavior: "instant"
-      });
-    const facts = factsOf(element);
-    const refusal = firstRefusal(world, element, facts, ask);
-    const moved = ask.expect !== undefined && limitMove(facts, ask.expect, ask) === "fits";
-    return {
-      facts,
-      ...refusal ? { refusal } : {},
-      ...moved ? { maxLengthMoved: true } : {}
-    };
-  }
-  function firstRefusal(world, element, facts, ask) {
-    const { expect } = ask;
-    if (expect && facts.origin !== expect.origin)
-      return { code: "wrongOrigin" };
-    if (expect?.type !== undefined && expect.type !== facts.type)
-      return { code: "wrongType" };
-    const fact = expect && changedFact(facts, expect, ask);
-    if (fact)
-      return { code: "boxChanged", fact };
-    if (element.disabled || element.readOnly || element.matches(":disabled"))
-      return { code: "boxNotEditable" };
-    if (!facts.sized) {
-      if (!ask.keys)
-        return { code: "boxHidden" };
-    } else if (!world.injected.elementState(element, "visible", ask.frameVisible).matches)
-      return { code: "boxHidden" };
-    else if (blocked(world, element, ask.keys))
-      return { code: "boxCovered" };
-    if (ask.length !== undefined && !ask.cut && facts.maxLength !== null && MAXLENGTH_TYPES.has(facts.type) && ask.length > facts.maxLength)
-      return { code: "valueTooLong" };
-    return;
-  }
-  function factsOf(input) {
-    const rect = input.getBoundingClientRect();
-    return {
-      origin: originOf(input.ownerDocument),
-      type: input.type,
-      autocomplete: input.getAttribute("autocomplete") ?? "",
-      maxLength: input.maxLength >= 0 ? input.maxLength : null,
-      inputMode: input.getAttribute("inputmode") ?? "",
-      name: input.getAttribute("name") ?? "",
-      id: input.getAttribute("id") ?? "",
-      sized: rect.width > 0 && rect.height > 0,
-      empty: input.value === ""
-    };
-  }
-  function originOf(document2) {
-    const origin = document2.defaultView ? Reflect.get(document2.defaultView, "origin") : undefined;
-    return typeof origin === "string" ? origin : document2.location.origin;
-  }
-  function changedFact(facts, expect, ask) {
-    if (expect.autocomplete !== undefined && expect.autocomplete !== facts.autocomplete)
-      return "autocomplete";
-    if (limitMove(facts, expect, ask) === "cuts")
-      return "maxLength";
-    if (expect.inputMode !== undefined && expect.inputMode !== facts.inputMode)
-      return "inputMode";
-    if (expect.name !== undefined && expect.name !== facts.name)
-      return "name";
-    if (expect.id !== undefined && expect.id !== facts.id)
-      return "id";
-    return;
-  }
-  function limitMove(facts, expect, ask) {
-    const approved = expect.maxLength;
-    if (approved === undefined)
-      return "same";
-    const now = facts.maxLength ?? -1;
-    if (approved === now)
-      return "same";
-    const { length } = ask;
-    if (length === undefined)
-      return "fits";
-    const fits = (limit) => limit === -1 || !MAXLENGTH_TYPES.has(facts.type) || length <= limit;
-    return fits(approved) && fits(now) ? "fits" : "cuts";
-  }
-  function isTextInput(element) {
-    return element.localName === "input" && element.namespaceURI === "http://www.w3.org/1999/xhtml" && TEXT_TYPES.has(String(Reflect.get(element, "type")));
-  }
-  function blockerOf(box) {
-    try {
-      scrollIntoViewIfNeeded(box);
-      const rect = box.getBoundingClientRect();
-      let document2 = box.ownerDocument;
-      let x = rect.left + rect.width / 2;
-      let y = rect.top + rect.height / 2;
-      for (let frame = document2.defaultView?.frameElement;frame; frame = document2.defaultView?.frameElement) {
-        const frameRect = frame.getBoundingClientRect();
-        x += frameRect.x + frame.clientLeft;
-        y += frameRect.y + frame.clientTop;
-        document2 = frame.ownerDocument;
-      }
-      return blockerAt(document2, box, x, y);
-    } catch {
-      return "unread";
-    }
-  }
-  var coverWrappers = new WeakMap;
-  function coverWrapper(box) {
-    return coverWrappers.get(box);
-  }
-  function blocked(world, box, keys) {
-    const blocker = blockerOf(box);
-    if (blocker === null)
-      return false;
-    if (blocker === "unread")
-      return true;
-    const wrapper = drawingOf(world, box, blocker, keys);
-    if (!wrapper)
-      return true;
-    coverWrappers.set(box, wrapper);
-    return false;
-  }
-  var CONTROLS = "input, textarea, select, button, a[href], iframe, frame, [contenteditable], [tabindex]";
-  function drawingOf(world, box, blocker, keys) {
-    if (blocker.ownerDocument !== box.ownerDocument)
-      return null;
-    const parent = box.parentElement;
-    const grand = parent?.parentElement;
-    const wrapper = parent?.contains(blocker) ? parent : grand?.contains(blocker) ? grand : null;
-    if (!wrapper)
-      return null;
-    let cover = blocker;
-    while (cover.parentElement && cover.parentElement !== wrapper && !cover.parentElement.contains(box))
-      cover = cover.parentElement;
-    if (cover.contains(box) || cover.matches(CONTROLS) || cover.querySelector(CONTROLS) || labelsAnother(cover, box))
-      return null;
-    const own = box.getBoundingClientRect();
-    const drawn = cover.getBoundingClientRect();
-    const dx = own.width / 2;
-    const dy = own.height / 2;
-    if (drawn.left < own.left - dx || drawn.right > own.right + dx || drawn.top < own.top - dy || drawn.bottom > own.bottom + dy)
-      return null;
-    const text = renderedText(cover);
-    if (fold(text) === "")
-      return keys ? wrapper : null;
-    const name = world.injected.utils.getElementAccessibleNameText(box, false);
-    return sameName(text, name) ? wrapper : null;
-  }
-  function labelsAnother(cover, box) {
-    const labels = [cover, ...cover.querySelectorAll("label")];
-    return labels.some((label) => {
-      if (label.localName !== "label")
-        return false;
-      const control = Reflect.get(label, "control");
-      return isNode(control) && control !== box;
-    });
-  }
-  function renderedText(element) {
-    const text = Reflect.get(element, "innerText");
-    return typeof text === "string" ? text : "";
-  }
-  function sameName(drawn, name) {
-    const a = fold(drawn);
-    const b = fold(name);
-    if (!a || !b)
-      return false;
-    if (a === b)
-      return true;
-    const [shorter, longer] = a.length < b.length ? [a, b] : [b, a];
-    return shorter.length >= 3 && longer.includes(shorter);
-  }
-  function fold(text) {
-    return text.replace(/\s+/g, " ").trim().toLowerCase().replace(/[\s*:]+$/, "");
-  }
-  function scrollIntoViewIfNeeded(box) {
-    const scroll = Reflect.get(box, "scrollIntoViewIfNeeded");
-    if (typeof scroll === "function")
-      Reflect.apply(scroll, box, [true]);
-    else
-      box.scrollIntoView({ block: "center", inline: "center" });
-  }
-  function blockerAt(document2, box, pointX, pointY) {
-    let currentDocument = document2;
-    let x = pointX;
-    let y = pointY;
-    let hit = currentDocument.elementFromPoint(x, y);
-    while (hit && (hit.tagName === "IFRAME" || hit.tagName === "FRAME") && hit !== box) {
-      let child = null;
-      try {
-        child = Reflect.get(hit, "contentDocument");
-      } catch {
-        child = null;
-      }
-      if (!isDocument(child))
-        break;
-      const frameRect = hit.getBoundingClientRect();
-      x -= frameRect.x + hit.clientLeft;
-      y -= frameRect.y + hit.clientTop;
-      currentDocument = child;
-      hit = currentDocument.elementFromPoint(x, y);
-    }
-    if (!hit || hit === box || reaches(hit, box) || reaches(box, hit))
-      return null;
-    const hitLabel = hit.closest("label");
-    if (hitLabel && (hitLabel.control === box || hitLabel.contains(box)))
-      return null;
-    const boxLabel = box.closest("label");
-    return boxLabel?.contains(hit) ?? false ? null : hit;
-  }
-  function up(node) {
-    const next = node.parentNode ?? Reflect.get(node, "host") ?? Reflect.get(node.getRootNode(), "host");
-    return isNode(next) ? next : null;
-  }
-  function isNode(value) {
-    return typeof value === "object" && value !== null && typeof Reflect.get(value, "nodeType") === "number";
-  }
-  function isDocument(value) {
-    return isNode(value) && value.nodeType === Node.DOCUMENT_NODE;
-  }
-  function reaches(from, to) {
-    for (let node = from;node; node = up(node))
-      if (node === to)
-        return true;
-    return false;
-  }
-
   // crates/neo-sdk/neo-playwright-js/src/probe/private-entry.ts
   var MARK = Symbol.for("neo.privatelyTyped");
   var anyMarked = false;
@@ -9700,6 +10596,9 @@ ${value.stack}`;
       this.engine = diagnosticEngine(world.injected);
       this.checks = expectChecks(world.injected);
     }
+    get neoSnapshot() {
+      return !this.policy.conformance;
+    }
     run(invoke) {
       if (this.policy.conformance && !anyPrivatelyTyped())
         return invoke();
@@ -9757,235 +10656,8 @@ ${value.stack}`;
     };
   }
 
-  // crates/neo-sdk/neo-playwright-js/src/probe/browseros-ui.ts
-  var BROWSEROS_UI_HOSTS = new Set([
-    "browseros-neo-takeover"
-  ]);
-  function isBrowserOSUi(element) {
-    return BROWSEROS_UI_HOSTS.has(element.localName);
-  }
-
-  // crates/neo-sdk/neo-playwright-js/src/probe/private-shown.ts
-  var inputs = 0;
-  var heard;
-  var listened = new WeakSet;
-  var walkedRoots = new WeakMap;
-  var waiting = new Set;
-  var pointed = new WeakSet;
-  var entries = new WeakMap;
-  var certain = new WeakSet;
-  var done = new WeakSet;
-  var tries = new WeakMap;
-  var NAMED_TRIES = 5;
-  var readings = 0;
-  var WAITING_MOST = 64;
-  var FOCUS_DEPTH = 32;
-  var SHADOW_HOSTS = new Set([
-    "article",
-    "aside",
-    "blockquote",
-    "body",
-    "div",
-    "footer",
-    "h1",
-    "h2",
-    "h3",
-    "h4",
-    "h5",
-    "h6",
-    "header",
-    "main",
-    "nav",
-    "p",
-    "section",
-    "span"
-  ]);
-  var XHTML = "http://www.w3.org/1999/xhtml";
-  function privateShown(world, request, _root, nodes) {
-    const { document: document2 } = world.injected;
-    const view = document2.defaultView;
-    if (!heard) {
-      heard = (event) => {
-        const first = event.composedPath()[0];
-        if (!(first instanceof Element))
-          return;
-        const known = knownRoot(first);
-        if (known)
-          listen2(known);
-        if (event.type === "input" && paintedInClear(first, view))
-          inputs += 1;
-        if (!event.isTrusted || !unknownHost(first) || done.has(first))
-          return;
-        inputs += 1;
-        point(first, true);
-      };
-      document2.addEventListener("beforeinput", heard, true);
-      document2.addEventListener("input", heard, true);
-    }
-    if (request.walk === true)
-      keep(nodes);
-    else {
-      readings += 1;
-      sweep();
-    }
-    pointFocus(document2);
-    const { shown, boxes } = look2(document2);
-    const hosts = waiting.size > 0 ? { hosts: true } : {};
-    const named = namedWaiting() ? { named: true } : {};
-    return { kind: "value", value: { shown, inputs, boxes, ...hosts, ...named } };
-  }
-  function privateHosts(request) {
-    const hosts = [];
-    for (const first of [true, false]) {
-      for (const ref of waiting) {
-        if (hosts.length >= request.limit)
-          return hosts;
-        const host = ref.deref();
-        if (!host?.isConnected) {
-          drop2(ref, host);
-          continue;
-        }
-        if (certain.has(host) !== first)
-          continue;
-        if (first) {
-          const tried = tries.get(host) ?? { count: 0, at: 0 };
-          if (tried.at === readings)
-            continue;
-          tries.set(host, { count: tried.count + 1, at: readings });
-        } else {
-          waiting.delete(ref);
-        }
-        hosts.push(host);
-      }
-    }
-    return hosts;
-  }
-  function sweep() {
-    for (const ref of waiting) {
-      const host = ref.deref();
-      const spent = host && (tries.get(host)?.count ?? 0) >= NAMED_TRIES;
-      if (!host?.isConnected || spent)
-        drop2(ref, host);
-    }
-  }
-  function drop2(ref, host) {
-    waiting.delete(ref);
-    if (host)
-      done.add(host);
-  }
-  function namedWaiting() {
-    for (const ref of waiting) {
-      const host = ref.deref();
-      if (host?.isConnected && certain.has(host))
-        return true;
-    }
-    return false;
-  }
-  function keep(roots) {
-    for (const root of roots) {
-      if (!(root instanceof ShadowRoot) || root.mode !== "closed")
-        continue;
-      const host = root.host;
-      if (isBrowserOSUi(host) || walkedRoots.has(host))
-        continue;
-      walkedRoots.set(host, root);
-      const entry = entries.get(host);
-      if (entry)
-        drop2(entry, host);
-    }
-  }
-  function knownRoot(host) {
-    return walkedRoots.get(host) ?? host.shadowRoot;
-  }
-  function unknownHost(element) {
-    return mayCarryRoot(element) && !editable(element);
-  }
-  function mayCarryRoot(element) {
-    if (element.namespaceURI !== XHTML || isBrowserOSUi(element))
-      return false;
-    const name = element.localName;
-    if (!SHADOW_HOSTS.has(name) && !name.includes("-"))
-      return false;
-    return knownRoot(element) === null;
-  }
-  function editable(element) {
-    if (Reflect.get(element, "isContentEditable") === true)
-      return true;
-    const modify = element.ownerDocument.defaultView?.getComputedStyle(element).getPropertyValue("-webkit-user-modify");
-    return modify?.startsWith("read-write") === true;
-  }
-  function point(host, byInput = false) {
-    if (byInput)
-      certain.add(host);
-    const entry = entries.get(host);
-    if (entry && waiting.has(entry))
-      return;
-    if (pointed.has(host) && !byInput)
-      return;
-    if (!byInput && waiting.size >= WAITING_MOST)
-      return;
-    pointed.add(host);
-    const fresh = new WeakRef(host);
-    entries.set(host, fresh);
-    waiting.add(fresh);
-  }
-  function listen2(root) {
-    if (root.mode !== "closed" || listened.has(root) || !heard)
-      return;
-    listened.add(root);
-    root.addEventListener("beforeinput", heard, true);
-    root.addEventListener("input", heard, true);
-  }
-  function pointFocus(document2) {
-    let holder = document2.activeElement;
-    for (let depth = 0;holder && depth < FOCUS_DEPTH; depth += 1) {
-      const inner = knownRoot(holder)?.activeElement;
-      if (!inner)
-        break;
-      holder = inner;
-    }
-    if (holder?.matches(":focus") && mayCarryRoot(holder))
-      point(holder);
-  }
-  function look2(document2) {
-    const view = document2.defaultView;
-    const roots = [document2];
-    let boxes = false;
-    for (const root of roots) {
-      if (root instanceof ShadowRoot)
-        listen2(root);
-      for (const field of root.querySelectorAll("input, textarea")) {
-        if (!isPrivateField(field, { declared: true }))
-          continue;
-        boxes = true;
-        if (paintedInClear(field, view))
-          return { shown: true, boxes };
-      }
-      for (const host of root.querySelectorAll("*")) {
-        const shadow = knownRoot(host);
-        if (shadow)
-          roots.push(shadow);
-      }
-    }
-    return { shown: false, boxes };
-  }
-  function paintedInClear(field, view) {
-    if (!isPrivateField(field, { declared: true }))
-      return false;
-    const value = Reflect.get(field, "value");
-    if (typeof value !== "string" || value === "")
-      return false;
-    const security = view?.getComputedStyle(field).getPropertyValue("-webkit-text-security");
-    if (security && security !== "none")
-      return false;
-    const visible = Reflect.get(field, "checkVisibility");
-    return typeof visible !== "function" || Reflect.apply(visible, field, [
-      { visibilityProperty: true, opacityProperty: true }
-    ]) === true;
-  }
-
   // crates/neo-sdk/neo-playwright-js/src/probe/protocol.ts
-  var PROTOCOL = 44;
+  var PROTOCOL = 50;
 
   // crates/neo-sdk/neo-playwright-js/src/probe/read.ts
   var XHTML2 = "http://www.w3.org/1999/xhtml";
@@ -10195,267 +10867,479 @@ ${value.stack}`;
     return { kind: "value", value: null };
   }
 
-  // crates/neo-sdk/neo-playwright-js/src/probe/shadow-roots.ts
-  var closedRoots = new WeakMap;
-  var realShadowRoot;
-  var installed = false;
-  function getterOf(prototype, name) {
-    let owner = prototype;
-    while (owner) {
-      const descriptor = Object.getOwnPropertyDescriptor(owner, name);
-      if (descriptor) {
-        if (typeof descriptor.get !== "function")
-          throw new ProbeError("internal", `this world's ${name} is not an accessor`);
-        return descriptor.get;
-      }
-      owner = Object.getPrototypeOf(owner);
+  // crates/neo-sdk/neo-playwright-js/src/probe/cover-survey.ts
+  var MAX_CONTROLS2 = 300;
+  var BUDGET_MS = 20;
+  var MAX_LAYERS = 3;
+  var DIALOGS2 = new Set([
+    "dialog",
+    "alertdialog",
+    "menu",
+    "listbox",
+    "tooltip",
+    "status",
+    "alert",
+    "log"
+  ]);
+  var memory = new WeakMap;
+  function surveyCovers(world, output, json) {
+    const { injected } = world;
+    const document2 = injected.document;
+    const refs = lastSnapshotRefs(injected);
+    const phases = {
+      hits: 0,
+      count: 0,
+      naming: 0,
+      linking: 0,
+      marks: 0,
+      stopped: false
+    };
+    const started = performance.now();
+    const samples = viewPoints().map((point) => ({
+      point,
+      hit: hitAtRoots([document2], point)
+    }));
+    const { hits, tested, main } = findFaces(world, refs, samples, started, phases);
+    phases.hits = performance.now() - started;
+    const inside = (root, element) => {
+      for (let at = element;at; at = at.assignedSlot ?? parentOrHost2(at))
+        if (at === root)
+          return true;
+      return false;
+    };
+    const page = pageGuard(world, refs, phases, main);
+    const resolving = performance.now();
+    const found = facesFromHits(world, hits, page);
+    if (hits.length)
+      phases.naming += Math.max(0, performance.now() - resolving - phases.count);
+    const remembered = memory.get(document2) ?? [];
+    retainFaces(world, found, remembered, page);
+    for (const [element, face] of found) {
+      if (!face.observed || page(element))
+        found.delete(element);
+      else
+        for (const root of face.roots)
+          if (page(root))
+            face.roots.delete(root);
     }
-    return;
+    if (!found.size) {
+      memory.delete(document2);
+      return {
+        layers: [],
+        tested: tested.length,
+        elapsed: performance.now() - started,
+        marksSkipped: false,
+        phases
+      };
+    }
+    const naming = performance.now();
+    const centre = { x: innerWidth / 2, y: innerHeight / 2 };
+    for (const face of found.values())
+      face.named = shownAs(world, output, face.named, centre);
+    const groups = joinFaces(found, inside).map((faces) => ({
+      faces,
+      held: holdersOf(faces, inside)
+    }));
+    const next = [];
+    const layers = groups.map((group) => describeLayer(world, output, group, groups, remembered, next, tested, samples, inside)).filter((layer) => layer !== undefined).sort((a, b) => Number(b.note.wholeView) - Number(a.note.wholeView) || a.order - b.order).slice(0, MAX_LAYERS);
+    memory.set(document2, next);
+    phases.naming += performance.now() - naming;
+    const marksSkipped = markBlocks(world, json, layers, inside, phases);
+    return {
+      layers: layers.map(({ note }) => note),
+      tested: tested.length,
+      elapsed: performance.now() - started,
+      marksSkipped,
+      phases
+    };
   }
-  function override(prototype, name, get) {
-    Object.defineProperty(prototype, name, {
-      configurable: true,
-      enumerable: true,
-      get
-    });
-  }
-  function installShadowRoots() {
-    if (installed)
-      return;
-    installed = true;
-    const read = getterOf(Element.prototype, "shadowRoot");
-    if (!read)
-      return;
-    realShadowRoot = read;
-    override(Element.prototype, "shadowRoot", function() {
-      if (isBrowserOSUi(this))
-        return null;
-      return Reflect.apply(read, this, []) ?? closedRoots.get(this) ?? null;
-    });
-    for (const prototype of [Element.prototype, Text.prototype]) {
-      const slot = getterOf(prototype, "assignedSlot");
-      if (!slot)
+  function findFaces(world, refs, samples, started, phases) {
+    const main = world.injected.document.querySelector('main, [role="main"]');
+    const hits = [];
+    const tested = [];
+    for (const sample of samples) {
+      const { point, hit } = sample;
+      const chain = [];
+      for (let at = hit;at; at = at.assignedSlot ?? parentOrHost2(at))
+        chain.push(at);
+      const top = chain.at(-1);
+      if (top)
+        sample.deepest = rememberHit(hits, chain, top, point, false, main);
+    }
+    for (const { element } of refs.values()) {
+      if (tested.length >= MAX_CONTROLS2 || performance.now() - started >= BUDGET_MS) {
+        phases.stopped = true;
+        break;
+      }
+      if (!coverControl(world, element))
         continue;
-      override(prototype, "assignedSlot", function() {
-        return Reflect.apply(slot, this, []) ?? closedSlotOf(this);
+      if (!world.injected.elementState(element, "visible", true).matches || !world.injected.elementState(element, "enabled", true).matches)
+        continue;
+      const point = middle(element);
+      if (!point)
+        continue;
+      const subject = world.injected.retarget(element, "button-link") ?? element;
+      const chain = hitChain(subject, point);
+      const kind = chain ? kindOf(world, subject, chain, point, false).is : "nothing";
+      const covered = kind === "page" || kind === "frame";
+      tested.push({ element, clear: !covered });
+      if (chain && covered)
+        rememberHit(hits, chain, coverRoot(subject, chain), point, true, main, subject);
+    }
+    return { hits, tested, main };
+  }
+  function rememberHit(hits, chain, root, point, observed, main, subject) {
+    const path = coverPath(chain, root, point);
+    const filtered = path.filter((element) => !pageElement(element, main));
+    const face = coverFace(filtered);
+    if (face && !edgeBar(face))
+      hits.push({ path: filtered, chain, root, point, face, observed, subject });
+    return path[0];
+  }
+  function facesFromHits(world, hits, page) {
+    const found = new Map;
+    for (const hit of hits) {
+      if (!hit.observed)
+        continue;
+      let path = hit.path;
+      let element = hit.face;
+      let peeled = false;
+      while (element && page(element)) {
+        path = path.slice(0, path.indexOf(element));
+        element = coverFace(path);
+        peeled = true;
+      }
+      if (!element || edgeBar(element))
+        continue;
+      const root = peeled ? hit.subject ? coverRoot(hit.subject, path) : path.at(-1) ?? element : hit.root;
+      const known = found.get(element);
+      if (known) {
+        known.observed = true;
+        if (!page(root))
+          known.roots.add(root);
+        continue;
+      }
+      const named = whichDialog(world, hit.chain, root, hit.point);
+      found.set(element, {
+        element,
+        named: page(named) ? element : named,
+        roots: new Set(!page(root) ? [root] : []),
+        observed: true
+      });
+    }
+    return found;
+  }
+  function pageGuard(world, refs, phases, main) {
+    let controls;
+    const cached = new Map;
+    const meanings = new Map;
+    const meaning = (element) => {
+      let known = meanings.get(element);
+      if (!known) {
+        const role = world.injected.utils.getAriaRole(element) ?? "";
+        const top = inTopLayer(element);
+        known = {
+          dialog: role === "dialog" || role === "alertdialog" || top,
+          exempt: DIALOGS2.has(role) || top
+        };
+        meanings.set(element, known);
+      }
+      return known;
+    };
+    const ownControl = (root, control) => {
+      let inDialog = false;
+      for (let at = control;at; at = at.assignedSlot ?? parentOrHost2(at)) {
+        if (at === root)
+          return !inDialog;
+        inDialog ||= meaning(at).dialog;
+      }
+      return false;
+    };
+    return (element) => {
+      const known = cached.get(element);
+      if (known !== undefined)
+        return known;
+      const started = performance.now();
+      let page = false;
+      try {
+        if (meaning(element).exempt)
+          return false;
+        for (let at = element.assignedSlot ?? parentOrHost2(element);at; at = at.assignedSlot ?? parentOrHost2(at))
+          if (meaning(at).dialog)
+            return false;
+        if (pageElement(element, main)) {
+          page = true;
+          return true;
+        }
+        controls ??= Array.from(refs.values(), ({ element }) => element).filter((element) => coverControl(world, element));
+        page = controls.filter((control) => ownControl(element, control)).length > controls.length / 2;
+        return page;
+      } finally {
+        cached.set(element, page);
+        phases.count += performance.now() - started;
+      }
+    };
+  }
+  function retainFaces(world, found, remembered, page) {
+    for (const entry of remembered) {
+      const element = entry.face.deref();
+      if (!element || !stands(world, element) || page(element))
+        continue;
+      const known = found.get(element);
+      if (known) {
+        known.observed = true;
+        continue;
+      }
+      const named = entry.named.deref();
+      found.set(element, {
+        element,
+        named: named?.isConnected && world.injected.elementState(named, "visible", true).matches ? named : element,
+        roots: new Set(entry.roots.flatMap((root) => {
+          const live = root.deref();
+          return live?.isConnected && !page(live) ? [live] : [];
+        })),
+        observed: true
       });
     }
   }
-  var slotMaps = new Map;
-  var dropScheduled = false;
-  function closedSlotOf(node) {
-    const host = node.parentElement;
-    const root = host ? closedRoots.get(host) : undefined;
-    if (!root)
-      return null;
-    let slots = slotMaps.get(root);
-    if (!slots) {
-      slots = new Map;
-      for (const slot of root.querySelectorAll("slot"))
-        for (const assigned of slot.assignedNodes())
-          if (!slots.has(assigned))
-            slots.set(assigned, slot);
-      slotMaps.set(root, slots);
-      if (!dropScheduled) {
-        dropScheduled = true;
-        queueMicrotask(() => {
-          dropScheduled = false;
-          slotMaps.clear();
-        });
+  function joinFaces(found, inside) {
+    const groups = [];
+    for (const face of found.values()) {
+      const joins = groups.filter((group) => group.some((other) => Array.from(face.roots).some((root) => other.roots.has(root)) || face.named === other.element || other.named === face.element || face.named !== face.element && inside(face.named, other.element) || other.named !== other.element && inside(other.named, face.element)));
+      const first = joins[0];
+      if (!first) {
+        groups.push([face]);
+        continue;
+      }
+      first.push(face);
+      for (const joined of joins.slice(1)) {
+        first.push(...joined);
+        groups.splice(groups.indexOf(joined), 1);
       }
     }
-    return slots.get(node) ?? null;
+    return groups;
   }
-  function openClosedRoots(seeds) {
-    const read = realShadowRoot;
-    if (!read)
+  function holdersOf(faces, inside) {
+    const shared = [...new Set(faces.flatMap((face) => [...face.roots]))].filter((root) => faces.filter((face) => face.roots.has(root)).length > 1);
+    const held = shared.length ? shared : faces.map((face) => face.element);
+    for (const { named } of faces)
+      if (!held.some((root) => inside(root, named)))
+        held.push(named);
+    return held;
+  }
+  function describeLayer(world, output, group, groups, remembered, next, tested, samples, inside) {
+    const { faces, held } = group;
+    const face = faces.find((face) => isBlank(world, output, face.element)) ?? faces[0];
+    if (!face)
       return;
-    for (const seed of seeds) {
-      if (!(seed instanceof Node))
-        continue;
-      const root = seed.getRootNode();
-      if (!(root instanceof ShadowRoot))
-        continue;
-      const host = root.host;
-      if (isBrowserOSUi(host))
-        continue;
-      if (Reflect.apply(read, host, []) !== root)
-        closedRoots.set(host, root);
-    }
+    const old = remembered.find((entry) => faces.some((face) => entry.face.deref() === face.element));
+    const order = old?.order ?? remembered.reduce((last, entry) => Math.max(last, entry.order + 1), 0) + next.length;
+    const named = face.named;
+    const belongs = (element) => held.some((root) => inside(root, element));
+    const ownOfAny = (element) => groups.some(({ held }) => held.some((root) => inside(root, element)));
+    const wholeView = samples.every(({ deepest }) => deepest && belongs(deepest)) && tested.every(({ element, clear }) => !clear || ownOfAny(element)) && tested.some(({ element, clear }) => !clear && !belongs(element));
+    const controls = Array.from(new Map(held.flatMap((root) => controlsOf(world, output, root)).map((control) => [control.ref, control])).values());
+    const words = output.tree(named, () => renderedText(named).trim().replace(/\s+/g, " "));
+    const blank = !inClosedPart(named) && controls.length === 0 && !words && isBlank(world, output, named);
+    for (const member of faces)
+      next.push({
+        face: new WeakRef(member.element),
+        named: new WeakRef(member.named),
+        roots: Array.from(member.roots, (root) => new WeakRef(root)),
+        order
+      });
+    return {
+      order,
+      held,
+      note: {
+        role: controlRole(world, named),
+        name: nameOf(world, output, named),
+        ref: world.refs.forElement(named, world.seq),
+        blank,
+        loading: held.some(saysLoading),
+        wholeView,
+        controls,
+        ...words ? { firstWords: Array.from(words).slice(0, 61).join("") } : {}
+      }
+    };
   }
-
-  // crates/neo-sdk/neo-playwright-js/src/probe/pointer-targets.ts
-  var INTERACTIVE_TAGS = new Set([
-    "a",
-    "button",
-    "input",
-    "select",
-    "textarea",
-    "details",
-    "summary"
-  ]);
-  var INTERACTIVE_ROLES = new Set([
-    "button",
-    "link",
-    "textbox",
-    "checkbox",
-    "radio",
-    "combobox",
-    "listbox",
-    "menuitem",
-    "menuitemcheckbox",
-    "menuitemradio",
-    "option",
-    "searchbox",
-    "slider",
-    "spinbutton",
-    "switch",
-    "tab",
-    "treeitem"
-  ]);
-  var SECTION_ROLES = new Set([
-    "banner",
-    "navigation",
-    "main",
-    "complementary",
-    "contentinfo",
-    "search",
-    "form",
-    "region",
-    "article"
-  ]);
-  var FRAME_TAGS = new Set(["iframe", "frame"]);
-  var pointerTargets = new Map;
-  var nearestTargets = new Map;
-  function leafTargets(targets, engine) {
-    const all = new Set(targets);
-    return targets.filter((target) => !holdsTarget(target, all, engine));
-  }
-  function holdsTarget(target, targets, engine) {
-    const seen = new Set([target]);
-    const pending = [];
-    pushChildren(pending, seen, target);
-    for (let element = pending.pop();element; element = pending.pop()) {
-      if (engine.isVisible(element) && (targets.has(element) || isOwnTarget(element, engine)))
-        return true;
-      pushChildren(pending, seen, element);
+  function markBlocks(world, json, layers, inside, phases) {
+    if (!layers.some(({ note }) => note.wholeView && !note.blank))
+      return false;
+    const started = performance.now();
+    let linked;
+    try {
+      linked = lastSnapshotNodes(world.injected, json);
+    } catch {
+      phases.linking = performance.now() - started;
+      return true;
     }
+    phases.linking = performance.now() - started;
+    const marking = performance.now();
+    const pending = [...json];
+    while (pending.length) {
+      const node = pending.pop();
+      if (!node)
+        continue;
+      const element = linked.nodes.get(node);
+      const layer = element && layers.find(({ held, note }) => note.wholeView && !note.blank && held.some((root) => inside(root, element)));
+      if (layer) {
+        node.onTop = layer.note.ref;
+      } else
+        for (const child of node.children ?? [])
+          if (typeof child !== "string")
+            pending.push(child);
+    }
+    phases.marks = performance.now() - marking;
     return false;
   }
-  function pushChildren(pending, seen, element) {
-    const push = (child) => {
-      if (seen.has(child))
-        return;
-      seen.add(child);
-      pending.push(child);
-    };
-    const assigned = typeof HTMLSlotElement !== "undefined" && element instanceof HTMLSlotElement ? element.assignedNodes() : [];
-    if (assigned.length) {
-      for (const node of assigned)
-        if (node.nodeType === Node.ELEMENT_NODE)
-          push(node);
-    } else {
-      for (const child of element.children)
-        if (!child.assignedSlot)
-          push(child);
-      const shadow = element.shadowRoot;
-      if (shadow)
-        for (const child of shadow.children)
-          push(child);
-    }
-    for (const id of element.getAttribute("aria-owns")?.split(/\s+/) ?? []) {
-      const owned = id ? element.ownerDocument.getElementById(id) : null;
-      if (owned)
-        push(owned);
-    }
+  function middle(element) {
+    const box = element.getBoundingClientRect();
+    const left = Math.max(0, box.left), right = Math.min(innerWidth, box.right);
+    const top = Math.max(0, box.top), bottom = Math.min(innerHeight, box.bottom);
+    return right > left && bottom > top ? { x: (left + right) / 2, y: (top + bottom) / 2 } : undefined;
   }
-  function isOwnTarget(element, engine) {
-    const tag = element.localName;
-    if (INTERACTIVE_TAGS.has(tag) || FRAME_TAGS.has(tag))
-      return true;
-    const role = engine.roleOf(element);
-    if (role !== null && (INTERACTIVE_ROLES.has(role) || SECTION_ROLES.has(role)))
-      return true;
-    return getComputedStyle(element)?.cursor === "pointer";
+  function viewPoints() {
+    return [
+      [1 / 2, 1 / 2],
+      [1 / 6, 1 / 6],
+      [5 / 6, 1 / 6],
+      [1 / 6, 5 / 6],
+      [5 / 6, 5 / 6]
+    ].map(([x = 0, y = 0]) => ({ x: x * innerWidth, y: y * innerHeight }));
   }
-  function asPointerTargets(targets, snapshot) {
-    if (targets.length === 0)
-      return snapshot();
-    const read = globalThis.getComputedStyle;
-    if (typeof read !== "function")
-      return snapshot();
-    const own = Object.getOwnPropertyDescriptor(globalThis, "getComputedStyle");
-    for (const target of targets) {
-      const style = Reflect.apply(read, globalThis, [
-        target
-      ]);
-      pointerTargets.set(target, style?.cursor ?? "");
-    }
-    Object.defineProperty(globalThis, "getComputedStyle", {
-      configurable: true,
-      enumerable: own?.enumerable ?? true,
-      writable: true,
-      value: function getComputedStyle2(element, pseudo) {
-        const style = Reflect.apply(read, this, [
-          element,
-          pseudo
-        ]);
-        if (pseudo)
-          return style;
-        if (pointerTargets.has(element))
-          return pointerStyle(style);
-        const target = nearestTarget(element);
-        return target && style.cursor === pointerTargets.get(target) ? pointerStyle(style) : style;
-      }
-    });
-    try {
-      return snapshot();
-    } finally {
-      if (own)
-        Object.defineProperty(globalThis, "getComputedStyle", own);
-      else
-        Reflect.deleteProperty(globalThis, "getComputedStyle");
-      pointerTargets.clear();
-      nearestTargets.clear();
-    }
+  function edgeBar(element) {
+    if (element.matches(":modal"))
+      return false;
+    const box = element.getBoundingClientRect();
+    const centre = box.left <= innerWidth / 2 && box.right > innerWidth / 2 && box.top <= innerHeight / 2 && box.bottom > innerHeight / 2;
+    return getComputedStyle(element).position === "sticky" || !centre && (box.width < innerWidth / 4 || box.height < innerHeight / 4);
   }
-  function nearestTarget(element) {
-    const chain = [];
-    let found = null;
-    for (let node = parentOrHost(element);node; node = parentOrHost(node)) {
-      if (pointerTargets.has(node)) {
-        found = node;
-        break;
-      }
-      const known = nearestTargets.get(node);
-      if (known !== undefined) {
-        found = known;
-        break;
-      }
-      chain.push(node);
-    }
-    nearestTargets.set(element, found);
-    for (const node of chain)
-      nearestTargets.set(node, found);
-    return found;
+  function stands(world, element) {
+    if (!element.isConnected || !takesPointer(element) || !world.injected.elementState(element, "visible", true).matches)
+      return false;
+    let carried = false;
+    for (let at = element;at; at = at.assignedSlot ?? parentOrHost2(at))
+      carried ||= getComputedStyle(at).position === "fixed" || inTopLayer(at);
+    const point = middle(element);
+    return carried && point !== undefined && hitChain(element, point) === null;
   }
-  function parentOrHost(element) {
+
+  // crates/neo-sdk/neo-playwright-js/src/probe/snapshot-inert.ts
+  function parent(element) {
     if (element.assignedSlot)
       return element.assignedSlot;
     if (element.parentElement)
       return element.parentElement;
-    const parent = element.parentNode;
-    return typeof ShadowRoot !== "undefined" && parent instanceof ShadowRoot ? parent.host : null;
+    const root = element.getRootNode();
+    return root instanceof ShadowRoot ? root.host : null;
   }
-  function pointerStyle(style) {
-    return new Proxy(style, {
-      get(target, key) {
-        if (key === "cursor")
-          return "pointer";
-        const value = Reflect.get(target, key);
-        return typeof value === "function" ? value.bind(target) : value;
+  function markInert(world, json) {
+    try {
+      for (const node of inertNodes(world, json))
+        node.inert = true;
+    } catch {}
+  }
+  function inertNodes(world, json) {
+    const document2 = world.injected.document;
+    const modals = [...document2.querySelectorAll("dialog:modal")];
+    const refs = lastSnapshotRefs(world.injected);
+    if (modals.length === 0 && !hasInertAttribute(document2, refs))
+      return [];
+    const modalAncestors = new Set;
+    for (const modal of reachableModals(document2, modals))
+      for (let ancestor = parent(modal);ancestor; ancestor = parent(ancestor))
+        modalAncestors.add(ancestor);
+    const ancestry = new WeakMap;
+    const isInert = (element) => {
+      const pending = [];
+      let state = { modal: false, attribute: false };
+      for (let ancestor = element;ancestor; ancestor = parent(ancestor)) {
+        const known = ancestry.get(ancestor);
+        if (known) {
+          state = known;
+          break;
+        }
+        pending.push(ancestor);
       }
-    });
+      for (const ancestor of pending.reverse()) {
+        const modal = ancestor.matches("dialog:modal");
+        state = {
+          modal: state.modal || modal,
+          attribute: !modal && state.attribute || ancestor.hasAttribute("inert")
+        };
+        ancestry.set(ancestor, state);
+      }
+      return state.attribute || !state.modal && modals.length > 0;
+    };
+    const protectedNodes = liveAncestors(json, refs, isInert);
+    const marked = [];
+    const pending = [...json];
+    while (pending.length) {
+      const node = pending.pop();
+      if (!node)
+        continue;
+      const element = node.ref ? refs.get(node.ref)?.element : undefined;
+      if (element && !protectedNodes.has(node) && !modalAncestors.has(element) && isInert(element)) {
+        marked.push(node);
+        continue;
+      }
+      for (const child of node.children ?? [])
+        if (typeof child !== "string")
+          pending.push(child);
+    }
+    return marked;
+  }
+  function reachableModals(document2, modals) {
+    const reachable = [...modals];
+    const pending = [document2];
+    const seen = new Set;
+    for (let root = pending.pop();root; root = pending.pop()) {
+      for (const element of root.querySelectorAll("*")) {
+        const shadow = element.shadowRoot;
+        if (!shadow || seen.has(shadow))
+          continue;
+        seen.add(shadow);
+        reachable.push(...shadow.querySelectorAll("dialog:modal"));
+        pending.push(shadow);
+      }
+    }
+    return reachable;
+  }
+  function hasInertAttribute(document2, refs) {
+    if (document2.querySelector("[inert]"))
+      return true;
+    const seen = new Set;
+    for (const { element } of refs.values()) {
+      let root = element.getRootNode();
+      while (root instanceof ShadowRoot && !seen.has(root)) {
+        seen.add(root);
+        if (root.querySelector("[inert]"))
+          return true;
+        root = root.host.getRootNode();
+      }
+    }
+    return false;
+  }
+  function liveAncestors(json, refs, isInert) {
+    const protectedNodes = new Set;
+    const visited = [];
+    const scan = [...json];
+    while (scan.length) {
+      const node = scan.pop();
+      if (!node)
+        continue;
+      visited.push(node);
+      for (const child of node.children ?? [])
+        if (typeof child !== "string")
+          scan.push(child);
+    }
+    for (const node of visited.reverse()) {
+      const element = node.ref ? refs.get(node.ref)?.element : undefined;
+      if (element !== undefined && !isInert(element) || node.children?.some((child) => typeof child !== "string" && protectedNodes.has(child)))
+        protectedNodes.add(node);
+    }
+    return protectedNodes;
   }
 
   // crates/neo-sdk/neo-playwright-js/src/probe/snapshot.ts
@@ -10486,10 +11370,26 @@ ${value.stack}`;
     const take = () => marked(targets, engine, plain);
     const { result, skipped } = output.tree(element, take);
     const { json, iframeRefs, iframeDepths } = result;
-    const iframes = [];
-    if (request.mode === "ai") {
-      const minted = lastSnapshotRefs(injected);
+    let inertMarkingMs;
+    if (request.markInert && request.mode === "ai" && output.neoSnapshot) {
+      const started = performance.now();
+      markInert(world, json);
+      inertMarkingMs = performance.now() - started;
+    }
+    const minted = request.mode === "ai" ? lastSnapshotRefs(injected) : undefined;
+    if (minted)
       world.refs.remember(minted);
+    let survey;
+    let surveyFailed = false;
+    if (request.surveyCovers && request.mode === "ai" && output.neoSnapshot) {
+      try {
+        survey = surveyCovers(world, output, json);
+      } catch {
+        surveyFailed = true;
+      }
+    }
+    const iframes = [];
+    if (minted) {
       for (const ref of iframeRefs) {
         const depth = iframeDepths[ref];
         const element = minted.get(ref)?.element;
@@ -10500,6 +11400,14 @@ ${value.stack}`;
     }
     return {
       kind: "snapshot",
+      ...survey ? {
+        onTop: survey.layers,
+        surveyTested: survey.tested,
+        surveyMs: survey.phases.hits,
+        surveyPhases: survey.phases
+      } : {},
+      ...surveyFailed || survey?.marksSkipped ? { onTopSkipped: true } : {},
+      ...inertMarkingMs === undefined ? {} : { inertMarkingMs },
       json,
       iframes,
       ...skipped ? { marksSkipped: true } : {}
@@ -10741,10 +11649,10 @@ ${value.stack}`;
     moves,
     disarm,
     frameBox,
+    cover,
     edit,
     look,
     private: privateStep,
-    privateShown,
     read,
     readAll,
     selector: generatedSelector,
@@ -10775,8 +11683,6 @@ ${value.stack}`;
         const { request, policy } = call;
         if (request.op === "pinned")
           return pinned(booted, request);
-        if (request.op === "privateHosts")
-          return privateHosts(request);
         const output = new FailureOutput(booted, policy);
         const reply = output.run(() => dispatch(booted, request.op, request, scope, nodes, output));
         return reply instanceof Promise ? reply.catch(thrownReply) : reply;
@@ -10828,7 +11734,7 @@ ${value.stack}`;
     if (typeof request !== "object" || request === null)
       return false;
     const op = Reflect.get(request, "op");
-    return typeof op === "string" && (op === "pinned" || op === "privateHosts" || Object.hasOwn(HANDLERS, op));
+    return typeof op === "string" && (op === "pinned" || Object.hasOwn(HANDLERS, op));
   }
   function parseBootOptions(options) {
     const frameSeq = typeof options === "object" && options !== null ? Reflect.get(options, "frameSeq") : undefined;

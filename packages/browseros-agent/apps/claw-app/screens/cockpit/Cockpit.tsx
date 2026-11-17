@@ -1,4 +1,6 @@
+import { skipToken } from '@tanstack/react-query'
 import { CockpitOnboarding } from '@/components/cockpit/CockpitOnboarding'
+import { EnergyMeter } from '@/components/cockpit/EnergyMeter'
 import { InControlBar } from '@/components/cockpit/InControlBar'
 import { NeedsYouBanner } from '@/components/cockpit/NeedsYouBanner'
 import { PromoSlot, usePromoSlot } from '@/components/cockpit/PromoSlot'
@@ -11,12 +13,14 @@ import { PageHeader } from '@/components/layout/PageHeader'
 import { useSessions } from '@/modules/api/audit.hooks'
 import { useCockpitStats } from '@/modules/api/cockpit.hooks'
 import { useConnections } from '@/modules/api/connections.hooks'
+import { usePlan, usePlanSavings } from '@/modules/api/plan.hooks'
 import { useCockpitData } from './cockpit.data'
 import { homeLede, partOfDay } from './cockpit.helpers'
 import { useCurrentHour, useHelpTakeover } from './cockpit.hooks'
 import { getOnboardingState } from './cockpit-onboarding.helpers'
 
 const ONBOARDING_PROBE_LIMIT = 1
+const ULTRAFAST_FEATURE = 'claw.ultrafast'
 
 export function Cockpit() {
   const { sessions } = useCockpitData()
@@ -76,6 +80,12 @@ export function Cockpit() {
     enabled: probesResolved && state === 'ready',
     refetchInterval: 60_000,
   })
+  const plan = usePlan()
+  const ultrafast = plan.data?.features.includes(ULTRAFAST_FEATURE) === true
+  const savings = usePlanSavings({
+    variables: ultrafast && state === 'ready' ? undefined : skipToken,
+    refetchInterval: 60_000,
+  })
 
   const content =
     state !== 'ready' ? (
@@ -89,8 +99,10 @@ export function Cockpit() {
           title={`Good ${partOfDay(hour)}`}
           lede={homeLede(sessions, takeover.inControlSession)}
         />
-        {/* Pulled up so the strip reads as part of the greeting, not the next section. */}
-        {stats.data && stats.data.allTime.sessionCount > 0 ? (
+        {ultrafast ? (
+          <EnergyMeter savings={savings} stats={stats.data} />
+        ) : stats.data && stats.data.allTime.sessionCount > 0 ? (
+          // Pulled up so the strip reads as part of the greeting, not the next section.
           <SavingsCard stats={stats.data} className="-mt-3" />
         ) : null}
         <NeedsYouBanner

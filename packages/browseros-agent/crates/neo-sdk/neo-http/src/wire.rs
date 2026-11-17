@@ -62,6 +62,7 @@ fn run_summary_fields(run: &RunSummary, fields: Fields) -> api::RunSummary {
         id: run.id.to_string(),
         task_id: run.task_id.as_ref().map(ToString::to_string),
         tabs_scope: run.tabs_scope.map(|scope| scope.as_str().to_owned()),
+        access: run.access.map(|access| access.as_str().to_owned()),
         tabs: run.tabs.iter().map(|tab| tab.0).collect(),
         status: run.status.as_str().to_string(),
         effects: run.effects.map(|effects| effects.as_str().to_string()),
@@ -106,6 +107,7 @@ pub(crate) fn run(run: &RunDetail, inlined: &Inlined, fields: Fields) -> api::Ru
         id,
         task_id,
         tabs_scope,
+        access,
         tabs,
         status,
         effects,
@@ -132,6 +134,7 @@ pub(crate) fn run(run: &RunDetail, inlined: &Inlined, fields: Fields) -> api::Ru
         id,
         task_id,
         tabs_scope,
+        access,
         tabs,
         status,
         effects,
@@ -867,6 +870,7 @@ fn operation_error(error: &ErrorRecord, fields: Fields) -> api::OperationError {
     api::OperationError {
         owner: error.owner.as_str().to_string(),
         code: error.code.clone(),
+        diagnostic_code: error.diagnostic_code.map(|code| code.as_str().to_owned()),
         host_code: (fields == Fields::Full)
             .then(|| error.host_code.clone())
             .flatten(),
@@ -877,5 +881,15 @@ fn operation_error(error: &ErrorRecord, fields: Fields) -> api::OperationError {
         },
         retryable: error.retryable,
         operation_id: error.operation_id.map(|id| id.to_string()),
+        // The cover's name and its controls' names are page text, so a summary view, which
+        // omits every text, omits the cover too. A cover the record cannot read as the
+        // contract's shape stays out: the record is neo-playwright's to fill, and a newer shape
+        // must not fail the read.
+        cover: error
+            .cover
+            .as_ref()
+            .filter(|_| fields == Fields::Full)
+            .and_then(|cover| serde_json::from_value(cover.clone()).ok())
+            .map(Box::new),
     }
 }

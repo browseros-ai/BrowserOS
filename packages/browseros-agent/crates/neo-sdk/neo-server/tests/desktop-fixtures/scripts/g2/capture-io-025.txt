@@ -1,0 +1,15 @@
+/** Native chooser handles retain the exact input; event registration precedes the activating input. */
+function file(name, text) { return {name, mimeType:'text/plain', buffer:Buffer.from(text)}; }
+async function choose(p, action) {
+  const waiting = p.waitForEvent('filechooser', {timeout:5000});
+  await action();
+  const chooser = await waiting;
+  assert(chooser.page() === p, 'chooser belongs to the initiating page');
+  return chooser;
+}
+
+await page.goto(args.base + '/upload.html');
+await page.getByLabel('Multi upload').setInputFiles([file('multi-one.txt','one'),file('multi-two.txt','two')]);
+await poll(async () => { const names=await page.locator('#multi-names').textContent();return names.includes('multi-one.txt')&&names.includes('multi-two.txt'); }, 'the page reports both selected names');
+const selected = await page.locator('#multi-names').textContent();
+return {selected};

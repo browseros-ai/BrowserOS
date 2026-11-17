@@ -1,0 +1,45 @@
+<!doctype html><meta charset="utf-8"><title>Debug overlay: popover</title><body style="margin:8px;font:16px sans-serif"><style>
+  .layer { position: fixed; inset: 0; background: #fff; z-index: 10; }
+  #notice { inset: 40px; z-index: 11; }
+  #blank { opacity: 0; }
+  #pop { margin: 0; width: 100vw; height: 100vh; box-sizing: border-box; }
+</style>
+<button id="open">Open information</button><button id="target">Reserve</button>
+<div id="portal"></div>
+<script>
+  const shape = 'popover';
+  target.onclick = () => window.targetClicks = (window.targetClicks || 0) + 1;
+  document.querySelector('#open').onclick = () => {
+    if (shape === 'textbox') {
+      portal.innerHTML = '<div id="modal-wrapper" role="textbox" class="layer">Important information<button id="close">Close</button></div>';
+    } else if (shape === 'presentation') {
+      portal.innerHTML = '<div id="sort-layer" role="presentation" class="layer">Sort by / Distance</div>';
+    } else if (shape === 'blank') {
+      portal.innerHTML = '<div id="blank" class="layer"></div>';
+    } else if (shape === 'aria-hidden') {
+      portal.innerHTML = '<div id="hidden" aria-hidden="true" class="layer"><p>Hidden overlay</p><button id="close">Dismiss</button></div>';
+    } else if (shape === 'native') {
+      portal.innerHTML = '<dialog id="native"><h2>Added to cart</h2><button id="close">Continue shopping</button></dialog>';
+      native.showModal();
+    } else if (shape === 'popover') {
+      portal.innerHTML = '<div id="pop" class="layer" popover><p>Store picker</p><button id="close">Close picker</button></div>';
+      pop.showPopover();
+    } else if (shape === 'leftover') {
+      portal.innerHTML = '<div id="blank" class="layer"></div><section id="notice" role="dialog" aria-label="Comparison" class="layer"><button id="close">Close comparison</button></section>';
+    } else if (shape === 'wrong-dialog') {
+      portal.innerHTML = '<div class="layer" id="modal-wrapper"><div class="c-ulo-viewport"><section role="dialog" aria-label="Navigation menu"><button id="actual-close">Close navigation menu</button></section></div></div><section id="notice" role="dialog" aria-label="Comparison" class="layer"><button id="close">Close comparison</button></section>';
+      document.querySelector('#actual-close').onclick = () => document.querySelector('#modal-wrapper').remove();
+    } else if (shape === 'closed-shadow') {
+      portal.innerHTML = '<div id="host" class="layer"></div>';
+      host.attachShadow({mode: 'closed'}).innerHTML = '<button>Close private overlay</button>';
+    }
+    document.querySelector('#close')?.addEventListener('click', () => {
+      if (shape === 'native') native.close();
+      else if (shape === 'popover') pop.hidePopover();
+      else if (shape === 'leftover' || shape === 'wrong-dialog') notice.remove();
+      else portal.replaceChildren();
+    });
+  };
+</script>
+<script>document.querySelector("#open").click()</script><script>window.fixtureReady=true</script>
+</body>

@@ -57,6 +57,8 @@ pub struct AppState {
     pub feedback_cohort: Arc<crate::services::feedback_cohort::FeedbackCohort>,
     pub feedback_invites: Arc<crate::db::feedback_invite::FeedbackInviteRepository>,
     pub tool_calls_daily: Arc<crate::db::tool_calls_daily::ToolCallsDailyRepository>,
+    /// What ultrafast did in each task, kept after the task's history is deleted.
+    pub ultrafast_ledger: Arc<crate::db::ultrafast_ledger::UltrafastLedger>,
     pub profiles: Arc<ProfileService>,
     pub sessions: Arc<Sessions>,
     /// Saved native-profile intent is separate from agent profiles and live browser state.
@@ -170,6 +172,9 @@ impl AppState {
         let tool_calls_daily = Arc::new(
             crate::db::tool_calls_daily::ToolCallsDailyRepository::new(database.clone()),
         );
+        let ultrafast_ledger = Arc::new(crate::db::ultrafast_ledger::UltrafastLedger::new(
+            database.clone(),
+        ));
         let skill = load_browserclaw_skill(&config.resources_dir, config.behavior.tab_grouping)?;
         let ultrafast_skill = with_ultrafast(&skill)?;
         let claude_desktop = Arc::new(crate::services::claude_desktop::ClaudeDesktop::new(
@@ -313,6 +318,7 @@ impl AppState {
             feedback_cohort,
             feedback_invites,
             tool_calls_daily,
+            ultrafast_ledger,
             profiles,
             sessions,
             targets,
@@ -356,6 +362,10 @@ impl AppState {
         {
             tracing::warn!(error = %error, "agent guide sync failed");
         }
+        // Outside the change check too, so a switch already on at startup still gets its date.
+        if let Err(error) = self.record_ultrafast_start().await {
+            tracing::warn!(error = %error, "ultrafast start date not saved");
+        }
         if !changed {
             return false;
         }
@@ -363,6 +373,36 @@ impl AppState {
             tracing::warn!(error = %error, "skill file sync failed");
         }
         true
+    }
+
+    /// Saves the day this computer got ultrafast, the first time the switch is on: the earlier of
+    /// now and the first ultrafast run, so a computer that used it before keeps those savings.
+    async fn record_ultrafast_start(&self) -> AppResult<()> {
+        if !self.ultrafast_enabled() {
+            return Ok(());
+        }
+        let store = JsonStore::new(self.config.browserclaw_dir.clone());
+        if crate::services::ultrafast_meter::saved_since(&store)
+            .await?
+            .is_some()
+        {
+            return Ok(());
+        }
+        let history = self.audit_log.all_ultrafast_sessions().await?;
+        let kept = self.ultrafast_ledger.all().await?;
+        let first_run = history
+            .iter()
+            .map(|session| session.first_run_at)
+            .chain(kept.iter().map(|record| record.first_run_at))
+            .min();
+        crate::services::ultrafast_meter::since(
+            &store,
+            true,
+            first_run,
+            crate::clock::now_epoch_ms(),
+        )
+        .await?;
+        Ok(())
     }
 
     pub async fn live_tab_activity(&self) -> Vec<TabActivityRecord> {

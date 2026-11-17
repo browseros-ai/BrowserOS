@@ -9,6 +9,7 @@ use sea_orm::entity::prelude::*;
 pub struct Model {
     pub values: Option<String>,
     pub tabs_scope: Option<String>,
+    pub access: Option<String>,
     #[sea_orm(primary_key, auto_increment = false)]
     pub id: String,
     pub task_id: Option<String>,

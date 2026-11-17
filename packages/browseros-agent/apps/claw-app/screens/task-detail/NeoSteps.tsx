@@ -5,6 +5,7 @@
  */
 
 import type { SessionPursueRun } from '@browseros/claw-api'
+import { UltrafastRail } from '@/components/audit/UltrafastMarks'
 import { Card } from '@/components/motion/card'
 import { pursueStepLabel } from '@/screens/audit/audit.helpers'
 
@@ -24,8 +25,9 @@ export function NeoSteps({ pursue }: { pursue: SessionPursueRun }) {
       </h2>
       <Card
         size="compact"
-        className="gap-3 border-border-2 bg-card px-4 py-4 shadow-card sm:px-[18px]"
+        className="relative gap-3 overflow-hidden border-border-2 bg-card py-4 pr-4 pl-5 shadow-card sm:pr-[18px] sm:pl-6"
       >
+        <UltrafastRail />
         {pursue.steps.length > 0 ? (
           <ol className="flex flex-col gap-2">
             {pursue.steps.map((step, index) => (
@@ -36,7 +38,7 @@ export function NeoSteps({ pursue }: { pursue: SessionPursueRun }) {
               >
                 <span
                   aria-hidden
-                  className="inline-grid size-5 shrink-0 place-items-center rounded-full bg-accent-tint font-bold text-[12px] text-primary"
+                  className="w-5 shrink-0 font-medium font-mono text-[12px] text-accent-ink tabular-nums"
                 >
                   {index + 1}
                 </span>

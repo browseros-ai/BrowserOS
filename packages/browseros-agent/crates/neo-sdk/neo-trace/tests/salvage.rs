@@ -8,9 +8,9 @@
 use browseros_core::TabId;
 use neo_trace::{
     Delivery, Effect, EpochMillis, IdError, Loss, OperationEnded, OperationId, OperationKind,
-    OperationStarted, Outcome, Recovery, RedactionLimits, Redactor, RequestId, RunEffects,
-    RunEnded, RunId, RunStarted, RunStatus, RunTabsScope, Salvage, TaskId, TraceError, TraceSink,
-    TraceStore, WriterConfig,
+    OperationStarted, Outcome, Recovery, RedactionLimits, Redactor, RequestId, RunAccess,
+    RunEffects, RunEnded, RunId, RunStarted, RunStatus, RunTabsScope, Salvage, TaskId, TraceError,
+    TraceSink, TraceStore, WriterConfig,
 };
 use sea_orm::sqlx;
 use sea_orm::sqlx::sqlite::{SqliteConnectOptions, SqliteConnection};
@@ -76,6 +76,7 @@ fn start(
     request_id: Option<&str>,
     task_id: Option<&str>,
     millis: i64,
+    access: Option<RunAccess>,
 ) -> Result<RunId, IdError> {
     let run = RunId::new();
     sink.run_started(RunStarted {
@@ -90,6 +91,7 @@ fn start(
         } else {
             RunTabsScope::Browser
         },
+        access,
         at: at(millis),
     });
     Ok(run)
@@ -99,7 +101,13 @@ async fn old_trace(dir: &Path) -> TestResult<Old> {
     let path = dir.join("old/trace.db");
     let store = TraceStore::open(&path).await?;
     let sink = writer(&store);
-    let ended = start(&sink, Some("call-1"), Some("checkout"), 0)?;
+    let ended = start(
+        &sink,
+        Some("call-1"),
+        Some("checkout"),
+        0,
+        Some(RunAccess::Read),
+    )?;
     sink.run_ended(RunEnded {
         id: ended,
         status: RunStatus::Ok,
@@ -108,8 +116,8 @@ async fn old_trace(dir: &Path) -> TestResult<Old> {
         replay: Some(reply()),
         at: at(1_000),
     });
-    let running = start(&sink, Some("call-2"), None, 2_000)?;
-    let untracked = start(&sink, None, None, 3_000)?;
+    let running = start(&sink, Some("call-2"), None, 2_000, Some(RunAccess::Read))?;
+    let untracked = start(&sink, None, None, 3_000, None)?;
     // Forty ended operations of a run still running: their inputs, stored with their ends, fill
     // the pages after the schema.
     for seq in 1..=40 {
@@ -166,7 +174,7 @@ async fn restart_the_log(old: &Old) -> TestResult {
         "no reader held the log, so the next write restarts it"
     );
     let before = fs::metadata(&log)?.len();
-    start(&old.sink, Some("call-3"), None, 4_000)?;
+    start(&old.sink, Some("call-3"), None, 4_000, None)?;
     old.sink.flush().await?;
     assert_eq!(
         fs::metadata(&log)?.len(),
@@ -359,6 +367,11 @@ async fn a_readable_trace_carries_its_request_history_into_the_fresh_store() -> 
     );
     assert_eq!(detail.code_withheld.as_deref(), Some("unavailable"));
     assert_eq!(
+        detail.summary.access,
+        Some(RunAccess::Read),
+        "salvage retains permission independently of replay"
+    );
+    assert_eq!(
         detail.summary.tabs_scope,
         Some(RunTabsScope::Task),
         "a bound run lists as bound after recovery"
@@ -378,6 +391,11 @@ async fn a_readable_trace_carries_its_request_history_into_the_fresh_store() -> 
         "a run the old Neo never ended ended with it"
     );
     assert_eq!(crashed.tabs_scope, Some(RunTabsScope::Browser));
+    assert_eq!(
+        crashed.access,
+        Some(RunAccess::Read),
+        "even an interrupted run retains its access"
+    );
     assert_eq!(store.run(old.untracked).await?, None);
 
     assert_eq!(
@@ -732,6 +750,10 @@ async fn an_older_schema_without_optional_columns_still_carries_over() -> TestRe
         .run_by_request(&request("call-1")?, None)
         .await?
         .ok_or("call-1's run did not come across")?;
+    assert_eq!(
+        first.access, None,
+        "a store without the access column does not invent a restriction"
+    );
     assert_eq!(
         (first.id, first.task_id, first.status, first.effects),
         (ended, None, RunStatus::Ok, Some(RunEffects::Unknown)),

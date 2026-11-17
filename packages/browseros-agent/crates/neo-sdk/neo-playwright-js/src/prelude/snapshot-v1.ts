@@ -22,6 +22,7 @@
  * a kept block after the cut is still printed. Rendering happens in the agent's realm, never in
  * a page, for the reason snapshot.ts gives.
  */
+
 import {
   aboutTokens,
   CHARS_PER_TOKEN,
@@ -30,6 +31,7 @@ import {
   partialHead,
   type Section,
 } from './snapshot-cap'
+import { onTopContent, onTopHead } from './snapshot-on-top'
 import type { AriaNodeJSON } from './vendored'
 import { renderAriaSnapshotAsYaml } from './vendored'
 import type {
@@ -151,6 +153,8 @@ export type SnapshotV1Options = {
   /** Prints each link's `/url`. */
   urls: boolean
   maxTokens: number
+  /** Include browser-inert subtrees; omission is the default. */
+  inert?: boolean
 }
 
 /**
@@ -161,6 +165,7 @@ export type PassedV1Options = {
   text?: boolean
   urls?: boolean
   maxTokens?: number
+  inert?: boolean
 }
 
 /** `passed` with Neo's defaults for what the script left out; `text` stays to the length rule. */
@@ -169,6 +174,7 @@ export function withDefaults(passed: PassedV1Options): SnapshotV1Options {
     text: passed.text,
     urls: passed.urls ?? false,
     maxTokens: passed.maxTokens ?? DEFAULT_MAX_TOKENS,
+    ...(passed.inert ? { inert: true } : {}),
   }
 }
 
@@ -184,12 +190,21 @@ export function renderSnapshotV1(
   options: SnapshotV1Options,
 ): RenderedV1 {
   const { urls, maxTokens } = options
-  const textForm = options.text === false ? null : walk(result, urls, true)
+  const textForm =
+    options.text === false
+      ? null
+      : walk(result, urls, true, options.inert === true)
   let text: TextForm
   if (textForm === null) text = 'never'
   else if (options.text === true) text = 'always'
-  else text = joinedLength(textForm) <= TEXT_LIMIT_CHARS ? 'kept' : 'leftOut'
-  const form = { text, urls, maxTokens }
+  else
+    text = joinedLength(textForm.lines) <= TEXT_LIMIT_CHARS ? 'kept' : 'leftOut'
+  const form = {
+    text,
+    urls,
+    maxTokens,
+    ...(options.inert ? { inert: true } : {}),
+  }
   return { text: renderForm(result, form, textForm), form }
 }
 
@@ -210,33 +225,94 @@ export function renderSnapshotV1As(
 function renderForm(
   result: SnapshotResult,
   form: SnapshotForm,
-  walked: Printed[] | null,
+  walked: Walked | null,
 ): string {
   const limit = form.maxTokens * CHARS_PER_TOKEN
+  const text = form.text === 'kept' || form.text === 'always'
+  const shown =
+    text && walked ? walked : walk(result, form.urls, text, form.inert === true)
+  const omitted = shown.omitted
+  const inertHead = shown.skipped
+    ? [
+        `# not listed: ${omitted.length} lines (${omitted.filter((line) => line.ref).length} with refs) of this page are inert: nothing in them can be clicked or typed into now. Pass { inert: true } to list them.`,
+      ]
+    : []
   const partial = partialHead(result)
-  if (form.text === 'never')
-    return cap([], partial, walk(result, form.urls, false), limit)
-  const textForm = walked ?? walk(result, form.urls, true)
-  if (form.text !== 'leftOut') return cap([], partial, textForm, limit)
-  const interactiveForm = walk(result, form.urls, false)
-  const left = joinedLength(textForm) - joinedLength(interactiveForm)
+  const finish = (head: string[], lines: Printed[]) => {
+    // This explanation is pinned before the ordinary notice, outside its token budget.
+    // Leave the partial-frame warnings in their existing position inside cap().
+    const body = cap(head, partial, lines, limit)
+    return [...onTopHead(result), ...inertHead, ...(body ? [body] : [])].join(
+      '\n',
+    )
+  }
+  if (form.text !== 'leftOut') return finish([], shown.lines)
+  const textForm = walked ?? walk(result, form.urls, true, form.inert === true)
+  const left = joinedLength(textForm.lines) - joinedLength(shown.lines)
   const about = aboutTokens(left)
   const notice = `# text left out: about ${about} tokens. Pass { text: true } to include it.`
-  return cap([notice], partial, interactiveForm, limit)
+  return finish([notice], shown.lines)
 }
 
+/** The returned lines and disjoint omissions, counted with each root's inherited text form. */
+type Walked = { lines: Printed[]; omitted: Printed[]; skipped: number }
+
 /** One form: the tree walked with page text on or off, then partial frames with no iframe line. */
-function walk(result: SnapshotResult, urls: boolean, text: boolean): Printed[] {
+function walk(
+  result: SnapshotResult,
+  urls: boolean,
+  text: boolean,
+  inert: boolean,
+): Walked {
   const partials = new Map<string, PartialFrame[]>()
   for (const partial of result.partial)
     partials.set(partial.ref, [...(partials.get(partial.ref) ?? []), partial])
-  const printer = new Printer(urls, partials)
+  const omitted: Printer[] = []
+  let segment: Printer | undefined
+  let boundary:
+    | { line?: Line; body?: string; length: number; level: number }
+    | undefined
+  let skipped = 0
+  const printer = new Printer(urls, partials, inert, (node, text, level) => {
+    skipped++
+    // Kept blocks force text on, even under { text: false }. Count at the omission
+    // point, with that inherited form, rather than rendering roots as new top-level reads.
+    const line = printer.lines.at(-1)
+    if (
+      !segment ||
+      !boundary ||
+      boundary.line !== line ||
+      boundary.body !== line?.body ||
+      boundary.length !== printer.lines.length ||
+      boundary.level !== level
+    ) {
+      // Adjacent text omissions still join, but a retained line or text piece separates
+      // them, just as it did in the original form. Preserve indentation across roots too.
+      segment = new Printer(urls, new Map(), true)
+      omitted.push(segment)
+    }
+    segment.walk([node], level, text)
+    boundary = { line, body: line?.body, length: printer.lines.length, level }
+  })
   // A virtual root over the json array, so a locator's root node goes through the same rules:
   // a locator on `main` prints `- main [ref=e2]:` and its content.
-  printer.walk(result.json, 0, text)
+  const front = onTopContent(result)
+  if (front.first.length) {
+    printer.walk(front.first, 0, true)
+    printer.separateText()
+  }
+  printer.walk(front.rest, 0, text)
   for (const unplaced of partials.values())
     for (const partial of unplaced) printer.comment(partialComment(partial), 0)
-  return printer.finish().map((line) => ({
+  return {
+    lines: printedLines(printer.finish()),
+    omitted: omitted.flatMap((segment) => printedLines(segment.finish())),
+    skipped,
+  }
+}
+
+function printedLines(lines: readonly Line[]): Printed[] {
+  return lines.map((line) => ({
     text:
       '  '.repeat(line.level) +
       (line.textLine
@@ -274,11 +350,18 @@ class Printer {
   readonly lines: Line[] = []
   /** The walk's pending steps; the next one is last. */
   private readonly steps: Step[] = []
+  private textBoundary = 0
 
   constructor(
     private readonly urls: boolean,
     /** The frames Rust could not read, by iframe ref; each is removed once printed. */
     private readonly partials: Map<string, PartialFrame[]>,
+    private readonly inert: boolean,
+    private readonly onOmit?: (
+      node: AriaNodeJSON,
+      text: boolean,
+      level: number,
+    ) => void,
   ) {}
 
   /** Prints `children` at `level`, depth first in document order. */
@@ -296,6 +379,11 @@ class Printer {
         this.closeKept(step.node, step.header, step.level)
       else this.closeSection(step.node, step.header)
     }
+  }
+
+  /** A promoted block and the page after it are separate text runs even at the same level. */
+  separateText(): void {
+    this.textBoundary = this.lines.length
   }
 
   comment(body: string, level: number): void {
@@ -323,12 +411,29 @@ class Printer {
     return printed
   }
 
+  /** Omitted iframe subtrees own their partial diagnostics, so none may reappear later. */
+  private omit(root: AriaNodeJSON): void {
+    const pending = [root]
+    while (pending.length) {
+      const node = pending.pop()
+      if (!node) continue
+      if (node.ref) this.partials.delete(node.ref)
+      for (const child of node.children ?? [])
+        if (typeof child !== 'string') pending.push(child)
+    }
+  }
+
   /** One child of the node being walked, by the first rule that matches it. */
   private node(
     child: AriaNodeJSON | string,
     level: number,
     text: boolean,
   ): void {
+    if (typeof child !== 'string' && child.inert && !this.inert) {
+      this.onOmit?.(child, text, level)
+      this.omit(child)
+      return
+    }
     if (typeof child === 'string') this.piece(child, level, text)
     else if (child.role === 'text') this.piece(child.text ?? '', level, text)
     else if (KEPT.has(child.role)) this.kept(child, level)
@@ -374,7 +479,12 @@ class Printer {
   private piece(raw: string, level: number, text: boolean): void {
     if (!text || raw === '') return
     const last = this.lines[this.lines.length - 1]
-    if (last?.textLine && last.level === level) last.body += ` ${raw}`
+    if (
+      this.lines.length > this.textBoundary &&
+      last?.textLine &&
+      last.level === level
+    )
+      last.body += ` ${raw}`
     else
       this.lines.push({
         level,
@@ -438,7 +548,7 @@ class Printer {
   }
 
   private heading(node: AriaNodeJSON, level: number): void {
-    const own = node.name ? '' : ownText(node)
+    const own = node.name ? '' : ownText(node, this.inert)
     this.element(
       copy(node, {
         ref: actionable(node),
@@ -458,12 +568,12 @@ class Printer {
     else if (FIELD.has(node.role) && node.text === undefined) {
       // Dropdown and editor values can be children instead of a `text` field. Keep that
       // value on the field's line before the child walk suppresses repeated text.
-      const own = ownText(node)
+      const own = ownText(node, this.inert)
       if (own !== '' && own !== node.name) value = own
     } else if (!node.name) {
       // A link with no words of its own still says where it goes, unless its `/url` line does.
       const label =
-        ownText(node) ||
+        ownText(node, this.inert) ||
         (node.role === 'link' && !this.urls ? (node.url ?? '') : '')
       if (label !== '') value = text ? label : clip(label, OWN_TEXT_CLIP)
     }
@@ -658,7 +768,7 @@ function saysNothing(children: AriaNodeJSON['children']): boolean {
  * too. Other content-only names count as pieces (an image's alt text, a cell's text).
  * `shownText` skips an iframe's fallback markup while keeping its frame's text.
  */
-function ownText(node: AriaNodeJSON): string {
+function ownText(node: AriaNodeJSON, inert: boolean): string {
   const pieces: string[] = []
   // Depth first in document order on an explicit stack, as the walk is, for deep trees.
   const stack: (AriaNodeJSON | string)[] = [node]
@@ -672,6 +782,7 @@ function ownText(node: AriaNodeJSON): string {
     const children = item.children ?? []
     for (let index = children.length - 1; index >= 0; index--) {
       const child = children[index]
+      if (typeof child !== 'string' && child.inert && !inert) continue
       if (typeof child === 'string' || child.role === 'text') stack.push(child)
       else if (!actionable(child) && !fieldWithoutRef(child))
         stack.push(nameAsContent(child) ?? child)
@@ -681,7 +792,11 @@ function ownText(node: AriaNodeJSON): string {
 }
 
 function clip(text: string, length: number): string {
-  return text.length <= length ? text : `${text.slice(0, length).trimEnd()}…`
+  if (text.length <= length) return text
+  // A lone surrogate cannot cross the JSON bridge that keeps the delta baseline.
+  const last = text.charCodeAt(length - 1)
+  if (last >= 0xd800 && last <= 0xdbff) length--
+  return `${text.slice(0, length).trimEnd()}…`
 }
 
 function partialComment(partial: PartialFrame): string {

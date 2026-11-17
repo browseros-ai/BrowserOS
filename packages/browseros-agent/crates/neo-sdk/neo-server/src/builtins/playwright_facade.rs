@@ -7,8 +7,7 @@ use std::time::Duration;
 use browseros_core::{TabId, TargetId};
 
 use futures_util::future::BoxFuture;
-use neo_http::PictureVerdict;
-use neo_playwright::{EventFence, FileAccess, PictureCheck, Playwright};
+use neo_playwright::{EventFence, FileAccess, Playwright};
 use tokio::sync::{OnceCell, SetOnce};
 use tokio::time;
 
@@ -125,13 +124,15 @@ impl PlaywrightFacade {
         &self.file_access
     }
 
-    /// Whether Neo's camera withholds a picture of `tab` now, which must not wait: the host's
-    /// `fill.pictures` is `never` and the tab took a private fill (ruling R58). `false` before
-    /// the facade is built, when no entry can have run.
+    /// Under `never`, withholds every tab until the filled-tab record has been applied.
+    /// Publication follows recovery, but the entry's setting copy arrives afterward, so the
+    /// camera reads this facade's setting and the entry's membership separately, without waiting.
     pub(crate) fn withholds_picture(&self, tab: TabId) -> bool {
-        self.playwright
-            .get()
-            .is_some_and(|playwright| playwright.withholds_picture(tab))
+        self.pictures_never.load(Ordering::Acquire)
+            && self
+                .playwright
+                .get()
+                .is_none_or(|playwright| playwright.took_private_text(tab))
     }
 
     /// The host's `fill.pictures` (ruling R58): `true` for `never`. Applied to the entry now if
@@ -155,19 +156,6 @@ impl PlaywrightFacade {
             if self.pictures_never.load(Ordering::Acquire) == never {
                 return;
             }
-        }
-    }
-
-    /// What `tab` shows now, for the camera (ruling R45): whether any frame holds a box masking
-    /// treats as private, not empty and painted in clear. Private before the facade is built
-    /// and whenever a frame cannot be read, so a picture is never stored on a guess.
-    pub(crate) async fn picture_verdict(&self, tab: TabId) -> PictureVerdict {
-        let Some(playwright) = self.playwright.get() else {
-            return PictureVerdict::Private;
-        };
-        match playwright.picture_check(tab).await {
-            PictureCheck::Clear { reading } => PictureVerdict::Clear { reading },
-            PictureCheck::Private | PictureCheck::Unknown => PictureVerdict::Private,
         }
     }
 

@@ -1,0 +1,13 @@
+await page.goto(args.base + '/form.html');
+const ref = await refFor(page, 'Disabled action');
+await page.getByRef(await refFor(page, '"Name"')).focus();
+equal(await page.evaluate(() => document.activeElement.id), 'name', 'the prior focus is established');
+// Focus only requires an attached node. Native focus on a disabled button leaves the prior focus intact.
+const result = await page.getByRef(ref).focus();
+assert(result === undefined, 'disabled focus resolves without a value', result);
+const state = await page.evaluate(() => {
+  const target = document.querySelector('button[disabled]');
+  return {active: document.activeElement.id, connected: target.isConnected, disabled: target.disabled};
+});
+equal(state, {active: 'name', connected: true, disabled: true}, 'disabled focus retains the prior active element');
+return {ref, focusReturnType: typeof result, ...state};

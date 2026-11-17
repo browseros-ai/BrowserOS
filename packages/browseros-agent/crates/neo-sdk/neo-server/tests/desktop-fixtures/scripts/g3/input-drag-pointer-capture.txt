@@ -1,0 +1,12 @@
+await page.goto(args.base + '/sdk-drag.html');
+const from = await page.evaluate(() => { const r = document.getElementById('capture-handle').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; });
+await page.mouse.move(from.x, from.y);
+await page.mouse.down();
+await page.mouse.move(from.x + 80, from.y + 60, { steps: 12 });
+await page.mouse.up();
+const state = await page.evaluate(() => window.pointerDrag);
+assert(state.capturedMoves > 0, 'the captured pointer receives held moves', state);
+equal(state.released, true, 'pointerup reaches the capture area');
+equal(state.hadCapture, true, 'the area still owns capture when pointerup arrives');
+assert(state.moved && Math.abs(state.moved.left - 100) < 0.5 && Math.abs(state.moved.top - 80) < 0.5, 'the captured handle moves by 80 and 60 pixels', state);
+return state;

@@ -21,6 +21,10 @@ import time
 JOB_ID = re.compile(r"[a-f0-9]{32}\Z")
 # The owner requires this admission limit even in a freshly initialized hosts file.
 WORKER_LIMIT = 2
+# A refresh point can fall near either end of two neighboring 20s client calls.
+# Keep FIFO age across those calls, the 2s poll pause and scheduling jitter. The
+# observer still withdraws on pipe loss; this backstop covers a vanished machine.
+WAITER_SECONDS = 60
 KINDS = {"gate", "image", "viewer-image", "spec", "detector", "run"}
 PRIORITY = {"gate": 0, "image": 1, "viewer-image": 1, "spec": 2, "detector": 2, "run": 2}
 # Measured gates took about 5 minutes, amd64 images 8, viewer images 16,
@@ -208,7 +212,7 @@ def request(path: Path, message: dict) -> dict:
                         raise ValueError(reason)
                     queued = {"id": job, "submitted": now, **metadata}
                     waiting.append(queued)
-                queued["until"] = now + 10
+                queued["until"] = now + WAITER_SECONDS
                 metadata = {**{name: queued[name] for name in ("kind", "worker", "label", "clientPid", "clientMachine")},
                             "protocol": queued.get("protocol", 0)}
             free = next((host for host in hosts if not host.get("job")
@@ -220,7 +224,7 @@ def request(path: Path, message: dict) -> dict:
             if waiting:
                 # Only the highest-priority live waiter can claim a free host.
                 # We do not reserve on somebody else's behalf: their next poll
-                # claims it, or their ten-second expiry removes the dead client.
+                # claims it, or their waiter expiry removes the dead client.
                 # FIFO within each class avoids racing clients jumping the queue.
                 if min(waiting, key=queue_order)["id"] != job:
                     write_state(path, state)

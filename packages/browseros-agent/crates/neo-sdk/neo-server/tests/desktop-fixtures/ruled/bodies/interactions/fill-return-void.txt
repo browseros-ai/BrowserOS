@@ -1,0 +1,15 @@
+// The immutable body records typeof before JSON serialization. Consume that exact run's
+// result across the harness handoff; another fill would prove a different operation.
+assert(Array.isArray(args.prior) && args.prior.length === 1, 'one immutable fill result precedes this verifier', args.prior);
+const result = args.prior[0];
+assert(result !== null && typeof result === 'object' && !Array.isArray(result), 'the fill result is an object', result);
+equal(result.fillReturnType, 'undefined', 'fill resolves without an automatic fields result');
+if ('goneReadback' in result) {
+  equal(result.exists, false, 'the removed field is absent rather than empty');
+  const failure = result.goneReadback;
+  assert(failure !== null && typeof failure === 'object', 'the original ref read must reject', failure);
+  equal({owner: failure.owner, code: failure.code, delivery: failure.delivery},
+    {owner: 'website', code: 'element_detached', delivery: 'not_sent'},
+    'the later read reports the original ref as stale');
+}
+return result;

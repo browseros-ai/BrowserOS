@@ -1,0 +1,56 @@
+/** Ref tokens name issuing documents; the fixture relays trusted input across its origin boundary. */
+const variants = [
+  { id: 'single-cross', commandLevel: 0, targetLevel: 1, site: 'B' },
+  { id: 'nested-mixed', commandLevel: 1, targetLevel: 2, site: 'A' },
+];
+const state = () => page.evaluate(() => JSON.parse(JSON.stringify(window.frameLab)));
+async function targetRef(label) {
+  let snapshot = '';
+  let ref;
+  await poll(async () => {
+    snapshot = await page.ariaSnapshot({ mode: 'full' });
+    const row = snapshot.split('\n').find(line => line.includes(label) && /\[ref=([^\]\s]+)\]/.test(line));
+    ref = row?.match(/\[ref=([^\]\s]+)\]/)?.[1];
+    return typeof ref === 'string';
+  }, 'the full snapshot contains a ref for ' + label, 20000);
+  return ref;
+}
+
+const cases = [];
+for (const variant of variants) {
+  await page.goto(args.base + '/frame-lab.html?case=' + variant.id);
+  await poll(async () => (await state()).ready, 'all frame levels are ready for ' + variant.id, 30000);
+  const oldRef = await targetRef('Click target ' + variant.id);
+  const oldDoc = (await state()).targetDoc;
+  assert(typeof oldDoc === 'string' && oldDoc.length > 0, 'the fixture identifies the original document', oldDoc);
+  equal((await state()).events, [], 'the original document has received no input');
+
+  // The command reloads the child document through its retained iframe owner; it never replaces that owner.
+  await page.evaluate(level => window.frameLab.command(level, 'reload'), variant.commandLevel);
+  await poll(async () => (await state()).done.includes(variant.commandLevel + ':reload'), 'the document owner applies reload');
+  let newDoc;
+  await poll(async () => {
+    newDoc = (await state()).targetDoc;
+    return typeof newDoc === 'string' && newDoc !== oldDoc;
+  }, 'the reloaded target has a new document identity', 30000);
+
+  const refusal = await rejected(() => page.getByRef(oldRef).click({ timeout: 1500 }));
+  equal({ owner: refusal.owner, code: refusal.code, delivery: refusal.delivery }, { owner: 'website', code: 'element_detached', delivery: 'not_sent' }, 'an old document ref refuses before input');
+  includes(refusal.message, oldRef, 'the refusal identifies the stale ref');
+  includes(refusal.message, 'not on the page any more', 'the refusal explains document detachment');
+  includes(refusal.message, 'take a new snapshot', 'the refusal gives fresh-reference guidance');
+  equal((await state()).events, [], 'the refused stale ref delivers no event to any frame');
+
+  const newRef = await targetRef('Click target ' + variant.id);
+  assert(newRef !== oldRef, 'a fresh snapshot issues a ref for the new document', { oldRef, newRef });
+  await page.getByRef(newRef).click();
+  await poll(async () => (await state()).events.length > 0, 'a fresh ref delivers native input to ' + variant.id);
+  const events = (await state()).events;
+  equal(events.length, 1, 'exactly one event follows the fresh-ref click');
+  const event = events[0];
+  const origin = new URL(args.base);
+  if (variant.site === 'B') origin.hostname = origin.hostname === 'localhost' ? '127.0.0.1' : 'localhost';
+  equal({ control: event.control, trusted: event.trusted, origin: event.origin, level: event.level, docId: event.docId }, { control: 'button', trusted: true, origin: origin.origin, level: variant.targetLevel, docId: newDoc }, 'the trusted click reaches exactly the new target document');
+  cases.push({ id: variant.id, oldRef, newRef, oldDoc, newDoc, refusal, event });
+}
+return { cases };
