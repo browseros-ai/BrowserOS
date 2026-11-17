@@ -208,7 +208,7 @@ export const delta: Gap = {
       shop({
         form: [
           { role: 'textbox', name: 'Coupon', ref: 'e6' },
-          { role: 'alert', children: ['Code expired.'] },
+          { role: 'alert', children: ['Expired.'] },
         ],
       }),
     ),
@@ -227,6 +227,17 @@ export const delta: Gap = {
     // A new ref on main and a line added far below: a hunk that adds is named from the new text.
     'delta/added-under-new-ref': tree(
       shop({ mainRef: 'e40', mugs: noted({ 14: 'Sold' }) }),
+    ),
+    // Two pictures added near the top, the form's last line gone: found from its old-text place.
+    'delta/shifted-removal': tree(
+      shop({
+        mugs: [
+          MUGS[0],
+          { role: 'img', name: 'New 1' },
+          { role: 'img', name: 'New 2' },
+          ...MUGS.slice(1),
+        ],
+      }),
     ),
     // Another page altogether: too much differs, refused before the search.
     'delta/elsewhere': tree([
@@ -375,6 +386,9 @@ export const delta: Gap = {
     ].flatMap((name) =>
       calls(name, { 'delta-after-shop': since({}, keptBy('delta/shop')) }),
     ),
+    ...calls('delta/shifted-removal', {
+      'delta-after-coupon-error': since({}, keptBy('delta/coupon-error')),
+    }),
     ...calls('delta/gallery', {
       'delta-after-roots': since({}, keptBy('delta/gallery-roots')),
     }),
