@@ -5640,6 +5640,83 @@ async fn a_start_that_cannot_list_the_tabs_treats_every_tab_as_filled() -> Resul
     Ok(())
 }
 
+/// A delayed restart listing cannot expose a filled tab under `never`. Once recovery finishes,
+/// only the recorded tab stays withheld, even while the entry's copy of the setting is stale.
+#[tokio::test]
+async fn pictures_follow_the_setting_while_filled_tabs_are_restored() -> Result<(), Box<dyn Error>>
+{
+    let fake = FakeCdp::new();
+    let filled_tab = fake.open_tab("https://shop.test/", "Shop");
+    let other_tab = fake.open_tab("https://news.test/", "News");
+    let connect = Arc::clone(&fake);
+    let link = BrowserLink::start_with(
+        NativeCapabilities::default(),
+        Arc::new(TabRegistry::new()),
+        move || future::ready(connect.connect()),
+    );
+    // Settle the initial watcher listing before holding the recovery's own listing.
+    within(link.watched_listing()).await?;
+    let target = link
+        .every_tab()
+        .await
+        .and_then(|tabs| tabs.into_iter().find(|(_, tab)| *tab == filled_tab))
+        .map(|(target, _)| target)
+        .ok_or("the browser lists the filled tab's target")?;
+    let dir = tempfile::tempdir()?;
+    fs::write(
+        dir.path().join("filled-tabs"),
+        format!("{}\n", target.as_str()),
+    )?;
+    let filled = FilledTabs::open(dir.path()).await;
+    let before = fake.count("Browser.getTabs");
+    fake.hold_next("Browser.getTabs");
+    let facade = PlaywrightFacade::start(
+        link,
+        false,
+        Arc::default(),
+        Arc::new(FileAccess::new(Vec::new, Vec::new())),
+        Some(filled),
+    );
+    assert!(
+        !facade.withholds_picture(filled_tab),
+        "default before recovery"
+    );
+    facade.set_fill_pictures_never(true);
+    assert!(
+        facade.withholds_picture(filled_tab),
+        "never before recovery"
+    );
+    within(async {
+        while fake.count("Browser.getTabs") == before {
+            time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await?;
+    for never in [true, false, true] {
+        facade.set_fill_pictures_never(never);
+        for tab in [filled_tab, other_tab] {
+            assert_eq!(
+                facade.withholds_picture(tab),
+                never,
+                "pending recovery: {tab:?}, never: {never}"
+            );
+        }
+    }
+    fake.release_held();
+    let playwright = within(facade.get()).await?;
+    for never in [true, false, true] {
+        facade.set_fill_pictures_never(never);
+        assert_eq!(facade.withholds_picture(filled_tab), never);
+        assert!(!facade.withholds_picture(other_tab));
+    }
+    // OnceCell publishes before get() syncs this copy. The camera's answer must already
+    // honor the facade's current setting during that interval.
+    playwright.set_fill_pictures_never(false);
+    assert!(facade.withholds_picture(filled_tab));
+    assert!(!facade.withholds_picture(other_tab));
+    Ok(())
+}
+
 /// A recorded script run whose host task is `task`.
 fn run_for(harness: &Harness, task: &TaskId) -> Result<(Arc<RunCtx>, RunGuard), Box<dyn Error>> {
     let view = harness.link.view().ok_or("the link is up")?;

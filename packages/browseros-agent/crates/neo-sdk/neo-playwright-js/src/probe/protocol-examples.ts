@@ -29,8 +29,6 @@ export const REQUEST_EXAMPLES: { [O in Op]: AtLeastOne<RequestOf<O>> } = {
   describe: [{ op: 'describe' }],
   screenshotMask: [{ op: 'screenshotMask', target: GO_BUTTON, color: '#F0F' }],
   screenshotMaskCleanup: [{ op: 'screenshotMaskCleanup' }],
-  privateShown: [{ op: 'privateShown' }, { op: 'privateShown', walk: true }],
-  privateHosts: [{ op: 'privateHosts', limit: 16 }],
   webStorage: [
     { op: 'webStorage', kind: 'local', action: 'items' },
     { op: 'webStorage', kind: 'session', action: 'getItem', name: 'token' },
@@ -907,7 +905,7 @@ export function protocolDocument() {
     protocol: PROTOCOL,
     callFunction: CALL_FUNCTION,
     replyKinds: REPLY_KINDS,
-    byHandle: ['pinned', 'privateHosts'],
+    byHandle: ['pinned'],
     anyRequest: ['error', 'uninstalled'],
     calls: CALL_EXAMPLES,
     requests: Object.values(REQUEST_EXAMPLES).flat(),

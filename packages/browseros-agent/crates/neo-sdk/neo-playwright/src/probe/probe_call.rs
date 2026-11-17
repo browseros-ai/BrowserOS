@@ -61,8 +61,7 @@ fn with_frame_context(conformance: bool, hint: impl FnOnce() -> bool) -> ProbePo
 }
 
 /// The only requests allowed after an operation's scope has ended. A token-specific verdict
-/// stops its own interceptor during navigation; it cannot stop a later operation's arm. The one
-/// other request sent without an op is the camera's [`picture_question`].
+/// stops its own interceptor during navigation; it cannot stop a later operation's arm.
 pub(crate) enum Control {
     Disarm,
     Verdict { token: u32 },
@@ -71,8 +70,7 @@ pub(crate) enum Control {
 }
 
 /// Best-effort detached cleanup has no general request overload. Its captured policy cannot
-/// authorize a fresh read or action once the operation's admission and deadline are gone. The
-/// camera's [`picture_question`] is the other sender outside an op, fixed to one request.
+/// authorize a fresh read or action once the operation's admission and deadline are gone.
 pub(crate) async fn cleanup(
     policy: ProbePolicy,
     world: &IsolatedWorld,
@@ -88,32 +86,6 @@ pub(crate) async fn cleanup(
         Control::ScreenshotMaskCleanup => ProbeRequest::ScreenshotMaskCleanup,
     };
     send(world, &request, policy, Handed::NONE, Gesture::None).await
-}
-
-/// Neo's camera's one question, asked outside any op (protected-fill ruling R45): only
-/// `privateShown`, which changes nothing in the page and reads no value out of it. It installs
-/// no mask and reads neither policy field; the policy is only the envelope every call carries,
-/// so it sends a fixed one. With [`cleanup`], the second sender that runs without an op.
-///
-/// `walk` is the camera's walk of closed shadow roots on demand (ruling R65,
-/// `picture_check.rs`): closed roots resolved into `world` from the hosts [`private_hosts`]
-/// handed over, which the world keeps for this question alone and never opens to its engine.
-pub(crate) async fn picture_question(
-    world: &IsolatedWorld,
-    walk: Option<&[String]>,
-) -> Result<ProbeReply, ProbeFailure> {
-    let policy = ProbePolicy {
-        conformance: false,
-        may_have_other_frame: true,
-    };
-    let request = ProbeRequest::PrivateShown {
-        walk: walk.is_some(),
-    };
-    let handed = Handed {
-        root: None,
-        nodes: walk.unwrap_or_default(),
-    };
-    send(world, &request, policy, handed, Gesture::None).await
 }
 
 /// Why a probe call or an install produced no reply.
@@ -595,71 +567,6 @@ pub(crate) async fn pinned_nodes(
         Some(DeepNodes::Null) => Err(ProbeFailure::Gone(Ran::No)),
         Some(DeepNodes::Array(_)) | None => Err(ProbeFailure::Broken(
             "the probe returned an incomplete batch of pinned nodes".to_owned(),
-        )),
-    }
-}
-
-/// The hosts the camera's question has waiting (`privateHosts`, ruling R65), outside any op as
-/// that question is: elements a trusted input event or the focus pointed at, which take no input
-/// themselves and may carry a closed shadow root the world does not know. Handed over by deep
-/// serialization, as [`pinned_nodes`] reads backend ids, so Rust takes no pin and no handle of a
-/// host: the call's remote array lives in `group`, the walk's own object group, until the walk
-/// ends. The page keeps the count of what it handed over: a host the focus pointed at once, one an
-/// input event named once a reading until its root is kept, five readings at most.
-/// No page script runs: the request's handler only reads the world's own list.
-pub(crate) async fn private_hosts(
-    world: &IsolatedWorld,
-    group: &str,
-    limit: u32,
-) -> Result<Vec<BackendNodeId>, ProbeFailure> {
-    let request = ProbeRequest::PrivateHosts { limit };
-    let call = ProbeCall {
-        request: &request,
-        policy: ProbePolicy {
-            conformance: false,
-            may_have_other_frame: true,
-        },
-    };
-    // A reply that is no list (`uninstalled`, or an error reply) comes back as null.
-    let function = format!(
-        "function (call) {{ const hosts = ({CALL_FUNCTION}).call(this, call); \
-         return Array.isArray(hosts) ? hosts : null; }}"
-    );
-    let called: Called = world
-        .session()
-        .send(
-            "Runtime.callFunctionOn",
-            json!({
-                "objectId": world.global(),
-                "functionDeclaration": function,
-                "arguments": [{ "value": call }],
-                "objectGroup": group,
-                "serializationOptions": {
-                    "serialization": "deep",
-                    "maxDepth": 2,
-                    "additionalParameters": { "maxNodeDepth": 0, "includeShadowTree": "none" }
-                }
-            }),
-        )
-        .await
-        .map_err(ProbeFailure::from_core)?;
-    if let Some(exception) = called.exception_details {
-        return Err(ProbeFailure::Broken(format!(
-            "the probe threw: {}",
-            exception.message()
-        )));
-    }
-    match called.result.deep_serialized_value {
-        Some(DeepNodes::Array(nodes)) => Ok(nodes
-            .into_iter()
-            .filter_map(|node| match node {
-                DeepNode::Node { backend_node_id } => Some(backend_node_id),
-                DeepNode::Null => None,
-            })
-            .collect()),
-        Some(DeepNodes::Null) => Err(ProbeFailure::Gone(Ran::No)),
-        None => Err(ProbeFailure::Broken(
-            "the probe answered `privateHosts` with no list".to_owned(),
         )),
     }
 }

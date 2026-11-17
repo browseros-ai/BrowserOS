@@ -72,14 +72,9 @@ it('tests that the protocol examples type-check against protocol.ts', () => {
   expect(result.status).toBe(0)
 })
 
-/**
- * Whether a by-handle reply has its shape: `pinned` answers its element or null, `privateHosts`
- * the camera's waiting hosts, a list of elements Rust reads through deep serialization.
- */
-const handedOver = (op: string, reply: unknown): boolean =>
-  op === 'privateHosts'
-    ? Array.isArray(reply) && reply.every((host) => host instanceof Element)
-    : reply === null || reply instanceof Element
+/** A by-handle `pinned` reply is its element or null. */
+const handedOver = (reply: unknown): boolean =>
+  reply === null || reply instanceof Element
 
 it('tests that every example request gets a reply its op allows from the built probe', async () => {
   page = openProbePage(PAGE)
@@ -90,11 +85,11 @@ it('tests that every example request gets a reply its op allows from the built p
       // `expect` answers with a promise, which CDP's `awaitPromise` settles for Rust.
       const reply = await page.call(request)
       if (!isValueOp(op)) {
-        if (!handedOver(op, reply))
+        if (!handedOver(reply))
           wrong.push({
             op,
             reply,
-            why: 'by-handle replies are an element or null, or a list of elements',
+            why: 'by-handle replies are an element or null',
           })
         continue
       }

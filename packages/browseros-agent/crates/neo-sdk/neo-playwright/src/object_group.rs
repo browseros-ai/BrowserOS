@@ -1,7 +1,5 @@
 //! Lifetime ownership for remote CDP objects. Operations keep temporary query objects; runs
-//! keep chooser inputs alive after event delivery, so detached nodes survive browser GC; the
-//! camera's walk of closed shadow roots, which runs outside any op, keeps the hosts handed over
-//! and the roots it resolves for the one question that reads them (`private_entry::picture_check`).
+//! keep chooser inputs alive after event delivery, so detached nodes survive browser GC.
 use browseros_core::ProtocolSession;
 use serde_json::{Value, json};
 use std::mem;
@@ -9,7 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, PoisonError};
 use tokio::runtime::Handle;
 
-/// Strong CDP references owned by one operation, one run or one camera walk. Dropping the owner
+/// Strong CDP references owned by one operation or one run. Dropping the owner
 /// releases every session's group, including when cancellation drops its future.
 #[derive(Debug)]
 pub(crate) struct ObjectGroup {

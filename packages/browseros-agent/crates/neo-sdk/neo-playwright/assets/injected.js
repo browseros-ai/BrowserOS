@@ -1885,828 +1885,6 @@
     return false;
   }
 
-  // crates/neo-sdk/neo-playwright-js/src/probe/browseros-ui.ts
-  var BROWSEROS_UI_HOSTS = new Set([
-    "browseros-neo-takeover"
-  ]);
-  function isBrowserOSUi(element) {
-    return BROWSEROS_UI_HOSTS.has(element.localName);
-  }
-
-  // crates/neo-sdk/neo-playwright-js/src/probe/private-digest.ts
-  var key;
-  var kept = new Map;
-  var holders = new WeakSet;
-  function setAside(text) {
-    return text.replace(/[\s\-/]/g, "");
-  }
-  function keepDigest(text) {
-    const bare = setAside(text);
-    if (!bare)
-      return;
-    key ??= crypto.getRandomValues(new Uint32Array(4));
-    kept.set(digest(key, bare), bare.length);
-  }
-  function keepsDigests() {
-    return kept.size > 0;
-  }
-  function noteHolders(document2) {
-    holders = new WeakSet;
-    if (!key || kept.size === 0)
-      return;
-    const lengths = new Set(kept.values());
-    const held = new Set;
-    for (const control of textControls(document2)) {
-      const bare = setAside(control.value);
-      if (!lengths.has(bare.length))
-        continue;
-      const found = digest(key, bare);
-      if (!kept.has(found))
-        continue;
-      held.add(found);
-      holders.add(control);
-    }
-    for (const known of kept.keys())
-      if (!held.has(known))
-        kept.delete(known);
-  }
-  function holdsKeptValue(element) {
-    return holders.has(element);
-  }
-  var NOT_TEXT = new Set([
-    "button",
-    "checkbox",
-    "color",
-    "file",
-    "image",
-    "radio",
-    "range",
-    "reset",
-    "submit"
-  ]);
-  function* textControls(document2) {
-    const roots = [document2];
-    for (const root of roots) {
-      for (const element of root.querySelectorAll("*")) {
-        if (element instanceof HTMLTextAreaElement)
-          yield element;
-        else if (element instanceof HTMLInputElement && !NOT_TEXT.has(element.type))
-          yield element;
-        const shadow = element.shadowRoot;
-        if (shadow)
-          roots.push(shadow);
-      }
-    }
-  }
-  function digest(secret, text) {
-    const bytes = new Uint8Array(text.length * 2);
-    for (let index = 0;index < text.length; index++) {
-      const unit = text.charCodeAt(index);
-      bytes[index * 2] = unit & 255;
-      bytes[index * 2 + 1] = unit >>> 8;
-    }
-    const [hash0, hash1] = sipHash24(secret, bytes);
-    return `${hash1.toString(16)}:${hash0.toString(16)}`;
-  }
-  function sipHash24(secret, bytes) {
-    const k0lo = secret[0] ?? 0;
-    const k0hi = secret[1] ?? 0;
-    const k1lo = secret[2] ?? 0;
-    const k1hi = secret[3] ?? 0;
-    const v = new Uint32Array([
-      (k0lo ^ 1886610805) >>> 0,
-      (k0hi ^ 1936682341) >>> 0,
-      (k1lo ^ 1852075885) >>> 0,
-      (k1hi ^ 1685025377) >>> 0,
-      (k0lo ^ 1852142177) >>> 0,
-      (k0hi ^ 1819895653) >>> 0,
-      (k1lo ^ 2037671283) >>> 0,
-      (k1hi ^ 1952801890) >>> 0
-    ]);
-    const word = (at) => ((bytes[at] ?? 0) | (bytes[at + 1] ?? 0) << 8 | (bytes[at + 2] ?? 0) << 16 | (bytes[at + 3] ?? 0) << 24) >>> 0;
-    const absorb = (lo, hi) => {
-      v[6] = (v[6] ?? 0) ^ lo;
-      v[7] = (v[7] ?? 0) ^ hi;
-      round(v);
-      round(v);
-      v[0] = (v[0] ?? 0) ^ lo;
-      v[1] = (v[1] ?? 0) ^ hi;
-    };
-    const whole = bytes.length - bytes.length % 8;
-    for (let at = 0;at < whole; at += 8)
-      absorb(word(at), word(at + 4));
-    const last = new Uint8Array(8);
-    last.set(bytes.subarray(whole));
-    last[7] = bytes.length & 255;
-    const lastLo = ((last[0] ?? 0) | (last[1] ?? 0) << 8 | (last[2] ?? 0) << 16 | (last[3] ?? 0) << 24) >>> 0;
-    const lastHi = ((last[4] ?? 0) | (last[5] ?? 0) << 8 | (last[6] ?? 0) << 16 | (last[7] ?? 0) << 24) >>> 0;
-    absorb(lastLo, lastHi);
-    v[4] = (v[4] ?? 0) ^ 255;
-    round(v);
-    round(v);
-    round(v);
-    round(v);
-    const lo = ((v[0] ?? 0) ^ (v[2] ?? 0) ^ (v[4] ?? 0) ^ (v[6] ?? 0)) >>> 0;
-    const hi = ((v[1] ?? 0) ^ (v[3] ?? 0) ^ (v[5] ?? 0) ^ (v[7] ?? 0)) >>> 0;
-    return [lo, hi];
-  }
-  function round(v) {
-    add(v, 0, 2);
-    rotate(v, 2, 13);
-    xor(v, 2, 0);
-    rotate(v, 0, 32);
-    add(v, 4, 6);
-    rotate(v, 6, 16);
-    xor(v, 6, 4);
-    add(v, 0, 6);
-    rotate(v, 6, 21);
-    xor(v, 6, 0);
-    add(v, 4, 2);
-    rotate(v, 2, 17);
-    xor(v, 2, 4);
-    rotate(v, 4, 32);
-  }
-  function add(v, into, from) {
-    const lo = (v[into] ?? 0) + (v[from] ?? 0);
-    const carry = lo > 4294967295 ? 1 : 0;
-    v[into] = lo >>> 0;
-    v[into + 1] = (v[into + 1] ?? 0) + (v[from + 1] ?? 0) + carry >>> 0;
-  }
-  function xor(v, into, from) {
-    v[into] = ((v[into] ?? 0) ^ (v[from] ?? 0)) >>> 0;
-    v[into + 1] = ((v[into + 1] ?? 0) ^ (v[from + 1] ?? 0)) >>> 0;
-  }
-  function rotate(v, at, bits) {
-    const lo = v[at] ?? 0;
-    const hi = v[at + 1] ?? 0;
-    if (bits === 32) {
-      v[at] = hi;
-      v[at + 1] = lo;
-      return;
-    }
-    v[at] = (lo << bits | hi >>> 32 - bits) >>> 0;
-    v[at + 1] = (hi << bits | lo >>> 32 - bits) >>> 0;
-  }
-
-  // crates/neo-sdk/neo-playwright-js/src/probe/private-entry.ts
-  var MARK = Symbol.for("neo.privatelyTyped");
-  var anyMarked = false;
-  var LEAVES = ["beforeunload", "pagehide"];
-  var watched = new WeakMap;
-  var active = new Map;
-  var drawnSlot;
-  function privatelyTyped(element) {
-    return Object.hasOwn(element, MARK) || holdsKeptValue(element);
-  }
-  function anyPrivatelyTyped() {
-    return anyMarked || keepsDigests();
-  }
-  function mark(element) {
-    if (!Object.hasOwn(element, MARK))
-      Object.defineProperty(element, MARK, { value: true });
-    anyMarked = true;
-  }
-  function privateStep(world, request) {
-    const { step, pin } = request;
-    if (step.kind === "drawn") {
-      const wrapper = drawnSlot?.pin === pin ? drawnSlot.wrapper : undefined;
-      drawnSlot = undefined;
-      return reply({
-        kind: "drawn",
-        drawn: wrapper ? draws(wrapper, step.text) : true
-      });
-    }
-    const box = active.get(pin) ?? (step.kind === "focus" || step.kind === "compare" ? world.pins.live(pin) : undefined);
-    if (!box)
-      return { kind: "detached" };
-    const answered = answer(world, pin, box, step);
-    return answered instanceof Promise ? answered.then(reply) : reply(answered);
-  }
-  function reply(value) {
-    return { kind: "value", value };
-  }
-  function answer(world, pin, box, step) {
-    switch (step.kind) {
-      case "focus":
-        return focus(world, pin, box, step.text, step.spaced);
-      case "focused":
-        return { kind: "focus", focus: focusState(box) };
-      case "holds":
-        return {
-          kind: "holds",
-          holds: same(heldText(box), step.text, step.spaced)
-        };
-      case "compare": {
-        const held = heldText(box);
-        return {
-          kind: "compared",
-          holds: same(held, step.text, step.spaced),
-          contains: contains(held, step.text, step.spaced)
-        };
-      }
-      case "readBack":
-        return readBack(pin, box);
-      case "forget":
-        forget(pin, box);
-        return { kind: "forgot" };
-      case "markFocused":
-        return { kind: "markedFocused", marked: markFocused(box) };
-    }
-  }
-  function markFocused(box) {
-    let holder = box.ownerDocument.activeElement;
-    while (holder?.shadowRoot?.activeElement)
-      holder = holder.shadowRoot.activeElement;
-    if (!holder || holder === box)
-      return false;
-    const name = holder.localName;
-    if (name !== "input" && name !== "textarea")
-      return false;
-    mark(holder);
-    keepDigest(heldText(holder));
-    return true;
-  }
-  async function focus(world, pin, box, text, spaced) {
-    mark(box);
-    listen(pin, box, text, spaced);
-    if (world.injected.selectText(box) === "error:notconnected")
-      return { kind: "focus", focus: "gone" };
-    await Promise.resolve();
-    return { kind: "focus", focus: focusState(box) };
-  }
-  function focusState(box) {
-    if (!box.isConnected)
-      return "gone";
-    if (moving(watched.get(box)))
-      return "moving";
-    if (!holdsFocus(box))
-      return "elsewhere";
-    return box.ownerDocument.hasFocus() ? "held" : "noDocumentFocus";
-  }
-  function holdsFocus(box) {
-    const root = box.getRootNode();
-    const active = Reflect.get(root, "activeElement");
-    return active === box;
-  }
-  function moving(entry) {
-    if (!entry)
-      return false;
-    return entry.leaving || entry.submits.some((event) => !event.defaultPrevented && Reflect.get(event.target ?? {}, "target") !== "_blank");
-  }
-  function listen(pin, box, text, spaced) {
-    forget(pin, box);
-    const wrapper = coverWrapper(box);
-    const entry = {
-      text,
-      spaced,
-      ...wrapper && {
-        cover: {
-          wrapper,
-          drewBefore: draws(wrapper, text),
-          text
-        }
-      },
-      heldAtLastInput: false,
-      submits: [],
-      leaving: false,
-      listener: () => {
-        entry.heldAtLastInput = same(heldText(box), text, spaced);
-      },
-      onSubmit: (event) => {
-        entry.submits.push(event);
-      },
-      onLeave: () => {
-        entry.leaving = true;
-      }
-    };
-    watched.set(box, entry);
-    active.set(pin, box);
-    box.addEventListener("input", entry.listener, { capture: true });
-    const view = box.ownerDocument.defaultView;
-    view?.addEventListener("submit", entry.onSubmit, { capture: true });
-    for (const type of LEAVES)
-      view?.addEventListener(type, entry.onLeave, { capture: true });
-  }
-  function forget(pin, box) {
-    active.delete(pin);
-    const entry = watched.get(box);
-    if (!entry)
-      return;
-    box.removeEventListener("input", entry.listener, { capture: true });
-    const view = box.ownerDocument.defaultView;
-    view?.removeEventListener("submit", entry.onSubmit, { capture: true });
-    for (const type of LEAVES)
-      view?.removeEventListener(type, entry.onLeave, { capture: true });
-    watched.delete(box);
-  }
-  function readBack(pin, box) {
-    const entry = watched.get(box);
-    const heldAtLastInput = entry?.heldAtLastInput ?? false;
-    let state;
-    if (!box.isConnected)
-      state = "left";
-    else if (entry && same(heldText(box), entry.text, entry.spaced))
-      state = "holds";
-    else
-      state = "other";
-    if (state !== "left")
-      keepDigest(heldText(box));
-    if (entry)
-      keepDigest(entry.text);
-    if (state === "other")
-      markFocused(box);
-    const leaving = moving(entry);
-    const cover = entry?.cover;
-    const drawn = cover !== undefined && !cover.drewBefore && draws(cover.wrapper, cover.text);
-    if (cover && drawn)
-      drawnSlot = { pin, wrapper: cover.wrapper };
-    forget(pin, box);
-    const drawing = !cover ? "none" : drawn ? "drawn" : "under";
-    return { kind: "readBack", state, heldAtLastInput, moving: leaving, drawing };
-  }
-  function draws(wrapper, text) {
-    const bare = (value) => value.replace(/[\s\-/]/g, "").toLowerCase();
-    const value = bare(text);
-    return value !== "" && bare(renderedText(wrapper)).includes(value);
-  }
-  function heldText(box) {
-    const value = Reflect.get(box, "value");
-    return typeof value === "string" ? value : "";
-  }
-  function contains(held, text, spaced) {
-    if (held.includes(text))
-      return true;
-    if (!spaced)
-      return false;
-    const bare = (value) => value.replace(/[\s\-/]/g, "");
-    return bare(held).includes(bare(text));
-  }
-  function same(held, text, spaced) {
-    if (held === text)
-      return true;
-    if (!spaced)
-      return false;
-    const bare = (value) => value.replace(/[\s\-/]/g, "");
-    return bare(held) === bare(text);
-  }
-
-  // crates/neo-sdk/neo-playwright-js/src/probe/private-field-values.ts
-  var PRIVATE_AUTOCOMPLETE = new Set([
-    "current-password",
-    "new-password",
-    "one-time-code",
-    "cc-number",
-    "cc-csc"
-  ]);
-  var HTML_NAMESPACE = "http://www.w3.org/1999/xhtml";
-  var FIELD_TAGS = new Set(["input", "textarea"]);
-  var PRIVATE_VALUE_ATTRIBUTES = new Set([
-    "value",
-    "aria-valuetext",
-    "aria-valuenow"
-  ]);
-  function isHtmlField(element) {
-    return element.nodeType === 1 && "localName" in element && typeof element.localName === "string" && FIELD_TAGS.has(element.localName) && "namespaceURI" in element && element.namespaceURI === HTML_NAMESPACE;
-  }
-  var declaredMasked;
-  function isHtmlTextarea(node) {
-    return node?.nodeType === 1 && "localName" in node && node.localName === "textarea" && "namespaceURI" in node && node.namespaceURI === HTML_NAMESPACE;
-  }
-  function hasReadableOpener(document2) {
-    try {
-      const view = document2.defaultView;
-      if (!view)
-        return true;
-      const opener = view.opener;
-      if (opener === null || opener === undefined)
-        return false;
-      if (typeof opener !== "object" && typeof opener !== "function")
-        return true;
-      const _openerDocument = Reflect.get(opener, "document");
-      return true;
-    } catch (error) {
-      return !(typeof error === "object" && error !== null && ("name" in error) && error.name === "SecurityError");
-    }
-  }
-  function collectFieldPrototypes({
-    root,
-    mayHaveOtherFrame
-  }) {
-    const prototypes = {
-      inputs: new Set([HTMLInputElement.prototype]),
-      textareas: new Set([HTMLTextAreaElement.prototype]),
-      texts: new Set([Text.prototype])
-    };
-    const collect = (element) => {
-      if (!isHtmlField(element))
-        return;
-      const prototype = Object.getPrototypeOf(element);
-      if (!prototype)
-        throw new TypeError("snapshot field prototype is unavailable");
-      if (element.localName === "input") {
-        prototypes.inputs.add(prototype);
-        return;
-      }
-      prototypes.textareas.add(prototype);
-      for (const child of element.childNodes) {
-        if (child.nodeType !== 3)
-          continue;
-        const textPrototype = Object.getPrototypeOf(child);
-        if (!textPrototype)
-          throw new TypeError("snapshot textarea Text prototype is unavailable");
-        prototypes.texts.add(textPrototype);
-      }
-    };
-    const ownerDocument = root?.ownerDocument ?? document;
-    if (root)
-      collect(root);
-    if (!mayHaveOtherFrame && !hasReadableOpener(ownerDocument))
-      return prototypes;
-    const roots = [ownerDocument];
-    for (const tree of roots) {
-      for (const element of tree.querySelectorAll("input,textarea"))
-        collect(element);
-      for (const host of tree.querySelectorAll("*")) {
-        const shadow = host.shadowRoot;
-        if (shadow)
-          roots.push(shadow);
-      }
-    }
-    return prototypes;
-  }
-  function isPrivateField(field, { declared = declaredMasked ?? true } = {}) {
-    return isHtmlField(field) && (privatelyTyped(field) || (declaredMasked === true || declared) && (field.getAttribute("type")?.toLowerCase() === "password" || (field.getAttribute("autocomplete") ?? "").toLowerCase().split(/\s+/).some((token) => PRIVATE_AUTOCOMPLETE.has(token))));
-  }
-  function maskedValue(descriptor, valueReads) {
-    if (typeof descriptor.get !== "function")
-      throw new TypeError("snapshot field value accessor is unavailable");
-    const get = descriptor.get;
-    return {
-      ...descriptor,
-      get() {
-        const alreadyReading = valueReads.has(this);
-        valueReads.add(this);
-        let value;
-        try {
-          value = get.call(this);
-        } finally {
-          if (!alreadyReading)
-            valueReads.delete(this);
-        }
-        if (typeof value !== "string")
-          throw new TypeError("snapshot field value accessor did not return text");
-        return isPrivateField(this) ? "•".repeat(value.length) : value;
-      }
-    };
-  }
-  function propertyOverride(target, property, mask) {
-    const original = Object.getOwnPropertyDescriptor(target, property);
-    if (original?.configurable === false || !original && !Object.isExtensible(target))
-      throw new TypeError(`snapshot field ${property} cannot be overridden`);
-    let owner = target;
-    while (owner) {
-      const descriptor = Object.getOwnPropertyDescriptor(owner, property);
-      if (descriptor) {
-        return {
-          target,
-          property,
-          original,
-          masked: { ...mask(descriptor), configurable: true }
-        };
-      }
-      owner = Object.getPrototypeOf(owner);
-    }
-    throw new TypeError(`snapshot field ${property} is unavailable`);
-  }
-  function maskedAttributes(descriptor) {
-    if (typeof descriptor.value !== "function")
-      throw new TypeError("snapshot field getAttribute method is unavailable");
-    const getAttribute = descriptor.value;
-    return {
-      ...descriptor,
-      value(name) {
-        const value = getAttribute.call(this, name);
-        return typeof value === "string" && typeof name === "string" && PRIVATE_VALUE_ATTRIBUTES.has(name.toLowerCase()) && isPrivateField(this) ? "•".repeat(value.length) : value;
-      }
-    };
-  }
-  function emptyTextareaText(descriptor, textareaOf, valueReads) {
-    if (typeof descriptor.get !== "function")
-      throw new TypeError("snapshot textarea text accessor is unavailable");
-    const get = descriptor.get;
-    return {
-      ...descriptor,
-      get() {
-        const textarea = textareaOf(this);
-        return textarea && !valueReads.has(textarea) && isPrivateField(textarea) ? "" : get.call(this);
-      }
-    };
-  }
-  function parentTextarea(node) {
-    const parent = node.parentElement;
-    return isHtmlTextarea(parent) ? parent : null;
-  }
-  function maskedComputedStyle(descriptor) {
-    if (typeof descriptor.value !== "function")
-      throw new TypeError("snapshot getComputedStyle method is unavailable");
-    const read = descriptor.value;
-    return {
-      ...descriptor,
-      value(element, pseudo) {
-        const style = Reflect.apply(read, this, [
-          element,
-          pseudo
-        ]);
-        if (!isHtmlField(element))
-          return style;
-        if (!isPrivateField(element))
-          return style;
-        return new Proxy(style, {
-          get(target, key) {
-            if (key === "content")
-              return "none";
-            if (key === "getPropertyValue")
-              return (property) => property.toLowerCase() === "content" ? "none" : target.getPropertyValue(property);
-            const value = Reflect.get(target, key);
-            return typeof value === "function" ? value.bind(target) : value;
-          }
-        });
-      }
-    };
-  }
-  function restoreOverrides(installed) {
-    const failures = [];
-    for (const override of installed.reverse()) {
-      try {
-        if (override.original) {
-          Object.defineProperty(override.target, override.property, override.original);
-        } else if (!Reflect.deleteProperty(override.target, override.property)) {
-          throw new TypeError(`snapshot field ${override.property} could not be removed`);
-        }
-      } catch (error) {
-        failures.push(error);
-      }
-    }
-    if (failures.length)
-      throw new TypeError("snapshot field overrides could not be restored", {
-        cause: new AggregateError(failures)
-      });
-  }
-  function withMarkedFieldsMasked(walk, root = document.documentElement) {
-    return anyPrivatelyTyped() || root !== null && privatelyTyped(root) ? withMaskedFieldValues({ root, mayHaveOtherFrame: true }, walk, {
-      declared: false
-    }) : walk();
-  }
-  function withMaskedFieldValues(discovery, walk, { declared = true } = {}) {
-    const prototypes = collectFieldPrototypes(discovery);
-    const inputs = Array.from(prototypes.inputs);
-    const textareas = Array.from(prototypes.textareas);
-    const texts = Array.from(prototypes.texts);
-    const valueReads = new Set;
-    const overrides = [
-      ...inputs.map((input) => propertyOverride(input, "value", (descriptor) => maskedValue(descriptor, valueReads))),
-      ...textareas.map((textarea) => propertyOverride(textarea, "value", (descriptor) => maskedValue(descriptor, valueReads))),
-      ...inputs.map((input) => propertyOverride(input, "defaultValue", (descriptor) => maskedValue(descriptor, valueReads))),
-      ...inputs.map((input) => propertyOverride(input, "getAttribute", maskedAttributes)),
-      ...textareas.map((textarea) => propertyOverride(textarea, "getAttribute", maskedAttributes)),
-      ...texts.flatMap((text) => ["nodeValue", "textContent", "data", "wholeText"].map((property) => propertyOverride(text, property, (descriptor) => emptyTextareaText(descriptor, parentTextarea, valueReads)))),
-      ...textareas.flatMap((textarea) => ["textContent", "innerText", "innerHTML", "defaultValue"].map((property) => propertyOverride(textarea, property, (descriptor) => emptyTextareaText(descriptor, (node) => isHtmlTextarea(node) ? node : null, valueReads)))),
-      propertyOverride(globalThis, "getComputedStyle", maskedComputedStyle)
-    ];
-    const installed = [];
-    const outer = declaredMasked;
-    try {
-      for (const override of overrides) {
-        Object.defineProperty(override.target, override.property, override.masked);
-        installed.push(override);
-      }
-      declaredMasked = declared || outer === true;
-      return walk();
-    } finally {
-      declaredMasked = outer;
-      restoreOverrides(installed);
-    }
-  }
-
-  // crates/neo-sdk/neo-playwright-js/src/probe/private-shown.ts
-  var inputs = 0;
-  var heard;
-  var listened = new WeakSet;
-  var walkedRoots = new WeakMap;
-  var waiting = new Set;
-  var pointed = new WeakSet;
-  var entries = new WeakMap;
-  var certain = new WeakSet;
-  var done = new WeakSet;
-  var tries = new WeakMap;
-  var NAMED_TRIES = 5;
-  var readings = 0;
-  var WAITING_MOST = 64;
-  var FOCUS_DEPTH = 32;
-  var SHADOW_HOSTS = new Set([
-    "article",
-    "aside",
-    "blockquote",
-    "body",
-    "div",
-    "footer",
-    "h1",
-    "h2",
-    "h3",
-    "h4",
-    "h5",
-    "h6",
-    "header",
-    "main",
-    "nav",
-    "p",
-    "section",
-    "span"
-  ]);
-  var XHTML = "http://www.w3.org/1999/xhtml";
-  function privateShown(world, request, _root, nodes) {
-    const { document: document2 } = world.injected;
-    const view = document2.defaultView;
-    if (!heard) {
-      heard = (event) => {
-        const first = event.composedPath()[0];
-        if (!(first instanceof Element))
-          return;
-        const known = knownRoot(first);
-        if (known)
-          listen2(known);
-        if (event.type === "input" && paintedInClear(first, view))
-          inputs += 1;
-        if (!event.isTrusted || !unknownHost(first) || done.has(first))
-          return;
-        inputs += 1;
-        point(first, true);
-      };
-      document2.addEventListener("beforeinput", heard, true);
-      document2.addEventListener("input", heard, true);
-    }
-    if (request.walk === true)
-      keep(nodes);
-    else {
-      readings += 1;
-      sweep();
-    }
-    pointFocus(document2);
-    const { shown, boxes } = look2(document2);
-    const hosts = waiting.size > 0 ? { hosts: true } : {};
-    const named = namedWaiting() ? { named: true } : {};
-    return { kind: "value", value: { shown, inputs, boxes, ...hosts, ...named } };
-  }
-  function privateHosts(request) {
-    const hosts = [];
-    for (const first of [true, false]) {
-      for (const ref of waiting) {
-        if (hosts.length >= request.limit)
-          return hosts;
-        const host = ref.deref();
-        if (!host?.isConnected) {
-          drop(ref, host);
-          continue;
-        }
-        if (certain.has(host) !== first)
-          continue;
-        if (first) {
-          const tried = tries.get(host) ?? { count: 0, at: 0 };
-          if (tried.at === readings)
-            continue;
-          tries.set(host, { count: tried.count + 1, at: readings });
-        } else {
-          waiting.delete(ref);
-        }
-        hosts.push(host);
-      }
-    }
-    return hosts;
-  }
-  function sweep() {
-    for (const ref of waiting) {
-      const host = ref.deref();
-      const spent = host && (tries.get(host)?.count ?? 0) >= NAMED_TRIES;
-      if (!host?.isConnected || spent)
-        drop(ref, host);
-    }
-  }
-  function drop(ref, host) {
-    waiting.delete(ref);
-    if (host)
-      done.add(host);
-  }
-  function namedWaiting() {
-    for (const ref of waiting) {
-      const host = ref.deref();
-      if (host?.isConnected && certain.has(host))
-        return true;
-    }
-    return false;
-  }
-  function keep(roots) {
-    for (const root of roots) {
-      if (!(root instanceof ShadowRoot) || root.mode !== "closed")
-        continue;
-      const host = root.host;
-      if (isBrowserOSUi(host) || walkedRoots.has(host))
-        continue;
-      walkedRoots.set(host, root);
-      const entry = entries.get(host);
-      if (entry)
-        drop(entry, host);
-    }
-  }
-  function knownRoot(host) {
-    return walkedRoots.get(host) ?? host.shadowRoot;
-  }
-  function unknownHost(element) {
-    return mayCarryRoot(element) && !editable(element);
-  }
-  function mayCarryRoot(element) {
-    if (element.namespaceURI !== XHTML || isBrowserOSUi(element))
-      return false;
-    const name = element.localName;
-    if (!SHADOW_HOSTS.has(name) && !name.includes("-"))
-      return false;
-    return knownRoot(element) === null;
-  }
-  function editable(element) {
-    if (Reflect.get(element, "isContentEditable") === true)
-      return true;
-    const modify = element.ownerDocument.defaultView?.getComputedStyle(element).getPropertyValue("-webkit-user-modify");
-    return modify?.startsWith("read-write") === true;
-  }
-  function point(host, byInput = false) {
-    if (byInput)
-      certain.add(host);
-    const entry = entries.get(host);
-    if (entry && waiting.has(entry))
-      return;
-    if (pointed.has(host) && !byInput)
-      return;
-    if (!byInput && waiting.size >= WAITING_MOST)
-      return;
-    pointed.add(host);
-    const fresh = new WeakRef(host);
-    entries.set(host, fresh);
-    waiting.add(fresh);
-  }
-  function listen2(root) {
-    if (root.mode !== "closed" || listened.has(root) || !heard)
-      return;
-    listened.add(root);
-    root.addEventListener("beforeinput", heard, true);
-    root.addEventListener("input", heard, true);
-  }
-  function pointFocus(document2) {
-    let holder = document2.activeElement;
-    for (let depth = 0;holder && depth < FOCUS_DEPTH; depth += 1) {
-      const inner = knownRoot(holder)?.activeElement;
-      if (!inner)
-        break;
-      holder = inner;
-    }
-    if (holder?.matches(":focus") && mayCarryRoot(holder))
-      point(holder);
-  }
-  function look2(document2) {
-    const view = document2.defaultView;
-    const roots = [document2];
-    let boxes = false;
-    for (const root of roots) {
-      if (root instanceof ShadowRoot)
-        listen2(root);
-      for (const field of root.querySelectorAll("input, textarea")) {
-        if (!isPrivateField(field, { declared: true }))
-          continue;
-        boxes = true;
-        if (paintedInClear(field, view))
-          return { shown: true, boxes };
-      }
-      for (const host of root.querySelectorAll("*")) {
-        const shadow = knownRoot(host);
-        if (shadow)
-          roots.push(shadow);
-      }
-    }
-    return { shown: false, boxes };
-  }
-  function paintedInClear(field, view) {
-    if (!isPrivateField(field, { declared: true }))
-      return false;
-    const value = Reflect.get(field, "value");
-    if (typeof value !== "string" || value === "")
-      return false;
-    const security = view?.getComputedStyle(field).getPropertyValue("-webkit-text-security");
-    if (security && security !== "none")
-      return false;
-    const visible = Reflect.get(field, "checkVisibility");
-    return typeof visible !== "function" || Reflect.apply(visible, field, [
-      { visibilityProperty: true, opacityProperty: true }
-    ]) === true;
-  }
-
   // crates/neo-sdk/neo-playwright/third_party/playwright/packages/isomorphic/ariaSnapshot.ts
   function hasPointerCursor(ariaNode) {
     return ariaNode.box.cursor === "pointer";
@@ -9522,6 +8700,132 @@ ${value.stack}`;
     return world.pins.held(request.pin) ?? null;
   }
 
+  // crates/neo-sdk/neo-playwright-js/src/probe/browseros-ui.ts
+  var BROWSEROS_UI_HOSTS = new Set([
+    "browseros-neo-takeover"
+  ]);
+  function isBrowserOSUi(element) {
+    return BROWSEROS_UI_HOSTS.has(element.localName);
+  }
+
+  // crates/neo-sdk/neo-playwright-js/src/probe/shadow-roots.ts
+  var closedRoots = new WeakMap;
+  var realShadowRoot;
+  var installed = false;
+  var XHTML = "http://www.w3.org/1999/xhtml";
+  var SHADOW_HOSTS = new Set([
+    "article",
+    "aside",
+    "blockquote",
+    "body",
+    "div",
+    "footer",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "header",
+    "main",
+    "nav",
+    "p",
+    "section",
+    "span"
+  ]);
+  function mayCarryRoot(element) {
+    if (element.namespaceURI !== XHTML || isBrowserOSUi(element))
+      return false;
+    const name = element.localName;
+    if (!SHADOW_HOSTS.has(name) && !name.includes("-"))
+      return false;
+    return element.shadowRoot === null;
+  }
+  function getterOf(prototype, name) {
+    let owner = prototype;
+    while (owner) {
+      const descriptor = Object.getOwnPropertyDescriptor(owner, name);
+      if (descriptor) {
+        if (typeof descriptor.get !== "function")
+          throw new ProbeError("internal", `this world's ${name} is not an accessor`);
+        return descriptor.get;
+      }
+      owner = Object.getPrototypeOf(owner);
+    }
+    return;
+  }
+  function override(prototype, name, get) {
+    Object.defineProperty(prototype, name, {
+      configurable: true,
+      enumerable: true,
+      get
+    });
+  }
+  function installShadowRoots() {
+    if (installed)
+      return;
+    installed = true;
+    const read = getterOf(Element.prototype, "shadowRoot");
+    if (!read)
+      return;
+    realShadowRoot = read;
+    override(Element.prototype, "shadowRoot", function() {
+      if (isBrowserOSUi(this))
+        return null;
+      return Reflect.apply(read, this, []) ?? closedRoots.get(this) ?? null;
+    });
+    for (const prototype of [Element.prototype, Text.prototype]) {
+      const slot = getterOf(prototype, "assignedSlot");
+      if (!slot)
+        continue;
+      override(prototype, "assignedSlot", function() {
+        return Reflect.apply(slot, this, []) ?? closedSlotOf(this);
+      });
+    }
+  }
+  var slotMaps = new Map;
+  var dropScheduled = false;
+  function closedSlotOf(node) {
+    const host = node.parentElement;
+    const root = host ? closedRoots.get(host) : undefined;
+    if (!root)
+      return null;
+    let slots = slotMaps.get(root);
+    if (!slots) {
+      slots = new Map;
+      for (const slot of root.querySelectorAll("slot"))
+        for (const assigned of slot.assignedNodes())
+          if (!slots.has(assigned))
+            slots.set(assigned, slot);
+      slotMaps.set(root, slots);
+      if (!dropScheduled) {
+        dropScheduled = true;
+        queueMicrotask(() => {
+          dropScheduled = false;
+          slotMaps.clear();
+        });
+      }
+    }
+    return slots.get(node) ?? null;
+  }
+  function openClosedRoots(seeds) {
+    const read = realShadowRoot;
+    if (!read)
+      return;
+    for (const seed of seeds) {
+      if (!(seed instanceof Node))
+        continue;
+      const root = seed.getRootNode();
+      if (!(root instanceof ShadowRoot))
+        continue;
+      const host = root.host;
+      if (isBrowserOSUi(host))
+        continue;
+      if (Reflect.apply(read, host, []) !== root)
+        closedRoots.set(host, root);
+    }
+  }
+
   // crates/neo-sdk/neo-playwright-js/src/probe/cover.ts
   var DIALOG_ROLES = new Set([
     "dialog",
@@ -10467,7 +9771,7 @@ ${value.stack}`;
   }
 
   // crates/neo-sdk/neo-playwright-js/src/probe/drop.ts
-  function drop2(element, edit) {
+  function drop(element, edit) {
     const transfer = new DataTransfer;
     for (const payload of edit.payloads) {
       const bytes = Uint8Array.from(atob(payload.buffer), (c) => c.charCodeAt(0));
@@ -10568,7 +9872,7 @@ ${value.stack}`;
         injected.dispatchEvent(element, edit.type, edit.init);
         return valueReply(null);
       case "drop":
-        return valueReply(drop2(element, edit));
+        return valueReply(drop(element, edit));
       case "setFiles":
         return valueReply(setFiles(world, element, edit.payloads));
     }
@@ -10577,7 +9881,7 @@ ${value.stack}`;
     await Promise.resolve();
     if (connected.some((element) => !element.isConnected))
       return "error:notconnected";
-    if (!typed || holdsFocus2(typed))
+    if (!typed || holdsFocus(typed))
       return kept;
     return { kind: "notFocused", ...holderOf(output, typed.ownerDocument) };
   }
@@ -10587,7 +9891,7 @@ ${value.stack}`;
     const control = Reflect.get(element, "control");
     return isElement(control) ? control : null;
   }
-  function holdsFocus2(target) {
+  function holdsFocus(target) {
     const found = Reflect.get(target.getRootNode(), "activeElement");
     const active = isElement(found) ? found : null;
     if (!active)
@@ -10660,6 +9964,601 @@ ${value.stack}`;
       resolved,
       received: check.received
     };
+  }
+
+  // crates/neo-sdk/neo-playwright-js/src/probe/private-digest.ts
+  var key;
+  var kept = new Map;
+  var holders = new WeakSet;
+  function setAside(text) {
+    return text.replace(/[\s\-/]/g, "");
+  }
+  function keepDigest(text) {
+    const bare = setAside(text);
+    if (!bare)
+      return;
+    key ??= crypto.getRandomValues(new Uint32Array(4));
+    kept.set(digest(key, bare), bare.length);
+  }
+  function keepsDigests() {
+    return kept.size > 0;
+  }
+  function noteHolders(document2) {
+    holders = new WeakSet;
+    if (!key || kept.size === 0)
+      return;
+    const lengths = new Set(kept.values());
+    const held = new Set;
+    for (const control of textControls(document2)) {
+      const bare = setAside(control.value);
+      if (!lengths.has(bare.length))
+        continue;
+      const found = digest(key, bare);
+      if (!kept.has(found))
+        continue;
+      held.add(found);
+      holders.add(control);
+    }
+    for (const known of kept.keys())
+      if (!held.has(known))
+        kept.delete(known);
+  }
+  function holdsKeptValue(element) {
+    return holders.has(element);
+  }
+  var NOT_TEXT = new Set([
+    "button",
+    "checkbox",
+    "color",
+    "file",
+    "image",
+    "radio",
+    "range",
+    "reset",
+    "submit"
+  ]);
+  function* textControls(document2) {
+    const roots = [document2];
+    for (const root of roots) {
+      for (const element of root.querySelectorAll("*")) {
+        if (element instanceof HTMLTextAreaElement)
+          yield element;
+        else if (element instanceof HTMLInputElement && !NOT_TEXT.has(element.type))
+          yield element;
+        const shadow = element.shadowRoot;
+        if (shadow)
+          roots.push(shadow);
+      }
+    }
+  }
+  function digest(secret, text) {
+    const bytes = new Uint8Array(text.length * 2);
+    for (let index = 0;index < text.length; index++) {
+      const unit = text.charCodeAt(index);
+      bytes[index * 2] = unit & 255;
+      bytes[index * 2 + 1] = unit >>> 8;
+    }
+    const [hash0, hash1] = sipHash24(secret, bytes);
+    return `${hash1.toString(16)}:${hash0.toString(16)}`;
+  }
+  function sipHash24(secret, bytes) {
+    const k0lo = secret[0] ?? 0;
+    const k0hi = secret[1] ?? 0;
+    const k1lo = secret[2] ?? 0;
+    const k1hi = secret[3] ?? 0;
+    const v = new Uint32Array([
+      (k0lo ^ 1886610805) >>> 0,
+      (k0hi ^ 1936682341) >>> 0,
+      (k1lo ^ 1852075885) >>> 0,
+      (k1hi ^ 1685025377) >>> 0,
+      (k0lo ^ 1852142177) >>> 0,
+      (k0hi ^ 1819895653) >>> 0,
+      (k1lo ^ 2037671283) >>> 0,
+      (k1hi ^ 1952801890) >>> 0
+    ]);
+    const word = (at) => ((bytes[at] ?? 0) | (bytes[at + 1] ?? 0) << 8 | (bytes[at + 2] ?? 0) << 16 | (bytes[at + 3] ?? 0) << 24) >>> 0;
+    const absorb = (lo, hi) => {
+      v[6] = (v[6] ?? 0) ^ lo;
+      v[7] = (v[7] ?? 0) ^ hi;
+      round(v);
+      round(v);
+      v[0] = (v[0] ?? 0) ^ lo;
+      v[1] = (v[1] ?? 0) ^ hi;
+    };
+    const whole = bytes.length - bytes.length % 8;
+    for (let at = 0;at < whole; at += 8)
+      absorb(word(at), word(at + 4));
+    const last = new Uint8Array(8);
+    last.set(bytes.subarray(whole));
+    last[7] = bytes.length & 255;
+    const lastLo = ((last[0] ?? 0) | (last[1] ?? 0) << 8 | (last[2] ?? 0) << 16 | (last[3] ?? 0) << 24) >>> 0;
+    const lastHi = ((last[4] ?? 0) | (last[5] ?? 0) << 8 | (last[6] ?? 0) << 16 | (last[7] ?? 0) << 24) >>> 0;
+    absorb(lastLo, lastHi);
+    v[4] = (v[4] ?? 0) ^ 255;
+    round(v);
+    round(v);
+    round(v);
+    round(v);
+    const lo = ((v[0] ?? 0) ^ (v[2] ?? 0) ^ (v[4] ?? 0) ^ (v[6] ?? 0)) >>> 0;
+    const hi = ((v[1] ?? 0) ^ (v[3] ?? 0) ^ (v[5] ?? 0) ^ (v[7] ?? 0)) >>> 0;
+    return [lo, hi];
+  }
+  function round(v) {
+    add(v, 0, 2);
+    rotate(v, 2, 13);
+    xor(v, 2, 0);
+    rotate(v, 0, 32);
+    add(v, 4, 6);
+    rotate(v, 6, 16);
+    xor(v, 6, 4);
+    add(v, 0, 6);
+    rotate(v, 6, 21);
+    xor(v, 6, 0);
+    add(v, 4, 2);
+    rotate(v, 2, 17);
+    xor(v, 2, 4);
+    rotate(v, 4, 32);
+  }
+  function add(v, into, from) {
+    const lo = (v[into] ?? 0) + (v[from] ?? 0);
+    const carry = lo > 4294967295 ? 1 : 0;
+    v[into] = lo >>> 0;
+    v[into + 1] = (v[into + 1] ?? 0) + (v[from + 1] ?? 0) + carry >>> 0;
+  }
+  function xor(v, into, from) {
+    v[into] = ((v[into] ?? 0) ^ (v[from] ?? 0)) >>> 0;
+    v[into + 1] = ((v[into + 1] ?? 0) ^ (v[from + 1] ?? 0)) >>> 0;
+  }
+  function rotate(v, at, bits) {
+    const lo = v[at] ?? 0;
+    const hi = v[at + 1] ?? 0;
+    if (bits === 32) {
+      v[at] = hi;
+      v[at + 1] = lo;
+      return;
+    }
+    v[at] = (lo << bits | hi >>> 32 - bits) >>> 0;
+    v[at + 1] = (hi << bits | lo >>> 32 - bits) >>> 0;
+  }
+
+  // crates/neo-sdk/neo-playwright-js/src/probe/private-entry.ts
+  var MARK = Symbol.for("neo.privatelyTyped");
+  var anyMarked = false;
+  var LEAVES = ["beforeunload", "pagehide"];
+  var watched = new WeakMap;
+  var active = new Map;
+  var drawnSlot;
+  function privatelyTyped(element) {
+    return Object.hasOwn(element, MARK) || holdsKeptValue(element);
+  }
+  function anyPrivatelyTyped() {
+    return anyMarked || keepsDigests();
+  }
+  function mark(element) {
+    if (!Object.hasOwn(element, MARK))
+      Object.defineProperty(element, MARK, { value: true });
+    anyMarked = true;
+  }
+  function privateStep(world, request) {
+    const { step, pin } = request;
+    if (step.kind === "drawn") {
+      const wrapper = drawnSlot?.pin === pin ? drawnSlot.wrapper : undefined;
+      drawnSlot = undefined;
+      return reply({
+        kind: "drawn",
+        drawn: wrapper ? draws(wrapper, step.text) : true
+      });
+    }
+    const box = active.get(pin) ?? (step.kind === "focus" || step.kind === "compare" ? world.pins.live(pin) : undefined);
+    if (!box)
+      return { kind: "detached" };
+    const answered = answer(world, pin, box, step);
+    return answered instanceof Promise ? answered.then(reply) : reply(answered);
+  }
+  function reply(value) {
+    return { kind: "value", value };
+  }
+  function answer(world, pin, box, step) {
+    switch (step.kind) {
+      case "focus":
+        return focus(world, pin, box, step.text, step.spaced);
+      case "focused":
+        return { kind: "focus", focus: focusState(box) };
+      case "holds":
+        return {
+          kind: "holds",
+          holds: same(heldText(box), step.text, step.spaced)
+        };
+      case "compare": {
+        const held = heldText(box);
+        return {
+          kind: "compared",
+          holds: same(held, step.text, step.spaced),
+          contains: contains(held, step.text, step.spaced)
+        };
+      }
+      case "readBack":
+        return readBack(pin, box);
+      case "forget":
+        forget(pin, box);
+        return { kind: "forgot" };
+      case "markFocused":
+        return { kind: "markedFocused", marked: markFocused(box) };
+    }
+  }
+  function markFocused(box) {
+    let holder = box.ownerDocument.activeElement;
+    while (holder?.shadowRoot?.activeElement)
+      holder = holder.shadowRoot.activeElement;
+    if (!holder || holder === box)
+      return false;
+    const name = holder.localName;
+    if (name !== "input" && name !== "textarea")
+      return false;
+    mark(holder);
+    keepDigest(heldText(holder));
+    return true;
+  }
+  async function focus(world, pin, box, text, spaced) {
+    mark(box);
+    listen(pin, box, text, spaced);
+    if (world.injected.selectText(box) === "error:notconnected")
+      return { kind: "focus", focus: "gone" };
+    await Promise.resolve();
+    return { kind: "focus", focus: focusState(box) };
+  }
+  function focusState(box) {
+    if (!box.isConnected)
+      return "gone";
+    if (moving(watched.get(box)))
+      return "moving";
+    if (!holdsFocus2(box))
+      return "elsewhere";
+    return box.ownerDocument.hasFocus() ? "held" : "noDocumentFocus";
+  }
+  function holdsFocus2(box) {
+    const root = box.getRootNode();
+    const active = Reflect.get(root, "activeElement");
+    return active === box;
+  }
+  function moving(entry) {
+    if (!entry)
+      return false;
+    return entry.leaving || entry.submits.some((event) => !event.defaultPrevented && Reflect.get(event.target ?? {}, "target") !== "_blank");
+  }
+  function listen(pin, box, text, spaced) {
+    forget(pin, box);
+    const wrapper = coverWrapper(box);
+    const entry = {
+      text,
+      spaced,
+      ...wrapper && {
+        cover: {
+          wrapper,
+          drewBefore: draws(wrapper, text),
+          text
+        }
+      },
+      heldAtLastInput: false,
+      submits: [],
+      leaving: false,
+      listener: () => {
+        entry.heldAtLastInput = same(heldText(box), text, spaced);
+      },
+      onSubmit: (event) => {
+        entry.submits.push(event);
+      },
+      onLeave: () => {
+        entry.leaving = true;
+      }
+    };
+    watched.set(box, entry);
+    active.set(pin, box);
+    box.addEventListener("input", entry.listener, { capture: true });
+    const view = box.ownerDocument.defaultView;
+    view?.addEventListener("submit", entry.onSubmit, { capture: true });
+    for (const type of LEAVES)
+      view?.addEventListener(type, entry.onLeave, { capture: true });
+  }
+  function forget(pin, box) {
+    active.delete(pin);
+    const entry = watched.get(box);
+    if (!entry)
+      return;
+    box.removeEventListener("input", entry.listener, { capture: true });
+    const view = box.ownerDocument.defaultView;
+    view?.removeEventListener("submit", entry.onSubmit, { capture: true });
+    for (const type of LEAVES)
+      view?.removeEventListener(type, entry.onLeave, { capture: true });
+    watched.delete(box);
+  }
+  function readBack(pin, box) {
+    const entry = watched.get(box);
+    const heldAtLastInput = entry?.heldAtLastInput ?? false;
+    let state;
+    if (!box.isConnected)
+      state = "left";
+    else if (entry && same(heldText(box), entry.text, entry.spaced))
+      state = "holds";
+    else
+      state = "other";
+    if (state !== "left")
+      keepDigest(heldText(box));
+    if (entry)
+      keepDigest(entry.text);
+    if (state === "other")
+      markFocused(box);
+    const leaving = moving(entry);
+    const cover = entry?.cover;
+    const drawn = cover !== undefined && !cover.drewBefore && draws(cover.wrapper, cover.text);
+    if (cover && drawn)
+      drawnSlot = { pin, wrapper: cover.wrapper };
+    forget(pin, box);
+    const drawing = !cover ? "none" : drawn ? "drawn" : "under";
+    return { kind: "readBack", state, heldAtLastInput, moving: leaving, drawing };
+  }
+  function draws(wrapper, text) {
+    const bare = (value) => value.replace(/[\s\-/]/g, "").toLowerCase();
+    const value = bare(text);
+    return value !== "" && bare(renderedText(wrapper)).includes(value);
+  }
+  function heldText(box) {
+    const value = Reflect.get(box, "value");
+    return typeof value === "string" ? value : "";
+  }
+  function contains(held, text, spaced) {
+    if (held.includes(text))
+      return true;
+    if (!spaced)
+      return false;
+    const bare = (value) => value.replace(/[\s\-/]/g, "");
+    return bare(held).includes(bare(text));
+  }
+  function same(held, text, spaced) {
+    if (held === text)
+      return true;
+    if (!spaced)
+      return false;
+    const bare = (value) => value.replace(/[\s\-/]/g, "");
+    return bare(held) === bare(text);
+  }
+
+  // crates/neo-sdk/neo-playwright-js/src/probe/private-field-values.ts
+  var PRIVATE_AUTOCOMPLETE = new Set([
+    "current-password",
+    "new-password",
+    "one-time-code",
+    "cc-number",
+    "cc-csc"
+  ]);
+  var HTML_NAMESPACE = "http://www.w3.org/1999/xhtml";
+  var FIELD_TAGS = new Set(["input", "textarea"]);
+  var PRIVATE_VALUE_ATTRIBUTES = new Set([
+    "value",
+    "aria-valuetext",
+    "aria-valuenow"
+  ]);
+  function isHtmlField(element) {
+    return element.nodeType === 1 && "localName" in element && typeof element.localName === "string" && FIELD_TAGS.has(element.localName) && "namespaceURI" in element && element.namespaceURI === HTML_NAMESPACE;
+  }
+  var declaredMasked;
+  function isHtmlTextarea(node) {
+    return node?.nodeType === 1 && "localName" in node && node.localName === "textarea" && "namespaceURI" in node && node.namespaceURI === HTML_NAMESPACE;
+  }
+  function hasReadableOpener(document2) {
+    try {
+      const view = document2.defaultView;
+      if (!view)
+        return true;
+      const opener = view.opener;
+      if (opener === null || opener === undefined)
+        return false;
+      if (typeof opener !== "object" && typeof opener !== "function")
+        return true;
+      const _openerDocument = Reflect.get(opener, "document");
+      return true;
+    } catch (error) {
+      return !(typeof error === "object" && error !== null && ("name" in error) && error.name === "SecurityError");
+    }
+  }
+  function collectFieldPrototypes({
+    root,
+    mayHaveOtherFrame
+  }) {
+    const prototypes = {
+      inputs: new Set([HTMLInputElement.prototype]),
+      textareas: new Set([HTMLTextAreaElement.prototype]),
+      texts: new Set([Text.prototype])
+    };
+    const collect = (element) => {
+      if (!isHtmlField(element))
+        return;
+      const prototype = Object.getPrototypeOf(element);
+      if (!prototype)
+        throw new TypeError("snapshot field prototype is unavailable");
+      if (element.localName === "input") {
+        prototypes.inputs.add(prototype);
+        return;
+      }
+      prototypes.textareas.add(prototype);
+      for (const child of element.childNodes) {
+        if (child.nodeType !== 3)
+          continue;
+        const textPrototype = Object.getPrototypeOf(child);
+        if (!textPrototype)
+          throw new TypeError("snapshot textarea Text prototype is unavailable");
+        prototypes.texts.add(textPrototype);
+      }
+    };
+    const ownerDocument = root?.ownerDocument ?? document;
+    if (root)
+      collect(root);
+    if (!mayHaveOtherFrame && !hasReadableOpener(ownerDocument))
+      return prototypes;
+    const roots = [ownerDocument];
+    for (const tree of roots) {
+      for (const element of tree.querySelectorAll("input,textarea"))
+        collect(element);
+      for (const host of tree.querySelectorAll("*")) {
+        const shadow = host.shadowRoot;
+        if (shadow)
+          roots.push(shadow);
+      }
+    }
+    return prototypes;
+  }
+  function isPrivateField(field, { declared = declaredMasked ?? true } = {}) {
+    return isHtmlField(field) && (privatelyTyped(field) || (declaredMasked === true || declared) && (field.getAttribute("type")?.toLowerCase() === "password" || (field.getAttribute("autocomplete") ?? "").toLowerCase().split(/\s+/).some((token) => PRIVATE_AUTOCOMPLETE.has(token))));
+  }
+  function maskedValue(descriptor, valueReads) {
+    if (typeof descriptor.get !== "function")
+      throw new TypeError("snapshot field value accessor is unavailable");
+    const get = descriptor.get;
+    return {
+      ...descriptor,
+      get() {
+        const alreadyReading = valueReads.has(this);
+        valueReads.add(this);
+        let value;
+        try {
+          value = get.call(this);
+        } finally {
+          if (!alreadyReading)
+            valueReads.delete(this);
+        }
+        if (typeof value !== "string")
+          throw new TypeError("snapshot field value accessor did not return text");
+        return isPrivateField(this) ? "•".repeat(value.length) : value;
+      }
+    };
+  }
+  function propertyOverride(target, property, mask) {
+    const original = Object.getOwnPropertyDescriptor(target, property);
+    if (original?.configurable === false || !original && !Object.isExtensible(target))
+      throw new TypeError(`snapshot field ${property} cannot be overridden`);
+    let owner = target;
+    while (owner) {
+      const descriptor = Object.getOwnPropertyDescriptor(owner, property);
+      if (descriptor) {
+        return {
+          target,
+          property,
+          original,
+          masked: { ...mask(descriptor), configurable: true }
+        };
+      }
+      owner = Object.getPrototypeOf(owner);
+    }
+    throw new TypeError(`snapshot field ${property} is unavailable`);
+  }
+  function maskedAttributes(descriptor) {
+    if (typeof descriptor.value !== "function")
+      throw new TypeError("snapshot field getAttribute method is unavailable");
+    const getAttribute = descriptor.value;
+    return {
+      ...descriptor,
+      value(name) {
+        const value = getAttribute.call(this, name);
+        return typeof value === "string" && typeof name === "string" && PRIVATE_VALUE_ATTRIBUTES.has(name.toLowerCase()) && isPrivateField(this) ? "•".repeat(value.length) : value;
+      }
+    };
+  }
+  function emptyTextareaText(descriptor, textareaOf, valueReads) {
+    if (typeof descriptor.get !== "function")
+      throw new TypeError("snapshot textarea text accessor is unavailable");
+    const get = descriptor.get;
+    return {
+      ...descriptor,
+      get() {
+        const textarea = textareaOf(this);
+        return textarea && !valueReads.has(textarea) && isPrivateField(textarea) ? "" : get.call(this);
+      }
+    };
+  }
+  function parentTextarea(node) {
+    const parent = node.parentElement;
+    return isHtmlTextarea(parent) ? parent : null;
+  }
+  function maskedComputedStyle(descriptor) {
+    if (typeof descriptor.value !== "function")
+      throw new TypeError("snapshot getComputedStyle method is unavailable");
+    const read = descriptor.value;
+    return {
+      ...descriptor,
+      value(element, pseudo) {
+        const style = Reflect.apply(read, this, [
+          element,
+          pseudo
+        ]);
+        if (!isHtmlField(element))
+          return style;
+        if (!isPrivateField(element))
+          return style;
+        return new Proxy(style, {
+          get(target, key) {
+            if (key === "content")
+              return "none";
+            if (key === "getPropertyValue")
+              return (property) => property.toLowerCase() === "content" ? "none" : target.getPropertyValue(property);
+            const value = Reflect.get(target, key);
+            return typeof value === "function" ? value.bind(target) : value;
+          }
+        });
+      }
+    };
+  }
+  function restoreOverrides(installed) {
+    const failures = [];
+    for (const override of installed.reverse()) {
+      try {
+        if (override.original) {
+          Object.defineProperty(override.target, override.property, override.original);
+        } else if (!Reflect.deleteProperty(override.target, override.property)) {
+          throw new TypeError(`snapshot field ${override.property} could not be removed`);
+        }
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (failures.length)
+      throw new TypeError("snapshot field overrides could not be restored", {
+        cause: new AggregateError(failures)
+      });
+  }
+  function withMarkedFieldsMasked(walk, root = document.documentElement) {
+    return anyPrivatelyTyped() || root !== null && privatelyTyped(root) ? withMaskedFieldValues({ root, mayHaveOtherFrame: true }, walk, {
+      declared: false
+    }) : walk();
+  }
+  function withMaskedFieldValues(discovery, walk, { declared = true } = {}) {
+    const prototypes = collectFieldPrototypes(discovery);
+    const inputs = Array.from(prototypes.inputs);
+    const textareas = Array.from(prototypes.textareas);
+    const texts = Array.from(prototypes.texts);
+    const valueReads = new Set;
+    const overrides = [
+      ...inputs.map((input) => propertyOverride(input, "value", (descriptor) => maskedValue(descriptor, valueReads))),
+      ...textareas.map((textarea) => propertyOverride(textarea, "value", (descriptor) => maskedValue(descriptor, valueReads))),
+      ...inputs.map((input) => propertyOverride(input, "defaultValue", (descriptor) => maskedValue(descriptor, valueReads))),
+      ...inputs.map((input) => propertyOverride(input, "getAttribute", maskedAttributes)),
+      ...textareas.map((textarea) => propertyOverride(textarea, "getAttribute", maskedAttributes)),
+      ...texts.flatMap((text) => ["nodeValue", "textContent", "data", "wholeText"].map((property) => propertyOverride(text, property, (descriptor) => emptyTextareaText(descriptor, parentTextarea, valueReads)))),
+      ...textareas.flatMap((textarea) => ["textContent", "innerText", "innerHTML", "defaultValue"].map((property) => propertyOverride(textarea, property, (descriptor) => emptyTextareaText(descriptor, (node) => isHtmlTextarea(node) ? node : null, valueReads)))),
+      propertyOverride(globalThis, "getComputedStyle", maskedComputedStyle)
+    ];
+    const installed = [];
+    const outer = declaredMasked;
+    try {
+      for (const override of overrides) {
+        Object.defineProperty(override.target, override.property, override.masked);
+        installed.push(override);
+      }
+      declaredMasked = declared || outer === true;
+      return walk();
+    } finally {
+      declaredMasked = outer;
+      restoreOverrides(installed);
+    }
   }
 
   // crates/neo-sdk/neo-playwright-js/src/probe/failure-output.ts
@@ -10758,7 +10657,7 @@ ${value.stack}`;
   }
 
   // crates/neo-sdk/neo-playwright-js/src/probe/protocol.ts
-  var PROTOCOL = 49;
+  var PROTOCOL = 50;
 
   // crates/neo-sdk/neo-playwright-js/src/probe/read.ts
   var XHTML2 = "http://www.w3.org/1999/xhtml";
@@ -10966,95 +10865,6 @@ ${value.stack}`;
   function screenshotMaskCleanup(world) {
     world.injected.hideHighlight();
     return { kind: "value", value: null };
-  }
-
-  // crates/neo-sdk/neo-playwright-js/src/probe/shadow-roots.ts
-  var closedRoots = new WeakMap;
-  var realShadowRoot;
-  var installed = false;
-  function getterOf(prototype, name) {
-    let owner = prototype;
-    while (owner) {
-      const descriptor = Object.getOwnPropertyDescriptor(owner, name);
-      if (descriptor) {
-        if (typeof descriptor.get !== "function")
-          throw new ProbeError("internal", `this world's ${name} is not an accessor`);
-        return descriptor.get;
-      }
-      owner = Object.getPrototypeOf(owner);
-    }
-    return;
-  }
-  function override(prototype, name, get) {
-    Object.defineProperty(prototype, name, {
-      configurable: true,
-      enumerable: true,
-      get
-    });
-  }
-  function installShadowRoots() {
-    if (installed)
-      return;
-    installed = true;
-    const read = getterOf(Element.prototype, "shadowRoot");
-    if (!read)
-      return;
-    realShadowRoot = read;
-    override(Element.prototype, "shadowRoot", function() {
-      if (isBrowserOSUi(this))
-        return null;
-      return Reflect.apply(read, this, []) ?? closedRoots.get(this) ?? null;
-    });
-    for (const prototype of [Element.prototype, Text.prototype]) {
-      const slot = getterOf(prototype, "assignedSlot");
-      if (!slot)
-        continue;
-      override(prototype, "assignedSlot", function() {
-        return Reflect.apply(slot, this, []) ?? closedSlotOf(this);
-      });
-    }
-  }
-  var slotMaps = new Map;
-  var dropScheduled = false;
-  function closedSlotOf(node) {
-    const host = node.parentElement;
-    const root = host ? closedRoots.get(host) : undefined;
-    if (!root)
-      return null;
-    let slots = slotMaps.get(root);
-    if (!slots) {
-      slots = new Map;
-      for (const slot of root.querySelectorAll("slot"))
-        for (const assigned of slot.assignedNodes())
-          if (!slots.has(assigned))
-            slots.set(assigned, slot);
-      slotMaps.set(root, slots);
-      if (!dropScheduled) {
-        dropScheduled = true;
-        queueMicrotask(() => {
-          dropScheduled = false;
-          slotMaps.clear();
-        });
-      }
-    }
-    return slots.get(node) ?? null;
-  }
-  function openClosedRoots(seeds) {
-    const read = realShadowRoot;
-    if (!read)
-      return;
-    for (const seed of seeds) {
-      if (!(seed instanceof Node))
-        continue;
-      const root = seed.getRootNode();
-      if (!(root instanceof ShadowRoot))
-        continue;
-      const host = root.host;
-      if (isBrowserOSUi(host))
-        continue;
-      if (Reflect.apply(read, host, []) !== root)
-        closedRoots.set(host, root);
-    }
   }
 
   // crates/neo-sdk/neo-playwright-js/src/probe/cover-survey.ts
@@ -11843,7 +11653,6 @@ ${value.stack}`;
     edit,
     look,
     private: privateStep,
-    privateShown,
     read,
     readAll,
     selector: generatedSelector,
@@ -11874,8 +11683,6 @@ ${value.stack}`;
         const { request, policy } = call;
         if (request.op === "pinned")
           return pinned(booted, request);
-        if (request.op === "privateHosts")
-          return privateHosts(request);
         const output = new FailureOutput(booted, policy);
         const reply = output.run(() => dispatch(booted, request.op, request, scope, nodes, output));
         return reply instanceof Promise ? reply.catch(thrownReply) : reply;
@@ -11927,7 +11734,7 @@ ${value.stack}`;
     if (typeof request !== "object" || request === null)
       return false;
     const op = Reflect.get(request, "op");
-    return typeof op === "string" && (op === "pinned" || op === "privateHosts" || Object.hasOwn(HANDLERS, op));
+    return typeof op === "string" && (op === "pinned" || Object.hasOwn(HANDLERS, op));
   }
   function parseBootOptions(options) {
     const frameSeq = typeof options === "object" && options !== null ? Reflect.get(options, "frameSeq") : undefined;

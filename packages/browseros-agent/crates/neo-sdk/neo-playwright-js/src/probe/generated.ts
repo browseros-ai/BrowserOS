@@ -534,14 +534,7 @@ look: boolean, } | { "op": "cover", target: ProbeTarget, point: Point, cover: nu
  * iframe, tested as it is. Otherwise `target` is the element, retargeted as the
  * interceptor retargets it.
  */
-above: boolean, } | { "op": "edit", pin: Pin, edit: Edit, } | { "op": "look", pin: Pin, look: BoxAsk, } | { "op": "private", pin: Pin, step: PrivateStep, } | { "op": "privateShown", 
-/**
- * The camera's walk of closed shadow roots on demand (ruling R65): the call's nodes are
- * closed roots Rust resolved into this world from the hosts `PrivateHosts` handed over.
- * The world keeps them for this question alone, never for its engine
- * (probe/private-shown.ts).
- */
-walk?: boolean, } | { "op": "privateHosts", limit: number, } | { "op": "read", target: ProbeTarget, strictness: Strictness, frameVisible: boolean, read: Read, } | { "op": "readAll", target: ProbeTarget, read: ReadAll, } | { "op": "screenshotMask", target: ProbeTarget, color: string, } | { "op": "screenshotMaskCleanup" } | { "op": "selector", target: ProbeTarget, } | { "op": "snapshot", 
+above: boolean, } | { "op": "edit", pin: Pin, edit: Edit, } | { "op": "look", pin: Pin, look: BoxAsk, } | { "op": "private", pin: Pin, step: PrivateStep, } | { "op": "read", target: ProbeTarget, strictness: Strictness, frameVisible: boolean, read: Read, } | { "op": "readAll", target: ProbeTarget, read: ReadAll, } | { "op": "screenshotMask", target: ProbeTarget, color: string, } | { "op": "screenshotMaskCleanup" } | { "op": "selector", target: ProbeTarget, } | { "op": "snapshot", 
 /**
  * A whole main-frame page in a Neo format; children and locators never survey hits.
  */

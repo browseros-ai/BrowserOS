@@ -23,7 +23,6 @@
 import type { FailureOutput } from './failure-output'
 import { SECTION_ROLES } from './pointer-targets'
 import { CONTROLS, drawingOf, renderedText } from './private-look'
-import { mayCarryRoot } from './private-shown'
 import type {
   CoverControl,
   CoverFacts,
@@ -34,6 +33,7 @@ import type {
   ReplyTo,
 } from './protocol'
 import { resolveTarget } from './resolve'
+import { mayCarryRoot } from './shadow-roots'
 import type { World } from './world'
 
 /** The roles that answer "which dialog", before the section roles. */

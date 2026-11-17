@@ -1,5 +1,5 @@
 {
-  "protocol": 49,
+  "protocol": 50,
   "callFunction": "function (call, root, ...nodes) { const probe = globalThis.__neoProbe; return probe ? probe.call(call, root ?? this, nodes) : { kind: \"uninstalled\" }; }",
   "replyKinds": {
     "describe": [
@@ -56,9 +56,6 @@
       "value",
       "detached"
     ],
-    "privateShown": [
-      "value"
-    ],
     "read": [
       "read",
       "none",
@@ -113,8 +110,7 @@
     ]
   },
   "byHandle": [
-    "pinned",
-    "privateHosts"
+    "pinned"
   ],
   "anyRequest": [
     "error",
@@ -201,17 +197,6 @@
     },
     {
       "op": "screenshotMaskCleanup"
-    },
-    {
-      "op": "privateShown"
-    },
-    {
-      "op": "privateShown",
-      "walk": true
-    },
-    {
-      "op": "privateHosts",
-      "limit": 16
     },
     {
       "op": "webStorage",
@@ -1310,19 +1295,19 @@
   "replies": [
     {
       "kind": "described",
-      "protocol": 49,
+      "protocol": 50,
       "seq": 0,
       "url": "https://example.com/"
     },
     {
       "kind": "described",
-      "protocol": 49,
+      "protocol": 50,
       "seq": 347,
       "url": "https://pay.example/frame"
     },
     {
       "kind": "described",
-      "protocol": 49,
+      "protocol": 50,
       "seq": 512340,
       "url": "https://example.com/",
       "retired": 0

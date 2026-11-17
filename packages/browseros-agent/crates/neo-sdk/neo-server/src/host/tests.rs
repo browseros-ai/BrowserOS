@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use browseros_core::{NativeCapabilities, TabId};
-use neo_http::{ChecksPicture, Settings, SettingsDefaults, TookPrivateText};
+use neo_http::{Settings, SettingsDefaults, TookPrivateText};
 use neo_trace::{
     Effect, EpochMillis, OperationId, RedactionLimits, Redactor, RunEnded, RunId, RunStarted,
     RunStatus, RunTabsScope, Screenshots, TraceStore, Values, WriterConfig,
@@ -89,15 +89,6 @@ fn entry_took(entry: &Arc<ScriptedEntry>, settings: &Settings) -> TookPrivateTex
     let entry = Arc::clone(entry);
     let settings = settings.clone();
     Arc::new(move |tab| settings.fill_pictures_never() && entry.took(tab))
-}
-
-/// The scripted entry's reading of what a tab shows, as the app wires `picture_check`.
-fn entry_checks(entry: &Arc<ScriptedEntry>) -> ChecksPicture {
-    let entry = Arc::clone(entry);
-    Arc::new(move |tab| {
-        let verdict = entry.verdict(tab);
-        Box::pin(async move { verdict })
-    })
 }
 
 impl Host {
@@ -192,7 +183,6 @@ impl Host {
             pictures_never: settings_pictures_never(&settings),
             shutdown: shutdown.clone(),
             took: entry_took(&entry, &settings),
-            checks: entry_checks(&entry),
         });
         let serving = tokio::spawn(host.with_fill(fill).serve(
             Arc::clone(&link),

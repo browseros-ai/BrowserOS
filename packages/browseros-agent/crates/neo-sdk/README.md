@@ -61,11 +61,12 @@ host / MCP run
 A host types a secret into a page with `POST /v1/tabs/{tabId}/fill`, never in a script: the
 route lives in `neo-http`, and `neo-server` runs it as a run of its own with one `protected`
 operation that records no value, address or picture (`neo-server/src/host/fill_service.rs`;
-[the image's host typing guide](neo-server/docker/README.md#type-a-hosts-secret) describes its use). Neo also stores no picture of a
-tab while any frame of it shows a box masking treats as private, not empty and painted in clear,
-such as a card number a script typed; a password box paints bullets, so sign-in pages keep theirs.
-Otherwise a tab that took a host's fill is pictured like any other by default; a host that wants no
-picture of it sets `fill.pictures` to `never` ([the server's settings](neo-server/README.md#settings)).
+[the image's host typing guide](neo-server/docker/README.md#type-a-hosts-secret) describes its use). Neo stores a picture even when a card number
+or a one-time code is visible in a box. A host that does not want that sets `fill.pictures` to
+`never` ([the server's settings](neo-server/README.md#settings)), which stops pictures of a tab
+after the host's private typing happened there. A value typed by a script or by the person at
+the keyboard is not covered by that setting. Only a fill under `never` writes the filled-tab
+record, so after Neo restarts a tab filled under the default is not known as filled.
 
 `neo-server/docker/` builds the Neo SDK image, the browser plus this server.
 See [the image's README](neo-server/docker/README.md) for host integration.
