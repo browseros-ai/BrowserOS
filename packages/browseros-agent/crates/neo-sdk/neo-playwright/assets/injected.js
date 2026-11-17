@@ -10681,8 +10681,11 @@ ${value.stack}`;
     };
   }
 
+  // crates/neo-sdk/neo-playwright-js/src/probe/generated.ts
+  var MAX_REPLY_DEPTH = 297;
+
   // crates/neo-sdk/neo-playwright-js/src/probe/protocol.ts
-  var PROTOCOL = 52;
+  var PROTOCOL = 53;
 
   // crates/neo-sdk/neo-playwright-js/src/probe/read.ts
   var XHTML2 = "http://www.w3.org/1999/xhtml";
@@ -10879,6 +10882,66 @@ ${value.stack}`;
           count,
           values: elements.map((element) => element.innerText ?? "")
         };
+    }
+  }
+
+  // crates/neo-sdk/neo-playwright-js/src/probe/reply-text.ts
+  var FALLBACK = '{"kind":"error","class":"internal","message":"Neo could not serialize the probe reply."}';
+  function replyDepth(text) {
+    let depth = 0;
+    let deepest = 0;
+    let quoted = false;
+    let escaped = false;
+    for (let index = 0;index < text.length; index++) {
+      const char = text[index];
+      if (quoted) {
+        if (escaped)
+          escaped = false;
+        else if (char === "\\")
+          escaped = true;
+        else if (char === '"')
+          quoted = false;
+      } else if (char === '"')
+        quoted = true;
+      else if (char === "[" || char === "{")
+        deepest = Math.max(deepest, ++depth);
+      else if (char === "]" || char === "}")
+        depth = Math.max(0, depth - 1);
+    }
+    return deepest;
+  }
+  function wellFormedReply(text) {
+    return text.replace(/\\\\|\\u[dD][89a-fA-F][0-9a-fA-F]{2}/g, (token) => token === "\\\\" ? token : "�");
+  }
+  function depthError(depth) {
+    return JSON.stringify({
+      kind: "error",
+      class: "unsupported",
+      message: `The snapshot reply reaches JSON depth ${depth}, above the limit of ${MAX_REPLY_DEPTH}. Pass { depth: n } or take a locator's snapshot of a section.`
+    });
+  }
+  function replyText(reply) {
+    try {
+      let text = JSON.stringify(reply);
+      if (text === undefined)
+        return FALLBACK;
+      let depth = replyDepth(text);
+      if (depth > MAX_REPLY_DEPTH) {
+        if (typeof reply === "object" && reply !== null && "kind" in reply && reply.kind === "cover" && "facts" in reply && typeof reply.facts === "object" && reply.facts !== null && "snapshot" in reply.facts) {
+          text = JSON.stringify({
+            ...reply,
+            facts: { ...reply.facts, snapshot: null }
+          });
+          if (text === undefined)
+            return FALLBACK;
+          depth = replyDepth(text);
+        }
+        if (depth > MAX_REPLY_DEPTH)
+          return depthError(depth);
+      }
+      return wellFormedReply(text);
+    } catch {
+      return FALLBACK;
     }
   }
 
@@ -11731,31 +11794,52 @@ ${value.stack}`;
         return thrownReply(error);
       }
     }
+    function bootReply(options) {
+      const { frameSeq, epoch } = parseBootOptions(options);
+      if (world?.epoch === epoch)
+        return described2(world);
+      pins.clear();
+      refs.forget();
+      listenForMoves();
+      installShadowRoots();
+      const injected = createEngine(frameSeq);
+      injected.onGlobalListenersRemoved.add(listenForMoves);
+      refs.install(engineTable(injected), injected.utils);
+      const retired = world?.seq;
+      world = { epoch, seq: frameSeq, injected, pins, refs };
+      return retired === undefined ? described2(world) : { ...described2(world), retired };
+    }
+    function failedText(error) {
+      try {
+        return replyText(thrownReply(error));
+      } catch {
+        return replyText(undefined);
+      }
+    }
     return {
       boot(options) {
-        const { frameSeq, epoch } = parseBootOptions(options);
-        if (world?.epoch === epoch)
-          return described2(world);
-        pins.clear();
-        refs.forget();
-        listenForMoves();
-        installShadowRoots();
-        const injected = createEngine(frameSeq);
-        injected.onGlobalListenersRemoved.add(listenForMoves);
-        refs.install(engineTable(injected), injected.utils);
-        const retired = world?.seq;
-        world = { epoch, seq: frameSeq, injected, pins, refs };
-        return retired === undefined ? described2(world) : { ...described2(world), retired };
+        try {
+          return replyText(bootReply(options));
+        } catch (error) {
+          return failedText(error);
+        }
       },
       call(call, root, nodes) {
-        const booted = world;
-        if (!booted)
-          return UNINSTALLED;
-        if (!isProbeCall(call))
-          return errorReply("internal", "not a probe call");
-        const scope = root instanceof Node ? root : undefined;
-        const handed = Array.isArray(nodes) ? nodes : [];
-        return answer(booted, call, scope, handed);
+        try {
+          const booted = world;
+          if (isProbeCall(call) && call.request.op === "pinned")
+            return booted ? answer(booted, call, undefined, []) : UNINSTALLED;
+          if (!booted)
+            return replyText(UNINSTALLED);
+          if (!isProbeCall(call))
+            return replyText(errorReply("internal", "not a probe call"));
+          const scope = root instanceof Node ? root : undefined;
+          const handed = Array.isArray(nodes) ? nodes : [];
+          const reply = answer(booted, call, scope, handed);
+          return reply instanceof Promise ? reply.then(replyText, failedText) : replyText(reply);
+        } catch (error) {
+          return failedText(error);
+        }
       }
     };
   }

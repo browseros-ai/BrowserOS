@@ -67,6 +67,7 @@ export function replyText(reply: unknown): string {
           ...reply,
           facts: { ...reply.facts, snapshot: null },
         })
+        if (text === undefined) return FALLBACK
         depth = replyDepth(text)
       }
       if (depth > MAX_REPLY_DEPTH) return depthError(depth)

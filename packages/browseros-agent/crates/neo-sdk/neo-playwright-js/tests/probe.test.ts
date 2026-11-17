@@ -5,7 +5,11 @@ import { afterEach, expect, it } from 'bun:test'
 import { parseSelector } from '../../neo-playwright/third_party/playwright/packages/isomorphic/selectorParser'
 import { PROTOCOL } from '../src/probe/protocol'
 import { REQUEST_EXAMPLES } from '../src/probe/protocol-examples'
-import { openProbePage, type ProbePage } from './support/probe-page'
+import {
+  decodeProbeReply,
+  openProbePage,
+  type ProbePage,
+} from './support/probe-page'
 
 const PAGE = `<html><body>
   <button>Go</button><button>Stop</button>
@@ -284,16 +288,18 @@ it('rejects missing or malformed common policy before reading a private snapshot
     { request },
     { request, policy: { conformance: 'true', discoverMovedFields: false } },
   ]) {
-    expect(globalThis.__neoProbe?.call(call)).toMatchObject({
+    expect(decodeProbeReply(globalThis.__neoProbe?.call(call))).toMatchObject({
       kind: 'error',
       class: 'internal',
     })
   }
   expect(
-    globalThis.__neoProbe?.call({
-      request,
-      policy: { conformance: false, discoverMovedFields: false },
-    }),
+    decodeProbeReply(
+      globalThis.__neoProbe?.call({
+        request,
+        policy: { conformance: false, discoverMovedFields: false },
+      }),
+    ),
   ).not.toEqual(
     expect.objectContaining({ class: 'internal', message: 'not a probe call' }),
   )
@@ -465,6 +471,12 @@ it('keeps every value exit as JSON text and pinned nodes as handles', async () =
   expect(typeof (await probe.rawCall(REQUEST_EXAMPLES.expect[0]))).toBe(
     'string',
   )
+  const rejected = await probe.rawCall({ op: 'expect', params: null })
+  expect(typeof rejected).toBe('string')
+  expect(JSON.parse(String(rejected))).toMatchObject({
+    kind: 'error',
+    class: 'internal',
+  })
   const reply = probe.call(
     resolveRequest('button', { strictness: 'firstMatch' }),
   )

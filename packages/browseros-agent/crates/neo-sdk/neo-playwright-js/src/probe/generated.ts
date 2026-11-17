@@ -2,6 +2,8 @@
 // Do not edit: change Rust's probe types, then run `bun run gen:probe` in neo-playwright-js.
 // PROTOCOL stays hand-bumped in protocol.ts; generating types never changes the wire version.
 
+export const MAX_REPLY_DEPTH = 297;
+
 /**
  * Arms the hit-target interceptor. `block_all` is Playwright's `trial`.
  */

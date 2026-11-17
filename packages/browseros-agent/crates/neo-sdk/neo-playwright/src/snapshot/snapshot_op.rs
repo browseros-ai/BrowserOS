@@ -47,11 +47,11 @@ use crate::listed_enum::listed_enum;
 use crate::op_input::OpArgs;
 use crate::op_scope::OpScope;
 use crate::op_spec::{OpSpec, PAGE, TARGET};
-use crate::page::OpPage;
+use crate::page::{MAX_VALUE_DEPTH, OpPage, json_depth};
 use crate::playwright_error::TARGET_CRASH_MESSAGE;
 use crate::probe::{
-    self, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget, SnapshotIframe, SnapshotMode,
-    SurveyLayer, Want,
+    self, ErrorClass, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget, SnapshotIframe,
+    SnapshotMode, SurveyLayer, Want,
 };
 use crate::resolve::{self, Hopped, Landed, Resolver};
 use crate::target::{Chunk, PageRef, Strictness, Target};
@@ -544,7 +544,10 @@ impl fmt::Display for Unread {
             Self::Timeout => write!(f, "timeout after {} ms", FRAME_BUDGET.as_millis()),
             Self::Detached => f.write_str("frame detached"),
             Self::Loading => f.write_str("frame not loaded"),
-            Self::Depth => write!(f, "snapshot exceeds JSON depth {}; pass {{ depth: n }} or take a locator's snapshot of a section", crate::page::MAX_VALUE_DEPTH),
+            Self::Depth => write!(
+                f,
+                "snapshot exceeds JSON depth {MAX_VALUE_DEPTH}; pass {{ depth: n }} or take a locator's snapshot of a section"
+            ),
             Self::Failed(ErrorCode::TargetCrashed) => f.write_str(TARGET_CRASH_MESSAGE),
             Self::Failed(code) => f.write_str(&code.as_str().replace('_', " ")),
         }
@@ -767,13 +770,16 @@ impl Snapshotter<'_> {
     ) -> Result<aria_snapshot::SnapshotResult, PlaywrightError> {
         let on_top = mem::take(&mut root.on_top);
         let mut result = aria_snapshot::stitch(self.below(root, depth).await?);
-        let encoded = serde_json::to_string(&result)
-            .map_err(|_| self.scope.fail(ErrorCode::Internal, "could not encode the stitched snapshot"))?;
-        let nesting = crate::page::json_depth(&encoded);
-        if nesting > crate::page::MAX_VALUE_DEPTH {
+        let encoded = serde_json::to_string(&result).map_err(|_unencodable| {
+            self.scope.fail(
+                ErrorCode::Internal,
+                "could not encode the stitched snapshot",
+            )
+        })?;
+        let nesting = json_depth(&encoded);
+        if nesting > MAX_VALUE_DEPTH {
             return Err(self.scope.fail(ErrorCode::Unsupported, &format!(
-                "The stitched snapshot reaches JSON depth {nesting}, above the limit of {}. Pass {{ depth: n }} or take a locator's snapshot of a section.",
-                crate::page::MAX_VALUE_DEPTH
+                "The stitched snapshot reaches JSON depth {nesting}, above the limit of {MAX_VALUE_DEPTH}. Pass {{ depth: n }} or take a locator's snapshot of a section."
             )));
         }
         result.on_top = on_top;
@@ -885,8 +891,13 @@ impl Snapshotter<'_> {
                         .map_err(|_why| Unread::Failed(ErrorCode::Internal));
                 }
                 Ok(ProbeReply::None { .. }) => return Ok(FrameReply::empty()),
-                Ok(ProbeReply::Error { class: probe::ErrorClass::Unsupported, message, .. })
-                    if message.starts_with("The snapshot reply reaches JSON depth ") => return Err(Unread::Depth),
+                Ok(ProbeReply::Error {
+                    class: ErrorClass::Unsupported,
+                    message,
+                    ..
+                }) if message.starts_with("The snapshot reply reaches JSON depth ") => {
+                    return Err(Unread::Depth);
+                }
                 Ok(other) => {
                     let refused = resolve::refused(self.scope, other);
                     return Err(Unread::Failed(
@@ -1046,11 +1057,15 @@ mod tests {
         Ok(())
     }
     #[test]
-    fn a_probe_tree_at_the_reply_cap_still_decodes_as_typed_aria_nodes() -> Result<(), Box<dyn Error>> {
+    fn a_probe_tree_at_the_reply_cap_still_decodes_as_typed_aria_nodes()
+    -> Result<(), Box<dyn Error>> {
         use serde::Deserialize as _;
         for groups in [70, 130, 147] {
-            let text = format!("[{}{{\"role\":\"button\",\"name\":\"End\"}}{}]",
-                "{\"role\":\"group\",\"children\":[".repeat(groups), "]}".repeat(groups));
+            let text = format!(
+                "[{}{{\"role\":\"button\",\"name\":\"End\"}}{}]",
+                "{\"role\":\"group\",\"children\":[".repeat(groups),
+                "]}".repeat(groups)
+            );
             let mut reader = serde_json::Deserializer::from_str(&text);
             reader.disable_recursion_limit();
             let value = serde_json::Value::deserialize(&mut reader)?;
@@ -1059,5 +1074,4 @@ mod tests {
         }
         Ok(())
     }
-
 }

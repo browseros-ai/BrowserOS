@@ -12,7 +12,11 @@ import type {
   ProbeRequest,
   Read,
 } from '../src/probe/protocol'
-import { openProbePage, type ProbePage } from './support/probe-page'
+import {
+  decodeProbeReply,
+  openProbePage,
+  type ProbePage,
+} from './support/probe-page'
 
 const SECRET = '🔐'
 const PAGE = `<html><body>
@@ -135,10 +139,12 @@ const diagnosticDescriptors = (engine: object) =>
 function conformanceCall(request: ProbeRequest): unknown {
   const probe = globalThis.__neoProbe
   if (!probe) throw new Error('the fixture has no probe')
-  return probe.call({
-    request,
-    policy: { conformance: true, discoverMovedFields: true },
-  })
+  return decodeProbeReply(
+    probe.call({
+      request,
+      policy: { conformance: true, discoverMovedFields: true },
+    }),
+  )
 }
 
 it('compares real private values through labels and counts code points only in diagnostics', async () => {

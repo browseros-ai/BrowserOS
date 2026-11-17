@@ -146,26 +146,30 @@ export function openProbePage(
   const callFunction = new Function(`return (${CALL_FUNCTION})`)()
   const probe = globalThis.__neoProbe
   if (!probe) throw new Error('the asset did not define __neoProbe')
-  // Decode at the same seam as Rust, leaving actual nodes from pinned calls untouched.
-  const decode = (value: unknown): unknown =>
-    value instanceof Promise
-      ? value.then(decode)
-      : typeof value === 'string'
-        ? JSON.parse(value)
-        : value
   const rawCall = (request: unknown, root?: Node | null, ...nodes: unknown[]) =>
     callFunction.call(globalThis, { request, policy }, root, ...nodes)
   return {
     document,
     rawCall,
-    call: (request, root, ...nodes) => decode(rawCall(request, root, ...nodes)),
+    call: (request, root, ...nodes) =>
+      decodeProbeReply(rawCall(request, root, ...nodes)),
     rawBoot: (options) => Reflect.apply(probe.boot, probe, [options]),
     // Through Reflect.apply, so tests can hand boot options Rust never would.
-    boot: (options) => decode(Reflect.apply(probe.boot, probe, [options])),
+    boot: (options) =>
+      decodeProbeReply(Reflect.apply(probe.boot, probe, [options])),
     close() {
       for (const prototype of suppliedDefaults)
         Reflect.deleteProperty(prototype, 'defaultValue')
       for (const [name, value] of saved) Reflect.set(globalThis, name, value)
     },
   }
+}
+
+/** Decode at Rust's seam, preserving actual nodes from by-handle pinned calls. */
+export function decodeProbeReply(value: unknown): unknown {
+  return value instanceof Promise
+    ? value.then(decodeProbeReply)
+    : typeof value === 'string'
+      ? JSON.parse(value)
+      : value
 }

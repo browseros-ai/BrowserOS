@@ -32,6 +32,8 @@ use crate::listed_enum::listed_enum;
 /// format, come back, and 149 nested arrays, 298, fail with [`TOO_DEEP`], because Chromium nests
 /// a CDP message at most 300 levels deep and the reply wraps the value in three. A deeper result
 /// is refused here as upstream's is, and the cap bounds every recursion over a value in Rust.
+/// Probe JSON text and stitched snapshots share this proven bound; the protocol generator
+/// exports it to the isolated-world exit, so neither side can silently admit a deeper tree.
 pub(crate) const MAX_DEPTH: usize = 297;
 
 /// upstream's message for a result deeper than [`MAX_DEPTH`] (`rewriteError`, PW:36883).

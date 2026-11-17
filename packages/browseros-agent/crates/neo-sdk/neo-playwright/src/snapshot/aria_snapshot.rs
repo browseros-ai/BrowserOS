@@ -14,7 +14,7 @@
 //! the root frame's world would copy every cross-site frame's text into the embedding site's
 //! renderer process, which site isolation exists to prevent.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -227,7 +227,18 @@ fn merge(frame: FrameSnapshot, partial: &mut Vec<PartialFrame>) -> Vec<AriaNode>
             } => {
                 let mut below = Vec::new();
                 let nodes = merge(snapshot, &mut below);
-                stitched.insert(iframe_ref, StitchedFrame { src, nodes, partial: below });
+                let unread_refs = below.iter().map(|frame| frame.r#ref.clone()).collect();
+                // Preserve the existing child-order of partial notes. If attachment later
+                // drops this branch, only its descendants' notes are removed.
+                partial.extend(below);
+                stitched.insert(
+                    iframe_ref,
+                    StitchedFrame {
+                        src,
+                        nodes,
+                        unread_refs,
+                    },
+                );
             }
             ChildFrame::Partial(frame) => partial.push(frame),
         }
@@ -240,17 +251,16 @@ fn merge(frame: FrameSnapshot, partial: &mut Vec<PartialFrame>) -> Vec<AriaNode>
     json
 }
 
-/// Upstream's `mergeIframeChildren`: an iframe node with a ref takes its child's nodes, unless
-/// the child came back empty, and is not looked into; any other node is walked. Version 1.64.1
-/// keeps an iframe node's own `text` beside the stitched children (1.65 drops it).
-/// Partial notes travel with their child until it is actually attached, so dropping an
-/// overdeep child never leaves notes for refs that the caller cannot see.
+/// Tracks a child's notes without moving them: ordinary snapshots retain their existing note
+/// order, while dropping an overdeep child removes notes for refs the caller cannot see.
 struct StitchedFrame {
     src: String,
     nodes: Vec<AriaNode>,
-    partial: Vec<PartialFrame>,
+    unread_refs: HashSet<String>,
 }
 
+/// Upstream's `mergeIframeChildren`, with a depth check before attaching a child. An iframe
+/// keeps its fallback text beside its children as version 1.64.1 does; other nodes are walked.
 fn attach(
     node: &mut AriaNode,
     stitched: &mut HashMap<String, StitchedFrame>,
@@ -266,8 +276,9 @@ fn attach(
             // The child's top array becomes this iframe's children array. Test before
             // attachment: the parent stays readable even when this one branch cannot fit.
             let encoded = serde_json::to_string(&child.nodes);
-            let deepest = encoded.as_deref().map(json_depth).unwrap_or(MAX_VALUE_DEPTH);
+            let deepest = encoded.as_deref().map_or(MAX_VALUE_DEPTH, json_depth);
             if depth + deepest > MAX_VALUE_DEPTH {
+                partial.retain(|frame| !child.unread_refs.contains(&frame.r#ref));
                 partial.push(PartialFrame {
                     r#ref: iframe_ref.clone(),
                     frame: child.src,
@@ -277,9 +288,11 @@ fn attach(
                     ),
                 });
             } else {
-                node.children = child.nodes.into_iter()
-                    .map(|child| AriaChild::Node(Box::new(child))).collect();
-                partial.extend(child.partial);
+                node.children = child
+                    .nodes
+                    .into_iter()
+                    .map(|child| AriaChild::Node(Box::new(child)))
+                    .collect();
             }
         }
         return;
@@ -487,7 +500,8 @@ pub(crate) mod tests {
         Ok(())
     }
     #[test]
-    fn stitching_an_overdeep_child_keeps_the_page_and_its_partial_reason() -> Result<(), Box<dyn Error>> {
+    fn stitching_an_overdeep_child_keeps_the_page_and_its_partial_reason()
+    -> Result<(), Box<dyn Error>> {
         let mut node: AriaNode = serde_json::from_value(json!({"role":"button", "name":"End"}))?;
         for _ in 0..147 {
             let mut group: AriaNode = serde_json::from_value(json!({"role":"group"}))?;
@@ -499,8 +513,12 @@ pub(crate) mod tests {
                 {"role":"button", "name":"Outside"}, {"role":"iframe", "ref":"e2"}
             ]))?,
             children: vec![ChildFrame::Read {
-                iframe_ref: "e2".to_owned(), src: "https://frame.example".to_owned(),
-                snapshot: FrameSnapshot { json: vec![node], children: Vec::new() },
+                iframe_ref: "e2".to_owned(),
+                src: "https://frame.example".to_owned(),
+                snapshot: FrameSnapshot {
+                    json: vec![node],
+                    children: Vec::new(),
+                },
             }],
         };
         let result = stitch(root);
@@ -512,5 +530,4 @@ pub(crate) mod tests {
         assert!(result.partial[0].reason.contains("{ depth: n }"));
         Ok(())
     }
-
 }

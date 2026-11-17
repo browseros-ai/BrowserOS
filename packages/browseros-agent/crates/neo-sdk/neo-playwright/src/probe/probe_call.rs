@@ -21,7 +21,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::op_scope::{OpScope, ProtocolRequest};
-use crate::page::OpPage;
+use crate::page::{MAX_VALUE_DEPTH, OpPage, json_depth};
 use crate::private_entry::PrivateStep;
 use crate::probe::probe_reply::ProbeReply;
 use crate::probe::probe_request::{ProbeCall, ProbePolicy, ProbeRequest};
@@ -445,14 +445,14 @@ pub(crate) fn reply_of(called: Value) -> Result<ProbeReply, ProbeFailure> {
             exception.message()
         )));
     }
-    let text = called.result.value.as_str().ok_or_else(|| {
-        ProbeFailure::Broken("the probe returned no JSON reply text".to_owned())
-    })?;
-    let depth = crate::page::json_depth(text);
-    if depth > crate::page::MAX_VALUE_DEPTH {
+    let text =
+        called.result.value.as_str().ok_or_else(|| {
+            ProbeFailure::Broken("the probe returned no JSON reply text".to_owned())
+        })?;
+    let depth = json_depth(text);
+    if depth > MAX_VALUE_DEPTH {
         return Err(ProbeFailure::Broken(format!(
-            "the probe reply reaches JSON depth {depth}, above limit {}. Pass {{ depth: n }} or take a locator's snapshot of a section.",
-            crate::page::MAX_VALUE_DEPTH
+            "the probe reply reaches JSON depth {depth}, above limit {MAX_VALUE_DEPTH}. Pass {{ depth: n }} or take a locator's snapshot of a section."
         )));
     }
     let mut reader = serde_json::Deserializer::from_str(text);
@@ -746,8 +746,9 @@ mod tests {
         let reply =
             reply_of(json!({ "result": { "type": "string", "value": "{\"kind\":\"none\"}" } }));
         assert!(matches!(reply, Ok(ProbeReply::None { stale_ref: None })));
-        let uninstalled =
-            reply_of(json!({ "result": { "type": "string", "value": "{\"kind\":\"uninstalled\"}" } }));
+        let uninstalled = reply_of(
+            json!({ "result": { "type": "string", "value": "{\"kind\":\"uninstalled\"}" } }),
+        );
         assert!(matches!(uninstalled, Err(ProbeFailure::Gone(_))));
         let thrown = reply_of(json!({
             "result": { "type": "object", "subtype": "error" },
@@ -757,8 +758,9 @@ mod tests {
             return Err("a probe that throws is a broken asset".into());
         };
         assert_eq!(message, "the probe threw: TypeError: x is not a function");
-        let unreadable =
-            reply_of(json!({ "result": { "type": "string", "value": "{\"kind\":\"teleported\"}" } }));
+        let unreadable = reply_of(
+            json!({ "result": { "type": "string", "value": "{\"kind\":\"teleported\"}" } }),
+        );
         assert!(matches!(unreadable, Err(ProbeFailure::Broken(_))));
         Ok(())
     }
@@ -773,20 +775,27 @@ mod tests {
             );
             let reply = reply_of(json!({ "result": { "type": "string", "value": text } }));
             if groups <= 147 {
-                assert!(matches!(reply, Ok(ProbeReply::Snapshot { .. })), "{groups}: {reply:?}");
+                assert!(
+                    matches!(reply, Ok(ProbeReply::Snapshot { .. })),
+                    "{groups}: {reply:?}"
+                );
             } else {
-                let Err(ProbeFailure::Broken(message)) = reply else { panic!("overdeep text must fail promptly") };
+                let Err(ProbeFailure::Broken(message)) = reply else {
+                    panic!("overdeep text must fail promptly")
+                };
                 assert!(message.contains("299"));
                 assert!(message.contains("{ depth: n }"));
             }
         }
         for depth in [297, 298] {
-            let text = format!("{{\"kind\":\"snapshot\",\"json\":{}0{},\"iframes\":[]}}",
-                "[".repeat(depth - 1), "]".repeat(depth - 1));
-            assert_eq!(crate::page::json_depth(&text), depth);
+            let text = format!(
+                "{{\"kind\":\"snapshot\",\"json\":{}0{},\"iframes\":[]}}",
+                "[".repeat(depth - 1),
+                "]".repeat(depth - 1)
+            );
+            assert_eq!(super::json_depth(&text), depth);
             let reply = reply_of(json!({ "result": { "type": "string", "value": text } }));
             assert_eq!(reply.is_ok(), depth == 297, "depth {depth}: {reply:?}");
         }
     }
-
 }
