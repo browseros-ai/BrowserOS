@@ -71,6 +71,7 @@ fn target_crashed_real_page_op_precedes_failed_native_refresh_on_the_wire() -> R
                     playwright: Arc::clone(&facade),
                 },
             )?;
+            registry.define(crate::test_rig::Gate(Arc::clone(&rig.gate)))?;
             rig.dispatcher = Arc::new(Dispatcher::new(
                 registry.build(),
                 Vec::new(),
@@ -150,31 +151,34 @@ fn target_crashed_real_page_op_precedes_failed_native_refresh_on_the_wire() -> R
             } else {
                 json!({ "page": { "$neo": "page", "tab": page.tab } })
             };
-            let initial_tabs = rig.fake.count("Browser.getTabs");
-            rig.fake.hold_next("Browser.getTabs");
             let request = request(
-                &format!("await __neo.invoke('{operation}', {input});"),
+                &format!(
+                    "await __neo.invoke('test.gate', {{}}); \
+                     await __neo.invoke('test.gate', {{}}); \
+                     await __neo.invoke('{operation}', {input});"
+                ),
                 RunMeta::default(),
             )?;
             let pending = task::spawn(async move { service.run(request).await });
-            within(CRASH_REFUSAL_WATCHDOG, async {
-                while rig.fake.count("Browser.getTabs") == initial_tabs {
-                    task::yield_now().await;
-                }
-            })
-            .await
-            .map_err(|error| {
-                format!("waiting for initial healthy getTabs before {failure}: {error}")
-            })?;
-            // RunService lists initial pages before starting QuickJS. Its healthy reply is
-            // already captured and held here; only the later foreground op sees the errors.
+            within(CRASH_REFUSAL_WATCHDOG, rig.gate.wait())
+                .await
+                .map_err(|error| {
+                    format!(
+                        "waiting for the script after healthy run startup before {failure}: {error}"
+                    )
+                })?;
+            // The first gate proves QuickJS has started after all run-start inventory. The
+            // second holds the script while failures are armed; counting the first native
+            // listing instead would include later startup reads in the operation's baseline.
             for method in ["Browser.getTabInfo", "Browser.getTabs"] {
                 rig.fake.fail(method, failure.clone());
             }
             let before_info = rig.fake.count("Browser.getTabInfo");
             let before_tabs = rig.fake.count("Browser.getTabs");
             let before_attach = rig.fake.count("Target.attachToTarget");
-            rig.fake.release_held();
+            within(CRASH_REFUSAL_WATCHDOG, rig.gate.wait())
+                .await
+                .map_err(|error| format!("releasing the script under {failure}: {error}"))?;
             let failed = within(CRASH_REFUSAL_WATCHDOG, pending)
                 .await
                 .map_err(|error| {

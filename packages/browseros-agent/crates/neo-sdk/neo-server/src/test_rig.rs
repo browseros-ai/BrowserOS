@@ -502,7 +502,7 @@ impl Method for Title {
 
 /// `test.gate`: waits until the test meets it at the rig's barrier. Its input is any JSON, kept
 /// only by its record, so a test can read a running op's start row.
-struct Gate(Arc<Barrier>);
+pub(crate) struct Gate(pub(crate) Arc<Barrier>);
 
 impl Method for Gate {
     type Input = Value;
