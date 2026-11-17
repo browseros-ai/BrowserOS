@@ -37,7 +37,6 @@
  * that frame's tree walk there; no host fill happens under the switch.
  */
 
-import { holdsKeptValue, keepDigest, keepsDigests } from './private-digest'
 import { coverWrapper, renderedText } from './private-look'
 import type {
   BoxState,
@@ -119,18 +118,14 @@ const active = new Map<Pin, Element>()
  */
 let drawnSlot: { pin: Pin; wrapper: Element } | undefined
 
-/**
- * Whether the mask treats `element` as a box Neo typed a private value into (pull request 4):
- * it carries the mark, or it held a value this world keeps a digest of when the current read
- * through the mask began (ruling R50, `private-digest.ts`).
- */
+/** The node's mark survives a move; copying its value does not mark another node. */
 export function privatelyTyped(element: Element): boolean {
-  return Object.hasOwn(element, MARK) || holdsKeptValue(element)
+  return Object.hasOwn(element, MARK)
 }
 
-/** Whether this world marked any box or keeps any digest (`anyMarked`). */
+/** Whether this world has marked a box; a moved-in marked root is checked separately. */
 export function anyPrivatelyTyped(): boolean {
-  return anyMarked || keepsDigests()
+  return anyMarked
 }
 
 function mark(element: Element): void {
@@ -209,10 +204,7 @@ function answer(
   }
 }
 
-/**
- * Marks the text control holding the focus in `box`'s document, down open shadow roots, and
- * keeps a digest of what it holds (ruling R50): the text may have gone there.
- */
+/** Marks the focus holder down open shadow roots when a page redirects the entry there. */
 function markFocused(box: Element): boolean {
   let holder = box.ownerDocument.activeElement
   while (holder?.shadowRoot?.activeElement)
@@ -221,7 +213,6 @@ function markFocused(box: Element): boolean {
   const name = holder.localName
   if (name !== 'input' && name !== 'textarea') return false
   mark(holder)
-  keepDigest(heldText(holder))
   return true
 }
 
@@ -347,13 +338,6 @@ function readBack(pin: Pin, box: Element): PrivateAnswer {
   else if (entry && same(heldText(box), entry.text, entry.spaced))
     state = 'holds'
   else state = 'other'
-  // The mark follows the value (ruling R50): a digest of what the box holds now, whether that is
-  // the value it was given or another form or part of it, and of the value it was given,
-  // whatever it holds. A widget that splits a code across its boxes may mirror the whole of it
-  // into another control (a hidden input), and a box that left may come back re-created with
-  // it. The scan at the next request forgets whichever no control holds.
-  if (state !== 'left') keepDigest(heldText(box))
-  if (entry) keepDigest(entry.text)
   // The text may have gone to the control that holds the focus now: it is marked before the
   // box is forgotten, which ends this entry's reach to the box (ruling R26).
   if (state === 'other') markFocused(box)

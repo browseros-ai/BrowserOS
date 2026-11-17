@@ -155,20 +155,12 @@ pub(crate) fn pages() -> HashMap<String, Page> {
             include_str!("../data/private/frames-gone.html"),
         ),
         (
-            "pin-mirror",
-            include_str!("../data/private/pin-mirror.html"),
-        ),
-        (
-            "mark-moves",
-            include_str!("../data/private/mark-moves.html"),
-        ),
-        (
             "busy-frame",
             include_str!("../data/private/busy-frame.html"),
         ),
         (
-            "mark-follows",
-            include_str!("../data/private/mark-follows.html"),
+            "copied-value",
+            include_str!("../data/private/copied-value.html"),
         ),
         (
             "out-of-view",
