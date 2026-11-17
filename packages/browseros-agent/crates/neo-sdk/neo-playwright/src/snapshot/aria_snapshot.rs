@@ -21,6 +21,7 @@ use serde_json::Value;
 use ts_rs::TS;
 
 use super::snapshot_rules;
+use crate::page::{MAX_VALUE_DEPTH, json_depth};
 
 /// One node of `ariaSnapshotJSON`: upstream's `AriaNodeJSON` (isomorphic/ariaSnapshot.ts).
 ///
@@ -106,6 +107,8 @@ pub(crate) enum ChildFrame {
     Read {
         /// The iframe node's ref in its parent frame.
         iframe_ref: String,
+        /// The child URL, retained for a partial note if stitching would exceed the cap.
+        src: String,
         snapshot: FrameSnapshot,
     },
     /// Not read (timed out, detached, session lost): the iframe node keeps its ref and gets no
@@ -219,15 +222,20 @@ fn merge(frame: FrameSnapshot, partial: &mut Vec<PartialFrame>) -> Vec<AriaNode>
         match child {
             ChildFrame::Read {
                 iframe_ref,
+                src,
                 snapshot,
             } => {
-                stitched.insert(iframe_ref, merge(snapshot, partial));
+                let mut below = Vec::new();
+                let nodes = merge(snapshot, &mut below);
+                stitched.insert(iframe_ref, StitchedFrame { src, nodes, partial: below });
             }
             ChildFrame::Partial(frame) => partial.push(frame),
         }
     }
     for node in &mut json {
-        attach(node, &mut stitched);
+        // The result object and its json array precede the first node. This is the same
+        // 297-level envelope the page exit admits, now including cross-frame stitching.
+        attach(node, &mut stitched, partial, 3);
     }
     json
 }
@@ -235,23 +243,50 @@ fn merge(frame: FrameSnapshot, partial: &mut Vec<PartialFrame>) -> Vec<AriaNode>
 /// Upstream's `mergeIframeChildren`: an iframe node with a ref takes its child's nodes, unless
 /// the child came back empty, and is not looked into; any other node is walked. Version 1.64.1
 /// keeps an iframe node's own `text` beside the stitched children (1.65 drops it).
-fn attach(node: &mut AriaNode, stitched: &mut HashMap<String, Vec<AriaNode>>) {
+/// Partial notes travel with their child until it is actually attached, so dropping an
+/// overdeep child never leaves notes for refs that the caller cannot see.
+struct StitchedFrame {
+    src: String,
+    nodes: Vec<AriaNode>,
+    partial: Vec<PartialFrame>,
+}
+
+fn attach(
+    node: &mut AriaNode,
+    stitched: &mut HashMap<String, StitchedFrame>,
+    partial: &mut Vec<PartialFrame>,
+    depth: usize,
+) {
     if node.role == "iframe"
         && let Some(iframe_ref) = &node.r#ref
     {
-        if let Some(nodes) = stitched.remove(iframe_ref)
-            && !nodes.is_empty()
+        if let Some(child) = stitched.remove(iframe_ref)
+            && !child.nodes.is_empty()
         {
-            node.children = nodes
-                .into_iter()
-                .map(|child| AriaChild::Node(Box::new(child)))
-                .collect();
+            // The child's top array becomes this iframe's children array. Test before
+            // attachment: the parent stays readable even when this one branch cannot fit.
+            let encoded = serde_json::to_string(&child.nodes);
+            let deepest = encoded.as_deref().map(json_depth).unwrap_or(MAX_VALUE_DEPTH);
+            if depth + deepest > MAX_VALUE_DEPTH {
+                partial.push(PartialFrame {
+                    r#ref: iframe_ref.clone(),
+                    frame: child.src,
+                    reason: format!(
+                        "stitched snapshot reaches JSON depth {}, above the limit of {MAX_VALUE_DEPTH}; pass {{ depth: n }} or take a locator's snapshot of a section",
+                        depth + deepest
+                    ),
+                });
+            } else {
+                node.children = child.nodes.into_iter()
+                    .map(|child| AriaChild::Node(Box::new(child))).collect();
+                partial.extend(child.partial);
+            }
         }
         return;
     }
     for child in &mut node.children {
         if let AriaChild::Node(child) = child {
-            attach(child, stitched);
+            attach(child, stitched, partial, depth + 2);
         }
     }
 }
@@ -318,6 +353,7 @@ pub(crate) mod tests {
                 } else {
                     ChildFrame::Read {
                         iframe_ref: iframe.r#ref.clone(),
+                        src: iframe.src.clone(),
                         snapshot: tree(recorded, iframe.frame, unread),
                     }
                 }
@@ -415,6 +451,7 @@ pub(crate) mod tests {
             }]))?,
             children: vec![ChildFrame::Read {
                 iframe_ref: "e2".to_owned(),
+                src: "https://frame.example".to_owned(),
                 snapshot: FrameSnapshot {
                     json: serde_json::from_value(json!([{
                         "role": "button", "ref": "f1e3", "name": "Inside", "inert": true
@@ -449,4 +486,31 @@ pub(crate) mod tests {
         }
         Ok(())
     }
+    #[test]
+    fn stitching_an_overdeep_child_keeps_the_page_and_its_partial_reason() -> Result<(), Box<dyn Error>> {
+        let mut node: AriaNode = serde_json::from_value(json!({"role":"button", "name":"End"}))?;
+        for _ in 0..147 {
+            let mut group: AriaNode = serde_json::from_value(json!({"role":"group"}))?;
+            group.children.push(AriaChild::Node(Box::new(node)));
+            node = group;
+        }
+        let root = FrameSnapshot {
+            json: serde_json::from_value(json!([
+                {"role":"button", "name":"Outside"}, {"role":"iframe", "ref":"e2"}
+            ]))?,
+            children: vec![ChildFrame::Read {
+                iframe_ref: "e2".to_owned(), src: "https://frame.example".to_owned(),
+                snapshot: FrameSnapshot { json: vec![node], children: Vec::new() },
+            }],
+        };
+        let result = stitch(root);
+        assert_eq!(result.json[0].name.as_deref(), Some("Outside"));
+        assert!(result.json[1].children.is_empty());
+        assert_eq!(result.partial.len(), 1);
+        assert_eq!(result.partial[0].r#ref, "e2");
+        assert!(result.partial[0].reason.contains("299"));
+        assert!(result.partial[0].reason.contains("{ depth: n }"));
+        Ok(())
+    }
+
 }

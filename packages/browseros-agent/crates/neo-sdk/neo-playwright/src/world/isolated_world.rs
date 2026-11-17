@@ -516,8 +516,8 @@ mod tests {
         /// Replies to the install's commands: `evaluated` to the evaluate, `booted` as the
         /// install function's return.
         fn answering(evaluated: Value, booted: Value) -> Arc<Self> {
-            let mut called = json!({ "result": { "type": "object" } });
-            called["result"]["value"] = booted;
+            let mut called = json!({ "result": { "type": "string" } });
+            called["result"]["value"] = json!(booted.to_string());
             let replies = TestConnection::new([
                 (
                     "Page.createIsolatedWorld",

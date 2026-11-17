@@ -76,7 +76,7 @@ impl Declarations {
         if !self.collisions.is_empty() {
             return Err(self.collisions.join("\n").into());
         }
-        let mut output = format!("{HEADER}\n");
+        let mut output = format!("{HEADER}\nexport const MAX_REPLY_DEPTH = {};\n\n", crate::page::MAX_VALUE_DEPTH);
         for declaration in self.named.into_values() {
             output.push_str(&declaration.text);
             output.push('\n');

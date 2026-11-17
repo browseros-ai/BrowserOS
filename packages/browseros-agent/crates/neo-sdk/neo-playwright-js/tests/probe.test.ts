@@ -4,6 +4,7 @@
 import { afterEach, expect, it } from 'bun:test'
 import { parseSelector } from '../../neo-playwright/third_party/playwright/packages/isomorphic/selectorParser'
 import { PROTOCOL } from '../src/probe/protocol'
+import { REQUEST_EXAMPLES } from '../src/probe/protocol-examples'
 import { openProbePage, type ProbePage } from './support/probe-page'
 
 const PAGE = `<html><body>
@@ -59,7 +60,11 @@ it('tests that boot rejects options Rust would never send', () => {
     { frameSeq: 1.5, epoch: 'a' },
     { frameSeq: 0, epoch: '' },
   ])
-    expect(() => probe.boot(options)).toThrow('boot takes')
+    expect(probe.boot(options)).toMatchObject({
+      kind: 'error',
+      class: 'internal',
+      message: expect.stringContaining('boot takes'),
+    })
 })
 
 it('tests that describe reports the protocol, the seq and the url', () => {
@@ -444,4 +449,26 @@ it("tests that matchUrl runs upstream's glob and the script's RegExp against the
     kind: 'error',
     class: 'script',
   })
+})
+
+it('keeps every value exit as JSON text and pinned nodes as handles', async () => {
+  const probe = open()
+  expect(probe.rawCall({ op: 'describe' })).toBe('{"kind":"uninstalled"}')
+  expect(typeof probe.rawBoot(undefined)).toBe('string')
+  expect(typeof probe.rawBoot({ frameSeq: 0, epoch: 'transport' })).toBe(
+    'string',
+  )
+  const globalProbe = globalThis.__neoProbe
+  expect(typeof globalProbe?.call(null)).toBe('string')
+  const raw = probe.rawCall({ op: 'describe' })
+  expect(typeof raw).toBe('string')
+  expect(typeof (await probe.rawCall(REQUEST_EXAMPLES.expect[0]))).toBe(
+    'string',
+  )
+  const reply = probe.call(
+    resolveRequest('button', { strictness: 'firstMatch' }),
+  )
+  expect(probe.rawCall({ op: 'pinned', pin: pinOf(reply) })).toBe(
+    probe.document.querySelector('button'),
+  )
 })

@@ -13,7 +13,7 @@ use crate::probe::PROBE_PROTOCOL;
 const ENGINE_JS: &str = include_str!("../../assets/injected.js");
 
 /// The function an install calls on a world's global with `{ frameSeq, epoch }`. It returns
-/// the probe's `described`, whose seq is the one the world keeps, and whose `retired` is the
+/// JSON text of the probe's `described`, whose seq the world keeps, and whose `retired` is the
 /// seq a re-key replaced.
 ///
 /// ```text
@@ -34,11 +34,11 @@ pub(crate) fn install_function() -> &'static str {
     SOURCE.get_or_init(|| {
         format!(
             "function (options) {{\nconst held = globalThis.__neoProbe;\nlet retired;\n\
-             if (held) {{\n  const described = held.boot(options);\n  if (described.protocol \
-             === {PROBE_PROTOCOL}) return described;\n  retired = described.retired;\n  delete \
+             if (held) {{\n  const previous = held.boot(options);\n  const described = typeof previous === \"string\" ? JSON.parse(previous) : previous;\n  if (described.protocol \
+             === {PROBE_PROTOCOL}) return previous;\n  retired = described.retired;\n  delete \
              globalThis.__neoProbe;\n}}\n{ENGINE_JS}\nconst booted = \
-             globalThis.__neoProbe.boot(options);\nreturn retired === undefined ? booted : {{ \
-             ...booted, retired }};\n}}"
+             globalThis.__neoProbe.boot(options);\nreturn retired === undefined ? booted : JSON.stringify({{ \
+             ...JSON.parse(booted), retired }});\n}}"
         )
     })
 }
@@ -92,7 +92,7 @@ mod tests {
         assert!(
             install.trim_end().ends_with(
                 "const booted = globalThis.__neoProbe.boot(options);\nreturn retired === \
-                 undefined ? booted : { ...booted, retired };\n}"
+                 undefined ? booted : JSON.stringify({ ...JSON.parse(booted), retired });\n}"
             ),
             "the install ends by booting whichever probe is in charge"
         );

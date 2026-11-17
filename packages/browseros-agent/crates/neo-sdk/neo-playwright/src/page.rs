@@ -47,6 +47,8 @@ pub(crate) mod page_op;
 mod page_registry;
 mod page_state;
 mod page_value;
+// Probe text and main-world values share one proven JSON nesting bound and scanner.
+pub(crate) use page_value::{MAX_DEPTH as MAX_VALUE_DEPTH, depth_of as json_depth};
 mod pdf;
 mod save_screenshot;
 mod screenshot;

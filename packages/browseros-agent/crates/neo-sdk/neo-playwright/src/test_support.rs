@@ -574,14 +574,20 @@ impl<S: TabScript> ScriptedTab<S> {
             let ProbeAnswer { after, reply } = self.script.probe(frame, request);
             time::sleep(after).await;
             return reply
-                .map(|reply| json!({ "result": { "type": "object", "value": reply } }))
+                .map(|reply| {
+                    if request["op"] == "pinned" {
+                        json!({ "result": { "type": "object", "value": reply } })
+                    } else {
+                        json!({ "result": { "type": "string", "value": reply.to_string() } })
+                    }
+                })
                 .map_err(protocol_error);
         }
         if first.get("frameSeq").is_some() {
             return Ok(
-                json!({ "result": { "type": "object", "value": { "kind": "described",
+                json!({ "result": { "type": "string", "value": json!({ "kind": "described",
                 "protocol": PROBE_PROTOCOL, "seq": first["frameSeq"],
-                "url": "https://a.test/" } } }),
+                "url": "https://a.test/" }).to_string() } }),
             );
         }
         let function = params["functionDeclaration"].as_str().unwrap_or_default();
