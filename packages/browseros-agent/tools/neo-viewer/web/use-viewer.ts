@@ -1,10 +1,11 @@
 /**
  * The page's data: every run since the last Clear, and the log's totals, from the viewer's API,
- * kept current by `/api/events`. Each event carries the new state of one run (or of the log, or a
- * clear) and its change number.
+ * kept current by `/api/events`. Every viewer tab of the origin hears that one stream
+ * (`viewer-events.ts`): one tab holds it and relays it to the others. Each event carries the new
+ * state of one run (or of the log, or a clear) and its change number.
  *
- * The stream opens first and every (re)open takes a fresh snapshot, so no change falls between a
- * snapshot and the stream. A snapshot can still land after events that are newer than it: the
+ * Every (re)open of the stream this tab hears takes a fresh snapshot, so no change falls between
+ * a snapshot and the stream. A snapshot can still land after events that are newer than it: the
  * page keeps the events since the stream opened and re-applies those numbered above the
  * snapshot's `version`.
  */
@@ -21,6 +22,7 @@ import type {
   ViewerInfo,
 } from '../shared/api'
 import { apiRoutes } from '../shared/api'
+import { listenToViewerEvents } from './viewer-events'
 
 /** Events kept for re-applying over a late snapshot; older ones are long since in any snapshot. */
 const KEPT_EVENTS = 2000
@@ -79,35 +81,45 @@ export function useViewer(): ViewerState {
     )
   }, [])
 
-  useEffect(() => {
-    const events = new EventSource(apiRoutes.events)
-    events.onopen = () => {
-      recent.current = []
-      setOpened((n) => n + 1)
-    }
-    events.onmessage = (message) => {
-      const event = JSON.parse(message.data) as ViewerEvent
-      recent.current.push(event)
-      if (recent.current.length > KEPT_EVENTS) {
-        recent.current.splice(0, recent.current.length - KEPT_EVENTS)
-      }
-      setState((current) => apply(current, event))
-    }
-    return () => events.close()
-  }, [])
+  useEffect(
+    () =>
+      listenToViewerEvents({
+        opened() {
+          recent.current = []
+          setOpened((n) => n + 1)
+        },
+        event(event) {
+          recent.current.push(event)
+          if (recent.current.length > KEPT_EVENTS) {
+            recent.current.splice(0, recent.current.length - KEPT_EVENTS)
+          }
+          setState((current) => apply(current, event))
+        },
+      }),
+    [],
+  )
 
   useEffect(() => {
     if (opened === 0) return
+    // A later opening emptied `recent` and took its own snapshot: this one, landing after it,
+    // would roll the list back to before that opening.
+    let current = true
     getJson<RunsResponse>(apiRoutes.runs).then(
       ({ runs, log, version }) => {
+        if (!current) return
         let next: { runs: RunSummary[]; log: LogSummary | null } = { runs, log }
         for (const event of recent.current) {
           if (event.version > version) next = apply(next, event)
         }
         setState(next)
       },
-      (cause) => setError(String(cause)),
+      (cause) => {
+        if (current) setError(String(cause))
+      },
     )
+    return () => {
+      current = false
+    }
   }, [opened])
 
   const clear = useCallback(async () => {

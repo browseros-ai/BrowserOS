@@ -25,6 +25,7 @@ const TAKEOVER: LiveTakeover = {
 }
 const STATUS_UP: LiveScreenAction = {
   type: 'status',
+  at: 0,
   status: {
     host: { state: 'up' },
     agent: {
