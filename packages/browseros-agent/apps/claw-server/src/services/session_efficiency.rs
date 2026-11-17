@@ -261,7 +261,13 @@ fn calculate_session_efficiency(
     let last_activity_end = source
         .dispatches
         .iter()
-        .map(|dispatch| dispatch.created_at + dispatch.duration_ms.unwrap_or(0))
+        .map(|dispatch| {
+            if dispatch.parent_dispatch_id.is_some() {
+                dispatch.created_at
+            } else {
+                dispatch.created_at + dispatch.duration_ms.unwrap_or(0)
+            }
+        })
         .max()
         .unwrap_or(source.end.created_at);
     let active_duration_ms = last_activity_end.saturating_sub(started_at).max(0);

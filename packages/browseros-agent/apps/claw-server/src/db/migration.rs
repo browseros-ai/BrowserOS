@@ -56,6 +56,9 @@ mod m0027_backfill_task_active_duration {
             // tasks.duration_ms is only rewritten when a session recomputes, so rows projected under
             // the old wall-clock formula keep the idle tail (session end minus start). Rewrite every
             // row to the active span: first activity to the last tool finishing.
+            // Child steps inside a script stamp their write (completion) time, so created_at is
+            // already their end; adding duration would double-count a slow child. Top-level rows
+            // stamp the tool start, so their end is created_at + duration.
             manager
                 .get_connection()
                 .execute_unprepared(
@@ -63,7 +66,7 @@ mod m0027_backfill_task_active_duration {
                     UPDATE tasks
                     SET duration_ms = MAX(0,
                       COALESCE(
-                        (SELECT MAX(d.created_at + COALESCE(d.duration_ms, 0)) FROM tool_dispatches d WHERE d.session_id = tasks.session_id),
+                        (SELECT MAX(CASE WHEN d.parent_dispatch_id IS NOT NULL THEN d.created_at ELSE d.created_at + COALESCE(d.duration_ms, 0) END) FROM tool_dispatches d WHERE d.session_id = tasks.session_id),
                         started_at
                       ) - started_at)
                     "#,
@@ -94,7 +97,16 @@ mod m0027_backfill_task_active_duration {
                 "INSERT INTO tasks (session_id, agent_id, slug, agent_label, title, started_at, ended_at, duration_ms, dispatch_count, tool_sequence_json, status, error_count, cursor_id, has_screenshots, updated_at) VALUES ('tail', 'agent', 'agent', 'Agent', 'Session', 100, 9000, 8900, 2, '[]', 'done', 0, 0, 0, 0)",
                 // No dispatches: falls back to started_at, so duration collapses to 0.
                 "INSERT INTO tasks (session_id, agent_id, slug, agent_label, title, started_at, ended_at, duration_ms, dispatch_count, tool_sequence_json, status, error_count, cursor_id, has_screenshots, updated_at) VALUES ('empty', 'agent', 'agent', 'Agent', 'Session', 500, 4000, 3500, 0, '[]', 'done', 0, 0, 0, 0)",
+                // Slow completion-stamped child: top-level script ends at 1000 + 200 = 1200; the
+                // child stamps its created_at (1150) at completion and carries a 30s duration, so a
+                // naive created_at + duration would overshoot to 31150. The active span must use the
+                // top-level end: 1200 - 200 = 1000.
+                "INSERT INTO tasks (session_id, agent_id, slug, agent_label, title, started_at, ended_at, duration_ms, dispatch_count, tool_sequence_json, status, error_count, cursor_id, has_screenshots, updated_at) VALUES ('child', 'agent', 'agent', 'Agent', 'Session', 200, 9000, 8800, 2, '[]', 'done', 0, 0, 0, 0)",
                 "INSERT INTO tool_dispatches (created_at, agent_id, slug, agent_label, session_id, tool_name, duration_ms, has_screenshot) VALUES (300, 'agent', 'agent', 'Agent', 'tail', 'navigate', 100, 0), (1000, 'agent', 'agent', 'Agent', 'tail', 'click', 200, 0)",
+                // Top-level script row (parent_dispatch_id NULL): end is created_at + duration.
+                "INSERT INTO tool_dispatches (created_at, agent_id, slug, agent_label, session_id, tool_name, duration_ms, has_screenshot) VALUES (1000, 'agent', 'agent', 'Agent', 'child', 'run', 200, 0)",
+                // Slow child row stamped at completion (parent_dispatch_id set): end is created_at.
+                "INSERT INTO tool_dispatches (created_at, agent_id, slug, agent_label, session_id, tool_name, duration_ms, has_screenshot, parent_dispatch_id) VALUES (1150, 'agent', 'agent', 'Agent', 'child', 'wait', 30000, 0, 'child-parent')",
             ] {
                 connection.execute_unprepared(statement).await?;
             }
@@ -112,7 +124,11 @@ mod m0027_backfill_task_active_duration {
                         row.try_get::<i64>("", "duration_ms")?,
                     )))
                     .collect::<Result<Vec<_>, DbErr>>()?,
-                [("empty".to_owned(), 0), ("tail".to_owned(), 1100)]
+                [
+                    ("child".to_owned(), 1000),
+                    ("empty".to_owned(), 0),
+                    ("tail".to_owned(), 1100)
+                ]
             );
             Ok(())
         }
