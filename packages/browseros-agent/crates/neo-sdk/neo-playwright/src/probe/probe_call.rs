@@ -35,8 +35,8 @@ use crate::world::{BackendNodeId, IsolatedWorld, Pin};
 pub(crate) const CALL_FUNCTION: &str = "function (call, root, ...nodes) { const probe = globalThis.__neoProbe; return probe ? probe.call(call, root ?? this, nodes) : { kind: \"uninstalled\" }; }";
 
 impl ProbePolicy {
-    /// Drop cannot borrow an ended operation or inspect its admitted page. These controls
-    /// never read or search fields, so this conservative permission cannot start discovery.
+    /// Drop cannot borrow an ended operation or inspect its admitted page. Cleanup never
+    /// requests a masked tree read, so this permission cannot start moved-field discovery.
     pub(crate) fn for_cleanup(scope: &OpScope<'_>) -> Self {
         Self {
             conformance: scope.conformance(),
