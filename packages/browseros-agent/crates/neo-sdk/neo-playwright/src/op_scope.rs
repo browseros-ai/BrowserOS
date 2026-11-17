@@ -372,6 +372,7 @@ impl<'env> OpScope<'env> {
         let Some(info) = self.known_tab(browser, tab).await? else {
             return Ok(None);
         };
+        self.check_cached_crash(&info)?;
         let admission = CrashAdmission {
             tracking: self.crashes,
             ticket: Mutex::default(),
@@ -515,6 +516,25 @@ impl<'env> OpScope<'env> {
     fn cached_crash(&self) -> PlaywrightError {
         self.crash_refused.store(true, Ordering::Relaxed);
         self.fail(ErrorCode::TargetCrashed, TARGET_CRASH_MESSAGE)
+    }
+
+    /// Refuses only remembered native-target crashes, without refreshing browser facts.
+    pub(crate) fn check_cached_crash(&self, info: &PageInfo) -> Result<(), PlaywrightError> {
+        // Native tab refresh can stop answering after a crash. An unbound run can refuse
+        // its visible cached target before that await. Bound or invalid captures still go
+        // through Core first, so profile, window and epoch authority keeps its precedence.
+        // Core's admission hook remains responsible for replacement races and checks
+        // healthy targets again on both sides of attachment.
+        // Verified fresh-document recovery clears this same registry. Until that proof or
+        // a reconciled replacement target arrives, the cached target stays conservative.
+        if let Some(tracking) = self.crashes
+            && tracking.crashes.is_crashed(&info.target_id)
+            && !self.hides_tab(info.tab_id)
+            && matches!(self.view().scope(), Ok(None))
+        {
+            return Err(self.cached_crash());
+        }
+        Ok(())
     }
 
     /// An initial crash reply can follow events produced by sent work. Only a refusal that

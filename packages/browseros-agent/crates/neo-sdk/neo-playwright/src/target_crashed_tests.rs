@@ -5,14 +5,16 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
-use browseros_cdp::CdpError;
+use browseros_cdp::{CdpError, CdpEvent};
 use browseros_core::pages::NewPageOptions;
 use browseros_core::{
     BrowserProfileId, BrowserSession, BrowserSessionHooks, BrowserView, CdpConnection, CoreError,
-    FrameId, NativeCapabilities, TargetBinding, TargetId, TargetIntent,
+    FrameId, NativeCapabilities, SessionId, TargetBinding, TargetId, TargetIntent,
 };
 use futures_util::FutureExt;
+use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
+use tokio::sync::{broadcast, mpsc};
 use tokio::{task, time};
 
 use crate::events::EventFence;
@@ -217,6 +219,306 @@ async fn crash_event(run: &ScriptedRun, tab: &ScriptedTab<CrashedTab>) -> TestRe
         run.playwright.events_handled_through(fence),
         "a held frame-tree event is not yet an observed crash"
     );
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug)]
+enum NativeReadFailure {
+    Timeout,
+    ConnectionLost,
+}
+
+/// Keeps crash events and renderer behavior real to the scripted connection, but can fail
+/// both native refresh routes with typed transport errors. Failing only getTabInfo would let
+/// Core's getTabs fallback hide the ordering bug this fixture needs to expose.
+struct FailingNativeReads {
+    tab: Arc<ScriptedTab<CrashedTab>>,
+    failure: Mutex<Option<NativeReadFailure>>,
+    get_tab_info: AtomicUsize,
+    get_tabs: AtomicUsize,
+}
+
+impl FailingNativeReads {
+    fn new(tab: Arc<ScriptedTab<CrashedTab>>) -> Arc<Self> {
+        Arc::new(Self {
+            tab,
+            failure: Mutex::default(),
+            get_tab_info: AtomicUsize::default(),
+            get_tabs: AtomicUsize::default(),
+        })
+    }
+
+    async fn run(self: &Arc<Self>) -> TestResult<ScriptedRun> {
+        let connection = Arc::clone(self) as Arc<dyn CdpConnection>;
+        let browser = BrowserSession::new(connection, BrowserSessionHooks::default());
+        let playwright = Playwright::new(Arc::clone(&browser));
+        let listed = browser.pages.list().await?;
+        let page = listed
+            .first()
+            .ok_or("the native tab is cached before failure")?;
+        Ok(ScriptedRun {
+            playwright,
+            env: TestEnv::over(BrowserView::unbound(browser, None)),
+            page: serde_json::from_value(json!({ "$neo": "page", "tab": page.tab_id }))?,
+        })
+    }
+
+    fn fail_with(&self, failure: NativeReadFailure) {
+        self.get_tab_info.store(0, Ordering::SeqCst);
+        self.get_tabs.store(0, Ordering::SeqCst);
+        *self.failure.lock().unwrap_or_else(PoisonError::into_inner) = Some(failure);
+    }
+
+    fn error(&self, method: &str) -> Option<CdpError> {
+        let failure = (*self.failure.lock().unwrap_or_else(PoisonError::into_inner))?;
+        let counter = match method {
+            "Browser.getTabInfo" => &self.get_tab_info,
+            "Browser.getTabs" => &self.get_tabs,
+            _ => return None,
+        };
+        counter.fetch_add(1, Ordering::SeqCst);
+        Some(match failure {
+            NativeReadFailure::Timeout => CdpError::Timeout {
+                method: method.to_owned(),
+            },
+            NativeReadFailure::ConnectionLost => CdpError::ConnectionLost,
+        })
+    }
+}
+
+impl CdpConnection for FailingNativeReads {
+    fn send<'a>(
+        &'a self,
+        method: &'a str,
+        params: Value,
+        session: Option<&'a SessionId>,
+    ) -> BoxFuture<'a, Result<Value, CdpError>> {
+        if let Some(error) = self.error(method) {
+            return Box::pin(async move { Err(error) });
+        }
+        self.tab.send(method, params, session)
+    }
+
+    fn send_raw_json<'a>(
+        &'a self,
+        method: &'a str,
+        params_json: &'a str,
+        session: Option<&'a SessionId>,
+    ) -> BoxFuture<'a, Result<String, CdpError>> {
+        if let Some(error) = self.error(method) {
+            return Box::pin(async move { Err(error) });
+        }
+        self.tab.send_raw_json(method, params_json, session)
+    }
+
+    fn events(&self) -> broadcast::Receiver<CdpEvent> {
+        self.tab.events()
+    }
+
+    fn events_counted(&self) -> (broadcast::Receiver<CdpEvent>, u64) {
+        self.tab.events_counted()
+    }
+
+    fn events_broadcast(&self) -> u64 {
+        self.tab.events_broadcast()
+    }
+
+    fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+        self.tab.events_targeted(method)
+    }
+
+    fn is_connected(&self) -> bool {
+        self.tab.is_connected()
+    }
+
+    fn connection_epoch(&self) -> u64 {
+        self.tab.connection_epoch()
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn target_crashed_cached_refusal_precedes_native_refresh_failure_in_a_fresh_run() -> TestResult
+{
+    for failure in [
+        NativeReadFailure::Timeout,
+        NativeReadFailure::ConnectionLost,
+    ] {
+        let tab = ScriptedTab::new(CrashedTab::default());
+        let native = FailingNativeReads::new(Arc::clone(&tab));
+        let run = native.run().await?;
+        crash_event(&run, &tab).await?;
+        tab.script().renderer_silent.store(true, Ordering::SeqCst);
+        let run = next_run(run);
+        let before = renderer_commands(&tab);
+        native.fail_with(failure);
+        let error = time::timeout(
+            REFUSAL_BOUND,
+            run.playwright.invoke(
+                &run.env,
+                Op::from_name("page.title").ok_or("page.title")?,
+                json!({ "call": { "timeoutMs": 10_000 }, "page": run.page }),
+            ),
+        )
+        .await
+        .map_err(|_elapsed| "remembered crash waited for failing native tab facts")?
+        .err()
+        .ok_or("the remembered native target must refuse renderer work")?;
+        assert_eq!(
+            error.error_code(),
+            Some(ErrorCode::TargetCrashed),
+            "{failure:?}"
+        );
+        assert_plain_crash(&error);
+        assert!(
+            error.message().starts_with("page.title:"),
+            "the refusal keeps the operation's source context: {error}"
+        );
+        assert_eq!(error.answer(), Answer::Definite);
+        assert_eq!(
+            native.get_tab_info.load(Ordering::SeqCst),
+            0,
+            "remembered refusal must precede native getTabInfo: {failure:?}"
+        );
+        assert_eq!(
+            native.get_tabs.load(Ordering::SeqCst),
+            0,
+            "remembered refusal must precede the native getTabs fallback: {failure:?}"
+        );
+        assert_eq!(
+            renderer_commands(&tab),
+            before,
+            "the crashed renderer must receive no admission or operation command"
+        );
+        assert!(
+            !run.env.calls().contains(&EnvCall::MarkSent),
+            "the host must still derive not_sent for cached refusal"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test(start_paused = true)]
+async fn target_crashed_unremembered_native_refresh_failures_remain_browser_disconnected()
+-> TestResult {
+    for failure in [
+        NativeReadFailure::Timeout,
+        NativeReadFailure::ConnectionLost,
+    ] {
+        let tab = ScriptedTab::new(CrashedTab::default());
+        let native = FailingNativeReads::new(Arc::clone(&tab));
+        let run = native.run().await?;
+        settle_watcher(&run).await?;
+        native.fail_with(failure);
+        let error = run
+            .playwright
+            .invoke(
+                &run.env,
+                Op::from_name("page.title").ok_or("page.title")?,
+                json!({ "page": run.page }),
+            )
+            .await
+            .err()
+            .ok_or("the native refresh must fail")?;
+        assert_eq!(
+            error.error_code(),
+            Some(ErrorCode::BrowserDisconnected),
+            "a native request failure without remembered crash is not crash evidence: {failure:?}"
+        );
+        assert!(
+            error.message().starts_with("page.title: CDP"),
+            "the original native error and operation remain visible: {error}"
+        );
+        assert!(
+            native.get_tab_info.load(Ordering::SeqCst) > 0,
+            "the control must exercise the native refresh"
+        );
+        assert!(
+            native.get_tabs.load(Ordering::SeqCst) > 0,
+            "the control must also exercise Core's native fallback"
+        );
+        assert!(!run.env.calls().contains(&EnvCall::MarkSent));
+    }
+    Ok(())
+}
+
+#[tokio::test(start_paused = true)]
+async fn target_crashed_cached_precheck_preserves_hidden_and_bound_admission() -> TestResult {
+    let tab = ScriptedTab::new(CrashedTab::default());
+    let native = FailingNativeReads::new(Arc::clone(&tab));
+    let run = native.run().await?;
+    crash_event(&run, &tab).await?;
+    run.env.hide(run.page.tab());
+    native.fail_with(NativeReadFailure::ConnectionLost);
+    let error = run
+        .playwright
+        .invoke(
+            &run.env,
+            Op::from_name("page.title").ok_or("page.title")?,
+            json!({ "page": run.page }),
+        )
+        .await
+        .err()
+        .ok_or("the hidden tab's ordinary admission must fail")?;
+    assert_eq!(
+        error.error_code(),
+        Some(ErrorCode::BrowserDisconnected),
+        "hidden tabs must not disclose cached crash knowledge ahead of ordinary admission"
+    );
+    assert!(native.get_tab_info.load(Ordering::SeqCst) > 0);
+
+    let tab = ScriptedTab::new(CrashedTab {
+        profile_targeting: true,
+        ..CrashedTab::default()
+    });
+    let connection = Arc::clone(&tab) as Arc<dyn CdpConnection>;
+    let browser = BrowserSession::new_with_native(
+        connection,
+        BrowserSessionHooks::default(),
+        NativeCapabilities::from_browseros_version(Some("0.51.1.3")),
+    );
+    let view = BrowserView::capture(
+        Arc::clone(&browser),
+        Some(TargetBinding {
+            intent: TargetIntent {
+                browser_profile_id: BrowserProfileId("test".to_owned()),
+                directory: "Test".to_owned(),
+                name: "Test".to_owned(),
+                window: None,
+            },
+            revision: 1,
+        }),
+        None,
+    )
+    .await;
+    assert!(
+        view.scope()?.is_some(),
+        "the control must retain captured authority"
+    );
+    let listed = browser.pages.list().await?;
+    let page = listed.first().ok_or("the bound native tab is listed")?;
+    let run = ScriptedRun {
+        playwright: Playwright::new(Arc::clone(&browser)),
+        env: TestEnv::over(view),
+        page: serde_json::from_value(json!({ "$neo": "page", "tab": page.tab_id }))?,
+    };
+    crash_event(&run, &tab).await?;
+    tab.reconnect();
+    let error = run
+        .playwright
+        .invoke(
+            &run.env,
+            Op::from_name("page.title").ok_or("page.title")?,
+            json!({ "page": run.page }),
+        )
+        .await
+        .err()
+        .ok_or("Core must reject stale captured authority")?;
+    assert_eq!(
+        error.error_code(),
+        Some(ErrorCode::TargetClosed),
+        "a bound view's epoch rejection must precede remembered crash refusal"
+    );
+    assert!(!run.env.calls().contains(&EnvCall::MarkSent));
     Ok(())
 }
 
@@ -556,7 +858,6 @@ fn target_crashed_classification_accepts_only_the_exact_protocol_reply() {
 async fn target_crashed_refusal_does_not_wait_for_an_unread_listener() -> TestResult {
     use crate::events::{PageEventKind, Subscription};
     use browseros_core::TargetId;
-
     let tab = ScriptedTab::new(CrashedTab::default());
     let run = ScriptedRun::over(&tab).await?;
     crash_event(&run, &tab).await?;
