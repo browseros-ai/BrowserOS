@@ -19,6 +19,72 @@ pub struct Config {
     pub cpu_guard: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Rung {
+    fps: f32,
+    crf_add: f32,
+    scale: Scale,
+}
+
+/// Both pressure sources choose from the same ordered picture settings.
+struct Ladder {
+    rungs: Vec<Rung>,
+    floor: usize,
+    cap: usize,
+    half: Option<usize>,
+    low: Option<usize>,
+}
+
+impl Ladder {
+    fn new(cfg: Config) -> Self {
+        let top = Rung {
+            fps: cfg.max_fps,
+            crf_add: 0.0,
+            scale: Scale::Full,
+        };
+        let mut rungs = vec![top];
+        for fps in [30.0, 20.0, 15.0] {
+            if fps < cfg.max_fps {
+                rungs.push(Rung { fps, ..top });
+            }
+        }
+        let floor = rungs.len() - 1;
+        let full = rungs[floor];
+        let mut crf_add = 0.0;
+        while crf_add < cfg.crf_range {
+            crf_add = (crf_add + 2.0_f32).min(cfg.crf_range);
+            rungs.push(Rung { crf_add, ..full });
+        }
+        let cap = rungs.len() - 1;
+        let half = cfg.adaptive_size.then(|| {
+            rungs.push(Rung {
+                scale: Scale::Half,
+                ..rungs[cap]
+            });
+            rungs.len() - 1
+        });
+        let low = (10.0 <= 0.8 * full.fps).then(|| {
+            rungs.push(Rung {
+                fps: 10.0,
+                ..rungs[half.unwrap_or(floor)]
+            });
+            rungs.len() - 1
+        });
+        Self {
+            rungs,
+            floor,
+            cap,
+            half,
+            low,
+        }
+    }
+}
+
+#[derive(Default)]
+struct Level {
+    at: usize,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Plan {
     pub scale: Scale,
@@ -95,6 +161,9 @@ struct Idr {
 
 pub struct Picture {
     cfg: Config,
+    ladder: Ladder,
+    link: Level,
+    cpu: Level,
     width: usize,
     soft: Vec<bool>,
     soft_minimum: usize,
@@ -140,6 +209,9 @@ impl Picture {
     pub fn new(cfg: Config, width: usize, height: usize, now: Instant) -> Self {
         Self {
             cfg,
+            ladder: Ladder::new(cfg),
+            link: Level::default(),
+            cpu: Level::default(),
             width,
             soft: vec![false; height],
             soft_minimum: 0,
@@ -204,10 +276,12 @@ impl Picture {
     }
 
     pub fn crf(&self) -> f32 {
-        self.crf
+        self.crf + self.ladder.rungs[self.link.at].crf_add
     }
     pub fn fps(&self) -> f32 {
         self.fps
+            .min(self.ladder.rungs[self.link.at].fps)
+            .min(self.ladder.rungs[self.cpu.at].fps)
     }
     pub fn link_kbps(&self) -> u32 {
         self.link_kbps
@@ -232,7 +306,12 @@ impl Picture {
     }
 
     fn motion_scale(&self) -> Scale {
-        if self.cfg.adaptive_size && (self.cpu_half || self.link_half.is_some()) {
+        if self.ladder.half.is_some()
+            && (self.cpu_half
+                || self.link_half.is_some()
+                || self.ladder.rungs[self.cpu.at].scale == Scale::Half
+                || self.ladder.rungs[self.link.at].scale == Scale::Half)
+        {
             Scale::Half
         } else {
             Scale::Full
@@ -542,9 +621,10 @@ impl Picture {
                 self.backoff = Duration::from_secs(2);
             }
         }
-        self.crf = self
-            .crf
-            .clamp(self.cfg.base_crf, self.cfg.base_crf + self.cfg.crf_range);
+        self.crf = self.crf.clamp(
+            self.cfg.base_crf,
+            self.cfg.base_crf + self.ladder.rungs[self.ladder.cap].crf_add,
+        );
         if congested && link.delivered_kbps > 100.0 {
             self.link_kbps = (link.delivered_kbps * 0.85) as u32;
         } else if !congested {
@@ -728,6 +808,51 @@ mod tests {
             100_000,
             Duration::from_secs_f32(800.0 / kbps) + Duration::from_millis(30),
             Duration::from_millis(30),
+        );
+    }
+
+    #[test]
+    fn tests_that_fps_rungs_follow_the_configured_max() {
+        for (max_fps, expected) in [
+            (60.0, &[60.0, 30.0, 20.0, 15.0][..]),
+            (30.0, &[30.0, 20.0, 15.0]),
+            (24.0, &[24.0, 20.0, 15.0]),
+            (19.5, &[19.5, 15.0]),
+            (15.0, &[15.0]),
+            (10.0, &[10.0]),
+        ] {
+            let ladder = Ladder::new(Config {
+                max_fps,
+                crf_range: 5.0,
+                ..cfg()
+            });
+            let rates: Vec<_> = ladder.rungs[..=ladder.floor]
+                .iter()
+                .map(|r| r.fps)
+                .collect();
+            assert_eq!(rates, expected);
+            let quality: Vec<_> = ladder.rungs[ladder.floor + 1..=ladder.cap]
+                .iter()
+                .map(|r| r.crf_add)
+                .collect();
+            assert_eq!(quality, [2.0, 4.0, 5.0]);
+            assert_eq!(ladder.half, Some(ladder.cap + 1));
+            assert_eq!(ladder.low.is_some(), max_fps > 10.0);
+        }
+        let fixed = Ladder::new(Config {
+            adaptive_size: false,
+            crf_range: 0.0,
+            ..cfg()
+        });
+        assert_eq!(fixed.floor, fixed.cap);
+        assert_eq!(fixed.half, None);
+        assert_eq!(
+            fixed.rungs[fixed.low.unwrap()],
+            Rung {
+                fps: 10.0,
+                crf_add: 0.0,
+                scale: Scale::Full
+            }
         );
     }
 
