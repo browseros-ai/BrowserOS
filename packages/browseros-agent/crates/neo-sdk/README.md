@@ -178,6 +178,30 @@ Use Bun 1.4.2 in `neo-playwright-js` for `bun run build`, `bun run build:check` 
 Regenerate the host contract from the agent root with `bun run codegen:neo-sdk-api`; never
 edit `neo-sdk-api/src/generated` by hand.
 
+Run every real-browser SDK suite on Linux with the browser version in
+`neo-server/docker/browser.lock` installed, from `packages/browseros-agent`:
+
+```sh
+CARGO_PROFILE_TEST_OPT_LEVEL=2 CARGO_PROFILE_DEV_OPT_LEVEL=2 \
+NEO_E2E_BROWSER=/usr/bin/browserclaw python3 crates/neo-sdk/live.py
+```
+
+The test profile is optimized at level 2 through the environment; repository Cargo profiles
+are unchanged. The live host processes large console events with the row's existing deadlines.
+The command compiles all 22 `neo-playwright` live targets and `neo-server`'s
+`acceptance_browseros` once. Each suite runs through `bun run test:browser` with
+`--ignored --test-threads=1`. Independent test clients share browser tabs inside a
+suite, so serial execution prevents one client's cleanup from clearing another's
+emulation. Each suite gets a fresh private browser. The acceptance rig also gets
+`CLAW_SDK_E2E_BROWSER` from the selected executable so its four rows actually run.
+The report in `.llm/sdk-live` contains the compile duration, optimization settings, counts,
+commands, logs, and per-suite outcomes. CI reports its measured compile cost in the job summary.
+A failed row, launcher failure, timeout, or empty selection fails the command.
+
+The separate `Neo SDK live / linux-x64` GitHub check runs the same command for SDK
+pull requests. It installs the checksum-pinned browser and the SDK image's fonts,
+and uploads the report and browser cleanup receipts. `check.sh` remains browser-free.
+
 Release and protocol identities remain `claw-sdk`, `browseros-claw-sdk`, the existing version
 marker, MCP name and `CLAW_*` environment variables. The package rename changes tracing
 targets to `neo_captcha::…` and `neo_screencast::…`, including in desktop logs. Custom `CLAW_LOG`

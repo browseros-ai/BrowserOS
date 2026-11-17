@@ -72,6 +72,16 @@ def execute(command, environment, log, timeout):
     }
 
 
+
+def publish_summary(output, lines, environment):
+    """Keep the same compile cost and suite counts in local artifacts and the CI summary."""
+    text = "\n".join(lines) + "\n"
+    (output / "summary.md").write_text(text)
+    if summary := environment.get("GITHUB_STEP_SUMMARY"):
+        with Path(summary).open("a") as destination:
+            destination.write(text)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, default=AGENT / ".llm/sdk-live")
@@ -81,51 +91,76 @@ def main():
         parser.error("--repeat must be positive")
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
-    suites = sorted(
-        path.stem for path in (SDK / "neo-playwright/tests").glob("*_live.rs")
-    )
+    suites = [
+        ("neo-playwright", path.stem)
+        for path in sorted((SDK / "neo-playwright/tests").glob("*_live.rs"))
+    ]
     if not suites:
         parser.error("no live suites found")
+    suites.append(("neo-server", "acceptance_browseros"))
 
     environment = os.environ.copy()
-    environment.update(
-        CARGO_BUILD_JOBS="4", CARGO_PROFILE_DEV_DEBUG="0", CARGO_PROFILE_TEST_DEBUG="0"
-    )
-    # The 112-million-pixel tall image exercises PNG's row filters and deflate encoder.
-    # Optimize only those test dependencies, preserving the test program and its oracles;
-    # an unoptimized codec can consume the screenshot's entire operation deadline.
+    environment.setdefault("CARGO_BUILD_JOBS", "4")
+    environment.setdefault("CARGO_PROFILE_DEV_DEBUG", "0")
+    environment.setdefault("CARGO_PROFILE_TEST_DEBUG", "0")
+    # Acceptance's owned-browser Rig can return early without this variable even
+    # when --ignored selected its rows. Give both browser consumers the same binary.
+    browser = environment.get("NEO_E2E_BROWSER") or environment.get("CLAW_SDK_E2E_BROWSER")
+    if not browser or not Path(browser).is_file() or not os.access(browser, os.X_OK):
+        parser.error("set NEO_E2E_BROWSER to the pinned browser executable")
+    environment.update(NEO_E2E_BROWSER=browser, CLAW_SDK_E2E_BROWSER=browser)
+    # CI selects test-profile optimisation through its environment: the live host must
+    # parse and distribute large console events within the same deadlines as production.
+    # Keep the tall-image codecs at level 3 even when the rest of the test build uses 2.
     cargo = [
         "cargo",
         "+1.98.0",
         "test",
         "--locked",
-        "-p",
-        "neo-playwright",
         "--config",
         "profile.test.package.png.opt-level=3",
         "--config",
         "profile.test.package.miniz_oxide.opt-level=3",
     ]
-    compile_command = ["nice", "-n", "10", *cargo, "--no-run"]
-    for suite in suites:
+    compile_command = [
+        "nice", "-n", "10", *cargo, "--no-run", "-p", "neo-playwright", "-p", "neo-server"
+    ]
+    for _package, suite in suites:
         compile_command.extend(["--test", suite])
-    report = {"suites": suites, "testThreads": 1, "runs": []}
+    report = {
+        "suites": [{"package": package, "target": suite} for package, suite in suites],
+        "testThreads": 1,
+        "build": {
+            "profile": "test",
+            "testOptLevel": environment.get("CARGO_PROFILE_TEST_OPT_LEVEL", "0"),
+            "devOptLevel": environment.get("CARGO_PROFILE_DEV_OPT_LEVEL", "0"),
+            "jobs": environment["CARGO_BUILD_JOBS"],
+        },
+        "runs": [],
+    }
     print(f"SDK live: compile {len(suites)} suites", flush=True)
     report["compile"] = execute(
         compile_command, environment, output / "compile.log", 900
     )
     (output / "results.json").write_text(json.dumps(report, indent=2) + "\n")
-    if report["compile"]["exitCode"]:
-        print((output / "compile.log").read_text())
-        return 1
-
-    browser = environment.get("NEO_E2E_BROWSER")
+    build = report["build"]
+    compile_note = (
+        f"Compile {len(suites)} integration targets: {report['compile']['wallSeconds']} s; "
+        f"test profile opt-level {build['testOptLevel']}, "
+        f"dev opt-level {build['devOptLevel']}, {build['jobs']} build jobs."
+    )
+    print(compile_note, flush=True)
     lines = [
+        "## SDK live suites", "", compile_note, "",
         "| Suite | Status | Pass | Fail | Ignored | Wall seconds |",
         "| --- | --- | ---: | ---: | ---: | ---: |",
     ]
+    if report["compile"]["exitCode"]:
+        print((output / "compile.log").read_text())
+        publish_summary(output, lines, environment)
+        return 1
     for repeat in range(1, args.repeat + 1):
-        for suite in suites:
+        for package, suite in suites:
             child_environment = environment.copy()
             if suite == "expect_live":
                 # This suite alone exercises the bundled takeover extension. The wrapper
@@ -143,6 +178,8 @@ def main():
                 "test:browser",
                 "--",
                 *cargo,
+                "-p",
+                package,
                 "--test",
                 suite,
                 "--",
@@ -154,7 +191,7 @@ def main():
             text = log.read_text(errors="replace")
             print(text, flush=True)
             summaries = list(SUMMARY.finditer(text))
-            result.update(suite=suite, repeat=repeat)
+            result.update(package=package, suite=suite, repeat=repeat)
             if len(summaries) == 1:
                 match = summaries[0]
                 result.update(
@@ -181,9 +218,7 @@ def main():
                 f"{result.get('ignored', '?')} | {result['wallSeconds']} |"
             )
             (output / "summary.md").write_text("\n".join(lines) + "\n")
-    if summary := environment.get("GITHUB_STEP_SUMMARY"):
-        with Path(summary).open("a") as destination:
-            destination.write("\n".join(lines) + "\n")
+    publish_summary(output, lines, environment)
     return int(any(not result["ok"] for result in report["runs"]))
 
 
