@@ -4,7 +4,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
  * Home for an ultrafast customer: the total tokens saved since this computer got ultrafast, read
- * off a ruled log scale with one needle, and a short ledger beside it. Free installs keep SavingsCard.
+ * off a ruler that spans the current stretch to the next milestone, and a short ledger beside it.
+ * Free installs keep SavingsCard.
  */
 
 import type {
@@ -29,12 +30,15 @@ import {
   meterNote,
   meterTokens,
   nextMilestone,
+  passedMilestone,
+  passedMilestones,
   rememberReading,
-  scaleMarks,
+  type ScaleSpan,
   scalePosition,
+  scaleSpan,
   scaleTicks,
-  scaleTop,
   tokensSavedSinceUltrafast,
+  trailCount,
 } from './energy-meter.helpers'
 import { BigNumber, INK, PANEL_SHADOW, Wordmark } from './InkPanel'
 import { timeSavedAmount } from './savings.helpers'
@@ -329,88 +333,142 @@ function Loading({ className }: { className?: string }) {
   )
 }
 
-/** The ruled log scale: ticks 1 to 9 per decade from 1k, milestones marked above, one needle. */
+/** The stretch from the last milestone passed to the next, ruled across the whole width, with the
+ * milestones passed before it folded into a trail at the left and one needle. */
 function Scale({ tokens }: { tokens: number }) {
-  const top = scaleTop(tokens)
+  const span = scaleSpan(tokens)
   const at = (value: number) =>
-    `${(scalePosition(value, top) * 100).toFixed(3)}%`
-  const marks = scaleMarks(tokens, top)
-  const lastPassed = marks.filter((mark) => mark.state === 'passed').pop()
-  const next = marks.find((mark) => mark.state === 'next')
+    `${(scalePosition(value, span) * 100).toFixed(3)}%`
+  const started = passedMilestone(tokens) !== null
+  const labels = scaleTicks(span).filter((tick) => {
+    // Round values between the ends, kept clear of the two end labels.
+    const position = scalePosition(tick.value, span)
+    return tick.major && position > 0.16 && position < 0.84
+  })
   return (
-    <div
-      role="img"
-      aria-label={`${meterTokens(tokens)} tokens saved, ${meterTokens(nextMilestone(tokens) - tokens)} to go to the next milestone`}
-      className="relative mx-0.5 mt-[26px] h-[46px]"
-    >
-      <span className="absolute inset-x-0 top-2.5 h-px bg-[rgb(238_243_255/0.26)]" />
-      <span
-        className="absolute top-2.5 left-0 h-px bg-[rgb(238_243_255/0.82)]"
-        style={{ width: at(tokens) }}
-      />
-      {scaleTicks(top).map((tick) => (
+    <div className="mt-[26px] flex gap-2.5">
+      <Trail tokens={tokens} />
+      <div
+        role="img"
+        aria-label={`${meterTokens(tokens)} tokens saved, ${meterTokens(span.to - tokens)} to go to the next milestone`}
+        className="relative mx-0.5 h-[46px] min-w-0 flex-1"
+      >
+        <span className="absolute inset-x-0 top-2.5 h-px bg-[rgb(238_243_255/0.26)]" />
         <span
-          key={tick.value}
-          className={cn(
-            'absolute top-2.5 -ml-[0.5px] w-px',
-            tick.decade ? 'h-3' : 'h-1.5',
-            tick.value <= tokens
-              ? 'bg-[rgb(238_243_255/0.82)]'
-              : 'bg-[rgb(238_243_255/0.26)]',
-          )}
-          style={{ left: at(tick.value) }}
+          className="absolute top-2.5 left-0 h-px bg-[rgb(238_243_255/0.82)]"
+          style={{ width: at(tokens) }}
         />
-      ))}
-      {marks.map((mark) => (
-        <svg
-          key={mark.value}
-          aria-hidden
-          data-mark={mark.state}
-          viewBox="0 0 9 7"
-          className="absolute top-0 -ml-[4.5px] h-[7px] w-[9px] overflow-visible"
-          style={{ left: at(mark.value) }}
-        >
-          <polygon
-            points="0.6,0.6 8.4,0.6 4.5,6.4"
-            strokeWidth={mark.state === 'next' ? 1.4 : 1.2}
+        {scaleTicks(span).map((tick) => (
+          <span
+            key={tick.value}
             className={cn(
-              mark.state === 'passed' && 'fill-[#eef3ff] stroke-[#eef3ff]',
-              mark.state === 'next' && 'fill-none stroke-[#9cc0ff]',
-              mark.state === 'ahead' &&
-                'fill-none stroke-[rgb(238_243_255/0.26)]',
+              'absolute top-2.5 -ml-[0.5px] w-px',
+              tick.major ? 'h-3' : 'h-1.5',
+              tick.value <= tokens
+                ? 'bg-[rgb(238_243_255/0.82)]'
+                : 'bg-[rgb(238_243_255/0.26)]',
             )}
+            style={{ left: at(tick.value) }}
           />
-        </svg>
-      ))}
-      {marks.map((mark, index) => (
+        ))}
+        {started ? <Mark state="passed" left="0%" /> : null}
+        <Mark state="next" left="100%" />
         <span
-          key={mark.value}
           className={cn(
-            'absolute top-7 whitespace-nowrap font-mono text-[10.5px] tabular-nums leading-none',
-            index === marks.length - 1
-              ? '-translate-x-full'
-              : '-translate-x-1/2',
-            mark.state === 'passed' && INK.ink2,
-            mark.state === 'next' && INK.accent,
-            mark.state === 'ahead' && INK.ink3,
-            // Narrow, only the last milestone passed and the next one keep their numbers.
-            mark !== lastPassed && mark !== next && '@max-2xl:hidden',
+            'absolute top-7 left-0 whitespace-nowrap font-mono text-[10.5px] tabular-nums leading-none',
+            started ? INK.ink2 : 'text-[rgb(238_243_255/0.42)]',
           )}
-          style={{ left: at(mark.value) }}
         >
-          {meterTokens(mark.value)}
+          {meterTokens(span.from)}
         </span>
-      ))}
-      <Needle tokens={tokens} top={top} />
+        {labels.map((tick) => (
+          <span
+            key={tick.value}
+            className="absolute top-7 @max-2xl:hidden -translate-x-1/2 whitespace-nowrap font-mono text-[10.5px] text-[rgb(238_243_255/0.42)] tabular-nums leading-none"
+            style={{ left: at(tick.value) }}
+          >
+            {meterTokens(tick.value)}
+          </span>
+        ))}
+        <span
+          className={cn(
+            'absolute top-7 left-full -translate-x-full whitespace-nowrap font-mono text-[10.5px] tabular-nums leading-none',
+            INK.accent,
+          )}
+        >
+          {meterTokens(span.to)}
+        </span>
+        {/* A new stretch remounts the needle, so it starts from the last reading on the new ruler. */}
+        <Needle key={span.from} tokens={tokens} span={span} />
+      </div>
     </div>
   )
 }
 
-function Needle({ tokens, top }: { tokens: number; top: number }) {
-  const to = scalePosition(tokens, top)
+/** A milestone mark above the ruler: filled once passed, outlined for the next one. */
+function Mark({ state, left }: { state: 'passed' | 'next'; left: string }) {
+  return (
+    <svg
+      aria-hidden
+      data-mark={state}
+      viewBox="0 0 9 7"
+      className="absolute top-0 -ml-[4.5px] h-[7px] w-[9px] overflow-visible"
+      style={{ left }}
+    >
+      <polygon
+        points="0.6,0.6 8.4,0.6 4.5,6.4"
+        strokeWidth={state === 'next' ? 1.4 : 1.2}
+        className={
+          state === 'passed'
+            ? 'fill-[#eef3ff] stroke-[#eef3ff]'
+            : 'fill-none stroke-[#9cc0ff]'
+        }
+      />
+    </svg>
+  )
+}
+
+/** The milestones passed before the current stretch, as small marks and a count. */
+function Trail({ tokens }: { tokens: number }) {
+  const count = trailCount(tokens)
+  if (count === 0) return null
+  const shown = passedMilestones(tokens).slice(0, count).slice(-6)
+  return (
+    <div aria-hidden className="relative h-[46px] w-[54px] shrink-0">
+      <div className="flex h-[7px] gap-0.5 overflow-hidden">
+        {shown.map((milestone) => (
+          <svg
+            key={milestone}
+            aria-hidden
+            viewBox="0 0 9 7"
+            className="h-1.5 w-[7px] shrink-0"
+          >
+            <polygon
+              points="0.6,0.6 8.4,0.6 4.5,6.4"
+              strokeWidth={1}
+              className="fill-[#eef3ff] stroke-[#eef3ff]"
+            />
+          </svg>
+        ))}
+      </div>
+      <span className="absolute top-2.5 -right-2.5 left-0 border-[rgb(238_243_255/0.82)] border-t border-dotted" />
+      <span
+        className={cn(
+          'absolute top-7 left-0 whitespace-nowrap font-mono text-[10.5px] leading-none',
+          INK.ink3,
+        )}
+      >
+        {count} passed
+      </span>
+    </div>
+  )
+}
+
+function Needle({ tokens, span }: { tokens: number; span: ScaleSpan }) {
+  const to = scalePosition(tokens, span)
   const [shown, setShown] = useState(() => {
     const last = lastReading()
-    return last === null || prefersStill() ? to : scalePosition(last, top)
+    return last === null || prefersStill() ? to : scalePosition(last, span)
   })
   // The needle moves once, from the last reading this computer saw; that reading lives in browser storage.
   useEffect(() => {

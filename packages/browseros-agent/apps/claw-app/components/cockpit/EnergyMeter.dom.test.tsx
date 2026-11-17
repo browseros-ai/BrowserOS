@@ -32,7 +32,7 @@ const globalDescriptors = new Map(
 )
 
 const { EnergyMeter } = await import('./EnergyMeter')
-const { scalePosition, scaleTop } = await import('./energy-meter.helpers')
+const { scalePosition, scaleSpan } = await import('./energy-meter.helpers')
 const { SavingsHero } = await import('@/screens/pro/SavingsHero')
 const { MemoryRouter } = await import('react-router')
 
@@ -203,34 +203,43 @@ describe('the ultrafast meter', () => {
     ).toBe(true)
   })
 
-  it('marks the milestones passed and outlines the next one', async () => {
+  it('rules the stretch from the last milestone to the next, with the earlier ones in a trail', async () => {
     await render(query({}))
     const states = [...body.querySelectorAll('[data-mark]')].map((mark) =>
       mark.getAttribute('data-mark'),
     )
-    expect(states).toEqual([
-      'passed',
-      'passed',
-      'passed',
-      'next',
-      'ahead',
-      'ahead',
-    ])
+    expect(states).toEqual(['passed', 'next'])
+    const ruler = body.querySelector('[role="img"]')?.textContent ?? ''
+    expect(ruler.startsWith('250k')).toBe(true)
+    expect(ruler.endsWith('500k')).toBe(true)
+    // 10k, 25k, 50k and 100k were passed before this stretch.
+    expect(text()).toContain('4 passed')
+  })
+
+  it('starts a first stretch at 0 with no trail', async () => {
+    await render(query({ data: at(6_118) }))
+    expect(
+      [...body.querySelectorAll('[data-mark]')].map((mark) =>
+        mark.getAttribute('data-mark'),
+      ),
+    ).toEqual(['next'])
+    expect(text()).not.toMatch(/\d passed/)
+    expect(text()).toContain('3.9k to go to 10k')
   })
 
   it('moves the needle once from the last reading on this computer', async () => {
     reducedMotion = false
-    storage.set('ultrafastMeterReading:v1', '200000')
+    storage.set('ultrafastMeterReading:v1', '251000')
     await render(query({}))
     const from = needle()
     await act(async () => new Promise((resolve) => setTimeout(resolve, 40)))
     const to = needle()
     expect(from).not.toBe(to)
     expect(to).toContain(
-      `translateX(${scalePosition(253_678, scaleTop(253_678)) * 100}%)`,
+      `translateX(${scalePosition(253_678, scaleSpan(253_678)) * 100}%)`,
     )
     expect(from).toContain(
-      `translateX(${scalePosition(200_000, scaleTop(253_678)) * 100}%)`,
+      `translateX(${scalePosition(251_000, scaleSpan(253_678)) * 100}%)`,
     )
     expect(storage.get('ultrafastMeterReading:v1')).toBe('253678')
   })
@@ -244,14 +253,29 @@ describe('the ultrafast meter', () => {
   })
 
   it('says a milestone crossed while Home is open', async () => {
-    await render(query({ data: at(61_000) }))
-    expect(text()).toContain('39k to go to 100k')
-    expect(text()).not.toContain('passed')
+    await render(query({ data: at(80_000) }))
+    expect(text()).toContain('20k to go to 100k')
+    expect(text()).toContain('Passed 50k')
 
     // The next poll brings the total past 100k without leaving Home.
     await render(query({ data: at(101_500) }))
     expect(text()).toContain('You just passed 100k')
     expect(text()).toContain('149k to go to 250k')
+  })
+
+  it('starts the needle from the left end of a new stretch when a milestone is crossed', async () => {
+    reducedMotion = false
+    await render(query({ data: at(80_000) }))
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 40)))
+    expect(storage.get('ultrafastMeterReading:v1')).toBe('80000')
+
+    // The next poll crosses 100k: the ruler becomes 100k to 250k and the last reading sits before it.
+    await render(query({ data: at(101_500) }))
+    expect(needle()).toContain('translateX(0%)')
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 40)))
+    expect(needle()).toContain(
+      `translateX(${scalePosition(101_500, scaleSpan(101_500)) * 100}%)`,
+    )
   })
 
   it('lays the panel out with container queries from a wrapper', async () => {
