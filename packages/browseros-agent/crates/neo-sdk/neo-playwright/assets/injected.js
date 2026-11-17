@@ -11190,6 +11190,8 @@ ${value.stack}`;
   function facesFromHits(world, hits, page) {
     const found = new Map;
     for (const hit of hits) {
+      if (!hit.observed)
+        continue;
       let path = hit.path;
       let element = hit.face;
       let peeled = false;

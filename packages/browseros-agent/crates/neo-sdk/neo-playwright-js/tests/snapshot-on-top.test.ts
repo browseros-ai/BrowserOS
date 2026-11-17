@@ -1,7 +1,14 @@
 /** Page-survey facts cross Rust as pinned words; only their whole-view content moves. */
 import { expect, it } from 'bun:test'
 import { renderFullSnapshot } from '../src/prelude/snapshot'
-import { NO_CHANGE, renderDelta } from '../src/prelude/snapshot-delta'
+import {
+  NO_BASELINE,
+  NO_CHANGE,
+  NO_TIME,
+  renderDelta,
+  renderUncompared,
+  TOO_MUCH,
+} from '../src/prelude/snapshot-delta'
 import { renderSnapshotV1 } from '../src/prelude/snapshot-v1'
 import type { SnapshotResult } from '../src/prelude/wire'
 
@@ -73,7 +80,20 @@ it('keeps on-top words ahead of inert counts and outside delta hunks', () => {
   const whole = renderSnapshotV1(current, options)
   expect(whole.text.startsWith(`${head}\n# not listed:`)).toBe(true)
   const delta = renderDelta({ text: whole.text, form: whole.form }, current, {})
-  expect(delta.returned).toBe(`${head}\n${NO_CHANGE}`)
+  expect(delta.returned).toBe(`${NO_CHANGE}\n${head}`)
+  for (const [text, status] of [
+    [renderDelta(null, current, {}).returned, NO_BASELINE],
+    [
+      renderDelta({ text: whole.text, form: whole.form }, current, {
+        urls: true,
+      }).returned,
+      TOO_MUCH,
+    ],
+    [renderUncompared(current, {}), NO_TIME],
+  ]) {
+    expect(text.startsWith(`${status}\n${head}\n`)).toBe(true)
+    expect(text.match(/# on top:/g)?.length).toBe(1)
+  }
 })
 
 it('names a removed layer once and never puts its head in a hunk', () => {
@@ -85,7 +105,10 @@ it('names a removed layer once and never puts its head in a hunk', () => {
     current,
     {},
   )
-  expect(delta.returned.startsWith(`${gone}\n`)).toBe(true)
+  expect(delta.returned.split('\n')[0]).toMatch(
+    /^# (?:no change |changes |whole page:)/,
+  )
+  expect(delta.returned.split('\n')[1]).toBe(gone)
   expect(delta.returned).not.toMatch(
     /^[+ -]# (?:on top| {3}its controls|no longer on top):/m,
   )

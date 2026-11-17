@@ -293,6 +293,9 @@ function facesFromHits(
 ): Map<Element, Face> {
   const found = new Map<Element, Face>()
   for (const hit of hits) {
+    // Samples provide reach only. Without a covered control, even a fixed app shell must
+    // not trigger the lazy document count or become a layer.
+    if (!hit.observed) continue
     let path = hit.path
     let element: Element | undefined = hit.face
     let peeled = false

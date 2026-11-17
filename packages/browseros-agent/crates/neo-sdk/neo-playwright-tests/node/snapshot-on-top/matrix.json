@@ -232,7 +232,7 @@
     },
     "expectedControls": 2,
     "expectedNotes": [],
-    "why": "Use the click module\u2019s predicate for a press that lands by itself; never duplicate its label test."
+    "why": "Use the click module’s predicate for a press that lands by itself; never duplicate its label test."
   },
   {
     "id": "d01-textbox",
@@ -501,7 +501,7 @@
         "flags": []
       }
     ],
-    "why": "Dialog stands on the backdrop at its own centre; describe it with the pair\u2019s reach, retain the cover identity."
+    "why": "Dialog stands on the backdrop at its own centre; describe it with the pair’s reach, retain the cover identity."
   },
   {
     "id": "e02-fixed-page",
@@ -513,7 +513,7 @@
     },
     "expectedControls": 19,
     "expectedNotes": [],
-    "why": "Independent row for the plan\u2019s fixed-page false positive; no external control is covered."
+    "why": "Independent row for the plan’s fixed-page false positive; no external control is covered."
   },
   {
     "id": "e03-popup-three",
@@ -995,5 +995,18 @@
     "why": "Dialog ancestry, including a dialog with no ref, does not make its plain carrier the page.",
     "firstText": "Read this first",
     "noRefDialog": "Boxless sign in"
+  },
+  {
+    "id": "e24-quiet-fixed-shell",
+    "title": "Fixed app shell with no covered control",
+    "file": "pages/e24-quiet-fixed-shell.html",
+    "viewport": {
+      "width": 1280,
+      "height": 800
+    },
+    "expectedControls": 3,
+    "expectedNotes": [],
+    "zeroCountPhase": true,
+    "why": "Samples hit the fixed shell, but every control is clear: no layer exists and the lazy document count never runs."
   }
 ]

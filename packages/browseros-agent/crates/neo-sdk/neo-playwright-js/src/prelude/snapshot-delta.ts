@@ -82,8 +82,8 @@ export function renderDelta(
     const whole = renderSnapshotV1(result, withDefaults(passed))
     return {
       returned: [
-        ...onTopHead(result),
         NO_BASELINE,
+        ...onTopHead(result),
         withoutTop(whole.text),
       ].join('\n'),
       baseline: whole,
@@ -93,11 +93,17 @@ export function renderDelta(
   if (agrees(passed, form)) {
     const current = renderSnapshotV1As(result, form)
     const changes = listChanges(stored.text, current)
-    if (changes !== null)
+    if (changes !== null) {
+      // Hosts use the first line to distinguish unchanged, changed and whole-page reads.
+      // Layer facts follow that status and stay outside every diff hunk.
+      const [status, ...body] = changes.split('\n')
       return {
-        returned: [...onTopDelta(stored.text, result), changes].join('\n'),
+        returned: [status, ...onTopDelta(stored.text, result), ...body].join(
+          '\n',
+        ),
         baseline: { text: current, form },
       }
+    }
   }
   // The whole page: what the call passed, the rest from the baseline's form. A `text` neither
   // call passed goes back to the length rule, since a whole page is a new snapshot and that rule
@@ -110,8 +116,8 @@ export function renderDelta(
   })
   return {
     returned: [
-      ...onTopDelta(stored.text, result),
       TOO_MUCH,
+      ...onTopDelta(stored.text, result),
       withoutTop(whole.text),
     ].join('\n'),
     baseline: whole,
@@ -128,8 +134,8 @@ export function renderUncompared(
   passed: PassedV1Options,
 ): string {
   return [
-    ...onTopHead(result),
     NO_TIME,
+    ...onTopHead(result),
     withoutTop(renderSnapshotV1(result, withDefaults(passed)).text),
   ].join('\n')
 }
@@ -429,7 +435,7 @@ function indentOf(line: string): number {
   return line.length - line.trimStart().length
 }
 
-/** The pinned survey head is attached once, before a delta's own status line. */
+/** Layer facts follow the delta's status once; a whole-page body cannot repeat them. */
 function withoutTop(text: string): string {
   return text
     .split('\n')

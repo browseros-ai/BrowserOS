@@ -3439,19 +3439,24 @@ async fn tests_that_on_top_delta_heads_follow_the_returned_snapshot() -> TestRes
     assert!(
         covered
             .as_str()
-            .is_some_and(|text| text.starts_with("# on top: dialog \"Read first\"")),
+            .and_then(|text| text.lines().nth(1))
+            .is_some_and(|line| line.starts_with("# on top: dialog \"Read first\"")),
         "{covered}"
     );
     let unchanged =
         js_runner::run_script(&host, &init, "return await page.ariaSnapshot({delta:true})").await?;
     run.end_run(Some(&unchanged));
     let text = unchanged.as_str().ok_or("the unchanged snapshot")?;
-    assert!(
-        text.starts_with("# on top: dialog \"Read first\""),
+    let mut lines = text.lines();
+    assert_eq!(
+        lines.next(),
+        Some("# no change since your last snapshot of this tab"),
         "{text}"
     );
     assert!(
-        text.ends_with("# no change since your last snapshot of this tab"),
+        lines
+            .next()
+            .is_some_and(|line| line.starts_with("# on top: dialog \"Read first\"")),
         "{text}"
     );
     let unread = js_runner::run_script(&host, &init, "await page.getByRole('button', {name:'Close', exact:true}).click(); await page.ariaSnapshot(); return 'not a page read'").await?;
@@ -3465,7 +3470,9 @@ async fn tests_that_on_top_delta_heads_follow_the_returned_snapshot() -> TestRes
     run.end_run(Some(&removed));
     let text = removed.as_str().ok_or("the closed layer's snapshot")?;
     assert!(
-        text.starts_with("# no longer on top: dialog \"Read first\""),
+        text.lines()
+            .nth(1)
+            .is_some_and(|line| line.starts_with("# no longer on top: dialog \"Read first\"")),
         "{text}"
     );
     assert!(
@@ -3554,6 +3561,24 @@ async fn tests_that_on_top_survey_counts_match_each_fixture() -> TestResult {
                 "{} tested {counts:?}, expected {expected:?}",
                 row["id"]
             ));
+        }
+        if row["zeroCountPhase"] == true {
+            let phases: Vec<_> = log
+                .iter()
+                .filter(|line| line.contains("cover survey phases:"))
+                .collect();
+            // A quiet fixed shell seeds samples, but no covered control authorizes the
+            // document-wide count. Zero is exact because that phase must never run.
+            if phases.len() != expected.len()
+                || phases
+                    .iter()
+                    .any(|line| !line.contains(", count 0.000 ms,"))
+            {
+                failures.push(format!(
+                    "{} quiet page must skip the document count: {phases:?}",
+                    row["id"]
+                ));
+            }
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));

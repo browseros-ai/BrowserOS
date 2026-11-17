@@ -8329,8 +8329,8 @@ ${value.stack}`;
       const whole = renderSnapshotV1(result, withDefaults(passed));
       return {
         returned: [
-          ...onTopHead(result),
           NO_BASELINE,
+          ...onTopHead(result),
           withoutTop(whole.text)
         ].join(`
 `),
@@ -8341,12 +8341,15 @@ ${value.stack}`;
     if (agrees(passed, form)) {
       const current = renderSnapshotV1As(result, form);
       const changes = listChanges(stored.text, current);
-      if (changes !== null)
+      if (changes !== null) {
+        const [status, ...body] = changes.split(`
+`);
         return {
-          returned: [...onTopDelta(stored.text, result), changes].join(`
+          returned: [status, ...onTopDelta(stored.text, result), ...body].join(`
 `),
           baseline: { text: current, form }
         };
+      }
     }
     const whole = renderSnapshotV1(result, {
       text: passed.text ?? passedText(form.text),
@@ -8356,8 +8359,8 @@ ${value.stack}`;
     });
     return {
       returned: [
-        ...onTopDelta(stored.text, result),
         TOO_MUCH,
+        ...onTopDelta(stored.text, result),
         withoutTop(whole.text)
       ].join(`
 `),
@@ -8366,8 +8369,8 @@ ${value.stack}`;
   }
   function renderUncompared(result, passed) {
     return [
-      ...onTopHead(result),
       NO_TIME,
+      ...onTopHead(result),
       withoutTop(renderSnapshotV1(result, withDefaults(passed)).text)
     ].join(`
 `);
