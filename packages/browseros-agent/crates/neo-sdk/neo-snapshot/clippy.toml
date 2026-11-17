@@ -1,0 +1,36 @@
+# claw-sdk's clippy configuration: copy to crates/neo-sdk/neo-server/clippy.toml.
+#
+# Clippy reads clippy.toml from the crate's manifest directory first, so this file applies to
+# claw-sdk alone, also under the workspace-wide `cargo clippy --workspace` in CI.
+# crates/neo-sdk/neo-playwright carries a copy; tests/style_boundaries.rs keeps the two equal.
+
+# Tests may panic and index: a failing assertion is the point of a test (Google allows it).
+allow-panic-in-tests = true
+allow-indexing-slicing-in-tests = true
+
+# Google: import types and call free functions through their module. Two segments allow
+# `mem::take` and `io::Error`; three (`std::mem::take`) must be imported.
+absolute-paths-max-segments = 2
+
+# Google: enums over bool params. One bool can read clearly (`set_enabled(true)`); two never do
+# (`fill(true, false)`).
+max-fn-params-bools = 1
+
+# Project words that are not Rust items, so `doc_markdown` does not demand backticks.
+doc-valid-idents = ["BrowserOS", "QuickJS", "JavaScript", "TypeScript", "WebSocket", "reCAPTCHA",
+                    "hCaptcha", "GeeTest", "OAuth", "..",]
+
+# Skeleton D6.10: the dispatcher holds no lock across an await. std guards are already caught by
+# the default `await_holding_lock`; this adds tokio's. A leaf that holds a lease across awaits on
+# purpose (viewport, CAPTCHA reservation) writes `#[expect(clippy::await_holding_invalid_type,
+# reason = "...")]`, so each one is visible in review.
+await-holding-invalid-types = [
+    { path = "tokio::sync::MutexGuard", reason = "no lock across an await (skeleton D6.10)" },
+    { path = "tokio::sync::RwLockReadGuard", reason = "no lock across an await (skeleton D6.10)" },
+    { path = "tokio::sync::RwLockWriteGuard", reason = "no lock across an await (skeleton D6.10)" },
+]
+
+disallowed-methods = [
+    # A blocking sleep stalls a tokio worker and every run scheduled on it.
+    { path = "std::thread::sleep", reason = "blocks a tokio worker", replacement = "tokio::time::sleep" },
+]
