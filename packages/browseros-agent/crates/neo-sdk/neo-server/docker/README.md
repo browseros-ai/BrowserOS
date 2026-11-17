@@ -203,6 +203,19 @@ returns bytes. Returning those bytes from `run` yields an inline result or a hos
 large. It does not create a download or accept a `path` option. For an actual download, await
 `download.path()` before importing its host endpoint.
 
+### Moving between browser versions
+
+Under the image's hosted settings, moving between browser 0.52.1.2 and 0.53.0 in either direction
+preserves cookies, localStorage, IndexedDB, browser history and Neo's own records. The browser's
+`Web Data` and `Account Web Data` databases are rewritten in place in each version's format. In
+the hosted profiles tested, their autofill tables were empty and the keyword rows survived the
+move back.
+
+The image disables address and credit-card autofill, password-save prompts and password-leak
+detection through managed policies. A host that enables the browser's own autofill is outside
+this measured compatibility. Neo's records live separately from the browser profile; the SDK's
+[trace-store rollback rule](#trace-store-upgrades-and-rollback) still applies when its schema changes.
+
 ### Trace-store upgrades and rollback
 
 This image advances the trace-store fence from 6 to 7 for the nullable `runs.access` column.
