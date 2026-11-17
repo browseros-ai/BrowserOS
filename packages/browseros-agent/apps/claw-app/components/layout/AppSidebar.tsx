@@ -6,6 +6,7 @@
 
 import type { ReactNode } from 'react'
 import { Link, useHref, useLocation } from 'react-router'
+import { UltrafastWordmark } from '@/components/audit/UltrafastMarks'
 import { HarnessIcon } from '@/components/harness/HarnessIcon'
 import { isUserFacingHarness } from '@/components/harness/harness.types'
 import { AnimatedBadge } from '@/components/motion/animated-badge'
@@ -61,7 +62,7 @@ function NavLinkButton({ item, badge }: { item: NavItem; badge?: ReactNode }) {
       icon={<Icon className="size-[18px]" strokeWidth={1.75} />}
       className={cn('text-[15px]', active && 'font-semibold text-primary')}
     >
-      {item.name}
+      {item.name === 'ultrafast' ? <UltrafastWordmark /> : item.name}
     </AnimatedSidebarMenuButton>
   )
 }

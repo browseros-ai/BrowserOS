@@ -180,13 +180,13 @@ function stepsLabel(steps: number): string {
   return steps === 1 ? '1 step' : `${steps} steps`
 }
 
-/** History card pill for a task where neo used pursue: what neo did, in one short phrase. */
-export function pursuePill(pursue: SessionPursueRun): string {
+/** What neo did in a pursue task, in one short phrase after the wordmark. */
+export function pursueNote(pursue: SessionPursueRun): string {
   if (pursue.outcome === 'completed') {
-    return `ultrafast · neo did it in ${ultrafastTime(pursue.durationMs)}`
+    return `neo did it in ${ultrafastTime(pursue.durationMs)}`
   }
-  if (pursue.steps.length === 0) return 'ultrafast · neo handed back'
-  return `ultrafast · neo did ${stepsLabel(pursue.steps.length)}`
+  if (pursue.steps.length === 0) return 'neo handed back'
+  return `neo did ${stepsLabel(pursue.steps.length)}`
 }
 
 /**

@@ -21,7 +21,7 @@ import {
   ultrafastNote,
 } from '@/screens/audit/audit.helpers'
 import { SessionStatusBadge } from './SessionStatusBadge'
-import { UltrafastNote, UltrafastRail } from './UltrafastMarks'
+import { UltrafastNote } from './UltrafastMarks'
 
 interface TaskRowProps {
   task: TaskSummary
@@ -49,10 +49,8 @@ export function TaskRow({ task, now, timeOnly = false }: TaskRowProps) {
       to={`/audit/${encodeURIComponent(task.sessionId)}`}
       state={{ from: location.pathname }}
       data-task-row={task.sessionId}
-      data-ultrafast={note ? '' : undefined}
-      className="relative grid grid-cols-[72px_minmax(0,1fr)] items-center gap-x-4 gap-y-2 px-4 py-3.5 transition-colors hover:bg-bg-canvas focus-visible:bg-bg-canvas focus-visible:outline-none sm:grid-cols-[112px_minmax(0,1fr)_auto] sm:gap-x-[18px] sm:px-[18px]"
+      className="grid grid-cols-[72px_minmax(0,1fr)] items-center gap-x-4 gap-y-2 px-4 py-3.5 transition-colors hover:bg-bg-canvas focus-visible:bg-bg-canvas focus-visible:outline-none sm:grid-cols-[112px_minmax(0,1fr)_auto] sm:gap-x-[18px] sm:px-[18px]"
     >
-      {note ? <UltrafastRail /> : null}
       <span
         className={cn(
           'relative grid aspect-[16/10] place-items-center overflow-hidden rounded-md border border-border-2',

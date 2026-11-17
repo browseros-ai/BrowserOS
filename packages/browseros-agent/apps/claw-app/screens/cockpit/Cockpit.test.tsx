@@ -240,6 +240,7 @@ function renderApp(
             runTimes: [],
             neoStepShare: 64,
             fastestRunMs: 3_095,
+            periods: { since: { timeSavedMs: 36 * 60_000 } },
           },
         },
         isPending: false,
@@ -332,7 +333,7 @@ describe('Cockpit', () => {
     expect(none).not.toContain('aria-label="Savings"')
   })
 
-  it('gives an ultrafast customer the meter in place of the savings strip', () => {
+  it('gives an ultrafast customer the ultrafast card in place of the savings strip', () => {
     const customer = renderApp({
       connections: 'installed',
       stats: 'measured',
@@ -342,7 +343,7 @@ describe('Cockpit', () => {
       /<\/header><div class="@container"><section aria-label="ultrafast"/,
     )
     expect(customer).toContain('tokens saved')
-    expect(customer).toContain('Pages neo accelerated')
+    expect(customer).toContain('steps done by neo')
     expect(customer).not.toContain('aria-label="Savings"')
 
     const free = renderApp({ connections: 'installed', stats: 'measured' })

@@ -24,21 +24,12 @@ const DAILY_LIMIT = 31
 export const SQUARE_LIMIT = 8
 /** The tallest bar, in px. */
 export const BAR_MAX = 66
-/** Under this many px a column can't carry its own count, so only the busiest one does. */
-const COUNT_ROOM = 30
-
 /** "Nov 5". */
 export function monthDay(epochMs: number): string {
   return new Date(epochMs).toLocaleDateString('en-US', {
     month: 'short',
     day: 'numeric',
   })
-}
-
-/** Where the period starts: the purchase, or 30 and 7 days back. */
-export function periodStart(key: PeriodKey, since: number, now: number) {
-  if (key === 'since') return since
-  return now - (key === 'last30Days' ? 30 : 7) * DAY_MS
 }
 
 export interface RunsColumn {
@@ -143,17 +134,6 @@ export function stripPx(strip: RunsStrip): number {
   return Math.max(26, 10 + 9 * strip.busiest)
 }
 
-/** The dotted reference line's value: the roundest number under 60% of the busiest column. */
-export function referenceStep(busiest: number): number | null {
-  const steps = [5, 10, 20, 50, 100, 200, 500, 1_000]
-  return steps.filter((step) => step <= busiest * 0.6).pop() ?? null
-}
-
-/** Whether every column has room for its own count at this width. */
-export function countsFit(strip: RunsStrip, widthPx: number): boolean {
-  return widthPx / strip.columns.length >= COUNT_ROOM
-}
-
 export interface AxisLabel {
   /** Left edge, as a fraction of the strip's width. */
   left: number
@@ -227,17 +207,9 @@ export function axisLabels(
 }
 
 /** The strip's one-line caption. */
-export function stripCaption(
-  key: PeriodKey,
-  strip: RunsStrip,
-  since: number,
-): string {
+export function stripCaption(strip: RunsStrip): string {
   const unit = strip.weekly ? 'week' : 'day'
-  const how = strip.bars
-    ? `Runs per ${unit}. Hover a ${unit} for its count.`
+  return strip.bars
+    ? `Runs per ${unit}. The busiest ${unit} is marked.`
     : 'One square is one ultrafast run.'
-  const bought = strip.columns.some((column) => column.purchase)
-  return key !== 'last7Days' && bought
-    ? `${how} ${monthDay(since)} is the day you got ultrafast.`
-    : how
 }
