@@ -28,7 +28,7 @@ fn current_native() -> NativeCapabilities {
 struct NativeProfiles {
     profiles: Mutex<Vec<Value>>,
     windows: Mutex<Vec<Value>>,
-    events: broadcast::Sender<CdpEvent>,
+    events: broadcast::Sender<Arc<CdpEvent>>,
     targeted: TargetedEvents,
 }
 
@@ -156,7 +156,7 @@ impl CdpConnection for NativeProfiles {
         })
     }
 
-    fn events(&self) -> broadcast::Receiver<CdpEvent> {
+    fn events(&self) -> broadcast::Receiver<Arc<CdpEvent>> {
         self.events.subscribe()
     }
 

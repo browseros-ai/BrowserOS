@@ -65,8 +65,8 @@ use browseros_core::{
     SessionId, TabId, TargetId,
 };
 use futures_util::future;
-use serde::Deserialize;
 use serde::de::DeserializeOwned;
+use serde::{Deserialize, Deserializer};
 use serde_json::{Value, json};
 use tokio::runtime::Handle;
 use tokio::sync::broadcast::Receiver;
@@ -444,7 +444,7 @@ enum LineItem {
         answer: TreeAnswer,
     },
     /// An event of the tab read at broadcast `position` and held behind the reads before it.
-    Event { position: u64, event: CdpEvent },
+    Event { position: u64, event: Arc<CdpEvent> },
     /// The tab's `load` or `DOMContentLoaded`, read at broadcast `position` while its main frame
     /// was unknown, behind the read it waits for: recorded with the main frame that read gave, or
     /// not at all, and never read for again (`page_load`).
@@ -476,10 +476,10 @@ impl LineItem {
 struct UnownedDownload {
     /// The broadcast position the begin was read at.
     position: u64,
-    begin: CdpEvent,
+    begin: Arc<CdpEvent>,
     /// The download's progress read meanwhile, with their positions: the download table drops
     /// progress of a download it has not listed, so it goes on behind the begin.
-    progress: Vec<(u64, CdpEvent)>,
+    progress: Vec<(u64, Arc<CdpEvent>)>,
 }
 
 /// A tree read's state in its line.
@@ -860,7 +860,7 @@ impl Watcher {
                 received = events.recv() => match received {
                     Ok(event) => {
                         if let Some(event) = self.hold(event) {
-                            self.handle(event).await;
+                            self.handle(&event).await;
                         }
                         self.progress.handled(1);
                     }
@@ -927,18 +927,18 @@ impl Watcher {
 
     /// Keeps [`Watcher::contexts`] current: a main-world context made, gone, or every context of
     /// the session gone (a navigation clears them). Any other event changes nothing.
-    fn context_changed(&mut self, method: &str, session: Option<SessionId>, params: Value) {
+    fn context_changed(&mut self, method: &str, session: Option<&SessionId>, params: &Value) {
         let Some(session) = session else {
             return;
         };
         match method {
-            "Inspector.workerScriptLoaded" => self.writer.hub().workers.script_loaded(&session),
+            "Inspector.workerScriptLoaded" => self.writer.hub().workers.script_loaded(session),
             "Runtime.executionContextCreated" => {
                 if let Some(ContextCreated { context }) = parse(params)
                     && context.aux_data.is_default
                     && let Some(frame) = context.aux_data.frame_id
                 {
-                    self.contexts.insert((session, context.id), frame);
+                    self.contexts.insert((session.clone(), context.id), frame);
                 }
             }
             "Runtime.executionContextDestroyed" => {
@@ -946,11 +946,12 @@ impl Watcher {
                     execution_context_id,
                 }) = parse(params)
                 {
-                    self.contexts.remove(&(session, execution_context_id));
+                    self.contexts
+                        .remove(&(session.clone(), execution_context_id));
                 }
             }
             "Runtime.executionContextsCleared" => {
-                self.contexts.retain(|(known, _), _| *known != session);
+                self.contexts.retain(|(known, _), _| known != session);
             }
             _ => {}
         }
@@ -993,13 +994,13 @@ impl Watcher {
     /// asked took it. It stops there even while more are queued, so a page that keeps sending
     /// events (frames that attach and detach all the time) cannot hold a request past the
     /// events it is owed, and stops sooner if nothing more is queued.
-    async fn drain_through(&mut self, events: &mut Receiver<CdpEvent>, fence: EventFence) {
+    async fn drain_through(&mut self, events: &mut Receiver<Arc<CdpEvent>>, fence: EventFence) {
         while self.progress.events_handled() < fence.0 {
             // Counted as the run loop counts, so ops waiting on `progress` see these too.
             match events.try_recv() {
                 Ok(event) => {
                     if let Some(event) = self.hold(event) {
-                        self.handle(event).await;
+                        self.handle(&event).await;
                     }
                     self.progress.handled(1);
                 }
@@ -1194,7 +1195,7 @@ impl Watcher {
         Ok(())
     }
 
-    async fn handle(&mut self, event: CdpEvent) {
+    async fn handle(&mut self, event: &CdpEvent) {
         self.handle_at(
             event,
             EventFence(self.progress.events_handled().saturating_add(1)),
@@ -1209,7 +1210,10 @@ impl Watcher {
         }
     }
 
-    async fn handle_at(&mut self, event: CdpEvent, ingress: EventFence) {
+    /// Reads the broadcast's shared event in place: each handler decodes the params it needs
+    /// from a reference, so an event the watcher skips, or a console message no run listens
+    /// for, is never copied.
+    async fn handle_at(&mut self, event: &CdpEvent, ingress: EventFence) {
         let CdpEvent {
             method,
             params,
@@ -1220,7 +1224,7 @@ impl Watcher {
             | "Page.frameNavigated"
             | "Page.navigatedWithinDocument"
             | "Page.frameDetached" => {
-                self.frame_changed(&method, session_id.as_ref(), params, ingress)
+                self.frame_changed(method, session_id.as_ref(), params, ingress)
                     .await;
             }
             "Target.targetCreated" => {
@@ -1263,12 +1267,12 @@ impl Watcher {
             }
             "Page.loadEventFired" | "Page.domContentEventFired" => {
                 if let Some(session) = session_id {
-                    self.page_load(&method, &session, ingress).await;
+                    self.page_load(method, session, ingress).await;
                 }
             }
             "Page.javascriptDialogOpening" => {
                 if let (Some(session), Some(dialog)) = (session_id, parse(params)) {
-                    self.dialog_opened(session, dialog).await;
+                    self.dialog_opened(session.clone(), dialog).await;
                 }
             }
             "Page.fileChooserOpened" => {
@@ -1276,14 +1280,14 @@ impl Watcher {
                 // every chooser in the bounded log: a wait may be admitted after its click,
                 // but its synchronous `since` stamp still predates this event.
                 if let Some(session) = session_id
-                    && let Some(target) = self.target_of(&session).await
+                    && let Some(target) = self.target_of(session).await
                     && let Some(params) = parse::<FileChooserParams>(params)
                     && let Some(node) = params.backend_node_id
                 {
                     self.writer
                         .record(PageEvent::FileChooser(FileChooserOpened {
                             target,
-                            session,
+                            session: session.clone(),
                             frame: params.frame_id,
                             node,
                         }));
@@ -1291,12 +1295,12 @@ impl Watcher {
             }
             "Page.javascriptDialogClosed" => {
                 if let Some(session) = session_id {
-                    self.dialog_closed(&session);
+                    self.dialog_closed(session);
                 }
             }
             "Runtime.consoleAPICalled" | "Runtime.exceptionThrown" => {
                 if let Some(session) = session_id {
-                    self.runtime_report(&method, session, params).await;
+                    self.runtime_report(method, session, params).await;
                 }
             }
             "Log.entryAdded" => {
@@ -1310,7 +1314,7 @@ impl Watcher {
                 }
             }
             "Browser.downloadProgress" => self.download_progress(params),
-            _ => self.context_changed(&method, session_id, params),
+            _ => self.context_changed(method, session_id.as_ref(), params),
         }
     }
 
@@ -1902,7 +1906,7 @@ impl Watcher {
         &mut self,
         method: &str,
         session: Option<&SessionId>,
-        params: Value,
+        params: &Value,
         ingress: EventFence,
     ) {
         let Some(navigation) = navigation_event::parse(method, params) else {
@@ -2369,7 +2373,7 @@ impl Watcher {
     /// Puts an event just read from the broadcast in its tab's line if that tab has a frame-tree
     /// read out ([`TabLine`]), or gives it back to be handled now. A line's own events are
     /// handled straight from it, in order, when the read before them is back.
-    fn hold(&mut self, event: CdpEvent) -> Option<CdpEvent> {
+    fn hold(&mut self, event: Arc<CdpEvent>) -> Option<Arc<CdpEvent>> {
         if event.method == "Target.targetCrashed"
             && let Some(target) = event.params.get("targetId").and_then(Value::as_str)
         {
@@ -2406,7 +2410,7 @@ impl Watcher {
     /// Keeps a download's begin that no line takes while its frame is unknown and tree reads are
     /// out, with its progress behind it ([`UnownedDownload`]), or gives the event back to be
     /// handled now: a begin whose frame a tracker knows, or read while no read is out.
-    fn wait_unowned(&mut self, event: CdpEvent) -> Option<CdpEvent> {
+    fn wait_unowned(&mut self, event: Arc<CdpEvent>) -> Option<Arc<CdpEvent>> {
         let position = self.progress.events_handled();
         match event.method.as_str() {
             "Browser.downloadProgress" => {
@@ -2488,10 +2492,10 @@ impl Watcher {
                 }
                 continue;
             }
-            self.handle_at(begin, EventFence(position.saturating_add(1)))
+            self.handle_at(&begin, EventFence(position.saturating_add(1)))
                 .await;
             for (position, event) in progress {
-                self.handle_at(event, EventFence(position.saturating_add(1)))
+                self.handle_at(&event, EventFence(position.saturating_add(1)))
                     .await;
             }
         }
@@ -2674,7 +2678,7 @@ impl Watcher {
                         && event.params.get("targetId").and_then(Value::as_str)
                             == Some(tab.as_str());
                     let later = self.lines.remove(&tab);
-                    self.handle_at(event, EventFence(position.saturating_add(1)))
+                    self.handle_at(&event, EventFence(position.saturating_add(1)))
                         .await;
                     if let Some(mut later) = later {
                         if destroys {
@@ -2737,7 +2741,7 @@ impl Watcher {
         &mut self,
         method: &str,
         session: Option<&SessionId>,
-        params: Value,
+        params: &Value,
         ingress: EventFence,
     ) {
         if let Some(session) = session {
@@ -2745,7 +2749,7 @@ impl Watcher {
             if !self.lifecycle_sources.accepts(session) {
                 return;
             }
-            self.frame_lifecycle(method, session, &params).await;
+            self.frame_lifecycle(method, session, params).await;
         }
         self.navigated(method, session, params, ingress).await;
     }
@@ -2828,13 +2832,13 @@ impl Watcher {
         }
         match method {
             "Page.frameAttached" => {
-                if let Some(FrameAttached { frame_id }) = parse(params.clone()) {
+                if let Some(FrameAttached { frame_id }) = parse(params) {
                     self.frame_event(session, FrameEvent::Attached(FrameId(frame_id)))
                         .await;
                 }
             }
             "Page.frameDetached" => {
-                if let Some(detached) = parse::<FrameDetached>(params.clone())
+                if let Some(detached) = parse::<FrameDetached>(params)
                     && detached.reason != "swap"
                 {
                     let removed = FrameEvent::Removed(FrameId(detached.frame_id));
@@ -2842,7 +2846,7 @@ impl Watcher {
                 }
             }
             "Page.frameNavigated" => {
-                if let Some(FrameNavigated { frame }) = parse(params.clone())
+                if let Some(FrameNavigated { frame }) = parse(params)
                     && let Some(tab) = self.target_of(session).await
                     // A tab's main frame id is its target id; a child's commit keeps its number.
                     && frame.id == tab.0
@@ -2894,21 +2898,21 @@ impl Watcher {
 
     /// A console message or uncaught exception, for the runs listening on its tab, unless it
     /// is history the browser replayed when a lease enabled `Runtime` ([`Self::replayed`]).
-    async fn runtime_report(&mut self, method: &str, session: SessionId, params: Value) {
-        let key = ReportKey::of(method, &params);
-        if self.replayed(&session, key, &params) {
+    async fn runtime_report(&mut self, method: &str, session: &SessionId, params: &Value) {
+        let key = ReportKey::of(method, params);
+        if self.replayed(session, key, params) {
             return;
         }
         let recorded = if method == "Runtime.consoleAPICalled" {
-            if let Some(target) = self.wanted(&session, PageEventKind::Console).await
+            if let Some(target) = self.wanted(session, PageEventKind::Console).await
                 && let Some(params) = parse::<ConsoleParams>(params)
             {
-                self.console(&session, target, params);
+                self.console(session, target, params);
                 true
             } else {
                 false
             }
-        } else if let Some(target) = self.wanted(&session, PageEventKind::PageError).await
+        } else if let Some(target) = self.wanted(session, PageEventKind::PageError).await
             && let Some(params) = parse::<ExceptionParams>(params)
         {
             let error = PageError::from_params(target, params);
@@ -2920,7 +2924,7 @@ impl Watcher {
         // Only what the log holds: a report nobody wanted then is not a later waiter's history
         // by identity, and its replay still meets the floor.
         if recorded && let Some(key) = key {
-            self.recorded.insert(&session, key);
+            self.recorded.insert(session, key);
         }
     }
 
@@ -2929,12 +2933,12 @@ impl Watcher {
     /// holds `Log` on for the session (`log_lease.rs`), and not the entries `Log.enable` replayed
     /// from before the span's floor. Off the broadcast, so in wire order with the console API's
     /// messages.
-    async fn log_entry(&mut self, session: SessionId, params: Value) {
-        let Some(floor) = self.writer.hub().log_leases().floor_ms(&session) else {
+    async fn log_entry(&mut self, session: &SessionId, params: &Value) {
+        let Some(floor) = self.writer.hub().log_leases().floor_ms(session) else {
             // No run asked (`addScriptTag` enables `Log` for its own CSP reports).
             return;
         };
-        let key = ReportKey::of("Log.entryAdded", &params);
+        let key = ReportKey::of("Log.entryAdded", params);
         let Some(entry) = parse::<LogEntryParams>(params) else {
             return;
         };
@@ -2952,7 +2956,7 @@ impl Watcher {
         }
         // As for `Runtime` reports, the floor is whole milliseconds and the stamp is not: an
         // entry this session's log already recorded is the replay of a new span (ER-006).
-        let recorded = key.is_some_and(|key| self.recorded.contains(&session, key));
+        let recorded = key.is_some_and(|key| self.recorded.contains(session, key));
         if entry.timestamp() < floor
             || recorded
             || !entry.logged_by_page()
@@ -2963,7 +2967,7 @@ impl Watcher {
         // Only under a console lease on the tab. `addScriptTag`'s own `Log` lease is for the CSP
         // reports it reads itself, and hosted mode takes no console lease, so a hosted script
         // hears no log entry (`event_op.rs`, `lease_runtime`).
-        if let Some(target) = self.wanted(&session, PageEventKind::Console).await
+        if let Some(target) = self.wanted(session, PageEventKind::Console).await
             && self
                 .writer
                 .hub()
@@ -2974,7 +2978,7 @@ impl Watcher {
             let message = ConsoleMessage::from_log_entry(target, entry);
             self.writer.record(PageEvent::Console(message));
             if let Some(key) = key {
-                self.recorded.insert(&session, key);
+                self.recorded.insert(session, key);
             }
         }
     }
@@ -3122,7 +3126,7 @@ impl Watcher {
     }
 
     /// How a download is going; the table keeps only how it ended.
-    fn download_progress(&self, params: Value) {
+    fn download_progress(&self, params: &Value) {
         if let Some(ProgressParams {
             guid,
             state,
@@ -3344,10 +3348,11 @@ async fn read_tree(protocol: &ProtocolSession, read: TreeRead) -> Option<Value> 
     tree.ok().and_then(Result::ok)
 }
 
-/// An event's params as `T`; one that does not decode is ignored, like any event the watcher
-/// does not need.
-fn parse<T: DeserializeOwned>(params: Value) -> Option<T> {
-    serde_json::from_value(params).ok()
+/// An event's params or a reply as `T`; one that does not decode is ignored, like any event
+/// the watcher does not need. An owned reply moves into `T`; a broadcast event's params are
+/// read through the shared event, copying only what `T` keeps.
+fn parse<'de, T: Deserialize<'de>>(params: impl Deserializer<'de>) -> Option<T> {
+    T::deserialize(params).ok()
 }
 
 fn decode<T: DeserializeOwned>(reply: Value) -> Result<T, CoreError> {
@@ -3403,11 +3408,11 @@ mod worker_observation_tests {
         progress.start(0, 0);
         for n in 0..10 {
             sender
-                .send(CdpEvent {
+                .send(Arc::new(CdpEvent {
                     method: "Page.lifecycleEvent".to_owned(),
                     params: json!({ "n": n }),
                     session_id: None,
-                })
+                }))
                 .map_err(|error| error.to_string())?;
         }
         watcher.drain_through(&mut events, EventFence(3)).await;
@@ -3425,8 +3430,8 @@ mod worker_observation_tests {
     /// Handles `event` as the run loop does: held in its tab's line or handled, then counted
     /// as read.
     async fn read(watcher: &mut Watcher, event: CdpEvent) {
-        if let Some(event) = watcher.hold(event) {
-            watcher.handle(event).await;
+        if let Some(event) = watcher.hold(Arc::new(event)) {
+            watcher.handle(&event).await;
         }
         watcher.progress.handled(1);
     }
@@ -3700,7 +3705,7 @@ mod worker_observation_tests {
         let mut watcher = watcher_with_a_line();
         let tab = Some(TargetId("tab".to_owned()));
         assert!(
-            watcher.hold(worker_attached()).is_none(),
+            watcher.hold(Arc::new(worker_attached())).is_none(),
             "the attachment waits"
         );
         let worker = [
@@ -3782,13 +3787,13 @@ mod worker_observation_tests {
         };
 
         watcher
-            .handle(on_tab(
+            .handle(&on_tab(
                 "Page.navigatedWithinDocument",
                 json!({ "frameId": "tab", "url": "https://a.test/#more" }),
             ))
             .await;
         watcher
-            .handle(on_tab(
+            .handle(&on_tab(
                 "Page.frameNavigated",
                 json!({ "frame": { "id": "child", "parentId": "tab", "url": "https://b.test/" } }),
             ))
@@ -3800,7 +3805,7 @@ mod worker_observation_tests {
         );
 
         watcher
-            .handle(on_tab(
+            .handle(&on_tab(
                 "Page.frameNavigated",
                 json!({ "frame": { "id": "tab", "url": "https://a.test/next" } }),
             ))
@@ -3812,7 +3817,7 @@ mod worker_observation_tests {
         );
 
         watcher
-            .handle(CdpEvent {
+            .handle(&CdpEvent {
                 method: "Target.targetDestroyed".to_owned(),
                 params: json!({ "targetId": "other" }),
                 session_id: None,
@@ -3921,7 +3926,7 @@ mod worker_observation_tests {
         let (hub, mut watcher) = scripted(&connection);
         watcher.discover(false).await?;
         watcher
-            .handle(CdpEvent {
+            .handle(&CdpEvent {
                 method: "Target.attachedToTarget".to_owned(),
                 params: json!({ "sessionId": "page-session", "targetInfo": {
                     "targetId": "page", "type": "page", "url": "https://example.test/"
@@ -3930,7 +3935,7 @@ mod worker_observation_tests {
             })
             .await;
         watcher
-            .handle(CdpEvent {
+            .handle(&CdpEvent {
                 method: "Page.frameAttached".to_owned(),
                 params: json!({ "frameId": "child", "parentFrameId": "page" }),
                 session_id: Some(SessionId::from("page-session")),
@@ -3947,7 +3952,7 @@ mod worker_observation_tests {
             "the page session must publish its child's attachment before the download"
         );
         watcher
-            .handle(CdpEvent {
+            .handle(&CdpEvent {
                 method: "Browser.downloadWillBegin".to_owned(),
                 params: json!({ "frameId": "child", "guid": "download",
                     "url": "https://example.test/attachment.txt",
@@ -4348,7 +4353,7 @@ mod worker_observation_tests {
         let round_three = run.events.waiting(errors.clone(), 1_000);
         let lease = leases.acquire(&protocol, 1_000.0).await?;
         watcher
-            .handle(thrown(
+            .handle(&thrown(
                 3,
                 1_000.6,
                 json!({ "type": "number", "value": 0, "description": "0" }),
@@ -4363,14 +4368,18 @@ mod worker_observation_tests {
         let round_four_lease = leases.acquire(&protocol, 1_000.0).await?;
         // The new span's replay, then round 4's own error.
         watcher
-            .handle(thrown(
+            .handle(&thrown(
                 3,
                 1_000.6,
                 json!({ "type": "number", "value": 0, "description": "0" }),
             ))
             .await;
         watcher
-            .handle(thrown(4, 1_000.8, json!({ "type": "string", "value": "" })))
+            .handle(&thrown(
+                4,
+                1_000.8,
+                json!({ "type": "string", "value": "" }),
+            ))
             .await;
         let messages: Vec<String> = hub
             .read_after(0)
@@ -4395,10 +4404,14 @@ mod worker_observation_tests {
         settle().await;
         let _retry_lease = leases.acquire(&protocol, 1_000.0).await?;
         watcher
-            .handle(thrown(4, 1_000.8, json!({ "type": "string", "value": "" })))
+            .handle(&thrown(
+                4,
+                1_000.8,
+                json!({ "type": "string", "value": "" }),
+            ))
             .await;
         watcher
-            .handle(thrown(
+            .handle(&thrown(
                 5,
                 1_000.8,
                 json!({ "type": "string", "value": "again" }),
@@ -4461,7 +4474,7 @@ mod worker_observation_tests {
 
         let insert = hub.log_leases().acquire(&protocol, 1_500.0).await?;
         watcher
-            .handle(entry("blocked by CSP during the insert"))
+            .handle(&entry("blocked by CSP during the insert"))
             .await;
         assert!(
             heard(&hub).is_empty(),
@@ -4482,7 +4495,7 @@ mod worker_observation_tests {
             .await
             .map_err(|refused| refused.error)?;
         watcher
-            .handle(entry("blocked by CSP under a console lease"))
+            .handle(&entry("blocked by CSP under a console lease"))
             .await;
         assert_eq!(heard(&hub), ["blocked by CSP under a console lease"]);
         drop(console_lease);
@@ -4540,8 +4553,8 @@ mod crash_tests {
     }
 
     async fn read(watcher: &mut Watcher, event: CdpEvent) {
-        if let Some(event) = watcher.hold(event) {
-            watcher.handle(event).await;
+        if let Some(event) = watcher.hold(Arc::new(event)) {
+            watcher.handle(&event).await;
         }
         watcher.progress.handled(1);
         watcher.apply_recoveries();
@@ -4903,8 +4916,8 @@ mod seed_tests {
     /// Handles `event` as the run loop does: held in its tab's line or handled, then counted
     /// as read.
     async fn read(watcher: &mut Watcher, event: CdpEvent) {
-        if let Some(event) = watcher.hold(event) {
-            watcher.handle(event).await;
+        if let Some(event) = watcher.hold(Arc::new(event)) {
+            watcher.handle(&event).await;
         }
         watcher.progress.handled(1);
     }

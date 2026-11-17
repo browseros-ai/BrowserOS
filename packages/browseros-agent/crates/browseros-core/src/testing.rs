@@ -67,7 +67,7 @@ pub struct TestConnection {
     /// This connection's number, the prefix of every session id it hands out.
     id: u64,
     script: Mutex<Script>,
-    events: broadcast::Sender<CdpEvent>,
+    events: broadcast::Sender<Arc<CdpEvent>>,
     targeted: TargetedEvents,
 }
 
@@ -131,7 +131,7 @@ impl TestConnection {
         };
         if let Some(event) = self.targeted.deliver(event) {
             // No receiver yet is not an error: the browser does not wait for listeners either.
-            let _ = self.events.send(event);
+            let _ = self.events.send(Arc::new(event));
         }
     }
 
@@ -233,7 +233,7 @@ impl CdpConnection for TestConnection {
         })
     }
 
-    fn events(&self) -> broadcast::Receiver<CdpEvent> {
+    fn events(&self) -> broadcast::Receiver<Arc<CdpEvent>> {
         self.events.subscribe()
     }
 

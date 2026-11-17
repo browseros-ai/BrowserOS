@@ -1556,7 +1556,7 @@ impl BrowserView {
             state: self.session.file_transfers.clone(),
         }
     }
-    pub fn cdp_events(&self) -> broadcast::Receiver<CdpEvent> {
+    pub fn cdp_events(&self) -> broadcast::Receiver<Arc<CdpEvent>> {
         self.scoped_events()
     }
     pub async fn list_windows(&self) -> Result<Vec<WindowInfo>, CoreError> {

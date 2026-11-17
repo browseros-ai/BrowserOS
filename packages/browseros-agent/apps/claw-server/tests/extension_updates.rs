@@ -24,7 +24,7 @@ struct Fixture {
     status: Mutex<Value>,
     workers: Mutex<Vec<Value>>,
     calls: Mutex<Vec<String>>,
-    events: broadcast::Sender<CdpEvent>,
+    events: broadcast::Sender<Arc<CdpEvent>>,
     targeted: TargetedEvents,
     hang_evaluation: AtomicBool,
     evaluating: Notify,
@@ -142,7 +142,7 @@ impl CdpConnection for Fixture {
         })
     }
 
-    fn events(&self) -> broadcast::Receiver<CdpEvent> {
+    fn events(&self) -> broadcast::Receiver<Arc<CdpEvent>> {
         self.events.subscribe()
     }
 

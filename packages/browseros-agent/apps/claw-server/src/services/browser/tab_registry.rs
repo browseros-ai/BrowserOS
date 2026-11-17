@@ -122,7 +122,7 @@ impl TabRegistry {
                     return;
                 }
                 match events.recv().await {
-                    Ok(event) => map.handle_event(epoch, event).await,
+                    Ok(event) => map.handle_event(epoch, &event).await,
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
                         warn!(
                             epoch,
@@ -307,7 +307,7 @@ impl TabRegistry {
         }
     }
 
-    async fn handle_event(&self, epoch: u64, event: CdpEvent) {
+    async fn handle_event(&self, epoch: u64, event: &CdpEvent) {
         if self.current_epoch.load(Ordering::SeqCst) != epoch {
             return;
         }
@@ -416,7 +416,7 @@ mod tests {
     use tokio::sync::{broadcast, mpsc};
 
     struct TabListConnection {
-        events: broadcast::Sender<CdpEvent>,
+        events: broadcast::Sender<Arc<CdpEvent>>,
         targeted: TargetedEvents,
         list_calls: AtomicUsize,
         list_params: StdMutex<Vec<Value>>,
@@ -435,9 +435,9 @@ mod tests {
 
         /// Offers `event` to its method's targeted subscribers and broadcasts it only when none
         /// took it, as `CdpClient` does. Fails when the broadcast is needed and no one reads it.
-        fn emit(&self, event: CdpEvent) -> Result<(), broadcast::error::SendError<CdpEvent>> {
+        fn emit(&self, event: CdpEvent) -> Result<(), broadcast::error::SendError<Arc<CdpEvent>>> {
             if let Some(event) = self.targeted.deliver(event) {
-                self.events.send(event)?;
+                self.events.send(Arc::new(event))?;
             }
             Ok(())
         }
@@ -534,7 +534,7 @@ mod tests {
             })
         }
 
-        fn events(&self) -> broadcast::Receiver<CdpEvent> {
+        fn events(&self) -> broadcast::Receiver<Arc<CdpEvent>> {
             self.events.subscribe()
         }
 
@@ -680,7 +680,7 @@ mod tests {
         map.rebuild_from_tabs(1, Vec::new()).await;
         map.handle_event(
             1,
-            CdpEvent {
+            &CdpEvent {
                 method: "Target.targetCreated".to_string(),
                 params: json!({"targetInfo": {"targetId": "target-d", "type": "page"}}),
                 session_id: None,
@@ -691,7 +691,7 @@ mod tests {
 
         map.handle_event(
             1,
-            CdpEvent {
+            &CdpEvent {
                 method: "Target.targetInfoChanged".to_string(),
                 params: json!({"targetInfo": {"targetId": "target-d", "type": "page", "tabId": 44}}),
                 session_id: None,
@@ -726,7 +726,7 @@ mod tests {
             .await;
         map.handle_event(
             1,
-            CdpEvent {
+            &CdpEvent {
                 method: "Target.targetCreated".to_string(),
                 params: json!({
                     "targetInfo": {
@@ -761,7 +761,7 @@ mod tests {
 
         map.handle_event(
             1,
-            CdpEvent {
+            &CdpEvent {
                 method: "Target.targetDestroyed".to_string(),
                 params: json!({"targetId": "target-e"}),
                 session_id: None,

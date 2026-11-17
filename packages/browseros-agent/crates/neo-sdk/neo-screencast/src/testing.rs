@@ -32,7 +32,7 @@ pub struct ScriptedCdp {
     sent: Mutex<Vec<SentCommand>>,
     sent_changed: Notify,
     sessions: AtomicUsize,
-    events: broadcast::Sender<CdpEvent>,
+    events: broadcast::Sender<Arc<CdpEvent>>,
     /// Routes events as `CdpClient` does: a method someone took with `events_targeted`, such as
     /// the hub's screencast frames, reaches every one of those subscribers and not the broadcast.
     targeted: TargetedEvents,
@@ -104,7 +104,7 @@ impl ScriptedCdp {
     fn emit(&self, event: CdpEvent) {
         if let Some(event) = self.targeted.deliver(event) {
             // No receiver is not an error: the browser does not wait for listeners either.
-            let _ = self.events.send(event);
+            let _ = self.events.send(Arc::new(event));
         }
     }
 
@@ -204,7 +204,7 @@ impl CdpConnection for ScriptedCdp {
         Box::pin(async move { Err(CdpError::Transport(format!("{method}: not scripted"))) })
     }
 
-    fn events(&self) -> broadcast::Receiver<CdpEvent> {
+    fn events(&self) -> broadcast::Receiver<Arc<CdpEvent>> {
         self.events.subscribe()
     }
 

@@ -4,7 +4,7 @@ use super::*;
 use std::collections::HashSet;
 
 impl BrowserView {
-    pub(super) fn scoped_events(&self) -> broadcast::Receiver<CdpEvent> {
+    pub(super) fn scoped_events(&self) -> broadcast::Receiver<Arc<CdpEvent>> {
         // Only a genuinely unbound view (older native, host infrastructure) gets the global
         // stream. A capture that failed, including an unusable default, relays nothing.
         if matches!(self.capture, Ok(None)) {
