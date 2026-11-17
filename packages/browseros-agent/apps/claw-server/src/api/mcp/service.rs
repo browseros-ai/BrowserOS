@@ -4123,7 +4123,7 @@ mod tests {
                 tools.iter().any(|tool| tool.name == PURSUE_TOOL_NAME),
                 service.get_tool(PURSUE_TOOL_NAME).is_some(),
                 run_names_pursue,
-                instructions.contains("Start each task that does something on a site with pursue"),
+                instructions.contains("Pick the tool by the path, not the goal."),
                 instructions.contains("Reach for run first"),
             )
         };
