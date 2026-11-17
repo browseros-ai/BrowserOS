@@ -14,9 +14,18 @@ export const PERIODS: readonly { key: PeriodKey; label: string }[] = [
   { key: 'last7Days', label: '7 days' },
 ]
 
+export const DETAILS_HOW_WE_COUNT =
+  'Tokens saved adds up page descriptions neo gave your agent instead of screenshots, and pages neo read itself. They are measured differently, so the total is an estimate.'
+
 const DAY_MS = 24 * 60 * 60 * 1000
-/** Past this many days, the since chart folds into weeks so its bars stay readable. */
+/** Past this many days, the since strip folds into weeks so its columns stay readable. */
 const DAILY_LIMIT = 31
+/** A day stacks one square per run up to this many; past it the whole strip draws bars. */
+export const SQUARE_LIMIT = 8
+/** The tallest bar, in px. */
+export const BAR_MAX = 66
+/** Under this many px a column can't carry its own count, so only the busiest one does. */
+const COUNT_ROOM = 30
 
 /** "Nov 5". */
 export function monthDay(epochMs: number): string {
@@ -32,27 +41,24 @@ export function periodStart(key: PeriodKey, since: number, now: number) {
   return now - (key === 'last30Days' ? 30 : 7) * DAY_MS
 }
 
-export function howWeCount(key: PeriodKey, since: number): string {
-  const lead =
-    key === 'since'
-      ? `Since ${monthDay(since)}`
-      : key === 'last30Days'
-        ? 'In the last 30 days'
-        : 'In the last 7 days'
-  return `${lead}, tokens saved adds up page descriptions neo gave your agent instead of screenshots and pages neo read itself; they're measured differently, so it's an estimate.`
-}
-
-export interface ChartBar {
+export interface RunsColumn {
   runs: number
+  /** What the hover and the axis say: "Nov 5", "Wed" or "Week of Nov 3". */
   label: string
-  /** The bar for the week the customer got ultrafast. */
+  /** Before the customer got ultrafast, when no ultrafast run could happen. */
+  before: boolean
+  /** The day (or week) the customer got ultrafast. */
   purchase: boolean
+  today: boolean
+  monday: boolean
 }
 
-export interface Chart {
-  title: string
-  bars: ChartBar[]
-  note: string | null
+export interface RunsStrip {
+  columns: RunsColumn[]
+  busiest: number
+  /** Past SQUARE_LIMIT runs on any day in view, every column is a bar. */
+  bars: boolean
+  weekly: boolean
 }
 
 function startOfDay(epochMs: number): Date {
@@ -71,86 +77,167 @@ function runsBetween(times: readonly number[], from: Date, to: Date): number {
   return times.filter((at) => at >= from.getTime() && at < to.getTime()).length
 }
 
-/** Seven-day buckets ending today, oldest first. */
-function weekBars(
-  times: readonly number[],
-  weeks: number,
-  now: number,
-  since: number,
-): ChartBar[] {
-  const today = startOfDay(now)
-  return Array.from({ length: weeks }, (_, index) => {
-    const back = weeks - 1 - index
-    const start = addDays(today, -(back * 7 + 6))
-    const end = addDays(today, -(back * 7) + 1)
-    return {
-      runs: runsBetween(times, start, end),
-      label: monthDay(start.getTime()),
-      purchase: since >= start.getTime() && since < end.getTime(),
-    }
-  })
-}
-
-/** The period's runs as bars: by day for 7 days and since, by week for 30 days. */
-export function chart(
+/** The period's runs, one column per local day; a since period past a month goes by week. */
+export function runsStrip(
   key: PeriodKey,
   period: Pick<PlanSavingsPeriod, 'runTimes'>,
   since: number,
   now: number,
-): Chart {
+): RunsStrip {
   const times = period.runTimes
   const today = startOfDay(now)
-  if (key === 'last30Days') {
-    const bars = weekBars(times, 5, now, since)
-    return {
-      title: 'ultrafast runs, week by week',
-      bars,
-      note: bars.some((bar) => bar.purchase)
-        ? `The outlined week is when you got ultrafast (${monthDay(since)}).`
-        : null,
-    }
-  }
-  if (key === 'last7Days') {
-    return {
-      title: 'ultrafast runs, day by day',
-      bars: Array.from({ length: 7 }, (_, index) => {
-        const start = addDays(today, index - 6)
+  const bought = startOfDay(since)
+  const span =
+    key === 'last7Days'
+      ? 7
+      : key === 'last30Days'
+        ? 30
+        : Math.max(
+            1,
+            Math.round((today.getTime() - bought.getTime()) / DAY_MS) + 1,
+          )
+  const weekly = key === 'since' && span > DAILY_LIMIT
+  const weeks = Math.ceil(span / 7)
+  const columns: RunsColumn[] = weekly
+    ? Array.from({ length: weeks }, (_, index) => {
+        const back = weeks - 1 - index
+        const start = addDays(today, -(back * 7 + 6))
+        const end = addDays(today, -(back * 7) + 1)
+        return {
+          runs: runsBetween(times, start, end),
+          label: `Week of ${monthDay(start.getTime())}`,
+          before: false,
+          purchase:
+            bought.getTime() >= start.getTime() &&
+            bought.getTime() < end.getTime(),
+          today: back === 0,
+          monday: false,
+        }
+      })
+    : Array.from({ length: span }, (_, index) => {
+        const start = addDays(today, index - (span - 1))
         return {
           runs: runsBetween(times, start, addDays(start, 1)),
-          label: start.toLocaleDateString('en-US', { weekday: 'short' }),
-          purchase: false,
+          label:
+            key === 'last7Days'
+              ? start.toLocaleDateString('en-US', { weekday: 'short' })
+              : monthDay(start.getTime()),
+          before: start.getTime() < bought.getTime(),
+          purchase: start.getTime() === bought.getTime(),
+          today: index === span - 1,
+          monday: start.getDay() === 1,
         }
-      }),
-      note: null,
-    }
-  }
-  const first = startOfDay(since)
-  const days = Math.round((today.getTime() - first.getTime()) / DAY_MS) + 1
-  const title = `ultrafast runs since ${monthDay(since)}`
-  if (days > DAILY_LIMIT) {
-    return {
-      title,
-      bars: weekBars(times, Math.ceil(days / 7), now, since),
-      note: null,
-    }
-  }
-  return {
-    title,
-    bars: Array.from({ length: Math.max(1, days) }, (_, index) => {
-      const start = addDays(first, index)
-      const edge = index === 0 || index === days - 1 || start.getDay() === 1
-      return {
-        runs: runsBetween(times, start, addDays(start, 1)),
-        label: edge ? monthDay(start.getTime()) : '',
-        purchase: false,
-      }
-    }),
-    note: null,
-  }
+      })
+  const busiest = Math.max(0, ...columns.map((column) => column.runs))
+  return { columns, busiest, bars: busiest > SQUARE_LIMIT, weekly }
 }
 
-/** A bar's height against the busiest one; an empty day is a stub. */
-export function chartBarHeight(runs: number, busiest: number): string {
-  if (runs === 0) return '12%'
-  return `${Math.round(30 + (runs / Math.max(1, busiest)) * 70)}%`
+/** A bar's height in px against the busiest column. */
+export function barPx(runs: number, busiest: number): number {
+  return Math.max(3, Math.round((runs / Math.max(1, busiest)) * BAR_MAX))
+}
+
+/** The strip's height in px: room for the tallest square stack, or for bars and their counts. */
+export function stripPx(strip: RunsStrip): number {
+  if (strip.bars) return BAR_MAX + 18
+  return Math.max(26, 10 + 9 * strip.busiest)
+}
+
+/** The dotted reference line's value: the roundest number under 60% of the busiest column. */
+export function referenceStep(busiest: number): number | null {
+  const steps = [5, 10, 20, 50, 100, 200, 500, 1_000]
+  return steps.filter((step) => step <= busiest * 0.6).pop() ?? null
+}
+
+/** Whether every column has room for its own count at this width. */
+export function countsFit(strip: RunsStrip, widthPx: number): boolean {
+  return widthPx / strip.columns.length >= COUNT_ROOM
+}
+
+export interface AxisLabel {
+  /** Left edge, as a fraction of the strip's width. */
+  left: number
+  text: string
+  kind: 'purchase' | 'before' | 'plain'
+}
+
+/**
+ * Axis labels at this width, by priority: the purchase day, today, the days before ultrafast,
+ * then Mondays (every day on the 7-day tab). A label that would touch one already placed is dropped.
+ */
+export function axisLabels(
+  key: PeriodKey,
+  strip: RunsStrip,
+  widthPx: number,
+): AxisLabel[] {
+  const columnPx = widthPx / strip.columns.length
+  const wanted: {
+    rank: number
+    centre: number
+    text: string
+    kind: AxisLabel['kind']
+    width?: number
+  }[] = []
+  strip.columns.forEach((column, index) => {
+    const centre = (index + 0.5) * columnPx
+    const text = strip.weekly
+      ? column.label.replace('Week of ', '')
+      : column.label
+    if (column.before) return
+    if (column.purchase && key !== 'last7Days') {
+      wanted.push({ rank: 0, centre, text, kind: 'purchase' })
+    } else if (column.today) {
+      wanted.push({ rank: 1, centre, text, kind: 'plain' })
+    } else if (key === 'last7Days' || strip.weekly || column.monday) {
+      wanted.push({ rank: 3, centre, text, kind: 'plain' })
+    }
+  })
+  const before = strip.columns.filter((column) => column.before).length
+  if (before > 0) {
+    wanted.push({
+      rank: 2,
+      centre: (before / 2) * columnPx,
+      text: 'before ultrafast',
+      kind: 'before',
+      width: 92,
+    })
+  }
+  const placed: {
+    left: number
+    width: number
+    text: string
+    kind: AxisLabel['kind']
+  }[] = []
+  for (const label of wanted.sort((a, b) => a.rank - b.rank)) {
+    const width = label.width ?? label.text.length * 6.4
+    const left = Math.min(
+      Math.max(label.centre - width / 2, 0),
+      widthPx - width,
+    )
+    const touches = placed.some(
+      (other) =>
+        left < other.left + other.width + 8 && left + width + 8 > other.left,
+    )
+    if (!touches)
+      placed.push({ left, width, text: label.text, kind: label.kind })
+  }
+  return placed
+    .sort((a, b) => a.left - b.left)
+    .map(({ left, text, kind }) => ({ left: left / widthPx, text, kind }))
+}
+
+/** The strip's one-line caption. */
+export function stripCaption(
+  key: PeriodKey,
+  strip: RunsStrip,
+  since: number,
+): string {
+  const unit = strip.weekly ? 'week' : 'day'
+  const how = strip.bars
+    ? `Runs per ${unit}. Hover a ${unit} for its count.`
+    : 'One square is one ultrafast run.'
+  const bought = strip.columns.some((column) => column.purchase)
+  return key !== 'last7Days' && bought
+    ? `${how} ${monthDay(since)} is the day you got ultrafast.`
+    : how
 }

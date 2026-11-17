@@ -341,12 +341,12 @@ describe('Cockpit', () => {
     expect(customer).toMatch(
       /<\/header><div class="@container"><section aria-label="ultrafast"/,
     )
-    expect(customer).toContain('since you got ultrafast')
-    expect(customer).toContain('pages neo accelerated')
+    expect(customer).toContain('tokens saved')
+    expect(customer).toContain('Pages neo accelerated')
     expect(customer).not.toContain('aria-label="Savings"')
 
     const free = renderApp({ connections: 'installed', stats: 'measured' })
     expect(free).toContain('aria-label="Savings"')
-    expect(free).not.toContain('since you got ultrafast')
+    expect(free).not.toContain('aria-label="ultrafast"')
   })
 })

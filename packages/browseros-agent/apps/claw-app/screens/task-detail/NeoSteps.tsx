@@ -38,7 +38,7 @@ export function NeoSteps({ pursue }: { pursue: SessionPursueRun }) {
               >
                 <span
                   aria-hidden
-                  className="inline-grid size-5 shrink-0 place-items-center rounded-full bg-[radial-gradient(circle_at_35%_30%,#2f6fe0,#06205f_75%)] font-bold text-[12px] text-white shadow-[0_0_10px_rgb(82_144_255/0.6)]"
+                  className="w-5 shrink-0 font-medium font-mono text-[12px] text-accent-ink tabular-nums"
                 >
                   {index + 1}
                 </span>

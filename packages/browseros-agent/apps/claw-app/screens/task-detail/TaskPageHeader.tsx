@@ -2,18 +2,14 @@ import type { SessionSummary } from '@browseros/claw-api'
 import { ExternalLink } from 'lucide-react'
 import { useLocation } from 'react-router'
 import { SessionStatusBadge } from '@/components/audit/SessionStatusBadge'
-import { UltrafastMark } from '@/components/audit/UltrafastMarks'
-import { UltrafastRunBadge } from '@/components/audit/UltrafastRunBadge'
+import { UltrafastNote } from '@/components/audit/UltrafastMarks'
 import { AgentMark } from '@/components/harness/AgentMark'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { ButtonLink } from '@/components/motion/button/base'
 import {
-  chipTokens,
-  pagesLabel,
-  pursueHeader,
   taskDayAndTime,
   tookLabel,
-  ultrafastTime,
+  ultrafastNote,
 } from '@/screens/audit/audit.helpers'
 
 interface TaskPageHeaderProps {
@@ -35,6 +31,9 @@ export function TaskPageHeader({ session, lastPageUrl }: TaskPageHeaderProps) {
       : '/audit'
   const back =
     from === '/' ? { to: '/', label: 'Home' } : { to: from, label: 'History' }
+  const note = ultrafastNote(session.pursue, session.ultrafast, {
+    withTokens: true,
+  })
 
   return (
     <PageHeader
@@ -46,19 +45,8 @@ export function TaskPageHeader({ session, lastPageUrl }: TaskPageHeaderProps) {
             sessionId={session.sessionId}
             size="md"
           />
-          {session.pursue || session.ultrafast ? (
-            <UltrafastMark size="md" />
-          ) : null}
-          {session.pursue ? (
-            <UltrafastRunBadge size="md">
-              {pursueHeader(session.pursue, session.ultrafast)}
-            </UltrafastRunBadge>
-          ) : session.ultrafast ? (
-            <UltrafastRunBadge size="md">
-              {ultrafastTime(session.ultrafast.durationMs)} ·{' '}
-              {pagesLabel(session.ultrafast.pagesRead)},{' '}
-              {chipTokens(session.ultrafast.tokensSaved)} tokens saved
-            </UltrafastRunBadge>
+          {note ? (
+            <UltrafastNote className="text-[14px]">{note}</UltrafastNote>
           ) : null}
           <span className="flex flex-wrap items-center gap-2 text-[13.5px] text-ink-3">
             <AgentMark

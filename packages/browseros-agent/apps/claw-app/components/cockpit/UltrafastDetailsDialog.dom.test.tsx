@@ -246,8 +246,28 @@ async function renderMeter(data: PlanSavings) {
   )
 }
 
+const PURCHASED = new Date(NOW - 12 * DAY).toLocaleDateString('en-US', {
+  month: 'short',
+  day: 'numeric',
+})
+
+/** A heavy month: up to 40 runs a day since the purchase. */
+const BUSY = [23, 31, 8, 37, 19, 0, 4, 28, 40, 26, 15, 11, 3]
+const HEAVY = period({
+  ...SINCE,
+  tokensSaved: 1_850_000,
+  runs: BUSY.reduce((sum, runs) => sum + runs, 0),
+  runTimes: BUSY.flatMap((runs, daysAgo) =>
+    Array.from({ length: runs }, () => NOW - daysAgo * DAY),
+  ),
+})
+
+function strip(): Element | null {
+  return dialog()?.querySelector('[data-strip]') ?? null
+}
+
 describe('the ultrafast Details', () => {
-  it('opens from the meter with the since numbers', async () => {
+  it('opens from the meter with the since numbers under a fixed header', async () => {
     await renderMeter(
       savings({ since: SINCE, last30Days: SINCE, last7Days: WEEK }),
     )
@@ -257,41 +277,83 @@ describe('the ultrafast Details', () => {
     expect(tab('Since you got ultrafast')?.getAttribute('aria-selected')).toBe(
       'true',
     )
-    expect(shown).toContain('326ktokens saved')
+    expect(shown).toContain(`326ktokens saved since ${PURCHASED}`)
+    expect(shown).toContain('52 minutesof your time saved')
+    expect(shown).toContain('14tasks finished')
     expect(shown).toContain('Where neo helped')
     expect(shown).toContain('flipkart.com2 runs')
     expect(shown).toContain('Pages neo accelerated38')
-    expect(shown).toContain('52 minutesof your time saved')
-    expect(shown).toContain('14tasks finished')
-    expect(shown).toContain('5ultrafast runs')
-    expect(shown).toContain('1 of 2site tasks neo finished on its own')
-    expect(shown).toContain('64%of the steps, done by neo')
-    expect(shown).toContain('16 secaverage run, 3 sec fastest')
-    expect(shown).toContain('ultrafast runs since')
+    expect(shown).toContain('ultrafast runs5')
+    expect(shown).toContain('Fastest run3 sec')
+    expect(shown).toContain('Site tasks finished1 of 2')
+    expect(shown).toContain('Average run16 sec')
+    expect(shown).toContain('Steps done by neo64%')
+    expect(shown).toContain('Tasks finished14')
+    expect(shown).toContain('They are measured differently')
     // Not the free plan's dialog.
     expect(shown).not.toContain('steps taken')
   })
 
-  it('switches every number with the tab', async () => {
+  it('switches every number and the strip with the tab', async () => {
     await renderMeter(
       savings({ since: SINCE, last30Days: SINCE, last7Days: WEEK }),
     )
     await openDetails()
     await click(tab('7 days'))
-    const shown = text(dialog())
+    let shown = text(dialog())
     expect(tab('7 days')?.getAttribute('aria-selected')).toBe('true')
-    expect(shown).toContain('109ktokens saved')
-    expect(shown).toContain('4ultrafast runs')
+    expect(tab('Since you got ultrafast')?.getAttribute('aria-selected')).toBe(
+      'false',
+    )
+    expect(shown).toContain('109ktokens saved in the last 7 days')
+    expect(shown).toContain('ultrafast runs4')
     expect(shown).toContain('24 minutesof your time saved')
     expect(shown).toContain('Pages neo accelerated11')
-    expect(shown).toContain('ultrafast runs, day by day')
-    expect(shown).toContain('In the last 7 days, tokens saved adds up')
+    expect(strip()?.querySelectorAll('[data-tip]').length).toBe(7)
 
     await click(tab('30 days'))
-    expect(text(dialog())).toContain('ultrafast runs, week by week')
-    expect(text(dialog())).toContain(
-      'The outlined week is when you got ultrafast',
+    shown = text(dialog())
+    expect(shown).toContain('tokens saved in the last 30 days')
+    // One column a day, the days before the purchase on their own baseline.
+    expect(strip()?.querySelectorAll('[data-tip]').length).toBe(30)
+    expect(
+      strip()?.querySelectorAll('[data-tip$="before ultrafast"]').length,
+    ).toBe(17)
+    expect(text(strip())).toContain('before ultrafast')
+  })
+
+  it('stacks one square per run on a light strip', async () => {
+    await renderMeter(
+      savings({ since: SINCE, last30Days: SINCE, last7Days: WEEK }),
     )
+    await openDetails()
+    expect(strip()?.getAttribute('data-strip')).toBe('squares')
+    expect(strip()?.querySelectorAll('[data-square]').length).toBe(5)
+    expect(text(strip())).toContain('One square is one ultrafast run.')
+    expect(text(strip())).toContain(
+      `${PURCHASED} is the day you got ultrafast.`,
+    )
+  })
+
+  it('turns the whole strip into bars with counts once a day passes eight runs', async () => {
+    await renderMeter(
+      savings({ since: HEAVY, last30Days: HEAVY, last7Days: WEEK }),
+    )
+    await openDetails()
+    const shown = text(strip())
+    expect(strip()?.getAttribute('data-strip')).toBe('bars')
+    expect(strip()?.querySelectorAll('[data-square]').length).toBe(0)
+    expect(
+      strip()?.querySelector('[role="img"]')?.getAttribute('aria-label'),
+    ).toContain('245 ultrafast runs, the busiest day')
+    expect(
+      [...(strip()?.querySelectorAll('em') ?? [])].map(
+        (count) => count.textContent,
+      ),
+    ).toContain('40')
+    expect(shown).toContain('Runs per day. Hover a day for its count.')
+    const busiest = strip()?.querySelector('[data-runs="40"]')
+    expect(busiest?.getAttribute('data-tip')).toMatch(/: 40 runs$/)
   })
 
   it('says so when a period has no runs', async () => {
@@ -313,7 +375,7 @@ describe('the ultrafast Details', () => {
     expect(shown).toContain('Switch to "Since you got ultrafast"')
     expect(shown).toContain('No ultrafast runs in this period.')
     expect(shown).toContain('2tasks finished')
-    expect(shown).not.toContain('ultrafast runs, day by day')
+    expect(strip()).toBeNull()
   })
 
   it('welcomes a customer who got ultrafast today', async () => {

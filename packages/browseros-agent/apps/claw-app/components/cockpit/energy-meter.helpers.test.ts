@@ -6,55 +6,87 @@
 
 import { describe, expect, it } from 'bun:test'
 import {
-  barHeight,
+  meterNote,
+  meterParts,
   meterTokens,
-  milestoneCard,
-  milestoneCopy,
   nextMilestone,
-  weekRuns,
+  scaleMarks,
+  scalePosition,
+  scaleTicks,
+  scaleTop,
 } from './energy-meter.helpers'
 
-const copy = (tokens: number, runs = 5) =>
-  milestoneCopy(milestoneCard(tokens, runs))
-
-describe('the milestone card', () => {
-  it('celebrates the first ultrafast run on its own', () => {
-    expect(copy(6_118, 1)).toEqual({
-      title: 'Your first ultrafast run is in',
-      line: '6.1k tokens saved since you got ultrafast. Next stop: 10k.',
+describe('the line under the scale', () => {
+  it('says the first ultrafast run is in', () => {
+    expect(meterNote(6_118, 1)).toEqual({
+      toGo: '3.9k',
+      next: '10k',
+      passed: 'Your first ultrafast run is in',
     })
   })
 
-  it('names each milestone passed, until halfway to the next', () => {
-    expect(copy(10_400).title).toBe('You passed 10k tokens saved')
-    expect(copy(101_500)).toEqual({
-      title: 'You passed 100k tokens saved',
-      line: "That's 100k tokens your agent never had to spend since you got ultrafast.",
+  it('says a milestone was just passed until halfway to the next, then passed', () => {
+    expect(meterNote(253_678, 5).passed).toBe('You just passed 250k')
+    expect(meterNote(253_678, 5).toGo).toBe('246k')
+    expect(meterNote(326_060, 5).passed).toBe('You just passed 250k')
+    expect(meterNote(400_000, 7)).toEqual({
+      toGo: '100k',
+      next: '500k',
+      passed: 'Passed 250k',
     })
-    expect(copy(253_678).title).toBe('You passed 250k tokens saved')
-    expect(copy(503_000)).toEqual({
-      title: 'Half a million tokens saved',
-      line: '500k tokens your agent never had to spend since you got ultrafast.',
-    })
-    expect(copy(1_004_000)).toEqual({
-      title: 'A million tokens saved',
-      line: '1M tokens your agent never had to spend since you got ultrafast.',
-    })
+    expect(meterNote(101_500, 3).passed).toBe('You just passed 100k')
+    expect(meterNote(1_004_000, 9).passed).toBe('You just passed 1M')
   })
 
-  it('counts down quietly once the total is past halfway', () => {
-    expect(copy(61_000)).toEqual({
-      title: '39k to go to 100k',
-      line: 'Every task neo helps your agent with moves this along.',
+  it('says nothing about milestones below the first after more than one run', () => {
+    expect(meterNote(4_000, 3)).toEqual({
+      toGo: '6.0k',
+      next: '10k',
+      passed: null,
     })
-    expect(milestoneCard(61_000, 5).kind).toBe('quiet')
-    // Below the first milestone after more than one run, there is nothing new to celebrate.
-    expect(copy(4_000, 3).title).toBe('6.0k to go to 10k')
   })
 
   it('keeps finding a next milestone past the last named one', () => {
     expect(nextMilestone(2_600_000)).toBe(5_000_000)
-    expect(copy(2_700_000).title).toBe('You passed 2.5M tokens saved')
+    expect(meterNote(2_700_000, 40).passed).toBe('You just passed 2.5M')
+  })
+})
+
+describe('the log scale', () => {
+  it('runs from 1k to 2.5M, or to the next milestone past it', () => {
+    expect(scaleTop(326_060)).toBe(2_500_000)
+    expect(scaleTop(5_300_000)).toBe(7_500_000)
+    expect(scalePosition(1_000, 2_500_000)).toBe(0)
+    expect(scalePosition(500, 2_500_000)).toBe(0)
+    expect(scalePosition(2_500_000, 2_500_000)).toBe(1)
+    // Each decade is as wide as the next, the way a slide rule is ruled.
+    const decade = scalePosition(10_000, 2_500_000)
+    expect(scalePosition(100_000, 2_500_000)).toBeCloseTo(decade * 2, 6)
+  })
+
+  it('rules 1 to 9 in every decade and marks each power of ten', () => {
+    const ticks = scaleTicks(2_500_000)
+    expect(ticks[0]).toEqual({ value: 1_000, decade: true })
+    expect(
+      ticks.filter((tick) => tick.decade).map((tick) => tick.value),
+    ).toEqual([1_000, 10_000, 100_000, 1_000_000, 2_500_000])
+    expect(ticks).toHaveLength(30)
+  })
+
+  it('marks milestones passed, the next one, and the rest ahead', () => {
+    const marks = scaleMarks(326_060, 2_500_000)
+    expect(marks.map((mark) => mark.state)).toEqual([
+      'passed',
+      'passed',
+      'passed',
+      'next',
+      'ahead',
+      'ahead',
+    ])
+    expect(scaleMarks(5_300_000, 7_500_000).map((mark) => mark.value)).toEqual([
+      10_000, 100_000, 250_000, 500_000, 1_000_000, 2_500_000, 5_000_000,
+      7_500_000,
+    ])
   })
 })
 
@@ -72,20 +104,9 @@ describe('meter numbers', () => {
     expect(meterTokens(1_240_000)).toBe('1.2M')
   })
 
-  it('buckets the week by local day, today last', () => {
-    const now = new Date(2026, 10, 16, 18, 0).getTime()
-    const today = new Date(2026, 10, 16, 9, 0).getTime()
-    const twoDaysAgo = new Date(2026, 10, 14, 23, 30).getTime()
-    const week = weekRuns([today, today, twoDaysAgo], now)
-    expect(week).toHaveLength(7)
-    expect(week[6]).toEqual({ label: 'Mon', runs: 2 })
-    expect(week[4]).toEqual({ label: 'Sat', runs: 1 })
-    expect(week.reduce((sum, day) => sum + day.runs, 0)).toBe(3)
-  })
-
-  it('draws an empty day as a stub and caps a busy one', () => {
-    expect(barHeight(0)).toBe('14%')
-    expect(barHeight(1)).toBe('65%')
-    expect(barHeight(5)).toBe('100%')
+  it('splits the figure from its unit so the unit can be set smaller', () => {
+    expect(meterParts(253_678)).toEqual({ figure: '254', unit: 'k' })
+    expect(meterParts(1_850_000)).toEqual({ figure: '1.9', unit: 'M' })
+    expect(meterParts(640)).toEqual({ figure: '640', unit: '' })
   })
 })

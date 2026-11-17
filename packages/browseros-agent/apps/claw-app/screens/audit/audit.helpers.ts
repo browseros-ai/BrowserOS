@@ -190,20 +190,36 @@ export function pursuePill(pursue: SessionPursueRun): string {
   return `ultrafast · neo did ${stepsLabel(pursue.steps.length)}`
 }
 
-/** Task header pill for a pursue task, with pages and tokens when neo counted them. */
-export function pursueHeader(
-  pursue: SessionPursueRun,
-  ultrafast?: SessionUltrafastRun,
-): string {
-  const time = ultrafastTime(pursue.durationMs)
-  const did =
-    pursue.outcome === 'completed'
-      ? `ultrafast · neo did it in ${time}`
-      : pursue.steps.length === 0
-        ? `ultrafast · neo handed back after ${time}`
-        : `ultrafast · neo did ${stepsLabel(pursue.steps.length)} in ${time}`
-  if (!ultrafast) return did
-  return `${did} · ${pagesLabel(ultrafast.pagesRead)}, ${chipTokens(ultrafast.tokensSaved)} tokens saved`
+/**
+ * What ultrafast did in a task, in words, for the line under its name: "neo did 3 steps in 6 sec,
+ * then handed back", "neo finished it in 7 sec", "neo ran it in 15 sec, read 9 pages".
+ * Null when ultrafast did nothing in the task.
+ */
+export function ultrafastNote(
+  pursue: SessionPursueRun | undefined,
+  ultrafast: SessionUltrafastRun | undefined,
+  { withTokens = false }: { withTokens?: boolean } = {},
+): string | null {
+  const parts: string[] = []
+  if (pursue) {
+    const time = ultrafastTime(pursue.durationMs)
+    parts.push(
+      pursue.outcome === 'completed'
+        ? `neo finished it in ${time}`
+        : pursue.steps.length === 0
+          ? `neo handed back after ${time}`
+          : `neo did ${stepsLabel(pursue.steps.length)} in ${time}, then handed back`,
+    )
+  } else if (ultrafast) {
+    parts.push(`neo ran it in ${ultrafastTime(ultrafast.durationMs)}`)
+  }
+  if (ultrafast && ultrafast.pagesRead > 0) {
+    parts.push(`read ${pagesLabel(ultrafast.pagesRead)}`)
+  }
+  if (ultrafast && withTokens && ultrafast.tokensSaved > 0) {
+    parts.push(`${chipTokens(ultrafast.tokensSaved)} tokens saved`)
+  }
+  return parts.length > 0 ? parts.join(', ') : null
 }
 
 /** One of neo's steps in plain words, from only what was recorded. */

@@ -3,9 +3,8 @@
  * Copyright 2026 BrowserOS
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
- * Home for an ultrafast customer: one ring of total tokens saved since this
- * computer got ultrafast, the next milestone, four tiles and the week's runs.
- * Free installs keep SavingsCard.
+ * Home for an ultrafast customer: the total tokens saved since this computer got ultrafast, read
+ * off a ruled log scale with one needle, and a short ledger beside it. Free installs keep SavingsCard.
  */
 
 import type {
@@ -14,40 +13,39 @@ import type {
   PlanSavingsMeter,
 } from '@browseros/claw-api'
 import type { UseQueryResult } from '@tanstack/react-query'
-import { ArrowRight, Copy, Info, Trophy, Zap } from 'lucide-react'
+import { ArrowRight, Copy, Info } from 'lucide-react'
 import { type ReactNode, useEffect, useState } from 'react'
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from '@/components/motion/tooltip'
-import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
 import { ultrafastTime } from '@/screens/audit/audit.helpers'
 import { roundTimeSaved } from '@/screens/cockpit/cockpit.helpers'
 import {
-  barHeight,
   HOW_WE_COUNT,
-  type MilestoneCard,
+  lastReading,
+  meterNote,
   meterTokens,
-  milestoneCard,
-  milestoneCopy,
   nextMilestone,
-  rememberSpark,
-  sparkSeen,
+  rememberReading,
+  scaleMarks,
+  scalePosition,
+  scaleTicks,
+  scaleTop,
   tokensSavedSinceUltrafast,
-  weekRuns,
 } from './energy-meter.helpers'
+import { BigNumber, INK, PANEL_SHADOW, Wordmark } from './InkPanel'
 import { timeSavedAmount } from './savings.helpers'
 import { UltrafastDetailsDialog } from './UltrafastDetailsDialog'
-
-const RADIUS = 104
-const CIRCUMFERENCE = 2 * Math.PI * RADIUS
-export const INK_2 = 'text-[rgb(214_225_255/0.78)]'
-export const INK_3 = 'text-[rgb(190_205_245/0.58)]'
+import { monthDay } from './ultrafast-details.helpers'
 
 export const TRY_TASK =
   'On google.com/travel/flights, search one-way flights from Chennai to Singapore on 20 December and sort by price.'
+
+const LINK =
+  'inline-flex h-8 items-center gap-1.5 rounded-lg px-2 -mx-2 text-[13.5px] hover:bg-[rgb(238_243_255/0.07)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9cc0ff] active:translate-y-px'
 
 export function EnergyMeter({
   savings,
@@ -58,35 +56,30 @@ export function EnergyMeter({
   stats: CockpitStats | undefined
   className?: string
 }) {
-  if (savings.isPending) {
-    return (
-      <Skeleton
-        aria-label="Loading your ultrafast savings"
-        className={cn('h-[300px] rounded-[20px]', className)}
-      />
-    )
-  }
+  if (savings.isPending) return <Loading className={className} />
   const meter = savings.data?.meter
   const tokens = savings.data ? tokensSavedSinceUltrafast(savings.data) : null
   if (savings.isError || !meter || tokens === null) {
     return (
-      <section
-        aria-label="ultrafast"
-        className={cn('em flex flex-col gap-3 px-8 py-7', className)}
-      >
-        <span aria-hidden className="em-grain" />
-        <Mark />
-        <p role="alert" className={cn('text-[14.5px]', INK_2)}>
-          Your ultrafast numbers didn't load.
-        </p>
-        <button
-          type="button"
-          onClick={() => savings.refetch()}
-          className="em-chip h-[34px] self-start rounded-[10px] px-3.5 font-semibold text-[13.5px] text-white"
-        >
-          Try again
-        </button>
-      </section>
+      <Panel className={className}>
+        <div className="flex flex-col items-start gap-3">
+          <Wordmark />
+          <p role="alert" className={cn('m-0 text-[14.5px]', INK.ink2)}>
+            Your ultrafast numbers didn't load.
+          </p>
+          <button
+            type="button"
+            onClick={() => savings.refetch()}
+            className={cn(
+              'h-[34px] rounded-lg border px-3.5 font-semibold text-[13.5px] hover:bg-[rgb(238_243_255/0.07)] active:translate-y-px',
+              INK.line,
+              INK.ink,
+            )}
+          >
+            Try again
+          </button>
+        </div>
+      </Panel>
     )
   }
   const plan = savings.data
@@ -105,11 +98,38 @@ export function EnergyMeter({
       savings={plan}
       meter={meter}
       tokens={tokens}
-      pages={plan.totals.pagesRead}
-      runs={plan.tasks}
       stats={stats}
       className={className}
     />
+  )
+}
+
+/** The ink panel. A container query sizes the children of `@container`, so the wrapper declares it. */
+function Panel({
+  children,
+  className,
+  label = 'ultrafast',
+  busy = false,
+}: {
+  children: ReactNode
+  className?: string
+  label?: string
+  busy?: boolean
+}) {
+  return (
+    <div className={cn('@container', className)}>
+      <section
+        aria-label={label}
+        aria-busy={busy || undefined}
+        className={cn(
+          'relative rounded-2xl @2xl:px-7 px-[18px] @2xl:pt-[26px] pt-5 @2xl:pb-4 pb-3',
+          INK.panel,
+          PANEL_SHADOW,
+        )}
+      >
+        {children}
+      </section>
+    </div>
   )
 }
 
@@ -117,113 +137,83 @@ function Meter({
   savings,
   meter,
   tokens,
-  pages,
-  runs,
   stats,
   className,
 }: {
   savings: PlanSavings
   meter: PlanSavingsMeter
   tokens: number
-  pages: number
-  runs: number
   stats: CockpitStats | undefined
   className?: string
 }) {
-  const card = milestoneCard(tokens, runs)
-  const week = weekRuns(meter.runTimes, Date.now())
-
+  const note = meterNote(tokens, savings.tasks)
+  const fastest =
+    meter.fastestRunMs == null ? null : ultrafastTime(meter.fastestRunMs)
   return (
-    // A container query sizes the children of `@container`, so the panel's own columns need it on a wrapper.
-    <div className={cn('@container', className)}>
-      <section
-        aria-label="ultrafast"
-        className={cn(
-          'em grid grid-cols-1 justify-items-center gap-[22px] px-5 pt-6 pb-5',
-          '@2xl:grid-cols-[auto_1fr] @2xl:items-center @2xl:justify-items-stretch @2xl:gap-[34px] @2xl:px-8 @2xl:pt-[30px] @2xl:pb-6',
-        )}
-      >
-        <span aria-hidden className="em-grain" />
-        <Ring tokens={tokens} />
-        <div className="flex w-full min-w-0 flex-col gap-[18px]">
-          <div className="flex flex-wrap items-center justify-between gap-2.5">
-            <span
-              className={cn(
-                'em-chip inline-flex h-[26px] items-center rounded-full px-2.5 font-semibold text-[12.5px]',
-                INK_2,
-              )}
-            >
-              since you got ultrafast
-            </span>
-          </div>
-          {/* Keyed on the milestone so one crossed while Home is open mounts fresh and plays its burst. */}
-          <Milestone
-            key={card.kind === 'quiet' ? 'quiet' : card.key}
-            card={card}
-          />
-          <div className="grid @2xl:grid-cols-4 grid-cols-2 gap-2.5">
-            <Tile
-              value={<CountUp to={pages} />}
-              label="pages neo accelerated"
-            />
-            <Tile value={<CountUp to={runs} />} label="ultrafast runs" />
-            <Tile
-              value={
-                meter.neoStepShare == null ? (
-                  'None yet'
-                ) : (
-                  <>
-                    <CountUp to={meter.neoStepShare} />%
-                  </>
-                )
-              }
-              label="of the steps, done by neo"
-            />
-            <Tile
-              value={
-                meter.fastestRunMs == null
-                  ? 'None yet'
-                  : ultrafastTime(meter.fastestRunMs)
-              }
-              label="your fastest ultrafast run"
-            />
-          </div>
+    <Panel className={className}>
+      <div className="grid @2xl:grid-cols-[minmax(0,1.75fr)_minmax(0,1fr)] grid-cols-1 @2xl:items-end gap-[22px] @2xl:gap-x-11 @2xl:gap-y-0">
+        <div className="min-w-0">
           <div
-            role="img"
-            aria-label={`ultrafast runs this week: ${week.map((day) => `${day.label} ${day.runs}`).join(', ')}`}
-            className="flex flex-col gap-1.5"
+            className={cn(
+              'flex items-baseline gap-2.5 text-[13.5px]',
+              INK.ink3,
+            )}
           >
-            <div className="flex h-[34px] items-end gap-1.5">
-              {week.map((day, index) => (
-                <span
-                  key={day.label}
-                  data-hit={day.runs > 0 ? '' : undefined}
-                  className="em-bar flex-1"
-                  style={
-                    {
-                      height: barHeight(day.runs),
-                      '--i': index,
-                    } as React.CSSProperties
-                  }
-                />
-              ))}
-            </div>
-            <div className={cn('flex gap-1.5 text-[11px]', INK_3)}>
-              {week.map((day) => (
-                <span key={day.label} className="flex-1 text-center">
-                  {day.label}
-                </span>
-              ))}
-            </div>
+            <Wordmark />
+            <span>since {monthDay(meter.since)}</span>
+          </div>
+          <div className="mt-3 flex flex-wrap items-baseline gap-x-3.5 gap-y-1">
+            <BigNumber
+              tokens={tokens}
+              className="@2xl:text-[76px] text-[60px]"
+            />
+            <span className={cn('text-[15px]', INK.ink2)}>tokens saved</span>
+          </div>
+          <Scale tokens={tokens} />
+          <div
+            className={cn(
+              'mt-1.5 flex flex-wrap justify-between gap-x-4 gap-y-1 text-[13.5px]',
+              INK.ink2,
+            )}
+          >
+            <span>
+              <b className={cn('font-bold', INK.ink)}>{note.toGo}</b> to go to{' '}
+              {note.next}
+            </span>
+            {note.passed ? (
+              <span className={cn('font-semibold', INK.accent)}>
+                {note.passed}
+              </span>
+            ) : null}
           </div>
         </div>
-        <Fold
-          savings={savings}
-          stats={stats}
-          className="col-span-full w-full"
-        />
-      </section>
-    </div>
+        <dl className="m-0 flex flex-col">
+          <LedgerRow label="Pages neo accelerated">
+            {savings.totals.pagesRead}
+          </LedgerRow>
+          <LedgerRow label="ultrafast runs">{savings.tasks}</LedgerRow>
+          {meter.neoStepShare == null ? (
+            <LedgerRow label="Steps done by neo" none>
+              None yet
+            </LedgerRow>
+          ) : (
+            <LedgerRow label="Steps done by neo" unit="%">
+              {meter.neoStepShare}
+            </LedgerRow>
+          )}
+          {fastest === null ? (
+            <LedgerRow label="Fastest run" none>
+              None yet
+            </LedgerRow>
+          ) : (
+            <LedgerRow label="Fastest run" unit={` ${fastest.split(' ')[1]}`}>
+              {fastest.split(' ')[0]}
+            </LedgerRow>
+          )}
+        </dl>
+      </div>
+      <Foot savings={savings} stats={stats} />
+    </Panel>
   )
 }
 
@@ -250,231 +240,277 @@ function FirstRun({
   }
 
   return (
-    <div className={cn('@container', className)}>
-      <section
-        aria-label="ultrafast"
-        className="em grid @2xl:grid-cols-[1.1fr_1fr] grid-cols-1"
-      >
-        <span aria-hidden className="em-grain" />
-        <div className="flex flex-col gap-4 @2xl:px-[30px] px-5 @2xl:py-7 py-[22px]">
-          <Mark />
-          <h3 className="m-0 font-extrabold @2xl:text-[30px] text-[25px] text-white leading-[1.1] tracking-[-0.03em]">
+    <Panel className={className}>
+      <div className="grid @2xl:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)] grid-cols-1 @2xl:items-end gap-6 @2xl:gap-x-11">
+        <div className="flex flex-col gap-4">
+          <Wordmark />
+          <h3
+            className={cn(
+              'm-0 font-bold @2xl:text-[30px] text-[25px] leading-[1.1] tracking-[-0.03em]',
+              INK.ink,
+            )}
+          >
             Let neo take the clicks.
           </h3>
           <p
             className={cn(
               'm-0 max-w-[46ch] text-[14.5px] leading-normal',
-              INK_2,
+              INK.ink2,
             )}
           >
             Give your AI agent a task on a website. neo takes the clicks and
             typing itself, so the pages never fill your agent's context. Your
-            first one lights this up.
+            first one moves the needle.
           </p>
-          <div className="em-prompt flex items-center gap-2.5 rounded-xl py-3 pr-3 pl-3.5">
-            <span className="flex-1 text-[13.5px] text-white leading-[1.45]">
+          <div
+            className={cn(
+              'flex items-center gap-2.5 rounded-xl border bg-[rgb(238_243_255/0.05)] py-3 pr-3 pl-3.5',
+              INK.line,
+            )}
+          >
+            <span
+              className={cn('flex-1 text-[13.5px] leading-[1.45]', INK.ink)}
+            >
               {TRY_TASK}
             </span>
             <button
               type="button"
               onClick={copy}
-              className="inline-flex h-[34px] shrink-0 items-center gap-1.5 rounded-[10px] bg-white px-3.5 font-semibold text-[#01123f] text-[13.5px] hover:bg-[#eaf1ff]"
+              className="inline-flex h-[34px] shrink-0 items-center gap-1.5 rounded-lg bg-[#eef3ff] px-3.5 font-semibold text-[#0c2742] text-[13.5px] hover:bg-white active:translate-y-px"
             >
               <Copy aria-hidden className="size-3.5" />
               {copied ? 'Copied' : 'Copy'}
             </button>
           </div>
-          <p className={cn('m-0 text-[13px]', INK_3)}>
+          <p className={cn('m-0 text-[13px]', INK.ink3)}>
             Paste it into Claude Code, Codex or Cursor, then come back here.
           </p>
         </div>
-        <div className="em-aside flex flex-col items-center justify-center gap-3 border-t @2xl:border-t-0 @2xl:border-l @2xl:px-[30px] px-5 @2xl:py-7 py-[22px]">
-          <Ring tokens={tokens} size="small" />
-          <span className={cn('text-center text-[13px]', INK_3)}>
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+            <BigNumber tokens={tokens} className="text-[48px]" />
+            <span className={cn('text-[15px]', INK.ink2)}>tokens saved</span>
+          </div>
+          <Scale tokens={tokens} />
+          <span className={cn('mt-1.5 block text-[13px]', INK.ink3)}>
             {next === 10_000
-              ? 'First milestone: 10k. The ring fills as neo saves tokens for you.'
-              : `Next milestone: ${meterTokens(next)}. The ring fills as neo saves tokens for you.`}
+              ? 'First milestone: 10k. The needle moves as neo saves tokens for you.'
+              : `Next milestone: ${meterTokens(next)}. The needle moves as neo saves tokens for you.`}
           </span>
         </div>
-        <Fold
-          savings={savings}
-          stats={stats}
-          className="col-span-full @2xl:px-[30px] px-5 pb-[22px]"
+      </div>
+      <Foot savings={savings} stats={stats} />
+    </Panel>
+  )
+}
+
+function Loading({ className }: { className?: string }) {
+  const block = 'block rounded-md bg-[rgb(238_243_255/0.09)]'
+  return (
+    <Panel className={className} label="Loading your ultrafast savings" busy>
+      <div className="grid @2xl:grid-cols-[minmax(0,1.75fr)_minmax(0,1fr)] grid-cols-1 @2xl:items-end gap-[22px] @2xl:gap-x-11">
+        <div>
+          <Wordmark />
+          <span className={cn(block, 'mt-4 h-14 w-[46%]')} />
+          <span className="mt-10 block h-px bg-[rgb(238_243_255/0.14)]" />
+          <span className={cn(block, 'mt-4 h-3 w-[34%]')} />
+        </div>
+        <div className="flex flex-col gap-5 pb-2">
+          <span className={cn(block, 'h-3.5')} />
+          <span className={cn(block, 'h-3.5')} />
+          <span className={cn(block, 'h-3.5')} />
+          <span className={cn(block, 'h-3.5')} />
+        </div>
+      </div>
+      <div className={cn('mt-5 border-t pt-3 text-[13px]', INK.line, INK.ink3)}>
+        Counting what neo saved
+      </div>
+    </Panel>
+  )
+}
+
+/** The ruled log scale: ticks 1 to 9 per decade from 1k, milestones marked above, one needle. */
+function Scale({ tokens }: { tokens: number }) {
+  const top = scaleTop(tokens)
+  const at = (value: number) =>
+    `${(scalePosition(value, top) * 100).toFixed(3)}%`
+  const marks = scaleMarks(tokens, top)
+  const lastPassed = marks.filter((mark) => mark.state === 'passed').pop()
+  const next = marks.find((mark) => mark.state === 'next')
+  return (
+    <div
+      role="img"
+      aria-label={`${meterTokens(tokens)} tokens saved, ${meterTokens(nextMilestone(tokens) - tokens)} to go to the next milestone`}
+      className="relative mx-0.5 mt-[26px] h-[46px]"
+    >
+      <span className="absolute inset-x-0 top-2.5 h-px bg-[rgb(238_243_255/0.26)]" />
+      <span
+        className="absolute top-2.5 left-0 h-px bg-[rgb(238_243_255/0.82)]"
+        style={{ width: at(tokens) }}
+      />
+      {scaleTicks(top).map((tick) => (
+        <span
+          key={tick.value}
+          className={cn(
+            'absolute top-2.5 -ml-[0.5px] w-px',
+            tick.decade ? 'h-3' : 'h-1.5',
+            tick.value <= tokens
+              ? 'bg-[rgb(238_243_255/0.82)]'
+              : 'bg-[rgb(238_243_255/0.26)]',
+          )}
+          style={{ left: at(tick.value) }}
         />
-      </section>
+      ))}
+      {marks.map((mark) => (
+        <svg
+          key={mark.value}
+          aria-hidden
+          data-mark={mark.state}
+          viewBox="0 0 9 7"
+          className="absolute top-0 -ml-[4.5px] h-[7px] w-[9px] overflow-visible"
+          style={{ left: at(mark.value) }}
+        >
+          <polygon
+            points="0.6,0.6 8.4,0.6 4.5,6.4"
+            strokeWidth={mark.state === 'next' ? 1.4 : 1.2}
+            className={cn(
+              mark.state === 'passed' && 'fill-[#eef3ff] stroke-[#eef3ff]',
+              mark.state === 'next' && 'fill-none stroke-[#9cc0ff]',
+              mark.state === 'ahead' &&
+                'fill-none stroke-[rgb(238_243_255/0.26)]',
+            )}
+          />
+        </svg>
+      ))}
+      {marks.map((mark, index) => (
+        <span
+          key={mark.value}
+          className={cn(
+            'absolute top-7 whitespace-nowrap font-mono text-[10.5px] tabular-nums leading-none',
+            index === marks.length - 1
+              ? '-translate-x-full'
+              : '-translate-x-1/2',
+            mark.state === 'passed' && INK.ink2,
+            mark.state === 'next' && INK.accent,
+            mark.state === 'ahead' && INK.ink3,
+            // Narrow, only the last milestone passed and the next one keep their numbers.
+            mark !== lastPassed && mark !== next && '@max-2xl:hidden',
+          )}
+          style={{ left: at(mark.value) }}
+        >
+          {meterTokens(mark.value)}
+        </span>
+      ))}
+      <Needle tokens={tokens} top={top} />
     </div>
   )
 }
 
-// ---------------------------------------------------------------------------
-
-export function Mark() {
+function Needle({ tokens, top }: { tokens: number; top: number }) {
+  const to = scalePosition(tokens, top)
+  const [shown, setShown] = useState(() => {
+    const last = lastReading()
+    return last === null || prefersStill() ? to : scalePosition(last, top)
+  })
+  // The needle moves once, from the last reading this computer saw; that reading lives in browser storage.
+  useEffect(() => {
+    rememberReading(tokens)
+    if (prefersStill()) {
+      setShown(to)
+      return
+    }
+    const frame = requestAnimationFrame(() => setShown(to))
+    return () => cancelAnimationFrame(frame)
+  }, [tokens, to])
   return (
-    <span className="em-mark inline-flex items-center gap-2 font-extrabold text-[15px] text-white italic tracking-[-0.01em]">
-      <Zap aria-hidden className="size-[18px]" />
-      ultrafast
+    <span
+      aria-hidden
+      data-needle={to.toFixed(4)}
+      className="pointer-events-none absolute inset-0 transition-transform duration-[1250ms] ease-[cubic-bezier(0.22,1.25,0.36,1)] motion-reduce:transition-none"
+      style={{ transform: `translateX(${shown * 100}%)` }}
+    >
+      <span className="absolute -top-1.5 -left-px h-[30px] w-0.5 rounded-[1px] bg-[#9cc0ff] after:absolute after:-top-[3px] after:-left-0.5 after:size-1.5 after:rounded-full after:bg-[#9cc0ff] after:content-['']" />
     </span>
   )
 }
 
-const RING_SIZES = {
-  large: { box: '@2xl:size-[240px] size-[220px]', number: 'text-[56px]' },
-  small: { box: 'size-[200px]', number: 'text-[48px]' },
-  dialog: { box: 'size-[168px]', number: 'text-[40px]' },
-} as const
-
-export function Ring({
-  tokens,
-  size = 'large',
+/** One ledger line: the label, dotted leaders, the figure. */
+function LedgerRow({
+  label,
+  unit,
+  none = false,
+  children,
 }: {
-  tokens: number
-  size?: keyof typeof RING_SIZES
+  label: string
+  unit?: string
+  none?: boolean
+  children: ReactNode
 }) {
-  const fraction = Math.min(1, tokens / nextMilestone(tokens))
   return (
-    <div className={cn('relative', RING_SIZES[size].box)}>
-      <svg
-        aria-hidden
-        viewBox="0 0 240 240"
-        className="em-ring size-full -rotate-90 overflow-visible"
+    <div className="flex items-baseline gap-2 py-[7px]">
+      <dt
+        className={cn(
+          'flex min-w-0 flex-1 items-baseline gap-2 text-[14px]',
+          INK.ink2,
+        )}
       >
-        <defs>
-          <linearGradient id="em-ring-gradient" x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0" stopColor="#ffffff" />
-            <stop offset=".45" stopColor="#9cc0ff" />
-            <stop offset="1" stopColor="#2f6fe0" />
-          </linearGradient>
-        </defs>
-        <circle className="em-track" cx="120" cy="120" r={RADIUS} />
-        <circle className="em-ticks" cx="120" cy="120" r={RADIUS} />
-        {fraction > 0 ? (
-          <circle
-            className="em-fill"
-            cx="120"
-            cy="120"
-            r={RADIUS}
-            strokeDasharray={CIRCUMFERENCE}
-            strokeDashoffset={CIRCUMFERENCE * (1 - fraction)}
-            style={
-              { '--em-circumference': CIRCUMFERENCE } as React.CSSProperties
-            }
-          />
-        ) : null}
-      </svg>
-      <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 text-center">
-        <Mark />
-        <span
-          className={cn(
-            'em-big font-extrabold leading-[0.92] tracking-[-0.045em]',
-            RING_SIZES[size].number,
-          )}
-        >
-          <CountUp to={tokens} format={meterTokens} />
-        </span>
-        <span
-          className={cn('max-w-[140px] text-[12.5px] leading-[1.35]', INK_2)}
-        >
-          tokens saved
-        </span>
-      </div>
-    </div>
-  )
-}
-
-function Milestone({ card }: { card: MilestoneCard }) {
-  const key = card.kind === 'quiet' ? null : card.key
-  // Read once per mount so the burst plays for this view even after it is remembered.
-  const [burst] = useState(() => key !== null && !sparkSeen(key))
-  // Browser storage sits outside React: remember the milestone once it has been shown.
-  useEffect(() => {
-    if (key !== null) rememberSpark(key)
-  }, [key])
-  const { title, line } = milestoneCopy(card)
-  const quiet = card.kind === 'quiet'
-
-  return (
-    <div
-      data-quiet={quiet ? '' : undefined}
-      className="em-milestone relative flex items-center gap-3 rounded-[14px] px-3.5 py-3"
-    >
-      {quiet ? null : (
+        <span className="whitespace-nowrap">{label}</span>
         <span
           aria-hidden
-          data-burst={burst ? '' : undefined}
-          className="em-sparks pointer-events-none absolute top-1/2 left-[30px] size-0"
-        >
-          {Array.from({ length: 14 }, (_, index) => {
-            const angle = (index / 14) * Math.PI * 2
-            return (
-              <i
-                // biome-ignore lint/suspicious/noArrayIndexKey: a fixed ring of sparks
-                key={index}
-                style={
-                  {
-                    '--dx': `${Math.cos(angle) * 46}px`,
-                    '--dy': `${Math.sin(angle) * 30}px`,
-                    animationDelay: `calc(1.9s + ${(index % 3) * 40}ms)`,
-                  } as React.CSSProperties
-                }
-              />
-            )
-          })}
-        </span>
-      )}
-      <span className="em-medal grid size-[34px] shrink-0 place-items-center rounded-full">
-        {card.kind === 'passed' ? (
-          <Trophy aria-hidden className="size-[17px]" />
-        ) : (
-          <Zap aria-hidden className="size-[17px]" />
+          className="min-w-3 flex-1 -translate-y-1 border-[rgb(238_243_255/0.32)] border-b border-dotted"
+        />
+      </dt>
+      <dd
+        className={cn(
+          'm-0 whitespace-nowrap',
+          none
+            ? cn('font-medium text-[14px]', INK.ink3)
+            : cn(
+                'font-bold text-[20px] tabular-nums tracking-[-0.02em]',
+                INK.ink,
+              ),
         )}
-      </span>
-      <span>
-        <span className="block font-bold text-[14px] text-white">{title}</span>
-        <span className={cn('block text-[12.5px]', INK_2)}>{line}</span>
-      </span>
+      >
+        {children}
+        {unit ? (
+          <small
+            className={cn(
+              'font-semibold text-[13px] tracking-normal',
+              INK.ink2,
+            )}
+          >
+            {unit}
+          </small>
+        ) : null}
+      </dd>
     </div>
   )
 }
 
-function Tile({ value, label }: { value: ReactNode; label: string }) {
-  return (
-    <div className="em-tile flex flex-col gap-0.5 rounded-xl px-3.5 py-3">
-      <span className="font-extrabold text-[26px] text-white tabular-nums tracking-[-0.03em]">
-        {value}
-      </span>
-      <span className={cn('text-[12.5px]', INK_3)}>{label}</span>
-    </div>
-  )
-}
-
-function Fold({
+function Foot({
   savings,
   stats,
-  className,
 }: {
   savings: PlanSavings
   stats: CockpitStats | undefined
-  className?: string
 }) {
   const time = stats ? roundTimeSaved(stats.allTime.humanTimeSavedMs) : null
   return (
     <div
       className={cn(
-        'em-fold flex flex-wrap items-center gap-x-4 gap-y-1.5 pt-3.5 text-[13px]',
-        INK_3,
-        className,
+        'mt-5 flex flex-wrap items-center gap-x-4 gap-y-1.5 border-t pt-3 text-[13px]',
+        INK.line,
+        INK.ink3,
       )}
     >
       {stats && time ? (
-        <>
-          <span>Also with neo:</span>
-          <span>
-            <b className={cn('font-bold', INK_2)}>
-              {timeSavedAmount(stats.allTime.humanTimeSavedMs)}
-            </b>{' '}
-            of your time saved
-          </span>
-        </>
+        <span>
+          Also with neo:{' '}
+          <b className={cn('font-bold', INK.ink2)}>
+            {timeSavedAmount(stats.allTime.humanTimeSavedMs)}
+          </b>{' '}
+          of your time saved
+        </span>
       ) : null}
       <span className="flex-1" />
       <Tooltip>
@@ -482,10 +518,7 @@ function Fold({
           <button
             type="button"
             aria-label="How tokens saved is counted"
-            className={cn(
-              'inline-flex items-center gap-1.5 font-semibold text-[13px]',
-              INK_2,
-            )}
+            className={cn(LINK, 'font-medium', INK.ink2)}
           >
             <Info aria-hidden className="size-3.5" />
             How we count
@@ -496,13 +529,7 @@ function Fold({
       <UltrafastDetailsDialog
         savings={savings}
         trigger={
-          <button
-            type="button"
-            className={cn(
-              'inline-flex items-center gap-1.5 font-semibold text-[13px]',
-              INK_2,
-            )}
-          >
+          <button type="button" className={cn(LINK, 'font-semibold', INK.ink)}>
             Details
             <ArrowRight aria-hidden className="size-3.5" />
           </button>
@@ -510,33 +537,6 @@ function Fold({
       />
     </div>
   )
-}
-
-/** Counts up to the number once on mount; readers who prefer less motion see it at once. */
-export function CountUp({
-  to,
-  format = (value: number) => String(Math.round(value)),
-}: {
-  to: number
-  format?: (value: number) => string
-}) {
-  const [shown, setShown] = useState(() => (prefersStill() ? to : 0))
-  // requestAnimationFrame drives the count, an external timer React can't express.
-  useEffect(() => {
-    if (prefersStill()) {
-      setShown(to)
-      return
-    }
-    const start = performance.now()
-    const duration = to >= 1_000 ? 1_600 : 1_100
-    let frame = requestAnimationFrame(function tick(now) {
-      const progress = Math.min(1, (now - start) / duration)
-      setShown(to * (1 - (1 - progress) ** 4))
-      if (progress < 1) frame = requestAnimationFrame(tick)
-    })
-    return () => cancelAnimationFrame(frame)
-  }, [to])
-  return <>{format(shown)}</>
 }
 
 function prefersStill(): boolean {

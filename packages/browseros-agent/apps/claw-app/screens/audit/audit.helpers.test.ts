@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'bun:test'
+import type { SessionPursueRun } from '@browseros/claw-api'
 import type { TaskStatus, TaskSummary } from '@/modules/api/audit.hooks'
 import {
   agentOptionsFor,
@@ -8,6 +9,7 @@ import {
   pagesLabel,
   taskWhen,
   tookLabel,
+  ultrafastNote,
   ultrafastTime,
 } from './audit.helpers'
 import { filtersToParams, paramsToFilters } from './audit.search-params'
@@ -172,5 +174,45 @@ describe('ultrafast run numbers', () => {
     expect(chipTokens(9_990)).toBe('10k')
     expect(chipTokens(61_942)).toBe('62k')
     expect(chipTokens(180_400)).toBe('180k')
+  })
+})
+
+describe('the ultrafast line under a task', () => {
+  const flights: SessionPursueRun = {
+    outcome: 'handed_back',
+    durationMs: 5_662,
+    steps: [{ action: 'click' }, { action: 'click' }, { action: 'type' }],
+  }
+  const finished: SessionPursueRun = {
+    outcome: 'completed',
+    durationMs: 7_317,
+    steps: [],
+  }
+
+  it('says what neo did with pursue', () => {
+    expect(ultrafastNote(flights, undefined)).toBe(
+      'neo did 3 steps in 6 sec, then handed back',
+    )
+    expect(ultrafastNote(finished, undefined)).toBe('neo finished it in 7 sec')
+    expect(ultrafastNote({ ...flights, steps: [] }, undefined)).toBe(
+      'neo handed back after 6 sec',
+    )
+  })
+
+  it('says how long neo ran and what it read, with tokens only when asked', () => {
+    const run = { durationMs: 15_354, pagesRead: 9, tokensSaved: 61_942 }
+    expect(ultrafastNote(undefined, run)).toBe(
+      'neo ran it in 15 sec, read 9 pages',
+    )
+    expect(ultrafastNote(undefined, run, { withTokens: true })).toBe(
+      'neo ran it in 15 sec, read 9 pages, 62k tokens saved',
+    )
+    expect(ultrafastNote(flights, run)).toBe(
+      'neo did 3 steps in 6 sec, then handed back, read 9 pages',
+    )
+  })
+
+  it('says nothing when ultrafast did nothing', () => {
+    expect(ultrafastNote(undefined, undefined)).toBe(null)
   })
 })

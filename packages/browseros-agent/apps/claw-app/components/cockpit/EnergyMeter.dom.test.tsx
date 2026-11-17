@@ -32,6 +32,7 @@ const globalDescriptors = new Map(
 )
 
 const { EnergyMeter } = await import('./EnergyMeter')
+const { scalePosition, scaleTop } = await import('./energy-meter.helpers')
 const { SavingsHero } = await import('@/screens/pro/SavingsHero')
 const { MemoryRouter } = await import('react-router')
 
@@ -57,12 +58,14 @@ const PERIODS = {
   last7Days: period({ tokensSaved: 68_000, runs: 4, pagesRead: 11 }),
 }
 
+const SINCE = new Date(2026, 10, 5, 9).getTime()
+
 const SAVINGS: PlanSavings = {
   totals: { durationMs: 80_000, pagesRead: 38, tokensSaved: 253_678 },
   tasks: 5,
   latest: [],
   meter: {
-    since: 1,
+    since: SINCE,
     tokensSaved: 253_678,
     runTimes: [],
     neoStepShare: 64,
@@ -156,55 +159,99 @@ afterEach(async () => {
   Reflect.deleteProperty(globalThis, 'IS_REACT_ACT_ENVIRONMENT')
 })
 
+function needle(): string {
+  return (
+    body.querySelector('[data-needle]')?.getAttribute('style') ?? ''
+  ).replace(/\s+/g, '')
+}
+
+function at(tokens: number): PlanSavings {
+  return {
+    ...SAVINGS,
+    meter: {
+      ...SAVINGS.meter,
+      since: SINCE,
+      runTimes: [],
+      tokensSaved: tokens,
+      periods: PERIODS,
+    },
+  }
+}
+
 describe('the ultrafast meter', () => {
-  it('shows the total, the milestone and the four tiles', async () => {
+  it('reads the total off the scale, with the next milestone and the ledger', async () => {
     await render(query({}))
     const shown = text()
+    expect(shown).toContain('ultrafastsince Nov 5')
     expect(shown).toContain('254ktokens saved')
-    expect(shown).toContain('since you got ultrafast')
-    expect(shown).toContain('You passed 250k tokens saved')
-    expect(shown).toContain('38pages neo accelerated')
-    expect(shown).toContain('5ultrafast runs')
-    expect(shown).toContain('64%of the steps, done by neo')
-    expect(shown).toContain('3 secyour fastest ultrafast run')
+    expect(shown).toContain('246k to go to 500k')
+    expect(shown).toContain('You just passed 250k')
+    expect(shown).toContain('Pages neo accelerated38')
+    expect(shown).toContain('ultrafast runs5')
+    expect(shown).toContain('Steps done by neo64%')
+    expect(shown).toContain('Fastest run3 sec')
+    expect(body.querySelector('[role="img"]')?.getAttribute('aria-label')).toBe(
+      '254k tokens saved, 246k to go to the next milestone',
+    )
     expect(
       body.querySelector('button[aria-label="How tokens saved is counted"]'),
     ).toBeTruthy()
+    expect(
+      [...body.querySelectorAll('button')].some((button) =>
+        button.textContent?.includes('Details'),
+      ),
+    ).toBe(true)
   })
 
-  it('bursts once per milestone on this computer', async () => {
+  it('marks the milestones passed and outlines the next one', async () => {
     await render(query({}))
-    expect(body.querySelector('[data-burst]')).toBeTruthy()
-    expect(storage.get('ultrafastMilestoneSeen:v1')).toBe('250000')
-
-    await act(async () => root.unmount())
-    const { createRoot } = await import('react-dom/client')
-    root = createRoot(body.querySelector('#root') as unknown as HTMLElement)
-    await render(query({}))
-    expect(body.querySelector('[data-burst]')).toBeNull()
-    expect(text()).toContain('You passed 250k tokens saved')
+    const states = [...body.querySelectorAll('[data-mark]')].map((mark) =>
+      mark.getAttribute('data-mark'),
+    )
+    expect(states).toEqual([
+      'passed',
+      'passed',
+      'passed',
+      'next',
+      'ahead',
+      'ahead',
+    ])
   })
 
-  it('plays the burst for a milestone crossed while Home is open', async () => {
-    const at = (tokensSaved: number): PlanSavings => ({
-      ...SAVINGS,
-      meter: {
-        ...SAVINGS.meter,
-        since: 1,
-        runTimes: [],
-        tokensSaved,
-        periods: PERIODS,
-      },
-    })
+  it('moves the needle once from the last reading on this computer', async () => {
+    reducedMotion = false
+    storage.set('ultrafastMeterReading:v1', '200000')
+    await render(query({}))
+    const from = needle()
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 40)))
+    const to = needle()
+    expect(from).not.toBe(to)
+    expect(to).toContain(
+      `translateX(${scalePosition(253_678, scaleTop(253_678)) * 100}%)`,
+    )
+    expect(from).toContain(
+      `translateX(${scalePosition(200_000, scaleTop(253_678)) * 100}%)`,
+    )
+    expect(storage.get('ultrafastMeterReading:v1')).toBe('253678')
+  })
+
+  it('sets the needle straight down for readers who prefer less motion', async () => {
+    storage.set('ultrafastMeterReading:v1', '200000')
+    await render(query({}))
+    const placed = needle()
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 40)))
+    expect(needle()).toBe(placed)
+  })
+
+  it('says a milestone crossed while Home is open', async () => {
     await render(query({ data: at(61_000) }))
     expect(text()).toContain('39k to go to 100k')
-    expect(body.querySelector('[data-burst]')).toBeNull()
+    expect(text()).not.toContain('passed')
 
     // The next poll brings the total past 100k without leaving Home.
     await render(query({ data: at(101_500) }))
-    expect(text()).toContain('You passed 100k tokens saved')
-    expect(body.querySelector('[data-burst]')).toBeTruthy()
-    expect(storage.get('ultrafastMilestoneSeen:v1')).toBe('100000')
+    expect(text()).toContain('You just passed 100k')
+    expect(text()).toContain('149k to go to 250k')
   })
 
   it('lays the panel out with container queries from a wrapper', async () => {
@@ -213,15 +260,6 @@ describe('the ultrafast meter', () => {
     // A container query can't size the element that declares the container.
     expect(panel?.parentElement?.className).toContain('@container')
     expect(panel?.className).not.toContain('@container')
-    expect(panel?.className).toContain('@2xl:grid-cols-[auto_1fr]')
-  })
-
-  it('counts the numbers up when motion is allowed', async () => {
-    reducedMotion = false
-    await render(query({}))
-    expect(text()).toContain('0tokens saved')
-    await act(async () => new Promise((resolve) => setTimeout(resolve, 1_800)))
-    expect(text()).toContain('254ktokens saved')
   })
 
   it('invites a brand-new customer to a first task', async () => {
@@ -231,7 +269,12 @@ describe('the ultrafast meter', () => {
           ...SAVINGS,
           tasks: 0,
           totals: { durationMs: 0, pagesRead: 0, tokensSaved: 0 },
-          meter: { since: 1, tokensSaved: 0, runTimes: [], periods: PERIODS },
+          meter: {
+            since: SINCE,
+            tokensSaved: 0,
+            runTimes: [],
+            periods: PERIODS,
+          },
         },
       }),
     )
@@ -239,20 +282,13 @@ describe('the ultrafast meter', () => {
     expect(shown).toContain('Let neo take the clicks.')
     expect(shown).toContain('0tokens saved')
     expect(shown).toContain('First milestone: 10k.')
-    expect(shown).not.toContain('pages neo accelerated')
+    expect(shown).not.toContain('Pages neo accelerated')
   })
 
   it('shows the same tokens saved figure as the ultrafast page', async () => {
     const data: PlanSavings = {
-      ...SAVINGS,
+      ...at(3_240_000),
       totals: { ...SAVINGS.totals, tokensSaved: 9_000 },
-      meter: {
-        ...SAVINGS.meter,
-        since: 1,
-        runTimes: [],
-        tokensSaved: 3_240_000,
-        periods: PERIODS,
-      },
     }
     await act(async () =>
       root.render(
@@ -266,19 +302,25 @@ describe('the ultrafast meter', () => {
         </MemoryRouter>,
       ),
     )
-    const figure = (id: string) =>
-      (body.querySelector(`#${id}`)?.textContent ?? '').match(
-        /([\d.]+[kM]?)tokens saved/,
-      )?.[1]
-    expect(figure('meter')).toBe('3.2M')
-    expect(figure('page')).toBe(figure('meter'))
+    // The meter reads its figure off the scale; the page sets it beside "tokens saved".
+    const meter = body
+      .querySelector('#meter [role="img"]')
+      ?.getAttribute('aria-label')
+      ?.split(' ')[0]
+    const page = (body.querySelector('#page')?.textContent ?? '').match(
+      /([\d.]+[kM]?)tokens saved/,
+    )?.[1]
+    expect(meter).toBe('3.2M')
+    expect(page).toBe(meter)
   })
 
-  it('shows a placeholder while loading and a retry when loading failed', async () => {
+  it('keeps the panel shape while loading and offers a retry when loading failed', async () => {
     await render(query({ data: undefined, isPending: true }))
-    expect(
-      body.querySelector('[aria-label="Loading your ultrafast savings"]'),
-    ).toBeTruthy()
+    const loading = body.querySelector(
+      'section[aria-label="Loading your ultrafast savings"]',
+    )
+    expect(loading?.getAttribute('aria-busy')).toBe('true')
+    expect(text()).toContain('Counting what neo saved')
 
     let retried = false
     await render(

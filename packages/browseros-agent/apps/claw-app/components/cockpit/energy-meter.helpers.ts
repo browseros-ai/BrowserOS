@@ -19,7 +19,7 @@ export function tokensSavedSinceUltrafast(savings: PlanSavings): number | null {
   return savings.meter?.tokensSaved ?? null
 }
 
-/** Total tokens saved since ultrafast that earn a trophy. Past the last, every 2.5M does. */
+/** Total tokens saved since ultrafast that are marked on the scale. Past the last, every 2.5M is. */
 export const MILESTONES = [
   10_000, 100_000, 250_000, 500_000, 1_000_000, 2_500_000,
 ] as const
@@ -36,7 +36,7 @@ export function meterTokens(tokens: number): string {
   return `${(value / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`
 }
 
-/** The milestone the ring fills toward. */
+/** The milestone the needle moves toward. */
 export function nextMilestone(tokens: number): number {
   const next = MILESTONES.find((milestone) => milestone > tokens)
   if (next) return next
@@ -54,104 +54,110 @@ export function passedMilestone(tokens: number): number | null {
   )
 }
 
-/**
- * What the milestone card says. A trophy holds until the total is halfway to the next milestone,
- * then the card goes quiet and counts down to it. The first ultrafast run gets its own card.
- */
-export type MilestoneCard =
-  | { kind: 'first'; tokens: number; key: 'first' }
-  | { kind: 'passed'; milestone: number; key: string }
-  | { kind: 'quiet'; toGo: number; next: number }
+/** The line under the scale: how far the next milestone is, and the last one passed. */
+export interface MeterNote {
+  toGo: string
+  next: string
+  /** "You just passed 250k" until halfway to the next, then "Passed 250k"; the first run gets its own words. */
+  passed: string | null
+}
 
-export function milestoneCard(tokens: number, runs: number): MilestoneCard {
+export function meterNote(tokens: number, runs: number): MeterNote {
   const next = nextMilestone(tokens)
   const passed = passedMilestone(tokens)
+  const toGo = meterTokens(next - tokens)
   if (passed === null) {
-    return runs === 1
-      ? { kind: 'first', tokens, key: 'first' }
-      : { kind: 'quiet', toGo: next - tokens, next }
-  }
-  if (tokens < passed + (next - passed) / 2) {
-    return { kind: 'passed', milestone: passed, key: String(passed) }
-  }
-  return { kind: 'quiet', toGo: next - tokens, next }
-}
-
-export function milestoneCopy(card: MilestoneCard): {
-  title: string
-  line: string
-} {
-  if (card.kind === 'first') {
     return {
-      title: 'Your first ultrafast run is in',
-      line: `${meterTokens(card.tokens)} tokens saved since you got ultrafast. Next stop: 10k.`,
+      toGo,
+      next: meterTokens(next),
+      passed: runs === 1 ? 'Your first ultrafast run is in' : null,
     }
   }
-  if (card.kind === 'quiet') {
-    return {
-      title: `${meterTokens(card.toGo)} to go to ${meterTokens(card.next)}`,
-      line: 'Every task neo helps your agent with moves this along.',
-    }
-  }
-  const amount = meterTokens(card.milestone)
-  if (card.milestone === 500_000) {
-    return {
-      title: 'Half a million tokens saved',
-      line: `${amount} tokens your agent never had to spend since you got ultrafast.`,
-    }
-  }
-  if (card.milestone === 1_000_000) {
-    return {
-      title: 'A million tokens saved',
-      line: `${amount} tokens your agent never had to spend since you got ultrafast.`,
-    }
-  }
+  const fresh = tokens < passed + (next - passed) / 2
   return {
-    title: `You passed ${amount} tokens saved`,
-    line: `That's ${amount} tokens your agent never had to spend since you got ultrafast.`,
+    toGo,
+    next: meterTokens(next),
+    passed: `${fresh ? 'You just passed' : 'Passed'} ${meterTokens(passed)}`,
   }
 }
 
-/** ultrafast runs per local day for the 7 days ending today, oldest first. */
-export function weekRuns(
-  runTimes: readonly number[],
-  now: number,
-): { label: string; runs: number }[] {
-  const today = new Date(now)
-  today.setHours(0, 0, 0, 0)
-  return Array.from({ length: 7 }, (_, index) => {
-    const start = new Date(today)
-    start.setDate(today.getDate() - (6 - index))
-    const end = new Date(start)
-    end.setDate(start.getDate() + 1)
-    return {
-      label: start.toLocaleDateString('en-US', { weekday: 'short' }),
-      runs: runTimes.filter((at) => at >= start.getTime() && at < end.getTime())
-        .length,
+/** "254k" as the figure "254" and its unit "k", so the unit can be set smaller. */
+export function meterParts(tokens: number): { figure: string; unit: string } {
+  const shown = meterTokens(tokens)
+  const unit = /[kM]$/.test(shown) ? shown.slice(-1) : ''
+  return { figure: unit ? shown.slice(0, -1) : shown, unit }
+}
+
+const SCALE_FLOOR = 1_000
+
+/** The scale runs from 1k to 2.5M, or to the next milestone once the total is past 2.5M. */
+export function scaleTop(tokens: number): number {
+  return Math.max(MILESTONES[MILESTONES.length - 1], nextMilestone(tokens))
+}
+
+/** Where a value sits on the log scale, from 0 at 1k to 1 at the top. */
+export function scalePosition(value: number, top: number): number {
+  if (value <= SCALE_FLOOR) return 0
+  return Math.min(
+    1,
+    Math.log10(value / SCALE_FLOOR) / Math.log10(top / SCALE_FLOOR),
+  )
+}
+
+/** Ticks ruled like a slide rule: 1 to 9 in every decade from 1k, longer at each power of ten. */
+export function scaleTicks(top: number): { value: number; decade: boolean }[] {
+  const ticks: { value: number; decade: boolean }[] = []
+  for (let decade = SCALE_FLOOR; decade <= top; decade *= 10) {
+    for (let step = 1; step <= 9 && step * decade <= top; step++) {
+      ticks.push({ value: step * decade, decade: step === 1 })
     }
-  })
+  }
+  if (ticks[ticks.length - 1]?.value !== top) {
+    ticks.push({ value: top, decade: true })
+  }
+  return ticks
 }
 
-/** A bar's height: a stub for an empty day, taller per run, never past the top. */
-export function barHeight(runs: number): string {
-  return runs === 0 ? '14%' : `${Math.min(100, 30 + runs * 35)}%`
+export type MarkState = 'passed' | 'next' | 'ahead'
+
+/** The milestones on the scale, each passed, the next one, or still ahead. */
+export function scaleMarks(
+  tokens: number,
+  top: number,
+): { value: number; state: MarkState }[] {
+  const marks: number[] = [...MILESTONES]
+  for (
+    let value = MILESTONES[MILESTONES.length - 1] + MILESTONE_STEP;
+    value <= top;
+    value += MILESTONE_STEP
+  ) {
+    marks.push(value)
+  }
+  const next = nextMilestone(tokens)
+  return marks.map((value) => ({
+    value,
+    state: value <= tokens ? 'passed' : value === next ? 'next' : 'ahead',
+  }))
 }
 
-const SPARK_KEY = 'ultrafastMilestoneSeen:v1'
+const READING_KEY = 'ultrafastMeterReading:v1'
 
-/** Whether this computer already celebrated the milestone. */
-export function sparkSeen(key: string): boolean {
+/** The total the needle last showed on this computer, or null the first time. */
+export function lastReading(): number | null {
   try {
-    return localStorage.getItem(SPARK_KEY) === key
+    const stored = localStorage.getItem(READING_KEY)
+    if (stored === null) return null
+    const value = Number(stored)
+    return Number.isFinite(value) ? value : null
   } catch {
-    return true
+    return null
   }
 }
 
-export function rememberSpark(key: string): void {
+export function rememberReading(tokens: number): void {
   try {
-    localStorage.setItem(SPARK_KEY, key)
+    localStorage.setItem(READING_KEY, String(Math.round(tokens)))
   } catch {
-    // Without browser storage the burst just plays again next time.
+    // Without browser storage the needle just starts where it ends next time.
   }
 }
