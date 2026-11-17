@@ -1,0 +1,26 @@
+/** Read encoded PNG headers directly; image decoders can silently rescale device pixels. */
+function png(bytes) {
+  const magic = bytes.subarray(0, 8).toString('hex');
+  equal(magic, '89504e470d0a1a0a', 'the SDK screenshot is PNG');
+  assert(bytes.length >= 24, 'the PNG has an IHDR dimension header', bytes.length);
+  const be = offset => bytes[offset] * 16777216 + bytes[offset + 1] * 65536 + bytes[offset + 2] * 256 + bytes[offset + 3];
+  return { magic, size: { width: be(16), height: be(20) } };
+}
+
+await page.goto(args.base + '/sdk-screenshot.html');
+const readViewport = () => page.evaluate(() => ({ width: innerWidth, height: innerHeight, dpr: devicePixelRatio, visualWidth: visualViewport.width, visualHeight: visualViewport.height, clientWidth: document.documentElement.clientWidth, clientHeight: document.documentElement.clientHeight }));
+const before = await readViewport();
+equal(before.dpr, 2, 'the contract runs in the isolated native DPR2 browser');
+// Screenshot brings its tab forward before measuring geometry. Sample after each capture
+// so an initially background tab's viewport cannot become a stale expected image size.
+const defaultCapture = png(await page.screenshot());
+const defaultViewport = await readViewport();
+const device = png(await page.screenshot({ scale: 'device' }));
+const deviceViewport = await readViewport();
+const evidence = { before, defaultViewport, deviceViewport, default: defaultCapture, device };
+equal(defaultViewport.dpr, 2, 'default capture keeps native DPR2');
+equal(deviceViewport.dpr, 2, 'explicit device capture keeps native DPR2');
+assert(defaultViewport.width > 0 && defaultViewport.height > 0 && deviceViewport.width > 0 && deviceViewport.height > 0, 'the captured CSS viewports have positive dimensions', evidence);
+equal(defaultCapture.size, { width: defaultViewport.width * 2, height: defaultViewport.height * 2 }, 'default capture retains twice the CSS viewport dimensions; ' + JSON.stringify(evidence));
+equal(device.size, { width: deviceViewport.width * 2, height: deviceViewport.height * 2 }, 'explicit device capture retains twice the CSS viewport dimensions; ' + JSON.stringify(evidence));
+return evidence;

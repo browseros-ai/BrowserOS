@@ -1,0 +1,3 @@
+await page.goto(args.base + '/form.html');
+const error = await rejected(async () => await page.getByText('this text never appears xyzzy',{exact:true}).waitFor({timeout:1000}), /timeout|timed out|exceeded/i);
+return {error};

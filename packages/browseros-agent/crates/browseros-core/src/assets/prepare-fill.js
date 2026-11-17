@@ -1,12 +1,26 @@
 // biome-ignore-all lint: Injected function is called with the resolved DOM node as this.
 // Validate and select only. The Rust caller owns native input and final readback;
 // assigning value or dispatching synthetic events here would bypass the editor.
+// Date, time, colour and range inputs have no text editor to type into, so validation
+// answers 'setValue' for them and the caller sets the value instead (set-input-value.js).
 function browserosPrepareFill(mode) {
   if (!this.isConnected) return 'Element is detached. Take a new snapshot.'
   const input = this.tagName === 'INPUT'
   const textControl = input || this.tagName === 'TEXTAREA'
+  const valueControl =
+    input &&
+    [
+      'date',
+      'time',
+      'datetime-local',
+      'month',
+      'week',
+      'color',
+      'range',
+    ].includes(this.type)
   if (
     input &&
+    !valueControl &&
     !['text', 'search', 'email', 'tel', 'url', 'password', 'number'].includes(
       this.type,
     )
@@ -27,7 +41,7 @@ function browserosPrepareFill(mode) {
   ) {
     return 'Element is not visible.'
   }
-  if (mode === 'validate') return true
+  if (mode === 'validate') return valueControl ? 'setValue' : true
   if (this.getRootNode().activeElement !== this) {
     return 'Element did not receive focus.'
   }

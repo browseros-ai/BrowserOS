@@ -209,9 +209,9 @@ class MakeContextTest(unittest.TestCase):
             self.assertEqual(ctx.semantic_version, "0.31.0")
             self.assertEqual(ctx.get_sparkle_version(), "10000.0.31.0.0")
             self.assertEqual(
-                ctx.get_features_yaml_path(), get_feature_registry_path(r.root)
+                ctx.get_features_yaml_path(), get_feature_registry_path(r.root.resolve())
             )
-            self.assertEqual(ctx.get_patches_dir(), r.root / "chromium_patches")
+            self.assertEqual(ctx.get_patches_dir(), r.root.resolve() / "chromium_patches")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Openbox only keeps Neo full-screen and places dialogs; there is no desktop.
+  - Every normal window is maximized without a title bar (Neo draws its own
+    tab strip), and openbox re-fits it when noVNC resizes the screen.
+  - Dialogs and pop-ups keep their size and open centered.
+  - One desktop and no shortcut that can switch the view away from Neo or
+    close it.
+  - Viewers can't zoom Neo (README, "Zoom"). Openbox takes Chromium's zoom
+    keys and Ctrl + mouse wheel, which is how noVNC sends a two-finger pinch,
+    so the browser never sees them. A binding needs an action, and Focus
+    changes nothing here. "Frame" bindings also cover the page, and unlike
+    "Client" ones they are not passed on.
+-->
+<openbox_config xmlns="http://openbox.org/3.4/rc">
+  <focus>
+    <focusNew>yes</focusNew>
+    <followMouse>no</followMouse>
+  </focus>
+  <placement>
+    <policy>Smart</policy>
+    <center>yes</center>
+  </placement>
+  <desktops>
+    <number>1</number>
+  </desktops>
+  <keyboard>
+    <keybind key="C-equal"><action name="Focus"/></keybind>
+    <keybind key="C-S-equal"><action name="Focus"/></keybind>
+    <keybind key="C-KP_Add"><action name="Focus"/></keybind>
+    <keybind key="C-minus"><action name="Focus"/></keybind>
+    <keybind key="C-S-minus"><action name="Focus"/></keybind>
+    <keybind key="C-KP_Subtract"><action name="Focus"/></keybind>
+    <keybind key="C-0"><action name="Focus"/></keybind>
+    <keybind key="C-KP_0"><action name="Focus"/></keybind>
+  </keyboard>
+  <mouse>
+    <context name="Frame">
+      <mousebind button="C-Up" action="Press"><action name="Focus"/></mousebind>
+      <mousebind button="C-Down" action="Press"><action name="Focus"/></mousebind>
+      <mousebind button="C-S-Up" action="Press"><action name="Focus"/></mousebind>
+      <mousebind button="C-S-Down" action="Press"><action name="Focus"/></mousebind>
+    </context>
+    <context name="Client">
+      <mousebind button="Left" action="Press">
+        <action name="Focus"/>
+        <action name="Raise"/>
+      </mousebind>
+      <mousebind button="Middle" action="Press">
+        <action name="Focus"/>
+        <action name="Raise"/>
+      </mousebind>
+      <mousebind button="Right" action="Press">
+        <action name="Focus"/>
+        <action name="Raise"/>
+      </mousebind>
+    </context>
+  </mouse>
+  <applications>
+    <application type="normal">
+      <decor>no</decor>
+      <maximized>yes</maximized>
+    </application>
+  </applications>
+</openbox_config>

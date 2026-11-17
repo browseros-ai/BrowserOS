@@ -1,0 +1,30 @@
+<!doctype html><meta charset=utf-8><title>Card limits</title>
+<style> body { margin: 24px; font: 15px sans-serif; } input { display: block; margin: 8px 0; width: 260px; } </style>
+<!-- A card form whose own script moves a box's maxlength as a hosted card field does once it
+     knows the brand (ruling R64): a number that starts with 4 (Visa) moves the code box from 4 to
+     3; a number that starts with 34 or 37 (Amex) moves the number box itself from 22 to 17, while
+     it is typed. setLimit(id, n) sets any box's limit, and takes it away when n is negative;
+     setName(id, name) renames a box. A plain box and a number box (whose type the browser applies
+     no maxlength to) take any other row. -->
+<input id=number aria-label="Card number" autocomplete=cc-number name=cardnumber maxlength=22>
+<input id=expiry aria-label="Expiry" autocomplete=cc-exp name=exp maxlength=5>
+<input id=code aria-label="Security code" autocomplete=cc-csc name=cvc maxlength=4>
+<input id=plain aria-label="Plain">
+<input id=pin type=number aria-label="Pin" maxlength=4>
+<script>
+  const byId = (id) => document.getElementById(id)
+  byId('number').addEventListener('input', (event) => {
+    const value = event.target.value
+    if (value.startsWith('4')) byId('code').maxLength = 3
+    if (value.startsWith('34') || value.startsWith('37')) event.target.maxLength = 17
+  })
+  window.setLimit = (id, n) => {
+    if (n < 0) byId(id).removeAttribute('maxlength')
+    else byId(id).maxLength = n
+    return true
+  }
+  window.setName = (id, name) => {
+    byId(id).name = name
+    return true
+  }
+</script>

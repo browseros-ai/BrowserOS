@@ -15,7 +15,7 @@ use crate::{
         capture::{CaptureHub, CdpPortTransport, LiveSessionTabs},
         cockpit::{CockpitQuery, SessionVisualService, TabActivityRecord, TabActivityService},
         harness::HarnessService,
-        harness_skills::load_browserclaw_skill,
+        harness_skills::{load_browserclaw_skill, with_ultrafast},
         page_hold::PageHoldService,
         profiles::ProfileService,
         recordings::{LiveRecordingBus, RecordingIngestService, RecordingStore},
@@ -49,10 +49,17 @@ pub struct AppState {
     pub harness: Arc<HarnessService>,
     pub skills: Arc<SkillService>,
     pub skill_runs: Arc<SkillRunService>,
+    /// Read through `ultrafast_enabled`, which also keeps hosted servers out.
+    pub ultrafast: Arc<crate::services::flow::switch::UltrafastSwitch>,
+    /// Single-use answers to the "with your agent or without" question, minted per write flow.
+    pub consent_tokens: Arc<crate::services::flow::consent::ConsentTokens>,
     pub analytics: Arc<AnalyticsService>,
     pub error_reporter: Arc<crate::services::error_reporting::ErrorReporter>,
     pub feedback_cohort: Arc<crate::services::feedback_cohort::FeedbackCohort>,
     pub feedback_invites: Arc<crate::db::feedback_invite::FeedbackInviteRepository>,
+    pub tool_calls_daily: Arc<crate::db::tool_calls_daily::ToolCallsDailyRepository>,
+    /// What ultrafast did in each task, kept after the task's history is deleted.
+    pub ultrafast_ledger: Arc<crate::db::ultrafast_ledger::UltrafastLedger>,
     pub profiles: Arc<ProfileService>,
     pub sessions: Arc<Sessions>,
     /// Saved native-profile intent is separate from agent profiles and live browser state.
@@ -72,23 +79,60 @@ pub struct AppState {
     pub page_hold: Arc<PageHoldService>,
     pub claude_desktop: Arc<crate::services::claude_desktop::ClaudeDesktop>,
     pub extension_updates: Arc<crate::services::extension_updates::ExtensionUpdates>,
+    /// ultrafast. Without a billing gateway in this build it reads as no plan and refuses the rest.
+    pub billing: Arc<crate::services::billing::Billing>,
+    /// The decisions worker pursue reaches the decision model and the writer through.
+    pub decisions: Arc<crate::services::decisions::Decisions>,
+    /// Where a release build reads whether ultrafast is on sale; `None` sells without asking.
+    pub plan_offer: Option<crate::services::plan_offer::FlagSource>,
     pub shutdown: ShutdownHandle,
     /// How the data this server opened compares to the schema this build knows, published on
     /// `/system/info` so the app can prompt an update when the database is ahead of the server.
     pub migration: MigrationOutcome,
 }
 
+pub use crate::services::billing::ULTRAFAST_FEATURE;
+
 /// Overall cap on how long a human-help request stays open before it is reaped, so a crashed or
 /// non-looping agent never leaves a stale "needs you" request behind.
 const HELP_MAX_WAIT: std::time::Duration = std::time::Duration::from_secs(20 * 60);
 
 impl AppState {
+    /// The server's state, with the billing gateway this build compiles in.
     pub async fn new(config: Arc<Config>) -> AppResult<Self> {
         let home = resolve_user_home_with(|name| env::var_os(name))?;
-        Self::new_with_home(config, home).await
+        // A hosted server is infrastructure with no person at it to buy or paste a key.
+        let billing = (!config.mode.is_hosted())
+            .then(|| crate::services::billing::BillingConfig::for_build(config.dev_mode))
+            .flatten();
+        let mut state = Self::new_with_home_and_billing(config, home, billing).await?;
+        if state.billing.is_available()
+            && crate::services::plan_offer::sells_behind_flag(state.config.dev_mode)
+        {
+            // Closed until PostHog says otherwise, or the last answer this computer saved.
+            let offered =
+                crate::services::plan_offer::load_cached(&state.config.browserclaw_dir).await;
+            state.billing.set_offered(offered.unwrap_or(false));
+            state.plan_offer = crate::services::plan_offer::flag_source(
+                state.config.mode,
+                state.config.dev_mode,
+                state.analytics.remote_config_credentials(),
+            );
+        }
+        Ok(state)
     }
 
+    /// State under another home with no billing gateway, so a test never reaches a real one.
+    /// Tests that need a gateway pass a local one to [`Self::new_with_home_and_billing`].
     pub async fn new_with_home(config: Arc<Config>, home_dir: PathBuf) -> AppResult<Self> {
+        Self::new_with_home_and_billing(config, home_dir, None).await
+    }
+
+    pub async fn new_with_home_and_billing(
+        config: Arc<Config>,
+        home_dir: PathBuf,
+        billing_config: Option<crate::services::billing::BillingConfig>,
+    ) -> AppResult<Self> {
         tokio::fs::create_dir_all(&config.browserclaw_dir).await?;
         let store = JsonStore::new(config.browserclaw_dir.clone());
         let targets = TargetBindings::load(store.clone()).await?;
@@ -114,7 +158,8 @@ impl AppState {
             config.browserclaw_dir.join("screenshots"),
             audit_log.clone(),
         ));
-        let analytics = Arc::new(AnalyticsService::new(&config.browserclaw_dir).await?);
+        let analytics =
+            Arc::new(AnalyticsService::new(&config.browserclaw_dir, config.mode).await?);
         let analytics_sink: Arc<dyn AnalyticsSink> = analytics.clone();
         // Shares the analytics install id, so a failure report and a product event are
         // the same anonymous install and neither adds a new identifier.
@@ -127,26 +172,29 @@ impl AppState {
         let feedback_invites = Arc::new(crate::db::feedback_invite::FeedbackInviteRepository::new(
             database.clone(),
         ));
-        // Read once, here, because the installed skill is a file on disk that
-        // reconcile keeps in step with whatever this decided at launch. A
-        // server that gains the credential later needs a restart for installed
-        // skills to follow it.
-        let skill = load_browserclaw_skill(
-            &config.resources_dir,
-            crate::config::PursueOffering::of(agent_settings.jev_token_source()),
-            config.behavior.tab_grouping,
-        )?;
+        let tool_calls_daily = Arc::new(
+            crate::db::tool_calls_daily::ToolCallsDailyRepository::new(database.clone()),
+        );
+        let ultrafast_ledger = Arc::new(crate::db::ultrafast_ledger::UltrafastLedger::new(
+            database.clone(),
+        ));
+        let skill = load_browserclaw_skill(&config.resources_dir, config.behavior.tab_grouping)?;
+        let ultrafast_skill = with_ultrafast(&skill)?;
         let claude_desktop = Arc::new(crate::services::claude_desktop::ClaudeDesktop::new(
             &home_dir,
             config.browserclaw_dir.join("claude-desktop"),
         ));
-        let harness = Arc::new(HarnessService::new_with_managed_skill(
-            config.browserclaw_dir.join("mcp-manager"),
-            config.browserclaw_dir.join("harness-integrations"),
-            home_dir,
-            skill,
-            analytics_sink.clone(),
-        ));
+        let harness = Arc::new(
+            HarnessService::new_with_managed_skill(
+                config.browserclaw_dir.join("mcp-manager"),
+                config.browserclaw_dir.join("harness-integrations"),
+                home_dir,
+                skill,
+                analytics_sink.clone(),
+            )
+            .with_ultrafast_skill(ultrafast_skill)
+            .with_read_only(config.dev_mode),
+        );
         let skills = Arc::new(SkillService::new(
             SkillsRepository::new(database.clone()),
             harness.clone(),
@@ -165,6 +213,7 @@ impl AppState {
             audit_log.clone(),
             session_tabs.clone(),
             config.session_idle,
+            config.session_complete_idle,
             config.session_retention,
             config.session_sweep_interval,
             analytics_sink,
@@ -251,6 +300,17 @@ impl AppState {
                 let _ = session_efficiency.queue_finalize(session_id);
             }
         }));
+        let billing = Arc::new(
+            crate::services::billing::Billing::open(
+                billing_config,
+                config.browserclaw_dir.clone(),
+                shutdown.child_token(),
+            )
+            .await,
+        );
+        let decisions = Arc::new(crate::services::decisions::Decisions::for_build(
+            config.mode.is_hosted(),
+        ));
         Ok(Self {
             config,
             audit_log,
@@ -268,10 +328,14 @@ impl AppState {
             harness,
             skills,
             skill_runs,
+            ultrafast: Arc::default(),
+            consent_tokens: Arc::default(),
             analytics,
             error_reporter,
             feedback_cohort,
             feedback_invites,
+            tool_calls_daily,
+            ultrafast_ledger,
             profiles,
             sessions,
             targets,
@@ -286,9 +350,77 @@ impl AppState {
             page_hold,
             claude_desktop,
             extension_updates: Arc::default(),
+            billing,
+            decisions,
+            plan_offer: None,
             shutdown,
             migration,
         })
+    }
+
+    /// Whether saved skills compile into ultrafast flows. Off by default, so skills save and run
+    /// the regular way; hosted servers never offer them.
+    #[must_use]
+    pub fn ultrafast_enabled(&self) -> bool {
+        self.ultrafast.is_on() && !self.config.mode.is_hosted()
+    }
+
+    /// Follows the plan: ultrafast is on while it includes it. When that changes, SKILL.md files
+    /// and the guide installed in connected agents follow, and those agents hear about it through
+    /// their tool list. Returns whether it changed.
+    pub async fn sync_ultrafast_with_plan(&self) -> bool {
+        let on = !self.config.mode.is_hosted() && self.billing.has_feature(ULTRAFAST_FEATURE).await;
+        let changed = self.ultrafast.set(on);
+        // Outside the change check: a switch pinned on at startup never reports a change, and the
+        // guide only re-installs when its own state moves.
+        if let Err(error) = self
+            .harness
+            .set_ultrafast_skill(self.ultrafast_enabled())
+            .await
+        {
+            tracing::warn!(error = %error, "agent guide sync failed");
+        }
+        // Outside the change check too, so a switch already on at startup still gets its date.
+        if let Err(error) = self.record_ultrafast_start().await {
+            tracing::warn!(error = %error, "ultrafast start date not saved");
+        }
+        if !changed {
+            return false;
+        }
+        if let Err(error) = self.skills.sync_skill_md(self.ultrafast_enabled()).await {
+            tracing::warn!(error = %error, "skill file sync failed");
+        }
+        true
+    }
+
+    /// Saves the day this computer got ultrafast, the first time the switch is on: the earlier of
+    /// now and the first ultrafast run, so a computer that used it before keeps those savings.
+    async fn record_ultrafast_start(&self) -> AppResult<()> {
+        if !self.ultrafast_enabled() {
+            return Ok(());
+        }
+        let store = JsonStore::new(self.config.browserclaw_dir.clone());
+        if crate::services::ultrafast_meter::saved_since(&store)
+            .await?
+            .is_some()
+        {
+            return Ok(());
+        }
+        let history = self.audit_log.all_ultrafast_sessions().await?;
+        let kept = self.ultrafast_ledger.all().await?;
+        let first_run = history
+            .iter()
+            .map(|session| session.first_run_at)
+            .chain(kept.iter().map(|record| record.first_run_at))
+            .min();
+        crate::services::ultrafast_meter::since(
+            &store,
+            true,
+            first_run,
+            crate::clock::now_epoch_ms(),
+        )
+        .await?;
+        Ok(())
     }
 
     pub async fn live_tab_activity(&self) -> Vec<TabActivityRecord> {
@@ -364,6 +496,7 @@ mod tests {
             resources_dir: dir.path().join("resources"),
             browserclaw_dir: browserclaw_dir.clone(),
             session_idle: Duration::from_secs(300),
+            session_complete_idle: Duration::from_secs(300),
             session_retention: Duration::from_secs(7_200),
             session_sweep_interval: Duration::from_secs(60),
             replay_retention_days: 7,
@@ -380,6 +513,33 @@ mod tests {
         assert_eq!(DATABASE_FILENAME, "browserclaw.sqlite");
         assert!(browserclaw_dir.join(DATABASE_FILENAME).is_file());
         assert_eq!(tokio::fs::read(old_database).await?, old_contents);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_test_app_has_no_billing_gateway_in_any_build() -> anyhow::Result<()> {
+        for dev_mode in [false, true] {
+            let dir = tempdir()?;
+            let config = Arc::new(Config {
+                server_port: 9200,
+                cdp_port: 49337,
+                proxy_port: None,
+                resources_dir: dir.path().join("resources"),
+                browserclaw_dir: dir.path().join("browserclaw"),
+                session_idle: Duration::from_secs(300),
+                session_complete_idle: Duration::from_secs(300),
+                session_retention: Duration::from_secs(7_200),
+                session_sweep_interval: Duration::from_secs(60),
+                replay_retention_days: 7,
+                dev_mode,
+                native: Default::default(),
+                mode: Default::default(),
+                behavior: Default::default(),
+                behavior_ignored: Vec::new(),
+            });
+            let state = AppState::new_with_home(config, dir.path().join("home")).await?;
+            assert!(!state.billing.is_available(), "dev_mode {dev_mode}");
+        }
         Ok(())
     }
 

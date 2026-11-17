@@ -80,14 +80,26 @@ describe('computeAffectedSuites', () => {
           'packages/browseros-agent/crates/browseros-core/src/assets/agent-cursor.js',
         ],
       ),
-    ).toEqual(['agent-cursor', 'build'])
+    ).toEqual(['agent-cursor', 'build', 'sdk-desktop-fixtures'])
   })
 
-  it('maps any affected Rust crate to all three Rust suites', () => {
+  it('tests that a vendored Playwright or engine asset change selects the engine freshness suite', () => {
+    for (const changed of [
+      'packages/browseros-agent/crates/neo-sdk/neo-playwright/assets/injected.js',
+      'packages/browseros-agent/crates/neo-sdk/neo-playwright/assets/prelude.js',
+      'packages/browseros-agent/crates/neo-sdk/neo-playwright/tests/data/probe-protocol.json',
+      'packages/browseros-agent/crates/neo-sdk/neo-playwright/third_party/playwright/packages/injected/src/injectedScript.ts',
+    ]) {
+      expect(suiteNames([], [changed])).toEqual([
+        'browseros-playwright-js',
+        'sdk-desktop-fixtures',
+      ])
+    }
+  })
+
+  it('maps any affected Rust crate to all Rust suites', () => {
     expect(
-      suiteNames([
-        pkg('@browseros/browseros-core-rust', 'crates/browseros-core'),
-      ]),
+      suiteNames([pkg('@browseros/unrelated-rust', 'crates/unrelated')]),
     ).toEqual(['claw-server', 'claw-server-quality', 'claw-mcp'])
   })
 
@@ -95,6 +107,87 @@ describe('computeAffectedSuites', () => {
     expect(
       suiteNames([pkg('@browseros/claw-server', 'apps/claw-server')]),
     ).toEqual(['claw-server', 'claw-server-quality', 'claw-mcp'])
+  })
+
+  it('does not select SDK fixtures for a claw-server-only change', () => {
+    expect(
+      suiteNames(
+        [pkg('@browseros/claw-server', 'apps/claw-server')],
+        ['packages/browseros-agent/apps/claw-server/src/lib.rs'],
+      ),
+    ).not.toContain('sdk-desktop-fixtures')
+  })
+
+  it('selects SDK fixtures for a browseros-core change', () => {
+    expect(
+      suiteNames(
+        [pkg('@browseros/browseros-core-rust', 'crates/browseros-core')],
+        ['packages/browseros-agent/crates/browseros-core/src/lib.rs'],
+      ),
+    ).toEqual([
+      'claw-server',
+      'claw-server-quality',
+      'claw-mcp',
+      'sdk-desktop-fixtures',
+    ])
+  })
+
+  it('selects SDK fixtures from each watched package root without changed-file metadata', () => {
+    for (const path of [
+      'crates/neo-sdk/neo-captcha',
+      'crates/neo-sdk/neo-playwright-js',
+      'crates/browseros-core',
+      'crates/browseros-cdp',
+      'crates/browseros-mcp',
+    ]) {
+      expect(suiteNames([pkg('test-package', path)])).toContain(
+        'sdk-desktop-fixtures',
+      )
+    }
+  })
+
+  it('selects SDK fixtures from each watched path without affected-package metadata', () => {
+    for (const path of [
+      'crates/neo-sdk/neo-captcha/Cargo.toml',
+      'crates/neo-sdk/neo-server/tests/desktop-fixtures/README.md',
+      'crates/browseros-core/src/lib.rs',
+      'crates/browseros-cdp/src/lib.rs',
+      'crates/browseros-mcp/src/lib.rs',
+      'contracts/claw-mcp/fixtures/pages/act.html',
+      'contracts/claw-mcp/tests/cases-act.ts',
+    ]) {
+      expect(suiteNames([], [`packages/browseros-agent/${path}`])).toContain(
+        'sdk-desktop-fixtures',
+      )
+    }
+  })
+
+  it('keeps unrelated and similarly named Rust paths out of SDK fixtures', () => {
+    for (const path of [
+      'apps/claw-server',
+      'crates/unrelated',
+      'crates/neo-sdk-other',
+      'crates/browseros-core-other',
+    ]) {
+      expect(
+        suiteNames(
+          [pkg('test-package', path)],
+          [`packages/browseros-agent/${path}/src/lib.rs`],
+        ),
+      ).not.toContain('sdk-desktop-fixtures')
+    }
+  })
+
+  it('runs the Rust suites and its own check script for a claw-sdk change', () => {
+    expect(
+      suiteNames([pkg('@browseros/neo-server', 'crates/neo-sdk/neo-server')]),
+    ).toEqual([
+      'claw-server',
+      'claw-server-quality',
+      'claw-sdk-quality',
+      'claw-mcp',
+      'sdk-desktop-fixtures',
+    ])
   })
 
   it('adds the build suite when scripts change', () => {
@@ -152,21 +245,27 @@ describe('computeAffectedSuites', () => {
         [],
         ['packages/browseros-agent/contracts/claw-mcp/tools.json'],
       ),
-    ).toEqual(['claw-mcp'])
+    ).toEqual(['claw-mcp', 'sdk-desktop-fixtures'])
   })
 
   it('ignores unrelated non-package files', () => {
     expect(suiteNames([], ['README.md', 'docs/whatever.md'])).toEqual([])
   })
 
-  it('tests that CAPTCHA test bed changes select their unit suite without a browser or Rust', () => {
+  it('tests that CAPTCHA test bed changes select SDK fixtures and the existing unit suite', () => {
     const suites = computeAffectedSuites(
       [],
-      ['packages/browseros-agent/tools/captcha-testbed/e2e/runner.ts'],
+      [
+        'packages/browseros-agent/crates/neo-sdk/neo-captcha/testbed/e2e/runner.ts',
+      ],
     )
-    expect(suites.map((suite) => suite.suite)).toEqual(['captcha'])
-    expect(suites[0]).toMatchObject({
-      command: 'bun run ./scripts/run-bun-test.ts ./tools/captcha-testbed',
+    expect(suites.map((suite) => suite.suite)).toEqual([
+      'sdk-desktop-fixtures',
+      'captcha',
+    ])
+    expect(suites.find((suite) => suite.suite === 'captcha')).toMatchObject({
+      command:
+        'bun run ./scripts/run-bun-test.ts ./crates/neo-sdk/neo-captcha/testbed',
       junit_path: 'test-results/captcha.xml',
       needs_browser: false,
       needs_rust: false,
@@ -196,6 +295,7 @@ describe('computeAffectedSuites', () => {
       'claw-server',
       'claw-server-quality',
       'claw-mcp',
+      'sdk-desktop-fixtures',
     ])
   })
 
@@ -210,7 +310,9 @@ describe('computeAffectedSuites', () => {
       pkg('@browseros/app-onboard', 'apps/app-onboard'),
       pkg('@browseros/build-server-tools', 'packages/build-server-tools'),
       pkg('@browseros/claw-server', 'apps/claw-server'),
+      pkg('@browseros/neo-server', 'crates/neo-sdk/neo-server'),
       pkg('@browseros/agent-cursor', 'packages/agent-cursor'),
+      pkg('@browseros/neo-playwright-js', 'crates/neo-sdk/neo-playwright-js'),
     ]
     expect(new Set(suiteNames(allPackages))).toEqual(
       new Set(

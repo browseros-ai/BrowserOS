@@ -20,6 +20,9 @@ impl HarnessService {
     /// Repairs eligible connections and product-owned skill content. The lock moves into the
     /// blocking thread: cancellation cannot release it while disk writes continue.
     pub async fn run_reconciliation(&self, mcp_url: &str) -> AppResult<ReconciliationOutcome> {
+        if self.read_only {
+            return Ok(ReconciliationOutcome::default());
+        }
         let guard = self.mutex.clone().lock_owned().await;
         let service = self.clone();
         let mcp_url = mcp_url.to_string();
@@ -98,6 +101,12 @@ impl HarnessService {
     /// Runs immediately and every minute on the owning HTTP runtime. Passes never
     /// overlap, missed ticks are skipped, and shutdown prevents another pass.
     pub async fn maintain_integrations(&self, mcp_url: &str, shutdown: impl Future<Output = ()>) {
+        if self.read_only {
+            tracing::info!(
+                "dev mode: harness provisioning is off; agent configuration changes are disabled"
+            );
+            return;
+        }
         let mut ticker = tokio::time::interval(Duration::from_secs(60));
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         tokio::pin!(shutdown);

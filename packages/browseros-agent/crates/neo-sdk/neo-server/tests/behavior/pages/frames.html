@@ -1,0 +1,14 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Frames</title><script src="events.js"></script></head>
+<body>
+<!-- Two named frames: `same` on this site, `cross` on localhost (an out-of-process iframe). -->
+<h1>Frames</h1>
+<button>Top button</button>
+<iframe name="same" title="Same frame" src="child.html?name=Same"></iframe>
+<script>
+  const cross = document.createElement('iframe')
+  cross.name = 'cross'
+  cross.title = 'Cross frame'
+  cross.src = `http://localhost:${location.port}/child.html?name=Cross`
+  document.body.append(cross)
+</script>
+</body></html>

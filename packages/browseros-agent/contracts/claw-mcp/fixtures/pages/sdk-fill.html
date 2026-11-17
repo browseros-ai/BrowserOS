@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Native input fill contracts</title>
+    <style>label { display: block; margin: 8px; }</style>
+  </head>
+  <body>
+    <!-- These controls have no text editor: fill must use their native values
+         and notify application listeners after setting them. -->
+    <label>Date field <input id="date" type="date" value="2020-01-02" /></label>
+    <label>Time field <input id="time" type="time" value="08:00" /></label>
+    <label>Datetime field <input id="datetime-local" type="datetime-local" value="2020-01-02T08:00" /></label>
+    <label>Month field <input id="month" type="month" value="2020-01" /></label>
+    <label>Week field <input id="week" type="week" value="2020-W01" /></label>
+    <label>Color field <input id="color" type="color" value="#112233" /></label>
+    <label>Range field <input id="range" type="range" min="0" max="100" value="10" /></label>
+    <script>
+      window.nativeEvents = []
+      for (const kind of ['input', 'change']) {
+        document.addEventListener(kind, event => {
+          window.nativeEvents.push({ id: event.target.id, kind, value: event.target.value })
+        })
+      }
+    </script>
+  </body>
+</html>

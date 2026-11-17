@@ -36,6 +36,15 @@ pub const ACTION_SETTLE_CDP_CALL_TIMEOUT: Duration = Duration::from_millis(250);
 /// A settled page answers after one quiet interval.
 pub const ARRIVAL_READY_BUDGET: Duration = Duration::from_millis(1_500);
 
+/// How long check/uncheck wait for a clicked control to report its new state. Frameworks
+/// can apply it a tick after the click event, so one read straight after would misreport.
+pub const CHECK_STATE_SETTLE: Duration = Duration::from_millis(500);
+pub const CHECK_STATE_POLL: Duration = Duration::from_millis(50);
+
+/// Mouse moves a drag takes between press and release. Steps past the first are what turn
+/// a press into a drag for scripts that track movement, and give drop targets dragover.
+pub const DRAG_STEPS: u32 = 10;
+
 /// Agent pointer travel time: the page plays each move over about this long.
 pub const POINTER_TRAVEL: Duration = Duration::from_millis(400);
 /// Hard cap on waiting for the pointer to arrive. A safety net, not the normal

@@ -1,0 +1,72 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Private failure fields</title>
+<style>
+  input, textarea, button, section { display: block; margin: 4px; }
+  .content-field { content: attr(value); color: rgb(20, 40, 60); }
+  .content-field::before, .content-field::after { content: attr(value); }
+  #covered { position: relative; width: 300px; }
+  #cover { position: absolute; inset: 0; z-index: 1; background: white; }
+  #intercept-target, #delayed-cover {
+    position: fixed; left: 20px; top: 20px; width: 200px; height: 40px;
+    margin: 0; box-sizing: border-box;
+  }
+  #intercept-target { z-index: 10; }
+  #delayed-cover { display: none; z-index: 11; }
+</style>
+<h1>Private failure fields</h1>
+<label id="password-label" for="private-input">Private password</label>
+<input id="private-input" class="content-field strict-fields" type="password"
+  value="AttrCanary-1" aria-valuetext="AttrCanary-1" aria-valuenow="AttrCanary-1">
+<input id="private-second" class="strict-fields" type="password"
+  value="AttrCanary-1" aria-valuetext="AttrCanary-1" aria-valuenow="AttrCanary-1">
+<section id="private-ancestor"><span>Public prefix </span><textarea
+  id="private-textarea" class="private-array" role="searchbox" autocomplete="new-password"
+  aria-label="Private textarea" value="AttrCanary-1">TextCanary-3</textarea><span> Public suffix</span></section>
+<span class="private-array">Public tail</span>
+<span id="name-prefix">Public label</span>
+<button id="name-from-private" aria-labelledby="name-prefix private-textarea">Name target</button>
+<!-- Native description reads the referenced button's accessible name. A direct textarea
+     describedby is empty in Chromium and cannot establish this regression. -->
+<button id="description-from-private" aria-describedby="name-from-private">Description target</button>
+<input id="error-from-private" aria-label="Invalid private reference" aria-invalid="true" aria-errormessage="error-private-message">
+<div id="error-private-message">Wrong: <button aria-labelledby="private-textarea">Error source</button></div>
+<button id="description-direct" aria-describedby="private-textarea">Direct description control</button>
+<button class="strict-names" aria-labelledby="private-textarea">First alias</button>
+<button class="strict-names" aria-labelledby="private-textarea">Second alias</button>
+<div id="covered">
+  <input id="covered-input" type="password" value="AttrCanary-1"
+    aria-valuetext="AttrCanary-1" aria-valuenow="AttrCanary-1">
+  <div id="cover">Covered input</div>
+</div>
+<input id="public-input" class="content-field" aria-label="Public input"
+  value="PublicAttr" aria-valuetext="PublicAttr" aria-valuenow="PublicAttr">
+<section id="public-ancestor"><span>Public prefix </span><textarea id="public-textarea"
+  class="public-array" role="searchbox" aria-label="Public textarea">PublicText</textarea><span> Public suffix</span></section>
+<span class="public-array">Public tail</span>
+<button id="name-from-public" aria-labelledby="name-prefix public-textarea">Public name target</button>
+<button id="description-from-public" aria-describedby="name-from-public">Public description target</button>
+<input id="error-from-public" aria-label="Invalid public reference" aria-invalid="true" aria-errormessage="error-public-message">
+<div id="error-public-message">Wrong: <button aria-labelledby="public-textarea">Public error source</button></div>
+<button id="intercept-target">Trusted event target</button>
+<input id="delayed-cover" type="password" value="AttrCanary-1"
+  aria-valuetext="AttrCanary-1" aria-valuenow="AttrCanary-1">
+
+<input id="focus-victim" type="text" aria-label="Focus victim">
+<input id="focus-thief" type="password" value="AttrCanary-1"
+  aria-valuetext="AttrCanary-1" aria-valuenow="AttrCanary-1">
+<input id="public-focus-victim" type="text" aria-label="Public focus victim">
+<input id="public-focus-thief" type="text" value="PublicFocus">
+<script>
+for (const prefix of ['', 'public-']) {
+  document.getElementById(prefix + 'focus-victim').addEventListener('focus', () =>
+    queueMicrotask(() => document.getElementById(prefix + 'focus-thief').focus()));
+}
+</script>
+
+<input id="strict-mirror-private" class="strict-mirror-fields" type="password" value="AttrCanary-1">
+<input class="strict-mirror-fields" type="text" value="PublicMirror">
+<script>
+const mirrored = document.getElementById('strict-mirror-private');
+mirrored.addEventListener('input', () => mirrored.setAttribute('value', mirrored.value));
+</script>

@@ -1,0 +1,13 @@
+await page.goto(args.base + '/links.html');
+const paths = [];
+for (let attempt=0;attempt<2;attempt++) {
+  // Register before input so an immediate download cannot beat the event subscription.
+const waiting = page.waitForEvent('download',{timeout:8000});
+  await page.getByRole('link',{name:'Download report',exact:true}).click();
+  const download = await waiting;
+  equal(await download.failure(),null,'the native download completes');
+  paths.push(await download.path());
+}
+assert(paths[0] !== paths[1],'two downloads keep distinct files',{paths});
+assert(/report \(\d+\)\.txt$/.test(paths[1]),'the second browser-chosen file name has a collision counter',{paths});
+return {paths};

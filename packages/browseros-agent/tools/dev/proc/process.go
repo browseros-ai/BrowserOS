@@ -46,6 +46,8 @@ type watchRunPathsResult struct {
 // AcquireWatchRunLock claims ownership of the current dev watch identity.
 // If the same run identity is already active, it terminates the recorded
 // process group from the state file and waits for the OS lock to be released.
+// A slow shutdown returns an error rather than killing the supervisor: managed
+// children have separate process groups and must be drained before it exits.
 func AcquireWatchRunLock(identity WatchRunIdentity, timeout time.Duration) (*WatchRunLock, bool, error) {
 	baseDir, err := DefaultWatchRunBaseDir()
 	if err != nil {
@@ -105,17 +107,7 @@ func AcquireWatchRunLockInDir(baseDir string, identity WatchRunIdentity, timeout
 		return nil, false, err
 	}
 
-	if err := signalProcessGroup(state.PGID, syscall.SIGKILL); err != nil {
-		return nil, false, err
-	}
-	lock, err = waitForWatchRunLock(paths, identity, time.Second)
-	if err != nil {
-		if errors.Is(err, errWatchRunLocked) {
-			return nil, false, fmt.Errorf("previous dev watch process group %d did not exit after SIGKILL; inspect %s before retrying", state.PGID, paths.Lock)
-		}
-		return nil, false, err
-	}
-	return lock, true, nil
+	return nil, false, fmt.Errorf("previous dev watch process group %d is still shutting down after %s; retry when it has stopped (lock: %s)", state.PGID, timeout, paths.Lock)
 }
 
 // DefaultWatchRunBaseDir returns the shared location for dev watch lock files.
@@ -160,12 +152,9 @@ func StopAllWatchProcessesInDir(baseDir string, timeout time.Duration) (int, err
 			return len(pgids), nil
 		}
 		if time.Now().After(deadline) {
-			for _, pgid := range remaining {
-				if err := signalProcessGroup(pgid, syscall.SIGKILL); err != nil {
-					return 0, err
-				}
-			}
-			return len(pgids), nil
+			// Cleanup must not orphan separately grouped server children or
+			// remove their temporary state while shutdown is still in progress.
+			return 0, fmt.Errorf("dev watch process groups %v are still shutting down after %s; retry when they have stopped", remaining, timeout)
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
@@ -211,12 +200,9 @@ func stopOtherWatchRunOwners(baseDir string, identity WatchRunIdentity, currentS
 			return true, nil
 		}
 		if time.Now().After(deadline) {
-			for _, pid := range remaining {
-				if err := signalProcess(pid, syscall.SIGKILL); err != nil {
-					return false, err
-				}
-			}
-			return true, nil
+			// Legacy owners must also finish their own child cleanup before a
+			// new lock identity can safely reuse their profile or Claw database.
+			return false, fmt.Errorf("previous dev watch processes %v are still shutting down after %s; retry when they have stopped", remaining, timeout)
 		}
 		time.Sleep(100 * time.Millisecond)
 	}

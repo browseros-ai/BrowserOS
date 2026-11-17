@@ -1,0 +1,11 @@
+await page.goto(args.base + '/form.html');
+const ref = await refFor(page, '"Name"');
+const field = page.getByRef(ref);
+await field.click();
+// Literal keys preserve their spelling under Shift; changing to KeyA would test another key path.
+const result = await field.press('Shift+a');
+assert(result === undefined, 'press resolves without a value', result);
+const value = await field.inputValue();
+equal(value, 'a', 'literal Shift+a types lowercase a');
+equal(await page.evaluate(() => document.getElementById('name').value), 'a', 'the referenced field owns the typed value');
+return {ref, value, pressReturnType: typeof result};

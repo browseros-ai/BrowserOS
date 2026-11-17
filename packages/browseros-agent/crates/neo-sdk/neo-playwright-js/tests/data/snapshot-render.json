@@ -1,0 +1,55 @@
+{
+  "note": "A stitched ai-mode snapshot as the snapshot ops return it ({ json, partial }, candidate 1 sketch/snapshot.rs): a checkout page whose card iframe was stitched in, whose nested frame missed its budget and whose ad frame detached. yaml is what ariaSnapshot() must return, written from the vendored renderer's rules plus Neo's partial comments.",
+  "result": {
+    "json": [
+      { "role": "heading", "name": "Checkout", "level": 1, "ref": "e2" },
+      { "role": "button", "name": "Pay now", "ref": "e3", "cursor": "pointer" },
+      {
+        "role": "iframe",
+        "ref": "e4",
+        "children": [
+          { "role": "textbox", "name": "Card number", "ref": "f1e2" },
+          { "role": "iframe", "ref": "f1e3" }
+        ]
+      },
+      { "role": "iframe", "name": "Ads", "ref": "e5" },
+      { "role": "generic", "ref": "e6", "text": "Chrome 1" },
+      {
+        "role": "list",
+        "ref": "e7",
+        "children": [
+          { "role": "listitem", "ref": "e8", "text": "One" },
+          {
+            "role": "listitem",
+            "ref": "e9",
+            "children": [
+              "Two: ",
+              { "role": "link", "name": "#2", "ref": "e10", "url": "https://shop.example/2" }
+            ]
+          }
+        ]
+      }
+    ],
+    "partial": [
+      { "ref": "f1e3", "frame": "https://hang.example/slow", "reason": "timeout after 2000 ms" },
+      { "ref": "e5", "frame": "https://ads.example/", "reason": "frame detached" }
+    ]
+  },
+  "yaml": [
+    "- heading \"Checkout\" [level=1] [ref=e2]",
+    "- button \"Pay now\" [ref=e3] [cursor=pointer]",
+    "- iframe [ref=e4]:",
+    "  - textbox \"Card number\" [ref=f1e2]",
+    "  - iframe [ref=f1e3]",
+    "    # partial: https://hang.example/slow not read (timeout after 2000 ms)",
+    "- iframe \"Ads\" [ref=e5]",
+    "  # partial: https://ads.example/ not read (frame detached)",
+    "- generic [ref=e6]: Chrome 1",
+    "- list [ref=e7]:",
+    "  - listitem [ref=e8]: One",
+    "  - listitem [ref=e9]:",
+    "    - text: \"Two: \"",
+    "    - link \"#2\" [ref=e10]:",
+    "      - /url: https://shop.example/2"
+  ]
+}

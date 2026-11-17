@@ -4,6 +4,7 @@ import { type ComponentProps, useRef, useState } from 'react'
 import { useParams } from 'react-router'
 import { StepLogDialog } from '@/components/audit/StepLogDialog'
 import { EmptyState } from '@/components/cockpit/EmptyState'
+import { agentIdentity } from '@/components/harness/harness.types'
 import { Page } from '@/components/layout/Page'
 import {
   Alert,
@@ -32,6 +33,10 @@ import {
   actionForStep,
   activeStepIndex,
   dispatchTimes,
+  lastActionForStep,
+  neoRunMarks,
+  railItems,
+  runLastIndex,
   snapshotForStep,
 } from './task-detail.helpers'
 
@@ -49,6 +54,8 @@ export function TaskDetailPage({ focus }: { focus?: 'player' } = {}) {
   // Without a recording, the step the person picked; null shows the last one.
   const [chosenDispatchId, setChosenDispatchId] = useState<number | null>(null)
   const [fullScreen, setFullScreen] = useState(false)
+  // The neo run whose ending was chosen, by its takeover's index in the step list.
+  const [chosenRunEnd, setChosenRunEnd] = useState<number | null>(null)
 
   if (data.isPending) {
     return (
@@ -97,13 +104,45 @@ export function TaskDetailPage({ focus }: { focus?: 'player' } = {}) {
   const shownStep = steps[activeIndex]
 
   const selectStep = (step: DescribedStep) => {
+    setChosenRunEnd(null)
     const action = actionForStep(step, replay.plan.actions)
     if (hasRecording && action) replay.selectAction(action)
     else setChosenDispatchId(step.dispatchIds[0] ?? null)
   }
 
+  // A run's ending is the moment neo's last step finished: play from there.
+  const selectRunEnd = (takeover: number) => {
+    const run = railItems(steps).find(
+      (item) => item.kind === 'run' && item.takeover === takeover,
+    )
+    const lastStep =
+      run?.kind === 'run' ? steps[runLastIndex(run)] : steps[takeover]
+    if (!lastStep) return
+    const action = lastActionForStep(lastStep, replay.plan.actions)
+    if (hasRecording && action) {
+      replay.seek(Math.max(action.startAt, action.completionAt))
+    } else {
+      setChosenDispatchId(lastStep.dispatchIds.at(-1) ?? null)
+    }
+    setChosenRunEnd(takeover)
+  }
+  // The ending stays chosen while the player sits on the run's last step.
+  const runEndShown =
+    chosenRunEnd !== null &&
+    railItems(steps).some(
+      (item) =>
+        item.kind === 'run' &&
+        item.takeover === chosenRunEnd &&
+        runLastIndex(item) === activeIndex,
+    )
+      ? chosenRunEnd
+      : null
+
   // Before the first step, a loading recording shows the first step's picture.
   const pictureStep = shownStep ?? steps[0]
+
+  // Where neo drove, for both scrubbers.
+  const neoMarks = neoRunMarks(steps, replay.plan.actions)
 
   // One step list, fed once: the page's rail and the full-screen one stay in step.
   const stepList: ComponentProps<typeof TaskSteps> = {
@@ -114,6 +153,9 @@ export function TaskDetailPage({ focus }: { focus?: 'player' } = {}) {
     showHidden,
     onShowHiddenChange: setShowHidden,
     onSelect: selectStep,
+    agent: agentIdentity(session.harness, session.label || session.slug).name,
+    chosenRunEnd: runEndShown,
+    onSelectRunEnd: selectRunEnd,
   }
 
   return (
@@ -139,6 +181,7 @@ export function TaskDetailPage({ focus }: { focus?: 'player' } = {}) {
           }
           onFullScreen={() => setFullScreen(true)}
           fullScreen={fullScreen}
+          neoMarks={neoMarks}
         />
         <TaskSteps {...stepList} />
       </div>
@@ -149,6 +192,7 @@ export function TaskDetailPage({ focus }: { focus?: 'player' } = {}) {
           session={session}
           replay={replay}
           steps={<TaskSteps {...stepList} layout="rail" />}
+          neoMarks={neoMarks}
         />
       ) : null}
       <PagesVisited pages={data.pages} />

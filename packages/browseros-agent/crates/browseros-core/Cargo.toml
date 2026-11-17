@@ -17,6 +17,15 @@ thiserror.workspace = true
 tracing.workspace = true
 base64.workspace = true
 uuid.workspace = true
+# Only behind the `ts-rs` feature below.
+ts-rs = { workspace = true, optional = true }
+
+[features]
+# Derives ts-rs's `TS` on the ids that cross neo-playwright's op wire (`TabId`, `FrameId`,
+# `TargetId`) and on the viewport `Size` of neo-server's run envelope, which those crates print in
+# the prelude's generated TypeScript; the orphan rule keeps the derive here. Only the neo-sdk
+# crates turn it on, so the desktop app's build is unchanged.
+ts-rs = ["dep:ts-rs"]
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }

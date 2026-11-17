@@ -1,0 +1,15 @@
+// Source port of act-020 at a7e536e152a4835abe9974498b27a5c927dd2e0d. Execution is owned by the coordinator.
+await page.goto(args.base + '/dialog.html');
+await page.ariaSnapshot();
+const outcomes = [];
+for (const accept of [true, false]) {
+  // Register the waiter before scheduling confirm so automatic dismissal cannot take it.
+  const waiting = page.waitForEvent('dialog', { timeout: 10000 });
+  await page.evaluate(() => { setTimeout(() => document.getElementById('trigger-confirm').click(), 0); return 'scheduled'; });
+  const dialog = await waiting;
+  if (accept) await dialog.accept();
+  else await dialog.dismiss();
+  await poll(async () => (await page.locator('#dialog-result').textContent()).includes('confirm:' + accept), 'the confirm reports ' + accept);
+  outcomes.push({ accept, type: dialog.type(), result: await page.locator('#dialog-result').textContent() });
+}
+return { outcomes };

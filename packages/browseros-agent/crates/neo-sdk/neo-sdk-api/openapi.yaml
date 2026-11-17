@@ -1,0 +1,3041 @@
+openapi: 3.0.3
+info:
+  title: BrowserOS claw-sdk API
+  version: 1.0.0
+  description: |
+    The host-facing API of hosted BrowserOS Neo (claw-sdk): run and operation records,
+    screenshots, the live view, the VNC display and owner takeover. Takeover is offered as small
+    stable parts (locks, fits and `/display`) and one
+    thin flow over them (`/v1/takeovers`); a host may compose its own flow from the parts.
+
+    It is served on Neo's host listener, never on the agent's MCP port. That is a Unix socket by
+    default (`CLAW_HOST_SOCKET`, or `$BROWSERCLAW_DIR/host.sock` when unset), with a TCP bind
+    only when `CLAW_HOST_TCP` is set. Every request needs `Authorization: Bearer <token>`, with the
+    token from the file `CLAW_HOST_TOKEN_FILE` names; on the socket the peer's uid is checked too.
+    Tokens are never accepted in query strings.
+
+    Locks belong to a browser tab, and a host groups its runs with ids of its own.
+    Ids: a run id is a UUIDv7 Neo creates for every run and returns in the result's
+    `_meta["com.browseros.neo/run"].id`; an operation id is `<runId>.<seq>`, where `seq` counts
+    the run's operations in start order; a tab id is the browser's own (`PageRef.tabId`),
+    unique among the browser's tabs until the browser restarts. An old number may then name
+    a different tab. A host
+    may send two optional ids of its own with a run
+    (`_meta["com.browseros.neo/run"] = {requestId?, taskId?, hostData?, access?}`), each at most 128
+    bytes. `requestId` names one call. Runs can be looked up by it, and a repeat of it never
+    runs again (within its task when the run has a `taskId`, else across Neo; under the `task`
+    tab scope, a request without a `taskId` repeats only a run without one), as long as Neo's
+    trace remembers it: a `requestId` whose run retention has removed (past
+    `trace.retentionSeconds`, at the sweep every 10 minutes; a run still running is never
+    removed), or one from before the trace store was replaced (an older image meeting a newer
+    trace file, or any start on a fresh trace), is unknown, and a repeat of it runs again. A host that journals its request
+    ids and retries them across a rollback must not count on the replay. `taskId` groups the
+    calls of one task, so its runs, events and trace can be listed together.
+
+    Task scope (`tabs.scope`, default `task`): a run that carries a `taskId` sees and acts on
+    only its task family's tabs. A family starts at the task a host named; every task its runs
+    create (`neo.createTask`, at any depth) joins it; its tabs are the ones its tasks' runs
+    opened and their popups, sibling tasks' included. Any other tab is refused with
+    `page_not_in_task`, and nothing is sent to it. A run without a `taskId` sees every tab, as
+    before, but under `task` it cannot use a task a host named (`neo.task(id)` answers
+    `task_not_found`), and its `requestId` repeats only an earlier run that had no task either.
+    The server README's Task scope section lists every difference such a run meets, new fields
+    and the trace's schema 6 included. Every result says which applied, in
+    `_meta["com.browseros.neo/run"].tabsScope`: `task` when the run was bound to its task,
+    `browser` when it was not. An older Neo sends no
+    `tabsScope`, which means `browser`. A host whose own scripts must reach every tab sends them
+    without a `taskId`, or sets `tabs.scope` to `browser`.
+
+    Delivery keeps three answers apart so a client never repeats a write blindly: `not_sent`
+    (no side effect was attempted), `done` (Neo has a definite answer) and `unknown` (sent,
+    never confirmed).
+
+    Compatibility: changes within `/v1` are additive. New response fields and new values of an
+    extensible enum (`x-extensible-enum`) can appear at any time, so clients must ignore fields
+    and values they do not know. Fields are never removed or renamed within `/v1`.
+servers:
+  - url: http://localhost
+    description: >-
+      Over the Unix socket named by `CLAW_HOST_SOCKET` (the Host header is ignored), or over TCP
+      at `CLAW_HOST_TCP` when that is set.
+security:
+  - bearer: []
+paths:
+  /v1/runs:
+    get:
+      operationId: listRuns
+      summary: Runs, newest first. `requestId` finds the run a host request produced.
+      description: The filters combine with AND.
+      parameters:
+        - $ref: '#/components/parameters/TraceFields'
+        - $ref: '#/components/parameters/InternalOperations'
+        - name: requestId
+          in: query
+          description: The host's own id it sent with the run, if it sent one.
+          schema:
+            type: string
+            maxLength: 128
+        - $ref: '#/components/parameters/TaskId'
+        - name: tab
+          in: query
+          description: Only runs with an operation that targeted this tab.
+          schema:
+            type: integer
+            format: int64
+        - name: status
+          in: query
+          schema:
+            type: string
+            x-extensible-enum: [running, ok, error, cancelled, timeout, interrupted]
+        - $ref: '#/components/parameters/Since'
+        - $ref: '#/components/parameters/Until'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: One page of runs.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunList'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /v1/runs/{runId}:
+    get:
+      operationId: getRun
+      summary: One run with selected operations in start order, all by default.
+      parameters:
+        - $ref: '#/components/parameters/TraceFields'
+        - $ref: '#/components/parameters/InternalOperations'
+        - name: runId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: wait
+          in: query
+          description: >-
+            Seconds to hold the request until the run is `complete`. The response is 200 either
+            way; check `complete`.
+          schema:
+            type: integer
+            format: int32
+            minimum: 0
+            maximum: 60
+            default: 0
+        - name: include
+          in: query
+          description: '`screenshots` inlines each operation''s screenshot as base64 JPEG.'
+          schema:
+            type: string
+            x-extensible-enum: [screenshots]
+      responses:
+        '200':
+          description: The run.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Run'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /v1/runs/{runId}/downloads/{index}:
+    get:
+      operationId: getRunDownload
+      summary: The bytes of one file the run downloaded.
+      description: >-
+        The copy Neo kept of download `index` of the run (`Run.downloads[].index`), taken when
+        the run ended. It is there once the run's reply has been sent, for as long as the run's
+        record is kept, and goes when retention removes the run. A download that was not
+        `completed` when the run ended has no bytes: 404. The script's own copy is
+        `Run.downloads[].path`, the file the browser saved, which stays where it is.
+      parameters:
+        - name: runId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: index
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int32
+            minimum: 0
+      responses:
+        '200':
+          description: The file's bytes, with its suggested name in `Content-Disposition`.
+          headers:
+            Content-Disposition:
+              description: '`attachment`, with the suggested file name when the record has one.'
+              schema:
+                type: string
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /v1/runs/{runId}/blobs/{blobId}:
+    get:
+      operationId: getRunBlob
+      summary: The bytes a run's reply names as a blob.
+      description: >-
+        A run whose returned value would be over the 256 KiB inline limit keeps its largest byte
+        values (a `Buffer` or `Uint8Array`, which travel as `{"$neo":"bytes","base64"}`) with the
+        run, largest first until the value fits, and the reply carries
+        `{"$neo":"blob","id":"b0","size":N}` in each one's place. This reads one. It is there
+        once the reply has been sent, for as long as the run's record is kept, and goes when
+        retention removes the run. Text is never kept this way: a value that does not fit once
+        every byte value moved fails `script / result_too_large`.
+      parameters:
+        - name: runId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: blobId
+          in: path
+          required: true
+          description: The marker's `id`, such as `b0`.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The blob's bytes, `size` of them.
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /v1/operations/{operationId}:
+    get:
+      operationId: getOperation
+      summary: One operation.
+      parameters:
+        - $ref: '#/components/parameters/OperationId'
+      responses:
+        '200':
+          description: The operation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Operation'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /v1/operations/{operationId}/screenshot:
+    get:
+      operationId: getOperationScreenshot
+      summary: The page after the operation, as JPEG.
+      parameters:
+        - $ref: '#/components/parameters/OperationId'
+      responses:
+        '200':
+          description: The image.
+          content:
+            image/jpeg:
+              schema:
+                type: string
+                format: binary
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '410':
+          $ref: '#/components/responses/Expired'
+  /v1/trace:
+    get:
+      operationId: getTrace
+      summary: The latest operations of a task, a tab or all of Neo, with their runs.
+      description: |
+        Keeps the last `tail` operations that match `taskId` and `tab`, oldest first, with the
+        summaries of their runs. Both filters are optional; given together, an operation must
+        match both. `truncated` says whether older matching operations were cut. `screenshots`
+        inlines stored images: `none`, `all`, or `last:N` (N from 1 to 50).
+      parameters:
+        - $ref: '#/components/parameters/TraceFields'
+        - $ref: '#/components/parameters/InternalOperations'
+        - $ref: '#/components/parameters/TaskId'
+        - name: tab
+          in: query
+          description: Only operations that targeted this tab.
+          schema:
+            type: integer
+            format: int64
+        - name: tail
+          in: query
+          schema:
+            type: integer
+            format: int32
+            minimum: 1
+            maximum: 1000
+            default: 100
+        - name: screenshots
+          in: query
+          schema:
+            type: string
+            default: none
+      responses:
+        '200':
+          description: The trace.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TraceTail'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /v1/events:
+    get:
+      operationId: streamEvents
+      summary: Server-sent events, for one task, one tab, or all of Neo.
+      description: |
+        `text/event-stream`; each event's `data` is one `Event`, and its `event` field is that
+        Event's `type`. Event ids are `<boot>-<n>`: send the last one back as `Last-Event-ID` to
+        resume within the same Neo process, while Neo still holds it (the last 1024 events).
+        An id from another Neo process (after a restart), an older one, or one Neo never sent
+        starts the stream with `stream.reset`, then live events; read the state endpoints
+        again. A client that falls more than 1024 events behind gets `stream.reset` too.
+
+        `taskId` keeps the run and operation events of that task's runs. `tab` keeps the events
+        about that tab: the operations that target it, and its `tab.closed`,
+        `lock.state` and `takeover.state` events. Given together, an event must match both.
+        `stream.reset` passes every filter.
+      parameters:
+        - $ref: '#/components/parameters/TaskId'
+        - name: tab
+          in: query
+          description: Only events about this tab.
+          schema:
+            type: integer
+            format: int64
+        - name: Last-Event-ID
+          in: header
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The stream.
+          content:
+            text/event-stream:
+              schema:
+                $ref: '#/components/schemas/Event'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /v1/tabs:
+    get:
+      operationId: listTabs
+      summary: Every open tab, its DevTools target and its task associations.
+      description: |
+        Lists the live native browser inventory, including tabs no task has touched, in the
+        browser's order. Metadata comes from one browser listing over Neo's existing connection.
+        `taskIds` are distinct, sorted ids whose retained, committed runs touched the tab;
+        untasked runs add no id. Trace writes are asynchronous, so a just-started operation may
+        appear after its batch commits. Retention removes associations with their runs.
+        These are historical associations, not exclusive ownership or a permission check.
+        `taskId`, when present, is the task holding the tab now: under the `task` tab scope, the
+        runs of every task in its family see it (see `Tab.taskId`).
+        Tab ids can be reused after a browser restart. The list is a point-in-time observation;
+        a tab may close or navigate after the listing. No separate host CDP connection is needed.
+        A tab with a host keep carries `keep`, empty without a limit or containing `expiresAt`.
+      responses:
+        '200':
+          description: All currently open tabs, or an empty list when none are open.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TabList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          description: Neo could not read the tab/task associations (`internal_error`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/tabs/{tabId}/keep:
+    parameters:
+      - $ref: '#/components/parameters/TabId'
+    put:
+      operationId: keepTab
+      summary: Keep an open tab from idle cleanup until the host releases it.
+      description: |
+        Sets or replaces this tab's keep. An absent body or `{}` keeps it without a time limit.
+        `ttlSeconds` ends it automatically after 1 to 2,592,000 seconds. A keep accepts any tab a
+        lock can name, including the owner's pages and Neo's blank tab. An internal, extension,
+        or devtools tab that the native inventory lists but a lock cannot name answers 404
+        `tab_not_found`. Agent operations, including closing the tab, remain available. Only
+        idle cleanup treats the tab as in use.
+
+        A keep ends on DELETE, expiry, tab closure, or server restart. DELETE and expiry restart
+        the idle clock at that instant, giving the tab one full idle interval. Keeps live only in
+        memory. After a server-only restart, preexisting tabs are discovered rather than
+        agent-opened, so idle cleanup does not close them. Persisting keeps could protect a
+        different tab after a browser restart reuses its number. If tab origins become persistent,
+        keeps must become persistent in the same change. No trace record or event is created.
+
+        A tab can close concurrently with this request. The host must handle `tab.closed` even
+        after a successful response. Older images answer 404 `not_found` for this route, distinct
+        from `tab_not_found` when this image cannot find the tab.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TabKeepRequest'
+      responses:
+        '200':
+          description: The tab's replacement keep.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TabKeepResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+    delete:
+      operationId: releaseTabKeep
+      summary: Release a tab's keep, including when the tab or keep is already gone.
+      description: >-
+        Safe to repeat. Never contacts the browser and always returns 200 for an integer tab id.
+        Releasing an active keep restarts the tab's idle clock. Repeating DELETE after release
+        does not postpone idle cleanup. No trace record or event is created.
+      responses:
+        '200':
+          description: The tab no longer has a keep.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TabKeepDeleted'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /v1/tabs/{tabId}/screencast:
+    get:
+      operationId: getScreencast
+      summary: A live MJPEG view of one tab.
+      description: |
+        `multipart/x-mixed-replace`; each part carries `Content-Type: image/jpeg`,
+        `Content-Length`, `X-Tab-Id`, `X-Url` and `X-Frame-At` (Unix epoch ms, the browser's
+        capture time). The stream ends when the tab closes, and `tab.closed` on `/v1/events`
+        reports the closure. Capture runs only while someone watches;
+        viewers of one tab and quality share one capture. A capture that cannot start is
+        `503 browser_unavailable`, before any byte is sent.
+
+        A successful fit answers once the screen, the window and the device settings are
+        applied. It does not wait for a frame: the screencast may still send a picture of the
+        previous size after the fit's answer, and a new reader first receives the newest
+        cached frame. A client that needs the new geometry keeps reading frames until one
+        matches the fitted page's geometry, accounting for the screencast's quality scaling.
+        `Fit.screen` describes the physical framebuffer, not the encoded frame's dimensions.
+      parameters:
+        - $ref: '#/components/parameters/TabId'
+        - $ref: '#/components/parameters/Quality'
+      responses:
+        '200':
+          description: The frame stream.
+          content:
+            multipart/x-mixed-replace:
+              schema:
+                type: string
+                format: binary
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/tabs/{tabId}/video:
+    get:
+      operationId: getVideo
+      summary: A live AV1 video (fragmented MP4) of one tab.
+      description: |
+        The initialization segment first, then one keyframe-led fragment about every 2 seconds,
+        for Media Source Extensions or WebCodecs. It ends when the tab closes.
+        A client that falls behind skips whole fragments. On a page that does not
+        repaint, no bytes arrive, not even the initialization segment, until it repaints. A
+        capture that cannot start is `503 browser_unavailable`, before any byte is sent.
+      parameters:
+        - $ref: '#/components/parameters/TabId'
+        - $ref: '#/components/parameters/Quality'
+      responses:
+        '200':
+          description: The video stream.
+          content:
+            video/mp4:
+              schema:
+                type: string
+                format: binary
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/tabs/{tabId}/fill:
+    post:
+      operationId: fillTab
+      summary: Type the host's secrets into named boxes, privately. The host only.
+      description: |
+        The host names each box by ref (`e5`, or `f2e4` for a box in frame document 2, as a
+        snapshot prints it or `locator.ref()` mints it), the origin the box's own frame must be
+        on, and the value: a password, a one-time code, a card number. Neo looks at every box
+        first; a box that is gone, not a text input, on another origin, of another type,
+        changed from what the host approved, disabled, hidden, covered, or too short for the
+        value refuses the whole call before any key. Neo brings each box into view at once
+        before it asks what covers it, whatever scrolling the page has set, and a box larger
+        than its view by its centre, which leaves the page scrolled there. A box with a size
+        that Neo cannot bring into view (a page that cannot scroll there, as a dialog's scroll
+        lock makes it, or a box parked off the page) is not typed, and answers `cover_unread`.
+        Then it types each value, in one insertion
+        or (`keys`) key by key with the focus checked before each character, asking the rules
+        again before each box and each key (a lock taken mid-entry stops the entry there), and
+        reads each box back. It does not wait: a box in another state now is refused now;
+        `timeoutMs` only bounds a browser that stops answering.
+
+        A cover in any page above the box's frame refuses the box, as one in the box's own
+        document does (`box_covered`). With the box brought into view at once, Neo asks every
+        page above the frame, from the top page down, out-of-process frames included, what takes
+        the pointer at the box's centre; a box whose centre is outside its own frame's view is
+        not asked above. The frame's owner element, or what holds it (a wrapper, a `<label>`
+        around the frame, a shadow host, the page's root), is clear when the frame lets the
+        pointer through or is drawn there. Anything else covers: a banner, a dialog or its backdrop,
+        a sticky header, a sheet that takes the pointer, another frame, and a label or a drawing
+        of that page even when it shows the field's name, for only the field's own label or
+        drawing in the box's own document is excused. An element the pointer passes through
+        (`pointer-events: none`) is no cover. A frame its page only shifts is placed by its
+        corner. A page that changes the frame's size or angle (a scale, a rotation, a skew, a
+        zoom) answers `cover_unread`, as does a page above that still cannot show the box's place
+        (it cannot scroll there, or clips the frame away) and a page above that Neo could not
+        ask: nothing is typed, and the code tells it from a real cover. Neo does not try again
+        for it: the sentence tells the agent what to do. What this gives up: a page that lays a label
+        or a shield over a framed field and lets it take the pointer refuses where Neo typed
+        before, and so does a frame its page scales or turns. Two blind spots stay: a box drawn
+        under its own wrapper counts as the box, and a cover inside the box's own shadow root
+        reads as its shadow host.
+
+        A box under its field's own drawing is typed by default. A site often draws over a box
+        an element that is no `<label>`: a floating label, or a code field's digit cells. Such a
+        drawing does not cover its box when it is in the box's own document, inside the box's
+        parent or that parent's parent, holds no control and is none (a `<label>` of another
+        control counts as one), and lies within the box's
+        rectangle grown by half on each side. A drawing that shows the box's own accessible name
+        lets it be typed either way; a drawing that shows nothing only key by key (`keys`), as a
+        code is typed, and in one insertion it answers `box_covered`. Still refused either way,
+        `box_covered`: a cover that sticks out beyond the field (a banner, a dialog, a sheet),
+        one that holds a control or is one, one outside the box's parent and grandparent or in
+        another document, and one that shows other words than the box's name. Neo never clicks
+        the drawing. After the typing Neo reads the text the drawing's wrapper shows outside the
+        box, whatever the box then holds. A value of at most ten characters it newly shows stays,
+        a code's digits, and the record notes it. A longer one, a password or a card number, Neo
+        empties from the box and reads the wrapper once more: `value_drawn` when the page no
+        longer shows it, `value_still_drawn` when it does, for Neo cannot take text off a page.
+        What this gives up: Neo types where a person's click would land on the field's drawing,
+        not on the box; a layer over one field that repeats its name, or a blank one when typing
+        key by key, passes; and the check after the typing reads text only, so a value a site
+        paints as an image is not seen (no snapshot prints such an image, and under
+        `fill.pictures: never` a tab that took a fill is not pictured).
+
+        The value is in no record. Neo starts a run of its own with one operation, `host.fill`
+        (kind `protected`), whose `args` name the boxes, the expected origins and the number of
+        characters, never the value; the run's `code` is one fixed line and its `result` is this
+        answer. On an entered fill the operation's own `result` also notes, in `drawings`, each
+        box entered under its field's own drawing (`field`, its index) and whether the site drew
+        the value there (`drawn`). The operation records no screenshot and no page address or title (a form that
+        submits by GET would put the value there), nor does its tab get a run-end picture. The
+        answer, events, logs and the fill's request record hold no value either.
+
+        Who may call it: the host, with the host token, on the host listener. A request a web
+        page sent is refused (403), whatever its token. No script reaches it: the method is
+        internal, and a script naming it gets `method_unavailable`.
+
+        A lock on the tab refuses the fill as it refuses any write (`host / owner_has_control`,
+        nothing typed), unless the request names it in `lockId` and the host took it itself with
+        `POST /v1/locks`: a host types through the one lock it holds on that tab. Any other lock
+        still refuses, a takeover's included, named or not (the owner holds that tab). A named
+        lock that is not held on this tab refuses the call (409 `lock_released`); one released
+        during the fill stops it at its next ask of the rules (`lock_released` in the answer).
+
+        A `requestId` makes the fill type once, across a Neo restart too. Fills keep their own
+        record of ids, beside the trace and apart from `run`'s: the start is written to disk
+        before the first key, the answer when it ends. While the first call runs, a repeat waits
+        for its answer; after it, a repeat gets the stored answer and types nothing, for as long
+        as the trace keeps the fill. A refused fill's id is spent too: send a new one to try
+        again. A first call Neo started and never finished (Neo restarted in the middle) answers
+        `uncertain` with `fill_interrupted`. Neo keeps no value to compare a repeat with. The
+        call runs to its end if the host hangs up. Only a request error (400, 404, 409, 503)
+        leaves the id unused.
+
+        Every answer about the page is a 200: read `outcome` first; `refused` with `typed` all
+        zero is "no character went out", whatever `delivery` says.
+
+        After a fill, its tab is changed for the rest of its life, from before the first key:
+
+        - Its pictures follow the host's `fill.pictures` (`PUT /v1/settings`). Under the default,
+          `allowed`, the tab is pictured like any other: a script's `page.screenshot()`,
+          `locator.screenshot()` and `page.pdf()` work, and Neo's own screenshots picture it.
+          Neo stores a picture even when a card number or a one-time code is visible in a box.
+          What a model can see by default: a script can take a picture of a tab after a private fill. A
+          password box paints bullets. A card number, a security code and a one-time code are
+          painted in clear, so a model that takes a screenshot can see one that Neo typed
+          privately. It still cannot read it as text. A host that does not want that sets
+          `fill.pictures` to `never` before the first fill.
+        - Under `never`, Neo takes no picture of it. Its operations keep `hasScreenshot: false`,
+          and their screenshot answers `404 not_found` with "this operation's picture was
+          withheld". A fill
+          made under `never` writes its tab, by target, into Neo's synced record beside the trace
+          before the first key, so this holds across a Neo restart while the browser keeps the
+          tab (a tab whose target the browser changes meanwhile, if it ever does, is not found
+          again); such a fill whose record cannot be written is refused, nothing typed. `never`
+          covers every tab Neo knows took a fill: those filled in this run of the server, whatever
+          the setting was, and after a restart only those filled while it was `never`.
+        - Under `never`, a script's own `page.screenshot()`, `locator.screenshot()` and
+          `page.pdf()` of it fail `host / private_tab`, with nothing sent. A repeat fails the same
+          way while the setting stands, though `retryable` reads `true` (nothing was sent). The
+          message the script reads says so: "This tab took a private fill, and the host set Neo to
+          take no picture of such a tab for the rest of its life. Trying again will not succeed.
+          Read the page with page.ariaSnapshot() instead."
+        - A box Neo typed into answers one `•` per character to every read Neo makes: the
+          snapshot, with or without the spec harness's switch, `locator.inputValue()`, and every
+          assertion (the received value and aria tree, the preview and the failure's snapshot),
+          so `toHaveValue` compares against the bullets. A name built from the box reads the
+          same.
+        - The mark follows the value. At each read-back Neo keeps, in the box's own isolated world,
+          a keyed digest of what the box holds and of the value it was given, with whitespace,
+          dashes and slashes set aside (the key is 128 random bits made there; neither leaves it).
+          Any text control of that document that holds a kept value reads as bullets to the same
+          reads: a box the page re-creates (a re-render, `cloneNode`), a clone, and a copy in
+          another box, grouped with spaces or not. While the page still holds the value this is no
+          new power, for `evaluate` reads it. A digest is forgotten at the start of the first
+          request Neo makes into the document at which no connected text control there holds its
+          value, so once the value has left the page a script that sets a box to guesses gets at
+          most one answer in bullets. The same scan, at every request, lets an element preview in
+          any error (`locator resolved to <input …>`, a strict mode violation) show such a box's
+          `value` attribute as `<N characters>`, as for a box Neo typed into.
+
+        What it does not cover:
+
+        - What the owner types in a takeover or on the display, a script's own fill, and the
+          browser's autofill: none of them marks a box or a tab.
+        - The boxes' marks survive a restart of the same Neo; an upgrade that changes the
+          page-side engine's protocol loses them for the documents still open, so a plain box's
+          value prints there again (under `fill.pictures: never` no picture of its tab is taken
+          either way).
+        - A reload, or going back in history into a new document, makes a new document that keeps no
+          mark and no digest, so a value that the page or the browser puts back there prints. A
+          document that returns whole from the back-forward cache keeps its marks. The SDK image
+          runs the browser with that cache off, so there going back always makes a new document, and
+          the browser's own form restore puts back the value of a plain box with `autocomplete` on,
+          where `inputValue()` and the snapshot print it; a host can test itself on such a box.
+          Until the browser saves no form state, a host masks the values it typed in what its agent
+          reads. A password box and a box with `autocomplete` off come back empty. A copy in another
+          document (a frame, a pop-up) prints too, as do a copy the page reformats beyond
+          whitespace, dashes and slashes, text the page prints outside a box, and a copy that
+          appears after its digest was forgotten. A box in a closed shadow root Neo's walk has not
+          seen does not hold a digest alive, so a later copy can print. An entry that ends before
+          its read-back keeps no digest: its box has the mark alone.
+        - A widget that spreads a code across several boxes shows the digits of the boxes Neo
+          did not fill. Fill it one box at a time. The fill's `uncertain` outcome is the sign
+          that a value given to one box did not stay there.
+        - A box that receives a longer text that contains the value prints it, since the mark
+          follows the value by equality. A page that echoes "card ending 4242" is not this
+          case: that text does not contain the value. A page that copies the whole number into
+          a longer field is. A host's means are its own withholding of pictures
+          (`fill.pictures`) and the check call's `contains` on the box it knows.
+        - A copy of the whole value that the page writes a moment after the fill, when no box
+          held the value in between, prints. A host meets it on a widget that spreads a code
+          across boxes and mirrors it late. Fill such a widget one box at a time. The fill's
+          `uncertain` outcome is the sign.
+        - `neo.solveCaptcha` photographs the challenge's own rectangle and sends it to the
+          provider, on such a tab too.
+        - An element preview in a call log or an error (`locator resolved to <input …>`) prints
+          the box's `value`, `aria-valuetext` and `aria-valuenow` attributes as
+          `<N characters>`, so a page that keeps the `value` attribute in step with what is
+          typed, as many frameworks do, does not show the value there. Another attribute the
+          page copies the value into prints as it is.
+        - The mark travels with the box: a box the page moves into another frame or window of
+          the same origin is still marked there. `inputValue()` and assertions on the box or
+          its label use bullets: they ask the node itself. Its own snapshot line can stay bare.
+          A name built from a moved box receives bullets only when the receiving tab took a
+          host's private fill; only those tabs search the document for foreign field prototypes.
+          On a tab that took no fill, a name derived from a box moved in from another frame or
+          window can print its value, including a page-declared private box. Local fields and
+          an explicit field root remain guarded on every tab. An assertion's message prints a
+          marked box's value as `<N characters>`.
+          Neo writes its filled-tab record only under `fill.pictures: never`. After a restart a
+          tab filled under the default is not known as filled, so it does not search until its
+          next private fill. Under `never` the search returns for a recorded tab that is still
+          open. If Neo cannot tell which tabs the record names, every tab counts as filled.
+        - A script's own code in the page (`evaluate`) reads what the page holds.
+      parameters:
+        - $ref: '#/components/parameters/TabId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FillRequest'
+      responses:
+        '200':
+          description: What happened to the boxes.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FillResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/LockReleased'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/tabs/{tabId}/fill/check:
+    post:
+      operationId: checkFill
+      summary: Look at boxes as a fill would, without typing. The host only.
+      description: |
+        The fill's look, alone (a read): each box answers on its own, with its facts and the
+        first refusal a fill would meet there now (a covered box answers both). The host can
+        approve the facts and send them back as `expect`, so the look at approval and the look at
+        typing are one rule. `expect` is optional here: without it the look checks no origin and
+        no fact, and answers only the refusals that need no approval. It types nothing and takes no
+        `requestId`. A field may carry a value to compare with its box (`holds`, `contains`). It has
+        no length check, with a value too, and never refuses for a limit that moved
+        (`maxLengthMoved`): compare `maxLength` with the value yourself. It takes `lockId` as the
+        fill does, so a host whose own lock blocks reads can look at its tab. Recorded as a run with
+        one operation, `host.fillCheck` (kind `protected`, a read), with no screenshot. The same
+        host-only rules as the fill.
+      parameters:
+        - $ref: '#/components/parameters/TabId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FillCheckRequest'
+      responses:
+        '200':
+          description: Each box's facts or refusal, in the request's order.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FillCheckResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/LockReleased'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/display:
+    get:
+      operationId: openDisplay
+      summary: Neo's whole screen as RFB over WebSocket (noVNC-compatible).
+      description: |
+        Binary frames carry RFB 3.8 both ways. No subprotocol is required, and `binary` is echoed
+        when the client offers it.
+
+        `view` drops every input message. `control` forwards input. View displays remain
+        available and keep streaming during control input and takeovers. The tab's screencast,
+        video and trace screenshots keep serving.
+        While no owner has control, `followTab` keeps that tab in front, and `followTask` keeps
+        the task's current page in front (the tab its latest operation targeted). Both pause
+        while the owner holds the screen or a lock holds their target tab. `followTab` and
+        `followTask` are mutually exclusive; sending both is `400 invalid_request`. A control
+        display takes neither, and a view display takes no `release`. `release` ties a control
+        display to a takeover: releasing the takeover closes it. A `release` that names no
+        takeover is `404 not_found`, and one whose takeover's release has begun is
+        `409 takeover_released`.
+
+        When a control display ends, by the client's close frame or its takeover's release, Neo
+        stops forwarding, half-closes its connection to the screen and waits up to 2 s for the
+        screen to close it. The screen reads a connection in order and closes it at its end of
+        stream, so that close shows the screen read every input message the display forwarded.
+        The guarantee that the owner's input landed before the display ended holds only when the
+        takeover's release answers `inputDrained: true`. A `false` after the bounded 2 s wait is
+        intentional: Neo does not wait longer, and for that release the guarantee does not hold.
+        A client's close frame is answered only after every whole RFB message in the binary
+        frames before it was handled (forwarded to the screen, or dropped in `view`), and for a
+        control display after that wait.
+
+        A display ends with a WebSocket close frame that says why:
+        - `4002` released: the display's takeover was released;
+        - `1008`: the client sent something the display refuses: an RFB message it does not
+          know, a paste over 1 MiB, or a handshake other than RFB 3.8 with no security;
+        - `1003`: the client sent a text frame;
+        - `1011`: Neo's screen closed the connection.
+
+        A client that went away is sent no code.
+      parameters:
+        - name: mode
+          in: query
+          required: true
+          schema:
+            type: string
+            x-extensible-enum: [view, control]
+        - name: followTab
+          in: query
+          description: A tab to keep in front. Not with `followTask`.
+          schema:
+            type: integer
+            format: int64
+        - name: followTask
+          in: query
+          description: >-
+            A host task (`_meta["com.browseros.neo/run"].taskId`) whose current page to keep in
+            front. Not with `followTab`.
+          schema:
+            type: string
+            maxLength: 128
+        - name: release
+          in: query
+          description: A takeover id. Releasing that takeover closes this display.
+          schema:
+            type: string
+      responses:
+        '101':
+          description: Switching protocols.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/locks:
+    post:
+      operationId: createLock
+      summary: Lock the agent out of a tab. A takeover part.
+      description: |
+        While the lock is held, the agent's operations on the tab fail with `host /
+        owner_has_control` and delivery `not_sent`. Writes are always refused; with
+        `reads: block` (the default), operations that read the tab are refused too. Operations
+        on other tabs, and operations with no tab, still run; a host that wants to pause a whole
+        task stops sending that task's runs. Taking a lock waits up to 2 s for the agent's
+        in-flight writes on the tab; `settled` says whether they finished. Every lock has a TTL,
+        so a host that dies cannot lock a tab forever.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LockRequest'
+      responses:
+        '200':
+          description: The lock, held.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Lock'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/locks/{lockId}:
+    get:
+      operationId: getLock
+      summary: One lock.
+      parameters:
+        - $ref: '#/components/parameters/LockId'
+      responses:
+        '200':
+          description: The lock.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Lock'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      operationId: releaseLock
+      summary: Release a lock. Idempotent. A takeover's lock is released with the takeover.
+      parameters:
+        - $ref: '#/components/parameters/LockId'
+      responses:
+        '200':
+          description: The lock, released.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Lock'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/tabs/{tabId}/fit:
+    post:
+      operationId: fitTab
+      summary: Fit a tab to a viewer's screen. A takeover part.
+      description: |
+        Brings the tab to the front, sizes Neo's screen to the viewer, resets the tab's zoom,
+        and sets it to mobile (a logical viewer 600 px wide or less, with touch in a fullscreen
+        window) or desktop (a maximized window, no emulation). Optional `scale: 2` draws a phone
+        preview at 200 percent on a framebuffer twice its logical width and height. Its logical
+        device size and existing DPR 2 stay the same. New fits default to scale 1; an omitted
+        scale on a refit inherits the current shared scale. Explicit 1 returns to 1x. Scale 2 on
+        a desktop, including an inherited 2, is 400 `invalid_request`. Logical sides and scaled
+        physical sides must each be at most 4096. The owner viewer should fit locally or send
+        physical scaled dimensions when requesting a remote framebuffer resize.
+
+        A successful fit answers once the screen, the window and the device settings are
+        applied. It does not wait for a frame: the screencast may still send a picture of the
+        previous size after the fit's answer, and a new reader first receives the newest
+        cached frame. A client that needs the new geometry keeps reading frames until one
+        matches the fitted page's geometry, accounting for the screencast's quality scaling.
+        `Fit.screen` describes the physical framebuffer, not the encoded frame's dimensions.
+
+        Neo has one screen and one window, so the window's state is recorded once, by the first
+        fit while no other is active, and put back at the last restore. Each tab's viewport mode
+        is recorded by its own first fit. The first fit of a tab returns a new fit; while that
+        fit is active, fitting the tab again refits it and returns the same fit. That holds for a
+        takeover's fit too: while a takeover started with a viewer is active, fitting its tab
+        refits the takeover's fit and returns it (the takeover's `fitId`), and the takeover's
+        release restores it. A takeover started without a viewer has no fit, so a fit of its tab
+        is a fit of its own, which that release does not restore. While a mobile fit is active,
+        pages the tab opens are pulled into it. All active fits follow the latest shared layout.
+        External framebuffer resizes at scale 2 floor odd sides to logical pixels and leave at
+        most one unused edge pixel. Crossing logical width 600 switches to ordinary desktop at
+        scale 1; returning to a phone then requires explicit 2 to restore 2x. Unusable external
+        sizes leave the last usable layout in place.
+      parameters:
+        - $ref: '#/components/parameters/TabId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ViewerRequest'
+      responses:
+        '200':
+          description: The fit.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Fit'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/fits/{fitId}:
+    get:
+      operationId: getFit
+      summary: One fit, with the geometry the owner's page needs. Never values, labels or text.
+      parameters:
+        - $ref: '#/components/parameters/FitId'
+      responses:
+        '200':
+          description: The fit.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Fit'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /v1/fits/{fitId}/navigate:
+    post:
+      operationId: navigateFit
+      summary: The owner's browser bar, on the fitted tab. A lock does not refuse it.
+      parameters:
+        - $ref: '#/components/parameters/FitId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NavigateRequest'
+      responses:
+        '200':
+          description: Done, or a notice for the owner.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NavigateResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/fits/{fitId}/restore:
+    post:
+      operationId: restoreFit
+      summary: Put the tab back exactly as the fit found it. Idempotent.
+      description: |
+        Resets zoom and puts back the tab's recorded viewport mode. The last restore, with no
+        other fit active, also puts Neo's screen back to its configured size and the window back
+        to the state the first fit recorded.
+      parameters:
+        - $ref: '#/components/parameters/FitId'
+      responses:
+        '200':
+          description: The fit, restored.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Fit'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/takeovers:
+    post:
+      operationId: startTakeover
+      summary: The v1 takeover flow, a thin composition of the parts. Start it when the owner opens the link.
+      description: |
+        The flow locks the agent out of the tab using `reads` and the TTL, and fits the
+        tab to `viewer` when given. A fit that fails gives back the lock. The answer names
+        the parts it holds and `display`, the control display to open for the owner. A tab that already
+        has an active takeover gets that takeover back as it is. A host may compose its own flow
+        from the parts instead. `viewer` uses the same logical size and optional scale as the
+        standalone fit request. Repeating a start returns the existing takeover unchanged;
+        resize or change scale through its fit.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TakeoverRequest'
+      responses:
+        '200':
+          description: The takeover, active.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Takeover'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/takeovers/{takeoverId}:
+    get:
+      operationId: getTakeover
+      summary: One takeover. `wait` holds the request until its state differs from `state`.
+      description: |
+        Release is the only change a takeover goes through, so `wait` with `state=active` (the
+        default) answers as soon as the takeover is released, and `state=released` never waits.
+        A released takeover stays readable for an hour.
+      parameters:
+        - $ref: '#/components/parameters/TakeoverId'
+        - name: wait
+          in: query
+          schema:
+            type: integer
+            format: int32
+            minimum: 0
+            maximum: 60
+            default: 0
+        - name: state
+          in: query
+          description: The state the host last saw.
+          schema:
+            type: string
+            x-extensible-enum: [active, released]
+            default: active
+      responses:
+        '200':
+          description: The takeover.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Takeover'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /v1/takeovers/{takeoverId}/release:
+    post:
+      operationId: releaseTakeover
+      summary: Give the browser back. Idempotent; returns once the agent's lock is lifted.
+      description: |
+        The flow closes the takeover's display, restores the fit, and releases the lock
+        last. Closing a control display waits up to 2 s for Neo's screen to read the owner's last
+        input (`/v1/display`). Only an answer with `inputDrained: true` guarantees that every key
+        the display forwarded was read before the release went on, so that a host can read what
+        the owner typed with no key landing after it. A `false` after that bounded wait is
+        intentional and means the guarantee does not hold for this release. The steps share a
+        10 s budget. A step that fails does not stop the rest,
+        and once the budget is spent the lock is released while a step still running finishes.
+        A second release answers as the first did. Neo releases a takeover itself 10 s before
+        `expiresAt` (`expired`), so the steps run while the agent is still locked out, and when
+        its tab closes (`tab_closed`).
+
+        View displays can open again after the takeover and its control displays end. The
+        tab's screencast, video and trace screenshots keep serving.
+      parameters:
+        - $ref: '#/components/parameters/TakeoverId'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReleaseRequest'
+      responses:
+        '200':
+          description: The takeover, released.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Takeover'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /v1/settings:
+    get:
+      operationId: getSettings
+      summary: How this Neo is set, and the default of every setting.
+      description: |
+        `settings` holds every setting this server knows, each at its value: what the host set,
+        or the default. Its shape is a body for `PUT`, so a host can read it, change it and send
+        it back. `file` reports this process's startup file load and stays unchanged after API
+        changes. A server older than this report answers `GET` without `file`, so a host reads
+        an absent `file` as not reported, never as `applied`. A server older than the settings
+        answers 404. Only the host may call these
+        routes: a request a web page sends is refused with 403, so a script in the browser Neo
+        drives cannot reach them even on the development TCP listener.
+      responses:
+        '200':
+          description: The settings.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SettingsState'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    put:
+      operationId: putSettings
+      summary: Set every setting. A setting left out goes back to its default.
+      description: |
+        Replaces everything the host set, so a host's start step always ends in the same state.
+        Every setting is optional. A name this server does not know is skipped, never refused:
+        the rest still applies, and the answer lists the skipped names in `unknown`. A name of an
+        open list it does not have yet (a new `trace.screenshots` mode) is skipped the same way
+        and its setting listed in `unknownValues`. A known setting with a value it cannot use
+        (out of its range, the wrong type, or `null`) refuses the whole call with 400
+        `invalid_request`, which names every setting at fault and its rule; nothing is applied.
+
+        Neo saves what the host set in `$BROWSERCLAW_DIR/claw-sdk/settings.json` beside its trace,
+        and loads it before the first run at every server start, with or without a host token.
+        A host may write that file before startup as one PUT body with no envelope. It writes
+        under another name in the same folder and renames, or writes while Neo is stopped.
+        After startup Neo owns the file; running changes use this API.
+
+        A missing file means normal defaults. Unreadable or malformed input uses defaults with
+        `trace.values` and `trace.screenshots` off. An invalid known value for either switch
+        uses off; an invalid `trace` group turns both off. Other invalid values keep their
+        defaults, including retention. Unknown names are skipped with a warning. Neo always
+        starts; recording-off fallbacks appear in GET and persist in the next API save. A saved
+        `fill.pictures` that this server cannot use falls back to `allowed`, so a host that needs
+        `never` reads `GET /v1/settings` after start.
+
+        In the SDK image the saved path is `/data/browserclaw/claw-sdk/settings.json`.
+        At every entrypoint start, a regular `/etc/neo/settings.json` atomically replaces it,
+        owned by Neo with mode 0600. A derived image can COPY that fixed file; a host can mount
+        it read-only. Failed copies are logged and startup continues with saved settings.
+        API changes survive a server or browser restart, until the next entrypoint start
+        replaces them from the fixed file. Without a fixed file, saved changes persist.
+
+        A change takes effect at once, with no restart: each
+        part reads the value when it acts. A run in flight follows the new values from its next
+        operation, except `tabs.scope`, which a run reads once at its start: a run in flight
+        keeps the scope it started with, and the next run takes the new one.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Settings'
+      responses:
+        '200':
+          description: The settings after the change.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SettingsState'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          description: Neo could not save the settings (`internal_error`). Nothing changed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    patch:
+      operationId: patchSettings
+      summary: Change the settings sent. A setting left out keeps its value.
+      description: |
+        `PUT`'s rules for each setting sent: an unknown name is skipped and listed in `unknown`,
+        an unknown name of an open list in `unknownValues` (the setting keeps its value), a wrong
+        value refuses the whole call. A setting changed this way stays changed across server
+        restarts. A host may replace the saved PUT-shaped settings file before startup. In the
+        SDK image a regular `/etc/neo/settings.json` replaces saved settings at each entrypoint
+        start, so API changes last until that start when a fixed file is present. See PUT for
+        the saved path, ownership handoff, atomic writes and tolerant startup rules.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Settings'
+      responses:
+        '200':
+          description: The settings after the change.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SettingsState'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          description: Neo could not save the settings (`internal_error`). Nothing changed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+components:
+  securitySchemes:
+    bearer:
+      type: http
+      scheme: bearer
+  parameters:
+    TraceFields:
+      name: fields
+      in: query
+      description: >-
+        full preserves all stored fields. summary omits operation arguments, results, truncation
+        flags, notes, error text and hostCode, and inline screenshots. Error message is the empty
+        string. It also omits run code, codeWithheld, result, resultTruncated, hostData and downloads.
+        Error owner/code, operation
+        metadata, page URL/title and tab identity remain. GET /v1/runs includes each run's operations
+        in this view, without site or delivery. This is a read view; values remain in trace.db.
+        Other endpoints and default reads still expose stored values. Summary ignores screenshot
+        inlining options and preserves hasScreenshot for separate image reads.
+      schema:
+        type: string
+        enum: [full, summary]
+        default: full
+    InternalOperations:
+      name: internal
+      in: query
+      description: >-
+        false omits Neo-owned subscriptions using the same shared name rule as run-end screenshots
+        and touched-tab following, plus the absence of a script call site. Script page.on calls
+        remain. On /v1/trace this filter applies before tail, and truncated counts older visible
+        matching operations. Run operationCount and execution facts remain the stored totals.
+      schema:
+        type: boolean
+        default: true
+    OperationId:
+      name: operationId
+      in: path
+      required: true
+      description: '`<runId>.<seq>`.'
+      schema:
+        type: string
+    TakeoverId:
+      name: takeoverId
+      in: path
+      required: true
+      schema:
+        type: string
+    LockId:
+      name: lockId
+      in: path
+      required: true
+      schema:
+        type: string
+    FitId:
+      name: fitId
+      in: path
+      required: true
+      schema:
+        type: string
+    TabId:
+      name: tabId
+      in: path
+      required: true
+      description: The browser's tab id (`PageRef.tabId`).
+      schema:
+        type: integer
+        format: int64
+    TaskId:
+      name: taskId
+      in: query
+      description: >-
+        A host task (`_meta["com.browseros.neo/run"].taskId`). Only what belongs to its runs.
+      schema:
+        type: string
+        maxLength: 128
+    Since:
+      name: since
+      in: query
+      description: At or after this time (Unix epoch ms).
+      schema:
+        type: integer
+        format: int64
+        minimum: 0
+    Until:
+      name: until
+      in: query
+      description: At or before this time (Unix epoch ms).
+      schema:
+        type: integer
+        format: int64
+        minimum: 0
+    Cursor:
+      name: cursor
+      in: query
+      description: Opaque `nextCursor` from the previous page.
+      schema:
+        type: string
+    Limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        format: int32
+        minimum: 1
+        maximum: 100
+        default: 25
+    Quality:
+      name: quality
+      in: query
+      description: >-
+        `low` is 640×400 at up to 4 frames per second (10 for `/video`); `high` is 1280×800 at
+        up to 10 (15 for `/video`). Frames keep the tab's aspect ratio.
+      schema:
+        type: string
+        x-extensible-enum: [low, high]
+        default: high
+  responses:
+    BadRequest:
+      description: A parameter or body is invalid (`invalid_request`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Forbidden:
+      description: >-
+        A request a web page sent (it carries `Origin` or `Sec-Fetch-Site`), which this route
+        never serves, whatever its token (`forbidden`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unauthorized:
+      description: No token, a wrong token, or a peer uid outside the socket's group (`unauthorized`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: >-
+        Nothing has this id (`not_found`): a run, operation, lock, fit or takeover. Or retention
+        deleted it (`expired`), or no open tab has the `tabId` (`tab_not_found`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Expired:
+      description: Retention deleted the image (`expired`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Conflict:
+      description: >-
+        A part was already given back: the fit was restored (`fit_restored`), the lock released
+        (`lock_released`), or the takeover released (`takeover_released`). Or a takeover is in
+        the way: the lock belongs to one, so release the takeover instead (`takeover_lock`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    InternalError:
+      description: >-
+        A failure inside Neo before any answer about the page (`internal_error`): a check's own
+        task failed, or the first call a repeat joined vanished without a word. Nothing about the
+        boxes is known from this call; read the run, or look again.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    LockReleased:
+      description: >-
+        The `lockId` the fill names is not held on this tab (`lock_released`): the agent is not
+        locked out as the host believed. Nothing was typed, and the `requestId` is not used.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unavailable:
+      description: >-
+        Neo could not start the takeover (`internal_error`), the display is unavailable
+        (`display_unavailable`), Neo could not reach the browser (`browser_unavailable`), or it
+        cannot write one of a fill's records (`trace_unavailable`): the request record a
+        `requestId` names, so it cannot promise one typing, or, for a fill made under
+        `fill.pictures: never`, with a `requestId` or not, its record of the tabs that took a
+        fill. Nothing was typed.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+  schemas:
+    OperationError:
+      type: object
+      required: [owner, code, message, retryable]
+      properties:
+        owner:
+          type: string
+          description: >-
+            Whose behavior must change to fix it: `neo` (browser, OS or Neo itself), `script`
+            (the agent's own code: a syntax error, `invalid_input`, `strict_mode_violation`,
+            `no_match`, `method_unavailable`), `website` (what the page did) or `host` (the
+            host's rules, services or owner, including `owner_has_control`).
+          x-extensible-enum: [neo, script, website, host]
+        code:
+          type: string
+          description: >-
+            Stable snake_case, e.g. `owner_has_control`, `strict_mode_violation`, `target_closed`.
+            `host / private_tab` refuses a script's own picture of a tab that took a private
+            fill (`POST /v1/tabs/{tabId}/fill`) while the host's `fill.pictures` is `never`. A
+            repeat fails the same way while that setting stands. `website / covered`: a pointer
+            action's element stayed under something else that takes the pointer until its
+            timeout ran out; the message names it, says what it shows and what to do, and
+            `cover` holds it. Under the spec harness's conformance switch the same wait answers
+            `not_actionable`, with Playwright's own message.
+        diagnosticCode:
+          type: string
+          description: >-
+            Optional typed detail. A crashed renderer retains primary code internal_error and
+            adds target_crashed. Present in full and summary views; clients ignore unknown values.
+          x-extensible-enum: [target_crashed]
+        hostCode:
+          type: string
+          description: The host's own code when `code` is `host_error`, e.g. `needs_owner`.
+        message:
+          type: string
+          description: Free-text error details. Empty with fields=summary; full reads retain the stored message.
+        retryable:
+          type: boolean
+          description: >-
+            True only when delivery is `not_sent` or the operation is a read: a repeat is safe.
+            It is never a promise that a repeat will succeed. A refusal that stands for good,
+            such as `host / private_tab`, reads `true` because nothing was sent; its message says
+            so.
+        operationId:
+          type: string
+          description: On a run's error, the operation it came from.
+        cover:
+          $ref: '#/components/schemas/Cover'
+    Cover:
+      type: object
+      description: >-
+        Only on `covered`: what covered the element at the action's point when its timeout ran
+        out. The element's own wrapper, its label or the page's root can be the cover; `kind`
+        says how it stands to the element.
+      required: [ref, role, name, kind, controls]
+      properties:
+        ref:
+          type: string
+          description: >-
+            The cover's ref: the one a snapshot printed for it, else one minted for it
+            (`n4`, `f3n4` in a frame), which `page.getByRef` resolves the same way.
+        role:
+          type: string
+          description: Its ARIA role, `generic` when it has none; a frame's is `iframe`.
+        name:
+          type: string
+          description: Its accessible name, read as a snapshot reads it; may be empty.
+        kind:
+          type: string
+          description: >-
+            How it stands to the element: `page` (another part of the page, such as a dialog
+            or an overlay), `frame` (an iframe), `partial` (another point of the element is
+            clear), `label` (the element's own label), `wrapper` (its own wrapper or drawing),
+            `labels` (the element is the label of the control on top), `nothing` (an ancestor
+            or the page's root: nothing covers it) or `folded` (a closed panel or menu clips it
+            away).
+          x-extensible-enum: [page, frame, partial, label, wrapper, labels, nothing, folded]
+        controls:
+          type: array
+          description: Up to eight of the cover's controls that take the pointer, in page order.
+          items:
+            $ref: '#/components/schemas/CoverControl'
+    CoverControl:
+      type: object
+      required: [ref, role, name]
+      properties:
+        ref:
+          type: string
+        role:
+          type: string
+          description: Its ARIA role, `generic` when it has none; a frame's is `iframe`.
+        name:
+          type: string
+    TabList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Tab'
+    Tab:
+      type: object
+      required: [tabId, targetId, url, title, taskIds]
+      properties:
+        tabId:
+          type: integer
+          format: int64
+          description: The browser's native tab id.
+        targetId:
+          type: string
+          description: The tab's current DevTools target id.
+        url:
+          type: string
+        title:
+          type: string
+        taskIds:
+          type: array
+          description: Distinct sorted task ids from retained committed runs that touched this tab.
+          items:
+            type: string
+        taskId:
+          type: string
+          description: >-
+            The task holding this tab now: the task whose run opened it, or the task of the tab
+            that opened it as a popup. Under the `task` tab scope, the runs of every task in that
+            task's family see it: the family starts at the task a host named, and every task its
+            runs create (`neo.createTask`, at any depth) joins it, so sibling tasks see each
+            other's tabs. A task keeps its family for its life, even when a host later names a
+            task an agent created. Absent on a tab no task holds, such as one the owner opened.
+        owner:
+          type: string
+          x-extensible-enum: [neo]
+          description: >-
+            Present on a tab Neo keeps for itself. `neo`: Neo's one blank tab, which keeps the
+            browser open when every other tab closes. No script sees or reaches it, no task
+            takes it, and Neo opens another if it closes; a lock, a fit, a keep, a takeover or a display
+            treats it as any tab. Once it shows a page (the owner browsed in it, or a fit
+            navigated it), Neo opens a new blank tab and the old one becomes an ordinary tab
+            without this field. Absent on every other tab.
+        keep:
+          description: Present only while the host keeps this tab from idle cleanup.
+          allOf:
+            - $ref: '#/components/schemas/TabKeep'
+    TabKeep:
+      type: object
+      description: A host's keep. An empty object has no time limit.
+      properties:
+        expiresAt:
+          type: integer
+          format: int64
+          description: Unix epoch milliseconds when this keep ends. Absent without a time limit.
+    TabKeepRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        ttlSeconds:
+          type: integer
+          format: int64
+          minimum: 1
+          maximum: 2592000
+          description: >-
+            Omit for no time limit. A keep blocks nothing and only spares a tab from idle
+            cleanup. It ends on server restart, so a crashed host cannot hold anything that
+            matters. A mandatory cap would only require a renewal timer.
+    TabKeepResult:
+      type: object
+      required: [tabId, keep]
+      properties:
+        tabId:
+          type: integer
+          format: int64
+        keep:
+          $ref: '#/components/schemas/TabKeep'
+    TabKeepDeleted:
+      type: object
+      required: [tabId]
+      properties:
+        tabId:
+          type: integer
+          format: int64
+    PageRef:
+      type: object
+      properties:
+        tabId:
+          type: integer
+          format: int64
+        url:
+          type: string
+        title:
+          type: string
+    TraceTail:
+      type: object
+      required: [runs, operations, truncated]
+      properties:
+        runs:
+          type: array
+          description: The runs of `operations`, oldest first.
+          items:
+            $ref: '#/components/schemas/RunSummary'
+        operations:
+          type: array
+          description: The matching operations by start, oldest first.
+          items:
+            $ref: '#/components/schemas/Operation'
+        truncated:
+          type: boolean
+          description: True when `tail` cut older matching operations.
+    RunSummary:
+      type: object
+      required: [id, status, startedAt, operationCount, complete, tabs]
+      properties:
+        values:
+          type: string
+          x-extensible-enum: [off]
+          description: >-
+            `off` means trace.values omitted script and host values when this record ended.
+            Error messages are empty; metadata, downloads and the separate screenshot policy stay.
+            Absent when values were recorded.
+        id:
+          type: string
+        taskId:
+          type: string
+          description: The host's task it sent with the run (`_meta["com.browseros.neo/run"].taskId`), if any.
+        tabsScope:
+          type: string
+          x-extensible-enum: [task, browser]
+          description: >-
+            `task` when the run was bound to its task's tabs, `browser` when it saw every tab, as
+            its result's `_meta["com.browseros.neo/run"].tabsScope` said. Absent for runs recorded
+            before Neo kept it, which saw every tab (`browser`).
+        access:
+          type: string
+          x-extensible-enum: [read]
+          description: >-
+            A host selects one read-only run with `_meta["com.browseros.neo/run"].access: "read"`.
+            Absent means ordinary execution; every other present request value, including null,
+            is host/invalid_meta. Older servers refuse the unknown metadata key.
+            The door admits reads except events.interceptFileChooser, newPage, disposable.dispose,
+            goto to a completed http(s) address on a tab that is not the owner's own, and
+            closing a tab the same run opened (not a popup or another run's tab).
+            Other operations fail script/read_only_run with delivery not_sent before browser work.
+            The owner's tab is one no agent opened and no task holds. Task scope separately limits
+            which tabs a run can reach. A requestId repeat retains the original run's access.
+            Effects still reports sent writes, including allowed navigation.
+            Screenshot/PDF buffers, snapshot text/delta and text locator waits are admitted.
+            Screenshot path captures first, then saveScreenshot is refused without saving a file;
+            PDF path keeps its existing unsupported refusal. A file chooser wait fails;
+            page.on('filechooser') registers nothing as its setup fails quietly.
+            Reads may scroll; screenshots may foreground a tab and temporarily change focus,
+            caret, animations or rendering, and PDF fires print events.
+            Site scripts run with the owner's cookies. A GET can sign out, unsubscribe, use a
+            one-time link or mark something read; responses set cookies and navigation adds history.
+            A goto may lose unsaved input and may download a file into Neo's own folder, as today;
+            the script cannot save it elsewhere or upload it.
+            Without a listener Neo dismisses confirm/prompt after 250 ms and accepts beforeunload.
+            A read-only dialog listener may read text but cannot answer dialog.*; it holds the page
+            and navigation while alive. Listeners end by run teardown, then the next reap applies
+            the same automatic answer within about a second of the listener ending.
+            Only read-only runs include this field; ordinary and older records omit it.
+        tabs:
+          type: array
+          description: The tabs its operations targeted, ascending.
+          items:
+            type: integer
+            format: int64
+        status:
+          type: string
+          description: '`interrupted`: Neo stopped (crashed or restarted) before the run ended.'
+          x-extensible-enum: [running, ok, error, cancelled, timeout, interrupted]
+        effects:
+          type: string
+          description: >-
+            `none`: no write was sent. `done`: every write that was sent got a definite answer.
+            `unknown`: at least one write was sent and never confirmed; check the page before
+            repeating anything. Absent while the run is `running`: Neo reports what the dispatcher
+            decided and never guesses an answer before the run ends.
+          x-extensible-enum: [none, done, unknown]
+        error:
+          $ref: '#/components/schemas/OperationError'
+        requestId:
+          type: string
+          description: The host's own id it sent with the run (`_meta["com.browseros.neo/run"].requestId`), if any.
+        startedAt:
+          type: integer
+          format: int64
+        endedAt:
+          type: integer
+          format: int64
+        operationCount:
+          type: integer
+          format: int64
+        complete:
+          type: boolean
+          description: Ended, and its screenshot work finished; a re-read returns the same data.
+        traceGaps:
+          type: integer
+          format: int64
+          description: Operation events Neo dropped under disk pressure; zero or absent normally.
+        operations:
+          type: array
+          description: >-
+            Present only on GET /v1/runs?fields=summary. Operations in start order, with the
+            summary projection and internal filter. The audit list omits site and delivery.
+            operationCount remains the stored total, including any omitted internal operations.
+          items:
+            $ref: '#/components/schemas/Operation'
+    Run:
+      type: object
+      required: [id, status, startedAt, operationCount, complete, tabs, operations]
+      properties:
+        values:
+          type: string
+          x-extensible-enum: [off]
+          description: >-
+            `off` means trace.values omitted script and host values when this record ended.
+            Error messages are empty; metadata, downloads and the separate screenshot policy stay.
+            Absent when values were recorded.
+        id:
+          type: string
+        taskId:
+          type: string
+          description: The host's task it sent with the run (`_meta["com.browseros.neo/run"].taskId`), if any.
+        tabsScope:
+          type: string
+          x-extensible-enum: [task, browser]
+          description: >-
+            `task` when the run was bound to its task's tabs, `browser` when it saw every tab, as
+            its result's `_meta["com.browseros.neo/run"].tabsScope` said. Absent for runs recorded
+            before Neo kept it, which saw every tab (`browser`).
+        access:
+          type: string
+          x-extensible-enum: [read]
+          description: >-
+            The host's read-only restriction, as on RunSummary; retained from run start through
+            failure and request replay. Ordinary runs and older records omit it.
+        tabs:
+          type: array
+          description: The tabs its operations targeted, ascending.
+          items:
+            type: integer
+            format: int64
+        status:
+          type: string
+          x-extensible-enum: [running, ok, error, cancelled, timeout, interrupted]
+        effects:
+          type: string
+          description: As on `RunSummary`; absent while the run is `running`.
+          x-extensible-enum: [none, done, unknown]
+        error:
+          $ref: '#/components/schemas/OperationError'
+        requestId:
+          type: string
+          description: The host's own id it sent with the run (`_meta["com.browseros.neo/run"].requestId`), if any.
+        startedAt:
+          type: integer
+          format: int64
+        endedAt:
+          type: integer
+          format: int64
+        operationCount:
+          type: integer
+          format: int64
+        complete:
+          type: boolean
+        traceGaps:
+          type: integer
+          format: int64
+        hostData:
+          type: object
+          description: >-
+            The host data the run was started with (`_meta["com.browseros.neo/run"].hostData`), if
+            any; bounded for storage. Present once the run has ended, so a running run, or one
+            cut short by a restart, has none.
+        code:
+          type: string
+          description: >-
+            The script, bounded for storage. Stored when the run ends, so it is absent while the run is
+            `running`. Older runs may also have no stored code.
+        codeWithheld:
+          type: string
+          description: >-
+            Restart marker: Neo stopped before the run ended, so its code was never stored.
+            The field name is retained for compatibility; new runs do not withhold code for field contents.
+          x-extensible-enum: [unavailable]
+        result:
+          description: >-
+            The script's return value, bounded for storage. A byte value the reply could not carry
+            inline is `{"$neo":"blob","id","size"}` here too; read it at
+            `GET /v1/runs/{runId}/blobs/{blobId}`.
+        resultTruncated:
+          type: boolean
+        unknown:
+          type: array
+          description: Write operations that were sent and never confirmed.
+          items:
+            $ref: '#/components/schemas/UnknownOperation'
+        operations:
+          type: array
+          items:
+            $ref: '#/components/schemas/Operation'
+        downloads:
+          type: array
+          description: >-
+            The files the run's `download` events handed its script, in the order it first saw
+            each. Recorded when the run ends: absent while it runs, and when it was handed none.
+          items:
+            $ref: '#/components/schemas/RunDownload'
+    RunDownload:
+      type: object
+      required: [index, url, suggestedFilename, state]
+      properties:
+        index:
+          type: integer
+          format: int32
+          description: Its place among the run's downloads, from 0; `GET /v1/runs/{runId}/downloads/{index}` reads its bytes.
+        url:
+          type: string
+          description: The URL it came from, cut to 4,096 characters.
+        suggestedFilename:
+          type: string
+        path:
+          type: string
+          description: >-
+            Where the browser saved it, on Neo's disk: what `download.path()` returned. A later
+            run may upload it with `setInputFiles`. Present when `completed`, and when Neo could
+            not keep a copy.
+        size:
+          type: integer
+          format: int64
+          description: The bytes Neo kept. Present when `completed`.
+        state:
+          type: string
+          description: >-
+            `completed`: finished, and its bytes are kept. `in_progress`: still being written
+            when the run ended, so nothing was kept; a script that needs the file awaits
+            `download.path()` before it returns. `failed`: canceled or interrupted, or Neo could
+            not keep a copy; `failure` says which.
+          x-extensible-enum: [in_progress, completed, failed]
+        failure:
+          type: string
+          description: Why it failed, such as the browser's `canceled`.
+    UnknownOperation:
+      type: object
+      required: [operationId, name]
+      properties:
+        operationId:
+          type: string
+        name:
+          type: string
+    RunList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/RunSummary'
+        nextCursor:
+          type: string
+    Operation:
+      type: object
+      required: [id, runId, name, kind, effect, startedAt, hasScreenshot, internal]
+      properties:
+        values:
+          type: string
+          x-extensible-enum: [off]
+          description: >-
+            `off` means trace.values omitted script and host values when this record ended.
+            Error messages are empty; metadata, downloads and the separate screenshot policy stay.
+            Absent when values were recorded.
+        id:
+          type: string
+        runId:
+          type: string
+        parentId:
+          type: string
+          description: The operation this one ran inside; absent for the agent's own calls.
+        name:
+          type: string
+          description: >-
+            e.g. `page.goto`, `locator.click`, `host.call`, or `host.fill` and `host.fillCheck`
+            for the host's private typing.
+        site:
+          description: Absent for operations without a script call site and historical records.
+          allOf:
+            - $ref: '#/components/schemas/OperationSite'
+        kind:
+          type: string
+          description: >-
+            `protected`: the host's private typing (`host.fill`, `host.fillCheck`), recorded with
+            no value, page address, title, call-log note or screenshot.
+          x-extensible-enum: [builtin, defined, next, host_call, protected]
+        attempt:
+          type: integer
+          format: int32
+          description: For `next`, which call of `next()` this was, from 1.
+        effect:
+          type: string
+          x-extensible-enum: [read, write]
+        tabId:
+          type: integer
+          format: int64
+          description: >-
+            The tab it targeted, when it had one. `page` is how the page looked after the
+            operation.
+        page:
+          $ref: '#/components/schemas/PageRef'
+        args:
+          description: >-
+            Original arguments, bounded for storage. Page and locator
+            handles appear as their branded JSON, e.g. `{"$neo":"locator","page":3,"selector":"…"}`.
+            Present once the operation has ended, so an operation still running, or one whose end Neo
+            never recorded, has none.
+        argsTruncated:
+          type: boolean
+        result:
+          description: Result, bounded for storage.
+        resultTruncated:
+          type: boolean
+        outcome:
+          type: string
+          description: Absent while the operation runs.
+          x-extensible-enum: [ok, error, cancelled]
+        delivery:
+          type: string
+          description: >-
+            `not_sent`: no side effect was attempted. `done`: Neo has a definite answer.
+            `unknown`: sent and never confirmed; never repeat it blindly. Absent while the operation
+            runs: delivery is what the dispatcher decided when it ended, never a guess.
+          x-extensible-enum: [not_sent, done, unknown]
+        error:
+          $ref: '#/components/schemas/OperationError'
+        notes:
+          type: array
+          description: >-
+            Absent: Neo never stores an operation's call-log lines (`waiting for getByRole('button')`
+            and the like), on purpose, because a line can carry what a script typed or read. They
+            reach the caller of the run only where upstream Playwright puts them: at the end of a
+            failing operation's error message, under `Call log:`. The record keeps that message as
+            the error's text, which `trace.values` `off` leaves out. The field stays for clients
+            that read it.
+          items:
+            type: string
+        startedAt:
+          type: integer
+          format: int64
+        sentAt:
+          type: integer
+          format: int64
+        endedAt:
+          type: integer
+          format: int64
+        durationMs:
+          type: integer
+          format: int64
+        hasScreenshot:
+          type: boolean
+        screenshot:
+          $ref: '#/components/schemas/Screenshot'
+        mainWorld:
+          type: boolean
+          description: >-
+            True when the operation ran script in the page's main world, the page's own
+            JavaScript world, rather than Neo's isolated world. Present once the operation has
+            ended, so an operation still running, one whose end Neo never recorded, or one
+            recorded before this field has none.
+        framesIncomplete:
+          type: boolean
+          description: >-
+            True when the operation read a tab's frame tree that was not whole: an out-of-process
+            frame's subtree (a cross-site iframe's) could not be read, or no tree came back at
+            all. Neo's own `page.frames` reads carry it. The script's `page.frames()` then lists
+            the frames that were read, and the tree is read again before the script's next
+            operation settles, so a later `page.frames` operation of the same tab shows whether
+            that read was whole. It describes this one read: `false` on an operation that failed
+            (refused, timed out) says nothing about the tree, which it did not answer. Present
+            once the operation has ended, so an operation still running, one whose end Neo never
+            recorded, or one recorded before this field has none.
+        internal:
+          type: boolean
+          description: >-
+            True for Neo-owned subscription work, derived from the shared subscription-name rule
+            and the absence of a script call site. Explicit script listeners carry a site and
+            are false. Historical listeners without recorded sites are indistinguishable from
+            Neo-owned work and are true. This field appears on every operation read and event.
+    OperationSite:
+      type: object
+      description: The call location in the agent script, with 1-based line and column numbers.
+      required: [line, column]
+      properties:
+        line:
+          type: integer
+          format: int64
+          minimum: 1
+        column:
+          type: integer
+          format: int64
+          minimum: 1
+    Screenshot:
+      type: object
+      required: [contentType, data]
+      properties:
+        contentType:
+          type: string
+          x-extensible-enum: [image/jpeg]
+        data:
+          type: string
+          description: The image bytes, base64 with the standard alphabet and padding.
+    LockRequest:
+      type: object
+      required: [tabId, ttlSeconds]
+      properties:
+        tabId:
+          type: integer
+          format: int64
+        reads:
+          type: string
+          description: '`block` refuses the agent''s reads of the tab too; `allow` refuses only writes.'
+          x-extensible-enum: [block, allow]
+          default: block
+        ttlSeconds:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 1200
+          description: >-
+            The lock releases itself after this long. At most 20 minutes, a fixed cap, so a
+            host that crashes cannot hold a tab for longer.
+    Lock:
+      type: object
+      required: [id, tabId, reads, settled, createdAt, expiresAt]
+      properties:
+        id:
+          type: string
+        tabId:
+          type: integer
+          format: int64
+        reads:
+          type: string
+          x-extensible-enum: [block, allow]
+        settled:
+          type: boolean
+          description: Whether the agent's in-flight writes on the tab finished within 2 s of locking.
+        createdAt:
+          type: integer
+          format: int64
+        expiresAt:
+          type: integer
+          format: int64
+        releasedAt:
+          type: integer
+          format: int64
+          description: Present once released, by the host or by the TTL.
+    Fit:
+      type: object
+      required: [id, tabId, screen, fit, createdAt]
+      properties:
+        id:
+          type: string
+        tabId:
+          type: integer
+          format: int64
+        screen:
+          $ref: '#/components/schemas/ViewerSize'
+        viewer:
+          description: >-
+            Effective logical dimensions and scale, present only at scale 2. `screen` remains
+            the physical framebuffer size. Every active fit reflects the latest shared layout.
+          allOf:
+            - $ref: '#/components/schemas/ViewerRequest'
+        mode:
+          type: string
+          x-extensible-enum: [mobile, desktop]
+        fit:
+          type: string
+          description: '`partial` when the page did not report the size asked for; Neo does not retry.'
+          x-extensible-enum: [pending, fitted, partial]
+        keyboard:
+          $ref: '#/components/schemas/FitKeyboard'
+        browser:
+          $ref: '#/components/schemas/FitBrowserBar'
+        popups:
+          type: array
+          description: Pages the tab opened that stay where they are.
+          items:
+            type: string
+        createdAt:
+          type: integer
+          format: int64
+        restoredAt:
+          type: integer
+          format: int64
+          description: Present once restored.
+    FitKeyboard:
+      type: object
+      description: >-
+        Boxes of the fields a phone keyboard opens for, in screen px, `[x, y, width, height]`: a
+        field's own box, or for a field with no size that the page draws with its own elements
+        (digit squares over a hidden code input) the drawing's box, where the owner taps. Present
+        only while they were measured at `width`×`height`. Dimensions and boxes are physical
+        framebuffer pixels, including the phone preview scale.
+      required: [width, height, boxes, at]
+      properties:
+        width:
+          type: integer
+          format: int32
+        height:
+          type: integer
+          format: int32
+        at:
+          type: integer
+          format: int64
+        boxes:
+          type: array
+          maxItems: 128
+          items:
+            type: array
+            minItems: 4
+            maxItems: 4
+            items:
+              type: number
+    FitBrowserBar:
+      type: object
+      description: The tab's place, for the owner page's browser bar. Mobile fits only.
+      required: [url, back, forward]
+      properties:
+        url:
+          type: string
+        back:
+          type: boolean
+        forward:
+          type: boolean
+    TakeoverRequest:
+      type: object
+      required: [tabId]
+      properties:
+        tabId:
+          type: integer
+          format: int64
+        viewer:
+          $ref: '#/components/schemas/ViewerRequest'
+        reads:
+          type: string
+          description: The lock's `reads`, as on `LockRequest`.
+          x-extensible-enum: [block, allow]
+          default: block
+        ttlSeconds:
+          type: integer
+          format: int32
+          minimum: 60
+          maximum: 1200
+          default: 1200
+          description: >-
+            The takeover lock's TTL. At most 20 minutes, the same fixed cap as a lock's. Neo
+            releases the takeover 10 s before it ends.
+    OpenedTab:
+      type: object
+      description: A tab that first appeared while a takeover was active.
+      required: [tabId, url, inFront, taskId, openerTabId]
+      properties:
+        tabId:
+          type: integer
+          format: int64
+        url:
+          type: string
+          nullable: true
+          description: >-
+            Its address when the release began; `null` when the release could not list the
+            browser's tabs.
+        inFront:
+          type: boolean
+          nullable: true
+          description: >-
+            Whether the browser showed it in front when the release began, before the fit was
+            restored or the screen let go: the owner's last focus. When no listed tab is in
+            front, the owner left another tab in front, usually the takeover's own. `null` when
+            the release could not list the browser's tabs: unknown, not `false`.
+        taskId:
+          type: string
+          nullable: true
+          description: >-
+            The task holding it when the release began, or `null` when no task holds it. A popup
+            of a task's tab already belongs to that task.
+        openerTabId:
+          type: integer
+          format: int64
+          nullable: true
+          description: >-
+            The tab that opened it, or `null` for one the owner opened by hand. A host cannot
+            tell those apart from a page's `window.open`; Neo can, through the opener.
+    Takeover:
+      type: object
+      required: [id, tabId, state, lockId, display, createdAt, expiresAt]
+      properties:
+        id:
+          type: string
+        tabId:
+          type: integer
+          format: int64
+        state:
+          type: string
+          x-extensible-enum: [active, released]
+        releaseReason:
+          type: string
+          x-extensible-enum: [done, idle, host, expired, tab_closed]
+        lockId:
+          type: string
+        fitId:
+          type: string
+          description: Present when the takeover was started with a viewer size.
+        display:
+          type: string
+          description: The control display to open for the owner; it closes at release.
+        inputDrained:
+          type: boolean
+          description: >-
+            Set by the release. The owner's input is guaranteed to have landed only when this is
+            `true`: every control display bound to the takeover ended with each input message it
+            forwarded whole and Neo's screen closing the connection Neo had half-closed, within
+            2 s, so the screen read all of that input before the release went on, and none
+            arrives later. Input a release cuts off before Neo forwarded it is dropped, never
+            delivered late. `false` is intentional after the bounded 2 s wait and means the
+            guarantee does not hold for this release: the screen kept the connection open or
+            closed it first, the release cut a message in two, or a display was still forwarding
+            when the release's budget ran out. Absent while the takeover is active, and when no
+            control display was bound to it.
+        openedTabs:
+          type: array
+          description: >-
+            Set by the release, the same whatever ended it: every tab that first appeared while the
+            takeover was active and was still open when its release began, oldest first: the newest
+            256 when more opened (see `openedTabsTruncated`). A tab showing the browser's own or an
+            extension's page, which no script reaches, appears once it shows a web page. Neo gives
+            none of them to a task: each stays with the task holding it, or with no task, hidden
+            from bound runs and never closed by the janitor. The host acts on the list by its own
+            rule (for example, only on the tab the owner left in front), or ignores it. Takeovers
+            active at once each list a tab opened during both. If the browser's tabs cannot be
+            listed at the release (it waits 2 s), every tab it kept is still listed, with `url` and
+            `inFront` `null`: unknown, never a guess. Absent while the takeover is active.
+          items:
+            $ref: '#/components/schemas/OpenedTab'
+        openedTabsNoted:
+          type: integer
+          format: int64
+          description: >-
+            Set with `openedTabs`: how many tabs first appeared while the takeover was active,
+            in all, closed ones included.
+        openedTabsTruncated:
+          type: boolean
+          description: >-
+            Set with `openedTabs`, and present whenever it is: whether more tabs opened than the
+            256 it keeps. When `true`, `openedTabs` is not every tab the owner opened (it holds
+            the newest), so treat any tab it does not list as unknown, never as one the owner
+            did not open: for example, mark every tab no task holds. The same rule as a `null`
+            `url` or `inFront`: unknown never reads as absent.
+        createdAt:
+          type: integer
+          format: int64
+        releasedAt:
+          type: integer
+          format: int64
+        expiresAt:
+          type: integer
+          format: int64
+          description: When the takeover's lock ends. Neo releases the takeover 10 s before.
+    ViewerSize:
+      type: object
+      description: Physical framebuffer dimensions in pixels.
+      required: [width, height]
+      properties:
+        width:
+          type: integer
+          format: int32
+          minimum: 100
+          maximum: 4096
+        height:
+          type: integer
+          format: int32
+          minimum: 100
+          maximum: 4096
+    ViewerRequest:
+      type: object
+      description: >-
+        Logical viewer dimensions. `scale` accepts only integer 1 or 2; null, other numbers,
+        strings and booleans are 400 `invalid_request`. New fits default to 1, and refits with
+        omitted scale inherit the current shared scale. Scale 2 requires logical width at most
+        600 and both scaled physical sides at most 4096. It uses the existing mobile preview
+        zoom at 200 percent and keeps the logical device size and mobile DPR 2 unchanged.
+      required: [width, height]
+      properties:
+        width:
+          type: integer
+          format: int32
+          minimum: 100
+          maximum: 4096
+        height:
+          type: integer
+          format: int32
+          minimum: 100
+          maximum: 4096
+        scale:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 2
+          description: Physical framebuffer pixels per logical viewer pixel, either 1 or 2.
+    NavigateRequest:
+      type: object
+      required: [action]
+      properties:
+        action:
+          type: string
+          x-extensible-enum: [back, forward, reload, open]
+        input:
+          type: string
+          maxLength: 2000
+          description: >-
+            For `open`: what the owner typed. A web address opens as is (https added); other text
+            is searched; a non-http scheme or embedded credentials is refused.
+    NavigateResult:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          x-extensible-enum: [completed, refused, failed]
+        notice:
+          type: string
+          description: A sentence for the owner when the bar did not move.
+    ReleaseRequest:
+      type: object
+      properties:
+        reason:
+          type: string
+          x-extensible-enum: [done, idle, host]
+          default: done
+    FillRequest:
+      type: object
+      required: [fields]
+      properties:
+        requestId:
+          type: string
+          maxLength: 128
+          description: >-
+            The host's id for this call, as on `run`: a repeat never types again. Not the HTTP
+            layer's `x-request-id`.
+        taskId:
+          type: string
+          maxLength: 128
+          description: Lists the fill's run with that task's runs.
+        url:
+          type: string
+          description: >-
+            The tab's address must still equal this, compared character for character with the
+            main frame's `location.href` when Neo looks: a changed fragment is a changed address
+            (`page_changed`).
+        lockId:
+          type: string
+          description: >-
+            A lock the host took on this tab with `POST /v1/locks`. The fill passes that lock and
+            no other; a takeover's lock refuses the fill, named or not. `409 lock_released` when
+            no lock with this id holds this tab.
+        timeoutMs:
+          type: integer
+          format: int32
+          minimum: 1000
+          maximum: 60000
+          default: 15000
+          description: >-
+            The whole call's limit. It only bounds a browser that stops answering: the entry
+            stops itself there and still answers `at` and `typed` (`run_timeout`).
+        fields:
+          type: array
+          minItems: 1
+          maxItems: 16
+          description: The boxes, in typing order. A code in six boxes is six fields.
+          items:
+            $ref: '#/components/schemas/FillField'
+    FillField:
+      type: object
+      required: [ref, value, expect]
+      properties:
+        ref:
+          type: string
+          description: >-
+            The box: a ref a snapshot printed or `locator.ref()` minted. It names one node and
+            never re-binds; it must be the `<input>` itself, of a type that takes text.
+        value:
+          type: string
+          writeOnly: true
+          minLength: 1
+          maxLength: 256
+          description: >-
+            What Neo types, 1 to 256 characters, no control character (a newline would press
+            Enter). Never recorded, never echoed, never quoted in an error.
+        expect:
+          $ref: '#/components/schemas/FillExpect'
+        cut:
+          type: boolean
+          default: false
+          description: Accept a value the box's own `maxlength` cuts; Neo types the part that fits.
+        spaced:
+          type: boolean
+          default: false
+          description: >-
+            Compare the read-back with spaces, dashes and slashes set aside, for a box that groups
+            digits or formats an expiry (`12 / 29`).
+        keys:
+          type: boolean
+          default: false
+          description: >-
+            Type key by key, with the focus checked before each character, for a code with one
+            character in each box, a box with no size, or a masked box that needs key events.
+            Default: one insertion, as `fill` types, which needs a box that shows.
+    FillExpect:
+      type: object
+      required: [origin]
+      description: >-
+        Facts the host approved about the box. Each one sent must still hold (`box_changed`),
+        but the limit, `maxLength`, which follows its own rule.
+      properties:
+        origin:
+          type: string
+          description: The origin of the box's own frame, e.g. `https://pay.example` (`wrong_origin`).
+        type:
+          type: string
+          description: The input's `type`, as the DOM reports it (`wrong_type`).
+        autocomplete:
+          type: string
+        maxLength:
+          type: integer
+          format: int32
+          description: >-
+            The limit the host approved, the box's `maxlength`. Send -1 for a box approved with no
+            limit, the DOM's own word for it: the box facts leave `maxLength` out for such a box.
+            Absent, it is not checked; 0 is a limit of zero; any other negative number is a
+            malformed body. A card field can move its limit once it knows the card's brand, so a
+            limit that moved is not a changed box: when the box has another limit now, the fill goes
+            on if the value fits both the approved limit and the limit now, and lists the field in
+            `maxLengthMoved`; otherwise `box_changed`, naming `maxLength`. A value fits a limit when
+            its length in UTF-16 code units is not above it, when the limit is none, or when the
+            box's type is one the browser applies no `maxlength` to. `cut` plays no part in this
+            rule.
+        inputMode:
+          type: string
+        name:
+          type: string
+        id:
+          type: string
+    FillResult:
+      type: object
+      required: [runId, outcome, delivery]
+      properties:
+        runId:
+          type: string
+          description: The fill's own run, with its one `host.fill` operation.
+        outcome:
+          type: string
+          description: >-
+            `entered`: every box holds its value, read back. `entered_page_moved`: every
+            character went in and the page moved after the last one, so the form may have
+            submitted. `refused`: no character was typed anywhere. `partial`: the boxes before
+            `at` hold their values, box `at` got none. `uncertain`: box `at` got some characters,
+            or could not be read back; look at the page before repeating.
+          x-extensible-enum: [entered, entered_page_moved, refused, partial, uncertain]
+        delivery:
+          type: string
+          description: The operation's delivery, as on every operation.
+          x-extensible-enum: [not_sent, done, unknown]
+        at:
+          type: integer
+          format: int32
+          description: The index of the field the fill stopped at; absent when it did not stop.
+        typed:
+          type: array
+          description: >-
+            How many characters went to each box, in the request's order. Never text. Absent
+            when Neo could not count them: a fill Neo cut short itself (shutting down), or a
+            repeat of a fill Neo never finished (`fill_interrupted`).
+          items:
+            type: integer
+            format: int32
+        maxLengthMoved:
+          type: array
+          description: >-
+            The indexes of the fields whose box had another `maxlength` than the approved one
+            (`expect.maxLength`) at the look before that box's turn, the value fitting both: where
+            Neo did not refuse for the limit. Read there and only there: a limit that moves while
+            its own box is typed (a number box going from 22 to 17 as an Amex prefix goes in) is not
+            listed, and the read-back decides that box as for any other. A box listed there may
+            still have got no character, when its entry stopped after that look (`typed` says how
+            many). Absent when there is none; never an empty list.
+          items:
+            type: integer
+            format: int32
+        error:
+          description: >-
+            Why it stopped: the operation's error, as on every operation (`retryable` only when
+            nothing was sent). Codes of this route: `owner_has_control`, `page_busy`,
+            `lock_released` (the named lock was released after the call was admitted),
+            `element_detached`, `not_an_input`, `wrong_origin`, `wrong_type`, `box_changed`,
+            `page_changed`, `box_not_editable`, `box_hidden`, `box_covered` (something takes
+            the pointer at the box, in its own document or in a page above its frame: dismiss
+            it, or scroll until the box is clear of it, and try again), `cover_unread` (the box
+            is not in view and could not be brought into view: close what locks the page, such as
+            a dialog, or scroll the box into view, and try again; or a page above the box's frame
+            could not be asked what covers the box: try again; or it cannot
+            show the frame: scroll the frame into view and try again; or it scales or turns the
+            frame: try again once the page has stopped moving), `value_too_long`,
+            `not_focused`, `focus_lost`, `value_not_taken`, `box_not_cleared` (a box with no
+            size still held text after Neo tried to empty it; nothing was typed), `value_drawn`
+            (a value of more than ten characters that the box's field drawing showed outside the
+            box: Neo emptied the box and the page no longer shows the value, but the site saw what
+            was typed, so look at the page before trying again), `value_still_drawn` (as
+            `value_drawn`, but the page still shows the value after the emptying: reload or close
+            the page before anything reads it, a snapshot included), `page_moved`,
+            `run_timeout`,
+            `target_closed`, `browser_disconnected`, `shutting_down`, `internal_error` (a
+            failure inside Neo, the fill's own task included: look at the page before trying
+            again), and `fill_interrupted` (a repeat of a fill Neo restarted in the middle of).
+            Messages are fixed sentences; none quotes the page or a value.
+          allOf:
+            - $ref: '#/components/schemas/OperationError'
+    FillCheckRequest:
+      type: object
+      required: [fields]
+      properties:
+        taskId:
+          type: string
+          maxLength: 128
+        url:
+          type: string
+          description: >-
+            As on the fill: compared character for character with the main frame's
+            `location.href`, a changed fragment included (`page_changed`).
+        lockId:
+          type: string
+          description: >-
+            As on the fill: a lock the host took with `POST /v1/locks` on this tab, which the
+            look passes, so a host whose own lock blocks reads can check its tab. A takeover's
+            lock refuses, named or not; `409 lock_released` when no lock with this id holds this
+            tab.
+        timeoutMs:
+          type: integer
+          format: int32
+          minimum: 1000
+          maximum: 60000
+          default: 15000
+        fields:
+          type: array
+          minItems: 1
+          maxItems: 16
+          items:
+            $ref: '#/components/schemas/FillCheckField'
+    FillCheckField:
+      type: object
+      required: [ref]
+      description: >-
+        A fill's field, its value optional. `expect` may be left out, except beside a `value`.
+        With `value`, Neo also compares the box with it (`holds`, `contains`).
+      properties:
+        ref:
+          type: string
+        value:
+          type: string
+          writeOnly: true
+          minLength: 1
+          maxLength: 256
+          description: >-
+            A value to compare the box with, as a fill's value: 1 to 256 characters, no control
+            character. Compared in the box's own isolated world and nowhere else, and never
+            recorded, echoed or quoted: no trace row, run or operation field, event, log line
+            or error message holds it. The check's run keeps the shape it has without one.
+            `spaced` and `cut` apply to the compare as they do to a fill's read-back. A field
+            that carries a value carries `expect` with the origin of the box's own frame, as a
+            fill does; without it the request is a malformed body (`invalid_request`), refused
+            before anything is sent.
+        expect:
+          $ref: '#/components/schemas/FillExpect'
+        cut:
+          type: boolean
+          default: false
+        spaced:
+          type: boolean
+          default: false
+        keys:
+          type: boolean
+          default: false
+          description: The field will be typed key by key, so a box with no size is not refused.
+    FillCheckResult:
+      type: object
+      required: [runId, fields]
+      properties:
+        runId:
+          type: string
+          description: The check's own run, with its one `host.fillCheck` operation.
+        fields:
+          type: array
+          items:
+            $ref: '#/components/schemas/FillBoxCheck'
+    FillBoxCheck:
+      type: object
+      description: >-
+        One box, on its own: neither field means every check a fill makes before typing passed, but
+        the two that need the value's length, which are the length check and whether a limit that
+        moved still fits.
+      properties:
+        facts:
+          description: The box's facts, whenever the ref names a text input.
+          allOf:
+            - $ref: '#/components/schemas/BoxFacts'
+        refusal:
+          description: The first rule a fill would be refused by now; absent when none.
+          allOf:
+            - $ref: '#/components/schemas/OperationError'
+        holds:
+          type: boolean
+          description: >-
+            Present exactly when the field sent a `value` and Neo read the box, whatever the
+            look says of it (a covered, hidden or out-of-view box answers it beside its
+            refusal). The value goes only where a fill would send it, so it never enters a site
+            the host did not approve: a box on another origin than `expect.origin` answers
+            `wrong_origin`, and a tab no longer at the request's `url` answers `page_changed`,
+            both with no compare. True when the box holds the value by a fill's read-back rule:
+            equal, or with `spaced` equal once whitespace, dashes and slashes are set aside, and
+            with `cut` the part the box's `maxlength` keeps. True decides "entered as typed".
+        contains:
+          type: boolean
+          description: >-
+            Present exactly when `holds` is. True when the box's text contains the value by the
+            same rule of setting separators aside; true whenever `holds` is. False decides
+            "gone": the value has left the box. Booleans only: no value, position, length or
+            count of matches. When both are absent the refusal says why, and it is never "not
+            held": `element_detached` means Neo no longer reaches the box by this ref (the box
+            left its document, the document was replaced, the frame is gone, or the isolated
+            world the ref was made in is gone). On its own it is not proof that the box left the
+            page; `frameGone` says when it is. `run_timeout` or any other code means Neo could
+            not read the box now. A value the page reformats beyond whitespace, dashes and
+            slashes is neither held nor contained, and a copy of the value in another box is not
+            seen.
+        frameGone:
+          type: boolean
+          description: >-
+            Present, and true, only when the ref is dead (`element_detached`) and the frame the box
+            was in is no longer in the tab: the box left the page with it, and nothing there holds
+            the value. A removed payment frame answers this, and so does a page that moved on, for
+            the frames it held. Neo reads the tab's frame tree for the check's dead refs, every
+            frame included, and true needs two reads in a row that agree: both whole, and neither
+            holds the frame. Never false. How the answers fit together, for a host that decides "the
+            box left the page": `frameGone` true, it did. `page_changed` is answered for a box Neo
+            still reaches: the tab is no longer at the address the host named, which says the
+            address changed, not that the box left, as a page can change its address and keep its
+            document; take a fresh snapshot. `element_detached` with no `frameGone` is unknown: the
+            box may have left a document whose frame is still there, its document may have been
+            replaced in place (the tab's main document after it moved on, or a frame that reloaded),
+            Neo may have lost its own world there, the ref may be from before a restart of Neo, the
+            frame tree could not be read whole, or frames in the browser, in any tab, were moving to
+            or from their own process while Neo read it; take a fresh snapshot. True says the frame
+            is gone now: a later Back can bring a page back, the fill route's own limit on history.
+            The fill's answer has no such field.
+        maxLengthMoved:
+          type: boolean
+          description: >-
+            Present, and true, only when the field sent `expect.maxLength` and the box has another
+            limit now (the limit itself is in `facts.maxLength`). The check call has no length
+            check, so it cannot say whether a value fits a limit that moved, and it never refuses
+            for one: a fill of that box goes on when the value fits both limits, and answers
+            `box_changed` otherwise. Never false.
+    BoxFacts:
+      type: object
+      required: [origin, type, autocomplete, inputMode, name, id, sized, empty]
+      description: >-
+        What the look read of a box in Neo's isolated world. Never what it holds, beyond
+        whether it is empty.
+      properties:
+        origin:
+          type: string
+        type:
+          type: string
+        autocomplete:
+          type: string
+        maxLength:
+          type: integer
+          format: int32
+          description: >-
+            Absent when the box has none. The check call never refuses for the limit: comparing
+            the value's length with it is the host's own.
+        inputMode:
+          type: string
+        name:
+          type: string
+        id:
+          type: string
+        sized:
+          type: boolean
+          description: Whether the box has a size. One with none is reached by focus, never covered.
+        empty:
+          type: boolean
+    Event:
+      type: object
+      required: [type, at]
+      properties:
+        type:
+          type: string
+          description: >-
+            What happened. `stream.reset` carries nothing else: events were missed, so re-read
+            the state endpoints.
+          x-extensible-enum:
+            [
+              run.started,
+              run.ended,
+              operation.started,
+              operation.ended,
+              tab.closed,
+              lock.state,
+              takeover.state,
+              stream.reset,
+            ]
+        at:
+          type: integer
+          format: int64
+        taskId:
+          type: string
+          description: The task of the run the event is about, when it has one.
+        tabId:
+          type: integer
+          format: int64
+          description: >-
+            The tab the event is about: an operation's target tab, or the tab of `tab.closed`,
+            `lock.state` and `takeover.state`.
+        run:
+          $ref: '#/components/schemas/RunSummary'
+        operation:
+          $ref: '#/components/schemas/Operation'
+        lock:
+          $ref: '#/components/schemas/Lock'
+        takeover:
+          $ref: '#/components/schemas/Takeover'
+    SettingsState:
+      type: object
+      required: [settings, defaults]
+      properties:
+        settings:
+          $ref: '#/components/schemas/Settings'
+        defaults:
+          $ref: '#/components/schemas/Settings'
+        file:
+          $ref: '#/components/schemas/SettingsFile'
+        unknown:
+          type: array
+          description: >-
+            On a `PUT` or `PATCH` answer only: the names skipped in that request because the
+            server does not know them, such as `tabs.idleCloseMinutes`. Empty when it knew every
+            name. The startup file's skipped names belong to `file.unknown` on `GET`.
+          items:
+            type: string
+        unknownValues:
+          type: array
+          description: >-
+            On a `PUT` or `PATCH` answer only: the settings in that request sent with a
+            name of an open list it does not have yet, such as a new `trace.screenshots` mode.
+            Each is skipped as if it were left out (`PUT`: its default; `PATCH`: its value
+            stays). The value is never repeated. Empty when it knew every value. The startup
+            file's skipped values belong to `file.unknownValues` on `GET`.
+          items:
+            type: string
+    SettingsFile:
+      type: object
+      description: >-
+        The startup settings-file load for this process, present only on `GET /v1/settings`
+        when startup attempted to load the settings file. Later API changes never alter it. A new process
+        reports its own load. Every list contains sorted names only, never input values or
+        validation rules, and is present even when empty.
+      required: [state, unknown, unknownValues, invalid]
+      properties:
+        state:
+          type: string
+          x-extensible-enum: [absent, applied, partial, unreadable]
+          description: >-
+            `absent` when no file existed; `applied` for a clean JSON object, including an empty
+            one; `partial` when an object contained anything skipped or refused; `unreadable`
+            for any other read failure, malformed JSON or a nonobject value. `absent`, `applied`
+            and `unreadable` have empty lists. An open string; clients ignore unknown states.
+        unknown:
+          type: array
+          description: Names skipped as unknown, as a `PUT` of the same object would list them.
+          items:
+            type: string
+        unknownValues:
+          type: array
+          description: Settings with unknown open-list values, as a `PUT` would list them.
+          items:
+            type: string
+        invalid:
+          type: array
+          description: >-
+            Names a `PUT` would refuse, for which startup used a fallback. A malformed group
+            is named by its group, such as `trace`, rather than by its child settings.
+          items:
+            type: string
+    Settings:
+      type: object
+      description: >-
+        What a host sets on Neo. Every setting is optional and has a default, and a client
+        ignores settings it does not know. New settings are only ever added: a setting never
+        changes its name, its type or its meaning.
+      properties:
+        tabs:
+          $ref: '#/components/schemas/TabSettings'
+        trace:
+          $ref: '#/components/schemas/TraceSettings'
+        files:
+          $ref: '#/components/schemas/FilesSettings'
+        fill:
+          $ref: '#/components/schemas/FillSettings'
+    FillSettings:
+      type: object
+      properties:
+        pictures:
+          type: string
+          x-extensible-enum: [allowed, never]
+          default: allowed
+          description: >-
+            Whether a tab that took the host's private fill (`POST /v1/tabs/{tabId}/fill`) is
+            pictured. `allowed`: like any other tab; a script's `page.screenshot()`,
+            `locator.screenshot()` and `page.pdf()` work, and Neo's own screenshots picture it.
+            `never`: no picture of it for the tab's life, by a script (`private_tab`) or by Neo,
+            kept across a restart of Neo by Neo's record of the tabs that took a fill. A picture
+            reads it when it is asked for, so a change applies from the next picture. A fill
+            reads it when it starts, and only under `never` writes its tab into that record before
+            the first character (a fill whose record cannot be written is then refused,
+            `trace_unavailable`, nothing typed). `never` covers every tab Neo knows took a fill:
+            those filled in this run of the server, whatever the setting was, and after a restart
+            those filled while it was `never`. Before the saved record is applied at startup,
+            `never` withholds every tab. A host that wants it sets it before its first
+            fill. What a model can see by default: a script can take a picture of a tab after a
+            private fill. A password box paints bullets. A card number, a security code and a
+            one-time code are painted in clear, so a model that takes a screenshot can see one
+            that Neo typed privately. It still cannot read it as text. A host that does not want
+            that sets `fill.pictures` to `never` before the first fill. Neo stores a picture even
+            when a card number or a one-time code is visible in a box. A value typed by a script
+            or by the person at the keyboard does not mark its tab for this setting. After Neo
+            restarts, a tab filled under `allowed` is not known as filled, because that fill
+            wrote no record. A name this server does not have is skipped and listed in
+            `unknownValues`: then `PUT` applies the default, `allowed`, and `PATCH` keeps the
+            value it had, so a host that needs `never` checks `unknownValues`.
+    FilesSettings:
+      type: object
+      properties:
+        readDirs:
+          type: array
+          maxItems: 16
+          x-neo-default: downloads folder
+          description: >-
+            Absolute folders scripts may read files from by path. Defaults to the browser's
+            downloads folder. Empty denies path reads; missing roots match nothing. Real
+            paths are compared by component at each use, so symlinks cannot escape a root.
+            Neo's state, profile, host token and CAPTCHA key files can never be read or written,
+            even with / allowed. In hosted mode the home of Neo's user is protected the same way,
+            for reads and writes. Inside the home a script works only in the downloads folder or in
+            a listed folder whose first name below the home is not a dot-entry, and there the list
+            also allows writes. Directory uploads cannot contain those protected locations.
+            Byte payload uploads do not need a listed folder. Changes apply at the next file
+            operation, including inside a running script.
+          items:
+            type: string
+            pattern: '^/'
+    TabSettings:
+      type: object
+      properties:
+        idleCloseSeconds:
+          type: integer
+          format: int64
+          minimum: 60
+          maximum: 86400
+          default: 1800
+          description: >-
+            Neo closes a tab the agent opened, or a popup one of those opened, once nothing has
+            used it for this long. A tab is in use while a run that used it is in flight, while
+            a lock holds it, a fit is on it, or a host keep protects it; its clock restarts when the last of those
+            ends. Neo never closes the browser's last tab, and checks once a minute.
+        scope:
+          type: string
+          x-extensible-enum: [task, browser]
+          default: task
+          description: >-
+            Which tabs a run sees. `task`: a run that carries a `taskId` sees and acts on only its
+            task family's tabs (the family starts at the task a host named, and every task its
+            runs create joins it; its tabs are the ones its tasks' runs opened and their popups);
+            any other tab is refused with `page_not_in_task`. A run without a
+            `taskId` sees every tab, but cannot pick, open a tab in or close a task a host named.
+            `browser`: every run sees every tab, whatever task it carries. A run reads this once,
+            at its start, and keeps it to its end. A name this server does not have is skipped
+            and listed in `unknownValues`, as if left out. Where a whole document is read (a `PUT`,
+            the saved settings file, `/etc/neo/settings.json`), it therefore reads as `task`, the
+            default. A `PATCH` changes only what it names, so a skipped value there changes
+            nothing: the setting keeps its value, `browser` included.
+    TraceSettings:
+      type: object
+      properties:
+        retentionSeconds:
+          type: integer
+          format: int64
+          minimum: 3600
+          maximum: 2592000
+          default: 604800
+          description: >-
+            Runs older than this are deleted with their operations, their screenshots and Neo's
+            copy of their downloads; a repeat of a deleted run's `requestId` runs again. Neo
+            sweeps every 10 minutes. A file the browser saved in the downloads folder stays.
+        screenshots:
+          type: string
+          x-extensible-enum: [perOperation, off]
+          default: perOperation
+          description: >-
+            Neo's own screenshots. `perOperation`: after each write, after a failure the website
+            or the script caused, and of each tab a run touched when it ends. `off`: none, from
+            the next operation that ends (a screenshot already ordered is still taken). A
+            script's own `page.screenshot()` is its result, whose storage follows trace.values. A name this
+            server does not have is skipped and listed in `unknownValues`. Neo stores a picture even when
+            a card number or a one-time code is visible in a box, including inside a closed
+            shadow root. A host that does not want pictures after private typing sets
+            `fill.pictures: never`, which stops pictures of a tab after the host's private
+            typing happened there. A value typed by a script or by the person at the keyboard
+            is not covered by that setting. Only a fill under `never` writes the filled-tab
+            record, so after Neo restarts a tab filled under the default is not known as filled.
+        valueBytes:
+          type: integer
+          format: int64
+          minimum: 0
+          maximum: 262144
+          default: 0
+          description: >-
+            Keeps each operation's arguments and result, a run's result, and any one string in
+            them whole up to this many bytes, from the next operation that ends. `0` keeps the
+            trace's own limits: 4 KiB arguments, 2 KiB results, 1 KiB strings. A higher value
+            stores more of what a script typed and got.
+        values:
+          type: string
+          x-extensible-enum: [on, off]
+          default: on
+          description: >-
+            `off` omits script text, arguments, results, notes, host data, stored replies and
+            error messages from records, from the next operation or run that ends. Metadata
+            and downloads stay; screenshots follow trace.screenshots. Result blobs stay
+            fetchable for ten minutes after their write, then the next minute upkeep removes them. Existing
+            records are unchanged. Unknown names are skipped and listed in unknownValues.
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          x-extensible-enum:
+            [
+              invalid_request,
+              unauthorized,
+              forbidden,
+              not_found,
+              expired,
+              tab_not_found,
+              lock_released,
+              fit_restored,
+              takeover_released,
+              takeover_lock,
+              display_unavailable,
+              browser_unavailable,
+              internal_error,
+              trace_unavailable,
+            ]
+        message:
+          type: string
+        requestId:
+          type: string
+          description: Also sent as the `x-request-id` response header.

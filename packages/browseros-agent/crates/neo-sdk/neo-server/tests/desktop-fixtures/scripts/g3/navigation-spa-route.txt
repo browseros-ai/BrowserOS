@@ -1,0 +1,11 @@
+await page.goto(args.base + '/sdk-spa-route.html');
+const routed = args.base + '/sdk-spa-route.html#/home';
+equal(await page.evaluate(() => location.href), routed, 'the SPA applies its initial hash route');
+const started = Date.now();
+const response = await page.goto(routed);
+const elapsed = Date.now() - started;
+assert(elapsed < 5000, 'goto the SPA route completes before 5000ms', { elapsed });
+const status = response ? response.status() : await page.evaluate(() => performance.getEntriesByType('navigation')[0]?.responseStatus);
+equal(status, 200, 'the unchanged document retains HTTP 200');
+equal(await page.evaluate(() => location.href), routed, 'goto preserves the routed URL');
+return { status, routed, elapsed };

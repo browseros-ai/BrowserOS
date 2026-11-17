@@ -76,6 +76,30 @@ describe('isBehindTheScenes', () => {
 })
 
 describe('describeStep', () => {
+  it('distinguishes a pending chooser from selecting files', () => {
+    expect(
+      describeStep(
+        call('act', {
+          args: { kind: 'click' },
+          meta: { fileChooserOpen: true },
+          ...FLIGHTS,
+        }),
+      ),
+    ).toBe(
+      'Opened a file chooser on San Francisco to New York | Google Flights',
+    )
+    expect(
+      describeStep(
+        call('upload', { args: { files: ['/vm/report.pdf'] }, ...FLIGHTS }),
+      ),
+    ).toBe('Selected files on San Francisco to New York | Google Flights')
+    expect(
+      describeStep(call('upload', { args: { files: [] }, ...FLIGHTS })),
+    ).toBe(
+      'Cleared file selection on San Francisco to New York | Google Flights',
+    )
+  })
+
   it('names the page a new tab opened, preferring its title', () => {
     expect(
       describeStep(call('tabs', { args: { action: 'new' }, ...FLIGHTS })),
@@ -146,6 +170,17 @@ describe('describeStep', () => {
   it('describes the human-help and saved-task tools', () => {
     expect(describeStep(call('request_human_help'))).toBe('Asked you for help')
     expect(describeStep(call('save_skill'))).toBe('Saved this as a skill')
+    expect(
+      describeStep(call('save_skill', { args: { name: 'x', flow: [] } })),
+    ).toBe('Made this skill ultrafast')
+    expect(
+      describeStep(
+        call('save_skill', { args: { name: 'x', patch: { step: 2 } } }),
+      ),
+    ).toBe('Repaired a step of this skill')
+    expect(
+      describeStep(call('run_skill', { args: { name: 'neo-shop-add' } })),
+    ).toBe('Ran neo-shop-add the fast way')
   })
 
   it('shortens very long page titles', () => {
@@ -301,21 +336,110 @@ describe('calls made inside a run script', () => {
     )
   })
 
-  it('names a decision-model goal in its own words', () => {
-    expect(
-      describeStep(
-        call('pursue', {
-          args: { goal: 'add a Sensodyne toothpaste to the cart.', page: 3 },
-        }),
-      ),
-    ).toBe('Set out to add a Sensodyne toothpaste to the cart')
-  })
-
   it('picks the typing icon for typing and the click icon for other input', () => {
     expect(verbForCall(call('act', { args: { kind: 'fill' } }))).toBe('type')
     expect(verbForCall(call('input.click', { args: [3, 'e1'] }))).toBe('click')
     expect(verbForCall(call('nav.goto', { args: [3, 'https://x.y'] }))).toBe(
       'navigate',
+    )
+  })
+})
+
+describe('when neo takes a task over', () => {
+  const STORE = 'https://shop.example.com/item/2-pack'
+  const GOAL = 'Add the 2-pack to the cart'
+
+  function pursue(outcome: string, at: number, durationMs: number) {
+    return {
+      ...call('pursue', {
+        args: { page: 1, goal: GOAL },
+        url: STORE,
+        meta: { isError: false, outcome },
+        at,
+      }),
+      durationMs,
+    }
+  }
+
+  it('says neo took over the clicking, with the goal', () => {
+    const step = pursue('completed', 1_000, 4_000)
+    expect(describeStep(step)).toBe(
+      'neo took over the clicking: “Add the 2-pack to the cart”',
+    )
+    expect(verbForCall(step)).toBe('browse')
+  })
+
+  it('marks where the agent carries on after a hand back', () => {
+    const { steps } = describeSteps([
+      pursue('handed_back', 1_000, 4_000),
+      call('act', { args: { kind: 'click' }, url: STORE, at: 2_000 }),
+      call('act', { args: { kind: 'fill' }, url: STORE, at: 6_000 }),
+    ])
+
+    expect(steps.map((step) => step.sentence)).toEqual([
+      'neo took over the clicking: “Add the 2-pack to the cart”',
+      'Clicked on shop.example.com',
+      'Typed into shop.example.com',
+    ])
+    expect(steps.map((step) => step.afterHandBack ?? false)).toEqual([
+      false,
+      false,
+      true,
+    ])
+    expect(steps[0]?.handedBack).toBe(true)
+    expect(steps.some((step) => step.isError)).toBe(false)
+  })
+
+  it('keeps the run on the takeover and times neo’s steps from it', () => {
+    const { steps } = describeSteps([
+      {
+        ...pursue('handed_back', 1_000, 4_000),
+        resultMeta: JSON.stringify({
+          isError: false,
+          outcome: 'handed_back',
+          pagesRead: 4,
+          pageTokens: 12_310,
+        }),
+      },
+      call('act', { args: { kind: 'click' }, url: STORE, at: 1_400 }),
+      call('act', { args: { kind: 'fill' }, url: STORE, at: 3_100 }),
+      call('read', { url: STORE, at: 6_000 }),
+    ])
+
+    expect(steps[0]?.neoRun).toEqual({
+      goal: GOAL,
+      outcome: 'handed_back',
+      durationMs: 4_000,
+      stepCount: 2,
+      pagesRead: 4,
+      pageTokens: 12_310,
+    })
+    expect(steps.map((step) => step.neoOffsetMs)).toEqual([
+      undefined,
+      400,
+      2_100,
+      undefined,
+    ])
+  })
+
+  it('leaves a run that is still going without an ending', () => {
+    const { steps } = describeSteps([
+      { ...pursue('', 1_000, 0), durationMs: undefined, resultMeta: undefined },
+      call('act', { args: { kind: 'click' }, url: STORE, at: 9_000 }),
+    ])
+
+    expect(steps[0]?.neoRun).toEqual({ goal: GOAL, stepCount: 1 })
+    expect(steps[1]?.neoOffsetMs).toBe(8_000)
+  })
+
+  it('marks nothing when neo finishes the task', () => {
+    const { steps } = describeSteps([
+      pursue('completed', 1_000, 4_000),
+      call('read', { url: 'https://other.example.com', at: 6_000 }),
+    ])
+
+    expect(steps.some((step) => step.handedBack || step.afterHandBack)).toBe(
+      false,
     )
   })
 })

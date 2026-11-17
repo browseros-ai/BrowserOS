@@ -12,6 +12,7 @@ import type {
   Skill,
   SkillCreate,
   SkillDetail,
+  SkillFlowSource,
   SkillList,
   SkillRunList,
 } from '@browseros/claw-api'
@@ -47,4 +48,24 @@ export const useUpdateSkill = createMutation<SkillDetail, UpdateSkillRequest>({
 
 export const useDeleteSkill = createMutation<void, SkillNameRequest>({
   mutationFn: async (request) => (await apiClient()).deleteSkill(request),
+})
+
+/** The skill's ultrafast flow file, for reading on the skill page. */
+export const useSkillFlow = createQuery<
+  SkillFlowSource,
+  { name: string },
+  Error
+>({
+  queryKey: ['api', 'skill-flow'],
+  fetcher: async ({ name }) => (await apiClient()).getSkillFlow({ name }),
+})
+
+/** Runs a write skill without the agent: neo does it by itself, including its one click. */
+export const useRunWithoutAgent = createMutation<Skill, SkillNameRequest>({
+  mutationFn: async (request) => (await apiClient()).approveSkillWrite(request),
+})
+
+/** Runs a write skill with the agent again, so it reads each page as it goes. */
+export const useRunWithAgent = createMutation<Skill, SkillNameRequest>({
+  mutationFn: async (request) => (await apiClient()).revokeSkillWrite(request),
 })

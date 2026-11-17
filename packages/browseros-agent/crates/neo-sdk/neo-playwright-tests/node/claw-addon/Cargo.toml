@@ -1,0 +1,20 @@
+[package]
+name = "claw-node"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# N-API registration needs unsafe code; product crates forbid it.
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+napi = { version = "2.16", default-features = false, features = ["napi5"] }
+napi-derive = "2.16"
+neo-server = { path = "../../../neo-server", features = ["hosted-run"] }
+tokio = { version = "1.52", features = ["rt-multi-thread", "sync", "time"] }
+
+[build-dependencies]
+napi-build = "2"

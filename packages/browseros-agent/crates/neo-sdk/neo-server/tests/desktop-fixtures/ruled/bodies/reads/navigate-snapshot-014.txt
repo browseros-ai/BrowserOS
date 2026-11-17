@@ -1,0 +1,19 @@
+// This is a second successful MCP request in the same task. args.prior is the caller's
+// received baseline, not a snapshot captured earlier inside this fresh script realm.
+assert(Array.isArray(args.prior) && args.prior.length === 1, 'the caller supplies exactly the baseline run');
+const baseline = args.prior[0];
+assert(baseline && typeof baseline.snapshot === 'string' && typeof baseline.taskId === 'string' && typeof baseline.pageId === 'number', 'the earlier reply contains snapshot and ownership identities', baseline);
+includes(baseline.snapshot, 'alpha item', 'the earlier reply contains the original list');
+await neo.task(baseline.taskId);
+equal(page.taskId, baseline.taskId, 'the mutation rejoins the baseline task');
+equal(page.tabId, baseline.pageId, 'the mutation uses the baseline tab');
+equal(page.url(), baseline.url, 'the baseline document remains current');
+await page.evaluate(() => { document.getElementById('add-item').click(); return 'clicked'; });
+await poll(async () => await page.locator('#list li').count() === 4, 'the list mutation has landed');
+equal(await page.locator('#list li').count(), 4, 'the fixture adds exactly one list item');
+const delta = await page.ariaSnapshot({ delta: true });
+const header = delta.match(/^# changes since your last snapshot of this tab: (\d+) added, (\d+) removed$/m);
+assert(header && Number(header[1]) > 0, 'the second run compares against a committed baseline', delta);
+assert(delta.split('\n').some(line => /^\+/.test(line) && line.includes('delta item 1')), 'the delta includes the added condensed text line', delta);
+assert(!/^\+\s*(?:-\s+)?listitem\b/m.test(delta), 'the condensed delta does not invent passive listitem role rows', delta);
+return { added: Number(header[1]), delta, pageId: page.tabId, taskId: page.taskId };

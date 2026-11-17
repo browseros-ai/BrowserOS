@@ -169,30 +169,6 @@ export interface paths {
     patch?: never
     trace?: never
   }
-  '/api/v1/settings/agent/jev-token': {
-    parameters: {
-      query?: never
-      header?: never
-      path?: never
-      cookie?: never
-    }
-    get?: never
-    /**
-     * Save the decision model credential.
-     * @description Stores the token and offers the pursue tool. Takes precedence over JEV_TOKEN in the server's environment. Agents see the tool on their next tools/list; an already installed skill follows after a server restart.
-     */
-    put: operations['saveJevToken']
-    post?: never
-    /**
-     * Remove the saved decision model credential.
-     * @description Forgets the stored token. If JEV_TOKEN is set in the server's environment, that becomes the credential again; otherwise the pursue tool stops being offered.
-     */
-    delete: operations['removeJevToken']
-    options?: never
-    head?: never
-    patch?: never
-    trace?: never
-  }
   '/api/v1/help/events': {
     parameters: {
       query?: never
@@ -561,6 +537,41 @@ export interface paths {
     patch?: never
     trace?: never
   }
+  '/api/v1/skills/{name}/flow': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /** @description The skill's ultrafast flow file. */
+    get: operations['getSkillFlow']
+    put?: never
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/api/v1/skills/{name}/ultrafast/approve-write': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    /** @description Run the skill without the agent, so neo does it by itself, including its one click that changes something. */
+    post: operations['approveSkillWrite']
+    /** @description Run the skill with the agent again, so it reads each page as it goes. */
+    delete: operations['revokeSkillWrite']
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
   '/api/v1/directory': {
     parameters: {
       query?: never
@@ -606,6 +617,283 @@ export interface paths {
     put?: never
     /** @description Install a catalog skill. Writes SKILL.md, links it into the connected agents, and records it as a skill. */
     post: operations['addDirectorySkill']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/api/v1/plan': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /**
+     * This computer's plan.
+     * @description Answers from memory and never reaches the billing gateway, so it works offline and before launch.
+     */
+    get: operations['getPlan']
+    put?: never
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/api/v1/plan/pricing': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /**
+     * The plans and prices on sale.
+     * @description Cached for a few minutes. A cached copy is served while the billing gateway is down.
+     */
+    get: operations['getPlanPricing']
+    put?: never
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/api/v1/plan/checkout': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    /**
+     * Start buying a plan.
+     * @description Returns the hosted payment page. The payment page asks for the email; this request carries none.
+     */
+    post: operations['startPlanCheckout']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/api/v1/plan/checkout/{checkoutId}': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /**
+     * A checkout's progress.
+     * @description Poll every couple of seconds while the payment page is open. On complete, the licence is verified and saved before the reply.
+     */
+    get: operations['getPlanCheckout']
+    put?: never
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/api/v1/plan/key': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /**
+     * The licence key this computer is on.
+     * @description Its first group and the computers on it. The key itself is never returned.
+     */
+    get: operations['getPlanKey']
+    put?: never
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/api/v1/plan/key/activate': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    /**
+     * Put this computer on a licence key.
+     * @description The pasted key is passed to the billing gateway and dropped. It is never stored, logged or returned.
+     */
+    post: operations['activatePlanKey']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/api/v1/plan/key/computers/{installId}/remove': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    /**
+     * Take a computer off this computer's key.
+     * @description Works for any computer on the key, including this one.
+     */
+    post: operations['removePlanComputer']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/api/v1/plan/key/computers/{installId}/rename': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    /**
+     * Rename a computer on this computer's key.
+     * @description The name is kept when the key is pasted on that computer again.
+     */
+    post: operations['renamePlanComputer']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/api/v1/plan/key/reset': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    /**
+     * Replace this computer's key with a new one.
+     * @description The new key is emailed and never returned. The old key stops working and every other computer leaves the key until the new one is pasted there.
+     */
+    post: operations['resetPlanKey']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/api/v1/plan/cancel': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    /**
+     * Cancel the plan at the end of the period.
+     * @description ultrafast stays on until the period ends. Works from any computer on the key.
+     */
+    post: operations['cancelPlan']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/api/v1/plan/resume': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    /** Keep a cancelled plan. */
+    post: operations['resumePlan']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/api/v1/plan/portal': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    /**
+     * A billing portal link.
+     * @description Plan, period and card changes happen there. The plan is refreshed shortly after.
+     */
+    post: operations['openPlanPortal']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/api/v1/plan/refresh': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    /**
+     * Fetch a fresh licence now.
+     * @description At most once a minute; sooner calls return the saved plan. A failed refresh returns the saved plan with stale set.
+     */
+    post: operations['refreshPlan']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/api/v1/plan/savings': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /**
+     * What ultrafast has done on this computer.
+     * @description Derived from the local task history, so it works offline. Tasks recorded before ultrafast kept its numbers count nothing.
+     */
+    get: operations['getPlanSavings']
+    put?: never
+    post?: never
     delete?: never
     options?: never
     head?: never
@@ -765,16 +1053,6 @@ export interface components {
       taskCleanupTipEnabled: boolean
       /** @description Whether a page neo acts on shows that neo is working on it and holds the person's clicks and typing until they take over. */
       workingOverlayEnabled: boolean
-      jevTokenSource: components['schemas']['JevTokenSource']
-    }
-    /**
-     * @description Where the decision model credential comes from, which decides whether the pursue tool is offered at all. "settings" is a token saved through this API, which takes precedence. "environment" is JEV_TOKEN in the server's environment. "none" means pursue is not offered. The token itself is never returned.
-     * @enum {string}
-     */
-    JevTokenSource: 'settings' | 'environment' | 'none'
-    SaveJevTokenRequest: {
-      /** @description The decision model credential. Write only: no endpoint returns it. Saving one takes precedence over JEV_TOKEN in the server's environment. */
-      token: string
     }
     UpdateAgentSettingsRequest: {
       /** @description Omit to preserve the saved human help preference. */
@@ -826,6 +1104,61 @@ export interface components {
        */
       totalTokenEstimate: number
     }
+    /** @description What neo did on its own in this session's ultrafast runs (skills that ran without the agent, and pursue runs that read the page), summed. */
+    SessionUltrafastRun: {
+      /**
+       * Format: int64
+       * @description Time those runs took, in milliseconds.
+       */
+      durationMs: number
+      /**
+       * Format: int64
+       * @description Pages neo read itself during those runs.
+       */
+      pagesRead: number
+      /**
+       * Format: int64
+       * @description Estimated tokens of page text neo read itself that never went to the agent.
+       */
+      tokensSaved: number
+    }
+    /** @description One thing neo did on the page during pursue. */
+    SessionPursueStep: {
+      /**
+       * @description The kind of step, as recorded.
+       * @enum {string}
+       */
+      action:
+        | 'click'
+        | 'type'
+        | 'press'
+        | 'check'
+        | 'uncheck'
+        | 'select'
+        | 'scroll'
+        | 'drag'
+        | 'dialog'
+        | 'open'
+        | 'back'
+        | 'reload'
+      /** @description What the step carried when it was recorded: the text typed, the key pressed, the option chosen, or the site opened. Absent when nothing was recorded or the value was redacted. */
+      text?: string
+    }
+    /** @description What neo did with pursue in this session, derived from the steps it recorded while pursue ran. */
+    SessionPursueRun: {
+      /**
+       * @description How the session's last pursue ended: neo finished the goal, or handed the page back to the agent.
+       * @enum {string}
+       */
+      outcome: 'completed' | 'handed_back'
+      /**
+       * Format: int64
+       * @description Time the session's pursue calls took, in milliseconds.
+       */
+      durationMs: number
+      /** @description The steps neo took on the page, in order. */
+      steps: components['schemas']['SessionPursueStep'][]
+    }
     SessionSummary: {
       sessionId: string
       profileId?: string
@@ -853,6 +1186,10 @@ export interface components {
       latestScreenshotId?: number
       /** @description Estimated token consumption of this session's tool traffic, summed across all dispatches and refreshed live as they land. Present only when the session has dispatches and every one carries token-estimator v1; absent for legacy or otherwise unmeasured sessions. */
       tokenUsage?: components['schemas']['SessionTokenUsage']
+      /** @description Present only when this session had an ultrafast run: a skill that ran to the end without the agent, or a pursue that read the page. */
+      ultrafast?: components['schemas']['SessionUltrafastRun']
+      /** @description Present only when this session had a pursue call that finished its goal or handed the page back. */
+      pursue?: components['schemas']['SessionPursueRun']
       /** @description Present only on summaries returned by an explicit `status=live` list query. */
       live?: components['schemas']['LiveSessionState']
     }
@@ -1142,6 +1479,7 @@ export interface components {
       /** Format: int64 */
       updatedAt: number
       tokenSavings?: components['schemas']['SkillTokenSavings']
+      ultrafast?: components['schemas']['SkillUltrafast']
     }
     SkillList: {
       items: components['schemas']['Skill'][]
@@ -1163,6 +1501,14 @@ export interface components {
       clean: boolean
       /** @description The tool that failed, when the run is not clean. */
       erroredTool?: string
+      mode?: components['schemas']['SkillRunMode']
+      /**
+       * Format: int64
+       * @description The step the flow handed back at, for a handed_back run.
+       */
+      handoverStep?: number
+      /** @enum {string} */
+      handoverCause?: 'site_changed' | 'input_only' | 'transient' | 'unknown'
       /** Format: int64 */
       createdAt: number
     }
@@ -1203,6 +1549,78 @@ export interface components {
        */
       measuredRunCount: number
     }
+    /**
+     * @description Where the skill's ultrafast flow stands. `none` means it has no flow and has not been offered one.
+     * @enum {string}
+     */
+    SkillUltrafastStatus:
+      | 'none'
+      | 'pending'
+      | 'verified'
+      | 'degraded'
+      | 'broken'
+      | 'off'
+    /** @description The skill's ultrafast flow. Present while ultrafast skills are enabled, and after the plan that turned them on ends (then `locked`). */
+    SkillUltrafast: {
+      status: components['schemas']['SkillUltrafastStatus']
+      /** @description Why the flow is off or broken, in plain words. */
+      reason?: string
+      /** Format: int64 */
+      flowVersion: number
+      /** @enum {string} */
+      effects?: 'read' | 'write'
+      /** @description Whether this write flow runs without the agent, by the user's choice for its current click. */
+      writeApproved: boolean
+      /** Format: int64 */
+      p50Ms?: number
+      /** Format: int64 */
+      verifiedAt?: number
+      /** Format: int64 */
+      repairedAt?: number
+      /** @description Ultrafast skills are off for this computer, so every skill runs with the agent and the choice can't change. */
+      locked?: boolean
+      runs?: components['schemas']['SkillUltrafastRuns']
+    }
+    /**
+     * @description Whether the skill runs with the user's agent reading each page, or neo runs it by itself.
+     * @enum {string}
+     */
+    SkillUltrafastRunsMode: 'with_agent' | 'without_agent'
+    /**
+     * @description Why the skill always runs with the agent, whatever the user chose.
+     * @enum {string}
+     */
+    SkillUltrafastAlwaysWith: 'pay' | 'order' | 'send' | 'delete'
+    /** @enum {string} */
+    SkillUltrafastChoiceVia: 'chat' | 'app'
+    /** @description How a skill that changes something runs when the user asks for it. Absent for a skill that only reads pages. */
+    SkillUltrafastRuns: {
+      mode: components['schemas']['SkillUltrafastRunsMode']
+      /** @description Whether the user chose for the skill's current click. Until then it runs with the agent. */
+      chosen: boolean
+      /** @description An earlier choice covered a different click, so the agent asks again. */
+      reask: boolean
+      alwaysWithAgent?: components['schemas']['SkillUltrafastAlwaysWith']
+      /** @description The step that changes something, in the skill's own words. */
+      click?: string
+      site?: string
+      via?: components['schemas']['SkillUltrafastChoiceVia']
+      /** Format: int64 */
+      chosenAt?: number
+      /** @description The user's own words when they chose in chat. */
+      answer?: string
+      /** @description The agent that relayed a chat answer. */
+      client?: string
+    }
+    SkillFlowSource: {
+      /** @description The flow.md file as stored beside SKILL.md. */
+      source: string
+    }
+    /**
+     * @description How the run was carried out. `handed_back` means the flow stopped and the agent finished the task.
+     * @enum {string}
+     */
+    SkillRunMode: 'ultrafast' | 'handed_back' | 'agent'
     SkillCreate: {
       name: string
       description: string
@@ -1247,6 +1665,295 @@ export interface components {
       skill: components['schemas']['DirectorySkill']
       /** @description The catalog SKILL.md contents, shown for preview before install. */
       body: string
+    }
+    /**
+     * @description none: this computer has no plan. active: paid and renewing. ending: cancelled, ultrafast lasts until endsAt. paymentFailed: a payment failed and ultrafast lasts until graceUntil. unpaid: still billed but past the grace period, or paused, so features is empty while the key, the portal and cancel keep working.
+     * @enum {string}
+     */
+    PlanStatus: 'none' | 'active' | 'ending' | 'paymentFailed' | 'unpaid'
+    /** @description This computer's plan, read from the last verified licence. Reading it never reaches the billing gateway. */
+    Plan: {
+      /** @description False when this build has no billing gateway, in which case every other plan route answers 404 billing_unavailable. Also false while ultrafast is not on sale on this computer and it has no licence; then pricing and checkout answer 404 billing_unavailable and the other routes work as usual. */
+      available: boolean
+      /** @description The plan id, such as "ultrafast". Null when status is none. */
+      plan: string | null
+      /** @description The plan's display name from the pricing list, such as "ultrafast". */
+      planName: string | null
+      /** @description Feature flags the plan turns on. Empty when status is none or unpaid. */
+      features: string[]
+      status: components['schemas']['PlanStatus']
+      /**
+       * Format: int64
+       * @description End of the current billing period, in epoch milliseconds.
+       */
+      periodEnd: number | null
+      /**
+       * Format: int64
+       * @description When a cancelled plan stops, in epoch milliseconds. Set only while status is ending.
+       */
+      endsAt: number | null
+      /**
+       * Format: int64
+       * @description When the grace period after a failed payment ends, in epoch milliseconds. Set only while status is paymentFailed.
+       */
+      graceUntil: number | null
+      /** @description Whether this computer is on a licence key. The key itself is never returned. */
+      onKey: boolean
+      /**
+       * Format: int64
+       * @description The last successful refresh from the billing gateway, in epoch milliseconds.
+       */
+      checkedAt: number | null
+      /** @description True when the last refresh failed and the saved licence is still valid. */
+      stale: boolean
+    }
+    /** @enum {string} */
+    PriceInterval: 'day' | 'week' | 'month' | 'year'
+    PlanPrice: {
+      interval: components['schemas']['PriceInterval']
+      /**
+       * Format: int32
+       * @description How many intervals one billing period lasts.
+       */
+      intervalCount: number
+      /**
+       * Format: int64
+       * @description The price per period in the currency's smallest unit, such as cents.
+       */
+      amount: number
+      /** @description Lower-case ISO 4217 code, such as "usd". */
+      currency: string
+    }
+    PricedPlan: {
+      plan: string
+      name: string
+      description: string | null
+      features: string[]
+      prices: components['schemas']['PlanPrice'][]
+    }
+    PlanPricing: {
+      plans: components['schemas']['PricedPlan'][]
+    }
+    StartPlanCheckoutRequest: {
+      plan: string
+      interval: components['schemas']['PriceInterval']
+      /**
+       * Format: int32
+       * @description Defaults to 1.
+       */
+      intervalCount?: number
+    }
+    PlanCheckout: {
+      /** @description The checkout's UUID, for polling its status. */
+      checkoutId: string
+      /**
+       * Format: uri
+       * @description The hosted payment page to open in a new tab.
+       */
+      url: string
+    }
+    /** @enum {string} */
+    PlanCheckoutPhase: 'open' | 'complete' | 'expired'
+    /** @description A checkout's progress. The licence key is never included; it is sent by email only. */
+    PlanCheckoutStatus: {
+      status: components['schemas']['PlanCheckoutPhase']
+      /** @description This computer's plan once the checkout is complete and its licence is saved. Null until then. */
+      plan: components['schemas']['Plan'] | null
+    }
+    PlanComputer: {
+      /** @description The computer's install UUID. */
+      installId: string
+      /** @description The computer's name. It starts as the computer's own name and can be renamed from any computer on the key. */
+      label: string | null
+      /** @description The operating system, such as "macos", "windows" or "linux". */
+      platform: string
+      /**
+       * Format: int64
+       * @description When the computer last reached the billing gateway, in epoch milliseconds.
+       */
+      lastSeenAt: number
+      /**
+       * Format: int64
+       * @description When the computer joined the key, in epoch milliseconds.
+       */
+      activatedAt: number
+      thisComputer: boolean
+    }
+    /** @description The licence key this computer is on. Only its first group is returned, never the key. */
+    PlanKey: {
+      /** @description The key's first group, such as "7K2QM" for a key that starts NEO-7K2QM. It cannot be used as a key. */
+      hint: string
+      /**
+       * Format: int32
+       * @description How many computers the key can be on at once.
+       */
+      cap: number
+      computers: components['schemas']['PlanComputer'][]
+    }
+    ActivatePlanKeyRequest: {
+      /** @description The licence key from the email. Write only. It is passed to the billing gateway and never stored or returned. */
+      key: string
+      /** @description When the key is full, the install UUID of the computer this one takes the place of. */
+      replace?: string
+    }
+    RenamePlanComputerRequest: {
+      /** @description The new name, trimmed. Empty after trimming is refused. */
+      name: string
+    }
+    /** @description The result of activating, removing or resetting a key. A reset emails the new key and never returns it. */
+    PlanKeyChange: {
+      plan: components['schemas']['Plan']
+      /** @description The key this computer is on afterwards. Null when this computer removed itself. */
+      key: components['schemas']['PlanKey'] | null
+    }
+    /** @description A conflict from activating a key. key_full carries computers, the computers already on the key, so the request can be sent again with one to replace. already_subscribed carries none. */
+    PlanKeyFullError: {
+      code: string
+      message: string
+      requestId?: string
+      /** @description Present only when code is key_full. */
+      computers?: components['schemas']['PlanComputer'][]
+    }
+    /** @description A too_many_tries or rate_limited error. */
+    PlanRateLimitedError: {
+      code: string
+      message: string
+      requestId?: string
+      /**
+       * Format: int32
+       * @description How long to wait before trying again, when known.
+       */
+      retryAfterSeconds?: number
+    }
+    CancelPlanRequest: {
+      /** @description Why the person is cancelling, if they said. Never logged. */
+      feedback?: string
+    }
+    /** @enum {string} */
+    PlanPortalFlow: 'billing' | 'updateCard'
+    PlanPortalRequest: {
+      flow: components['schemas']['PlanPortalFlow']
+    }
+    PlanPortal: {
+      /**
+       * Format: uri
+       * @description The billing portal page to open in a new tab.
+       */
+      url: string
+    }
+    /** @description What ultrafast has done on this computer, from the task history: every task where ultrafast did work (a skill that ran without the agent, or a pursue that finished or handed back). */
+    PlanSavings: {
+      /** @description Time, pages read and tokens saved, summed across those tasks. Time includes every pursue; pages and tokens count only where neo counted them, so pursue runs from before that add time alone. */
+      totals: components['schemas']['SessionUltrafastRun']
+      /**
+       * Format: int64
+       * @description How many tasks ultrafast did work in.
+       */
+      tasks: number
+      /** @description The newest of those tasks, newest first, each with what neo measured (`ultrafast`) and what it did with pursue (`pursue`) where recorded. */
+      latest: components['schemas']['SessionSummary'][]
+      /** @description Present only once ultrafast has been on for this computer: what the Home meter shows since then. */
+      meter?: components['schemas']['PlanSavingsMeter']
+    }
+    /** @description The Home meter for an ultrafast customer, counted from the day this computer got ultrafast. */
+    PlanSavingsMeter: {
+      /**
+       * Format: int64
+       * @description When this computer got ultrafast, in epoch milliseconds: the first time it was on here, or the first ultrafast run if that came earlier.
+       */
+      since: number
+      /**
+       * Format: int64
+       * @description Estimated tokens neo kept off the agent since then: page descriptions instead of screenshots, plus the page text neo read itself during ultrafast runs. The two are measured differently, so this is an estimate.
+       */
+      tokensSaved: number
+      /** @description When each ultrafast task of the last 7 days last ran, in epoch milliseconds, newest first, for a by-day chart in local time. */
+      runTimes: number[]
+      /**
+       * Format: int32
+       * @description In tasks that used pursue, the average share of browser steps neo took itself, as a whole percent. Absent until such a task recorded a step.
+       */
+      neoStepShare?: number
+      /**
+       * Format: int64
+       * @description The shortest single ultrafast run: a skill that finished without the agent, or a pursue that finished or handed back. Absent before the first one.
+       */
+      fastestRunMs?: number
+      /** @description The meter's Details, for each period it can show. */
+      periods: components['schemas']['PlanSavingsPeriods']
+    }
+    /** @description What ultrafast and neo did in one period. */
+    PlanSavingsPeriod: {
+      /**
+       * Format: int64
+       * @description neo's page-description saving from sessions that ended in the period, plus the page text neo read itself in the period's ultrafast tasks.
+       */
+      tokensSaved: number
+      /**
+       * Format: int64
+       * @description Ultrafast tasks in the period.
+       */
+      runs: number
+      /**
+       * Format: int64
+       * @description Pages neo read itself in those tasks.
+       */
+      pagesRead: number
+      /**
+       * Format: int64
+       * @description Time neo's ultrafast runs took in those tasks.
+       */
+      durationMs: number
+      /**
+       * Format: int64
+       * @description The shortest single run in the period. Absent without one.
+       */
+      fastestRunMs?: number
+      /**
+       * Format: int32
+       * @description In the period's tasks that used pursue, the average share of browser steps neo took. Absent without one.
+       */
+      neoStepShare?: number
+      /**
+       * Format: int64
+       * @description The period's tasks that used pursue.
+       */
+      siteTasks: number
+      /**
+       * Format: int64
+       * @description Of those, the ones pursue finished without handing back.
+       */
+      siteTasksFinished: number
+      /** @description Sites with the most ultrafast tasks in the period, most first. */
+      topSites: components['schemas']['PlanSavingsSite'][]
+      /**
+       * Format: int64
+       * @description Time saved by every task that ended in the period.
+       */
+      timeSavedMs: number
+      /**
+       * Format: int64
+       * @description Tasks that ended in the period.
+       */
+      tasksFinished: number
+      /** @description When each of the period's ultrafast tasks last ran, in epoch milliseconds, newest first, for a chart by local day or week. */
+      runTimes: number[]
+    }
+    /** @description The Details numbers since this computer got ultrafast, and for the last 30 and 7 days. A task counts in a period when its last ultrafast run started in it; neo's own saving, time saved and tasks finished follow the cockpit's windows. */
+    PlanSavingsPeriods: {
+      /** @description Since this computer got ultrafast. Its tokensSaved is the meter's tokensSaved. */
+      since: components['schemas']['PlanSavingsPeriod']
+      last30Days: components['schemas']['PlanSavingsPeriod']
+      last7Days: components['schemas']['PlanSavingsPeriod']
+    }
+    PlanSavingsSite: {
+      /** @description The site, as the task list shows it. */
+      site: string
+      /**
+       * Format: int64
+       * @description Ultrafast tasks on that site in the period.
+       */
+      runs: number
     }
   }
   responses: {
@@ -1304,6 +2011,42 @@ export interface components {
         'application/json': components['schemas']['ApiError']
       }
     }
+    /** @description forbidden, when the request comes from a browser origin other than the app. */
+    PlanForbidden: {
+      headers: {
+        [name: string]: unknown
+      }
+      content: {
+        'application/json': components['schemas']['ApiError']
+      }
+    }
+    /** @description billing_unavailable when this build has no billing gateway, or not_found when the checkout or computer is unknown. */
+    PlanNotFound: {
+      headers: {
+        [name: string]: unknown
+      }
+      content: {
+        'application/json': components['schemas']['ApiError']
+      }
+    }
+    /** @description too_many_tries or rate_limited. */
+    PlanRateLimited: {
+      headers: {
+        [name: string]: unknown
+      }
+      content: {
+        'application/json': components['schemas']['PlanRateLimitedError']
+      }
+    }
+    /** @description billing_unreachable, when the billing gateway is down or this computer is offline. */
+    BillingUnreachable: {
+      headers: {
+        [name: string]: unknown
+      }
+      content: {
+        'application/json': components['schemas']['ApiError']
+      }
+    }
     /** @description The browser origin is not allowed to write recordings. */
     Forbidden: {
       headers: {
@@ -1325,6 +2068,8 @@ export interface components {
     RecordingBatchId: string
     /** @description Permanently marks this document stream partial after recorder-side loss. */
     RecordingGap: boolean
+    CheckoutId: string
+    InstallId: string
   }
   requestBodies: never
   headers: never
@@ -1632,53 +2377,6 @@ export interface operations {
         }
       }
       400: components['responses']['BadRequest']
-      500: components['responses']['InternalError']
-    }
-  }
-  saveJevToken: {
-    parameters: {
-      query?: never
-      header?: never
-      path?: never
-      cookie?: never
-    }
-    requestBody: {
-      content: {
-        'application/json': components['schemas']['SaveJevTokenRequest']
-      }
-    }
-    responses: {
-      /** @description Updated agent settings. The token is not included. */
-      200: {
-        headers: {
-          [name: string]: unknown
-        }
-        content: {
-          'application/json': components['schemas']['AgentSettings']
-        }
-      }
-      400: components['responses']['BadRequest']
-      500: components['responses']['InternalError']
-    }
-  }
-  removeJevToken: {
-    parameters: {
-      query?: never
-      header?: never
-      path?: never
-      cookie?: never
-    }
-    requestBody?: never
-    responses: {
-      /** @description Updated agent settings. */
-      200: {
-        headers: {
-          [name: string]: unknown
-        }
-        content: {
-          'application/json': components['schemas']['AgentSettings']
-        }
-      }
       500: components['responses']['InternalError']
     }
   }
@@ -2358,6 +3056,80 @@ export interface operations {
       500: components['responses']['InternalError']
     }
   }
+  getSkillFlow: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        name: components['parameters']['SkillName']
+      }
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description The flow source. */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['SkillFlowSource']
+        }
+      }
+      404: components['responses']['NotFound']
+      500: components['responses']['InternalError']
+    }
+  }
+  approveSkillWrite: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        name: components['parameters']['SkillName']
+      }
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description The skill with its updated ultrafast state. */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['Skill']
+        }
+      }
+      404: components['responses']['NotFound']
+      409: components['responses']['Conflict']
+      500: components['responses']['InternalError']
+    }
+  }
+  revokeSkillWrite: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        name: components['parameters']['SkillName']
+      }
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description The skill with its updated ultrafast state. */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['Skill']
+        }
+      }
+      404: components['responses']['NotFound']
+      409: components['responses']['Conflict']
+      500: components['responses']['InternalError']
+    }
+  }
   listDirectory: {
     parameters: {
       query?: {
@@ -2428,6 +3200,483 @@ export interface operations {
       }
       404: components['responses']['NotFound']
       409: components['responses']['Conflict']
+      500: components['responses']['InternalError']
+    }
+  }
+  getPlan: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description The plan from the last verified licence. */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['Plan']
+        }
+      }
+      403: components['responses']['PlanForbidden']
+      500: components['responses']['InternalError']
+    }
+  }
+  getPlanPricing: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description The plans on sale. */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['PlanPricing']
+        }
+      }
+      403: components['responses']['PlanForbidden']
+      404: components['responses']['PlanNotFound']
+      500: components['responses']['InternalError']
+      503: components['responses']['BillingUnreachable']
+    }
+  }
+  startPlanCheckout: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['StartPlanCheckoutRequest']
+      }
+    }
+    responses: {
+      /** @description The checkout to open and poll. */
+      201: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['PlanCheckout']
+        }
+      }
+      /** @description invalid_request, or unknown_plan when the plan or price is not on sale. */
+      400: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ApiError']
+        }
+      }
+      403: components['responses']['PlanForbidden']
+      404: components['responses']['PlanNotFound']
+      /** @description already_subscribed, when this computer's key already has a live plan. */
+      409: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ApiError']
+        }
+      }
+      429: components['responses']['PlanRateLimited']
+      500: components['responses']['InternalError']
+      503: components['responses']['BillingUnreachable']
+    }
+  }
+  getPlanCheckout: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        checkoutId: components['parameters']['CheckoutId']
+      }
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description The checkout's status, with the plan once it is complete. */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['PlanCheckoutStatus']
+        }
+      }
+      403: components['responses']['PlanForbidden']
+      404: components['responses']['PlanNotFound']
+      429: components['responses']['PlanRateLimited']
+      500: components['responses']['InternalError']
+      503: components['responses']['BillingUnreachable']
+    }
+  }
+  getPlanKey: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description The key's hint, cap and computers. */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['PlanKey']
+        }
+      }
+      403: components['responses']['PlanForbidden']
+      404: components['responses']['PlanNotFound']
+      /** @description not_linked, when this computer is on no key. */
+      409: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ApiError']
+        }
+      }
+      429: components['responses']['PlanRateLimited']
+      500: components['responses']['InternalError']
+      503: components['responses']['BillingUnreachable']
+    }
+  }
+  activatePlanKey: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['ActivatePlanKeyRequest']
+      }
+    }
+    responses: {
+      /** @description The plan and key afterwards. */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['PlanKeyChange']
+        }
+      }
+      /** @description key_invalid, or invalid_request. */
+      400: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ApiError']
+        }
+      }
+      403: components['responses']['PlanForbidden']
+      404: components['responses']['PlanNotFound']
+      /** @description key_full with the computers on the key, so the request can be sent again with one to replace; or already_subscribed, when this computer pays through another key. */
+      409: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['PlanKeyFullError']
+        }
+      }
+      429: components['responses']['PlanRateLimited']
+      500: components['responses']['InternalError']
+      503: components['responses']['BillingUnreachable']
+    }
+  }
+  removePlanComputer: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        installId: components['parameters']['InstallId']
+      }
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description The plan and key afterwards. */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['PlanKeyChange']
+        }
+      }
+      403: components['responses']['PlanForbidden']
+      404: components['responses']['PlanNotFound']
+      /** @description not_linked, when this computer is on no key. */
+      409: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ApiError']
+        }
+      }
+      429: components['responses']['PlanRateLimited']
+      500: components['responses']['InternalError']
+      503: components['responses']['BillingUnreachable']
+    }
+  }
+  renamePlanComputer: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        installId: components['parameters']['InstallId']
+      }
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['RenamePlanComputerRequest']
+      }
+    }
+    responses: {
+      /** @description The key with the new name. */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['PlanKey']
+        }
+      }
+      /** @description invalid_request, when the name is empty or longer than 40 characters. */
+      400: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ApiError']
+        }
+      }
+      403: components['responses']['PlanForbidden']
+      404: components['responses']['PlanNotFound']
+      /** @description not_linked, when this computer is on no key. */
+      409: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ApiError']
+        }
+      }
+      429: components['responses']['PlanRateLimited']
+      500: components['responses']['InternalError']
+      503: components['responses']['BillingUnreachable']
+    }
+  }
+  resetPlanKey: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description The plan and new key's hint afterwards. */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['PlanKeyChange']
+        }
+      }
+      403: components['responses']['PlanForbidden']
+      404: components['responses']['PlanNotFound']
+      /** @description not_linked, when this computer is on no key. */
+      409: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ApiError']
+        }
+      }
+      429: components['responses']['PlanRateLimited']
+      500: components['responses']['InternalError']
+      503: components['responses']['BillingUnreachable']
+    }
+  }
+  cancelPlan: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['CancelPlanRequest']
+      }
+    }
+    responses: {
+      /** @description The plan afterwards, normally ending. */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['Plan']
+        }
+      }
+      400: components['responses']['BadRequest']
+      403: components['responses']['PlanForbidden']
+      404: components['responses']['PlanNotFound']
+      /** @description not_linked, when this computer is on no key. */
+      409: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ApiError']
+        }
+      }
+      429: components['responses']['PlanRateLimited']
+      500: components['responses']['InternalError']
+      503: components['responses']['BillingUnreachable']
+    }
+  }
+  resumePlan: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description The plan afterwards, normally active. */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['Plan']
+        }
+      }
+      403: components['responses']['PlanForbidden']
+      404: components['responses']['PlanNotFound']
+      /** @description not_linked, when this computer is on no key. */
+      409: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ApiError']
+        }
+      }
+      429: components['responses']['PlanRateLimited']
+      500: components['responses']['InternalError']
+      503: components['responses']['BillingUnreachable']
+    }
+  }
+  openPlanPortal: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['PlanPortalRequest']
+      }
+    }
+    responses: {
+      /** @description The portal page to open. */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['PlanPortal']
+        }
+      }
+      400: components['responses']['BadRequest']
+      403: components['responses']['PlanForbidden']
+      404: components['responses']['PlanNotFound']
+      /** @description not_linked, when this computer is on no key. */
+      409: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ApiError']
+        }
+      }
+      429: components['responses']['PlanRateLimited']
+      500: components['responses']['InternalError']
+      503: components['responses']['BillingUnreachable']
+    }
+  }
+  refreshPlan: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description The plan afterwards. */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['Plan']
+        }
+      }
+      403: components['responses']['PlanForbidden']
+      404: components['responses']['PlanNotFound']
+      500: components['responses']['InternalError']
+    }
+  }
+  getPlanSavings: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description Totals and the newest ultrafast tasks. */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['PlanSavings']
+        }
+      }
+      403: components['responses']['PlanForbidden']
       500: components['responses']['InternalError']
     }
   }

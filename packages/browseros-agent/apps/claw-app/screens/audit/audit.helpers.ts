@@ -1,4 +1,8 @@
-import type { AuditAgent } from '@browseros/claw-api'
+import type {
+  AuditAgent,
+  SessionPursueRun,
+  SessionUltrafastRun,
+} from '@browseros/claw-api'
 import { agentIdentity } from '@/components/harness/harness.types'
 import type { TaskSummary } from '@/modules/api/audit.hooks'
 
@@ -147,4 +151,68 @@ export function taskDayAndTime(startedAt: number, now: number): string {
   const days = daysBefore(startedAt, now)
   const day = days <= 0 ? 'Today' : taskWhen(startedAt, now)
   return `${day} at ${taskTime(startedAt)}`
+}
+
+/** "15 sec" under a minute, then "2 min" to the nearest minute. */
+export function ultrafastTime(durationMs: number): string {
+  const seconds = Math.max(1, Math.round(Math.max(0, durationMs) / 1_000))
+  if (seconds < 60) return `${seconds} sec`
+  return `${Math.round(seconds / 60)} min`
+}
+
+/** "1 page", "9 pages". */
+export function pagesLabel(pages: number): string {
+  return pages === 1 ? '1 page' : `${pages.toLocaleString('en-US')} pages`
+}
+
+/** Compact for a chip: "640", "4.2k", "62k". */
+export function chipTokens(tokens: number): string {
+  const value = Math.max(0, Math.round(tokens))
+  if (value < 1_000) return String(value)
+  if (value < 10_000) {
+    const thousands = Math.round(value / 100) / 10
+    return thousands >= 10 ? '10k' : `${thousands}k`
+  }
+  return `${Math.round(value / 1_000).toLocaleString('en-US')}k`
+}
+
+function stepsLabel(steps: number): string {
+  return steps === 1 ? '1 step' : `${steps} steps`
+}
+
+/** History card pill for a task where neo used pursue: what neo did, in one short phrase. */
+export function pursuePill(pursue: SessionPursueRun): string {
+  if (pursue.outcome === 'completed') {
+    return `ultrafast · neo did it in ${ultrafastTime(pursue.durationMs)}`
+  }
+  if (pursue.steps.length === 0) return 'ultrafast · neo handed back'
+  return `ultrafast · neo did ${stepsLabel(pursue.steps.length)}`
+}
+
+/**
+ * What ultrafast did in a task, in words, for the line under its name: "neo did 3 steps in 6 sec,
+ * then handed back", "neo finished it in 7 sec", "neo ran it in 15 sec, read 9 pages".
+ * Null when ultrafast did nothing in the task.
+ */
+export function ultrafastNote(
+  pursue: SessionPursueRun | undefined,
+  ultrafast: SessionUltrafastRun | undefined,
+): string | null {
+  const parts: string[] = []
+  if (pursue) {
+    const time = ultrafastTime(pursue.durationMs)
+    parts.push(
+      pursue.outcome === 'completed'
+        ? `neo finished it in ${time}`
+        : pursue.steps.length === 0
+          ? `neo handed back after ${time}`
+          : `neo did ${stepsLabel(pursue.steps.length)} in ${time}, then handed back`,
+    )
+  } else if (ultrafast) {
+    parts.push(`neo ran it in ${ultrafastTime(ultrafast.durationMs)}`)
+  }
+  if (ultrafast && ultrafast.pagesRead > 0) {
+    parts.push(`read ${pagesLabel(ultrafast.pagesRead)}`)
+  }
+  return parts.length > 0 ? parts.join(', ') : null
 }

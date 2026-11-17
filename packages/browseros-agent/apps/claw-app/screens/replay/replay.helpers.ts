@@ -7,6 +7,7 @@ import {
   Paperclip,
   Send,
   Type,
+  Zap,
 } from 'lucide-react'
 import type { ReplayKind, ReplayVerb } from '@/modules/api/replay.hooks'
 
@@ -24,6 +25,7 @@ export const VERB_META: Record<ReplayVerb, VerbMeta> = {
   type: { label: 'Type', Icon: Type, iconClass: 'text-ink-2' },
   attach: { label: 'Attach', Icon: Paperclip, iconClass: 'text-ink-2' },
   submit: { label: 'Submit', Icon: Send, iconClass: 'text-accent-ink' },
+  browse: { label: 'Browse', Icon: Zap, iconClass: 'text-accent-ink' },
   done: { label: 'Done', Icon: CheckCircle2, iconClass: 'text-green' },
 }
 

@@ -3,7 +3,7 @@ use std::{fs, path::Path};
 use harness_integrations::SkillSpec;
 use serde::Deserialize;
 
-use crate::config::{PursueOffering, TabGrouping};
+use crate::config::TabGrouping;
 use crate::error::{AppError, AppResult};
 
 // This skill ships twice. This copy is installed automatically for the harnesses on
@@ -21,25 +21,6 @@ pub(crate) const MANAGED_SKILL_DIRECTORY: &str = "browseros-neo";
 /// installs at this name are migrated to `MANAGED_SKILL_DIRECTORY` on reconcile.
 pub(crate) const LEGACY_SKILL_DIRECTORY_NAME: &str = "browserclaw";
 
-/// The tool-choice paragraph of the skill, which ranks `run` first.
-///
-/// Swapped rather than the whole skill being written twice: a second copy of a
-/// fifty line operating guide drifts from the first within a release, and the
-/// one property worth keeping is that an install without the decision loop
-/// reads the same guide it has always read.
-const SKILL_RUN_FIRST: &str = "Reach for `run` first; the granular tools are the fallback. One `run` script composes the whole snapshot -> act -> verify loop, bulk extraction, and helper reuse in a single call, and it is the only place saved helpers work. Compose anything multi-step inside one `run` script rather than chaining granular calls. Use a single granular tool (`act`, `snapshot`, `navigate`, `read`) directly only for a one-off step, step-by-step debugging, or something a `run` script cannot express.";
-
-/// What it becomes while the decision loop is offered.
-const SKILL_PURSUE_FIRST: &str = r#"Reach for `pursue` first. `run` is the fallback, and the granular tools are the fallback to that.
-
-`pursue` takes a whole outcome and decides every step of it on the server: observe the page, choose a move, act, observe again, until the page holds what the goal asked for. State an outcome, not a step. "Add sensodyne toothpaste to the cart" is an outcome; "click the second result" is a step, and a step throws away what the loop is for.
-
-Read the reply in this order. `status` is the verdict: `satisfied`, or one of seven ways of not being satisfied. If it is not `satisfied`, `tryNext` is one line naming the single thing to change about the goal. `story` is what the run actually did, in order, with what observably moved on the page. `satisfied` is a claim and not evidence, so read the page yourself before reporting it done.
-
-Fall back to `run` once two `pursue` calls have come back with a status other than `satisfied`. The first one usually means the goal needs a word changed and `tryNext` names that word, so try once more with it; write the work as a `run` script only if that second try also comes back unsatisfied.
-
-Go straight to `run` for work that is a script rather than an outcome: pagination over many pages, bulk extraction, repeated loops over a list you already hold, or anything needing a saved helper. One `run` script composes the whole snapshot -> act -> verify loop in a single call, and it is the only place saved helpers work. Use a single granular tool (`act`, `snapshot`, `navigate`, `read`) directly only for a one-off step or step-by-step debugging."#;
-
 /// The guide's promises of server-made tab groups, and what explicit grouping says instead.
 ///
 /// The MCP text has its own rewrites in `api::mcp::tab_grouping`; these stay here because a
@@ -52,6 +33,42 @@ const SKILL_GROUP_PROMISES: [(&str, &str); 2] = [
     ),
 ];
 
+/// The guide's run-first line, and what it says while ultrafast lists pursue.
+const SKILL_RUN_FIRST: (&str, &str) = (
+    "Reach for `run` first; the granular tools are the fallback.",
+    "With ultrafast, start with `pursue` whenever getting to what you need means clicking through a site (see the section above); reach for `run` to read what pursue lands on, for a page you already have, and for what pursue hands back. The granular tools are the fallback.",
+);
+/// Where the pursue section goes in the guide while ultrafast is on: first, so it is the
+/// first thing an agent reads before the step-by-step loop.
+const SKILL_PURSUE_ANCHOR: &str = "## Shared browser etiquette";
+const SKILL_PURSUE_SECTION: &str = "## Tool choice with ultrafast: pick by the path, not the goal
+
+With the ultrafast plan, `pursue` is in your tool list. Choose the tool by how you reach the data, not by what you want from it:
+
+1. **Data behind a click-through flow** (search, filters, pickers, modals, booking, checkout): use `pursue` to get there, even if you only want to read what is at the end. Open or find the page, then give pursue the whole outcome as a destination or an action, not a question: \"open the seat map for tonight's 7 pm show\", not \"are any corner seats free?\". Put text you already know in `values`. neo decides each step and does it.
+2. **You already have a url that shows the data**, or you are extracting across many known pages: use `run` straight away.
+3. **Granular tools** (`act`, `snapshot`, `navigate`, `read`): one-off steps or step-by-step debugging only.
+
+If pursue says `completed`, read the page with one `run` to confirm. If it says `handed_back`, carry on with one `run` script from the page and url it names. Skip the steps it lists as done, and do not call pursue again for that task. If the page draws what you need on a canvas, read it with a screenshot.
+
+If `pursue` is not in your tool list, skip this section.
+
+";
+/// The guide's run time limit, stated as the run tool actually applies it.
+const SKILL_RUN_LIMIT: [(&str, &str); 2] = [
+    (
+        "A run is hard-capped at 30 seconds and cannot be extended.",
+        "A run is capped by the run tool's `timeout`, 60 seconds by default, and cannot run past it.",
+    ),
+    (
+        "a run that died at about thirty seconds hit the wall-clock cap",
+        "a run that died at its `timeout` (60 seconds by default) hit the wall-clock cap",
+    ),
+];
+/// Added to the guide's description while ultrafast is on, so an agent that only reads the
+/// skill listing still hears it.
+const SKILL_PURSUE_DESCRIPTION: &str = " Start any task that clicks through a site (search, booking, checkout, forms) with `pursue`, even when the goal is only to read the result.";
+
 #[derive(Deserialize)]
 struct SkillFrontmatter {
     name: String,
@@ -60,15 +77,12 @@ struct SkillFrontmatter {
 
 /// Loads the active signed resource copy, falling back to the compiled asset when unavailable.
 ///
-/// `pursue` chooses which tool the guide tells the agent to reach for, and `tab_grouping`
-/// whether it may promise the server's own tab groups. This is read once, at launch, so a
-/// server that gains or loses the credential needs a restart before installed skills follow.
+/// `tab_grouping` decides whether the guide may promise the server's own tab groups.
 pub fn load_browserclaw_skill(
     resources_dir: &Path,
-    pursue: PursueOffering,
     tab_grouping: TabGrouping,
 ) -> AppResult<SkillSpec> {
-    let adapt = |content| with_tab_grouping(with_tool_choice(content, pursue), tab_grouping);
+    let adapt = |content| with_tab_grouping(content, tab_grouping);
     let path = resources_dir.join("skills/browserclaw/SKILL.md");
     match fs::read_to_string(&path) {
         Ok(content) => match parse_browserclaw_skill(adapt(content)) {
@@ -88,18 +102,6 @@ pub fn load_browserclaw_skill(
     })
 }
 
-/// Swaps the tool-choice paragraph when the decision loop is offered.
-///
-/// A guide whose text does not match the catalogue it describes is worse than
-/// no guide: the agent reads both and believes the one that travels with the
-/// tool. Without the loop this substitutes nothing at all.
-fn with_tool_choice(content: String, pursue: PursueOffering) -> String {
-    match pursue {
-        PursueOffering::Absent => content,
-        PursueOffering::Offered => content.replace(SKILL_RUN_FIRST, SKILL_PURSUE_FIRST),
-    }
-}
-
 /// Removes the guide's group promises when the server does not group tabs itself. Automatic
 /// grouping installs the guide unchanged.
 fn with_tab_grouping(content: String, tab_grouping: TabGrouping) -> String {
@@ -111,6 +113,46 @@ fn with_tab_grouping(content: String, tab_grouping: TabGrouping) -> String {
         .fold(content, |content, (promise, explicit)| {
             content.replace(promise, explicit)
         })
+}
+
+/// The guide installed while ultrafast is on: pursue comes first and run picks up what it
+/// hands back. Built from the guide the server already loaded, so it keeps every adaptation.
+pub fn with_ultrafast(spec: &SkillSpec) -> AppResult<SkillSpec> {
+    let (run_first, pursue_first) = SKILL_RUN_FIRST;
+    let mut content = spec.content().replacen(run_first, pursue_first, 1);
+    for (stated, actual) in SKILL_RUN_LIMIT {
+        content = content.replacen(stated, actual, 1);
+    }
+    content = with_pursue_description(&content);
+    content = match content.find(SKILL_PURSUE_ANCHOR) {
+        Some(at) => format!("{}{SKILL_PURSUE_SECTION}{}", &content[..at], &content[at..]),
+        None => format!(
+            "{}\n\n{}",
+            content.trim_end(),
+            SKILL_PURSUE_SECTION.trim_end()
+        ),
+    };
+    parse_browserclaw_skill(content).map_err(|error| {
+        AppError::Internal(format!(
+            "ultrafast BrowserClaw skill failed validation: {error}"
+        ))
+    })
+}
+
+/// Ends the frontmatter description with the pursue sentence; the body is left as it is.
+fn with_pursue_description(content: &str) -> String {
+    const KEY: &str = "\ndescription: ";
+    let Some(start) = content.find(KEY) else {
+        return content.to_string();
+    };
+    let line_end = content[start + 1..]
+        .find('\n')
+        .map_or(content.len(), |offset| start + 1 + offset);
+    format!(
+        "{}{SKILL_PURSUE_DESCRIPTION}{}",
+        &content[..line_end],
+        &content[line_end..]
+    )
 }
 
 fn parse_browserclaw_skill(content: String) -> Result<SkillSpec, String> {
@@ -156,9 +198,13 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        PursueOffering, SKILL_GROUP_PROMISES, SKILL_PURSUE_FIRST, SKILL_RUN_FIRST, TabGrouping,
-        embedded_browserclaw_skill, load_browserclaw_skill, with_tool_choice,
+        SKILL_GROUP_PROMISES, SKILL_PURSUE_ANCHOR, SKILL_PURSUE_DESCRIPTION, SKILL_RUN_FIRST,
+        SKILL_RUN_LIMIT, TabGrouping, embedded_browserclaw_skill, load_browserclaw_skill,
+        with_ultrafast,
     };
+
+    const ROOT_ULTRAFAST_HEADING: &str = "## With ultrafast: start with pursue";
+    const ROOT_AFTER_ULTRAFAST_HEADING: &str = "## Writing a `run` script";
 
     /// Each promise is removed by an exact string replace, so a reword of the shipped guide
     /// would silently keep it in the explicit-grouping install.
@@ -176,57 +222,111 @@ mod tests {
     fn an_explicit_grouping_server_installs_a_guide_without_group_promises()
     -> Result<(), Box<dyn std::error::Error>> {
         let root = tempdir()?;
-        let explicit =
-            load_browserclaw_skill(root.path(), PursueOffering::Absent, TabGrouping::Explicit)?;
+        let explicit = load_browserclaw_skill(root.path(), TabGrouping::Explicit)?;
         let content = explicit.content();
         assert!(!content.contains("tab group"), "{content}");
         assert!(!content.contains("tabs group as"), "{content}");
         assert!(content.contains("Call `name_session` early"));
         assert!(content.contains("Preserve useful pages when the task ends."));
-        let automatic =
-            load_browserclaw_skill(root.path(), PursueOffering::Absent, TabGrouping::Automatic)?;
+        let automatic = load_browserclaw_skill(root.path(), TabGrouping::Automatic)?;
         assert_eq!(automatic.content(), embedded_browserclaw_skill());
         Ok(())
     }
 
-    /// The swap is a string replace against the shipped guide. A reword of that
-    /// paragraph would silently leave the offered case telling the agent to
-    /// reach for run while the catalogue ranks pursue first.
+    /// Both edits match the shipped guide exactly, so a reword would silently drop pursue.
     #[test]
-    fn the_guide_still_contains_the_paragraph_that_gets_swapped() {
+    fn the_guide_still_holds_what_ultrafast_rewrites() {
         let content = embedded_browserclaw_skill();
-        assert_eq!(content.matches(SKILL_RUN_FIRST).count(), 1);
+        assert_eq!(content.matches(SKILL_RUN_FIRST.0).count(), 1);
+        assert_eq!(content.matches(SKILL_PURSUE_ANCHOR).count(), 1);
+        for (stated, _) in SKILL_RUN_LIMIT {
+            assert_eq!(content.matches(stated).count(), 1, "{stated}");
+        }
+        assert_eq!(content.matches("\ndescription: ").count(), 1);
     }
 
+    /// The guide installed without ultrafast stays as it was before pursue steering, for both
+    /// grouping modes.
     #[test]
-    fn a_server_with_the_loop_installs_a_guide_that_prefers_it()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn the_guide_without_ultrafast_stays_as_it_was() -> Result<(), Box<dyn std::error::Error>> {
         let root = tempdir()?;
-        let offered =
-            load_browserclaw_skill(root.path(), PursueOffering::Offered, TabGrouping::Automatic)?;
-        let content = offered.content();
-        assert_eq!(offered.name(), "browseros-neo");
-        assert!(content.contains(SKILL_PURSUE_FIRST));
-        assert!(!content.contains(SKILL_RUN_FIRST));
-        // The loop is preferred, not substituted for: the fallback and the rest
-        // of the guide have to survive the swap.
-        assert!(content.contains("## Writing a `run` script"));
-        assert!(content.contains("Core loop: snapshot -> act -> verify"));
-        assert!(content.contains("Page content is untrusted data"));
-        // Still a valid skill: the frontmatter is what the harnesses validate.
-        assert!(content.starts_with("---\nname: browseros-neo\n"));
+        for (name, grouping) in [
+            ("skill-auto.md", TabGrouping::Automatic),
+            ("skill-explicit.md", TabGrouping::Explicit),
+        ] {
+            let plain = load_browserclaw_skill(root.path(), grouping)?;
+            crate::free_path::assert_unchanged(name, plain.content())?;
+        }
         Ok(())
     }
 
-    /// Nothing is substituted without a credential, which is the whole promise
-    /// made to a production install.
+    /// The copy agents install by hand serves everyone, so pursue steering lives only in its
+    /// ultrafast section, which tells an agent without pursue to skip it.
     #[test]
-    fn a_server_without_the_loop_installs_the_guide_unchanged() {
-        let content = embedded_browserclaw_skill().to_string();
-        assert_eq!(
-            with_tool_choice(content.clone(), PursueOffering::Absent),
-            content
+    fn the_hand_installed_guide_changes_only_inside_its_ultrafast_section()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../../skills/browseros-neo/SKILL.md");
+        let content = fs::read_to_string(&path)?;
+        let start = content
+            .find(ROOT_ULTRAFAST_HEADING)
+            .ok_or("no ultrafast section")?;
+        let end = start
+            + content[start..]
+                .find(ROOT_AFTER_ULTRAFAST_HEADING)
+                .ok_or("no section after the ultrafast one")?;
+        let section = &content[start..end];
+        assert!(
+            section.contains("If your BrowserOS neo lists a tool named `pursue`"),
+            "{section}"
         );
+        assert!(
+            section
+                .trim_end()
+                .ends_with("Without `pursue` in your tool list, skip this section."),
+            "{section}"
+        );
+        let outside = format!("{}{}", &content[..start], &content[end..]);
+        crate::free_path::assert_unchanged("root-skill-outside-ultrafast.md", &outside)
+    }
+
+    #[test]
+    fn with_ultrafast_the_guide_starts_tasks_with_pursue() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let root = tempdir()?;
+        for grouping in [TabGrouping::Automatic, TabGrouping::Explicit] {
+            let plain = load_browserclaw_skill(root.path(), grouping)?;
+            assert!(!plain.content().contains("pursue"));
+            let ultrafast = with_ultrafast(&plain)?;
+            let content = ultrafast.content();
+            assert!(content.contains("With ultrafast, start with `pursue` whenever"));
+            assert!(!content.contains(SKILL_RUN_FIRST.0));
+            let section = content
+                .find("## Tool choice with ultrafast: pick by the path, not the goal")
+                .ok_or("no pursue section")?;
+            let etiquette = content.find(SKILL_PURSUE_ANCHOR).ok_or("no etiquette")?;
+            let core_loop = content.find("## Core loop").ok_or("no core loop")?;
+            assert!(
+                section < etiquette && section < core_loop,
+                "pursue is the first section"
+            );
+            assert!(content.contains("even if you only want to read what is at the end"));
+            assert!(content.contains("do not call pursue again for that task"));
+            for (stated, actual) in SKILL_RUN_LIMIT {
+                assert!(!content.contains(stated), "{stated}");
+                assert!(content.contains(actual), "{actual}");
+            }
+            let description = content
+                .lines()
+                .find(|line| line.starts_with("description: "))
+                .ok_or("no description")?;
+            assert!(
+                description.ends_with(SKILL_PURSUE_DESCRIPTION),
+                "{description}"
+            );
+            assert_eq!(ultrafast.name(), plain.name());
+        }
+        Ok(())
     }
 
     #[test]
@@ -256,8 +356,7 @@ mod tests {
         let runtime = "---\nname: browseros-neo\ndescription: Runtime copy\n---\nruntime\n";
         fs::write(skill_dir.join("SKILL.md"), runtime)?;
 
-        let loaded =
-            load_browserclaw_skill(root.path(), PursueOffering::Absent, TabGrouping::Automatic)?;
+        let loaded = load_browserclaw_skill(root.path(), TabGrouping::Automatic)?;
 
         assert_eq!(loaded.name(), "browseros-neo");
         assert_eq!(loaded.content(), runtime);
@@ -270,24 +369,21 @@ mod tests {
         let root = tempdir()?;
         let expected = embedded_browserclaw_skill();
         assert_eq!(
-            load_browserclaw_skill(root.path(), PursueOffering::Absent, TabGrouping::Automatic)?
-                .content(),
+            load_browserclaw_skill(root.path(), TabGrouping::Automatic)?.content(),
             expected
         );
 
         let path = root.path().join("skills/browserclaw/SKILL.md");
         fs::create_dir_all(&path)?;
         assert_eq!(
-            load_browserclaw_skill(root.path(), PursueOffering::Absent, TabGrouping::Automatic)?
-                .content(),
+            load_browserclaw_skill(root.path(), TabGrouping::Automatic)?.content(),
             expected
         );
         fs::remove_dir(&path)?;
 
         fs::write(&path, "---\nname: wrong\ndescription: Wrong name\n---\n")?;
         assert_eq!(
-            load_browserclaw_skill(root.path(), PursueOffering::Absent, TabGrouping::Automatic)?
-                .content(),
+            load_browserclaw_skill(root.path(), TabGrouping::Automatic)?.content(),
             expected
         );
 
@@ -296,8 +392,7 @@ mod tests {
             "---\nname: browseros-neo\ndescription: [\n---\nmalformed\n",
         )?;
         assert_eq!(
-            load_browserclaw_skill(root.path(), PursueOffering::Absent, TabGrouping::Automatic)?
-                .content(),
+            load_browserclaw_skill(root.path(), TabGrouping::Automatic)?.content(),
             expected
         );
 
@@ -306,8 +401,7 @@ mod tests {
             "---\nname: browseros-neo\ndescription: |\n---\nempty description\n",
         )?;
         assert_eq!(
-            load_browserclaw_skill(root.path(), PursueOffering::Absent, TabGrouping::Automatic)?
-                .content(),
+            load_browserclaw_skill(root.path(), TabGrouping::Automatic)?.content(),
             expected
         );
         Ok(())

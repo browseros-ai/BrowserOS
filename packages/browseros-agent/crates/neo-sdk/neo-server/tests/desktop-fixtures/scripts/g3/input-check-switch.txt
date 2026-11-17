@@ -1,0 +1,6 @@
+await page.goto(args.base + '/sdk-input.html');
+
+await page.getByRef(await refFor(page, 'Enabled switch')).check();
+const state = await page.evaluate(() => ({ checked: document.getElementById('switch').getAttribute('aria-checked'), clicks: window.switchClicks }));
+equal(state, { checked: 'true', clicks: 0 }, 'an already-on switch is not clicked');
+return state;

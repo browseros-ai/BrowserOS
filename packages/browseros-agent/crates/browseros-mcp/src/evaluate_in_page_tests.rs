@@ -6,7 +6,7 @@ use crate::{
     output_file::create_browser_output_file_access,
     tools,
 };
-use browseros_cdp::{CdpError, CdpEvent};
+use browseros_cdp::{CdpError, CdpEvent, TargetedEvents};
 use browseros_core::{BrowserSession, BrowserSessionHooks, BrowserView, CdpConnection, SessionId};
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
@@ -14,7 +14,7 @@ use std::{
     error::Error,
     sync::{Arc, Mutex},
 };
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 
 type TestResult = Result<(), Box<dyn Error>>;
@@ -22,10 +22,15 @@ type TestResult = Result<(), Box<dyn Error>>;
 /// Appears only in the agent's script, so the evaluation carrying it is easy to find among the
 /// readiness probes the tools also send.
 const SCRIPT: &str = "40 + 2";
+/// A script whose result is longer than the inline limit.
+const LONG_RESULT: &str = "'x'.repeat(20000)";
+const MEDIUM_RESULT: &str = "'x'.repeat(12000)";
+const OVERRIDE_RESULT: &str = "'x'.repeat(200000)";
 
 struct Native {
     evaluations: Mutex<Vec<Value>>,
     events: broadcast::Sender<CdpEvent>,
+    targeted: TargetedEvents,
 }
 
 impl Native {
@@ -34,6 +39,7 @@ impl Native {
         Arc::new(Self {
             evaluations: Mutex::new(Vec::new()),
             events,
+            targeted: TargetedEvents::default(),
         })
     }
 
@@ -74,6 +80,20 @@ impl Native {
                 let is_script = params["expression"]
                     .as_str()
                     .is_some_and(|expression| expression.contains(SCRIPT));
+                for (script, length) in [
+                    (LONG_RESULT, 20_000),
+                    (MEDIUM_RESULT, 12_000),
+                    (OVERRIDE_RESULT, 200_000),
+                ] {
+                    if params["expression"]
+                        .as_str()
+                        .is_some_and(|expression| expression.contains(script))
+                    {
+                        return Ok(
+                            json!({"result": {"type": "string", "value": "x".repeat(length)}}),
+                        );
+                    }
+                }
                 if is_script {
                     json!({"result": {"type": "number", "value": 42}})
                 } else {
@@ -109,6 +129,10 @@ impl CdpConnection for Native {
 
     fn events(&self) -> broadcast::Receiver<CdpEvent> {
         self.events.subscribe()
+    }
+
+    fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+        self.targeted.subscribe(method)
     }
 
     fn is_connected(&self) -> bool {
@@ -219,5 +243,77 @@ async fn tests_that_an_old_page_evaluate_call_is_pointed_at_evaluate_in_page() -
         text(&result)
     );
     assert!(native.scripts().is_empty(), "{:?}", native.scripts());
+    Ok(())
+}
+
+#[tokio::test]
+async fn evaluation_defaults_keep_medium_results_inline_and_clamp_large_overrides() -> TestResult {
+    let native = Native::new();
+    let context = ctx(&native);
+    let medium = call(
+        &context,
+        tools::evaluate_in_page::definition(),
+        json!({"page": 1, "code": format!("return {MEDIUM_RESULT};")}),
+    )
+    .await;
+    assert!(!medium.is_error, "{}", text(&medium));
+    assert_eq!(
+        medium
+            .structured_content
+            .as_ref()
+            .and_then(|data| data.get("value"))
+            .and_then(Value::as_str)
+            .map(str::len),
+        Some(12_000)
+    );
+    let large = call(
+        &context,
+        tools::evaluate_in_page::definition(),
+        json!({"page": 1, "code": format!("return {OVERRIDE_RESULT};"), "maxChars": 2000000}),
+    )
+    .await;
+    assert!(!large.is_error);
+    assert!(text(&large).contains("Evaluate result truncated at 150000 bytes"));
+    assert_eq!(
+        large
+            .structured_content
+            .as_ref()
+            .and_then(|data| data.get("writtenToFile")),
+        Some(&json!(true))
+    );
+    Ok(())
+}
+
+/// A run script reads the value itself, so it gets all of it rather than an excerpt plus a
+/// file path it has no way to open.
+#[tokio::test]
+async fn tests_that_a_run_script_gets_a_long_result_whole() -> TestResult {
+    let native = Native::new();
+    let direct = call(
+        &ctx(&native),
+        tools::evaluate_in_page::definition(),
+        json!({"page": 1, "code": format!("return {LONG_RESULT};")}),
+    )
+    .await;
+    assert!(text(&direct).contains("truncated"), "{}", text(&direct));
+
+    let code = format!(
+        "const result = await browser.page(1).evaluateInPage(\"return {LONG_RESULT};\");
+         return result.value.length;"
+    );
+    let result = call(
+        &ctx(&native),
+        tools::run::definition(),
+        json!({"code": code, "timeout": 5000}),
+    )
+    .await;
+    assert!(!result.is_error, "{}", text(&result));
+    assert_eq!(
+        result
+            .structured_content
+            .as_ref()
+            .and_then(|data| data.get("value")),
+        Some(&json!(20000))
+    );
     Ok(())
 }

@@ -1,0 +1,7 @@
+<!doctype html><html><head><meta charset="utf-8"><title>frames</title></head>
+<body>
+<p>A same-site frame and a cross-site one (127.0.0.1 and localhost are different sites, so the
+second is an out-of-process iframe), which embeds a frame of the first site again.</p>
+<iframe name="same" src="/child.html"></iframe>
+<iframe name="cross" src="{{CROSS}}/nested.html"></iframe>
+</body></html>

@@ -1,0 +1,20 @@
+// Source port of act-007 at a7e536e152a4835abe9974498b27a5c927dd2e0d. Execution is owned by the coordinator.
+
+// A ref is opaque. SDK child-frame refs include a document prefix, unlike desktop eN refs.
+const g1aRef = (snapshot, needle) => {
+  const row = snapshot.split('\n').find(line =>
+    line.replace(/\s+"/g, '"').includes(needle) && /\[ref=([^\]\s]+)\]/.test(line));
+  assert(row, 'snapshot has a ref for ' + needle, snapshot);
+  return row.match(/\[ref=([^\]\s]+)\]/)[1];
+};
+await page.goto(args.base + '/form.html');
+await page.evaluate(() => {
+  document.getElementById('name').value = 'old name';
+  document.getElementById('bio').value = 'old bio';
+});
+const snapshot = await page.ariaSnapshot();
+await page.getByRef(g1aRef(snapshot, '"Name"')).fill('Katherine Johnson');
+await page.getByRef(g1aRef(snapshot, '"Bio"')).fill('orbital mechanics');
+const state = { name: await page.locator('#name').inputValue(), bio: await page.locator('#bio').inputValue() };
+equal(state, { name: 'Katherine Johnson', bio: 'orbital mechanics' }, 'one run replaces both old form values');
+return state;

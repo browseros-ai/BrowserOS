@@ -5,9 +5,47 @@ use crate::{
     target::page_access::PageAccess,
     timeouts,
 };
+use browseros_cdp::CdpError;
+use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use std::sync::Arc;
 use tokio::time::{sleep, timeout};
+
+/// What a `goto` learned beyond arriving: the parts of `Page.navigate`'s answer and the new
+/// document that a caller would otherwise mistake for an ordinary page load.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct GotoOutcome {
+    /// The main document's HTTP status, when the page exposes one.
+    pub status: Option<u16>,
+    /// The URL answered with a file, so the browser downloaded it and the page stayed put.
+    pub download: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct NavigateReply {
+    #[serde(default)]
+    error_text: Option<String>,
+    #[serde(default)]
+    is_download: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct NavigationHistory {
+    current_index: i64,
+    entries: Vec<NavigationEntry>,
+}
+
+#[derive(Deserialize)]
+struct NavigationEntry {
+    id: i64,
+}
+
+/// The status line of the document the frame now shows. Navigation Timing exposes it to the
+/// isolated world without touching the page's own scripts.
+const HTTP_STATUS_JS: &str = "(()=>{const entry=performance.getEntriesByType('navigation')[0];\
+return entry&&entry.responseStatus?entry.responseStatus:null;})()";
 
 /// Navigation retains the admitted page incarnation through load waits; it cannot reacquire a
 /// different context or page when a task rebinds or the browser reconnects.
@@ -40,17 +78,52 @@ impl Navigation {
         }
     }
 
-    pub async fn goto(&self, url: &str) -> Result<(), CoreError> {
+    /// Sends a navigation command, returning the session it ran on, the document mark taken
+    /// just before it and its reply. Chromium refuses a command on a dead session before it
+    /// runs, and that refusal already evicted the session, so the command goes once more on a
+    /// fresh attachment. A command that ran is never sent again.
+    async fn send_navigation<R: DeserializeOwned>(
+        &self,
+        method: &str,
+        params: Value,
+    ) -> Result<(PageSession, DocumentMark, R), CoreError> {
+        let page = self.page_session().await?;
+        let mark = self.page_signals.document_mark(&self.page_id);
+        match page.session.send(method, params.clone()).await {
+            Err(CoreError::Cdp(CdpError::SessionGone)) => {
+                let page = self.page_session().await?;
+                let mark = self.page_signals.document_mark(&self.page_id);
+                let reply = page.session.send(method, params).await?;
+                Ok((page, mark, reply))
+            }
+            reply => Ok((page, mark, reply?)),
+        }
+    }
+
+    /// Navigates and waits for the page to arrive. A URL the browser could not load (an
+    /// unknown host, a refused connection) is an error rather than an arrival at Chrome's
+    /// error page, and a URL that turns out to be a file reports the download instead of
+    /// waiting for a page that never comes.
+    pub async fn goto(&self, url: &str) -> Result<GotoOutcome, CoreError> {
         if let Some(access) = &self.access {
             access.fresh().await?;
         }
         self.throw_if_dialog_open()?;
-        let page = self.page_session().await?;
-        let mark = self.page_signals.document_mark(&self.page_id);
-        let _: Value = page
-            .session
-            .send("Page.navigate", json!({ "url": url }))
+        let (page, mark, reply) = self
+            .send_navigation::<NavigateReply>("Page.navigate", json!({ "url": url }))
             .await?;
+        // A download is answered with errorText net::ERR_ABORTED too, so it goes first.
+        if reply.is_download {
+            return Ok(GotoOutcome {
+                status: None,
+                download: true,
+            });
+        }
+        if let Some(error) = reply.error_text.filter(|error| !error.is_empty()) {
+            return Err(CoreError::Message(format!(
+                "Navigation to {url} failed: {error}"
+            )));
+        }
         // Chromium answers Page.navigate only once the document committed, so a navigation
         // that has not started by now was a same-document one.
         wait_for_load(
@@ -63,7 +136,19 @@ impl Navigation {
                 expects_new_document: false,
             },
         )
+        .await?;
+        let status = timeout(
+            timeouts::ACTION_SETTLE_CDP_CALL_TIMEOUT,
+            PageJs::isolated(&page.session).eval::<Option<u16>>(HTTP_STATUS_JS),
+        )
         .await
+        .ok()
+        .and_then(Result::ok)
+        .flatten();
+        Ok(GotoOutcome {
+            status,
+            download: false,
+        })
     }
 
     pub async fn reload(&self) -> Result<(), CoreError> {
@@ -71,39 +156,8 @@ impl Navigation {
             access.fresh().await?;
         }
         self.throw_if_dialog_open()?;
-        let page = self.page_session().await?;
-        let mark = self.page_signals.document_mark(&self.page_id);
-        let _: Value = page.session.send("Page.reload", json!({})).await?;
-        wait_for_load(
-            &page,
-            &self.page_signals,
-            &self.page_id,
-            self.access.as_deref(),
-            Arrival {
-                mark,
-                expects_new_document: true,
-            },
-        )
-        .await
-    }
-
-    pub async fn back(&self) -> Result<(), CoreError> {
-        self.history("back").await
-    }
-
-    pub async fn forward(&self) -> Result<(), CoreError> {
-        self.history("forward").await
-    }
-
-    async fn history(&self, direction: &str) -> Result<(), CoreError> {
-        if let Some(access) = &self.access {
-            access.fresh().await?;
-        }
-        self.throw_if_dialog_open()?;
-        let page = self.page_session().await?;
-        let mark = self.page_signals.document_mark(&self.page_id);
-        let _: Value = PageJs::isolated(&page.session)
-            .eval(&format!("history.{direction}()"))
+        let (page, mark, _) = self
+            .send_navigation::<Value>("Page.reload", json!({}))
             .await?;
         wait_for_load(
             &page,
@@ -116,6 +170,60 @@ impl Navigation {
             },
         )
         .await
+    }
+
+    /// Goes one entry back in the tab's history. False when there is none: the page is left
+    /// as it was.
+    pub async fn back(&self) -> Result<bool, CoreError> {
+        self.history(-1).await
+    }
+
+    /// Goes one entry forward in the tab's history. False when there is none.
+    pub async fn forward(&self) -> Result<bool, CoreError> {
+        self.history(1).await
+    }
+
+    /// Steps the tab's session history from the browser side. Calling `history.back()` in the
+    /// page needed its main thread, so a busy page stalled it, and with no entry it did
+    /// nothing while the step still reported a navigation.
+    async fn history(&self, delta: i64) -> Result<bool, CoreError> {
+        if let Some(access) = &self.access {
+            access.fresh().await?;
+        }
+        self.throw_if_dialog_open()?;
+        let page = self.page_session().await?;
+        let history: NavigationHistory = page
+            .session
+            .send("Page.getNavigationHistory", json!({}))
+            .await?;
+        let entry = history
+            .current_index
+            .checked_add(delta)
+            .and_then(|index| usize::try_from(index).ok())
+            .and_then(|index| history.entries.get(index));
+        let Some(entry) = entry else {
+            return Ok(false);
+        };
+        let mark = self.page_signals.document_mark(&self.page_id);
+        let _: Value = page
+            .session
+            .send(
+                "Page.navigateToHistoryEntry",
+                json!({ "entryId": entry.id }),
+            )
+            .await?;
+        wait_for_load(
+            &page,
+            &self.page_signals,
+            &self.page_id,
+            self.access.as_deref(),
+            Arrival {
+                mark,
+                expects_new_document: true,
+            },
+        )
+        .await?;
+        Ok(true)
     }
 
     fn throw_if_dialog_open(&self) -> Result<(), CoreError> {

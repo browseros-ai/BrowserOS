@@ -1,18 +1,17 @@
-# Contributing to BrowserOS neo and BrowserOS
+# Contributing to BrowserOS neo
 
 Thanks for being here. Whether you are fixing a bug, building a feature, improving docs, or just poking around, we are glad to have you.
 
-Both browsers ship from this one repo, and there are three places you can work. Pick the one that matches what you want to change.
+BrowserOS neo ships from this one repo, and there are two places you can work. Pick the one that matches what you want to change.
 
 ## Pick your path
 
 | Path | You would work on | Stack | Cost to set up |
 |---|---|---|---|
 | **[BrowserOS neo](packages/browseros-agent/CONTRIBUTING.md)** | The cockpit new tab, the MCP surface agents connect to, session replay | TypeScript, React, Rust | ~15 minutes |
-| **[BrowserOS](packages/browseros-agent/CONTRIBUTING.BrowserOS.md)** | The side panel chat, the agent loop, scheduled tasks, settings | TypeScript, React, Bun | ~15 minutes |
 | **Browser** | Chromium patches, the build system, platform features | C++, Python | ~100GB disk, hours |
 
-Most contributors start with BrowserOS neo or BrowserOS. Both live in `packages/browseros-agent` and share one toolchain, so setting up for one gets you most of the way to the other.
+Most contributors start with BrowserOS neo, which lives in `packages/browseros-agent`.
 
 ## Before you start
 
@@ -20,11 +19,11 @@ Most contributors start with BrowserOS neo or BrowserOS. Both live in `packages/
 
 Install it by following [the Bun installation guide](https://bun.sh/docs/installation). CI installs the exact pinned version by reading that same `package.json`, so matching it locally keeps you on the same dependency resolution. Check yours with `bun --version`.
 
-The per-path guides list what else each one needs.
+The BrowserOS neo guide lists what else it needs.
 
 ## Browser development
 
-Building the Chromium fork is a different kind of work from everything above. Only go here if you are changing the browser itself rather than what runs inside it.
+Building the Chromium fork is a different kind of work from the agent platform. Only go here if you are changing the browser itself rather than what runs inside it.
 
 **You will need** roughly 100GB of free disk for the Chromium source, 16GB or more of RAM, Python 3.12+ with [uv](https://docs.astral.sh/uv/), and your platform's toolchain: Xcode command line tools on macOS, `build-essential` on Linux, or Visual Studio Build Tools on Windows.
 
@@ -37,8 +36,7 @@ cd packages/browseros
 uv sync                                   # once
 cp .env.example .env                      # once, then fill in what you need
 
-# a debug build of either product
-uv run browseros build --preset debug --product browseros   --chromium-src /path/to/chromium/src
+# a debug build of BrowserOS neo
 uv run browseros build --preset debug --product browserclaw --chromium-src /path/to/chromium/src
 
 # see exactly what a build would run, without running it

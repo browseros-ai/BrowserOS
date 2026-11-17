@@ -169,6 +169,14 @@ export const readEvalCases: ContractCase[] = [
     async run(ctx) {
       const page = await ctx.openPage(ctx.fixture('/dynamic.html'))
       await loadBigSection(ctx, page)
+      // Keep 200 matching lines above the 15 KB inline budget while each line
+      // remains below grep's independent 500-byte per-line cap.
+      expectOk(
+        await ctx.mcp.callTool('evaluate_in_page', {
+          page,
+          code: "for (const row of document.querySelectorAll('#big h6')) row.append(' extra detail'.repeat(15))",
+        }),
+      )
       const text = expectOk(
         await ctx.mcp.callTool('grep', {
           page,

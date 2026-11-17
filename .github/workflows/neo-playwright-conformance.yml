@@ -1,0 +1,43 @@
+# Keep this opt-in until native amd64 conformance is green. Two CI fix attempts
+# repaired browser startup and calibration, but the upstream suite still exposes
+# Neo parity failures (for example bounding boxes and zero-size element scrolling).
+name: Neo Playwright conformance
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+  packages: read
+jobs:
+  core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v7
+      - name: Read the injected source pin without moving any checkout
+        run: |
+          pin=packages/browseros-agent/crates/neo-sdk/neo-playwright/third_party/playwright/VERSION
+          tag=$(head -1 "$pin")
+          git clone --depth=1 --single-branch --no-checkout --branch "$tag" https://github.com/microsoft/playwright.git "$RUNNER_TEMP/playwright"
+          test "$(git -C "$RUNNER_TEMP/playwright" rev-parse "$tag^{commit}")" = "$(sed -n '2p' "$pin")"
+          mkdir -p "$RUNNER_TEMP/conformance" "$RUNNER_TEMP/conformance-data"
+          chmod 777 "$RUNNER_TEMP/conformance" "$RUNNER_TEMP/conformance-data"
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/setup-buildx-action@v3
+      - name: Build and run on native Linux amd64
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+          PLAYWRIGHT_SRC: ${{ runner.temp }}/playwright
+          CONFORMANCE_OUTPUT: ${{ runner.temp }}/conformance
+          CONFORMANCE_DATA: ${{ runner.temp }}/conformance-data
+        run: |
+          docker compose --project-name neo-conformance-${{ github.run_id }} -f packages/browseros-agent/crates/neo-sdk/neo-server/conformance/compose.yaml build
+          docker compose --project-name neo-conformance-${{ github.run_id }} -f packages/browseros-agent/crates/neo-sdk/neo-server/conformance/compose.yaml run --rm conformance
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: neo-playwright-linux-${{ github.run_id }}
+          path: ${{ runner.temp }}/conformance

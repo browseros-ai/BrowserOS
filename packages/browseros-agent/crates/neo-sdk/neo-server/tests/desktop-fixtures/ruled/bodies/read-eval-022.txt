@@ -1,0 +1,6 @@
+// Runtime checks acceptance of the actual 600000ms request; public deadline source proves
+// non-clamping. The separate driver deadline prevents this probe from waiting ten minutes.
+await page.goto(args.base + '/form.html');
+const title = await page.title();
+equal(title, 'Form fixture', 'budget acceptance reaches a live fixture');
+return { acceptedTimeoutMs: 600000, result: 'sdk-timeout-accepted' };

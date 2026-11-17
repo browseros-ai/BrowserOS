@@ -1,0 +1,213 @@
+[
+  {
+    "name": "keyboard.down",
+    "input": {
+      "call": {
+        "api": "keyboard.down",
+        "timeoutMs": 0
+      },
+      "page": {
+        "$neo": "page",
+        "tab": 1007
+      },
+      "key": "Shift"
+    }
+  },
+  {
+    "name": "keyboard.up",
+    "input": {
+      "call": {
+        "api": "keyboard.up",
+        "timeoutMs": 0
+      },
+      "page": {
+        "$neo": "page",
+        "tab": 1007
+      },
+      "key": "Shift"
+    }
+  },
+  {
+    "name": "keyboard.press",
+    "input": {
+      "call": {
+        "api": "keyboard.press",
+        "timeoutMs": 0
+      },
+      "page": {
+        "$neo": "page",
+        "tab": 1007
+      },
+      "key": "ControlOrMeta+A",
+      "delay": 3
+    }
+  },
+  {
+    "name": "keyboard.type",
+    "input": {
+      "call": {
+        "api": "keyboard.type",
+        "timeoutMs": 0
+      },
+      "page": {
+        "$neo": "page",
+        "tab": 1007
+      },
+      "text": "a😀",
+      "delay": 4
+    }
+  },
+  {
+    "name": "keyboard.insertText",
+    "input": {
+      "call": {
+        "api": "keyboard.insertText",
+        "timeoutMs": 0
+      },
+      "page": {
+        "$neo": "page",
+        "tab": 1007
+      },
+      "text": "b😀"
+    }
+  },
+  {
+    "name": "mouse.move",
+    "input": {
+      "call": {
+        "api": "mouse.move",
+        "timeoutMs": 0
+      },
+      "page": {
+        "$neo": "page",
+        "tab": 1007
+      },
+      "x": 1.5,
+      "y": -2,
+      "steps": 3
+    }
+  },
+  {
+    "name": "mouse.down",
+    "input": {
+      "call": {
+        "api": "mouse.down",
+        "timeoutMs": 0
+      },
+      "page": {
+        "$neo": "page",
+        "tab": 1007
+      },
+      "button": "right",
+      "clickCount": 2
+    }
+  },
+  {
+    "name": "mouse.up",
+    "input": {
+      "call": {
+        "api": "mouse.up",
+        "timeoutMs": 0
+      },
+      "page": {
+        "$neo": "page",
+        "tab": 1007
+      },
+      "button": "right",
+      "clickCount": 2
+    }
+  },
+  {
+    "name": "mouse.click",
+    "input": {
+      "call": {
+        "api": "mouse.click",
+        "timeoutMs": 0
+      },
+      "page": {
+        "$neo": "page",
+        "tab": 1007
+      },
+      "x": 3,
+      "y": 4,
+      "button": "middle",
+      "clickCount": 3,
+      "delay": 5
+    }
+  },
+  {
+    "name": "mouse.click",
+    "input": {
+      "call": {
+        "api": "mouse.dblclick",
+        "timeoutMs": 0
+      },
+      "page": {
+        "$neo": "page",
+        "tab": 1007
+      },
+      "x": 5,
+      "y": 6,
+      "button": "left",
+      "clickCount": 2,
+      "delay": 6
+    }
+  },
+  {
+    "name": "mouse.wheel",
+    "input": {
+      "call": {
+        "api": "mouse.wheel",
+        "timeoutMs": 0
+      },
+      "page": {
+        "$neo": "page",
+        "tab": 1007
+      },
+      "deltaX": -7,
+      "deltaY": 8
+    }
+  },
+  {
+    "name": "keyboard.press",
+    "input": {
+      "call": {
+        "api": "keyboard.press",
+        "timeoutMs": 0
+      },
+      "page": {
+        "$neo": "page",
+        "tab": 1007
+      },
+      "key": "a"
+    }
+  },
+  {
+    "name": "mouse.down",
+    "input": {
+      "call": {
+        "api": "mouse.down",
+        "timeoutMs": 0
+      },
+      "page": {
+        "$neo": "page",
+        "tab": 1007
+      }
+    }
+  },
+  {
+    "name": "mouse.move",
+    "input": {
+      "call": {
+        "api": "mouse.move",
+        "timeoutMs": 0
+      },
+      "page": {
+        "$neo": "page",
+        "tab": 1007
+      },
+      "x": 9,
+      "y": 10
+    }
+  }
+]

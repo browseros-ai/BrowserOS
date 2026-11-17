@@ -3,6 +3,7 @@
 
 from pathlib import Path
 
+from ...core.patch_source import validate_v8_gitlink
 from ...core.resume import remove_checkpoint_dirs
 from ...core.step import Step, ValidationError, step
 from ...core.context import Context
@@ -19,11 +20,19 @@ class CleanModule(Step):
     requires = []
     description = "Clean build artifacts, reset git state, and prune orphaned resources"
 
+    def preflight(self, ctx: Context) -> None:
+        validate_v8_gitlink(
+            ctx.get_patch_root(), ctx.chromium_src, allow_missing_base=True
+        )
+
     def validate(self, ctx: Context) -> None:
         if not ctx.chromium_src.exists():
             raise ValidationError(f"Chromium source not found: {ctx.chromium_src}")
 
     def execute(self, ctx: Context) -> None:
+        # Shallow provisioning can fetch the pin after whole-plan preflight.
+        # Recheck before deleting outputs or resetting either source checkout.
+        self.preflight(ctx)
         self.clean_outputs(ctx)
         reset_source(ctx.chromium_src)
         self._clean_sparkle(ctx)
@@ -54,6 +63,7 @@ class CleanModule(Step):
         for architecture in self._output_architectures(ctx):
             out_ctx = Context(
                 root_dir=ctx.root_dir,
+                patch_root=ctx.patch_root,
                 chromium_src=ctx.chromium_src,
                 architecture=architecture,
                 build_type=ctx.build_type,

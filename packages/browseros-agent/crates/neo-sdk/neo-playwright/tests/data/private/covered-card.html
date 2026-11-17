@@ -1,0 +1,11 @@
+<!doctype html><meta charset=utf-8><title>Covered card</title>
+<style>.row { position: relative; width: 320px; height: 40px; } .row input { position: absolute; left: 0; top: 0; width: 300px; height: 30px; }
+#cover { position: absolute; left: 0; top: 0; width: 300px; height: 30px; background: rgba(200, 0, 0, 0.3); z-index: 5; }</style>
+<form method=post action=/echo><div class=row id=numrow><input id=number name=number autocomplete=cc-number inputmode=numeric aria-label="Card number"></div>
+<div class=row><input id=cvc name=cvc autocomplete=cc-csc inputmode=numeric aria-label="CVC"></div></form>
+<script>
+// ?mode=cover (default): an overlay inside this frame on the number box; ?mode=none: nothing.
+if ((new URLSearchParams(location.search).get('mode') || 'cover') === 'cover') {
+  const d = document.createElement('div'); d.id = 'cover'; document.getElementById('numrow').appendChild(d);
+}
+</script>

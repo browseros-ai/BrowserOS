@@ -14,8 +14,14 @@ import {
   taskScreenshotUrl,
   useTaskScreenshotBaseUrl,
 } from '@/modules/api/audit.hooks'
-import { taskTime, taskWhen, tookLabel } from '@/screens/audit/audit.helpers'
+import {
+  taskTime,
+  taskWhen,
+  tookLabel,
+  ultrafastNote,
+} from '@/screens/audit/audit.helpers'
 import { SessionStatusBadge } from './SessionStatusBadge'
+import { UltrafastNote, UltrafastRail } from './UltrafastMarks'
 
 interface TaskRowProps {
   task: TaskSummary
@@ -28,6 +34,7 @@ interface TaskRowProps {
 export function TaskRow({ task, now, timeOnly = false }: TaskRowProps) {
   const location = useLocation()
   const screenshotBaseUrl = useTaskScreenshotBaseUrl()
+  const note = ultrafastNote(task.pursue, task.ultrafast)
   const shot =
     task.latestScreenshotId != null && screenshotBaseUrl !== null
       ? taskScreenshotUrl(
@@ -42,8 +49,10 @@ export function TaskRow({ task, now, timeOnly = false }: TaskRowProps) {
       to={`/audit/${encodeURIComponent(task.sessionId)}`}
       state={{ from: location.pathname }}
       data-task-row={task.sessionId}
-      className="grid grid-cols-[72px_minmax(0,1fr)] items-center gap-x-4 gap-y-2 px-4 py-3.5 transition-colors hover:bg-bg-canvas focus-visible:bg-bg-canvas focus-visible:outline-none sm:grid-cols-[112px_minmax(0,1fr)_auto] sm:gap-x-[18px] sm:px-[18px]"
+      data-ultrafast={note ? '' : undefined}
+      className="relative grid grid-cols-[72px_minmax(0,1fr)] items-center gap-x-4 gap-y-2 px-4 py-3.5 transition-colors hover:bg-bg-canvas focus-visible:bg-bg-canvas focus-visible:outline-none sm:grid-cols-[112px_minmax(0,1fr)_auto] sm:gap-x-[18px] sm:px-[18px]"
     >
+      {note ? <UltrafastRail /> : null}
       <span
         className={cn(
           'relative grid aspect-[16/10] place-items-center overflow-hidden rounded-md border border-border-2',
@@ -97,6 +106,7 @@ export function TaskRow({ task, now, timeOnly = false }: TaskRowProps) {
           <span aria-hidden>·</span>
           <span>{tookLabel(task.durationMs)}</span>
         </span>
+        {note ? <UltrafastNote className="mt-0.5">{note}</UltrafastNote> : null}
       </span>
       <SessionStatusBadge
         status={task.status}

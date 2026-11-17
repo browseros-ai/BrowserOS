@@ -1,0 +1,66 @@
+/**
+ * Port of the pinned desktop click-recovery assertions to one hosted SDK run.
+ * Capture refusals before reading the fixture, so a failed action cannot hide extra clicks.
+ * Refs come from a marked snapshot and stay node-bound throughout each attempt.
+ */
+const failures = [];
+function must(condition, message) {
+  if (!condition) failures.push(message);
+}
+function same(actual, expected, message) {
+  must(JSON.stringify(actual) === JSON.stringify(expected), message);
+}
+function errorRecord(error) {
+  return {
+    message: String(error?.message ?? error),
+    code: error?.code ?? null,
+    owner: error?.owner ?? null,
+    delivery: error?.delivery ?? null,
+    retryable: error?.retryable ?? null,
+    click: error?.click ?? null,
+  };
+}
+async function clickRef(ref, options = {}) {
+  try {
+    const value = await page.getByRef(ref).click({ timeout: 3500, ...options });
+    return { ok: true, returnedType: typeof value, value: value ?? null };
+  } catch (error) {
+    return { ok: false, error: errorRecord(error), returnedType: null, value: null };
+  }
+}
+async function state() {
+  return await page.evaluate(() => ({
+    events: window.events,
+    pageWorldClickCalls: window.pageWorldClickCalls,
+    replaced: window.replaced ?? false,
+    coverPresent: Boolean(document.getElementById('cover')),
+    targetDisabled: document.getElementById('target')?.matches(':disabled') ?? null,
+    targetDisplay: document.getElementById('target')?.style.display ?? null,
+    targetVisibility: document.getElementById('target')?.style.visibility ?? null,
+  }));
+}
+function finish(observed) {
+  assert(failures.length === 0, 'Desktop click-recovery contract failed', { failures, observed });
+  return observed;
+}
+function nativePress() {
+  assert(typeof args.nativePress === 'boolean', 'Root must supply the host-only DOM.click capability probe result', { nativePress: args.nativePress });
+  return args.nativePress;
+}
+function fallbackMarker(result) {
+  // Hosted click returns void at this SHA. Keep the desktop fallback marker as an
+  // unmet requirement instead of manufacturing delivery feedback from page events.
+  const feedback = result.value?.click ?? result.error?.click;
+  must(feedback?.domFallback === true, 'Click reports its DOM fallback');
+  return feedback;
+}
+
+await page.goto(args.base + '/click-recovery.html?mode=first-legend&cover=false');
+const before = await state();
+same(before.targetDisabled, false, 'HTML fieldset disabled semantics match the fixture');
+const ref = await refFor(page, 'Recovery target');
+const result = await clickRef(ref);
+const observed = { before, ref, result, state: await state() };
+must(result.ok, 'Enabled control in the first legend is clicked');
+same(observed.state.events, [{ trusted: true }], 'Exactly one first-legend click has the required trust');
+return finish(observed);

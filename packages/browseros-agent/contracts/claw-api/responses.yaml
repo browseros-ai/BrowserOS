@@ -40,3 +40,29 @@ InternalError:
     application/json:
       schema:
         $ref: ./schemas/common.yaml#/ApiError
+PlanForbidden:
+  description: forbidden, when the request comes from a browser origin other than the app.
+  content:
+    application/json:
+      schema:
+        $ref: ./schemas/common.yaml#/ApiError
+PlanNotFound:
+  description: >-
+    billing_unavailable when this build has no billing gateway, or not_found when the
+    checkout or computer is unknown.
+  content:
+    application/json:
+      schema:
+        $ref: ./schemas/common.yaml#/ApiError
+PlanRateLimited:
+  description: too_many_tries or rate_limited.
+  content:
+    application/json:
+      schema:
+        $ref: ./schemas/plan.yaml#/PlanRateLimitedError
+BillingUnreachable:
+  description: billing_unreachable, when the billing gateway is down or this computer is offline.
+  content:
+    application/json:
+      schema:
+        $ref: ./schemas/common.yaml#/ApiError

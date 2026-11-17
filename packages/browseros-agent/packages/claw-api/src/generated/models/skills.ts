@@ -200,6 +200,12 @@ export interface Skill {
      * @memberof Skill
      */
     tokenSavings?: SkillTokenSavings;
+    /**
+     *
+     * @type {SkillUltrafast}
+     * @memberof Skill
+     */
+    ultrafast?: SkillUltrafast;
 }
 
 /**
@@ -276,6 +282,20 @@ export interface SkillDetail {
      * @memberof SkillDetail
      */
     tokenSavings: SkillTokenSavings;
+}
+
+/**
+ *
+ * @export
+ * @interface SkillFlowSource
+ */
+export interface SkillFlowSource {
+    /**
+     * The flow.md file as stored beside SKILL.md.
+     * @type {string}
+     * @memberof SkillFlowSource
+     */
+    source: string;
 }
 
 /**
@@ -371,11 +391,41 @@ export interface SkillRun {
     erroredTool?: string;
     /**
      *
+     * @type {SkillRunMode}
+     * @memberof SkillRun
+     */
+    mode?: SkillRunMode;
+    /**
+     * The step the flow handed back at, for a handed_back run.
+     * @type {number}
+     * @memberof SkillRun
+     */
+    handoverStep?: number;
+    /**
+     *
+     * @type {SkillRunHandoverCauseEnum}
+     * @memberof SkillRun
+     */
+    handoverCause?: SkillRunHandoverCauseEnum;
+    /**
+     *
      * @type {number}
      * @memberof SkillRun
      */
     createdAt: number;
 }
+
+
+/**
+ * @export
+ */
+export const SkillRunHandoverCauseEnum = {
+    SiteChanged: 'site_changed',
+    InputOnly: 'input_only',
+    Transient: 'transient',
+    Unknown: 'unknown'
+} as const;
+export type SkillRunHandoverCauseEnum = typeof SkillRunHandoverCauseEnum[keyof typeof SkillRunHandoverCauseEnum];
 
 /**
  *
@@ -396,6 +446,17 @@ export interface SkillRunList {
      */
     nextCursor?: number;
 }
+
+/**
+ * How the run was carried out. `handed_back` means the flow stopped and the agent finished the task.
+ * @export
+ */
+export const SkillRunMode = {
+    Ultrafast: 'ultrafast',
+    HandedBack: 'handed_back',
+    Agent: 'agent'
+} as const;
+export type SkillRunMode = typeof SkillRunMode[keyof typeof SkillRunMode];
 
 /**
  *
@@ -428,6 +489,198 @@ export interface SkillTokenSavings {
      */
     measuredRunCount: number;
 }
+
+/**
+ * The skill's ultrafast flow. Present while ultrafast skills are enabled, and after the plan that turned them on ends (then `locked`).
+ * @export
+ * @interface SkillUltrafast
+ */
+export interface SkillUltrafast {
+    /**
+     *
+     * @type {SkillUltrafastStatus}
+     * @memberof SkillUltrafast
+     */
+    status: SkillUltrafastStatus;
+    /**
+     * Why the flow is off or broken, in plain words.
+     * @type {string}
+     * @memberof SkillUltrafast
+     */
+    reason?: string;
+    /**
+     *
+     * @type {number}
+     * @memberof SkillUltrafast
+     */
+    flowVersion: number;
+    /**
+     *
+     * @type {SkillUltrafastEffectsEnum}
+     * @memberof SkillUltrafast
+     */
+    effects?: SkillUltrafastEffectsEnum;
+    /**
+     * Whether this write flow runs without the agent, by the user's choice for its current click.
+     * @type {boolean}
+     * @memberof SkillUltrafast
+     */
+    writeApproved: boolean;
+    /**
+     *
+     * @type {number}
+     * @memberof SkillUltrafast
+     */
+    p50Ms?: number;
+    /**
+     *
+     * @type {number}
+     * @memberof SkillUltrafast
+     */
+    verifiedAt?: number;
+    /**
+     *
+     * @type {number}
+     * @memberof SkillUltrafast
+     */
+    repairedAt?: number;
+    /**
+     * Ultrafast skills are off for this computer, so every skill runs with the agent and the choice can't change.
+     * @type {boolean}
+     * @memberof SkillUltrafast
+     */
+    locked?: boolean;
+    /**
+     *
+     * @type {SkillUltrafastRuns}
+     * @memberof SkillUltrafast
+     */
+    runs?: SkillUltrafastRuns;
+}
+
+
+/**
+ * @export
+ */
+export const SkillUltrafastEffectsEnum = {
+    Read: 'read',
+    Write: 'write'
+} as const;
+export type SkillUltrafastEffectsEnum = typeof SkillUltrafastEffectsEnum[keyof typeof SkillUltrafastEffectsEnum];
+
+/**
+ * Why the skill always runs with the agent, whatever the user chose.
+ * @export
+ */
+export const SkillUltrafastAlwaysWith = {
+    Pay: 'pay',
+    Order: 'order',
+    Send: 'send',
+    Delete: 'delete'
+} as const;
+export type SkillUltrafastAlwaysWith = typeof SkillUltrafastAlwaysWith[keyof typeof SkillUltrafastAlwaysWith];
+
+/**
+ *
+ * @export
+ */
+export const SkillUltrafastChoiceVia = {
+    Chat: 'chat',
+    App: 'app'
+} as const;
+export type SkillUltrafastChoiceVia = typeof SkillUltrafastChoiceVia[keyof typeof SkillUltrafastChoiceVia];
+
+/**
+ * How a skill that changes something runs when the user asks for it. Absent for a skill that only reads pages.
+ * @export
+ * @interface SkillUltrafastRuns
+ */
+export interface SkillUltrafastRuns {
+    /**
+     *
+     * @type {SkillUltrafastRunsMode}
+     * @memberof SkillUltrafastRuns
+     */
+    mode: SkillUltrafastRunsMode;
+    /**
+     * Whether the user chose for the skill's current click. Until then it runs with the agent.
+     * @type {boolean}
+     * @memberof SkillUltrafastRuns
+     */
+    chosen: boolean;
+    /**
+     * An earlier choice covered a different click, so the agent asks again.
+     * @type {boolean}
+     * @memberof SkillUltrafastRuns
+     */
+    reask: boolean;
+    /**
+     *
+     * @type {SkillUltrafastAlwaysWith}
+     * @memberof SkillUltrafastRuns
+     */
+    alwaysWithAgent?: SkillUltrafastAlwaysWith;
+    /**
+     * The step that changes something, in the skill's own words.
+     * @type {string}
+     * @memberof SkillUltrafastRuns
+     */
+    click?: string;
+    /**
+     *
+     * @type {string}
+     * @memberof SkillUltrafastRuns
+     */
+    site?: string;
+    /**
+     *
+     * @type {SkillUltrafastChoiceVia}
+     * @memberof SkillUltrafastRuns
+     */
+    via?: SkillUltrafastChoiceVia;
+    /**
+     *
+     * @type {number}
+     * @memberof SkillUltrafastRuns
+     */
+    chosenAt?: number;
+    /**
+     * The user's own words when they chose in chat.
+     * @type {string}
+     * @memberof SkillUltrafastRuns
+     */
+    answer?: string;
+    /**
+     * The agent that relayed a chat answer.
+     * @type {string}
+     * @memberof SkillUltrafastRuns
+     */
+    client?: string;
+}
+
+/**
+ * Whether the skill runs with the user's agent reading each page, or neo runs it by itself.
+ * @export
+ */
+export const SkillUltrafastRunsMode = {
+    WithAgent: 'with_agent',
+    WithoutAgent: 'without_agent'
+} as const;
+export type SkillUltrafastRunsMode = typeof SkillUltrafastRunsMode[keyof typeof SkillUltrafastRunsMode];
+
+/**
+ * Where the skill's ultrafast flow stands. `none` means it has no flow and has not been offered one.
+ * @export
+ */
+export const SkillUltrafastStatus = {
+    None: 'none',
+    Pending: 'pending',
+    Verified: 'verified',
+    Degraded: 'degraded',
+    Broken: 'broken',
+    Off: 'off'
+} as const;
+export type SkillUltrafastStatus = typeof SkillUltrafastStatus[keyof typeof SkillUltrafastStatus];
 
 /**
  *

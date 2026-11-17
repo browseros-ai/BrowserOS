@@ -18,6 +18,7 @@ from .utils import FileOperation, FilePatch
 def make_context(root_dir: Path) -> SimpleNamespace:
     return SimpleNamespace(
         root_dir=root_dir,
+        get_base_commit_path=lambda: root_dir / "BASE_COMMIT",
         chromium_src=Path("/tmp/chromium"),
         get_patch_path_for_file=lambda rel: root_dir / "chromium_patches" / rel,
     )

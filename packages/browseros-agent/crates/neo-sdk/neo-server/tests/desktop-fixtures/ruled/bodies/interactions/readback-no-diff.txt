@@ -1,0 +1,27 @@
+/** Snapshot scalars are explicit caller readback, independent of fill's void return. */
+function shownField(snapshot, label) {
+  const name = JSON.stringify(label);
+  const line = snapshot.split('\n').find(row => row.includes(name));
+  assert(line !== undefined, 'snapshot contains the requested field', {label, snapshot});
+  const afterName = line.slice(line.indexOf(name) + name.length).trim();
+  const tail = afterName.replace(/^(?:\[[^\]]+\]\s*)*/, '');
+  assert(tail === '' || tail === ':' || tail.startsWith(': '),
+    'field line has a scalar readback', {label, line});
+  const scalar = tail === '' || tail === ':' ? '' : tail.slice(2);
+  const value = scalar.startsWith('"') ? JSON.parse(scalar)
+    : scalar.startsWith("'") ? scalar.slice(1, -1).replace(/''/g, "'") : scalar;
+  return {label, line, value, snapshotRef: line.match(/\[ref=([^\]]+)\]/)?.[1] ?? null};
+}
+
+await page.goto(args.base + '/fill.html');
+const ref = await page.getByLabel('Verification code', {exact: true}).ref({timeout: 5000});
+const field = page.getByRef(ref);
+const result = await field.fill('440212', {timeout: 8000});
+assert(result === undefined, 'fill resolves without a value when readback is requested separately', result);
+equal(await field.inputValue(), '440 212', 'the pinned field exposes the page-formatted code');
+equal(await page.evaluate(() => document.getElementById('code').value), '440 212', 'the page stores the formatted code');
+const snapshot = await page.ariaSnapshot({mode: 'ai', delta: false});
+const shown = shownField(snapshot, 'Verification code');
+equal(shown.value, '440 212', 'the full explicit snapshot reports the formatted code');
+assert(!snapshot.includes(' diff]'), 'the full snapshot contains no desktop diff block', snapshot);
+return {ref, fillReturnType: typeof result, shown};

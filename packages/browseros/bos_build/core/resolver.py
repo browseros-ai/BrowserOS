@@ -83,6 +83,7 @@ def resolve_config(cli_args: Dict[str, Any]) -> List[Context]:
 
     return [
         Context(
+            patch_root=cli_args.get("patch_root"),
             chromium_src=chromium_src,
             architecture=architecture,
             plan_architectures=(architecture,),

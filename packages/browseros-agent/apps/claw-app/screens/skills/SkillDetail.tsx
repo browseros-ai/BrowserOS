@@ -5,30 +5,54 @@
  */
 
 import type { Skill, SkillRun } from '@browseros/claw-api'
-import { ChevronDown, FileText, TriangleAlert } from 'lucide-react'
-import type { ReactNode } from 'react'
-import { NavLink, useNavigate } from 'react-router'
+import { skipToken } from '@tanstack/react-query'
+import {
+  ChevronDown,
+  Eye,
+  FileText,
+  Lock,
+  MessageCircle,
+  MessageCircleQuestion,
+  RefreshCw,
+  ShieldCheck,
+  TriangleAlert,
+  UserRoundCheck,
+  Zap,
+} from 'lucide-react'
+import { type ReactNode, useId, useState } from 'react'
+import { Link, NavLink, useNavigate } from 'react-router'
 import { CodeBlock } from '@/components/agents/code-block'
 import { SessionStatusBadge } from '@/components/audit/SessionStatusBadge'
 import { AgentMark } from '@/components/harness/AgentMark'
 import { Page } from '@/components/layout/Page'
 import { PageHeader } from '@/components/layout/PageHeader'
-import { Card } from '@/components/motion/card'
+import { CARD_TARGET_CLASS, Card } from '@/components/motion/card'
 import {
   Collapsible,
   CollapsibleContent,
   CollapsibleIndicator,
   CollapsibleTrigger,
 } from '@/components/motion/collapsible'
+import { SkillPicture } from '@/components/pro/UltrafastPictures'
 import { Phrase } from '@/components/skills/Phrase'
 import { RunSkillButton } from '@/components/skills/RunSkillButton'
+import { RunsChoiceDialog } from '@/components/skills/RunsChoiceDialog'
 import { SiteBadge } from '@/components/skills/SiteBadge'
 import { SkillActions } from '@/components/skills/SkillActions'
+import { UltrafastBadge } from '@/components/skills/UltrafastBadge'
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Skeleton } from '@/components/ui/skeleton'
+import { useSkillFlow } from '@/modules/api/skills.hooks'
 import { taskDayAndTime } from '@/screens/audit/audit.helpers'
 import { useSkillDetailData } from './skill-detail.data'
 import {
+  chosenLine,
+  healthLine,
   parseSkillBody,
+  type RunsChoice,
+  runModeCounts,
+  runModeLabel,
+  runsChoice,
   skillCommand,
   stuckWhile,
   usedLabel,
@@ -94,7 +118,8 @@ export function SkillDetail() {
                 onDeleted={() => navigate('/skills')}
               />
             </div>
-            <p className="text-[14px] text-ink-3">
+            <p className="flex flex-wrap items-center gap-2 text-[14px] text-ink-3">
+              <UltrafastBadge ultrafast={skill.ultrafast} />
               {usedLabel(skill.runCount, skill.lastRunAt, Date.now())}
             </p>
           </div>
@@ -139,6 +164,7 @@ export function SkillDetail() {
           </Section>
         </div>
         <div className="flex flex-col gap-5">
+          <UltrafastSection skill={skill} runs={runs} />
           <WorksIn skill={skill} />
           <RecentRuns runs={runs} />
         </div>
@@ -197,6 +223,328 @@ function WorksIn({ skill }: { skill: Skill }) {
   )
 }
 
+/** The skill's fast version: its state, how it has been running, and whether it runs with the agent. */
+function UltrafastSection({ skill, runs }: { skill: Skill; runs: SkillRun[] }) {
+  const ultrafast = skill.ultrafast
+  if (!ultrafast || ultrafast.status === 'none') return null
+  const counts = runModeCounts(runs)
+  const health = healthLine(ultrafast, Date.now())
+  const ranFast = counts.ultrafast + counts.handedBack > 0
+  const choice = runsChoice(ultrafast, runs)
+  return (
+    <Section title="Ultrafast">
+      <div className="flex flex-col gap-2.5 text-[14.5px] text-ink-2">
+        <UltrafastBadge
+          ultrafast={ultrafast}
+          size="md"
+          className="self-start"
+        />
+        {choice ? null : <p>{ULTRAFAST_STATE[ultrafast.status]}</p>}
+        {ultrafast.reason ? (
+          <p className="text-[13.5px] text-ink-3">{ultrafast.reason}</p>
+        ) : null}
+        {health ? <p className="text-[13.5px] text-ink-3">{health}</p> : null}
+        {ranFast ? (
+          <p className="text-[13.5px] text-ink-3">
+            {counts.ultrafast} ultrafast · {counts.handedBack} handed back ·{' '}
+            {counts.normal} the normal way
+          </p>
+        ) : null}
+        {choice ? <RunsChoiceBlock skill={skill} choice={choice} /> : null}
+        {ultrafast.flowVersion > 0 ? <FlowFile name={skill.name} /> : null}
+      </div>
+    </Section>
+  )
+}
+
+const ALWAYS_WITH_REASON: Record<string, string> = {
+  pay: 'This skill pays for something.',
+  order: 'This skill places an order.',
+  send: 'This skill sends something for you.',
+  delete: 'This skill deletes something.',
+}
+
+const CHIP_CLASS: Record<RunsChoice['chipTone'], string> = {
+  accent: 'bg-accent-tint text-accent-ink',
+  amber: 'bg-amber-tint text-amber-ink',
+  muted: 'bg-bg-sunken text-ink-2',
+}
+
+/** "With your agent" or "without your agent" for a skill that changes something. */
+function RunsChoiceBlock({
+  skill,
+  choice,
+}: {
+  skill: Skill
+  choice: RunsChoice
+}) {
+  const [target, setTarget] = useState<'with_agent' | 'without_agent' | null>(
+    null,
+  )
+  const detail = skill.ultrafast?.runs
+  const chip = (
+    <span
+      className={`self-start rounded-full px-2.5 py-1 font-semibold text-[12.5px] ${CHIP_CLASS[choice.chipTone]}`}
+    >
+      {choice.chip}
+    </span>
+  )
+  if (choice.state === 'read') {
+    return (
+      <div className="flex flex-col gap-2.5">
+        <Note icon={<Eye aria-hidden className="size-4" />}>
+          This skill only reads pages, so neo runs it without your agent.
+          There’s nothing to choose.
+        </Note>
+      </div>
+    )
+  }
+  const click = detail?.click
+  const site = detail?.site
+  const chosen = detail ? chosenLine(detail, Date.now()) : null
+  return (
+    <div className="flex flex-col gap-3">
+      {chip}
+      {choice.state === 'reask' ? (
+        <Note tone="amber" icon={<RefreshCw aria-hidden className="size-4" />}>
+          <strong className="text-cyanotype-ink">The last step changed.</strong>{' '}
+          It now does this{site ? ` on ${site}` : ''}: “{click}”. Your earlier
+          choice was for a different step, so it runs with your agent until you
+          choose again.
+        </Note>
+      ) : null}
+      {choice.state === 'always' && detail?.alwaysWithAgent ? (
+        <p>{ALWAYS_WITH_REASON[detail.alwaysWithAgent]}</p>
+      ) : null}
+      {choice.state === 'locked' ? (
+        <p>
+          ultrafast is off on this computer, so this skill runs with your agent
+          now.
+        </p>
+      ) : null}
+      {choice.state !== 'reask' &&
+      choice.state !== 'always' &&
+      choice.state !== 'locked' &&
+      click ? (
+        <p>
+          This skill changes something{site ? ` on ${site}` : ''}. Its last
+          step: “{click}”
+        </p>
+      ) : null}
+      <RadioGroup
+        aria-label="How it runs when you ask for it"
+        value={choice.selected}
+        disabled={choice.disabled}
+        onValueChange={(value) => {
+          if (value === 'with_agent' || value === 'without_agent') {
+            if (value !== choice.selected) setTarget(value)
+          }
+        }}
+        className="gap-2.5"
+      >
+        <p className="text-[13.5px] text-ink-3">
+          How it runs when you ask for it
+        </p>
+        <RunsOption
+          value="with_agent"
+          selected={choice.selected === 'with_agent'}
+          disabled={choice.disabled}
+          icon={<UserRoundCheck aria-hidden className="size-4" />}
+          title="With your agent"
+          time={choice.slowLabel}
+          why="Your agent reads each page as it goes, so it can stop if something looks wrong. Safer."
+        />
+        <RunsOption
+          value="without_agent"
+          selected={choice.selected === 'without_agent'}
+          disabled={choice.withoutLocked}
+          icon={
+            choice.withoutLocked ? (
+              <Lock aria-hidden className="size-4" />
+            ) : (
+              <Zap aria-hidden className="size-4" />
+            )
+          }
+          title="Without your agent"
+          time={choice.fastLabel}
+          why="neo does it by itself. It only stops if a step can’t find what it expects."
+        />
+      </RadioGroup>
+      {choice.state === 'choose' ? (
+        <Note
+          tone="amber"
+          icon={<MessageCircleQuestion aria-hidden className="size-4" />}
+        >
+          You haven’t chosen yet, so it runs with your agent. Your agent will
+          ask you the next time you use it, or you can choose here.
+        </Note>
+      ) : null}
+      {choice.state === 'reask' ? (
+        <p className="text-[13.5px] text-ink-3">
+          Your agent will ask you the next time you use it.
+        </p>
+      ) : null}
+      {(choice.state === 'without' || choice.state === 'with') && chosen ? (
+        <Note icon={<MessageCircle aria-hidden className="size-4" />}>
+          {chosen}
+          {detail?.answer ? (
+            <>
+              :{' '}
+              <span className="font-semibold text-cyanotype-ink">
+                “{detail.answer}”
+              </span>
+            </>
+          ) : (
+            '.'
+          )}
+        </Note>
+      ) : null}
+      {choice.state === 'always' ? (
+        <Note icon={<ShieldCheck aria-hidden className="size-4" />}>
+          Skills that pay, place an order, send a message or delete something
+          always run with your agent, so it can check each page first.
+        </Note>
+      ) : null}
+      {choice.state === 'locked' ? (
+        <div className="max-w-sm">
+          <SkillPicture />
+        </div>
+      ) : null}
+      {choice.state === 'locked' ? (
+        <Link
+          to="/pro"
+          className="self-start rounded-lg bg-primary px-3 py-1.5 font-semibold text-[13.5px] text-primary-foreground outline-none hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          See ultrafast
+        </Link>
+      ) : null}
+      <RunsChoiceDialog
+        name={skill.name}
+        target={target}
+        click={click}
+        site={site}
+        fastLabel={choice.fastLabel}
+        onClose={() => setTarget(null)}
+      />
+    </div>
+  )
+}
+
+function RunsOption({
+  value,
+  selected,
+  disabled,
+  icon,
+  title,
+  time,
+  why,
+}: {
+  value: 'with_agent' | 'without_agent'
+  selected: boolean
+  disabled: boolean
+  icon: ReactNode
+  title: string
+  time: string | null
+  why: string
+}) {
+  const titleId = useId()
+  return (
+    <Card
+      size="compact"
+      interactive={!disabled}
+      selected={selected}
+      className={`relative flex-row gap-3 px-3.5 py-3 ${disabled ? 'opacity-55' : ''}`}
+    >
+      <RadioGroupItem
+        value={value}
+        disabled={disabled}
+        aria-labelledby={titleId}
+        className={`mt-0.5 ${CARD_TARGET_CLASS}`}
+      />
+      <span className="flex flex-col gap-0.5">
+        <span
+          id={titleId}
+          className="flex items-center gap-1.5 font-bold text-[14.5px] text-cyanotype-ink"
+        >
+          {icon}
+          {title}
+        </span>
+        {time ? (
+          <span className="font-bold text-[17px] text-cyanotype-ink">
+            {time}
+          </span>
+        ) : null}
+        <span className="text-[13.5px] text-ink-2 leading-snug">{why}</span>
+      </span>
+    </Card>
+  )
+}
+
+function Note({
+  icon,
+  tone = 'plain',
+  children,
+}: {
+  icon: ReactNode
+  tone?: 'plain' | 'amber'
+  children: ReactNode
+}) {
+  const box =
+    tone === 'amber'
+      ? 'bg-amber-tint text-ink-2'
+      : 'border border-border-2 bg-bg-sunken text-ink-2'
+  const iconColor = tone === 'amber' ? 'text-amber-ink' : 'text-ink-3'
+  return (
+    <div
+      className={`flex items-start gap-2.5 rounded-xl px-3.5 py-3 text-[14px] ${box}`}
+    >
+      <span className={`mt-0.5 shrink-0 ${iconColor}`}>{icon}</span>
+      <span>{children}</span>
+    </div>
+  )
+}
+
+const ULTRAFAST_STATE: Record<string, string> = {
+  verified:
+    'Your agent runs this skill in about a second. If the site changes, it stops and finishes the task the normal way.',
+  degraded:
+    'The site changed. Your agent finishes these runs the normal way and repairs the fast version as it goes.',
+  broken:
+    'The fast version kept failing, so it is paused. Your agent runs the skill the normal way and can make it fast again.',
+  pending: 'Your agent is turning this skill into a fast version.',
+  off: 'This skill runs the normal way.',
+}
+
+/** The flow file, fetched only once someone opens it. */
+function FlowFile({ name }: { name: string }) {
+  const [open, setOpen] = useState(false)
+  const flow = useSkillFlow({ variables: open ? { name } : skipToken })
+  return (
+    <Collapsible open={open} onOpenChange={setOpen}>
+      <CollapsibleTrigger className="flex items-center gap-1.5 font-semibold text-[13.5px] text-ink-2 outline-none hover:text-cyanotype-ink focus-visible:ring-2 focus-visible:ring-ring">
+        <span>See the fast version</span>
+        <CollapsibleIndicator>
+          <ChevronDown aria-hidden className="size-3.5" />
+        </CollapsibleIndicator>
+      </CollapsibleTrigger>
+      <CollapsibleContent contentClassName="pt-2.5">
+        {flow.isError ? (
+          <p className="text-[13.5px] text-ink-3">Couldn’t load it.</p>
+        ) : flow.isPending ? (
+          <Skeleton className="h-24 rounded-lg" />
+        ) : (
+          <CodeBlock
+            code={flow.data.source}
+            language="text"
+            maxHeight={320}
+            copyable
+          />
+        )}
+      </CollapsibleContent>
+    </Collapsible>
+  )
+}
+
 function RecentRuns({ runs }: { runs: SkillRun[] }) {
   const now = Date.now()
   return (
@@ -217,6 +565,14 @@ function RecentRuns({ runs }: { runs: SkillRun[] }) {
                     label={run.agentId}
                     className="text-[13.5px] text-ink-3"
                   />
+                  {runModeLabel(run) ? (
+                    <span className="flex items-center gap-1 text-[13.5px] text-ink-3">
+                      {run.mode === 'ultrafast' ? (
+                        <Zap aria-hidden className="size-3 text-accent-ink" />
+                      ) : null}
+                      {runModeLabel(run)}
+                    </span>
+                  ) : null}
                   {run.clean ? null : (
                     <span className="text-[13.5px] text-ink-3">
                       {stuckWhile(run.erroredTool)}

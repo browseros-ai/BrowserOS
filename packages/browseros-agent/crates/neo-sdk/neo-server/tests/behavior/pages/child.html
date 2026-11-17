@@ -1,0 +1,11 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Child</title><script src="events.js"></script></head>
+<body>
+<!-- A plain page: the target of popups, iframes and history steps. `?name=<text>` names it. -->
+<p id="name">Child</p>
+<button>Child button</button>
+<input aria-label="Child field">
+<script>
+  const name = new URLSearchParams(location.search).get('name')
+  if (name !== null) document.getElementById('name').textContent = name
+</script>
+</body></html>

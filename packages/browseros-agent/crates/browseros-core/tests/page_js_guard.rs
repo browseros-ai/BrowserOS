@@ -1,6 +1,8 @@
-//! Keeps page JavaScript on one path. Every `Runtime.evaluate` and `Runtime.callFunctionOn` that
-//! BrowserOS sends goes through `browseros_core::page_js`, which decides the world a script runs
-//! in. A raw send anywhere else would run in the page's own world whatever the caller intended.
+//! Keeps page JavaScript on known paths. Every `Runtime.evaluate` and `Runtime.callFunctionOn`
+//! that BrowserOS sends goes through `browseros_core::page_js`, which decides the world a script
+//! runs in, or through the neo-playwright files in `ALLOWED`, which own its isolated
+//! `browseros-engine` world, main-world `page.evaluate`, and dedicated-worker evaluation. A raw
+//! send anywhere else would run in the target's default world whatever the caller intended.
 //!
 //! A send is recognised by the method literal in argument position (followed by a comma), which
 //! leaves the CDP policy tables and error labels that merely name the methods alone.
@@ -11,7 +13,17 @@ use std::{
 };
 
 const METHODS: &[&str] = &["\"Runtime.evaluate\"", "\"Runtime.callFunctionOn\""];
-const ALLOWED: &[&str] = &["crates/browseros-core/src/page_js.rs"];
+const ALLOWED: &[&str] = &[
+    "crates/browseros-core/src/page_js.rs",
+    // These files install neo-playwright's isolated world, speak its probe protocol,
+    // and run scripts in the page's main world.
+    "crates/neo-sdk/neo-playwright/src/world/isolated_world.rs",
+    "crates/neo-sdk/neo-playwright/src/probe/probe_call.rs",
+    "crates/neo-sdk/neo-playwright/src/page/evaluate_guard.rs",
+    // Workers have no document or isolated world. This gateway selects the worker target's
+    // startup context and races its lifetime, after checking the owning page's capability.
+    "crates/neo-sdk/neo-playwright/src/page/worker_evaluate.rs",
+];
 const SKIPPED_DIRS: &[&str] = &["target", "node_modules", "dist", "tests"];
 
 #[test]
@@ -48,10 +60,26 @@ fn tests_that_page_javascript_is_only_sent_through_page_js() -> std::io::Result<
     assert!(
         offenders.is_empty(),
         "page JavaScript must go through browseros_core::PageJs, which picks the isolated or the \
-         page world:\n{}",
+         page world, or through the neo-playwright files in ALLOWED:\n{}",
         offenders.join("\n")
     );
     Ok(())
+}
+
+/// An entry whose file is gone guards nothing: a renamed file would send page script unchecked
+/// while the list still read as if it were reviewed.
+#[test]
+fn tests_that_every_allowed_file_exists() {
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let missing: Vec<&str> = ALLOWED
+        .iter()
+        .copied()
+        .filter(|allowed| !workspace.join(allowed).is_file())
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "ALLOWED names files that do not exist; rename the entry with its file: {missing:?}"
+    );
 }
 
 fn collect_rust_files(dir: &Path, files: &mut Vec<PathBuf>) -> std::io::Result<()> {

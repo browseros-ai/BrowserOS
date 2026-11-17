@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Held-button and HTML5 drag contracts</title>
+    <style>
+      .row { display: flex; gap: 100px; margin: 20px; }
+      .row > * { box-sizing: border-box; width: 140px; height: 70px; }
+      .target { border: 2px solid black; }
+      #script-source { user-select: none; }
+    </style>
+  </head>
+  <body>
+    <div class="row">
+      <button id="script-source">Script source</button>
+      <button id="script-target" class="target">Script target</button>
+    </div>
+    <div class="row">
+      <button id="html-source" draggable="true">HTML source</button>
+      <button id="html-target" class="target">HTML target</button>
+    </div>
+    <!-- A click after a drag shows the tab is out of the drag and takes input again. -->
+    <button id="follow-up" style="margin: 20px">Follow-up button</button>
+    <div id="capture-area" style="position: relative; width: 300px; height: 160px; margin: 20px; border: 1px solid black">
+      <div id="capture-handle" style="position: absolute; left: 20px; top: 20px; width: 40px; height: 40px; background: #888"></div>
+    </div>
+    <script>
+      // Script-driven widgets only drag while mousemove carries the held button.
+      window.scriptDrag = { down: false, heldMoves: 0, up: false, drop: null }
+      let dragging = false
+      document.getElementById('script-source').addEventListener('mousedown', event => {
+        dragging = event.button === 0
+        window.scriptDrag.down = dragging
+        event.preventDefault()
+      })
+      document.addEventListener('mousemove', event => {
+        if (dragging && event.buttons === 1) window.scriptDrag.heldMoves++
+      })
+      document.addEventListener('mouseup', event => {
+        if (!dragging) return
+        dragging = false
+        window.scriptDrag.up = true
+        if (window.scriptDrag.heldMoves > 0 && event.target.id === 'script-target') {
+          window.scriptDrag.drop = { x: event.clientX, y: event.clientY }
+        }
+      })
+      // HTML5 drag uses DataTransfer, so mouse events alone cannot fake success.
+      window.htmlDrag = { starts: 0, overs: 0, dropped: null }
+      document.getElementById('html-source').addEventListener('dragstart', event => {
+        window.htmlDrag.starts++
+        event.dataTransfer.setData('text/plain', event.target.id)
+        event.dataTransfer.effectAllowed = 'copy'
+      })
+      document.getElementById('html-target').addEventListener('dragover', event => {
+        event.preventDefault()
+        event.dataTransfer.dropEffect = 'copy'
+        window.htmlDrag.overs++
+      })
+      document.getElementById('html-target').addEventListener('drop', event => {
+        event.preventDefault()
+        window.htmlDrag.dropped = event.dataTransfer.getData('text/plain')
+      })
+      window.followUps = 0
+      document.getElementById('follow-up').addEventListener('click', () => window.followUps++)
+      // Sliders and sortable lists capture the pointer on pointerdown and follow only the
+      // moves delivered under that capture, so a move without the held button never lands.
+      window.pointerDrag = { capturedMoves: 0, released: false, hadCapture: false, moved: null }
+      const area = document.getElementById('capture-area')
+      const handle = document.getElementById('capture-handle')
+      let grab = null
+      handle.addEventListener('pointerdown', event => {
+        area.setPointerCapture(event.pointerId)
+        grab = { x: event.clientX - handle.offsetLeft, y: event.clientY - handle.offsetTop }
+        event.preventDefault()
+      })
+      area.addEventListener('pointermove', event => {
+        if (!grab || !area.hasPointerCapture(event.pointerId)) return
+        window.pointerDrag.capturedMoves++
+        handle.style.left = `${event.clientX - grab.x}px`
+        handle.style.top = `${event.clientY - grab.y}px`
+      })
+      area.addEventListener('pointerup', event => {
+        if (!grab) return
+        window.pointerDrag.released = true
+        window.pointerDrag.hadCapture = area.hasPointerCapture(event.pointerId)
+        window.pointerDrag.moved = { left: handle.offsetLeft, top: handle.offsetTop }
+        grab = null
+      })
+    </script>
+  </body>
+</html>

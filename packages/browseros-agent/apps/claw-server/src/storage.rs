@@ -71,13 +71,15 @@ impl JsonStore {
 
     /// Writes a file only its owner can read.
     ///
-    /// For a credential. The mode is set on the temporary file before the
-    /// rename, which carries it over, so the file never exists at the final
-    /// path with a wider mode than it should have.
+    /// For a credential. On unix the temporary file is created with mode 0600, so the
+    /// contents are never readable by others, not even between the write and the rename,
+    /// which carries the mode over to the final path.
     pub async fn write_json_private<T>(&self, rel_path: &str, value: &T) -> AppResult<()>
     where
         T: Serialize,
     {
+        use tokio::io::AsyncWriteExt;
+
         let abs = self.resolve(rel_path)?;
         let parent = abs
             .parent()
@@ -86,14 +88,28 @@ impl JsonStore {
         fs::create_dir_all(&parent).await.with_path(parent)?;
         let tmp = abs.with_extension(tmp_extension(abs.extension()));
         let body = serde_json::to_string_pretty(value)?;
-        fs::write(&tmp, body).await.with_path(tmp.clone())?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))
-                .await
-                .with_path(tmp.clone())?;
+        // A leftover from an interrupted write keeps whatever mode it was created with, and
+        // the mode below only applies to a file this call creates.
+        match fs::remove_file(&tmp).await {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(source) => {
+                return Err(AppError::Io {
+                    path: Some(tmp),
+                    source,
+                });
+            }
         }
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        let mut file = options.open(&tmp).await.with_path(tmp.clone())?;
+        file.write_all(body.as_bytes())
+            .await
+            .with_path(tmp.clone())?;
+        file.flush().await.with_path(tmp.clone())?;
+        drop(file);
         fs::rename(&tmp, &abs).await.with_path(abs)
     }
 
@@ -207,6 +223,35 @@ mod tests {
         );
         assert!(store.file_exists("agents/a.json").await?);
         assert_eq!(store.list_files("agents", ".json").await?, vec!["a.json"]);
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn private_writes_are_owner_only_even_over_a_wide_leftover() -> anyhow::Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempdir()?;
+        let store = JsonStore::new(dir.path().to_path_buf());
+        let leftover = dir.path().join("secret.json.tmp");
+        tokio::fs::write(&leftover, "{}").await?;
+        tokio::fs::set_permissions(&leftover, std::fs::Permissions::from_mode(0o644)).await?;
+        store
+            .write_json_private(
+                "secret.json",
+                &Row {
+                    id: "s".to_string(),
+                },
+            )
+            .await?;
+        let mode = tokio::fs::metadata(dir.path().join("secret.json"))
+            .await?
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600, "got {mode:o}");
+        assert!(!leftover.exists());
+        let row: Row = store.read_json("secret.json").await?;
+        assert_eq!(row.id, "s");
         Ok(())
     }
 

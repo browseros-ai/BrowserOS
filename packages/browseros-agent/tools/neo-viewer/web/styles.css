@@ -1,0 +1,39 @@
+@import "tailwindcss";
+
+/* Light theme only (the approved design). */
+:root {
+  color-scheme: light;
+}
+
+/*
+ * The Viewer C v2 palette and type, from the Paper file "neo · trace viewer". The designed screen
+ * (web/screen/) uses these names; the plain page keeps Tailwind's defaults.
+ */
+@theme {
+  --font-plex: "IBM Plex Sans", system-ui, sans-serif;
+  --font-code:
+    "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, monospace;
+
+  --color-ink: #0d1730;
+  --color-ink-2: #4a5365;
+  --color-ink-3: #6b7385;
+  --color-ink-4: #9aa2b1;
+  --color-line: #e4e7ec;
+  --color-line-2: #eef0f3;
+  --color-control: #d5d9e0;
+  --color-panel: #f5f6f8;
+  --color-panel-2: #f8f9fb;
+  --color-neo: #1f4fd8;
+  --color-neo-soft: #a9bef2;
+  --color-neo-edge: #dce5fb;
+  --color-neo-tint: #eef3fd;
+  --color-neo-tint-2: #f3f6fe;
+  --color-neo-tint-3: #f8faff;
+  --color-ok: #12803a;
+  --color-bad: #c0262d;
+  --color-busy: #b26200;
+  --color-busy-ink: #8a4b00;
+  --color-busy-tint: #fff8ec;
+  --color-keyword: #8b3daf;
+  --color-string: #0f7a4f;
+}

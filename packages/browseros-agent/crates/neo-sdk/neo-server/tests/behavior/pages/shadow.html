@@ -1,0 +1,15 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Shadow</title><script src="events.js"></script></head>
+<body>
+<!-- Shadow roots: two open levels, a slot, and a closed root the engine cannot enter. -->
+<h1>Shadow</h1>
+<div id="outer"><span slot="label">Slotted label</span></div>
+<div id="closed"></div>
+<script>
+  const outer = document.getElementById('outer').attachShadow({ mode: 'open' })
+  outer.innerHTML = '<p>Outer text <slot name="label"></slot></p><div id="inner"></div><button>Outer button</button>'
+  const inner = outer.getElementById('inner').attachShadow({ mode: 'open' })
+  inner.innerHTML = '<button>Inner button</button><input aria-label="Inner field" value="deep">'
+  document.getElementById('closed').attachShadow({ mode: 'closed' }).innerHTML =
+    '<button>Closed button</button>'
+</script>
+</body></html>

@@ -2,7 +2,7 @@
 //! A disposable native peer supplies identity and loading state; all requests go
 //! through the real router, task store, tool dispatch, effects, and wire envelope.
 
-use browseros_cdp::{CdpError, CdpEvent};
+use browseros_cdp::{CdpError, CdpEvent, TargetedEvents};
 use browseros_core::{
     BrowserSession, BrowserSessionHooks, CdpConnection, NativeCapabilities, SessionId,
 };
@@ -14,7 +14,11 @@ use std::{
     time::Duration,
 };
 use tempfile::TempDir;
-use tokio::{net::TcpListener, sync::broadcast, task::JoinHandle};
+use tokio::{
+    net::TcpListener,
+    sync::{broadcast, mpsc},
+    task::JoinHandle,
+};
 
 /// The first native release with profile targeting, which this wire test models.
 fn current_native() -> NativeCapabilities {
@@ -25,6 +29,7 @@ struct NativeProfiles {
     profiles: Mutex<Vec<Value>>,
     windows: Mutex<Vec<Value>>,
     events: broadcast::Sender<CdpEvent>,
+    targeted: TargetedEvents,
 }
 
 impl NativeProfiles {
@@ -51,6 +56,7 @@ impl NativeProfiles {
                     .collect(),
             ),
             events: broadcast::channel(8).0,
+            targeted: TargetedEvents::default(),
         })
     }
 }
@@ -153,6 +159,11 @@ impl CdpConnection for NativeProfiles {
     fn events(&self) -> broadcast::Receiver<CdpEvent> {
         self.events.subscribe()
     }
+
+    fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+        self.targeted.subscribe(method)
+    }
+
     fn is_connected(&self) -> bool {
         true
     }
@@ -179,6 +190,7 @@ impl HttpPeer {
             resources_dir: dir.path().join("resources"),
             browserclaw_dir: dir.path().join("claw"),
             session_idle: Duration::from_secs(300),
+            session_complete_idle: Duration::from_secs(300),
             session_retention: Duration::from_secs(7_200),
             session_sweep_interval: Duration::from_secs(60),
             replay_retention_days: 7,
@@ -353,7 +365,9 @@ async fn browser_target_http_roundtrip_preserves_window_revision_and_native_stat
     let tabs = peer
         .call("tabs", json!({"action":"list"}), Some(handle))
         .await?;
-    assert!(tabs.get("structuredContent").is_none(), "{tabs}");
+    // Public metadata survives even without outputSchema; saved-output producers
+    // rely on this same envelope to expose their output references.
+    assert_eq!(structured(&tabs)?, json!({"pages":[]}));
     assert!(tabs["content"].is_array());
 
     // get remains a recovery operation after pin closure. Its wire status exposes

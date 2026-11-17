@@ -1,0 +1,264 @@
+{
+  "playwright": "1.64.1",
+  "capture": "scripts/capture-snapshot-fixture.mjs: playwright-core over CDP on a throwaway BrowserOS",
+  "note": "frames[0] is the page; each iframe names the frame it holds by index into frames.",
+  "frames": [
+    {
+      "url": "http://127.0.0.1:42051/snapshot/top.html",
+      "json": [
+        {
+          "role": "generic",
+          "active": true,
+          "ref": "e1",
+          "children": [
+            {
+              "role": "heading",
+              "name": "Checkout",
+              "level": 1,
+              "ref": "e2"
+            },
+            {
+              "role": "textbox",
+              "name": "Code",
+              "ref": "e3"
+            },
+            {
+              "role": "generic",
+              "name": "Chrome 1",
+              "ref": "e4"
+            },
+            {
+              "role": "generic",
+              "name": "Status",
+              "ref": "e5",
+              "children": [
+                "Ready",
+                {
+                  "role": "button",
+                  "name": "Retry",
+                  "ref": "e6"
+                }
+              ]
+            },
+            {
+              "role": "paragraph",
+              "ref": "e7",
+              "text": "Plain paragraph"
+            },
+            {
+              "role": "link",
+              "name": "Help",
+              "ref": "e8",
+              "cursor": "pointer",
+              "url": "/help"
+            },
+            {
+              "role": "textbox",
+              "name": "Search",
+              "ref": "e9"
+            },
+            {
+              "role": "iframe",
+              "ref": "e10"
+            },
+            {
+              "role": "iframe",
+              "ref": "e11"
+            }
+          ]
+        }
+      ],
+      "iframes": [
+        {
+          "ref": "e10",
+          "depth": 1,
+          "src": "http://localhost:42051/snapshot/child.html",
+          "frame": 1
+        },
+        {
+          "ref": "e11",
+          "depth": 1,
+          "src": "http://[::1]:42051/snapshot/side.html",
+          "frame": 2
+        }
+      ]
+    },
+    {
+      "url": "http://localhost:42051/snapshot/child.html",
+      "json": [
+        {
+          "role": "generic",
+          "ref": "f1e1",
+          "children": [
+            {
+              "role": "button",
+              "name": "Child button",
+              "ref": "f1e2"
+            },
+            {
+              "role": "paragraph",
+              "ref": "f1e3",
+              "text": "Confirm your code 482913"
+            },
+            {
+              "role": "iframe",
+              "ref": "f1e4"
+            }
+          ]
+        }
+      ],
+      "iframes": [
+        {
+          "ref": "f1e4",
+          "depth": 1,
+          "src": "http://127.0.0.1:42051/snapshot/grandchild.html",
+          "frame": 3
+        }
+      ]
+    },
+    {
+      "url": "http://[::1]:42051/snapshot/side.html",
+      "json": [
+        {
+          "role": "button",
+          "name": "Side button",
+          "ref": "f2e2"
+        }
+      ],
+      "iframes": []
+    },
+    {
+      "url": "http://127.0.0.1:42051/snapshot/grandchild.html",
+      "json": [
+        {
+          "role": "generic",
+          "ref": "f3e1",
+          "children": [
+            {
+              "role": "button",
+              "name": "Deep button",
+              "ref": "f3e2"
+            },
+            {
+              "role": "textbox",
+              "name": "Deep field",
+              "ref": "f3e3"
+            }
+          ]
+        }
+      ],
+      "iframes": []
+    }
+  ],
+  "stitched": [
+    {
+      "role": "generic",
+      "active": true,
+      "ref": "e1",
+      "children": [
+        {
+          "role": "heading",
+          "name": "Checkout",
+          "level": 1,
+          "ref": "e2"
+        },
+        {
+          "role": "textbox",
+          "name": "Code",
+          "ref": "e3"
+        },
+        {
+          "role": "generic",
+          "name": "Chrome 1",
+          "ref": "e4"
+        },
+        {
+          "role": "generic",
+          "name": "Status",
+          "ref": "e5",
+          "children": [
+            "Ready",
+            {
+              "role": "button",
+              "name": "Retry",
+              "ref": "e6"
+            }
+          ]
+        },
+        {
+          "role": "paragraph",
+          "ref": "e7",
+          "text": "Plain paragraph"
+        },
+        {
+          "role": "link",
+          "name": "Help",
+          "ref": "e8",
+          "cursor": "pointer",
+          "url": "/help"
+        },
+        {
+          "role": "textbox",
+          "name": "Search",
+          "ref": "e9"
+        },
+        {
+          "role": "iframe",
+          "ref": "e10",
+          "children": [
+            {
+              "role": "generic",
+              "ref": "f1e1",
+              "children": [
+                {
+                  "role": "button",
+                  "name": "Child button",
+                  "ref": "f1e2"
+                },
+                {
+                  "role": "paragraph",
+                  "ref": "f1e3",
+                  "text": "Confirm your code 482913"
+                },
+                {
+                  "role": "iframe",
+                  "ref": "f1e4",
+                  "children": [
+                    {
+                      "role": "generic",
+                      "ref": "f3e1",
+                      "children": [
+                        {
+                          "role": "button",
+                          "name": "Deep button",
+                          "ref": "f3e2"
+                        },
+                        {
+                          "role": "textbox",
+                          "name": "Deep field",
+                          "ref": "f3e3"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "role": "iframe",
+          "ref": "e11",
+          "children": [
+            {
+              "role": "button",
+              "name": "Side button",
+              "ref": "f2e2"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "yaml": "- generic [active] [ref=e1]:\n  - heading \"Checkout\" [level=1] [ref=e2]\n  - textbox \"Code\" [ref=e3]\n  - generic \"Chrome 1\" [ref=e4]\n  - generic \"Status\" [ref=e5]:\n    - text: Ready\n    - button \"Retry\" [ref=e6]\n  - paragraph [ref=e7]: Plain paragraph\n  - link \"Help\" [ref=e8] [cursor=pointer]:\n    - /url: /help\n  - textbox \"Search\" [ref=e9]\n  - iframe [ref=e10]:\n    - generic [ref=f1e1]:\n      - button \"Child button\" [ref=f1e2]\n      - paragraph [ref=f1e3]: Confirm your code 482913\n      - iframe [ref=f1e4]:\n        - generic [ref=f3e1]:\n          - button \"Deep button\" [ref=f3e2]\n          - textbox \"Deep field\" [ref=f3e3]\n  - iframe [ref=e11]:\n    - button \"Side button\" [ref=f2e2]"
+}

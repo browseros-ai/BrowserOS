@@ -47,6 +47,58 @@ fn existing_config_changes_only_its_endpoint_port() -> Result<(), Box<dyn std::e
 }
 
 #[test]
+fn opencode_reconcile_targets_mcp_servers_and_preserves_a_bom()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root = tempfile::tempdir()?;
+    let manager = McpManager::new(root.path().join("state"));
+    let config = root.path().join("opencode.jsonc");
+    let raw = "\u{feff}{\n  // keep me\n  \"$schema\": \"https://opencode.ai/config.json\",\n  \"mcp\": {\n    \"servers\": {\n      \"browseros-neo\": {\n        \"type\": \"remote\",\n        \"url\": \"http://127.0.0.1:9001/mcp\",\n        \"enabled\": true,\n        \"headers\": { \"X-Custom\": \"keep\" }\n      }\n    }\n  },\n  \"tail\": true\n}\n";
+    fs::write(&config, raw)?;
+    let unchanged = manager.reconcile(input(AgentId::OpenCode, &config, 9001))?;
+    assert!(unchanged.connected);
+    assert!(!unchanged.updated);
+    assert_eq!(fs::read_to_string(&config)?, raw);
+    let updated = manager.reconcile(input(AgentId::OpenCode, &config, 9002))?;
+    assert!(updated.updated);
+    assert_eq!(
+        fs::read_to_string(&config)?,
+        raw.replace(":9001/", ":9002/")
+    );
+    let configured = fs::read_to_string(&config)?;
+    let root = jsonc_parser::cst::CstRootNode::parse(
+        configured.trim_start_matches('\u{feff}'),
+        &jsonc_parser::ParseOptions::default(),
+    )?;
+    let parsed: serde_json::Value = root
+        .object_value()
+        .and_then(|object| object.to_serde_value())
+        .ok_or("opencode config root is not an object")?;
+    assert!(parsed["mcp"].get("browseros-neo").is_none());
+    Ok(())
+}
+
+#[test]
+fn opencode_reconcile_creates_mcp_servers_from_a_bom_only_file()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root = tempfile::tempdir()?;
+    let manager = McpManager::new(root.path().join("state"));
+    let config = root.path().join("opencode.jsonc");
+    fs::write(&config, "\u{feff}")?;
+    let summary = manager.reconcile(input(AgentId::OpenCode, &config, 9010))?;
+    assert!(summary.created);
+    let configured = fs::read_to_string(&config)?;
+    assert!(configured.starts_with('\u{feff}'));
+    let parsed: serde_json::Value =
+        serde_json::from_str(configured.trim_start_matches('\u{feff}'))?;
+    assert_eq!(
+        parsed["mcp"]["servers"]["browseros-neo"]["url"],
+        "http://127.0.0.1:9010/mcp"
+    );
+    assert!(parsed["mcp"].get("browseros-neo").is_none());
+    Ok(())
+}
+
+#[test]
 fn preserves_toml_options_and_adopts_alias_without_renaming()
 -> Result<(), Box<dyn std::error::Error>> {
     let root = tempfile::tempdir()?;

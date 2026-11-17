@@ -1,0 +1,31 @@
+{
+  "name": "@browseros/neo-viewer",
+  "type": "module",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Local dev tool: an MCP proxy in front of the Neo SDK image that logs every run() call per agent task, with a web UI. Not shipped.",
+  "scripts": {
+    "start": "bun server/main.ts",
+    "test": "bun test server shared web",
+    "test:real-image": "bun test tests",
+    "typecheck": "tsc --noEmit",
+    "lint": "bunx biome check",
+    "lint:fix": "bunx biome check --write --unsafe"
+  },
+  "dependencies": {
+    "@fontsource-variable/jetbrains-mono": "^5.3.0",
+    "@fontsource/ibm-plex-sans": "^5.3.0",
+    "@novnc/novnc": "^1.7.0",
+    "acorn": "^8.17.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/node": "^4.3.3",
+    "@tailwindcss/oxide": "^4.3.3",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "linkedom": "^0.18.13",
+    "tailwindcss": "^4.3.3"
+  }
+}

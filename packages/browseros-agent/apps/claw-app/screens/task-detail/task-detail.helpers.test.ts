@@ -7,8 +7,12 @@ import {
   actionForStep,
   activeStepIndex,
   lastPageUrl,
+  neoRunMarks,
+  offsetFromTakeover,
   pagesVisited,
+  railItems,
   snapshotForStep,
+  ultrafastLineText,
 } from './task-detail.helpers'
 
 function step(firstAt: number, dispatchIds: number[]): DescribedStep {
@@ -118,5 +122,137 @@ describe('pagesVisited', () => {
         title: 'HN',
       },
     ])
+  })
+})
+
+describe('neo runs in the step list', () => {
+  const takeover = {
+    ...step(1_000, [1]),
+    neoRun: {
+      goal: 'Pick a show',
+      outcome: 'handed_back' as const,
+      stepCount: 2,
+    },
+  }
+  const steps = [
+    step(500, [0]),
+    takeover,
+    { ...step(1_400, [2]), neoOffsetMs: 400 },
+    { ...step(3_100, [3]), neoOffsetMs: 2_100 },
+    step(6_000, [4]),
+  ]
+
+  it('gathers each run behind its takeover', () => {
+    expect(railItems(steps)).toEqual([
+      { kind: 'step', index: 0 },
+      { kind: 'run', takeover: 1, steps: [2, 3] },
+      { kind: 'step', index: 4 },
+    ])
+  })
+
+  it('times neo’s steps from the takeover', () => {
+    expect(offsetFromTakeover(400)).toBe('+0.4s')
+    expect(offsetFromTakeover(9_960)).toBe('+10.0s')
+    expect(offsetFromTakeover(12_400)).toBe('+12s')
+  })
+
+  it('keeps a pursue call that failed as an ordinary row', () => {
+    const failed = { ...takeover, isError: true }
+    expect(
+      railItems([step(500, [0]), failed]).map((item) => item.kind),
+    ).toEqual(['step', 'step'])
+  })
+
+  it('marks the run on the scrubber from the takeover to neo’s last step', () => {
+    const action = (dispatchId: number, startAt: number) =>
+      ({
+        frame: { dispatchId },
+        startAt,
+        completionAt: startAt,
+      }) as ReplayAction
+    expect(
+      neoRunMarks(steps, [
+        action(1, 40),
+        action(2, 41),
+        action(3, 43),
+        action(4, 50),
+      ]),
+    ).toEqual([{ startAt: 40, endAt: 43 }])
+  })
+
+  it('ends the mark at the last call of a folded last step', () => {
+    const action = (dispatchId: number, startAt: number) =>
+      ({
+        frame: { dispatchId },
+        startAt,
+        completionAt: startAt,
+      }) as ReplayAction
+    const folded = [
+      ...steps.slice(0, 3),
+      { ...steps[3], dispatchIds: [3, 5] },
+      steps[4],
+    ]
+    expect(
+      neoRunMarks(folded, [
+        action(1, 40),
+        action(2, 41),
+        action(3, 43),
+        action(5, 44),
+        action(4, 50),
+      ]),
+    ).toEqual([{ startAt: 40, endAt: 44 }])
+  })
+})
+
+describe('the ultrafast line on the task page', () => {
+  const words = (text: ReturnType<typeof ultrafastLineText>) =>
+    text?.sentence
+      .map((part) => (typeof part === 'string' ? part : part.figure))
+      .join('')
+
+  it('says neo handed the page back, with the figures it saved', () => {
+    const text = ultrafastLineText(
+      {
+        outcome: 'handed_back',
+        durationMs: 5_662,
+        steps: [{ action: 'click' }, { action: 'click' }, { action: 'scroll' }],
+      },
+      { durationMs: 5_662, pagesRead: 4, tokensSaved: 46_210 },
+      'Claude',
+    )
+    expect(words(text)).toBe(
+      'neo did 3 steps in 6 sec, then handed the page back to Claude.',
+    )
+    expect(text?.figures).toEqual([
+      { value: '46k', label: 'tokens saved' },
+      { value: '4', label: 'pages read' },
+    ])
+  })
+
+  it('says neo finished on its own and adds its steps', () => {
+    const text = ultrafastLineText(
+      { outcome: 'completed', durationMs: 9_200, steps: [{ action: 'click' }] },
+      { durationMs: 9_200, pagesRead: 1, tokensSaved: 900 },
+      'Claude',
+    )
+    expect(words(text)).toBe('neo finished the task on its own in 9 sec.')
+    expect(
+      text?.figures.map((figure) => `${figure.value} ${figure.label}`),
+    ).toEqual(['900 tokens saved', '1 page read', '1 step by neo'])
+  })
+
+  it('says neo read the pages itself on a skill run', () => {
+    const text = ultrafastLineText(
+      undefined,
+      { durationMs: 15_354, pagesRead: 9, tokensSaved: 61_942 },
+      'Claude',
+    )
+    expect(words(text)).toBe(
+      'neo read the pages itself in 15 sec, so Claude didn’t have to.',
+    )
+  })
+
+  it('says nothing on a task that ran the normal way', () => {
+    expect(ultrafastLineText(undefined, undefined, 'Claude')).toBe(null)
   })
 })

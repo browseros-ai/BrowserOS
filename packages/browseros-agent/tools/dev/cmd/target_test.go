@@ -53,6 +53,22 @@ func TestResolveDevTargetFallsBackToExampleEnvPorts(t *testing.T) {
 	}
 }
 
+func TestResolveDevTargetKeepsWatchOwnershipWithStateOverrides(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	state := filepath.Join(t.TempDir(), "redirected-state")
+	t.Setenv("BROWSEROS_DIR", state)
+	for _, override := range []string{"", filepath.Join(t.TempDir(), "flag-state")} {
+		target, err := resolveResetTarget(t.TempDir(), resetTargetOptions{Target: "dev", BrowserOSDir: override})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if target.WatchRunStateDir != filepath.Join(home, ".browseros-dev", "runs") {
+			t.Fatalf("state override redirected watch ownership metadata: %s", target.WatchRunStateDir)
+		}
+	}
+}
+
 func TestReadPortsFromEnvFileStripsHashComments(t *testing.T) {
 	path := filepath.Join(t.TempDir(), ".env")
 	if err := os.WriteFile(path, []byte(

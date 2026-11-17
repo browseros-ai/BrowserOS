@@ -41,8 +41,22 @@ struct PortConflict {
     port: u16,
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+/// Stack for each tokio worker thread. A `run` call nests QuickJS, the SDK bridge and a whole
+/// tool (act, then check, then its click) on one worker. In a debug build that chain needs
+/// close to the default 2 MiB, and on Linux it overflowed, which aborts the whole process.
+/// The size is reserved address space; pages are committed only as the stack grows.
+const WORKER_STACK_BYTES: usize = 8 * 1024 * 1024;
+
+/// `#[tokio::main]` with a larger worker stack, which the attribute cannot set.
+fn main() -> anyhow::Result<()> {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_stack_size(WORKER_STACK_BYTES)
+        .build()?
+        .block_on(async_main())
+}
+
+async fn async_main() -> anyhow::Result<()> {
     std::hint::black_box(VERSION_MARKER);
     std::hint::black_box(POSTHOG_KEY_MARKER);
     let (config_path, stdio_mode) = match Cli::parse_action() {
@@ -80,6 +94,10 @@ async fn main() -> anyhow::Result<()> {
         }
     };
     record_startup(&logs_dir, "initialized", None);
+    // Debug builds only, so the MCP conformance suite can drive compiled flows end to end.
+    if cfg!(debug_assertions) && std::env::var_os("CLAW_SERVER_ULTRAFAST").is_some() {
+        state.ultrafast.pin_on();
+    }
     // Report one-time startup conditions worth seeing remotely, such as a database migrated by a
     // newer BrowserOS neo (read-forward). Consent-gated and drawn from the shared daily budget.
     state.report_startup_state().await;
@@ -133,8 +151,10 @@ fn log_native_identity(config: &claw_server::config::Config) {
     // The effective values, so a deployment can confirm its behaviour file took hold.
     info!(
         tab_grouping = config.behavior.tab_grouping.as_str(),
+        tab_close_after = ?config.behavior.tab_close_after,
         isolated_world = config.behavior.isolated_world,
         working_overlay = config.behavior.working_overlay,
+        run_wall_timeout_seconds = config.behavior.run_policy.wall_timeout().as_secs(),
         file_env = claw_server::config::BEHAVIOR_FILE_ENV,
         "server behaviour"
     );
@@ -263,13 +283,6 @@ async fn serve(
         async move {
             // Only the HTTP process that acquired the listener owns provisioning.
             // Keep repair off request handling and stop it with this runtime.
-            if heal_state.config.dev_mode {
-                info!(
-                    "dev mode: automatic harness provisioning is off; agent configs stay with \
-                     the installed BrowserOS neo, connect from the app to link one"
-                );
-                return;
-            }
             heal_state
                 .harness
                 .maintain_integrations(
@@ -456,6 +469,7 @@ mod tests {
             resources_dir: root.path().join("resources"),
             browserclaw_dir: root.path().to_path_buf(),
             session_idle: Duration::from_secs(300),
+            session_complete_idle: Duration::from_secs(300),
             session_retention: Duration::from_secs(7_200),
             session_sweep_interval: Duration::from_secs(60),
             replay_retention_days: 7,
@@ -509,6 +523,7 @@ mod tests {
             resources_dir: root.path().join("resources"),
             browserclaw_dir: root.path().to_path_buf(),
             session_idle: Duration::from_secs(300),
+            session_complete_idle: Duration::from_secs(300),
             session_retention: Duration::from_secs(7_200),
             session_sweep_interval: Duration::from_secs(60),
             replay_retention_days: 7,

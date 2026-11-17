@@ -1,0 +1,37 @@
+// This deliberately uncertain write is observed only in the final disposable browser.
+// Its same-script readback is evidence of page state, never an acknowledgement of delivery.
+await page.goto(args.base + '/form.html');
+const color = page.getByRef(await refFor(page, 'Color'));
+const selected = await color.selectOption('green');
+equal(selected, ['green'], 'valid select returns its selected option');
+const readState = () => page.evaluate(() => ({
+  value: document.querySelector('#color').value,
+  changes: Number(document.querySelector('#color').dataset.changeCount),
+  prompt: document.querySelector('.styled-select-prompt').textContent.trim(),
+}));
+const before = await readState();
+equal(before, { value: 'green', changes: 1, prompt: 'Green' }, 'green select updates semantic state');
+let error;
+try {
+  await color.selectOption('chartreuse', { timeout: 1500 });
+} catch (caught) {
+  error = {
+    neo: caught instanceof NeoError,
+    name: caught.name,
+    owner: caught.owner,
+    code: caught.code,
+    delivery: caught.delivery,
+    operationId: caught.operationId,
+    timeout: caught.timeout,
+    message: caught.message,
+  };
+}
+assert(error, 'missing option must reject');
+equal({ neo: error.neo, name: error.name, owner: error.owner, code: error.code, delivery: error.delivery, timeout: error.timeout },
+  { neo: true, name: 'TimeoutError', owner: 'website', code: 'not_actionable', delivery: 'unknown', timeout: true },
+  'missing option retains the SDK operation error identity');
+assert(/^locator\.selectOption: Timeout 1500ms exceeded\./.test(error.message), 'missing-option timeout message', error);
+assert(typeof error.operationId === 'string', 'caught error retains operationId', error);
+const after = await readState();
+equal(after, before, 'missing-option timeout leaves green/1/Green unchanged');
+return { selected, before, after, error, taskId: args.taskId, requestId: args.requestId };

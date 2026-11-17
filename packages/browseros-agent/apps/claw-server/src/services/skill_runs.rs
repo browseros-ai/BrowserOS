@@ -2,7 +2,8 @@ use crate::{
     db::{
         AuditLog, SkillsRepository,
         audit_log::{TaskStatus, TaskSummary},
-        entities::skill_runs,
+        entities::{skill_run_marks, skill_runs},
+        skills::RunMode,
     },
     error::{AppError, AppResult},
 };
@@ -43,8 +44,28 @@ impl SkillRunService {
         if self.repo.get(skill_name).await?.is_none() {
             return Err(AppError::not_found("skill not found"));
         }
+        // A run_skill outcome already marked this session for the same skill; the
+        // agent finishing by hand must not erase that it was handed back.
+        if let Some(existing) = self.repo.get_mark(session_id).await?
+            && existing.skill_name == skill_name
+            && existing.mode != "agent"
+        {
+            return Ok(());
+        }
         self.repo
             .upsert_mark(session_id, skill_name, now_ms())
+            .await
+    }
+
+    /// Tie the session to a skill with the way `run_skill` carried it out.
+    pub async fn mark_as(
+        &self,
+        session_id: &str,
+        skill_name: &str,
+        mode: &RunMode,
+    ) -> AppResult<()> {
+        self.repo
+            .upsert_mark_as(session_id, skill_name, now_ms(), mode)
             .await
     }
 
@@ -79,7 +100,7 @@ impl SkillRunService {
             // Not terminal yet; leave the mark for a later completion.
             return Ok(false);
         }
-        let recorded = self.record_run(&mark.skill_name, session_id, &task).await?;
+        let recorded = self.record_run(&mark, session_id, &task).await?;
         // The run is durable now (this call inserted it or a prior one did), so
         // the mark has served its purpose.
         self.repo.delete_mark(session_id).await?;
@@ -99,16 +120,24 @@ impl SkillRunService {
 
     async fn record_run(
         &self,
-        skill_name: &str,
+        mark: &skill_run_marks::Model,
         session_id: &str,
         task: &TaskSummary,
     ) -> AppResult<bool> {
+        let skill_name = mark.skill_name.as_str();
         let run_number = self.repo.max_run_number(skill_name).await?.unwrap_or(0) + 1;
         let tokens = task
             .tokens_measured
             .then(|| task.tool_input_token_estimate + task.tool_output_token_estimate);
-        let clean = task.error_count == 0
-            && !matches!(task.status, TaskStatus::Failed | TaskStatus::Cancelled);
+        let finished = match task.status {
+            TaskStatus::Failed => false,
+            // People press Stop to close a task that already finished, so a Stop only counts
+            // against the run when it cut off a call that was still running.
+            TaskStatus::Cancelled => !self.repo.has_cancelled_dispatch(session_id).await?,
+            _ => true,
+        };
+        // A session is only marked ultrafast when its flow returned done.
+        let clean = mark.mode == RunMode::ultrafast().mode || (task.error_count == 0 && finished);
         let errored_tool = if clean {
             None
         } else {
@@ -126,6 +155,9 @@ impl SkillRunService {
             clean,
             errored_tool,
             created_at: now_ms(),
+            mode: mark.mode.clone(),
+            handover_step: mark.handover_step,
+            handover_cause: mark.handover_cause.clone(),
         };
         self.repo.insert_run_if_absent(row).await
     }

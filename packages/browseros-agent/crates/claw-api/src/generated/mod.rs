@@ -12,6 +12,8 @@ pub mod dispatches;
 pub use self::dispatches::*;
 pub mod feedback;
 pub use self::feedback::*;
+pub mod plan;
+pub use self::plan::*;
 pub mod recordings;
 pub use self::recordings::*;
 pub mod screencasts;

@@ -8,6 +8,12 @@ preflight that every requested architecture was actually published, the tag
 policy, and the buildx invocation. The CLI and the release workflow are thin
 callers of build_image.
 
+Publishing in the release workflow is two steps so the published image is the
+one that was tested: each architecture's verify job builds and smoke-tests its
+image natively, then pushes that same image by digest with no tags
+(push_by_digest); publish_index then tags one multi-architecture index over
+those digests without building anything.
+
 Tag policy: a release installs the browser package for `<version>` plus the
 claw-server and packaging of one repository commit, so the browser version alone
 does not name an image. `<version>-<commit>` names one build and is never reused
@@ -47,6 +53,7 @@ PLATFORM_PACKAGES = {
 }
 
 _VERSION = re.compile(r"^\d+(\.\d+){1,3}$")
+_DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 _REVISION = re.compile(r"^[0-9a-f]{40}$")
 # The commit tag uses GitHub's short form, so it matches the commit links people see.
 _SHORT_REVISION = 7
@@ -91,6 +98,8 @@ class ImageRequest:
     revision: str = ""
     capsolver_key_file: Optional[Path] = None
     twocaptcha_key_file: Optional[Path] = None
+    # Push one architecture's image without tags, for publish_index to name later.
+    push_by_digest: bool = False
 
 
 @dataclass(frozen=True)
@@ -119,11 +128,20 @@ class ImageOperations(Protocol):
         """Runs `docker buildx build <argv>` and returns buildx's metadata."""
         ...
 
+    def create_index(self, argv: list[str]) -> None:
+        """Runs `docker buildx imagetools create <argv>`."""
+        ...
+
+    def inspect_image(self, reference: str) -> dict:
+        """A pushed image's index digest and per-platform configs:
+        {"digest": ..., "configs": {"linux/amd64": {...}, ...}}."""
+        ...
+
 
 def _resolve_deb(request: ImageRequest, deb: Path) -> ImageRequest:
     """Fills version and platform from a release-named .deb, so the tag and
     platform cannot disagree with the package actually installed."""
-    if request.push:
+    if request.push or request.push_by_digest:
         raise ImageError("A local .deb is for testing and is never pushed; push a published version")
     match = _DEB_NAME.match(deb.name)
     if not match:
@@ -139,6 +157,8 @@ def _resolve_deb(request: ImageRequest, deb: Path) -> ImageRequest:
 
 
 def _platforms(request: ImageRequest, ops: ImageOperations) -> tuple[str, ...]:
+    if request.push_by_digest and len(request.platforms) != 1:
+        raise ImageError("--push-by-digest pushes the one architecture this machine tested; pass one --platform")
     if request.platforms:
         platforms = request.platforms
     elif request.push:
@@ -195,11 +215,14 @@ def build_image(request: ImageRequest, ops: ImageOperations, context: Path) -> I
         request = _resolve_deb(request, request.deb)
     if not _VERSION.match(request.version):
         raise ImageError(f"Invalid Neo version '{request.version}'; expected e.g. 0.52.0.1")
+    if request.push and request.push_by_digest:
+        raise ImageError("--push-by-digest pushes one untagged architecture; do not combine it with --push")
     if request.latest and not request.push:
         raise ImageError("--latest requires --push")
-    if (request.push or request.revision) and request.server_dir is None:
+    publishing = request.push or request.push_by_digest
+    if (publishing or request.revision) and request.server_dir is None:
         raise ImageError("A commit-tagged build needs that commit's servers; pass --server-dir")
-    if (request.push or request.revision) and not _REVISION.match(request.revision):
+    if (publishing or request.revision) and not _REVISION.match(request.revision):
         raise ImageError(
             f"Invalid revision '{request.revision}'; pass the full 40-character commit sha with --revision"
         )
@@ -225,14 +248,9 @@ def build_image(request: ImageRequest, ops: ImageOperations, context: Path) -> I
     if request.deb is None:
         _require_published(request.version, platforms, ops)
 
-    image_version = request.version
-    tags: tuple[str, ...] = ()
-    if request.revision:
-        image_version += f"-{request.revision[:_SHORT_REVISION]}"
-        tags += (f"{request.repository}:{image_version}",)
-    tags += (f"{request.repository}:{request.version}",)
-    if request.latest:
-        tags += (f"{request.repository}:latest",)
+    image_version, tags = _tags(request)
+    if request.push_by_digest:
+        tags = ()
     argv = ["--platform", ",".join(platforms)]
     argv += ["--build-arg", f"NEO_VERSION={request.version}"]
     for tag in tags:
@@ -244,23 +262,34 @@ def build_image(request: ImageRequest, ops: ImageOperations, context: Path) -> I
         argv += ["--label", f"{REVISION_LABEL}={request.revision}"]
     if server_version:
         argv += ["--label", f"{SERVER_VERSION_LABEL}={server_version}"]
-    if request.push:
+    if request.push_by_digest:
+        argv += [
+            "--output",
+            f"type=image,name={request.repository},push-by-digest=true,name-canonical=true,push=true",
+        ]
+    elif request.push:
+        argv.append("--push")
+    else:
+        argv.append("--load")
+    if publishing:
         # Index annotations fail on an export without an index, so request the
         # provenance attestation explicitly: it makes even a single-platform
         # push an index. Local loads stay plain images.
         argv += [
-            "--push",
             "--provenance", "mode=min",
             "--annotation", f"index:org.opencontainers.image.source={IMAGE_SOURCE}",
         ]
-    else:
-        argv.append("--load")
     if request.server_dir is not None:
         argv += ["--build-context", f"neo-server={request.server_dir}"]
     # Re-run the final credentials stage even for keyless builds: secret
     # contents (and their removal) are not reliable cache invalidators. Keep
     # the expensive browser installation cached in the preceding runtime stage.
-    argv += ["--no-cache-filter", "neo"]
+    # A push by digest is the exception: it follows the build it pushes, on the
+    # same builder with the same keys, and every layer, the credentials stage
+    # included, must come from that build's cache so the pushed image is the
+    # one that was just tested rather than a rebuild of it.
+    if not request.push_by_digest:
+        argv += ["--no-cache-filter", "neo"]
     for name, key_file in keys:
         argv += ["--secret", f"id={name},src={key_file}"]
     staging = ops.staged_deb(request.deb) if request.deb is not None else nullcontext(None)
@@ -270,8 +299,71 @@ def build_image(request: ImageRequest, ops: ImageOperations, context: Path) -> I
             argv += ["--build-context", f"neo-deb={deb_dir}"]
         argv.append(str(context))
         metadata = ops.run_buildx(argv)
-    digest = metadata.get("containerimage.digest", "") if request.push else ""
+    digest = metadata.get("containerimage.digest", "") if publishing else ""
     return ImageResult(tags, platforms, digest)
+
+
+def _tags(request: ImageRequest) -> tuple[str, tuple[str, ...]]:
+    """The version label and the tags one build or index gets, per the tag policy above."""
+    image_version = request.version
+    tags: tuple[str, ...] = ()
+    if request.revision:
+        image_version += f"-{request.revision[:_SHORT_REVISION]}"
+        tags += (f"{request.repository}:{image_version}",)
+    tags += (f"{request.repository}:{request.version}",)
+    if request.latest:
+        tags += (f"{request.repository}:latest",)
+    return image_version, tags
+
+
+def publish_index(request: ImageRequest, digests: dict[str, str], ops: ImageOperations) -> ImageResult:
+    """Tags one multi-architecture index over images already pushed by digest.
+
+    `digests` maps every published platform to the image its verify job built,
+    tested and pushed, so nothing is rebuilt here. Each source must be that
+    platform's image from this commit before any tag moves, so a stray digest
+    can never take the release tags. After tagging, the registry's view of the
+    index is checked the same way.
+    """
+    if request.push_by_digest:
+        raise ImageError("--from-digests tags the images verify pushed; do not combine it with --push-by-digest")
+    if not _VERSION.match(request.version):
+        raise ImageError(f"Invalid Neo version '{request.version}'; expected e.g. 0.52.0.1")
+    if not _REVISION.match(request.revision):
+        raise ImageError(
+            f"Invalid revision '{request.revision}'; pass the full 40-character commit sha with --revision"
+        )
+    platforms = tuple(PLATFORM_PACKAGES)
+    missing = [platform for platform in platforms if platform not in digests]
+    if missing:
+        raise ImageError(f"No tested image for {', '.join(missing)}; every architecture must pass verify")
+    for platform in platforms:
+        if not _DIGEST.match(digests[platform]):
+            raise ImageError(f"Invalid {platform} digest '{digests[platform]}'")
+    for platform in platforms:
+        source = f"{request.repository}@{digests[platform]}"
+        configs = ops.inspect_image(source).get("configs", {})
+        if set(configs) != {platform} or not _built_from(configs[platform], request.revision):
+            raise ImageError(f"{source} is not a {platform} image from {request.revision}")
+    _, tags = _tags(request)
+    argv = ["--annotation", f"index:org.opencontainers.image.source={IMAGE_SOURCE}"]
+    for tag in tags:
+        argv += ["--tag", tag]
+    argv += [f"{request.repository}@{digests[platform]}" for platform in platforms]
+    ops.create_index(argv)
+
+    published = ops.inspect_image(tags[0])
+    configs = published.get("configs", {})
+    for platform in platforms:
+        if not _built_from(configs.get(platform), request.revision):
+            raise ImageError(f"{tags[0]} has no {platform} image from {request.revision}")
+    return ImageResult(tags, platforms, published.get("digest", ""))
+
+
+def _built_from(config: Optional[dict], revision: str) -> bool:
+    """Whether an image config carries `revision` as its source commit."""
+    labels = ((config or {}).get("config") or {}).get("Labels") or {}
+    return labels.get(REVISION_LABEL) == revision
 
 
 def image_context() -> Path:
@@ -317,6 +409,26 @@ class DockerOperations:
             except OSError:
                 shutil.copy2(deb, target)
             yield Path(directory)
+
+    def create_index(self, argv: list[str]) -> None:
+        subprocess.run(["docker", "buildx", "imagetools", "create", *argv], check=True)
+
+    def inspect_image(self, reference: str) -> dict:
+        def inspect(template: str):
+            result = subprocess.run(
+                ["docker", "buildx", "imagetools", "inspect", reference, "--format", template],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            return json.loads(result.stdout)
+
+        # .Image maps each platform to its config, except for an image with one
+        # platform (a verify job's push), where it is that platform's config.
+        images = inspect("{{json .Image}}")
+        if "rootfs" in images:
+            images = {f"{images.get('os')}/{images.get('architecture')}": images}
+        return {"digest": inspect("{{json .Manifest}}")["digest"], "configs": images}
 
     def run_buildx(self, argv: list[str]) -> dict:
         with tempfile.TemporaryDirectory(prefix="neo-buildx-") as directory:

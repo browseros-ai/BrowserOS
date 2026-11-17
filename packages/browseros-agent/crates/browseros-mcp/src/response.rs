@@ -5,6 +5,7 @@
 use crate::{
     constants::TOOL_POST_ACTION_CAPTURE_TIMEOUT,
     format::{
+        coverage::insert_coverage,
         diff::{DiffDetail, format_diff_result},
         snapshot::format_snapshot_result,
     },
@@ -12,8 +13,8 @@ use crate::{
     trust_boundary::wrap_untrusted,
 };
 use browseros_core::{
-    ConsoleEntry, DocumentMark, FrameId, PageId, Ref, observer::SnapshotResult, overlay, pointer,
-    settle::SettleOutcome,
+    ConsoleEntry, ConsoleMark, DocumentMark, FrameId, PageId, Ref, observer::SnapshotResult,
+    overlay, pointer, settle::SettleOutcome,
 };
 use rmcp::model::ContentBlock;
 use serde_json::{Value, json};
@@ -59,7 +60,7 @@ pub struct FieldTarget {
 #[derive(Debug, Clone)]
 struct ConsoleSummary {
     page: u32,
-    since: u64,
+    since: ConsoleMark,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -106,6 +107,30 @@ impl ToolResponse {
 
     pub fn data(&mut self, value: Value) {
         merge_structured(&mut self.structured_content, value);
+    }
+
+    /// Delivery is collected before an action can lose its acknowledgement.
+    /// Later error decoration must preserve that path while updating its status.
+    pub fn click_data(&mut self, value: Value) {
+        let mut click = self
+            .structured_content
+            .as_ref()
+            .and_then(|data| data.get("click"))
+            .cloned();
+        merge_structured(&mut click, value);
+        self.data(json!({"click": click}));
+    }
+
+    /// Automatic readbacks are additional parts of the primary result. Keep their
+    /// metadata in order rather than overwriting the action's fields or earlier pages.
+    fn context_data(&mut self, page: u32, kind: &str, data: Value) {
+        let structured = self.structured_content.get_or_insert_with(|| json!({}));
+        if let Some(object) = structured.as_object_mut() {
+            let contexts = object.entry("contexts").or_insert_with(|| json!([]));
+            if let Some(contexts) = contexts.as_array_mut() {
+                contexts.push(json!({ "page": page, "kind": kind, "data": data }));
+            }
+        }
     }
 
     /// Record host-only audit hints (secret redaction, screenshot suppression) for
@@ -168,7 +193,7 @@ impl ToolResponse {
         self.post_actions.push(PostAction::Screenshot { page });
     }
 
-    pub fn include_console_summary(&mut self, page: u32, since: u64) {
+    pub fn include_console_summary(&mut self, page: u32, since: ConsoleMark) {
         self.console_summaries.push(ConsoleSummary { page, since });
     }
 
@@ -212,7 +237,23 @@ impl ToolResponse {
         }
 
         for summary in self.console_summaries.clone() {
-            if ctx.browser.page(PageId(summary.page)).await.is_ok() {
+            let page_id = PageId(summary.page);
+            if ctx.browser.page(page_id.clone()).await.is_ok() {
+                match ctx.browser.page_session(page_id.clone()).await {
+                    Ok(page) => {
+                        if let Err(err) = ctx
+                            .browser
+                            .signals()
+                            .harvest_console(&page_id, &page.session)
+                            .await
+                        {
+                            tracing::debug!("console harvest failed for page {}: {err}", page_id.0);
+                        }
+                    }
+                    Err(err) => {
+                        tracing::debug!("console harvest skipped for page {}: {err}", page_id.0);
+                    }
+                }
                 self.append_console_summary(ctx, summary);
             }
         }
@@ -244,8 +285,11 @@ impl ToolResponse {
                 self.throw_if_dialog_open(ctx, page)?;
                 let observer = ctx.browser.observe(browseros_core::PageId(page)).await?;
                 let snapshot = observer.snapshot().await?;
-                let formatted = format_snapshot_result(&snapshot.text, &snapshot.url, ctx).await;
+                let formatted =
+                    format_snapshot_result(&snapshot.text, &snapshot.coverage, &snapshot.url, ctx)
+                        .await;
                 self.text(format!("[Page {page} snapshot]\n{}", formatted.text));
+                self.context_data(page, "snapshot", formatted.structured);
                 self.captures.insert(page, snapshot);
                 Ok(())
             }
@@ -275,6 +319,7 @@ impl ToolResponse {
                 };
                 let formatted = format_diff_result(&diff, &origin, ctx, detail).await;
                 self.text(format!("[Page {page} diff]\n{}", formatted.text));
+                self.context_data(page, "diff", formatted.structured);
                 if include_structured {
                     let mut structured = json!({ "changed": diff.changed });
                     // Text changing and the page changing are different
@@ -298,6 +343,9 @@ impl ToolResponse {
                             diff.after_url.map(Value::String).unwrap_or(Value::Null),
                         );
                     }
+                    // The action's own success is the tool result; this says only how much of
+                    // the page its follow-up capture could read.
+                    insert_coverage(&mut structured, &diff.coverage, &diff.uncompared);
                     self.data(structured);
                 }
                 Ok(())
@@ -326,6 +374,9 @@ impl ToolResponse {
                         match shown {
                             Some((now, line)) if *now == field.ref_id => line.to_string(),
                             Some((_, line)) => format!("{} → {line}", field.ref_id),
+                            None if capture.may_lack_frame(field.frame.as_ref()) => {
+                                format!("{}: unknown, its frame could not be read", field.ref_id)
+                            }
                             None => format!("{}: not on the page now", field.ref_id),
                         }
                     })
@@ -385,6 +436,16 @@ impl ToolResponse {
                     overlay::restore_after_capture(&page_session.session).await;
                 }
                 let result = result?;
+                if let Err(error) = ctx
+                    .output_files
+                    .image(&result.data, "image/png", &json!({ "page": page }))
+                    .await
+                {
+                    self.text(format!(
+                        "Screenshot captured, but could not retain its output: {error}"
+                    ));
+                    self.data(json!({ "outputWriteFailed": true }));
+                }
                 self.text(format!("[Page {page} screenshot]"));
                 self.image(result.data, "image/png");
                 Ok(())
@@ -585,7 +646,7 @@ mod pointer_capture_tests {
         framework::{BrowserToolDefaults, BrowserToolOptions, ToolCtx},
         output_file::create_browser_output_file_access,
     };
-    use browseros_cdp::{CdpError, CdpEvent};
+    use browseros_cdp::{CdpError, CdpEvent, TargetedEvents};
     use browseros_core::{
         Browser, CdpConnection, PageId, SessionId,
         screenshot::{ScreenshotCaptureOptions, ScreenshotFormat},
@@ -593,7 +654,7 @@ mod pointer_capture_tests {
     use futures_util::future::BoxFuture;
     use serde_json::{Value, json};
     use std::sync::{Arc, Mutex};
-    use tokio::sync::broadcast;
+    use tokio::sync::{broadcast, mpsc};
     use tokio_util::sync::CancellationToken;
 
     #[derive(Clone, Copy, Debug)]
@@ -613,6 +674,7 @@ mod pointer_capture_tests {
     struct CaptureConnection {
         calls: Mutex<Vec<(String, Value)>>,
         events: broadcast::Sender<CdpEvent>,
+        targeted: TargetedEvents,
         fail_hide: bool,
         fail_capture: bool,
     }
@@ -623,6 +685,7 @@ mod pointer_capture_tests {
             Arc::new(Self {
                 calls: Mutex::new(Vec::new()),
                 events,
+                targeted: TargetedEvents::default(),
                 fail_hide,
                 fail_capture,
             })
@@ -736,6 +799,11 @@ mod pointer_capture_tests {
         fn events(&self) -> broadcast::Receiver<CdpEvent> {
             self.events.subscribe()
         }
+
+        fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+            self.targeted.subscribe(method)
+        }
+
         fn is_connected(&self) -> bool {
             true
         }

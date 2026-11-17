@@ -1,0 +1,12 @@
+[Unit]
+Description=Cancel abandoned or over-budget remote builds after proven cleanup
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=buildrunner
+Group=buildrunner
+ExecStart=/usr/bin/python3 /usr/local/lib/browseros-remote-builds/reaper.py
+# Four bounded SSH cleanup attempts can take up to ninety seconds each.
+TimeoutStartSec=400

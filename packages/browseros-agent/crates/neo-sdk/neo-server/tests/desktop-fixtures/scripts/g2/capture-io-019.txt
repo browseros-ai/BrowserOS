@@ -1,0 +1,5 @@
+await page.goto(args.base + '/links.html');
+const bytes = await page.pdf({landscape:true});
+const magic = bytes.subarray(0,5).toString();
+equal(magic,'%PDF-','the rendered PDF has the required magic');
+return {bytes,magic,length:bytes.length};

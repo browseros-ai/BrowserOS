@@ -29,6 +29,9 @@ export interface FixturePair {
   stop(): Promise<void>
 }
 
+/** How long the `/slow/` routes wait before answering. */
+const SLOW_RESPONSE_MS = 1_200
+
 function randomFixturePort(): number {
   const span = FIXTURE_PORT_MAX - FIXTURE_PORT_MIN + 1
   return FIXTURE_PORT_MIN + Math.floor(Math.random() * span)
@@ -43,6 +46,18 @@ async function handleRequest(request: Request): Promise<Response> {
         'content-disposition': 'attachment; filename="report.txt"',
       },
     })
+  }
+  // A server slow to answer: a new tab shows about:blank until this page commits, so a
+  // snapshot taken before the commit would read the blank tab instead of the page.
+  const slow = pathname.match(/^\/slow\/([\w-]+\.html)$/)
+  if (slow) {
+    await Bun.sleep(SLOW_RESPONSE_MS)
+    const file = Bun.file(resolve(PAGES_DIR, slow[1]))
+    if (await file.exists()) {
+      return new Response(file, {
+        headers: { 'content-type': 'text/html; charset=utf-8' },
+      })
+    }
   }
   if (/^\/[\w-]+\.html$/.test(pathname)) {
     const file = Bun.file(resolve(PAGES_DIR, pathname.slice(1)))

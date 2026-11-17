@@ -24,6 +24,7 @@ mod connections;
 mod feedback;
 mod help_events;
 mod live;
+mod plan;
 mod previews;
 mod recordings;
 mod replay;
@@ -65,10 +66,6 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route(
             "/api/v1/settings/agent",
             get(settings::agent).put(settings::update_agent),
-        )
-        .route(
-            "/api/v1/settings/agent/jev-token",
-            put(settings::save_jev_token).delete(settings::remove_jev_token),
         )
         .route("/api/v1/help/events", get(help_events::events))
         .route("/api/v1/screencasts", get(screencasts::screencasts))
@@ -130,6 +127,31 @@ pub fn router(state: AppState) -> Router<AppState> {
             get(skills::get).put(skills::update).delete(skills::delete),
         )
         .route("/api/v1/skills/{name}/runs", get(skills::list_runs))
+        .route("/api/v1/plan", get(plan::plan))
+        .route("/api/v1/plan/pricing", get(plan::pricing))
+        .route("/api/v1/plan/savings", get(sessions::savings))
+        .route("/api/v1/plan/checkout", post(plan::start_checkout))
+        .route("/api/v1/plan/checkout/{checkout_id}", get(plan::checkout))
+        .route("/api/v1/plan/key", get(plan::key))
+        .route("/api/v1/plan/key/activate", post(plan::activate))
+        .route(
+            "/api/v1/plan/key/computers/{install_id}/remove",
+            post(plan::remove_computer),
+        )
+        .route(
+            "/api/v1/plan/key/computers/{install_id}/rename",
+            post(plan::rename_computer),
+        )
+        .route("/api/v1/plan/key/reset", post(plan::reset_key))
+        .route("/api/v1/plan/cancel", post(plan::cancel))
+        .route("/api/v1/plan/resume", post(plan::resume))
+        .route("/api/v1/plan/portal", post(plan::portal))
+        .route("/api/v1/plan/refresh", post(plan::refresh))
+        .route("/api/v1/skills/{name}/flow", get(skills::flow))
+        .route(
+            "/api/v1/skills/{name}/ultrafast/approve-write",
+            post(skills::approve_write).delete(skills::revoke_write),
+        )
         .nest_service(
             "/mcp",
             Router::new()
@@ -204,7 +226,9 @@ pub async fn request_context(mut req: Request, next: Next) -> Response {
     let path = req.uri().path().to_string();
     let reject_origin = (path == "/api/v1/recordings/events"
         && !trusted_recording_origin(req.headers()))
-        || ((path == "/api/v1/extension/update-ready" || path == "/api/v1/screencasts")
+        || ((path == "/api/v1/extension/update-ready"
+            || path == "/api/v1/screencasts"
+            || is_plan_path(&path))
             && !trusted_extension_origin(req.headers()));
     let span = info_span!("http_request", request_id = %request_id.0, %method, %path);
     async move {
@@ -257,6 +281,12 @@ pub async fn request_context(mut req: Request, next: Next) -> Response {
     .await
 }
 
+/// The ultrafast routes can buy, cancel, reset a key and remove computers, and their answers name
+/// the computers on the key, so no web page may reach them.
+fn is_plan_path(path: &str) -> bool {
+    path == "/api/v1/plan" || path.starts_with("/api/v1/plan/")
+}
+
 /// Stable origin derived from claw-app's manifest signing key.
 const BROWSERCLAW_EXTENSION_ORIGIN: &str = "chrome-extension://pjimfkbpehlcllblajnpfamdfjhhlgkc";
 
@@ -299,13 +329,19 @@ async fn extension_update_ready(
 /// claw-app, or a native client (no `Origin` and no `Sec-Fetch-Site`). Every other web page is
 /// refused: responses here carry `Access-Control-Allow-Origin: *`, and a WebSocket has no CORS at
 /// all, so the origin check is the only thing keeping a site from these endpoints.
+///
+/// Chrome sends no `Origin` on a GET from an extension page that holds host permission, only
+/// `Sec-Fetch-Site: none`. A web page cannot set that header, and its requests here say
+/// `cross-site`.
 fn trusted_extension_origin(headers: &axum::http::HeaderMap) -> bool {
     match headers
         .get(header::ORIGIN)
         .and_then(|value| value.to_str().ok())
     {
         Some(BROWSERCLAW_EXTENSION_ORIGIN) => true,
-        None => !headers.contains_key("sec-fetch-site"),
+        None => headers
+            .get("sec-fetch-site")
+            .is_none_or(|value| value.as_bytes() == b"none"),
         Some(_) => false,
     }
 }

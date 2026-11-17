@@ -38,8 +38,9 @@
       setTimeout(() => {
         document.getElementById('delayed').textContent = 'delayed content ready'
       }, 1500)
-      // Generated filler drives the >15k-token snapshot spill and the >5k-char
-      // grep/read spills; one oversized line exercises the 500-char grep clamp.
+      // Generated filler drives snapshot and read spills; the grep spill case
+      // adds detail to exceed its own inline budget.
+      // One oversized line exercises the independent 500-char grep clamp.
       // h6 (not div): plain divs are ignored AX nodes and never reach the
       // snapshot, while headings carry their text as the accessible name.
       const big = document.getElementById('big')

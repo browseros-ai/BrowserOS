@@ -1,0 +1,8 @@
+// Source port of navigate-snapshot-015 at a7e536e152a4835abe9974498b27a5c927dd2e0d. Execution is owned by the coordinator.
+assert(args.prior && args.prior[0] && typeof args.prior[0].snapshot === 'string', 'the earlier run returned a snapshot baseline', args.prior);
+await neo.task(args.prior[0].taskId);
+assert(page.tabId === args.prior[0].pageId, 'the delta uses the baseline tab in the same task', { current: page.tabId, baseline: args.prior[0].pageId });
+
+const delta = await page.ariaSnapshot({ delta: true });
+assert(/no change|unchanged/i.test(delta), 'a no-op delta reports no change', delta);
+return { delta };

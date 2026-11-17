@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Run SDK input contracts</title>
+    <style>
+      label { display: block; margin: 8px; }
+      button { margin: 8px; }
+    </style>
+  </head>
+  <body>
+    <!-- The submit counter distinguishes literal insertion from Enter key events. -->
+    <form id="form">
+      <label>Literal multiline <textarea id="multiline"></textarea></label>
+      <label>Submit field <input id="submit-field" /></label>
+      <button type="submit">Submit input</button>
+    </form>
+    <label><input id="native" type="checkbox" /> Native checkbox</label>
+    <button id="switch" role="switch" aria-checked="true">Enabled switch</button>
+    <label><input id="radio" type="radio" checked /> Checked radio</label>
+    <!-- A hidden input leaves the label with its own actionable snapshot ref. -->
+    <input id="label-control" type="checkbox" style="display: none" />
+    <label for="label-control">Styled checkbox label</label>
+    <button id="inert" role="checkbox" aria-checked="false">Inert checkbox</button>
+    <!-- Unchecked beneath an indeterminate look: a click would turn it on, not off. -->
+    <label><input id="mixed" type="checkbox" /> Mixed checkbox</label>
+    <!-- A framework re-render swaps the clicked control for a new node that keeps its state. -->
+    <div id="rerender-host"><label><input class="rerendered" type="checkbox" /> Re-rendered checkbox</label></div>
+    <!-- Checking this filter navigates, like a shopping-site facet. -->
+    <label><input id="facet" type="checkbox" /> Navigating facet</label>
+    <script>
+      document.getElementById('mixed').indeterminate = true
+      document.getElementById('rerender-host').addEventListener('change', event => {
+        event.currentTarget.innerHTML =
+          '<label><input class="rerendered" type="checkbox" checked /> Re-rendered checkbox</label>'
+      })
+      document.getElementById('facet').addEventListener('change', () => location.assign('/links.html'))
+      window.submits = 0
+      window.enterKeys = 0
+      window.switchClicks = 0
+      document.getElementById('form').addEventListener('submit', event => {
+        event.preventDefault()
+        window.submits++
+      })
+      document.getElementById('form').addEventListener('keydown', event => {
+        if (event.key === 'Enter') window.enterKeys++
+      })
+      document.getElementById('switch').addEventListener('click', event => {
+        window.switchClicks++
+        const control = event.currentTarget
+        control.setAttribute('aria-checked', String(control.getAttribute('aria-checked') !== 'true'))
+      })
+    </script>
+  </body>
+</html>

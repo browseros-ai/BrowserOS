@@ -10,6 +10,8 @@ use tracing::{error, info, warn};
 const TASK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 const SESSION_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 const AUDIT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+/// How often the ultrafast switch re-reads the plan. Buying or ending a plan shows up within this.
+const ULTRAFAST_GATE_EVERY: Duration = Duration::from_secs(10);
 
 #[derive(Clone, Debug, Default)]
 pub struct ShutdownHandle {
@@ -139,6 +141,34 @@ impl AppRuntime {
                 }),
             },
             BackgroundTask {
+                name: "daily tool usage report",
+                handle: tokio::spawn({
+                    let state = state.clone();
+                    let cancel = shutdown.child_token();
+                    async move {
+                        let mut ticker = tokio::time::interval(Duration::from_secs(60 * 60));
+                        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                        loop {
+                            tokio::select! {
+                                () = cancel.cancelled() => return,
+                                _ = ticker.tick() => {
+                                    if let Err(error) =
+                                        crate::services::tool_usage::flush_finished_days(
+                                            &state.tool_calls_daily,
+                                            &state.analytics,
+                                            crate::clock::now_epoch_ms(),
+                                        )
+                                        .await
+                                    {
+                                        warn!(error = %error, "daily tool usage report failed");
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }),
+            },
+            BackgroundTask {
                 name: "recording payload migration",
                 handle: state
                     .recordings
@@ -164,6 +194,34 @@ impl AppRuntime {
                 }),
             },
             BackgroundTask {
+                name: "ultrafast plan gate",
+                handle: tokio::spawn({
+                    let state = state.clone();
+                    let cancel = shutdown.child_token();
+                    async move {
+                        // The first pass always brings SKILL.md in line, even when the plan
+                        // leaves the switch where it started.
+                        if !state.sync_ultrafast_with_plan().await
+                            && let Err(error) =
+                                state.skills.sync_skill_md(state.ultrafast_enabled()).await
+                        {
+                            warn!(error = %error, "skill file sync failed");
+                        }
+                        // Polled rather than pushed: a plan also ends by the clock alone.
+                        let mut ticker = tokio::time::interval(ULTRAFAST_GATE_EVERY);
+                        ticker.tick().await;
+                        loop {
+                            tokio::select! {
+                                () = cancel.cancelled() => return,
+                                _ = ticker.tick() => {
+                                    state.sync_ultrafast_with_plan().await;
+                                }
+                            }
+                        }
+                    }
+                }),
+            },
+            BackgroundTask {
                 name: "skill run reconciliation",
                 handle: tokio::spawn({
                     let skill_runs = state.skill_runs.clone();
@@ -181,12 +239,10 @@ impl AppRuntime {
                 }),
             },
         ];
-        // Reads the cohort from PostHog remote configuration using the analytics
-        // credentials this build already embeds, so shipping it needs nothing else
-        // configured. A build with no PostHog key reaches no source, the cohort stays
-        // empty and nobody is invited, which is the same silent outcome as an unreachable
-        // one, so there is nothing to report.
+        // The cohort module resolves deployment policy and source precedence together; no source
+        // means this process must not start a refresh task, even with embedded analytics keys.
         if let Some(source) = crate::services::feedback_cohort::configured_source(
+            state.config.mode,
             state.analytics.remote_config_credentials(),
         ) {
             tasks.push(BackgroundTask {
@@ -194,6 +250,32 @@ impl AppRuntime {
                 handle: crate::services::feedback_cohort::spawn_refresh_loop(
                     (*state.feedback_cohort).clone(),
                     source,
+                    shutdown.child_token(),
+                ),
+            });
+        }
+
+        if let Some(source) = state.plan_offer.clone() {
+            tasks.push(BackgroundTask {
+                name: "plan offer refresh",
+                handle: crate::services::plan_offer::spawn_refresh_loop(
+                    {
+                        let billing = state.billing.clone();
+                        move |offered| billing.set_offered(offered)
+                    },
+                    state.analytics.clone(),
+                    source,
+                    state.config.browserclaw_dir.clone(),
+                    shutdown.child_token(),
+                ),
+            });
+        }
+
+        if state.billing.is_available() {
+            tasks.push(BackgroundTask {
+                name: "billing licence refresh",
+                handle: crate::services::billing::refresher::spawn(
+                    (*state.billing).clone(),
                     shutdown.child_token(),
                 ),
             });
@@ -376,6 +458,7 @@ mod tests {
             resources_dir: root.path().join("resources"),
             browserclaw_dir: root.path().to_path_buf(),
             session_idle: Duration::from_secs(300),
+            session_complete_idle: Duration::from_secs(300),
             session_retention: Duration::from_secs(7_200),
             session_sweep_interval: Duration::from_secs(60),
             replay_retention_days: 7,
@@ -432,6 +515,7 @@ mod tests {
             resources_dir: root.path().join("resources"),
             browserclaw_dir: root.path().to_path_buf(),
             session_idle: Duration::from_secs(300),
+            session_complete_idle: Duration::from_secs(300),
             session_retention: Duration::from_secs(7_200),
             session_sweep_interval: Duration::from_secs(60),
             replay_retention_days: 7,
@@ -482,6 +566,7 @@ mod tests {
             resources_dir: root.path().join("resources"),
             browserclaw_dir: root.path().to_path_buf(),
             session_idle: Duration::from_secs(300),
+            session_complete_idle: Duration::from_secs(300),
             session_retention: Duration::from_secs(7_200),
             session_sweep_interval: Duration::from_secs(60),
             replay_retention_days: 7,
@@ -537,6 +622,7 @@ mod tests {
             resources_dir: root.path().join("resources"),
             browserclaw_dir: root.path().to_path_buf(),
             session_idle: Duration::from_secs(300),
+            session_complete_idle: Duration::from_secs(300),
             session_retention: Duration::from_secs(7_200),
             session_sweep_interval: Duration::from_secs(60),
             replay_retention_days: 7,
@@ -577,6 +663,7 @@ mod tests {
             state.audit_log.clone(),
             state.session_tabs.clone(),
             config.session_idle,
+            config.session_complete_idle,
             config.session_retention,
             config.session_sweep_interval,
             analytics.clone(),
@@ -604,6 +691,7 @@ mod tests {
                     title: None,
                 },
                 None,
+                true,
             )
             .await?;
         state
@@ -694,6 +782,7 @@ mod tests {
             resources_dir: root.path().join("resources"),
             browserclaw_dir: root.path().to_path_buf(),
             session_idle: Duration::from_secs(300),
+            session_complete_idle: Duration::from_secs(300),
             session_retention: Duration::from_secs(7_200),
             session_sweep_interval: Duration::from_secs(60),
             replay_retention_days: 7,
@@ -717,6 +806,7 @@ mod tests {
             state.audit_log.clone(),
             state.session_tabs.clone(),
             config.session_idle,
+            config.session_complete_idle,
             config.session_retention,
             config.session_sweep_interval,
             analytics.clone(),

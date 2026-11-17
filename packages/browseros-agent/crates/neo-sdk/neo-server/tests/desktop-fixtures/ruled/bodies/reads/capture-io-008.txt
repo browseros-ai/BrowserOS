@@ -1,0 +1,29 @@
+/** The native chooser retains one input handle; completing it does not consume that handle. */
+async function choose() {
+  const waiting = page.waitForEvent('filechooser', { timeout: 5000 });
+  await page.locator('#upload-button').click();
+  const chooser = await waiting;
+  assert(chooser.page() === page, 'the chooser belongs to the initiating page');
+  return chooser;
+}
+
+await page.goto(args.base + '/upload.html');
+const payload = { name: 'pending-chooser.txt', mimeType: 'text/plain', buffer: Buffer.from('pending chooser selection') };
+const chooser = await choose();
+await chooser.setFiles(payload);
+const selected = await chooser.element().evaluate(input => input.files[0]?.name);
+equal(selected, 'pending-chooser.txt', 'the intercepted input receives the first selection');
+equal(await page.locator('#hidden-names').textContent(), selected, 'the fixture observes the native selection');
+
+let consumedError = null;
+try { await chooser.setFiles(payload); }
+catch (error) { consumedError = { owner: error.owner, code: error.code, delivery: error.delivery, message: String(error.message || error) }; }
+equal(consumedError, null, 'the same live chooser remains reusable');
+const afterReuse = await chooser.element().evaluate(input => Array.from(input.files, file => file.name));
+equal(afterReuse, ['pending-chooser.txt'], 'reuse updates the same retained input');
+
+const clearing = await choose();
+await clearing.setFiles([]);
+const remaining = await page.locator('#hidden-file').evaluate(input => input.files.length);
+equal(remaining, 0, 'a fresh chooser can clear the live input');
+return { selected, afterReuse, remaining, consumedError };

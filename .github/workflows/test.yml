@@ -101,6 +101,11 @@ jobs:
         if: matrix.needs_rust == true
         uses: Swatinem/rust-cache@v2
         with:
+          # A fresh key namespace. Caches saved while the repo used a shared
+          # Cargo build-dir hold the compiled output in ~/.cargo/build/browseros,
+          # which cargo no longer reads; an exact hit on one would restore
+          # nothing useful and, being a hit, never save a replacement.
+          prefix-key: browseros-target-v1
           workspaces: packages/browseros-agent
           # Without this the key embeds GITHUB_JOB, so the warm cache produced
           # on main by a differently named job could never be restored here.
@@ -113,14 +118,16 @@ jobs:
           # cargo fingerprints by rustc version itself, so a toolchain change
           # rebuilds rather than reusing the wrong artifacts.
           add-rust-environment-hash-key: false
-          # Intermediate artifacts live outside the checkout so worktrees can
-          # share them, and rust-cache only saves workspace target dirs plus the
-          # registry and git caches by default. Name the build dir explicitly or
-          # every run would recompile the dependency graph from scratch.
-          cache-directories: ~/.cargo/build/browseros
 
       - name: Install dependencies
         run: bun ci
+
+      # Local fixture tests only: this must never submit a job to the shared fleet.
+      # Transfer fixtures additionally require the complete pinned Crabbox release;
+      # those are run manually as documented in tools/remote-builds/README.md.
+      - name: Check remote-build admission and cleanup helpers
+        if: matrix.suite == 'claw-sdk-quality'
+        run: python3 -m unittest discover -s tools/remote-builds -p 'test_*.py' -v
 
       - name: Resolve BrowserOS cache key
         if: matrix.needs_browser == true
@@ -160,7 +167,7 @@ jobs:
           #!/usr/bin/env bash
           set -euo pipefail
           export APPIMAGE_EXTRACT_AND_RUN=1
-          # Chromium's hidden-window APIs require a real X11 platform.
+          # Cases that match hosted Neo's headed rendering need an X11 display.
           if [ "${BROWSEROS_TEST_HEADLESS:-true}" = "false" ]; then
             export XDG_SESSION_TYPE=x11
             exec xvfb-run --auto-servernum "$(dirname "$0")/BrowserOS.AppImage" "$@"
@@ -177,8 +184,8 @@ jobs:
         id: test
         env:
           BROWSEROS_BINARY: ${{ github.workspace }}/packages/browseros-agent/.ci/bin/browseros
-          # The hidden-window APIs that required X11 have been retired. Use the
-          # suite's headless default so native input does not depend on Xvfb focus.
+          # Keep the suite headless by default. Individual visual cases can
+          # request headed rendering; the wrapper starts Xvfb for those launches.
           BROWSEROS_TEST_HEADLESS: "true"
           BROWSEROS_TEST_EXTRA_ARGS: --no-sandbox --disable-dev-shm-usage
           BROWSEROS_JUNIT_PATH: ${{ github.workspace }}/packages/browseros-agent/${{ matrix.junit_path }}

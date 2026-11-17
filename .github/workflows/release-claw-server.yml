@@ -276,7 +276,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-14
+          - runner: macos-26
           - runner: windows-latest
 
     steps:
@@ -312,13 +312,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Both macOS targets build on the arm64 image. darwin-x64 cross-compiles,
+          # and its "Verify stamped binary version" step runs the x86_64 binary
+          # under Rosetta 2, which GitHub installs on its arm64 macOS images.
           - target: darwin-arm64
             rust_target: aarch64-apple-darwin
-            runner: macos-14
+            runner: macos-26
             binary_ext: ""
           - target: darwin-x64
             rust_target: x86_64-apple-darwin
-            runner: macos-14
+            runner: macos-26
             binary_ext: ""
           - target: linux-arm64
             rust_target: aarch64-unknown-linux-gnu
@@ -458,6 +461,15 @@ jobs:
           # The requested source ref can predate the source package rename.
           # Resolve its package identity from that checkout's release descriptor.
           server_package="$(uv run --directory ../browseros python -c 'from bos_build.release.components import component_by_id; print(component_by_id("claw-server-rust").package_name)')"
+          # rustc links macOS binaries for its per-arch default minimum, but the
+          # cc crate compiles the C dependencies (aws-lc, ring, SQLite, QuickJS)
+          # for the runner's Xcode SDK version when this is unset. Pin it to
+          # rustc's defaults so the shipped minimum macOS stays fixed across
+          # runner images.
+          case "$RUST_TARGET" in
+            aarch64-apple-darwin) export MACOSX_DEPLOYMENT_TARGET=11.0 ;;
+            x86_64-apple-darwin) export MACOSX_DEPLOYMENT_TARGET=10.12 ;;
+          esac
           cargo build --release --locked --target "$RUST_TARGET" \
             -p "$server_package" \
             --bin browseros-claw-server-rs

@@ -1,0 +1,7 @@
+<!doctype html><meta charset=utf-8><title>Middle frame</title>
+<style> body { margin: 0; } iframe { width: 360px; height: 120px; border: 0; display: block; } </style>
+<!-- A frame between the top page and the sign-in frame: it loads ?frame= and holds nothing else. -->
+<iframe title="Inner frame"></iframe>
+<script>
+  document.querySelector('iframe').src = new URLSearchParams(location.search).get('frame')
+</script>

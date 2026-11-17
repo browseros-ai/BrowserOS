@@ -1,0 +1,16 @@
+const url = args.base + '/links.html';
+await page.goto(url);
+await page.evaluate(() => { window.navigationSentinel = 'same-document'; });
+
+// Subscribe before goto so a fast file response cannot outrun the download listener.
+const pendingDownload = page.waitForEvent('download');
+let navigationError = null;
+try { await page.goto(args.base + '/files/report.txt'); }
+catch (error) { navigationError = { message: error.message, code: error.code }; }
+const download = await pendingDownload;
+const filename = download.suggestedFilename();
+assert(filename && /report/.test(filename), 'the browser reports the download', { filename, navigationError });
+
+const state = await page.evaluate(() => ({ url: location.href, sentinel: window.navigationSentinel }));
+equal(state, { url, sentinel: 'same-document' }, 'download preserves the existing document and URL');
+return { filename, navigationError, state };

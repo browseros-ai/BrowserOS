@@ -1,0 +1,19 @@
+// Source port of act-015 at a7e536e152a4835abe9974498b27a5c927dd2e0d. Execution is owned by the coordinator.
+
+// A ref is opaque. SDK child-frame refs include a document prefix, unlike desktop eN refs.
+const g1aRef = (snapshot, needle) => {
+  const row = snapshot.split('\n').find(line =>
+    line.replace(/\s+"/g, '"').includes(needle) && /\[ref=([^\]\s]+)\]/.test(line));
+  assert(row, 'snapshot has a ref for ' + needle, snapshot);
+  return row.match(/\[ref=([^\]\s]+)\]/)[1];
+};
+await page.goto(args.base + '/form.html');
+const firstSnapshot = await page.ariaSnapshot();
+await page.getByRef(g1aRef(firstSnapshot, 'Subscribe')).click();
+const first = await page.locator('#subscribe').isChecked();
+equal(first, true, 'first checkbox click checks it');
+const secondSnapshot = await page.ariaSnapshot();
+await page.getByRef(g1aRef(secondSnapshot, 'Subscribe')).click();
+const second = await page.locator('#subscribe').isChecked();
+equal(second, false, 'second checkbox click unchecks it');
+return { first, second, firstSnapshot, secondSnapshot };

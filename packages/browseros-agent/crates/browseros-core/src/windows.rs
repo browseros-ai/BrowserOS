@@ -81,7 +81,7 @@ impl WindowManager {
 #[cfg(test)]
 mod tests {
     use super::WindowManager;
-    use crate::test_support::TestConnection;
+    use crate::testing::TestConnection;
     use serde_json::json;
     use std::error::Error;
 

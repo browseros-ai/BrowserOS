@@ -84,6 +84,7 @@ def create_release_context(
         chromium_src=root,
         architecture="",
         build_type="release",
+        artifact_only=True,
         product=_resolve_product(product),
     )
     ctx.release_version = version

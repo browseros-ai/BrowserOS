@@ -7,6 +7,7 @@ pub mod recording_streams;
 pub mod run_error_budget;
 pub mod session_efficiency_stats;
 pub mod session_tabs;
+pub mod skill_flows;
 pub mod skill_run_marks;
 pub mod skill_runs;
 pub mod skills;
@@ -25,6 +26,7 @@ pub mod prelude {
     pub use super::run_error_budget::Entity as RunErrorBudget;
     pub use super::session_efficiency_stats::Entity as SessionEfficiencyStats;
     pub use super::session_tabs::Entity as SessionTabs;
+    pub use super::skill_flows::Entity as SkillFlows;
     pub use super::skill_run_marks::Entity as SkillRunMarks;
     pub use super::skill_runs::Entity as SkillRuns;
     pub use super::skills::Entity as Skills;

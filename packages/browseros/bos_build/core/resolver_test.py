@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest import mock
 
 from bos_build.core.resolver import resolve_config, resolve_pipeline
-from bos_build.lib.testing import MockChromium
+from bos_build.lib.testing import MockBrowserOSRoot, MockChromium
 
 
 class ResolveConfigDirectModeTest(unittest.TestCase):
@@ -22,8 +22,12 @@ class ResolveConfigDirectModeTest(unittest.TestCase):
     def test_cli_chromium_src_and_arch_resolve(self):
         with tempfile.TemporaryDirectory() as tmp:
             m = MockChromium(Path(tmp))
+            package = MockBrowserOSRoot(
+                Path(tmp) / "patches", chromium_version="158.0.8127.18"
+            ).with_patch_store()
             cli_args = {
                 "chromium_src": str(m.src),
+                "patch_root": package.root,
                 "arch": "arm64",
                 "build_type": "release",
             }
@@ -33,6 +37,18 @@ class ResolveConfigDirectModeTest(unittest.TestCase):
             self.assertEqual(contexts[0].architecture, "arm64")
             self.assertEqual(contexts[0].build_type, "release")
             self.assertEqual(contexts[0].product.id, "browseros")
+
+    def test_external_patch_package_reaches_direct_context(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            chromium = MockChromium(Path(tmp) / "chromium")
+            package = MockBrowserOSRoot(
+                Path(tmp) / "patches", chromium_version="158.0.8127.18"
+            ).with_patch_store()
+            contexts = resolve_config(
+                {"chromium_src": chromium.src, "patch_root": package.root}
+            )
+            self.assertEqual(contexts[0].get_patch_root(), package.root.resolve())
+            self.assertEqual(contexts[0].chromium_version, "158.0.8127.18")
 
     def test_env_chromium_src_used_when_no_cli(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -1,0 +1,86 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.5.0/schema.json",
+  "vcs": {
+    "enabled": true,
+    "clientKind": "git",
+    "useIgnoreFile": true
+  },
+  "files": {
+    "ignoreUnknown": false,
+    "includes": [
+      "**",
+      "!.scripts",
+      "!**/*.svg",
+      "!packages/claw-api/src/generated",
+      "!packages/agent-cursor/src",
+      "!packages/agent-cursor/tests/fixtures/golden.json",
+      "!contracts/claw-mcp/fixtures/pages",
+      "!crates/neo-sdk/neo-captcha/testbed/fixtures/pages",
+      "!crates/browseros-core/tests/data/captured",
+      "!crates/browseros-core/src/assets/agent-cursor.js",
+      "!crates/neo-sdk/neo-playwright/third_party",
+      "!crates/neo-sdk/neo-playwright/assets",
+      "!crates/neo-sdk/neo-playwright/tests/data",
+      "!crates/neo-sdk/neo-server/tests/behavior/pages",
+      // run() bodies: a function body with top-level await and return, which Biome cannot parse as a module
+      "!crates/neo-sdk/neo-server/docker/devkit/examples/*.js",
+      "!crates/neo-sdk/neo-server/conformance/inventory.json",
+      "!crates/neo-sdk/neo-playwright-js/tests/data",
+      "!crates/neo-sdk/neo-playwright-js/src/prelude/generated",
+      "!crates/neo-sdk/neo-playwright-js/src/probe/generated.ts",
+      "!apps/server/src/lib/db/migrations"
+    ]
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "recommended",
+      "correctness": {
+        "noUnusedImports": "error",
+        "noUnusedVariables": "error"
+      },
+      "nursery": {
+        "useSortedClasses": "error"
+      },
+      "complexity": {
+        "noExcessiveCognitiveComplexity": {
+          "level": "warn",
+          "options": {
+            "maxAllowedComplexity": 30
+          }
+        }
+      }
+    }
+  },
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "single",
+      "semicolons": "asNeeded"
+    }
+  },
+  "assist": {
+    "enabled": true,
+    "actions": {
+      "source": {
+        "organizeImports": "on"
+      }
+    }
+  },
+  "overrides": [
+    {
+      "includes": ["**/scripts/dev/inspect-ui.ts"],
+      "linter": {
+        "rules": {
+          "complexity": {
+            "noExcessiveCognitiveComplexity": "off"
+          }
+        }
+      }
+    }
+  ]
+}

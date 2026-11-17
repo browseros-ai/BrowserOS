@@ -105,7 +105,7 @@ Each page entrypoint owns a `react-router` v7 `HashRouter` with one central rout
 - From the monorepo root, run `bun run fallow` before pushing. It flags unused files/exports, circular dependencies, and private-type leaks (`.fallowrc.json`); `generated/**` is ignored, and fallow skips its unused/leak checks for `components/ui/**` and `components/ai-elements/**`.
 - Colocate a feature's pieces with the entrypoint that owns them — its `graphql/` documents, `*.helpers.ts`, and `*.test.ts` sit next to it. Only genuinely shared code goes in `lib/` or `components/`, imported via the `@/` alias.
 - Biome owns formatting and import order — run `bun run lint:fix` rather than hand-formatting.
-- Comments: default to none and explain *why*, not *what*; see `packages/browseros-agent/CLAUDE.md` for the full rule.
+- Comments: follow "Code comments" in `packages/browseros-agent/CLAUDE.md`.
 
 ## Analytics
 

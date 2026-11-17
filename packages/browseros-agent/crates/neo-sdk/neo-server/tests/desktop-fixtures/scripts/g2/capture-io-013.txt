@@ -1,0 +1,27 @@
+/** Native chooser handles retain the exact input; event registration precedes the activating input. */
+function file(name, text) { return {name, mimeType:'text/plain', buffer:Buffer.from(text)}; }
+async function choose(p, action) {
+  const waiting = p.waitForEvent('filechooser', {timeout:5000});
+  await action();
+  const chooser = await waiting;
+  assert(chooser.page() === p, 'chooser belongs to the initiating page');
+  return chooser;
+}
+
+await page.goto(args.base + '/upload.html');
+const counts = [];
+await page.locator('#upload-button').focus();
+const typed = await choose(page, () => page.keyboard.press('Enter'));
+await typed.setFiles([]);
+counts.push(await page.locator('#hidden-file').evaluate(input => input.files.length));
+await page.locator('#upload-button').focus();
+const scripted = await choose(page, () => page.locator('#upload-button').press('Enter'));
+await scripted.setFiles([]);
+counts.push(await page.locator('#hidden-file').evaluate(input => input.files.length));
+const box = await page.locator('#upload-button').boundingBox();
+assert(box,'coordinate typing target has a native box');
+const coordinate = await choose(page, () => page.mouse.click(box.x + box.width/2,box.y + box.height/2));
+await coordinate.setFiles([]);
+counts.push(await page.locator('#hidden-file').evaluate(input => input.files.length));
+equal(counts,[0,0,0],'each observed picker can be completed with an empty selection');
+return {fileChooserEvents:counts.length,counts,point:{x:box.x+box.width/2,y:box.y+box.height/2}};

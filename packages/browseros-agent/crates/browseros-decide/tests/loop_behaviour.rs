@@ -12,10 +12,11 @@ use browseros_decide::client::{Answer as RawAnswer, JevError, Question, Response
 use browseros_decide::drive::{ActError, Driver, Move, Performed};
 use browseros_decide::gate::Handback;
 use browseros_decide::offer::{Destination, NamedValue};
-use browseros_decide::pursue::{Oracle, Status, Stuck, advance};
+use browseros_decide::pursue::{Oracle, Status, Stuck, advance, advance_writing};
 use browseros_decide::run::{Budget, Offered, Run};
 use browseros_decide::view::{Control, ControlState, PageView};
 use browseros_decide::vocabulary::{How, Operation};
+use browseros_decide::writer::{Field, Writer, WriterError};
 
 /// A model that answers from a script, so a scenario is written rather than
 /// hoped for.
@@ -673,6 +674,179 @@ async fn a_fill_with_no_value_available_hands_back() {
         panic!("expected a hand-back, got {:?}", outcome.status);
     };
     assert_eq!(why, Handback::NoFieldNamed);
+}
+
+/// A writer that answers from a list and remembers the fields it was asked about.
+struct Pen {
+    replies: Vec<String>,
+    asked: RefCell<Vec<Field>>,
+}
+
+impl Pen {
+    fn new(replies: &[&str]) -> Self {
+        Self {
+            replies: replies.iter().map(|reply| (*reply).to_string()).collect(),
+            asked: RefCell::new(Vec::new()),
+        }
+    }
+}
+
+impl Writer for Pen {
+    async fn candidates(&self, _goal: &str, field: &Field) -> Result<Vec<String>, WriterError> {
+        self.asked.borrow_mut().push(field.clone());
+        Ok(self.replies.clone())
+    }
+}
+
+fn typed(driver: &Fake) -> Vec<String> {
+    driver
+        .ran()
+        .iter()
+        .filter_map(|act| match act {
+            Move::Act(decision) if decision.how == Some(How::Fill) => decision.value.clone(),
+            _ => None,
+        })
+        .collect()
+}
+
+/// With nothing supplied, the writer proposes values, jev picks one, and that one is typed.
+#[tokio::test]
+async fn a_fill_with_nothing_supplied_types_the_written_value_jev_picks() {
+    let view = page(
+        "https://shop.test/search?q=old&session=abc",
+        1,
+        vec![
+            control("e1", "searchbox", "Search the shop"),
+            control("e2", "link", "Something else"),
+        ],
+    );
+    let driver = Fake::new(view);
+    let oracle = Scripted::new(vec![
+        vec![
+            ("operation", choice("ACT", 0.95)),
+            ("act_how", choice("FILL", 0.95)),
+            ("target", choice("e1", 0.95)),
+        ],
+        vec![("wrote", choice("v1", 0.9))],
+        vec![("operation", choice("DONE", 0.95))],
+    ]);
+    let pen = Pen::new(&[
+        "sensodyne",
+        "sensodyne fresh mint 150g",
+        "Sensodyne Fresh Mint",
+    ]);
+
+    let outcome = advance_writing(
+        &oracle,
+        &driver,
+        Some(&pen),
+        run_for("find sensodyne fresh mint"),
+    )
+    .await;
+
+    assert_eq!(outcome.status, Status::Satisfied);
+    assert_eq!(typed(&driver), vec!["sensodyne fresh mint 150g"]);
+    assert_eq!(outcome.writes, 1);
+    let asked = pen.asked.borrow();
+    assert_eq!(
+        asked[0].site, "https://shop.test",
+        "only the origin reaches the writer"
+    );
+    assert_eq!(asked[0].name, "Search the shop");
+}
+
+/// jev refusing every written value is a hand-back that names the field, not a guess.
+#[tokio::test]
+async fn none_of_the_written_values_fitting_hands_back() {
+    let view = page(
+        "https://shop.test/",
+        1,
+        vec![
+            control("e1", "textbox", "Gift message"),
+            control("e2", "link", "Something"),
+        ],
+    );
+    let driver = Fake::new(view);
+    let oracle = Scripted::new(vec![
+        vec![
+            ("operation", choice("ACT", 0.95)),
+            ("act_how", choice("FILL", 0.95)),
+            ("target", choice("e1", 0.95)),
+        ],
+        vec![("wrote", choice("none_of_these", 0.9))],
+    ]);
+    let pen = Pen::new(&["happy birthday"]);
+
+    let outcome = advance_writing(&oracle, &driver, Some(&pen), run_for("send a gift")).await;
+
+    let Status::NeedsInput(why, said) = outcome.status else {
+        panic!("expected a hand-back, got {:?}", outcome.status);
+    };
+    assert_eq!(why, Handback::NoFieldNamed);
+    assert!(said.contains("Gift message"), "{said}");
+    assert!(typed(&driver).is_empty());
+}
+
+/// A secret field is refused before the writer is asked, so it never leaves the machine.
+#[tokio::test]
+async fn a_password_field_is_never_sent_to_the_writer() {
+    let view = page(
+        "https://shop.test/login",
+        1,
+        vec![
+            control("e1", "textbox", "Password"),
+            control("e2", "link", "Help"),
+        ],
+    );
+    let driver = Fake::new(view);
+    let oracle = Scripted::new(vec![vec![
+        ("operation", choice("ACT", 0.95)),
+        ("act_how", choice("FILL", 0.95)),
+        ("target", choice("e1", 0.95)),
+    ]]);
+    let pen = Pen::new(&["hunter2"]);
+
+    let outcome = advance_writing(&oracle, &driver, Some(&pen), run_for("sign in")).await;
+
+    assert!(
+        matches!(outcome.status, Status::Blocked(_)),
+        "{:?}",
+        outcome.status
+    );
+    assert!(pen.asked.borrow().is_empty());
+    assert!(typed(&driver).is_empty());
+}
+
+/// Only unusable values (blank, multi-line) means nothing to choose between, so jev is not asked.
+#[tokio::test]
+async fn unusable_written_values_hand_back_without_asking_again() {
+    let view = page(
+        "https://shop.test/",
+        1,
+        vec![
+            control("e1", "searchbox", "Search"),
+            control("e2", "link", "Something"),
+        ],
+    );
+    let driver = Fake::new(view);
+    let oracle = Scripted::new(vec![vec![
+        ("operation", choice("ACT", 0.95)),
+        ("act_how", choice("FILL", 0.95)),
+        ("target", choice("e1", 0.95)),
+    ]]);
+    let pen = Pen::new(&["", "two\nlines"]);
+
+    let outcome = advance_writing(&oracle, &driver, Some(&pen), run_for("search")).await;
+
+    assert!(matches!(
+        outcome.status,
+        Status::NeedsInput(Handback::NoFieldNamed, _)
+    ));
+    assert_eq!(
+        oracle.heads_asked().len(),
+        1,
+        "no second question was asked"
+    );
 }
 
 /// A run may only move between pages so many times, so a goal that is really a

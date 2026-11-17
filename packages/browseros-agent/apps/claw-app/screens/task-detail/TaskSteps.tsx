@@ -9,6 +9,7 @@ import {
   Send,
   TriangleAlert,
   Type,
+  Zap,
 } from 'lucide-react'
 import { useReducedMotion } from 'motion/react'
 import { useEffect, useId, useRef } from 'react'
@@ -17,7 +18,8 @@ import { Card } from '@/components/motion/card'
 import type { DescribedStep } from '@/lib/step-sentences'
 import { cn } from '@/lib/utils'
 import type { ReplayVerb } from '@/modules/api/replay.hooks'
-import { offsetLabel } from './task-detail.helpers'
+import { NeoRun } from './NeoRun'
+import { offsetLabel, railItems } from './task-detail.helpers'
 
 interface TaskStepsProps {
   steps: DescribedStep[]
@@ -30,6 +32,12 @@ interface TaskStepsProps {
   onSelect: (step: DescribedStep) => void
   /** "rail" drops the card chrome to fill a side panel, as in full screen. */
   layout?: 'card' | 'rail'
+  /** The agent's name, for where neo hands the page back. */
+  agent?: string
+  /** The neo run whose ending is the chosen row, by its takeover's index. */
+  chosenRunEnd?: number | null
+  /** Chooses the end of the neo run that starts at `takeover`. */
+  onSelectRunEnd?: (takeover: number) => void
 }
 
 const VERB_ICON: Record<ReplayVerb, LucideIcon> = {
@@ -39,6 +47,7 @@ const VERB_ICON: Record<ReplayVerb, LucideIcon> = {
   type: Type,
   attach: Paperclip,
   submit: Send,
+  browse: Zap,
   done: Check,
 }
 
@@ -55,6 +64,9 @@ export function TaskSteps({
   onShowHiddenChange,
   onSelect,
   layout = 'card',
+  agent = 'your agent',
+  chosenRunEnd = null,
+  onSelectRunEnd,
 }: TaskStepsProps) {
   const reduce = useReducedMotion() ?? false
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -74,6 +86,8 @@ export function TaskSteps({
       behavior: reduce ? 'auto' : 'smooth',
     })
   }, [activeIndex, reduce])
+
+  const items = railItems(steps)
 
   const progress =
     activeIndex >= 0
@@ -98,17 +112,39 @@ export function TaskSteps({
           </p>
         ) : (
           <ol className="flex flex-col">
-            {steps.map((step, index) => (
-              <StepRow
-                key={step.dispatchIds[0] ?? index}
-                step={step}
-                index={index}
-                activeIndex={activeIndex}
-                last={index === steps.length - 1}
-                time={offsetLabel(step.firstAt, startedAt)}
-                onSelect={onSelect}
-              />
-            ))}
+            {items.map((item, position) => {
+              const last = position === items.length - 1
+              if (item.kind === 'run') {
+                const takeover = steps[item.takeover]
+                return (
+                  <NeoRun
+                    key={takeover?.dispatchIds[0] ?? item.takeover}
+                    run={item}
+                    steps={steps}
+                    activeIndex={activeIndex}
+                    endChosen={chosenRunEnd === item.takeover}
+                    agent={agent}
+                    startedAt={startedAt}
+                    last={last}
+                    onSelect={onSelect}
+                    onSelectEnd={() => onSelectRunEnd?.(item.takeover)}
+                  />
+                )
+              }
+              const step = steps[item.index]
+              if (!step) return null
+              return (
+                <StepRow
+                  key={step.dispatchIds[0] ?? item.index}
+                  step={step}
+                  index={item.index}
+                  activeIndex={activeIndex}
+                  last={last}
+                  time={offsetLabel(step.firstAt, startedAt)}
+                  onSelect={onSelect}
+                />
+              )
+            })}
           </ol>
         )}
       </div>

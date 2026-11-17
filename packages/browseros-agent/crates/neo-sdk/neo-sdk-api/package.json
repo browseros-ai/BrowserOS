@@ -1,0 +1,9 @@
+{
+  "name": "@browseros/neo-sdk-api-rust",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "lint:rust": "cargo fmt --package neo-sdk-api -- --check && cargo clippy --package neo-sdk-api --all-targets --locked -- -D warnings",
+    "test:rust": "cargo test --package neo-sdk-api --locked"
+  }
+}

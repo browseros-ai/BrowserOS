@@ -20,6 +20,7 @@ export type ReplayVerb =
   | 'type'
   | 'attach'
   | 'submit'
+  | 'browse'
   | 'done'
 
 export type ReplayKind = 'action' | 'block' | 'done'

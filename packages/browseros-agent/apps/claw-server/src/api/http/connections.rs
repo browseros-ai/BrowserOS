@@ -1,7 +1,7 @@
 use super::{error, internal};
 use crate::{
     AppState,
-    error::{CanonicalError, RequestId},
+    error::{AppError, CanonicalError, RequestId},
     services::harness::{ConnectionState, Harness as ServiceHarness},
 };
 use axum::{Extension, Json, extract::Path, extract::State, http::StatusCode};
@@ -36,7 +36,7 @@ pub(super) async fn connect(
         .harness
         .connect_browseros(harness, &state.config.public_mcp_url())
         .await
-        .map_err(|source| internal(&request_id, source))?;
+        .map_err(|source| update_error(&request_id, source))?;
     Ok(Json(to_contract(connection)))
 }
 
@@ -50,8 +50,19 @@ pub(super) async fn disconnect(
         .harness
         .disconnect_browseros(harness)
         .await
-        .map_err(|source| internal(&request_id, source))?;
+        .map_err(|source| update_error(&request_id, source))?;
     Ok(Json(to_contract(connection)))
+}
+
+fn update_error(request_id: &RequestId, source: AppError) -> CanonicalError {
+    match source {
+        // Policy refusals are actionable to the app; internal failures still use the
+        // redacted error response rather than exposing filesystem or storage details.
+        AppError::Http { status, message } => {
+            error(request_id, status, "connection_update_failed", &message)
+        }
+        source => internal(request_id, source),
+    }
 }
 
 fn parse_harness(request_id: &RequestId, raw: &str) -> Result<ServiceHarness, CanonicalError> {

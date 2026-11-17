@@ -54,6 +54,42 @@ Only the `configure` step writes `args.gn`. A plan that skips it (for example
 `--from compile`) reuses the existing file untouched, including any overrides a
 previous invocation wrote there.
 
+## External Chromium patch packages
+
+`--patch-root` selects another `packages/browseros` directory as the source of
+`CHROMIUM_VERSION`, `BASE_COMMIT`, `chromium_patches` (including ownership and
+store metadata), optional `v8_patches`, and `series_patches`. The version and
+canonical store base must agree. V8 patches run before Chromium patches, and
+their base must match the V8 gitlink in the selected Chromium base. Optional
+V8 store metadata and ownership are validated before execution; the gitlink
+check runs as soon as the Chromium commit is available, before source selection
+or reset. Symlinks inside external patch inputs are rejected so resume can
+identify all consumed bytes; a symlink to the package root itself is supported.
+
+Build code, profiles, GN flags, branding overlays, resource manifests, product
+version, and build offset still come from the repository running the command.
+Omitting `--patch-root` keeps the existing single-repository behavior.
+
+```bash
+# Inspect the selected inputs without a Chromium checkout.
+browseros build --preset debug --patch-root /path/to/internal/packages/browseros --show-plan
+
+# Use the selected package with an existing source checkout.
+browseros build --preset debug --chromium-src /path/to/chromium/src \
+  --patch-root /path/to/internal/packages/browseros
+```
+
+The option works with presets, modules profiles, and direct `--modules`/phase
+flags. It is a CLI-only path; profiles remain portable. When provisioning source
+separately, pass the same package's `CHROMIUM_VERSION` to `browseros source ensure` with
+`--version-file`.
+
+Resume checkpoints include the external pin files and patch-store contents,
+including V8 and platform series. Editing those inputs invalidates a prior
+checkpoint even when the build repository has not changed. External patch
+packages cannot be combined with `--lane-manifest`: release-lane evidence
+currently attests one source repository and cannot represent this split.
+
 ## Modules profiles — "you own this list now"
 
 For the rare run that genuinely wants an arbitrary sequence, a profile may carry

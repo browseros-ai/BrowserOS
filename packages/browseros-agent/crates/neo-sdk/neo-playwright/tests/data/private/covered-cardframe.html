@@ -1,0 +1,15 @@
+<!doctype html><meta charset=utf-8><title>Covered card frame</title>
+<style>#wrap { position: relative; width: 340px; height: 100px; } #wrap iframe { width: 340px; height: 100px; border: 0; }
+#outer { position: absolute; left: 0; top: 0; width: 320px; height: 36px; background: rgba(0, 0, 200, 0.3); z-index: 5; }</style>
+<h1>Pay</h1>
+<div id=wrap><iframe id=card></iframe></div>
+<script>
+// The card frame on another site. ?inner=cover|none goes to the frame (an overlay inside it);
+// ?outer=1 lays an overlay of this page over the frame's number box.
+const q = new URLSearchParams(location.search);
+// ?same=1: the frame on this page's own origin instead.
+// The other site is this server's other name (Neo's fixture server answers on both).
+const other = location.protocol + '//' + (location.hostname === 'localhost' ? '127.0.0.1' : 'localhost') + ':' + location.port;
+document.getElementById('card').src = (q.get('same') ? '' : other) + '/private/covered-card.html?mode=' + (q.get('inner') || 'cover');
+if (q.get('outer')) { const d = document.createElement('div'); d.id = 'outer'; document.getElementById('wrap').appendChild(d); }
+</script>

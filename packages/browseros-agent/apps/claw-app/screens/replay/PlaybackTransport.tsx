@@ -15,6 +15,8 @@ interface PlaybackTransportProps {
   /** Replayable activity for the whole session, not one tab's recording. */
   totalSeconds: number
   actions: readonly ReplayAction[]
+  /** Spans where neo drove the page, drawn as short Signal Blue bars under the track. */
+  neoMarks?: readonly { startAt: number; endAt: number }[]
   onSeek: (seconds: number) => void
   /** Shown but inert, while the recording is still loading. */
   disabled?: boolean
@@ -33,6 +35,7 @@ export function PlaybackTransport({
   playback,
   totalSeconds,
   actions,
+  neoMarks = [],
   onSeek,
   disabled = false,
   onToggleFullScreen,
@@ -81,6 +84,21 @@ export function PlaybackTransport({
         />
         {/* Same 10px inset as the slider's handle, so marks line up with time. */}
         <div className="pointer-events-none absolute inset-x-[10px] inset-y-0">
+          {neoMarks.map((mark) => {
+            const span = Math.max(totalSeconds, SCRUBBER_STEP)
+            return (
+              <span
+                key={`neo-${mark.startAt}`}
+                aria-hidden
+                data-neo-mark
+                style={{
+                  left: `${(mark.startAt / span) * 100}%`,
+                  width: `${((mark.endAt - mark.startAt) / span) * 100}%`,
+                }}
+                className="absolute -bottom-[5px] h-[3px] min-w-[3px] rounded-[1px] bg-primary"
+              />
+            )
+          })}
           {actions.map((action) => {
             const { frame } = action
             if (frame.kind === 'action') return null

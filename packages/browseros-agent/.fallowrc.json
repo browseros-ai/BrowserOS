@@ -15,8 +15,27 @@
     "scripts/run-bun-test.ts",
     "scripts/dev/inspect-ui.ts",
     "scripts/patch-windows-exe.ts",
+    "crates/neo-sdk/neo-server/src/runtime/js/abort_globals.js",
+    "crates/neo-sdk/neo-playwright-tests/node/filechooser-lifetime.test.mjs",
+    "crates/neo-sdk/neo-playwright-tests/node/child-frame-goto.test.mjs",
     "packages/agent-cursor/src/index.ts",
-    "packages/agent-cursor/scripts/classic-entry.ts"
+    "packages/agent-cursor/scripts/classic-entry.ts",
+    "crates/neo-sdk/neo-server/conformance/conformance.mjs",
+    "crates/neo-sdk/neo-server/conformance/src/diagnostic-plugin.cjs",
+    "crates/neo-sdk/neo-playwright-js/src/probe/index.ts",
+    "crates/neo-sdk/neo-playwright-js/src/prelude/index.ts",
+    "crates/neo-sdk/neo-playwright-js/src/main-world/index.ts",
+    "crates/neo-sdk/neo-playwright-js/scripts/build.ts",
+    "crates/neo-sdk/neo-playwright-js/scripts/probe-smoke.mjs",
+    "crates/neo-sdk/neo-playwright-js/scripts/capture-goldens.mjs",
+    "crates/neo-sdk/neo-playwright-js/scripts/port-keyboard-layout.ts",
+    "crates/neo-sdk/neo-playwright-js/scripts/capture-snapshot-fixture.mjs",
+    "crates/neo-sdk/neo-playwright-js/src/stubs/highlight.ts",
+    "crates/neo-sdk/neo-playwright-js/src/stubs/consoleApi.ts",
+    "crates/neo-sdk/neo-playwright-js/src/stubs/selectorEngine.ts",
+    "crates/neo-sdk/neo-playwright-js/src/stubs/protocol/structs.ts",
+    "crates/neo-sdk/neo-playwright-js/src/prelude/vendored-globals.ts",
+    "crates/neo-sdk/neo-playwright-js/src/probe/masked-strings.ts"
   ],
   "ignoreDependencies": [
     "tailwind-scrollbar-hide",
@@ -46,7 +65,9 @@
     "packages/cdp-protocol/src/generated/**",
     ".agents/skills/**",
     ".claude/skills/**",
-    "packages/agent-cursor/playground/**"
+    "packages/agent-cursor/playground/**",
+    "crates/neo-sdk/neo-playwright/third_party/**",
+    "crates/neo-sdk/neo-playwright/assets/**"
   ],
   "rules": {
     "unused-files": "warn",

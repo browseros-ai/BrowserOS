@@ -6,6 +6,13 @@ Run BrowserOS neo in a container and use it from your machine:
 - **Connect any agent** to Neo's MCP server and watch it work live in that tab.
 - **Keep your profile** (logins, history, downloads) in a folder you choose.
 
+The viewer shares text through your normal copy, cut and paste shortcuts (Command
+on Mac, Ctrl elsewhere), including Unicode and multiple lines. Copying requires a
+selection in the remote app; opening the viewer never replaces your clipboard.
+If clipboard access is denied or a copy cannot be confirmed, the Clipboard panel
+opens for manual transfer; click or tap the remote screen to dismiss it. Images
+and files are not transferred through this text clipboard.
+
 One image runs natively on Apple silicon Macs, arm64 Linux and x86-64 Linux.
 
 ## Quick start
@@ -68,7 +75,9 @@ on one source commit, use its `<version>-<commit>` tag (e.g. `0.52.0.1-169e41f`)
 replaces it. To pin exact image contents, use the digest.
 The server updater is disabled so the server stays at the version verified with
 the image. Pull a newer image and recreate the container to update it.
-The server's product analytics are off (`CLAW_ANALYTICS_ENABLED=0`).
+The server's product analytics and desktop feedback-cohort polling are off in hosted mode,
+even when analytics keys or saved consent are present. The image also sets
+`CLAW_ANALYTICS_ENABLED=0` for runs with hosted mode off.
 
 `BROWSERCLAW_HOSTED_MODE=1` gives agents the browser tools only. Skills (`save_skill`,
 `mark_skill_run`) and human help (`request_human_help`, `await_human_help`) are hidden, since
@@ -122,6 +131,43 @@ Recreate the container after editing the file.
 | Key | Values | Hosted default | Desktop default |
 |---|---|---|---|
 | `[tabs] grouping` | `"explicit"`: a page joins a group only when the agent passes `groupId`. `"auto"`: Neo keeps each task's pages in a `<client>/<task>` group it titles, collapses and closes. | `"explicit"` | `"auto"` |
+| `[tabs] close_after_minutes` | Positive whole minutes to keep finished sessions' tabs before automatic cleanup. Applies with either grouping mode. | `30` | `60` |
+| `[run] wall_timeout_seconds` | Positive whole seconds for a run's default and maximum execution budget, including browser calls and waits. | `60` | `60` |
+
+For example, to keep finished sessions' tabs for 90 minutes:
+
+```toml
+[tabs]
+close_after_minutes = 90
+```
+
+The grace period starts when a session ends. The separate session idle timeout remains
+30 minutes by default. Both automatic group cleanup and individual-tab cleanup use this
+grace period; individual-tab cleanup skips active tabs and tabs owned by a live session.
+Cleanup runs once per minute by default. Existing `CLAW_SESSION_RETENTION_MS` overrides
+remain a fallback; a valid `close_after_minutes` in the file takes precedence.
+
+For longer browser scripts, configure the run budget in the same file:
+
+```toml
+[run]
+wall_timeout_seconds = 120
+```
+
+The `run` tool advertises the configured default and maximum in milliseconds.
+A call may request a shorter `timeout`; a value above the deployment limit is
+rejected before script execution. Saved flows use this same limit and hand back
+earlier to leave time for a page snapshot. Individual browser operations retain
+their own timeouts. Expiry stops the script; browser actions already sent are not
+rolled back, so inspect their outcome before retrying.
+
+This bounds script execution, not the complete HTTP response: admission and
+output publication can add time. Configure the MCP client's and any proxy's
+request timeout above the run budget (for example, 90 seconds for a 60-second
+run). The MCP TypeScript SDK defaults to a 60-second request timeout; increasing
+Neo's budget alone does not extend that client timeout. Recreate the container
+after editing this startup setting. Invalid values retain the default and emit
+a warning, following the behaviour-file rules above.
 
 The server logs the values it runs with at startup (`server behaviour`).
 
@@ -156,6 +202,11 @@ docker run ... -e NEO_ARGS="--disable-browseros-features=VerticalTabs,HomeButton
 The bookmarks bar and the window buttons have no names. Every container start turns the bar
 off with a managed policy and gives the window an empty GTK button layout.
 
+In hosted mode (`BROWSERCLAW_HOSTED_MODE=1`, the image default) the browser also skips Chromium's
+"To exit full screen, press and hold Esc" notice when it goes full screen itself, as an owner's
+phone view does (F11). A page that goes full screen keeps its notice. Browsers built before this
+change show the notice.
+
 ### Zoom
 
 Viewers can't zoom Neo: the page in the viewer is the page your agent works in. To see it bigger,
@@ -172,6 +223,8 @@ zoom your own browser or device.
   (`Input.synthesizePinchGesture`).
 - `setViewport`'s `zoom` scales its mobile preview through DevTools emulation, not browser zoom,
   and still works, as does F11 fullscreen.
+- In `setViewport`'s mobile mode the mouse acts as a finger, as in DevTools' device mode: a drag
+  scrolls or draws as a touch would, and a double tap does not zoom.
 
 ### Bundled extensions
 
@@ -259,9 +312,58 @@ Everything Neo keeps lives under `/data` by default:
 /data/downloads    Neo's Downloads folder
 ```
 
+Downloads use `$NEO_DATA_DIR/downloads` by default. `NEO_DOWNLOAD_DIR` can point to a separate absolute directory inside the container, so an agent can share downloaded files without sharing Neo's profile. Startup fixes this directory and disables Save As prompting for every browser profile, including reused ones. Chrome still chooses collision-free filenames; MCP reports the completed file's actual path over CDP without bundled extensions.
+
+For a VM folder mounted at the same path in the agent and Neo:
+
+```sh
+docker run --rm --shm-size=1g \
+  -p 127.0.0.1:6080:6080 -p 127.0.0.1:9010:9010 \
+  -v "$HOME/neo-data:/data" \
+  --mount type=bind,src=/workspace/files,dst=/workspace/files \
+  -e NEO_DOWNLOAD_DIR=/workspace/files/downloads \
+  ghcr.io/browseros-ai/neo:latest
+```
+
+Create `/workspace/files` on the VM first and ensure the configured `PUID`/`PGID` can access it. Neo creates and owns the download directory itself; it does not change a shared parent's ownership. Compose accepts `NEO_DOWNLOAD_DIR` too; an external folder needs a corresponding mount in your Compose override.
+
+To attach a file to a website, pass its container-visible path to `upload` with either a file-input ref or an upload-button ref. An intercepted chooser from another action returns `fileChooserOpen: true`; call `upload` with `file`/`files` and omit `ref` to finish selection. `files: []` clears the selection. The files must already exist in the VM/shared mount. Selecting them does not submit the website form or transfer a laptop attachment into the VM.
+
+MCP output files live under `$NEO_DATA_DIR/tool-output` by default. Set
+`NEO_OUTPUT_DIR` to a different absolute directory to place them on another mount;
+the entrypoint passes it to the server as `BROWSEROS_OUTPUT_DIR`. The layout is
+`tool-output/<session-key>/<output-id>/`, with typed parts and a `manifest.json`.
+Session keys are path-safe encodings of the logical Neo session, so reconnecting
+with the same session handle can retrieve the same output. Directories are private
+(0700), files are 0600, and references expire after 24 hours. Expired outputs are
+removed on the next publication in that session. Each session can retain up to 128
+outputs / 128 MiB, with at most 64 parts per output and 64 MiB per part.
+
+Small text results stay inline. Larger results, PDFs, completed downloads and
+explicit screenshot captures return an `output` descriptor containing an ID and
+named parts; automatic snapshots/diffs and files produced inside `run` share the
+outer call's ID. Direct screenshots remain inline images; nested scripts receive
+up to four inline captures / 8 MiB of encoded image data, with additional captures
+available through the output reference. One part slot is reserved for the primary
+result. If retaining a part fails, available attachments are still published and
+the reference includes warnings rather than requiring an action to be repeated.
+`result.json` contains the complete primary result
+as `{isError, structuredContent, text}`, including unabridged JSON values/logs.
+Inline text defaults are 30,000 UTF-8 bytes for `run` (about 10,000 estimated
+tokens), and 15,000 bytes for `read`, `grep` and `evaluate_in_page` (about 5,000).
+`run` and `evaluate_in_page` accept a per-call `maxChars` byte budget capped at
+150,000 bytes (about 50,000 estimated tokens). This inline ceiling is separate
+from `run`'s 2,000,000-byte return-value limit: larger accepted results are saved
+whole and returned as an inline preview plus an output reference.
+Use `read_output` with the same `session` and `outputId`; omit `part` to list parts. Text reads return
+`nextOffset` for the next bounded chunk. Images up to 4 MiB can be read inline;
+`encoding="base64"` transfers exact binary chunks for importing/sending a file.
+Retrieval never repeats the browser action. These are temporary Neo artifacts;
+callers choose when to import them into their own persistent file store.
+
 `NEO_DATA_DIR` changes the directory **inside the container**. For example, a
 derived image can set `NEO_DATA_DIR=/var/lib/mirror/browseros`; Neo then uses
-`profile`, `browserclaw`, and `downloads` below that directory. Mount that directory
+`profile`, `browserclaw`, `downloads`, and `tool-output` below that directory. Mount that directory
 or a persistent parent explicitly:
 
 ```sh

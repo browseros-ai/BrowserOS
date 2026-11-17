@@ -1,11 +1,19 @@
 import { describe, expect, it } from 'bun:test'
-import type { Skill } from '@browseros/claw-api'
+import type { Skill, SkillUltrafast } from '@browseros/claw-api'
 import {
+  chosenLine,
+  durationLabel,
+  healthLine,
   neoName,
   parseSkillBody,
+  runModeCounts,
+  runModeLabel,
+  runSpeed,
+  runsChoice,
   skillCommand,
   skillSites,
   stuckWhile,
+  ultrafastBadge,
   usedLabel,
   worksInAgents,
 } from './skills.helpers'
@@ -152,5 +160,156 @@ describe('stuckWhile', () => {
     expect(stuckWhile('navigate')).toBe('Got stuck while opening a page.')
     expect(stuckWhile('act')).toBe('Got stuck while clicking on a page.')
     expect(stuckWhile(undefined)).toBe('Got stuck before it finished.')
+  })
+})
+
+const ultrafast = (patch: Partial<SkillUltrafast>): SkillUltrafast => ({
+  status: 'verified',
+  flowVersion: 1,
+  writeApproved: false,
+  ...patch,
+})
+
+describe('ultrafastBadge', () => {
+  it('names each state and stays quiet for a plain skill', () => {
+    expect(ultrafastBadge(ultrafast({}))?.label).toBe('Ultrafast')
+    expect(ultrafastBadge(ultrafast({ status: 'degraded' }))?.tone).toBe(
+      'warning',
+    )
+    expect(ultrafastBadge(ultrafast({ status: 'broken' }))?.tone).toBe('danger')
+    expect(ultrafastBadge(ultrafast({ status: 'none' }))).toBeNull()
+    expect(ultrafastBadge(undefined)).toBeNull()
+  })
+})
+
+describe('healthLine', () => {
+  it('says when it was checked and repaired, and how fast it runs', () => {
+    const now = new Date(2026, 9, 29, 12).getTime()
+    const yesterday = new Date(2026, 9, 28, 9).getTime()
+    expect(
+      healthLine(
+        ultrafast({ verifiedAt: now, repairedAt: yesterday, p50Ms: 1240 }),
+        now,
+      ),
+    ).toBe('Checked today · repaired yesterday · about 1.2 s a run')
+    expect(runSpeed(40)).toBe('about 0.1 s a run')
+  })
+})
+
+describe('runModeLabel', () => {
+  it('reads a handover in plain words and leaves normal runs unlabelled', () => {
+    expect(runModeLabel({ mode: 'ultrafast' })).toBe('Ultrafast')
+    expect(
+      runModeLabel({
+        mode: 'handed_back',
+        handoverStep: 2,
+        handoverCause: 'site_changed',
+      }),
+    ).toBe('Took over at step 2: the site changed')
+    expect(runModeLabel({ mode: 'agent' })).toBeNull()
+    expect(runModeLabel({})).toBeNull()
+  })
+
+  it('counts runs by how they went', () => {
+    expect(
+      runModeCounts([
+        { mode: 'ultrafast' },
+        { mode: 'ultrafast' },
+        { mode: 'handed_back' },
+        {},
+      ]),
+    ).toEqual({ ultrafast: 2, handedBack: 1, normal: 1 })
+  })
+})
+
+const writeRuns = (
+  patch: Partial<NonNullable<SkillUltrafast['runs']>>,
+): NonNullable<SkillUltrafast['runs']> => ({
+  mode: 'with_agent',
+  chosen: false,
+  reask: false,
+  click: 'Add it to the cart.',
+  site: 'amazon.in',
+  ...patch,
+})
+
+describe('runsChoice', () => {
+  const agentRuns = [
+    { mode: 'agent' as const, durationMs: 62_000 },
+    { mode: 'ultrafast' as const, durationMs: 11_000 },
+  ]
+
+  it('reads a read-only skill as nothing to choose', () => {
+    const choice = runsChoice(ultrafast({ p50Ms: 10_400 }), agentRuns)
+    expect(choice?.state).toBe('read')
+    expect(choice?.fastLabel).toBe('about 10 sec')
+    expect(choice?.slowLabel).toBe('about 1 min')
+  })
+
+  it('runs with the agent until the user chooses', () => {
+    const choice = runsChoice(
+      ultrafast({ effects: 'write', runs: writeRuns({}) }),
+      [],
+    )
+    expect(choice).toMatchObject({
+      state: 'choose',
+      selected: 'with_agent',
+      chip: 'Choose how it runs',
+      withoutLocked: false,
+    })
+    expect(choice?.slowLabel).toBeNull()
+  })
+
+  it('shows each chosen, re-asked, locked and always-with state', () => {
+    const state = (runs: NonNullable<SkillUltrafast['runs']>, locked = false) =>
+      runsChoice(ultrafast({ effects: 'write', runs, locked }), [])
+    expect(
+      state(writeRuns({ chosen: true, mode: 'without_agent' }))?.state,
+    ).toBe('without')
+    expect(state(writeRuns({ chosen: true }))?.state).toBe('with')
+    expect(state(writeRuns({ reask: true }))?.state).toBe('reask')
+    expect(state(writeRuns({ alwaysWithAgent: 'order' }))).toMatchObject({
+      state: 'always',
+      withoutLocked: true,
+      disabled: false,
+    })
+    expect(
+      state(writeRuns({ chosen: true, mode: 'without_agent' }), true),
+    ).toMatchObject({ state: 'locked', disabled: true, selected: 'with_agent' })
+  })
+
+  it('stays quiet without a working fast version', () => {
+    expect(runsChoice(ultrafast({ status: 'pending' }), [])).toBeNull()
+    expect(runsChoice(undefined, [])).toBeNull()
+  })
+})
+
+describe('chosenLine', () => {
+  it('says who chose and where', () => {
+    const now = new Date(2026, 10, 11, 18).getTime()
+    expect(
+      chosenLine(
+        writeRuns({
+          chosen: true,
+          via: 'chat',
+          client: 'Claude Code',
+          chosenAt: new Date(2026, 10, 11, 9).getTime(),
+        }),
+        now,
+      ),
+    ).toBe('You chose this in chat with Claude Code today')
+    expect(
+      chosenLine(writeRuns({ chosen: true, via: 'app', chosenAt: now }), now),
+    ).toBe('You chose this in BrowserOS today')
+    expect(chosenLine(writeRuns({}), now)).toBeNull()
+  })
+})
+
+describe('durationLabel', () => {
+  it('rounds to the way the page talks about time', () => {
+    expect(durationLabel(1_180)).toBe('about 1 sec')
+    expect(durationLabel(11_000)).toBe('about 11 sec')
+    expect(durationLabel(92_000)).toBe('about 2 min')
+    expect(durationLabel(undefined)).toBeNull()
   })
 })

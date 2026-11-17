@@ -258,6 +258,109 @@ impl SessionList {
     }
 }
 
+/// SessionPursueRun : What neo did with pursue in this session, derived from the steps it recorded while pursue ran.
+#[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SessionPursueRun {
+    /// How the session's last pursue ended: neo finished the goal, or handed the page back to the agent.
+    #[serde(rename = "outcome")]
+    pub outcome: SessionPursueRunOutcome,
+    /// Time the session's pursue calls took, in milliseconds.
+    #[serde(rename = "durationMs")]
+    pub duration_ms: i64,
+    /// The steps neo took on the page, in order.
+    #[serde(rename = "steps")]
+    pub steps: Vec<models::SessionPursueStep>,
+}
+
+impl SessionPursueRun {
+    /// What neo did with pursue in this session, derived from the steps it recorded while pursue ran.
+    pub fn new(
+        outcome: SessionPursueRunOutcome,
+        duration_ms: i64,
+        steps: Vec<models::SessionPursueStep>,
+    ) -> SessionPursueRun {
+        SessionPursueRun {
+            outcome,
+            duration_ms,
+            steps,
+        }
+    }
+}
+/// How the session's last pursue ended: neo finished the goal, or handed the page back to the agent.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+pub enum SessionPursueRunOutcome {
+    #[serde(rename = "completed")]
+    Completed,
+    #[serde(rename = "handed_back")]
+    HandedBack,
+}
+
+impl Default for SessionPursueRunOutcome {
+    fn default() -> SessionPursueRunOutcome {
+        Self::Completed
+    }
+}
+
+pub mod session_pursue_run {
+    pub use super::SessionPursueRunOutcome as Outcome;
+}
+
+/// SessionPursueStep : One thing neo did on the page during pursue.
+#[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SessionPursueStep {
+    /// The kind of step, as recorded.
+    #[serde(rename = "action")]
+    pub action: SessionPursueStepAction,
+    /// What the step carried when it was recorded: the text typed, the key pressed, the option chosen, or the site opened. Absent when nothing was recorded or the value was redacted.
+    #[serde(rename = "text", skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+}
+
+impl SessionPursueStep {
+    /// One thing neo did on the page during pursue.
+    pub fn new(action: SessionPursueStepAction) -> SessionPursueStep {
+        SessionPursueStep { action, text: None }
+    }
+}
+/// The kind of step, as recorded.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+pub enum SessionPursueStepAction {
+    #[serde(rename = "click")]
+    Click,
+    #[serde(rename = "type")]
+    Type,
+    #[serde(rename = "press")]
+    Press,
+    #[serde(rename = "check")]
+    Check,
+    #[serde(rename = "uncheck")]
+    Uncheck,
+    #[serde(rename = "select")]
+    Select,
+    #[serde(rename = "scroll")]
+    Scroll,
+    #[serde(rename = "drag")]
+    Drag,
+    #[serde(rename = "dialog")]
+    Dialog,
+    #[serde(rename = "open")]
+    Open,
+    #[serde(rename = "back")]
+    Back,
+    #[serde(rename = "reload")]
+    Reload,
+}
+
+impl Default for SessionPursueStepAction {
+    fn default() -> SessionPursueStepAction {
+        Self::Click
+    }
+}
+
+pub mod session_pursue_step {
+    pub use super::SessionPursueStepAction as Action;
+}
+
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SessionScreenshot {
     #[serde(rename = "screenshotId")]
@@ -360,6 +463,12 @@ pub struct SessionSummary {
     /// Estimated token consumption of this session's tool traffic, summed across all dispatches and refreshed live as they land. Present only when the session has dispatches and every one carries token-estimator v1; absent for legacy or otherwise unmeasured sessions.
     #[serde(rename = "tokenUsage", skip_serializing_if = "Option::is_none")]
     pub token_usage: Option<Box<models::SessionTokenUsage>>,
+    /// Present only when this session had an ultrafast run: a skill that ran to the end without the agent, or a pursue that read the page.
+    #[serde(rename = "ultrafast", skip_serializing_if = "Option::is_none")]
+    pub ultrafast: Option<Box<models::SessionUltrafastRun>>,
+    /// Present only when this session had a pursue call that finished its goal or handed the page back.
+    #[serde(rename = "pursue", skip_serializing_if = "Option::is_none")]
+    pub pursue: Option<Box<models::SessionPursueRun>>,
     /// Present only on summaries returned by an explicit `status=live` list query.
     #[serde(rename = "live", skip_serializing_if = "Option::is_none")]
     pub live: Option<Box<models::LiveSessionState>>,
@@ -397,6 +506,8 @@ impl SessionSummary {
             error_count,
             latest_screenshot_id: None,
             token_usage: None,
+            ultrafast: None,
+            pursue: None,
             live: None,
         }
     }
@@ -427,6 +538,31 @@ impl SessionTokenUsage {
             input_token_estimate,
             output_token_estimate,
             total_token_estimate,
+        }
+    }
+}
+
+/// SessionUltrafastRun : What neo did on its own in this session's ultrafast runs (skills that ran without the agent, and pursue runs that read the page), summed.
+#[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SessionUltrafastRun {
+    /// Time those runs took, in milliseconds.
+    #[serde(rename = "durationMs")]
+    pub duration_ms: i64,
+    /// Pages neo read itself during those runs.
+    #[serde(rename = "pagesRead")]
+    pub pages_read: i64,
+    /// Estimated tokens of page text neo read itself that never went to the agent.
+    #[serde(rename = "tokensSaved")]
+    pub tokens_saved: i64,
+}
+
+impl SessionUltrafastRun {
+    /// What neo did on its own in this session's ultrafast runs (skills that ran without the agent, and pursue runs that read the page), summed.
+    pub fn new(duration_ms: i64, pages_read: i64, tokens_saved: i64) -> SessionUltrafastRun {
+        SessionUltrafastRun {
+            duration_ms,
+            pages_read,
+            tokens_saved,
         }
     }
 }

@@ -1,0 +1,8 @@
+const created = await context.newPage();
+try {
+  const error = await rejected(async () => created.goto('https://nowhere.invalid/'), /net::ERR_NAME_NOT_RESOLVED/);
+  assert(Number.isFinite(created.tabId), 'a failed navigation still has a page id', { tabId: created.tabId });
+  equal(created.isClosed(), false, 'the failed-load tab stays open');
+  assert(context.pages().some(candidate => candidate.tabId === created.tabId), 'the failed-load tab remains listed', { tabId: created.tabId });
+  return { tabId: created.tabId, error, listed: true };
+} finally { await created.close(); }

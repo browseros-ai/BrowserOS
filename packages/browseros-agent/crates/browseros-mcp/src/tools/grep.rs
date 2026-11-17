@@ -108,6 +108,14 @@ fn handler<'a>(
             .map(|line| clamp_text(line, GREP_MATCH_LINE_MAX_CHARS))
             .collect::<Vec<_>>();
         let full_matches_text = matches.join("\n");
+        if ctx.within_script {
+            // A script consumes the selected matches itself; only its outer return is
+            // bounded for the model, just like read/evaluate inside the SDK.
+            return Ok(Some(text_result(
+                wrap_untrusted(&full_matches_text, &origin),
+                Some(json!({ "page": args.page, "over": over, "count": matches.len() })),
+            )));
+        }
         let rendered_text = rendered_matches.join("\n");
         let line_truncated = rendered_matches
             .iter()

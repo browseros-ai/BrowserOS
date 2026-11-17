@@ -1,0 +1,5 @@
+await page.goto(args.base + '/sdk-fill.html');
+const error = await rejected(async () => page.getByRef(await refFor(page, 'Date field')).fill('29/10/2026'), /date|format|malformed|YYYY-MM-DD/i);
+const state = await page.evaluate(() => ({ value: document.getElementById('date').value, events: window.nativeEvents }));
+equal(state, { value: '2020-01-02', events: [] }, 'invalid fill leaves the field and application event record unchanged');
+return { error, state };

@@ -1,0 +1,17 @@
+name: CLA Trigger
+
+# Starts cla-check.yml for pull request activity. It needs no permissions,
+# checks nothing out, and passes nothing on: cla-check.yml looks the PR up
+# from the API itself.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions: {}
+
+jobs:
+  cla-trigger:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Hand off to CLA Check
+        run: echo "The CLA check runs in cla-check.yml"

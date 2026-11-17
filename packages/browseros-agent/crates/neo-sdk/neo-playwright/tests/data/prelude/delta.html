@@ -1,0 +1,50 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Delta</title></head><body>
+<!-- tests/prelude_live.rs: a thread whose first comment collapses, for ariaSnapshot({ delta: true }). -->
+<main>
+<h1>Thread</h1>
+<article aria-label="First comment">
+<button aria-expanded="true" onclick="toggle(this)">Collapse</button>
+<div id="replies"><a href="#r1">Reply one</a> <a href="#r2">Reply two</a></div>
+</article>
+<ul>
+<li><a href="#s0">Story 0</a></li>
+<li><a href="#s1">Story 1</a></li>
+<li><a href="#s2">Story 2</a></li>
+<li><a href="#s3">Story 3</a></li>
+<li><a href="#s4">Story 4</a></li>
+<li><a href="#s5">Story 5</a></li>
+<li><a href="#s6">Story 6</a></li>
+<li><a href="#s7">Story 7</a></li>
+<li><a href="#s8">Story 8</a></li>
+<li><a href="#s9">Story 9</a></li>
+<li><a href="#s10">Story 10</a></li>
+<li><a href="#s11">Story 11</a></li>
+<li><a href="#s12">Story 12</a></li>
+<li><a href="#s13">Story 13</a></li>
+<li><a href="#s14">Story 14</a></li>
+<li><a href="#s15">Story 15</a></li>
+<li><a href="#s16">Story 16</a></li>
+<li><a href="#s17">Story 17</a></li>
+<li><a href="#s18">Story 18</a></li>
+<li><a href="#s19">Story 19</a></li>
+<li><a href="#s20">Story 20</a></li>
+<li><a href="#s21">Story 21</a></li>
+<li><a href="#s22">Story 22</a></li>
+<li><a href="#s23">Story 23</a></li>
+<li><a href="#s24">Story 24</a></li>
+<li><a href="#s25">Story 25</a></li>
+<li><a href="#s26">Story 26</a></li>
+<li><a href="#s27">Story 27</a></li>
+<li><a href="#s28">Story 28</a></li>
+<li><a href="#s29">Story 29</a></li>
+</ul>
+</main>
+<script>
+function toggle(button) {
+  const open = button.getAttribute('aria-expanded') === 'true'
+  button.setAttribute('aria-expanded', String(!open))
+  button.textContent = open ? 'Expand' : 'Collapse'
+  document.getElementById('replies').hidden = open
+}
+</script>
+</body></html>

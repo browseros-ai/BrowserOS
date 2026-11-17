@@ -1,0 +1,14 @@
+<!doctype html><meta charset=utf-8><title>Boxes out of view</title>
+<style>
+  body { margin: 24px; font: 15px sans-serif; }
+  input { width: 220px; height: 32px; box-sizing: border-box; }
+  #helper { position: absolute; left: -9999px; top: 40px; }
+  #corner { position: fixed; left: -1px; top: -1px; width: 1px; height: 1px; padding: 0; border: 0; }
+</style>
+<!-- Text boxes that no scroll can bring into view (ruling R62), beside one in view. A page parks a
+     helper box far off its left edge, where no scroll goes, and a 1 by 1 box just off its
+     top-left corner. Real pages leave such boxes unnamed; these carry names so a test can find
+     them by the snapshot. -->
+<label>Email <input id=email autocomplete=email></label>
+<input id=helper aria-label="Helper">
+<input id=corner aria-label="Corner">

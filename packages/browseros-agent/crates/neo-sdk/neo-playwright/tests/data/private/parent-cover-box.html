@@ -1,0 +1,17 @@
+<!doctype html><meta charset=utf-8><title>Sign-in box</title>
+<style>
+  body { margin: 0; }
+  input { margin: 10px; width: 260px; height: 34px; box-sizing: border-box; }
+  input.away { position: absolute; left: -9999px; top: -9999px; }
+  button { margin-left: 10px; }
+</style>
+<!-- The password box a page above covers, or not: nothing covers it in this document.
+     ?away=1 lays it far off this frame's viewport, as payment frames lay a helper box.
+     The button's name says whether this frame can reach the element that holds it: a frame on
+     another origin cannot, whatever process it shares. -->
+<input id=pw type=password autocomplete=current-password aria-label="Password">
+<button type=button></button>
+<script>
+  if (new URLSearchParams(location.search).get('away')) document.getElementById('pw').className = 'away'
+  document.querySelector('button').setAttribute('aria-label', window.frameElement === null ? 'No frame element' : 'Frame element')
+</script>

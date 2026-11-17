@@ -6,15 +6,18 @@ use crate::{
     input::ClickOptions,
     pages::{PageManager, PageManagerHooks},
 };
+use browseros_cdp::TargetedEvents;
 use futures_util::future::BoxFuture;
 use std::{
     collections::VecDeque,
     error::Error,
     sync::{
-        Mutex, MutexGuard,
+        Mutex, MutexGuard, PoisonError,
         atomic::{AtomicU64, Ordering},
     },
+    time::Duration,
 };
+use tokio::sync::mpsc;
 
 type TestResult = Result<(), Box<dyn Error>>;
 #[derive(Clone, Debug)]
@@ -36,11 +39,17 @@ struct Fixture {
     move_group_on_tab_read: Option<(usize, i64)>,
     epoch_after_profiles: bool,
     fail_load: bool,
+    /// What `Page.navigate` answers, for a load that fails or downloads.
+    navigate_reply: Option<Value>,
+    /// Reconciles the newest tab onto this target as soon as something attaches to it: the
+    /// window between creating a tab and navigating it.
+    replace_newest_on_attach: Option<String>,
 }
 struct Native {
     state: Mutex<Fixture>,
     epoch: AtomicU64,
     events: broadcast::Sender<CdpEvent>,
+    targeted: TargetedEvents,
     attach_hold: Mutex<Option<Arc<tokio::sync::Notify>>>,
     attach_started: tokio::sync::Notify,
     detach_done: tokio::sync::Notify,
@@ -75,6 +84,7 @@ impl Native {
         Arc::new(Self {
             epoch: AtomicU64::new(1),
             events,
+            targeted: TargetedEvents::default(),
             attach_hold: Mutex::new(None),
             attach_started: tokio::sync::Notify::new(),
             detach_done: tokio::sync::Notify::new(),
@@ -113,8 +123,18 @@ impl Native {
                 move_group_on_tab_read: None,
                 epoch_after_profiles: false,
                 fail_load: false,
+                navigate_reply: None,
+                replace_newest_on_attach: None,
             }),
         })
+    }
+    /// Offers `event` to its method's targeted subscribers and broadcasts it only when none
+    /// took it, as `CdpClient` does. Fails when the broadcast is needed and no one reads it.
+    fn emit(&self, event: CdpEvent) -> Result<(), broadcast::error::SendError<CdpEvent>> {
+        if let Some(event) = self.targeted.deliver(event) {
+            self.events.send(event)?;
+        }
+        Ok(())
     }
     fn lock(&self) -> MutexGuard<'_, Fixture> {
         self.state
@@ -373,6 +393,20 @@ impl Native {
                 if let Some(target) = state.replace_on_attach.pop_front() {
                     state.tabs[0]["targetId"] = json!(target);
                 }
+                let newest = state
+                    .tabs
+                    .iter()
+                    .max_by_key(|tab| tab["tabId"].as_i64())
+                    .map(|tab| tab["targetId"].clone());
+                if newest.as_ref() == Some(&params["targetId"])
+                    && let Some(replacement) = state.replace_newest_on_attach.take()
+                    && let Some(tab) = state
+                        .tabs
+                        .iter_mut()
+                        .find(|tab| tab["targetId"] == params["targetId"])
+                {
+                    tab["targetId"] = json!(replacement);
+                }
                 json!({"sessionId":format!("session-{}",params["targetId"].as_str().unwrap_or_default())})
             }
             "Target.getTargets" => {
@@ -384,6 +418,22 @@ impl Native {
             }
             "Target.getTargetInfo" => {
                 json!({"targetInfo":{"targetId":params["targetId"],"type":"service_worker","url":"chrome-extension://synthetic/worker.js","browserContextId":"live-eng"}})
+            }
+            "Page.navigate" => {
+                let reply = state
+                    .navigate_reply
+                    .clone()
+                    .unwrap_or_else(|| json!({"frameId":"frame","loaderId":"loader"}));
+                // A committed navigation changes the tab's URL, as the browser then reports it.
+                let committed = reply.get("errorText").is_none() && reply["isDownload"] != true;
+                if committed
+                    && let Some(target) =
+                        session.and_then(|id| id.as_str().strip_prefix("session-"))
+                    && let Some(tab) = state.tabs.iter_mut().find(|tab| tab["targetId"] == target)
+                {
+                    tab["url"] = params["url"].clone();
+                }
+                reply
             }
             "Runtime.evaluate" => {
                 if params["expression"] == "document.readyState" {
@@ -616,6 +666,9 @@ impl CdpConnection for Native {
     fn events(&self) -> broadcast::Receiver<CdpEvent> {
         self.events.subscribe()
     }
+    fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+        self.targeted.subscribe(method)
+    }
     fn send_at_epoch<'a>(
         &'a self,
         expected_epoch: u64,
@@ -789,6 +842,24 @@ async fn focus_and_working_window_are_placement_while_pin_is_restriction() -> Te
             .err()
             .ok_or("creation unexpectedly admitted")?,
         "pinned_window_restricts",
+    );
+    Ok(())
+}
+#[tokio::test]
+async fn agent_created_names_only_tabs_core_opened() -> TestResult {
+    let scoped = view(Native::new(), None).await;
+    let adopted = page_id(&scoped, 2).await?;
+    let opened = scoped
+        .new_page("about:blank", NewPageOptions::default())
+        .await?
+        .page_id;
+    assert!(
+        scoped.is_agent_created(&opened).await,
+        "core registered this tab from its own create reply"
+    );
+    assert!(
+        !scoped.is_agent_created(&adopted).await,
+        "a tab found in the browser's list is adopted, not created"
     );
     Ok(())
 }
@@ -1344,6 +1415,211 @@ async fn method_specific_target_creation_translates_placement_and_rejects_unsupp
     assert_eq!(native.calls("Browser.createTab")[0].params["windowId"], 12);
     Ok(())
 }
+/// Records the incarnation and attachment boundary visible to a caller's acquisition hook.
+#[derive(Clone)]
+struct AdmissionObservation {
+    page: PageInfo,
+    attachments: usize,
+}
+
+/// A caller may refuse a native target without taking ownership of Core's scope policy.
+struct SessionAdmissionProbe {
+    native: Arc<Native>,
+    rejected: Option<TargetId>,
+    seen: Mutex<Vec<AdmissionObservation>>,
+}
+impl SessionAdmissionProbe {
+    fn new(native: Arc<Native>, rejected: Option<TargetId>) -> Self {
+        Self {
+            native,
+            rejected,
+            seen: Mutex::new(Vec::new()),
+        }
+    }
+    fn observations(&self) -> Vec<AdmissionObservation> {
+        self.seen
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+}
+impl PageAdmission for SessionAdmissionProbe {
+    fn admit(&self, fresh: &PageInfo) -> Result<(), CoreError> {
+        self.seen
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(AdmissionObservation {
+                page: fresh.clone(),
+                attachments: self.native.calls("Target.attachToTarget").len(),
+            });
+        if self.rejected.as_ref() == Some(&fresh.target_id) {
+            return Err(CoreError::Message("additional admission refused".into()));
+        }
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn additional_page_admission_sees_the_target_replaced_during_acquisition() -> TestResult {
+    for bound in [false, true] {
+        let native = Native::new();
+        let captured = view(native.clone(), None).await;
+        let view = if bound {
+            captured
+        } else {
+            BrowserView::unbound(captured.session.clone(), None)
+        };
+        let page = page_id(&view, 1).await?;
+        let probe = Arc::new(SessionAdmissionProbe::new(
+            native.clone(),
+            Some(TargetId("replacement-b".into())),
+        ));
+        let release = Arc::new(tokio::sync::Notify::new());
+        *native
+            .dispatch_hold
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) =
+            Some(("Browser.getTabInfo".into(), release.clone()));
+        let caller_probe = probe.clone();
+        let acquire = tokio::spawn(async move {
+            view.page_session_admitted(page, caller_probe.as_ref())
+                .await
+        });
+        // Hold the acquisition's fresh read after the reusable ID previously named A.
+        tokio::time::timeout(Duration::from_secs(30), native.dispatch_started.notified()).await?;
+        native.lock().tabs[0]["targetId"] = json!("replacement-b");
+        *native
+            .dispatch_hold
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = None;
+        release.notify_one();
+        let result = tokio::time::timeout(Duration::from_secs(30), acquire).await??;
+        assert!(
+            matches!(result, Err(CoreError::Message(message)) if message == "additional admission refused"),
+            "bound={bound}"
+        );
+        let seen = probe.observations();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].page.target_id.as_str(), "replacement-b");
+        assert_eq!(seen[0].attachments, 0);
+        assert!(native.calls("Target.attachToTarget").is_empty());
+        assert!(native.calls("Page.enable").is_empty());
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn additional_page_admission_refuses_before_attachment_and_domain_setup() -> TestResult {
+    for bound in [false, true] {
+        let native = Native::new();
+        native.lock().tabs[0]["targetId"] = json!("refused-target");
+        let captured = view(native.clone(), None).await;
+        let view = if bound {
+            captured
+        } else {
+            BrowserView::unbound(captured.session.clone(), None)
+        };
+        let page = page_id(&view, 1).await?;
+        let probe =
+            SessionAdmissionProbe::new(native.clone(), Some(TargetId("refused-target".into())));
+        let result = view.page_session_admitted(page.clone(), &probe).await;
+        assert!(
+            matches!(result, Err(CoreError::Message(message)) if message == "additional admission refused")
+        );
+        assert_eq!(probe.observations().len(), 1);
+        if bound {
+            let probe = SessionAdmissionProbe::new(native.clone(), None);
+            {
+                let mut state = native.lock();
+                state.tabs[0]["windowId"] = json!(20);
+                state.tabs[0]["browserProfileId"] = json!("sales");
+                state.tabs[0]["liveBrowserContextId"] = json!("live-sales");
+            }
+            assert!(view.page_session_admitted(page, &probe).await.is_err());
+            assert!(
+                probe.observations().is_empty(),
+                "Core refuses its foreign page before exposing it to the caller's hook"
+            );
+        }
+        for method in [
+            "Target.attachToTarget",
+            "Page.enable",
+            "DOM.enable",
+            "Runtime.enable",
+            "Network.enable",
+        ] {
+            assert!(native.calls(method).is_empty(), "bound={bound}: {method}");
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn additional_page_admission_allows_a_created_target_to_move_within_its_scope() -> TestResult
+{
+    for bound in [false, true] {
+        let native = Native::new();
+        let captured = view(native.clone(), None).await;
+        let view = if bound {
+            captured
+        } else {
+            BrowserView::unbound(captured.session.clone(), None)
+        };
+        let created = view
+            .new_page(
+                "about:blank",
+                NewPageOptions {
+                    window_id: Some(WindowId(11)),
+                    ..NewPageOptions::default()
+                },
+            )
+            .await?;
+        {
+            let mut state = native.lock();
+            let tab = state
+                .tabs
+                .iter_mut()
+                .find(|tab| tab["tabId"] == created.tab_id.0)
+                .ok_or("created fixture tab missing")?;
+            tab["windowId"] = json!(12);
+        }
+        let probe = SessionAdmissionProbe::new(native.clone(), None);
+        let before = native.calls("Target.attachToTarget").len();
+        let session = view.page_session_admitted(created.page_id, &probe).await?;
+        assert_eq!(session.target_id, created.target_id);
+        let seen = probe.observations();
+        assert_eq!(seen.len(), 2, "checks bracket native attachment");
+        for observation in &seen {
+            assert_eq!(observation.page.target_id, created.target_id);
+            assert_eq!(observation.page.window_id, Some(WindowId(12)));
+        }
+        assert_eq!(seen[0].attachments, before);
+        assert_eq!(seen[1].attachments, before + 1);
+        if bound {
+            assert!(
+                session
+                    .session
+                    .send_value("Browser.closeWindow", json!({"windowId":12}))
+                    .await
+                    .is_err(),
+                "the new path retains Core's per-protocol policy"
+            );
+            assert!(native.calls("Browser.closeWindow").is_empty());
+            native.reconnect();
+            assert!(
+                session
+                    .session
+                    .send_value("Runtime.evaluate", json!({"expression":"1"}))
+                    .await
+                    .is_err(),
+                "the returned session retains the captured epoch"
+            );
+            assert!(native.calls("Runtime.evaluate").is_empty());
+        }
+    }
+    Ok(())
+}
+
 #[tokio::test]
 async fn admission_retries_one_target_replacement_and_rejects_a_second() -> TestResult {
     struct Permit;
@@ -1496,7 +1772,7 @@ async fn signal_projection_denies_foreign_reads_and_ownership_mutation() -> Test
         params: json!({"type":"confirm","message":"foreign-secret","url":"https://sales.test"}),
         session_id: Some(foreign_session.session_id),
     };
-    native.events.send(event)?;
+    native.emit(event)?;
     tokio::task::yield_now().await;
     assert_eq!(
         scoped
@@ -1509,7 +1785,7 @@ async fn signal_projection_denies_foreign_reads_and_ownership_mutation() -> Test
     assert!(scoped.signals().pending_dialog(&foreign).is_none());
     assert!(scoped.signals().pending_dialog(&own).is_none());
     assert!(scoped.signals().console_entries(&foreign).is_empty());
-    native.events.send(CdpEvent {
+    native.emit(CdpEvent {
         method: "Page.javascriptDialogOpening".into(),
         params: json!({"type":"confirm","message":"own-message"}),
         session_id: Some(own_session.session_id),
@@ -1537,12 +1813,12 @@ async fn event_projection_omits_foreign_page_events_and_closes_on_stale_context(
         .get_session(page_id(&scoped, 4).await?)
         .await?;
     let mut events = scoped.cdp_events();
-    native.events.send(CdpEvent {
+    native.emit(CdpEvent {
         method: "Runtime.consoleAPICalled".into(),
         params: json!({"type":"log","args":[]}),
         session_id: Some(foreign.session_id),
     })?;
-    native.events.send(CdpEvent {
+    native.emit(CdpEvent {
         method: "Runtime.consoleAPICalled".into(),
         params: json!({"type":"log","args":[]}),
         session_id: Some(own.session_id.clone()),
@@ -1550,7 +1826,7 @@ async fn event_projection_omits_foreign_page_events_and_closes_on_stale_context(
     let event = tokio::time::timeout(std::time::Duration::from_secs(1), events.recv()).await??;
     assert_eq!(event.session_id, Some(own.session_id.clone()));
     native.epoch.store(2, Ordering::SeqCst);
-    native.events.send(CdpEvent {
+    native.emit(CdpEvent {
         method: "Runtime.consoleAPICalled".into(),
         params: json!({"type":"log","args":[]}),
         session_id: Some(own.session_id),
@@ -1582,7 +1858,7 @@ async fn navigation_load_wait_rechecks_scope_before_dialog_readback() -> TestRes
     )
     .await?;
     native.lock().tabs[0]["windowId"] = json!(12);
-    native.events.send(CdpEvent {
+    native.emit(CdpEvent {
         method: "Page.javascriptDialogOpening".into(),
         params: json!({"type":"confirm","message":"moved-tab-secret"}),
         session_id: Some(session.session_id),
@@ -1941,6 +2217,9 @@ impl CdpConnection for LegacyTransport {
     }
     fn events(&self) -> broadcast::Receiver<CdpEvent> {
         self.0.events()
+    }
+    fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+        self.0.events_targeted(method)
     }
     fn is_connected(&self) -> bool {
         self.0.is_connected()
@@ -2730,7 +3009,12 @@ async fn default_without_a_window_opens_an_inactive_normal_window_there() -> Tes
     let tabs = native.calls("Browser.createTab");
     assert_eq!(tabs.len(), 1);
     assert_eq!(tabs[0].params["windowId"], created_window["windowId"]);
-    assert_eq!(tabs[0].params["url"], json!("https://first.test/"));
+    // The tab opens on about:blank and is then navigated, so the load's outcome is seen.
+    assert_eq!(tabs[0].params["url"], json!("about:blank"));
+    assert_eq!(
+        native.calls("Page.navigate")[0].params["url"],
+        json!("https://first.test/")
+    );
     assert_eq!(opened.url, "https://first.test/");
     assert_eq!(
         opened.window_id.map(|id| id.0),
@@ -3035,7 +3319,7 @@ async fn failed_default_view_exposes_no_global_events() -> TestResult {
     let view = default_view(native.clone()).await;
     assert!(view.admission_error().is_some());
     let mut events = view.cdp_events();
-    let _ = native.events.send(CdpEvent {
+    let _ = native.emit(CdpEvent {
         method: "Target.targetCreated".into(),
         params: json!({"targetInfo":{"targetId":"target-4","type":"page"}}),
         session_id: None,
@@ -3238,5 +3522,168 @@ async fn viewport_changes_never_reach_pages_outside_the_scope() -> TestResult {
     ] {
         assert!(native.calls(method).is_empty(), "{method} was sent");
     }
+    Ok(())
+}
+
+fn unbound_view(native: &Arc<Native>) -> BrowserView {
+    BrowserView::unbound(
+        BrowserSession::new_with_native(
+            native.clone(),
+            crate::BrowserSessionHooks::default(),
+            current_native(),
+        ),
+        Some(WindowId(11)),
+    )
+}
+
+/// A tab opens on about:blank and is then navigated like `goto`, so the load's outcome is known:
+/// creating it at the URL answers before the page commits and shows a failure as a page.
+async fn opens_on_blank_then_navigates(view: BrowserView, native: &Arc<Native>) -> TestResult {
+    let opened = view
+        .open_page("https://opened.test/", NewPageOptions::default())
+        .await?;
+    assert_eq!(
+        native.calls("Browser.createTab")[0].params["url"],
+        "about:blank"
+    );
+    let navigations = native.calls("Page.navigate");
+    assert_eq!(navigations.len(), 1);
+    assert_eq!(navigations[0].params["url"], "https://opened.test/");
+    assert!(matches!(opened.load, Some(Ok(_))), "{:?}", opened.load);
+    // The page comes back as the navigation left it, not as the blank tab it was created on.
+    assert_eq!(opened.page.url, "https://opened.test/");
+    Ok(())
+}
+
+#[tokio::test]
+async fn an_unbound_view_opens_a_tab_on_blank_then_navigates_it() -> TestResult {
+    let native = Native::new();
+    opens_on_blank_then_navigates(unbound_view(&native), &native).await
+}
+
+#[tokio::test]
+async fn a_bound_view_opens_a_tab_on_blank_then_navigates_it() -> TestResult {
+    let native = Native::new();
+    let bound = view(
+        native.clone(),
+        Some(WindowSelection::Working {
+            window_id: WindowId(11),
+        }),
+    )
+    .await;
+    opens_on_blank_then_navigates(bound, &native).await
+}
+
+#[tokio::test]
+async fn a_tab_opened_on_blank_needs_no_navigation() -> TestResult {
+    let native = Native::new();
+    let opened = unbound_view(&native)
+        .open_page("about:blank", NewPageOptions::default())
+        .await?;
+    assert!(opened.load.is_none());
+    assert!(native.calls("Page.navigate").is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_tab_whose_url_fails_to_load_stays_open_and_says_why() -> TestResult {
+    let native = Native::new();
+    native.lock().navigate_reply =
+        Some(json!({"frameId":"frame","errorText":"net::ERR_NAME_NOT_RESOLVED"}));
+    let view = unbound_view(&native);
+    let opened = view
+        .open_page("https://nowhere.test/", NewPageOptions::default())
+        .await?;
+    let Some(Err(error)) = &opened.load else {
+        return Err(format!("expected a load failure, got {:?}", opened.load).into());
+    };
+    assert!(
+        error.to_string().contains("net::ERR_NAME_NOT_RESOLVED"),
+        "{error}"
+    );
+    assert!(
+        view.list_pages()
+            .await?
+            .pages
+            .iter()
+            .any(|page| page.page_id == opened.page.page_id)
+    );
+    Ok(())
+}
+
+/// A tab reconciled onto a new target between its creation and its load is never navigated, and
+/// keeps the identity its creation returned: the replacement is not adopted.
+async fn a_replaced_tab_is_not_loaded_or_adopted(
+    view: BrowserView,
+    native: &Arc<Native>,
+) -> TestResult {
+    native.lock().replace_newest_on_attach = Some("replacement-target".into());
+    let opened = view
+        .open_page("https://opened.test/", NewPageOptions::default())
+        .await?;
+    assert!(
+        native.calls("Page.navigate").is_empty(),
+        "navigated a tab reconciled onto a new target"
+    );
+    assert!(
+        matches!(
+            opened.load,
+            Some(Err(CoreError::Target(TargetError::PageTargetChanged(_))))
+        ),
+        "{:?}",
+        opened.load
+    );
+    assert_ne!(opened.page.target_id.as_str(), "replacement-target");
+    Ok(())
+}
+
+#[tokio::test]
+async fn an_unbound_view_never_loads_or_adopts_a_replaced_tab() -> TestResult {
+    let native = Native::new();
+    a_replaced_tab_is_not_loaded_or_adopted(unbound_view(&native), &native).await
+}
+
+#[tokio::test]
+async fn a_bound_view_never_loads_or_adopts_a_replaced_tab() -> TestResult {
+    let native = Native::new();
+    let bound = view(
+        native.clone(),
+        Some(WindowSelection::Working {
+            window_id: WindowId(11),
+        }),
+    )
+    .await;
+    a_replaced_tab_is_not_loaded_or_adopted(bound, &native).await
+}
+
+#[test]
+fn an_emitted_event_reaches_its_targeted_subscriber_and_not_the_broadcast() -> TestResult {
+    let native = Native::new();
+    let mut broadcast = native.events();
+    let mut targeted = native.events_targeted("Runtime.bindingCalled");
+    native.emit(CdpEvent {
+        method: "Runtime.bindingCalled".into(),
+        params: json!({ "name": "probe" }),
+        session_id: None,
+    })?;
+    assert_eq!(targeted.try_recv()?.params["name"], "probe");
+    assert!(
+        broadcast.try_recv().is_err(),
+        "a method with a live targeted subscriber must bypass the broadcast"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_legacy_transport_hands_its_targeted_subscriber_what_the_browser_emits() -> TestResult {
+    let native = Native::new();
+    let legacy = LegacyTransport(native.clone());
+    let mut targeted = legacy.events_targeted("Runtime.bindingCalled");
+    native.emit(CdpEvent {
+        method: "Runtime.bindingCalled".into(),
+        params: json!({ "name": "probe" }),
+        session_id: None,
+    })?;
+    assert_eq!(targeted.try_recv()?.params["name"], "probe");
     Ok(())
 }

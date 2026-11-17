@@ -11,7 +11,7 @@ use crate::{
     response::ToolResponse,
     tools,
 };
-use browseros_cdp::{CdpError, CdpEvent};
+use browseros_cdp::{CdpError, CdpEvent, TargetedEvents};
 use browseros_core::{BrowserSession, BrowserSessionHooks, BrowserView, CdpConnection, SessionId};
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
@@ -24,7 +24,7 @@ use std::{
     },
     time::Duration,
 };
-use tokio::sync::{Mutex as AsyncMutex, Notify, OwnedMutexGuard, broadcast};
+use tokio::sync::{Mutex as AsyncMutex, Notify, OwnedMutexGuard, broadcast, mpsc};
 
 /// One isolated conversation's lock and observable async phases. The hook and transport
 /// share this state so assertions cover the handler's native write and later readback.
@@ -138,6 +138,7 @@ impl InnerCallHook for GuardHook {
 struct GuardConnection {
     state: Arc<GuardState>,
     events: broadcast::Sender<CdpEvent>,
+    targeted: TargetedEvents,
 }
 
 impl CdpConnection for GuardConnection {
@@ -226,6 +227,11 @@ impl CdpConnection for GuardConnection {
     fn events(&self) -> broadcast::Receiver<CdpEvent> {
         self.events.subscribe()
     }
+
+    fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+        self.targeted.subscribe(method)
+    }
+
     fn is_connected(&self) -> bool {
         true
     }
@@ -240,6 +246,7 @@ fn guarded_ctx(state: Arc<GuardState>) -> ToolCtx {
         Arc::new(GuardConnection {
             state: state.clone(),
             events,
+            targeted: TargetedEvents::default(),
         }),
         BrowserSessionHooks::default(),
     );
@@ -273,7 +280,7 @@ fn probe_handler<'a>(
 fn probe_def() -> ToolDef {
     let mut def = tools::tab_groups::definition();
     def.name = "guard_probe";
-    def.handler = probe_handler;
+    def.handler = crate::framework::ToolHandler::Browser(probe_handler);
     def
 }
 

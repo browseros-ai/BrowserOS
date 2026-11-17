@@ -64,14 +64,19 @@ impl BrowserView {
                     return Ok(false);
                 };
                 for page in self.list_pages().await?.pages {
-                    let session = self.page_session(page.page_id).await?;
+                    let session = self.page_session(page.page_id.clone()).await?;
                     let tree = session
                         .session
                         .send_value("Page.getFrameTree", json!({}))
                         .await?;
-                    if contains_frame(&tree["frameTree"], frame)
-                        && let Some(guid) = event.params["guid"].as_str()
-                    {
+                    // Remote frames can be absent from getFrameTree. Resolve their DOM owner
+                    // through this same captured page capability before admitting a GUID.
+                    let belongs = contains_frame(&tree["frameTree"], frame)
+                        || self
+                            .frame_session(page.page_id.clone(), crate::FrameId(frame.into()))
+                            .await
+                            .is_ok();
+                    if belongs && let Some(guid) = event.params["guid"].as_str() {
                         downloads.insert(guid.into());
                         return Ok(true);
                     }

@@ -1,0 +1,37 @@
+/** Snapshot scalars are explicit caller readback, independent of fill's void return. */
+function shownField(snapshot, label) {
+  const name = JSON.stringify(label);
+  const line = snapshot.split('\n').find(row => row.includes(name));
+  assert(line !== undefined, 'snapshot contains the requested field', {label, snapshot});
+  const afterName = line.slice(line.indexOf(name) + name.length).trim();
+  const tail = afterName.replace(/^(?:\[[^\]]+\]\s*)*/, '');
+  assert(tail === '' || tail === ':' || tail.startsWith(': '),
+    'field line has a scalar readback', {label, line});
+  const scalar = tail === '' || tail === ':' ? '' : tail.slice(2);
+  const value = scalar.startsWith('"') ? JSON.parse(scalar)
+    : scalar.startsWith("'") ? scalar.slice(1, -1).replace(/''/g, "'") : scalar;
+  return {label, line, value, snapshotRef: line.match(/\[ref=([^\]]+)\]/)?.[1] ?? null};
+}
+
+await page.goto(args.base + '/fill.html');
+const oldRef = await page.getByLabel('Navigating field', {exact: true}).ref({timeout: 5000});
+const original = page.getByRef(oldRef);
+const result = await original.fill('go', {timeout: 8000});
+assert(result === undefined, 'the navigating fill resolves without a value', result);
+await page.waitForURL(args.base + '/fill.html?navigated', {timeout: 8000});
+// A URL transition replaces the document. Keep the old pin for the stale read;
+// resolving the label again would silently prove the new field instead.
+const failure = await rejected(() => original.inputValue({timeout: 2500}), /detached|not on the page|no longer|stale/i);
+equal({owner: failure.owner, code: failure.code, delivery: failure.delivery},
+  {owner: 'website', code: 'element_detached', delivery: 'not_sent'},
+  'the old document ref is stale after navigation');
+const freshRef = await page.getByLabel('Navigating field', {exact: true}).ref({timeout: 5000});
+assert(freshRef !== oldRef, 'the new document receives a different opaque ref', {oldRef, freshRef});
+equal(await page.getByRef(freshRef).inputValue(), '', 'the fresh field is empty');
+const state = await page.evaluate(() => ({path: location.pathname + location.search, value: document.getElementById('navigate').value}));
+equal(state, {path: '/fill.html?navigated', value: ''}, 'the new document contains an empty navigating field');
+const snapshot = await page.ariaSnapshot({mode: 'ai', delta: false});
+const shown = shownField(snapshot, 'Navigating field');
+equal(shown.value, '', 'explicit snapshot readback describes the fresh empty field');
+assert(!snapshot.includes('[ref=' + oldRef + ']'), 'the fresh snapshot never reuses the old document ref', {oldRef, snapshot});
+return {oldRef, freshRef, fillReturnType: typeof result, failure, state, shown};

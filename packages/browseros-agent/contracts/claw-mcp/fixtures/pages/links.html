@@ -18,5 +18,6 @@
     <h2 id="section-two">Section two</h2>
     <p>The second section holds a downloadable report link below.</p>
     <a href="/files/report.txt" download="report.txt">Download report</a>
+    <button id="frame-download" onclick="const frame = document.createElement('iframe'); frame.hidden = true; frame.src = '/files/report.txt'; document.body.appendChild(frame)">Download through new frame</button>
   </body>
 </html>

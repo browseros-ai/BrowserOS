@@ -5,22 +5,17 @@
  */
 
 import { useState } from 'react'
-import { useUltrafastJoined } from '@/screens/ultrafast/ultrafast-price'
+import { usePlan } from '@/modules/api/plan.hooks'
 import { FeedbackInviteCard, useFeedbackOffer } from './FeedbackInviteCard'
+import { ProBanner, readProBannerDismissed } from './ProBanner'
 import {
   isProductHuntPromoAvailable,
   ProductHuntBanner,
 } from './ProductHuntBanner'
-import {
-  readUltrafastBannerDismissed,
-  UltrafastBanner,
-} from './UltrafastBanner'
 
-export type PromoKind = 'feedback' | 'product-hunt' | 'ultrafast'
+export type PromoKind = 'feedback' | 'product-hunt' | 'pro'
 
-const PRIORITY: readonly PromoKind[] = ['feedback', 'product-hunt', 'ultrafast']
-// Pause the waitlist promotion until re-enabled.
-const SHOW_ULTRAFAST_BANNER = false
+const PRIORITY: readonly PromoKind[] = ['feedback', 'product-hunt', 'pro']
 
 export interface PromoSlotState {
   /** The one promotion Home shows, or null when none is due. */
@@ -31,15 +26,16 @@ export interface PromoSlotState {
 /** Picks at most one promotion, so Home never stacks banners. */
 export function usePromoSlot(): PromoSlotState {
   const feedback = useFeedbackOffer()
-  const ultrafastJoined = useUltrafastJoined()
+  // Loading or unreachable reads as no billing, so the Pro bar waits.
+  const plan = usePlan()
   const [closed, setClosed] = useState<readonly PromoKind[]>([])
   const available: Record<PromoKind, boolean> = {
     feedback: feedback.bookUrl !== undefined,
     'product-hunt': isProductHuntPromoAvailable(),
-    ultrafast:
-      SHOW_ULTRAFAST_BANNER &&
-      !ultrafastJoined &&
-      !readUltrafastBannerDismissed(),
+    pro:
+      plan.data?.available === true &&
+      plan.data.status === 'none' &&
+      !readProBannerDismissed(),
   }
   const kind =
     PRIORITY.find(
@@ -58,8 +54,8 @@ export function PromoSlot({ kind, close }: PromoSlotState) {
   if (kind === 'product-hunt') {
     return <ProductHuntBanner onClosed={() => close('product-hunt')} />
   }
-  if (kind === 'ultrafast') {
-    return <UltrafastBanner onClosed={() => close('ultrafast')} />
+  if (kind === 'pro') {
+    return <ProBanner onClosed={() => close('pro')} />
   }
   return null
 }

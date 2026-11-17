@@ -106,26 +106,7 @@ Every session is saved as a scrubbable video on your disk with a step-by-step ac
 - **Not a cloud browser.** Cloud browsers (like browser-use, browserbase) run in a datacenter, so logging into your accounts is a pain, and sites like Twitter and LinkedIn block you because you are on a datacenter IP. BrowserOS neo runs on your machine, on `127.0.0.1`.
 - **Not a locked-in AI browser.** Atlas, Comet, and Dia only work with their own AI. BrowserOS neo works with the agents you already use and pay for: Claude Code, Cowork, Codex, Cursor, and others.
 
-## Also in this repo: BrowserOS
-
-<table>
-<tr>
-<td width="110" align="center" valign="middle">
-<img src="packages/browseros/resources/browseros/icons/product_logo_192.png" alt="" width="72" />
-</td>
-<td valign="middle">
-<h3>BrowserOS, the AI browser for humans</h3>
-A Chromium fork with an AI agent built into every new tab, for when <b>you</b> are the one browsing. Bring your own AI keys or run everything locally with Ollama.
-<br><br>
-<b><a href="README.BrowserOS.md">Read about BrowserOS</a></b> &nbsp;·&nbsp; <a href="https://www.browseros.com/browseros/">Website</a> &nbsp;·&nbsp; <a href="https://docs.browseros.com/browseros">Docs</a>
-</td>
-</tr>
-</table>
-
 ## FAQ
-
-**What's the difference between BrowserOS neo and BrowserOS?**
-BrowserOS neo is a browser your AI drives. BrowserOS is a browser you drive, with an AI agent built in. Both ship from this repo and run side by side. Keep your daily browser, and let agents work in neo.
 
 **Which AI tools work with BrowserOS neo?**
 Any AI that speaks MCP. Claude Code, Codex, Cursor, VS Code, Zed, OpenCode, Hermes, OpenClaw and Antigravity connect with one click.
@@ -134,21 +115,21 @@ Any AI that speaks MCP. Claude Code, Codex, Cursor, VS Code, Zed, OpenCode, Herm
 Your sessions, screenshots, history, and settings live under `~/.browserclaw/` and never upload. BrowserOS neo sends anonymous product-usage events (agent connect/disconnect, version, OS) to help us improve the app; it never sends URLs, page content, prompts, tool results, or screenshots. Off with one toggle in Settings. [Full policy](https://docs.browseros.com/neo/privacy).
 
 **Do my Chrome extensions and bookmarks work?**
-Yes. Both browsers are Chromium forks, so Chrome extensions work and your bookmarks, passwords, and settings import in one click.
+Yes. BrowserOS neo is a Chromium fork, so Chrome extensions work and your bookmarks, passwords, and settings import in one click.
 
 **What platforms are supported?**
-BrowserOS neo and BrowserOS run on macOS, Windows, and Linux. Neo's Linux builds are x64. System requirements match Google Chrome.
+BrowserOS neo runs on macOS, Windows, and Linux. Linux builds are x64. System requirements match Google Chrome.
 
 ## Get help
 
 - [Discord](https://discord.gg/YKwjt5vuKr) · [Slack](https://dub.sh/browserOS-slack)
 - [Report a bug](https://github.com/browseros-ai/BrowserOS/issues)
-- [BrowserOS neo docs](https://docs.browseros.com) · [BrowserOS docs](https://docs.browseros.com/browseros)
+- [BrowserOS neo docs](https://docs.browseros.com)
 - Enterprise deployment: [founders@browseros.com](mailto:founders@browseros.com?subject=Enterprise%3A%20BrowserOS%20neo&body=Hi%2C%0A%0AWe%27re%20looking%20at%20BrowserOS%20neo%20for%20our%20team.%0A%0ACompany%3A%0ATeam%20size%3A%0AWhat%20we%20want%20to%20automate%3A)
 
 ## For developers
 
-Both browsers ship from this monorepo. Two main subsystems: the **browser** (Chromium fork, C++ and Python) and the **agent platform** (TypeScript and Rust).
+BrowserOS neo ships from this monorepo. Two main subsystems: the **browser** (Chromium fork, C++ and Python) and the **agent platform** (TypeScript and Rust).
 
 ### Architecture
 
@@ -163,18 +144,10 @@ BrowserOS/
     ├── apps/
     │   ├── claw-server/             # BrowserOS neo backend: MCP endpoint + JSON API (Rust)
     │   ├── claw-app/                # BrowserOS neo dashboard extension (WXT + React)
-    │   ├── claw-onboard/            # BrowserOS neo onboarding flow (Vite)
-    │   ├── server/                  # BrowserOS MCP server + AI agent loop (Bun)
-    │   ├── app/                     # BrowserOS extension UI (WXT + React)
-    │   └── app-onboard/             # BrowserOS onboarding flow (Vite)
+    │   └── claw-onboard/            # BrowserOS neo onboarding flow (Vite)
     │
     ├── packages/                    # Shared TypeScript packages
-    │   ├── acpx-ai-provider/        # AI SDK provider over the acpx ACP runtime
-    │   ├── agent-mcp-manager/       # Add, link and unlink MCP servers across coding agents
-    │   ├── browser-core/            # Core browser control primitives
-    │   ├── browser-mcp/             # Browser MCP tool surface
     │   ├── build-server-tools/      # Shared build tooling for server binaries and assets
-    │   ├── cdp-protocol/            # CDP type bindings
     │   ├── claw-api/                # Generated BrowserOS neo wire types
     │   ├── claw-api-client/         # Contract-typed BrowserOS neo HTTP client
     │   ├── onboarding-video/        # Remotion compositions for the first-run demo
@@ -194,22 +167,18 @@ BrowserOS/
 | [`apps/claw-server`](packages/browseros-agent/apps/claw-server/) | BrowserOS neo backend: MCP endpoint agents connect to, plus the API behind the dashboard |
 | [`apps/claw-app`](packages/browseros-agent/apps/claw-app/) | BrowserOS neo new-tab dashboard: watch, replay, and manage agent sessions |
 | [`apps/claw-onboard`](packages/browseros-agent/apps/claw-onboard/) | BrowserOS neo first-run onboarding |
-| [`apps/server`](packages/browseros-agent/apps/server/) | Bun server exposing the browser MCP tools and running the BrowserOS AI agent loop |
-| [`apps/app`](packages/browseros-agent/apps/app/) | BrowserOS extension: new tab, side panel chat, onboarding, settings |
-| [`apps/app-onboard`](packages/browseros-agent/apps/app-onboard/) | BrowserOS first-run onboarding |
 
 ### Contributing
 
-We'd love your help making BrowserOS neo and BrowserOS better. Start with the [Contributing Guide](CONTRIBUTING.md), which routes you to the right path.
+We'd love your help making BrowserOS neo better. Start with the [Contributing Guide](CONTRIBUTING.md), which routes you to the right path.
 
 - **BrowserOS neo** (TypeScript, React, Rust): [setup guide](packages/browseros-agent/CONTRIBUTING.md). Around 15 minutes.
-- **BrowserOS** (TypeScript, React, Bun): [setup guide](packages/browseros-agent/CONTRIBUTING.BrowserOS.md). Around 15 minutes.
 - **Browser** (C++, Python): requires ~100GB of disk. See the [root guide](CONTRIBUTING.md#browser-development).
 
 ## Credits
 
 - [ungoogled-chromium](https://github.com/ungoogled-software/ungoogled-chromium): we use some of its patches for enhanced privacy. Thanks to everyone behind this project.
-- [The Chromium Project](https://www.chromium.org/): at the core of both browsers, making it possible for them to exist in the first place.
+- [The Chromium Project](https://www.chromium.org/): at the core of BrowserOS neo, making it possible for it to exist in the first place.
 
 ## Citation
 

@@ -1,0 +1,7 @@
+/** Return both native byte values so the host can compare the reply with the same run's persisted artifacts. */
+await page.goto(args.base + '/media.html');
+const screenshot = await page.screenshot({type:'png'});
+const pdf = await page.pdf();
+equal(screenshot.subarray(0,8).toString('hex'),'89504e470d0a1a0a','nested screenshot retains its exact PNG signature');
+equal(pdf.subarray(0,5).toString(),'%PDF-','nested PDF retains its PDF signature');
+return {done:true,screenshot,pdf,screenshotBytes:screenshot.length,pdfBytes:pdf.length};

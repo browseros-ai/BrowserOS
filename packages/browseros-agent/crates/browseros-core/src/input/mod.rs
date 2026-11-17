@@ -1,3 +1,4 @@
+mod click;
 mod fill;
 pub mod geometry;
 pub mod keyboard;
@@ -11,19 +12,39 @@ use crate::{
     pointer::{Pointer, PointerAction},
     snapshot::RefEntry,
     target::page_access::PageAccess,
+    timeouts,
 };
-use geometry::{
-    click_blocker_at_point, focus_element_js, get_element_center, js_click, scroll_into_view,
-};
+use geometry::{click_blocker_at_point, focus_element_js, get_element_center, scroll_into_view};
 use mouse::{
     MouseButton, dispatch_click, dispatch_click_with_options, dispatch_drag, dispatch_hover,
     dispatch_scroll,
 };
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicU8, Ordering},
+};
+
+/// Delivery state survives cancellation of the click future by a dialog/picker
+/// race. Started means the one-shot handoff began; delivery is still uncertain.
+/// A dispatched press is trusted when BrowserOS pressed the element natively,
+/// and inert when the page had made it inert, usually behind an open dialog.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DomFallbackStatus {
+    Started,
+    Dispatched { trusted: bool, inert: bool },
+}
+
+/// `Input::dom_fallback` states: started, or dispatched with flag bits.
+const FALLBACK_STARTED: u8 = 1;
+const FALLBACK_DISPATCHED: u8 = 2;
+const FALLBACK_TRUSTED: u8 = 4;
+const FALLBACK_INERT: u8 = 8;
 
 pub use keyboard::{
-    KeyInfo, clear_field, get_key_info, modifier_bitmask, normalize_key, press_combo, type_text,
+    KeyInfo, clear_field, get_key_info, insert_text, modifier_bitmask, normalize_key, press_combo,
+    type_text,
 };
 pub use mouse::MouseButton as PublicMouseButton;
 
@@ -48,7 +69,7 @@ pub struct DragResult {
     pub to: Point,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Point {
     pub x: f64,
     pub y: f64,
@@ -73,6 +94,9 @@ pub struct Input {
     /// A zoomed mobile preview (see `crate::viewport`) takes main-frame pointer coordinates in
     /// its scaled on-screen space; everything else here is in CSS pixels.
     pointer_scale: f64,
+    /// Observe delivery after a raced future is dropped. This flag publishes no
+    /// other data, so relaxed atomic access suffices across executor threads.
+    dom_fallback: AtomicU8,
 }
 
 #[derive(Debug, Clone)]
@@ -115,6 +139,20 @@ impl Input {
             access: None,
             pointer: None,
             pointer_scale: 1.0,
+            dom_fallback: AtomicU8::new(0),
+        }
+    }
+
+    /// Includes the handoff even when a modal interrupts its acknowledgement.
+    /// Native clicks leave a previous fallback notice intact within this Input.
+    pub fn dom_fallback_status(&self) -> Option<DomFallbackStatus> {
+        match self.dom_fallback.load(Ordering::Relaxed) {
+            0 => None,
+            FALLBACK_STARTED => Some(DomFallbackStatus::Started),
+            state => Some(DomFallbackStatus::Dispatched {
+                trusted: state & FALLBACK_TRUSTED != 0,
+                inert: state & FALLBACK_INERT != 0,
+            }),
         }
     }
 
@@ -164,6 +202,9 @@ impl Input {
         }
     }
 
+    /// Recover on one pinned node, preferring native input. `Some(point)` means
+    /// native dispatch; `None` means the internal DOM fallback dispatched once.
+    /// Either acknowledges delivery only; callers must verify application state.
     pub async fn click(
         &self,
         ref_id: &Ref,
@@ -181,6 +222,7 @@ impl Input {
         .await
     }
 
+    /// Backend-node callers share the ref click transaction and delivery result.
     pub async fn click_backend_node(
         &self,
         backend_node_id: i64,
@@ -271,41 +313,6 @@ impl Input {
         .await
     }
 
-    async fn click_node(
-        &self,
-        session: &ProtocolSession,
-        target: InputTarget,
-        opts: ClickOptions,
-    ) -> Result<Option<Point>, CoreError> {
-        scroll_into_view(session, target.backend_node_id).await;
-        match get_element_center(session, target.backend_node_id).await {
-            Ok(mut point) => {
-                self.check_click_point(session, &target, point).await?;
-                if let Some(pointer) = self.drawing_pointer().await
-                    && pointer.move_to(session, PointerAction::Click, point).await
-                {
-                    point = match get_element_center(session, target.backend_node_id).await {
-                        Ok(point) => point,
-                        Err(_) => {
-                            js_click(session, target.backend_node_id).await?;
-                            return Ok(None);
-                        }
-                    };
-                    self.check_click_point(session, &target, point).await?;
-                    pointer.click_effect(session, point).await;
-                }
-                let at = self.dispatch_point(session, point).await;
-                let opts = self.dispatch_options(session, opts).await;
-                dispatch_click_with_options(session, at.x, at.y, opts, 0).await?;
-                Ok(Some(point))
-            }
-            Err(_err) => {
-                js_click(session, target.backend_node_id).await?;
-                Ok(None)
-            }
-        }
-    }
-
     pub async fn hover(&self, ref_id: &Ref) -> Result<Point, CoreError> {
         self.held(Box::pin(async {
             let resolved = self.observer.resolve_ref(ref_id).await?;
@@ -372,6 +379,14 @@ impl Input {
         .await
     }
 
+    pub async fn insert_text(&self, text: &str) -> Result<(), CoreError> {
+        self.with_page_session_retry(|session| {
+            let text = text.to_string();
+            async move { insert_text(&session, &text).await }
+        })
+        .await
+    }
+
     pub async fn press(&self, key: &str) -> Result<(), CoreError> {
         self.held(Box::pin(async {
             self.with_page_session_retry(|session| {
@@ -421,43 +436,75 @@ impl Input {
     }
 
     pub async fn check(&self, ref_id: &Ref) -> Result<bool, CoreError> {
-        self.held(Box::pin(async {
-            let resolved = self.observer.resolve_ref(ref_id).await?;
-            let checked: Option<bool> = PageJs::isolated(&resolved.session)
-                .call(resolved.backend_node_id, CHECKED_FN, &[])
-                .await?;
-            if checked != Some(true) {
-                let _ = self
-                    .click_node(
-                        &resolved.session,
-                        InputTarget::from_ref_entry(&resolved.entry),
-                        ClickOptions::default(),
-                    )
-                    .await?;
-            }
-            Ok(true)
-        }))
-        .await
+        self.held(Box::pin(async { self.set_checked(ref_id, true).await }))
+            .await
     }
 
     pub async fn uncheck(&self, ref_id: &Ref) -> Result<bool, CoreError> {
-        self.held(Box::pin(async {
-            let resolved = self.observer.resolve_ref(ref_id).await?;
-            let checked: Option<bool> = PageJs::isolated(&resolved.session)
-                .call(resolved.backend_node_id, CHECKED_FN, &[])
+        self.held(Box::pin(async { self.set_checked(ref_id, false).await }))
+            .await
+    }
+
+    /// Clicks the control only when it is not already in the wanted state, then confirms the
+    /// click changed it. Native checkboxes and radios report `checked`; custom switches report
+    /// `aria-checked`. A control with neither keeps the old contract: check clicks it once,
+    /// uncheck leaves it, and nothing can be confirmed.
+    async fn set_checked(&self, ref_id: &Ref, checked: bool) -> Result<bool, CoreError> {
+        let resolved = self.observer.resolve_ref(ref_id).await?;
+        let js = PageJs::isolated(&resolved.session);
+        let before: Option<CheckState> = js
+            .call(resolved.backend_node_id, CHECK_STATE_FN, &[])
+            .await?;
+        let Some(before) = before else {
+            if checked {
+                self.click_node(
+                    &resolved.session,
+                    InputTarget::from_ref_entry(&resolved.entry),
+                    ClickOptions::default(),
+                )
                 .await?;
-            if checked == Some(true) {
-                let _ = self
-                    .click_node(
-                        &resolved.session,
-                        InputTarget::from_ref_entry(&resolved.entry),
-                        ClickOptions::default(),
-                    )
-                    .await?;
             }
-            Ok(false)
-        }))
-        .await
+            return Ok(checked);
+        };
+        if before.checked == checked {
+            return Ok(checked);
+        }
+        if before.radio && !checked {
+            return Err(CoreError::Message(format!(
+                "{ref_id} is a radio button, which cannot be unchecked. Check another option in its group instead."
+            )));
+        }
+        self.click_node(
+            &resolved.session,
+            InputTarget::from_ref_entry(&resolved.entry),
+            ClickOptions::default(),
+        )
+        .await?;
+        // A framework can apply the new state a tick after the click event, so poll briefly
+        // instead of reading once.
+        let deadline = tokio::time::Instant::now() + timeouts::CHECK_STATE_SETTLE;
+        loop {
+            // The click has landed. A control the page then replaced, or a page that navigated
+            // away, can no longer report its state; the readback shows the page as it is, and
+            // an error here would only invite a retry that clicks again and flips it back.
+            let Ok(after) = js
+                .call::<Option<CheckState>>(resolved.backend_node_id, CHECK_STATE_FN, &[])
+                .await
+            else {
+                return Ok(checked);
+            };
+            match after {
+                Some(after) if after.detached || after.checked == checked => return Ok(checked),
+                _ => {}
+            }
+            if tokio::time::Instant::now() >= deadline {
+                let wanted = if checked { "checked" } else { "unchecked" };
+                return Err(CoreError::Message(format!(
+                    "Clicking {ref_id} did not make it {wanted}. The page may ignore the click or need another control; take a new snapshot."
+                )));
+            }
+            tokio::time::sleep(timeouts::CHECK_STATE_POLL).await;
+        }
     }
 
     pub async fn upload_file_by_ref(
@@ -563,16 +610,20 @@ impl Input {
     /// Best-effort: true when the ref resolves to a password or payment-card field.
     /// Used by the audit layer to redact the value before it is persisted; a read
     /// failure returns false (the explicit `sensitive` flag is the deterministic path).
+    /// The read runs once more after a failure, as [`Self::evaluate_sensitive`] does.
     pub async fn ref_field_is_sensitive(&self, ref_id: &Ref) -> bool {
-        let Ok(resolved) = self.observer.resolve_ref(ref_id).await else {
-            return false;
-        };
-        PageJs::isolated(&resolved.session)
-            .call::<Option<bool>>(resolved.backend_node_id, &sensitive_field_fn(), &[])
-            .await
-            .ok()
-            .flatten()
-            .unwrap_or(false)
+        for _ in 0..SENSITIVE_CHECK_ATTEMPTS {
+            let Ok(resolved) = self.observer.resolve_ref(ref_id).await else {
+                continue;
+            };
+            if let Ok(sensitive) = PageJs::isolated(&resolved.session)
+                .call::<Option<bool>>(resolved.backend_node_id, &sensitive_field_fn(), &[])
+                .await
+            {
+                return sensitive.unwrap_or(false);
+            }
+        }
+        false
     }
 
     /// Best-effort: true when the currently focused element is a password or
@@ -598,16 +649,23 @@ impl Input {
         self.evaluate_sensitive(&expression).await
     }
 
+    /// Runs the check once more after any failure. A session can die between the isolated
+    /// world's setup and the script, and the action that follows then re-attaches and types a
+    /// secret this check reported as not sensitive. Unlike the input retry, a second read
+    /// repeats nothing the page sees, so it needs no proof that the first one never landed.
     async fn evaluate_sensitive(&self, expression: &str) -> bool {
-        let Ok(session) = self.page_session().await else {
-            return false;
-        };
-        PageJs::isolated(&session)
-            .eval::<Option<bool>>(expression)
-            .await
-            .ok()
-            .flatten()
-            .unwrap_or(false)
+        for _ in 0..SENSITIVE_CHECK_ATTEMPTS {
+            let Ok(session) = self.page_session().await else {
+                continue;
+            };
+            if let Ok(sensitive) = PageJs::isolated(&session)
+                .eval::<Option<bool>>(expression)
+                .await
+            {
+                return sensitive.unwrap_or(false);
+            }
+        }
+        false
     }
 
     /// What the working overlay shows for a ref: the element's accessible name, and where its
@@ -670,8 +728,9 @@ impl Input {
     ) -> Result<(), CoreError> {
         match click_blocker_at_point(session, target.backend_node_id, point).await {
             Ok(Some(blocker)) => Err(CoreError::ElementCovered {
-                target: target.error_target.clone(),
+                target: Box::new(target.error_target.clone()),
                 blocker,
+                blocker_ref: None,
             }),
             Ok(None) | Err(_) => Ok(()),
         }
@@ -684,10 +743,18 @@ impl Input {
     {
         let mut attempted = false;
         loop {
-            let result = action(self.page_session().await?).await;
+            // Run again only if the session was gone before anything reached the page. Once a
+            // command was answered, part of the action (a keyDown, a mouse press) may have
+            // landed, and running it again on a new attachment would repeat it.
+            let (session, answered) = self.page_session().await?.witnessed();
+            let result = action(session).await;
             match result {
                 Ok(value) => return Ok(value),
-                Err(err) if !attempted && err.is_retryable_session_loss() => {
+                Err(err)
+                    if !attempted
+                        && err.is_retryable_session_loss()
+                        && !answered.load(Ordering::SeqCst) =>
+                {
                     attempted = true;
                     let _ = self.pages.refresh(self.page_id.clone()).await;
                 }
@@ -713,6 +780,10 @@ const SENSITIVE_FIELD_PREDICATE: &str = "(el)=>{\
 fn sensitive_field_fn() -> String {
     format!("function(){{const pred={SENSITIVE_FIELD_PREDICATE};return pred(this);}}")
 }
+
+/// Reads in the audit layer's sensitive-field checks: the first, and one after a failure that
+/// may have been a session dying mid-read.
+const SENSITIVE_CHECK_ATTEMPTS: usize = 2;
 
 /// Resolves the real focused element, descending shadow roots and same-origin
 /// iframes, then applies the predicate. `__PRED__` is replaced with the predicate.
@@ -743,7 +814,34 @@ const POINT_SENSITIVE_JS: &str = "(()=>{const pred=__PRED__;\
   }\
   return pred(el);})()";
 
-const CHECKED_FN: &str = "function(){return this.checked}";
+/// What [`CHECK_STATE_FN`] reads.
+#[derive(Debug, Clone, Copy, serde::Deserialize)]
+struct CheckState {
+    checked: bool,
+    radio: bool,
+    /// The control is no longer in the document, typically replaced by a re-render.
+    #[serde(default)]
+    detached: bool,
+}
+
+/// Reads a control's checked state, following a label to the control it names. Returns null
+/// when the element has no checked state at all.
+///
+/// A mixed control reads as its underlying state, as Playwright's `getCheckedWithoutMixed`
+/// does: a native box's `checked` sits beneath `indeterminate`, and clicking clears the mixed
+/// look by toggling that, so treating mixed as unknown and clicking would invert a box that
+/// was already where the caller wanted it. An `aria-checked="mixed"` control counts as
+/// unchecked.
+const CHECK_STATE_FN: &str = "function(){\
+const el=this.tagName==='LABEL'&&this.control?this.control:this;\
+if(!el.isConnected)return{checked:false,radio:false,detached:true};\
+if(el.tagName==='INPUT'&&(el.type==='checkbox'||el.type==='radio'))\
+return{checked:el.checked,radio:el.type==='radio'};\
+const aria=el.getAttribute&&el.getAttribute('aria-checked');\
+if(aria!=='true'&&aria!=='false'&&aria!=='mixed')return null;\
+const role=(el.getAttribute('role')||'').trim().split(/\\s+/)[0];\
+return{checked:aria==='true',radio:role==='radio'||role==='menuitemradio'};\
+}";
 
 const SELECT_OPTION_FN: &str = "function(val){\
   for(var i=0;i<this.options.length;i++){\
@@ -758,21 +856,23 @@ const SELECT_OPTION_FN: &str = "function(val){\
 
 #[cfg(test)]
 mod tests {
-    use super::{ClickOptions, Input, Point, PublicMouseButton, ScrollDirection};
+    use super::{
+        ClickOptions, DomFallbackStatus, Input, Point, PublicMouseButton, ScrollDirection,
+    };
     use crate::{
         BrowserSession, BrowserSessionHooks, CoreError, Ref,
         connection::CdpConnection,
         pointer::Pointer,
         snapshot::{AxNode, AxValue},
         target::BrowserView,
-        test_support::TestCall,
+        testing::TestCall,
         timeouts,
     };
-    use browseros_cdp::{CdpError, CdpEvent};
+    use browseros_cdp::{CdpError, CdpEvent, TargetedEvents};
     use futures_util::future::BoxFuture;
     use serde_json::{Value, json};
     use std::sync::{Arc, Mutex};
-    use tokio::sync::broadcast;
+    use tokio::sync::{broadcast, mpsc};
     use tokio::time::{Duration, Instant};
 
     #[derive(Clone, Copy)]
@@ -790,10 +890,26 @@ mod tests {
         Pending,
     }
 
+    /// How the browser answers `DOM.click`.
+    #[derive(Clone, Copy)]
+    enum NativePress {
+        Pressed {
+            inert: bool,
+        },
+        Refused(&'static str),
+        /// A BrowserOS build from before `DOM.click`.
+        Missing,
+        /// Sent, but the acknowledgement never came back.
+        Lost,
+    }
+
     struct HarnessState {
         hit_test: HitTestResponse,
         hit_test_calls: usize,
         mouse_events: usize,
+        fail_mouse_ack: Option<&'static str>,
+        native_press: NativePress,
+        fail_dom_ack: bool,
         mouse_calls: Vec<(Value, Instant)>,
         page_scrolls: usize,
         select_calls: usize,
@@ -814,12 +930,27 @@ mod tests {
         tab_info_error: bool,
         tab_list_error: bool,
         tab_target: &'static str,
+        /// What the check-state read answers: null when the element has no checked state.
+        check_state: Value,
+        /// The check state a mouse press leaves behind, for controls the click toggles.
+        check_state_after_click: Option<Value>,
+        /// The held move (counting from 1) that never gets an answer, to cancel a drag mid-way.
+        stall_held_move: Option<usize>,
+        /// The held move (counting from 1) that the browser rejects, to fail a drag mid-way.
+        fail_held_move: Option<usize>,
+        held_moves: usize,
+        /// The field is a date/time/colour/range input, which fill sets instead of typing.
+        value_control: bool,
+        /// What the set-value script answers: true, or the reason the value was refused.
+        set_value_result: Value,
+        set_values: Vec<Value>,
     }
 
     struct HarnessConnection {
         state: Mutex<HarnessState>,
         target_role: &'static str,
         target_name: &'static str,
+        targeted: TargetedEvents,
     }
 
     impl HarnessConnection {
@@ -888,13 +1019,14 @@ mod tests {
             &'a self,
             method: &'a str,
             params: Value,
-            _session: Option<&'a crate::SessionId>,
+            session: Option<&'a crate::SessionId>,
         ) -> BoxFuture<'a, Result<Value, CdpError>> {
             Box::pin(async move {
                 self.configure(|state| {
                     state.calls.push(TestCall {
                         method: method.to_string(),
                         params: params.clone(),
+                        session: session.cloned(),
                     });
                 })
                 .map_err(|err| CdpError::Protocol {
@@ -1000,7 +1132,29 @@ mod tests {
                         }
                         Ok(json!({ "result": { "value": [] } }))
                     }
+                    "DOM.click" => {
+                        let press = self
+                            .state
+                            .lock()
+                            .map_err(|_| CdpError::ConnectionLost)?
+                            .native_press;
+                        match press {
+                            NativePress::Pressed { inert } => Ok(json!({ "inert": inert })),
+                            NativePress::Refused(code) => Ok(json!({ "refused": code })),
+                            NativePress::Missing => Err(CdpError::Protocol {
+                                code: -32601,
+                                message: "'DOM.click' wasn't found".into(),
+                            }),
+                            NativePress::Lost => Err(CdpError::Protocol {
+                                code: -32000,
+                                message: "Inspected target navigated or closed".into(),
+                            }),
+                        }
+                    }
                     "DOM.resolveNode" => Ok(json!({ "object": { "objectId": "target-object" } })),
+                    "DOM.getNodeForLocation" => {
+                        Ok(json!({ "backendNodeId": 20, "frameId": "main" }))
+                    }
                     "DOM.getContentQuads" => {
                         let state = self.state.lock().map_err(|_| CdpError::Protocol {
                             code: -1,
@@ -1030,9 +1184,40 @@ mod tests {
                         Ok(json!({}))
                     }
                     "Input.dispatchMouseEvent" => {
+                        let (mut stall, mut fail) = (false, false);
+                        let mut lost_ack = false;
                         if let Ok(mut state) = self.state.lock() {
                             state.mouse_events += 1;
+                            if params["type"] == "mousePressed"
+                                && let Some(after) = state.check_state_after_click.take()
+                            {
+                                state.check_state = after;
+                            }
+                            if params["type"] == "mouseMoved" && params["buttons"] == 1 {
+                                state.held_moves += 1;
+                                stall = state.stall_held_move == Some(state.held_moves);
+                                fail = state.fail_held_move == Some(state.held_moves);
+                            }
+                            if state
+                                .fail_mouse_ack
+                                .is_some_and(|kind| params["type"] == kind)
+                            {
+                                state.fail_mouse_ack = None;
+                                lost_ack = true;
+                            }
                             state.mouse_calls.push((params, Instant::now()));
+                        }
+                        if lost_ack {
+                            return Err(CdpError::ConnectionLost);
+                        }
+                        if stall {
+                            std::future::pending::<()>().await;
+                        }
+                        if fail {
+                            return Err(CdpError::Protocol {
+                                code: -32000,
+                                message: "the held move was rejected".into(),
+                            });
                         }
                         Ok(json!({}))
                     }
@@ -1074,6 +1259,10 @@ mod tests {
             rx
         }
 
+        fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+            self.targeted.subscribe(method)
+        }
+
         fn is_connected(&self) -> bool {
             true
         }
@@ -1089,6 +1278,27 @@ mod tests {
                 .get("functionDeclaration")
                 .and_then(Value::as_str)
                 .unwrap_or_default();
+            if function.contains("browserosActivateDom") {
+                if self.state.lock().is_ok_and(|state| state.fail_dom_ack) {
+                    return Err(CdpError::Protocol {
+                        code: -32000,
+                        message: "Execution context was destroyed".into(),
+                    });
+                }
+                return Ok(json!({"result":{"value":{}}}));
+            }
+            if function.contains("browserosProbeClick")
+                && self.state.lock().is_ok_and(|state| {
+                    state.missing_geometry
+                        || (state.pointer_moved && state.missing_geometry_after_move)
+                })
+            {
+                // A disappearing target loses its DOM client rects as well as
+                // its native quads; the exact destination recheck must refuse it.
+                return Ok(
+                    json!({ "result": { "value": { "unavailable": "Element has no visible click area." } } }),
+                );
+            }
             if function.contains("elementFromPoint") {
                 let response = match self.state.lock() {
                     Ok(mut state) => {
@@ -1102,6 +1312,22 @@ mod tests {
                     Err(_err) => HitTestResponse::Error,
                 };
                 return match response {
+                    HitTestResponse::Blocked(blocker)
+                        if function.contains("browserosProbeClick") =>
+                    {
+                        Ok(
+                            json!({ "result": { "value": { "points": [], "blocker": blocker, "blockedPoint": {"x":50.0,"y":25.0} } } }),
+                        )
+                    }
+                    HitTestResponse::Clear if function.contains("browserosProbeClick") => {
+                        let moved = self
+                            .state
+                            .lock()
+                            .is_ok_and(|state| state.pointer_moved && state.moved_box);
+                        Ok(
+                            json!({ "result": { "value": { "points": [{"x":if moved {250.0} else {50.0},"y":if moved {125.0} else {25.0}}], "viewport": {"width":1280.0,"height":720.0} } } }),
+                        )
+                    }
                     HitTestResponse::Blocked(blocker) => {
                         Ok(json!({ "result": { "value": blocker } }))
                     }
@@ -1112,8 +1338,28 @@ mod tests {
                     }),
                 };
             }
-            if function.contains("return this.checked") {
-                return Ok(json!({ "result": { "value": false } }));
+            if function.contains("aria-checked") {
+                let state = self.state.lock().map_err(|_| CdpError::Protocol {
+                    code: -1,
+                    message: "poisoned test state".into(),
+                })?;
+                return Ok(json!({ "result": { "value": state.check_state } }));
+            }
+            if function.contains("browserosSetInputValue") {
+                let mut state = self.state.lock().map_err(|_| CdpError::Protocol {
+                    code: -1,
+                    message: "poisoned test state".into(),
+                })?;
+                state
+                    .set_values
+                    .push(params["arguments"][0]["value"].clone());
+                return Ok(json!({ "result": { "value": state.set_value_result } }));
+            }
+            if function.contains("browserosPrepareFill")
+                && params["arguments"][0]["value"] == "validate"
+                && self.state.lock().is_ok_and(|state| state.value_control)
+            {
+                return Ok(json!({ "result": { "value": "setValue" } }));
             }
             if function.contains("browserosPrepareFill") || function.contains("this.focus()") {
                 return Ok(json!({ "result": { "value": true } }));
@@ -1163,6 +1409,9 @@ mod tests {
                 hit_test,
                 hit_test_calls: 0,
                 mouse_events: 0,
+                fail_mouse_ack: None,
+                native_press: NativePress::Pressed { inert: false },
+                fail_dom_ack: false,
                 mouse_calls: Vec::new(),
                 page_scrolls: 0,
                 select_calls: 0,
@@ -1182,9 +1431,18 @@ mod tests {
                 tab_info_error: false,
                 tab_list_error: false,
                 tab_target: "target-1",
+                check_state: Value::Null,
+                check_state_after_click: None,
+                stall_held_move: None,
+                fail_held_move: None,
+                held_moves: 0,
+                value_control: false,
+                set_value_result: json!(true),
+                set_values: Vec::new(),
             }),
             target_role,
             target_name,
+            targeted: TargetedEvents::default(),
         });
         let session = BrowserSession::new(connection.clone(), BrowserSessionHooks::default());
         let pages = session.pages.list().await?;
@@ -1261,7 +1519,14 @@ mod tests {
                     json!({"type":"mouseReleased","x":50.0,"y":25.0,"button":"left","clickCount":1,"modifiers":0}),
                 ]
             );
-            assert_eq!(started.elapsed(), Duration::ZERO);
+            assert_eq!(
+                started.elapsed(),
+                if kind == 0 {
+                    Duration::ZERO
+                } else {
+                    Duration::from_millis(50)
+                }
+            );
         }
         Ok(())
     }
@@ -1384,12 +1649,13 @@ mod tests {
                 .position(|call| call.method == "Input.dispatchMouseEvent")
                 .ok_or("missing mouse input")?;
             assert!(movement < effect && effect < first_mouse, "{kind}");
-            assert!(
-                calls[first_mouse..first_mouse + 6]
-                    .iter()
-                    .all(|call| call.method == "Input.dispatchMouseEvent"),
-                "{kind}"
-            );
+            // Ref clicks recheck after hover and before the press; geometry
+            // reads may occur between native movement and button input.
+            let press = calls
+                .iter()
+                .position(|call| call.params["type"] == "mousePressed")
+                .ok_or("missing press")?;
+            assert!(first_mouse < press);
         }
         Ok(())
     }
@@ -1433,22 +1699,9 @@ mod tests {
         }
     }
 
-    fn protocol_fingerprint(calls: &[TestCall]) -> Result<u64, serde_json::Error> {
-        let calls: Vec<_> = calls
-            .iter()
-            .map(|call| json!([call.method, call.params]))
-            .collect();
-        Ok(serde_json::to_vec(&calls)?
-            .iter()
-            .fold(0xcbf29ce484222325_u64, |hash, byte| {
-                (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3)
-            }))
-    }
-
     #[tokio::test]
     async fn tests_that_disabled_inputs_preserve_the_legacy_protocol()
     -> Result<(), Box<dyn std::error::Error>> {
-        let mut fingerprints = Vec::new();
         for action in POINTER_INPUTS {
             let (connection, input, ref_id) = input_harness(HitTestResponse::Clear).await?;
             connection.take_calls()?;
@@ -1462,22 +1715,8 @@ mod tests {
                 !calls.iter().any(|call| call.method == "Browser.getTabInfo"),
                 "{action:?}"
             );
-            fingerprints.push(protocol_fingerprint(&calls)?);
+            assert_real_input_once(&calls, action);
         }
-        // Frozen input protocol with the pointer disabled, including every method, parameter
-        // and call order. Element calls go through `PageJs`, which awaits their result and
-        // releases each node wrapper it resolves. FNV keeps the six protocol fixtures compact.
-        assert_eq!(
-            fingerprints,
-            [
-                14638203640916461425,
-                7395435797475900152,
-                6586471237564934084,
-                10296638448501175693,
-                5312967615472211188,
-                4986025384446686415,
-            ]
-        );
         Ok(())
     }
 
@@ -1599,6 +1838,7 @@ mod tests {
                 match action {
                     PointerInput::Focus => 1,
                     PointerInput::ClickAt | PointerInput::HoverAt => 0,
+                    PointerInput::Click => 2,
                     _ => 2,
                 },
                 "{action:?}"
@@ -1635,11 +1875,13 @@ mod tests {
                         .is_some_and(|function| function.contains("elementFromPoint"))
                 })
                 .collect();
-            assert_eq!(hit_tests.len(), 2);
-            assert_eq!(
-                hit_tests[1].params["arguments"],
-                json!([{ "value": 250.0 }, { "value": 125.0 }])
-            );
+            assert!(hit_tests.len() >= 2);
+            if !matches!(action, PointerInput::Click) {
+                assert_eq!(
+                    hit_tests[1].params["arguments"],
+                    json!([{ "value": 250.0 }, { "value": 125.0 }])
+                );
+            }
             if action.has_effect() {
                 let effect = pointer_calls(&calls)
                     .find(|call| is_pointer_effect(call))
@@ -1655,20 +1897,33 @@ mod tests {
                     .ok_or("missing effect call")?;
                 let hit_index = calls
                     .iter()
-                    .position(|call| std::ptr::eq(call, hit_tests[1]))
+                    .rposition(|call| {
+                        call.params["functionDeclaration"]
+                            .as_str()
+                            .is_some_and(|function| function.contains("elementFromPoint"))
+                            && !is_pointer_effect(call)
+                    })
                     .ok_or("missing recheck")?;
                 let mouse_index = calls
                     .iter()
                     .position(|call| call.method == "Input.dispatchMouseEvent")
                     .ok_or("missing mouse input")?;
-                assert!(hit_index < effect_index && effect_index < mouse_index);
+                if matches!(action, PointerInput::Click) {
+                    let press_index = calls
+                        .iter()
+                        .position(|call| call.params["type"] == "mousePressed")
+                        .ok_or("missing press")?;
+                    assert!(effect_index < mouse_index && hit_index < press_index);
+                } else {
+                    assert!(hit_index < effect_index && effect_index < mouse_index);
+                }
             }
         }
         Ok(())
     }
 
     #[tokio::test]
-    async fn tests_that_newly_covered_targets_stop_before_effects_or_mouse_input()
+    async fn newly_covered_targets_stop_native_input_and_only_click_can_fall_back()
     -> Result<(), Box<dyn std::error::Error>> {
         for action in [PointerInput::Click, PointerInput::Hover, PointerInput::Fill] {
             let (connection, input, ref_id) = input_harness(HitTestResponse::Clear).await?;
@@ -1677,15 +1932,17 @@ mod tests {
             })?;
             let input = input.with_pointer(Some(Pointer::default()));
             connection.take_calls()?;
-            let error = action
-                .run(&input, &ref_id)
-                .await
-                .err()
-                .ok_or("covered action succeeded")?;
-            if matches!(action, PointerInput::Fill) {
-                assert!(error.to_string().contains("covered by <div#overlay>"));
+            let result = action.run(&input, &ref_id).await;
+            if matches!(action, PointerInput::Click) {
+                assert_eq!(result?, None);
             } else {
-                assert!(matches!(error, CoreError::ElementCovered { .. }));
+                assert!(
+                    result
+                        .err()
+                        .ok_or("covered action succeeded")?
+                        .to_string()
+                        .contains("covered by <div#overlay>")
+                );
             }
             let calls = connection.take_calls()?;
             assert!(
@@ -1694,6 +1951,11 @@ mod tests {
                     .any(|call| call.method == "Input.dispatchMouseEvent")
             );
             assert_eq!(pointer_calls(&calls).count(), 1);
+            assert_eq!(
+                native_press_count(&calls),
+                usize::from(matches!(action, PointerInput::Click))
+            );
+            assert_eq!(dom_activation_count(&calls), 0);
         }
         Ok(())
     }
@@ -1754,7 +2016,15 @@ mod tests {
             connection.take_calls()?;
             let started = tokio::time::Instant::now();
             action.run(&input, &ref_id).await?;
-            assert_eq!(started.elapsed(), std::time::Duration::ZERO, "{action:?}");
+            assert_eq!(
+                started.elapsed(),
+                if matches!(action, PointerInput::Click) {
+                    Duration::from_millis(50)
+                } else {
+                    Duration::ZERO
+                },
+                "{action:?}"
+            );
             let mut calls = connection.take_calls()?;
             assert_eq!(pointer_calls(&calls).count(), 0, "{action:?}");
             assert_eq!(
@@ -1908,7 +2178,11 @@ mod tests {
                 pointer_calls(&calls)
                     .filter(|call| is_pointer_move(call))
                     .count(),
-                1
+                if matches!(action, PointerInput::Click) {
+                    2
+                } else {
+                    1
+                }
             );
         }
         Ok(())
@@ -1926,7 +2200,12 @@ mod tests {
             action.run(&input, &ref_id).await?;
             assert_eq!(
                 started.elapsed(),
-                timeouts::POINTER_MOVE_DEADLINE,
+                timeouts::POINTER_MOVE_DEADLINE
+                    + if matches!(action, PointerInput::Click) {
+                        Duration::from_millis(50)
+                    } else {
+                        Duration::ZERO
+                    },
                 "{action:?}"
             );
             let calls = connection.take_calls()?;
@@ -1983,7 +2262,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tests_that_missing_click_geometry_keeps_the_js_fallback()
+    async fn missing_click_geometry_uses_dom_fallback_before_any_press()
     -> Result<(), Box<dyn std::error::Error>> {
         for after_move in [false, true] {
             let (connection, input, ref_id) = input_harness(HitTestResponse::Clear).await?;
@@ -1994,16 +2273,18 @@ mod tests {
             let input = input.with_pointer(Some(Pointer::default()));
             connection.take_calls()?;
             assert_eq!(input.click(&ref_id, ClickOptions::default()).await?, None);
+            assert_eq!(
+                input.dom_fallback_status(),
+                Some(DomFallbackStatus::Dispatched {
+                    trusted: true,
+                    inert: false
+                })
+            );
             let calls = connection.take_calls()?;
             assert_eq!(press_count(&calls), 0);
             assert_eq!(pointer_calls(&calls).count(), usize::from(after_move));
-            assert_eq!(
-                calls
-                    .iter()
-                    .filter(|call| call.params["functionDeclaration"] == "function(){this.click()}")
-                    .count(),
-                1
-            );
+            assert_eq!(native_press_count(&calls), 1);
+            assert_eq!(dom_activation_count(&calls), 0);
         }
         Ok(())
     }
@@ -2127,12 +2408,352 @@ mod tests {
         Ok(())
     }
 
+    fn sent<'a>(calls: &'a [TestCall], method: &'a str) -> impl Iterator<Item = &'a Value> + 'a {
+        calls
+            .iter()
+            .filter(move |call| call.method == method)
+            .map(|call| &call.params)
+    }
+
+    #[tokio::test]
+    async fn insert_text_sends_newlines_as_text_not_enter() -> Result<(), CoreError> {
+        let (connection, input, _ref_id) = input_harness(HitTestResponse::Clear).await?;
+        connection.take_calls()?;
+        input.insert_text("line one\nline two").await?;
+        let calls = connection.take_calls()?;
+        let inserted: Vec<_> = sent(&calls, "Input.insertText").collect();
+        assert_eq!(inserted, [&json!({ "text": "line one\nline two" })]);
+        assert_eq!(sent(&calls, "Input.dispatchKeyEvent").count(), 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn check_clicks_an_unchecked_control_and_confirms_the_new_state() -> Result<(), CoreError>
+    {
+        let (connection, input, ref_id) = input_harness(HitTestResponse::Clear).await?;
+        connection.configure(|state| {
+            state.check_state = json!({ "checked": false, "radio": false });
+            state.check_state_after_click = Some(json!({ "checked": true, "radio": false }));
+        })?;
+        assert!(input.check(&ref_id).await?);
+        assert_eq!(press_count(&connection.take_calls()?), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn check_leaves_a_switch_that_is_already_on() -> Result<(), CoreError> {
+        let (connection, input, ref_id) = input_harness(HitTestResponse::Clear).await?;
+        // A role=switch reports aria-checked; reading only `checked` used to click it off.
+        connection.configure(|state| {
+            state.check_state = json!({ "checked": true, "radio": false });
+        })?;
+        connection.take_calls()?;
+        assert!(input.check(&ref_id).await?);
+        assert_eq!(press_count(&connection.take_calls()?), 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn uncheck_refuses_a_radio_without_clicking() -> Result<(), CoreError> {
+        let (connection, input, ref_id) = input_harness(HitTestResponse::Clear).await?;
+        connection.configure(|state| {
+            state.check_state = json!({ "checked": true, "radio": true });
+        })?;
+        connection.take_calls()?;
+        let error = input
+            .uncheck(&ref_id)
+            .await
+            .err()
+            .map(|error| error.to_string());
+        assert!(error.is_some_and(|error| error.contains("cannot be unchecked")));
+        assert_eq!(press_count(&connection.take_calls()?), 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn check_reports_a_click_that_did_not_change_the_state() -> Result<(), CoreError> {
+        let (connection, input, ref_id) = input_harness(HitTestResponse::Clear).await?;
+        connection.configure(|state| {
+            state.check_state = json!({ "checked": false, "radio": false });
+        })?;
+        let error = input
+            .check(&ref_id)
+            .await
+            .err()
+            .map(|error| error.to_string());
+        assert!(error.is_some_and(|error| error.contains("did not make it checked")));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn check_trusts_a_click_after_which_the_page_replaced_the_control()
+    -> Result<(), CoreError> {
+        let (connection, input, ref_id) = input_harness(HitTestResponse::Clear).await?;
+        connection.configure(|state| {
+            state.check_state = json!({ "checked": false, "radio": false });
+            state.check_state_after_click =
+                Some(json!({ "checked": false, "radio": false, "detached": true }));
+        })?;
+        connection.take_calls()?;
+        assert!(input.check(&ref_id).await?);
+        assert_eq!(press_count(&connection.take_calls()?), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn drag_holds_the_left_button_through_every_move() -> Result<(), CoreError> {
+        let (connection, input, ref_id) = input_harness(HitTestResponse::Clear).await?;
+        connection.take_calls()?;
+        input.drag(&ref_id, &ref_id).await?;
+        let calls = connection.take_calls()?;
+        let mouse: Vec<&Value> = sent(&calls, "Input.dispatchMouseEvent").collect();
+        let held_moves = mouse
+            .iter()
+            .filter(|params| params["type"] == "mouseMoved" && params["buttons"] == 1)
+            .count();
+        assert_eq!(held_moves, timeouts::DRAG_STEPS as usize);
+        assert!(mouse.iter().all(|params| params["type"] != "mouseMoved"
+            || params["buttons"] == 1
+            || params["buttons"].is_null()));
+        assert_eq!(
+            mouse.last().map(|params| &params["type"]),
+            Some(&json!("mouseReleased"))
+        );
+        // Chromium's own drag controller runs an HTML5 drag from these events.
+        assert_eq!(sent(&calls, "Input.cancelDragging").count(), 0);
+        Ok(())
+    }
+
+    /// The calls a drag's cleanup task sends, once it has had a moment to run.
+    async fn cleanup_calls(connection: &HarnessConnection) -> Result<Vec<TestCall>, CoreError> {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        connection.take_calls()
+    }
+
+    fn ends_the_drag(calls: &[TestCall]) -> bool {
+        let methods: Vec<&str> = calls
+            .iter()
+            .filter(|call| {
+                call.method == "Input.cancelDragging"
+                    || (call.method == "Input.dispatchMouseEvent"
+                        && call.params["type"] == "mouseReleased"
+                        && call.params["buttons"] == 0)
+            })
+            .map(|call| call.method.as_str())
+            .collect();
+        methods == ["Input.cancelDragging", "Input.dispatchMouseEvent"]
+    }
+
+    #[tokio::test]
+    async fn a_drag_cancelled_mid_gesture_cancels_the_drag_and_releases_the_button()
+    -> Result<(), CoreError> {
+        let (connection, input, ref_id) = input_harness(HitTestResponse::Clear).await?;
+        connection.configure(|state| state.stall_held_move = Some(3))?;
+        connection.take_calls()?;
+        let drag = tokio::time::timeout(Duration::from_secs(1), input.drag(&ref_id, &ref_id));
+        assert!(drag.await.is_err(), "the stalled drag should be cancelled");
+        assert!(ends_the_drag(&cleanup_calls(&connection).await?));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_drag_that_fails_part_way_still_cancels_and_releases() -> Result<(), CoreError> {
+        let (connection, input, ref_id) = input_harness(HitTestResponse::Clear).await?;
+        connection.configure(|state| state.fail_held_move = Some(3))?;
+        connection.take_calls()?;
+        assert!(input.drag(&ref_id, &ref_id).await.is_err());
+        assert!(ends_the_drag(&cleanup_calls(&connection).await?));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn fill_sets_a_date_input_without_clicking_or_typing() -> Result<(), CoreError> {
+        let (connection, input, ref_id) = input_harness(HitTestResponse::Clear).await?;
+        connection.configure(|state| state.value_control = true)?;
+        connection.take_calls()?;
+        input.fill(&ref_id, "2026-10-29", true).await?;
+        let calls = connection.take_calls()?;
+        // A click would open the date picker; typing has no editor to land in.
+        assert_eq!(press_count(&calls), 0);
+        assert_eq!(sent(&calls, "Input.insertText").count(), 0);
+        let set: Vec<Value> = connection
+            .state
+            .lock()
+            .map(|state| state.set_values.clone())
+            .unwrap_or_default();
+        assert_eq!(set, [json!("2026-10-29")]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn fill_reports_a_value_the_input_cannot_hold() -> Result<(), CoreError> {
+        let (connection, input, ref_id) = input_harness(HitTestResponse::Clear).await?;
+        connection.configure(|state| {
+            state.value_control = true;
+            state.set_value_result =
+                json!("\"29/10/2026\" is not a valid date value. Use YYYY-MM-DD.");
+        })?;
+        let error = input
+            .fill(&ref_id, "29/10/2026", true)
+            .await
+            .err()
+            .map(|error| error.to_string());
+        assert!(error.is_some_and(|error| error.contains("Use YYYY-MM-DD")));
+        Ok(())
+    }
+
+    fn dom_activation_count(calls: &[TestCall]) -> usize {
+        calls
+            .iter()
+            .filter(|call| {
+                call.params["functionDeclaration"]
+                    .as_str()
+                    .is_some_and(|script| script.contains("browserosActivateDom"))
+            })
+            .count()
+    }
+
+    fn native_press_count(calls: &[TestCall]) -> usize {
+        calls
+            .iter()
+            .filter(|call| call.method == "DOM.click")
+            .count()
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn fallback_press_goes_through_cover_and_never_replays() -> Result<(), CoreError> {
+        // The native press reaches a covered target, an inert one behind a dialog included.
+        for inert in [false, true] {
+            let (connection, input, ref_id) =
+                input_harness(HitTestResponse::Blocked("div#overlay")).await?;
+            connection.configure(|state| state.native_press = NativePress::Pressed { inert })?;
+            assert_eq!(input.click(&ref_id, ClickOptions::default()).await?, None);
+            let calls = connection.take_calls()?;
+            assert_eq!(press_count(&calls), 0);
+            assert_eq!(native_press_count(&calls), 1);
+            assert_eq!(dom_activation_count(&calls), 0);
+            assert_eq!(
+                input.dom_fallback_status(),
+                Some(DomFallbackStatus::Dispatched {
+                    trusted: true,
+                    inert
+                })
+            );
+        }
+
+        // A refusal sends nothing more and keeps the native obstruction.
+        let (connection, input, ref_id) =
+            input_harness(HitTestResponse::Blocked("div#overlay")).await?;
+        connection.configure(|state| state.native_press = NativePress::Refused("notVisible"))?;
+        let result = input.click(&ref_id, ClickOptions::default()).await;
+        assert!(matches!(
+            result,
+            Err(CoreError::ClickFallbackUnavailable { ref native, ref reason })
+                if matches!(**native, CoreError::ElementCovered { .. })
+                    && reason.contains("not visible")
+        ));
+        let calls = connection.take_calls()?;
+        assert_eq!(native_press_count(&calls), 1);
+        assert_eq!(dom_activation_count(&calls), 0);
+        assert_eq!(input.dom_fallback_status(), None);
+
+        // A build without DOM.click gets one untrusted script click, with a user
+        // gesture so its handler can open popups and pickers.
+        for fail_ack in [false, true] {
+            let (connection, input, ref_id) =
+                input_harness(HitTestResponse::Blocked("div#overlay")).await?;
+            connection.configure(|state| {
+                state.native_press = NativePress::Missing;
+                state.fail_dom_ack = fail_ack;
+            })?;
+            let result = input.click(&ref_id, ClickOptions::default()).await;
+            if fail_ack {
+                assert!(matches!(result, Err(CoreError::ClickOutcomeUnknown(_))));
+            } else {
+                assert_eq!(result?, None);
+            }
+            let calls = connection.take_calls()?;
+            assert_eq!(native_press_count(&calls), 1);
+            assert_eq!(dom_activation_count(&calls), 1);
+            assert!(calls.iter().any(|call| {
+                call.params["functionDeclaration"]
+                    .as_str()
+                    .is_some_and(|script| script.contains("browserosActivateDom"))
+                    && call.params["userGesture"] == true
+            }));
+            assert_eq!(
+                input.dom_fallback_status(),
+                Some(if fail_ack {
+                    DomFallbackStatus::Started
+                } else {
+                    DomFallbackStatus::Dispatched {
+                        trusted: false,
+                        inert: false,
+                    }
+                })
+            );
+        }
+
+        // A lost native acknowledgement is never followed by the script or a repeat.
+        let (connection, input, ref_id) =
+            input_harness(HitTestResponse::Blocked("div#overlay")).await?;
+        connection.configure(|state| state.native_press = NativePress::Lost)?;
+        let result = input.click(&ref_id, ClickOptions::default()).await;
+        assert!(matches!(result, Err(CoreError::ClickOutcomeUnknown(_))));
+        let calls = connection.take_calls()?;
+        assert_eq!(press_count(&calls), 0);
+        assert_eq!(native_press_count(&calls), 1);
+        assert_eq!(dom_activation_count(&calls), 0);
+        assert_eq!(
+            input.dom_fallback_status(),
+            Some(DomFallbackStatus::Started)
+        );
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_lost_press_or_release_ack_never_replays_a_click() -> Result<(), CoreError> {
+        for failed_ack in ["mousePressed", "mouseReleased"] {
+            for entry in 0..3 {
+                let (connection, input, ref_id) = input_harness(HitTestResponse::Clear).await?;
+                connection.configure(|state| state.fail_mouse_ack = Some(failed_ack))?;
+                connection.take_calls()?;
+                let result = match entry {
+                    0 => input.click_at(50.0, 25.0, ClickOptions::default()).await,
+                    1 => input
+                        .click_backend_node(10, ClickOptions::default())
+                        .await
+                        .map(|_| ()),
+                    _ => input
+                        .click(&ref_id, ClickOptions::default())
+                        .await
+                        .map(|_| ()),
+                };
+                assert!(matches!(result, Err(CoreError::ClickOutcomeUnknown(_))));
+                let calls = connection.take_calls()?;
+                assert_eq!(press_count(&calls), 1, "{failed_ack}, entry {entry}");
+                assert_eq!(native_press_count(&calls), 0);
+                assert_eq!(dom_activation_count(&calls), 0);
+                assert_eq!(input.dom_fallback_status(), None);
+            }
+        }
+        Ok(())
+    }
+
     #[tokio::test]
     async fn click_reports_covered_ref_and_skips_dispatch() -> Result<(), CoreError> {
         let (connection, input, ref_id) =
             input_harness(HitTestResponse::Blocked("div#consent-banner")).await?;
 
-        let result = input.click(&ref_id, ClickOptions::default()).await;
+        let result = input
+            .click(
+                &ref_id,
+                ClickOptions {
+                    click_count: Some(2),
+                    ..Default::default()
+                },
+            )
+            .await;
 
         let err = match result {
             Err(err) => err,
@@ -2142,9 +2763,16 @@ mod tests {
                 )));
             }
         };
-        let message = err.to_string();
-        match err {
-            CoreError::ElementCovered { target, blocker } => {
+        let CoreError::ClickFallbackUnavailable { native, reason } = err else {
+            return Err(CoreError::Message(
+                "Expected refused fallback for double click".into(),
+            ));
+        };
+        assert!(reason.contains("repeated click"));
+        match *native {
+            CoreError::ElementCovered {
+                target, blocker, ..
+            } => {
                 assert_eq!(target.ref_id, Some(Ref("e1".to_string())));
                 assert_eq!(target.role.as_deref(), Some("button"));
                 assert_eq!(target.name.as_deref(), Some("Submit"));
@@ -2157,21 +2785,16 @@ mod tests {
             }
         }
         assert_eq!(connection.mouse_events(), 0);
-        assert_eq!(
-            message,
-            "Element e1 (button \"Submit\") is covered by <div#consent-banner> at its click point; the click would hit that element instead. Dismiss or interact with the covering element first (often a dialog, banner, or sticky header)."
-        );
+        assert_eq!(dom_activation_count(&connection.take_calls()?), 0);
         Ok(())
     }
 
     #[tokio::test]
-    async fn click_proceeds_when_hit_test_fails() -> Result<(), CoreError> {
+    async fn click_does_not_dispatch_when_hit_testing_is_unavailable() -> Result<(), CoreError> {
         let (connection, input, ref_id) = input_harness(HitTestResponse::Error).await?;
 
-        let point = input.click(&ref_id, ClickOptions::default()).await?;
-
-        assert_eq!(point.map(|point| (point.x, point.y)), Some((50.0, 25.0)));
-        assert_eq!(connection.mouse_events(), 3);
+        assert!(input.click(&ref_id, ClickOptions::default()).await.is_err());
+        assert_eq!(connection.mouse_events(), 0);
         Ok(())
     }
 
@@ -2188,7 +2811,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn semantic_select_ignores_pointer_occlusion_but_click_stays_blocked()
+    async fn semantic_select_preserves_selection_while_click_uses_its_own_fallback()
     -> Result<(), CoreError> {
         let (connection, input, ref_id) = select_input_harness(
             HitTestResponse::Blocked("span.a-dropdown-prompt"),
@@ -2204,21 +2827,9 @@ mod tests {
         assert_eq!(connection.mouse_events(), 0);
         assert!(connection.select_semantics_preserved());
 
-        let click_result = input.click(&ref_id, ClickOptions::default()).await;
-        match click_result {
-            Err(CoreError::ElementCovered { target, blocker }) => {
-                assert_eq!(target.ref_id, Some(Ref("e1".to_string())));
-                assert_eq!(target.role.as_deref(), Some("combobox"));
-                assert_eq!(target.name.as_deref(), Some("Sort by:"));
-                assert_eq!(blocker, "span.a-dropdown-prompt");
-            }
-            other => {
-                return Err(CoreError::Message(format!(
-                    "expected ElementCovered, got {other:?}"
-                )));
-            }
-        }
-        assert_eq!(connection.hit_test_calls(), 1);
+        assert_eq!(input.click(&ref_id, ClickOptions::default()).await?, None);
+        assert_eq!(native_press_count(&connection.take_calls()?), 1);
+        assert!(connection.hit_test_calls() >= 2);
         assert_eq!(connection.mouse_events(), 0);
         Ok(())
     }

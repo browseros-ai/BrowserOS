@@ -286,6 +286,7 @@ fn analytics_catalog_and_sdk_have_single_source_boundaries()
         "page_hold_started",
         "page_reach_in",
         "page_taken_over",
+        "tool_calls_daily",
     ];
     let mut wire_locations = wire_names
         .iter()
@@ -326,7 +327,16 @@ fn analytics_catalog_and_sdk_have_single_source_boundaries()
         sdk_locations,
         ["analytics/aliases.rs", "analytics/service.rs"]
     );
-    assert_eq!(claw_server::analytics::events::ALL.len(), 11);
+    let mut catalog_names = claw_server::analytics::events::ALL
+        .map(|definition| definition.name())
+        .to_vec();
+    let mut checked_names = wire_names.to_vec();
+    catalog_names.sort_unstable();
+    checked_names.sort_unstable();
+    assert_eq!(
+        catalog_names, checked_names,
+        "every catalog event is checked for a single source"
+    );
     Ok(())
 }
 
@@ -455,7 +465,13 @@ fn classify(relative: &Path) -> Result<Layer, String> {
         [file]
             if matches!(
                 file.as_str(),
-                "clock.rs" | "config.rs" | "error.rs" | "ids.rs" | "lib.rs" | "storage.rs"
+                "clock.rs"
+                    | "config.rs"
+                    | "error.rs"
+                    | "free_path.rs"
+                    | "ids.rs"
+                    | "lib.rs"
+                    | "storage.rs"
             ) =>
         {
             Ok(Layer::Support)
@@ -493,9 +509,8 @@ fn crate_target(path: &[String], failures: &mut Vec<String>, display: &str) -> O
         "identity" => Some(Target::Identity),
         "app" | "runtime" => Some(Target::Composition),
         "AppState" => Some(Target::AppState),
-        "analytics" | "clock" | "config" | "error" | "ids" | "storage" | "AppResult" => {
-            Some(Target::Support)
-        }
+        "analytics" | "clock" | "config" | "error" | "free_path" | "ids" | "storage"
+        | "AppResult" => Some(Target::Support),
         _ => None,
     }
 }
@@ -559,6 +574,10 @@ fn allowed_service_edge(source: &str, target: &str) -> bool {
             // A take over interrupts the session's calls on the page; the person's own switch
             // gates the overlay.
             | ("page_hold", "agent_settings" | "browser" | "sessions")
+            // SKILL.md is rendered from the prose a skill's ultrafast flow is numbered against.
+            | ("skills", "flow")
+            // The decisions worker is reached with the licence billing holds.
+            | ("decisions", "billing")
     )
 }
 
