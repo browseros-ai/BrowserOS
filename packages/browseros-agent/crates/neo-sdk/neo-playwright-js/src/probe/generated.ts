@@ -498,6 +498,10 @@ unseen: boolean,
  */
 cover?: CoverMark, } | { "kind": "cover", facts: CoverFacts | null, } | { "kind": "value", value: PageText, } | { "kind": "notFocused", holder?: string, } | { "kind": "read", value: PageText, resolved?: Resolution, } | { "kind": "values", count: number, values: Array<PageText>, } | { "kind": "selector", selector: string, } | { "kind": "snapshot", 
 /**
+ * The main page's same-request cover survey; absent outside Neo's two text formats.
+ */
+onTop?: Array<SurveyLayer>, surveyTested?: number, surveyMs?: number, surveyPhases?: SurveyPhases, onTopSkipped?: boolean, 
+/**
  * Isolated-world inert annotation time, for the operation trace only.
  */
 inertMarkingMs?: number, json: import('../prelude/vendored').AriaSnapshotJSON, iframes: Array<SnapshotIframe>, 
@@ -538,6 +542,10 @@ above: boolean, } | { "op": "edit", pin: Pin, edit: Edit, } | { "op": "look", pi
  * (probe/private-shown.ts).
  */
 walk?: boolean, } | { "op": "privateHosts", limit: number, } | { "op": "read", target: ProbeTarget, strictness: Strictness, frameVisible: boolean, read: Read, } | { "op": "readAll", target: ProbeTarget, read: ReadAll, } | { "op": "screenshotMask", target: ProbeTarget, color: string, } | { "op": "screenshotMaskCleanup" } | { "op": "selector", target: ProbeTarget, } | { "op": "snapshot", 
+/**
+ * A whole main-frame page in a Neo format; children and locators never survey hits.
+ */
+surveyCovers?: boolean, 
 /**
  * Annotate native inertness only for Neo text formats, never JSON or conformance.
  */
@@ -657,6 +665,16 @@ export type StorageValue = Array<StorageItem> | string | null;
  * with the same names.
  */
 export type Strictness = "strict" | "firstMatch";
+
+/**
+ * A layer the main frame found in the snapshot's own request. The action module words it.
+ */
+export type SurveyLayer = { role: string, name: string, ref: string, blank: boolean, loading: boolean, wholeView: boolean, controls: Array<CoverControl>, firstWords?: string, };
+
+/**
+ * Each added read phase is measured separately so a large document cannot hide the hit budget.
+ */
+export type SurveyPhases = { hits: number, count: number, naming: number, linking: number, marks: number, stopped: boolean, };
 
 /**
  * A `setFiles` value other than null (protocol.ts `FilesSet`): what upstream's injected

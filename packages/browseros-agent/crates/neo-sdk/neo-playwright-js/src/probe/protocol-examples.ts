@@ -364,7 +364,7 @@ export const REQUEST_EXAMPLES: { [O in Op]: AtLeastOne<RequestOf<O>> } = {
     { op: 'snapshot', root: chunk('main'), mode: 'default', depth: 3 },
     { op: 'snapshot', root: 'document', mode: 'default', boxes: true },
     { op: 'snapshot', root: 'document', mode: 'ai', closedRoots: 2 },
-    { op: 'snapshot', root: 'document', mode: 'ai' },
+    { op: 'snapshot', root: 'document', mode: 'ai', surveyCovers: true },
     {
       op: 'snapshot',
       root: chunk('main'),
@@ -763,6 +763,40 @@ const REPLY_EXAMPLES: {
     { kind: 'selector', selector: 'iframe[name="pay"]' },
   ],
   snapshot: [
+    {
+      kind: 'snapshot',
+      json: [
+        {
+          role: 'dialog',
+          name: 'Read first',
+          ref: 'e9',
+          onTop: 'e9',
+          children: [{ role: 'button', name: 'Close', ref: 'e10' }],
+        },
+      ],
+      iframes: [],
+      onTop: [
+        {
+          role: 'dialog',
+          name: 'Read first',
+          ref: 'e9',
+          blank: false,
+          loading: false,
+          wholeView: true,
+          controls: [{ role: 'button', name: 'Close', ref: 'e10' }],
+        },
+      ],
+      surveyTested: 3,
+      surveyMs: 1,
+      surveyPhases: {
+        hits: 1,
+        count: 0,
+        naming: 1,
+        linking: 1,
+        marks: 0.1,
+        stopped: false,
+      },
+    },
     {
       kind: 'snapshot',
       inertMarkingMs: 0.125,

@@ -22,6 +22,7 @@
  * a kept block after the cut is still printed. Rendering happens in the agent's realm, never in
  * a page, for the reason snapshot.ts gives.
  */
+
 import {
   aboutTokens,
   CHARS_PER_TOKEN,
@@ -30,6 +31,7 @@ import {
   partialHead,
   type Section,
 } from './snapshot-cap'
+import { onTopContent, onTopHead } from './snapshot-on-top'
 import type { AriaNodeJSON } from './vendored'
 import { renderAriaSnapshotAsYaml } from './vendored'
 import type {
@@ -240,7 +242,9 @@ function renderForm(
     // This explanation is pinned before the ordinary notice, outside its token budget.
     // Leave the partial-frame warnings in their existing position inside cap().
     const body = cap(head, partial, lines, limit)
-    return [...inertHead, ...(body ? [body] : [])].join('\n')
+    return [...onTopHead(result), ...inertHead, ...(body ? [body] : [])].join(
+      '\n',
+    )
   }
   if (form.text !== 'leftOut') return finish([], shown.lines)
   const textForm = walked ?? walk(result, form.urls, true, form.inert === true)
@@ -292,7 +296,12 @@ function walk(
   })
   // A virtual root over the json array, so a locator's root node goes through the same rules:
   // a locator on `main` prints `- main [ref=e2]:` and its content.
-  printer.walk(result.json, 0, text)
+  const front = onTopContent(result)
+  if (front.first.length) {
+    printer.walk(front.first, 0, true)
+    printer.separateText()
+  }
+  printer.walk(front.rest, 0, text)
   for (const unplaced of partials.values())
     for (const partial of unplaced) printer.comment(partialComment(partial), 0)
   return {
@@ -341,6 +350,7 @@ class Printer {
   readonly lines: Line[] = []
   /** The walk's pending steps; the next one is last. */
   private readonly steps: Step[] = []
+  private textBoundary = 0
 
   constructor(
     private readonly urls: boolean,
@@ -369,6 +379,11 @@ class Printer {
         this.closeKept(step.node, step.header, step.level)
       else this.closeSection(step.node, step.header)
     }
+  }
+
+  /** A promoted block and the page after it are separate text runs even at the same level. */
+  separateText(): void {
+    this.textBoundary = this.lines.length
   }
 
   comment(body: string, level: number): void {
@@ -464,7 +479,12 @@ class Printer {
   private piece(raw: string, level: number, text: boolean): void {
     if (!text || raw === '') return
     const last = this.lines[this.lines.length - 1]
-    if (last?.textLine && last.level === level) last.body += ` ${raw}`
+    if (
+      this.lines.length > this.textBoundary &&
+      last?.textLine &&
+      last.level === level
+    )
+      last.body += ` ${raw}`
     else
       this.lines.push({
         level,

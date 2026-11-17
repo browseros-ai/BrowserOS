@@ -48,6 +48,9 @@ pub(crate) struct AriaNode {
     /// Browser-declared inert subtree, only on Neo-format reads; live modal descendants are never enclosed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) inert: Option<bool>,
+    /// Topmost content of this whole-view layer; only the default renderer moves it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) on_top: Option<String>,
     /// `true`, `"grammar"` or `"spelling"`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) invalid: Option<Value>,
@@ -154,6 +157,10 @@ pub(crate) struct SnapshotResult {
     #[ts(type = "import('../../vendored').AriaSnapshotJSON")]
     pub(crate) json: Vec<AriaNode>,
     pub(crate) partial: Vec<PartialFrame>,
+    /// Pinned words from the main page alone; empty keeps every old output byte unchanged.
+    #[serde(rename = "onTop", skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional, as = "Option<Vec<SnapshotTop>>")]
+    pub(crate) on_top: Vec<SnapshotTop>,
     /// Set on `page.ariaSnapshot` only; a locator's snapshot never becomes a baseline.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -167,6 +174,15 @@ pub(crate) struct SnapshotResult {
     #[serde(rename = "closedRoots", skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub(crate) closed_roots: Option<ClosedRoots>,
+}
+
+/// Rust's shared wording and reach; the tree's marks identify the whole-view content.
+#[derive(Clone, Debug, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SnapshotTop {
+    pub(crate) r#ref: String,
+    pub(crate) line: String,
+    pub(crate) whole_view: bool,
 }
 
 /// How many of the seeds clickable marking found inside closed shadow roots reached a probe.
@@ -185,6 +201,7 @@ pub(crate) fn stitch(root: FrameSnapshot) -> SnapshotResult {
         snapshot_rules::drop_prohibited_names(node);
     }
     SnapshotResult {
+        on_top: Vec::new(),
         json,
         partial,
         document: None,

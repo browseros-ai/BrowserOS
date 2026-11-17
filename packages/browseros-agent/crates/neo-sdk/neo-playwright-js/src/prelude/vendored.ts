@@ -12,6 +12,7 @@ import type { AriaNodeJSON as UpstreamAriaNode } from '../../../neo-playwright/t
 /** The upstream tree plus Neo's isolated-world annotation; upstream renderers ignore it. */
 export type AriaNodeJSON = Omit<UpstreamAriaNode, 'children'> & {
   inert?: boolean
+  onTop?: string
   children?: (AriaNodeJSON | string)[]
 }
 export type AriaSnapshotJSON = AriaNodeJSON[]

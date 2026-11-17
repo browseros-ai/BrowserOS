@@ -283,13 +283,6 @@ const ON_TOP_CONTROLS: usize = 4;
 
 /// What a page snapshot's first lines, and a run's reply, say about one layer that takes the
 /// pointer from controls (snapshot design section 21.10).
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the snapshot's `# on top:` lines and the run reply's are built on this module"
-    )
-)]
 pub(crate) struct OnTopNote<'a> {
     pub(crate) role: &'a str,
     pub(crate) name: &'a Value,
@@ -302,6 +295,8 @@ pub(crate) struct OnTopNote<'a> {
     pub(crate) whole_view: bool,
     /// Its own controls that take the pointer, buttons first: role, name and ref.
     pub(crate) controls: &'a [(&'a str, &'a Value, &'a str)],
+    /// First drawn words, only for an unnamed nonblank layer with no controls.
+    pub(crate) first_words: Option<&'a str>,
 }
 
 /// The one place Neo words a layer on top, for a page snapshot (section 21.10):
@@ -314,13 +309,6 @@ pub(crate) struct OnTopNote<'a> {
 /// A run's reply prints the same words after `[on top] tab <id>: `, the second line joined to
 /// the first with `; its controls: `; the covered answer names its cover with the same
 /// [`node_named`]. No counts and no advice: those are the covered answer's.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the snapshot's `# on top:` lines and the run reply's are built on this module"
-    )
-)]
 pub(crate) fn on_top_line(note: &OnTopNote<'_>) -> String {
     let mut line = format!(
         "# on top: {}",
@@ -332,6 +320,14 @@ pub(crate) fn on_top_line(note: &OnTopNote<'_>) -> String {
     if note.loading {
         line.push_str(", loading");
     }
+    if !note.blank
+        && note.controls.is_empty()
+        && note.name.as_str().is_none_or(|name| name.trim().is_empty())
+        && let Some(words) = note.first_words.filter(|words| !words.is_empty())
+    {
+        let words = clipped(words, 60);
+        let _ = write!(line, ", says {}", Value::from(words));
+    }
     line.push_str(if note.whole_view {
         " over the whole view"
     } else {
@@ -341,6 +337,12 @@ pub(crate) fn on_top_line(note: &OnTopNote<'_>) -> String {
         let controls: Vec<String> = note
             .controls
             .iter()
+            .filter(|(role, _, _)| *role == "button")
+            .chain(
+                note.controls
+                    .iter()
+                    .filter(|(role, _, _)| *role != "button"),
+            )
             .take(ON_TOP_CONTROLS)
             .map(|(role, name, reference)| node_named(role, name, reference, CONTROL_NAME_CHARS))
             .collect();
@@ -354,13 +356,18 @@ pub(crate) fn on_top_line(note: &OnTopNote<'_>) -> String {
 fn node_named(role: &str, name: &Value, reference: &str, chars: usize) -> String {
     match name.as_str().map(str::trim) {
         Some(name) if !name.is_empty() => {
-            let clipped: String = match name.char_indices().nth(chars) {
-                Some((cut, _)) => format!("{}…", name.get(..cut).unwrap_or(name)),
-                None => name.to_owned(),
-            };
+            let clipped = clipped(name, chars);
             format!("{role} {} [ref={reference}]", Value::from(clipped))
         }
         _ => format!("{role} [ref={reference}]"),
+    }
+}
+
+/// Every field in a layer line clips between Unicode characters and shares its ellipsis rule.
+fn clipped(text: &str, chars: usize) -> String {
+    match text.char_indices().nth(chars) {
+        Some((cut, _)) => format!("{}…", text.get(..cut).unwrap_or(text)),
+        None => text.to_owned(),
     }
 }
 

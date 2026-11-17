@@ -119,7 +119,9 @@ it('tests that every example request gets a reply its op allows from the built p
       // browser serializer. Keep ordinary document reads covered by this offline matrix.
       const needsBrowser =
         NEEDS_A_BROWSER.has(op) ||
-        (request.op === 'document' && request.includeShadow === true)
+        (request.op === 'document' && request.includeShadow === true) ||
+        // A survey needs real viewport points and pointer hits; linkedom has no layout.
+        (request.op === 'snapshot' && request.surveyCovers === true)
       if (
         !unbuilt &&
         !needsBrowser &&

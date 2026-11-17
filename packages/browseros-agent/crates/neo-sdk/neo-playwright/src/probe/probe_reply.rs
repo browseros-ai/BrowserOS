@@ -24,7 +24,7 @@ use crate::world::{FrameSeq, Pin};
 /// contract: a world keeps the probe an earlier build installed, and the install replaces that
 /// probe only when its number differs (`engine_source`), so a shape changed under the same
 /// number reaches this build in the old shape. The lock's test catches a change without a bump.
-pub(crate) const PROBE_PROTOCOL: u32 = 48;
+pub(crate) const PROBE_PROTOCOL: u32 = 49;
 
 /// One reply; `kind` is the tag. Any request may also answer `error`, and `uninstalled` when
 /// the world has no booted probe.
@@ -175,6 +175,22 @@ pub(crate) enum ProbeReply {
     },
     /// One frame's `ariaSnapshotJSON` and its rendered iframes.
     Snapshot {
+        /// The main page's same-request cover survey; absent outside Neo's two text formats.
+        #[serde(default)]
+        #[ts(optional, as = "Option<Vec<SurveyLayer>>")]
+        on_top: Vec<SurveyLayer>,
+        #[serde(default)]
+        #[ts(optional)]
+        survey_tested: Option<u32>,
+        #[serde(default)]
+        #[ts(optional)]
+        survey_ms: Option<f64>,
+        #[serde(default)]
+        #[ts(optional)]
+        survey_phases: Option<SurveyPhases>,
+        #[serde(default)]
+        #[ts(optional, as = "Option<bool>")]
+        on_top_skipped: bool,
         /// Isolated-world inert annotation time, for the operation trace only.
         #[serde(default)]
         #[ts(optional)]
@@ -415,6 +431,35 @@ pub(crate) struct CoverFacts {
     #[serde(default)]
     pub(crate) notice: bool,
     pub(crate) kind: CoverKind,
+}
+
+/// Each added read phase is measured separately so a large document cannot hide the hit budget.
+#[derive(Debug, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SurveyPhases {
+    pub(crate) hits: f64,
+    pub(crate) count: f64,
+    pub(crate) naming: f64,
+    pub(crate) linking: f64,
+    pub(crate) marks: f64,
+    pub(crate) stopped: bool,
+}
+
+/// A layer the main frame found in the snapshot's own request. The action module words it.
+#[derive(Debug, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct SurveyLayer {
+    pub(crate) role: String,
+    #[ts(type = "string")]
+    pub(crate) name: PageText,
+    pub(crate) r#ref: String,
+    pub(crate) blank: bool,
+    pub(crate) loading: bool,
+    pub(crate) whole_view: bool,
+    pub(crate) controls: Vec<CoverControl>,
+    #[serde(default)]
+    #[ts(optional, type = "string")]
+    pub(crate) first_words: Option<PageText>,
 }
 
 /// One control of a cover that takes the pointer.

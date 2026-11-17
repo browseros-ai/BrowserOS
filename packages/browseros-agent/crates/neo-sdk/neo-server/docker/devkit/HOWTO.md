@@ -129,9 +129,13 @@ What sits inside a closed shadow root (a Cloudflare Turnstile widget, a closed w
    - link "Checkout" [ref=e17]
 ```
 
+When a layer is on top, its `# on top:` lines follow that first status line; a layer that is gone gets `# no longer on top: ...` there.
+
 A new document in the tab (a navigation, a reload) starts over. A locator's snapshot, `{ mode: 'default' }` and `{ mode: 'full' }` ignore `delta` and never become the baseline. When a run takes a whole-page snapshot of a page you were already given, its reply ends with a one-line tip saying so, at most three times per task.
 
-`page.ariaSnapshot()` leaves out what the browser has made inert, such as the page behind a modal dialog. When it leaves anything out, its first line, `# not listed: ...`, reports how many lines were left out; `{ inert: true }` lists them. A host that parses or slices snapshot text must expect this first line.
+`page.ariaSnapshot()` leaves out what the browser has made inert, such as the page behind a modal dialog. When it leaves anything out, a line at its top, `# not listed: ...`, reports how many lines were left out; `{ inert: true }` lists them. A host that parses or slices snapshot text must expect these explanatory lines.
+
+A `# on top: ...` line names a layer taking the pointer from controls, followed by up to four of its own controls. These lines survive every token cap; a whole-view layer's content prints before the rest of the default snapshot.
 
 ```sh
 ./dev.sh run --task howto-aria -f devkit/examples/aria-ref.js
