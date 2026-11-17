@@ -2,6 +2,9 @@
 // Do not edit: change Rust's probe types, then run `bun run gen:probe` in neo-playwright-js.
 // PROTOCOL stays hand-bumped in protocol.ts; generating types never changes the wire version.
 
+export const MAX_REPLY_DEPTH = 297;
+export const SNAPSHOT_DEPTH_ERROR = "This tree is nested about {levels} levels deep, more than a snapshot carries (about 147). Pass { depth: n } with n of 140 or less to cut it there, or take a locator's snapshot of a smaller section.";
+
 /**
  * Arms the hit-target interceptor. `block_all` is Playwright's `trial`.
  */
@@ -551,6 +554,11 @@ inertMarkingMs?: number, json: import('../prelude/vendored').AriaSnapshotJSON, i
  * the op's call log says so.
  */
 marksSkipped?: boolean, } | { "kind": "expect", matches: boolean, resolved: string, received?: PageText, ariaSnapshot?: string, } | { "kind": "urlMatch", matches: boolean, url: string, } | { "kind": "documentText", text: string, } | { "kind": "replaced" } | { "kind": "error", message: string, class: ErrorClass, 
+/**
+ * Approximate tree levels for a depth refusal. Presence identifies the failure without
+ * coupling a child frame's partial handling to the message's wording.
+ */
+treeDepth?: number, 
 /**
  * Only from a file input that refused the files: what its chunk resolved to.
  */

@@ -24,7 +24,16 @@ use crate::world::{FrameSeq, Pin};
 /// contract: a world keeps the probe an earlier build installed, and the install replaces that
 /// probe only when its number differs (`engine_source`), so a shape changed under the same
 /// number reaches this build in the old shape. The lock's test catches a change without a bump.
-pub(crate) const PROBE_PROTOCOL: u32 = 52;
+pub(crate) const PROBE_PROTOCOL: u32 = 53;
+
+/// One message template for page-side and stitched depth refusals. The numeric reply field,
+/// rather than these words, identifies a child that must become partial.
+pub(crate) const SNAPSHOT_DEPTH_ERROR: &str = "This tree is nested about {levels} levels deep, more than a snapshot carries (about 147). Pass { depth: n } with n of 140 or less to cut it there, or take a locator's snapshot of a smaller section.";
+
+/// Words use tree levels because the suggested snapshot depth option uses those levels too.
+pub(crate) fn depth_error(levels: usize) -> String {
+    SNAPSHOT_DEPTH_ERROR.replace("{levels}", &levels.to_string())
+}
 
 /// One reply; `kind` is the tag. Any request may also answer `error`, and `uninstalled` when
 /// the world has no booted probe.
@@ -238,6 +247,11 @@ pub(crate) enum ProbeReply {
     Error {
         message: String,
         class: ErrorClass,
+        /// Approximate tree levels for a depth refusal. Presence identifies the failure without
+        /// coupling a child frame's partial handling to the message's wording.
+        #[serde(default)]
+        #[ts(optional)]
+        tree_depth: Option<usize>,
         /// Only from a file input that refused the files: what its chunk resolved to.
         #[serde(default)]
         #[ts(optional)]

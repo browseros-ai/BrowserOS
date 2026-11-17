@@ -21,9 +21,9 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::op_scope::{OpScope, ProtocolRequest};
-use crate::page::OpPage;
+use crate::page::{self, MAX_VALUE_DEPTH, OpPage};
 use crate::private_entry::PrivateStep;
-use crate::probe::probe_reply::ProbeReply;
+use crate::probe::probe_reply::{self, ProbeReply};
 use crate::probe::probe_request::{ProbeCall, ProbePolicy, ProbeRequest};
 use crate::world::{BackendNodeId, IsolatedWorld, Pin};
 
@@ -32,7 +32,7 @@ use crate::world::{BackendNodeId, IsolatedWorld, Pin};
 /// with the call envelope, an element handle's node or null as the call's root, and any further
 /// nodes the request reads ([`call_with_nodes`]); a world without a booted probe answers
 /// `uninstalled`, which Rust treats like a stale context.
-pub(crate) const CALL_FUNCTION: &str = "function (call, root, ...nodes) { const probe = globalThis.__neoProbe; return probe ? probe.call(call, root ?? this, nodes) : { kind: \"uninstalled\" }; }";
+pub(crate) const CALL_FUNCTION: &str = r#"function (call, root, ...nodes) { const probe = globalThis.__neoProbe; return probe ? probe.call(call, root ?? this, nodes) : call?.request?.op === "pinned" ? { kind: "uninstalled" } : '{"kind":"uninstalled"}'; }"#;
 
 impl ProbePolicy {
     /// Drop cannot borrow an ended operation or inspect its admitted page. Cleanup never
@@ -445,7 +445,24 @@ pub(crate) fn reply_of(called: Value) -> Result<ProbeReply, ProbeFailure> {
             exception.message()
         )));
     }
-    match serde_json::from_value(called.result.value) {
+    let text =
+        called.result.value.as_str().ok_or_else(|| {
+            ProbeFailure::Broken("the probe returned no JSON reply text".to_owned())
+        })?;
+    let depth = page::json_depth(text);
+    if depth > MAX_VALUE_DEPTH {
+        return Err(ProbeFailure::Broken(probe_reply::depth_error(
+            depth.saturating_sub(1) / 2,
+        )));
+    }
+    let mut reader = serde_json::Deserializer::from_str(text);
+    // The common page-value scanner bounds every recursive decode before serde's cap is lifted.
+    reader.disable_recursion_limit();
+    let reply = ProbeReply::deserialize(&mut reader).and_then(|reply| {
+        reader.end()?;
+        Ok(reply)
+    });
+    match reply {
         Ok(ProbeReply::Uninstalled) => Err(ProbeFailure::Gone(Ran::No)),
         Ok(reply) => Ok(reply),
         Err(error) => Err(ProbeFailure::Broken(format!(
@@ -599,6 +616,8 @@ async fn is_uninstalled(world: &IsolatedWorld, object: Option<&str>) -> Result<b
 
 #[cfg(test)]
 mod tests {
+    use crate::page;
+
     use std::error::Error;
     use std::slice;
 
@@ -607,7 +626,7 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::{CALL_FUNCTION, Handed, ProbeFailure, Ran, call_arguments, reply_of};
-    use crate::probe::probe_reply::ProbeReply;
+    use crate::probe::probe_reply::{ErrorClass, ProbeReply};
     use crate::probe::probe_request::{ProbePolicy, ProbeRequest};
 
     const PROTOCOL: &str = include_str!("../../tests/data/probe-protocol.json");
@@ -727,10 +746,11 @@ mod tests {
     #[test]
     fn tests_that_replies_decode_and_uninstalled_is_gone() -> Result<(), Box<dyn Error>> {
         let reply =
-            reply_of(json!({ "result": { "type": "object", "value": { "kind": "none" } } }));
+            reply_of(json!({ "result": { "type": "string", "value": "{\"kind\":\"none\"}" } }));
         assert!(matches!(reply, Ok(ProbeReply::None { stale_ref: None })));
-        let uninstalled =
-            reply_of(json!({ "result": { "type": "object", "value": { "kind": "uninstalled" } } }));
+        let uninstalled = reply_of(
+            json!({ "result": { "type": "string", "value": "{\"kind\":\"uninstalled\"}" } }),
+        );
         assert!(matches!(uninstalled, Err(ProbeFailure::Gone(_))));
         let thrown = reply_of(json!({
             "result": { "type": "object", "subtype": "error" },
@@ -740,9 +760,64 @@ mod tests {
             return Err("a probe that throws is a broken asset".into());
         };
         assert_eq!(message, "the probe threw: TypeError: x is not a function");
-        let unreadable =
-            reply_of(json!({ "result": { "type": "object", "value": { "kind": "teleported" } } }));
+        let unreadable = reply_of(
+            json!({ "result": { "type": "string", "value": "{\"kind\":\"teleported\"}" } }),
+        );
         assert!(matches!(unreadable, Err(ProbeFailure::Broken(_))));
         Ok(())
+    }
+    #[test]
+    fn probe_reply_text_keeps_the_numeric_tree_depth_marker() {
+        let reply = reply_of(json!({ "result": { "type": "string", "value":
+            r#"{"kind":"error","class":"unsupported","treeDepth":149,"message":"m"}"#
+        } }));
+        assert!(matches!(
+            reply,
+            Ok(ProbeReply::Error {
+                class: ErrorClass::Unsupported,
+                tree_depth: Some(149),
+                ..
+            })
+        ));
+    }
+
+    /// Exercise the real decoder beyond serde's default cap, not merely the scanner.
+    #[test]
+    fn probe_reply_text_admits_147_groups_and_refuses_148() {
+        // The advice is in tree levels: an arbitrary leaf adds two JSON levels to each pair
+        // contributed by a group and its children. The suggested cut must fit that same cap.
+        let largest_tree = (page::MAX_VALUE_DEPTH - 2) / 2;
+        assert_eq!(largest_tree, 147);
+        assert_eq!(140.min(largest_tree), 140, "the suggested cut fits the cap");
+        for groups in [70, 130, 147, 148] {
+            let text = format!(
+                "{{\"kind\":\"snapshot\",\"json\":[{}{{\"role\":\"button\",\"name\":\"End\"}}{}],\"iframes\":[]}}",
+                "{\"role\":\"group\",\"children\":[".repeat(groups),
+                "]}".repeat(groups),
+            );
+            let reply = reply_of(json!({ "result": { "type": "string", "value": text } }));
+            if groups <= 147 {
+                assert!(
+                    matches!(reply, Ok(ProbeReply::Snapshot { .. })),
+                    "{groups}: {reply:?}"
+                );
+            } else {
+                let Err(ProbeFailure::Broken(message)) = reply else {
+                    panic!("overdeep text must fail promptly")
+                };
+                assert!(message.contains("149 levels deep"));
+                assert!(message.contains("{ depth: n }"));
+            }
+        }
+        for depth in [297, 298] {
+            let text = format!(
+                "{{\"kind\":\"snapshot\",\"json\":{}0{},\"iframes\":[]}}",
+                "[".repeat(depth - 1),
+                "]".repeat(depth - 1)
+            );
+            assert_eq!(page::json_depth(&text), depth);
+            let reply = reply_of(json!({ "result": { "type": "string", "value": text } }));
+            assert_eq!(reply.is_ok(), depth == 297, "depth {depth}: {reply:?}");
+        }
     }
 }

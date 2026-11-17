@@ -1030,3 +1030,73 @@ async fn tests_that_a_renderer_swap_in_the_install_window_fails_gone_never_a_pag
     live.close(&tab).await;
     Ok(())
 }
+
+/// A boot failure is not a version handshake. Replacing this object would leave its engine
+/// alive without the re-key that clears refs, and would lose the failure that explains it.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT (default 9005)"]
+async fn tests_that_a_held_probe_boot_error_is_not_replaced() -> TestResult {
+    let live = LiveBrowser::connect().await?;
+    let server = fixtures().await?;
+    for as_text in [false, true] {
+        let tab = live
+            .open(&server.url("127.0.0.1", "/password.html"))
+            .await?;
+        let result = async {
+            let created: Value = tab
+                .session
+                .send(
+                    "Page.createIsolatedWorld",
+                    json!({
+                        "frameId": tab.target.as_str(), "worldName": ENGINE_WORLD,
+                    }),
+                )
+                .await?;
+            let context = created["executionContextId"].clone();
+            let fake = format!(
+                r"globalThis.__heldFailedProbe = {{ boot() {{
+                const reply = {{ kind: 'error', class: 'internal', message: 'boot diagnostic' }};
+                return {as_text} ? JSON.stringify(reply) : reply;
+            }} }}; globalThis.__neoProbe = globalThis.__heldFailedProbe; 1"
+            );
+            tab.session
+                .send::<_, Value>(
+                    "Runtime.evaluate",
+                    json!({
+                        "expression": fake, "contextId": context,
+                    }),
+                )
+                .await?;
+            let env = live.env();
+            let scope = OpScope::new(&env, count_op()?, CallHeader::default());
+            let failure = main_world(&live, &scope, &tab)
+                .await
+                .err()
+                .ok_or("boot must fail without replacement")?;
+            assert!(
+                failure
+                    .to_string()
+                    .contains("the engine failed to install: boot diagnostic")
+            );
+            let same: Value = tab
+                .session
+                .send(
+                    "Runtime.evaluate",
+                    json!({
+                        "expression": "globalThis.__neoProbe === globalThis.__heldFailedProbe",
+                        "contextId": context, "returnByValue": true,
+                    }),
+                )
+                .await?;
+            assert_eq!(
+                same["result"]["value"], true,
+                "the failed engine remains in charge"
+            );
+            TestResult::Ok(())
+        }
+        .await;
+        live.close(&tab).await;
+        result?;
+    }
+    Ok(())
+}

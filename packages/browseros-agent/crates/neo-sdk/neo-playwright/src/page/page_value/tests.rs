@@ -97,13 +97,6 @@ fn tests_that_a_value_deeper_than_upstreams_limit_is_too_deep() {
     }
 }
 
-#[test]
-fn tests_that_depth_counts_brackets_outside_strings_only() {
-    assert_eq!(depth_of(r#""[[{{""#), 0);
-    assert_eq!(depth_of(r#"["a\"[[", {"b": ["]"]}]"#), 3);
-    assert_eq!(depth_of("42"), 0);
-}
-
 /// Shapes the serializer never writes for a result, as a page that replaced its globals could:
 /// each fails rather than reaching the agent.
 #[test]

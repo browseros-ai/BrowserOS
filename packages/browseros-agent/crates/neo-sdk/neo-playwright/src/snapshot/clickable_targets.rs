@@ -404,12 +404,52 @@ async fn resolve(
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error;
     use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, PoisonError};
     use std::time::Duration;
 
     use tokio::time::{self, Instant};
 
-    use super::{MARK_BUDGET, Skipped, budget_within, within};
+    use super::{MARK_BUDGET, Marking, Skipped, budget_within, within};
+    use crate::op_scope::OpScope;
+    use crate::target::CallHeader;
+    use crate::test_env::{EnvCall, Recording, TestEnv};
+    use crate::world::IsolatedWorld;
+    use crate::{ErrorCode, Op};
+
+    /// A capture already cut off for this session still explains the lost marks to this
+    /// snapshot’s own host environment; no browser or logger is needed to observe that seam.
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_skipped_marking_notes_its_snapshot_operation() -> Result<(), Box<dyn Error>>
+    {
+        let env = TestEnv::new();
+        let op = Op::from_name("page.ariaSnapshot").ok_or("snapshot operation exists")?;
+        let scope = OpScope::new(&env, op, CallHeader::default());
+        let recording = Arc::new(Recording::default());
+        let world = IsolatedWorld::for_tests(recording.session("A"), "frame", 1, "global");
+        let marking = Marking::new();
+        marking
+            .timed_out
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(Some("A".to_owned()));
+        assert!(marking.feed(&scope, &world, None, None).await.is_none());
+        let note = "  clickable marking skipped a frame (timeout) after 0 ms";
+        assert_eq!(env.calls(), [EnvCall::Note(note.to_owned())]);
+        assert!(
+            recording.sent().is_empty(),
+            "a timed-out capture is not repeated"
+        );
+        let error = scope.fail(ErrorCode::Unsupported, "test refusal");
+        assert!(
+            error
+                .message()
+                .starts_with("page.ariaSnapshot: test refusal")
+        );
+        assert!(error.message().contains(note.trim_start()));
+        Ok(())
+    }
 
     #[tokio::test(start_paused = true)]
     async fn tests_that_a_spent_budget_drops_the_read_before_it_runs_and_a_late_one_as_it_lands() {

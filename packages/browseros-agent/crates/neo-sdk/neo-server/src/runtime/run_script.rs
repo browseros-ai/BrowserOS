@@ -56,6 +56,10 @@ const AGENT_FILE: &str = "run";
 const SETTLED_OVERHEAD: usize = 16;
 /// The bootstrap's prefix for a returned value, which the result limit applies to.
 const SETTLED_OK: &str = r#"{"ok":"#;
+/// The existing serde reader accepts 127 JSON levels in all; the settled envelope takes one.
+/// Keep that stored-value boundary unchanged while classifying an overdeep return as the
+/// script's choice, before the parser can misreport it as a bootstrap defect.
+const MAX_RETURN_DEPTH: usize = 126;
 
 /// One script to run. A plain data bag.
 #[derive(Debug)]
@@ -416,6 +420,17 @@ fn interrupt_handler(
 /// bytes in `blobs` and returns markers for them; a thrown error's text is not held to the limit,
 /// since it parses into three strings, clipped below. The realm's heap bounds `json`.
 fn settle(json: &str, bridge: &Bridge, blobs: &mut Vec<ResultBlob>) -> ScriptOutcome {
+    if json.starts_with(SETTLED_OK) {
+        let levels = neo_trace::json_value_depth(json).saturating_sub(1);
+        if levels > MAX_RETURN_DEPTH {
+            return ScriptOutcome::Failed(OperationError::script(
+                ErrorCode::RESULT_TOO_LARGE,
+                format_args!(
+                    "the returned value is nested {levels} levels deep; a run returns at most {MAX_RETURN_DEPTH}: return a summary, or return it as text with JSON.stringify"
+                ),
+            ));
+        }
+    }
     let over =
         json.starts_with(SETTLED_OK) && json.len() > Defaults::MAX_RESULT_BYTES + SETTLED_OVERHEAD;
     match serde_json::from_str::<Settled>(json) {

@@ -2875,3 +2875,55 @@ fn removed_tab_listing_is_absent_and_its_operation_is_unknown() -> Result<(), Te
         Ok(())
     })
 }
+
+/// A return is bounded before serde or persistence sees it. A deeper value remains available
+/// as text, so this changes ownership of the failure without admitting new stored shapes.
+#[test]
+fn returned_values_keep_the_126_level_limit_with_script_owned_depth_errors() -> Result<(), TestError>
+{
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        for shape in ["array", "object"] {
+            for depth in [125, 126, 127, 128] {
+                let wrap = if shape == "array" {
+                    "[value]"
+                } else {
+                    "({ down: value })"
+                };
+                let code = format!(
+                    "let value = 'bottom'; for (let i = 0; i < {depth}; i++) value = {wrap}; return value;"
+                );
+                let end = script(&rig, &code).await?;
+                if depth <= 126 {
+                    let value = returned(end)?;
+                    let mut node = &value;
+                    let mut observed = 0;
+                    while let Some(child) = match node {
+                        Value::Array(items) => items.first(),
+                        Value::Object(fields) => fields.get("down"),
+                        _ => None,
+                    } {
+                        node = child;
+                        observed += 1;
+                    }
+                    assert_eq!(observed, depth, "{shape}");
+                    assert_eq!(node, &json!("bottom"));
+                } else {
+                    let error = failed(end)?;
+                    assert_eq!(error.owner(), ErrorOwner::Script);
+                    assert_eq!(error.code(), ErrorCode::RESULT_TOO_LARGE);
+                    assert!(error.message().contains(&format!("{depth} levels deep")));
+                    assert!(error.message().contains("at most 126"));
+                    assert!(error.message().contains("JSON.stringify"));
+                }
+            }
+        }
+        let value = returned(script(&rig, "let value = 'bottom'; for(let i=0;i<260;i++)value=[value];return JSON.stringify(value);").await?)?;
+        assert!(
+            value
+                .as_str()
+                .is_some_and(|s| s.starts_with("[[[[") && s.contains("bottom"))
+        );
+        Ok(())
+    })
+}
