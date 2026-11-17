@@ -25,6 +25,8 @@ mod js_runner;
 mod live_run;
 
 use std::collections::{HashMap, HashSet};
+use std::fmt::Write as _;
+use std::io::{self, Write as _};
 use std::path::Path;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -3413,14 +3415,15 @@ async fn tests_that_closed_roots_slot_their_hosts_children_as_open_ones_do() -> 
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_on_top_delta_heads_follow_the_returned_snapshot() -> TestResult {
+    let mut stories = String::new();
+    for n in 0..20 {
+        write!(&mut stories, "<p><a href='#story{n}'>Story {n}</a></p>")?;
+    }
     let body = format!(
-        r#"<button id="open">Open</button>{}
+        r#"<button id="open">Open</button>{stories}
 <div id="shade" style="display:none;position:fixed;inset:0;background:#8888;z-index:10"></div>
 <section id="box" role="dialog" aria-label="Read first" style="display:none;position:fixed;left:25%;top:25%;width:50%;height:50%;background:white;z-index:11"><p>Current cover</p><button id="close">Close</button></section>
-<script>document.querySelector('#open').onclick=()=>{{shade.style.display='block';box.style.display='block'}};document.querySelector('#close').onclick=()=>{{shade.style.display='none';box.style.display='none'}};</script>"#,
-        (0..20)
-            .map(|n| format!("<p><a href='#story{n}'>Story {n}</a></p>"))
-            .collect::<String>()
+<script>document.querySelector('#open').onclick=()=>{{shade.style.display='block';box.style.display='block'}};document.querySelector('#close').onclick=()=>{{shade.style.display='none';box.style.display='none'}};</script>"#
     );
     let server =
         FixtureServer::start(HashMap::from([("/on-top".to_owned(), Page::html(&body))])).await?;
@@ -3474,19 +3477,25 @@ async fn tests_that_on_top_delta_heads_follow_the_returned_snapshot() -> TestRes
     Ok(())
 }
 
-
 /// The Node host checks the printed text; this table checks the same pages' actual survey
-/// counts at OpEnv::note, before the server's debug-log policy can discard those lines.
+/// counts at `OpEnv::note`, before the server's debug-log policy can discard those lines.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_on_top_survey_counts_match_each_fixture() -> TestResult {
-    let folder = Path::new(env!("CARGO_MANIFEST_DIR")).join("../neo-playwright-tests/node/snapshot-on-top");
+    let folder =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../neo-playwright-tests/node/snapshot-on-top");
     let rows: Vec<Value> = serde_json::from_str(&fs::read_to_string(folder.join("matrix.json"))?)?;
     let mut pages = HashMap::new();
     for row in &rows {
         let file = row["file"].as_str().ok_or("fixture file")?;
-        let path = Path::new(file).file_name().ok_or("fixture filename")?.to_string_lossy();
-        pages.insert(format!("/{path}"), Page::html(&fs::read_to_string(folder.join(file))?));
+        let path = Path::new(file)
+            .file_name()
+            .ok_or("fixture filename")?
+            .to_string_lossy();
+        pages.insert(
+            format!("/{path}"),
+            Page::html(&fs::read_to_string(folder.join(file))?),
+        );
     }
     let server = FixtureServer::start(pages).await?;
     let mut failures = Vec::new();
@@ -3494,30 +3503,58 @@ async fn tests_that_on_top_survey_counts_match_each_fixture() -> TestResult {
         let run = Arc::new(LiveRun::connect().await?.with_viewports());
         let host: Arc<dyn OpHost> = Arc::clone(&run) as Arc<dyn OpHost>;
         let file = row["file"].as_str().ok_or("fixture file")?;
-        let name = Path::new(file).file_name().ok_or("fixture filename")?.to_string_lossy();
+        let name = Path::new(file)
+            .file_name()
+            .ok_or("fixture filename")?
+            .to_string_lossy();
         let url = server.url("127.0.0.1", &format!("/{name}"));
         // This is the Node fixture's exact agent script, with only its module export removed.
-        let driver = include_str!("../../neo-playwright-tests/node/snapshot-on-top-row.mjs").replacen("export async function", "async function", 1);
-        let script = format!(r#"{driver}
+        let driver = include_str!("../../neo-playwright-tests/node/snapshot-on-top-row.mjs")
+            .replacen("export async function", "async function", 1);
+        let script = format!(
+            r"{driver}
             try {{ return await driveSnapshotRow(page, {row}, {url}); }}
             finally {{ await page.close(); }}
-        "#, row = row, url = json!(url));
+        ",
+            row = row,
+            url = json!(url)
+        );
         let output = match js_runner::run_script(&host, &json!({"page":null}), &script).await {
             Ok(output) => output,
             Err(error) => {
                 failures.push(format!("{}: {error}", row["id"]));
-                json!({"error":error.to_string()})
+                json!({"error":error})
             }
         };
         let log = notes(&run);
-        let counts: Vec<u64> = log.iter().filter_map(|line| line.trim().strip_prefix("cover survey: ")?.split_whitespace().next()?.parse().ok()).collect();
+        let counts: Vec<u64> = log
+            .iter()
+            .filter_map(|line| {
+                line.trim()
+                    .strip_prefix("cover survey: ")?
+                    .split_whitespace()
+                    .next()?
+                    .parse()
+                    .ok()
+            })
+            .collect();
         let initial = row["expectedControls"].as_u64().ok_or("fixture count")?;
         let mut expected = vec![initial; 5];
         for phase in row["phases"].as_array().into_iter().flatten() {
             expected.push(phase["expectedControls"].as_u64().ok_or("phase count")?);
         }
-        println!("{}", json!({"shape":row["id"],"output":output,"expected":expected,"tested":counts,"notes":log.iter().filter(|line|line.contains("cover survey") || line.contains("inert marking")).collect::<Vec<_>>()}));
-        if counts != expected { failures.push(format!("{} tested {counts:?}, expected {expected:?}", row["id"])); }
+        // The review artifact needs exact observations; an output failure fails the proof.
+        writeln!(
+            io::stdout().lock(),
+            "{}",
+            json!({"shape":row["id"],"output":output,"expected":expected,"tested":counts,"notes":log.iter().filter(|line|line.contains("cover survey") || line.contains("inert marking")).collect::<Vec<_>>()})
+        )?;
+        if counts != expected {
+            failures.push(format!(
+                "{} tested {counts:?}, expected {expected:?}",
+                row["id"]
+            ));
+        }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
     Ok(())
@@ -3528,10 +3565,15 @@ async fn tests_that_on_top_survey_counts_match_each_fixture() -> TestResult {
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_on_top_survey_reports_named_page_phases() -> TestResult {
-    for url in ["https://news.ycombinator.com/item?id=50467087", "https://en.wikipedia.org/wiki/World_War_II", "https://www.ag-grid.com/example/"] {
+    for url in [
+        "https://news.ycombinator.com/item?id=50467087",
+        "https://en.wikipedia.org/wiki/World_War_II",
+        "https://www.ag-grid.com/example/",
+    ] {
         let run = Arc::new(LiveRun::connect().await?.with_viewports());
         let host: Arc<dyn OpHost> = Arc::clone(&run) as Arc<dyn OpHost>;
-        let script = format!(r#"
+        let script = format!(
+            r"
             try {{
                 await page.setViewportSize({{width:1280,height:800}});
                 const response = await page.goto({url}, {{waitUntil:'domcontentloaded',timeout:30000}});
@@ -3545,13 +3587,20 @@ async fn tests_that_on_top_survey_reports_named_page_phases() -> TestResult {
                 }}
                 return result;
             }} finally {{ await page.close(); }}
-        "#, url = json!(url));
+        ",
+            url = json!(url)
+        );
         let result = match js_runner::run_script(&host, &json!({"page":null}), &script).await {
             Ok(result) => result,
-            Err(error) => json!({"error":error.to_string()}),
+            Err(error) => json!({"error":error}),
         };
         let log = notes(&run);
-        println!("{}", json!({"url":url,"result":result,"notes":log.iter().filter(|line|line.contains("cover survey") || line.contains("inert marking")).collect::<Vec<_>>()}));
+        // The review artifact needs exact observations; an output failure fails the proof.
+        writeln!(
+            io::stdout().lock(),
+            "{}",
+            json!({"url":url,"result":result,"notes":log.iter().filter(|line|line.contains("cover survey") || line.contains("inert marking")).collect::<Vec<_>>()})
+        )?;
     }
     Ok(())
 }

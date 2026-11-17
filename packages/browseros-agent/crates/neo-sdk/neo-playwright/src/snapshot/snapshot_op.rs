@@ -28,10 +28,9 @@
 //! that when the run ends (`snapshot_baselines.rs`, `pending_baselines.rs`).
 
 use std::borrow::Cow;
-use std::fmt;
-use std::mem;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
+use std::{fmt, mem};
 
 use futures_util::future::{self, BoxFuture};
 use serde::Deserialize;

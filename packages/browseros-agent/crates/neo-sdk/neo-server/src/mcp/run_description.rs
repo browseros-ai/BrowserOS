@@ -33,7 +33,7 @@ Each run starts with fresh JavaScript; tabs stay open between runs.";
 /// A ref resolves from `page` in any frame: the resolver jumps to the document that printed it
 /// (`neo-playwright/src/resolve/resolver.rs`). A model that knows Playwright doubts that for a
 /// frame's content, and in a real run guessed a locator beside a printed frame ref, so the text
-/// says it. SNAPSHOT_ON_TOP, right after this paragraph, says what the snapshot's `# on top:`
+/// says it. `SNAPSHOT_ON_TOP`, right after this paragraph, says what the snapshot's `# on top:`
 /// lines mean.
 const LOOP: &str = r#"Work in a loop: look, act, look again.
 - Look: `return await page.ariaSnapshot()` lists what you can act on, each with a ref, such as `- button "Add to cart" [ref=e41]`.
