@@ -1,20 +1,17 @@
 #!/usr/bin/env bash
-# Container supervisor for the BrowserOS neo image. Runs as root under tini.
+# Neo SDK container supervisor. Runs as root under tini or the host's supervisor.
 #
 #   Xvnc :1 (X server + VNC on loopback :5900) ◀── draws ── Neo ── starts ──▶ claw-server
 #     │                                                      └─ MCP proxy :9010 ◀── agents
-#     └── websockify :6080 (noVNC page + WebSocket) ◀── browser tab
+#     ├── websockify :6080 (noVNC page + WebSocket, claw-server only)
+#     └── slimviewer on loopback :5910 (control) and :5911 (view only)
 #   openbox keeps Neo maximized and follows viewer-driven screen resizes.
 #
-# Two images run this supervisor: the Neo image here, and the Neo SDK image
-# (packages/browseros-agent/crates/neo-sdk/neo-server/docker), which builds on
-# this file instead of copying it. Images built with claw-sdk instead of
-# claw-server run no websockify, keep the clipboard from VNC viewers, and get a
-# host socket directory; server_policy decides from the installed binary.
+# server_policy recognizes claw-server and claw-sdk. With claw-sdk, Xvnc keeps
+# the clipboard from VNC viewers and the host gets a socket directory.
 #
-# Only Neo is restarted here, because users can close it. If Xvnc, openbox or
-# websockify (where it runs) exits, the container exits and Docker's restart
-# policy takes over.
+# The supervisor restarts Neo when it closes and slimviewer when it exits.
+# Losing Xvnc, openbox or websockify (where enabled) stops the container.
 set -euo pipefail
 
 : "${NEO_DATA_DIR:=/data}"
@@ -49,6 +46,7 @@ readonly HOST_SOCKET_DIR=/run/neo
 # of a second, clear_sessions waits for the last browser process to go.
 readonly PROC_DIR=/proc
 readonly BROWSER_GONE_TENTHS=100
+readonly SLIMVIEWER_RESTART_DELAY=5
 
 : "${NEO_SCREEN:=1600x1000}" "${NEO_SANDBOX:=false}" "${NEO_ARGS:=}"
 : "${NEO_SOFTWARE_GRAPHICS:=true}"
@@ -104,6 +102,9 @@ esac
 MCP_REMOTE=false
 if is_true "$NEO_MCP_REMOTE"; then MCP_REMOTE=true; fi
 readonly MCP_REMOTE
+SLIMVIEWER_ENABLED=0
+if is_true "${NEO_SLIMVIEWER:-true}"; then SLIMVIEWER_ENABLED=1; fi
+readonly SLIMVIEWER_ENABLED
 CLEAR_SESSIONS=0
 if is_true "$NEO_CLEAR_SESSIONS"; then
   if [ "$BROWSERCLAW_HOSTED_MODE" = 1 ]; then
@@ -391,6 +392,41 @@ start_display() {
   fi
 }
 
+# Xvnc's shared memory belongs to the remapped neo uid. The viewer needs
+# only HOME and PATH. The exec chain keeps the viewer a direct child.
+start_slimviewer() {
+  local viewer=/usr/local/bin/slimviewer
+  if [ "$SLIMVIEWER_ENABLED" = 0 ]; then
+    log "Skipping slimviewer (disabled by NEO_SLIMVIEWER)"
+  elif [ ! -x "$viewer" ]; then
+    log "Skipping slimviewer ($viewer is missing or not executable)"
+  elif [ "$stopping" = 0 ]; then
+    (exec setpriv --reuid=neo --regid=neo --init-groups --no-new-privs \
+      env -i PATH=/usr/local/bin:/usr/bin:/bin HOME="$NEO_HOME" \
+      "$viewer" --display :1 --rfb 127.0.0.1:5900 \
+        --listen 127.0.0.1:5910 --listen-view 127.0.0.1:5911) &
+    slimviewer_pid=$!
+  fi
+}
+
+# The retry timer runs beside the poll loop so display failures and TERM are
+# still handled during the delay. Shutdown reaps whichever child is active.
+poll_slimviewer() {
+  [ "$stopping" = 0 ] || return 0
+  if [ -n "$slimviewer_pid" ] && ! kill -0 "$slimviewer_pid" 2>/dev/null; then
+    local code=0
+    wait "$slimviewer_pid" 2>/dev/null || code=$?
+    slimviewer_pid=""
+    log "slimviewer exited with status $code, retrying in ${SLIMVIEWER_RESTART_DELAY}s"
+    sleep "$SLIMVIEWER_RESTART_DELAY" &
+    slimviewer_retry_pid=$!
+  elif [ -n "$slimviewer_retry_pid" ] && ! kill -0 "$slimviewer_retry_pid" 2>/dev/null; then
+    wait "$slimviewer_retry_pid" || true
+    slimviewer_retry_pid=""
+    start_slimviewer
+  fi
+}
+
 # Chromium's sandbox needs user namespaces, which Docker's default seccomp
 # profile (and AppArmor on Ubuntu hosts) denies, so it is off unless the
 # container was started with security options that allow it (README).
@@ -603,6 +639,8 @@ stopping=0
 neo_pid=""
 neo_signaled=0
 configure_pid=""
+slimviewer_pid=""
+slimviewer_retry_pid=""
 
 # Quit Neo the way a user would (CDP Browser.close, see neo-quit.py) so it
 # records a clean exit and flushes cookies; Chromium's own SIGTERM handling
@@ -620,7 +658,7 @@ on_term() {
   term_neo
 }
 
-# Neo first so it can save cookies and the session, then the display stack.
+# Neo first so it can save cookies and the session, then the viewer and display.
 shutdown() {
   local code=$1
   if [ -n "$neo_pid" ] && kill -0 "$neo_pid" 2>/dev/null; then
@@ -630,7 +668,8 @@ shutdown() {
     kill -KILL "$neo_pid" 2>/dev/null || true
   fi
   [ -n "$configure_pid" ] && kill -TERM "$configure_pid" 2>/dev/null || true
-  kill -TERM ${websockify_pid:+"$websockify_pid"} "$openbox_pid" "$vncconfig_pid" "$xvnc_pid" 2>/dev/null || true
+  kill -TERM ${slimviewer_pid:+"$slimviewer_pid"} ${slimviewer_retry_pid:+"$slimviewer_retry_pid"} \
+    ${websockify_pid:+"$websockify_pid"} "$openbox_pid" "$vncconfig_pid" "$xvnc_pid" 2>/dev/null || true
   wait 2>/dev/null || true
   exit "$code"
 }
@@ -647,6 +686,7 @@ prepare_host_socket
 apply_policies
 apply_minimal_ui
 start_display
+start_slimviewer
 start_neo || { log "Could not start Neo; stopping the container"; shutdown 1; }
 configure_neo &
 configure_pid=$!
@@ -669,6 +709,7 @@ while [ "$stopping" = 0 ]; do
       shutdown 1
     fi
   done
+  poll_slimviewer
   if ! kill -0 "$neo_pid" 2>/dev/null; then
     wait "$neo_pid" 2>/dev/null || true
     log "Neo exited; restarting"

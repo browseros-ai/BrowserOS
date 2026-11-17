@@ -99,6 +99,7 @@ viewer and a trace UI over the host API, and `dev.sh run` to send scripts. `smok
 | `CLAW_HOST_SOCKET` | `/run/neo/host.sock` | Moves the socket. Keep it off a Docker Desktop file share, which cannot hold a socket. |
 | `CLAW_HOST_TCP` | unset | Development only: also serves the host API on this TCP address, token only. |
 | `NEO_MCP_REMOTE` | `false` | `false`: the browser's MCP ports refuse every peer but loopback. `true` is needed to publish 9010, and admits every peer that can route to the container. |
+| `NEO_SLIMVIEWER` | `true` | Starts the phone viewer when installed. Set to `0` to disable it. |
 | `BROWSEROS_CAPSOLVER_API_KEY_FILE`, `BROWSEROS_2CAPTCHA_API_KEY_FILE` | `/home/neo/.config/browseros/captcha/capsolver-api-key`, `…/2captcha-api-key` | CAPTCHA provider keys, read if the files exist. The published image carries both; a local or pull request build none ([CAPTCHA keys](#captcha-keys)). |
 | `NEO_SCREEN`, `NEO_SANDBOX`, `NEO_SOFTWARE_GRAPHICS`, `NEO_DISABLE_BROWSEROS_EXTENSIONS`, `NEO_ARGS`, `NEO_DOWNLOAD_DIR`, `TZ` | as the Neo image | The same meaning as in [the Neo image's README](../../../../../browseros/docker/neo/README.md). The browser always runs with `--disable-back-forward-cache`, as Playwright launches Chromium; `NEO_ARGS` adds to it. |
 | `NEO_CLEAR_SESSIONS` | `false` | `true`: before every start of the browser, the entrypoint removes the profile's saved sessions, `/data/profile/Default/Sessions`, where values typed into pages rest ([Saved sessions](#saved-sessions)). |
@@ -149,9 +150,22 @@ Playwright's existing behavior, including `download.saveAs()` outside the read r
 | 9210 | claw-sdk's agent listener, `127.0.0.1` | none | loopback |
 | 9110 | the browser's CDP, `127.0.0.1` | none | loopback |
 | 5900 | Xvnc, `127.0.0.1`. The host API's display and fits use it | none | loopback |
+| 5910, 5911 | slimviewer, `127.0.0.1`. Owner stream and input on 5910, view-only stream on 5911 | none | loopback |
 | `/run/neo/host.sock` | the host API | the socket's group, then the token | host processes in `NEO_HOST_GID` |
 
 Nothing listens on 6080: this image serves no noVNC viewer.
+
+### Phone viewer (slimviewer)
+
+Once Xvnc opens display `:1`, the entrypoint starts `/usr/local/bin/slimviewer` as a direct child.
+It runs as `neo` with the configured `PUID` and `PGID`, `no-new-privs`, and only `PATH` and `HOME`.
+It sends input to Xvnc on `127.0.0.1:5900`. Never publish its loopback ports 5910 and 5911.
+Apply the same local-user firewall rules as for 9011.
+
+The viewer defaults on. Set `NEO_SLIMVIEWER=0` to turn it off. A missing binary is skipped.
+If it exits, the supervisor logs its status and retries after five seconds. On shutdown, it stops
+the viewer before Xvnc. The image uses OpenH264 only. The page (`slimviewer.html`), `ui.js`,
+and `RUNTIME-DEPS` are in `/usr/share/slimviewer`. Notices are in `/usr/share/doc/slimviewer/THIRD-PARTY-LICENSES`.
 
 ### Exposure rule
 
@@ -171,8 +185,8 @@ Nothing listens on 6080: this image serves no noVNC viewer.
 - mount a persistent `/data`, and run one container per `/data`;
 - give Chromium shared memory: `--shm-size=1g`, or `--disable-dev-shm-usage` in `NEO_ARGS`;
 - keep `NEO_MCP_REMOTE=false` unless it publishes 9010; then publish it on `127.0.0.1`, on a dedicated
-  network, and never publish 9011, 9110, 9210 or 5900;
-- firewall 9010 and 9011 (and 9110, 9210, 5900) for any local uid that must not drive the browser, and
+  network, and never publish 9011, 9110, 9210, 5900, 5910 or 5911;
+- firewall 9010 and 9011 (and 9110, 9210, 5900, 5910, 5911) for any local uid that must not access the browser, and
   prefer an allow-list of loopback ports for such a uid, since 9011 moves if something else holds it;
 - start the entrypoint as root (it renumbers neo, owns `/data`, writes Chromium policies and `/run/neo`,
   then drops to neo); `docker run --user` is not supported. It needs SETUID, SETGID, CHOWN, FOWNER,
@@ -322,7 +336,7 @@ COPY settings.json /etc/neo/settings.json
 Call `/usr/local/bin/neo-entrypoint` from the host's supervisor as root, with the `/data`
 layout and neo user described above. Pass `NEO_HOST_GID` and `CLAW_HOST_TOKEN_FILE`, allow
 `CLAW_*` through any `env -i` filter, add the socket's group to the host's supervisor,
-and include 9011 in the firewall rules for Neo's ports.
+and include 9011, 5910 and 5911 in the firewall rules for Neo's ports.
 
 A host can write `/data/browserclaw/claw-sdk/settings.json` before the entrypoint starts.
 The file holds one `PUT /v1/settings` body with no envelope. Every setting is optional.
