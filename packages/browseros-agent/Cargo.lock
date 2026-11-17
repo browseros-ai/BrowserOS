@@ -2082,6 +2082,7 @@ dependencies = [
 name = "neo-snapshot"
 version = "0.1.0"
 dependencies = [
+ "rquickjs",
  "serde",
  "serde_json",
 ]
