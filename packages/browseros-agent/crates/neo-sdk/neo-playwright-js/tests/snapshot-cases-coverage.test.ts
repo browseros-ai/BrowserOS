@@ -5,13 +5,16 @@
  * line ran, not every boundary; the cases name the boundaries themselves.
  *
  * The cases run in a child `bun test --coverage` (support/snapshot-cases-run.ts) so that only
- * they are measured, not this package's other suites.
+ * they are measured, not this package's other suites. Bun marks lines differently from one
+ * version to the next (1.4.4 finds a branch inside a line that 1.4.2 counts as run), so the
+ * report is the pinned Bun's, as the built files are; another version is refused, not judged.
  */
 import { expect, it } from 'bun:test'
 import { spawnSync } from 'node:child_process'
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { engines } from '../../../../package.json'
 import {
   RENDERER,
   UNREACHED,
@@ -70,6 +73,10 @@ function explained(entry: Unreached, source: string[]): number[] {
 }
 
 it('tests that the snapshot text cases reach every line of the renderer, or say why not', () => {
+  expect(
+    Bun.version,
+    `the coverage report is Bun ${engines.bun}'s (package.json engines.bun)`,
+  ).toBe(engines.bun)
   const dir = mkdtempSync(join(tmpdir(), 'snapshot-cases-coverage-'))
   try {
     const run = spawnSync(
