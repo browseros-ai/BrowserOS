@@ -91,6 +91,17 @@ export function parentOrHost(element: Element): Element | undefined {
  * roots, and each root's hit leads into the next.
  */
 export function hitChain(target: Element, point: Point): Element[] | null {
+  let hit = hitAt(target, point)
+  const chain: Element[] = []
+  while (hit && hit !== target) {
+    chain.push(hit)
+    hit = hit.assignedSlot ?? parentOrHost(hit)
+  }
+  return hit === target ? null : chain
+}
+
+/** What is on top at `point` in the target's own chain of roots, as `hitChain` reads it. */
+function hitAt(target: Element, point: Point): Element | undefined {
   const roots: (Document | ShadowRoot)[] = []
   for (let at: Element | undefined = target; at; ) {
     const root = at.getRootNode()
@@ -248,7 +259,10 @@ function factsOf(
     snapshot = output.tree(shown, () => quietSnapshot(world, shown))
     words = holdsWords(snapshot)
   }
-  const controls = surrounds ? [] : controlsOf(world, output, shown)
+  // Every control the cover takes the pointer with, read in full: the list the answer prints is
+  // cut to eight, and what the cover is (frames only or not) is decided before that cut.
+  const taking = surrounds ? [] : takingControls(world, shown)
+  const controls = controlsOf(world, output, shown, taking)
   // The engine drops a textbox's own text, so a wordless snapshot is not a wordless cover.
   const drawn = words
     ? undefined
@@ -275,7 +289,7 @@ function factsOf(
     behind,
     closed,
     notice: !surrounds && inLiveRegion(world, shown),
-    kind: frameKind(shown, kind, controls),
+    kind: frameKind(shown, kind, taking),
   }
 }
 
@@ -320,7 +334,8 @@ function isFrame(element: Element): boolean {
 }
 
 /**
- * The kind against the cover named and the controls it lists, for the frame's line:
+ * The kind against the cover named and every control it takes the pointer with (not the list the
+ * answer prints, which is cut to eight), for the frame's line:
  * - a cover that is a frame keeps its kind and its line;
  * - a cover that lists nothing but frames, one or more, gets the frame's kind whatever lies at the
  *   point, with a line that points into the frame (`inside`): its way out is in there, as on a
@@ -332,14 +347,16 @@ function isFrame(element: Element): boolean {
 function frameKind(
   shown: Element,
   kind: CoverKind,
-  controls: readonly CoverControl[],
+  taking: readonly Element[],
 ): CoverKind {
-  if (shown.localName === 'iframe' || shown.localName === 'frame') return kind
+  const isFrame = (element: Element) =>
+    element.localName === 'iframe' || element.localName === 'frame'
+  if (isFrame(shown)) return kind
   if (kind.is !== 'page' && kind.is !== 'frame') return kind
-  const frames = controls.filter((control) => control.role === 'iframe')
-  if (frames.length > 0 && frames.length === controls.length)
+  const frames = taking.filter(isFrame)
+  if (frames.length > 0 && frames.length === taking.length)
     return { is: 'frame', inside: true }
-  return kind.is === 'frame' && frames.length < controls.length
+  return kind.is === 'frame' && frames.length < taking.length
     ? { is: 'page' }
     : kind
 }
@@ -769,8 +786,8 @@ export function controlsOf(
   world: World,
   output: FailureOutput,
   shown: Element,
+  taking: readonly Element[] = takingControls(world, shown),
 ): CoverControl[] {
-  const taking = takingControls(world, shown)
   const roleOf = (control: Element) => controlRole(world, control)
   const kept = new Set<Element>(
     taking
@@ -907,7 +924,7 @@ export function ownPress(
   if (kind.is === 'label') {
     const label = ownLabel(target, onTop)
     if (!label) return undefined
-    const at = plainAt(label, onTop) ? point : labelPlainPoint(label)
+    const at = ownSurface(label, onTop) ? point : labelPlainPoint(label)
     if (!at) return undefined
     return {
       element: label,
@@ -918,6 +935,10 @@ export function ownPress(
   if (kind.is === 'wrapper') {
     if (coverNumber(coverRoot(target, chain)) !== allowed.wrapper)
       return undefined
+    // The wrapper is what was hit, so `ownSurface` asks nothing of it: a wrapper that is a shadow
+    // host (a radio card built as a component, the radio slotted in) draws what is not seen here
+    // over the control, and takes no press.
+    if (drawsUnseen(onTop)) return undefined
     const checked = checkedState(world, target)
     if (checked === undefined) return undefined
     return {
@@ -961,20 +982,36 @@ export function shownOwnLabel(
 }
 
 /**
- * What is on top lies in the label itself or its plain content: no link or control of the
- * label's own holds it, so a press there is the label's. A control is a native one, one with a
- * tabindex, or one whose role attribute names a control (a `span role="button"` runs its own
- * click handler). The walk stops at the label: a container around it, such as a dialog's body
- * with its tabindex, is not the label's.
+ * Whether `hit` lies on `owner`'s own surface: a point is the owner's own when nothing between
+ * what was hit there and the owner is a link, a control (native, with a tabindex, or by a
+ * declared role), a frame, or a shadow host, since what a host draws is not seen from here. The
+ * label, the clear point and the wrapper all ask it. The owner itself is not asked: a target that
+ * is a host keeps its insides as its own. The walk stops at the owner, so a container around it,
+ * such as a dialog's body with its tabindex, is not the owner's.
  */
-function plainAt(label: Element, onTop: Element): boolean {
-  for (
-    let at: Element | null = onTop;
-    at && at !== label;
-    at = at.parentElement
+function ownSurface(owner: Element, hit: Element): boolean {
+  for (let at: Element | null = hit; at && at !== owner; at = at.parentElement)
+    if (
+      at.matches(`a[href], ${CONTROLS}`) ||
+      explicitControl(at) ||
+      drawsUnseen(at)
+    )
+      return false
+  return owner.contains(hit)
+}
+
+/**
+ * A shadow host: what it draws in its root (a link, perhaps) is not seen as plain, whether this
+ * world reads that root or not. A root this world reads shows as `shadowRoot`; one it cannot is
+ * known by `inClosedPart`'s test. Both a hit and the root's own hit answer the host for a point
+ * inside its root, so the host is always on a walk from what was hit. Slotted text needs nothing:
+ * its parent is the host.
+ */
+function drawsUnseen(element: Element): boolean {
+  return (
+    element.shadowRoot !== null ||
+    (element.localName.includes('-') && mayCarryRoot(element))
   )
-    if (at.matches(`a[href], ${CONTROLS}`) || explicitControl(at)) return false
-  return label.contains(onTop)
 }
 
 /** The label's first plain point (`pointOffLinks`), in the frame's pixels. */
@@ -1027,7 +1064,7 @@ function pointOffLinks(label: Element): Point | undefined {
       const chain = hitChain(label, point)
       if (chain !== null) continue
       const on = scope.elementFromPoint(point.x, point.y)
-      if (on && !plainAt(label, on)) continue
+      if (on && !ownSurface(label, on)) continue
       return { x: point.x - left, y: point.y - topEdge }
     }
   return undefined
@@ -1045,8 +1082,11 @@ function labelledControl(
 }
 
 /**
- * One of eight other points of the control where it is on top, from its padding edge, as
- * `click({ position })` takes it. Only points inside the viewport count.
+ * One of eight other points of the control where it is on top, on its own surface
+ * (`ownSurface`: no link, control, frame or component nested in it), from its padding edge, as
+ * `click({ position })` takes it. Only points inside the viewport count. Both a press of the
+ * target's own and the covered answer's point come from here, so neither lands on a control
+ * inside the target; one whose only clear parts are such controls has no clear point.
  */
 function clearPoint(subject: Element): Point | undefined {
   const box = subject.getBoundingClientRect()
@@ -1071,7 +1111,8 @@ function clearPoint(subject: Element): Point | undefined {
       point.y >= innerHeight
     )
       continue
-    if (hitChain(subject, point) === null)
+    const hit = hitAt(subject, point)
+    if (hit && ownSurface(subject, hit))
       return {
         x: Math.round(point.x - left),
         y: Math.round(point.y - topEdge),

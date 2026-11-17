@@ -96,6 +96,21 @@ const shapes = {
     widget.setAttribute('style', 'position: absolute; z-index: 5; left: 110px; top: 0; width: 80px; height: 48px; background: #ffe')
     stage.append(widget)
   },
+  partiallink() {
+    // A button half under the same widget whose left part is a component drawing a link in its
+    // own root: a press of the button's own goes where the button itself is on top.
+    const target = button()
+    target.style.cssText = 'position: relative; width: 300px'
+    target.innerHTML = '<span id="more" style="position: absolute; left: 0; top: 0; width: 100px; height: 100%"></span>Buy'
+    const root = document.getElementById('more').attachShadow({ mode: 'open' })
+    root.innerHTML = '<a href="/elsewhere/more" id="info" style="display: block; height: 100%">More</a>'
+    root.getElementById('info').addEventListener('click', log('info'))
+    const widget = document.createElement('div')
+    widget.id = 'widget'
+    widget.textContent = 'EN'
+    widget.setAttribute('style', 'position: absolute; z-index: 5; left: 110px; top: 0; width: 80px; height: 48px; background: #ffe')
+    stage.append(widget)
+  },
   partialslider() {
     // A slider half under the same widget: a press at whatever point is clear would move its
     // value, so no clear point of it is pressed for the agent.
@@ -134,6 +149,15 @@ const shapes = {
     stage.innerHTML = `<div tabindex="-1">${termsOver('<a href="/elsewhere/terms" id="info" style="position: relative; display: inline-block; width: 60px; height: 24px; background: #eef">Terms</a>')}</div>`
     pressLogged()
   },
+  linksnested() {
+    // A component inside the label: a host whose own root draws a link over the box, and the
+    // label's plain text after it. What the host draws is not the label's plain content.
+    stage.innerHTML = termsOver('<span id="terms" style="position: relative; display: inline-block; width: 140px; height: 24px"></span>')
+    const root = document.getElementById('terms').attachShadow({ mode: 'open' })
+    root.innerHTML = '<a href="/elsewhere/terms" id="info" style="display: block; width: 140px; height: 24px; background: #eef">Terms</a>'
+    document.getElementById('target').addEventListener('click', log('target'))
+    root.getElementById('info').addEventListener('click', log('info'))
+  },
   linksshadow() {
     // The same label inside an open shadow root: what is hit there is asked in that root, as the
     // document's own answer is the root's host.
@@ -164,6 +188,13 @@ const shapes = {
       <label id="own" for="target" style="display: inline-block; padding: 8px; background: #eef">Accept the terms</label>`
     document.getElementById('target').addEventListener('click', log('target'))
   },
+  manyframes() {
+    // A layer that holds nine frames and then a Close link: not frames only, though the eight
+    // controls an answer prints are all frames.
+    button()
+    const frames = '<iframe srcdoc="<p>ad</p>" style="width: 60px; height: 40px; border: 0"></iframe>'.repeat(9)
+    layer(`${frames}<a href="/elsewhere/close">Close</a>`)
+  },
   wrapper() {
     // A radio card: its blank wrapper takes the pointer and selects the radio on a press.
     stage.innerHTML = `<style>.option { position: relative; width: 200px; height: 40px }
@@ -181,6 +212,15 @@ const shapes = {
       .veiled::after { content: ''; position: absolute; inset: 0 }</style>
       <div class="veiled"><button id="target" style="width: 160px; height: 40px">Pay now</button></div>`
     document.getElementById('target').addEventListener('click', log('target'))
+  },
+  wrappershadow() {
+    // A radio card built as a component: the radio slotted into a host whose own root draws a
+    // Remove button over it. What the host draws is not seen, so the wrapper takes no press.
+    stage.innerHTML = '<div id="card" style="position: relative; width: 200px; height: 40px"><input type="radio" id="target" name="size" style="margin: 12px; width: 13px; height: 13px"></div>'
+    const root = document.getElementById('card').attachShadow({ mode: 'open' })
+    root.innerHTML = '<slot></slot><button id="remove" style="position: absolute; inset: 0; opacity: 0.01">Remove</button>'
+    document.getElementById('target').addEventListener('click', log('target'))
+    root.getElementById('remove').addEventListener('click', log('remove'))
   },
   wrapperdead() {
     // The same blank wrapper with nothing behind it: a press on it changes nothing.

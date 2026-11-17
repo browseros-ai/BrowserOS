@@ -362,7 +362,8 @@ where
 
 /// Covered-click C: a press whose cover is the target's own lands by itself, with one trusted
 /// press, and the call log says which in one fixed form: a clear point of a button half under
-/// a widget, a checkbox under its own label, a terms checkbox whose label holds two links (the
+/// a widget (and of one whose left part is a component drawing a link, which is not its own
+/// surface), a checkbox under its own label, a terms checkbox whose label holds two links (the
 /// press goes where the label is plain, and the page stays), and a radio under its own blank
 /// wrapper once that wrapper stood its four checks.
 #[tokio::test]
@@ -370,6 +371,10 @@ where
 async fn tests_that_a_press_on_the_targets_own_lands_by_itself() -> TestResult {
     for (name, line) in [
         ("partial", "  a clear point of it takes the press: { x: "),
+        (
+            "partiallink",
+            "  a clear point of it takes the press: { x: ",
+        ),
         ("label", "  its own label takes the press: <label"),
         ("links", "  its own label takes the press: <label"),
         ("wrapper", "  its own wrapper takes the press: <div"),
@@ -382,7 +387,7 @@ async fn tests_that_a_press_on_the_targets_own_lands_by_itself() -> TestResult {
                 .map_err(|error| format!("{name}: {error}"))?;
             assert!(noted(&shape, line), "{name}: {:?}", notes(&shape));
             assert_eq!(presses(&shape), 1, "{name}: one press, one line");
-            if name == "partial" {
+            if name.starts_with("partial") {
                 assert_eq!(shape.log().await?, ["target"], "{name}");
             } else {
                 let checked = shape
@@ -446,6 +451,32 @@ async fn tests_that_a_dead_wrapper_says_the_state_did_not_change() -> TestResult
                 .message()
                 .contains("did not change its state: its own wrapper took the press"),
             "{checked}"
+        );
+        TestResult::Ok(())
+    }
+    .await;
+    shape.close().await;
+    result
+}
+
+/// A radio slotted into a component whose own root draws a Remove button over it: the host is
+/// its wrapper, but what a host draws is not seen, so it takes no press. The covered answer comes
+/// with the wrapper's line; Remove saw no click and the radio stays as it was.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_wrapper_that_is_a_shadow_host_is_not_pressed() -> TestResult {
+    let shape = Shape::shape("wrappershadow").await?;
+    let result = async {
+        let (message, cover) = covered(shape.click("#target").await)?;
+        assert_eq!(text(&cover, "kind"), "wrapper", "{message}");
+        assert_eq!(presses(&shape), 0, "{:?}", notes(&shape));
+        assert!(shape.log().await?.is_empty(), "nothing saw a click");
+        assert_eq!(
+            shape
+                .run
+                .eval(&shape.page, "document.getElementById('target').checked")
+                .await?,
+            json!(false)
         );
         TestResult::Ok(())
     }
@@ -549,15 +580,16 @@ const SHADOWED_TARGET_CHECKED: &str = "(document.getElementById('target') ?? \
      document.getElementById('host').shadowRoot.getElementById('target')).checked";
 
 /// A press of the target's own label goes where the label is plain: never on a custom control
-/// in it (a `span role="button"` with no tabindex runs its own click handler); a label inside a
-/// container with a tabindex, as a dialog's body has, still has plain points; and so has one
-/// inside an open shadow root, whose hits are asked in that root. The box is checked, the
-/// label's own control saw no click, and the page stayed.
+/// in it (a `span role="button"` with no tabindex runs its own click handler), nor on what a
+/// component inside it draws in its own root (a link there); a label inside a container with a
+/// tabindex, as a dialog's body has, still has plain points; and so has one inside an open shadow
+/// root, whose hits are asked in that root. The box is checked, the label's own control saw no
+/// click, and the page stayed.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_a_label_press_goes_where_the_label_is_plain() -> TestResult {
     each_shape(
-        &["labelrole", "linksdialog", "linksshadow"],
+        &["labelrole", "linksdialog", "linksshadow", "linksnested"],
         |shape, name| async move {
             let result = async {
                 shape.click("#target").await?;
@@ -610,6 +642,24 @@ async fn tests_that_a_hidden_checkbox_is_checked_through_its_label() -> TestResu
         (shape, result)
     })
     .await
+}
+
+/// A layer that holds nine frames and then a Close link is not a cover of frames only, though
+/// the eight controls the answer prints are all frames: its kind is `page`, without the frame's
+/// line, as the full list of what it takes the pointer with says.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_frames_and_a_link_are_not_frames_only() -> TestResult {
+    let shape = Shape::shape("manyframes").await?;
+    let result = async {
+        let (message, cover) = covered(shape.click("#target").await)?;
+        assert_eq!(text(&cover, "kind"), "page", "{message}");
+        assert!(!message.contains("its content is in a frame"), "{message}");
+        TestResult::Ok(())
+    }
+    .await;
+    shape.close().await;
+    result
 }
 
 /// A button in a same-process frame, half under a widget of its own page, whose clear point
