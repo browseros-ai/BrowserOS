@@ -169,6 +169,7 @@ class FakeGitHub:
         with self.lock:
             self.calls.append((method, path))
             if path.endswith("/generate-jitconfig"):
+                self.minted = body
                 runner = 100 + len(self.calls)
                 self.runners[runner] = {"busy": False}
                 return {"runner": {"id": runner}, "encoded_jit_config": "one-job-registration"}
@@ -250,6 +251,8 @@ class DispatcherTests(PoolFixture):
         self.assertEqual("vm-1", self.acquire("d" * 32, "9" * 32)["name"])
         self.assertEqual({"jitconfig": "one-job-registration", "repository": REPOSITORY,
                           "workflows": [ALLOWED]}, transport.request)
+        # pool-run.yml asks for [self-hosted, browseros-pool]; a JIT runner gets no default labels.
+        self.assertEqual(["self-hosted", "browseros-pool"], github.minted["labels"])
         time.sleep(0.1)
         self.assertEqual("busy", slot.state)
         transport.process.done.set()
