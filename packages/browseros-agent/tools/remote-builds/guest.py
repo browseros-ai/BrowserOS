@@ -108,6 +108,17 @@ def cleanup_docker(job: str, cancelled: bool = False) -> None:
                             *created], check=True, capture_output=True, timeout=30)
 
 
+def sweep_runner(job: str) -> None:
+    """Remove what a GitHub runner job's account left, while this job still owns the host.
+
+    runner.sh sweeps on exit, but a cancelled service can die before that sweep runs.
+    Callers hold host_guard, before any receipt says the host is safe to release. A
+    developer's job has no runner marker, so this does nothing for it.
+    """
+    if (ROOT / (job + ".runner")).exists():
+        subprocess.run(["bash", RUNNER_LAUNCHER, "--sweep"], check=True, capture_output=True, timeout=600)
+
+
 def finish(job: str, receipt: dict) -> dict:
     """Commit the terminal fence before a client may return this host to the pool."""
     log = ROOT / (job + ".log")
@@ -190,6 +201,7 @@ def cancel(job: str, interrupt_streamer: bool = False) -> dict:
                 if not active(unit):
                     with host_guard(job):
                         cleanup_docker(job, cancelled=True)
+                        sweep_runner(job)
                         receipt = {"safeToRelease": True, "job": job, "exitCode": 130, "cancelled": True}
                         info = ROOT / (job + ".info.json")
                         if info.exists():
@@ -294,6 +306,7 @@ def run(arguments: argparse.Namespace) -> int:
                     break
                 time.sleep(0.1)
         cleanup_docker(arguments.job)
+        sweep_runner(arguments.job)
         receipt = {"job": arguments.job, "exitCode": process.returncode,
                    "seconds": time.monotonic() - started, "safeToRelease": not active(unit),
                    "sourceRoot": str(source)}
@@ -350,7 +363,7 @@ def runner_request(job: str) -> dict:
             or not all(isinstance(ref, str) and re.fullmatch(r"[^\s]{1,300}", ref)
                        for ref in request["workflows"])):
         raise ValueError("invalid runner start request")
-    for leftover in (".runner.json", ".info.json", ".result.json"):
+    for leftover in (".runner", ".runner.json", ".info.json", ".result.json"):
         if (ROOT / (job + leftover)).exists():
             raise ValueError("job was already admitted; recover instead of starting it twice")
     return request
@@ -374,6 +387,9 @@ def runner_rpc(command: str) -> int:
     if operation == "runner-start":
         request = runner_request(job)
         ROOT.mkdir(parents=True, exist_ok=True)
+        # The marker outlives the registration file runner.sh deletes. It tells cancel()
+        # and run() to sweep the runner account before the host is released.
+        atomic_json(ROOT / (job + ".runner"), {"job": job})
         atomic_json(ROOT / (job + ".runner.json"), request)
         # run() requires a source root inside this UUID's namespace and a revision. A
         # runner job uploads no source: the runner checks out its own ref as the runner

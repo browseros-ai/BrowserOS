@@ -11,15 +11,13 @@
 # reservation per host). So anything `poolrunner` owns when a job starts or ends is a
 # leftover from a runner job, and is removed. That keeps one job from leaving anything
 # for the next.
+#
+# `runner.sh --sweep` only removes and checks. guest.py runs it after the job's service has
+# stopped and before it records the host as safe to release, so a job cancelled before
+# its own exit sweep still leaves nothing behind.
 set -euo pipefail
-job=${REMOTE_BUILD_JOB:?guest supervisor must supply the job}
-[[ $job =~ ^[0-9a-f]{32}$ ]] || { echo 'invalid job identifier' >&2; exit 2; }
-request=/var/lib/browseros-remote-builds/jobs/$job.runner.json
 base=/work/pool-runner
-dir=$base/$job
-dist=/opt/actions-runner/current
 account=poolrunner
-hook=/usr/local/lib/browseros-remote-builds/runner-hook.sh
 
 sweep() {
   # Kill by account, not by name: no other job runs on this machine now, and only
@@ -43,12 +41,24 @@ PY
   sudo -n find "$base" -mindepth 1 -maxdepth 1 -exec rm -rf --one-file-system -- {} + || true
 }
 
+swept() {
+  ! pgrep -u "$account" >/dev/null && [ -z "$(sudo -n find "$base" -mindepth 1 -maxdepth 1 -print -quit)" ]
+}
+
 sweep
-# Refuse to start on top of anything the sweep could not remove.
-if pgrep -u "$account" >/dev/null || [ -n "$(sudo -n find "$base" -mindepth 1 -maxdepth 1 -print -quit)" ]; then
-  echo 'a previous runner job left processes or files that could not be removed' >&2
-  exit 1
+if [ "${1:-}" = --sweep ]; then
+  swept || { echo 'runner account processes or files could not be removed' >&2; exit 1; }
+  exit 0
 fi
+# Refuse to start on top of anything the sweep could not remove.
+swept || { echo 'a previous runner job left processes or files that could not be removed' >&2; exit 1; }
+
+job=${REMOTE_BUILD_JOB:?guest supervisor must supply the job}
+[[ $job =~ ^[0-9a-f]{32}$ ]] || { echo 'invalid job identifier' >&2; exit 2; }
+request=/var/lib/browseros-remote-builds/jobs/$job.runner.json
+dir=$base/$job
+dist=/opt/actions-runner/current
+hook=/usr/local/lib/browseros-remote-builds/runner-hook.sh
 trap 'sweep' EXIT
 [ -f "$request" ] || { echo 'no runner registration for this job' >&2; exit 2; }
 

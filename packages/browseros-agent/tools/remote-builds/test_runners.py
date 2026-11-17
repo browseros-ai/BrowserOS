@@ -444,6 +444,32 @@ class RunnerCommandTests(unittest.TestCase):
         with patch.object(guest.sys, "stdin", io.StringIO(json.dumps(valid))), self.assertRaises(ValueError):
             guest.runner_request("a" * 32)
 
+    def test_only_a_runner_job_is_swept_and_a_failed_sweep_blocks_release(self):
+        calls = []
+        with patch.object(guest.subprocess, "run", lambda argv, **options: calls.append(argv)):
+            guest.sweep_runner("b" * 32)
+        self.assertEqual([], calls)
+        (guest.ROOT / ("a" * 32 + ".runner")).write_text("{}")
+        with patch.object(guest.subprocess, "run", lambda argv, **options: calls.append(argv)):
+            guest.sweep_runner("a" * 32)
+        self.assertEqual([["bash", guest.RUNNER_LAUNCHER, "--sweep"]], calls)
+
+        def fails(argv, **options):
+            raise subprocess.CalledProcessError(1, argv)
+        with patch.object(guest.subprocess, "run", fails), self.assertRaises(subprocess.CalledProcessError):
+            guest.sweep_runner("a" * 32)
+
+    def test_a_runner_start_leaves_the_sweep_marker_and_runs_the_fixed_launcher(self):
+        valid = {"jitconfig": "registration", "repository": REPOSITORY, "workflows": [ALLOWED]}
+        started = []
+        with patch.object(guest.sys, "stdin", io.StringIO(json.dumps(valid))), \
+                patch.object(guest, "run", lambda arguments: started.append(arguments) or 0), \
+                patch.object(guest.Path, "mkdir", lambda *args, **kwargs: None):
+            self.assertEqual(0, guest.runner_rpc("runner-start " + "a" * 32))
+        self.assertTrue((guest.ROOT / ("a" * 32 + ".runner")).exists())
+        self.assertEqual(["bash", guest.RUNNER_LAUNCHER], started[0].command)
+        self.assertEqual(valid, json.loads((guest.ROOT / ("a" * 32 + ".runner.json")).read_text()))
+
     def test_runner_scripts_parse(self):
         for script in ("runner.sh", "runner-hook.sh", "prepare-runner.sh", "pool-ref.sh"):
             subprocess.run(["bash", "-n", str(HERE / script)], check=True)
