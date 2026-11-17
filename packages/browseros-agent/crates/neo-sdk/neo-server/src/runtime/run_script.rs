@@ -421,7 +421,7 @@ fn interrupt_handler(
 /// since it parses into three strings, clipped below. The realm's heap bounds `json`.
 fn settle(json: &str, bridge: &Bridge, blobs: &mut Vec<ResultBlob>) -> ScriptOutcome {
     if json.starts_with(SETTLED_OK) {
-        let levels = neo_playwright::json_value_depth(json).saturating_sub(1);
+        let levels = crate::json_value_depth(json).saturating_sub(1);
         if levels > MAX_RETURN_DEPTH {
             return ScriptOutcome::Failed(OperationError::script(
                 ErrorCode::RESULT_TOO_LARGE,

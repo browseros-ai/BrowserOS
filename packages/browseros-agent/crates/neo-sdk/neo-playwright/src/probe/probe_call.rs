@@ -626,7 +626,7 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::{CALL_FUNCTION, Handed, ProbeFailure, Ran, call_arguments, reply_of};
-    use crate::probe::probe_reply::ProbeReply;
+    use crate::probe::probe_reply::{ErrorClass, ProbeReply};
     use crate::probe::probe_request::{ProbePolicy, ProbeRequest};
 
     const PROTOCOL: &str = include_str!("../../tests/data/probe-protocol.json");
@@ -766,9 +766,29 @@ mod tests {
         assert!(matches!(unreadable, Err(ProbeFailure::Broken(_))));
         Ok(())
     }
+    #[test]
+    fn probe_reply_text_keeps_the_numeric_tree_depth_marker() {
+        let reply = reply_of(json!({ "result": { "type": "string", "value":
+            r#"{"kind":"error","class":"unsupported","treeDepth":149,"message":"m"}"#
+        } }));
+        assert!(matches!(
+            reply,
+            Ok(ProbeReply::Error {
+                class: ErrorClass::Unsupported,
+                tree_depth: Some(149),
+                ..
+            })
+        ));
+    }
+
     /// Exercise the real decoder beyond serde's default cap, not merely the scanner.
     #[test]
     fn probe_reply_text_admits_147_groups_and_refuses_148() {
+        // The advice is in tree levels: an arbitrary leaf adds two JSON levels to each pair
+        // contributed by a group and its children. The suggested cut must fit that same cap.
+        let largest_tree = (page::MAX_VALUE_DEPTH - 2) / 2;
+        assert_eq!(largest_tree, 147);
+        assert_eq!(140.min(largest_tree), 140, "the suggested cut fits the cap");
         for groups in [70, 130, 147, 148] {
             let text = format!(
                 "{{\"kind\":\"snapshot\",\"json\":[{}{{\"role\":\"button\",\"name\":\"End\"}}{}],\"iframes\":[]}}",

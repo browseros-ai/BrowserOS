@@ -43,3 +43,8 @@ mod url_scheme;
 pub use app::{App, StartError};
 pub use config::{AppConfig, ConfigError};
 pub use logging::Logging;
+
+// This is a pure text scan: nothing through it can reach the browser. Expose only this
+// utility so runtime parsing shares one scanner without naming a browser-driving crate or
+// bypassing the dispatcher’s admission and trace boundary.
+pub(crate) use neo_playwright::json_value_depth;
