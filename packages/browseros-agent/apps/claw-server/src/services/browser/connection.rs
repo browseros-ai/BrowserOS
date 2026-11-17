@@ -444,6 +444,7 @@ mod tests {
             Duration::from_secs(60),
             Duration::from_secs(60),
             Duration::from_secs(60),
+            Duration::from_secs(60),
         );
         Ok((
             BrowserService::new(

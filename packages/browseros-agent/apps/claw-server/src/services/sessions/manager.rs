@@ -138,6 +138,7 @@ pub struct Sessions {
     completion_hook: OnceLock<SessionCompletionHook>,
     target_bindings: OnceLock<Arc<TargetBindings>>,
     idle_after: Duration,
+    complete_after: Duration,
     retention: Duration,
     sweep_interval: Duration,
 }
@@ -148,6 +149,7 @@ impl Sessions {
         audit_log: Arc<AuditLog>,
         session_tabs: Arc<SessionTabLedger>,
         idle_after: Duration,
+        complete_after: Duration,
         retention: Duration,
         sweep_interval: Duration,
     ) -> Arc<Self> {
@@ -155,6 +157,7 @@ impl Sessions {
             audit_log,
             session_tabs,
             idle_after,
+            complete_after,
             retention,
             sweep_interval,
             Arc::new(NoopAnalyticsSink),
@@ -166,6 +169,7 @@ impl Sessions {
         audit_log: Arc<AuditLog>,
         session_tabs: Arc<SessionTabLedger>,
         idle_after: Duration,
+        complete_after: Duration,
         retention: Duration,
         sweep_interval: Duration,
         analytics: Arc<dyn AnalyticsSink>,
@@ -187,6 +191,7 @@ impl Sessions {
             completion_hook: OnceLock::new(),
             target_bindings: OnceLock::new(),
             idle_after,
+            complete_after,
             retention,
             sweep_interval,
         })
@@ -539,15 +544,21 @@ impl Sessions {
             .iter()
             .map(|(id, session)| (id.clone(), session.clone()))
             .collect();
-        let mut expired = Vec::new();
+        let mut expired: Vec<(SessionId, &'static str)> = Vec::new();
         for (id, session) in sessions {
-            if session.idle_for(now).await >= self.idle_after {
-                expired.push(id);
+            let idle = session.idle_for(now).await;
+            if idle >= self.idle_after {
+                expired.push((id, "idle timeout"));
+            } else if idle >= self.complete_after && session.active_dispatch_count().await == 0 {
+                // Per-session completion: this task's own dispatches went quiet and nothing is in
+                // flight, so it finished. teardown's stop_dispatches is the authority; this
+                // active-count check is a best-effort filter, like the idle-timeout path beside it.
+                expired.push((id, "completed"));
             }
         }
         let mut removed = 0;
-        for id in expired {
-            if self.remove(&id, "closed", Some("idle timeout")).await? {
+        for (id, reason) in expired {
+            if self.remove(&id, "closed", Some(reason)).await? {
                 removed += 1;
             }
         }
@@ -817,6 +828,7 @@ mod tests {
             audit_log.clone(),
             session_tabs.clone(),
             Duration::from_secs(5),
+            Duration::from_secs(5),
             Duration::from_secs(60),
             Duration::from_secs(1),
         );
@@ -866,6 +878,7 @@ mod tests {
             audit_log,
             session_tabs,
             Duration::from_secs(600),
+            Duration::from_secs(600),
             Duration::from_secs(60),
             Duration::from_secs(1),
         );
@@ -905,6 +918,7 @@ mod tests {
             audit_log,
             session_tabs,
             Duration::from_secs(600),
+            Duration::from_secs(600),
             Duration::from_secs(60),
             Duration::from_secs(1),
         );
@@ -928,6 +942,7 @@ mod tests {
         let registry = Sessions::new(
             audit_log,
             session_tabs,
+            Duration::from_secs(600),
             Duration::from_secs(600),
             Duration::from_secs(60),
             Duration::from_secs(1),
@@ -982,6 +997,7 @@ mod tests {
             session_tabs.clone(),
             Duration::from_secs(60),
             Duration::from_secs(60),
+            Duration::from_secs(60),
             Duration::from_secs(1),
         );
         let session = Session::new(
@@ -1025,6 +1041,7 @@ mod tests {
             session_tabs,
             Duration::from_secs(60),
             Duration::from_secs(60),
+            Duration::from_secs(60),
             Duration::from_secs(1),
         );
         let session = registry
@@ -1051,6 +1068,7 @@ mod tests {
         let registry = Sessions::new(
             audit_log.clone(),
             session_tabs,
+            Duration::from_secs(60),
             Duration::from_secs(60),
             Duration::from_secs(60),
             Duration::from_secs(1),
@@ -1113,6 +1131,7 @@ mod tests {
         let registry = Sessions::new(
             audit_log,
             session_tabs,
+            Duration::from_secs(60),
             Duration::from_secs(60),
             Duration::from_secs(60),
             Duration::from_secs(1),
@@ -1178,6 +1197,7 @@ mod tests {
             session_tabs,
             Duration::from_secs(60),
             Duration::from_secs(60),
+            Duration::from_secs(60),
             Duration::from_secs(1),
         );
         let session = registry
@@ -1215,6 +1235,7 @@ mod tests {
         let registry = Sessions::new(
             audit_log,
             session_tabs,
+            Duration::from_secs(60),
             Duration::from_secs(60),
             Duration::from_secs(60),
             Duration::from_secs(1),
@@ -1258,6 +1279,7 @@ mod tests {
             session_tabs,
             Duration::from_secs(60),
             Duration::from_secs(60),
+            Duration::from_secs(60),
             Duration::from_secs(1),
         );
         let first = Session::new(
@@ -1299,6 +1321,7 @@ mod tests {
         let registry = Sessions::new_with_analytics(
             audit_log,
             session_tabs,
+            Duration::from_secs(60),
             Duration::from_secs(60),
             Duration::from_secs(60),
             Duration::from_secs(1),
@@ -1350,6 +1373,7 @@ mod tests {
         let registry = Sessions::new_with_analytics(
             audit_log,
             session_tabs,
+            Duration::from_secs(60),
             Duration::from_secs(60),
             Duration::from_secs(60),
             Duration::from_secs(1),
@@ -1425,6 +1449,7 @@ mod tests {
         let registry = Sessions::new_with_analytics(
             audit_log,
             session_tabs,
+            Duration::from_secs(60),
             Duration::from_secs(60),
             Duration::from_secs(60),
             Duration::from_secs(1),
@@ -1504,6 +1529,7 @@ mod tests {
             session_tabs,
             Duration::from_secs(60),
             Duration::from_secs(60),
+            Duration::from_secs(60),
             Duration::from_secs(1),
             analytics.clone(),
         );
@@ -1540,6 +1566,7 @@ mod tests {
         let registry = Sessions::new(
             audit_log,
             session_tabs,
+            Duration::from_secs(60),
             Duration::from_secs(60),
             Duration::from_secs(60),
             Duration::from_secs(1),
@@ -1599,6 +1626,7 @@ mod tests {
             session_tabs,
             Duration::from_secs(60),
             Duration::from_secs(60),
+            Duration::from_secs(60),
             Duration::from_secs(1),
         );
         let collapse_entered = Arc::new(tokio::sync::Notify::new());
@@ -1652,6 +1680,7 @@ mod tests {
         let registry = Sessions::new_with_analytics(
             audit_log,
             session_tabs,
+            Duration::ZERO,
             Duration::ZERO,
             Duration::from_secs(60),
             Duration::from_secs(1),
@@ -1729,6 +1758,7 @@ mod tests {
         let registry = Sessions::new_with_analytics(
             audit_log,
             session_tabs,
+            Duration::from_secs(60),
             Duration::from_secs(60),
             Duration::from_secs(60),
             Duration::from_secs(1),
@@ -1813,6 +1843,7 @@ mod tests {
             session_tabs,
             Duration::from_secs(60),
             Duration::from_secs(60),
+            Duration::from_secs(60),
             Duration::from_secs(1),
         );
         let client = ClientInfo {
@@ -1869,6 +1900,7 @@ mod tests {
         let registry = Sessions::new(
             audit_log,
             session_tabs,
+            Duration::from_secs(60),
             Duration::from_secs(60),
             Duration::from_secs(10),
             Duration::from_secs(1),
@@ -1969,6 +2001,7 @@ mod tests {
             audit_log,
             session_tabs,
             Duration::from_secs(60),
+            Duration::from_secs(60),
             Duration::from_secs(10),
             Duration::from_secs(1),
         );
@@ -2043,6 +2076,7 @@ mod tests {
             audit_log,
             session_tabs,
             Duration::from_secs(60),
+            Duration::from_secs(60),
             Duration::from_secs(10),
             Duration::from_secs(1),
         );
@@ -2088,6 +2122,7 @@ mod tests {
         let registry = Sessions::new(
             audit_log,
             session_tabs,
+            Duration::from_secs(60),
             Duration::from_secs(60),
             Duration::from_secs(10),
             Duration::from_secs(1),
@@ -2135,6 +2170,89 @@ mod tests {
         assert_eq!(first.await?, 1);
         assert_eq!(registry.reap_retained(now).await, 0);
         assert_eq!(close_attempts.load(Ordering::SeqCst), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn sweep_completes_idle_session_with_no_active_dispatch() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let (audit_log, session_tabs) = repositories(&dir).await?;
+        let registry = Sessions::new(
+            audit_log.clone(),
+            session_tabs,
+            Duration::from_secs(600),
+            Duration::from_millis(1),
+            Duration::from_secs(60),
+            Duration::from_secs(1),
+        );
+        let session = registry
+            .mint(
+                ClientIdentity::Ephemeral {
+                    slug: "agent".to_string(),
+                    label: "Agent".to_string(),
+                },
+                ClientInfo {
+                    name: "Agent".to_string(),
+                    version: "1".to_string(),
+                    title: None,
+                },
+            )
+            .await?;
+        let id = session.id().clone();
+        assert_eq!(session.active_dispatch_count().await, 0);
+        // Idle past complete_after but well below idle_after, so completion owns the removal.
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_secs(5)).await;
+        tokio::time::resume();
+        assert_eq!(registry.sweep_idle().await?, 1);
+        assert!(registry.lookup(&id).await.is_none());
+        let summary = audit_log
+            .get_task_summary(id.as_str())
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("completed summary missing"))?;
+        assert_eq!(summary.status, TaskStatus::Done);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn sweep_keeps_idle_session_with_active_dispatch() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let (audit_log, session_tabs) = repositories(&dir).await?;
+        let registry = Sessions::new(
+            audit_log,
+            session_tabs,
+            Duration::from_secs(600),
+            Duration::from_millis(1),
+            Duration::from_secs(60),
+            Duration::from_secs(1),
+        );
+        let session = registry
+            .mint(
+                ClientIdentity::Ephemeral {
+                    slug: "agent".to_string(),
+                    label: "Agent".to_string(),
+                },
+                ClientInfo {
+                    name: "Agent".to_string(),
+                    version: "1".to_string(),
+                    title: None,
+                },
+            )
+            .await?;
+        let id = session.id().clone();
+        let token = CancellationToken::new();
+        let dispatch_id = DispatchId::new();
+        assert!(
+            session
+                .try_register_dispatch(dispatch_id.clone(), token.clone())
+                .await
+        );
+        // Idle past complete_after, but an in-flight dispatch means the task is still working.
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_secs(5)).await;
+        tokio::time::resume();
+        assert_eq!(registry.sweep_idle().await?, 0);
+        assert!(registry.lookup(&id).await.is_some());
         Ok(())
     }
 }
