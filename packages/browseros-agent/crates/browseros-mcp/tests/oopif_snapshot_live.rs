@@ -126,7 +126,7 @@ impl CdpConnection for HidesDetach {
         )
     }
 
-    fn events(&self) -> broadcast::Receiver<CdpEvent> {
+    fn events(&self) -> broadcast::Receiver<Arc<CdpEvent>> {
         let mut source = CdpConnection::events(&self.inner);
         let (tx, rx) = broadcast::channel(4096);
         let hidden = self.hidden.clone();

@@ -760,7 +760,7 @@ impl CdpConnection for HoldsOneAnswer {
         )
     }
 
-    fn events(&self) -> broadcast::Receiver<CdpEvent> {
+    fn events(&self) -> broadcast::Receiver<Arc<CdpEvent>> {
         CdpConnection::events(&self.client)
     }
 
@@ -772,7 +772,7 @@ impl CdpConnection for HoldsOneAnswer {
         CdpConnection::events_broadcast(&self.client)
     }
 
-    fn events_counted(&self) -> (broadcast::Receiver<CdpEvent>, u64) {
+    fn events_counted(&self) -> (broadcast::Receiver<Arc<CdpEvent>>, u64) {
         CdpConnection::events_counted(&self.client)
     }
 
@@ -925,7 +925,7 @@ impl CdpConnection for SlowWatcher {
         )
     }
 
-    fn events(&self) -> broadcast::Receiver<CdpEvent> {
+    fn events(&self) -> broadcast::Receiver<Arc<CdpEvent>> {
         CdpConnection::events(&self.client)
     }
 
@@ -937,7 +937,7 @@ impl CdpConnection for SlowWatcher {
         CdpConnection::events_broadcast(&self.client)
     }
 
-    fn events_counted(&self) -> (broadcast::Receiver<CdpEvent>, u64) {
+    fn events_counted(&self) -> (broadcast::Receiver<Arc<CdpEvent>>, u64) {
         let (mut wire, before) = CdpConnection::events_counted(&self.client);
         let (late_tx, late) = broadcast::channel(4096);
         let (stamped_tx, mut stamped) = mpsc::unbounded_channel();

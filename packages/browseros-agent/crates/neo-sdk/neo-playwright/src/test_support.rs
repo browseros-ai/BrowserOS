@@ -328,7 +328,7 @@ pub(crate) struct ScriptedTab<S> {
     slowed: AtomicUsize,
     /// Every command sent, by method, in order.
     sent: Mutex<Vec<String>>,
-    events: broadcast::Sender<CdpEvent>,
+    events: broadcast::Sender<Arc<CdpEvent>>,
     /// Count and subscription share this lock, matching the real transport's fence contract.
     broadcast_count: Mutex<u64>,
     targeted: TargetedEvents,
@@ -431,7 +431,7 @@ impl<S: TabScript> ScriptedTab<S> {
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner);
             *count += 1;
-            let _ = self.events.send(event);
+            let _ = self.events.send(Arc::new(event));
         }
     }
 
@@ -671,7 +671,7 @@ impl<S: TabScript> CdpConnection for ScriptedTab<S> {
         self.send_raw_json(method, params_json, session)
     }
 
-    fn events(&self) -> broadcast::Receiver<CdpEvent> {
+    fn events(&self) -> broadcast::Receiver<Arc<CdpEvent>> {
         self.events.subscribe()
     }
 
@@ -682,7 +682,7 @@ impl<S: TabScript> CdpConnection for ScriptedTab<S> {
             .unwrap_or_else(PoisonError::into_inner)
     }
 
-    fn events_counted(&self) -> (broadcast::Receiver<CdpEvent>, u64) {
+    fn events_counted(&self) -> (broadcast::Receiver<Arc<CdpEvent>>, u64) {
         let count = self
             .broadcast_count
             .lock()

@@ -249,7 +249,7 @@ impl CdpConnection for InputRecording {
 
     // Events, and their counts, are the browser connection's own: a wrapper that answered them
     // itself would break the readers that number what they took.
-    fn events(&self) -> broadcast::Receiver<CdpEvent> {
+    fn events(&self) -> broadcast::Receiver<Arc<CdpEvent>> {
         self.inner.events()
     }
 
@@ -261,7 +261,7 @@ impl CdpConnection for InputRecording {
         self.inner.events_broadcast()
     }
 
-    fn events_counted(&self) -> (broadcast::Receiver<CdpEvent>, u64) {
+    fn events_counted(&self) -> (broadcast::Receiver<Arc<CdpEvent>>, u64) {
         self.inner.events_counted()
     }
 

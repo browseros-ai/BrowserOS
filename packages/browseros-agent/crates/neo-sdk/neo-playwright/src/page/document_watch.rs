@@ -38,7 +38,7 @@ use crate::page::LoadState;
 /// its original receiver and follows the logical frame across successor sessions.
 pub(crate) struct DocumentWatch {
     /// Taken in [`DocumentWatch::new`], before the op sends anything.
-    events: Receiver<CdpEvent>,
+    events: Receiver<Arc<CdpEvent>>,
     connection: Arc<dyn CdpConnection>,
     /// Child goto keeps this same receiver across renderer changes. The containing target
     /// distinguishes closing the page from retiring an OOPIF's old target during a swap.

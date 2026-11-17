@@ -21,6 +21,7 @@
 
 use std::collections::HashSet;
 use std::future;
+use std::sync::Arc;
 
 use browseros_cdp::CdpEvent;
 use browseros_core::{FrameId, SessionId, TargetId};
@@ -35,7 +36,7 @@ use crate::{ErrorCode, PlaywrightError};
 
 /// The CDP events of one click's tab, from just before its input.
 pub(crate) struct RequestedNavigations {
-    events: Receiver<CdpEvent>,
+    events: Receiver<Arc<CdpEvent>>,
     /// The sessions whose frames the click can navigate.
     sessions: Vec<SessionId>,
     /// Frames with a navigation requested and not yet committed or cancelled.
@@ -112,7 +113,7 @@ impl Committed {
 
 impl RequestedNavigations {
     /// Starts listening. Take it before the first input event, so no request is missed.
-    pub(crate) fn watch(events: Receiver<CdpEvent>, sessions: Vec<SessionId>) -> Self {
+    pub(crate) fn watch(events: Receiver<Arc<CdpEvent>>, sessions: Vec<SessionId>) -> Self {
         Self {
             events,
             sessions,
@@ -288,6 +289,7 @@ impl RequestedNavigations {
 #[cfg(test)]
 mod tests {
     use std::error::Error;
+    use std::sync::Arc;
     use std::time::Duration;
 
     use browseros_cdp::CdpEvent;
@@ -306,22 +308,22 @@ mod tests {
 
     const SESSION: &str = "root";
 
-    fn event(method: &str, params: serde_json::Value) -> CdpEvent {
-        CdpEvent {
+    fn event(method: &str, params: serde_json::Value) -> Arc<CdpEvent> {
+        Arc::new(CdpEvent {
             method: method.to_owned(),
             params,
             session_id: Some(SessionId::from(SESSION.to_owned())),
-        }
+        })
     }
 
-    fn requested(frame: &str) -> CdpEvent {
+    fn requested(frame: &str) -> Arc<CdpEvent> {
         event(
             "Page.frameRequestedNavigation",
             json!({ "frameId": frame, "disposition": "currentTab", "reason": "anchorClick", "url": "https://a.test/" }),
         )
     }
 
-    fn watch() -> (broadcast::Sender<CdpEvent>, RequestedNavigations) {
+    fn watch() -> (broadcast::Sender<Arc<CdpEvent>>, RequestedNavigations) {
         let (events, receiver) = broadcast::channel(16);
         let watch =
             RequestedNavigations::watch(receiver, vec![SessionId::from(SESSION.to_owned())]);

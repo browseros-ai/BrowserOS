@@ -1982,7 +1982,7 @@ mod tests {
 
     /// Script fixture with an immutable transport epoch, including guarded creation readbacks.
     struct RunFakeConnection {
-        sender: broadcast::Sender<CdpEvent>,
+        sender: broadcast::Sender<Arc<CdpEvent>>,
         targeted: TargetedEvents,
         state: Arc<Mutex<RunFakeState>>,
     }
@@ -2048,7 +2048,7 @@ mod tests {
                 session_id: session_id.map(SessionId::from),
             };
             if let Some(event) = self.targeted.deliver(event) {
-                let _ = self.sender.send(event);
+                let _ = self.sender.send(Arc::new(event));
             }
         }
     }
@@ -2207,7 +2207,7 @@ mod tests {
             })
         }
 
-        fn events(&self) -> broadcast::Receiver<CdpEvent> {
+        fn events(&self) -> broadcast::Receiver<Arc<CdpEvent>> {
             self.sender.subscribe()
         }
 

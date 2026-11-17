@@ -196,7 +196,7 @@ impl CdpConnection for Recorder {
         self.inner.send_raw_json(method, params_json, session)
     }
 
-    fn events(&self) -> broadcast::Receiver<CdpEvent> {
+    fn events(&self) -> broadcast::Receiver<Arc<CdpEvent>> {
         self.inner.events()
     }
 

@@ -19,7 +19,7 @@ const BUTTON: i64 = 9;
 /// nodes above. Every call is recorded with the session it was sent on.
 struct Native {
     calls: Mutex<Vec<(String, Value, Option<SessionId>)>>,
-    events: broadcast::Sender<CdpEvent>,
+    events: broadcast::Sender<Arc<CdpEvent>>,
     targeted: TargetedEvents,
 }
 
@@ -100,7 +100,7 @@ impl CdpConnection for Native {
         self.send(method, params, session)
     }
 
-    fn events(&self) -> broadcast::Receiver<CdpEvent> {
+    fn events(&self) -> broadcast::Receiver<Arc<CdpEvent>> {
         self.events.subscribe()
     }
 

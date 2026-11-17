@@ -534,7 +534,7 @@ fn take(receiver: &mut mpsc::UnboundedReceiver<CdpEvent>) -> CdpEvent {
         .unwrap_or_else(|err| panic!("no targeted event: {err}"))
 }
 
-fn take_broadcast(receiver: &mut broadcast::Receiver<CdpEvent>) -> CdpEvent {
+fn take_broadcast(receiver: &mut broadcast::Receiver<Arc<CdpEvent>>) -> Arc<CdpEvent> {
     receiver
         .try_recv()
         .unwrap_or_else(|err| panic!("no broadcast event: {err}"))
@@ -751,18 +751,33 @@ async fn a_close_frames_code_and_reason_reach_a_caller_whose_request_it_cut_off(
     }
 }
 
-/// A stream skips the events of other methods on the shared event, without copying them. The
-/// count is the bytes this thread allocated, so it holds whatever does the copying.
+/// A stream skips the events of other methods on the shared event, and a broadcast reader
+/// checks an event's method through it, both without copying the event. The count is the
+/// bytes this thread allocated, so it holds whatever does the copying.
 #[tokio::test]
-async fn twenty_streams_of_other_methods_make_no_copy_of_a_megabyte_event() {
+async fn streams_and_broadcast_readers_make_no_copy_of_a_megabyte_event() {
     const MIB: usize = 1 << 20;
     let browser = LoopbackBrowser::start().await;
     let client = browser.connect().await;
-    let _broadcast_reader = client.events();
+    let mut readers: Vec<_> = (0..20).map(|_| client.events()).collect();
     let mut streams: Vec<EventStream> = (0..20).map(|_| client.on_event("Test.small")).collect();
     let large = json!({ "method": "Test.large", "params": { "text": "x".repeat(MIB) } });
     handle_text_message(&client.inner, &large.to_string()).await;
     handle_text_message(&client.inner, r#"{"method":"Test.small","params":{}}"#).await;
+
+    let before = alloc_count::allocated();
+    for reader in &mut readers {
+        let event = reader
+            .recv()
+            .await
+            .unwrap_or_else(|err| panic!("broadcast: {err}"));
+        assert_eq!(event.method, "Test.large");
+    }
+    let read = alloc_count::allocated() - before;
+    assert!(
+        read < MIB / 16,
+        "twenty broadcast readers of a 1 MiB event allocated {read} bytes"
+    );
 
     let before = alloc_count::allocated();
     for stream in &mut streams {

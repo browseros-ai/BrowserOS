@@ -512,7 +512,7 @@ mod tests {
     /// Minimal browser connection exposing one page (tab 11), enough for
     /// `pages.get_info` so the hook can open a session-tab window.
     struct OnePageConnection {
-        events: broadcast::Sender<CdpEvent>,
+        events: broadcast::Sender<Arc<CdpEvent>>,
         targeted: TargetedEvents,
     }
 
@@ -594,7 +594,7 @@ mod tests {
             })
         }
 
-        fn events(&self) -> broadcast::Receiver<CdpEvent> {
+        fn events(&self) -> broadcast::Receiver<Arc<CdpEvent>> {
             self.events.subscribe()
         }
 

@@ -1293,7 +1293,9 @@ mod tests {
         ) -> futures_util::future::BoxFuture<'a, Result<String, browseros_cdp::CdpError>> {
             self.inner.send_raw_json(method, params, session)
         }
-        fn events(&self) -> tokio::sync::broadcast::Receiver<browseros_cdp::CdpEvent> {
+        fn events(
+            &self,
+        ) -> tokio::sync::broadcast::Receiver<std::sync::Arc<browseros_cdp::CdpEvent>> {
             self.inner.events()
         }
         fn events_targeted(

@@ -29,7 +29,7 @@ const OVERRIDE_RESULT: &str = "'x'.repeat(200000)";
 
 struct Native {
     evaluations: Mutex<Vec<Value>>,
-    events: broadcast::Sender<CdpEvent>,
+    events: broadcast::Sender<Arc<CdpEvent>>,
     targeted: TargetedEvents,
 }
 
@@ -127,7 +127,7 @@ impl CdpConnection for Native {
         })
     }
 
-    fn events(&self) -> broadcast::Receiver<CdpEvent> {
+    fn events(&self) -> broadcast::Receiver<Arc<CdpEvent>> {
         self.events.subscribe()
     }
 

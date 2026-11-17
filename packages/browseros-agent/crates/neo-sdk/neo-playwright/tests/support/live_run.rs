@@ -170,7 +170,7 @@ impl CdpConnection for Tap {
             .send_raw_json_at_epoch(expected_epoch, method, params_json, session)
     }
 
-    fn events(&self) -> broadcast::Receiver<CdpEvent> {
+    fn events(&self) -> broadcast::Receiver<Arc<CdpEvent>> {
         self.browser.events()
     }
 
@@ -184,7 +184,7 @@ impl CdpConnection for Tap {
         self.browser.events_broadcast()
     }
 
-    fn events_counted(&self) -> (broadcast::Receiver<CdpEvent>, u64) {
+    fn events_counted(&self) -> (broadcast::Receiver<Arc<CdpEvent>>, u64) {
         self.browser.events_counted()
     }
 
