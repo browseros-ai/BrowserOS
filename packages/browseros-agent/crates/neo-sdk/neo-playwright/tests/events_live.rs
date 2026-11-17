@@ -27,12 +27,12 @@ mod live_run;
 #[path = "support/page_server.rs"]
 mod page_server;
 
-use std::env;
 use std::future::{self, Future};
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::{env, thread};
 
 use browseros_cdp::{CdpClient, CdpError, CdpEvent};
 use browseros_core::{CdpConnection, SessionId};
@@ -44,6 +44,7 @@ use neo_trace::ErrorOwner;
 use page_server::PageServer;
 use serde_json::{Value, json};
 use tokio::fs::{read_to_string, remove_file};
+use tokio::runtime::Handle;
 use tokio::sync::{Notify, broadcast, mpsc};
 use tokio::time;
 
@@ -1144,22 +1145,65 @@ async fn tests_that_a_browser_log_entry_reaches_a_console_listener_as_a_message(
 /// action and the message came too late.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+#[expect(
+    clippy::print_stderr,
+    reason = "opt-in phase markers correlate a lost fixture connection with its wire record"
+)]
 async fn tests_that_a_click_that_logs_completes_under_a_console_listener_and_is_heard_once()
 -> TestResult {
     if env::var("BROWSERCLAW_HOSTED_MODE").is_ok_and(|mode| mode == "1") {
         // Hosted mode sends no console events, so there is nothing to hear.
         return Ok(());
     }
+    let started = Instant::now();
+    let trace = |phase: &str| {
+        if env::var_os("NEO_LIVE_DIAGNOSTICS").is_some() {
+            eprintln!(
+                "LIVE_CONSOLE {}",
+                json!({ "phase": phase, "wallMs": now_ms().ok(),
+                    "elapsedMs": started.elapsed().as_millis(),
+                    "thread": format!("{:?}", thread::current().id()),
+                    "runtime": format!("{:?}", Handle::current().runtime_flavor()) })
+            );
+        }
+    };
+    trace("connect");
     let run = Arc::new(LiveRun::connect().await?);
     let server = PageServer::start().await?;
     let page = run.new_page().await?;
-    let result = async {
+    // A delayed tick distinguishes an occupied test executor from a live reader that lost
+    // its socket. This observer adds no browser traffic and never changes an op's deadline.
+    let scheduler_gap = Arc::new(AtomicU64::new(0));
+    let last_tick = Arc::new(AtomicU64::new(0));
+    let monitor = env::var_os("NEO_LIVE_DIAGNOSTICS").map(|_| {
+        let gap = Arc::clone(&scheduler_gap);
+        let tick = Arc::clone(&last_tick);
+        tokio::spawn(async move {
+            loop {
+                time::sleep(Duration::from_millis(100)).await;
+                let now = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+                gap.fetch_max(
+                    now.saturating_sub(tick.swap(now, Ordering::Relaxed)),
+                    Ordering::Relaxed,
+                );
+            }
+        })
+    });
+    let mut phase = "navigate";
+    let result: TestResult = async {
+        trace(phase);
         open(&run, &page, &server.url("/popups.html")).await?;
+        phase = "start_tables";
+        trace(phase);
         run.click(&page, "#tables").await?;
         // Tables stored before the listener: its lease's `Runtime.enable` replays them too.
         time::sleep(Duration::from_millis(1000)).await;
+        phase = "install_delivery_counter";
+        trace(phase);
         run.eval(&page, "window.__landed = 0; document.querySelector('#log').addEventListener('click', () => window.__landed++)").await?;
         let host: Arc<dyn OpHost> = Arc::clone(&run) as Arc<dyn OpHost>;
+        phase = "script";
+        trace(phase);
         let heard = js_runner::run_script(
             &host,
             &json!({ "page": brand(&page) }),
@@ -1168,13 +1212,38 @@ async fn tests_that_a_click_that_logs_completes_under_a_console_listener_and_is_
              return seen.filter((text) => text === 'clicked 7').length;",
         )
         .await?;
+        trace("script_returned");
         assert_eq!(heard, json!(1), "the handler's message, exactly once");
+        phase = "read_delivery_counter";
+        trace(phase);
         assert_eq!(run.eval(&page, "window.__landed").await?, json!(1), "the console-listener click landed exactly once");
         Ok(())
     }
     .await;
+    // Include a final occupied interval even if the observer has not been polled again
+    // before the operation reports its error. Snapshot before cleanup so cleanup latency
+    // cannot be mistaken for the scheduling gap that preceded the original failure.
+    scheduler_gap.fetch_max(
+        u64::try_from(started.elapsed().as_millis())
+            .unwrap_or(u64::MAX)
+            .saturating_sub(last_tick.load(Ordering::Relaxed)),
+        Ordering::Relaxed,
+    );
+    let observed_gap = monitor
+        .as_ref()
+        .map(|_| format!("{} ms", scheduler_gap.load(Ordering::Relaxed)))
+        .unwrap_or_else(|| "not recorded".to_owned());
+    trace("cleanup");
     run.close_page(&page).await;
-    result
+    if let Some(monitor) = monitor {
+        monitor.abort();
+    }
+    result.map_err(|error| {
+        format!(
+            "console click failed during {phase}; largest executor tick gap {observed_gap}: {error}"
+        )
+        .into()
+    })
 }
 
 /// What one timed-out `waitForFunction` left behind, as the WA-005 row reads it.
