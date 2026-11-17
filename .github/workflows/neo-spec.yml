@@ -109,7 +109,8 @@ jobs:
         run: |
           set -euo pipefail
           . crates/neo-sdk/neo-server/docker/browser.lock
-          curl -fsSL --retry 3 -o "$RUNNER_TEMP/neo.deb" "$NEO_BROWSER_URL_AMD64"
+          # --retry alone skips a reset connection (curl 56); --retry-all-errors retries it too.
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 -o "$RUNNER_TEMP/neo.deb" "$NEO_BROWSER_URL_AMD64"
           echo "$NEO_BROWSER_SHA256_AMD64  $RUNNER_TEMP/neo.deb" | sha256sum -c -
           sudo apt-get update -q
           # The font list is the SDK image's (neo-server/docker/Dockerfile), so pages render with
