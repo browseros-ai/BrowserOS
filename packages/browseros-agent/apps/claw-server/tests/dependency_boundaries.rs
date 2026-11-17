@@ -462,7 +462,13 @@ fn classify(relative: &Path) -> Result<Layer, String> {
         [file]
             if matches!(
                 file.as_str(),
-                "clock.rs" | "config.rs" | "error.rs" | "ids.rs" | "lib.rs" | "storage.rs"
+                "clock.rs"
+                    | "config.rs"
+                    | "error.rs"
+                    | "free_path.rs"
+                    | "ids.rs"
+                    | "lib.rs"
+                    | "storage.rs"
             ) =>
         {
             Ok(Layer::Support)
@@ -500,9 +506,8 @@ fn crate_target(path: &[String], failures: &mut Vec<String>, display: &str) -> O
         "identity" => Some(Target::Identity),
         "app" | "runtime" => Some(Target::Composition),
         "AppState" => Some(Target::AppState),
-        "analytics" | "clock" | "config" | "error" | "ids" | "storage" | "AppResult" => {
-            Some(Target::Support)
-        }
+        "analytics" | "clock" | "config" | "error" | "free_path" | "ids" | "storage"
+        | "AppResult" => Some(Target::Support),
         _ => None,
     }
 }
