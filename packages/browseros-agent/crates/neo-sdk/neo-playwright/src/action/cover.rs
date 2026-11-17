@@ -113,12 +113,11 @@ impl CoverWatch {
             // The place stays the first sighting's, so a cover drifting under the tolerance at
             // every check still moves; whether it says it is loading is the latest sighting's.
             if let Some(seen) = mark {
-                match standing.mark.as_mut() {
-                    Some(held) => held.busy = seen.busy,
-                    None => {
-                        standing.mark = Some(seen);
-                        standing.mark_at = seat.point;
-                    }
+                if let Some(held) = standing.mark.as_mut() {
+                    held.busy = seen.busy;
+                } else {
+                    standing.mark = Some(seen);
+                    standing.mark_at = seat.point;
                 }
             }
             standing.seat = seat;
