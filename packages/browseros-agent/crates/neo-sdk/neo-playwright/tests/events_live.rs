@@ -181,7 +181,7 @@ async fn tests_that_a_cross_site_iframe_reports_its_own_navigation_without_a_fra
                 .url(&format!("/child.html?{query}"))
                 .replacen("127.0.0.1", "localhost", 1)
         };
-        let (first, second) = (cross("first"), cross("second"));
+        let first = cross("first");
         run.eval(
             &page,
             &format!(
@@ -192,13 +192,25 @@ async fn tests_that_a_cross_site_iframe_reports_its_own_navigation_without_a_fra
             ),
         )
         .await?;
-        let since = now_ms()?;
-        run.eval(
-            &page,
-            &format!("document.getElementById('late').src = {}", json!(second)),
-        )
-        .await?;
-        let navigated = navigated_to(&run, &page, since, &second).await?;
+        // The watcher turns `Page` on as the frame's session attaches, on a task of its own, so
+        // a navigation started at once can still beat it. The frame navigates up to three times:
+        // once `Page` is on, the next navigation is heard; without the watcher's enable, none is.
+        let mut heard = None;
+        for attempt in 1..=3 {
+            let next = cross(&format!("next{attempt}"));
+            let since = now_ms()?;
+            run.eval(
+                &page,
+                &format!("document.getElementById('late').src = {}", json!(next)),
+            )
+            .await?;
+            if let Ok(event) = navigated_to(&run, &page, since, &next).await {
+                heard = Some(event);
+                break;
+            }
+        }
+        let navigated =
+            heard.ok_or("no framenavigated for any of three navigations of the frame")?;
         assert!(
             navigated
                 .pointer("/frame/parentId")
