@@ -10,10 +10,11 @@ import {
   meterParts,
   meterTokens,
   nextMilestone,
-  scaleMarks,
+  passedMilestones,
   scalePosition,
+  scaleSpan,
   scaleTicks,
-  scaleTop,
+  trailCount,
 } from './energy-meter.helpers'
 
 describe('the line under the scale', () => {
@@ -52,41 +53,121 @@ describe('the line under the scale', () => {
   })
 })
 
-describe('the log scale', () => {
-  it('runs from 1k to 2.5M, or to the next milestone past it', () => {
-    expect(scaleTop(326_060)).toBe(2_500_000)
-    expect(scaleTop(5_300_000)).toBe(7_500_000)
-    expect(scalePosition(1_000, 2_500_000)).toBe(0)
-    expect(scalePosition(500, 2_500_000)).toBe(0)
-    expect(scalePosition(2_500_000, 2_500_000)).toBe(1)
-    // Each decade is as wide as the next, the way a slide rule is ruled.
-    const decade = scalePosition(10_000, 2_500_000)
-    expect(scalePosition(100_000, 2_500_000)).toBeCloseTo(decade * 2, 6)
+describe('the milestones', () => {
+  it('step 10k, 25k, 50k in every power of ten and never run out', () => {
+    expect(passedMilestones(12_000_000)).toEqual([
+      10_000, 25_000, 50_000, 100_000, 250_000, 500_000, 1_000_000, 2_500_000,
+      5_000_000, 10_000_000,
+    ])
+    expect(nextMilestone(0)).toBe(10_000)
+    expect(nextMilestone(10_000)).toBe(25_000)
+    expect(nextMilestone(30_000_000)).toBe(50_000_000)
+    expect(nextMilestone(400_000_000)).toBe(500_000_000)
+  })
+})
+
+describe('the close-up scale', () => {
+  // total, stretch, needle, milestones in the trail, the line under the scale.
+  const stages = [
+    [
+      6_000,
+      [0, 10_000],
+      0.6,
+      0,
+      '4.0k',
+      '10k',
+      'Your first ultrafast run is in',
+    ],
+    [38_000, [25_000, 50_000], 0.52, 1, '12k', '50k', 'Passed 25k'],
+    [
+      120_000,
+      [100_000, 250_000],
+      0.1333,
+      3,
+      '130k',
+      '250k',
+      'You just passed 100k',
+    ],
+    [
+      366_000,
+      [250_000, 500_000],
+      0.464,
+      4,
+      '134k',
+      '500k',
+      'You just passed 250k',
+    ],
+    [
+      740_000,
+      [500_000, 1_000_000],
+      0.48,
+      5,
+      '260k',
+      '1M',
+      'You just passed 500k',
+    ],
+    [
+      1_600_000,
+      [1_000_000, 2_500_000],
+      0.4,
+      6,
+      '900k',
+      '2.5M',
+      'You just passed 1M',
+    ],
+    [4_200_000, [2_500_000, 5_000_000], 0.68, 7, '800k', '5M', 'Passed 2.5M'],
+    [
+      12_000_000,
+      [10_000_000, 25_000_000],
+      0.1333,
+      9,
+      '13M',
+      '25M',
+      'You just passed 10M',
+    ],
+  ] as const
+
+  for (const [
+    tokens,
+    [from, to],
+    needle,
+    trail,
+    toGo,
+    next,
+    passed,
+  ] of stages) {
+    it(`spans the current stretch at ${meterTokens(tokens)}`, () => {
+      const span = scaleSpan(tokens)
+      expect(span).toEqual({ from, to })
+      expect(scalePosition(tokens, span)).toBeCloseTo(needle, 3)
+      expect(trailCount(tokens)).toBe(trail)
+      expect(meterNote(tokens, 1)).toEqual({ toGo, next, passed })
+    })
+  }
+
+  it('keeps the needle on the ruler for readings outside the stretch', () => {
+    const span = scaleSpan(366_000)
+    expect(scalePosition(120_000, span)).toBe(0)
+    expect(scalePosition(900_000, span)).toBe(1)
   })
 
-  it('rules 1 to 9 in every decade and marks each power of ten', () => {
-    const ticks = scaleTicks(2_500_000)
-    expect(ticks[0]).toEqual({ value: 1_000, decade: true })
+  it('rules about 25 round steps, every fifth longer', () => {
+    const ticks = scaleTicks(scaleSpan(366_000))
+    expect(ticks).toHaveLength(26)
+    expect(ticks[0]).toEqual({ value: 250_000, major: true })
     expect(
-      ticks.filter((tick) => tick.decade).map((tick) => tick.value),
-    ).toEqual([1_000, 10_000, 100_000, 1_000_000, 2_500_000])
-    expect(ticks).toHaveLength(30)
-  })
-
-  it('marks milestones passed, the next one, and the rest ahead', () => {
-    const marks = scaleMarks(326_060, 2_500_000)
-    expect(marks.map((mark) => mark.state)).toEqual([
-      'passed',
-      'passed',
-      'passed',
-      'next',
-      'ahead',
-      'ahead',
-    ])
-    expect(scaleMarks(5_300_000, 7_500_000).map((mark) => mark.value)).toEqual([
-      10_000, 100_000, 250_000, 500_000, 1_000_000, 2_500_000, 5_000_000,
-      7_500_000,
-    ])
+      ticks.filter((tick) => tick.major).map((tick) => tick.value),
+    ).toEqual([250_000, 300_000, 350_000, 400_000, 450_000, 500_000])
+    expect(
+      scaleTicks(scaleSpan(6_000))
+        .filter((tick) => tick.major)
+        .map((tick) => tick.value),
+    ).toEqual([0, 2_500, 5_000, 7_500, 10_000])
+    expect(
+      scaleTicks(scaleSpan(12_000_000))
+        .filter((tick) => tick.major)
+        .map((tick) => tick.value),
+    ).toEqual([10_000_000, 15_000_000, 20_000_000, 25_000_000])
   })
 })
 

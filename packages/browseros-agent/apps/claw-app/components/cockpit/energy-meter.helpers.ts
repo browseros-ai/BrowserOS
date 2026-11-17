@@ -19,12 +19,21 @@ export function tokensSavedSinceUltrafast(savings: PlanSavings): number | null {
   return savings.meter?.tokensSaved ?? null
 }
 
-/** Total tokens saved since ultrafast that are marked on the scale. Past the last, every 2.5M is. */
-export const MILESTONES = [
-  10_000, 100_000, 250_000, 500_000, 1_000_000, 2_500_000,
-] as const
+/** The first milestone; after it they step 1, 2.5, 5 per power of ten: 25k, 50k, 100k ... 10M, 25M. */
+const FIRST_MILESTONE = 10_000
+const LADDER = [1, 2.5, 5] as const
 
-const MILESTONE_STEP = 2_500_000
+/** Every milestone up to and including the first one above `tokens`. */
+function milestonesThrough(tokens: number): number[] {
+  const milestones: number[] = []
+  for (let power = FIRST_MILESTONE; ; power *= 10) {
+    for (const step of LADDER) {
+      const milestone = step * power
+      milestones.push(milestone)
+      if (milestone > tokens) return milestones
+    }
+  }
+}
 
 /** "640", "6.1k", "254k", "3.2M", "1M". */
 export function meterTokens(tokens: number): string {
@@ -38,20 +47,17 @@ export function meterTokens(tokens: number): string {
 
 /** The milestone the needle moves toward. */
 export function nextMilestone(tokens: number): number {
-  const next = MILESTONES.find((milestone) => milestone > tokens)
-  if (next) return next
-  return (Math.floor(tokens / MILESTONE_STEP) + 1) * MILESTONE_STEP
+  return milestonesThrough(tokens).at(-1) ?? FIRST_MILESTONE
+}
+
+/** Every milestone already passed, lowest first. */
+export function passedMilestones(tokens: number): number[] {
+  return milestonesThrough(tokens).filter((milestone) => milestone <= tokens)
 }
 
 /** The highest milestone already passed, or null below the first. */
 export function passedMilestone(tokens: number): number | null {
-  if (tokens < MILESTONES[0]) return null
-  const last = MILESTONES[MILESTONES.length - 1]
-  if (tokens >= last)
-    return Math.floor(tokens / MILESTONE_STEP) * MILESTONE_STEP
-  return (
-    [...MILESTONES].reverse().find((milestone) => milestone <= tokens) ?? null
-  )
+  return passedMilestones(tokens).at(-1) ?? null
 }
 
 /** The line under the scale: how far the next milestone is, and the last one passed. */
@@ -88,56 +94,48 @@ export function meterParts(tokens: number): { figure: string; unit: string } {
   return { figure: unit ? shown.slice(0, -1) : shown, unit }
 }
 
-const SCALE_FLOOR = 1_000
-
-/** The scale runs from 1k to 2.5M, or to the next milestone once the total is past 2.5M. */
-export function scaleTop(tokens: number): number {
-  return Math.max(MILESTONES[MILESTONES.length - 1], nextMilestone(tokens))
+/** The stretch the scale shows: from the last milestone passed (or 0) to the next one. */
+export interface ScaleSpan {
+  from: number
+  to: number
 }
 
-/** Where a value sits on the log scale, from 0 at 1k to 1 at the top. */
-export function scalePosition(value: number, top: number): number {
-  if (value <= SCALE_FLOOR) return 0
-  return Math.min(
-    1,
-    Math.log10(value / SCALE_FLOOR) / Math.log10(top / SCALE_FLOOR),
-  )
+/** Each stretch fills the whole ruler, so a bigger total never gets a thinner slice of it. */
+export function scaleSpan(tokens: number): ScaleSpan {
+  return { from: passedMilestone(tokens) ?? 0, to: nextMilestone(tokens) }
 }
 
-/** Ticks ruled like a slide rule: 1 to 9 in every decade from 1k, longer at each power of ten. */
-export function scaleTicks(top: number): { value: number; decade: boolean }[] {
-  const ticks: { value: number; decade: boolean }[] = []
-  for (let decade = SCALE_FLOOR; decade <= top; decade *= 10) {
-    for (let step = 1; step <= 9 && step * decade <= top; step++) {
-      ticks.push({ value: step * decade, decade: step === 1 })
-    }
-  }
-  if (ticks[ticks.length - 1]?.value !== top) {
-    ticks.push({ value: top, decade: true })
+/** Where a value sits on the stretch, from 0 at its start to 1 at the next milestone. */
+export function scalePosition(value: number, span: ScaleSpan): number {
+  return Math.min(1, Math.max(0, (value - span.from) / (span.to - span.from)))
+}
+
+/** A round tick spacing that rules the stretch into about 25 steps, every fifth one longer. */
+function tickStep(span: ScaleSpan): number {
+  const raw = (span.to - span.from) / 25
+  const power = 10 ** Math.floor(Math.log10(raw))
+  const step = [1, 2, 2.5, 5].find((nice) => nice * power >= raw) ?? 10
+  return step * power
+}
+
+export function scaleTicks(
+  span: ScaleSpan,
+): { value: number; major: boolean }[] {
+  const step = tickStep(span)
+  const ticks: { value: number; major: boolean }[] = []
+  for (
+    let index = Math.ceil(span.from / step);
+    index * step <= span.to;
+    index++
+  ) {
+    ticks.push({ value: index * step, major: index % 5 === 0 })
   }
   return ticks
 }
 
-export type MarkState = 'passed' | 'next' | 'ahead'
-
-/** The milestones on the scale, each passed, the next one, or still ahead. */
-export function scaleMarks(
-  tokens: number,
-  top: number,
-): { value: number; state: MarkState }[] {
-  const marks: number[] = [...MILESTONES]
-  for (
-    let value = MILESTONES[MILESTONES.length - 1] + MILESTONE_STEP;
-    value <= top;
-    value += MILESTONE_STEP
-  ) {
-    marks.push(value)
-  }
-  const next = nextMilestone(tokens)
-  return marks.map((value) => ({
-    value,
-    state: value <= tokens ? 'passed' : value === next ? 'next' : 'ahead',
-  }))
+/** The milestones passed before the stretch starts, folded into the trail at the left. */
+export function trailCount(tokens: number): number {
+  return Math.max(0, passedMilestones(tokens).length - 1)
 }
 
 const READING_KEY = 'ultrafastMeterReading:v1'
