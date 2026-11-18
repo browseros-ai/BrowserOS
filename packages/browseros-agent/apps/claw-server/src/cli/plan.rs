@@ -34,6 +34,9 @@ fn step_lines(steps: &str) -> Value {
 
 /// `evaluate_in_page`'s own hard ceiling, which it clamps to rather than
 /// rejecting. Separate from `run`'s budget, which a deployment configures.
+/// The most `read_output` returns in one call, so a whole part takes the fewest calls.
+pub const OUTPUT_CHUNK_BYTES: u64 = 64 * 1024;
+
 const EVAL_TIMEOUT_CAP_MS: f64 = 30_000.0;
 use crate::cli::grammar::{
     CardsCmd, Command, CredentialsCmd, DialogCmd, DiffFlag, GroupCmd, HelpCmd, HelpersCmd,
@@ -71,6 +74,9 @@ pub struct ToolPlan {
     /// A `--script-timeout` the caller asked for, before the server's budget
     /// is known. Clamped at dispatch against the schema's maximum.
     pub requested_timeout: Option<f64>,
+    /// Read a saved output part to its end rather than one chunk of it. The part is
+    /// already on disk, and a single chunk read as the whole output loses its tail.
+    pub read_all: bool,
     /// Lines for stderr, decided here so they can be asserted in a test.
     pub notices: Vec<String>,
 }
@@ -906,13 +912,19 @@ pub fn build(command: &Command, external: Option<&str>) -> Result<Plan, Failure>
             part,
             offset,
             limit,
-        } => Plan::tool(
-            ToolPlan::new("read_output")
+        } => {
+            // A whole part unless a slice was asked for: chunks of the server's maximum,
+            // read on to the end. Without a part, the reply is the list of parts.
+            let read_all = part.is_some() && offset.is_none() && limit.is_none();
+            let limit = limit.or(read_all.then_some(OUTPUT_CHUNK_BYTES));
+            let mut plan = ToolPlan::new("read_output")
                 .arg("outputId", json!(id))
                 .arg("part", opt(part))
                 .arg("offset", offset.map_or(Value::Null, Value::from))
-                .arg("limit", limit.map_or(Value::Null, Value::from)),
-        ),
+                .arg("limit", limit.map_or(Value::Null, Value::from));
+            plan.read_all = read_all;
+            Plan::tool(plan)
+        }
         Command::Help(HelpCmd::Request {
             reason,
             details,

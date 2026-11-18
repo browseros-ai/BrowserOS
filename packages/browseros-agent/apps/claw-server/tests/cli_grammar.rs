@@ -668,3 +668,38 @@ fn skill_save_refuses_two_arguments_reading_the_same_stdin() {
     assert_eq!(error.code, claw_server::cli::exit::Code::Usage);
     assert!(error.message.contains("stdin"), "{}", error.message);
 }
+
+/// Parses an argv and returns the whole tool plan, for the flags `call` does not show.
+fn tool(argv: &[&str]) -> claw_server::cli::plan::ToolPlan {
+    let cli = Cli::try_parse_from(argv).unwrap_or_else(|error| panic!("{argv:?}: {error}"));
+    match claw_server::cli::plan::build(&cli.command, None) {
+        Ok(Plan::Tool(plan)) => *plan,
+        other => panic!("{argv:?} did not plan a tool call: {other:?}"),
+    }
+}
+
+/// A saved output part is read whole unless a slice is asked for, in chunks of the most the
+/// server returns at once. Without a part the reply is the list of parts, so there is nothing
+/// to page through.
+#[test]
+fn output_reads_a_whole_part_unless_a_slice_is_asked_for() {
+    let whole = tool(&["browseros", "output", "out-1", "--part", "read.txt"]);
+    assert!(whole.read_all);
+    assert_eq!(whole.args["limit"], json!(65536));
+
+    let slice = tool(&[
+        "browseros",
+        "output",
+        "out-1",
+        "--part",
+        "read.txt",
+        "--limit",
+        "100",
+    ]);
+    assert!(!slice.read_all);
+    assert_eq!(slice.args["limit"], json!(100));
+
+    let listing = tool(&["browseros", "output", "out-1"]);
+    assert!(!listing.read_all);
+    assert!(listing.args.get("limit").is_none());
+}

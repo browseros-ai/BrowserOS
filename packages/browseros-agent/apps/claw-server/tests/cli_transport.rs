@@ -405,3 +405,65 @@ async fn the_plan_refusal_exits_with_its_own_code_and_keeps_the_task() {
         "a refused call never reached a task, so it cannot have ended one"
     );
 }
+
+/// One chunk of a saved output part, as `read_output` answers it.
+fn output_chunk(text: &str, offset: u64, next: Option<u64>, total: u64) -> Canned {
+    let cursor = json!({
+        "outputId": "out-1", "part": "read.txt", "offset": offset, "bytes": text.len(),
+        "totalBytes": total, "nextOffset": next, "eof": next.is_none()
+    });
+    let mut structured = cursor.clone();
+    structured["text"] = json!(text);
+    Canned::json(
+        200,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "result": {
+                "content": [{ "type": "text", "text": format!("Output chunk: {cursor}\n{text}") }],
+                "structuredContent": structured
+            }
+        }),
+    )
+}
+
+#[tokio::test]
+async fn a_saved_output_is_read_to_its_end_as_one_text() {
+    let dir = tempfile::tempdir().unwrap_or_else(|error| panic!("{error}"));
+    let fixture = fixture(vec![
+        output_chunk("first ", 0, Some(6), 17),
+        output_chunk("second ", 6, Some(13), 17),
+        output_chunk("last", 13, None, 17),
+    ])
+    .await;
+    let mut client = client_for(&fixture.url, dir.path());
+    let args = json!({ "outputId": "out-1", "part": "read.txt", "limit": 65536 });
+    let mut output = client
+        .call("read_output", args.clone())
+        .await
+        .unwrap_or_else(|error| panic!("{error}"));
+
+    let chunks = claw_server::cli::exec::read_rest_of_output(
+        &mut client,
+        args.as_object().unwrap_or_else(|| unreachable!()),
+        &mut output,
+    )
+    .await
+    .unwrap_or_else(|error| panic!("{error}"));
+
+    assert_eq!(chunks, 3);
+    assert_eq!(output.text, "first \nsecond \nlast");
+    assert!(
+        !output.text.contains("Output chunk:"),
+        "the cursor lines are paged away"
+    );
+    let seen = fixture
+        .seen
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let offsets: Vec<_> = seen
+        .iter()
+        .map(|request| body_of(request)["params"]["arguments"]["offset"].clone())
+        .collect();
+    assert_eq!(offsets, vec![json!(null), json!(6), json!(13)]);
+}

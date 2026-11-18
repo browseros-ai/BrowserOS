@@ -162,6 +162,14 @@ async fn run_tool(
             .call(plan.tool, Value::Object(plan.args.clone()))
             .await?;
     }
+    if plan.read_all && !output.is_error {
+        let chunks = read_rest_of_output(client, &plan.args, &mut output).await?;
+        if chunks > 1 {
+            io::note(&format!("[read the whole part in {chunks} chunks]"));
+        }
+    } else if plan.tool == "read_output" {
+        note_rest_of_output(&plan.args, &output);
+    }
     let elapsed = started.elapsed().as_millis();
 
     if plan.remember_page
@@ -523,6 +531,77 @@ async fn task_done(client: &mut Client, keep_tabs: bool, all: bool) -> Result<Co
         io::out(&format!("cleared {cleared} scope file(s)."));
     }
     Ok(Code::Ok)
+}
+
+/// Reads a saved output part on to its end after its first chunk, so the whole part prints
+/// as one text. Each chunk keeps the server's untrusted-content markers; only the cursor line
+/// it leads with is dropped, since the CLI has done the paging it describes. Returns how many
+/// chunks were read.
+///
+/// # Errors
+/// Propagates a failed call; a chunk the server refuses replaces the output with its error.
+pub async fn read_rest_of_output(
+    client: &mut Client,
+    args: &serde_json::Map<String, Value>,
+    output: &mut ToolOutput,
+) -> Result<usize> {
+    let mut texts = vec![without_output_cursor(&output.text).to_string()];
+    let mut next = next_output_offset(output);
+    while let Some(offset) = next {
+        let mut chunk_args = args.clone();
+        chunk_args.insert("offset".to_string(), json!(offset));
+        let chunk = client
+            .call("read_output", Value::Object(chunk_args))
+            .await?;
+        if chunk.is_error {
+            *output = chunk;
+            return Ok(texts.len());
+        }
+        texts.push(without_output_cursor(&chunk.text).to_string());
+        next = next_output_offset(&chunk);
+    }
+    output.text = texts.join("\n");
+    Ok(texts.len())
+}
+
+/// For a slice the caller asked for, says how much of the part is left and how to read it.
+fn note_rest_of_output(args: &serde_json::Map<String, Value>, output: &ToolOutput) {
+    let Some(next) = next_output_offset(output) else {
+        return;
+    };
+    let total = output
+        .structured
+        .as_ref()
+        .and_then(|value| value.get("totalBytes"))
+        .and_then(Value::as_u64)
+        .unwrap_or(next);
+    let id = args
+        .get("outputId")
+        .and_then(Value::as_str)
+        .unwrap_or("<id>");
+    let part = args.get("part").and_then(Value::as_str).unwrap_or("<part>");
+    io::note(&format!(
+        "[{} more bytes: browseros output {id} --part {part} --offset {next}]",
+        total.saturating_sub(next)
+    ));
+}
+
+fn next_output_offset(output: &ToolOutput) -> Option<u64> {
+    let structured = output.structured.as_ref()?;
+    if structured
+        .get("eof")
+        .and_then(Value::as_bool)
+        .unwrap_or(true)
+    {
+        return None;
+    }
+    structured.get("nextOffset").and_then(Value::as_u64)
+}
+
+fn without_output_cursor(text: &str) -> &str {
+    text.strip_prefix("Output chunk: ")
+        .and_then(|rest| rest.split_once('\n'))
+        .map_or(text, |(_, body)| body)
 }
 
 fn report(
