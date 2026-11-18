@@ -327,6 +327,7 @@ pub struct Picture {
     calm_sharp: bool,
     last_input: Option<Instant>,
     queue_high: bool,
+    previous_late_at_cap: bool,
     previous_congested_no_ack: bool,
     last_reset: Option<Instant>,
     reset_since_tick: bool,
@@ -380,6 +381,7 @@ impl Picture {
             calm_sharp: false,
             last_input: None,
             queue_high: false,
+            previous_late_at_cap: false,
             previous_congested_no_ack: false,
             last_reset: None,
             reset_since_tick: false,
@@ -455,6 +457,7 @@ impl Picture {
         self.last_reset = None;
         self.reset_since_tick = false;
         self.queue_high = false;
+        self.previous_late_at_cap = false;
         self.previous_congested_no_ack = false;
         self.last_congested = None;
         self.clear_ticks_needed = 0;
@@ -797,7 +800,14 @@ impl Picture {
         }
         let reset = std::mem::take(&mut self.reset_since_tick);
         let congested = reset || link_full(link.blocked);
-        let severe = congested && self.severe(&link, mean_bytes);
+        // A queue built below the cap hasn't tested what the quality steps can save.
+        let late_at_cap = self.link.at == self.ladder.cap
+            && !reset
+            && congested
+            && link.delivered_kbps > 0.0
+            && link.queue_ms > 300;
+        let severe = congested && self.severe(&link, mean_bytes, late_at_cap);
+        self.previous_late_at_cap = late_at_cap;
         self.previous_congested_no_ack = congested && link.delivered_kbps == 0.0;
         self.facts = Facts {
             blocked: link.blocked,
@@ -882,12 +892,11 @@ impl Picture {
 
     /// Price a full motion frame at the quality cap. A keyframe burst alone says
     /// nothing about the cost of continued motion.
-    fn severe(&self, link: &Link, mean_bytes: f32) -> bool {
+    fn severe(&self, link: &Link, mean_bytes: f32, late_at_cap: bool) -> bool {
         if link.delivered_kbps == 0.0 {
             return self.previous_congested_no_ack && link.sent_kbps > 0.0;
         }
-        // A nonzero queue is measured from this pacer's acknowledgements in this interval.
-        if link.queue_ms > 300 {
+        if late_at_cap && self.previous_late_at_cap {
             return true;
         }
         let remaining =
@@ -1494,7 +1503,7 @@ mod tests {
             p.tick(
                 at(t, n),
                 Link {
-                    queue_ms: 200,
+                    queue_ms: 400,
                     ..active(15)
                 },
                 Cpu::default(),
@@ -1517,15 +1526,8 @@ mod tests {
         let t = Instant::now();
         let mut p = picture(t);
         for n in 1..=2 {
-            sized_motion(&mut p, at(t, n), 200_000, 3);
-            let moves = p.tick(
-                at(t, n),
-                Link {
-                    queue_ms: if n == 1 { 350 } else { 250 },
-                    ..jam()
-                },
-                Cpu::default(),
-            );
+            sized_motion(&mut p, at(t, n), 240_000, 3);
+            let moves = p.tick(at(t, n), jam(), Cpu::default());
             assert_eq!(moves[0].why, Why::Severe);
             assert_eq!((p.fps(), p.crf()), (15.0, 30.0));
             assert_eq!(
@@ -1562,14 +1564,8 @@ mod tests {
         let t = Instant::now();
         for intervening in [active(15), Link::default()] {
             let mut p = picture(t);
-            p.tick(
-                t,
-                Link {
-                    queue_ms: 400,
-                    ..jam()
-                },
-                Cpu::default(),
-            );
+            sized_motion(&mut p, t, 240_000, 3);
+            p.tick(t, jam(), Cpu::default());
             let stalled = || Link {
                 delivered_kbps: 0.0,
                 ..jam()
@@ -1585,17 +1581,46 @@ mod tests {
     }
 
     #[test]
-    fn tests_that_a_late_queue_tick_is_severe() {
+    fn tests_that_a_late_queue_below_the_cap_takes_quality_steps() {
         let t = Instant::now();
-        for (queue_ms, delivered_kbps, blocked, expected) in [
-            (300, 3000.0, 0.6, Some(Why::Congested)),
-            (301, 3000.0, 0.6, Some(Why::Severe)),
-            (301, 0.0, 0.6, Some(Why::Congested)),
-            (301, 3000.0, 0.1, None),
+        let mut p = picture(t);
+        for n in 1..=2 {
+            p.tick(at(t, n), jam(), Cpu::default());
+        }
+        assert_eq!((p.fps(), p.crf()), (15.0, 24.0));
+        for (n, queue_ms, crf, scale, why) in [
+            (3, 402, 26.0, Scale::Full, Some(Why::Congested)),
+            (4, 500, 28.0, Scale::Full, Some(Why::Congested)),
+            (5, 596, 30.0, Scale::Full, Some(Why::Congested)),
+            (6, 596, 30.0, Scale::Full, None),
+            (7, 596, 30.0, Scale::Half, Some(Why::Severe)),
+        ] {
+            let moves = p.tick(at(t, n), Link { queue_ms, ..jam() }, Cpu::default());
+            assert_eq!((p.crf(), p.motion_scale()), (crf, scale), "tick {n}");
+            assert_eq!(moves.first().map(|m| m.why), why);
+        }
+    }
+
+    #[test]
+    fn tests_that_only_consecutive_late_congested_acks_at_the_cap_are_severe() {
+        let t = Instant::now();
+        for (queue_ms, delivered_kbps, blocked, second, third) in [
+            (300, 3000.0, 0.6, None, Some(Why::Jam)),
+            (301, 3000.0, 0.6, Some(Why::Severe), None),
+            (301, 0.0, 0.6, None, Some(Why::Jam)),
+            (301, 3000.0, 0.1, None, None),
+            (0, 0.0, 0.0, None, None),
         ] {
             let mut p = picture(t);
+            sized_motion(&mut p, t, 240_000, 3);
+            p.tick(t, jam(), Cpu::default());
+            let late = || Link {
+                queue_ms: 301,
+                ..jam()
+            };
+            assert!(p.tick(at(t, 1), late(), Cpu::default()).is_empty());
             let moves = p.tick(
-                at(t, 1),
+                at(t, 2),
                 Link {
                     queue_ms,
                     delivered_kbps,
@@ -1604,7 +1629,9 @@ mod tests {
                 },
                 Cpu::default(),
             );
-            assert_eq!(moves.first().map(|m| m.why), expected);
+            assert_eq!(moves.first().map(|m| m.why), second);
+            let moves = p.tick(at(t, 3), late(), Cpu::default());
+            assert_eq!(moves.first().map(|m| m.why), third);
         }
     }
 
@@ -1988,14 +2015,8 @@ mod tests {
     fn tests_that_alternating_clean_and_jittery_ticks_restore_full_cadence() {
         let t = Instant::now();
         let mut p = picture(t);
-        p.tick(
-            at(t, 1),
-            Link {
-                queue_ms: 400,
-                ..jam()
-            },
-            Cpu::default(),
-        );
+        p.window_reset(t);
+        p.tick(at(t, 1), Link::default(), Cpu::default());
         assert_eq!((p.crf(), p.fps()), (30.0, 15.0));
         let mut climbs = Vec::new();
         for n in 2..=24 {
@@ -2453,15 +2474,24 @@ mod tests {
     fn tests_that_pacer_replacement_forgets_streaks_and_resize_forgets_costs() {
         let t = Instant::now();
         let mut p = picture(t);
-        for n in 1..=7 {
+        for n in 1..=6 {
             p.tick(at(t, n), jam(), Cpu::default());
         }
+        let late = || Link {
+            queue_ms: 400,
+            ..jam()
+        };
+        p.tick(at(t, 7), late(), Cpu::default());
         settle(&mut p, at(t, 7));
         p.pacer_changed();
         p.resize(WIDTH, ROWS / 2, at(t, 7));
         assert!(p.estimate(18.0).is_none());
         for n in 8..=10 {
-            p.tick(at(t, n), jam(), Cpu::default());
+            p.tick(
+                at(t, n),
+                if n == 8 { late() } else { jam() },
+                Cpu::default(),
+            );
             assert_eq!(
                 p.motion_scale(),
                 if n == 10 { Scale::Half } else { Scale::Full }
