@@ -981,6 +981,25 @@ impl ClawMcpService {
         }
     }
 
+    /// The group a CLI task works in now: the newest it still owns, if it owns any.
+    async fn open_cli_group(&self, session_id: &SessionId) -> Option<String> {
+        match self
+            .state
+            .task_groups
+            .live_groups_for_session(session_id.as_str())
+            .await
+        {
+            Ok(groups) => groups
+                .into_iter()
+                .next_back()
+                .map(|binding| binding.group_id),
+            Err(error) => {
+                warn!(error = %error, "reading a CLI task's group failed");
+                None
+            }
+        }
+    }
+
     async fn cli_task_was_stopped(&self, session_id: &SessionId) -> bool {
         self.state.targets.is_stopped(session_id).await
             || matches!(
@@ -1718,6 +1737,12 @@ impl ServerHandler for ClawMcpService {
             self.end_cli_task_for_closed_group(started.session.id(), &group)
                 .await;
         }
+        let finished = if cli_call {
+            let group = self.open_cli_group(started.session.id()).await;
+            task_group::attach(finished, group.as_deref())
+        } else {
+            finished
+        };
         let mut result = session_handle::attach(finished, modern_handle, presented_handle)?;
         // The tip asks the agent to close the group the server made for it, so it has no place
         // where the server makes none.

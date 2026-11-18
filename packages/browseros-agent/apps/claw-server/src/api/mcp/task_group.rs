@@ -4,6 +4,10 @@
 //! harness does, and it is not asked to carry a session either. It carries the group its
 //! task works in, which it owns anyway, and the server resolves the task from that.
 
+use rmcp::{
+    ErrorData as McpError,
+    model::{CallToolResult, MetaObject},
+};
 use serde_json::Value;
 
 /// The `clientInfo.name` the `browseros` command line sends on every call.
@@ -13,6 +17,9 @@ pub const CLI_CLIENT_NAME: &str = "browseros-cli";
 
 /// The argument a CLI call presents its group in.
 pub(super) const FIELD: &str = "group";
+
+/// The `_meta` key a CLI result names its task's group under, namespaced like the handle's.
+pub const META_KEY: &str = "com.browseros.neo/group";
 
 #[must_use]
 pub fn is_cli_client(name: &str) -> bool {
@@ -41,6 +48,26 @@ pub(super) fn closing_group(tool: &str, args: &Value) -> Option<String> {
         .map(str::trim)
         .filter(|group| !group.is_empty())
         .map(str::to_string)
+}
+
+/// `result` naming the group the CLI task works in now, in `_meta` only. The CLI reads it
+/// there and remembers it for the next command. Nothing is added to the text the agent
+/// reads: the point of the model is that the agent carries nothing. No group means the task
+/// has none open, which is how the CLI learns a task it was in has ended.
+pub(super) fn attach(
+    result: Result<CallToolResult, McpError>,
+    group: Option<&str>,
+) -> Result<CallToolResult, McpError> {
+    let Some(group) = group else {
+        return result;
+    };
+    result.map(|mut call_result| {
+        call_result
+            .meta
+            .get_or_insert_with(MetaObject::new)
+            .insert(META_KEY.to_string(), Value::String(group.to_string()));
+        call_result
+    })
 }
 
 #[cfg(test)]
@@ -90,5 +117,34 @@ mod tests {
             None
         );
         assert_eq!(closing_group("tabs", &close), None);
+    }
+
+    #[test]
+    fn the_group_rides_in_meta_and_never_in_the_text() {
+        let result = CallToolResult::success(vec![rmcp::model::ContentBlock::text("opened")]);
+
+        let attached = attach(Ok(result.clone()), Some("G1"))
+            .unwrap_or_else(|error| panic!("attach failed: {error:?}"));
+
+        assert_eq!(
+            attached
+                .meta
+                .as_ref()
+                .and_then(|meta| meta.get(META_KEY))
+                .and_then(Value::as_str),
+            Some("G1")
+        );
+        assert_eq!(
+            attached.content, result.content,
+            "the agent's text is untouched"
+        );
+    }
+
+    #[test]
+    fn no_open_group_leaves_the_result_as_it_was() {
+        let result = CallToolResult::success(vec![rmcp::model::ContentBlock::text("done")]);
+        let attached = attach(Ok(result.clone()), None)
+            .unwrap_or_else(|error| panic!("attach failed: {error:?}"));
+        assert_eq!(attached, result);
     }
 }
