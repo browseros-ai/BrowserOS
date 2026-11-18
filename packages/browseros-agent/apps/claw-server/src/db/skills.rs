@@ -2,8 +2,8 @@ use crate::{
     db::{
         Database,
         entities::{
-            prelude::{SkillFlows, SkillRunMarks, SkillRuns, Skills, ToolDispatches},
-            skill_flows, skill_run_marks, skill_runs, skills, tool_dispatches,
+            prelude::{SkillDrafts, SkillFlows, SkillRunMarks, SkillRuns, Skills, ToolDispatches},
+            skill_drafts, skill_flows, skill_run_marks, skill_runs, skills, tool_dispatches,
         },
     },
     error::AppResult,
@@ -36,6 +36,72 @@ impl SkillsRepository {
         Ok(Skills::find_by_id(name.to_owned())
             .one(self.db.connection())
             .await?)
+    }
+
+    /// The skill made from this finished task in the app, if one was saved.
+    pub async fn history_skill_for_session(
+        &self,
+        session_id: &str,
+    ) -> AppResult<Option<skills::Model>> {
+        Ok(Skills::find()
+            .filter(skills::Column::SourceSessionId.eq(session_id))
+            .filter(skills::Column::Origin.eq("history"))
+            .one(self.db.connection())
+            .await?)
+    }
+
+    /// For each session that has a skill saved from it (by the app or the agent), the newest
+    /// such skill's name, so task rows can link to it.
+    pub async fn skill_names_by_session(
+        &self,
+        session_ids: &[String],
+    ) -> AppResult<std::collections::HashMap<String, String>> {
+        if session_ids.is_empty() {
+            return Ok(std::collections::HashMap::new());
+        }
+        let rows = Skills::find()
+            .filter(skills::Column::SourceSessionId.is_in(session_ids.iter().cloned()))
+            .order_by_asc(skills::Column::CreatedAt)
+            .all(self.db.connection())
+            .await?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|row| row.source_session_id.map(|session| (session, row.name)))
+            .collect())
+    }
+
+    pub async fn get_draft(&self, session_id: &str) -> AppResult<Option<skill_drafts::Model>> {
+        Ok(SkillDrafts::find_by_id(session_id.to_owned())
+            .one(self.db.connection())
+            .await?)
+    }
+
+    pub async fn put_draft(&self, model: skill_drafts::Model) -> AppResult<()> {
+        let active = skill_drafts::ActiveModel {
+            session_id: Set(model.session_id),
+            status: Set(model.status),
+            request_id: Set(model.request_id),
+            draft_json: Set(model.draft_json),
+            failure_json: Set(model.failure_json),
+            created_at: Set(model.created_at),
+            updated_at: Set(model.updated_at),
+        };
+        SkillDrafts::insert(active)
+            .on_conflict(
+                OnConflict::column(skill_drafts::Column::SessionId)
+                    .update_columns([
+                        skill_drafts::Column::Status,
+                        skill_drafts::Column::RequestId,
+                        skill_drafts::Column::DraftJson,
+                        skill_drafts::Column::FailureJson,
+                        skill_drafts::Column::CreatedAt,
+                        skill_drafts::Column::UpdatedAt,
+                    ])
+                    .to_owned(),
+            )
+            .exec_without_returning(self.db.connection())
+            .await?;
+        Ok(())
     }
 
     /// Insert a skill only if its name is free. Returns `true` when the row was
@@ -361,6 +427,7 @@ fn into_active(model: skills::Model) -> skills::ActiveModel {
         version: Set(model.version),
         body_path: Set(model.body_path),
         linked_agents_json: Set(model.linked_agents_json),
+        inputs_json: Set(model.inputs_json),
         created_at: Set(model.created_at),
         updated_at: Set(model.updated_at),
     }

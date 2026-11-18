@@ -12,6 +12,8 @@ pub struct Model {
     pub version: i64,
     pub body_path: String,
     pub linked_agents_json: String,
+    /// The skill's inputs as JSON, kept when it was made from a finished task.
+    pub inputs_json: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
 }

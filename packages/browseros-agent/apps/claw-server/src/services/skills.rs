@@ -61,6 +61,8 @@ pub enum SkillOrigin {
     Agent,
     Manual,
     Directory,
+    /// Made in the app from a finished task, from a draft the person reviewed.
+    History,
 }
 
 impl SkillOrigin {
@@ -69,8 +71,31 @@ impl SkillOrigin {
             Self::Agent => "agent",
             Self::Manual => "manual",
             Self::Directory => "directory",
+            Self::History => "history",
         }
     }
+}
+
+/// One part of a skill that changes between runs, with an example taken from the task.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SkillInput {
+    pub name: String,
+    pub label: String,
+    pub example: String,
+    pub kind: String,
+}
+
+/// What a skill made from a finished task carries beyond a regular one.
+pub struct FromTask {
+    /// One sentence on what the skill does, written above the steps.
+    pub summary: Option<String>,
+    pub inputs: Vec<SkillInput>,
+}
+
+/// Whether saving a skill from a task made a new one or found the one already saved.
+pub enum Saved {
+    Created(SkillView),
+    Existing(SkillView),
 }
 
 /// Aggregated run stats for the list and detail views.
@@ -412,6 +437,84 @@ impl SkillService {
             .ok_or_else(|| AppError::conflict("a skill with this name already exists"))
     }
 
+    /// Saves a reviewed draft as a regular skill linked to its task. A task has at most one such
+    /// skill, so saving again (a double click, a retried request, another window) returns the
+    /// skill already saved instead of a copy. The skill starts with no flow, which is what makes
+    /// `mark_skill_run` ask the agent for one on its first run.
+    pub async fn create_from_task(&self, input: CreateSkill, from: FromTask) -> AppResult<Saved> {
+        let _guard = self.mutate.lock().await;
+        let Some(session_id) = input.source_session_id.clone() else {
+            return Err(AppError::bad_request(
+                "a skill from a task needs its session",
+            ));
+        };
+        if let Some(existing) = self.repo.history_skill_for_session(&session_id).await? {
+            return self.view_of(existing).await.map(Saved::Existing);
+        }
+        let name = normalized_skill_name(&input.name)?;
+        let CreateSkill {
+            name: _,
+            description,
+            site,
+            steps,
+            learned_notes,
+            origin: _,
+            source_session_id,
+        } = input;
+        let content = with_task_sections(
+            &render_skill_markdown(&name, &description, &steps, &learned_notes),
+            from.summary.as_deref(),
+            &from.inputs,
+        );
+        let mut model = self.new_skill_model(
+            &name,
+            description,
+            site,
+            SkillOrigin::History,
+            source_session_id,
+        );
+        model.inputs_json = (!from.inputs.is_empty())
+            .then(|| serde_json::to_string(&from.inputs).ok())
+            .flatten();
+        match self.try_install_new(&name, &content, model).await {
+            Ok(Some(view)) => Ok(Saved::Created(view)),
+            Ok(None) => Err(AppError::conflict("a skill with this name already exists")),
+            // The unique index on the task lost a race with another save of the same draft.
+            Err(error) => match self.repo.history_skill_for_session(&session_id).await? {
+                Some(existing) => self.view_of(existing).await.map(Saved::Existing),
+                None => Err(error),
+            },
+        }
+    }
+
+    /// For each of these sessions that has a skill saved from it, the newest such skill's name.
+    pub async fn names_by_session(
+        &self,
+        session_ids: &[String],
+    ) -> AppResult<HashMap<String, String>> {
+        self.repo.skill_names_by_session(session_ids).await
+    }
+
+    /// Whether a skill with this name exists, for picking a free name for a draft.
+    pub async fn name_taken(&self, name: &str) -> AppResult<bool> {
+        Ok(self.repo.get(name).await?.is_some())
+    }
+
+    /// How the skill came to exist, as stored (`agent`, `manual`, `directory` or `history`).
+    pub async fn origin(&self, name: &str) -> AppResult<Option<String>> {
+        Ok(self.repo.get(name).await?.map(|model| model.origin))
+    }
+
+    async fn view_of(&self, model: skills::Model) -> AppResult<SkillView> {
+        let runs = self.repo.runs_for(&model.name).await?;
+        let linked_agents = parse_linked_agents(&model.linked_agents_json);
+        Ok(SkillView {
+            stats: stats_from_runs(&runs),
+            linked_agents,
+            model,
+        })
+    }
+
     /// Reserve the name with an atomic insert, then write the canonical file and
     /// link it into the connected agents. The unique primary key arbitrates
     /// across processes, so a concurrent create of the same new name loses the
@@ -468,6 +571,7 @@ impl SkillService {
             version: 1,
             body_path: self.canonical_body_path(name),
             linked_agents_json: "[]".to_string(),
+            inputs_json: None,
             created_at: now,
             updated_at: now,
         }
@@ -746,6 +850,37 @@ fn normalized_skill_name(raw: &str) -> AppResult<String> {
         return Err(AppError::conflict("skill name is reserved"));
     }
     Ok(name)
+}
+
+/// Adds what a skill made from a task says beyond its steps: the summary above the first section
+/// and an "## Inputs" section at the end. Rendering does not own either, so both survive every
+/// later re-render as hand-written text, and the agent's first run sees the examples it needs.
+fn with_task_sections(generated: &str, summary: Option<&str>, inputs: &[SkillInput]) -> String {
+    let (front, rest) = split_frontmatter(generated);
+    let mut out = String::from("---\n");
+    for line in front {
+        out.push_str(line);
+        out.push('\n');
+    }
+    out.push_str("---\n\n");
+    if let Some(summary) = summary.map(str::trim).filter(|summary| !summary.is_empty()) {
+        out.push_str(summary);
+        out.push_str("\n\n");
+    }
+    out.push_str(rest.join("\n").trim());
+    out.push('\n');
+    if !inputs.is_empty() {
+        out.push_str(
+            "\n## Inputs\nThese change between runs. Ask the user for any they did not give.\n",
+        );
+        for input in inputs {
+            out.push_str(&format!(
+                "- {{{}}}: {} ({}), for example {}\n",
+                input.name, input.label, input.kind, input.example
+            ));
+        }
+    }
+    out
 }
 
 /// The sections and frontmatter keys SKILL.md rendering writes. Anything else in the file was
