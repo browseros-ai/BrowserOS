@@ -6,7 +6,7 @@
 //!   always the latest screen, so a slow link drops states at the source instead of queueing them.
 //!   It allows for the ack jitter seen lately (up to 150 ms): on a phone that is mostly radio
 //!   jitter, not a queue.
-//! - Picture policy owns quality, size and sharpening. This loop supplies measured work,
+//! - Picture policy owns frame rate, quality, size and sharpening. This loop supplies measured work,
 //!   input, acknowledgments and CPU counters, then applies its decisions.
 
 use std::collections::VecDeque;
@@ -19,7 +19,7 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender};
 use std::time::{Duration, Instant};
 
 use crate::capture::{Capture, GrabError};
-use crate::encoder::{Encoder, Settings};
+use crate::encoder::{ENCODER_FPS, Encoder, Settings};
 #[cfg(test)]
 use crate::picture::link_full;
 use crate::picture::{self, Picture, Plan, Scale, Work};
@@ -48,7 +48,7 @@ pub struct Config {
     pub max_fps: f32,
     pub sharpen_qp: u8,
     pub sharpen_after: Duration,
-    /// How far the quality may drop below `encoder.crf` on a slow link.
+    /// Maximum quantizer increase at the frame-rate floor before the link can use half size.
     pub crf_range: f32,
     pub cpu_guard: bool,
     pub adaptive_size: bool,
@@ -76,6 +76,8 @@ pub struct Viewer {
     needs_key: bool,
     burst_grace: bool,
     rtt: AckDelays,
+    sent_frames: u32,
+    sent_bytes: u64,
     acked_bytes: u64,
     delays_ms: Vec<u32>,
     probes: Vec<(usize, Duration, Duration)>,
@@ -164,6 +166,8 @@ impl Viewer {
             needs_key: true,
             burst_grace: true,
             rtt: AckDelays::new(),
+            sent_frames: 0,
+            sent_bytes: 0,
             acked_bytes: 0,
             delays_ms: Vec::new(),
             probes: Vec::new(),
@@ -271,8 +275,34 @@ impl Viewer {
         if full_return {
             self.burst_grace = true;
         }
+        self.sent_frames += 1;
+        self.sent_bytes += frame.bytes as u64;
         self.unacked_since.get_or_insert(frame.at);
         self.inflight.push_back(frame);
+    }
+
+    fn link_sample(&mut self, elapsed: f32) -> picture::Link {
+        self.delays_ms.sort_unstable();
+        let rtt_ms = self.rtt.get().as_millis() as u32;
+        let queue_ms = self
+            .delays_ms
+            .get(self.delays_ms.len() / 2)
+            .map_or(0, |d| d.saturating_sub(rtt_ms));
+        let kbps = |bytes: u64| bytes as f32 * 8.0 / 1000.0 / elapsed;
+        picture::Link {
+            frames: self.sent_frames,
+            sent_kbps: kbps(self.sent_bytes),
+            delivered_kbps: kbps(self.acked_bytes),
+            queue_ms,
+            ..picture::Link::default()
+        }
+    }
+
+    fn clear_interval(&mut self) {
+        self.sent_frames = 0;
+        self.sent_bytes = 0;
+        self.acked_bytes = 0;
+        self.delays_ms.clear();
     }
 
     fn queue(&self, record: Arc<[u8]>) -> bool {
@@ -561,6 +591,56 @@ impl Trace {
     }
 }
 
+/// Frame facts at the point the engine hands the encoded picture to the viewers.
+struct SendEvent<'a> {
+    seq: u32,
+    bytes: usize,
+    requested_key: bool,
+    key: bool,
+    plan: Plan,
+    encode: Duration,
+    picture: &'a Picture,
+}
+
+impl std::fmt::Display for SendEvent<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "event=send seq={} bytes={} requested_key={} key={} sharp={} scale={:?} encode_ms={:.3} crf={} fps={} qp=",
+            self.seq,
+            self.bytes,
+            self.requested_key,
+            self.key,
+            self.plan.sharp_qp.is_some(),
+            self.plan.scale,
+            self.encode.as_secs_f64() * 1000.0,
+            self.picture.crf(),
+            self.picture.fps()
+        )?;
+        match self.plan.sharp_qp {
+            Some(qp) => write!(f, "{qp}"),
+            None => f.write_str("-"),
+        }
+    }
+}
+
+fn log_rungs(out: &mut impl Write, moves: &[picture::Move]) {
+    for change in moves {
+        let _ = writeln!(out, "slimviewer: event=rung {change}");
+    }
+}
+
+fn vbv_kbps(picture: &Picture, scale: Scale) -> u32 {
+    if scale == Scale::Full {
+        return 0;
+    }
+    // The shims budget bytes per frame at fixed fps. Keep the measured link budget at the
+    // actual motion cadence, within the native signed bits-per-second limit.
+    (f64::from(picture.link_kbps()) * f64::from(ENCODER_FPS) / f64::from(picture.fps()))
+        .round()
+        .min(f64::from(i32::MAX / 1000)) as u32
+}
+
 enum FrameAction {
     Grab,
     Still(Plan),
@@ -614,6 +694,31 @@ fn frame_deadline(
     )
 }
 
+/// Wall time spent in a condition between loop events. A running span survives a tick boundary.
+#[derive(Default)]
+struct ActiveTime {
+    since: Option<Instant>,
+    elapsed: Duration,
+}
+
+impl ActiveTime {
+    fn observe(&mut self, now: Instant, active: bool) {
+        if active {
+            self.since.get_or_insert(now);
+        } else if let Some(start) = self.since.take() {
+            self.elapsed += now - start;
+        }
+    }
+
+    fn take(&mut self, now: Instant) -> Duration {
+        if let Some(start) = self.since.as_mut() {
+            self.elapsed += now - *start;
+            *start = now;
+        }
+        std::mem::take(&mut self.elapsed)
+    }
+}
+
 struct Engine {
     cfg: Config,
     cap: Capture,
@@ -621,6 +726,7 @@ struct Engine {
     enc: Option<Encoder>,
     pic: I420,
     viewers: Vec<Viewer>,
+    pacer_id: Option<u64>,
     retiring: Vec<Retiring>,
     seq: u32,
     t0: Instant,
@@ -633,8 +739,8 @@ struct Engine {
     picture: Picture,
     /// When the oldest damage not yet in a sent frame arrived (for the damage→send log figure).
     damage_at: Option<Instant>,
-    blocked: Duration,
-    blocked_since: Option<Instant>,
+    blocked: ActiveTime,
+    busy: ActiveTime,
     window_reset: bool,
     tick_at: Instant,
     last_log: Option<Instant>,
@@ -645,6 +751,7 @@ struct Engine {
 
 #[derive(Default)]
 struct Stats {
+    damage_pending: bool,
     frames: u32,
     keys: u32,
     sharps: u32,
@@ -682,6 +789,7 @@ pub fn run(cfg: Config, cap: Capture, input: Input, events: Receiver<Ev>) -> Res
         input,
         enc: None,
         viewers: Vec::new(),
+        pacer_id: None,
         retiring: Vec::new(),
         seq: 0,
         t0: now,
@@ -691,8 +799,8 @@ pub fn run(cfg: Config, cap: Capture, input: Input, events: Receiver<Ev>) -> Res
         want_key: true,
         last_send: now,
         last_key: now,
-        blocked: Duration::ZERO,
-        blocked_since: None,
+        blocked: ActiveTime::default(),
+        busy: ActiveTime::default(),
         window_reset: false,
         tick_at: now,
         last_log: None,
@@ -748,6 +856,30 @@ impl Engine {
     fn pacer(&mut self) -> Option<&mut Viewer> {
         let i = pacer_index(&self.viewers)?;
         self.viewers.get_mut(i)
+    }
+
+    fn sync_pacer(&mut self) {
+        let index = pacer_index(&self.viewers);
+        let id = index.map(|i| self.viewers[i].id);
+        if id != self.pacer_id {
+            // A spectator becoming the pacer has counters from its old role. Start a fresh
+            // interval of link evidence without discarding the picture's current settings.
+            self.pacer_id = id;
+            self.picture.pacer_changed();
+            self.blocked = ActiveTime::default();
+            self.busy = ActiveTime::default();
+            self.window_reset = false;
+            self.stats.damage_pending = false;
+            if let Some(i) = index {
+                self.viewers[i].clear_interval();
+            }
+        }
+    }
+
+    fn observe_busy(&mut self, now: Instant) {
+        let interval = self.interval();
+        let ready = self.damaged && self.pacer().is_some_and(|p| p.open(now, interval));
+        self.busy.observe(now, ready);
     }
 
     fn on(&mut self, ev: Ev) -> Result<(), String> {
@@ -827,6 +959,8 @@ impl Engine {
                 }
             }
         }
+        self.sync_pacer();
+        self.observe_busy(now);
         self.release_changed_owner(previous_owner)
     }
 
@@ -866,6 +1000,8 @@ impl Engine {
     fn step(&mut self) -> Result<(), String> {
         let previous_owner = self.owner_connection();
         self.stream_step()?;
+        // A completed grab consumes damage. Close its busy span before sleeping for more.
+        self.observe_busy(Instant::now());
         self.release_changed_owner(previous_owner)
     }
 
@@ -873,9 +1009,11 @@ impl Engine {
         let now = Instant::now();
         self.retiring.retain(|r| now < r.until);
         let reset = expire_viewers(&mut self.viewers, now);
+        self.sync_pacer();
         self.want_key |= reset;
         self.window_reset |= reset;
-        if now >= self.tick_at {
+        // Price the forced resync key before it is admitted, even between regular ticks.
+        if now >= self.tick_at || self.window_reset {
             self.tick(now);
         }
         if self.viewers.is_empty() {
@@ -913,20 +1051,15 @@ impl Engine {
         }
         let interval = self.interval();
         let open = self.pacer().is_some_and(|p| p.open(now, interval));
+        self.stats.damage_pending |= self.damaged;
         let wants = self.damaged || self.want_key;
         let capacity = self.picture.capacity_kbps(now);
         let blocked = wants
             && self
                 .pacer()
                 .is_some_and(|p| p.link_blocked(now, interval, capacity));
-        match (blocked, self.blocked_since) {
-            (true, None) => self.blocked_since = Some(now),
-            (false, Some(t)) => {
-                self.blocked += now - t;
-                self.blocked_since = None;
-            }
-            _ => {}
-        }
+        self.blocked.observe(now, blocked);
+        self.busy.observe(now, self.damaged && open);
         let action = frame_action(&self.picture, now, self.last_send, wants, open);
         if self.trace.enabled {
             let reason = match action {
@@ -1046,12 +1179,7 @@ impl Engine {
             return Ok(false);
         }
         self.enc = None;
-        // Half size = a short link or CPU: cap its rate. Full size: none (sharp keyframes).
-        let vbv = if scale == Scale::Half {
-            self.picture.link_kbps()
-        } else {
-            0
-        };
+        let vbv = vbv_kbps(&self.picture, scale);
         self.enc = Some(
             Encoder::open(w, h, &self.cfg.encoder, self.picture.crf(), vbv)
                 .ok_or("encoder refused the settings")?,
@@ -1165,42 +1293,38 @@ impl Engine {
         self.stats.keys += u32::from(out.key);
         self.stats.sharps += u32::from(qp.is_some());
         self.stats.bytes += record.len() as u64;
-        self.trace.log(Instant::now(), format_args!(
-            "event=send seq={seq} bytes={} requested_key={idr} key={} sharp={} scale={:?} encode_ms={:.3}",
-            record.len(), out.key, qp.is_some(), plan.scale, work.encode.as_secs_f64() * 1000.0,
-        ));
+        let event = SendEvent {
+            seq,
+            bytes: record.len(),
+            requested_key: idr,
+            key: out.key,
+            plan,
+            encode: work.encode,
+            picture: &self.picture,
+        };
+        self.trace.log(Instant::now(), format_args!("{event}"));
     }
 
     /// Once a second: feed link and CPU facts to policy, apply rates, and log.
     fn tick(&mut self, now: Instant) {
-        let elapsed = (now - self.tick_at + Duration::from_secs(1))
+        let elapsed = (now + Duration::from_secs(1) - self.tick_at)
             .as_secs_f32()
-            .max(0.5);
+            .max(0.001);
         self.tick_at = now + Duration::from_secs(1);
-        if let Some(t) = self.blocked_since {
-            self.blocked += now - t;
-            self.blocked_since = Some(now);
-        }
-        let blocked = std::mem::take(&mut self.blocked).as_secs_f32() / elapsed;
+        let blocked = self.blocked.take(now).as_secs_f32() / elapsed;
+        let busy = self.busy.take(now);
         let frames = self.stats.frames;
         let mut rtt_ms = 0;
-        let mut link = picture::Link {
-            reset: std::mem::take(&mut self.window_reset),
-            blocked,
-            sent_kbps: self.stats.bytes as f32 * 8.0 / 1000.0 / elapsed,
-            ..picture::Link::default()
-        };
-        if let Some(p) = self.pacer() {
-            link.delivered_kbps =
-                (std::mem::take(&mut p.acked_bytes) * 8) as f32 / 1000.0 / elapsed;
-            let mut d = std::mem::take(&mut p.delays_ms);
-            d.sort_unstable();
+        let mut link = self.pacer().map_or_else(picture::Link::default, |p| {
             rtt_ms = p.rtt.get().as_millis() as u32;
-            link.queue_ms = d.get(d.len() / 2).map_or(0, |m| m.saturating_sub(rtt_ms));
-        }
+            p.link_sample(elapsed)
+        });
+        link.reset = std::mem::take(&mut self.window_reset);
+        link.blocked = blocked;
+        link.damage_pending =
+            self.stats.damage_pending || (self.damaged && self.pacer_id.is_some());
         for viewer in &mut self.viewers {
-            viewer.acked_bytes = 0;
-            viewer.delays_ms.clear();
+            viewer.clear_interval();
         }
         let throttled = throttled_usec().is_some_and(|t| {
             t.saturating_sub(self.throttled_usec.replace(t).unwrap_or(t)) > 10_000
@@ -1214,15 +1338,17 @@ impl Engine {
             share
         });
         let queue_ms = link.queue_ms;
-        self.picture
+        let moves = self
+            .picture
             .tick(now, link, picture::Cpu { stolen, throttled });
+        if !moves.is_empty() {
+            log_rungs(&mut io::stderr().lock(), &moves);
+        }
         if let Some(enc) = self.enc.as_mut() {
-            let vbv = if self.picture.scale() == Scale::Half {
-                self.picture.link_kbps()
-            } else {
-                0
-            };
-            enc.set_rate(self.picture.crf(), vbv);
+            enc.set_rate(
+                self.picture.crf(),
+                vbv_kbps(&self.picture, self.picture.scale()),
+            );
         }
         let s = &mut self.stats;
         if frames > 0
@@ -1239,7 +1365,7 @@ impl Engine {
                 }
             };
             eprintln!(
-                "slimviewer: {frames} frames ({} key, {} sharp{}) {} kbps{} | grabs {} ({} unchanged) {:.1} ms, encode {:.1} ms, damage→sent {:.1} ms | crf {:.0}, link {} kbps, fps cap {:.0}, rtt {rtt_ms} ms, queue {queue_ms} ms, blocked {:.0}%{} | scale {}, work p75 {:.1} ms, stolen {:.0}%, sharp qp {}, cap {:.0} kbps",
+                "slimviewer: {frames} frames ({} key, {} sharp{}) {} kbps{} | grabs {} ({} unchanged) {:.1} ms, encode {:.1} ms, damage→sent {:.1} ms | crf {:.0}, link {} kbps, fps cap {:.0}, rtt {rtt_ms} ms, queue {queue_ms} ms, blocked {:.0}%{} | scale {}, work p75 {:.1} ms, stolen {:.0}%, sharp qp {}, cap {:.0} kbps, busy {:.2}s, rung {}",
                 s.keys,
                 s.sharps,
                 if s.delayed > 0 {
@@ -1270,6 +1396,8 @@ impl Engine {
                     .sharp_qp(now)
                     .map_or_else(|| "skip".to_owned(), |qp| qp.to_string()),
                 self.picture.capacity_kbps(now).unwrap_or(0.0),
+                busy.as_secs_f32(),
+                self.picture.rung_label(),
             );
         }
         *s = Stats::default();
@@ -1690,7 +1818,7 @@ mod tests {
         let mut p = Picture::new(
             picture::Config {
                 base_crf: 24.0,
-                crf_range: 12.0,
+                crf_range: 6.0,
                 sharpen_qp: 18,
                 sharpen_after: SHARPEN,
                 max_fps: 30.0,
@@ -1699,10 +1827,10 @@ mod tests {
             },
             780,
             ROWS,
-            now,
+            now - Duration::from_secs(9),
         );
         if constrained {
-            for n in (1..=2).rev() {
+            for n in (1..=8).rev() {
                 p.tick(
                     now - Duration::from_secs(n),
                     picture::Link {
@@ -1711,6 +1839,9 @@ mod tests {
                         delivered_kbps: 3000.0,
                         reset: false,
                         queue_ms: 200,
+                        frames: 8,
+                        damage_pending: true,
+                        busy: Duration::from_millis(400),
                     },
                     picture::Cpu::default(),
                 );
@@ -1841,6 +1972,20 @@ mod tests {
     fn tests_that_small_motion_never_starts_half_size() {
         let t0 = Instant::now();
         let mut m = motion(t0, true);
+        // The first sent key is full size. The following small update comes before settling.
+        let key = frame_plan(&mut m, t0, BIG, true);
+        m.encoded(
+            t0,
+            picture::Encoded {
+                plan: key,
+                key: true,
+                owner_key: true,
+                bytes: 40_000,
+                pixels: 780 * ROWS,
+                big: true,
+                work: Work::default(),
+            },
+        );
         assert_eq!(
             changed(&mut m, t0, Some((0, ROWS * 2 / 5, ROWS * 2 / 5))),
             Plan {
@@ -1916,6 +2061,7 @@ mod tests {
                 picture::Cpu::default(),
             );
             assert_eq!(p.plan(at, BIG).scale, Scale::Full);
+            assert_eq!(p.fps(), 30.0);
         }
     }
 
@@ -1932,23 +2078,67 @@ mod tests {
         // Every second of the jam is a full link, to the end: the allowance for jitter is
         // bounded, so a standing queue cannot pass for jitter.
         assert!(blocked[3..].iter().all(|&b| link_full(b)), "{blocked:?}");
-        // Quality is spent on tick one; a second congested tick sends big motion half size.
         let t0 = Instant::now();
         let mut p = motion(t0, false);
-        for n in 1..=2 {
+        for n in 1..=8 {
+            let now = t0 + Duration::from_secs(n);
             p.tick(
-                t0 + Duration::from_secs(n),
+                now,
                 picture::Link {
-                    blocked: blocked[15 + n as usize],
+                    blocked: blocked[2 + n as usize],
                     sent_kbps: 9600.0,
                     delivered_kbps: 3000.0,
-                    reset: false,
                     queue_ms: 200,
+                    frames: 8,
+                    damage_pending: true,
+                    busy: Duration::from_millis(400),
+                    reset: false,
                 },
                 picture::Cpu::default(),
             );
+            assert_eq!(
+                p.plan(now, BIG).scale,
+                if n < 8 { Scale::Full } else { Scale::Half }
+            );
+            assert_eq!(p.fps(), if n == 1 { 20.0 } else { 15.0 });
         }
-        assert_eq!(p.plan(t0 + Duration::from_secs(2), BIG).scale, Scale::Half);
+    }
+
+    #[test]
+    fn tests_that_busy_time_excludes_pacer_waits_and_idle_spans_across_ticks() {
+        let t = Instant::now();
+        let mut busy = ActiveTime::default();
+        let (mut pacer, _peer) = viewer_pair(1, false);
+        let interval = Duration::from_secs_f32(1.0 / 30.0);
+        let at = |ms| t + Duration::from_millis(ms);
+        busy.observe(at(0), pacer.open(at(0), interval));
+        pacer.record_frame(
+            Sent {
+                seq: 1,
+                at: at(300),
+                bytes: 1000,
+                burst: true,
+            },
+            false,
+        );
+        busy.observe(at(300), pacer.open(at(300), interval));
+        pacer.on_ack(1, at(800));
+        busy.observe(at(800), pacer.open(at(800), interval));
+        assert_eq!(busy.take(at(1000)), Duration::from_millis(500));
+        busy.observe(at(1050), false); // The last damage was captured.
+        assert_eq!(busy.take(at(2000)), Duration::from_millis(50));
+        assert_eq!(busy.take(at(3000)), Duration::ZERO);
+    }
+
+    #[test]
+    fn tests_that_slack_follows_the_rung_interval() {
+        let t = Instant::now();
+        let mut v = viewer();
+        v.rtt.push(20, t);
+        queued(&mut v, 1, t);
+        let after_transfer = t + Duration::from_millis(20 + 60);
+        assert!(!v.link_blocked(after_transfer, Duration::from_secs_f32(1.0 / 15.0), None));
+        assert!(v.link_blocked(after_transfer, Duration::from_secs_f32(1.0 / 30.0), None));
     }
 
     #[test]
@@ -2268,6 +2458,7 @@ mod tests {
 
     #[derive(Debug)]
     struct PacedTick {
+        fps: f32,
         crf: f32,
         scale: Scale,
         sent: f32,
@@ -2275,6 +2466,7 @@ mod tests {
     }
     struct PacedFrame {
         at: Duration,
+        received: Duration,
         scale: Scale,
         key: bool,
         bytes: usize,
@@ -2286,30 +2478,39 @@ mod tests {
         resets: Vec<Duration>,
     }
 
-    // Real Viewer pacing/ACK/timeout code and Picture policy, with a serial link and a
-    // deterministic encoder-size model. An optional initial burst replays queued log facts.
-    fn paced_picture(
-        seconds: u64,
+    struct PacedCell {
         kbps: u64,
+        rtt_ms: u64,
+        jitter_ms: u64,
+        motion_kbps: u64,
         key_bytes: usize,
-        motion_bytes: usize,
-        initial_keys: u32,
-        prior_capacity: Option<f32>,
-    ) -> PacedTrace {
+        first_two_ack_floor_ms: u64,
+    }
+
+    impl Default for PacedCell {
+        fn default() -> Self {
+            Self {
+                kbps: 3000,
+                rtt_ms: 30,
+                jitter_ms: 0,
+                motion_kbps: 9600,
+                key_bytes: 40_000,
+                first_two_ack_floor_ms: 0,
+            }
+        }
+    }
+
+    // Viewer admission, ACKs and policy run on the same clock as a serial link. A scroll
+    // exposes the same bytes each second, so each frame carries more damage at lower fps.
+    fn paced_picture(seconds: u64, cell: PacedCell) -> PacedTrace {
         let t = Instant::now();
         let mut p = motion(t, false);
-        if let Some(cap) = prior_capacity {
-            p.probe(
-                t,
-                100_000,
-                Duration::from_secs_f32(800.0 / cap),
-                Duration::ZERO,
-            );
-        }
         let (owner, _peer) = viewer_pair(1, false);
         let mut viewers = vec![owner];
-        let (mut seq, mut last_send, mut sent, mut blocked, mut reset) =
-            (0, None::<Instant>, 0_usize, 0.0, false);
+        let (mut seq, mut last_send, mut blocked) = (0, None::<Instant>, 0.0);
+        let mut last_tick = t;
+        let mut busy = ActiveTime::default();
+        let mut seed = 12345_u32;
         let (mut link_free, mut acks) = (t, VecDeque::<(Instant, u32)>::new());
         let mut trace = PacedTrace::default();
         for ms in 0..=seconds * 1000 {
@@ -2320,62 +2521,51 @@ mod tests {
                 acknowledge(&mut viewers, &mut p, 1, ack, at);
                 acks.pop_front();
             }
-            if expire_viewers(&mut viewers, now) {
-                reset = true;
+            let reset = expire_viewers(&mut viewers, now);
+            if reset {
                 trace.resets.push(now - t);
             }
             assert_eq!(viewers.len(), 1, "owner disconnected at {ms} ms");
             let interval = Duration::from_secs_f32(1.0 / p.fps());
+            busy.observe(now, viewers[0].open(now, interval));
             if viewers[0].link_blocked(now, interval, p.capacity_kbps(now)) {
                 blocked += 0.001;
             }
-            if ms > 0 && ms % 1000 == 0 {
+            if now >= last_tick + Duration::from_secs(1) || reset {
+                let elapsed = (now - last_tick).as_secs_f32();
                 let v = &mut viewers[0];
-                let delivered = std::mem::take(&mut v.acked_bytes) as f32 * 8.0 / 1000.0;
-                let mut delays = std::mem::take(&mut v.delays_ms);
-                delays.sort_unstable();
-                let queue_ms = delays
-                    .get(delays.len() / 2)
-                    .map_or(0, |d| d.saturating_sub(v.rtt.get().as_millis() as u32));
-                let sent_kbps = sent as f32 * 8.0 / 1000.0;
-                p.tick(
-                    now,
-                    picture::Link {
-                        reset,
-                        blocked,
-                        sent_kbps,
-                        delivered_kbps: delivered,
-                        queue_ms,
-                    },
-                    picture::Cpu::default(),
-                );
+                let mut link = v.link_sample(elapsed);
+                v.clear_interval();
+                link.reset = reset;
+                link.blocked = blocked / elapsed;
+                link.damage_pending = true;
+                link.busy = busy.take(now);
+                let sent = link.sent_kbps;
+                let delivered = link.delivered_kbps;
+                p.tick(now, link, picture::Cpu::default());
                 trace.ticks.push(PacedTick {
+                    fps: p.fps(),
                     crf: p.crf(),
                     scale: p.plan(now, BIG).scale,
-                    sent: sent_kbps,
+                    sent,
                     delivered,
                 });
-                (sent, blocked, reset) = (0, 0.0, false);
+                blocked = 0.0;
+                last_tick = now;
             }
-            let replay = seq < initial_keys && ms < 1000;
-            if (initial_keys == 0 || replay || ms >= 1000)
-                && viewers[0].open(now, interval)
-                && last_send.is_none_or(|last| now >= last + interval)
+            let interval = Duration::from_secs_f32(1.0 / p.fps());
+            if viewers[0].open(now, interval) && last_send.is_none_or(|last| now >= last + interval)
             {
-                let owner_key = replay || viewers[0].needs_key;
+                let owner_key = viewers[0].needs_key;
                 let plan = frame_plan(&mut p, now, BIG, owner_key);
                 let key = owner_key || plan.scale != p.scale();
-                let base = if key { key_bytes } else { motion_bytes };
-                // Keep offered motion demand fixed so the 3x jam remains 3x after
-                // a quality step. Keyframe estimates still shrink with quality.
-                let quality = if key {
-                    2.0_f32.powf((24.0 - p.crf()) / 6.0)
+                let full_bytes = if key {
+                    cell.key_bytes as f32 * 2.0_f32.powf((24.0 - p.crf()) / 6.0)
                 } else {
-                    1.0
+                    cell.motion_kbps as f32 * 1000.0 / (8.0 * p.fps())
                 };
-                let size = (base as f32 * quality
-                    / if plan.scale == Scale::Half { 4.0 } else { 1.0 })
-                .ceil() as usize;
+                let size = (full_bytes / if plan.scale == Scale::Half { 4.0 } else { 1.0 }).ceil()
+                    as usize;
                 let full_return = p.scale() == Scale::Half && plan.scale == Scale::Full;
                 p.encoded(
                     now,
@@ -2404,15 +2594,24 @@ mod tests {
                     full_return && key,
                 );
                 v.needs_key = false;
-                link_free = link_free.max(now) + Duration::from_micros(size as u64 * 8000 / kbps);
-                acks.push_back((link_free + Duration::from_millis(30), seq));
+                link_free =
+                    link_free.max(now) + Duration::from_micros(size as u64 * 8000 / cell.kbps);
+                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                let jitter = (u64::from(seed) * 2 * cell.jitter_ms) >> 32;
+                let mut ack =
+                    link_free + Duration::from_millis(cell.rtt_ms - cell.jitter_ms + jitter);
+                if seq <= 2 {
+                    ack = ack.max(now + Duration::from_millis(cell.first_two_ack_floor_ms));
+                }
+                let ack = acks.back().map_or(ack, |&(last, _)| ack.max(last));
+                acks.push_back((ack, seq));
                 trace.frames.push(PacedFrame {
                     at: now - t,
+                    received: link_free - t,
                     scale: plan.scale,
                     key,
                     bytes: size,
                 });
-                sent += size;
                 last_send = Some(now);
             }
         }
@@ -2421,17 +2620,30 @@ mod tests {
 
     #[test]
     fn tests_that_threefold_jam_uses_offered_demand_before_window_throttling() {
-        let trace = paced_picture(3, 3000, 40_000, 40_000, 0, None);
-        assert!(trace.ticks[0].sent < 9600.0, "{:?}", trace.ticks);
-        assert!(trace.ticks[0].delivered < 9600.0);
-        assert!(trace.ticks[0].crf >= 30.0, "{:?}", trace.ticks);
-        assert_eq!(trace.ticks[1].scale, Scale::Half, "{:?}", trace.ticks);
+        let trace = paced_picture(10, PacedCell::default());
+        assert!(trace.ticks[0].sent < 9600.0 && trace.ticks[0].delivered < 9600.0);
+        assert_eq!((trace.ticks[0].fps, trace.ticks[0].crf), (20.0, 24.0));
+        assert!(
+            trace.ticks[..8]
+                .iter()
+                .any(|tick| tick.scale == Scale::Half),
+            "{:?}",
+            trace.ticks
+        );
     }
 
     #[test]
     fn tests_that_a_point_three_megabit_link_escapes_the_keyframe_reset_loop() {
-        let trace = paced_picture(30, 300, 150_000, 4000, 0, None);
-        assert!(trace.ticks.iter().any(|tick| tick.crf >= 32.0));
+        let trace = paced_picture(
+            30,
+            PacedCell {
+                kbps: 300,
+                key_bytes: 150_000,
+                motion_kbps: 960,
+                ..PacedCell::default()
+            },
+        );
+        assert!(trace.ticks.iter().any(|tick| tick.crf == 30.0));
         assert!(trace.frames.iter().any(|frame| frame.scale == Scale::Half));
         assert!(
             trace
@@ -2462,20 +2674,84 @@ mod tests {
     }
 
     #[test]
-    fn tests_that_megabyte_keyframe_jam_reaches_half_on_the_second_tick() {
-        // Offer the recorded six ~1 MB keys through admission, with a stale ~859 Mb/s probe.
-        let trace = paced_picture(4, 3000, 1_000_000, 1_000_000, 6, Some(859_464.0));
-        assert!(trace.ticks[0].crf >= 32.0, "{:?}", trace.ticks);
-        assert_eq!(trace.ticks[1].scale, Scale::Half, "{:?}", trace.ticks);
-        // A 1 MB frame alone takes 2.67 s on the wire; apply the decision on its ACK.
+    fn tests_that_megabyte_keyframe_jam_reaches_half_via_two_resets() -> Result<(), &'static str> {
+        // The first two keys cross the real window timeout before their ACKs release the barrier.
+        let trace = paced_picture(
+            8,
+            PacedCell {
+                key_bytes: 1_000_000,
+                first_two_ack_floor_ms: 3100,
+                ..PacedCell::default()
+            },
+        );
+        assert_eq!(trace.resets.len(), 2, "{:?}", trace.resets);
         let half = trace
             .frames
             .iter()
             .find(|frame| frame.scale == Scale::Half)
-            .unwrap();
-        assert!(half.at < Duration::from_secs(3));
-        assert!(half.bytes <= 125_000);
+            .ok_or("the reset must produce a half-size key")?;
+        assert!(half.at >= trace.resets[1] && half.at <= Duration::from_secs(8));
+        assert!(half.key && half.bytes <= 125_000);
+        let resync = trace
+            .frames
+            .iter()
+            .find(|f| f.at >= trace.resets[0])
+            .ok_or("the first reset must send a full resync key")?;
+        assert_eq!(
+            resync.bytes, 500_000,
+            "the first forced full key already uses the cap QP"
+        );
+        Ok(())
     }
+
+    #[test]
+    fn tests_that_scroll_like_jam_reaches_half_without_a_half_second_gap() {
+        let trace = paced_picture(20, PacedCell::default());
+        assert!(
+            trace.ticks[..10]
+                .iter()
+                .any(|tick| tick.scale == Scale::Half)
+        );
+        assert!(trace.resets.len() <= 1);
+        let mut previous = Duration::ZERO;
+        let mut max_gap = Duration::ZERO;
+        for frame in &trace.frames {
+            max_gap = max_gap.max(frame.received - previous);
+            previous = frame.received;
+        }
+        max_gap = max_gap.max(Duration::from_secs(20).saturating_sub(previous));
+        assert!(
+            max_gap < Duration::from_millis(500),
+            "largest gap between complete frames: {max_gap:?}"
+        );
+        let before_half = trace.frames.iter().take_while(|f| f.scale == Scale::Full);
+        assert_eq!(
+            before_half.clone().filter(|f| f.key).count(),
+            1,
+            "fps steps reuse the encoder"
+        );
+        assert!(
+            before_half.filter(|f| !f.key).any(|f| f.bytes == 80_000),
+            "15 fps still offers 9.6 Mb/s"
+        );
+    }
+
+    #[test]
+    fn tests_that_a_cellular_link_under_its_demand_never_sets_half() {
+        let trace = paced_picture(
+            60,
+            PacedCell {
+                rtt_ms: 100,
+                jitter_ms: 20,
+                motion_kbps: 2400,
+                ..PacedCell::default()
+            },
+        );
+        assert!(trace.resets.is_empty());
+        assert!(trace.ticks.iter().all(|tick| tick.scale == Scale::Full));
+        assert!(trace.frames.iter().all(|frame| frame.scale == Scale::Full));
+    }
+
     #[test]
     fn tests_that_newer_bursts_cannot_hide_an_older_stalled_frame() {
         let t = Instant::now();
@@ -2638,7 +2914,7 @@ mod tests {
         p.probe(
             t,
             600_000,
-            Duration::from_millis(402),
+            Duration::from_millis(242),
             Duration::from_millis(2),
         );
         let returned = t + Duration::from_secs(1);
@@ -2679,16 +2955,16 @@ mod tests {
         );
         let interval = Duration::from_millis(33);
         let mut blocked = 0.0;
-        for ms in 0..402 {
+        for ms in 0..242 {
             if v.link_blocked(
                 returned + Duration::from_millis(ms),
                 interval,
-                Some(12_000.0),
+                Some(20_000.0),
             ) {
                 blocked += 0.001;
             }
         }
-        v.on_ack(2, returned + Duration::from_millis(402));
+        v.on_ack(2, returned + Duration::from_millis(242));
         let now = returned + Duration::from_secs(1);
         p.tick(
             now,
@@ -2711,9 +2987,102 @@ mod tests {
             false,
         );
         assert!(
-            v.link_blocked(now + Duration::from_millis(250), interval, Some(12_000.0)),
+            v.link_blocked(now + Duration::from_millis(250), interval, Some(20_000.0)),
             "an ordinary later key must not renew the full-return grace"
         );
+    }
+
+    #[test]
+    fn tests_that_trace_send_line_carries_crf_and_fps() -> Result<(), std::string::FromUtf8Error> {
+        let t = Instant::now();
+        let p = motion(t, true);
+        for (sharp_qp, expected) in [(None, "-"), (Some(18), "18")] {
+            let event = SendEvent {
+                seq: 4,
+                bytes: 128,
+                requested_key: false,
+                key: false,
+                plan: Plan {
+                    scale: Scale::Half,
+                    sharp_qp,
+                },
+                encode: Duration::from_millis(2),
+                picture: &p,
+            };
+            let mut bytes = Vec::new();
+            Trace::new(Some("1"), t).write(&mut bytes, t, format_args!("{event}"));
+            let log = String::from_utf8(bytes)?;
+            assert!(log.contains("event=send seq=4 bytes=128"));
+            assert!(
+                log.ends_with(&format!("crf=30 fps=15 qp={expected}\n")),
+                "{log}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn tests_that_rung_events_are_logged_on_every_move() -> Result<(), std::string::FromUtf8Error> {
+        let t = Instant::now();
+        let mut p = motion(t, false);
+        let mut out = Vec::new();
+        for n in 1..=2 {
+            let moves = p.tick(
+                t + Duration::from_secs(n),
+                picture::Link {
+                    blocked: 0.3,
+                    frames: 6,
+                    damage_pending: true,
+                    busy: Duration::from_millis(700),
+                    ..picture::Link::default()
+                },
+                picture::Cpu {
+                    stolen: 0.25,
+                    throttled: false,
+                },
+            );
+            log_rungs(&mut out, &moves);
+        }
+        let log = String::from_utf8(out)?;
+        let lines: Vec<_> = log.lines().collect();
+        assert_eq!(lines.len(), 3);
+        for (line, expected) in lines.iter().zip([
+            "source=link from=0 to=1",
+            "source=link from=1 to=2",
+            "source=cpu from=0 to=1",
+        ]) {
+            assert!(
+                line.starts_with(&format!("slimviewer: event=rung {expected}")),
+                "{line}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn tests_that_half_size_vbv_uses_the_actual_frame_rate() {
+        let t = Instant::now();
+        let mut p = motion(t, true);
+        assert_eq!(p.fps(), 15.0);
+        assert_eq!(vbv_kbps(&p, Scale::Half), p.link_kbps() * 2);
+        assert_eq!(vbv_kbps(&p, Scale::Full), 0);
+        for n in 1..=9 {
+            p.tick(
+                t + Duration::from_secs(n),
+                picture::Link {
+                    frames: 6,
+                    damage_pending: true,
+                    busy: Duration::from_secs(1),
+                    ..picture::Link::default()
+                },
+                picture::Cpu {
+                    stolen: 0.25,
+                    throttled: false,
+                },
+            );
+        }
+        assert_eq!(p.fps(), 10.0);
+        assert_eq!(vbv_kbps(&p, Scale::Half), p.link_kbps() * 3);
     }
 
     #[test]

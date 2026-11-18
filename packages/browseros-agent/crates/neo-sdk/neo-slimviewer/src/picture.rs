@@ -1260,12 +1260,12 @@ mod tests {
         assert_eq!(fixed.floor, fixed.cap);
         assert_eq!(fixed.half, None);
         assert_eq!(
-            fixed.rungs[fixed.low.unwrap()],
-            Rung {
+            fixed.low.map(|low| fixed.rungs[low]),
+            Some(Rung {
                 fps: 10.0,
                 crf_add: 0.0,
                 scale: Scale::Full
-            }
+            })
         );
     }
 
@@ -1487,18 +1487,24 @@ mod tests {
         let half = to_link_half(&mut p, t);
         costly_half_key(&mut p, half);
         assert!(!p.full_return_fits(at(half, 1)));
-        assert_eq!(p.still(at(half, 1)).unwrap().scale, Scale::Full);
+        assert_eq!(
+            p.still(at(half, 1)).map(|plan| plan.scale),
+            Some(Scale::Full)
+        );
     }
 
     #[test]
-    fn tests_that_small_damage_after_a_full_still_never_starts_half_size() {
+    fn tests_that_small_damage_after_a_full_still_never_starts_half_size()
+    -> Result<(), &'static str> {
         let t = Instant::now();
         let mut p = picture(t);
         let half = to_link_half(&mut p, t);
         costly_half_key(&mut p, half);
         let quiet = at(half, 1);
         let mut full = frame(Scale::Full, 10);
-        full.plan = p.still(quiet).unwrap();
+        full.plan = p
+            .still(quiet)
+            .ok_or("a still screen must get a full frame")?;
         full.key = true;
         full.big = false;
         full.bytes = 160_000;
@@ -1513,6 +1519,7 @@ mod tests {
                 sharp_qp: None
             }
         );
+        Ok(())
     }
 
     #[test]
@@ -1935,7 +1942,7 @@ mod tests {
     }
 
     #[test]
-    fn tests_that_the_settle_frame_fires_at_the_fps_floor() {
+    fn tests_that_the_settle_frame_fires_at_the_fps_floor() -> Result<(), &'static str> {
         let t = Instant::now();
         let mut p = picture(t);
         for n in 1..=2 {
@@ -1947,7 +1954,7 @@ mod tests {
         assert_eq!(p.fps(), 15.0);
         assert!(p.still(stop + Duration::from_millis(249)).is_none());
         let due = stop + Duration::from_millis(250);
-        let sharp = p.still(due).unwrap();
+        let sharp = p.still(due).ok_or("the sharp frame is due after 250 ms")?;
         assert_eq!(
             sharp,
             Plan {
@@ -1957,6 +1964,7 @@ mod tests {
         );
         send(&mut p, due, sharp);
         assert!(p.still(at(stop, 1)).is_none());
+        Ok(())
     }
 
     #[test]
@@ -2204,7 +2212,10 @@ mod tests {
         let plan = p.plan(entered, BIG);
         send(&mut p, entered, plan);
         assert!(p.still(entered + Duration::from_millis(999)).is_none());
-        assert_eq!(p.still(at(entered, 1)).unwrap().scale, Scale::Full);
+        assert_eq!(
+            p.still(at(entered, 1)).map(|plan| plan.scale),
+            Some(Scale::Full)
+        );
     }
 
     #[test]
