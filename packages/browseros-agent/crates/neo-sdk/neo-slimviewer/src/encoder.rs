@@ -14,6 +14,9 @@ mod tests;
 #[cfg(not(any(feature = "x264", feature = "openh264")))]
 compile_error!("enable at least one encoder feature: x264 or openh264");
 
+/// Both native encoders divide their bitrate target into this many frames per second.
+pub const ENCODER_FPS: f32 = 30.0;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Backend {
     X264,

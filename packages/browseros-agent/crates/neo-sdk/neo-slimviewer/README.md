@@ -28,7 +28,8 @@ to the appropriate loopback TCP port. See [Host integration](docs/integrate.md).
 | `--listen-view` | `127.0.0.1:5911` | View-only stream |
 | `--max-viewers` | `8` | Spectator limit, or zero to disable spectators |
 | `--encoder`, `--threads` | `openh264`, `0` | Compiled encoder and thread count (zero selects automatically) |
-| `--fps`, `--crf`, `--crf-range` | `30`, `24`, `12` | Frame rate ceiling, starting quantizer and allowed increase |
+| `--fps` | `30` | Frame rate ceiling. The lower rungs are whichever of 30, 20 and 15 fps fall below it |
+| `--crf`, `--crf-range` | `24`, `6` | Starting quantizer and maximum increase. At the frame-rate floor a congested link spends this budget in steps of up to 2 before using half size |
 | `--sharpen-qp`, `--sharpen-ms` | `18`, `250` | Still-frame quantizer and delay in milliseconds |
 | `--no-cpu-guard`, `--full-size-only` | off | Disable CPU throttling feedback or adaptive scaling |
 | `--preset` | `ultrafast` | Encoder preset for x264 builds |
