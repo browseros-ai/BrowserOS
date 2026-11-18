@@ -22,10 +22,9 @@ use std::sync::{Arc, LazyLock};
 
 use browseros_core::{BrowserView, CoreError, TabId, TargetId};
 use futures_util::future::BoxFuture;
-use neo_playwright::url_scheme::{refuses_page, url_scheme};
 use neo_playwright::{
     Answer, ErrorCode as PlaywrightCode, FileAccess, Op, OpEnv, OpTarget, PlaywrightError, Refusal,
-    RunState, TimedOut,
+    RunState, TimedOut, url_scheme,
 };
 use neo_trace::{DiagnosticCode, ErrorOwner};
 use serde::{Deserialize, Deserializer};
@@ -401,12 +400,12 @@ async fn refused_page<M>(
     let Some(url) = shown_url(op).await? else {
         return Ok(None);
     };
-    if refuses_page(&url) {
+    if url_scheme::refuses_page(&url) {
         return Ok(Some(file_page(
             "Neo does not act on this tab, which shows a `file:` page",
         )));
     }
-    let scheme = url_scheme(&url);
+    let scheme = url_scheme::url_scheme(&url);
     if effect == PageEffect::Reloads {
         return Ok(match scheme {
             Some(scheme) if NAVIGABLE_SCHEMES.contains(&scheme.as_str()) => None,
@@ -442,7 +441,7 @@ async fn refused_page<M>(
         .and_then(|index| usize::try_from(index).ok())
         .and_then(|index| history.entries.get(index));
     Ok(opens
-        .filter(|entry| refuses_page(&entry.url))
+        .filter(|entry| url_scheme::refuses_page(&entry.url))
         .map(|_| file_page("Neo does not take this step, whose history entry is a `file:` page")))
 }
 
@@ -466,7 +465,9 @@ async fn shown_url<M>(op: &OpCtx<M>) -> Result<Option<String>, LeafError> {
 /// Whether the op's tab shows a `file:` page now that the op ended. The rule before the op
 /// cannot see a navigation the page makes while the op waits on it.
 async fn moved_to_file<M>(op: &OpCtx<M>) -> Result<bool, LeafError> {
-    Ok(shown_url(op).await?.is_some_and(|url| refuses_page(&url)))
+    Ok(shown_url(op)
+        .await?
+        .is_some_and(|url| url_scheme::refuses_page(&url)))
 }
 
 /// `Page.getNavigationHistory`'s reply, as much of it as [`refused_page`] reads: the crate's own

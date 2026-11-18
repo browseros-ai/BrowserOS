@@ -36,8 +36,6 @@ pub fn refuses_page(url: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{refuses_page, url_scheme};
-
     #[test]
     fn tests_that_a_scheme_is_read_as_chromium_reads_it() {
         for (url, scheme) in [
@@ -50,7 +48,7 @@ mod tests {
             ("1http://bank.example/", None),
             ("", None),
         ] {
-            assert_eq!(url_scheme(url).as_deref(), scheme, "{url:?}");
+            assert_eq!(super::url_scheme(url).as_deref(), scheme, "{url:?}");
         }
     }
 
@@ -61,7 +59,7 @@ mod tests {
             "FILE:///etc/hosts",
             " \u{1}fi\tl\ne:///etc/hosts",
         ] {
-            assert!(refuses_page(url), "{url:?} is refused");
+            assert!(super::refuses_page(url), "{url:?} is refused");
         }
         for url in [
             "https://bank.example/file:///etc/hosts",
@@ -69,7 +67,7 @@ mod tests {
             "data:text/html,x",
             "",
         ] {
-            assert!(!refuses_page(url), "{url:?} is not refused");
+            assert!(!super::refuses_page(url), "{url:?} is not refused");
         }
     }
 }

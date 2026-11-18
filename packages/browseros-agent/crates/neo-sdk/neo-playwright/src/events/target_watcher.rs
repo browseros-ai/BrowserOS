@@ -90,7 +90,7 @@ use crate::events::worker_table::WorkerContext;
 use crate::events::{PageEventKind, WatcherProgress, navigation_event};
 use crate::snapshot::SnapshotBaselines;
 use crate::target_crashes::{RecoveryTicket, TargetCrashes};
-use crate::url_scheme::refuses_page;
+use crate::url_scheme;
 use crate::world::{BackendNodeId, FrameAttachLog, FrameEvent};
 
 /// upstream's `PageBinding.kBindingName`: the CDP binding every exposed binding's stub calls.
@@ -1380,7 +1380,11 @@ impl Watcher {
     /// then is what the browser sends on its own on a session with `Page` on (its frames' and
     /// loads' events, its dialogs), never the answer to a command of ours.
     fn door_verdict(&self, tab: &TargetId) -> Option<bool> {
-        self.pages.get(tab)?.url.as_deref().map(refuses_page)
+        self.pages
+            .get(tab)?
+            .url
+            .as_deref()
+            .map(url_scheme::refuses_page)
     }
 
     /// A new tab has its URL: recorded now, or once a popup's window type is known.
