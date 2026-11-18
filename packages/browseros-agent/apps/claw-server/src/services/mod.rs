@@ -24,6 +24,7 @@ pub mod runtime_file;
 pub mod screenshots;
 pub mod session_efficiency;
 pub mod sessions;
+pub mod skill_draft;
 pub mod skill_runs;
 pub mod skills;
 pub mod tab_cleanup;

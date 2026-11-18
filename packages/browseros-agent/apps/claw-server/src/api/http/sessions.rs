@@ -33,7 +33,7 @@ use claw_api::models::{
     CancelSessionResponse, Dispatch, PlanSavings, PlanSavingsMeter, PlanSavingsPeriod,
     PlanSavingsPeriods, PlanSavingsSite, ResolveHelpRequest, ResolveHelpResponse,
     SessionBrowserTab, SessionDetail, SessionList, SessionPursueRun, SessionPursueStep,
-    SessionStatus, SessionSummary, SessionTokenUsage, SessionUltrafastRun,
+    SessionStatus, SessionSummary, SessionTokenUsage, SessionUltrafastRun, SkillDraftStatus,
 };
 use std::{collections::HashMap, sync::Arc};
 
@@ -129,6 +129,11 @@ pub(super) async fn list(
         .pursue_runs(&session_ids)
         .await
         .map_err(|source| internal(&request_id, source))?;
+    let mut skill_names = state
+        .skills
+        .names_by_session(&session_ids)
+        .await
+        .map_err(|source| internal(&request_id, source))?;
     // profile_id lives on the live session's agent, and a done filter
     // must reconcile persisted-live rows. Both apply after pagination,
     // so a filtered page may come back short rather than backfilled.
@@ -140,6 +145,7 @@ pub(super) async fn list(
         let mut summary = contract_summary(task, session).await;
         summary.ultrafast = stats.map(contract_ultrafast);
         summary.pursue = pursued.map(contract_pursue);
+        summary.skill_name = skill_names.remove(summary.session_id.as_str());
         if response_status_filter
             .is_none_or(|status| summary.status == contract_status(status, true))
             && query
@@ -173,8 +179,127 @@ pub(super) async fn get(
                 "session not found",
             )
         })?;
+    let skill_name = saved_skill(&state, &session_id)
+        .await
+        .map_err(|source| internal(&request_id, source))?;
     let live = state.sessions.lookup(&SessionId::new(session_id)).await;
-    Ok(Json(contract_detail(task, live.as_ref()).await))
+    let mut detail = contract_detail(task, live.as_ref()).await;
+    detail.session.skill_name = skill_name;
+    Ok(Json(detail))
+}
+
+/// The skill saved from this task, by the app or the agent, if there is one.
+async fn saved_skill(state: &AppState, session_id: &str) -> AppResult<Option<String>> {
+    Ok(state
+        .skills
+        .names_by_session(&[session_id.to_string()])
+        .await?
+        .remove(session_id))
+}
+
+/// GET /api/v1/sessions/{id}/skill-draft: where making a skill from this task stands.
+pub(super) async fn skill_draft(
+    Extension(request_id): Extension<RequestId>,
+    State(state): State<AppState>,
+    Path(session_id): Path<String>,
+) -> Result<Json<SkillDraftStatus>, CanonicalError> {
+    state
+        .audit_log
+        .get_task(&session_id)
+        .await
+        .map_err(|source| internal(&request_id, source))?
+        .ok_or_else(|| session_not_found(&request_id))?;
+    let skill_name = saved_skill(&state, &session_id)
+        .await
+        .map_err(|source| internal(&request_id, source))?;
+    let status = state
+        .skill_drafts
+        .status(&session_id, skill_name, now_epoch_ms())
+        .await
+        .map_err(|source| internal(&request_id, source))?;
+    Ok(Json(status))
+}
+
+/// POST /api/v1/sessions/{id}/skill-draft: writes a skill draft from this finished task through
+/// the decisions worker, or returns the draft already written. Ultrafast plans with skill drafts
+/// only. The draft runs on its own task, so leaving the page does not waste a paid draft.
+pub(super) async fn draft_skill(
+    Extension(request_id): Extension<RequestId>,
+    State(state): State<AppState>,
+    Path(session_id): Path<String>,
+) -> Result<Json<SkillDraftStatus>, CanonicalError> {
+    use crate::services::skill_draft::{SKILL_DRAFTS_FEATURE, digest};
+    if !state.ultrafast_enabled() || !state.billing.has_feature(SKILL_DRAFTS_FEATURE).await {
+        return Err(error(
+            &request_id,
+            StatusCode::FORBIDDEN,
+            "not_entitled",
+            "this plan does not include making skills from tasks",
+        ));
+    }
+    let task = state
+        .audit_log
+        .get_task(&session_id)
+        .await
+        .map_err(|source| internal(&request_id, source))?
+        .ok_or_else(|| session_not_found(&request_id))?;
+    let live = state
+        .sessions
+        .lookup(&SessionId::new(session_id.clone()))
+        .await;
+    if task.summary.status != TaskStatus::Done || live.is_some() {
+        return Err(error(
+            &request_id,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "not_finished",
+            "only a finished task can become a skill",
+        ));
+    }
+    let skill_name = saved_skill(&state, &session_id)
+        .await
+        .map_err(|source| internal(&request_id, source))?;
+    if skill_name.is_some() {
+        let status = state
+            .skill_drafts
+            .status(&session_id, skill_name, now_epoch_ms())
+            .await
+            .map_err(|source| internal(&request_id, source))?;
+        return Ok(Json(status));
+    }
+    let request = digest::build(&task);
+    let drafter = state.decisions.skill_drafter(state.billing.clone());
+    let drafts = state.skill_drafts.clone();
+    let id = session_id.clone();
+    let written = tokio::spawn(async move {
+        drafts
+            .draft(&id, now_epoch_ms(), request, |request| async move {
+                match drafter {
+                    Some(drafter) => drafter.draft(&request).await,
+                    None => Err(claw_api::models::SkillDraftFailure::new(
+                        claw_api::models::SkillDraftFailureCode::UpstreamError,
+                    )),
+                }
+            })
+            .await
+    })
+    .await
+    .map_err(|join| {
+        internal(
+            &request_id,
+            crate::error::AppError::unavailable(join.to_string()),
+        )
+    })?
+    .map_err(|source| internal(&request_id, source))?;
+    Ok(Json(written))
+}
+
+fn session_not_found(request_id: &RequestId) -> CanonicalError {
+    error(
+        request_id,
+        StatusCode::NOT_FOUND,
+        "session_not_found",
+        "session not found",
+    )
 }
 
 /// How many of the newest ultrafast tasks the savings view lists.
