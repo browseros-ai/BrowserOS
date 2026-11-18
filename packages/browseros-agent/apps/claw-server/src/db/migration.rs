@@ -36,6 +36,7 @@ impl MigratorTrait for Migrator {
             Box::new(m0027_backfill_task_active_duration::Migration),
             Box::new(m0028_align_efficiency_active_duration::Migration),
             Box::new(m0029_add_task_groups::Migration),
+            Box::new(m0030_add_name_to_task_groups::Migration),
         ]
     }
 }
@@ -3158,5 +3159,41 @@ mod m0029_add_task_groups {
         ProfileId,
         CreatedAt,
         EndedAt,
+    }
+}
+
+mod m0030_add_name_to_task_groups {
+    use super::*;
+
+    pub struct Migration;
+
+    impl MigrationName for Migration {
+        fn name(&self) -> &str {
+            "m0030_add_name_to_task_groups"
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl MigrationTrait for Migration {
+        async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            // A session's name lives only in memory, so a CLI task resumed after a restart
+            // came back under a generated one. The task outlives the process, so its name
+            // has to be kept where the task is.
+            if !manager.has_column("task_groups", "name").await? {
+                manager
+                    .alter_table(
+                        Table::alter()
+                            .table(Alias::new("task_groups"))
+                            .add_column(ColumnDef::new(Alias::new("name")).string().null())
+                            .to_owned(),
+                    )
+                    .await?;
+            }
+            Ok(())
+        }
+
+        async fn down(&self, _manager: &SchemaManager) -> Result<(), DbErr> {
+            Ok(())
+        }
     }
 }

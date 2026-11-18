@@ -12,6 +12,7 @@ pub struct Model {
     pub profile_id: Option<String>,
     pub created_at: i64,
     pub ended_at: Option<i64>,
+    pub name: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

@@ -50,6 +50,9 @@ pub struct Binding {
     pub profile_id: Option<String>,
     pub created_at: i64,
     pub ended_at: Option<i64>,
+    /// The task's name, kept here because a session's name lives only in memory and the
+    /// task outlives the process.
+    pub name: Option<String>,
 }
 
 impl Binding {
@@ -123,7 +126,7 @@ impl TaskGroupStore {
                  session_id = excluded.session_id, agent_id = excluded.agent_id, \
                  origin = excluded.origin, window_id = excluded.window_id, \
                  profile_id = excluded.profile_id, created_at = excluded.created_at, \
-                 ended_at = NULL \
+                 ended_at = NULL, name = NULL \
                  WHERE task_groups.ended_at IS NOT NULL",
                 [
                     Value::from(group_id),
@@ -162,7 +165,7 @@ impl TaskGroupStore {
     pub async fn lookup(&self, group_id: &str) -> AppResult<Option<Binding>> {
         Ok(Binding::find_by_statement(Statement::from_sql_and_values(
             DatabaseBackend::Sqlite,
-            "SELECT group_id, session_id, agent_id, origin, window_id, profile_id, created_at, ended_at \
+            "SELECT group_id, session_id, agent_id, origin, window_id, profile_id, created_at, ended_at, name \
              FROM task_groups WHERE group_id = ?",
             [Value::from(group_id)],
         ))
@@ -201,7 +204,7 @@ impl TaskGroupStore {
     pub async fn live_groups_for_session(&self, session_id: &str) -> AppResult<Vec<Binding>> {
         Ok(Binding::find_by_statement(Statement::from_sql_and_values(
             DatabaseBackend::Sqlite,
-            "SELECT group_id, session_id, agent_id, origin, window_id, profile_id, created_at, ended_at \
+            "SELECT group_id, session_id, agent_id, origin, window_id, profile_id, created_at, ended_at, name \
              FROM task_groups WHERE session_id = ? AND ended_at IS NULL ORDER BY created_at",
             [Value::from(session_id)],
         ))
@@ -209,11 +212,25 @@ impl TaskGroupStore {
         .await?)
     }
 
+    /// Records the name of the task `session_id` is, on every group it still owns.
+    pub async fn set_name_for_session(&self, session_id: &str, name: &str) -> AppResult<u64> {
+        Ok(self
+            .db
+            .connection()
+            .execute(Statement::from_sql_and_values(
+                DatabaseBackend::Sqlite,
+                "UPDATE task_groups SET name = ? WHERE session_id = ? AND ended_at IS NULL",
+                [Value::from(name), Value::from(session_id)],
+            ))
+            .await?
+            .rows_affected())
+    }
+
     /// Every live CLI binding, for the sweep that notices a group the user closed.
     pub async fn live_cli_bindings(&self) -> AppResult<Vec<Binding>> {
         Ok(Binding::find_by_statement(Statement::from_sql_and_values(
             DatabaseBackend::Sqlite,
-            "SELECT group_id, session_id, agent_id, origin, window_id, profile_id, created_at, ended_at \
+            "SELECT group_id, session_id, agent_id, origin, window_id, profile_id, created_at, ended_at, name \
              FROM task_groups WHERE ended_at IS NULL AND origin = ? ORDER BY created_at",
             [Value::from(TaskOrigin::Cli.as_str())],
         ))
@@ -365,6 +382,30 @@ mod tests {
             .map(|binding| binding.group_id)
             .collect();
         assert_eq!(cli, vec!["G1".to_string()], "an MCP binding is never swept");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_tasks_name_is_kept_on_its_open_groups_and_dropped_when_rebound() -> anyhow::Result<()>
+    {
+        let dir = tempdir()?;
+        let store = store(dir.path()).await?;
+        store.bind(cli("G1", "s1"), T0).await?;
+        store.bind(cli("G2", "s1"), T0).await?;
+
+        assert_eq!(store.set_name_for_session("s1", "price check").await?, 2);
+        assert_eq!(
+            live(&store, "G2").await?.name.as_deref(),
+            Some("price check")
+        );
+
+        store.end("G1", T0 + 1).await?;
+        store.bind(cli("G1", "s2"), T0 + 2).await?;
+        assert_eq!(
+            live(&store, "G1").await?.name,
+            None,
+            "new work in a closed task's group starts unnamed"
+        );
         Ok(())
     }
 }

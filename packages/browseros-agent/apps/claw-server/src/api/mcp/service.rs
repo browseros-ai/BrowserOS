@@ -345,6 +345,19 @@ impl ClawMcpService {
                 .into_call_tool_result();
             }
         };
+        // A session's name lives only in memory. A CLI task outlives the process, so its
+        // name is kept with its groups and comes back when the task resumes.
+        if started.session.follows_group() {
+            let name = started.session.label().await;
+            if let Err(error) = self
+                .state
+                .task_groups
+                .set_name_for_session(started.session.id().as_str(), &name)
+                .await
+            {
+                warn!(error = %error, "keeping a CLI task's name failed");
+            }
+        }
         // Scrub structural PII from any provided summary before it is stored, indexed for
         // search, or recorded on the task-declared analytics event. Last write wins locally.
         let scrubbed_summary = raw_args
@@ -921,7 +934,7 @@ impl ClawMcpService {
                     McpError::internal_error(format!("task group lookup failed: {error}"), None)
                 })?;
             if let Some(binding) = binding.filter(|binding| binding.is_cli()) {
-                let session_id = SessionId::new(binding.session_id);
+                let session_id = SessionId::new(binding.session_id.clone());
                 if self.cli_task_was_stopped(&session_id).await {
                     // Stop in the cockpit ends a CLI task for good, as it does a handle. The
                     // group is freed so the next command starts new work rather than failing.
@@ -934,6 +947,7 @@ impl ClawMcpService {
                         warn!(error = %error, group, "ending a stopped task's group failed");
                     }
                 } else {
+                    let resuming = self.state.sessions.lookup(&session_id).await.is_none();
                     let started = self
                         .start_session_in_store(session_id, client, true)
                         .await?;
@@ -941,6 +955,9 @@ impl ClawMcpService {
                     // Set on every resolve, because a task minted again after a restart
                     // starts with the flag clear.
                     started.session.follow_group();
+                    if resuming {
+                        self.resume_cli_task(&started, &binding).await;
+                    }
                     return Ok(started);
                 }
             }
@@ -997,6 +1014,89 @@ impl ClawMcpService {
                 warn!(error = %error, "reading a CLI task's group failed");
                 None
             }
+        }
+    }
+
+    /// A CLI task minted again after a server restart picks up where it was. It did not end
+    /// with the process, so its history row is reopened, the tabs in its groups are its own
+    /// again, and its name comes back. Each step is best effort: a resumed task that misses
+    /// one still works, it only reads less well in the cockpit.
+    async fn resume_cli_task(&self, started: &StartedSession, binding: &crate::db::Binding) {
+        let session = &started.session;
+        if let Err(error) = self
+            .state
+            .audit_log
+            .reopen_after_server_exit(session.id().as_str())
+            .await
+        {
+            warn!(error = %error, "reopening a resumed CLI task's history failed");
+        }
+        let groups = match self
+            .state
+            .task_groups
+            .live_groups_for_session(session.id().as_str())
+            .await
+        {
+            Ok(groups) => groups,
+            Err(error) => {
+                warn!(error = %error, "reading a resumed CLI task's groups failed");
+                Vec::new()
+            }
+        };
+        self.reclaim_cli_task_tabs(session, &groups).await;
+        // After the group is the task's again, so the retitle lands on it.
+        if let Some(name) = binding.name.clone() {
+            self.apply_task_name(started, name).await;
+        }
+    }
+
+    /// The tabs in a resumed task's groups are its own again. Boot reconciliation released
+    /// their claims with the dead process, so without this they read as the user's and the
+    /// orphaned-tab sweep would eventually close tabs of a task still in progress.
+    async fn reclaim_cli_task_tabs(&self, session: &Arc<Session>, groups: &[crate::db::Binding]) {
+        let Some(newest) = groups.last() else {
+            return;
+        };
+        let ownership = self.state.sessions.ownership();
+        ownership
+            .set_tab_group(
+                session.convo_id().clone(),
+                Some(newest.group_id.clone()),
+                Some(crate::services::browser::color_for_slug(
+                    session.agent().slug(),
+                )),
+            )
+            .await;
+        let Some(browser) = self.state.browser.session().await else {
+            return;
+        };
+        let pages = match browser.pages.list().await {
+            Ok(pages) => pages,
+            Err(error) => {
+                warn!(error = %error, "listing a resumed CLI task's tabs failed");
+                return;
+            }
+        };
+        let owned: std::collections::HashSet<&str> = groups
+            .iter()
+            .map(|binding| binding.group_id.as_str())
+            .collect();
+        let now = crate::clock::now_epoch_ms();
+        for page in pages.iter().filter(|page| {
+            page.group_id
+                .as_deref()
+                .is_some_and(|group| owned.contains(group))
+        }) {
+            self.state.session_tabs.enqueue_claim_tab_for_session(
+                page.tab_id.0,
+                Some(page.target_id.as_str().to_string()),
+                session.id().as_str().to_string(),
+                session.convo_id().as_str().to_string(),
+                now,
+            );
+            ownership
+                .claim_page(session.convo_id().clone(), page.page_id.clone())
+                .await;
         }
     }
 
@@ -4912,6 +5012,49 @@ mod tests {
                 );
             }
         }
+        Ok(())
+    }
+
+    /// A CLI task resumed after a restart gets back what the dead process lost: its name,
+    /// which lived only in memory, and a history row that reads live rather than ended.
+    #[tokio::test]
+    async fn a_resumed_cli_task_gets_its_name_and_its_live_history_back() -> anyhow::Result<()> {
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let state = call.state.clone();
+        let service = ClawMcpService::new(call.state);
+        let before = SessionId::new("named-before-restart");
+        bind_cli_group(&state, "G1", &before).await?;
+        state
+            .task_groups
+            .set_name_for_session(before.as_str(), "price-check")
+            .await?;
+        // What the dead process left behind: a start, and the end boot reconciliation wrote.
+        state
+            .audit_log
+            .record_session_start(
+                before.as_str(),
+                "browseros-cli-old",
+                "browseros-cli",
+                "browseros-cli",
+                task_group::CLI_CLIENT_NAME,
+                "0.0.1",
+            )
+            .await?;
+        state
+            .audit_log
+            .close_sessions_open_from_previous_run()
+            .await?;
+
+        let resumed = cli_task(&service, Some("G1"), HandlelessStart::OpenTask).await?;
+
+        assert_eq!(resumed.session.id(), &before);
+        assert_eq!(resumed.session.label().await, "price-check");
+        let summary = state
+            .audit_log
+            .get_task_summary(before.as_str())
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("the resumed task has no history row"))?;
+        assert_eq!(summary.status, crate::db::audit_log::TaskStatus::Live);
         Ok(())
     }
 }

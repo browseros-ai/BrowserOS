@@ -292,6 +292,7 @@ mod tests {
             profile_id: None,
             created_at,
             ended_at: None,
+            name: None,
         }
     }
 

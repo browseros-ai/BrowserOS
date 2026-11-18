@@ -60,6 +60,9 @@ const RESULT_JSON_STRING_MAX: usize = 192;
 const SUSTAINED_ERROR_TAIL: usize = 3;
 const OPERATOR_CANCELLATION_REASON: &str = "Operation cancelled by the User";
 
+/// The reason boot reconciliation records when it ends a session the dead process left open.
+const SERVER_EXITED: &str = "server exited";
+
 #[derive(Clone)]
 pub struct AuditLog {
     db: Database,
@@ -493,6 +496,33 @@ impl AuditLog {
         Ok(())
     }
 
+    /// Reopens a task the server's exit closed, for a task that outlives the process.
+    ///
+    /// Boot reconciliation ends every session the dead process left open, and a session
+    /// minted again under the same id writes a second start. A CLI task does not end when
+    /// the server does, so its rows collapse back to one lifetime: the first start, with no
+    /// end. That keeps the counts reconciliation balances in step, so the next boot does not
+    /// end it twice, and the history reads the task as live again.
+    pub async fn reopen_after_server_exit(&self, session_id: &str) -> AppResult<()> {
+        let txn = self.db.connection().begin().await?;
+        txn.execute(Statement::from_sql_and_values(
+            DbBackend::Sqlite,
+            "DELETE FROM agent_session_ends WHERE session_id = ? AND kind = 'closed' AND reason = ?",
+            [session_id.to_owned().into(), SERVER_EXITED.into()],
+        ))
+        .await?;
+        txn.execute(Statement::from_sql_and_values(
+            DbBackend::Sqlite,
+            "DELETE FROM agent_session_starts WHERE session_id = ? AND id > \
+             (SELECT MIN(id) FROM agent_session_starts WHERE session_id = ?)",
+            [session_id.to_owned().into(), session_id.to_owned().into()],
+        ))
+        .await?;
+        recompute_task(&txn, session_id).await?;
+        txn.commit().await?;
+        Ok(())
+    }
+
     /// Closes sessions left open by a process that is no longer running.
     ///
     /// A start row with no end row is indistinguishable from an ongoing session, and the
@@ -565,7 +595,7 @@ impl AuditLog {
                     // The only thing actually known. Whether the process was killed, crashed
                     // or restarted by a watcher is recorded nowhere, and naming a cause we
                     // did not observe would put a guess in the audit trail.
-                    reason: Set(Some("server exited".to_owned())),
+                    reason: Set(Some(SERVER_EXITED.to_owned())),
                 })
                 .exec(&txn)
                 .await?;
@@ -1931,6 +1961,55 @@ mod tests {
             "a session that never dispatched ends where it started"
         );
         assert_eq!(idle_end.reason.as_deref(), Some("server exited"));
+        Ok(())
+    }
+
+    /// A CLI task outlives the server. Reopened after the restart, it reads as one live task
+    /// again, and its rows balance so the next boot does not end it a second time.
+    #[tokio::test]
+    async fn a_task_reopened_after_the_server_exited_reads_live_and_stays_balanced()
+    -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let audit = AuditLog::new(Database::open(dir.path().join(DATABASE_FILENAME)).await?);
+        audit
+            .record_session_start(
+                "c1",
+                "cli-task",
+                "browseros-cli",
+                "browseros-cli",
+                "browseros-cli",
+                "1.0",
+            )
+            .await?;
+        audit
+            .record_tool_dispatch(dispatch("c1", "https://one.example.com", false))
+            .await?;
+        assert_eq!(audit.close_sessions_open_from_previous_run().await?, 1);
+        // Minted again under its own id, which writes a second start.
+        audit
+            .record_session_start(
+                "c1",
+                "cli-task-2",
+                "browseros-cli",
+                "browseros-cli",
+                "browseros-cli",
+                "1.0",
+            )
+            .await?;
+
+        audit.reopen_after_server_exit("c1").await?;
+
+        let task = audit
+            .get_task("c1")
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("task missing"))?;
+        assert_eq!(task.summary.status, TaskStatus::Live);
+        assert_eq!(task.summary.ended_at, None);
+        assert_eq!(
+            audit.close_sessions_open_from_previous_run().await?,
+            1,
+            "one live task, so the next boot ends it exactly once"
+        );
         Ok(())
     }
 
