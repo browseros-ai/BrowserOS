@@ -11,7 +11,7 @@ use std::{
 
 use claw_server::{
     analytics::NoopAnalyticsSink,
-    services::harness::{Harness, HarnessService},
+    services::harness::{FirstRunConnectOutcome, Harness, HarnessService},
 };
 use harness_integrations::{AgentId, SkillSpec, is_installed};
 
@@ -64,6 +64,47 @@ fn dev_harness_service_never_mutates_shared_agent_files() -> anyhow::Result<()> 
                 assert!(!home.join(".agents").exists());
                 assert!(!home.join(".claude/skills").exists());
             }
+            Ok(())
+        },
+    )
+}
+
+#[test]
+fn dev_mode_honors_explicit_connect_and_disconnect() -> anyhow::Result<()> {
+    isolated(
+        "dev_mode_honors_explicit_connect_and_disconnect",
+        None,
+        |home| async move {
+            let state = home.join("state");
+            let service = HarnessService::new_with_managed_skill(
+                state.join("mcp"),
+                state.join("skills"),
+                home.clone(),
+                SkillSpec::new("browseros-neo", "dev instructions")?,
+                Arc::new(NoopAnalyticsSink),
+            )
+            .with_read_only(true);
+            let url = "http://127.0.0.1:9200/mcp";
+            let config = home.join(".codex/config.toml");
+            fs::create_dir_all(home.join(".codex"))?;
+            fs::write(&config, "model = \"custom\"\n")?;
+
+            // An explicit Connect from the dev build UI is a deliberate developer
+            // action: read-only mode must honor it and write the agent config.
+            let connected = service.connect_browseros(Harness::Codex, url).await?;
+            assert!(connected.installed, "{}", connected.message);
+            assert!(fs::read_to_string(&config)?.contains(url));
+
+            // The automatic first-run path keeps its own read-only guard, so dev
+            // startup still never writes configs on its own.
+            assert_eq!(
+                service.first_run_connect(url).await?,
+                FirstRunConnectOutcome::default()
+            );
+
+            let disconnected = service.disconnect_browseros(Harness::Codex).await?;
+            assert!(!disconnected.installed, "{}", disconnected.message);
+            assert!(!fs::read_to_string(&config)?.contains("browseros-neo"));
             Ok(())
         },
     )

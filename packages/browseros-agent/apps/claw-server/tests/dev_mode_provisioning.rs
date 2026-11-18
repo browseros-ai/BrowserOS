@@ -1,7 +1,9 @@
 //! A dev claw-server (tools/dev `dev:claw:watch`) shares the developer's home with their
 //! installed BrowserOS neo, and both name their MCP entry `browseros-neo`. These tests launch
-//! the real binary against a disposable home holding the installed app's entry, so only a
-//! non-dev server may change agent harnesses, including through app requests.
+//! the real binary against a disposable home holding the installed app's entry. A dev server
+//! never provisions harnesses on its own at boot, so it cannot clobber that shared entry
+//! automatically; an explicit app request (PUT/DELETE a connection) is a deliberate developer
+//! action and is honored, so harness connections can be tested against the dev build.
 use std::{
     fs,
     io::{BufRead, BufReader},
@@ -37,14 +39,15 @@ fn dev_server_leaves_the_installed_apps_harness_configs_alone() -> anyhow::Resul
 }
 
 #[tokio::test]
-async fn dev_server_connect_leaves_the_installed_apps_mcp_url_alone() -> anyhow::Result<()> {
+async fn dev_server_connect_rewrites_the_shared_mcp_url() -> anyhow::Result<()> {
     let home = Home::seeded()?;
-    let before = fs::read(home.path().join(".claude.json"))?;
     let server = Server::launch(&home, true)?;
     server.wait_for_any(&[PROVISIONING_SKIPPED, PROVISIONING_RAN])?;
 
-    // The app can still send Connect after boot. Exercise the real HTTP boundary so a
-    // startup-only guard cannot hide a later takeover of the installed app's endpoint.
+    // Boot provisioning stays off in dev, so the installed app's entry is untouched until an
+    // explicit request. That request is a deliberate developer action: it may repoint the
+    // shared browseros-neo entry at the dev server so harness connections can be tested here.
+    assert_eq!(home.claude_mcp_url()?, INSTALLED_MCP_URL);
     let response = reqwest::Client::new()
         .put(format!(
             "http://127.0.0.1:{}/api/v1/connections/Claude%20Code",
@@ -53,29 +56,25 @@ async fn dev_server_connect_leaves_the_installed_apps_mcp_url_alone() -> anyhow:
         .send()
         .await?;
 
-    assert_eq!(home.claude_mcp_url()?, INSTALLED_MCP_URL);
-    assert_eq!(fs::read(home.path().join(".claude.json"))?, before);
-    assert_eq!(response.status(), reqwest::StatusCode::FORBIDDEN);
-    assert!(response.text().await?.contains("development mode"));
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    let dev_url = format!("http://127.0.0.1:{}/mcp", server.port);
+    assert_eq!(home.claude_mcp_url()?, dev_url);
+    assert_ne!(home.claude_mcp_url()?, INSTALLED_MCP_URL);
     Ok(())
 }
 
 #[tokio::test]
-async fn dev_server_refuses_connection_changes_for_every_harness() -> anyhow::Result<()> {
+async fn dev_server_allows_explicit_connection_changes_for_every_harness() -> anyhow::Result<()> {
     let home = Home::seeded()?;
-    let before = fs::read(home.path().join(".claude.json"))?;
     let server = Server::launch(&home, true)?;
     server.wait_for_any(&[PROVISIONING_SKIPPED, PROVISIONING_RAN])?;
-    assert_harness_changes_refused(&server).await?;
+    assert_harness_changes_allowed(&server).await?;
     assert_connections_readable(&server).await?;
-    assert_eq!(fs::read(home.path().join(".claude.json"))?, before);
-    assert!(!home.root.path().join("state/mcp-manager").exists());
-    assert!(!home.path().join(".agents/skills/browseros-neo").exists());
     Ok(())
 }
 
 /// Exercise both mutation verbs for every supported app through the real listener.
-async fn assert_harness_changes_refused(server: &Server) -> anyhow::Result<()> {
+async fn assert_harness_changes_allowed(server: &Server) -> anyhow::Result<()> {
     let client = reqwest::Client::new();
     for harness in Harness::ALL {
         let url = connection_url(server, harness)?;
@@ -83,8 +82,8 @@ async fn assert_harness_changes_refused(server: &Server) -> anyhow::Result<()> {
             let response = client.request(method.clone(), url.clone()).send().await?;
             assert_eq!(
                 response.status(),
-                reqwest::StatusCode::FORBIDDEN,
-                "dev {method} must leave {harness}'s config alone"
+                reqwest::StatusCode::OK,
+                "dev {method} is an explicit developer action for {harness}"
             );
         }
     }
