@@ -2315,7 +2315,10 @@ impl Watcher {
     }
 
     /// Sends each retry that is due ([`ReadRetry`]) while its session is still its target's
-    /// lifecycle source. `start_seed` sends none while a read of that session is in its line.
+    /// lifecycle source, or is the tab's root observer waiting behind a session of core's: its
+    /// read turns its `Page` on, which it needs before core's detach promotes it
+    /// (`seed_observer`). `start_seed` sends none while a read of that session is in its line,
+    /// nor any to a tab the door refuses.
     async fn retry_reads(&mut self) {
         let now = Instant::now();
         let due: Vec<(SessionId, TargetId, TreeRead)> = self
@@ -2330,7 +2333,9 @@ impl Watcher {
             })
             .collect();
         for (session, tab, read) in due {
-            if self.sessions.contains_key(&session) && self.lifecycle_sources.accepts(&session) {
+            let reads = self.lifecycle_sources.accepts(&session)
+                || self.root_observers.contains_key(&session);
+            if reads && self.sessions.contains_key(&session) {
                 self.start_seed(&tab, &session, read).await;
             }
         }
@@ -6095,6 +6100,66 @@ mod seed_tests {
         };
         read(&mut watcher, gone).await;
         assert!(watcher.lifecycle_sources.accepts(&observer), "promoted");
+        let commit = json!({ "frame": { "id": "child", "parentId": "tab", "loaderId": "next",
+            "url": "https://a.test/next" } });
+        read(
+            &mut watcher,
+            on(observer.as_str(), "Page.frameNavigated", commit),
+        )
+        .await;
+        assert_eq!(
+            records(&hub),
+            ["framenavigated https://a.test/next"],
+            "the promoted observer reports the tab's commit"
+        );
+        Ok(())
+    }
+
+    /// An observer waiting behind core's session whose seed's `Page.enable` fails is read again
+    /// on a later tick, as a source is: once its enable succeeds, core's detach promotes an
+    /// observer with `Page` on, and the tab's commits are recorded from it.
+    #[tokio::test(start_paused = true)]
+    async fn a_waiting_observer_whose_enable_failed_is_read_again() -> TestResult {
+        let connection =
+            TestConnection::new([("Page.enable", cdp_error("Page domain unavailable"))]);
+        for method in ["Target.setAutoAttach", "Page.enable"] {
+            connection.always(method, json!({}))?;
+        }
+        connection.always("Page.getFrameTree", tree_with("tab", Some("child")))?;
+        let (hub, mut watcher, mut answers) = watcher(&connection);
+        read(&mut watcher, target_created("tab", "")).await;
+        watcher.observe_workers(TargetId("tab".to_owned())).await;
+        let observer = observer(&watcher)?;
+        read(&mut watcher, page_attached("core", "tab")).await;
+        answer_next(&mut watcher, &mut answers).await?;
+        read(&mut watcher, info_changed("tab", "https://a.test/")).await;
+        answer_next(&mut watcher, &mut answers).await?;
+        assert!(
+            !watcher.lifecycle_sources.accepts(&observer),
+            "it waits behind core's session"
+        );
+
+        time::advance(TICK).await;
+        watcher.retry_reads().await;
+        settle().await;
+        assert_eq!(
+            page_domain_calls(&connection, &observer)?,
+            [
+                "Page.enable",
+                "Page.getFrameTree",
+                "Page.enable",
+                "Page.getFrameTree"
+            ],
+            "read again on a later tick while it waits"
+        );
+        answer_next(&mut watcher, &mut answers).await?;
+        assert!(watcher.read_retries.is_empty(), "its enable succeeded");
+        let gone = CdpEvent {
+            method: "Target.detachedFromTarget".to_owned(),
+            params: json!({ "sessionId": "core" }),
+            session_id: None,
+        };
+        read(&mut watcher, gone).await;
         let commit = json!({ "frame": { "id": "child", "parentId": "tab", "loaderId": "next",
             "url": "https://a.test/next" } });
         read(
