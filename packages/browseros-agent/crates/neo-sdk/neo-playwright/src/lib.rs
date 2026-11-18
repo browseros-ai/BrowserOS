@@ -70,6 +70,7 @@ mod target_crashes;
 mod test_env;
 #[cfg(test)]
 mod test_support;
+pub mod url_scheme;
 mod wire;
 mod world;
 

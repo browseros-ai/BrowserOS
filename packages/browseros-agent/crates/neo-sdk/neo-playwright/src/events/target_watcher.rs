@@ -90,6 +90,7 @@ use crate::events::worker_table::WorkerContext;
 use crate::events::{PageEventKind, WatcherProgress, navigation_event};
 use crate::snapshot::SnapshotBaselines;
 use crate::target_crashes::{RecoveryTicket, TargetCrashes};
+use crate::url_scheme::refuses_page;
 use crate::world::{BackendNodeId, FrameAttachLog, FrameEvent};
 
 /// upstream's `PageBinding.kBindingName`: the CDP binding every exposed binding's stub calls.
@@ -606,6 +607,11 @@ struct KnownPage {
     /// The native tab id, which the popup's record carries (`OpenedPage::tab`).
     tab: Option<TabId>,
     state: PageState,
+    /// The URL the tab's own target events last named (`Target.targetCreated`,
+    /// `Target.targetInfoChanged`, discovery's `Target.getTargets`); `None` until one did. The
+    /// door check reads it ([`Watcher::door_verdict`]). The tab listing's URL is not used: it
+    /// names the tab, and lags a swap of the tab's target, whose new target has none yet.
+    url: Option<String>,
 }
 
 enum PageState {
@@ -1106,12 +1112,13 @@ impl Watcher {
         for id in gone_workers {
             self.close_worker(&id);
         }
-        let live: HashSet<TargetId> = targets
+        let listed: Vec<(TargetId, String)> = targets
             .target_infos
             .into_iter()
             .filter(is_tab)
-            .map(|info| TargetId(info.target_id))
+            .map(|info| (TargetId(info.target_id), info.url))
             .collect();
+        let live: HashSet<TargetId> = listed.iter().map(|(target, _)| target.clone()).collect();
         self.crashes.reconcile(
             &snapshot,
             &live,
@@ -1126,12 +1133,16 @@ impl Watcher {
         for target in gone {
             self.destroyed(&target);
         }
-        for target in live {
-            self.pages.entry(target).or_insert(KnownPage {
+        for (target, url) in listed {
+            let page = self.pages.entry(target).or_insert(KnownPage {
                 opener: None,
                 tab: None,
                 state: PageState::Reported,
+                url: None,
             });
+            if !url.is_empty() {
+                page.url = Some(url);
+            }
         }
         if changed {
             // Whatever the tabs did while the old socket was down went unseen.
@@ -1211,7 +1222,7 @@ impl Watcher {
             }
             "Target.targetInfoChanged" => {
                 if let Some(TargetEvent { target_info }) = parse(params) {
-                    self.info_changed(target_info);
+                    self.info_changed(target_info).await;
                 }
             }
             "Target.targetDestroyed" => {
@@ -1310,6 +1321,7 @@ impl Watcher {
                     deadline: Instant::now() + URL_WAIT,
                     window_id: info.window_id,
                 },
+                url: (!info.url.is_empty()).then(|| info.url.clone()),
             },
         );
         if !info.url.is_empty() {
@@ -1318,16 +1330,45 @@ impl Watcher {
         true
     }
 
-    fn info_changed(&mut self, info: TargetInfo) {
+    /// A tab's target changed: its tab id and URL, a pending tab's recording, and the seed of its
+    /// root observer once its URL is one the door allows (`seed_observer`): a tab that showed a
+    /// refused page, or no URL yet, gets its observer's `Page` and seed on the change that
+    /// brings an allowed one.
+    async fn info_changed(&mut self, info: TargetInfo) {
         let target = TargetId(info.target_id);
         let Some(page) = self.pages.get_mut(&target) else {
             return;
         };
         page.tab = info.tab_id.or(page.tab);
+        if !info.url.is_empty() {
+            page.url = Some(info.url.clone());
+        }
         let pending = matches!(page.state, PageState::Pending { .. });
         if pending && !info.url.is_empty() {
             self.ready(&target, info.url, info.window_id);
         }
+        let observer = self
+            .root_observers
+            .iter()
+            .find_map(|(session, observer)| (observer.target == target).then(|| session.clone()));
+        if let Some(observer) = observer
+            && !self.lifecycle_sources.accepts(&observer)
+            && self.door_verdict(&target) == Some(false)
+        {
+            self.seed_observer(&target, &observer).await;
+        }
+    }
+
+    /// Whether the door refuses the page `tab` shows (`url_scheme::refuses_page`), read from the
+    /// URL its own target events last named; `None` while none did. The watcher sends nothing
+    /// of a page domain to a tab the door refuses: no read, no retry and no observer `Page`
+    /// ([`Self::start_seed`]), and it attaches to an untouched tab only once its URL is known
+    /// and allowed (`observe_context`). A tab that moves to a refused page after its session's
+    /// `Page` went on gets nothing new, and no `Page.disable` either: what still arrives from it
+    /// then is what the browser sends on its own on a session with `Page` on (its frames' and
+    /// loads' events, its dialogs), never the answer to a command of ours.
+    fn door_verdict(&self, tab: &TargetId) -> Option<bool> {
+        self.pages.get(tab)?.url.as_deref().map(refuses_page)
     }
 
     /// A new tab has its URL: recorded now, or once a popup's window type is known.
@@ -1993,8 +2034,15 @@ impl Watcher {
                 {
                     continue;
                 }
+                // One door check covers both attaches of an untouched tab: core's full page
+                // session for a context-level listener, and the observer's `Page` and seed
+                // (`observe_workers`). A tab on a refused page, or with no URL from its target
+                // events yet, gets neither; the pass after it moves to an allowed page attaches
+                // it (`info_changed` seeds an observer already there).
                 if full {
-                    self.attach_page(page.target_id, page.page_id);
+                    if self.door_verdict(&page.target_id) == Some(false) {
+                        self.attach_page(page.target_id, page.page_id);
+                    }
                 } else if !self
                     .root_observers
                     .values()
@@ -2030,12 +2078,14 @@ impl Watcher {
     }
 
     /// Attaches the watcher's own root observer to the untouched tab `target`. It auto-attaches
-    /// the tab's workers and out-of-process frames, and is the tab's lifecycle source unless a
-    /// session of core's came first: `Page` goes on with the seed read, sent together, through
-    /// the tab's line (`start_seed`), so such a tab reports its frames' commits and its tracker
-    /// lists them before any run reads its tree. `Runtime` stays off. Nothing
-    /// here waits for the tab's renderer: the attach is the browser's to answer, and the
-    /// auto-attach and the seed go out on tasks of their own, so a busy tab holds only its line.
+    /// the tab's workers and out-of-process frames, as on main. Once the tab's URL is one the door
+    /// allows ([`Self::door_verdict`]), now or on a later `Target.targetInfoChanged`, it is also
+    /// the tab's lifecycle source unless a session of core's came first: `Page` goes on with the
+    /// seed read, sent together, through the tab's line (`seed_observer`), so such a tab reports
+    /// its frames' commits and its tracker lists them before any run reads its tree. `Runtime`
+    /// stays off. Nothing here waits for the tab's renderer: the attach is the browser's to
+    /// answer, and the auto-attach and the seed go out on tasks of their own, so a busy tab
+    /// holds only its line.
     async fn observe_workers(&mut self, target: TargetId) {
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase")]
@@ -2052,8 +2102,6 @@ impl Watcher {
         let Some(Observed { session_id }) = reply.ok().and_then(parse::<Observed>) else {
             return;
         };
-        self.lifecycle_sources.attach(&session_id, &target);
-        let source = self.lifecycle_sources.accepts(&session_id);
         self.root_observers.insert(
             session_id.clone(),
             RootObserver {
@@ -2089,8 +2137,19 @@ impl Watcher {
             .await;
         };
         drop(tokio::spawn(arm));
-        if source {
-            self.start_seed(&target, &session_id, TreeRead::Frame).await;
+        if self.door_verdict(&target) == Some(false) {
+            self.seed_observer(&target, &session_id).await;
+        }
+    }
+
+    /// Makes `observer` its tab's lifecycle source, unless a session of core's came first, and
+    /// sends its `Page.enable` with the seed read through the tab's line (`start_seed`). Only an
+    /// observer that turns `Page` on is a source: a mute one would hold a core session that
+    /// attaches meanwhile as its source-in-waiting, whose events would then be dropped.
+    async fn seed_observer(&mut self, target: &TargetId, observer: &SessionId) {
+        self.lifecycle_sources.attach(observer, target);
+        if self.lifecycle_sources.accepts(observer) {
+            self.start_seed(target, observer, TreeRead::Frame).await;
         }
     }
 
@@ -2143,6 +2202,7 @@ impl Watcher {
                 .insert(observed.session_id.clone(), target.clone());
             observed.session_id
         };
+        let refused = self.door_verdict(target) == Some(true);
         let Some(observer) = self.root_observers.get_mut(&session) else {
             return;
         };
@@ -2160,7 +2220,7 @@ impl Watcher {
                 observer.recovery = RecoveryObservation::On;
             }
         }
-        if matches!(observer.recovery, RecoveryObservation::Off) {
+        if matches!(observer.recovery, RecoveryObservation::Off) && !refused {
             self.lifecycle_sources.attach(&session, target);
             let protocol = self.browser.protocol_session(session).at_connection_epoch();
             observer.recovery = RecoveryObservation::Enabling(tokio::spawn(async move {
@@ -2188,6 +2248,9 @@ impl Watcher {
             );
         if in_line {
             return true;
+        }
+        if self.door_verdict(tab) == Some(true) {
+            return false;
         }
         let protocol = self.browser.protocol_session(session.clone());
         let Some(seeded) = self.seeded.clone() else {
@@ -4749,6 +4812,24 @@ mod seed_tests {
         }
     }
 
+    /// Tab `tab` appears, its own target event naming `url`.
+    fn target_created(tab: &str, url: &str) -> CdpEvent {
+        CdpEvent {
+            method: "Target.targetCreated".to_owned(),
+            params: json!({ "targetInfo": { "targetId": tab, "type": "page", "url": url } }),
+            session_id: None,
+        }
+    }
+
+    /// Tab `tab`'s target now shows `url`.
+    fn info_changed(tab: &str, url: &str) -> CdpEvent {
+        CdpEvent {
+            method: "Target.targetInfoChanged".to_owned(),
+            params: json!({ "targetInfo": { "targetId": tab, "type": "page", "url": url } }),
+            session_id: None,
+        }
+    }
+
     /// Tab `tab`'s tree, its main frame at `url`.
     fn tree(tab: &str, url: &str) -> Value {
         json!({ "frameTree": { "frame": { "id": tab, "loaderId": "seeded", "url": url } } })
@@ -5315,6 +5396,7 @@ mod seed_tests {
         }
         connection.always("Page.getFrameTree", tree_with("tab", Some("child")))?;
         let (hub, mut watcher, mut answers) = watcher(&connection);
+        read(&mut watcher, target_created("tab", "https://a.test/")).await;
         watcher.observe_workers(TargetId("tab".to_owned())).await;
         let observer = observer(&watcher)?;
         answer_next(&mut watcher, &mut answers).await?;
@@ -5368,6 +5450,7 @@ mod seed_tests {
             .sessions
             .insert(healthy_page.clone(), healthy.clone());
         watcher.lifecycle_sources.attach(&healthy_page, &healthy);
+        read(&mut watcher, target_created("busy", "https://busy.test/")).await;
         // No time passes on the loop's clock: a command awaited in place would run into this.
         time::timeout(TREE_READ_WAIT / 4, async {
             watcher.observe_workers(TargetId("busy".to_owned())).await;
@@ -5451,6 +5534,7 @@ mod seed_tests {
         }
         connection.always("Page.getFrameTree", tree_with("tab", Some("child")))?;
         let (hub, mut watcher, mut answers) = watcher(&connection);
+        read(&mut watcher, target_created("tab", "https://a.test/")).await;
         watcher.observe_workers(TargetId("tab".to_owned())).await;
         let observer = observer(&watcher)?;
         answer_next(&mut watcher, &mut answers).await?;
@@ -5498,6 +5582,7 @@ mod seed_tests {
         }
         connection.always("Page.getFrameTree", tree_with("tab", None))?;
         let (hub, mut watcher, mut answers) = watcher(connection);
+        read(&mut watcher, target_created("tab", "https://a.test/")).await;
         watcher.observe_workers(TargetId("tab".to_owned())).await;
         let observer = observer(&watcher)?;
         answer_next(&mut watcher, &mut answers).await?;
@@ -5576,6 +5661,7 @@ mod seed_tests {
         connection.always("Page.enable", cdp_error("Page domain unavailable"))?;
         connection.always("Page.getFrameTree", tree_with("tab", Some("child")))?;
         let (hub, mut watcher, mut answers) = watcher(&connection);
+        read(&mut watcher, target_created("tab", "https://a.test/")).await;
         watcher.observe_workers(TargetId("tab".to_owned())).await;
         let observer = observer(&watcher)?;
         answer_next(&mut watcher, &mut answers).await?;
@@ -5612,6 +5698,7 @@ mod seed_tests {
         }
         connection.always("Page.getFrameTree", cdp_pending())?;
         let (hub, mut watcher, _answers) = watcher(&connection);
+        read(&mut watcher, target_created("tab", "https://a.test/")).await;
         watcher.observe_workers(TargetId("tab".to_owned())).await;
         let observer = observer(&watcher)?;
         for _ in 0..3 {
@@ -5651,6 +5738,108 @@ mod seed_tests {
         Ok(())
     }
 
+    /// The calls of a page domain that went to `session`, in order.
+    fn page_domain_calls(
+        connection: &TestConnection,
+        session: &SessionId,
+    ) -> Result<Vec<String>, Box<dyn Error>> {
+        Ok(connection
+            .calls()?
+            .into_iter()
+            .filter(|call| call.session.as_ref() == Some(session))
+            .map(|call| call.method)
+            .filter(|method| {
+                [
+                    "Page.",
+                    "Runtime.",
+                    "DOM.",
+                    "Input.",
+                    "Emulation.",
+                    "Accessibility.",
+                ]
+                .iter()
+                .any(|domain| method.starts_with(domain))
+            })
+            .collect())
+    }
+
+    /// An untouched tab on a `file:` page, which the door refuses, gets nothing of a page domain
+    /// from its observer, which is no lifecycle source meanwhile; once it moves to a page the door
+    /// allows, the observer's `Page.enable` and seed read go out, and it is the tab's source.
+    #[tokio::test]
+    async fn an_untouched_tab_on_a_file_page_is_seeded_only_once_it_moves_off_it() -> TestResult {
+        let connection = TestConnection::new([]);
+        for method in ["Target.setAutoAttach", "Page.enable"] {
+            connection.always(method, json!({}))?;
+        }
+        connection.always("Page.getFrameTree", tree_with("tab", None))?;
+        let (_hub, mut watcher, _answers) = watcher(&connection);
+        read(&mut watcher, target_created("tab", "file:///etc/hosts")).await;
+        watcher.observe_workers(TargetId("tab".to_owned())).await;
+        let observer = observer(&watcher)?;
+        settle().await;
+        assert_eq!(
+            page_domain_calls(&connection, &observer)?,
+            Vec::<String>::new(),
+            "nothing of a page domain while it shows a file page"
+        );
+        assert!(
+            !watcher.lifecycle_sources.accepts(&observer),
+            "a mute observer is no lifecycle source"
+        );
+
+        read(&mut watcher, info_changed("tab", "https://a.test/")).await;
+        settle().await;
+        assert_eq!(
+            page_domain_calls(&connection, &observer)?,
+            ["Page.enable", "Page.getFrameTree"],
+            "its seed starts on the change that brings an allowed page"
+        );
+        assert!(watcher.lifecycle_sources.accepts(&observer));
+        Ok(())
+    }
+
+    /// While a run listens on the context for lifecycle events, an untouched tab on a `file:` page
+    /// gets no attach of core's page session, and the pass after it moves to an allowed page
+    /// attaches it.
+    #[tokio::test(start_paused = true)]
+    async fn a_context_listener_attaches_no_tab_on_a_file_page() -> TestResult {
+        let connection = TestConnection::new([]);
+        connection.always(
+            "Browser.getTabs",
+            json!({ "tabs": [{ "tabId": 7, "targetId": "tab", "windowId": 1,
+                "url": "file:///etc/hosts", "title": "hosts", "isActive": false,
+                "isLoading": false, "loadProgress": 1.0, "isPinned": false, "isHidden": false }] }),
+        )?;
+        connection.always("Target.attachToTarget", cdp_pending())?;
+        let (hub, mut watcher, _answers) = watcher(&connection);
+        let run = Arc::new(RunState::default());
+        hub.bind(&run);
+        run.events
+            .listen(Subscription::Context(PageEventKind::Dialog), 1_000, 0);
+        let attaches = || -> Result<usize, Box<dyn Error>> {
+            Ok(connection
+                .calls()?
+                .iter()
+                .filter(|call| call.method == "Target.attachToTarget")
+                .count())
+        };
+        read(&mut watcher, target_created("tab", "file:///etc/hosts")).await;
+        watcher.observe_context().await;
+        settle().await;
+        assert_eq!(attaches()?, 0, "no attach while it shows a file page");
+
+        read(&mut watcher, info_changed("tab", "https://a.test/")).await;
+        watcher.observe_context().await;
+        settle().await;
+        assert_eq!(
+            attaches()?,
+            1,
+            "the pass after it moved to an allowed page attaches it"
+        );
+        Ok(())
+    }
+
     /// While a run listens on the context for lifecycle events, an untouched tab whose renderer
     /// never answers core's attach costs the loop nothing, and only one attach of it is out at a
     /// time; once that one ends without a session, a later pass attaches it again.
@@ -5669,6 +5858,9 @@ mod seed_tests {
         hub.bind(&run);
         run.events
             .listen(Subscription::Context(PageEventKind::Dialog), 1_000, 0);
+        // Its URL from its own target event: the door allows it, so the pass this event runs
+        // attaches it.
+        read(&mut watcher, target_created("busy", "https://busy.test/")).await;
         let attaches = || -> Result<usize, Box<dyn Error>> {
             Ok(connection
                 .calls()?
