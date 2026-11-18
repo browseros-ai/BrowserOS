@@ -1983,8 +1983,8 @@ mod tests {
     const SHARPEN: Duration = Duration::from_millis(250);
     const FULL_SIZE_AFTER: Duration = Duration::from_secs(1);
 
-    fn motion(now: Instant, constrained: bool) -> Picture {
-        let mut p = Picture::new(
+    fn full_picture(now: Instant, width: usize, height: usize) -> Picture {
+        Picture::new(
             picture::Config {
                 base_crf: 24.0,
                 crf_range: 6.0,
@@ -1994,10 +1994,14 @@ mod tests {
                 adaptive_size: true,
                 cpu_guard: true,
             },
-            780,
-            ROWS,
-            now - Duration::from_secs(9),
-        );
+            width,
+            height,
+            now,
+        )
+    }
+
+    fn motion(now: Instant, constrained: bool) -> Picture {
+        let mut p = full_picture(now - Duration::from_secs(9), 780, ROWS);
         if constrained {
             for n in (1..=8).rev() {
                 p.tick(
@@ -2718,6 +2722,7 @@ mod tests {
         sent: f32,
         delivered: f32,
         blocked: f32,
+        queue_ms: u32,
     }
     struct PacedFrame {
         at: Duration,
@@ -2734,6 +2739,18 @@ mod tests {
         first_half: Option<Duration>,
     }
 
+    impl PacedTrace {
+        fn max_draw_gap(&self, end: Duration) -> Duration {
+            let mut previous = Duration::ZERO;
+            let mut max_gap = Duration::ZERO;
+            for frame in &self.frames {
+                max_gap = max_gap.max(frame.received - previous);
+                previous = frame.received;
+            }
+            max_gap.max(end.saturating_sub(previous))
+        }
+    }
+
     struct PacedCell {
         kbps: u64,
         rtt_ms: u64,
@@ -2743,6 +2760,7 @@ mod tests {
         first_two_ack_floor_ms: u64,
         initial_queue_ms: u64,
         changed_rows: usize,
+        input_every_ms: Option<u64>,
     }
 
     impl Default for PacedCell {
@@ -2756,13 +2774,28 @@ mod tests {
                 first_two_ack_floor_ms: 0,
                 initial_queue_ms: 0,
                 changed_rows: 1200,
+                input_every_ms: None,
             }
         }
     }
 
-    // Viewer admission, ACKs and policy run on the same clock as a serial link. A scroll
-    // exposes the same bytes each second, so each frame carries more damage at lower fps.
+    // A steady scroll exposes the same bytes each second, so slower frames carry more damage.
     fn paced_picture(seconds: u64, cell: PacedCell) -> PacedTrace {
+        paced_screen(seconds, &cell, (780, ROWS), |_, p| {
+            (
+                cell.changed_rows,
+                cell.motion_kbps as f32 * 1000.0 / (8.0 * p.fps()),
+            )
+        })
+    }
+
+    // Viewer admission, ACKs and policy run on the same clock as the serial link.
+    fn paced_screen(
+        seconds: u64,
+        cell: &PacedCell,
+        (width, height): (usize, usize),
+        motion_frame: impl Fn(u64, &Picture) -> (usize, f32),
+    ) -> PacedTrace {
         let (mut owner, _peer) = viewer_pair(1, false);
         let mut t = Instant::now();
         if cell.initial_queue_ms > 0 {
@@ -2775,7 +2808,7 @@ mod tests {
                     .push((cell.rtt_ms + cell.initial_queue_ms) as u32, t);
             }
         }
-        let mut p = motion(t, false);
+        let mut p = full_picture(t, width, height);
         let mut viewers = vec![owner];
         let (mut seq, mut last_send, mut blocked) = (0, None::<Instant>, 0.0);
         let mut tick_at = t + Duration::from_secs(1);
@@ -2786,6 +2819,12 @@ mod tests {
         let mut trace = PacedTrace::default();
         for ms in 0..=seconds * 1000 {
             let now = t + Duration::from_millis(ms);
+            if cell
+                .input_every_ms
+                .is_some_and(|period| ms.is_multiple_of(period))
+            {
+                p.input(now);
+            }
             while let Some(&(at, ack)) = acks.front()
                 && at <= now
             {
@@ -2815,6 +2854,7 @@ mod tests {
                 v.clear_interval();
                 let sent = link.sent_kbps;
                 let delivered = link.delivered_kbps;
+                let queue_ms = link.queue_ms;
                 p.tick(now, link, picture::Cpu::default());
                 trace.ticks.push(PacedTick {
                     fps: p.fps(),
@@ -2823,6 +2863,7 @@ mod tests {
                     sent,
                     delivered,
                     blocked: blocked_fraction,
+                    queue_ms,
                 });
                 blocked = 0.0;
             }
@@ -2833,13 +2874,15 @@ mod tests {
             if viewers[0].open(now, interval) && last_send.is_none_or(|last| now >= last + interval)
             {
                 let owner_key = viewers[0].needs_key;
-                let band = Some((0, ROWS, cell.changed_rows));
+                let (changed_rows, motion_bytes) = motion_frame(ms, &p);
+                let band = Some((0, height, changed_rows));
                 let plan = frame_plan(&mut p, now, band, owner_key);
-                let key = owner_key || plan.scale != p.scale();
+                let key = owner_key || plan.scale != p.scale() || plan.sharp_qp.is_some();
                 let full_bytes = if key {
-                    cell.key_bytes as f32 * 2.0_f32.powf((24.0 - p.crf()) / 6.0)
+                    let qp = plan.sharp_qp.map_or(p.crf(), f32::from);
+                    cell.key_bytes as f32 * 2.0_f32.powf((24.0 - qp) / 6.0)
                 } else {
-                    cell.motion_kbps as f32 * 1000.0 / (8.0 * p.fps())
+                    motion_bytes
                 };
                 let size = match plan.scale {
                     Scale::Full => full_bytes,
@@ -2859,8 +2902,8 @@ mod tests {
                         key,
                         owner_key,
                         bytes: size,
-                        pixels: 780 * ROWS / if plan.scale == Scale::Half { 4 } else { 1 },
-                        big: cell.changed_rows * 2 > ROWS,
+                        pixels: width * height / if plan.scale == Scale::Half { 4 } else { 1 },
+                        big: changed_rows * 2 > height,
                         work: Work {
                             encode: Duration::from_millis(10),
                             ..Work::default()
@@ -2883,8 +2926,14 @@ mod tests {
                     link_free.max(now) + Duration::from_micros(size as u64 * 8000 / cell.kbps);
                 seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
                 let jitter = (u64::from(seed) * 2 * cell.jitter_ms) >> 32;
-                let mut ack =
-                    link_free + Duration::from_millis(cell.rtt_ms - cell.jitter_ms + jitter);
+                let path_delay = Duration::from_millis(cell.rtt_ms - cell.jitter_ms + jitter);
+                // The frame can be drawn after the forward leg. TCP preserves its order.
+                let received = link_free - t + path_delay / 2;
+                let received = trace
+                    .frames
+                    .last()
+                    .map_or(received, |f| f.received.max(received));
+                let mut ack = link_free + path_delay;
                 if seq <= 2 {
                     ack = ack.max(now + Duration::from_millis(cell.first_two_ack_floor_ms));
                 }
@@ -2892,7 +2941,7 @@ mod tests {
                 acks.push_back((ack, seq));
                 trace.frames.push(PacedFrame {
                     at: now - t,
-                    received: link_free - t,
+                    received,
                     scale: plan.scale,
                     key,
                     bytes: size,
@@ -3071,13 +3120,7 @@ mod tests {
                 .any(|tick| tick.scale == Scale::Half)
         );
         assert!(trace.resets.len() <= 1);
-        let mut previous = Duration::ZERO;
-        let mut max_gap = Duration::ZERO;
-        for frame in &trace.frames {
-            max_gap = max_gap.max(frame.received - previous);
-            previous = frame.received;
-        }
-        max_gap = max_gap.max(Duration::from_secs(20).saturating_sub(previous));
+        let max_gap = trace.max_draw_gap(Duration::from_secs(20));
         assert!(
             max_gap < Duration::from_millis(500),
             "largest gap between complete frames: {max_gap:?}"
@@ -3178,6 +3221,52 @@ mod tests {
         assert!(trace.resets.is_empty());
         assert!(trace.ticks.iter().all(|tick| tick.scale == Scale::Full));
         assert!(trace.frames.iter().all(|frame| frame.scale == Scale::Full));
+    }
+
+    #[test]
+    fn tests_that_cellular_carousel_swipes_stay_full_without_half_second_draw_gaps() {
+        let seconds = 60;
+        // Fly captures two pixels per CSS pixel on the 430 × 932 screen.
+        let height = 932 * 2;
+        let trace = paced_screen(
+            seconds,
+            &PacedCell {
+                kbps: 3000,
+                rtt_ms: 100 + 60,
+                jitter_ms: 20,
+                key_bytes: 100_000,
+                input_every_ms: Some(420),
+                ..PacedCell::default()
+            },
+            (430 * 2, height),
+            |ms, p| {
+                // Swipes cross the one-second tick boundary. At 30 fps the heavy
+                // and light parts average 10 kB/frame (2.4 Mb/s) over six seconds.
+                let phase = (ms + 500) % 9_000;
+                if phase >= 6_000 {
+                    return (height / 10, 250.0);
+                }
+                let base_bytes = if phase < 1_500 { 34_000.0 } else { 2_000.0 };
+                (
+                    height,
+                    base_bytes * 30.0 / p.fps() * 2.0_f32.powf((24.0 - p.crf()) / 6.0),
+                )
+            },
+        );
+        assert!(
+            trace
+                .ticks
+                .iter()
+                .any(|t| t.queue_ms > 300 && link_full(t.blocked)),
+            "the replay must exercise late, congested ACKs"
+        );
+        assert_eq!(trace.first_half, None);
+        assert!(trace.frames.iter().all(|f| f.scale == Scale::Full));
+        let max_gap = trace.max_draw_gap(Duration::from_secs(seconds));
+        assert!(
+            max_gap < Duration::from_millis(500),
+            "largest draw gap {max_gap:?}"
+        );
     }
 
     #[test]
