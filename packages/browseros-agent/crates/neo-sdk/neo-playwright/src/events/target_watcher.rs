@@ -1337,7 +1337,7 @@ impl Watcher {
     /// A tab's target changed: its tab id and URL, a pending tab's recording, and the seed of its
     /// root observer once its URL is one the door allows (`seed_observer`): a tab that showed a
     /// refused page, or no URL yet, gets its observer's `Page` and seed on the change that
-    /// brings an allowed one.
+    /// brings an allowed one, whether or not a session of core's is its source meanwhile.
     async fn info_changed(&mut self, info: TargetInfo) {
         let target = TargetId(info.target_id);
         let Some(page) = self.pages.get_mut(&target) else {
@@ -1351,16 +1351,18 @@ impl Watcher {
         if pending && !info.url.is_empty() {
             self.ready(&target, info.url, info.window_id);
         }
-        let observer = self
-            .root_observers
-            .iter()
-            .find_map(|(session, observer)| (observer.target == target).then(|| session.clone()));
-        if let Some(observer) = observer
-            && !self.lifecycle_sources.accepts(&observer)
+        if let Some(observer) = self.observer_of(&target)
             && self.door_verdict(&target) == Some(false)
         {
             self.seed_observer(&target, &observer).await;
         }
+    }
+
+    /// The root observer the watcher attached to `target`, if any.
+    fn observer_of(&self, target: &TargetId) -> Option<SessionId> {
+        self.root_observers
+            .iter()
+            .find_map(|(session, observer)| (observer.target == *target).then(|| session.clone()))
     }
 
     /// Whether the door refuses the page `tab` shows (`url_scheme::refuses_page`), read from the
@@ -2051,16 +2053,19 @@ impl Watcher {
                 // session for a context-level listener, and the observer's `Page` and seed
                 // (`observe_workers`). A tab on a refused page, or with no URL from its target
                 // events yet, gets neither; the pass after it moves to an allowed page attaches
-                // it (`info_changed` seeds an observer already there).
+                // it. An observer already there is seeded on the change that brings that URL
+                // (`info_changed`), or here, on a pass that finds its tab on an allowed URL some
+                // other road brought (discovery after lost events, or core leaving a tab whose
+                // observer never seeded); `seed_observer` does nothing once it is entered.
                 if full {
                     if self.door_verdict(&page.target_id) == Some(false) {
                         self.attach_page(page.target_id, page.page_id);
                     }
-                } else if !self
-                    .root_observers
-                    .values()
-                    .any(|observer| observer.target == page.target_id)
-                {
+                } else if let Some(observer) = self.observer_of(&page.target_id) {
+                    if self.door_verdict(&page.target_id) == Some(false) {
+                        self.seed_observer(&page.target_id, &observer).await;
+                    }
+                } else {
                     self.observe_workers(page.target_id).await;
                 }
             }
@@ -2155,15 +2160,19 @@ impl Watcher {
         }
     }
 
-    /// Makes `observer` its tab's lifecycle source, unless a session of core's came first, and
-    /// sends its `Page.enable` with the seed read through the tab's line (`start_seed`). Only an
-    /// observer that turns `Page` on is a source: a mute one would hold a core session that
-    /// attaches meanwhile as its source-in-waiting, whose events would then be dropped.
+    /// Enters `observer` among its tab's lifecycle sessions, once, together with its `Page.enable`
+    /// and seed read, sent through the tab's line (`start_seed`): its tab's source, or the source
+    /// in waiting behind a session of core's that came first. Never one without the other: a
+    /// mute observer entered as a source would drop the events of a core session that attaches
+    /// behind it, and one entered behind core's session would be promoted with `Page` off when core
+    /// detaches (core does detach its sessions), the tab silent from then on. A waiting observer's
+    /// events are dropped as any waiting session's are; its seed still goes into the tracker.
     async fn seed_observer(&mut self, target: &TargetId, observer: &SessionId) {
-        self.lifecycle_sources.attach(observer, target);
-        if self.lifecycle_sources.accepts(observer) {
-            self.start_seed(target, observer, TreeRead::Frame).await;
+        if self.lifecycle_sources.entered(observer) {
+            return;
         }
+        self.lifecycle_sources.attach(observer, target);
+        self.start_seed(target, observer, TreeRead::Frame).await;
     }
 
     /// Reconnect loses every session, but keeps crash facts. Reattach a minimal observer so
@@ -3115,6 +3124,11 @@ impl LifecycleSources {
         self.primary
             .entry(target.clone())
             .or_insert_with(|| session.clone());
+    }
+
+    /// Whether `session` is among its tab's lifecycle sessions, its source or one in waiting.
+    fn entered(&self, session: &SessionId) -> bool {
+        self.targets.contains_key(session)
     }
 
     fn accepts(&self, session: &SessionId) -> bool {
@@ -6041,6 +6055,107 @@ mod seed_tests {
             "no retry for a session gone with its tab"
         );
         assert!(watcher.lines.is_empty());
+        Ok(())
+    }
+
+    /// Core's session came first on a tab whose observer never seeded (no URL then): when the
+    /// tab's URL comes, the observer is entered behind core's session with its `Page.enable` and
+    /// seed, so the observer that core's detach promotes reports the tab's commits. Entered mute,
+    /// it would be promoted with `Page` off, and the tab would go silent.
+    #[tokio::test]
+    async fn an_observer_behind_core_s_session_turns_page_on_before_it_is_promoted() -> TestResult {
+        let connection = TestConnection::new([]);
+        for method in ["Target.setAutoAttach", "Page.enable"] {
+            connection.always(method, json!({}))?;
+        }
+        connection.always("Page.getFrameTree", tree_with("tab", Some("child")))?;
+        let (hub, mut watcher, mut answers) = watcher(&connection);
+        read(&mut watcher, target_created("tab", "")).await;
+        watcher.observe_workers(TargetId("tab".to_owned())).await;
+        let observer = observer(&watcher)?;
+        read(&mut watcher, page_attached("core", "tab")).await;
+        answer_next(&mut watcher, &mut answers).await?;
+        assert!(
+            watcher.lifecycle_sources.accepts(&SessionId::from("core")),
+            "core's session is the tab's source"
+        );
+
+        read(&mut watcher, info_changed("tab", "https://a.test/")).await;
+        settle().await;
+        assert_eq!(
+            page_domain_calls(&connection, &observer)?,
+            ["Page.enable", "Page.getFrameTree"],
+            "its seed goes out though core's session is the source"
+        );
+        answer_next(&mut watcher, &mut answers).await?;
+        let gone = CdpEvent {
+            method: "Target.detachedFromTarget".to_owned(),
+            params: json!({ "sessionId": "core" }),
+            session_id: None,
+        };
+        read(&mut watcher, gone).await;
+        assert!(watcher.lifecycle_sources.accepts(&observer), "promoted");
+        let commit = json!({ "frame": { "id": "child", "parentId": "tab", "loaderId": "next",
+            "url": "https://a.test/next" } });
+        read(
+            &mut watcher,
+            on(observer.as_str(), "Page.frameNavigated", commit),
+        )
+        .await;
+        assert_eq!(
+            records(&hub),
+            ["framenavigated https://a.test/next"],
+            "the promoted observer reports the tab's commit"
+        );
+        Ok(())
+    }
+
+    /// An untouched tab whose observer was never entered, now on a URL the door allows that no
+    /// target event of its brought (discovery filled it), is seeded on the next pass of
+    /// `observe_context`: the move to an allowed page is seen whichever road brings its URL.
+    #[tokio::test]
+    async fn a_pass_seeds_an_observer_whose_tab_s_url_discovery_filled() -> TestResult {
+        let connection = TestConnection::new([]);
+        for (method, answer) in [
+            (
+                "Target.getTargets",
+                json!({ "targetInfos": [
+                    { "targetId": "tab", "type": "page", "url": "https://a.test/" } ] }),
+            ),
+            ("Target.setDiscoverTargets", json!({})),
+            ("Browser.setDownloadBehavior", json!({})),
+            ("Target.setAutoAttach", json!({})),
+            ("Page.enable", json!({})),
+            (
+                "Browser.getTabs",
+                json!({ "tabs": [{ "tabId": 7, "targetId": "tab", "windowId": 1,
+                    "url": "https://a.test/", "title": "A", "isActive": false,
+                    "isLoading": false, "loadProgress": 1.0, "isPinned": false,
+                    "isHidden": false }] }),
+            ),
+        ] {
+            connection.always(method, answer)?;
+        }
+        connection.always("Page.getFrameTree", tree_with("tab", None))?;
+        let (_hub, mut watcher, _answers) = watcher(&connection);
+        // Its creation's pass attaches its observer, which the door keeps mute on a file page.
+        read(&mut watcher, target_created("tab", "file:///etc/hosts")).await;
+        let observer = observer(&watcher)?;
+        settle().await;
+        assert_eq!(
+            page_domain_calls(&connection, &observer)?,
+            Vec::<String>::new()
+        );
+
+        watcher.discover(false).await?;
+        watcher.observe_context().await;
+        settle().await;
+        assert_eq!(
+            page_domain_calls(&connection, &observer)?,
+            ["Page.enable", "Page.getFrameTree"],
+            "the pass seeds it"
+        );
+        assert!(watcher.lifecycle_sources.accepts(&observer));
         Ok(())
     }
 

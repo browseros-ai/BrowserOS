@@ -3,7 +3,7 @@
 //! reading itself, and the rule for pages Neo refuses, live in `neo_playwright::url_scheme`,
 //! which the target watcher reads too.
 
-pub(crate) use neo_playwright::url_scheme::url_scheme;
+use neo_playwright::url_scheme::url_scheme;
 
 /// The navigation adapter's scheme admission, including its existing HTTP completion for raw
 /// lowercase local addresses. The engine can normalize more inputs before completing them, but

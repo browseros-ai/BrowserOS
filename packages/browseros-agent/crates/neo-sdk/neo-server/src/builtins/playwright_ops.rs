@@ -22,7 +22,7 @@ use std::sync::{Arc, LazyLock};
 
 use browseros_core::{BrowserView, CoreError, TabId, TargetId};
 use futures_util::future::BoxFuture;
-use neo_playwright::url_scheme::refuses_page;
+use neo_playwright::url_scheme::{refuses_page, url_scheme};
 use neo_playwright::{
     Answer, ErrorCode as PlaywrightCode, FileAccess, Op, OpEnv, OpTarget, PlaywrightError, Refusal,
     RunState, TimedOut,
@@ -40,7 +40,7 @@ use crate::dispatch::{
     RegistryBuilder, RegistryError, RunCtx,
 };
 use crate::host::AgentFront;
-use crate::url_scheme;
+use crate::navigation_scheme;
 
 /// neo-playwright's prelude, which the agent realm evaluates after its bootstrap: the
 /// `page`, `context`, `browser` and `expect` parameters of the agent's function, over these ops.
@@ -338,7 +338,7 @@ impl OpInput {
     /// the entry it opens ([`refused_page`]).
     fn refused_navigation(&self) -> Option<OperationError> {
         let url = self.json.get("url")?.as_str()?;
-        let which = match url_scheme::navigation_scheme(url) {
+        let which = match navigation_scheme::navigation_scheme(url) {
             Some(scheme) if scheme == "file" => {
                 return Some(file_page("Neo does not open this URL, a `file:` one"));
             }
@@ -406,7 +406,7 @@ async fn refused_page<M>(
             "Neo does not act on this tab, which shows a `file:` page",
         )));
     }
-    let scheme = url_scheme::url_scheme(&url);
+    let scheme = url_scheme(&url);
     if effect == PageEffect::Reloads {
         return Ok(match scheme {
             Some(scheme) if NAVIGABLE_SCHEMES.contains(&scheme.as_str()) => None,
