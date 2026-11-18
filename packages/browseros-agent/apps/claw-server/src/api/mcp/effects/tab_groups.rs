@@ -659,7 +659,7 @@ async fn bind_cli_task_group(call: &ToolCall, group_id: &str, window_id: Option<
         .bind(request, crate::clock::now_epoch_ms())
         .await
     {
-        Ok(BindOutcome::Bound) => {}
+        Ok(BindOutcome::Bound) => session.follow_group(),
         Ok(BindOutcome::AlreadyBound { session_id }) => {
             warn!(group_id, owner = %session_id, "a CLI task's new group is owned by another task");
         }
@@ -3575,6 +3575,16 @@ mod tests {
             .ok_or_else(|| anyhow::anyhow!("the CLI task's group was not bound"))?;
         assert_eq!(binding.session_id, call.session_id.as_str());
         assert!(binding.is_cli());
+        let session = call
+            .state
+            .sessions
+            .lookup(&call.session_id)
+            .await
+            .ok_or_else(|| anyhow::anyhow!("the CLI session left the live map"))?;
+        assert!(
+            session.follows_group(),
+            "the task now lives as long as its group"
+        );
         Ok(())
     }
 
@@ -3600,6 +3610,16 @@ mod tests {
             "the MCP session still gets its group"
         );
         assert!(call.state.task_groups.lookup("group-1").await?.is_none());
+        let session = call
+            .state
+            .sessions
+            .lookup(&call.session_id)
+            .await
+            .ok_or_else(|| anyhow::anyhow!("the MCP session left the live map"))?;
+        assert!(
+            !session.follows_group(),
+            "an MCP session keeps its own lifetime"
+        );
         Ok(())
     }
 }

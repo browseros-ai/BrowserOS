@@ -546,6 +546,12 @@ impl Sessions {
             .collect();
         let mut expired: Vec<(SessionId, &'static str)> = Vec::new();
         for (id, session) in sessions {
+            // A CLI task ends when its group closes, which the CLI task sweep watches. Keyed
+            // on the session following its group, never on owning one: every automatic-
+            // grouping MCP session owns a group and must still end here.
+            if session.follows_group() {
+                continue;
+            }
             let idle = session.idle_for(now).await;
             if idle >= self.idle_after {
                 expired.push((id, "idle timeout"));
@@ -2332,6 +2338,44 @@ mod tests {
 
         assert_eq!(registry.sweep_idle().await?, 1);
         assert!(registry.lookup(&id).await.is_none());
+        Ok(())
+    }
+
+    /// A CLI task's lifetime is its group's, so neither idle sweep ends it while it follows
+    /// one, however long the agent goes quiet between commands.
+    #[tokio::test]
+    async fn a_task_that_follows_its_group_outlives_both_idle_sweeps() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let (audit_log, session_tabs) = repositories(&dir).await?;
+        let registry = Sessions::new(
+            audit_log,
+            session_tabs,
+            Duration::from_secs(5),
+            Duration::from_millis(1),
+            Duration::from_secs(60),
+            Duration::from_secs(1),
+        );
+        let session = registry
+            .mint(
+                ClientIdentity::Ephemeral {
+                    slug: "browseros".to_string(),
+                    label: "browseros".to_string(),
+                },
+                ClientInfo {
+                    name: "browseros-cli".to_string(),
+                    version: "0.0.1".to_string(),
+                    title: None,
+                },
+            )
+            .await?;
+        let id = session.id().clone();
+        session.follow_group();
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_secs(3600)).await;
+        tokio::time::resume();
+
+        assert_eq!(registry.sweep_idle().await?, 0);
+        assert!(registry.lookup(&id).await.is_some());
         Ok(())
     }
 }

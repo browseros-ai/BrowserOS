@@ -41,6 +41,7 @@ pub struct Session {
     operator_stop_requested: AtomicBool,
     task_declared: AtomicBool,
     pursue_handed_back: AtomicBool,
+    follows_group: AtomicBool,
     cancel: CancellationToken,
     last_activity: Mutex<Instant>,
 }
@@ -103,6 +104,7 @@ impl Session {
             operator_stop_requested: AtomicBool::new(false),
             task_declared: AtomicBool::new(false),
             pursue_handed_back: AtomicBool::new(false),
+            follows_group: AtomicBool::new(false),
             cancel: CancellationToken::new(),
             last_activity: Mutex::new(now),
         })
@@ -254,6 +256,18 @@ impl Session {
 
     pub fn mark_pursue_handed_back(&self) {
         self.pursue_handed_back.store(true, Ordering::Release);
+    }
+
+    /// Whether this task lives as long as its tab group rather than its activity. Set only for
+    /// a CLI task once it owns a group: the user ends that task by closing the group, so going
+    /// quiet between commands is not the task finishing.
+    #[must_use]
+    pub fn follows_group(&self) -> bool {
+        self.follows_group.load(Ordering::Acquire)
+    }
+
+    pub fn follow_group(&self) {
+        self.follows_group.store(true, Ordering::Release);
     }
 
     /// Keeps Stop-owned calls active until their effects finish and audit reconciliation is queued.

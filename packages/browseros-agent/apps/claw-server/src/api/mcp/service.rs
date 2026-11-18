@@ -938,6 +938,9 @@ impl ClawMcpService {
                         .start_session_in_store(session_id, client, true)
                         .await?;
                     self.promote_reused_session(&started.session, start).await?;
+                    // Set on every resolve, because a task minted again after a restart
+                    // starts with the flag clear.
+                    started.session.follow_group();
                     return Ok(started);
                 }
             }
@@ -4754,6 +4757,10 @@ mod tests {
             resumed.session.id(),
             &before,
             "the task resumes under its own id"
+        );
+        assert!(
+            resumed.session.follows_group(),
+            "a resumed task still lives as long as its group"
         );
         Ok(())
     }
