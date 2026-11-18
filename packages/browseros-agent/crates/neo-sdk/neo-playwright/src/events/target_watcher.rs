@@ -2432,7 +2432,9 @@ impl Watcher {
 
     /// Tells [`WatcherProgress`] the oldest event the watcher holds, in a line or as a waiting
     /// download, so no fence past it counts as in the log. Every item counts, not only each line's
-    /// first, so the hold stays right whatever order a line holds its items in.
+    /// first, so the hold stays right whatever order a line holds its items in. It equals the
+    /// first-item hold while lines stay sorted, as [`place_by_position`] and the replay keep them,
+    /// so no row pins it; it stays in case a later change breaks that order.
     fn publish_hold(&self) {
         let oldest = self
             .lines
