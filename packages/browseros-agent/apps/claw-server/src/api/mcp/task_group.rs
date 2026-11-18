@@ -22,6 +22,11 @@ pub(super) const FIELD: &str = "group";
 /// CLI can tell this refusal from a tool's own error and exit with a code of its own.
 pub const NOT_ON_PLAN: &str = "ultrafast_required: the browseros command line is part of the ultrafast plan, which this computer does not have. Open BrowserOS neo to get ultrafast.";
 
+/// The end-of-task reminder a CLI task gets: the command the CLI has, not the tab group it
+/// would otherwise be told to close by hand.
+pub(super) const DONE_TIP: &str =
+    "Tip: when the user says this task is done, run: browseros task done";
+
 /// The `_meta` key a CLI result names its task's group under, namespaced like the handle's.
 pub const META_KEY: &str = "com.browseros.neo/group";
 

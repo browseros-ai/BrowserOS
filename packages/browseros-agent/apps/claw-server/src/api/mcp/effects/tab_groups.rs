@@ -672,7 +672,20 @@ async fn bind_cli_task_group(call: &ToolCall, group_id: &str, window_id: Option<
         .bind(request, crate::clock::now_epoch_ms())
         .await
     {
-        Ok(BindOutcome::Bound) => session.follow_group(),
+        Ok(BindOutcome::Bound) => {
+            session.follow_group();
+            // Kept with the group, since the session's name lives only in memory. A task
+            // named on the call that created it already carries its real name here.
+            let name = session.label().await;
+            if let Err(error) = call
+                .state
+                .task_groups
+                .set_name_for_session(call.session_id.as_str(), &name)
+                .await
+            {
+                warn!(%error, group_id, "keeping a CLI task's name failed");
+            }
+        }
         Ok(BindOutcome::AlreadyBound { session_id }) => {
             warn!(group_id, owner = %session_id, "a CLI task's new group is owned by another task");
         }
@@ -3588,6 +3601,10 @@ mod tests {
             .ok_or_else(|| anyhow::anyhow!("the CLI task's group was not bound"))?;
         assert_eq!(binding.session_id, call.session_id.as_str());
         assert!(binding.is_cli());
+        assert!(
+            binding.name.is_some(),
+            "the task's name is kept with its group from the start"
+        );
         let session = call
             .state
             .sessions

@@ -435,22 +435,25 @@ fn task_start(
     Ok(Code::Ok)
 }
 
-/// Applies a name given before the first page, now that the task has a group.
+/// Settles a name given before the first page, now that the task has a group. The name itself
+/// went with the call that created the task; a category or summary still needs `name_session`.
 async fn name_pending_task(client: &mut Client, pending: state::PendingTask) -> Result<()> {
-    let arguments = client::object(vec![
-        ("name", json!(pending.name)),
-        (
-            "category",
-            pending.category.map_or(Value::Null, Value::String),
-        ),
-        (
-            "summary",
-            pending.summary.map_or(Value::Null, Value::String),
-        ),
-    ]);
-    let named = client.call("name_session", arguments).await?;
-    if named.is_error {
-        io::note(&format!("[naming the task failed: {}]", named.text));
+    if pending.category.is_some() || pending.summary.is_some() {
+        let arguments = client::object(vec![
+            ("name", json!(pending.name)),
+            (
+                "category",
+                pending.category.map_or(Value::Null, Value::String),
+            ),
+            (
+                "summary",
+                pending.summary.map_or(Value::Null, Value::String),
+            ),
+        ]);
+        let named = client.call("name_session", arguments).await?;
+        if named.is_error {
+            io::note(&format!("[describing the task failed: {}]", named.text));
+        }
     }
     client.persist(|state| {
         state.task = Some(pending.name);

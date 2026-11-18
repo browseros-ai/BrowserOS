@@ -34,6 +34,20 @@ fn step_lines(steps: &str) -> Value {
 
 /// `evaluate_in_page`'s own hard ceiling, which it clamps to rather than
 /// rejecting. Separate from `run`'s budget, which a deployment configures.
+/// The rules the server applies to a task name sent with a call. Checked here because a pending
+/// name rides on every call until the task exists, so one the server refuses would fail them all.
+fn validate_task_name(name: &str) -> Result<(), Failure> {
+    if name.trim().chars().count() > 64 {
+        return Err(Failure::usage("a task name is at most 64 characters."));
+    }
+    if !name.chars().any(char::is_alphanumeric) {
+        return Err(Failure::usage(
+            "a task name needs letters or digits, e.g. \"price check\".",
+        ));
+    }
+    Ok(())
+}
+
 /// The most `read_output` returns in one call, so a whole part takes the fewest calls.
 pub const OUTPUT_CHUNK_BYTES: u64 = 64 * 1024;
 
@@ -214,11 +228,16 @@ pub fn build(command: &Command, external: Option<&str>) -> Result<Plan, Failure>
             name,
             category,
             summary,
-        }) => Plan::Local(Local::TaskStart {
-            name: name.clone(),
-            category: category.clone(),
-            summary: summary.clone(),
-        }),
+        }) => {
+            if let Some(name) = name {
+                validate_task_name(name)?;
+            }
+            Plan::Local(Local::TaskStart {
+                name: name.clone(),
+                category: category.clone(),
+                summary: summary.clone(),
+            })
+        }
         Command::Task(TaskCmd::List) => Plan::Local(Local::TaskList),
         Command::Task(TaskCmd::Done { keep_tabs, all }) => Plan::Local(Local::TaskDone {
             keep_tabs: *keep_tabs,

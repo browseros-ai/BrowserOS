@@ -304,7 +304,16 @@ impl ClawMcpService {
         if started.session.label().await == label {
             return;
         }
-        started.session.rename(label).await;
+        started.session.rename(label.clone()).await;
+        if started.session.follows_group()
+            && let Err(error) = self
+                .state
+                .task_groups
+                .set_name_for_session(started.session.id().as_str(), &label)
+                .await
+        {
+            warn!(error = %error, "keeping a CLI task's name failed");
+        }
         let browser = self.state.browser.session().await;
         apply_agent_tab_group_title(
             browser.as_ref(),
@@ -1859,9 +1868,13 @@ impl ServerHandler for ClawMcpService {
             && self.state.agent_settings.task_cleanup_tip_enabled()
             && !result.is_error.unwrap_or(false)
         {
-            result.content.push(rmcp::model::ContentBlock::text(
-                "Tip: When you finish this task, close your task’s tab group.",
-            ));
+            result
+                .content
+                .push(rmcp::model::ContentBlock::text(if cli_call {
+                    task_group::DONE_TIP
+                } else {
+                    "Tip: When you finish this task, close your task’s tab group."
+                }));
         }
         Ok(result.into())
     }

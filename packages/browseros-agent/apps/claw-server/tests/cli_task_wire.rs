@@ -219,3 +219,33 @@ async fn an_mcp_client_keeps_its_handle_and_never_sees_a_group() -> anyhow::Resu
     assert!(result["_meta"][GROUP_META].is_null(), "{result}");
     Ok(())
 }
+
+/// A task named before its first page is named by the call that creates it, before that
+/// call's tool runs, so its group is created with the name and no reminder asks for one.
+#[tokio::test]
+async fn a_cli_task_is_named_by_the_call_that_creates_it() -> anyhow::Result<()> {
+    let server = Server::start().await?;
+    server.state.ultrafast.set(true);
+
+    server
+        .call(
+            CLI,
+            "tabs",
+            json!({"action": "list", "taskName": "price check"}),
+        )
+        .await?;
+
+    let named = server
+        .state
+        .sessions
+        .snapshot()
+        .await
+        .into_iter()
+        .filter(|session| session.client_name() == CLI);
+    let mut labels = Vec::new();
+    for session in named {
+        labels.push(session.label().await);
+    }
+    assert_eq!(labels, vec!["price-check".to_string()]);
+    Ok(())
+}

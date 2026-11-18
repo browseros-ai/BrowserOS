@@ -467,3 +467,32 @@ async fn a_saved_output_is_read_to_its_end_as_one_text() {
         .collect();
     assert_eq!(offsets, vec![json!(null), json!(6), json!(13)]);
 }
+
+#[tokio::test]
+async fn a_pending_task_name_rides_on_the_call_that_creates_the_task() {
+    let dir = tempfile::tempdir().unwrap_or_else(|error| panic!("{error}"));
+    let fixture = fixture(vec![result_in_group("G1")]).await;
+    let mut client = client_for(&fixture.url, dir.path());
+    client
+        .persist(|state| {
+            state.pending_task = Some(claw_server::cli::state::PendingTask {
+                name: "price check".into(),
+                ..Default::default()
+            });
+        })
+        .unwrap_or_else(|error| panic!("{error}"));
+
+    client
+        .call("tabs", json!({ "action": "new", "url": "https://x.test" }))
+        .await
+        .unwrap_or_else(|error| panic!("{error}"));
+
+    let seen = fixture
+        .seen
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    assert_eq!(
+        body_of(&seen[0])["params"]["arguments"]["taskName"],
+        "price check"
+    );
+}

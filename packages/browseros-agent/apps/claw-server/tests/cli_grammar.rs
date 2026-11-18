@@ -703,3 +703,13 @@ fn output_reads_a_whole_part_unless_a_slice_is_asked_for() {
     assert!(!listing.read_all);
     assert!(listing.args.get("limit").is_none());
 }
+
+/// A pending name rides on every call until the task exists, so one the server would refuse
+/// is refused here, before it can fail them all.
+#[test]
+fn a_task_name_the_server_would_refuse_is_refused_up_front() {
+    assert!(
+        refused(&["browseros", "task", "start", "--name", "!!!"]).contains("letters or digits")
+    );
+    assert!(refused(&["browseros", "task", "start", "--name", &"a".repeat(65)]).contains("64"));
+}

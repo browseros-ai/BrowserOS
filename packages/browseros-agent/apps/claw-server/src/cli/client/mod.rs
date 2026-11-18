@@ -29,6 +29,8 @@ fn next_id() -> u64 {
 
 /// The argument every call presents its task's group in.
 const GROUP_ARG: &str = "group";
+/// The argument that names a task on the call that creates it.
+const TASK_NAME_ARG: &str = "taskName";
 /// The `_meta` key a result names its task's group under.
 const GROUP_META: &str = "com.browseros.neo/group";
 /// How the server starts its refusal on a computer without the ultrafast plan.
@@ -97,7 +99,7 @@ impl Client {
     pub async fn call(&mut self, tool: &str, arguments: Value) -> Result<ToolOutput> {
         let closing = tool == "tab_groups"
             && arguments.get("action").and_then(Value::as_str) == Some("close");
-        let arguments = self.with_group(self.with_agent_name(tool, arguments));
+        let arguments = self.with_task_name(self.with_group(self.with_agent_name(tool, arguments)));
         let reply = self.send(tool, &arguments).await?;
         let group = reply
             .body
@@ -185,6 +187,23 @@ impl Client {
             )
             .into()),
         }
+    }
+
+    /// Names the task on the call that creates it, while a name given before its first page
+    /// is still pending. The server applies it before the tool runs, so the task's group is
+    /// created with its name and no reminder asks for one.
+    fn with_task_name(&self, arguments: Value) -> Value {
+        let Some(pending) = self.state.pending_task.as_ref() else {
+            return arguments;
+        };
+        let Value::Object(mut map) = arguments else {
+            return arguments;
+        };
+        map.insert(
+            TASK_NAME_ARG.to_string(),
+            Value::String(pending.name.clone()),
+        );
+        Value::Object(map)
     }
 
     /// Presents the task's group, when this directory has one.
