@@ -1,9 +1,11 @@
+//! Command-line defaults, validation and startup behavior.
 use std::process::Command;
 
 #[test]
 fn tests_that_help_and_version_need_no_display() {
     for (arg, expected) in [
         ("--help", "--max-viewers"),
+        ("--help", "[--crf-range 6]"),
         ("--version", "slimviewer 0.1.0"),
     ] {
         let out = Command::new(env!("CARGO_BIN_EXE_slimviewer"))

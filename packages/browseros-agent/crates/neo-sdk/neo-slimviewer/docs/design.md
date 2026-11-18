@@ -9,8 +9,17 @@ and the encoder.
 
 The engine owns the encoder and each viewer's frame acknowledgements. It uses
 the owner's acknowledgements to pace capture, or a spectator's when there is
-no owner. During motion it can reduce resolution or quality to fit the CPU and
-link budget. After motion stops, OpenH264 sends a sharp full-size keyframe.
+no owner. The link and CPU each choose a frame-rate limit, and the lower one
+paces capture. Under pressure they step down through 30, 20 and 15 fps. At
+the floor, a congested link raises the quantizer by up to two per step, to
++6 by default. Sustained congestion can then trigger half size. A frame that
+would take over 300 ms at the quality limit, late acknowledgements or stalled
+delivery can accelerate those steps. Slow measured work can lower the CPU
+limit. Throttle or steal counts only when frames miss 80% of the current
+cadence during at least half a second with damage pending and the pacer open.
+Recovery takes one step at a time after sustained headroom. A return to full-size motion must also fit the link's 300 ms
+keyframe budget. Once damage stops, the full-size settle frame can still go
+out and its acknowledgement measures fresh capacity.
 
 The host relays a TCP byte stream over WebSocket. Each record starts with a
 four-byte big-endian length covering a type byte and its payload. A record may
