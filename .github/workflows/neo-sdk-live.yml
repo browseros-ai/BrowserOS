@@ -34,7 +34,7 @@ jobs:
   live:
     name: Neo SDK live / linux-x64
     # Fork code uses a public runner; repository branches use the existing Warp fleet.
-    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || 'warp-custom-browseros-ubuntu-2204-x64-32x' }}
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || 'warp-custom-browseros-ubuntu-2204-x64-16x' }}
     timeout-minutes: 25
     defaults:
       run:
@@ -46,7 +46,7 @@ jobs:
       CARGO_PROFILE_DEV_OPT_LEVEL: "2"
       CARGO_PROFILE_TEST_DEBUG: "0"
       CARGO_PROFILE_DEV_DEBUG: "0"
-      # Use the existing 32-vCPU runner for more parallel compilation; forks stay small.
+      # Keep compilation at eight jobs to leave headroom on the 16-vCPU runner.
       CARGO_BUILD_JOBS: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && '2' || '8' }}
       CARGO_BUILD_BUILD_DIR: ${{ github.workspace }}/packages/browseros-agent/target/build-private
       BROWSERCLAW_HOSTED_MODE: "0"
