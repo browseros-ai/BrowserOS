@@ -463,6 +463,12 @@ impl LiveRun {
         self.playwright.event_head()
     }
 
+    /// Every tab's frame-tree version, as the production door reads it for each reply's
+    /// `frames`: a run re-reads a listed tab's tree once its version moved.
+    pub(crate) fn frame_versions(&self) -> Vec<(TabId, u64)> {
+        self.playwright.frame_versions()
+    }
+
     /// Mirrors the door's cache observation for live tests, including watcher/core lag.
     pub(crate) async fn page_facts(&self, tabs: Vec<TabId>) -> Vec<Value> {
         let mut facts = Vec::new();
