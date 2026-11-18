@@ -14,7 +14,7 @@ use crate::snapshot::{PartialFrame, Snapshot};
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct CaseFile {
+pub(crate) struct CaseFile {
     #[serde(rename = "about")]
     _about: IgnoredAny,
     snapshots: BTreeMap<String, CaseSnapshot>,
@@ -25,13 +25,13 @@ pub(super) struct CaseFile {
 /// place).
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct Case {
-    pub(super) name: String,
-    pub(super) snapshot: Option<String>,
+pub(crate) struct Case {
+    pub(crate) name: String,
+    pub(crate) snapshot: Option<String>,
     /// Which text, by its one key (`playwright`, `full`, `element`, `page`, `delta`, `cover`) with
     /// that call's options.
     call: BTreeMap<String, Value>,
-    pub(super) text: Option<String>,
+    pub(crate) text: Option<String>,
     /// What a whole page in Neo's format keeps as the tab's baseline; not Playwright's format's.
     #[serde(rename = "pending")]
     _pending: Option<IgnoredAny>,
@@ -75,19 +75,19 @@ struct CasePartial {
 
 impl CaseFile {
     /// The cases that ask for Playwright's format.
-    pub(super) fn playwright_cases(&self) -> impl Iterator<Item = &Case> {
+    pub(crate) fn playwright_cases(&self) -> impl Iterator<Item = &Case> {
         self.cases
             .iter()
             .filter(|case| case.call.contains_key("playwright"))
     }
 
     /// Every snapshot's name.
-    pub(super) fn snapshot_names(&self) -> impl Iterator<Item = &str> {
+    pub(crate) fn snapshot_names(&self) -> impl Iterator<Item = &str> {
         self.snapshots.keys().map(String::as_str)
     }
 
     /// The snapshot named `name`, built as the renderer is handed it.
-    pub(super) fn snapshot(&self, name: &str) -> Result<Snapshot, String> {
+    pub(crate) fn snapshot(&self, name: &str) -> Result<Snapshot, String> {
         let found = self
             .snapshots
             .get(name)

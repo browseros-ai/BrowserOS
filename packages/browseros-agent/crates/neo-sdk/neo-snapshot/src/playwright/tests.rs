@@ -1,14 +1,6 @@
-//! Playwright's text in Rust against its judges: the committed cases; the private sets of saved
-//! pages, where a folder names them; and, in QuickJS on seeded random nodes and trees, upstream's
-//! printer and today's TypeScript renderer.
-//!
-//! The random runs are small here, as the gate runs them on every change. A long run sets
-//! `NEO_SNAPSHOT_DIFFERENTIAL_NODES`, `NEO_SNAPSHOT_DIFFERENTIAL_TREES` and
-//! `NEO_SNAPSHOT_DIFFERENTIAL_SEED` (decimal, or hex after `0x`).
-
-mod bundles;
-mod case_file;
-mod generator;
+//! Playwright's text in Rust against its judges (`crate::judges`): the committed cases; the
+//! private sets of saved pages, where a folder names them; and, in QuickJS on seeded random nodes
+//! and trees, upstream's printer and today's TypeScript renderer.
 
 use std::error::Error;
 use std::path::PathBuf;
@@ -17,11 +9,9 @@ use std::{env, fs};
 use serde_json::json;
 
 use crate::aria_node::AriaNode;
+use crate::judges::{Bundles, CaseFile, Generator, count, first_difference, seed};
 use crate::snapshot::Snapshot;
 
-use self::bundles::Bundles;
-use self::case_file::CaseFile;
-use self::generator::Generator;
 use super::{NodeAlone, node_text, tree_text};
 
 /// Upstream's printer's own text on trees with no Neo fact; kept for as long as the vendored
@@ -30,9 +20,6 @@ const PLAYWRIGHT_CASES: &str = include_str!("../../tests/data/cases/playwright.j
 
 /// Every other case, by today's renderer, Playwright's format on trees with Neo's facts among them.
 const NEO_CASES: &str = include_str!("../../tests/data/cases/neo.json");
-
-/// The seed of the random runs unless `NEO_SNAPSHOT_DIFFERENTIAL_SEED` names another.
-const SEED: u64 = 0x5eed_7a11_0000_0002;
 
 /// How many random nodes and trees the gate's run draws.
 const GATE_NODES: usize = 3_000;
@@ -243,39 +230,4 @@ fn tests_that_a_line_break_in_a_key_moves_its_colon_as_todays_renderer_does()
         "upstream's own walk keeps the colon at the end of the quoted key"
     );
     Ok(())
-}
-
-/// Where `printed` first differs from `expected`: the line's number from 1, and that line of each
-/// (empty past a text's end). `None` when they are equal.
-fn first_difference<'a>(printed: &'a str, expected: &'a str) -> Option<(usize, &'a str, &'a str)> {
-    let mut printed_lines = printed.split('\n');
-    let mut expected_lines = expected.split('\n');
-    let mut line = 0;
-    loop {
-        line += 1;
-        match (printed_lines.next(), expected_lines.next()) {
-            (None, None) => return None,
-            (Some(left), Some(right)) if left == right => {}
-            (left, right) => {
-                return Some((line, left.unwrap_or_default(), right.unwrap_or_default()));
-            }
-        }
-    }
-}
-
-fn seed() -> Result<u64, Box<dyn Error>> {
-    let Ok(text) = env::var("NEO_SNAPSHOT_DIFFERENTIAL_SEED") else {
-        return Ok(SEED);
-    };
-    Ok(match text.strip_prefix("0x") {
-        Some(hex) => u64::from_str_radix(hex, 16)?,
-        None => text.parse()?,
-    })
-}
-
-fn count(variable: &str, gate: usize) -> Result<usize, Box<dyn Error>> {
-    match env::var(variable) {
-        Ok(text) => Ok(text.parse()?),
-        Err(_) => Ok(gate),
-    }
 }

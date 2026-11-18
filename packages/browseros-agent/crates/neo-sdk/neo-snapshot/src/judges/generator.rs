@@ -4,11 +4,17 @@
 //! strings are built from the marks each of upstream's quoting tests looks for, so each mark lands
 //! at the start, inside and at the end of a key, a text, a url and a placeholder.
 
+use std::env;
+use std::error::Error;
+
 use serde_json::Number;
 
 use crate::aria_node::{AriaChild, AriaNode, Invalid, NodeBox, Tristate};
 use crate::snapshot::{PartialFrame, Snapshot};
 use crate::split_mix64::SplitMix64;
+
+/// The seed of the random runs unless `NEO_SNAPSHOT_DIFFERENTIAL_SEED` names another.
+const SEED: u64 = 0x5eed_7a11_0000_0002;
 
 /// What a generated string is made of: zero to three of these, end to end.
 const PIECES: &[&str] = &[
@@ -140,15 +146,15 @@ const REASONS: &[&str] = &["timeout after 2000 ms", "frame detached", "target cl
 /// The deepest level a generated tree reaches, the top level being 0.
 const MAX_DEPTH: usize = 4;
 
-pub(super) struct Generator(SplitMix64);
+pub(crate) struct Generator(SplitMix64);
 
 impl Generator {
-    pub(super) fn new(seed: u64) -> Self {
+    pub(crate) fn new(seed: u64) -> Self {
         Self(SplitMix64(seed))
     }
 
     /// One node without children.
-    pub(super) fn node(&mut self) -> AriaNode {
+    pub(crate) fn node(&mut self) -> AriaNode {
         let role = if self.chance(85) {
             self.pick(ROLES).to_owned()
         } else {
@@ -209,7 +215,7 @@ impl Generator {
 
     /// A tree of one to four top-level nodes, each with up to three children a level, and up to
     /// three frames not read: most under a ref of the tree, some under none, some two for one.
-    pub(super) fn snapshot(&mut self) -> Snapshot {
+    pub(crate) fn snapshot(&mut self) -> Snapshot {
         let tree = (0..=self.below(3)).map(|_| self.subtree(0)).collect();
         let mut partial: Vec<PartialFrame> = Vec::new();
         for _ in 0..self.below(4) {
@@ -340,5 +346,25 @@ impl Generator {
 
     fn draw(&mut self) -> u64 {
         self.0.next().unwrap_or_default()
+    }
+}
+
+/// The random runs' seed: `NEO_SNAPSHOT_DIFFERENTIAL_SEED` (decimal, or hex after `0x`), else
+/// the gate's.
+pub(crate) fn seed() -> Result<u64, Box<dyn Error>> {
+    let Ok(text) = env::var("NEO_SNAPSHOT_DIFFERENTIAL_SEED") else {
+        return Ok(SEED);
+    };
+    Ok(match text.strip_prefix("0x") {
+        Some(hex) => u64::from_str_radix(hex, 16)?,
+        None => text.parse()?,
+    })
+}
+
+/// How many a random run draws: the number `variable` names, else the gate's `gate`.
+pub(crate) fn count(variable: &str, gate: usize) -> Result<usize, Box<dyn Error>> {
+    match env::var(variable) {
+        Ok(text) => Ok(text.parse()?),
+        Err(_) => Ok(gate),
     }
 }

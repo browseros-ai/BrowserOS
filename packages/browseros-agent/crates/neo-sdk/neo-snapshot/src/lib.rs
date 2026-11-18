@@ -51,6 +51,8 @@ mod aria_node;
     )
 )]
 mod js;
+#[cfg(test)]
+mod judges;
 #[cfg_attr(
     not(test),
     expect(

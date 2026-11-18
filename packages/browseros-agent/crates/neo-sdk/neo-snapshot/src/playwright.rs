@@ -19,9 +19,9 @@
 //! page, with the page's own copy of upstream's file. `PORTED_FROM` records the vendored files'
 //! hashes, and neo-playwright's `engine_sources` test fails when an upgrade changes one.
 //!
-//! The judges, all in `tests.rs`: the committed cases, written by neo-playwright-js's build.ts
-//! from upstream's printer and today's TypeScript renderer, and those two again in QuickJS beside
-//! the Rust, on seeded random nodes and trees.
+//! The judges, in `tests.rs` through `crate::judges`: the committed cases, written by
+//! neo-playwright-js's build.ts from upstream's printer and today's TypeScript renderer, and those
+//! two again in QuickJS beside the Rust, on seeded random nodes and trees.
 
 mod node_text;
 mod ported_from;
