@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use serde_json::{Value, json};
 
-use crate::cli::client::{self, Session, result::ToolOutput};
+use crate::cli::client::{self, Client, result::ToolOutput};
 use crate::cli::exit::{Code, Failure};
 use crate::cli::grammar::{Cli, Command, Globals};
 use crate::cli::plan::{self, External, Local, Plan, ToolPlan};
@@ -43,17 +43,17 @@ pub async fn run(cli: Cli) -> Result<Code> {
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty())
     });
-    let mut session =
+    let mut client =
         client::connect(cli.globals.endpoint.as_deref(), agent.as_deref(), timeout).await?;
 
     match built {
-        Plan::Tool(tool) => run_tool(&mut session, &cli.globals, label, *tool).await,
-        Plan::Local(local) => run_local(&mut session, &cli.globals, local).await,
+        Plan::Tool(tool) => run_tool(&mut client, &cli.globals, label, *tool).await,
+        Plan::Local(local) => run_local(&mut client, &cli.globals, local).await,
     }
 }
 
 async fn run_tool(
-    session: &mut Session,
+    client: &mut Client,
     globals: &Globals,
     label: &'static str,
     mut plan: ToolPlan,
@@ -65,7 +65,7 @@ async fn run_tool(
     // Before anything else, including resolving a page. A tool this server
     // does not have cannot be fixed by opening one, so "no current page" would
     // send the caller after the wrong problem.
-    if let Some(reason) = capability::unavailable(plan.tool, &session.state().tools) {
+    if let Some(reason) = capability::unavailable(plan.tool, &client.state().tools) {
         return Err(Failure::tool(format!(
             "this server does not offer `{}`: {reason}.\n  Run `browseros status` to see what it does offer.",
             plan.tool
@@ -79,12 +79,12 @@ async fn run_tool(
     // `tools/call` failure into something the caller can act on. Found when
     // `evaluate` became `evaluate_in_page` and `eval` failed with nothing but
     // the method name.
-    if !session.state().tools.is_empty() && !session.state().offers(plan.tool) {
+    if !client.state().tools.is_empty() && !client.state().offers(plan.tool) {
         return Err(Failure::tool(format!(
             "this server has no `{}` tool, so `browseros {}` cannot run.\n  The server is {}; this CLI may be older or newer than it.\n  Run `browseros status` to see what it offers.",
             plan.tool,
             label,
-            session
+            client
                 .state()
                 .server_version
                 .as_deref()
@@ -96,7 +96,7 @@ async fn run_tool(
     let page = if plan.needs_page {
         let page = globals
             .page
-            .or(session.state().page)
+            .or(client.state().page)
             .ok_or_else(|| Failure::usage(
                 "no current page in this directory.\n  Open one:  browseros open <url>\n  Or pick one: browseros tab list, then browseros use <id>",
             ))?;
@@ -109,7 +109,7 @@ async fn run_tool(
     // `run` has no page argument: the page is bound inside the script
     // instead, which is the whole preamble a CLI can write for the caller.
     if plan.wrap_page
-        && let Some(page) = globals.page.or(session.state().page)
+        && let Some(page) = globals.page.or(client.state().page)
         && let Some(Value::String(code)) = plan.args.get("code")
     {
         let wrapped = script::with_page(code, page);
@@ -117,7 +117,7 @@ async fn run_tool(
     }
 
     if plan.with_group
-        && let Some(group) = session.state().group_id.clone()
+        && let Some(group) = client.state().group_id.clone()
     {
         plan.args
             .entry("groupId".to_string())
@@ -129,7 +129,7 @@ async fn run_tool(
     // the run tool's schema; with none cached, the request goes as asked and
     // the server's own rejection is the authoritative answer.
     if let Some(requested) = plan.requested_timeout
-        && let Some(budget) = session.state().run_budget_ms
+        && let Some(budget) = client.state().run_budget_ms
         && requested > budget as f64
     {
         plan.args
@@ -141,28 +141,25 @@ async fn run_tool(
 
     let started = Instant::now();
     let arguments = Value::Object(plan.args.clone());
-    let mut output = session
-        .call(plan.tool, arguments, !globals.no_auto_session)
-        .await?;
+    let mut output = client.call(plan.tool, arguments).await?;
 
-    // A recorded group that no longer exists refuses every call carrying it,
-    // so the directory stays wedged until someone deletes the scope file. The
-    // group can go without this CLI touching it: the user closes the tabs, or
-    // the server's own tab cleanup reaps them after its grace period. The
-    // group is an optimisation and never the caller's intent, so drop it and
-    // run the command that was actually asked for. Once, because a second
-    // refusal is about something else.
+    // The task's group was closed without this CLI, by the user or by the
+    // browser restarting, so placing a new tab in it is refused. The task went
+    // with its group, so start a new one in a new group rather than leave the
+    // directory wedged. Once, because a second refusal is about something else.
     if output.is_error
         && output.text.contains("group_out_of_scope")
-        && session.state().group_id.is_some()
+        && plan.args.remove("groupId").is_some()
     {
-        session.persist(|state| state.group_id = None)?;
-        plan.args.remove("groupId");
+        client.persist(|state| {
+            state.group_id = None;
+            state.task = None;
+        })?;
         io::note(
-            "[the tab group recorded here is gone, so it was dropped and the command retried without it]",
+            "[this directory's task ended when its tab group was closed, so this starts a new task in a new group]",
         );
-        output = session
-            .call(plan.tool, Value::Object(plan.args.clone()), false)
+        output = client
+            .call(plan.tool, Value::Object(plan.args.clone()))
             .await?;
     }
     let elapsed = started.elapsed().as_millis();
@@ -171,7 +168,7 @@ async fn run_tool(
         && let Some(new_page) = render::page_from(&output)
     {
         let url = render::url_from(&output);
-        session.persist(|state| {
+        client.persist(|state| {
             state.page = Some(new_page);
             state.page_url = url.clone();
         })?;
@@ -184,41 +181,13 @@ async fn run_tool(
         && plan.tool == "navigate"
         && let Some(url) = render::url_from(&output)
     {
-        session.persist(|state| state.page_url = Some(url.clone()))?;
+        client.persist(|state| state.page_url = Some(url.clone()))?;
     }
 
-    // The task's tab group is the durable half of the session identity: the
-    // transport id dies with the server, a known group can be re-claimed, and
-    // without it `session end --close-tabs` has nothing to close. The server
-    // creates it and never names it in a reply, so it has to be read out of a
-    // listing.
-    //
-    // Two chances to catch it, because neither alone is enough. A listing the
-    // caller already asked for costs nothing and always sees the group, but a
-    // session that only opens and clicks never asks for one. A listing taken
-    // right after the open does not always see it: a tab now opens on
-    // about:blank and navigates afterwards, so the group can land after the
-    // reply. Together they cost one extra round trip per session at most, and
-    // the next command heals what the first attempt missed.
-    if session.state().group_id.is_none() && !output.is_error {
-        let mine = session.state().page;
-        if plan.tool == "tabs" && plan.args.get("action").and_then(Value::as_str) == Some("list") {
-            if let Some(page) = mine
-                && let Some(group) = render::group_of(&output, page)
-            {
-                session.persist(|state| state.group_id = Some(group.clone()))?;
-            }
-        } else if plan.with_group
-            && let Some(opened) = render::page_from(&output)
-        {
-            let listed = session
-                .call("tabs", json!({ "action": "list" }), false)
-                .await
-                .ok();
-            if let Some(group) = listed.as_ref().and_then(|l| render::group_of(l, opened)) {
-                session.persist(|state| state.group_id = Some(group.clone()))?;
-            }
-        }
+    if client.state().group_id.is_some()
+        && let Some(pending) = client.state().pending_task.clone()
+    {
+        name_pending_task(client, pending).await?;
     }
 
     let mut files = Vec::new();
@@ -257,7 +226,7 @@ async fn run_tool(
         } else if let Some(logs) = script::surviving_logs(&output) {
             io::out(&logs);
         }
-        io::note(&script::cap_advice(session.state().run_budget_ms));
+        io::note(&script::cap_advice(client.state().run_budget_ms));
         return Ok(Code::Timeout);
     }
 
@@ -266,12 +235,12 @@ async fn run_tool(
     // A page-scoped failure is usually a closed or recycled tab, and the one
     // extra round trip to say so precisely only happens on the failure path.
     if output.is_error && plan.needs_page {
-        explain_stale_page(session, page).await;
+        explain_stale_page(client, page).await;
     }
     Ok(output.exit_code())
 }
 
-/// The locals that need neither the network nor a session.
+/// The locals that need neither the network nor a browser.
 fn run_offline(local: &Local) -> Result<Option<Code>> {
     match local {
         Local::SkillsList => {
@@ -289,8 +258,8 @@ fn run_offline(local: &Local) -> Result<Option<Code>> {
             ))
             .into()),
         },
-        Local::SessionList => {
-            session_list();
+        Local::TaskList => {
+            task_list();
             Ok(Some(Code::Ok))
         }
         Local::InstallCli { confirm } => {
@@ -301,61 +270,65 @@ fn run_offline(local: &Local) -> Result<Option<Code>> {
     }
 }
 
-async fn run_local(session: &mut Session, globals: &Globals, local: Local) -> Result<Code> {
+async fn run_local(client: &mut Client, globals: &Globals, local: Local) -> Result<Code> {
     match local {
-        Local::Status => status(session, globals).await,
+        Local::Status => status(client, globals).await,
         Local::Use(page) => {
-            session.persist(|state| {
+            client.persist(|state| {
                 state.page = Some(page);
                 state.page_url = None;
             })?;
             io::out(&format!("page {page}"));
             Ok(Code::Ok)
         }
-        Local::SessionStart {
-            task,
+        Local::TaskStart {
+            name,
             category,
             summary,
-        } => session_start(session, globals, task, category, summary).await,
-        Local::SessionEnd { close_tabs, all } => session_end(session, close_tabs, all).await,
+        } => task_start(client, name, category, summary),
+        Local::TaskDone { keep_tabs, all } => task_done(client, keep_tabs, all).await,
         // Already answered by run_offline before the server was contacted.
         Local::SkillsList
         | Local::SkillsGet { .. }
-        | Local::SessionList
+        | Local::TaskList
         | Local::InstallCli { .. } => Ok(Code::Ok),
     }
 }
 
-async fn status(session: &mut Session, globals: &Globals) -> Result<Code> {
-    let ready = session.transport().ready().await;
+async fn status(client: &mut Client, globals: &Globals) -> Result<Code> {
+    let ready = client.transport().ready().await;
     let link = client::link_summary(ready.clone());
     // One tools/list, cached against the server version. It is the largest
-    // response the CLI ever reads, so asking once per pairing rather than per
-    // command is the whole cost argument for a CLI over MCP.
-    let offered = session.refresh_tools().await.unwrap_or_default();
-    let state = session.state().clone();
+    // response the CLI ever reads, so asking once per server version rather
+    // than per command is the whole cost argument for a CLI over MCP.
+    let offered = client.refresh_tools().await.unwrap_or_default();
+    let state = client.state().clone();
 
     let rows = vec![
         (
             "endpoint",
-            format!("{}  ({link})", session.transport().endpoint()),
+            format!("{}  ({link})", client.transport().endpoint()),
         ),
         (
-            "session",
+            "task",
             state
-                .mcp_session_id
-                .as_deref()
-                .map(client::short)
-                .unwrap_or_else(|| "not paired".to_string()),
+                .task
+                .clone()
+                .or_else(|| {
+                    state
+                        .pending_task
+                        .as_ref()
+                        .map(|pending| pending.name.clone())
+                })
+                .unwrap_or_default(),
         ),
-        ("task", state.task.clone().unwrap_or_default()),
         (
             "group",
             state
                 .group_id
                 .as_deref()
                 .map(client::short)
-                .unwrap_or_default(),
+                .unwrap_or_else(|| "none yet: the next page you open starts a task".to_string()),
         ),
         (
             "page",
@@ -379,7 +352,7 @@ async fn status(session: &mut Session, globals: &Globals) -> Result<Code> {
     if globals.json {
         io::out(&serde_json::to_string_pretty(&json!({
             "ok": true,
-            "endpoint": session.transport().endpoint(),
+            "endpoint": client.transport().endpoint(),
             "browser": link,
             "state": state,
             "tools": offered,
@@ -420,130 +393,118 @@ async fn status(session: &mut Session, globals: &Globals) -> Result<Code> {
     })
 }
 
-async fn session_start(
-    session: &mut Session,
-    globals: &Globals,
-    task: Option<String>,
+/// Names the task this directory is about to do. A task is its tab group and a
+/// group needs a page, so the name waits for the first page and is applied then.
+fn task_start(
+    client: &mut Client,
+    name: Option<String>,
     category: Option<String>,
     summary: Option<String>,
 ) -> Result<Code> {
-    session.handshake(false).await?;
-
-    // The server's own guidance prescribes a list on the first call of a
-    // connection, so make it. It also proves the browser link before anything
-    // is opened.
-    let _ = session
-        .call(
-            "tabs",
-            json!({ "action": "list" }),
-            !globals.no_auto_session,
-        )
-        .await?;
-    // The group this scope already owns, if any. It is deliberately not
-    // guessed from the listing: an id there may belong to the user or to
-    // another agent, and claiming one would put this task's tabs in someone
-    // else's group. A session with no recorded group learns its own from the
-    // first tab it opens, which is where the server creates it.
-    let adopted = session.state().group_id.clone();
-
-    if let Some(name) = task.clone() {
-        let arguments = client::object(vec![
-            ("name", json!(name)),
-            ("category", category.map_or(Value::Null, Value::String)),
-            ("summary", summary.map_or(Value::Null, Value::String)),
-        ]);
-        let named = session.call("name_session", arguments, true).await?;
-        if named.is_error {
-            io::note(&format!("[name_session: {}]", named.text));
-        }
+    if let Some(group) = client.state().group_id.clone() {
+        return Err(Failure::usage(format!(
+            "this directory already has a task, in tab group {}.\n  Finish it first: browseros task done",
+            client::short(&group)
+        ))
+        .into());
     }
-
-    let task_for_state = task.clone();
-    let group_for_state = adopted.clone();
-    session.persist(|state| {
-        state.task = task_for_state.clone();
-        state.group_id = group_for_state.clone();
+    let pending = name.clone().map(|name| state::PendingTask {
+        name,
+        category,
+        summary,
+    });
+    client.persist(|state| {
+        state.pending_task = pending;
+        state.started_at = Some(state::now_stamp());
     })?;
-
-    let id = session
-        .state()
-        .mcp_session_id
-        .as_deref()
-        .map(client::short)
-        .unwrap_or_default();
     io::out(&render::fields(&[
-        (
-            "session",
-            format!("{id}  started on {}", session.transport().endpoint()),
-        ),
-        ("task", task.unwrap_or_default()),
-        (
-            "group",
-            adopted
-                .as_deref()
-                .map(|group| format!("{}  (adopted)", client::short(group)))
-                .unwrap_or_else(|| "none yet".to_string()),
-        ),
+        ("task", name.unwrap_or_else(|| "(unnamed)".to_string())),
+        ("group", "opens with the first page".to_string()),
     ]));
     io::out(
-        "\nLater commands in this directory reuse this session.\nEnd it with: browseros session end",
+        "\nEvery command in this directory joins this task.\nWhen the user says it is done: browseros task done",
     );
     Ok(Code::Ok)
 }
 
-fn session_list() {
-    let scopes = state::all_scopes();
-    if scopes.is_empty() {
-        io::out("(no sessions on this machine)");
+/// Applies a name given before the first page, now that the task has a group.
+async fn name_pending_task(client: &mut Client, pending: state::PendingTask) -> Result<()> {
+    let arguments = client::object(vec![
+        ("name", json!(pending.name)),
+        (
+            "category",
+            pending.category.map_or(Value::Null, Value::String),
+        ),
+        (
+            "summary",
+            pending.summary.map_or(Value::Null, Value::String),
+        ),
+    ]);
+    let named = client.call("name_session", arguments).await?;
+    if named.is_error {
+        io::note(&format!("[naming the task failed: {}]", named.text));
+    }
+    client.persist(|state| {
+        state.task = Some(pending.name);
+        state.pending_task = None;
+    })
+}
+
+fn task_list() {
+    let tasks = state::all_scopes()
+        .into_iter()
+        .filter(|(_, value)| value.group_id.is_some() || value.pending_task.is_some())
+        .collect::<Vec<_>>();
+    if tasks.is_empty() {
+        io::out("(no tasks on this machine)");
         return;
     }
-    for (key, value) in scopes {
-        let id = value
-            .mcp_session_id
+    for (key, value) in tasks {
+        let group = value
+            .group_id
             .as_deref()
             .map(client::short)
             .unwrap_or_else(|| "-".to_string());
+        let name = value
+            .task
+            .or_else(|| value.pending_task.map(|pending| pending.name))
+            .unwrap_or_default();
         io::out(&format!(
-            "{key}  {id:<10} {:<24} {}",
-            value.task.unwrap_or_default(),
+            "{key}  {group:<10} {name:<24} {}",
             value.scope_path.unwrap_or_default()
         ));
     }
 }
 
-async fn session_end(session: &mut Session, close_tabs: bool, all: bool) -> Result<Code> {
-    // Closing the group is a decision about the user's browser, so it is a
-    // flag. Leaving tabs open matches the guidance that useful pages should
-    // survive the end of a task unless asked otherwise.
-    if close_tabs {
-        // Resolve the group from a live listing when the scope file has none:
-        // this is the one destructive command, and "nothing recorded" is a
-        // worse answer than one extra round trip.
-        if session.state().group_id.is_none()
-            && let Some(page) = session.state().page
-            && let Ok(listed) = session
-                .call("tabs", json!({ "action": "list" }), false)
-                .await
-            && let Some(group) = render::group_of(&listed, page)
-        {
-            session.persist(|state| state.group_id = Some(group.clone()))?;
+/// The user said the task is done. Closing its tab group ends it on the server,
+/// so there is nothing else to release. `keep_tabs` leaves the pages open and
+/// only takes them out of the group, which ends the task the same way.
+async fn task_done(client: &mut Client, keep_tabs: bool, all: bool) -> Result<Code> {
+    match client.state().group_id.clone() {
+        None => io::out("no task in this directory."),
+        Some(group) if keep_tabs => {
+            let listed = client.call("tabs", json!({ "action": "list" })).await?;
+            let pages = render::pages_in_group(&listed, &group);
+            if !pages.is_empty() {
+                let arguments = json!({ "action": "ungroup", "pages": pages });
+                let ungrouped = client.call("tab_groups", arguments).await?;
+                if ungrouped.is_error {
+                    io::note(&format!("[{}]", ungrouped.text));
+                }
+            }
+            io::out("task done. Its pages are still open, out of their group.");
         }
-        if let Some(group) = session.state().group_id.clone() {
+        Some(group) => {
             let arguments = json!({ "action": "close", "groupId": group });
-            let closed = session.call("tab_groups", arguments, false).await?;
-            io::out(&closed.text);
-        } else {
-            io::note("[no tab group recorded for this directory; nothing was closed]");
+            let closed = client.call("tab_groups", arguments).await?;
+            io::out(if closed.is_error {
+                "task done. Its tab group was already closed."
+            } else {
+                "task done. Its tab group is closed."
+            });
         }
     }
-
-    let status = session.release().await?;
-    session.store().clear()?;
-    io::out(match status {
-        Some(202) => "session released.",
-        Some(_) => "session released (the server had already forgotten it).",
-        None => "no session in this directory.",
-    });
+    client.store().clear()?;
 
     if all {
         let mut cleared = 0;
@@ -655,12 +616,9 @@ fn decode_base64(encoded: &str) -> Result<Vec<u8>> {
 }
 
 /// On a page-scoped failure, say precisely whether the tab is still there.
-async fn explain_stale_page(session: &mut Session, page: Option<u32>) {
+async fn explain_stale_page(client: &mut Client, page: Option<u32>) {
     let Some(page) = page else { return };
-    let Ok(listed) = session
-        .call("tabs", json!({ "action": "list" }), false)
-        .await
-    else {
+    let Ok(listed) = client.call("tabs", json!({ "action": "list" })).await else {
         return;
     };
     let listed_pages = render::listed_pages(&listed);
@@ -673,7 +631,7 @@ async fn explain_stale_page(session: &mut Session, page: Option<u32>) {
     io::note(&format!(
         "[page {page} is no longer open, so the remembered page has been cleared.\n Pick another: browseros tab list, then browseros use <id>]"
     ));
-    let _ = session.persist(|state| {
+    let _ = client.persist(|state| {
         state.page = None;
         state.page_url = None;
     });
@@ -696,7 +654,7 @@ fn read_external(source: &External) -> Result<String> {
 fn command_label(command: &Command) -> &'static str {
     match command {
         Command::Status => "status",
-        Command::Session(_) => "session",
+        Command::Task(_) => "task",
         Command::Use { .. } => "use",
         Command::Open { .. } => "open",
         Command::Goto { .. } => "goto",

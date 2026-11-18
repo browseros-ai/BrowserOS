@@ -230,7 +230,7 @@ fn values_the_server_would_reject_are_refused_locally() {
     assert!(
         refused(&[
             "browseros",
-            "session",
+            "task",
             "name",
             "x",
             "--summary",
@@ -421,7 +421,7 @@ fn pursue_turns_pairs_into_the_shapes_the_tool_declares() {
 fn locals_never_become_tool_calls() {
     assert_eq!(local(&["browseros", "status"]), Local::Status);
     assert_eq!(local(&["browseros", "use", "7"]), Local::Use(7));
-    assert_eq!(local(&["browseros", "session", "list"]), Local::SessionList);
+    assert_eq!(local(&["browseros", "task", "list"]), Local::TaskList);
     assert_eq!(
         local(&["browseros", "skills", "get", "core", "--full"]),
         Local::SkillsGet {
@@ -429,26 +429,36 @@ fn locals_never_become_tool_calls() {
             full: true
         }
     );
-    // session status is the same report as status, deliberately.
-    assert_eq!(local(&["browseros", "session", "status"]), Local::Status);
+    // task status is the same report as status, deliberately.
+    assert_eq!(local(&["browseros", "task", "status"]), Local::Status);
 }
 
+/// Done closes the task's group by default, because closing the group is what
+/// ends the task. Keeping the pages is the option, not the default.
 #[test]
-fn session_end_leaves_tabs_alone_unless_asked() {
+fn task_done_closes_the_group_unless_asked_to_keep_the_pages() {
     assert_eq!(
-        local(&["browseros", "session", "end"]),
-        Local::SessionEnd {
-            close_tabs: false,
+        local(&["browseros", "task", "done"]),
+        Local::TaskDone {
+            keep_tabs: false,
             all: false
         }
     );
     assert_eq!(
-        local(&["browseros", "session", "end", "--close-tabs"]),
-        Local::SessionEnd {
-            close_tabs: true,
+        local(&["browseros", "task", "done", "--keep-tabs"]),
+        Local::TaskDone {
+            keep_tabs: true,
             all: false
         }
     );
+}
+
+/// There is no session to pair or release, so the commands that did it are gone
+/// rather than kept as aliases an agent might learn.
+#[test]
+fn there_is_no_session_command_and_no_session_flag() {
+    assert!(Cli::try_parse_from(["browseros", "session", "start"]).is_err());
+    assert!(Cli::try_parse_from(["browseros", "--no-auto-session", "status"]).is_err());
 }
 
 #[test]
@@ -518,21 +528,17 @@ fn page_scoped_commands_ask_for_a_page_and_page_free_ones_do_not() {
     }
 }
 
-/// `session start` must not claim a group id it merely saw in a listing.
-///
-/// A listing names the user's groups and other agents' groups too, and the
-/// structured content it would have been read from is stripped on the wire
-/// anyway. A session with no recorded group learns its own from the first tab
-/// it opens, where the server creates it.
+/// `task start` only records a name. A task is its tab group and a group needs a
+/// page, so nothing reaches the server until the first page opens.
 #[test]
-fn starting_a_session_plans_no_group_guess() {
-    let cli = Cli::try_parse_from(["browseros", "session", "start", "--task", "x"])
+fn starting_a_task_stays_local_until_the_first_page() {
+    let cli = Cli::try_parse_from(["browseros", "task", "start", "--name", "x"])
         .unwrap_or_else(|error| panic!("{error}"));
     match claw_server::cli::plan::build(&cli.command, None) {
-        Ok(Plan::Local(Local::SessionStart { task, .. })) => {
-            assert_eq!(task.as_deref(), Some("x"));
+        Ok(Plan::Local(Local::TaskStart { name, .. })) => {
+            assert_eq!(name.as_deref(), Some("x"));
         }
-        other => panic!("session start should stay local: {other:?}"),
+        other => panic!("task start should stay local: {other:?}"),
     }
 }
 

@@ -3,10 +3,13 @@
 /// What a shell caller can branch on.
 ///
 /// `Stopped` exists because the server already distinguishes the two
-/// cancellation paths: an MCP `notifications/cancelled` from this client, and a
-/// human pressing Stop in the cockpit, which comes back with
+/// cancellation paths: this client abandoning a call, and a human pressing Stop
+/// in the cockpit, which comes back with
 /// `cancellationKind: "cockpit.operator-cancelled"`. Only one of those is worth
 /// retrying, and a script cannot tell them apart from exit 1.
+///
+/// `NotOnPlan` is its own code because no retry fixes it: the CLI is part of
+/// the ultrafast plan, and this computer does not have it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Code {
     Ok = 0,
@@ -15,6 +18,7 @@ pub enum Code {
     NoBrowser = 3,
     Timeout = 4,
     Stopped = 5,
+    NotOnPlan = 6,
     Interrupted = 130,
 }
 

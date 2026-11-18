@@ -2,16 +2,18 @@
 //!
 //! Every assertion here is a rule read out of the server rather than invented:
 //! the /mcp hygiene middleware 403s a request carrying Origin or
-//! Sec-Fetch-Site, POST must be JSON, DELETE must carry no content-type, and
-//! the reply may be SSE framed. Each of those is an intermittent mystery if it
-//! is only ever tested against a real server that happens to behave.
+//! Sec-Fetch-Site, POST must be JSON, a stateless request names its protocol
+//! and method in headers, and the reply may be SSE framed. Each of those is an
+//! intermittent mystery if it is only ever tested against a real server that
+//! happens to behave. There is no session: a call carries the task's tab group
+//! and nothing else, and the client follows the group the server names back.
 
 use std::sync::{Arc, Mutex};
 
+use claw_server::cli::client::Client;
 use claw_server::cli::client::transport::{
-    Transport, call_message, decode_body, initialize_message, initialized_message,
+    CLIENT_NAME, PROTOCOL_VERSION, Transport, call_message, decode_body,
 };
-use claw_server::cli::client::{Session, cancel_in_flight};
 use claw_server::cli::state::{Store, scope};
 use serde_json::json;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -40,7 +42,6 @@ struct Canned {
     status: u16,
     content_type: &'static str,
     body: String,
-    session_id: Option<&'static str>,
 }
 
 impl Canned {
@@ -49,21 +50,6 @@ impl Canned {
             status,
             content_type: "application/json",
             body: body.to_string(),
-            session_id: None,
-        }
-    }
-
-    fn with_session(mut self, id: &'static str) -> Self {
-        self.session_id = Some(id);
-        self
-    }
-
-    fn text(status: u16, body: &str) -> Self {
-        Self {
-            status,
-            content_type: "text/plain",
-            body: body.to_string(),
-            session_id: None,
         }
     }
 }
@@ -139,12 +125,8 @@ async fn fixture(responses: Vec<Canned>) -> Fixture {
                 });
             }
 
-            let session = canned
-                .session_id
-                .map(|id| format!("mcp-session-id: {id}\r\n"))
-                .unwrap_or_default();
             let response = format!(
-                "HTTP/1.1 {} OK\r\ncontent-type: {}\r\ncontent-length: {}\r\n{session}connection: close\r\n\r\n{}",
+                "HTTP/1.1 {} OK\r\ncontent-type: {}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
                 canned.status,
                 canned.content_type,
                 canned.body.len(),
@@ -170,9 +152,7 @@ fn transport(url: &str) -> Transport {
 async fn a_post_never_carries_the_headers_the_hygiene_middleware_rejects() {
     let fixture = fixture(vec![Canned::json(200, json!({ "result": {} }))]).await;
     let transport = transport(&fixture.url);
-    let _ = transport
-        .post(&call_message(1, "tabs", &json!({})), Some("abc"))
-        .await;
+    let _ = transport.post(&call_message(1, "tabs", &json!({}))).await;
 
     let seen = fixture
         .seen
@@ -190,7 +170,15 @@ async fn a_post_never_carries_the_headers_the_hygiene_middleware_rejects() {
     );
     assert_eq!(request.method, "POST");
     assert_eq!(request.header("content-type"), Some("application/json"));
-    assert_eq!(request.header("mcp-session-id"), Some("abc"));
+    // Stateless: the protocol and the method ride in headers the server
+    // checks against the body, and no session is ever presented.
+    assert_eq!(
+        request.header("mcp-protocol-version"),
+        Some(PROTOCOL_VERSION)
+    );
+    assert_eq!(request.header("mcp-method"), Some("tools/call"));
+    assert_eq!(request.header("mcp-name"), Some("tabs"));
+    assert_eq!(request.header("mcp-session-id"), None);
     assert!(
         request
             .header("accept")
@@ -201,83 +189,20 @@ async fn a_post_never_carries_the_headers_the_hygiene_middleware_rejects() {
 }
 
 #[tokio::test]
-async fn delete_carries_no_content_type_because_that_is_the_only_shape_exempted() {
-    let fixture = fixture(vec![Canned::text(202, "")]).await;
-    let transport = transport(&fixture.url);
-    let status = transport.delete_session("abc").await.unwrap_or(0);
-    assert_eq!(status, 202);
-
-    let seen = fixture
-        .seen
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
-    let request = seen.first().unwrap_or_else(|| panic!("nothing was sent"));
-    assert_eq!(request.method, "DELETE");
-    assert_eq!(
-        request.header("content-type"),
-        None,
-        "the middleware exempts DELETE from the JSON check only when the header is absent"
-    );
-    assert_eq!(request.header("mcp-session-id"), Some("abc"));
-}
-
-#[tokio::test]
 async fn an_sse_framed_reply_is_read_exactly_like_a_json_one() {
     let payload = json!({ "jsonrpc": "2.0", "id": 1, "result": { "content": [] } });
     let fixture = fixture(vec![Canned {
         status: 200,
         content_type: "text/event-stream",
         body: format!("event: message\ndata: {payload}\n\n"),
-        session_id: None,
     }])
     .await;
     let transport = transport(&fixture.url);
     let reply = transport
-        .post(&call_message(1, "tabs", &json!({})), Some("abc"))
+        .post(&call_message(1, "tabs", &json!({})))
         .await
         .unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(reply.body, Some(payload));
-}
-
-#[tokio::test]
-async fn the_session_id_is_taken_from_the_response_header() {
-    let fixture = fixture(vec![
-        Canned::json(
-            200,
-            json!({ "result": { "protocolVersion": "2026-07-28" } }),
-        )
-        .with_session("sess-123"),
-    ])
-    .await;
-    let transport = transport(&fixture.url);
-    let reply = transport
-        .post(&initialize_message("browseros-cli", "0.0.1"), None)
-        .await
-        .unwrap_or_else(|error| panic!("{error}"));
-    assert_eq!(reply.session_id.as_deref(), Some("sess-123"));
-
-    let seen = fixture
-        .seen
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
-    let request = seen.first().unwrap_or_else(|| panic!("nothing was sent"));
-    assert_eq!(
-        request.header("mcp-session-id"),
-        None,
-        "initialize is the one call that must not present an id"
-    );
-    assert!(request.body.contains("\"initialize\""), "{}", request.body);
-}
-
-#[tokio::test]
-async fn a_dead_session_is_recognised_from_the_status_alone() {
-    let fixture = fixture(vec![Canned::text(404, "Not Found: Session not found")]).await;
-    let transport = transport(&fixture.url);
-    let reply = transport
-        .post(&call_message(1, "tabs", &json!({})), Some("gone"))
-        .await
-        .unwrap_or_else(|error| panic!("{error}"));
-    assert!(reply.is_session_gone());
 }
 
 #[tokio::test]
@@ -304,7 +229,7 @@ async fn health_proves_an_endpoint_and_a_dead_port_fails_fast() {
 async fn a_connection_failure_is_classified_as_no_browser_rather_than_a_tool_error() {
     let transport = transport("http://127.0.0.1:1");
     let error = transport
-        .post(&call_message(1, "tabs", &json!({})), None)
+        .post(&call_message(1, "tabs", &json!({})))
         .await
         .err()
         .unwrap_or_else(|| panic!("a dead port must fail"));
@@ -315,224 +240,168 @@ async fn a_connection_failure_is_classified_as_no_browser_rather_than_a_tool_err
 }
 
 #[test]
-fn the_notification_that_completes_the_handshake_carries_no_id() {
-    let message = initialized_message();
-    assert_eq!(message["method"], "notifications/initialized");
-    assert!(message.get("id").is_none(), "a notification has no id");
-}
-
-#[test]
 fn an_empty_or_unparsable_body_decodes_to_nothing_rather_than_panicking() {
     assert_eq!(decode_body("application/json", ""), None);
     assert_eq!(decode_body("application/json", "not json"), None);
 }
 
-/// What the JSON-RPC body of a recorded request says it is.
-fn method_of(request: &Recorded) -> String {
-    serde_json::from_str::<serde_json::Value>(&request.body)
-        .ok()
-        .and_then(|body| {
-            body.get("method")
-                .and_then(|method| method.as_str())
-                .map(ToString::to_string)
-        })
-        .unwrap_or_default()
+/// The JSON-RPC body of a recorded request.
+fn body_of(request: &Recorded) -> serde_json::Value {
+    serde_json::from_str(&request.body).unwrap_or_else(|error| panic!("{error}"))
 }
 
-fn session_for(url: &str, dir: &std::path::Path) -> Session {
+fn client_for(url: &str, dir: &std::path::Path) -> Client {
     let scope = scope(std::path::Path::new("/repo"), None);
     let store = Store::open_in(dir, &scope).unwrap_or_else(|error| panic!("{error}"));
     let transport = Transport::new(url, std::time::Duration::from_secs(5))
         .unwrap_or_else(|error| panic!("{error}"));
     let state = store.load();
-    Session::new(transport, store, state)
+    Client::new(transport, store, state)
+}
+
+/// A tool result naming `group` as its task's, the way the server answers the CLI.
+fn result_in_group(group: &str) -> Canned {
+    Canned::json(
+        200,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "result": {
+                "content": [{ "type": "text", "text": "ok" }],
+                "_meta": { "com.browseros.neo/group": group }
+            }
+        }),
+    )
 }
 
 #[tokio::test]
-async fn a_dead_session_triggers_exactly_one_re_handshake_and_one_retry() {
+async fn a_call_is_one_request_with_no_handshake() {
     let dir = tempfile::tempdir().unwrap_or_else(|error| panic!("{error}"));
-    // The server restarted, so the stored id is gone. The recovery is a
-    // re-handshake and a single retry: a loop here is how a restarting server
-    // turns into a tab storm.
-    let fixture = fixture(vec![
-        Canned::text(404, "Not Found: Session not found"),
-        Canned::json(200, json!({ "jsonrpc": "2.0", "id": 1, "result": {} }))
-            .with_session("fresh-session"),
-        Canned::text(202, ""),
-        Canned::json(
-            200,
-            json!({
-                "jsonrpc": "2.0",
-                "id": 3,
-                "result": { "content": [{ "type": "text", "text": "ok" }] }
-            }),
-        ),
-        // A fifth response is queued so an extra attempt would be recorded
-        // rather than hanging the test.
-        Canned::text(404, "Not Found: Session not found"),
-    ])
-    .await;
+    let fixture = fixture(vec![result_in_group("G1")]).await;
+    let mut client = client_for(&fixture.url, dir.path());
 
-    let mut session = session_for(&fixture.url, dir.path());
-    session
-        .persist(|state| state.mcp_session_id = Some("stale-session".into()))
-        .unwrap_or_else(|error| panic!("{error}"));
-
-    let output = session
-        .call("tabs", json!({ "action": "list" }), true)
+    client
+        .call("tabs", json!({ "action": "list" }))
         .await
-        .unwrap_or_else(|error| panic!("the retry should have succeeded: {error}"));
-    assert_eq!(output.text, "ok");
+        .unwrap_or_else(|error| panic!("{error}"));
 
     let seen = fixture
         .seen
         .lock()
         .unwrap_or_else(|error| error.into_inner());
-    let methods: Vec<String> = seen.iter().map(method_of).collect();
+    assert_eq!(seen.len(), 1, "no initialize, no notification: {seen:?}");
+    let body = body_of(&seen[0]);
+    assert_eq!(body["method"], "tools/call");
+    // The server recognises the CLI by this name; it is what turns on the
+    // group-keyed task model for this call.
     assert_eq!(
-        methods,
-        vec![
-            "tools/call",
-            "initialize",
-            "notifications/initialized",
-            "tools/call",
-        ],
-        "exactly one re-handshake and one retry"
-    );
-
-    // The first call presented the dead id; the retry presented the new one.
-    assert_eq!(seen[0].header("mcp-session-id"), Some("stale-session"));
-    assert_eq!(seen[1].header("mcp-session-id"), None);
-    assert_eq!(seen[3].header("mcp-session-id"), Some("fresh-session"));
-    // And the new id is what the next process will read.
-    assert_eq!(
-        session.state().mcp_session_id.as_deref(),
-        Some("fresh-session")
+        body["params"]["_meta"]["io.modelcontextprotocol/clientInfo"]["name"],
+        CLIENT_NAME
     );
 }
 
 #[tokio::test]
-async fn a_retry_that_also_fails_stops_rather_than_handshaking_again() {
+async fn a_call_presents_the_recorded_group_and_nothing_else() {
     let dir = tempfile::tempdir().unwrap_or_else(|error| panic!("{error}"));
-    let fixture = fixture(vec![
-        Canned::text(404, "Not Found: Session not found"),
-        Canned::json(200, json!({ "jsonrpc": "2.0", "id": 1, "result": {} }))
-            .with_session("fresh-session"),
-        Canned::text(202, ""),
-        Canned::text(404, "Not Found: Session not found"),
-        Canned::json(200, json!({ "jsonrpc": "2.0", "id": 1, "result": {} }))
-            .with_session("third-session"),
-    ])
-    .await;
-
-    let mut session = session_for(&fixture.url, dir.path());
-    session
-        .persist(|state| state.mcp_session_id = Some("stale-session".into()))
+    let fixture = fixture(vec![result_in_group("G1")]).await;
+    let mut client = client_for(&fixture.url, dir.path());
+    client
+        .persist(|state| state.group_id = Some("G1".into()))
         .unwrap_or_else(|error| panic!("{error}"));
 
-    let error = session
-        .call("tabs", json!({ "action": "list" }), true)
+    client
+        .call("snapshot", json!({ "page": 3 }))
+        .await
+        .unwrap_or_else(|error| panic!("{error}"));
+
+    let seen = fixture
+        .seen
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let arguments = &body_of(&seen[0])["params"]["arguments"];
+    assert_eq!(arguments, &json!({ "page": 3, "group": "G1" }));
+    assert_eq!(seen[0].header("mcp-session-id"), None);
+}
+
+#[tokio::test]
+async fn the_group_the_server_names_is_kept_for_the_next_command() {
+    let dir = tempfile::tempdir().unwrap_or_else(|error| panic!("{error}"));
+    let fixture = fixture(vec![result_in_group("G7")]).await;
+    let mut client = client_for(&fixture.url, dir.path());
+
+    client
+        .call("tabs", json!({ "action": "new", "url": "https://x.test" }))
+        .await
+        .unwrap_or_else(|error| panic!("{error}"));
+
+    assert_eq!(client.state().group_id.as_deref(), Some("G7"));
+    // And on disk, which is what the next process reads.
+    assert_eq!(client.store().load().group_id.as_deref(), Some("G7"));
+}
+
+#[tokio::test]
+async fn a_result_naming_no_group_ends_the_recorded_task() {
+    let dir = tempfile::tempdir().unwrap_or_else(|error| panic!("{error}"));
+    // The user closed the task's tabs, so the server resolved no open task.
+    let fixture = fixture(vec![Canned::json(
+        200,
+        json!({ "jsonrpc": "2.0", "id": 2, "result": { "content": [] } }),
+    )])
+    .await;
+    let mut client = client_for(&fixture.url, dir.path());
+    client
+        .persist(|state| {
+            state.group_id = Some("G1".into());
+            state.task = Some("price check".into());
+        })
+        .unwrap_or_else(|error| panic!("{error}"));
+
+    client
+        .call("tabs", json!({ "action": "list" }))
+        .await
+        .unwrap_or_else(|error| panic!("{error}"));
+
+    assert_eq!(client.state().group_id, None);
+    assert_eq!(client.state().task, None);
+}
+
+#[tokio::test]
+async fn the_plan_refusal_exits_with_its_own_code_and_keeps_the_task() {
+    let dir = tempfile::tempdir().unwrap_or_else(|error| panic!("{error}"));
+    let fixture = fixture(vec![Canned::json(
+        200,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "result": {
+                "isError": true,
+                "content": [{
+                    "type": "text",
+                    "text": "ultrafast_required: the browseros command line is part of the ultrafast plan, which this computer does not have."
+                }]
+            }
+        }),
+    )])
+    .await;
+    let mut client = client_for(&fixture.url, dir.path());
+    client
+        .persist(|state| state.group_id = Some("G1".into()))
+        .unwrap_or_else(|error| panic!("{error}"));
+
+    let error = client
+        .call("tabs", json!({ "action": "list" }))
         .await
         .err()
-        .unwrap_or_else(|| panic!("a second 404 must not be swallowed"));
+        .unwrap_or_else(|| panic!("the refusal must fail the command"));
+
     assert_eq!(
         claw_server::cli::exit::code_of(&error),
-        claw_server::cli::exit::Code::NoBrowser
+        claw_server::cli::exit::Code::NotOnPlan
     );
-
-    let seen = fixture
-        .seen
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
+    assert!(error.to_string().contains("ultrafast plan"), "{error}");
     assert_eq!(
-        seen.iter().filter(|r| method_of(r) == "initialize").count(),
-        1,
-        "exactly one retry, then stop"
+        client.state().group_id.as_deref(),
+        Some("G1"),
+        "a refused call never reached a task, so it cannot have ended one"
     );
-}
-
-#[tokio::test]
-async fn an_unpaired_scope_handshakes_before_the_first_call() {
-    let dir = tempfile::tempdir().unwrap_or_else(|error| panic!("{error}"));
-    let fixture = fixture(vec![
-        Canned::json(200, json!({ "jsonrpc": "2.0", "id": 1, "result": {} }))
-            .with_session("first-session"),
-        Canned::text(202, ""),
-        Canned::json(
-            200,
-            json!({ "jsonrpc": "2.0", "id": 2, "result": { "content": [] } }),
-        ),
-    ])
-    .await;
-
-    let mut session = session_for(&fixture.url, dir.path());
-    session
-        .call("tabs", json!({ "action": "list" }), true)
-        .await
-        .unwrap_or_else(|error| panic!("{error}"));
-
-    let seen = fixture
-        .seen
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
-    let methods: Vec<String> = seen.iter().map(method_of).collect();
-    assert_eq!(
-        methods,
-        vec!["initialize", "notifications/initialized", "tools/call"]
-    );
-}
-
-#[tokio::test]
-async fn no_auto_session_refuses_to_pair_rather_than_pairing_quietly() {
-    let dir = tempfile::tempdir().unwrap_or_else(|error| panic!("{error}"));
-    let fixture = fixture(vec![Canned::text(200, "")]).await;
-    let mut session = session_for(&fixture.url, dir.path());
-
-    let error = session
-        .call("tabs", json!({}), false)
-        .await
-        .err()
-        .unwrap_or_else(|| panic!("it must refuse"));
-    assert_eq!(
-        claw_server::cli::exit::code_of(&error),
-        claw_server::cli::exit::Code::NoBrowser
-    );
-
-    let seen = fixture
-        .seen
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
-    assert!(seen.is_empty(), "nothing should have been sent: {seen:?}");
-}
-
-#[tokio::test]
-async fn the_cancellation_notification_names_the_request_it_abandons() {
-    // Sent on ctrl-C. dispatch.rs has a client_cancel path that stops the tool
-    // server side; dying without this leaves it running one nobody will read.
-    let fixture = fixture(vec![Canned::text(202, "")]).await;
-    let transport = transport(&fixture.url);
-    cancel_in_flight(&transport, 42, Some("sess")).await;
-
-    let seen = fixture
-        .seen
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
-    let request = seen.first().unwrap_or_else(|| panic!("nothing was sent"));
-    let body: serde_json::Value =
-        serde_json::from_str(&request.body).unwrap_or_else(|error| panic!("{error}"));
-    assert_eq!(body["method"], "notifications/cancelled");
-    assert_eq!(body["params"]["requestId"], 42);
-    // A notification carries no id, so the server never tries to answer it.
-    assert!(body.get("id").is_none(), "{body}");
-    assert_eq!(request.header("mcp-session-id"), Some("sess"));
-}
-
-#[tokio::test]
-async fn a_cancellation_the_server_cannot_take_does_not_hold_the_process_open() {
-    // The caller has already pressed ctrl-C. A dead port must not make them
-    // press it again.
-    let transport = transport("http://127.0.0.1:1");
-    let started = std::time::Instant::now();
-    cancel_in_flight(&transport, 1, None).await;
-    assert!(started.elapsed() < std::time::Duration::from_secs(5));
 }

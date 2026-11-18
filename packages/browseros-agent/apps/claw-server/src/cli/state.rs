@@ -1,9 +1,11 @@
 //! The scope file: what makes `browseros click @e3` carry no arguments.
 //!
-//! Three things live here because a CLI process cannot hold them between
-//! invocations: the current page, the MCP transport session id, and the tab
-//! group id. The first is the ergonomic delta; the second and third are what
-//! keep tab ownership intact across separate processes.
+//! Two things live here because a CLI process cannot hold them between
+//! invocations: the current page, and the tab group the task works in. The
+//! first is the ergonomic delta. The second is the task itself: the server
+//! resolves the task from it, so it is the only identity a command carries.
+//! There is no session. A scope file written before that change still loads;
+//! its old session id is simply dropped on the next save.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -24,15 +26,18 @@ const LOCK_POLL: Duration = Duration::from_millis(25);
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct State {
-    /// A cache, re-resolvable. A change discards `mcp_session_id` and `page`,
+    /// A cache, re-resolvable. A change discards `page` and the tool cache,
     /// which mean nothing on another server.
     pub endpoint: Option<String>,
-    /// The fast path. Dies with the server; a 404 is the signal.
-    pub mcp_session_id: Option<String>,
-    /// The durable identity. Survives a restart and is re-claimed on `tabs new`.
+    /// The task. Presented on every call, named back by the server in every
+    /// result, and cleared when the server says the task has no group open.
     pub group_id: Option<String>,
-    /// So a recovered session can re-apply its name.
+    /// The task's name, once the server has it.
     pub task: Option<String>,
+    /// A name given before the task's first page. Applied once its group exists,
+    /// which is when the server has a task to name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_task: Option<PendingTask>,
     /// The implicit current page.
     pub page: Option<u32>,
     /// A page id is only good while that tab is open and still ours, so the URL
@@ -50,16 +55,24 @@ pub struct State {
     /// Configurable per deployment, so it is discovered, never assumed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_budget_ms: Option<u64>,
-    /// The scope's human-readable path, for `session list`.
+    /// The scope's human-readable path, for `task list`.
     pub scope_path: Option<String>,
     pub started_at: Option<String>,
+}
+
+/// A task named with `task start` before it has a page.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct PendingTask {
+    pub name: String,
+    pub category: Option<String>,
+    pub summary: Option<String>,
 }
 
 impl State {
     /// Drops everything that is meaningless on a different server.
     pub fn rebind(&mut self, endpoint: &str) {
         if self.endpoint.as_deref() != Some(endpoint) {
-            self.mcp_session_id = None;
             self.page = None;
             self.page_url = None;
             self.tools.clear();
@@ -358,20 +371,18 @@ mod tests {
     }
 
     #[test]
-    fn a_changed_endpoint_discards_the_session_and_the_page() {
+    fn a_changed_endpoint_discards_the_page_and_keeps_the_task() {
         let mut state = State {
             endpoint: Some("http://127.0.0.1:9200".into()),
-            mcp_session_id: Some("abc".into()),
             page: Some(3),
             group_id: Some("G".into()),
             task: Some("price check".into()),
             ..State::default()
         };
         state.rebind("http://127.0.0.1:9739");
-        assert_eq!(state.mcp_session_id, None);
         assert_eq!(state.page, None);
-        // The group and the task are the server-independent half of the
-        // identity and survive, so a reconnect can re-claim them.
+        // The group is the task, and the browser holds it whatever server
+        // answers, so it survives and the next command resolves the task.
         assert_eq!(state.group_id.as_deref(), Some("G"));
         assert_eq!(state.task.as_deref(), Some("price check"));
     }
@@ -380,13 +391,27 @@ mod tests {
     fn the_same_endpoint_keeps_everything() {
         let mut state = State {
             endpoint: Some("http://127.0.0.1:9200".into()),
-            mcp_session_id: Some("abc".into()),
             page: Some(3),
+            group_id: Some("G".into()),
             ..State::default()
         };
         state.rebind("http://127.0.0.1:9200");
-        assert_eq!(state.mcp_session_id.as_deref(), Some("abc"));
         assert_eq!(state.page, Some(3));
+        assert_eq!(state.group_id.as_deref(), Some("G"));
+    }
+
+    #[test]
+    fn a_scope_file_from_the_session_model_loads_with_its_task_intact()
+    -> Result<(), serde_json::Error> {
+        // Written by a CLI that still paired sessions. The session id means
+        // nothing now and is dropped; the group, which is the task, is kept.
+        let old =
+            r#"{"endpoint":"http://127.0.0.1:9200","mcpSessionId":"abc","groupId":"G","page":3}"#;
+        let state: State = serde_json::from_str(old)?;
+        assert_eq!(state.group_id.as_deref(), Some("G"));
+        assert_eq!(state.page, Some(3));
+        assert!(!serde_json::to_string(&state)?.contains("mcpSessionId"));
+        Ok(())
     }
 
     #[test]

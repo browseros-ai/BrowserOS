@@ -69,6 +69,16 @@ pub fn listed_pages(output: &ToolOutput) -> Vec<u32> {
         .collect()
 }
 
+/// Every listed page that sits in `group`, for leaving a task's pages open as
+/// its group goes.
+#[must_use]
+pub fn pages_in_group(output: &ToolOutput, group: &str) -> Vec<u32> {
+    listed_pages(output)
+        .into_iter()
+        .filter(|page| group_of(output, *page).as_deref() == Some(group))
+        .collect()
+}
+
 /// The path a tool reports having written.
 ///
 /// `pdf` and `download` write into the browser's own output directory and name

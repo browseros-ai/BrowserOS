@@ -37,7 +37,7 @@ fn step_lines(steps: &str) -> Value {
 const EVAL_TIMEOUT_CAP_MS: f64 = 30_000.0;
 use crate::cli::grammar::{
     CardsCmd, Command, CredentialsCmd, DialogCmd, DiffFlag, GroupCmd, HelpCmd, HelpersCmd,
-    ProfileCmd, SessionCmd, SkillCmd, SkillsCmd, TabCmd, TargetCmd, WindowCmd,
+    ProfileCmd, SkillCmd, SkillsCmd, TabCmd, TargetCmd, TaskCmd, WindowCmd,
 };
 use crate::cli::refs;
 
@@ -101,14 +101,14 @@ impl ToolPlan {
 pub enum Local {
     Status,
     Use(u32),
-    SessionStart {
-        task: Option<String>,
+    TaskStart {
+        name: Option<String>,
         category: Option<String>,
         summary: Option<String>,
     },
-    SessionList,
-    SessionEnd {
-        close_tabs: bool,
+    TaskList,
+    TaskDone {
+        keep_tabs: bool,
         all: bool,
     },
     SkillsList,
@@ -202,23 +202,23 @@ pub fn needs_external(command: &Command) -> Option<External> {
 /// each of those otherwise costs a round trip to learn.
 pub fn build(command: &Command, external: Option<&str>) -> Result<Plan, Failure> {
     Ok(match command {
-        Command::Status | Command::Session(SessionCmd::Status) => Plan::Local(Local::Status),
+        Command::Status | Command::Task(TaskCmd::Status) => Plan::Local(Local::Status),
         Command::Use { page } => Plan::Local(Local::Use(*page)),
-        Command::Session(SessionCmd::Start {
-            task,
+        Command::Task(TaskCmd::Start {
+            name,
             category,
             summary,
-        }) => Plan::Local(Local::SessionStart {
-            task: task.clone(),
+        }) => Plan::Local(Local::TaskStart {
+            name: name.clone(),
             category: category.clone(),
             summary: summary.clone(),
         }),
-        Command::Session(SessionCmd::List) => Plan::Local(Local::SessionList),
-        Command::Session(SessionCmd::End { close_tabs, all }) => Plan::Local(Local::SessionEnd {
-            close_tabs: *close_tabs,
+        Command::Task(TaskCmd::List) => Plan::Local(Local::TaskList),
+        Command::Task(TaskCmd::Done { keep_tabs, all }) => Plan::Local(Local::TaskDone {
+            keep_tabs: *keep_tabs,
             all: *all,
         }),
-        Command::Session(SessionCmd::Name {
+        Command::Task(TaskCmd::Name {
             name,
             category,
             summary,
@@ -227,7 +227,7 @@ pub fn build(command: &Command, external: Option<&str>) -> Result<Plan, Failure>
                 && summary.chars().count() > 200
             {
                 return Err(Failure::usage(
-                    "session summary is capped at 200 characters by the server.",
+                    "task summary is capped at 200 characters by the server.",
                 ));
             }
             Plan::tool(

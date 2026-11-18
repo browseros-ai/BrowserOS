@@ -15,7 +15,6 @@ fn a_round_trip_keeps_every_field() -> anyhow::Result<()> {
 
     store.update(|state| {
         state.endpoint = Some("http://127.0.0.1:9200".into());
-        state.mcp_session_id = Some("sess".into());
         state.group_id = Some("GROUP".into());
         state.task = Some("price check".into());
         state.page = Some(3);
@@ -26,7 +25,7 @@ fn a_round_trip_keeps_every_field() -> anyhow::Result<()> {
     assert_eq!(read.page, Some(3));
     assert_eq!(read.group_id.as_deref(), Some("GROUP"));
     assert_eq!(read.page_url.as_deref(), Some("https://x.test"));
-    // The scope path is filled in on first write so `session list` can print it.
+    // The scope path is filled in on first write so `task list` can print it.
     assert_eq!(read.scope_path.as_deref(), Some("/repo"));
     Ok(())
 }
@@ -41,7 +40,7 @@ fn a_corrupt_file_is_replaced_rather_than_fatal() -> anyhow::Result<()> {
         "{ this is not json",
     )?;
 
-    // It is a cache of three recoverable facts. Refusing to run because of it
+    // It is a cache of recoverable facts. Refusing to run because of it
     // would turn a cosmetic problem into an outage.
     let read = store.load();
     assert_eq!(read.page, None);
@@ -54,7 +53,6 @@ fn a_corrupt_file_is_replaced_rather_than_fatal() -> anyhow::Result<()> {
 fn a_changed_endpoint_discards_what_cannot_survive_it() {
     let mut state = State {
         endpoint: Some("http://127.0.0.1:9200".into()),
-        mcp_session_id: Some("sess".into()),
         page: Some(3),
         page_url: Some("https://x.test".into()),
         group_id: Some("GROUP".into()),
@@ -66,12 +64,11 @@ fn a_changed_endpoint_discards_what_cannot_survive_it() {
     state.rebind("http://127.0.0.1:9739");
 
     // Meaningless on another server.
-    assert_eq!(state.mcp_session_id, None);
     assert_eq!(state.page, None);
     assert_eq!(state.page_url, None);
     assert!(state.tools.is_empty());
     assert_eq!(state.server_version, None);
-    // The server-independent half of the identity, which a reconnect reclaims.
+    // The task is its group, which the browser holds whatever server answers.
     assert_eq!(state.group_id.as_deref(), Some("GROUP"));
     assert_eq!(state.task.as_deref(), Some("price check"));
 }

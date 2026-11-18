@@ -41,7 +41,7 @@ const PROBES: &[&[&str]] = &[
     &["browseros", "output", "abc123"],
     &["browseros", "cards", "list"],
     &["browseros", "target", "get"],
-    &["browseros", "session", "name", "price check"],
+    &["browseros", "task", "name", "price check"],
     &["browseros", "skill", "save", "x", "--description", "d"],
     &["browseros", "skill", "ran", "x"],
     &["browseros", "pursue", "do the thing"],

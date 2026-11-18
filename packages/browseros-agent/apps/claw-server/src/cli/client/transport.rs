@@ -1,10 +1,10 @@
-//! One POST per call, carrying a persisted `mcp-session-id`.
+//! One stateless POST per call. No handshake, no session, nothing carried.
 //!
-//! Hand written rather than taken from rmcp because rmcp 3.2's
-//! `StreamableHttpClientTransportConfig` has no field for an initial session
-//! id, so its client re-initializes in every process. Tab ownership is keyed to
-//! the MCP connection, so a CLI that re-initialized per command would re-orphan
-//! its own tabs on every command.
+//! Every command is its own process, so it could not hold a connection if it
+//! wanted to, and the server does not ask it to: on the 2026-07-28 stateless
+//! path each request names its protocol version and client in `_meta`, and the
+//! CLI's task travels as the tab group it works in, which the caller puts in
+//! the arguments. Hand written because that is all it is, one POST.
 //!
 //! Four rules come out of the server rather than out of taste, and each one
 //! turns into an intermittent mystery if it is guessed:
@@ -13,9 +13,9 @@
 //!    rejects both with 403, because browser fetches carry them and native MCP
 //!    clients do not.
 //! 2. POST must carry `content-type: application/json`, or 415.
-//! 3. DELETE must carry NO content-type. The middleware exempts DELETE from the
-//!    JSON check only when the header is absent, which is the shape of rmcp's
-//!    session teardown.
+//! 3. A stateless request names its protocol version in the
+//!    `mcp-protocol-version` header and its method in `mcp-method` (and the
+//!    tool in `mcp-name`), which the server checks against the body.
 //! 4. The reply may be `text/event-stream`, because `Accept` advertises both
 //!    framings and the server chooses.
 
@@ -28,10 +28,12 @@ use crate::cli::exit::{Code, Failure};
 
 /// Advertises both framings, which is why [`decode_body`] has to handle both.
 const ACCEPT: &str = "application/json, text/event-stream";
-const SESSION_HEADER: &str = "mcp-session-id";
-/// Newest in the server's `SUPPORTED_PROTOCOL_VERSIONS`. The optional
-/// `agentName` argument is gated on this version or later.
+/// The stateless protocol: no handshake, and per-request metadata instead of a
+/// session. The optional `agentName` argument is gated on this version too.
 pub const PROTOCOL_VERSION: &str = "2026-07-28";
+/// The `clientInfo.name` the server recognises the CLI by. Every group-keyed
+/// task behaviour on the server is gated on it, so it must never change alone.
+pub const CLIENT_NAME: &str = "browseros-cli";
 
 /// A dead port should fail fast so endpoint resolution can try the next candidate.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
@@ -44,17 +46,8 @@ pub const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(180);
 /// What a single POST came back as, before it is interpreted as a tool result.
 pub struct Reply {
     pub status: u16,
-    pub session_id: Option<String>,
     pub body: Option<Value>,
     pub raw: String,
-}
-
-impl Reply {
-    /// Whether this is the server saying the transport session is gone.
-    #[must_use]
-    pub fn is_session_gone(&self) -> bool {
-        self.status == 404
-    }
 }
 
 pub struct Transport {
@@ -88,48 +81,29 @@ impl Transport {
         format!("{}/mcp", self.endpoint)
     }
 
-    /// POSTs one JSON-RPC message, optionally carrying a session id.
+    /// POSTs one JSON-RPC message.
     ///
     /// # Errors
     /// Connection failures become [`Code::NoBrowser`] and read timeouts become
     /// [`Code::Timeout`], so the caller never has to inspect a reqwest error.
-    pub async fn post(&self, message: &Value, session: Option<&str>) -> Result<Reply> {
-        self.post_within(message, session, None).await
-    }
-
-    /// The same POST, but with its own deadline.
-    ///
-    /// Used for the cancellation notification, which must not inherit the
-    /// 180 second read timeout: a caller who has pressed ctrl-C is waiting,
-    /// and a second interrupt should not be needed to get the process back.
-    ///
-    /// # Errors
-    /// Classified the same way as [`Self::post`].
-    pub async fn post_within(
-        &self,
-        message: &Value,
-        session: Option<&str>,
-        deadline: Option<Duration>,
-    ) -> Result<Reply> {
+    pub async fn post(&self, message: &Value) -> Result<Reply> {
+        let method = message
+            .get("method")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         let mut request = self
             .http
             .post(self.mcp_url())
             .header(reqwest::header::CONTENT_TYPE, "application/json")
-            .header(reqwest::header::ACCEPT, ACCEPT);
-        if let Some(deadline) = deadline {
-            request = request.timeout(deadline);
-        }
-        if let Some(session) = session {
-            request = request.header(SESSION_HEADER, session);
+            .header(reqwest::header::ACCEPT, ACCEPT)
+            .header("mcp-protocol-version", PROTOCOL_VERSION)
+            .header("mcp-method", method);
+        if let Some(tool) = message.pointer("/params/name").and_then(Value::as_str) {
+            request = request.header("mcp-name", tool);
         }
         let response = request.json(message).send().await.map_err(classify)?;
 
         let status = response.status().as_u16();
-        let session_id = response
-            .headers()
-            .get(SESSION_HEADER)
-            .and_then(|value| value.to_str().ok())
-            .map(ToString::to_string);
         let content_type = response
             .headers()
             .get(reqwest::header::CONTENT_TYPE)
@@ -139,31 +113,7 @@ impl Transport {
         let raw = response.text().await.map_err(classify)?;
         let body = decode_body(&content_type, &raw);
 
-        Ok(Reply {
-            status,
-            session_id,
-            body,
-            raw,
-        })
-    }
-
-    /// Releases the transport session. The server answers 202.
-    ///
-    /// # Errors
-    /// Propagates a classified connection error; a non-202 is not an error,
-    /// because the session being gone already is the desired end state.
-    pub async fn delete_session(&self, session: &str) -> Result<u16> {
-        let response = self
-            .http
-            .delete(self.mcp_url())
-            // Deliberately no content-type: the hygiene middleware exempts
-            // DELETE from the JSON check only when the header is absent.
-            .header(reqwest::header::ACCEPT, ACCEPT)
-            .header(SESSION_HEADER, session)
-            .send()
-            .await
-            .map_err(classify)?;
-        Ok(response.status().as_u16())
+        Ok(Reply { status, body, raw })
     }
 
     /// `GET /system/health`, used to prove an endpoint before trusting it.
@@ -255,26 +205,19 @@ pub fn decode_body(content_type: &str, raw: &str) -> Option<Value> {
     serde_json::from_str(raw).ok()
 }
 
-/// The `initialize` request body.
+/// The metadata a stateless request carries in place of a session: which
+/// protocol it speaks and which client it is. The client name is what the
+/// server resolves the CLI's task model from.
 #[must_use]
-pub fn initialize_message(client_name: &str, client_version: &str) -> Value {
+pub fn request_meta() -> Value {
     json!({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "initialize",
-        "params": {
-            "protocolVersion": PROTOCOL_VERSION,
-            "capabilities": {},
-            "clientInfo": { "name": client_name, "version": client_version }
+        "io.modelcontextprotocol/protocolVersion": PROTOCOL_VERSION,
+        "io.modelcontextprotocol/clientCapabilities": {},
+        "io.modelcontextprotocol/clientInfo": {
+            "name": CLIENT_NAME,
+            "version": crate::VERSION,
         }
     })
-}
-
-/// The notification that completes the handshake. It carries no id and the
-/// server answers with no body.
-#[must_use]
-pub fn initialized_message() -> Value {
-    json!({ "jsonrpc": "2.0", "method": "notifications/initialized" })
 }
 
 /// A `tools/call` request body.
@@ -284,31 +227,18 @@ pub fn call_message(id: u64, tool: &str, arguments: &Value) -> Value {
         "jsonrpc": "2.0",
         "id": id,
         "method": "tools/call",
-        "params": { "name": tool, "arguments": arguments }
+        "params": { "name": tool, "arguments": arguments, "_meta": request_meta() }
     })
 }
 
 /// A `tools/list` request body.
 #[must_use]
 pub fn list_message(id: u64) -> Value {
-    json!({ "jsonrpc": "2.0", "id": id, "method": "tools/list", "params": {} })
-}
-
-/// How long the cancellation notification gets. Short, because the caller
-/// has already pressed ctrl-C and is waiting on the process to go away.
-pub const CANCEL_TIMEOUT: Duration = Duration::from_secs(2);
-
-/// Tells the server to stop a call this client is abandoning.
-///
-/// Sent on SIGINT. `dispatch.rs` has a `client_cancel` path that stops the tool
-/// server side; dying without this leaves the server running a tool nobody will
-/// read.
-#[must_use]
-pub fn cancelled_message(id: u64) -> Value {
     json!({
         "jsonrpc": "2.0",
-        "method": "notifications/cancelled",
-        "params": { "requestId": id, "reason": "client interrupted" }
+        "id": id,
+        "method": "tools/list",
+        "params": { "_meta": request_meta() }
     })
 }
 
@@ -344,8 +274,17 @@ mod tests {
     }
 
     #[test]
-    fn initialize_negotiates_the_version_that_gates_agent_name() {
-        let message = initialize_message("browseros-cli", "0.0.1");
-        assert_eq!(message["params"]["protocolVersion"], PROTOCOL_VERSION);
+    fn every_request_names_its_protocol_and_the_cli_as_its_client() {
+        for message in [call_message(1, "tabs", &json!({})), list_message(2)] {
+            let meta = &message["params"]["_meta"];
+            assert_eq!(
+                meta["io.modelcontextprotocol/protocolVersion"],
+                PROTOCOL_VERSION
+            );
+            assert_eq!(
+                meta["io.modelcontextprotocol/clientInfo"]["name"],
+                CLIENT_NAME
+            );
+        }
     }
 }

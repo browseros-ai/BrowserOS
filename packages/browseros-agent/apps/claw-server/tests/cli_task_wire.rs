@@ -15,7 +15,9 @@ use std::{sync::Arc, time::Duration};
 use tempfile::TempDir;
 use tokio::{net::TcpListener, task::JoinHandle};
 
-const CLI: &str = "browseros-cli";
+/// The CLI's own constant, so the binary and the server's gate are tested as one: if
+/// either side renamed the client alone, these tests would stop resolving tasks.
+const CLI: &str = claw_server::cli::client::transport::CLIENT_NAME;
 const GROUP_META: &str = "com.browseros.neo/group";
 const SESSION_META: &str = "com.browseros.neo/session";
 

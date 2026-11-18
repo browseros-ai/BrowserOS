@@ -3,12 +3,12 @@
 //! Three mismatches separate an MCP tool surface from a CLI surface, and this
 //! module exists to fix all three.
 //!
-//! One: every page-scoped tool needs `page` and every tool accepts `session`.
-//! Both come from the scope file, so no command spells them.
+//! One: every page-scoped tool needs `page`, and every call presents the task's
+//! tab group. Both come from the scope file, so no command spells them.
 //!
 //! Two: `act` is seventeen commands wearing one coat. A `kind` discriminator
 //! with twenty sibling parameters is right for a tool list, where every extra
-//! tool costs schema tokens in every session. It is wrong here, where
+//! tool costs schema tokens in every conversation. It is wrong here, where
 //! `--help` is free. It expands into verbs.
 //!
 //! Three: refs have three spellings. [`crate::cli::refs`] normalizes them.
@@ -19,8 +19,10 @@ use clap::{Args, Parser, Subcommand};
 #[command(
     name = "browseros",
     about = "Drive BrowserOS neo from a shell.",
-    long_about = "Drive BrowserOS neo from a shell.\n\nThe current page, the session and the tab group are remembered per directory, \
-so commands carry no plumbing. Start with `browseros status`, then `browseros open <url>`.\n\n\
+    long_about = "Drive BrowserOS neo from a shell.\n\nA task is the tab group it works in. The first page you open starts one, every \
+command in this directory joins it, and `browseros task done` closes it. The current page and the group are remembered per \
+directory, so commands carry no plumbing and there is no session to manage. Start with `browseros status`, then \
+`browseros open <url>`.\n\n\
 Reach for `run` for anything multi-step: it is one call and the only place saved helpers work.",
     version,
     disable_help_subcommand = true
@@ -61,9 +63,6 @@ pub struct Globals {
     /// typing it after `wait` means the wait's own budget.
     #[arg(long, global = true, value_name = "MS")]
     pub client_timeout: Option<u64>,
-    /// Fail instead of pairing a session automatically.
-    #[arg(long, global = true)]
-    pub no_auto_session: bool,
 }
 
 /// How much of `act`'s automatic readback to keep. The tool already returns a
@@ -77,11 +76,11 @@ pub struct DiffFlag {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// Endpoint, browser link, session, current page, and what this server offers.
+    /// Endpoint, browser link, task, current page, and what this server offers.
     Status,
-    /// Pair, inspect, list or release the session for this directory.
+    /// Start, inspect, list, name or finish this directory's task.
     #[command(subcommand)]
-    Session(SessionCmd),
+    Task(TaskCmd),
     /// Set the remembered page.
     Use { page: u32 },
 
@@ -407,11 +406,12 @@ pub enum Command {
 }
 
 #[derive(Debug, Subcommand)]
-pub enum SessionCmd {
-    /// Handshake once, adopt or create a tab group, and name the task.
+pub enum TaskCmd {
+    /// Name the task this directory is about to do. Its tab group opens with
+    /// the first page, and the name is applied to it then.
     Start {
         #[arg(long)]
-        task: Option<String>,
+        name: Option<String>,
         #[arg(long)]
         category: Option<String>,
         #[arg(long)]
@@ -419,12 +419,14 @@ pub enum SessionCmd {
     },
     /// The same report as `status`.
     Status,
-    /// Every scope file on this machine.
+    /// Every directory on this machine with a task.
     List,
-    /// Release the session. Tabs are left open unless asked otherwise.
-    End {
+    /// The user said the task is done: close its tab group, which ends it.
+    Done {
+        /// Leave the pages open and only take them out of the group.
         #[arg(long)]
-        close_tabs: bool,
+        keep_tabs: bool,
+        /// Also forget every other directory's task on this machine.
         #[arg(long)]
         all: bool,
     },
