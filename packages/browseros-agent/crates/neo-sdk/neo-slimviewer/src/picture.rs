@@ -319,6 +319,8 @@ pub struct Picture {
     calm_sharp: bool,
     last_input: Option<Instant>,
     queue_high: bool,
+    /// Two low-queue delivery ticks release the stale IDR budget until congestion returns.
+    clear_ticks: u8,
     last_reset: Option<Instant>,
     last_pressure: Option<Instant>,
     last_congested: Option<Instant>,
@@ -364,6 +366,7 @@ impl Picture {
             calm_sharp: false,
             last_input: None,
             queue_high: false,
+            clear_ticks: 0,
             last_reset: None,
             last_pressure: None,
             last_congested: None,
@@ -432,6 +435,7 @@ impl Picture {
         self.link.last_up = None;
         self.last_reset = None;
         self.queue_high = false;
+        self.clear_ticks = 0;
     }
 
     pub fn link_kbps(&self) -> u32 {
@@ -620,9 +624,12 @@ impl Picture {
     /// Keep its transfer within 300 ms even when half-size traffic has become too small to probe.
     fn full_return_fits(&self, now: Instant) -> bool {
         let cap_crf = self.cfg.base_crf + self.ladder.rungs[self.ladder.cap].crf_add;
-        let kbps = self
-            .capacity_kbps(now)
-            .or_else(|| self.capacity.back().map(|&(_, kbps)| kbps));
+        let kbps = self.capacity_kbps(now).or_else(|| {
+            self.capacity
+                .back()
+                .filter(|_| self.clear_ticks < 2)
+                .map(|&(_, kbps)| kbps)
+        });
         self.estimate(cap_crf)
             .zip(kbps)
             .is_none_or(|(bytes, kbps)| bytes * 8.0 <= 300.0 * kbps)
@@ -835,6 +842,7 @@ impl Picture {
             self.capacity.pop_front();
         }
         if congested {
+            self.clear_ticks = 0;
             self.last_congested = Some(now);
             if link.delivered_kbps > 0.0 {
                 self.capacity.push_back((now, link.delivered_kbps));
@@ -843,6 +851,13 @@ impl Picture {
                 self.link_kbps = ((link.delivered_kbps * 0.85) as u32).max(300);
             }
         } else {
+            if self.clear_ticks < 2 {
+                self.clear_ticks = if link.queue_ms < 10 && link.delivered_kbps > 0.0 {
+                    self.clear_ticks + 1
+                } else {
+                    0
+                };
+            }
             self.link_kbps = (self.link_kbps.saturating_add(self.link_kbps / 10)).min(8000);
             if self
                 .last_congested
@@ -1462,7 +1477,16 @@ mod tests {
         costly_half_key(&mut p, half);
         for n in 1..=25 {
             let now = at(half, n);
-            p.tick(now, active(15), Cpu::default());
+            let queue_ms = if n % 2 == 0 { 23 } else { 170 };
+            p.tick(
+                now,
+                Link {
+                    queue_ms,
+                    blocked: if n == 5 { 0.4 } else { 0.0 },
+                    ..active(15)
+                },
+                Cpu::default(),
+            );
             let plan = p.plan(now, Some((10, 26, 16)));
             assert_eq!(
                 plan,
@@ -1477,6 +1501,82 @@ mod tests {
         assert!(
             !p.full_return_fits(at(half, 25)),
             "the last known link still prices the IDR"
+        );
+    }
+
+    #[test]
+    fn tests_that_a_cleared_link_drops_stale_capacity_and_returns_full() {
+        let t = Instant::now();
+        let mut p = picture(t);
+        let half = to_link_half(&mut p, t);
+        costly_half_key(&mut p, half);
+        for n in 1..=16 {
+            let now = at(half, n);
+            // A gap in delivery and a 10 ms queue each break the first clean streak.
+            let queue_ms = if n <= 10 {
+                23
+            } else if n == 14 {
+                10
+            } else {
+                1
+            };
+            let link = Link {
+                queue_ms,
+                delivered_kbps: if n == 12 { 0.0 } else { 3000.0 },
+                ..active(15)
+            };
+            p.tick(now, link, Cpu::default());
+            let plan = p.plan(now, Some((10, 26, 16)));
+            assert_eq!(
+                plan.scale,
+                if n < 16 { Scale::Half } else { Scale::Full },
+                "tick {n}"
+            );
+            send(&mut p, now, plan);
+        }
+        assert_eq!(
+            p.capacity_kbps(at(half, 16)),
+            None,
+            "the carousel produced no new capacity probe"
+        );
+    }
+
+    #[test]
+    fn tests_that_fresh_capacity_always_applies_and_congestion_rearms_the_last_sample() {
+        let t = Instant::now();
+        let mut p = picture(t);
+        let half = to_link_half(&mut p, t);
+        costly_half_key(&mut p, half);
+        for n in 1..=2 {
+            p.tick(at(half, n), active(15), Cpu::default());
+        }
+        assert!(
+            !p.full_return_fits(at(half, 2)),
+            "a fresh sample still limits full-size keys"
+        );
+        p.tick(
+            at(half, 3),
+            Link {
+                queue_ms: 100,
+                ..active(15)
+            },
+            Cpu::default(),
+        );
+        assert!(
+            p.full_return_fits(at(half, 11)),
+            "the cleared link can outlive the stale sample"
+        );
+        p.tick(
+            at(half, 12),
+            Link {
+                blocked: 0.4,
+                ..Link::default()
+            },
+            Cpu::default(),
+        );
+        assert!(
+            !p.full_return_fits(at(half, 12)),
+            "new congestion restores even the expired estimate"
         );
     }
 

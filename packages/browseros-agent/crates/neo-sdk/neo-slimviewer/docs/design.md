@@ -18,7 +18,9 @@ delivery can accelerate those steps. Slow measured work can lower the CPU
 limit. Throttle or steal counts only when frames miss 80% of the current
 cadence during at least half a second with damage pending and the pacer open.
 Recovery takes one step at a time after sustained headroom. A return to full-size motion must also fit the link's 300 ms
-keyframe budget. Once damage stops, the full-size settle frame can still go
+keyframe budget. Two delivery intervals with less than 10 ms of queue release
+an expired capacity estimate. Fresh measurements still set the budget.
+Once damage stops, the full-size settle frame can still go
 out and its acknowledgement measures fresh capacity.
 
 The host relays a TCP byte stream over WebSocket. Each record starts with a
