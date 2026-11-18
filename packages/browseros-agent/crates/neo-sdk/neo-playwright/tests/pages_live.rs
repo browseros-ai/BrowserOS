@@ -1470,6 +1470,202 @@ async fn tests_that_a_context_listener_beside_a_busy_tab_never_waits_for_it() ->
     result
 }
 
+/// How long the run's watcher may take to show a tab another client opened: the tab's version
+/// is in `frame_versions()` once the watcher attached its root observer and the observer's
+/// auto-attach reported the tab's cross-site frame. That is the signal the row waits for, the
+/// same on main and with every observer a lifecycle source. It covers the tab's load, the
+/// watcher's next tick and the frame's attach; read from code, not measured.
+const UNTOUCHED_TAB_OBSERVED_BOUND: Duration = Duration::from_secs(10);
+
+/// How long a child frame's commit in a tab Neo never acted on may take to move the tab's frame
+/// version: the child's navigation and commit, its `Page.frameNavigated` on the tab's lifecycle
+/// source, the watcher's handling of it (behind a tick and a tree read in the tab's line at
+/// most), and the version's write. Read from code, not measured; the row prints what it took.
+const UNTOUCHED_CHILD_COMMIT_BOUND: Duration = Duration::from_secs(2);
+
+/// A tab opened by a client of the test's own, over a connection of its own: neither the run's
+/// core nor its watcher hears of that connection's session, so whatever the test does through it
+/// is another client's doing, never the run's.
+struct OutsideTab {
+    client: Arc<CdpClient>,
+    transport: Arc<dyn CdpConnection>,
+    target: String,
+    session: ProtocolSession,
+}
+
+impl OutsideTab {
+    /// Opens `url` in a background tab and returns once it loaded. A setup that fails at any step
+    /// closes the tab it created and the connection, so no tab or client outlives the row.
+    async fn open(url: &str) -> TestResult<Self> {
+        let client = Arc::new(CdpClient::connect(ConnectOptions::new(live_run::cdp_port())).await?);
+        let transport: Arc<dyn CdpConnection> = Arc::<CdpClient>::clone(&client);
+        let mut created = None;
+        let opened: TestResult<Self> = async {
+            let reply = transport
+                .send(
+                    "Target.createTarget",
+                    json!({ "url": url, "background": true }),
+                    None,
+                )
+                .await?;
+            let target = reply
+                .get("targetId")
+                .and_then(Value::as_str)
+                .ok_or("no target id")?
+                .to_owned();
+            created = Some(target.clone());
+            let attached = transport
+                .send(
+                    "Target.attachToTarget",
+                    json!({ "targetId": target, "flatten": true }),
+                    None,
+                )
+                .await?;
+            let session = attached
+                .get("sessionId")
+                .and_then(Value::as_str)
+                .ok_or("no session id")?;
+            let tab = Self {
+                client: Arc::clone(&client),
+                transport: Arc::clone(&transport),
+                session: ProtocolSession::for_session(
+                    Arc::clone(&transport),
+                    SessionId::from(session),
+                ),
+                target,
+            };
+            for _ in 0..200 {
+                if tab.eval("document.readyState").await? == json!("complete") {
+                    return Ok(tab);
+                }
+                time::sleep(Duration::from_millis(50)).await;
+            }
+            Err(format!("{url} did not load within 10 s").into())
+        }
+        .await;
+        if opened.is_err() {
+            if let Some(target) = &created {
+                let _closed = transport
+                    .send("Target.closeTarget", json!({ "targetId": target }), None)
+                    .await;
+            }
+            client.disconnect().await;
+        }
+        opened
+    }
+
+    /// Runs `expression` in the tab's main world, by value.
+    async fn eval(&self, expression: &str) -> TestResult<Value> {
+        let reply = self
+            .session
+            .send_value(
+                "Runtime.evaluate",
+                json!({ "expression": expression, "returnByValue": true }),
+            )
+            .await?;
+        Ok(reply
+            .pointer("/result/value")
+            .cloned()
+            .unwrap_or(Value::Null))
+    }
+
+    /// Closes the tab, then the connection: dropping a `CdpClient` does not stop its tasks.
+    async fn close(&self) {
+        let _closed = self
+            .transport
+            .send(
+                "Target.closeTarget",
+                json!({ "targetId": self.target }),
+                None,
+            )
+            .await;
+        self.client.disconnect().await;
+    }
+}
+
+/// A tab Neo never acted on reports its frames' commits. Another client opens the nested-frame
+/// fixture over its own connection, and its children commit navigations while the run's core has
+/// no session on the tab. Each commit moves the tab's frame version, which the production door
+/// hands every reply so a run re-reads a listed tab's tree: for the same-site child, whose events
+/// only a lifecycle source of the tab with `Page` on reports, and for the cross-site one, which
+/// its own session reports. The tab stays untouched throughout: core never attached to it.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+#[expect(
+    clippy::print_stderr,
+    reason = "each child's commit prints how long the version took to move, the measure its \
+              bound is checked against"
+)]
+async fn tests_that_a_child_commit_in_a_tab_neo_never_touched_moves_its_frame_version() -> TestResult
+{
+    let run = LiveRun::connect().await?;
+    let server = PageServer::start().await?;
+    let tab = OutsideTab::open(&server.url("/frames.html")).await?;
+    let result = async {
+        let info = run
+            .browser()
+            .pages
+            .list()
+            .await?
+            .into_iter()
+            .find(|info| info.target_id.as_str() == tab.target)
+            .ok_or("the tab is not listed")?;
+        let version = || {
+            run.frame_versions()
+                .into_iter()
+                .find(|(listed, _)| *listed == info.tab_id)
+                .map(|(_, version)| version)
+        };
+        let observing = Instant::now();
+        while version().is_none() {
+            if observing.elapsed() > UNTOUCHED_TAB_OBSERVED_BOUND {
+                return Err(format!(
+                    "the run's watcher did not show the tab within {UNTOUCHED_TAB_OBSERVED_BOUND:?}"
+                )
+                .into());
+            }
+            time::sleep(Duration::from_millis(50)).await;
+        }
+        let cross = server
+            .url("/nested.html?moved")
+            .replacen("127.0.0.1", "localhost", 1);
+        for (frame, url) in [("same", server.url("/child.html?moved")), ("cross", cross)] {
+            let before = version();
+            tab.eval(&format!(
+                "document.querySelector('iframe[name={frame}]').src = {url:?}; ''"
+            ))
+            .await?;
+            let asked = Instant::now();
+            while version() <= before {
+                if asked.elapsed() > UNTOUCHED_CHILD_COMMIT_BOUND {
+                    return Err(format!(
+                        "the {frame} child's commit did not move the tab's frame version within \
+                         {UNTOUCHED_CHILD_COMMIT_BOUND:?}"
+                    )
+                    .into());
+                }
+                time::sleep(Duration::from_millis(20)).await;
+            }
+            eprintln!(
+                "UNTOUCHED_CHILD_COMMIT frame={frame} took={:?}",
+                asked.elapsed()
+            );
+        }
+        assert!(
+            run.browser()
+                .pages
+                .get_attached_session(info.page_id)
+                .await
+                .is_none(),
+            "the run's core never attached to the tab"
+        );
+        Ok::<(), Box<dyn Error>>(())
+    }
+    .await;
+    tab.close().await;
+    result
+}
+
 /// A run lists a listed tab's whole frame tree from its first statement, as a host's observer
 /// reads it: `context.pages()` names another tab, and the script walks its frames before any
 /// await, cross-site ones included. Nothing in the run touched that tab; the start waits for its

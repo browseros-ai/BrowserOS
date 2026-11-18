@@ -24,7 +24,7 @@ use browseros_core::{BrowserView, CoreError, TabId, TargetId};
 use futures_util::future::BoxFuture;
 use neo_playwright::{
     Answer, ErrorCode as PlaywrightCode, FileAccess, Op, OpEnv, OpTarget, PlaywrightError, Refusal,
-    RunState, TimedOut,
+    RunState, TimedOut, url_scheme,
 };
 use neo_trace::{DiagnosticCode, ErrorOwner};
 use serde::{Deserialize, Deserializer};
@@ -39,7 +39,7 @@ use crate::dispatch::{
     RegistryBuilder, RegistryError, RunCtx,
 };
 use crate::host::AgentFront;
-use crate::url_scheme;
+use crate::navigation_scheme;
 
 /// neo-playwright's prelude, which the agent realm evaluates after its bootstrap: the
 /// `page`, `context`, `browser` and `expect` parameters of the agent's function, over these ops.
@@ -337,7 +337,7 @@ impl OpInput {
     /// the entry it opens ([`refused_page`]).
     fn refused_navigation(&self) -> Option<OperationError> {
         let url = self.json.get("url")?.as_str()?;
-        let which = match url_scheme::navigation_scheme(url) {
+        let which = match navigation_scheme::navigation_scheme(url) {
             Some(scheme) if scheme == "file" => {
                 return Some(file_page("Neo does not open this URL, a `file:` one"));
             }
@@ -400,12 +400,12 @@ async fn refused_page<M>(
     let Some(url) = shown_url(op).await? else {
         return Ok(None);
     };
-    let scheme = url_scheme::url_scheme(&url);
-    if scheme.as_deref() == Some("file") {
+    if url_scheme::refuses_page(&url) {
         return Ok(Some(file_page(
             "Neo does not act on this tab, which shows a `file:` page",
         )));
     }
+    let scheme = url_scheme::url_scheme(&url);
     if effect == PageEffect::Reloads {
         return Ok(match scheme {
             Some(scheme) if NAVIGABLE_SCHEMES.contains(&scheme.as_str()) => None,
@@ -441,7 +441,7 @@ async fn refused_page<M>(
         .and_then(|index| usize::try_from(index).ok())
         .and_then(|index| history.entries.get(index));
     Ok(opens
-        .filter(|entry| url_scheme::url_scheme(&entry.url).as_deref() == Some("file"))
+        .filter(|entry| url_scheme::refuses_page(&entry.url))
         .map(|_| file_page("Neo does not take this step, whose history entry is a `file:` page")))
 }
 
@@ -467,7 +467,7 @@ async fn shown_url<M>(op: &OpCtx<M>) -> Result<Option<String>, LeafError> {
 async fn moved_to_file<M>(op: &OpCtx<M>) -> Result<bool, LeafError> {
     Ok(shown_url(op)
         .await?
-        .is_some_and(|url| url_scheme::url_scheme(&url).as_deref() == Some("file")))
+        .is_some_and(|url| url_scheme::refuses_page(&url)))
 }
 
 /// `Page.getNavigationHistory`'s reply, as much of it as [`refused_page`] reads: the crate's own

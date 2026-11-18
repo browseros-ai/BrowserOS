@@ -229,6 +229,16 @@ impl FakeCdp {
     /// tab's contents: the new target is created, then the old one destroyed. `false` when the
     /// fake has no such tab.
     pub fn replace_target(&self, tab: TabId) -> bool {
+        self.swap_target(tab, None)
+    }
+
+    /// [`Self::replace_target`], the new target created already showing `url`, as Chromium
+    /// reports one that took over a tab mid-navigation.
+    pub fn replace_target_showing(&self, tab: TabId, url: &str) -> bool {
+        self.swap_target(tab, Some(url))
+    }
+
+    fn swap_target(&self, tab: TabId, url: Option<&str>) -> bool {
         let mut state = self.lock();
         state.replaced_targets += 1;
         let target = format!("target-{}.{}", tab.0, state.replaced_targets);
@@ -237,6 +247,13 @@ impl FakeCdp {
         };
         let old = mem::replace(&mut entry.target, target);
         let mut events = state.created_events(tab.0);
+        if let Some(url) = url {
+            for event in &mut events {
+                if let Some(info) = event.params.get_mut("targetInfo") {
+                    info["url"] = json!(url);
+                }
+            }
+        }
         events.extend(state.destroyed_events(&old));
         drop(state);
         self.emit(events);
@@ -246,18 +263,29 @@ impl FakeCdp {
     /// An event the page in `tab` sends, such as `Runtime.consoleAPICalled` or
     /// `Page.javascriptDialogOpening`, on the session `Target.attachToTarget` gives for the tab's
     /// current target. It reaches a session's listeners only once something attached to the tab.
-    /// `false` when the fake has no such tab.
+    /// A target's own lifecycle (`Target.targetCreated`, `Target.targetInfoChanged`,
+    /// `Target.targetDestroyed`, `Target.targetCrashed`) goes on the browser's session instead,
+    /// as Chromium sends it to the client that turned target discovery on; an attachment's
+    /// `Target.attachedToTarget` and `Target.detachedFromTarget` stay on the tab's session, its
+    /// parent's. `false` when the fake has no such tab.
     pub fn page_event(&self, tab: TabId, method: &str, params: Value) -> bool {
         let state = self.lock();
         let Some(entry) = state.tabs.iter().find(|entry| entry.tab == tab.0) else {
             return false;
         };
-        let session = SessionId::from(format!("session-{}", entry.target));
+        let lifecycle = matches!(
+            method,
+            "Target.targetCreated"
+                | "Target.targetInfoChanged"
+                | "Target.targetDestroyed"
+                | "Target.targetCrashed"
+        );
+        let session = (!lifecycle).then(|| SessionId::from(format!("session-{}", entry.target)));
         drop(state);
         self.emit(vec![CdpEvent {
             method: method.to_owned(),
             params,
-            session_id: Some(session),
+            session_id: session,
         }]);
         true
     }

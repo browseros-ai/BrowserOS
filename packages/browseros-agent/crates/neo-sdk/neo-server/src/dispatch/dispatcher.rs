@@ -33,7 +33,7 @@ use super::{
 };
 use crate::browser::{BrowserLink, PageRef, Sight, TabRegistry, TaskRecord};
 use crate::config::Defaults;
-use crate::url_scheme;
+use crate::navigation_scheme;
 
 /// A tab's refresh bookkeeping, a per-tab slot dropped with the tab: the event seq through which
 /// the door last refreshed its entry in core's page cache, so a navigation the page made itself
@@ -1186,7 +1186,7 @@ fn read_only_admission(
         let web = input
             .get("url")
             .and_then(Value::as_str)
-            .and_then(url_scheme::navigation_scheme)
+            .and_then(navigation_scheme::navigation_scheme)
             .is_some_and(|scheme| matches!(scheme.as_str(), "http" | "https"));
         // adoptable reads origin and holder together. Early naming proves this run's new tab
         // before readiness updates its origin or holder; without that evidence it would look
