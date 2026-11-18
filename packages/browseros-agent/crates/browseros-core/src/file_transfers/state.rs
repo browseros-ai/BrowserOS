@@ -136,7 +136,19 @@ impl TransferState {
         let _leases = turns.leases.lock().await;
         {
             let mut leases = self.leases();
-            leases.retain(|(known, _), _| *known == epoch);
+            // The epoch is read again here, under the bookkeeping lock. The turn awaited above
+            // belongs to this tab alone, so a reconnect can land while this caller waits, and
+            // other tabs may already hold leases of the new epoch. A stale caller takes no lease
+            // and prunes nothing: pruning by its old epoch would delete another tab's live lease,
+            // whose release would then find nothing to restore and leave that tab intercepted.
+            let current = self.epoch();
+            if current != epoch {
+                return Err(CoreError::Cdp(CdpError::ConnectionEpochChanged {
+                    expected: epoch,
+                    actual: current,
+                }));
+            }
+            leases.retain(|(known, _), _| *known >= current);
             let entry = leases
                 .entry((epoch, id.clone()))
                 .or_insert_with(|| BorrowedInterception {
@@ -577,6 +589,7 @@ mod tests {
     use serde_json::{Value, json};
     use std::error::Error;
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::Duration;
     use tokio::sync::{broadcast, mpsc, watch};
 
@@ -598,6 +611,7 @@ mod tests {
         calls: watch::Sender<Vec<Call>>,
         events: broadcast::Sender<CdpEvent>,
         targeted: TargetedEvents,
+        epoch: AtomicU64,
     }
 
     impl Browser {
@@ -608,7 +622,13 @@ mod tests {
                 calls: watch::channel(Vec::new()).0,
                 events: broadcast::channel(16).0,
                 targeted: TargetedEvents::default(),
+                epoch: AtomicU64::new(1),
             })
+        }
+
+        /// The socket reconnects: every later command and lease belongs to the next epoch.
+        fn reconnect(&self) {
+            self.epoch.fetch_add(1, Ordering::SeqCst);
         }
 
         /// Commands on `session`, those already waiting included, go unanswered until `answer`.
@@ -736,8 +756,61 @@ mod tests {
         }
 
         fn connection_epoch(&self) -> u64 {
-            1
+            self.epoch.load(Ordering::SeqCst)
         }
+    }
+
+    /// A lease that waited on its own tab's turn across a reconnect neither takes a lease nor
+    /// prunes the new epoch's: another tab's lease taken meanwhile survives, and its release
+    /// still restores that tab's native picker.
+    #[tokio::test]
+    async fn tests_that_a_lease_stale_after_a_reconnect_leaves_another_tabs_new_lease() -> TestResult
+    {
+        let browser = Browser::new("gone");
+        let transfers = TransferState::new(browser.clone());
+        let tab_a = ProtocolSession::for_session(browser.clone(), SessionId::from("a"));
+        let tab_b = ProtocolSession::for_session(browser.clone(), SessionId::from("b"));
+
+        // Tab A's first lease holds A's turn across a setup its busy renderer leaves unanswered,
+        // and a second lease of A waits behind it, its epoch read before the reconnect.
+        browser.hang("a");
+        let first = tokio::spawn({
+            let (transfers, tab_a) = (Arc::clone(&transfers), tab_a.clone());
+            async move { transfers.lease_interception(&tab_a).await }
+        });
+        browser
+            .until("tab A's setup", |calls| overrides(calls, "a") == [true])
+            .await?;
+        let stale = tokio::spawn({
+            let (transfers, tab_a) = (Arc::clone(&transfers), tab_a.clone());
+            async move { transfers.lease_interception(&tab_a).await }
+        });
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
+
+        browser.reconnect();
+        let mut lease_b = transfers.lease_interception(&tab_b).await?;
+        assert_eq!(
+            browser.overrides("b"),
+            [true],
+            "tab B is intercepted at the new epoch"
+        );
+
+        browser.answer();
+        let _first = first.await??;
+        let stale = stale.await?;
+        lease_b.release().await?;
+        assert_eq!(
+            browser.overrides("b"),
+            [true, false],
+            "tab B's lease survived the stale caller, so its release restores the native picker"
+        );
+        assert!(
+            stale.is_err(),
+            "the lease whose epoch went stale while it waited takes nothing"
+        );
+        Ok(())
     }
 
     #[tokio::test]
