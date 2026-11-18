@@ -64,6 +64,41 @@ const both = {
   'page-notext': page({ text: false }),
 }
 
+/** Snapshot-v1's INTERACTIVE list, each role with a word to name its node. */
+const INTERACTIVE: Record<string, string> = {
+  button: 'Buy',
+  link: 'Home',
+  textbox: 'Name',
+  checkbox: 'Gift',
+  radio: 'Small',
+  combobox: 'Size',
+  listbox: 'Color',
+  menuitem: 'Open',
+  menuitemcheckbox: 'Bold',
+  menuitemradio: 'Left',
+  option: 'Red',
+  searchbox: 'Find',
+  slider: 'Volume',
+  spinbutton: 'Count',
+  switch: 'Dark',
+  tab: 'Specs',
+  treeitem: 'Docs',
+}
+
+/** Snapshot-v1's SECTION list. */
+const SECTION = [
+  'banner',
+  'navigation',
+  'main',
+  'complementary',
+  'contentinfo',
+  'search',
+  'form',
+  'region',
+  'article',
+  'iframe',
+]
+
 export const rules: Gap = {
   snapshots: {
     // An iframe's fallback text: Playwright's format prints it and not the frame; Neo's formats
@@ -425,6 +460,64 @@ export const rules: Gap = {
       { role: 'region', ref: 'e2', children: ['Ships', 'tomorrow'] },
       text('Free returns'),
     ]),
+    // Every interactive role, with a ref and without, over the same value: with a ref each is a
+    // control; the field roles print their value, with or without a ref; the others print it as
+    // page text without one, and nothing of it with one.
+    'rules/roles-interactive': tree(
+      Object.entries(INTERACTIVE).flatMap(([role, name], index) => [
+        {
+          role: role as AriaNodeJSON['role'],
+          name,
+          ref: `e${index + 1}`,
+          children: ['Picked'],
+        },
+        { role: role as AriaNodeJSON['role'], name, children: ['Picked'] },
+      ]),
+    ),
+    // Every section role prints its line with its ref and indents its content.
+    'rules/roles-section': tree(
+      SECTION.map((role, index) => ({
+        role: role as AriaNodeJSON['role'],
+        ref: `e${2 * index + 1}`,
+        children: [link('Home', `e${2 * index + 2}`)],
+      })),
+    ),
+    // A dropped separator line moves a kept block's end back: under a cut inside the block, the
+    // block prints whole and the line after it is not part of it.
+    'rules/separators-kept-end': tree([
+      text('|'),
+      { role: 'dialog', ref: 'e1', children: ['Saved.', button('OK', 'e2')] },
+      button('Undo', 'e3'),
+      button('Close', 'e4'),
+    ]),
+    // A nameless link with no words and no url prints no label; with a url, the url is its label.
+    'rules/link-no-url': tree([
+      { role: 'link', ref: 'e1' },
+      { role: 'link', ref: 'e2', url: 'https://shop.example/cart' },
+    ]),
+    // Empty text pieces add no space to a control's own text: a label, a value, a heading's text.
+    'rules/own-text-empty': tree([
+      {
+        role: 'generic',
+        ref: 'e1',
+        cursor: 'pointer',
+        children: ['', 'Add', '', 'to cart', ''],
+      },
+      {
+        role: 'textbox',
+        name: 'Name',
+        ref: 'e2',
+        children: ['', { role: 'text', text: '' }, 'Ana'],
+      },
+      { role: 'heading', level: 2, children: ['', 'Step 2'] },
+    ]),
+    // An empty named kept block is still a kept block: past a cut it prints after the cut line.
+    'rules/kept-empty-cut': tree([
+      button('Undo', 'e1'),
+      button('Close', 'e2'),
+      { role: 'alertdialog', name: 'Session ended', ref: 'e3' },
+      button('Help', 'e4'),
+    ]),
     // A whole-view layer's content prints first, with its text in every form, and its last text
     // never joins the page's first.
     'rules/front-layer': tree(
@@ -488,5 +581,16 @@ export const rules: Gap = {
     }),
     ...calls('rules/joining', { playwright: playwright(), ...both }),
     ...calls('rules/front-layer', { full: full(), ...both }),
+    ...calls('rules/roles-interactive', both),
+    ...calls('rules/roles-section', { 'page-notext': page({ text: false }) }),
+    ...calls('rules/separators-kept-end', {
+      'page-max10': page({ maxTokens: 10 }),
+    }),
+    ...calls('rules/kept-empty-cut', { 'page-max6': page({ maxTokens: 6 }) }),
+    ...calls('rules/link-no-url', {
+      'page-notext': page({ text: false }),
+      'page-notext-urls': page({ text: false, urls: true }),
+    }),
+    ...calls('rules/own-text-empty', both),
   ],
 }

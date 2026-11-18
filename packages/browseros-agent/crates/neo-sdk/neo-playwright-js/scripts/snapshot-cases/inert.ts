@@ -156,6 +156,27 @@ export const inert: Gap = {
       { role: 'region', ref: 'e2' },
       paragraph('Two'),
     ]),
+    // An inert part holding an iframe with fallback text: both counts take the frame's content,
+    // never that text.
+    'inert/iframe-fallback': tree([
+      GO,
+      marked({
+        role: 'region',
+        name: 'Card',
+        ref: 'e2',
+        children: [
+          {
+            role: 'iframe',
+            ref: 'e3',
+            text: '<p>Your browser does not support iframes.</p>',
+            children: [
+              { role: 'textbox', name: 'Card number', ref: 'f1e1' },
+              { role: 'button', name: 'Pay', ref: 'f1e2' },
+            ],
+          },
+        ],
+      }),
+    ]),
     // Every head line in order: on top, refs missing, not listed, the text notice, closed roots.
     'inert/heads': tree(
       [
@@ -236,6 +257,7 @@ export const inert: Gap = {
       'element-inert': element({ inert: true }),
     }),
     ...calls('inert/after-vanished', { element: element() }),
+    ...calls('inert/iframe-fallback', { full: full(), element: element() }),
     ...calls('inert/heads', {
       page: page(),
       'page-tiny': page({ maxTokens: 1 }),

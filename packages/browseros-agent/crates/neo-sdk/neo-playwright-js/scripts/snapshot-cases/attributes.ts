@@ -1,12 +1,16 @@
 /**
  * The attributes of a node's key, the numbers they print, and absent against empty.
  */
+import type { AriaNodeJSON } from '../../src/prelude/vendored'
 import {
   calls,
   delta,
   element,
+  everyFormat,
+  type Facts,
   full,
   type Gap,
+  keptBy,
   page,
   playwright,
   tree,
@@ -178,6 +182,123 @@ const emptyRefPartial = tree(
   },
 )
 
+type Admitted = Partial<
+  Record<
+    | 'checked'
+    | 'pressed'
+    | 'invalid'
+    | 'disabled'
+    | 'expanded'
+    | 'active'
+    | 'inert'
+    | 'selected'
+    | 'ariaHidden',
+    false
+  >
+> & { cursor?: string }
+
+// Values no page writes, which Rust's typed tree admits: upstream's type forbids them.
+const admitted = (node: AriaNodeJSON, values: Admitted): AriaNodeJSON =>
+  ({ ...node, ...values }) as AriaNodeJSON
+
+const FALSES: Admitted = {
+  checked: false,
+  pressed: false,
+  invalid: false,
+  disabled: false,
+  expanded: false,
+  active: false,
+  inert: false,
+  selected: false,
+  ariaHidden: false,
+}
+
+/**
+ * Each value where a test for presence would print differently: the key fields on a control and
+ * a section, cursors on a section, a kept block, controls and nodes that are none, `inert` inside
+ * a nameless control's text and on a whole-view layer, `selected` on a long select's options. `set` gives a node its
+ * values: `admitted`, or nothing for the twin.
+ */
+function admittedPage(
+  set: (node: AriaNodeJSON, values: Admitted) => AriaNodeJSON,
+): AriaNodeJSON[] {
+  return [
+    set(
+      {
+        role: 'region',
+        name: 'Terms',
+        ref: 'e1',
+        children: [
+          'Read these first.',
+          set({ role: 'checkbox', name: 'Agree', ref: 'e2' }, FALSES),
+          set(
+            { role: 'button', name: 'Send', ref: 'e3' },
+            { cursor: 'default' },
+          ),
+          set(
+            { role: 'generic', name: 'Card', ref: 'e4' },
+            { cursor: 'default' },
+          ),
+          set({ role: 'generic', name: 'Tile', ref: 'e5' }, { cursor: '' }),
+          set(
+            { role: 'generic', name: 'Row', ref: 'e6' },
+            { cursor: 'POINTER' },
+          ),
+          set({ role: 'generic', name: 'Note' }, { cursor: 'default' }),
+          {
+            role: 'generic',
+            ref: 'e7',
+            cursor: 'pointer',
+            children: [
+              'Buy',
+              set({ role: 'generic', children: ['now'] }, { inert: false }),
+            ],
+          },
+          {
+            role: 'combobox',
+            name: 'Size',
+            ref: 'e8',
+            children: Array.from({ length: 13 }, (_, index) =>
+              index === 3
+                ? { role: 'option', name: `Size ${index + 1}`, selected: true }
+                : set(
+                    { role: 'option', name: `Size ${index + 1}` },
+                    { selected: false },
+                  ),
+            ),
+          },
+        ],
+      },
+      { ...FALSES, cursor: 'default' },
+    ),
+    set(
+      {
+        role: 'dialog',
+        name: 'Offer',
+        ref: 'e20',
+        onTop: 'e20',
+        children: [
+          'Save ten percent.',
+          { role: 'button', name: 'Close', ref: 'e21' },
+        ],
+      },
+      { inert: false, cursor: '' },
+    ),
+  ]
+}
+
+const OFFER: Partial<Facts> = {
+  onTop: [
+    {
+      ref: 'e20',
+      line: '# on top: dialog "Offer" [ref=e20] over the whole view\n#   its controls: button "Close" [ref=e21]',
+      wholeView: true,
+    },
+  ],
+}
+
+const { 'delta-uncompared': _uncompared, ...formats } = everyFormat()
+
 export const attributes: Gap = {
   snapshots: {
     'attributes/every': every,
@@ -186,6 +307,14 @@ export const attributes: Gap = {
     'attributes/absent-empty': absentEmpty,
     'attributes/empty-ref-cut': emptyRefCut,
     'attributes/empty-ref-partial': emptyRefPartial,
+    // An explicit false in each true-or-absent field, and a cursor that is not 'pointer': each
+    // prints as if the field were absent, in every format.
+    'attributes/false-values': tree(admittedPage(admitted), OFFER),
+    // The same page without those fields: every text is the one above.
+    'attributes/false-values-twin': tree(
+      admittedPage((node) => node),
+      OFFER,
+    ),
   },
   cases: [
     ...calls('attributes/every', {
@@ -211,6 +340,11 @@ export const attributes: Gap = {
       element20: element({ maxTokens: 20 }),
       full20: full(20),
     }),
+    ...calls('attributes/false-values', {
+      ...formats,
+      'delta-after-twin': delta({}, keptBy('attributes/false-values-twin')),
+    }),
+    ...calls('attributes/false-values-twin', formats),
     ...calls('attributes/empty-ref-partial', {
       playwright: playwright(),
       full: full(),
