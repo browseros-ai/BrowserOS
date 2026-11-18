@@ -1017,3 +1017,44 @@ async fn two_tasks_with_the_same_draft_name_both_save() -> anyhow::Result<()> {
     assert_eq!(second["sourceSessionId"], "hist-two");
     Ok(())
 }
+
+#[tokio::test]
+async fn editing_a_task_skill_keeps_its_summary_and_inputs() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let router = &app.router;
+    finished_task(&app.state, "hist-sess").await?;
+    let (status, _) = request(
+        router,
+        "POST",
+        "/api/v1/skills",
+        Some(task_skill("hist-sess")),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, edited) = request(
+        router,
+        "PUT",
+        "/api/v1/skills/neo-flipkart-phones-under-budget",
+        Some(json!({
+            "site": "flipkart.com",
+            "steps": ["Open flipkart.com and search for phones.", "Sort by popularity under {budget}."],
+            "learnedNotes": []
+        })),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{edited}");
+
+    let body = std::fs::read_to_string(
+        app.root
+            .join("skills/neo-flipkart-phones-under-budget/SKILL.md"),
+    )?;
+    assert!(body.contains("Sort by popularity"), "{body}");
+    assert!(body.contains("Lists the most popular phones"), "{body}");
+    assert!(
+        body.contains("- {budget}: Highest price (number), for example 30000"),
+        "{body}"
+    );
+    assert_eq!(body.matches("## Inputs").count(), 1, "{body}");
+    Ok(())
+}

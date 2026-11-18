@@ -636,17 +636,20 @@ impl SkillService {
 
         // Decide what, if anything, to write to disk. A structured edit renders
         // the whole SKILL.md so its frontmatter description can never drift from
-        // the stored column. A raw `body` is written verbatim (agent authoring
-        // or a manual override). A metadata-only description change patches just
-        // the frontmatter line so the file matches the new column without
-        // disturbing the rest of the body.
+        // the stored column, keeping the sections and summary rendering does not
+        // own (a task skill's `## Inputs`, anything added by hand). A raw `body`
+        // is written verbatim (agent authoring or a manual override). A
+        // metadata-only description change patches just the frontmatter line so
+        // the file matches the new column without disturbing the rest of the body.
         let rewrite: Option<String> = if steps.is_some() || learned_notes.is_some() {
-            Some(render_skill_markdown(
+            let generated = render_skill_markdown(
                 name,
                 &effective_description,
                 &steps.unwrap_or_default(),
                 &learned_notes.unwrap_or_default(),
-            ))
+            );
+            let current = self.read_body(&body_path).await;
+            Some(keep_hand_written(&generated, &current))
         } else if let Some(raw) = body {
             Some(raw)
         } else if description.is_some() {
