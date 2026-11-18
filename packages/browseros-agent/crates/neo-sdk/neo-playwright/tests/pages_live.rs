@@ -1494,49 +1494,64 @@ struct OutsideTab {
 }
 
 impl OutsideTab {
-    /// Opens `url` in a background tab and returns once it loaded.
+    /// Opens `url` in a background tab and returns once it loaded. A setup that fails at any step
+    /// closes the tab it created and the connection, so no tab or client outlives the row.
     async fn open(url: &str) -> TestResult<Self> {
         let client = Arc::new(CdpClient::connect(ConnectOptions::new(live_run::cdp_port())).await?);
         let transport: Arc<dyn CdpConnection> = Arc::<CdpClient>::clone(&client);
-        let created = transport
-            .send(
-                "Target.createTarget",
-                json!({ "url": url, "background": true }),
-                None,
-            )
-            .await?;
-        let target = created
-            .get("targetId")
-            .and_then(Value::as_str)
-            .ok_or("no target id")?
-            .to_owned();
-        let attached = transport
-            .send(
-                "Target.attachToTarget",
-                json!({ "targetId": target, "flatten": true }),
-                None,
-            )
-            .await?;
-        let session = attached
-            .get("sessionId")
-            .and_then(Value::as_str)
-            .ok_or("no session id")?;
-        let session =
-            ProtocolSession::for_session(Arc::clone(&transport), SessionId::from(session));
-        let tab = Self {
-            client,
-            transport,
-            target,
-            session,
-        };
-        for _ in 0..200 {
-            if tab.eval("document.readyState").await? == json!("complete") {
-                return Ok(tab);
+        let mut created = None;
+        let opened: TestResult<Self> = async {
+            let reply = transport
+                .send(
+                    "Target.createTarget",
+                    json!({ "url": url, "background": true }),
+                    None,
+                )
+                .await?;
+            let target = reply
+                .get("targetId")
+                .and_then(Value::as_str)
+                .ok_or("no target id")?
+                .to_owned();
+            created = Some(target.clone());
+            let attached = transport
+                .send(
+                    "Target.attachToTarget",
+                    json!({ "targetId": target, "flatten": true }),
+                    None,
+                )
+                .await?;
+            let session = attached
+                .get("sessionId")
+                .and_then(Value::as_str)
+                .ok_or("no session id")?;
+            let tab = Self {
+                client: Arc::clone(&client),
+                transport: Arc::clone(&transport),
+                session: ProtocolSession::for_session(
+                    Arc::clone(&transport),
+                    SessionId::from(session),
+                ),
+                target,
+            };
+            for _ in 0..200 {
+                if tab.eval("document.readyState").await? == json!("complete") {
+                    return Ok(tab);
+                }
+                time::sleep(Duration::from_millis(50)).await;
             }
-            time::sleep(Duration::from_millis(50)).await;
+            Err(format!("{url} did not load within 10 s").into())
         }
-        tab.close().await;
-        Err(format!("{url} did not load within 10 s").into())
+        .await;
+        if opened.is_err() {
+            if let Some(target) = &created {
+                let _closed = transport
+                    .send("Target.closeTarget", json!({ "targetId": target }), None)
+                    .await;
+            }
+            client.disconnect().await;
+        }
+        opened
     }
 
     /// Runs `expression` in the tab's main world, by value.
