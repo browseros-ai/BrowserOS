@@ -2609,6 +2609,7 @@ mod tests {
         scale: Scale,
         sent: f32,
         delivered: f32,
+        blocked: f32,
     }
     struct PacedFrame {
         at: Duration,
@@ -2631,6 +2632,7 @@ mod tests {
         motion_kbps: u64,
         key_bytes: usize,
         first_two_ack_floor_ms: u64,
+        initial_queue_ms: u64,
     }
 
     impl Default for PacedCell {
@@ -2642,6 +2644,7 @@ mod tests {
                 motion_kbps: 9600,
                 key_bytes: 40_000,
                 first_two_ack_floor_ms: 0,
+                initial_queue_ms: 0,
             }
         }
     }
@@ -2649,15 +2652,26 @@ mod tests {
     // Viewer admission, ACKs and policy run on the same clock as a serial link. A scroll
     // exposes the same bytes each second, so each frame carries more damage at lower fps.
     fn paced_picture(seconds: u64, cell: PacedCell) -> PacedTrace {
-        let t = Instant::now();
+        let (mut owner, _peer) = viewer_pair(1, false);
+        let mut t = Instant::now();
+        if cell.initial_queue_ms > 0 {
+            // Replay a queue already old enough to have raised the short ACK floor.
+            owner.rtt.push(cell.rtt_ms as u32, t);
+            for _ in 0..12 {
+                t += Duration::from_secs(1);
+                owner
+                    .rtt
+                    .push((cell.rtt_ms + cell.initial_queue_ms) as u32, t);
+            }
+        }
         let mut p = motion(t, false);
-        let (owner, _peer) = viewer_pair(1, false);
         let mut viewers = vec![owner];
         let (mut seq, mut last_send, mut blocked) = (0, None::<Instant>, 0.0);
         let mut tick_at = t + Duration::from_secs(1);
         let mut busy = ActiveTime::default();
         let mut seed = 12345_u32;
-        let (mut link_free, mut acks) = (t, VecDeque::<(Instant, u32)>::new());
+        let mut link_free = t + Duration::from_millis(cell.initial_queue_ms);
+        let mut acks = VecDeque::<(Instant, u32)>::new();
         let mut trace = PacedTrace::default();
         for ms in 0..=seconds * 1000 {
             let now = t + Duration::from_millis(ms);
@@ -2684,8 +2698,9 @@ mod tests {
                     grabs: v.sent_frames,
                     ..Stats::default()
                 };
+                let blocked_fraction = blocked / elapsed;
                 let link =
-                    stats.link_sample(Some(v), elapsed, blocked / elapsed, busy.take(now), true);
+                    stats.link_sample(Some(v), elapsed, blocked_fraction, busy.take(now), true);
                 v.clear_interval();
                 let sent = link.sent_kbps;
                 let delivered = link.delivered_kbps;
@@ -2696,6 +2711,7 @@ mod tests {
                     scale: p.plan(now, BIG).scale,
                     sent,
                     delivered,
+                    blocked: blocked_fraction,
                 });
                 blocked = 0.0;
             }
@@ -2710,8 +2726,16 @@ mod tests {
                 } else {
                     cell.motion_kbps as f32 * 1000.0 / (8.0 * p.fps())
                 };
-                let size = (full_bytes / if plan.scale == Scale::Half { 4.0 } else { 1.0 }).ceil()
-                    as usize;
+                let size = match plan.scale {
+                    Scale::Full => full_bytes,
+                    Scale::Half if key => full_bytes / 4.0,
+                    Scale::Half => {
+                        let bytes_per_frame =
+                            vbv_kbps(&p, Scale::Half) as f32 * 1000.0 / (8.0 * ENCODER_FPS);
+                        (full_bytes / 4.0).min(bytes_per_frame)
+                    }
+                }
+                .ceil() as usize;
                 let full_return = p.scale() == Scale::Half && plan.scale == Scale::Full;
                 p.encoded(
                     now,
@@ -2932,6 +2956,76 @@ mod tests {
             before_half.filter(|f| !f.key).any(|f| f.bytes == 80_000),
             "15 fps still offers 9.6 Mb/s"
         );
+    }
+
+    #[test]
+    fn tests_that_a_standing_noise_jam_keeps_drawing_at_half_size() {
+        let end = Duration::from_secs(60);
+        // At the quality cap these keys are 330 and 440 kB. Half-size motion
+        // offers 3.2 Mb/s before the encoder budget on a 3 Mb/s serial link.
+        for key_bytes in [660_000, 880_000] {
+            let trace = paced_picture(
+                end.as_secs(),
+                PacedCell {
+                    kbps: 3000,
+                    rtt_ms: 70,
+                    initial_queue_ms: 1140,
+                    key_bytes,
+                    motion_kbps: 12_800,
+                    ..PacedCell::default()
+                },
+            );
+            let half = trace
+                .ticks
+                .iter()
+                .take(10)
+                .position(|tick| tick.scale == Scale::Half)
+                .expect("the jam must engage half size");
+            let ticks = &trace.ticks[half..];
+            assert!(
+                ticks.iter().all(|tick| tick.scale == Scale::Half),
+                "link returned to full with {key_bytes} B keys"
+            );
+            assert!(
+                ticks
+                    .windows(2)
+                    .any(|pair| pair.iter().all(|t| !link_full(t.blocked))),
+                "the link must get a chance to return"
+            );
+            assert!(
+                ticks
+                    .windows(20)
+                    .all(|span| span.iter().any(|t| link_full(t.blocked))),
+                "congestion must persist through the replay"
+            );
+
+            let half_frame = trace
+                .frames
+                .iter()
+                .position(|frame| frame.scale == Scale::Half)
+                .expect("a half-size frame must reach the wire");
+            assert!(
+                trace.frames[half_frame..]
+                    .iter()
+                    .all(|frame| frame.scale == Scale::Half)
+            );
+            let engaged = Duration::from_secs(half as u64 + 1);
+            let draws = trace
+                .frames
+                .iter()
+                .map(|frame| frame.received)
+                .filter(|&draw| draw >= engaged && draw <= end);
+            let mut last = engaged;
+            let mut longest = Duration::ZERO;
+            for draw in draws.chain([end]) {
+                longest = longest.max(draw - last);
+                last = draw;
+            }
+            assert!(
+                longest < Duration::from_millis(500),
+                "largest draw gap after half engaged: {longest:?}"
+            );
+        }
     }
 
     #[test]
