@@ -16,17 +16,20 @@
 //! Ported: `createKey`, `visit`, `visitText` and `indent` of `isomorphic/ariaSnapshotRenderer.ts`,
 //! and all of `isomorphic/yaml.ts`. Not ported: the regular-expression mode
 //! (`convertToBestGuessRegex`, `textContributesInfo`), which only a failed `expect` uses, in the
-//! page, with the page's own copy of upstream's file.
+//! page, with the page's own copy of upstream's file. `PORTED_FROM` records the vendored files'
+//! hashes, and neo-playwright's `engine_sources` test fails when an upgrade changes one.
 //!
 //! The judges, all in `tests.rs`: the committed cases, written by neo-playwright-js's build.ts
 //! from upstream's printer and today's TypeScript renderer, and those two again in QuickJS beside
 //! the Rust, on seeded random nodes and trees.
 
 mod node_text;
+mod ported_from;
 #[cfg(test)]
 mod tests;
 mod tree_text;
 mod yaml_escape;
 
 pub(crate) use node_text::{NodeAlone, node_text};
+pub use ported_from::{PORTED_FROM, PortedFile};
 pub(crate) use tree_text::tree_text;

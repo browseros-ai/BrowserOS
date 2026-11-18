@@ -28,10 +28,14 @@
 //!
 //! | Here | Ported from |
 //! |---|---|
+//! | `aria_node.rs` | vendored `isomorphic/ariaSnapshot.ts` (the shape) and `injected/src/ariaSnapshot.ts` (its writer) |
 //! | `playwright/yaml_escape.rs` | vendored `isomorphic/yaml.ts` |
 //! | `playwright/node_text.rs` | vendored `isomorphic/ariaSnapshotRenderer.ts` |
 //! | `playwright/tree_text.rs` | neo-playwright-js `prelude/snapshot.ts` (`treeLines`, `yamlLines`, `renderSnapshot`) |
 //! | `js/*.rs` | ECMAScript itself; QuickJS is the test oracle |
+//!
+//! [`PORTED_FROM`] holds the vendored files' hashes at the port, which neo-playwright's tests
+//! compare with the vendored tree at every engine upgrade.
 //!
 //! Pure: no clock, no store, no browser and no async. The dependencies are serde and `serde_json`,
 //! so the build refuses printing that waits or sends.
@@ -70,3 +74,4 @@ mod snapshot;
 mod split_mix64;
 
 pub use aria_node::{AriaChild, AriaNode, Invalid, NodeBox, Tristate};
+pub use playwright::{PORTED_FROM, PortedFile};
