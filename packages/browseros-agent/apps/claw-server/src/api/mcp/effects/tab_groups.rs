@@ -63,7 +63,11 @@ pub fn apply(context: ToolEffectContext<'_>) -> BoxFuture<'_, anyhow::Result<Opt
         // delay the tool response. Failed creation capture skips all group writes;
         // existing-page calls can still synchronize their already captured view.
         if !context.call.flags.new_page || created.is_some() {
-            drop(spawn_tab_group_work(context.call.clone(), created));
+            if group_is_identity(context.call) {
+                run_tab_group_work(context.call.clone(), created).await;
+            } else {
+                drop(spawn_tab_group_work(context.call.clone(), created));
+            }
         }
         Ok(notice.map(|notice| append_notice(context.result, notice)))
     })
@@ -195,6 +199,15 @@ pub(crate) async fn created_page(call: &ToolCall, page_id: u32) -> Option<Create
         .await
         .insert(page_id, CreatedPageCapture { page: info, view });
     Some(created)
+}
+
+/// Whether this call's group work has to finish before its result returns. A CLI task's
+/// group is its identity: the result names it for the next command to present, so it
+/// cannot land after the reply. For an MCP agent the group is cosmetic and stays detached.
+pub(crate) fn group_is_identity(call: &ToolCall) -> bool {
+    call.identity
+        .as_ref()
+        .is_some_and(|identity| task_group::is_cli_client(identity.session.client_name()))
 }
 
 fn spawn_tab_group_work(call: ToolCall, created: Option<CreatedPage>) -> JoinHandle<()> {
@@ -3619,6 +3632,44 @@ mod tests {
         assert!(
             !session.follows_group(),
             "an MCP session keeps its own lifetime"
+        );
+        Ok(())
+    }
+
+    /// A CLI task's group must exist by the time `tabs new` replies, because the reply names
+    /// it for the next command to present. Created detached, it could land after the reply,
+    /// and the next command, presenting nothing, would start a second task.
+    #[tokio::test]
+    async fn a_cli_tasks_group_is_bound_before_tabs_new_replies() -> anyhow::Result<()> {
+        let recorder = Arc::new(GroupDispatchRecorder::new());
+        let (mut call, _browser) = connected_call(recorder.clone()).await?;
+        let identity = call
+            .identity
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("identity missing"))?;
+        let cli = crate::services::sessions::Session::new(
+            call.session_id.clone(),
+            identity.agent.clone(),
+            crate::identity::ConversationIdentity::new(identity.agent.slug(), "cli".to_string()),
+            crate::api::mcp::task_group::CLI_CLIENT_NAME.to_string(),
+            tokio::time::Instant::now(),
+        );
+        call.state.sessions.insert_for_testing(cli.clone()).await;
+        call.identity = Some(crate::api::mcp::dispatch::ToolIdentity {
+            session: cli,
+            ..identity
+        });
+
+        apply_tabs_new(&call).await;
+
+        assert_eq!(recorder.create_count(), 1);
+        assert!(
+            call.state
+                .task_groups
+                .lookup_live("group-1")
+                .await?
+                .is_some(),
+            "the group is bound by the time the call returns, with no wait"
         );
         Ok(())
     }

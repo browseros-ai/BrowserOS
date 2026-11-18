@@ -238,15 +238,18 @@ impl InnerCallHook for ScriptInnerCallHook {
             )
             .await;
             // Ensure the agent's tab group and place the page in it. Detached so
-            // browser grouping does not block the script, matching the effect.
+            // browser grouping does not block the script, matching the effect, except
+            // for a CLI task, whose group is its identity and must exist by the reply.
             // Retain the created incarnation and its guarded view before spawning,
             // including the original epoch for an unbound run. Missing metadata
             // skips this cosmetic effect rather than dispatching without a guard.
             if let Some(created) = tab_groups::created_page(&self.call, page_id).await {
-                tokio::spawn(tab_groups::run_tab_group_work(
-                    self.call.clone(),
-                    Some(created),
-                ));
+                let work = tab_groups::run_tab_group_work(self.call.clone(), Some(created));
+                if tab_groups::group_is_identity(&self.call) {
+                    work.await;
+                } else {
+                    tokio::spawn(work);
+                }
             }
         })
     }
