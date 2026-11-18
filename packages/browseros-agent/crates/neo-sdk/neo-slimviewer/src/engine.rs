@@ -3109,13 +3109,22 @@ mod tests {
                 work: Work::default(),
             },
         );
+        p.tick(
+            t,
+            picture::Link {
+                blocked: 0.4,
+                delivered_kbps: 20_000.0,
+                ..picture::Link::default()
+            },
+            picture::Cpu::default(),
+        );
         p.probe(
             t,
             600_000,
             Duration::from_millis(242),
             Duration::from_millis(2),
         );
-        let returned = t + Duration::from_secs(1);
+        let returned = t + Duration::from_secs(2);
         p.tick(returned, picture::Link::default(), picture::Cpu::default());
         let full = p.plan(returned, BIG);
         assert_eq!(full.scale, Scale::Full);

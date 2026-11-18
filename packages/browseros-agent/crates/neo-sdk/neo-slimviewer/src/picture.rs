@@ -333,6 +333,8 @@ pub struct Picture {
     last_full: Option<Instant>,
     backoff: Duration,
     capacity: VecDeque<(Instant, f32)>,
+    last_probe: Option<(Instant, f32)>,
+    last_congested_kbps: Option<f32>,
     last_delivery: Option<(Instant, f64)>,
     demand_kbps: Option<f32>,
     full_big: usize,
@@ -381,6 +383,8 @@ impl Picture {
             last_full: None,
             backoff: Duration::from_secs(2),
             capacity: VecDeque::new(),
+            last_probe: None,
+            last_congested_kbps: None,
             last_delivery: None,
             demand_kbps: None,
             full_big: 0,
@@ -447,6 +451,8 @@ impl Picture {
         self.previous_congested_no_ack = false;
         self.last_congested = None;
         self.capacity.clear();
+        self.last_probe = None;
+        self.last_congested_kbps = None;
         self.last_delivery = None;
         self.facts = Facts::default();
     }
@@ -641,22 +647,30 @@ impl Picture {
         )
     }
 
+    fn return_capacity_kbps(&self, now: Instant) -> Option<f32> {
+        if self
+            .last_congested
+            .is_none_or(|at| now.saturating_duration_since(at) >= STALE_CAPACITY_AFTER_JAM)
+        {
+            return self.capacity_kbps(now);
+        }
+        // A burst can outrun sustained delivery. If half frames are too small to
+        // probe, keep pricing the return from the last observation during the jam.
+        let (_, kbps) = self
+            .last_probe
+            .filter(|(at, _)| now.saturating_duration_since(*at) <= CAPACITY_WINDOW)
+            .or_else(|| self.capacity.back().copied())?;
+        Some(
+            self.last_congested_kbps
+                .map_or(kbps, |delivered| delivered.min(kbps)),
+        )
+    }
+
     /// A motion return reopens the full encoder and puts an IDR on the wire.
-    /// Keep its transfer within 300 ms even when half-size traffic has become too small to probe.
     fn full_return_fits(&self, now: Instant) -> bool {
         let cap_crf = self.cfg.base_crf + self.ladder.rungs[self.ladder.cap].crf_add;
-        let kbps = self.capacity_kbps(now).or_else(|| {
-            self.capacity
-                .back()
-                .filter(|_| {
-                    self.last_congested.is_some_and(|at| {
-                        now.saturating_duration_since(at) < STALE_CAPACITY_AFTER_JAM
-                    })
-                })
-                .map(|&(_, kbps)| kbps)
-        });
         self.estimate(cap_crf)
-            .zip(kbps)
+            .zip(self.return_capacity_kbps(now))
             .is_none_or(|(bytes, kbps)| bytes * 8.0 <= 300.0 * kbps)
     }
 
@@ -731,8 +745,9 @@ impl Picture {
             && let Some(transfer) = delay.checked_sub(base_rtt)
             && !transfer.is_zero()
         {
-            self.capacity
-                .push_back((now, bytes as f32 * 8.0 / 1000.0 / transfer.as_secs_f32()));
+            let sample = (now, bytes as f32 * 8.0 / 1000.0 / transfer.as_secs_f32());
+            self.capacity.push_back(sample);
+            self.last_probe = Some(sample);
         }
     }
 
@@ -884,6 +899,7 @@ impl Picture {
             self.last_congested = Some(now);
             if link.delivered_kbps > 0.0 {
                 self.capacity.push_back((now, link.delivered_kbps));
+                self.last_congested_kbps = Some(link.delivered_kbps);
             }
             if link.delivered_kbps > 100.0 {
                 self.link_kbps = ((link.delivered_kbps * 0.85) as u32).max(300);
@@ -926,7 +942,7 @@ impl Picture {
                 .last_congested
                 .is_none_or(|t| now.saturating_duration_since(t) >= Duration::from_secs(2))
             && self
-                .capacity_kbps(now)
+                .return_capacity_kbps(now)
                 .zip(self.demand_kbps)
                 .is_none_or(|(cap, demand)| cap >= 1.2 * demand)
             && self.full_return_fits(now)
@@ -1587,6 +1603,47 @@ mod tests {
     }
 
     #[test]
+    fn tests_that_half_returns_use_the_lower_of_probe_and_congested_delivery() {
+        for (full_key_bytes, probe, delivery) in [
+            (330_000, 8000.0, 3500.0),
+            (240_000, 8000.0, 3500.0),
+            (240_000, 3500.0, 8000.0),
+        ] {
+            let t = Instant::now();
+            let mut p = picture(t);
+            let half = to_link_half(&mut p, t);
+            let mut key = frame(Scale::Half, 10);
+            key.key = true;
+            key.bytes = full_key_bytes / 4;
+            p.encoded(half, key);
+            let jammed = at(half, 2);
+            for (now, delivered_kbps) in [(at(half, 1), 12_000.0), (jammed, delivery)] {
+                p.tick(
+                    now,
+                    Link {
+                        delivered_kbps,
+                        ..jam()
+                    },
+                    Cpu::default(),
+                );
+            }
+            capacity(&mut p, at(jammed, 5), probe);
+            for seconds in [5, 19] {
+                let now = at(jammed, seconds);
+                assert!(
+                    !p.full_return_fits(now),
+                    "{full_key_bytes} B, probe {probe}, delivery {delivery}, +{seconds}s"
+                );
+                p.tick(now, active(15), Cpu::default());
+                assert_eq!(p.motion_scale(), Scale::Half);
+            }
+            let cleared = at(jammed, 20);
+            p.tick(cleared, active(15), Cpu::default());
+            assert_eq!(p.motion_scale(), Scale::Full);
+        }
+    }
+
+    #[test]
     fn tests_that_fresh_capacity_always_applies_and_congestion_rearms_the_last_sample() {
         let t = Instant::now();
         let mut p = picture(t);
@@ -1648,8 +1705,10 @@ mod tests {
         let t = Instant::now();
         let mut p = picture(t);
         let half = to_link_half(&mut p, t);
-        costly_half_key(&mut p, half);
-        capacity(&mut p, half, 9000.0);
+        let mut key = frame(Scale::Half, 10);
+        key.key = true;
+        key.bytes = 24_000; // A 96 kB full key fits the measured 3 Mb/s.
+        p.encoded(half, key);
         let now = half + Duration::from_millis(950);
         assert_eq!(p.plan(now, Some((10, 26, 16))).scale, Scale::Half);
         assert_eq!(p.deadline(now), Some(at(half, 1)));
@@ -1702,16 +1761,15 @@ mod tests {
     }
 
     #[test]
-    fn tests_that_half_returns_to_full_once_a_probe_shows_capacity() {
+    fn tests_that_a_fresh_probe_restores_full_when_the_congested_rate_expires() {
         let t = Instant::now();
         let mut p = picture(t);
         let half = to_link_half(&mut p, t);
         costly_half_key(&mut p, half);
-        p.tick(at(half, 2), active(15), Cpu::default());
+        capacity(&mut p, at(half, 19), 9000.0);
+        p.tick(at(half, 19), active(15), Cpu::default());
         assert_eq!(p.motion_scale(), Scale::Half);
-        capacity(&mut p, at(half, 3), 9000.0);
-        assert!(p.full_return_fits(at(half, 3)));
-        let moves = p.tick(at(half, 3), active(15), Cpu::default());
+        let moves = p.tick(at(half, 20), active(15), Cpu::default());
         assert_eq!(moves[0].why, Why::Capacity);
         assert_eq!(
             (p.motion_scale(), p.fps(), p.crf()),
@@ -2313,10 +2371,25 @@ mod tests {
         let entered = to_link_half(&mut p, t);
         assert_eq!(p.plan(entered, BIG).scale, Scale::Half);
         capacity(&mut p, entered, 12_000.0);
-        p.tick(at(entered, 1), Link::default(), Cpu::default());
-        assert_eq!(p.plan(at(entered, 1), BIG).scale, Scale::Half);
         p.tick(at(entered, 2), Link::default(), Cpu::default());
-        assert_eq!(p.plan(at(entered, 2), BIG).scale, Scale::Full);
+        assert_eq!(
+            p.plan(at(entered, 2), BIG).scale,
+            Scale::Half,
+            "3 Mb/s delivery cannot sustain full motion"
+        );
+        let recovered = at(entered, 3);
+        p.tick(
+            recovered,
+            Link {
+                delivered_kbps: 12_000.0,
+                ..jam()
+            },
+            Cpu::default(),
+        );
+        p.tick(at(recovered, 1), Link::default(), Cpu::default());
+        assert_eq!(p.plan(at(recovered, 1), BIG).scale, Scale::Half);
+        p.tick(at(recovered, 2), Link::default(), Cpu::default());
+        assert_eq!(p.plan(at(recovered, 2), BIG).scale, Scale::Full);
         assert_eq!((p.fps(), p.crf()), (15.0, 30.0));
     }
     #[test]
@@ -3252,10 +3325,19 @@ mod tests {
         send(&mut p, entered, half);
         // 12 Mb/s supports 40 KB motion at 30 fps with the required 20% headroom.
         // A single 200 KB key must not inflate that demand or keep motion at half.
-        capacity(&mut p, entered, 12_000.0);
-        p.tick(at(entered, 1), Link::default(), Cpu::default());
-        p.tick(at(entered, 2), Link::default(), Cpu::default());
-        assert_eq!(p.plan(at(entered, 2), BIG).scale, Scale::Full);
+        let recovered = at(entered, 1);
+        p.tick(
+            recovered,
+            Link {
+                delivered_kbps: 12_000.0,
+                ..jam()
+            },
+            Cpu::default(),
+        );
+        capacity(&mut p, recovered, 12_000.0);
+        p.tick(at(recovered, 1), Link::default(), Cpu::default());
+        p.tick(at(recovered, 2), Link::default(), Cpu::default());
+        assert_eq!(p.plan(at(recovered, 2), BIG).scale, Scale::Full);
     }
 
     #[test]
