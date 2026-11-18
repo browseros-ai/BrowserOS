@@ -2,13 +2,15 @@ use crate::api::mcp::{
     dispatch::{ToolEffect, ToolEffectContext},
     hosted::rename_tip,
     naming::session_group_title,
+    task_group,
 };
 use browseros_mcp::ToolResult;
 use futures_util::future::BoxFuture;
 use rmcp::model::ContentBlock;
 
 /// Appends a bounded rename reminder while the generated session label remains active.
-/// The reminder names whichever rename channel the server mode offers.
+/// The reminder names whichever rename channel the client has: the CLI's own command, or
+/// the one the server mode offers.
 pub fn apply(context: ToolEffectContext<'_>) -> BoxFuture<'_, anyhow::Result<Option<ToolResult>>> {
     Box::pin(async move {
         if context.result.is_error {
@@ -21,11 +23,13 @@ pub fn apply(context: ToolEffectContext<'_>) -> BoxFuture<'_, anyhow::Result<Opt
             return Ok(None);
         };
         let title = session_group_title(&identity.session, &label);
+        let tip = if task_group::is_cli_client(identity.session.client_name()) {
+            task_group::rename_tip(&title)
+        } else {
+            rename_tip(context.call.state.config.mode, &title)
+        };
         let mut result = context.result.clone();
-        result.content.push(ContentBlock::text(rename_tip(
-            context.call.state.config.mode,
-            &title,
-        )));
+        result.content.push(ContentBlock::text(tip));
         Ok(Some(result))
     })
 }
@@ -141,6 +145,44 @@ mod tests {
         }
         assert_result_eq(&apply_result(&first, &success).await?, &success);
         assert_eq!(apply_result(&second, &success).await?.content.len(), 2);
+        Ok(())
+    }
+
+    /// A CLI agent has no session to rename and no name_session tool to call, so its
+    /// reminder names the command it does have.
+    #[tokio::test]
+    async fn cli_tips_point_at_the_task_name_command() -> anyhow::Result<()> {
+        let mut call =
+            crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
+        let identity = call
+            .identity
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("identity missing"))?;
+        let cli = crate::services::sessions::Session::new(
+            call.session_id.clone(),
+            identity.agent.clone(),
+            crate::identity::ConversationIdentity::new(identity.agent.slug(), "cli".to_string()),
+            crate::api::mcp::task_group::CLI_CLIENT_NAME.to_string(),
+            tokio::time::Instant::now(),
+        );
+        call.identity = Some(crate::api::mcp::dispatch::ToolIdentity {
+            session: cli,
+            ..identity
+        });
+
+        let result = apply_result(&call, &ToolResult::text("ok", None)).await?;
+        let tip = result
+            .content
+            .last()
+            .and_then(ContentBlock::as_text)
+            .map(|text| text.text.clone())
+            .unwrap_or_default();
+        assert!(tip.contains("browseros task name"), "{tip}");
+        assert!(!tip.contains("session"), "{tip}");
+        assert!(
+            !tip.contains('\u{2014}'),
+            "no em dash in shipped copy: {tip}"
+        );
         Ok(())
     }
 }

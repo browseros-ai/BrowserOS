@@ -54,6 +54,15 @@ pub(super) fn closing_group(tool: &str, args: &Value) -> Option<String> {
         .map(str::to_string)
 }
 
+/// The rename reminder a CLI task gets in place of the session one. It names the
+/// command the CLI has, and says task, since the CLI has no session to rename.
+#[must_use]
+pub(super) fn rename_tip(title: &str) -> String {
+    format!(
+        "Tip: this task is \"{title}\". Name it with: browseros task name \"<2-3 word task label>\""
+    )
+}
+
 /// `result` naming the group the CLI task works in now, in `_meta` only. The CLI reads it
 /// there and remembers it for the next command. Nothing is added to the text the agent
 /// reads: the point of the model is that the agent carries nothing. No group means the task
