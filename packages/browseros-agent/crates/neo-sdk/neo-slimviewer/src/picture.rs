@@ -445,6 +445,10 @@ impl Picture {
         self.reset_since_tick = false;
         self.queue_high = false;
         self.previous_congested_no_ack = false;
+        self.last_congested = None;
+        self.capacity.clear();
+        self.last_delivery = None;
+        self.facts = Facts::default();
     }
 
     pub fn link_kbps(&self) -> u32 {
@@ -2184,6 +2188,36 @@ mod tests {
         assert_eq!(p.fps(), 15.0);
         p.tick(at(t, 44), active(8), Cpu::default());
         assert_eq!(p.fps(), 20.0);
+    }
+
+    #[test]
+    fn tests_that_a_new_pacer_uses_its_own_capacity_for_full_keys() {
+        let t = Instant::now();
+        for age in [0, 11] {
+            let mut p = picture(t);
+            let half = to_link_half(&mut p, t);
+            costly_half_key(&mut p, half);
+            capacity(&mut p, half, 3000.0);
+            let changed = at(half, age);
+            assert!(!p.full_return_fits(changed));
+            p.pacer_changed();
+            assert_eq!(p.motion_scale(), Scale::Half);
+            assert_eq!(p.capacity_kbps(changed), None);
+            assert!(p.full_return_fits(changed));
+            capacity(&mut p, changed, 3000.0);
+            assert!(
+                !p.full_return_fits(changed),
+                "the new pacer's probe prices the same key"
+            );
+            let expired = at(changed, 11);
+            assert!(
+                p.full_return_fits(expired),
+                "only this pacer's jams extend its samples"
+            );
+            capacity(&mut p, expired, 9000.0);
+            p.tick(expired, active(15), Cpu::default());
+            assert_eq!(p.plan(expired, BIG).scale, Scale::Full);
+        }
     }
 
     #[test]
