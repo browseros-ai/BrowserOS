@@ -380,6 +380,12 @@ struct Watcher {
     /// Where those reads send their answers back, so only this task writes the tracker; set by
     /// the run loop. Without it (a test driving `handle` alone) a read is awaited in place.
     seeded: Option<UnboundedSender<SeededTree>>,
+    /// Download begins waiting for the tree reads that were out when they were read, oldest first.
+    /// Each is let go only when [`Self::advance_lines`] pops a read (`release_downloads`), so its
+    /// release depends on every read in a line being popped, as each is once its answer comes back
+    /// within [`TREE_READ_WAIT`]. A change that drops a line with a read in it (a tab closing) must
+    /// release the downloads waiting for that read too, or one would hold every reply's synchronize.
+    unowned_downloads: Vec<UnownedDownload>,
     /// Each untouched tab's attach of core's page session for a context-level listener, while
     /// out or until the next pass replaces it ([`Watcher::attach_page`]).
     attaching: HashMap<TargetId, JoinHandle<()>>,
@@ -409,9 +415,11 @@ struct Watcher {
 type TabLine = VecDeque<LineItem>;
 
 enum LineItem {
-    /// A session's tree read and how far it got.
+    /// A session's tree read and how far it got. `started` is how many broadcast events the loop
+    /// had read when it went out: an event read at that position or later found it out.
     Read {
         session: SessionId,
+        started: u64,
         answer: TreeAnswer,
     },
     /// An event of the tab read at broadcast `position` and held behind the reads before it.
@@ -420,6 +428,37 @@ enum LineItem {
     /// was unknown, behind the read it waits for: recorded with the main frame that read gave, or
     /// not at all, and never read for again (`page_load`).
     Load { position: u64, kind: PageEventKind },
+}
+
+impl LineItem {
+    /// The broadcast position of a held event; a read has none.
+    fn position(&self) -> Option<u64> {
+        match self {
+            Self::Event { position, .. } | Self::Load { position, .. } => Some(*position),
+            Self::Read { .. } => None,
+        }
+    }
+}
+
+/// A download's begin whose frame no tracker knew when the loop read it, while frame-tree reads
+/// were out ([`Watcher::wait_unowned`]).
+///
+/// `Browser.downloadWillBegin` names only a frame, and a same-process child that existed before
+/// its tab's session reported events is known only from a tree read, its tab's or, nested in an
+/// out-of-process frame, that frame session's. Handled while such a read is out, the download is
+/// recorded with no page, and a script's `download` wait never hears of it. So it waits for every
+/// read out when it was read, in any line, and for none started later: a page that keeps adding
+/// frames keeps reads out all the time, and a begin that waited for those would hold every reply
+/// whose fence covers it. Each of those reads is applied within [`TREE_READ_WAIT`] of going out,
+/// tree or none, so it waits about that long at most, and it goes sooner, as soon as a tree names
+/// its frame (`release_downloads`). Its position counts in the hold meanwhile.
+struct UnownedDownload {
+    /// The broadcast position the begin was read at.
+    position: u64,
+    begin: CdpEvent,
+    /// The download's progress read meanwhile, with their positions: the download table drops
+    /// progress of a download it has not listed, so it goes on behind the begin.
+    progress: Vec<(u64, CdpEvent)>,
 }
 
 /// A tree read's state in its line.
@@ -742,6 +781,7 @@ impl Watcher {
             found,
             lines: HashMap::new(),
             seeded: None,
+            unowned_downloads: Vec::new(),
             attaching: HashMap::new(),
             deferred: Vec::new(),
             held_attachments: HashMap::new(),
@@ -1100,6 +1140,13 @@ impl Watcher {
             EventFence(self.progress.events_handled().saturating_add(1)),
         )
         .await;
+        // A load event may have gone into its tab's line (`page_load`): its hold is published
+        // before the loop counts it read. An event handled from a line publishes nothing here:
+        // `advance_lines` holds that tab's later events aside meanwhile, and publishes once
+        // they are back.
+        if !self.lines.is_empty() {
+            self.publish_hold();
+        }
     }
 
     async fn handle_at(&mut self, event: CdpEvent, ingress: EventFence) {
@@ -2077,6 +2124,7 @@ impl Watcher {
             .or_default()
             .push_back(LineItem::Read {
                 session: session.clone(),
+                started: self.progress.events_handled(),
                 answer: TreeAnswer::Out,
             });
         let session = session.clone();
@@ -2100,7 +2148,7 @@ impl Watcher {
             );
         }
         let Some(tab) = self.line_for(&event) else {
-            return Some(event);
+            return self.wait_unowned(event);
         };
         let position = self.progress.events_handled();
         if event.method == "Target.attachedToTarget" {
@@ -2122,6 +2170,100 @@ impl Watcher {
         }
         self.publish_hold();
         None
+    }
+
+    /// Keeps a download's begin that no line takes while its frame is unknown and tree reads are
+    /// out, with its progress behind it ([`UnownedDownload`]), or gives the event back to be
+    /// handled now: a begin whose frame a tracker knows, or read while no read is out.
+    fn wait_unowned(&mut self, event: CdpEvent) -> Option<CdpEvent> {
+        let position = self.progress.events_handled();
+        match event.method.as_str() {
+            "Browser.downloadProgress" => {
+                let guid = event.params.get("guid").and_then(Value::as_str);
+                let Some(waiting) = self.unowned_downloads.iter_mut().find(|waiting| {
+                    guid.is_some()
+                        && waiting.begin.params.get("guid").and_then(Value::as_str) == guid
+                }) else {
+                    return Some(event);
+                };
+                waiting.progress.push((position, event));
+            }
+            "Browser.downloadWillBegin" => {
+                let unowned = event
+                    .params
+                    .get("frameId")
+                    .and_then(Value::as_str)
+                    .is_some_and(|frame| self.frame_owner(&FrameId(frame.to_owned())).is_none());
+                let reading = self
+                    .lines
+                    .values()
+                    .flatten()
+                    .any(|item| matches!(item, LineItem::Read { .. }));
+                if !(unowned && reading) {
+                    return Some(event);
+                }
+                self.unowned_downloads.push(UnownedDownload {
+                    position,
+                    begin: event,
+                    progress: Vec::new(),
+                });
+            }
+            _ => return Some(event),
+        }
+        self.publish_hold();
+        None
+    }
+
+    /// Lets go of each waiting download that is ready ([`UnownedDownload`]): as soon as a tree
+    /// names its frame, or once every read out at its begin is applied, tree or none. One whose tab
+    /// is known goes into that tab's line at its place ([`place_by_position`]), its progress after
+    /// it, when the tab holds a line (the read that named it was in that line), and is handled
+    /// now otherwise; one no tree named is handled now, with no page. It must not wait on for the
+    /// other reads once a tree named its frame: its tab's line would meanwhile replay the frame's
+    /// removal, and the download would find no owner.
+    async fn release_downloads(&mut self) {
+        for download in mem::take(&mut self.unowned_downloads) {
+            let owner = download
+                .begin
+                .params
+                .get("frameId")
+                .and_then(Value::as_str)
+                .and_then(|frame| self.frame_owner(&FrameId(frame.to_owned())))
+                .cloned();
+            let reading = self.lines.values().flatten().any(|item| {
+                matches!(item, LineItem::Read { started, .. } if *started <= download.position)
+            });
+            let release = owner.is_some() || !reading;
+            if !release {
+                self.unowned_downloads.push(download);
+                continue;
+            }
+            let UnownedDownload {
+                position,
+                begin,
+                progress,
+            } = download;
+            if let Some(line) = owner.and_then(|owner| self.lines.get_mut(&owner)) {
+                place_by_position(
+                    line,
+                    position,
+                    LineItem::Event {
+                        position,
+                        event: begin,
+                    },
+                );
+                for (position, event) in progress {
+                    place_by_position(line, position, LineItem::Event { position, event });
+                }
+                continue;
+            }
+            self.handle_at(begin, EventFence(position.saturating_add(1)))
+                .await;
+            for (position, event) in progress {
+                self.handle_at(event, EventFence(position.saturating_add(1)))
+                    .await;
+            }
+        }
     }
 
     /// The tab whose line `event` must wait in: while a tab has a frame-tree read out, every
@@ -2230,6 +2372,7 @@ impl Watcher {
                 LineItem::Read {
                     session: asked,
                     answer: answer @ TreeAnswer::Out,
+                    ..
                 } if *asked == session => Some(answer),
                 _ => None,
             });
@@ -2258,11 +2401,12 @@ impl Watcher {
                 break;
             };
             match item {
-                LineItem::Read {
-                    answer: TreeAnswer::Back(Some(tree)),
-                    ..
-                } => self.lifecycle.seed(&tab, tree),
-                LineItem::Read { .. } => {}
+                LineItem::Read { answer, .. } => {
+                    if let TreeAnswer::Back(Some(tree)) = answer {
+                        self.lifecycle.seed(&tab, tree);
+                    }
+                    self.release_downloads().await;
+                }
                 LineItem::Load { kind, .. } => self.record_load(tab, kind),
                 LineItem::Event { event, position } => {
                     // What the event queues for its own tab (a load event's new read and the load
@@ -2286,20 +2430,22 @@ impl Watcher {
         self.answer_deferred();
     }
 
-    /// Tells [`WatcherProgress`] the oldest event a line holds, so no fence past it counts as
-    /// in the log.
+    /// Tells [`WatcherProgress`] the oldest event the watcher holds, in a line or as a waiting
+    /// download, so no fence past it counts as in the log. Every item counts, not only each line's
+    /// first, so the hold stays right whatever order a line holds its items in. It equals the
+    /// first-item hold while lines stay sorted, as [`place_by_position`] and the replay keep them,
+    /// so no row pins it; it stays in case a later change breaks that order.
     fn publish_hold(&self) {
         let oldest = self
             .lines
             .values()
-            .filter_map(|line| {
-                line.iter().find_map(|item| match item {
-                    LineItem::Event { position, .. } | LineItem::Load { position, .. } => {
-                        Some(*position)
-                    }
-                    LineItem::Read { .. } => None,
-                })
-            })
+            .flatten()
+            .filter_map(LineItem::position)
+            .chain(
+                self.unowned_downloads
+                    .iter()
+                    .map(|download| download.position),
+            )
             .min();
         self.progress.hold_from(oldest);
     }
@@ -2375,9 +2521,6 @@ impl Watcher {
                     position: ingress.0.saturating_sub(1),
                     kind,
                 });
-            // Its hold is published before the loop counts it read. It is right even while
-            // `advance_lines` holds the tab's later events aside: each is newer than this load.
-            self.publish_hold();
             return;
         }
         self.record_load(target, kind);
@@ -2798,6 +2941,28 @@ async fn window_kind(
             .map_or(WindowKind::Tab, |_popup| WindowKind::Window),
         Err(_unknown) => WindowKind::Tab,
     }
+}
+
+/// Inserts `item`, an event read at `position`, into `line` right after the last item that must
+/// come before it: an event read earlier, or a read that was out when it was read (index 0 when
+/// none is). Not before the first read started later: a read a replayed load queued can stand at
+/// the line's front with a late start, and the tab's older events behind it still come first.
+/// A released download goes there, so it replays before every newer event of its tab, its
+/// frame's removal among them.
+fn place_by_position(line: &mut TabLine, position: u64, item: LineItem) {
+    let at = line
+        .iter()
+        .rposition(|queued| match queued {
+            LineItem::Event {
+                position: queued, ..
+            }
+            | LineItem::Load {
+                position: queued, ..
+            } => *queued < position,
+            LineItem::Read { started, .. } => *started <= position,
+        })
+        .map_or(0, |last| last + 1);
+    line.insert(at, item);
 }
 
 /// One frame-tree read for the tracker ([`Watcher::start_seed`]), within [`TREE_READ_WAIT`];
@@ -4142,6 +4307,7 @@ mod crash_tests {
             .or_default()
             .push_back(LineItem::Read {
                 session: SessionId::from("pending-session"),
+                started: 0,
                 answer: TreeAnswer::Out,
             });
         read(
@@ -4351,6 +4517,7 @@ mod seed_tests {
     use super::{
         CONTEXT_ATTACH_WAIT, EventFence, SeededTree, TREE_READ_WAIT, Watcher, WatcherRequest,
     };
+    use crate::DownloadState;
     use crate::events::{EventHub, PageEvent, PageEventKind, Subscription, WatcherProgress};
     use crate::run_state::RunState;
     use crate::snapshot::SnapshotBaselines;
@@ -4679,6 +4846,292 @@ mod seed_tests {
         );
         assert_eq!(tree_reads(&connection, "page")?, 1);
         assert!(watcher.lines.is_empty());
+        Ok(())
+    }
+
+    /// A download's begin and its completion, from the browser's own session.
+    fn download(frame: &str) -> [CdpEvent; 2] {
+        let browser = |method: &str, params: Value| CdpEvent {
+            method: method.to_owned(),
+            params,
+            session_id: None,
+        };
+        [
+            browser(
+                "Browser.downloadWillBegin",
+                json!({ "frameId": frame, "guid": "download", "url": "https://a.test/file.txt",
+                    "suggestedFilename": "file.txt" }),
+            ),
+            browser(
+                "Browser.downloadProgress",
+                json!({ "guid": "download", "state": "completed",
+                    "filePath": "/downloads/file.txt" }),
+            ),
+        ]
+    }
+
+    /// The tab each recorded download was given, in order.
+    fn download_pages(hub: &EventHub) -> Vec<Option<String>> {
+        hub.read_after(0)
+            .records
+            .into_iter()
+            .filter_map(|record| match record.event {
+                PageEvent::Download(download) => Some(download.page.map(|page| page.0)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Whether the download's completion reached the table after its begin.
+    fn completed(hub: &EventHub) -> bool {
+        hub.downloads().get("download").is_some_and(|tracked| {
+            tracked.facts().state == DownloadState::Completed("/downloads/file.txt".into())
+        })
+    }
+
+    /// Tab `tab`'s tree, with a same-process child `child` when one is given.
+    fn tree_with(tab: &str, child: Option<&str>) -> Value {
+        let children: Vec<Value> = child
+            .into_iter()
+            .map(|child| {
+                json!({ "frame": { "id": child, "parentId": tab, "url": "https://a.test/c" } })
+            })
+            .collect();
+        json!({ "frameTree": {
+            "frame": { "id": tab, "loaderId": "seeded", "url": "https://a.test/" },
+            "childFrames": children } })
+    }
+
+    /// Applies `session`'s tree read with `tree`, as the run loop applies an answer.
+    async fn answer(watcher: &mut Watcher, session: &str, tree: Value) {
+        watcher.seeded_tree(SeededTree {
+            session: SessionId::from(session),
+            tree: Some(tree),
+        });
+        watcher.advance_lines().await;
+    }
+
+    /// A download begun by a same-process child that existed before its tab's session reported
+    /// events, while that session's first tree read is out: no event names the child, only the
+    /// tree. The download waits, holding its place in the log, and is recorded with its tab
+    /// once the tree is applied, its completion after it.
+    #[tokio::test]
+    async fn a_download_of_a_child_only_a_read_out_names_is_recorded_with_its_tab() -> TestResult {
+        let connection = TestConnection::new([]);
+        connection.always("Page.getFrameTree", cdp_pending())?;
+        let (hub, mut watcher, _answers) = watcher(&connection);
+        read(&mut watcher, page_attached("page", "tab")).await;
+        for event in download("child") {
+            read(&mut watcher, event).await;
+        }
+        assert_eq!(
+            download_pages(&hub),
+            Vec::<Option<String>>::new(),
+            "it waits"
+        );
+        assert_eq!(
+            watcher.progress.applied_through(),
+            1,
+            "its place in the log is held"
+        );
+
+        answer(&mut watcher, "page", tree_with("tab", Some("child"))).await;
+        assert_eq!(download_pages(&hub), [Some("tab".to_owned())]);
+        assert!(completed(&hub), "its completion followed it");
+        assert_eq!(watcher.progress.applied_through(), 3);
+        Ok(())
+    }
+
+    /// When the reads out at a download's begin end without naming its frame, it is recorded with
+    /// no page, as when no read was out: neither lost nor kept.
+    #[tokio::test]
+    async fn a_download_whose_frame_no_read_names_is_recorded_without_a_page() -> TestResult {
+        let connection = TestConnection::new([]);
+        connection.always("Page.getFrameTree", cdp_pending())?;
+        let (hub, mut watcher, _answers) = watcher(&connection);
+        read(&mut watcher, page_attached("page", "tab")).await;
+        for event in download("elsewhere") {
+            read(&mut watcher, event).await;
+        }
+        answer(&mut watcher, "page", tree_with("tab", None)).await;
+        assert_eq!(download_pages(&hub), [None]);
+        assert!(completed(&hub), "its completion followed it");
+        assert!(watcher.unowned_downloads.is_empty() && watcher.lines.is_empty());
+        assert_eq!(watcher.progress.applied_through(), 3);
+        Ok(())
+    }
+
+    /// A download waits only for the reads out when it began: one that went out after it, which
+    /// a page that keeps adding frames always has, does not keep it waiting.
+    #[tokio::test]
+    async fn a_read_started_after_a_download_does_not_keep_it_waiting() -> TestResult {
+        let connection = TestConnection::new([]);
+        connection.always("Page.getFrameTree", cdp_pending())?;
+        let (hub, mut watcher, _answers) = watcher(&connection);
+        read(&mut watcher, page_attached("a-page", "a")).await;
+        for event in download("b-child") {
+            read(&mut watcher, event).await;
+        }
+        read(&mut watcher, page_attached("b-page", "b")).await;
+        answer(&mut watcher, "a-page", tree_with("a", None)).await;
+        assert_eq!(
+            download_pages(&hub),
+            [None],
+            "recorded while the later read is still out"
+        );
+        assert!(completed(&hub));
+        assert!(
+            watcher.lines.contains_key(&TargetId("b".to_owned())),
+            "the later read is still out"
+        );
+        Ok(())
+    }
+
+    /// A download begun while no tree read is out is recorded at once, with no page when no
+    /// tracker knows its frame.
+    #[tokio::test]
+    async fn a_download_begun_while_no_read_is_out_is_recorded_at_once() -> TestResult {
+        let connection = TestConnection::new([]);
+        let (hub, mut watcher, _answers) = watcher(&connection);
+        for event in download("child") {
+            read(&mut watcher, event).await;
+        }
+        assert_eq!(download_pages(&hub), [None]);
+        assert!(completed(&hub));
+        assert_eq!(watcher.progress.applied_through(), 2);
+        Ok(())
+    }
+
+    /// A child its tab's tree names begins a download while that read is out, and the tab then
+    /// removes it, the removal held behind the read: the download replays before the removal, so
+    /// it is recorded with its tab.
+    #[tokio::test]
+    async fn a_download_whose_child_its_tab_then_removes_keeps_its_tab() -> TestResult {
+        let connection = TestConnection::new([]);
+        connection.always("Page.getFrameTree", cdp_pending())?;
+        let (hub, mut watcher, _answers) = watcher(&connection);
+        read(&mut watcher, page_attached("t-page", "t")).await;
+        for event in download("child") {
+            read(&mut watcher, event).await;
+        }
+        let removed = json!({ "frameId": "child", "reason": "remove" });
+        read(&mut watcher, on("t-page", "Page.frameDetached", removed)).await;
+        answer(&mut watcher, "t-page", tree_with("t", Some("child"))).await;
+        assert_eq!(download_pages(&hub), [Some("t".to_owned())]);
+        assert!(completed(&hub), "its completion followed it");
+        Ok(())
+    }
+
+    /// A download is let go as soon as a tree names its frame, before the other reads out at its
+    /// begin answer: waiting on, its tab's line would replay the child's removal first.
+    #[tokio::test]
+    async fn a_download_is_let_go_as_soon_as_a_tree_names_its_frame() -> TestResult {
+        let connection = TestConnection::new([]);
+        connection.always("Page.getFrameTree", cdp_pending())?;
+        let (hub, mut watcher, _answers) = watcher(&connection);
+        read(&mut watcher, page_attached("u-page", "u")).await;
+        read(&mut watcher, page_attached("t-page", "t")).await;
+        for event in download("child") {
+            read(&mut watcher, event).await;
+        }
+        let removed = json!({ "frameId": "child", "reason": "remove" });
+        read(&mut watcher, on("t-page", "Page.frameDetached", removed)).await;
+        answer(&mut watcher, "t-page", tree_with("t", Some("child"))).await;
+        assert_eq!(
+            download_pages(&hub),
+            [Some("t".to_owned())],
+            "at once, while u's read is out"
+        );
+        assert!(
+            watcher.lines.contains_key(&TargetId("u".to_owned())),
+            "u's read is still out"
+        );
+        Ok(())
+    }
+
+    /// A released download rests in its tab's line at its place, behind the tab's older held
+    /// event, and is recorded after it, with its tab.
+    #[tokio::test]
+    async fn a_released_download_waits_behind_its_tab_s_older_events() -> TestResult {
+        let connection = TestConnection::new([]);
+        connection.always("Page.getFrameTree", cdp_pending())?;
+        connection.always("Page.enable", cdp_pending())?;
+        let (hub, mut watcher, _answers) = watcher(&connection);
+        read(&mut watcher, page_attached("t-page", "t")).await;
+        // An out-of-process frame of t attaches: its read holds t's later events.
+        let frame = json!({ "sessionId": "tf",
+            "targetInfo": { "targetId": "tf", "type": "iframe", "url": "https://tf.test/" } });
+        read(&mut watcher, on("t-page", "Target.attachedToTarget", frame)).await;
+        let older = json!({ "frameId": "older", "parentFrameId": "t" });
+        read(&mut watcher, on("t-page", "Page.frameAttached", older)).await;
+        for event in download("child") {
+            read(&mut watcher, event).await;
+        }
+        answer(&mut watcher, "t-page", tree_with("t", Some("child"))).await;
+        assert_eq!(
+            download_pages(&hub),
+            Vec::<Option<String>>::new(),
+            "it waits behind the older event"
+        );
+        assert_eq!(
+            watcher.progress.applied_through(),
+            2,
+            "the older event is held"
+        );
+
+        let tf_tree = json!({ "frameTree": { "frame": { "id": "tf", "parentId": "t", "url": "https://tf.test/" } } });
+        answer(&mut watcher, "tf", tf_tree).await;
+        let order: Vec<String> = hub
+            .read_after(0)
+            .records
+            .into_iter()
+            .filter_map(|record| match record.event {
+                PageEvent::FrameLifecycle(event) => Some(event.frame.id.0),
+                PageEvent::Download(download) => {
+                    Some(format!("download {:?}", download.page.map(|page| page.0)))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(order, ["older", "download Some(\"t\")"], "in t's own order");
+        assert!(completed(&hub));
+        Ok(())
+    }
+
+    /// A read of the download's own tab that started after the download began does not keep it:
+    /// once the tab's earlier read names its frame, the download goes in ahead of that later
+    /// read, at its place, and is recorded at once with its tab.
+    #[tokio::test]
+    async fn a_later_read_in_the_download_s_own_tab_does_not_keep_it() -> TestResult {
+        let connection = TestConnection::new([]);
+        connection.always("Page.getFrameTree", cdp_pending())?;
+        connection.always("Page.enable", cdp_pending())?;
+        let (hub, mut watcher, _answers) = watcher(&connection);
+        read(&mut watcher, page_attached("t-page", "t")).await;
+        for event in download("child") {
+            read(&mut watcher, event).await;
+        }
+        // An out-of-process frame of t attaches after the begin: its read stands in t's line and
+        // never answers.
+        let frame = json!({ "sessionId": "tf",
+            "targetInfo": { "targetId": "tf", "type": "iframe", "url": "https://tf.test/" } });
+        read(&mut watcher, on("t-page", "Target.attachedToTarget", frame)).await;
+        answer(&mut watcher, "t-page", tree_with("t", Some("child"))).await;
+        assert_eq!(
+            download_pages(&hub),
+            [Some("t".to_owned())],
+            "at once, ahead of the frame's later read"
+        );
+        assert!(completed(&hub), "its completion followed it");
+        assert!(
+            watcher.lines.contains_key(&TargetId("t".to_owned())),
+            "the frame's read is still out"
+        );
+        assert_eq!(
+            watcher.progress.applied_through(),
+            4,
+            "nothing of t is held"
+        );
         Ok(())
     }
 
