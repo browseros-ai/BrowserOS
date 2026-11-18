@@ -4782,8 +4782,8 @@ mod seed_tests {
     use tokio::{task, time};
 
     use super::{
-        CONTEXT_ATTACH_WAIT, DIALOG_GRACE, EventFence, REAP, SeededTree, TICK, TREE_READ_WAIT,
-        Watcher, WatcherRequest,
+        CONTEXT_ATTACH_WAIT, DIALOG_GRACE, EventFence, FrameId, PageState, REAP, SeededTree, TICK,
+        TREE_READ_WAIT, Watcher, WatcherRequest,
     };
     use crate::DownloadState;
     use crate::events::{EventHub, PageEvent, PageEventKind, Subscription, WatcherProgress};
@@ -5944,6 +5944,103 @@ mod seed_tests {
         assert!(completed(&hub), "its completion followed it");
         assert!(watcher.unowned_downloads.is_empty() && watcher.lines.is_empty());
         assert_eq!(watcher.progress.applied_through(), 4, "the hold moved on");
+        Ok(())
+    }
+
+    /// Discovery fills a tab's URL only on a page past `Pending`: a pending tab it lists with a URL
+    /// stays pending, and its observer, which the door admits only on a known allowed URL, sends
+    /// nothing of a page domain and is no lifecycle source. So the URL that lets a seed out is
+    /// always one that reported its tab.
+    #[tokio::test]
+    async fn discovery_gives_a_pending_tab_no_url() -> TestResult {
+        let connection = TestConnection::new([]);
+        for (method, answer) in [
+            (
+                "Target.getTargets",
+                json!({ "targetInfos": [
+                    { "targetId": "tab", "type": "page", "url": "https://a.test/" } ] }),
+            ),
+            ("Target.setDiscoverTargets", json!({})),
+            ("Browser.setDownloadBehavior", json!({})),
+            ("Target.setAutoAttach", json!({})),
+            ("Page.enable", json!({})),
+        ] {
+            connection.always(method, answer)?;
+        }
+        connection.always("Page.getFrameTree", tree_with("tab", None))?;
+        let (hub, mut watcher, _answers) = watcher(&connection);
+        read(&mut watcher, target_created("tab", "")).await;
+        watcher.discover(false).await?;
+        watcher.observe_workers(TargetId("tab".to_owned())).await;
+        let observer = observer(&watcher)?;
+        settle().await;
+        assert_eq!(
+            page_domain_calls(&connection, &observer)?,
+            Vec::<String>::new(),
+            "no seed and no Page.enable on discovery's URL"
+        );
+        assert!(!watcher.lifecycle_sources.accepts(&observer));
+        assert!(
+            matches!(
+                watcher
+                    .pages
+                    .get(&TargetId("tab".to_owned()))
+                    .map(|page| &page.state),
+                Some(PageState::Pending { .. })
+            ),
+            "the fill did not report it"
+        );
+        assert_eq!(tab_records(&hub), Vec::<String>::new());
+        Ok(())
+    }
+
+    /// A tab's own `Target.targetDestroyed`, replayed from its line, ends the reads that went into
+    /// the line behind it, as `destroyed` ends those of a line it finds: an out-of-process frame's
+    /// read that went out after the destroy was read puts nothing in the gone tab's tracker when
+    /// its tree lands, and leaves no retry.
+    #[tokio::test]
+    async fn a_tab_s_replayed_destroy_ends_the_reads_behind_it() -> TestResult {
+        let connection = TestConnection::new([]);
+        connection.always("Page.getFrameTree", cdp_pending())?;
+        connection.always("Page.enable", cdp_pending())?;
+        let (hub, mut watcher, _answers) = watcher(&connection);
+        read(&mut watcher, target_created("t", "https://t.test/")).await;
+        read(&mut watcher, page_attached("t-page", "t")).await;
+        let destroyed = CdpEvent {
+            method: "Target.targetDestroyed".to_owned(),
+            params: json!({ "targetId": "t" }),
+            session_id: None,
+        };
+        read(&mut watcher, destroyed).await;
+        let frame = json!({ "sessionId": "tf",
+            "targetInfo": { "targetId": "tf", "type": "iframe", "url": "https://tf.test/" } });
+        read(&mut watcher, on("t-page", "Target.attachedToTarget", frame)).await;
+        assert_eq!(
+            tab_records(&hub),
+            ["opened t"],
+            "the destroy waits behind the tab's read"
+        );
+
+        answer(&mut watcher, "t-page", tree_with("t", None)).await;
+        assert_eq!(tab_records(&hub), ["opened t", "closed t"]);
+        let tf_tree = json!({ "frameTree": {
+            "frame": { "id": "tf", "parentId": "t", "url": "https://tf.test/" },
+            "childFrames": [
+                { "frame": { "id": "deep", "parentId": "tf", "url": "https://tf.test/deep" } }
+            ] } });
+        answer(&mut watcher, "tf", tf_tree).await;
+        assert!(
+            watcher
+                .lifecycle
+                .owner(&FrameId("deep".to_owned()))
+                .is_none(),
+            "the gone tab's tracker learns no frame from the read behind its destroy"
+        );
+        assert!(
+            watcher.read_retries.is_empty(),
+            "no retry for a session gone with its tab"
+        );
+        assert!(watcher.lines.is_empty());
         Ok(())
     }
 
