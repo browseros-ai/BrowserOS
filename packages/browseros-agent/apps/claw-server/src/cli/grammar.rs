@@ -44,8 +44,8 @@ pub struct Globals {
     pub endpoint: Option<String>,
     /// The product driving this CLI, for tab labelling: claude, codex, cursor, and so on.
     /// Also read from BROWSEROS_AGENT, which is how a harness sets it once.
-    /// Read by hand rather than through clap's `env` feature, which is not
-    /// enabled in the workspace and would unify onto claw-server's build.
+    // Read by hand rather than through clap's `env` feature, which is not enabled in the
+    // workspace and would unify onto claw-server's build.
     #[arg(long, global = true, value_name = "NAME")]
     pub agent: Option<String>,
     /// Wrap the result in a JSON envelope on stdout.

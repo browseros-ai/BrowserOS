@@ -248,3 +248,50 @@ fn no_command_invents_a_tool_the_server_does_not_have() {
         );
     }
 }
+
+/// Every guide an agent reads about the CLI, as shipped.
+const GUIDES: &[(&str, &str)] = &[
+    ("core.md", include_str!("../src/cli/skills/core.md")),
+    (
+        "core-full.md",
+        include_str!("../src/cli/skills/core-full.md"),
+    ),
+    (
+        "SKILL.md",
+        include_str!("../../../resources/skills/browseros-neo-cli/SKILL.md"),
+    ),
+];
+
+/// The guides drift silently when the SDK or a command changes under them, and an agent
+/// believes what it reads. Each pattern here is a mistake a guide has already shipped.
+#[test]
+fn the_guides_never_teach_what_the_sdk_or_cli_rejects() {
+    for (name, text) in GUIDES {
+        for (index, _) in text.match_indices("page.evaluate") {
+            assert!(
+                text[index..].starts_with("page.evaluateInPage"),
+                "{name} teaches page.evaluate, which the runtime rejects"
+            );
+        }
+        assert!(
+            !text.contains("--part result "),
+            "{name} names a part without its extension"
+        );
+        assert!(
+            !text.contains("browseros session"),
+            "{name} teaches a session command the CLI no longer has"
+        );
+    }
+}
+
+/// Help text is what an agent reads when it asks; implementation notes do not belong in it.
+#[test]
+fn help_text_carries_no_implementation_notes() {
+    use clap::CommandFactory;
+    let help = claw_server::cli::grammar::Cli::command()
+        .render_long_help()
+        .to_string();
+    for leak in ["clap", "feature", "workspace"] {
+        assert!(!help.contains(leak), "help mentions {leak}: {help}");
+    }
+}

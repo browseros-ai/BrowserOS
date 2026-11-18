@@ -207,8 +207,10 @@ characters.
 
 The `run` runtime is a bare engine, neither Node nor the page. It has `browser`,
 `console`, `setTimeout`/`clearTimeout` and `sleep`, and nothing else: no
-`fetch`, `require`, `process`, `window`, `document` or `localStorage`. Reach
-into the page through `page.evaluate`, which runs there.
+`fetch`, `require`, `process`, `window`, `document` or `localStorage`. Read a
+page with `page.snapshot`, `page.read` and `page.grep`. `page.evaluateInPage`
+runs code inside the page itself, where the page can watch it, so use it only
+when the user asks for that.
 
 Helpers are saved per host and are hot-loaded as `helpers.<name>(browser, page)`
 where page is the id number. They are only callable inside `run`, even though
@@ -220,10 +222,14 @@ A call whose result exceeds the server's inline budget saves the whole thing
 and names an output id. Read it back without re-running the call:
 
 ```bash
-browseros output <id>                  # list the parts
-browseros output <id> --part result    # one part
-browseros output <id> --part result --offset 16384 --limit 65536
+browseros output <id>                     # list the parts
+browseros output <id> --part read.txt     # the whole part, read to its end
+browseros output <id> --part read.txt --offset 16384 --limit 65536   # one slice
 ```
+
+Part names carry their extension, such as `result.json` or `read.txt`; list
+the parts to see them. Asking for a slice prints, on stderr, how much is left
+and the command for the next one.
 
 The server's own advisory for this names the `read_output` tool, because it is
 written for MCP callers. `browseros output` is the same thing.
@@ -283,7 +289,7 @@ typed into the page and recorded with the call like any other argument.
 
 ```text
 0    success
-1    the tool ran and reported a failure, including a refusal this server makes
+1    the tool ran and reported a failure, including a page that did not load and a refusal this server makes
 2    usage error: bad flag, unknown command, malformed ref, out-of-range value
 3    no browser: nothing answering any endpoint, or the browser link is down
 4    timeout, including a run killed at the server's wall-clock cap
