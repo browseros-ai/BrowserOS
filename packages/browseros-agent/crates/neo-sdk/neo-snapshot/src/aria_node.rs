@@ -61,8 +61,9 @@ pub struct AriaNode {
     #[serde(default, deserialize_with = "present")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub invalid: Option<Invalid>,
-    /// A heading's or tree item's level (`h1` to `h6`, or `aria-level`). Any JSON number, kept as
-    /// it arrived so it is written back unchanged; 0 prints no level.
+    /// A heading's or tree item's level (`h1` to `h6`, or `aria-level`). Any JSON number. Its value
+    /// and whether it was an integer are kept, not its spelling: `1e+21` from the page is written
+    /// back as `1e21`, which a script reads as the same number. 0 prints no level.
     #[serde(default, deserialize_with = "present")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub level: Option<Number>,
@@ -154,8 +155,9 @@ pub enum Invalid {
 }
 
 /// `box`: the element's client rect in its own frame's viewport, each number rounded. Playwright's
-/// renderer prints it as `[box=x,y,width,height]`. Each number is kept as it arrived, so it is
-/// written back unchanged.
+/// renderer prints it as `[box=x,y,width,height]`. Each number's value and whether it was an
+/// integer are kept, not its spelling: `1e+21` is written back as `1e21`, the same number to a
+/// script.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct NodeBox {
