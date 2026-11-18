@@ -309,7 +309,8 @@ pub struct Picture {
     soft: Vec<bool>,
     soft_minimum: usize,
     scale: Scale,
-    half_cpu: bool,
+    /// The encoded half frame keeps its settle delay even if a level moves before the next send.
+    encoded_cpu_half: bool,
     link_kbps: u32,
     last_big: Instant,
     last_change: Instant,
@@ -354,7 +355,7 @@ impl Picture {
             soft: vec![false; height],
             soft_minimum: 0,
             scale: Scale::Full,
-            half_cpu: false,
+            encoded_cpu_half: false,
             link_kbps: 2000,
             last_big: now,
             last_change: now,
@@ -442,7 +443,7 @@ impl Picture {
     pub fn scale_label(&self) -> &'static str {
         match self.scale {
             Scale::Full => "full",
-            Scale::Half if self.half_cpu => "half(cpu)",
+            Scale::Half if self.encoded_cpu_half => "half(cpu)",
             Scale::Half => "half(link)",
         }
     }
@@ -496,7 +497,7 @@ impl Picture {
         {
             if Some(self.link.at) == self.ladder.half && !self.full_return_fits(now) {
                 return Plan {
-                    scale: Scale::Half,
+                    scale: self.scale,
                     sharp_qp: None,
                 };
             }
@@ -552,7 +553,7 @@ impl Picture {
     }
 
     fn full_size_after(&self) -> Duration {
-        if self.scale == Scale::Half && self.half_cpu {
+        if self.scale == Scale::Half && self.encoded_cpu_half {
             CPU_FULL_SIZE_AFTER
         } else {
             FULL_SIZE_AFTER
@@ -653,7 +654,7 @@ impl Picture {
         let soft_key = frame.key && (frame.owner_key || switched || self.idr.is_none());
         self.scale = frame.plan.scale;
         if self.scale == Scale::Half {
-            self.half_cpu = self.ladder.rungs[self.cpu.at].scale == Scale::Half;
+            self.encoded_cpu_half = self.ladder.rungs[self.cpu.at].scale == Scale::Half;
             self.cpu_full_calm_since = None;
         } else if self.cpu_return_pending {
             // Start the failure window when full frames actually resume.
@@ -1487,6 +1488,31 @@ mod tests {
         costly_half_key(&mut p, half);
         assert!(!p.full_return_fits(at(half, 1)));
         assert_eq!(p.still(at(half, 1)).unwrap().scale, Scale::Full);
+    }
+
+    #[test]
+    fn tests_that_small_damage_after_a_full_still_never_starts_half_size() {
+        let t = Instant::now();
+        let mut p = picture(t);
+        let half = to_link_half(&mut p, t);
+        costly_half_key(&mut p, half);
+        let quiet = at(half, 1);
+        let mut full = frame(Scale::Full, 10);
+        full.plan = p.still(quiet).unwrap();
+        full.key = true;
+        full.big = false;
+        full.bytes = 160_000;
+        p.encoded(quiet, full);
+        let next = at(quiet, 11);
+        assert!(p.sharp_qp(next).is_some());
+        assert!(!p.full_return_fits(next));
+        assert_eq!(
+            p.plan(next, Some((10, 26, 16))),
+            Plan {
+                scale: Scale::Full,
+                sharp_qp: None
+            }
+        );
     }
 
     #[test]
