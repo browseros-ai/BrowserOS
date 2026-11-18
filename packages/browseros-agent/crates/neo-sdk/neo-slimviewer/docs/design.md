@@ -21,8 +21,8 @@ Recovery takes one step at a time after sustained headroom. A return to full-siz
 motion must also fit the link's 300 ms keyframe budget. Fresh capacity samples
 set the budget. While half-size traffic is too small to measure, the last sample
 continues to apply until the link has gone 20 seconds without congestion.
-Once damage stops, the full-size settle frame can still go
-out and its acknowledgement measures fresh capacity.
+If the full key exceeds that budget, a full second without a change allows the
+settle frame through. Its acknowledgement measures fresh capacity.
 
 When an owner's acknowledgement window times out, the engine applies the
 quality cap before encoding the next keyframe. It measures delivered bytes,

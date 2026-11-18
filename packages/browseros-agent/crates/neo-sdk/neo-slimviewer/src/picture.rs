@@ -535,7 +535,7 @@ impl Picture {
         if now.saturating_duration_since(at) > CAPACITY_WINDOW {
             return false;
         }
-        let due = self.last_big + self.full_size_after();
+        let due = self.full_size_deadline(now);
         now < due
             && self.estimate(self.crf()).is_some_and(|bytes| {
                 f64::from(bytes) * 0.25 * seconds_per_byte
@@ -568,9 +568,17 @@ impl Picture {
 
     fn deadline_since(&self, now: Instant, since: Instant) -> Option<Instant> {
         if self.scale == Scale::Half {
-            return Some(self.last_big + self.full_size_after());
+            return Some(self.full_size_deadline(now));
         }
         self.sharp_deadline_since(now, since)
+    }
+
+    fn full_size_deadline(&self, now: Instant) -> Instant {
+        if Some(self.link.at) == self.ladder.half && !self.full_return_fits(now) {
+            self.last_change + FULL_SIZE_AFTER
+        } else {
+            self.last_big + self.full_size_after()
+        }
     }
 
     fn sharp_deadline_since(&self, now: Instant, since: Instant) -> Option<Instant> {
@@ -1561,6 +1569,44 @@ mod tests {
         assert!(
             !p.full_return_fits(at(half, 42)),
             "fresh probes always apply"
+        );
+    }
+
+    #[test]
+    fn tests_that_an_expensive_full_still_waits_for_a_second_without_small_changes() {
+        let t = Instant::now();
+        let mut p = picture(t);
+        let half = to_link_half(&mut p, t);
+        costly_half_key(&mut p, half);
+        for n in 1..=30 {
+            let now = half + Duration::from_millis(n * 100);
+            let plan = p.plan(now, Some((10, 26, 16)));
+            assert_eq!(plan.scale, Scale::Half);
+            let mut f = frame(plan.scale, 10);
+            f.big = false;
+            p.encoded(now, f);
+            let gap = now + Duration::from_millis(67);
+            assert!(p.still(gap).is_none());
+            assert_eq!(p.deadline(gap), Some(now + FULL_SIZE_AFTER));
+        }
+        let due = at(half, 4);
+        assert!(p.still(due - Duration::from_millis(1)).is_none());
+        assert_eq!(p.still(due).map(|plan| plan.scale), Some(Scale::Full));
+    }
+
+    #[test]
+    fn tests_that_a_fitting_full_still_keeps_its_deadline_during_small_changes() {
+        let t = Instant::now();
+        let mut p = picture(t);
+        let half = to_link_half(&mut p, t);
+        costly_half_key(&mut p, half);
+        capacity(&mut p, half, 9000.0);
+        let now = half + Duration::from_millis(950);
+        assert_eq!(p.plan(now, Some((10, 26, 16))).scale, Scale::Half);
+        assert_eq!(p.deadline(now), Some(at(half, 1)));
+        assert_eq!(
+            p.still(at(half, 1)).map(|plan| plan.scale),
+            Some(Scale::Full)
         );
     }
 
