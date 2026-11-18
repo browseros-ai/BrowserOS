@@ -15,8 +15,9 @@ slimviewer --display :1 --rfb 127.0.0.1:5900 \
   --listen 127.0.0.1:5910 --listen-view 127.0.0.1:5911
 ```
 
-These are the SDK defaults. Run the binary as the Xvnc user in the same IPC
-namespace. The host serves the page and bridges each authenticated WebSocket
+These are the SDK defaults. Set `NEO_SLIMVIEWER_FPS` in the SDK container to pass
+`--fps` (0.1–240, decimals allowed). Empty or unset keeps the default of 30.
+Run the binary as the Xvnc user in the same IPC namespace. The host serves the page and bridges each authenticated WebSocket
 to the appropriate loopback TCP port. See [Host integration](docs/integrate.md).
 
 | Option | Default | Purpose |
@@ -43,7 +44,15 @@ docker buildx build --output type=local,dest=target/rootfs .
 docker buildx build --target slimviewer-check --output type=cacheonly .
 ```
 
-The release uses OpenH264. To build the full SDK image, run `../neo-server/docker/build.sh`.
+The release builds OpenH264 2.7.0 (BSD-2-Clause) from patched source. By default,
+it skips the 8×8 feature search unless it detects a nonzero scroll vector. This
+saves encode time on typing and small animations while keeping scroll traffic
+close to upstream. Set `SV_OPENH264_FME` when launching the binary directly,
+or `NEO_SLIMVIEWER_FEATURE_SEARCH` in the SDK container. Choose `scroll`
+(default), `always` for upstream behavior, or `never` to save encode time on
+CPU-limited hosts with bandwidth to spare.
+
+To build the full SDK image, run `../neo-server/docker/build.sh`.
 
 ## Build on Linux
 

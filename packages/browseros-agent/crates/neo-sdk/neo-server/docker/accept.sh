@@ -488,7 +488,7 @@ docker network create --internal --label neo-sdk-accept="$run_id" "$network" >/d
 [ -n "$data_dir" ] || docker volume create --label neo-sdk-accept="$run_id" "$volume" >/dev/null
 
 if [ -z "$selected_case" ] || [ "$selected_case" = slimviewer ]; then
-  slimviewer_case slimviewer running -e PUID=2345 -e PGID=2345
+  slimviewer_case slimviewer running -e PUID=2345 -e PGID=2345 -e NEO_SLIMVIEWER_FPS=60
   slimviewer_case slimviewer-disabled disabled -e NEO_SLIMVIEWER=0
   if [ "$selected_case" = slimviewer ]; then
     printf '\n'; printf '%s\n' "${results[@]}"
