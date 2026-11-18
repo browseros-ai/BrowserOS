@@ -572,6 +572,10 @@ fn allowed_service_edge(source: &str, target: &str) -> bool {
             | ("skills", "flow")
             // The decisions worker is reached with the licence billing holds.
             | ("decisions", "billing")
+            // The decisions worker writes skill drafts from the task digest skill_draft builds.
+            | ("decisions", "skill_draft")
+            // A draft's name follows the same neo- naming rule as every saved skill.
+            | ("skill_draft", "skills")
     )
 }
 
