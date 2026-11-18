@@ -220,6 +220,6 @@ browser and do not fall back to another browser tool.
 ## Learning more
 
 ```bash
-browseros skills get core --full     # the complete reference and the gaps
+browseros guide core --full          # the complete reference and the gaps
 browseros <command> --help
 ```

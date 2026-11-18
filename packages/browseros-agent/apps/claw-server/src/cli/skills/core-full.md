@@ -1,7 +1,7 @@
 # browseros: the complete reference
 
 Everything the CLI can do, every flag, and an honest list of what it cannot.
-For the short version, use `browseros skills get core`.
+For the short version, use `browseros guide core`.
 
 ## The model
 

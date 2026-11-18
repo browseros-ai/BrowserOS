@@ -54,7 +54,7 @@ pub const OUTPUT_CHUNK_BYTES: u64 = 64 * 1024;
 const EVAL_TIMEOUT_CAP_MS: f64 = 30_000.0;
 use crate::cli::grammar::{
     CardsCmd, Command, CredentialsCmd, DialogCmd, DiffFlag, GroupCmd, HelpCmd, HelpersCmd,
-    ProfileCmd, SkillCmd, SkillsCmd, TabCmd, TargetCmd, TaskCmd, WindowCmd,
+    ProfileCmd, SkillCmd, TabCmd, TargetCmd, TaskCmd, WindowCmd,
 };
 use crate::cli::refs;
 
@@ -131,8 +131,8 @@ pub enum Local {
         keep_tabs: bool,
         all: bool,
     },
-    SkillsList,
-    SkillsGet {
+    GuideList,
+    GuideGet {
         name: String,
         full: bool,
     },
@@ -262,9 +262,13 @@ pub fn build(command: &Command, external: Option<&str>) -> Result<Plan, Failure>
                     .arg("summary", opt(summary)),
             )
         }
-        Command::Skills(SkillsCmd::List) => Plan::Local(Local::SkillsList),
-        Command::Skills(SkillsCmd::Get { name, full }) => Plan::Local(Local::SkillsGet {
-            name: name.clone(),
+        // `guide --full` alone means the complete reference of the working guide.
+        Command::Guide {
+            name: None,
+            full: false,
+        } => Plan::Local(Local::GuideList),
+        Command::Guide { name, full } => Plan::Local(Local::GuideGet {
+            name: name.clone().unwrap_or_else(|| "core".to_string()),
             full: *full,
         }),
         Command::InstallCli { confirm } => Plan::Local(Local::InstallCli { confirm: *confirm }),

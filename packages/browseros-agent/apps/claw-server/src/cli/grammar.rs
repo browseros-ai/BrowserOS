@@ -393,9 +393,15 @@ pub enum Command {
         destination: Vec<String>,
     },
 
-    /// The CLI's own guides, for an agent learning the API.
-    #[command(subcommand)]
-    Skills(SkillsCmd),
+    /// Read a guide this binary carries, for an agent learning the CLI. With no name,
+    /// list them. Works with no server running.
+    Guide {
+        /// Which guide. `core` is the working guide.
+        name: Option<String>,
+        /// The complete reference: every flag, and what neo cannot do.
+        #[arg(long)]
+        full: bool,
+    },
     /// Offer to link this binary onto PATH. You do not need it: the skill
     /// names the binary by its full path, which always works.
     InstallCli {
@@ -656,16 +662,5 @@ pub enum HelpCmd {
     Wait {
         #[arg(value_name = "ID")]
         request: Option<String>,
-    },
-}
-
-#[derive(Debug, Subcommand)]
-pub enum SkillsCmd {
-    List,
-    Get {
-        #[arg(default_value = "core")]
-        name: String,
-        #[arg(long)]
-        full: bool,
     },
 }

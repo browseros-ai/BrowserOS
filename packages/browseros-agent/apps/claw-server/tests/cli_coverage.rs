@@ -281,6 +281,10 @@ fn the_guides_never_teach_what_the_sdk_or_cli_rejects() {
             !text.contains("browseros session"),
             "{name} teaches a session command the CLI no longer has"
         );
+        assert!(
+            !text.contains("browseros skills"),
+            "{name} teaches `skills`, which is now `guide`"
+        );
     }
 }
 

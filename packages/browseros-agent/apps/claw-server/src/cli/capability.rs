@@ -189,9 +189,7 @@ pub fn teach(command: &str) -> Option<String> {
     if let Some(nearest) = gap.nearest {
         message.push_str(&format!("\n  Closest: {nearest}"));
     }
-    message.push_str(
-        "\n  See: browseros skills get core --full  (section: gaps versus agent-browser)",
-    );
+    message.push_str("\n  See: browseros guide core --full  (section: gaps versus agent-browser)");
     Some(message)
 }
 
@@ -227,7 +225,7 @@ mod tests {
     fn an_agent_browser_habit_gets_the_nearest_neo_command() {
         let message = teach("cookies").unwrap_or_default();
         assert!(message.contains("Network.getCookies"), "{message}");
-        assert!(message.contains("skills get core --full"), "{message}");
+        assert!(message.contains("guide core --full"), "{message}");
     }
 
     #[test]

@@ -294,11 +294,11 @@ async fn run_tool(
 /// The locals that need neither the network nor a browser.
 fn run_offline(local: &Local) -> Result<Option<Code>> {
     match local {
-        Local::SkillsList => {
+        Local::GuideList => {
             io::out(&guides::list());
             Ok(Some(Code::Ok))
         }
-        Local::SkillsGet { name, full } => match guides::get(name, *full) {
+        Local::GuideGet { name, full } => match guides::get(name, *full) {
             Some(body) => {
                 io::out(body);
                 Ok(Some(Code::Ok))
@@ -339,10 +339,9 @@ async fn run_local(client: &mut Client, globals: &Globals, local: Local) -> Resu
         } => task_start(client, name, category, summary),
         Local::TaskDone { keep_tabs, all } => task_done(client, keep_tabs, all).await,
         // Already answered by run_offline before the server was contacted.
-        Local::SkillsList
-        | Local::SkillsGet { .. }
-        | Local::TaskList
-        | Local::InstallCli { .. } => Ok(Code::Ok),
+        Local::GuideList | Local::GuideGet { .. } | Local::TaskList | Local::InstallCli { .. } => {
+            Ok(Code::Ok)
+        }
     }
 }
 
@@ -830,7 +829,7 @@ fn command_label(command: &Command) -> &'static str {
         Command::Skill(_) => "skill",
         Command::Help(_) => "help",
         Command::Pursue { .. } => "pursue",
-        Command::Skills(_) => "skills",
+        Command::Guide { .. } => "guide",
         Command::InstallCli { .. } => "install-cli",
     }
 }

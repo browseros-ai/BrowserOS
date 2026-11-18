@@ -139,11 +139,11 @@ browser tool.
 ## Learning the rest
 
 ```bash
-browseros skills get core          # the working guide
-browseros skills get core --full   # every flag, and what neo cannot do
+browseros guide core          # the working guide
+browseros guide core --full   # every flag, and what neo cannot do
 browseros <command> --help
 ```
 
-`skills get` works with no server running. If `browseros` is not on PATH, the
+`guide` works with no server running. If `browseros` is not on PATH, the
 binary ships inside the BrowserOS neo application bundle under
 `resources/bin/browseros`, and `browseros install-cli` offers to link it.

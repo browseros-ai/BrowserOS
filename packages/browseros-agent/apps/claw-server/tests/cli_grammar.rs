@@ -423,8 +423,8 @@ fn locals_never_become_tool_calls() {
     assert_eq!(local(&["browseros", "use", "7"]), Local::Use(7));
     assert_eq!(local(&["browseros", "task", "list"]), Local::TaskList);
     assert_eq!(
-        local(&["browseros", "skills", "get", "core", "--full"]),
-        Local::SkillsGet {
+        local(&["browseros", "guide", "core", "--full"]),
+        Local::GuideGet {
             name: "core".into(),
             full: true
         }
@@ -712,4 +712,19 @@ fn a_task_name_the_server_would_refuse_is_refused_up_front() {
         refused(&["browseros", "task", "start", "--name", "!!!"]).contains("letters or digits")
     );
     assert!(refused(&["browseros", "task", "start", "--name", &"a".repeat(65)]).contains("64"));
+}
+
+/// The built-in guides are `guide`, one word apart from nothing else: `skills` sat one letter
+/// from `skill`, which saves and runs the user's own skills, and agents typed the wrong one.
+#[test]
+fn the_guides_are_browseros_guide() {
+    assert_eq!(local(&["browseros", "guide"]), Local::GuideList);
+    assert_eq!(
+        local(&["browseros", "guide", "--full"]),
+        Local::GuideGet {
+            name: "core".into(),
+            full: true
+        }
+    );
+    assert!(Cli::try_parse_from(["browseros", "skills", "list"]).is_err());
 }

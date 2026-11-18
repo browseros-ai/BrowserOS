@@ -9,7 +9,7 @@
 //!
 //! Embedded with `include_str!` rather than a crate, because two markdown
 //! files do not justify a dependency and embedding is what makes
-//! `skills get core` work with no network and no install step.
+//! `guide core` work with no network and no install step.
 
 const CORE: &str = include_str!("skills/core.md");
 const CORE_FULL: &str = include_str!("skills/core-full.md");
@@ -38,11 +38,11 @@ pub fn get(name: &str, full: bool) -> Option<&'static str> {
     })
 }
 
-/// What `skills list` prints.
+/// What `guide` prints with no name.
 #[must_use]
 pub fn list() -> String {
     let mut lines = vec![
-        "Guides carried by this binary. Read one with: browseros skills get <name>".to_string(),
+        "Guides carried by this binary. Read one with: browseros guide <name>".to_string(),
         String::new(),
     ];
     for guide in GUIDES {
