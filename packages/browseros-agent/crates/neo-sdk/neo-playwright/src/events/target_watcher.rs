@@ -402,8 +402,9 @@ struct Watcher {
     /// Download begins waiting for the tree reads that were out when they were read, oldest first.
     /// Each is let go only when [`Self::advance_lines`] pops a read (`release_downloads`), so its
     /// release depends on every read in a line being popped, as each is once its answer comes back
-    /// within [`TREE_READ_WAIT`]. A change that drops a line with a read in it (a tab closing) must
-    /// release the downloads waiting for that read too, or one would hold every reply's synchronize.
+    /// within [`TREE_READ_WAIT`]. So no line with a read in it is ever dropped: a closing tab's
+    /// reads are ended and popped as failed ones (`end_reads`), or a download waiting for one would
+    /// hold every reply's synchronize.
     unowned_downloads: Vec<UnownedDownload>,
     /// Each untouched tab's attach of core's page session for a context-level listener, while
     /// out or until the next pass replaces it ([`Watcher::attach_page`]).
@@ -1140,7 +1141,10 @@ impl Watcher {
                 state: PageState::Reported,
                 url: None,
             });
-            if !url.is_empty() {
+            // Only on a page past `Pending`: the URL that admits a tab's seed (`door_verdict`) is
+            // always one that took its page out of `Pending` (`created`, `info_changed`), so a
+            // seeded tab is a reported one, and a removal records its `Closed`.
+            if !url.is_empty() && !matches!(page.state, PageState::Pending { .. }) {
                 page.url = Some(url);
             }
         }
@@ -1448,6 +1452,16 @@ impl Watcher {
         self.attach_log.forget(target);
         self.baselines.tab_closed(target);
         self.lifecycle.forget(target);
+        // Its line stays: a waiting download is let go only as a read is popped, and the hold
+        // counts every item, so a dropped read could park a download and hold every reply's
+        // synchronize for good. Its reads end instead, as failed ones, and the next
+        // `advance_lines` pops them: no tree goes into the tracker just forgotten, and no retry
+        // is due for a session that went with the tab. Events held behind them replay onto a
+        // tab already gone.
+        if let Some(line) = self.lines.get_mut(target) {
+            end_reads(line);
+        }
+        self.read_retries.retain(|_, retry| retry.tab != *target);
         self.attaching.remove(target);
         let Some(page) = self.pages.remove(target) else {
             return;
@@ -1464,7 +1478,6 @@ impl Watcher {
             self.frame_logs.remove(session);
             self.recorded.forget(session);
             self.lifecycle_sources.detach(session);
-            self.read_retries.remove(session);
         }
         match page.state {
             PageState::Reported => {
@@ -2452,8 +2465,20 @@ impl Watcher {
     ///   (held, the reads of a page that keeps adding frames would go out one at a time);
     /// - a session's execution-context bookkeeping, which a binding call, arriving on a
     ///   channel of its own, needs in arrival order to name its frame.
+    ///
+    /// A target's `Target.targetCreated` and `Target.targetInfoChanged` never wait, whatever
+    /// session carries them: they are the browser's facts about a target, which Chromium sends
+    /// on the browser's session, never a tab's (so on Chromium this changes nothing). Held behind
+    /// a read, the change that gives a tab its URL would leave it `Pending` meanwhile, and a
+    /// discovery that removed it then would record no `Closed` for a tab already open.
     fn line_for(&self, event: &CdpEvent) -> Option<TargetId> {
         if self.lines.is_empty() {
+            return None;
+        }
+        if matches!(
+            event.method.as_str(),
+            "Target.targetCreated" | "Target.targetInfoChanged"
+        ) {
             return None;
         }
         let named = |key: Option<&str>| key.and_then(|key| self.held_attachments.get(key));
@@ -2541,7 +2566,8 @@ impl Watcher {
     }
 
     /// A session's tree came back: its read in the line is answered, to be applied in order by
-    /// [`Self::advance_lines`].
+    /// [`Self::advance_lines`]. A read its tab's end already answered (`end_reads`) is no longer
+    /// out, so the tree of a gone tab is dropped here.
     fn seeded_tree(&mut self, SeededTree { session, tree }: SeededTree) {
         let read = self
             .lines
@@ -2592,7 +2618,8 @@ impl Watcher {
                         if let Some(observer) = self.root_observers.get_mut(&session) {
                             observer.recovery = RecoveryObservation::On;
                         }
-                    } else {
+                    } else if self.sessions.contains_key(&session) {
+                        // A session gone with its tab, or detached, has nothing to read again.
                         self.retry_later(&tab, session, read);
                     }
                     self.release_downloads().await;
@@ -2602,10 +2629,18 @@ impl Watcher {
                     // What the event queues for its own tab (a load event's new read and the load
                     // behind it, `page_load`) goes ahead of the tab's events read after it, as
                     // when an event is handled as it is read: those come back behind it.
+                    // The tab's own `Target.targetDestroyed` ends the reads behind it, as
+                    // `destroyed` ends the reads of the line it finds.
+                    let destroys = event.method == "Target.targetDestroyed"
+                        && event.params.get("targetId").and_then(Value::as_str)
+                            == Some(tab.as_str());
                     let later = self.lines.remove(&tab);
                     self.handle_at(event, EventFence(position.saturating_add(1)))
                         .await;
-                    if let Some(later) = later {
+                    if let Some(mut later) = later {
+                        if destroys {
+                            end_reads(&mut later);
+                        }
                         self.lines.entry(tab).or_default().extend(later);
                     }
                 }
@@ -3155,6 +3190,17 @@ async fn window_kind(
             .filter(|window| window.window_type != "normal")
             .map_or(WindowKind::Tab, |_popup| WindowKind::Window),
         Err(_unknown) => WindowKind::Tab,
+    }
+}
+
+/// Ends every read in a gone tab's line ([`Watcher::destroyed`]): each counts as answered with no
+/// tree, a tree already back included, so popping it seeds nothing; a read's own answer, landing
+/// later, finds no read out and is dropped (`seeded_tree`).
+fn end_reads(line: &mut TabLine) {
+    for item in line {
+        if let LineItem::Read { answer, .. } = item {
+            *answer = TreeAnswer::Back(None);
+        }
     }
 }
 
@@ -4858,6 +4904,31 @@ mod seed_tests {
             .collect()
     }
 
+    /// The log's tab records, in order: each tab opened or closed, by its target.
+    fn tab_records(hub: &EventHub) -> Vec<String> {
+        hub.read_after(0)
+            .records
+            .into_iter()
+            .filter_map(|record| match record.event {
+                PageEvent::Opened(page) => Some(format!("opened {}", page.target.as_str())),
+                PageEvent::Closed(target) => Some(format!("closed {}", target.as_str())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Answers discovery's calls, `Target.getTargets` listing no tab.
+    fn discovery_lists_nothing(connection: &TestConnection) -> TestResult {
+        for (method, answer) in [
+            ("Target.getTargets", json!({ "targetInfos": [] })),
+            ("Target.setDiscoverTargets", json!({})),
+            ("Browser.setDownloadBehavior", json!({})),
+        ] {
+            connection.always(method, answer)?;
+        }
+        Ok(())
+    }
+
     /// How many tree reads went to `session`.
     fn tree_reads(connection: &TestConnection, session: &str) -> Result<usize, Box<dyn Error>> {
         Ok(connection
@@ -5796,6 +5867,83 @@ mod seed_tests {
             "its seed starts on the change that brings an allowed page"
         );
         assert!(watcher.lifecycle_sources.accepts(&observer));
+        Ok(())
+    }
+
+    /// A tab's own target events never wait in its line, whatever session carries them: the
+    /// change that gives a `Pending` tab its URL is applied while a read of core's session is out,
+    /// so a discovery that removes the tab then finds it reported and records its `Closed`.
+    /// Chromium sends the change on the browser's session; here it comes on the tab's own.
+    #[tokio::test]
+    async fn a_tab_s_target_events_never_wait_in_its_line() -> TestResult {
+        let connection = TestConnection::new([]);
+        discovery_lists_nothing(&connection)?;
+        connection.always("Page.getFrameTree", cdp_pending())?;
+        let (hub, mut watcher, _answers) = watcher(&connection);
+        read(&mut watcher, target_created("tab", "")).await;
+        read(&mut watcher, page_attached("page", "tab")).await;
+        assert!(
+            watcher.lines.contains_key(&TargetId("tab".to_owned())),
+            "core's read of the tab is out"
+        );
+        let mut change = info_changed("tab", "https://a.test/");
+        change.session_id = Some(SessionId::from("page"));
+        read(&mut watcher, change).await;
+        assert_eq!(
+            tab_records(&hub),
+            ["opened tab"],
+            "its URL change was applied at once"
+        );
+
+        watcher.discover(false).await?;
+        assert_eq!(tab_records(&hub), ["opened tab", "closed tab"]);
+        Ok(())
+    }
+
+    /// A tab that discovery removes while a read of it is out keeps its line, the read ending as
+    /// a failed one: the read's tree, landing later, puts nothing in the gone tab's tracker, no
+    /// retry is due for its session, and a download waiting for that read is let go, with the
+    /// hold behind it.
+    #[tokio::test]
+    async fn a_tab_gone_with_a_read_out_ends_the_read_as_a_failed_one() -> TestResult {
+        let connection = TestConnection::new([]);
+        discovery_lists_nothing(&connection)?;
+        connection.always("Page.getFrameTree", cdp_pending())?;
+        let (hub, mut watcher, _answers) = watcher(&connection);
+        read(&mut watcher, target_created("tab", "https://a.test/")).await;
+        read(&mut watcher, page_attached("page", "tab")).await;
+        for event in download("child") {
+            read(&mut watcher, event).await;
+        }
+        assert_eq!(
+            download_pages(&hub),
+            Vec::<Option<String>>::new(),
+            "it waits for the read"
+        );
+        assert_eq!(watcher.progress.applied_through(), 2, "its place is held");
+
+        watcher.discover(false).await?;
+        assert_eq!(tab_records(&hub), ["opened tab", "closed tab"]);
+        answer(&mut watcher, "page", tree_with("tab", Some("child"))).await;
+        assert!(
+            watcher
+                .lifecycle
+                .main(&TargetId("tab".to_owned()))
+                .is_none(),
+            "the gone tab's tracker stays empty"
+        );
+        assert!(
+            watcher.read_retries.is_empty(),
+            "no retry for a session gone with its tab"
+        );
+        assert_eq!(
+            download_pages(&hub),
+            [None],
+            "the download was let go, with no page"
+        );
+        assert!(completed(&hub), "its completion followed it");
+        assert!(watcher.unowned_downloads.is_empty() && watcher.lines.is_empty());
+        assert_eq!(watcher.progress.applied_through(), 4, "the hold moved on");
         Ok(())
     }
 
