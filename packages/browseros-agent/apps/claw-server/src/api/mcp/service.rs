@@ -4761,4 +4761,72 @@ mod tests {
         assert_ne!(cli.session.id().as_str(), "an-mcp-session");
         Ok(())
     }
+
+    /// The legacy path's teardown on transport close must not move: it is how a legacy MCP
+    /// agent's session ends when the agent disconnects.
+    #[tokio::test]
+    async fn a_legacy_session_still_ends_when_its_transport_closes() -> anyhow::Result<()> {
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let state = call.state.clone();
+        let service = ClawMcpService::new(call.state);
+        let transport = SessionId::new("legacy-transport");
+        service
+            .ensure_session_started(transport.clone())
+            .await
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        assert!(state.sessions.lookup(&transport).await.is_some());
+
+        drop(service);
+        // Drop hands the teardown to a spawned task.
+        for _ in 0..400 {
+            if state.sessions.lookup(&transport).await.is_none() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        assert!(state.sessions.lookup(&transport).await.is_none());
+        assert!(matches!(
+            state.sessions.retirement_of(&transport).await,
+            Some(RetirementCause::Closed)
+        ));
+        Ok(())
+    }
+
+    /// A stateless 2026-07-28 session is never torn down by Drop, because rmcp serves each
+    /// such request on a service instance of its own. A CLI task's lifetime rests on this.
+    #[tokio::test]
+    async fn a_stateless_session_survives_its_service_being_dropped() -> anyhow::Result<()> {
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let state = call.state.clone();
+        let service = ClawMcpService::new(call.state);
+        let (_, handle) = service
+            .resolve_modern_session(None, None, None)
+            .await
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+
+        drop(service);
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert!(state.sessions.lookup(&handle).await.is_some());
+        Ok(())
+    }
+
+    /// The `group` argument is the CLI's alone. No MCP client, legacy or modern, is offered
+    /// it, so their tool schemas do not move when the CLI's surface does.
+    #[tokio::test]
+    async fn no_mcp_client_is_offered_the_cli_group_argument() -> anyhow::Result<()> {
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let service = ClawMcpService::new(call.state);
+        for modern in [false, true] {
+            for tool in service.listed_tools(modern) {
+                let schema = Value::Object(tool.input_schema.as_ref().clone());
+                assert_eq!(
+                    schema["properties"][task_group::FIELD],
+                    Value::Null,
+                    "{} offers the CLI's group argument to an MCP client",
+                    tool.name
+                );
+            }
+        }
+        Ok(())
+    }
 }

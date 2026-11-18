@@ -2255,4 +2255,83 @@ mod tests {
         assert!(registry.lookup(&id).await.is_some());
         Ok(())
     }
+
+    /// Owning a tab group must never exempt an MCP session from the idle sweep. Every
+    /// automatic-grouping session owns one, so an exemption keyed on the group would make
+    /// all of them immortal.
+    #[tokio::test]
+    async fn an_mcp_session_that_owns_a_group_still_ends_on_the_idle_sweep() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let (audit_log, session_tabs) = repositories(&dir).await?;
+        let registry = Sessions::new(
+            audit_log,
+            session_tabs,
+            Duration::from_secs(5),
+            Duration::from_secs(5),
+            Duration::from_secs(60),
+            Duration::from_secs(1),
+        );
+        let session = Session::new(
+            SessionId::new("s1"),
+            ClientIdentity::Ephemeral {
+                slug: "a1".to_string(),
+                label: "A1".to_string(),
+            },
+            ConversationIdentity::new("a1", "agile-alpaca".to_string()),
+            "Codex".to_string(),
+            Instant::now(),
+        );
+        registry
+            .ownership()
+            .set_tab_group(session.convo_id().clone(), Some("G1".to_string()), None)
+            .await;
+        registry.insert_for_testing(session).await;
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_secs(6)).await;
+        tokio::time::resume();
+
+        assert_eq!(registry.sweep_idle().await?, 1);
+        assert_eq!(registry.count().await, 0);
+        Ok(())
+    }
+
+    /// The completion sweep likewise ends an idle MCP session whatever group it owns.
+    #[tokio::test]
+    async fn an_mcp_session_that_owns_a_group_still_completes_when_idle() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let (audit_log, session_tabs) = repositories(&dir).await?;
+        let registry = Sessions::new(
+            audit_log,
+            session_tabs,
+            Duration::from_secs(600),
+            Duration::from_millis(1),
+            Duration::from_secs(60),
+            Duration::from_secs(1),
+        );
+        let session = registry
+            .mint(
+                ClientIdentity::Ephemeral {
+                    slug: "agent".to_string(),
+                    label: "Agent".to_string(),
+                },
+                ClientInfo {
+                    name: "Agent".to_string(),
+                    version: "1".to_string(),
+                    title: None,
+                },
+            )
+            .await?;
+        let id = session.id().clone();
+        registry
+            .ownership()
+            .set_tab_group(session.convo_id().clone(), Some("G1".to_string()), None)
+            .await;
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_secs(5)).await;
+        tokio::time::resume();
+
+        assert_eq!(registry.sweep_idle().await?, 1);
+        assert!(registry.lookup(&id).await.is_none());
+        Ok(())
+    }
 }
