@@ -552,6 +552,16 @@ impl BrowserView {
     /// Publish native creation authority before returning to the host. Bound creation records
     /// it before readiness; unbound readiness retains the same private authority in PageManager.
     /// Later reads may refresh presentation fields, but cannot replace this target or epoch.
+    /// Every page this call created, including any whose open went on to fail or was abandoned
+    /// part way. Recorded the moment the tab exists, before it is grouped or navigated.
+    #[must_use]
+    pub fn created_pages(&self) -> Vec<PageId> {
+        self.creation_receipts
+            .read()
+            .map(|receipts| receipts.keys().cloned().collect())
+            .unwrap_or_default()
+    }
+
     fn retain_created_page(&self, creation: PageCreation) -> Result<(), CoreError> {
         let mut receipts = self
             .creation_receipts

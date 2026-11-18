@@ -11,6 +11,10 @@ pub fn apply(
     context: ToolEffectContext<'_>,
 ) -> BoxFuture<'_, anyhow::Result<Option<browseros_mcp::ToolResult>>> {
     Box::pin(async move {
+        // Before the error check: a run that failed or was abandoned still opened its pages.
+        if context.call.tool().name == "run" {
+            claim_run_pages(&context).await;
+        }
         if context.result.is_error {
             return Ok(None);
         }
@@ -59,6 +63,32 @@ pub fn apply(
         }
         Ok(None)
     })
+}
+
+/// Every page a run opened is the agent's, whether the run finished, failed or was abandoned.
+/// The script hook claims a page only once its open fully succeeds, so a page whose group add
+/// or load failed, or whose open was still in flight when the run ended, was left unclaimed,
+/// and an unclaimed tab reads as the user's: the one an agent is told to leave alone. A page
+/// someone already owns is never taken.
+async fn claim_run_pages(context: &ToolEffectContext<'_>) {
+    let (Some(identity), Some(view)) = (&context.call.identity, &context.call.view) else {
+        return;
+    };
+    let ownership = context.call.state.sessions.ownership();
+    for page in view.created_pages() {
+        if ownership.owner_of_page(&page).await.is_some() {
+            continue;
+        }
+        record_new_page(
+            &context.call.state,
+            identity,
+            context.call.browser_session.as_ref(),
+            context.call.session_id.as_str(),
+            page.0,
+            context.call.started_at_ms,
+        )
+        .await;
+    }
 }
 
 /// Records a newly created page as owned by the agent: tab activity, the
@@ -380,5 +410,65 @@ mod tests {
                 .is_empty()
         );
         Ok(())
+    }
+
+    /// A run that opened a page and then failed still owns the page. Before, the page was
+    /// claimed only when its open fully succeeded, so a failed or abandoned run left tabs that
+    /// read as the user's, the ones an agent is told to leave alone.
+    #[tokio::test]
+    async fn a_failed_runs_pages_are_still_its_own() -> anyhow::Result<()> {
+        use crate::api::mcp::test_support::{ProfileConnection, current_session, tool_call};
+        let transport = ProfileConnection::new();
+        let browser = current_session(transport.clone());
+        browser.pages.list().await?;
+        let mut call = tool_call("run", serde_json::json!({ "code": "return 1" })).await?;
+        call.browser_session = Some(browser.clone());
+        let view = browser_core_view(&browser).await;
+        let opened = view
+            .open_page(
+                "about:blank",
+                browseros_core::pages::NewPageOptions::default(),
+            )
+            .await?;
+        call.view = Some(view);
+        let failed = browseros_mcp::ToolResult::error("the script threw after opening a page");
+
+        apply(ToolEffectContext {
+            call: &call,
+            result: &failed,
+            cancelled: false,
+            duration_ms: 1,
+        })
+        .await?;
+
+        let key = call
+            .identity
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("identity missing"))?
+            .ownership_key
+            .clone();
+        assert_eq!(
+            call.state
+                .sessions
+                .ownership()
+                .owner_of_page(&opened.page.page_id)
+                .await
+                .as_ref(),
+            Some(&key)
+        );
+        Ok(())
+    }
+
+    async fn browser_core_view(
+        browser: &Arc<BrowserSession>,
+    ) -> browseros_core::target::BrowserView {
+        browseros_core::target::BrowserView::capture(
+            browser.clone(),
+            Some(crate::api::mcp::test_support::ProfileConnection::binding(
+                "eng", 1, 1,
+            )),
+            None,
+        )
+        .await
     }
 }
