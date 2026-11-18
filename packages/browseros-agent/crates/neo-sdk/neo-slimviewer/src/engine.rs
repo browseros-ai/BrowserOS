@@ -765,6 +765,15 @@ struct Stats {
     delayed: u32,
 }
 
+fn take_tick(now: Instant, due: &mut Instant) -> Option<f32> {
+    if now < *due {
+        return None;
+    }
+    let elapsed = Duration::from_secs(1) + (now - *due);
+    *due = now + Duration::from_secs(1);
+    Some(elapsed.as_secs_f32())
+}
+
 pub fn run(cfg: Config, cap: Capture, input: Input, events: Receiver<Ev>) -> Result<(), String> {
     let now = Instant::now();
     let mut e = Engine {
@@ -802,7 +811,7 @@ pub fn run(cfg: Config, cap: Capture, input: Input, events: Receiver<Ev>) -> Res
         blocked: ActiveTime::default(),
         busy: ActiveTime::default(),
         window_reset: false,
-        tick_at: now,
+        tick_at: now + Duration::from_secs(1),
         last_log: None,
         throttled_usec: throttled_usec(),
         cpu_times: cpu_times(),
@@ -1013,8 +1022,12 @@ impl Engine {
         self.want_key |= reset;
         self.window_reset |= reset;
         // Price the forced resync key before it is admitted, even between regular ticks.
-        if now >= self.tick_at || self.window_reset {
-            self.tick(now);
+        if std::mem::take(&mut self.window_reset) {
+            let change = self.picture.window_reset(now);
+            self.apply_rate(change.as_slice());
+        }
+        if let Some(elapsed) = take_tick(now, &mut self.tick_at) {
+            self.tick(now, elapsed);
         }
         if self.viewers.is_empty() {
             self.trace
@@ -1305,12 +1318,20 @@ impl Engine {
         self.trace.log(Instant::now(), format_args!("{event}"));
     }
 
+    fn apply_rate(&mut self, moves: &[picture::Move]) {
+        if !moves.is_empty() {
+            log_rungs(&mut io::stderr().lock(), moves);
+        }
+        if let Some(enc) = self.enc.as_mut() {
+            enc.set_rate(
+                self.picture.crf(),
+                vbv_kbps(&self.picture, self.picture.scale()),
+            );
+        }
+    }
+
     /// Once a second: feed link and CPU facts to policy, apply rates, and log.
-    fn tick(&mut self, now: Instant) {
-        let elapsed = (now + Duration::from_secs(1) - self.tick_at)
-            .as_secs_f32()
-            .max(0.001);
-        self.tick_at = now + Duration::from_secs(1);
+    fn tick(&mut self, now: Instant, elapsed: f32) {
         let blocked = self.blocked.take(now).as_secs_f32() / elapsed;
         let busy = self.busy.take(now);
         let frames = self.stats.frames;
@@ -1319,7 +1340,6 @@ impl Engine {
             rtt_ms = p.rtt.get().as_millis() as u32;
             p.link_sample(elapsed)
         });
-        link.reset = std::mem::take(&mut self.window_reset);
         link.blocked = blocked;
         link.damage_pending =
             self.stats.damage_pending || (self.damaged && self.pacer_id.is_some());
@@ -1341,15 +1361,7 @@ impl Engine {
         let moves = self
             .picture
             .tick(now, link, picture::Cpu { stolen, throttled });
-        if !moves.is_empty() {
-            log_rungs(&mut io::stderr().lock(), &moves);
-        }
-        if let Some(enc) = self.enc.as_mut() {
-            enc.set_rate(
-                self.picture.crf(),
-                vbv_kbps(&self.picture, self.picture.scale()),
-            );
-        }
+        self.apply_rate(&moves);
         let s = &mut self.stats;
         if frames > 0
             || self
@@ -1837,7 +1849,6 @@ mod tests {
                         blocked: 0.6,
                         sent_kbps: 9600.0,
                         delivered_kbps: 3000.0,
-                        reset: false,
                         queue_ms: 200,
                         frames: 8,
                         damage_pending: true,
@@ -2092,7 +2103,6 @@ mod tests {
                     frames: 8,
                     damage_pending: true,
                     busy: Duration::from_millis(400),
-                    reset: false,
                 },
                 picture::Cpu::default(),
             );
@@ -2508,7 +2518,7 @@ mod tests {
         let (owner, _peer) = viewer_pair(1, false);
         let mut viewers = vec![owner];
         let (mut seq, mut last_send, mut blocked) = (0, None::<Instant>, 0.0);
-        let mut last_tick = t;
+        let mut tick_at = t + Duration::from_secs(1);
         let mut busy = ActiveTime::default();
         let mut seed = 12345_u32;
         let (mut link_free, mut acks) = (t, VecDeque::<(Instant, u32)>::new());
@@ -2524,6 +2534,7 @@ mod tests {
             let reset = expire_viewers(&mut viewers, now);
             if reset {
                 trace.resets.push(now - t);
+                p.window_reset(now);
             }
             assert_eq!(viewers.len(), 1, "owner disconnected at {ms} ms");
             let interval = Duration::from_secs_f32(1.0 / p.fps());
@@ -2531,12 +2542,10 @@ mod tests {
             if viewers[0].link_blocked(now, interval, p.capacity_kbps(now)) {
                 blocked += 0.001;
             }
-            if now >= last_tick + Duration::from_secs(1) || reset {
-                let elapsed = (now - last_tick).as_secs_f32();
+            if let Some(elapsed) = take_tick(now, &mut tick_at) {
                 let v = &mut viewers[0];
                 let mut link = v.link_sample(elapsed);
                 v.clear_interval();
-                link.reset = reset;
                 link.blocked = blocked / elapsed;
                 link.damage_pending = true;
                 link.busy = busy.take(now);
@@ -2551,7 +2560,6 @@ mod tests {
                     delivered,
                 });
                 blocked = 0.0;
-                last_tick = now;
             }
             let interval = Duration::from_secs_f32(1.0 / p.fps());
             if viewers[0].open(now, interval) && last_send.is_none_or(|last| now >= last + interval)
@@ -2685,6 +2693,7 @@ mod tests {
             },
         );
         assert_eq!(trace.resets.len(), 2, "{:?}", trace.resets);
+        assert_eq!(trace.ticks.len(), 8);
         let half = trace
             .frames
             .iter()
@@ -2701,6 +2710,57 @@ mod tests {
             resync.bytes, 500_000,
             "the first forced full key already uses the cap QP"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn tests_that_a_midsecond_reset_keeps_the_ack_in_the_regular_interval()
+    -> Result<(), &'static str> {
+        let t = Instant::now();
+        let mut p = motion(t, false);
+        p.tick(
+            t,
+            picture::Link {
+                blocked: 0.4,
+                sent_kbps: 9600.0,
+                delivered_kbps: 3000.0,
+                ..picture::Link::default()
+            },
+            picture::Cpu::default(),
+        );
+        let budget = p.link_kbps();
+        let (owner, _peer) = viewer_pair(1, false);
+        let mut viewers = vec![owner];
+        let now = t + Duration::from_millis(20);
+        for seq in [1, 2] {
+            viewers[0].record_frame(
+                Sent {
+                    seq,
+                    at: now - ACK_TIMEOUT,
+                    bytes: 60_000,
+                    burst: false,
+                },
+                false,
+            );
+        }
+        viewers[0].clear_interval();
+        acknowledge(&mut viewers, &mut p, 1, 1, now);
+        assert!(expire_viewers(&mut viewers, now));
+        assert!(p.window_reset(now).is_some());
+        assert_eq!((p.crf(), p.plan(now, BIG).scale), (30.0, Scale::Full));
+        assert_eq!(p.capacity_kbps(now), Some(3000.0));
+        assert_eq!(p.link_kbps(), budget);
+        let mut due = t + Duration::from_secs(1);
+        assert_eq!(take_tick(now, &mut due), None);
+        assert_eq!(due, t + Duration::from_secs(1));
+        let end = due;
+        let elapsed = take_tick(end, &mut due).ok_or("the regular tick is due")?;
+        let link = viewers[0].link_sample(elapsed);
+        assert_eq!((link.sent_kbps, link.delivered_kbps), (0.0, 480.0));
+        assert!(p.tick(end, link, picture::Cpu::default()).is_empty());
+        assert_eq!(p.plan(end, BIG).scale, Scale::Full);
+        assert_eq!(p.capacity_kbps(end), Some(3000.0));
+        assert_eq!(p.link_kbps(), 300);
         Ok(())
     }
 

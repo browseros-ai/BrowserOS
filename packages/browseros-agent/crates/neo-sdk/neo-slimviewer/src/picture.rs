@@ -159,7 +159,7 @@ impl Why {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 struct Facts {
     blocked: f32,
     queue_ms: u32,
@@ -237,7 +237,6 @@ pub struct Encoded {
 
 #[derive(Default)]
 pub struct Link {
-    pub reset: bool,
     pub blocked: f32,
     pub sent_kbps: f32,
     pub delivered_kbps: f32,
@@ -321,6 +320,9 @@ pub struct Picture {
     last_input: Option<Instant>,
     queue_high: bool,
     last_reset: Option<Instant>,
+    reset_since_tick: bool,
+    /// An asynchronous reset reports the last complete interval's measurements.
+    facts: Facts,
     last_pressure: Option<Instant>,
     last_congested: Option<Instant>,
     last_full: Option<Instant>,
@@ -366,6 +368,8 @@ impl Picture {
             last_input: None,
             queue_high: false,
             last_reset: None,
+            reset_since_tick: false,
+            facts: Facts::default(),
             last_pressure: None,
             last_congested: None,
             last_full: None,
@@ -432,6 +436,7 @@ impl Picture {
         self.link.need = 3;
         self.link.last_up = None;
         self.last_reset = None;
+        self.reset_since_tick = false;
         self.queue_high = false;
     }
 
@@ -720,6 +725,14 @@ impl Picture {
             .reduce(f32::max)
     }
 
+    /// Price the forced key immediately. The next complete interval measures this stall.
+    pub fn window_reset(&mut self, now: Instant) -> Option<Move> {
+        self.reset_since_tick = true;
+        self.last_congested = Some(now);
+        self.link_pressure(now, Why::Reset)
+            .map(|(to, why)| self.apply(now, Source::Link, to, why))
+    }
+
     pub fn tick(&mut self, now: Instant, link: Link, cpu: Cpu) -> Vec<Move> {
         let fps = self.fps();
         let work = percentile75(&mut self.work);
@@ -737,9 +750,10 @@ impl Picture {
                     .map_or(demand, |old| 0.75 * old + 0.25 * demand),
             );
         }
-        let congested = link.reset || link_full(link.blocked);
+        let reset = std::mem::take(&mut self.reset_since_tick);
+        let congested = reset || link_full(link.blocked);
         let severe = congested && self.severe(&link, mean_bytes);
-        let facts = Facts {
+        self.facts = Facts {
             blocked: link.blocked,
             queue_ms: link.queue_ms,
             offered_kbps: self.demand_kbps.unwrap_or(link.sent_kbps),
@@ -751,8 +765,11 @@ impl Picture {
         };
         self.observe_link(now, &link, congested);
         let mut moves = Vec::new();
-        if let Some((to, why)) = self.link_step(now, &link, congested, severe) {
-            moves.push(self.apply(now, Source::Link, to, why, facts));
+        if reset {
+            // The reset already cast this interval's link vote.
+            self.queue_high = link.queue_ms > 150;
+        } else if let Some((to, why)) = self.link_step(now, &link, congested, severe) {
+            moves.push(self.apply(now, Source::Link, to, why));
         }
         if self.cfg.cpu_guard {
             let work_pressure = measured.is_some_and(|w| w > starved_work(fps));
@@ -780,7 +797,7 @@ impl Picture {
                 None
             };
             if let Some((to, why)) = step {
-                moves.push(self.apply(now, Source::Cpu, to, why, facts));
+                moves.push(self.apply(now, Source::Cpu, to, why));
             }
         }
         self.full_big = 0;
@@ -791,7 +808,7 @@ impl Picture {
         moves
     }
 
-    fn apply(&mut self, now: Instant, source: Source, to: usize, why: Why, facts: Facts) -> Move {
+    fn apply(&mut self, now: Instant, source: Source, to: usize, why: Why) -> Move {
         let level = match source {
             Source::Link => &mut self.link,
             Source::Cpu => &mut self.cpu,
@@ -806,7 +823,7 @@ impl Picture {
             from,
             to,
             why,
-            facts,
+            facts: self.facts,
             base_crf: self.cfg.base_crf,
             rung: Rung {
                 fps: self.fps(),
@@ -851,7 +868,7 @@ impl Picture {
                 self.link_kbps = ((link.delivered_kbps * 0.85) as u32).max(300);
             }
         } else {
-            self.link_kbps = (self.link_kbps.saturating_add(self.link_kbps / 10)).min(8000);
+            self.link_kbps += self.link_kbps / 10;
             if self
                 .last_congested
                 .is_none_or(|at| now.saturating_duration_since(at) >= Duration::from_secs(30))
@@ -859,6 +876,10 @@ impl Picture {
                 self.backoff = Duration::from_secs(2);
             }
         }
+        // An ACK burst can drain bytes sent in earlier intervals. Limit the half encoder
+        // to current demand, keeping its minimum usable rate when little was sent.
+        let demand_cap = (1.2 * link.sent_kbps).clamp(300.0, 8000.0) as u32;
+        self.link_kbps = self.link_kbps.min(demand_cap);
     }
 
     fn link_step(
@@ -870,10 +891,6 @@ impl Picture {
     ) -> Option<(usize, Why)> {
         let at = self.link.at;
         let cap = self.ladder.cap;
-        let repeat_reset = link.reset && recent(self.last_reset, now);
-        if link.reset {
-            self.last_reset = Some(now);
-        }
         if self
             .last_pressure
             .is_some_and(|t| now.saturating_duration_since(t) >= Duration::from_secs(30))
@@ -907,12 +924,14 @@ impl Picture {
         let queued = self.queue_high && link.queue_ms > 150;
         self.queue_high = link.queue_ms > 150;
         if congested || queued {
-            self.link.under_pressure(now);
-            self.last_pressure = Some(now);
-            if at > cap {
-                return None;
-            }
-            return self.link_pressure(now, link, congested, severe, repeat_reset);
+            let why = if severe {
+                Why::Severe
+            } else if congested {
+                Why::Congested
+            } else {
+                Why::Queue
+            };
+            return self.link_pressure(now, why);
         }
         self.link.pressure = 0;
         if at == 0 || at > cap || link.queue_ms >= 40 || link.delivered_kbps == 0.0 {
@@ -931,28 +950,27 @@ impl Picture {
         Some((at - 1, Why::Clean))
     }
 
-    fn link_pressure(
-        &mut self,
-        now: Instant,
-        link: &Link,
-        congested: bool,
-        severe: bool,
-        repeat_reset: bool,
-    ) -> Option<(usize, Why)> {
+    fn link_pressure(&mut self, now: Instant, why: Why) -> Option<(usize, Why)> {
+        let repeat_reset = why == Why::Reset && recent(self.last_reset.replace(now), now);
+        self.link.under_pressure(now);
+        self.last_pressure = Some(now);
         let at = self.link.at;
         let cap = self.ladder.cap;
+        if at > cap {
+            return None;
+        }
         // A CPU vote may already have paid for some or all of the fps steps.
         let effective = at.max(self.cpu.at.min(self.ladder.floor));
-        if link.reset && at < cap && !(repeat_reset && self.ladder.half.is_some()) {
-            return Some((cap, Why::Reset));
+        if at < cap
+            && matches!(why, Why::Reset | Why::Severe)
+            && !(repeat_reset && self.ladder.half.is_some())
+        {
+            return Some((cap, why));
         }
-        if severe && at < cap && !repeat_reset {
-            return Some((cap, Why::Severe));
-        }
-        if repeat_reset || (congested && effective == cap) {
+        if repeat_reset || (why != Why::Queue && effective == cap) {
             self.link.pressure = self.link.pressure.saturating_add(1);
             if let Some(half) = self.ladder.half
-                && (severe
+                && (why == Why::Severe
                     || repeat_reset
                     || self.link.pressure >= 3
                     || recent(self.last_full, now))
@@ -960,26 +978,13 @@ impl Picture {
                 if recent(self.last_full, now) {
                     self.backoff = (self.backoff * 2).min(Duration::from_secs(16));
                 }
-                let why = if link.reset {
-                    Why::Reset
-                } else if severe {
-                    Why::Severe
-                } else {
-                    Why::Jam
-                };
+                let why = if why == Why::Congested { Why::Jam } else { why };
                 return Some((half, why));
             }
         } else {
             self.link.pressure = 0;
         }
         let to = (effective + 1).min(cap);
-        let why = if link.reset {
-            Why::Reset
-        } else if congested {
-            Why::Congested
-        } else {
-            Why::Queue
-        };
         (to != at).then_some((to, why))
     }
 
@@ -1177,7 +1182,6 @@ mod tests {
             blocked: 0.6,
             sent_kbps: 9600.0,
             delivered_kbps: 3000.0,
-            reset: false,
             queue_ms: 250,
             frames: 8,
             damage_pending: true,
@@ -1710,19 +1714,54 @@ mod tests {
     }
 
     #[test]
+    fn tests_that_a_reset_preserves_unmeasured_cpu_work() {
+        let t = Instant::now();
+        let mut p = picture(t);
+        motion(&mut p, t, Scale::Full, 70);
+        p.tick(t, active(6), Cpu::default());
+        motion(&mut p, t + Duration::from_millis(10), Scale::Full, 70);
+        p.window_reset(t + Duration::from_millis(20));
+        assert_eq!(
+            p.cpu.at, 0,
+            "only a complete interval can advance CPU pressure"
+        );
+        let moves = p.tick(at(t, 1), active(6), Cpu::default());
+        assert_eq!(moves.len(), 1);
+        assert_eq!((moves[0].source, moves[0].why), (Source::Cpu, Why::Work));
+    }
+
+    #[test]
+    fn tests_that_burst_acks_cannot_raise_the_link_budget_above_sent_demand() {
+        let t = Instant::now();
+        let mut p = picture(t);
+        for (n, blocked, sent_kbps, budget) in [
+            (1, 0.6, 30_000.0, 8000),
+            (2, 0.6, 1000.0, 1200),
+            (3, 0.0, 500.0, 600),
+            (4, 0.6, 0.0, 300),
+        ] {
+            p.tick(
+                at(t, n),
+                Link {
+                    blocked,
+                    sent_kbps,
+                    delivered_kbps: 24_000.0,
+                    ..Link::default()
+                },
+                Cpu::default(),
+            );
+            assert_eq!(p.link_kbps(), budget);
+        }
+    }
+
+    #[test]
     fn tests_that_a_second_reset_within_ten_seconds_sets_half() {
         let t = Instant::now();
         for (delay, scale) in [(10, Scale::Half), (11, Scale::Full)] {
             let mut p = picture(t);
             for n in [1, 1 + delay] {
-                p.tick(
-                    at(t, n),
-                    Link {
-                        reset: true,
-                        ..Link::default()
-                    },
-                    Cpu::default(),
-                );
+                p.window_reset(at(t, n));
+                p.tick(at(t, n), Link::default(), Cpu::default());
             }
             assert_eq!(p.motion_scale(), scale);
         }
@@ -2077,7 +2116,6 @@ mod tests {
                 at(t, n),
                 Link {
                     blocked: 0.1,
-                    reset: false,
                     queue_ms: 80,
                     ..Link::default()
                 },
@@ -2698,15 +2736,9 @@ mod tests {
     fn tests_that_a_window_reset_jumps_to_the_quality_cap_without_half() {
         let t = Instant::now();
         let mut p = picture(t);
-        let moves = p.tick(
-            at(t, 1),
-            Link {
-                reset: true,
-                ..Link::default()
-            },
-            Cpu::default(),
-        );
-        assert_eq!(moves[0].why, Why::Reset);
+        let change = p.window_reset(at(t, 1));
+        assert_eq!(change.map(|m| m.why), Some(Why::Reset));
+        assert!(p.tick(at(t, 1), Link::default(), Cpu::default()).is_empty());
         assert_eq!(
             (p.fps(), p.crf(), p.motion_scale()),
             (15.0, 30.0, Scale::Full)

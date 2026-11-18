@@ -24,6 +24,10 @@ continues to apply until the link has gone 20 seconds without congestion.
 Once damage stops, the full-size settle frame can still go
 out and its acknowledgement measures fresh capacity.
 
+When an owner's acknowledgement window times out, the engine applies the
+quality cap before encoding the next keyframe. It measures delivered bytes,
+CPU load and capture counts on the regular one-second tick.
+
 The host relays a TCP byte stream over WebSocket. Each record starts with a
 four-byte big-endian length covering a type byte and its payload. A record may
 span multiple WebSocket messages. The page reassembles records, decodes Annex B
