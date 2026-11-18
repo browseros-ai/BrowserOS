@@ -177,6 +177,15 @@ pub struct SkillCreate {
     /// Agents to link into. Defaults to every connected agent when omitted.
     #[serde(rename = "linkAgents", skip_serializing_if = "Option::is_none")]
     pub link_agents: Option<Vec<models::Harness>>,
+    /// The finished task this skill is made from. Saving twice for one task returns the skill already saved.
+    #[serde(rename = "sourceSessionId", skip_serializing_if = "Option::is_none")]
+    pub source_session_id: Option<String>,
+    /// One sentence on what the skill does, written above its steps.
+    #[serde(rename = "summary", skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    /// The parts that change between runs, each with an example.
+    #[serde(rename = "inputs", skip_serializing_if = "Option::is_none")]
+    pub inputs: Option<Vec<models::SkillDraftInput>>,
 }
 
 impl SkillCreate {
@@ -188,6 +197,9 @@ impl SkillCreate {
             steps: None,
             learned_notes: None,
             link_agents: None,
+            source_session_id: None,
+            summary: None,
+            inputs: None,
         }
     }
 }
@@ -222,6 +234,300 @@ impl SkillDetail {
 }
 
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SkillDraft {
+    /// The skill's slug, without the neo- prefix.
+    #[serde(rename = "name")]
+    pub name: String,
+    #[serde(rename = "title")]
+    pub title: String,
+    #[serde(rename = "description")]
+    pub description: String,
+    #[serde(rename = "site")]
+    pub site: String,
+    #[serde(rename = "steps")]
+    pub steps: Vec<String>,
+    #[serde(rename = "inputs")]
+    pub inputs: Vec<models::SkillDraftInput>,
+    #[serde(rename = "notes")]
+    pub notes: Vec<String>,
+    #[serde(rename = "effects")]
+    pub effects: models::SkillDraftEffects,
+    #[serde(rename = "confidence")]
+    pub confidence: models::SkillDraftConfidence,
+}
+
+impl SkillDraft {
+    pub fn new(
+        name: String,
+        title: String,
+        description: String,
+        site: String,
+        steps: Vec<String>,
+        inputs: Vec<models::SkillDraftInput>,
+        notes: Vec<String>,
+        effects: models::SkillDraftEffects,
+        confidence: models::SkillDraftConfidence,
+    ) -> SkillDraft {
+        SkillDraft {
+            name,
+            title,
+            description,
+            site,
+            steps,
+            inputs,
+            notes,
+            effects,
+            confidence,
+        }
+    }
+}
+
+///
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+pub enum SkillDraftConfidence {
+    #[serde(rename = "high")]
+    High,
+    #[serde(rename = "low")]
+    Low,
+}
+
+impl std::fmt::Display for SkillDraftConfidence {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Self::High => write!(f, "high"),
+            Self::Low => write!(f, "low"),
+        }
+    }
+}
+
+impl Default for SkillDraftConfidence {
+    fn default() -> SkillDraftConfidence {
+        Self::High
+    }
+}
+
+///
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+pub enum SkillDraftEffects {
+    #[serde(rename = "read")]
+    Read,
+    #[serde(rename = "write")]
+    Write,
+}
+
+impl std::fmt::Display for SkillDraftEffects {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Self::Read => write!(f, "read"),
+            Self::Write => write!(f, "write"),
+        }
+    }
+}
+
+impl Default for SkillDraftEffects {
+    fn default() -> SkillDraftEffects {
+        Self::Read
+    }
+}
+
+#[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SkillDraftFailure {
+    #[serde(rename = "code")]
+    pub code: models::SkillDraftFailureCode,
+    #[serde(rename = "scope", skip_serializing_if = "Option::is_none")]
+    pub scope: Option<models::SkillDraftLimitScope>,
+    /// When the limit resets, as an ISO 8601 UTC time.
+    #[serde(rename = "resetsAt", skip_serializing_if = "Option::is_none")]
+    pub resets_at: Option<String>,
+}
+
+impl SkillDraftFailure {
+    pub fn new(code: models::SkillDraftFailureCode) -> SkillDraftFailure {
+        SkillDraftFailure {
+            code,
+            scope: None,
+            resets_at: None,
+        }
+    }
+}
+
+///
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+pub enum SkillDraftFailureCode {
+    #[serde(rename = "limit_reached")]
+    LimitReached,
+    #[serde(rename = "drafts_paused")]
+    DraftsPaused,
+    #[serde(rename = "draft_unusable")]
+    DraftUnusable,
+    #[serde(rename = "upstream_error")]
+    UpstreamError,
+    #[serde(rename = "in_progress")]
+    InProgress,
+}
+
+impl std::fmt::Display for SkillDraftFailureCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Self::LimitReached => write!(f, "limit_reached"),
+            Self::DraftsPaused => write!(f, "drafts_paused"),
+            Self::DraftUnusable => write!(f, "draft_unusable"),
+            Self::UpstreamError => write!(f, "upstream_error"),
+            Self::InProgress => write!(f, "in_progress"),
+        }
+    }
+}
+
+impl Default for SkillDraftFailureCode {
+    fn default() -> SkillDraftFailureCode {
+        Self::LimitReached
+    }
+}
+
+#[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SkillDraftInput {
+    #[serde(rename = "name")]
+    pub name: String,
+    #[serde(rename = "label")]
+    pub label: String,
+    #[serde(rename = "example")]
+    pub example: String,
+    #[serde(rename = "kind")]
+    pub kind: models::SkillDraftInputKind,
+}
+
+impl SkillDraftInput {
+    pub fn new(
+        name: String,
+        label: String,
+        example: String,
+        kind: models::SkillDraftInputKind,
+    ) -> SkillDraftInput {
+        SkillDraftInput {
+            name,
+            label,
+            example,
+            kind,
+        }
+    }
+}
+
+///
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+pub enum SkillDraftInputKind {
+    #[serde(rename = "text")]
+    Text,
+    #[serde(rename = "number")]
+    Number,
+    #[serde(rename = "date")]
+    Date,
+}
+
+impl std::fmt::Display for SkillDraftInputKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Self::Text => write!(f, "text"),
+            Self::Number => write!(f, "number"),
+            Self::Date => write!(f, "date"),
+        }
+    }
+}
+
+impl Default for SkillDraftInputKind {
+    fn default() -> SkillDraftInputKind {
+        Self::Text
+    }
+}
+
+///
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+pub enum SkillDraftLimitScope {
+    #[serde(rename = "day")]
+    Day,
+    #[serde(rename = "month")]
+    Month,
+}
+
+impl std::fmt::Display for SkillDraftLimitScope {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Self::Day => write!(f, "day"),
+            Self::Month => write!(f, "month"),
+        }
+    }
+}
+
+impl Default for SkillDraftLimitScope {
+    fn default() -> SkillDraftLimitScope {
+        Self::Day
+    }
+}
+
+///
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+pub enum SkillDraftState {
+    #[serde(rename = "none")]
+    None,
+    #[serde(rename = "writing")]
+    Writing,
+    #[serde(rename = "ready")]
+    Ready,
+    #[serde(rename = "failed")]
+    Failed,
+    #[serde(rename = "saved")]
+    Saved,
+}
+
+impl std::fmt::Display for SkillDraftState {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Self::None => write!(f, "none"),
+            Self::Writing => write!(f, "writing"),
+            Self::Ready => write!(f, "ready"),
+            Self::Failed => write!(f, "failed"),
+            Self::Saved => write!(f, "saved"),
+        }
+    }
+}
+
+impl Default for SkillDraftState {
+    fn default() -> SkillDraftState {
+        Self::None
+    }
+}
+
+#[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SkillDraftStatus {
+    #[serde(rename = "status")]
+    pub status: models::SkillDraftState,
+    #[serde(rename = "draftId", skip_serializing_if = "Option::is_none")]
+    pub draft_id: Option<String>,
+    #[serde(rename = "draft", skip_serializing_if = "Option::is_none")]
+    pub draft: Option<Box<models::SkillDraft>>,
+    /// The skill saved from this task, once it is saved.
+    #[serde(rename = "skillName", skip_serializing_if = "Option::is_none")]
+    pub skill_name: Option<String>,
+    /// Epoch ms after which a draft that was not saved is written again.
+    #[serde(rename = "expiresAt", skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<i64>,
+    #[serde(rename = "failure", skip_serializing_if = "Option::is_none")]
+    pub failure: Option<Box<models::SkillDraftFailure>>,
+}
+
+impl SkillDraftStatus {
+    pub fn new(status: models::SkillDraftState) -> SkillDraftStatus {
+        SkillDraftStatus {
+            status,
+            draft_id: None,
+            draft: None,
+            skill_name: None,
+            expires_at: None,
+            failure: None,
+        }
+    }
+}
+
+#[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SkillFlowSource {
     /// The flow.md file as stored beside SKILL.md.
     #[serde(rename = "source")]
@@ -246,8 +552,8 @@ impl SkillList {
     }
 }
 
-/// SkillOrigin : How the skill came to exist. `agent` authored via the MCP tool, `manual` created or edited by the user, `directory` installed from the catalog.
-/// How the skill came to exist. `agent` authored via the MCP tool, `manual` created or edited by the user, `directory` installed from the catalog.
+/// SkillOrigin : How the skill came to exist. `agent` authored via the MCP tool, `manual` created or edited by the user, `directory` installed from the catalog, `history` made in the app from a finished task.
+/// How the skill came to exist. `agent` authored via the MCP tool, `manual` created or edited by the user, `directory` installed from the catalog, `history` made in the app from a finished task.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub enum SkillOrigin {
     #[serde(rename = "agent")]
@@ -256,6 +562,8 @@ pub enum SkillOrigin {
     Manual,
     #[serde(rename = "directory")]
     Directory,
+    #[serde(rename = "history")]
+    History,
 }
 
 impl std::fmt::Display for SkillOrigin {
@@ -264,6 +572,7 @@ impl std::fmt::Display for SkillOrigin {
             Self::Agent => write!(f, "agent"),
             Self::Manual => write!(f, "manual"),
             Self::Directory => write!(f, "directory"),
+            Self::History => write!(f, "history"),
         }
     }
 }

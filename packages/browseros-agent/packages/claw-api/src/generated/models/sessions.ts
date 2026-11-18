@@ -528,6 +528,12 @@ export interface SessionSummary {
      * @memberof SessionSummary
      */
     live?: LiveSessionState;
+    /**
+     * The skill saved from this task, when there is one.
+     * @type {string}
+     * @memberof SessionSummary
+     */
+    skillName?: string;
 }
 
 /**

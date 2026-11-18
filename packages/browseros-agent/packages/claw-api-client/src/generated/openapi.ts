@@ -252,6 +252,24 @@ export interface paths {
     patch?: never
     trace?: never
   }
+  '/api/v1/sessions/{sessionId}/skill-draft': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /** @description Where making a skill from this finished task stands, shared by every view of the task. */
+    get: operations['getSkillDraft']
+    put?: never
+    /** @description Write a skill draft from this finished task through the decisions worker. Nothing is saved. A draft already written, or one being written, is returned instead of a new one. */
+    post: operations['draftSkillFromSession']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
   '/api/v1/sessions/{sessionId}/recording': {
     parameters: {
       query?: never
@@ -1188,6 +1206,8 @@ export interface components {
       pursue?: components['schemas']['SessionPursueRun']
       /** @description Present only on summaries returned by an explicit `status=live` list query. */
       live?: components['schemas']['LiveSessionState']
+      /** @description The skill saved from this task, when there is one. */
+      skillName?: string
     }
     SessionList: {
       items: components['schemas']['SessionSummary'][]
@@ -1431,10 +1451,10 @@ export interface components {
       items: components['schemas']['AuditAgent'][]
     }
     /**
-     * @description How the skill came to exist. `agent` authored via the MCP tool, `manual` created or edited by the user, `directory` installed from the catalog.
+     * @description How the skill came to exist. `agent` authored via the MCP tool, `manual` created or edited by the user, `directory` installed from the catalog, `history` made in the app from a finished task.
      * @enum {string}
      */
-    SkillOrigin: 'agent' | 'manual' | 'directory'
+    SkillOrigin: 'agent' | 'manual' | 'directory' | 'history'
     Skill: {
       /** @description Slug used as the on-disk folder name and the agent command. */
       name: string
@@ -1625,6 +1645,12 @@ export interface components {
       learnedNotes?: string[]
       /** @description Agents to link into. Defaults to every connected agent when omitted. */
       linkAgents?: components['schemas']['Harness'][]
+      /** @description The finished task this skill is made from. Saving twice for one task returns the skill already saved. */
+      sourceSessionId?: string
+      /** @description One sentence on what the skill does, written above its steps. */
+      summary?: string
+      /** @description The parts that change between runs, each with an example. */
+      inputs?: components['schemas']['SkillDraftInput'][]
     }
     SkillUpdate: {
       description?: string
@@ -1636,6 +1662,60 @@ export interface components {
       learnedNotes?: string[]
       /** @description Replacement SKILL.md contents for a raw manual edit or agent authoring. */
       body?: string
+    }
+    /** @enum {string} */
+    SkillDraftEffects: 'read' | 'write'
+    /** @enum {string} */
+    SkillDraftConfidence: 'high' | 'low'
+    /** @enum {string} */
+    SkillDraftInputKind: 'text' | 'number' | 'date'
+    SkillDraftInput: {
+      name: string
+      label: string
+      example: string
+      kind: components['schemas']['SkillDraftInputKind']
+    }
+    SkillDraft: {
+      /** @description The skill's slug, without the neo- prefix. */
+      name: string
+      title: string
+      description: string
+      site: string
+      steps: string[]
+      inputs: components['schemas']['SkillDraftInput'][]
+      notes: string[]
+      effects: components['schemas']['SkillDraftEffects']
+      confidence: components['schemas']['SkillDraftConfidence']
+    }
+    /** @enum {string} */
+    SkillDraftState: 'none' | 'writing' | 'ready' | 'failed' | 'saved'
+    /** @enum {string} */
+    SkillDraftFailureCode:
+      | 'limit_reached'
+      | 'drafts_paused'
+      | 'draft_unusable'
+      | 'upstream_error'
+      | 'in_progress'
+    /** @enum {string} */
+    SkillDraftLimitScope: 'day' | 'month'
+    SkillDraftFailure: {
+      code: components['schemas']['SkillDraftFailureCode']
+      scope?: components['schemas']['SkillDraftLimitScope']
+      /** @description When the limit resets, as an ISO 8601 UTC time. */
+      resetsAt?: string
+    }
+    SkillDraftStatus: {
+      status: components['schemas']['SkillDraftState']
+      draftId?: string
+      draft?: components['schemas']['SkillDraft']
+      /** @description The skill saved from this task, once it is saved. */
+      skillName?: string
+      /**
+       * Format: int64
+       * @description Epoch ms after which a draft that was not saved is written again.
+       */
+      expiresAt?: number
+      failure?: components['schemas']['SkillDraftFailure']
     }
     DirectorySkill: {
       name: string
@@ -2506,6 +2586,72 @@ export interface operations {
         }
       }
       400: components['responses']['BadRequest']
+      500: components['responses']['InternalError']
+    }
+  }
+  getSkillDraft: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        sessionId: components['parameters']['SessionId']
+      }
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description The draft's state, with the draft once it is ready. */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['SkillDraftStatus']
+        }
+      }
+      404: components['responses']['NotFound']
+      500: components['responses']['InternalError']
+    }
+  }
+  draftSkillFromSession: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        sessionId: components['parameters']['SessionId']
+      }
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description The draft, or why it could not be written. */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['SkillDraftStatus']
+        }
+      }
+      /** @description not_entitled, when the plan does not include skill drafts. */
+      403: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ApiError']
+        }
+      }
+      404: components['responses']['NotFound']
+      /** @description not_finished, when the task did not finish. */
+      422: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ApiError']
+        }
+      }
       500: components['responses']['InternalError']
     }
   }

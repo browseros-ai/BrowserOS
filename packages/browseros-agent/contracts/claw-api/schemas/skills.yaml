@@ -1,7 +1,7 @@
 SkillOrigin:
   type: string
-  enum: [agent, manual, directory]
-  description: How the skill came to exist. `agent` authored via the MCP tool, `manual` created or edited by the user, `directory` installed from the catalog.
+  enum: [agent, manual, directory, history]
+  description: How the skill came to exist. `agent` authored via the MCP tool, `manual` created or edited by the user, `directory` installed from the catalog, `history` made in the app from a finished task.
 Skill:
   type: object
   additionalProperties: false
@@ -310,6 +310,111 @@ SkillCreate:
       items:
         $ref: ./connections.yaml#/Harness
       description: Agents to link into. Defaults to every connected agent when omitted.
+    sourceSessionId:
+      type: string
+      description: The finished task this skill is made from. Saving twice for one task returns the skill already saved.
+    summary:
+      type: string
+      description: One sentence on what the skill does, written above its steps.
+    inputs:
+      type: array
+      items:
+        $ref: '#/SkillDraftInput'
+      description: The parts that change between runs, each with an example.
+SkillDraftEffects:
+  type: string
+  enum: [read, write]
+SkillDraftConfidence:
+  type: string
+  enum: [high, low]
+SkillDraftInputKind:
+  type: string
+  enum: [text, number, date]
+SkillDraftInput:
+  type: object
+  additionalProperties: false
+  required: [name, label, example, kind]
+  properties:
+    name:
+      type: string
+    label:
+      type: string
+    example:
+      type: string
+    kind:
+      $ref: '#/SkillDraftInputKind'
+SkillDraft:
+  type: object
+  additionalProperties: false
+  required: [name, title, description, site, steps, inputs, notes, effects, confidence]
+  properties:
+    name:
+      type: string
+      pattern: '^[a-z0-9-]+$'
+      description: The skill's slug, without the neo- prefix.
+    title:
+      type: string
+    description:
+      type: string
+    site:
+      type: string
+    steps:
+      type: array
+      items:
+        type: string
+    inputs:
+      type: array
+      items:
+        $ref: '#/SkillDraftInput'
+    notes:
+      type: array
+      items:
+        type: string
+    effects:
+      $ref: '#/SkillDraftEffects'
+    confidence:
+      $ref: '#/SkillDraftConfidence'
+SkillDraftState:
+  type: string
+  enum: [none, writing, ready, failed, saved]
+SkillDraftFailureCode:
+  type: string
+  enum: [limit_reached, drafts_paused, draft_unusable, upstream_error, in_progress]
+SkillDraftLimitScope:
+  type: string
+  enum: [day, month]
+SkillDraftFailure:
+  type: object
+  additionalProperties: false
+  required: [code]
+  properties:
+    code:
+      $ref: '#/SkillDraftFailureCode'
+    scope:
+      $ref: '#/SkillDraftLimitScope'
+    resetsAt:
+      type: string
+      description: When the limit resets, as an ISO 8601 UTC time.
+SkillDraftStatus:
+  type: object
+  additionalProperties: false
+  required: [status]
+  properties:
+    status:
+      $ref: '#/SkillDraftState'
+    draftId:
+      type: string
+    draft:
+      $ref: '#/SkillDraft'
+    skillName:
+      type: string
+      description: The skill saved from this task, once it is saved.
+    expiresAt:
+      type: integer
+      format: int64
+      description: Epoch ms after which a draft that was not saved is written again.
+    failure:
+      $ref: '#/SkillDraftFailure'
 SkillUpdate:
   type: object
   additionalProperties: false
