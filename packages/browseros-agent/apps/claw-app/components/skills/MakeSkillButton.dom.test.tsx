@@ -26,6 +26,23 @@ import type { Root } from 'react-dom/client'
 import { MemoryRouter, Route, Routes } from 'react-router'
 
 const api = await import('@/modules/api/client')
+const posthog = await import('@/modules/analytics/posthog')
+
+interface Captured {
+  event: string
+  properties?: Record<string, unknown>
+}
+/** Every event this file captured, kept across tests: impressions count once per app load. */
+const everCaptured: Captured[] = []
+let captured: Captured[]
+
+mock.module('@/modules/analytics/posthog', () => ({
+  ...posthog,
+  capture: (event: string, properties?: Record<string, unknown>) => {
+    everCaptured.push({ event, properties })
+    captured.push({ event, properties })
+  },
+}))
 
 let features: string[]
 let draftReply: SkillDraftStatus
@@ -186,6 +203,7 @@ beforeEach(async () => {
   draftReply = ready
   draftCalls = 0
   created = []
+  captured = []
   const dom = parseHTML(
     '<!doctype html><html><body><div id="root"></div></body></html>',
   )
@@ -322,6 +340,61 @@ describe('making a skill from a task', () => {
     ])
     expect(created[0]?.inputs?.map((input) => input.name)).toEqual(['budget'])
     expect(text()).toContain('Skills page')
+
+    const events = captured.filter(
+      ({ event }) => event !== 'skill_from_task_cta_shown',
+    )
+    expect(events).toEqual([
+      {
+        event: 'skill_from_task_clicked',
+        properties: { surface: 'task_page' },
+      },
+      {
+        event: 'skill_draft_generated',
+        properties: {
+          ms: expect.any(Number),
+          confidence: 'high',
+          steps: 2,
+          inputs: 1,
+        },
+      },
+      {
+        event: 'skill_from_task_saved',
+        properties: {
+          edited_name: false,
+          edited_steps: true,
+          edited_inputs: false,
+          steps: 1,
+          inputs: 1,
+        },
+      },
+    ])
+  })
+
+  it('tests that the button counts as shown once per place, and closing a draft is counted', async () => {
+    await mount(task())
+    await act(async () => root.unmount())
+    const { createRoot } = await import('react-dom/client')
+    root = createRoot(container)
+    await mount(task())
+    expect(
+      everCaptured.filter(
+        ({ event, properties }) =>
+          event === 'skill_from_task_cta_shown' &&
+          properties?.surface === 'task_page',
+      ),
+    ).toHaveLength(1)
+
+    await click(button('Make it a skill'))
+    await settle()
+    await click(
+      container.querySelector('[role="dialog"] button[aria-label="Close"]') ??
+        undefined,
+    )
+    expect(captured).toContainEqual({
+      event: 'skill_draft_discarded',
+      properties: { stage: 'review' },
+    })
   })
 
   it('tests that a limit explains itself and points to the agent', async () => {
@@ -343,6 +416,10 @@ describe('making a skill from a task', () => {
     expect(text()).toContain('Your agent can still save one for you.')
     expect(text()).toContain('save this as a skill in neo')
     expect(button('Try again')).toBeUndefined()
+    expect(captured).toContainEqual({
+      event: 'skill_draft_failed',
+      properties: { code: 'limit_reached' },
+    })
   })
 
   it('tests that a failed draft offers a retry', async () => {

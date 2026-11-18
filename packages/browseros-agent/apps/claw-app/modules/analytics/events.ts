@@ -50,6 +50,13 @@ export const AnalyticsEvent = {
   ProComputerRemoved: 'pro_computer_removed',
   ProComputerRenamed: 'pro_computer_renamed',
   ProKeyReset: 'pro_key_reset',
+  SkillFromTaskCtaShown: 'skill_from_task_cta_shown',
+  SkillFromTaskClicked: 'skill_from_task_clicked',
+  SkillDraftGenerated: 'skill_draft_generated',
+  SkillDraftFailed: 'skill_draft_failed',
+  SkillFromTaskSaved: 'skill_from_task_saved',
+  SkillDraftDiscarded: 'skill_draft_discarded',
+  SkillUpgradeSeen: 'skill_upgrade_seen',
 } as const
 
 export type AnalyticsEventName =

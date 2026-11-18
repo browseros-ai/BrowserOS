@@ -63,6 +63,7 @@ export function RecentActivity() {
                 task={task}
                 now={now}
                 skillAlways={task.sessionId === skillAlwaysId}
+                skillPlace="home"
               />
             ))}
           </div>

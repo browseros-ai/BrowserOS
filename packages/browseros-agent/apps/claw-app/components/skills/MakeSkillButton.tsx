@@ -13,13 +13,14 @@ import {
   PenLine,
   RotateCcw,
 } from 'lucide-react'
-import type { ReactNode } from 'react'
+import { type ReactNode, useEffect } from 'react'
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from '@/components/motion/tooltip'
 import { cn } from '@/lib/utils'
+import { AnalyticsEvent, track } from '@/modules/analytics/events'
 import { usePlan } from '@/modules/api/plan.hooks'
 import { taskDayAndTime } from '@/screens/audit/audit.helpers'
 import { SkillDraftSheet } from '@/screens/skill-draft/SkillDraftSheet'
@@ -29,6 +30,7 @@ import {
   isBusy,
   isDraftable,
   type MakeSkillState,
+  type SkillCtaSurface,
   siteName,
 } from '@/screens/skill-draft/skill-draft.helpers'
 import { useMakeSkill } from '@/screens/skill-draft/skill-draft.hooks'
@@ -67,6 +69,8 @@ interface MakeSkillButtonProps {
   task: SessionSummary
   /** `row` on Home and History, `page` in the task page header. */
   surface: 'row' | 'page'
+  /** Which list a row is in, for analytics; the task page header is always `task_page`. */
+  place?: 'home' | 'history'
   /** Rows other than the newest show the button only on hover or focus, from `sm` up. */
   revealOnHover?: boolean
   className?: string
@@ -80,9 +84,11 @@ interface MakeSkillButtonProps {
 export function MakeSkillButton({
   task,
   surface,
+  place = 'history',
   revealOnHover = false,
   className,
 }: MakeSkillButtonProps) {
+  const ctaSurface: SkillCtaSurface = surface === 'page' ? 'task_page' : place
   const plan = usePlan()
   const entitled = canDraftSkills(plan.data?.features)
   const available = entitled && (Boolean(task.skillName) || isDraftable(task))
@@ -90,7 +96,13 @@ export function MakeSkillButton({
     sessionId: task.sessionId,
     skillName: task.skillName,
     enabled: available,
+    surface: ctaSurface,
   })
+  const offered = available && flow.state === 'idle'
+  // Counting an impression is a side effect of the button appearing; no handler runs then.
+  useEffect(() => {
+    if (offered) countCtaShown(ctaSurface)
+  }, [offered, ctaSurface])
   if (!available) return null
 
   const state = flow.state
@@ -160,6 +172,15 @@ export function MakeSkillButton({
       />
     </>
   )
+}
+
+/** Surfaces whose button has been counted as shown in this app load: one impression each. */
+const countedSurfaces = new Set<SkillCtaSurface>()
+
+function countCtaShown(surface: SkillCtaSurface) {
+  if (countedSurfaces.has(surface)) return
+  countedSurfaces.add(surface)
+  track(AnalyticsEvent.SkillFromTaskCtaShown, { surface })
 }
 
 /** "From your Flipkart task, today at 18:39". */

@@ -14,6 +14,7 @@ import { useNavigate } from 'react-router'
 import { UltrafastWordmark } from '@/components/audit/UltrafastMarks'
 import { INK, PANEL_SHADOW } from '@/components/cockpit/InkPanel'
 import { cn } from '@/lib/utils'
+import { AnalyticsEvent, track } from '@/modules/analytics/events'
 import { useSessionDetail } from '@/modules/api/audit.hooks'
 import { toast } from '@/modules/toast/toast'
 import {
@@ -69,7 +70,9 @@ export function NowUltrafastStrip({ skill }: { skill: Skill }) {
 
   // Showing it is what uses up the moment, and nothing the person does marks that point.
   useEffect(() => {
-    if (show) markUpgradeSeen('skill_page', skill)
+    if (!show) return
+    markUpgradeSeen('skill_page', skill)
+    track(AnalyticsEvent.SkillUpgradeSeen, { surface: 'skill_page' })
   }, [show, skill])
 
   const p50Ms = skill.ultrafast?.p50Ms
@@ -143,6 +146,7 @@ export function useUpgradeToasts(skills: Skill[]): void {
     for (const skill of skills) {
       if (!turnedUltrafast(skill) || upgradeSeen('skills', skill)) continue
       markUpgradeSeen('skills', skill)
+      track(AnalyticsEvent.SkillUpgradeSeen, { surface: 'skills' })
       toast({
         title: (
           <>

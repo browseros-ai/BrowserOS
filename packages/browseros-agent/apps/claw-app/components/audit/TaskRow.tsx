@@ -34,6 +34,8 @@ interface TaskRowProps {
    * the rest show it on hover and focus.
    */
   skillAlways?: boolean
+  /** Which list the row is in, for analytics on "Make it a skill". */
+  skillPlace?: 'home' | 'history'
 }
 
 /**
@@ -46,6 +48,7 @@ export function TaskRow({
   now,
   timeOnly = false,
   skillAlways = false,
+  skillPlace = 'history',
 }: TaskRowProps) {
   const location = useLocation()
   const screenshotBaseUrl = useTaskScreenshotBaseUrl()
@@ -127,6 +130,7 @@ export function TaskRow({
         <MakeSkillButton
           task={task}
           surface="row"
+          place={skillPlace}
           revealOnHover={!skillAlways}
         />
         <SessionStatusBadge status={task.status} sessionId={task.sessionId} />

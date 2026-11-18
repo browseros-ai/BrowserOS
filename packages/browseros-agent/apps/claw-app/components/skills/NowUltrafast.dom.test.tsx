@@ -228,7 +228,8 @@ describe('the now ultrafast toast on Skills', () => {
     await remount(<Toasts skills={[upgraded, waiting]} />)
     disconnect()
 
-    expect(shown).toHaveLength(1)
-    expect(shown[0]?.action?.label).toBe('Open')
+    // Toasts raised before the host connected (by other test files) flush first; keep ours.
+    const upgrades = shown.filter((input) => input.action?.label === 'Open')
+    expect(upgrades).toHaveLength(1)
   })
 })

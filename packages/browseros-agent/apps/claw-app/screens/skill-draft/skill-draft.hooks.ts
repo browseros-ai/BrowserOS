@@ -10,8 +10,9 @@
 
 import type { SkillDraftStatus } from '@browseros/claw-api'
 import { skipToken, useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
+import { AnalyticsEvent, track } from '@/modules/analytics/events'
 import { useSessionDetail, useSessions } from '@/modules/api/audit.hooks'
 import {
   useCreateSkill,
@@ -25,6 +26,8 @@ import {
   type DraftEdits,
   isBusy,
   makeSkillState,
+  type SkillCtaSurface,
+  savedDraftProps,
   toSkillCreate,
 } from './skill-draft.helpers'
 
@@ -37,8 +40,11 @@ export function useMakeSkill({
   sessionId,
   skillName,
   enabled,
+  surface,
 }: {
   sessionId: string
+  /** Where the button is, for analytics. */
+  surface: SkillCtaSurface
   /** The skill already saved from this task, from the task summary. */
   skillName?: string
   /** Whether this plan and task can make a skill; nothing is fetched otherwise. */
@@ -47,6 +53,7 @@ export function useMakeSkill({
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const [sheetOpen, setSheetOpen] = useState(false)
+  const draftStartedAt = useRef(0)
   const variables = { sessionId }
   const statusKey = useSkillDraftStatus.getKey(variables)
   const statusQuery = useSkillDraftStatus({
@@ -55,13 +62,29 @@ export function useMakeSkill({
       query.state.data?.status === 'writing' ? WRITING_POLL_MS : false,
   })
   const draft = useDraftSkill({
-    onSuccess: (result) => queryClient.setQueryData(statusKey, result),
+    onSuccess: (result) => {
+      queryClient.setQueryData(statusKey, result)
+      if (result.status === 'ready' && result.draft) {
+        track(AnalyticsEvent.SkillDraftGenerated, {
+          ms: Date.now() - draftStartedAt.current,
+          confidence: result.draft.confidence,
+          steps: result.draft.steps.length,
+          inputs: result.draft.inputs.length,
+        })
+      } else if (result.status === 'failed') {
+        track(AnalyticsEvent.SkillDraftFailed, {
+          code: result.failure?.code ?? 'upstream_error',
+        })
+      }
+    },
     // The request itself failed (the plan changed, or the server is gone): show the retry view.
-    onError: () =>
+    onError: () => {
       queryClient.setQueryData<SkillDraftStatus>(statusKey, {
         status: 'failed',
         failure: { code: 'upstream_error' },
-      }),
+      })
+      track(AnalyticsEvent.SkillDraftFailed, { code: 'upstream_error' })
+    },
   })
   const create = useCreateSkill()
   const remove = useDeleteSkill()
@@ -92,6 +115,7 @@ export function useMakeSkill({
     const cached = queryClient.getQueryData<SkillDraftStatus>(statusKey)
     if (cached?.status === 'writing' || draft.isPending) return
     queryClient.setQueryData(statusKey, WRITING)
+    draftStartedAt.current = Date.now()
     draft.mutate(variables)
   }
 
@@ -101,6 +125,8 @@ export function useMakeSkill({
       navigate(`/skills/${encodeURIComponent(status.skillName)}`)
       return
     }
+    if (state === 'idle')
+      track(AnalyticsEvent.SkillFromTaskClicked, { surface })
     setSheetOpen(true)
     if (state === 'idle' || state === 'error') requestDraft()
   }
@@ -120,6 +146,7 @@ export function useMakeSkill({
     if (!ready || create.isPending) return
     create.mutate(toSkillCreate(ready, edits, sessionId), {
       onSuccess: (skill) => {
+        track(AnalyticsEvent.SkillFromTaskSaved, savedDraftProps(ready, edits))
         queryClient.setQueryData<SkillDraftStatus>(statusKey, {
           ...status,
           status: 'saved',
@@ -145,7 +172,12 @@ export function useMakeSkill({
     start,
     retry: requestDraft,
     save,
-    close: () => setSheetOpen(false),
+    close: () => {
+      if (state === 'writing' || state === 'review') {
+        track(AnalyticsEvent.SkillDraftDiscarded, { stage: state })
+      }
+      setSheetOpen(false)
+    },
   }
 }
 

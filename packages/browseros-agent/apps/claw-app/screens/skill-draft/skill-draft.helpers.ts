@@ -190,6 +190,25 @@ export function canSave(edits: DraftEdits): boolean {
  * The skill a reviewed draft saves as. The card shows the title, so it is the description; the
  * one-line "what it does" goes above the steps in SKILL.md.
  */
+/** Where "Make it a skill" was shown, as analytics names it. */
+export type SkillCtaSurface = 'home' | 'history' | 'task_page'
+
+/** What the person changed before saving, as booleans and counts: never the words themselves. */
+export function savedDraftProps(
+  draft: SkillDraft,
+  edits: DraftEdits,
+): Record<string, boolean | number> {
+  const steps = edits.steps.map((step) => step.trim()).filter(Boolean)
+  return {
+    edited_name: edits.title.trim() !== draft.title.trim(),
+    edited_steps: steps.join('\n') !== draft.steps.join('\n'),
+    edited_inputs:
+      JSON.stringify(edits.inputs) !== JSON.stringify(draft.inputs),
+    steps: steps.length,
+    inputs: edits.inputs.length,
+  }
+}
+
 export function toSkillCreate(
   draft: SkillDraft,
   edits: DraftEdits,
