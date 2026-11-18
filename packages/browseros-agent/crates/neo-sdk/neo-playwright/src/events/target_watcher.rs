@@ -2823,11 +2823,26 @@ impl Watcher {
         self.writer.hub().wants(&target, event).then_some(target)
     }
 
+    /// A JavaScript dialog opened: held for the runs that listen for it, recorded, and closed
+    /// after [`DIALOG_GRACE`] when nobody does. That is Neo's only on a tab Neo acts on, one a
+    /// session of core's is on (agent-created or adopted) when the dialog opens. A dialog only a
+    /// root observer reports, on a tab Neo never acted on (the user's own, another client's), is
+    /// left alone: no hold, no grace, no close and no record, so the user answers it; closed
+    /// after the grace, a `confirm()`, `prompt()` or `beforeunload` on the user's tab would be
+    /// dismissed by Neo within 250 ms. Core's page signals accept alerts only on core's own
+    /// sessions, so they leave such a tab's alerts alone too. Once a session of core's is on the
+    /// tab, its dialogs are Neo's again, whichever session is the tab's lifecycle source.
     async fn dialog_opened(&mut self, session: SessionId, params: DialogParams) {
         let target = self.target_of(&session).await;
         // A modal is reported on every attached session. Use the selected native-target
         // source so even an automatically answered alert has one opening/closure pair.
         if !self.lifecycle_sources.accepts(&session) {
+            return;
+        }
+        if target
+            .as_ref()
+            .is_some_and(|target| !self.core_attached(target))
+        {
             return;
         }
         let kind = DialogKind::parse(&params.kind);
@@ -2862,6 +2877,15 @@ impl Watcher {
             self.writer.record(PageEvent::Dialog(dialog.clone()));
             self.pending_dialogs.insert(session, dialog);
         }
+    }
+
+    /// Whether a session of core's is on `target`'s tab: one of its own page sessions, from an
+    /// attach the watcher saw or core's registry, as opposed to the watcher's root observer.
+    fn core_attached(&self, target: &TargetId) -> bool {
+        self.lifecycle_sources
+            .targets
+            .iter()
+            .any(|(session, known)| known == target && !self.root_observers.contains_key(session))
     }
 
     /// CDP orders opening before closing on one session. Removing its metadata makes duplicate
@@ -4632,7 +4656,8 @@ mod seed_tests {
     use tokio::{task, time};
 
     use super::{
-        CONTEXT_ATTACH_WAIT, EventFence, SeededTree, TICK, TREE_READ_WAIT, Watcher, WatcherRequest,
+        CONTEXT_ATTACH_WAIT, DIALOG_GRACE, EventFence, REAP, SeededTree, TICK, TREE_READ_WAIT,
+        Watcher, WatcherRequest,
     };
     use crate::DownloadState;
     use crate::events::{EventHub, PageEvent, PageEventKind, Subscription, WatcherProgress};
@@ -5438,6 +5463,89 @@ mod seed_tests {
                 "framenavigated https://a.test/again"
             ],
             "core's session reports once the observer went"
+        );
+        Ok(())
+    }
+
+    /// A watcher with a seeded root observer on the untouched tab `tab`, which answers a dialog
+    /// command, and the observer's session.
+    async fn observed_tab(
+        connection: &Arc<TestConnection>,
+    ) -> Result<(Arc<EventHub>, Watcher, SessionId), Box<dyn Error>> {
+        for method in [
+            "Target.setAutoAttach",
+            "Page.enable",
+            "Page.handleJavaScriptDialog",
+        ] {
+            connection.always(method, json!({}))?;
+        }
+        connection.always("Page.getFrameTree", tree_with("tab", None))?;
+        let (hub, mut watcher, mut answers) = watcher(connection);
+        watcher.observe_workers(TargetId("tab".to_owned())).await;
+        let observer = observer(&watcher)?;
+        answer_next(&mut watcher, &mut answers).await?;
+        Ok((hub, watcher, observer))
+    }
+
+    fn dialog_recorded(hub: &EventHub) -> bool {
+        hub.read_after(0)
+            .records
+            .iter()
+            .any(|record| matches!(record.event, PageEvent::Dialog(_)))
+    }
+
+    fn dialog_answered(connection: &TestConnection) -> Result<bool, Box<dyn Error>> {
+        Ok(connection
+            .calls()?
+            .iter()
+            .any(|call| call.method == "Page.handleJavaScriptDialog"))
+    }
+
+    /// A `confirm()` on a tab Neo never acted on, which only the tab's root observer reports, is
+    /// the user's to answer: Neo records nothing and answers nothing, past its grace and a reap.
+    #[tokio::test(start_paused = true)]
+    async fn a_dialog_on_an_untouched_tab_is_never_answered_by_neo() -> TestResult {
+        let connection = TestConnection::new([]);
+        let (hub, mut watcher, observer) = observed_tab(&connection).await?;
+        let confirm = json!({ "type": "confirm", "message": "Leave this page?" });
+        read(
+            &mut watcher,
+            on(observer.as_str(), "Page.javascriptDialogOpening", confirm),
+        )
+        .await;
+        time::advance(DIALOG_GRACE + REAP).await;
+        watcher.end_graces();
+        watcher.tick().await;
+        settle().await;
+        assert!(
+            !dialog_recorded(&hub),
+            "Neo records no dialog of the user's tab"
+        );
+        assert!(!dialog_answered(&connection)?, "and never answers it");
+        Ok(())
+    }
+
+    /// The same `confirm()` on a tab a session of core's is on is Neo's, as before: recorded, and
+    /// answered once its grace ends with nobody listening, though the root observer that came
+    /// first stays the tab's lifecycle source.
+    #[tokio::test(start_paused = true)]
+    async fn a_dialog_on_a_tab_with_a_core_session_is_held_and_closed() -> TestResult {
+        let connection = TestConnection::new([]);
+        let (hub, mut watcher, observer) = observed_tab(&connection).await?;
+        read(&mut watcher, page_attached("core", "tab")).await;
+        let confirm = json!({ "type": "confirm", "message": "Leave this page?" });
+        read(
+            &mut watcher,
+            on(observer.as_str(), "Page.javascriptDialogOpening", confirm),
+        )
+        .await;
+        assert!(dialog_recorded(&hub), "recorded");
+        time::advance(DIALOG_GRACE * 2).await;
+        watcher.end_graces();
+        settle().await;
+        assert!(
+            dialog_answered(&connection)?,
+            "closed after its grace with nobody listening"
         );
         Ok(())
     }
