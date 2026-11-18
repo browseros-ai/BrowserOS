@@ -451,7 +451,7 @@ impl SkillService {
         if let Some(existing) = self.repo.history_skill_for_session(&session_id).await? {
             return self.view_of(existing).await.map(Saved::Existing);
         }
-        let name = normalized_skill_name(&input.name)?;
+        let base = normalized_skill_name(&input.name)?;
         let CreateSkill {
             name: _,
             description,
@@ -461,30 +461,38 @@ impl SkillService {
             origin: _,
             source_session_id,
         } = input;
-        let content = with_task_sections(
-            &render_skill_markdown(&name, &description, &steps, &learned_notes),
-            from.summary.as_deref(),
-            &from.inputs,
-        );
-        let mut model = self.new_skill_model(
-            &name,
-            description,
-            site,
-            SkillOrigin::History,
-            source_session_id,
-        );
-        model.inputs_json = (!from.inputs.is_empty())
+        let inputs_json = (!from.inputs.is_empty())
             .then(|| serde_json::to_string(&from.inputs).ok())
             .flatten();
-        match self.try_install_new(&name, &content, model).await {
-            Ok(Some(view)) => Ok(Saved::Created(view)),
-            Ok(None) => Err(AppError::conflict("a skill with this name already exists")),
-            // The unique index on the task lost a race with another save of the same draft.
-            Err(error) => match self.repo.history_skill_for_session(&session_id).await? {
-                Some(existing) => self.view_of(existing).await.map(Saved::Existing),
-                None => Err(error),
-            },
+        // Two drafts can propose the same name, and the review sheet does not let the person
+        // rename one, so a taken name moves on to the next free `-2`, `-3` form.
+        for name in name_candidates(&base) {
+            let content = with_task_sections(
+                &render_skill_markdown(&name, &description, &steps, &learned_notes),
+                from.summary.as_deref(),
+                &from.inputs,
+            );
+            let mut model = self.new_skill_model(
+                &name,
+                description.clone(),
+                site.clone(),
+                SkillOrigin::History,
+                source_session_id.clone(),
+            );
+            model.inputs_json.clone_from(&inputs_json);
+            match self.try_install_new(&name, &content, model).await {
+                Ok(Some(view)) => return Ok(Saved::Created(view)),
+                Ok(None) => {}
+                // The unique index on the task lost a race with another save of the same draft.
+                Err(error) => {
+                    return match self.repo.history_skill_for_session(&session_id).await? {
+                        Some(existing) => self.view_of(existing).await.map(Saved::Existing),
+                        None => Err(error),
+                    };
+                }
+            }
         }
+        Err(AppError::conflict("a skill with this name already exists"))
     }
 
     /// For each of these sessions that has a skill saved from it, the newest such skill's name.
@@ -493,11 +501,6 @@ impl SkillService {
         session_ids: &[String],
     ) -> AppResult<HashMap<String, String>> {
         self.repo.skill_names_by_session(session_ids).await
-    }
-
-    /// Whether a skill with this name exists, for picking a free name for a draft.
-    pub async fn name_taken(&self, name: &str) -> AppResult<bool> {
-        Ok(self.repo.get(name).await?.is_some())
     }
 
     /// How the skill came to exist, as stored (`agent`, `manual`, `directory` or `history`).
@@ -836,6 +839,15 @@ pub(crate) fn neo_prefixed(name: &str) -> String {
     } else {
         format!("{NEO_SKILL_PREFIX}{name}")
     }
+}
+
+/// `base`, then `base-2` up to `base-99`, then one random suffix that cannot be taken.
+fn name_candidates(base: &str) -> impl Iterator<Item = String> + '_ {
+    std::iter::once(base.to_string())
+        .chain((2..100).map(move |suffix| format!("{base}-{suffix}")))
+        .chain(std::iter::once_with(move || {
+            format!("{base}-{}", uuid::Uuid::new_v4().simple())
+        }))
 }
 
 /// Validate a raw skill name and return its canonical `neo-`-prefixed form.

@@ -987,3 +987,33 @@ async fn drafting_a_skill_needs_the_plan_and_a_known_task() -> anyhow::Result<()
     assert_eq!(status, StatusCode::NOT_FOUND);
     Ok(())
 }
+
+#[tokio::test]
+async fn two_tasks_with_the_same_draft_name_both_save() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let router = &app.router;
+    finished_task(&app.state, "hist-one").await?;
+    finished_task(&app.state, "hist-two").await?;
+
+    let (status, first) = request(
+        router,
+        "POST",
+        "/api/v1/skills",
+        Some(task_skill("hist-one")),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::CREATED, "{first}");
+    assert_eq!(first["name"], "neo-flipkart-phones-under-budget");
+
+    let (status, second) = request(
+        router,
+        "POST",
+        "/api/v1/skills",
+        Some(task_skill("hist-two")),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::CREATED, "{second}");
+    assert_eq!(second["name"], "neo-flipkart-phones-under-budget-2");
+    assert_eq!(second["sourceSessionId"], "hist-two");
+    Ok(())
+}
