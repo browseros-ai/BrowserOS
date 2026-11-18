@@ -23,7 +23,7 @@ import {
   upgradeSeconds,
 } from '@/screens/skills/skills.helpers'
 
-export type UpgradeSurface = 'skills' | 'skill_page'
+type UpgradeSurface = 'skills' | 'skill_page'
 
 const SEEN_PREFIX = 'skillUpgradeSeen:v1'
 
@@ -35,7 +35,7 @@ function seenKey(surface: UpgradeSurface, skill: Skill): string {
   return `${SEEN_PREFIX}:${surface}:${skill.name}:${skill.createdAt}`
 }
 
-export function upgradeSeen(surface: UpgradeSurface, skill: Skill): boolean {
+function upgradeSeen(surface: UpgradeSurface, skill: Skill): boolean {
   const key = seenKey(surface, skill)
   if (seenThisLoad.has(key)) return true
   try {
@@ -45,7 +45,7 @@ export function upgradeSeen(surface: UpgradeSurface, skill: Skill): boolean {
   }
 }
 
-export function markUpgradeSeen(surface: UpgradeSurface, skill: Skill): void {
+function markUpgradeSeen(surface: UpgradeSurface, skill: Skill): void {
   const key = seenKey(surface, skill)
   seenThisLoad.add(key)
   try {
