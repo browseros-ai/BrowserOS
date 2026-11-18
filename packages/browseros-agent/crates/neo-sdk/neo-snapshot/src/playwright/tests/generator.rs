@@ -1,4 +1,4 @@
-//! Seeded random nodes for the differential. They take every value the typed tree
+//! Seeded random nodes and trees for the differential. They take every value the typed tree
 //! admits, not only what a page writes: an explicit `false` in every flag, a `cursor` that is not
 //! `pointer`, `""` in every string, a role or a ref with a line break, numbers of every form. Their
 //! strings are built from the marks each of upstream's quoting tests looks for, so each mark lands
@@ -6,7 +6,8 @@
 
 use serde_json::Number;
 
-use crate::aria_node::{AriaNode, Invalid, NodeBox, Tristate};
+use crate::aria_node::{AriaChild, AriaNode, Invalid, NodeBox, Tristate};
+use crate::snapshot::{PartialFrame, Snapshot};
 use crate::split_mix64::SplitMix64;
 
 /// What a generated string is made of: zero to three of these, end to end.
@@ -129,10 +130,15 @@ const ROLES: &[&str] = &[
     "row",
 ];
 
-/// A few refs, so two nodes often share one.
+/// A few refs, so two nodes, or a node and a partial frame, often share one.
 const REFS: &[&str] = &["e1", "e2", "e3", "f1e1", "f1e2"];
 
 const CURSORS: &[&str] = &["pointer", "default", "", "Pointer"];
+
+const REASONS: &[&str] = &["timeout after 2000 ms", "frame detached", "target closed"];
+
+/// The deepest level a generated tree reaches, the top level being 0.
+const MAX_DEPTH: usize = 4;
 
 pub(super) struct Generator(SplitMix64);
 
@@ -199,6 +205,50 @@ impl Generator {
             text,
             children: Vec::new(),
         }
+    }
+
+    /// A tree of one to four top-level nodes, each with up to three children a level, and up to
+    /// three frames not read: most under a ref of the tree, some under none, some two for one.
+    pub(super) fn snapshot(&mut self) -> Snapshot {
+        let tree = (0..=self.below(3)).map(|_| self.subtree(0)).collect();
+        let mut partial: Vec<PartialFrame> = Vec::new();
+        for _ in 0..self.below(4) {
+            let iframe = match (self.below(5), partial.last()) {
+                (0, Some(last)) => last.r#ref.clone(),
+                (1, _) => "e9".to_owned(),
+                _ => self.reference(),
+            };
+            let frame = if self.chance(70) {
+                format!("https://pay.example/{}", self.string())
+            } else {
+                self.string()
+            };
+            let reason = if self.chance(80) {
+                self.pick(REASONS).to_owned()
+            } else {
+                self.string()
+            };
+            partial.push(PartialFrame {
+                r#ref: iframe,
+                frame,
+                reason,
+            });
+        }
+        Snapshot { tree, partial }
+    }
+
+    fn subtree(&mut self, depth: usize) -> AriaNode {
+        let mut node = self.node();
+        if depth < MAX_DEPTH {
+            for _ in 0..self.below(4) {
+                node.children.push(if self.chance(30) {
+                    AriaChild::Text(self.string())
+                } else {
+                    AriaChild::Node(Box::new(self.subtree(depth + 1)))
+                });
+            }
+        }
+        node
     }
 
     /// Zero to three pieces end to end, so the empty string comes up too.

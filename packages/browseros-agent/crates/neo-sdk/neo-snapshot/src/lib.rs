@@ -4,10 +4,10 @@
 //! Its place in a snapshot's path is tree in, text out:
 //!
 //! ```text
-//!  a producer of the shape ─▶ AriaNode tree
+//!  a producer of the shape ─▶ Snapshot: the AriaNode tree, the frames not read
 //!                                 │
 //!                                 ▼
-//!                       playwright: upstream's printer, one node at a time ─▶ the text
+//!                       playwright: Playwright's own text ─▶ the text
 //!                                 │ every length, space, number and quote by
 //!                                 ▼
 //!                       js: JavaScript's rules
@@ -30,6 +30,7 @@
 //! |---|---|
 //! | `playwright/yaml_escape.rs` | vendored `isomorphic/yaml.ts` |
 //! | `playwright/node_text.rs` | vendored `isomorphic/ariaSnapshotRenderer.ts` |
+//! | `playwright/tree_text.rs` | neo-playwright-js `prelude/snapshot.ts` (`treeLines`, `yamlLines`, `renderSnapshot`) |
 //! | `js/*.rs` | ECMAScript itself; QuickJS is the test oracle |
 //!
 //! Pure: no clock, no store, no browser and no async. The dependencies are serde and `serde_json`,
@@ -56,6 +57,15 @@ mod js;
     )
 )]
 mod playwright;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "a snapshot is built by the snapshot operation once it renders through this \
+                  crate; until then only the tests build one"
+    )
+)]
+mod snapshot;
 #[cfg(test)]
 mod split_mix64;
 
