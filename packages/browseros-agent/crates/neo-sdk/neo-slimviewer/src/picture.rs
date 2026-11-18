@@ -259,6 +259,7 @@ pub struct Cpu {
 const FULL_SIZE_AFTER: Duration = Duration::from_secs(1);
 const CPU_FULL_SIZE_AFTER: Duration = Duration::from_secs(2);
 const CAPACITY_WINDOW: Duration = Duration::from_secs(10);
+const STALE_CAPACITY_AFTER_JAM: Duration = Duration::from_secs(20);
 // Integer nanoseconds keep the 40 ms recovery boundary at 15 fps inclusive.
 fn starved_work(fps: f32) -> Duration {
     Duration::from_nanos((800_000_000.0 / f64::from(fps)) as u64)
@@ -319,8 +320,6 @@ pub struct Picture {
     calm_sharp: bool,
     last_input: Option<Instant>,
     queue_high: bool,
-    /// Two low-queue delivery ticks release the stale IDR budget until congestion returns.
-    clear_ticks: u8,
     last_reset: Option<Instant>,
     last_pressure: Option<Instant>,
     last_congested: Option<Instant>,
@@ -366,7 +365,6 @@ impl Picture {
             calm_sharp: false,
             last_input: None,
             queue_high: false,
-            clear_ticks: 0,
             last_reset: None,
             last_pressure: None,
             last_congested: None,
@@ -435,7 +433,6 @@ impl Picture {
         self.link.last_up = None;
         self.last_reset = None;
         self.queue_high = false;
-        self.clear_ticks = 0;
     }
 
     pub fn link_kbps(&self) -> u32 {
@@ -627,7 +624,11 @@ impl Picture {
         let kbps = self.capacity_kbps(now).or_else(|| {
             self.capacity
                 .back()
-                .filter(|_| self.clear_ticks < 2)
+                .filter(|_| {
+                    self.last_congested.is_some_and(|at| {
+                        now.saturating_duration_since(at) < STALE_CAPACITY_AFTER_JAM
+                    })
+                })
                 .map(|&(_, kbps)| kbps)
         });
         self.estimate(cap_crf)
@@ -842,7 +843,6 @@ impl Picture {
             self.capacity.pop_front();
         }
         if congested {
-            self.clear_ticks = 0;
             self.last_congested = Some(now);
             if link.delivered_kbps > 0.0 {
                 self.capacity.push_back((now, link.delivered_kbps));
@@ -851,13 +851,6 @@ impl Picture {
                 self.link_kbps = ((link.delivered_kbps * 0.85) as u32).max(300);
             }
         } else {
-            if self.clear_ticks < 2 {
-                self.clear_ticks = if link.queue_ms < 10 && link.delivered_kbps > 0.0 {
-                    self.clear_ticks + 1
-                } else {
-                    0
-                };
-            }
             self.link_kbps = (self.link_kbps.saturating_add(self.link_kbps / 10)).min(8000);
             if self
                 .last_congested
@@ -1475,14 +1468,14 @@ mod tests {
         let mut p = picture(t);
         let half = to_link_half(&mut p, t);
         costly_half_key(&mut p, half);
-        for n in 1..=25 {
+        for n in 1..=60 {
             let now = at(half, n);
-            let queue_ms = if n % 2 == 0 { 23 } else { 170 };
+            let congested = n % 6 == 0;
             p.tick(
                 now,
                 Link {
-                    queue_ms,
-                    blocked: if n == 5 { 0.4 } else { 0.0 },
+                    blocked: if congested { 0.4 } else { 0.0 },
+                    delivered_kbps: if congested { 0.0 } else { 3000.0 },
                     ..active(15)
                 },
                 Cpu::default(),
@@ -1497,45 +1490,36 @@ mod tests {
             );
             send(&mut p, now, plan);
         }
-        assert_eq!(p.capacity_kbps(at(half, 25)), None);
+        assert_eq!(p.capacity_kbps(at(half, 60)), None);
         assert!(
-            !p.full_return_fits(at(half, 25)),
+            !p.full_return_fits(at(half, 60)),
             "the last known link still prices the IDR"
         );
     }
 
     #[test]
-    fn tests_that_a_cleared_link_drops_stale_capacity_and_returns_full() {
+    fn tests_that_a_cleared_cell_link_returns_full_during_small_changes() {
         let t = Instant::now();
         let mut p = picture(t);
         let half = to_link_half(&mut p, t);
         costly_half_key(&mut p, half);
-        for n in 1..=16 {
+        for n in 1..=22 {
             let now = at(half, n);
-            // A gap in delivery and a 10 ms queue each break the first clean streak.
-            let queue_ms = if n <= 10 {
-                23
-            } else if n == 14 {
-                10
-            } else {
-                1
-            };
             let link = Link {
-                queue_ms,
-                delivered_kbps: if n == 12 { 0.0 } else { 3000.0 },
+                queue_ms: [20, 30, 40, 50, 60][n as usize % 5],
                 ..active(15)
             };
             p.tick(now, link, Cpu::default());
             let plan = p.plan(now, Some((10, 26, 16)));
             assert_eq!(
                 plan.scale,
-                if n < 16 { Scale::Half } else { Scale::Full },
+                if n < 20 { Scale::Half } else { Scale::Full },
                 "tick {n}"
             );
             send(&mut p, now, plan);
         }
         assert_eq!(
-            p.capacity_kbps(at(half, 16)),
+            p.capacity_kbps(at(half, 22)),
             None,
             "the carousel produced no new capacity probe"
         );
@@ -1554,20 +1538,11 @@ mod tests {
             !p.full_return_fits(at(half, 2)),
             "a fresh sample still limits full-size keys"
         );
+        assert_eq!(p.capacity_kbps(at(half, 19)), None);
+        assert!(!p.full_return_fits(at(half, 19)));
+        assert!(p.full_return_fits(at(half, 20)));
         p.tick(
-            at(half, 3),
-            Link {
-                queue_ms: 100,
-                ..active(15)
-            },
-            Cpu::default(),
-        );
-        assert!(
-            p.full_return_fits(at(half, 11)),
-            "the cleared link can outlive the stale sample"
-        );
-        p.tick(
-            at(half, 12),
+            at(half, 21),
             Link {
                 blocked: 0.4,
                 ..Link::default()
@@ -1575,8 +1550,13 @@ mod tests {
             Cpu::default(),
         );
         assert!(
-            !p.full_return_fits(at(half, 12)),
+            !p.full_return_fits(at(half, 21)),
             "new congestion restores even the expired estimate"
+        );
+        capacity(&mut p, at(half, 40), 3000.0);
+        assert!(
+            !p.full_return_fits(at(half, 42)),
+            "fresh probes always apply"
         );
     }
 
