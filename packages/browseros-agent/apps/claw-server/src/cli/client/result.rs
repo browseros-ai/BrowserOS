@@ -13,6 +13,9 @@ pub struct ToolOutput {
     /// Base64 image blocks, which a terminal cannot render and which therefore
     /// become files.
     pub images: Vec<ImageBlock>,
+    /// The server's tips: guidance about the session rather than the result. They go to
+    /// stderr as the CLI's own notices, so `-q` drops them and captured output stays clean.
+    pub notices: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -27,6 +30,9 @@ pub struct ImageBlock {
 /// this should never appear. Filtering it costs nothing and keeps the agent
 /// reading the output from ever being told to carry a session.
 const HANDLE_PREFIX: &str = "[browseros-neo session:";
+
+/// How the server starts each tip it appends to a result.
+const TIP_PREFIX: &str = "Tip: ";
 
 impl ToolOutput {
     /// Which exit code this result deserves.
@@ -113,6 +119,12 @@ pub fn from_call_result(result: &Value) -> ToolOutput {
                 Some("text") => {
                     if let Some(text) = block.get("text").and_then(Value::as_str) {
                         if text.trim_start().starts_with(HANDLE_PREFIX) {
+                            continue;
+                        }
+                        // A tip arrives as a block of its own, so it is set apart whole and
+                        // page content is never mistaken for one.
+                        if text.trim_start().starts_with(TIP_PREFIX) {
+                            output.notices.push(text.trim().to_string());
                             continue;
                         }
                         lines.push(text.to_string());
@@ -213,5 +225,18 @@ mod tests {
             }));
             assert_eq!(output.exit_code(), Code::Ok, "{structured}");
         }
+    }
+
+    #[test]
+    fn tips_are_notices_and_never_part_of_the_text() {
+        let output = from_call_result(&json!({
+            "content": [
+                { "type": "text", "text": "page content" },
+                { "type": "text", "text": "Tip: when the user says this task is done, run: browseros task done" }
+            ]
+        }));
+        assert_eq!(output.text, "page content");
+        assert_eq!(output.notices.len(), 1);
+        assert!(output.notices[0].contains("browseros task done"));
     }
 }

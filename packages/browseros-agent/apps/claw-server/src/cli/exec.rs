@@ -656,6 +656,9 @@ fn report(
     files: &[String],
     globals: &Globals,
 ) {
+    for notice in &output.notices {
+        io::note(notice);
+    }
     if globals.json {
         io::out(&render::envelope(label, tool, page, output, elapsed, files));
         return;

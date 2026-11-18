@@ -51,7 +51,7 @@ pub struct Globals {
     /// Wrap the result in a JSON envelope on stdout.
     #[arg(long, global = true)]
     pub json: bool,
-    /// Suppress the CLI's own notices on stderr.
+    /// Suppress the notices and tips printed on stderr. Results on stdout are unaffected.
     #[arg(long, short, global = true)]
     pub quiet: bool,
     /// Client read timeout in ms. The default is 180000, which must exceed the
