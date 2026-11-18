@@ -1347,11 +1347,26 @@ impl ClawMcpService {
             .as_ref()
             .and_then(|row| row.status_reason.as_deref())
             .is_some_and(|reason| reason.starts_with("skipped"));
+        // A skill made from a finished task promises to turn ultrafast after its first run. If
+        // that run's flow failed to verify, it is left pending with nothing verified; ask again
+        // on the next run instead of leaving it pending for good.
+        let unverified_from_task = status == FlowStatus::Pending
+            && row.as_ref().is_some_and(|row| row.verified_at.is_none())
+            && self
+                .state
+                .skills
+                .origin(name)
+                .await
+                .ok()
+                .flatten()
+                .as_deref()
+                == Some("history");
         if skipped
-            || !matches!(
-                status,
-                FlowStatus::None | FlowStatus::Off | FlowStatus::Broken
-            )
+            || !(unverified_from_task
+                || matches!(
+                    status,
+                    FlowStatus::None | FlowStatus::Off | FlowStatus::Broken
+                ))
         {
             return None;
         }

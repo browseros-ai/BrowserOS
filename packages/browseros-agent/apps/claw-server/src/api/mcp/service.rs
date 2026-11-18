@@ -4269,6 +4269,73 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_skill_from_a_task_is_nudged_until_its_flow_verifies() -> anyhow::Result<()> {
+        use crate::services::skills::{CreateSkill, FromTask, SkillOrigin};
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let state = call.state.clone();
+        state.ultrafast.set(true);
+        let service = ClawMcpService::new(state.clone());
+        let skill = |name: &str, session: Option<&str>| CreateSkill {
+            name: name.to_string(),
+            description: "Find phones under a budget".to_string(),
+            site: Some("flipkart.com".to_string()),
+            steps: vec![
+                "Open flipkart.com".to_string(),
+                "Read the top phones".to_string(),
+            ],
+            learned_notes: vec![],
+            origin: SkillOrigin::Agent,
+            source_session_id: session.map(str::to_string),
+        };
+        let from = || FromTask {
+            summary: None,
+            inputs: vec![],
+        };
+        state
+            .skills
+            .create_from_task(skill("neo-from-task", Some("hist-sess")), from())
+            .await?;
+        state.skills.create(skill("neo-by-agent", None)).await?;
+        let pending = |name: &str| crate::db::entities::skill_flows::Model {
+            skill_name: name.to_string(),
+            status: "pending".to_string(),
+            status_reason: None,
+            flow_version: 0,
+            attempts: 1,
+            site_failures: 0,
+            effects: None,
+            write_approved: false,
+            approved_commit: None,
+            approved_via: None,
+            approved_at: None,
+            approved_answer: None,
+            approved_client: None,
+            with_agent_commit: None,
+            p50_ms: None,
+            source_session_id: None,
+            verified_at: None,
+            repaired_at: None,
+            updated_at: 0,
+        };
+
+        // Saved with no flow: the first run asks for one, like any skill without a flow.
+        assert!(service.upgrade_nudge("neo-from-task").await.is_some());
+
+        // Left pending by a verify that failed: a task skill is asked again, others are not.
+        state.skills.put_flow_row(pending("neo-from-task")).await?;
+        state.skills.put_flow_row(pending("neo-by-agent")).await?;
+        assert!(service.upgrade_nudge("neo-from-task").await.is_some());
+        assert!(service.upgrade_nudge("neo-by-agent").await.is_none());
+
+        // Once it has verified, a pending row (a repair under way) is left alone.
+        let mut verified_once = pending("neo-from-task");
+        verified_once.verified_at = Some(1);
+        state.skills.put_flow_row(verified_once).await?;
+        assert!(service.upgrade_nudge("neo-from-task").await.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn name_session_validates_and_renames_without_a_browser() -> anyhow::Result<()> {
         let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
         let session = call
