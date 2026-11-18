@@ -47,6 +47,7 @@ import { useSkillFlow } from '@/modules/api/skills.hooks'
 import { taskDayAndTime } from '@/screens/audit/audit.helpers'
 import { useSkillDetailData } from './skill-detail.data'
 import {
+  awaitsFirstRun,
   chosenLine,
   healthLine,
   parseSkillBody,
@@ -125,11 +126,12 @@ export function SkillDetail() {
             <p className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[14px] text-ink-3">
               <UltrafastState
                 ultrafast={skill.ultrafast}
+                afterFirstRun={awaitsFirstRun(skill)}
                 wordmarkClassName="text-[14.5px]"
               >
                 {p50Ms ? <span>{runSpeed(p50Ms)}</span> : null}
               </UltrafastState>
-              {ultrafastMark(skill.ultrafast) ? (
+              {ultrafastMark(skill.ultrafast, awaitsFirstRun(skill)) ? (
                 <span aria-hidden className="h-3.5 w-px bg-border-2" />
               ) : null}
               {usedLabel(skill.runCount, skill.lastRunAt, Date.now())}

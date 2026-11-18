@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test'
 import type { Skill, SkillUltrafast } from '@browseros/claw-api'
 import {
+  awaitsFirstRun,
   chosenLine,
   durationLabel,
   healthLine,
@@ -188,6 +189,38 @@ describe('ultrafastMark', () => {
     })
     expect(ultrafastMark(ultrafast({ status: 'none' }))).toBeNull()
     expect(ultrafastMark(undefined)).toBeNull()
+  })
+
+  it('says a skill made from a task turns ultrafast after its first run', () => {
+    const fromTask: Skill = {
+      name: 'neo-flipkart-phones',
+      description: 'Find phones under a budget on Flipkart',
+      origin: 'history',
+      version: 1,
+      linkedAgents: [],
+      runCount: 0,
+      cleanRunCount: 0,
+      createdAt: 0,
+      updatedAt: 0,
+      ultrafast: ultrafast({ status: 'none' }),
+    }
+    expect(awaitsFirstRun(fromTask)).toBe(true)
+    expect(ultrafastMark(fromTask.ultrafast, true)).toEqual({
+      dim: true,
+      word: 'after its first run',
+      tone: 'muted',
+    })
+    expect(awaitsFirstRun({ ...fromTask, runCount: 1 })).toBe(false)
+    expect(awaitsFirstRun({ ...fromTask, origin: 'agent' })).toBe(false)
+    expect(
+      awaitsFirstRun({
+        ...fromTask,
+        ultrafast: ultrafast({ status: 'none', locked: true }),
+      }),
+    ).toBe(false)
+    expect(ultrafastMark(ultrafast({ status: 'pending' }), true)?.word).toBe(
+      'on the way',
+    )
   })
 })
 

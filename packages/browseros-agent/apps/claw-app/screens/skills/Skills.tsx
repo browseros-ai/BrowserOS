@@ -7,7 +7,7 @@
 import type { Skill } from '@browseros/claw-api'
 import { Bookmark, Globe, Lightbulb, Plus, TriangleAlert } from 'lucide-react'
 import { type ReactNode, useState } from 'react'
-import { NavLink } from 'react-router'
+import { NavLink, useLocation } from 'react-router'
 import { CopyButton } from '@/components/copy/CopyButton'
 import { Favicon } from '@/components/favicon/Favicon'
 import { HarnessIcon } from '@/components/harness/HarnessIcon'
@@ -24,7 +24,13 @@ import { UltrafastState } from '@/components/skills/UltrafastState'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
 import { useSkillsScreenData } from './skills.data'
-import { SAVE_PHRASE, skillSites, usedLabel } from './skills.helpers'
+import {
+  awaitsFirstRun,
+  SAVE_PHRASE,
+  skillCommand,
+  skillSites,
+  usedLabel,
+} from './skills.helpers'
 
 /** Two columns at the page's full width, one on narrow screens. */
 const GRID_CLASS =
@@ -34,6 +40,7 @@ const GRID_CLASS =
 export function Skills() {
   const { skills, agents, isLoading, isError } = useSkillsScreenData()
   const [creating, setCreating] = useState(false)
+  const triedSkill = useTriedSkill()
   const now = Date.now()
 
   return (
@@ -56,6 +63,7 @@ export function Skills() {
 
       <div className="flex flex-col gap-4">
         <SaveTip />
+        {triedSkill ? <TryNewSkill name={triedSkill} /> : null}
 
         <div className="flex flex-col gap-5">
           {agents.length > 0 ? <WorksIn agents={agents} /> : null}
@@ -97,6 +105,41 @@ export function Skills() {
 }
 
 // ---------------------------------------------------------------------------
+
+/** The skill just saved from a task, carried in router state from the review sheet. */
+function useTriedSkill(): string | undefined {
+  const { state } = useLocation()
+  return typeof state === 'object' &&
+    state !== null &&
+    'triedSkill' in state &&
+    typeof state.triedSkill === 'string'
+    ? state.triedSkill
+    : undefined
+}
+
+/** Shown once after saving a skill from a task: the exact words to paste into an agent. */
+function TryNewSkill({ name }: { name: string }) {
+  const phrase = skillCommand(name)
+  return (
+    <div className="flex flex-wrap items-center gap-x-3.5 gap-y-2.5 rounded-xl border border-border-2 bg-card px-[18px] py-3.5 shadow-card">
+      <span className="font-semibold text-cyanotype-ink">
+        Try your new skill.
+      </span>
+      <Phrase className="py-1.5 text-[13.5px]">{phrase}</Phrase>
+      <CopyButton
+        text={phrase}
+        what="the phrase"
+        variant="ghost"
+        size="sm"
+        className="h-[30px] px-2 font-semibold text-[13.5px] text-primary"
+      />
+      <span className="basis-full text-[14px] text-ink-3">
+        Paste this into your AI agent to run it. The first run makes it
+        ultrafast.
+      </span>
+    </div>
+  )
+}
 
 /** One quiet line, so the skills stay the first thing on the page. */
 function SaveTip() {
@@ -196,6 +239,7 @@ function SkillCard({ skill, now }: { skill: Skill; now: number }) {
         <span className="flex min-w-0 items-center gap-2 text-[13px] text-ink-3 leading-4">
           <UltrafastState
             ultrafast={skill.ultrafast}
+            afterFirstRun={awaitsFirstRun(skill)}
             wordmarkClassName="text-[13.5px]"
           />
           <span className="truncate">

@@ -164,9 +164,14 @@ export interface UltrafastMark {
   tone: 'amber' | 'red' | 'muted'
 }
 
-/** How a skill's ultrafast state reads beside the wordmark, or nothing for a plain skill. */
+/**
+ * How a skill's ultrafast state reads beside the wordmark, or nothing for a plain skill.
+ * `afterFirstRun` marks a skill made from a task that has not run yet: it has no flow, but its
+ * first run in an agent makes it ultrafast, so it says so.
+ */
 export function ultrafastMark(
   ultrafast: SkillUltrafast | undefined,
+  afterFirstRun = false,
 ): UltrafastMark | null {
   switch (ultrafast?.status) {
     case 'verified':
@@ -180,8 +185,20 @@ export function ultrafastMark(
     case 'off':
       return { dim: true, word: 'off', tone: 'muted' }
     default:
-      return null
+      return afterFirstRun
+        ? { dim: true, word: 'after its first run', tone: 'muted' }
+        : null
   }
+}
+
+/** A skill made from a finished task that is waiting for the run that makes it ultrafast. */
+export function awaitsFirstRun(skill: Skill): boolean {
+  return (
+    skill.origin === 'history' &&
+    skill.runCount === 0 &&
+    skill.ultrafast?.status === 'none' &&
+    skill.ultrafast.locked !== true
+  )
 }
 
 /** "about 1.2 s a run" from a median in milliseconds. */
