@@ -1898,11 +1898,14 @@ impl Watcher {
         let Some(navigation) = navigation_event::parse(method, params) else {
             return;
         };
-        let main_of = match (&navigation, session) {
-            (PageEvent::Navigation(event), Some(session)) => self
-                .target_of(session)
-                .await
-                .filter(|tab| tab.as_str() == event.frame.as_str()),
+        let tab = match session {
+            Some(session) => self.target_of(session).await,
+            None => None,
+        };
+        let main_of = match (&navigation, &tab) {
+            (PageEvent::Navigation(event), Some(tab)) if tab.as_str() == event.frame.as_str() => {
+                Some(tab.clone())
+            }
             _ => None,
         };
         if let Some(target) = &main_of
@@ -1923,6 +1926,12 @@ impl Watcher {
             {
                 self.verify_recovery(ticket, session);
             }
+        }
+        if tab
+            .as_ref()
+            .is_some_and(|tab| !self.records_page_events(tab))
+        {
+            return;
         }
         let seq = self.writer.record(navigation);
         if let Some(tab) = main_of {
@@ -2765,8 +2774,12 @@ impl Watcher {
         self.record_load(target, kind);
     }
 
-    /// Records `target`'s load event of `kind` with its main frame, if the tracker knows it.
+    /// Records `target`'s load event of `kind` with its main frame, if the tracker knows it and a
+    /// session of core's is on the tab ([`Self::records_page_events`]).
     fn record_load(&mut self, target: TargetId, kind: PageEventKind) {
+        if !self.records_page_events(&target) {
+            return;
+        }
         if let Some(frame) = self.lifecycle.main(&target) {
             self.writer.record(PageEvent::Load {
                 target,
@@ -2780,9 +2793,12 @@ impl Watcher {
     /// frame's commit. Same-document navigations and process swaps change no number.
     async fn frame_lifecycle(&mut self, method: &str, session: &SessionId, params: &Value) {
         if let Some(target) = self.target_of(session).await {
+            let record = self.records_page_events(&target);
             let mut changed = false;
             for event in self.lifecycle.record(&target, method, params) {
-                self.writer.record(PageEvent::FrameLifecycle(event));
+                if record {
+                    self.writer.record(PageEvent::FrameLifecycle(event));
+                }
                 changed = true;
             }
             // A child frame attached, left or committed, or the main frame did: the tab's tree
@@ -3004,6 +3020,21 @@ impl Watcher {
             self.writer.record(PageEvent::Dialog(dialog.clone()));
             self.pending_dialogs.insert(session, dialog);
         }
+    }
+
+    /// Whether a page-domain event of `tab`'s, applied now, gets a record in the shared event log:
+    /// a frame's attach, removal or commit, a navigation, a load. Only while a session of core's
+    /// is on the tab ([`Self::core_attached`], the dialog rule's predicate). The log is one ring
+    /// for every run, 1,024 records long (`LOG_CAPACITY`), and an untouched tab that churns
+    /// frames would fill it for nobody: every reader of these records has a session of core's on
+    /// the tab first (a page listener is admitted on the tab, a context listener attaches core to
+    /// every tab, `observe_context`). Such a tab keeps its tracker and frame version current, which
+    /// write nothing to the ring (`EventWriter::frames_changed`). Asked when the event is applied,
+    /// in its line, so from core's attach on the tab's events are recorded, in order, whichever
+    /// session is its source; events read before the attach that its line still held are
+    /// recorded too, as they replay after it.
+    fn records_page_events(&self, tab: &TargetId) -> bool {
+        self.core_attached(tab)
     }
 
     /// Whether a session of core's is on `target`'s tab: one of its own page sessions, from an
@@ -4794,7 +4825,9 @@ mod seed_tests {
 
     use browseros_cdp::CdpEvent;
     use browseros_core::testing::{TestConnection, cdp_error, cdp_pending};
-    use browseros_core::{BrowserSession, BrowserSessionHooks, CdpConnection, SessionId, TargetId};
+    use browseros_core::{
+        BrowserSession, BrowserSessionHooks, CdpConnection, SessionId, TabId, TargetId,
+    };
     use serde_json::{Value, json};
     use tokio::sync::mpsc::{self, UnboundedReceiver};
     use tokio::sync::oneshot;
@@ -5477,7 +5510,7 @@ mod seed_tests {
 
     /// A tab no session of core's is on: its root observer is its lifecycle source. `Page` goes
     /// on with the seed read, on the observer's own session, so the frames that existed are known
-    /// and the frames' events are recorded; `Runtime` stays off.
+    /// and the frames' events reach the tracker; `Runtime` stays off.
     #[tokio::test]
     async fn an_untouched_tab_s_observer_is_its_lifecycle_source() -> TestResult {
         let connection = TestConnection::new([]);
@@ -5485,21 +5518,26 @@ mod seed_tests {
             connection.always(method, json!({}))?;
         }
         connection.always("Page.getFrameTree", tree_with("tab", Some("child")))?;
-        let (hub, mut watcher, mut answers) = watcher(&connection);
+        let (_hub, mut watcher, mut answers) = watcher(&connection);
         read(&mut watcher, target_created("tab", "https://a.test/")).await;
         watcher.observe_workers(TargetId("tab".to_owned())).await;
         let observer = observer(&watcher)?;
         answer_next(&mut watcher, &mut answers).await?;
+        let child = FrameId("child".to_owned());
+        assert_eq!(
+            watcher.lifecycle.owner(&child),
+            Some(&TargetId("tab".to_owned())),
+            "its seed named the existing child"
+        );
         let removed = json!({ "frameId": "child", "reason": "remove" });
         read(
             &mut watcher,
             on(observer.as_str(), "Page.frameDetached", removed),
         )
         .await;
-        assert_eq!(
-            records(&hub),
-            ["framedetached https://a.test/c"],
-            "the existing child is reported with the document its seed gave"
+        assert!(
+            watcher.lifecycle.owner(&child).is_none(),
+            "its removal reached the tracker"
         );
         settle().await;
         let calls: Vec<String> = connection
@@ -5750,20 +5788,16 @@ mod seed_tests {
         connection.always("Target.setAutoAttach", json!({}))?;
         connection.always("Page.enable", cdp_error("Page domain unavailable"))?;
         connection.always("Page.getFrameTree", tree_with("tab", Some("child")))?;
-        let (hub, mut watcher, mut answers) = watcher(&connection);
+        let (_hub, mut watcher, mut answers) = watcher(&connection);
         read(&mut watcher, target_created("tab", "https://a.test/")).await;
         watcher.observe_workers(TargetId("tab".to_owned())).await;
         let observer = observer(&watcher)?;
         answer_next(&mut watcher, &mut answers).await?;
-        let removed = json!({ "frameId": "child", "reason": "remove" });
-        read(
-            &mut watcher,
-            on(observer.as_str(), "Page.frameDetached", removed),
-        )
-        .await;
-        assert_eq!(
-            records(&hub),
-            Vec::<String>::new(),
+        assert!(
+            watcher
+                .lifecycle
+                .owner(&FrameId("child".to_owned()))
+                .is_none(),
             "nothing was seeded from the tree that came with the failed enable"
         );
         time::advance(TICK).await;
@@ -6065,8 +6099,9 @@ mod seed_tests {
 
     /// Core's session came first on a tab whose observer never seeded (no URL then): when the
     /// tab's URL comes, the observer is entered behind core's session with its `Page.enable` and
-    /// seed, so the observer that core's detach promotes reports the tab's commits. Entered mute,
-    /// it would be promoted with `Page` off, and the tab would go silent.
+    /// seed, so the observer that core's detach promotes reports the tab's commits to the run whose
+    /// session attaches next. Entered mute, it would be promoted with `Page` off, that session
+    /// would wait behind it with its events dropped, and the tab would go silent.
     #[tokio::test]
     async fn an_observer_behind_core_s_session_turns_page_on_before_it_is_promoted() -> TestResult {
         let connection = TestConnection::new([]);
@@ -6100,6 +6135,8 @@ mod seed_tests {
         };
         read(&mut watcher, gone).await;
         assert!(watcher.lifecycle_sources.accepts(&observer), "promoted");
+        // A run's next session of core's waits behind the promoted observer, its copies dropped.
+        read(&mut watcher, page_attached("core-next", "tab")).await;
         let commit = json!({ "frame": { "id": "child", "parentId": "tab", "loaderId": "next",
             "url": "https://a.test/next" } });
         read(
@@ -6117,7 +6154,7 @@ mod seed_tests {
 
     /// An observer waiting behind core's session whose seed's `Page.enable` fails is read again
     /// on a later tick, as a source is: once its enable succeeds, core's detach promotes an
-    /// observer with `Page` on, and the tab's commits are recorded from it.
+    /// observer with `Page` on, and with core's next session on the tab its commits are recorded.
     #[tokio::test(start_paused = true)]
     async fn a_waiting_observer_whose_enable_failed_is_read_again() -> TestResult {
         let connection =
@@ -6160,6 +6197,7 @@ mod seed_tests {
             session_id: None,
         };
         read(&mut watcher, gone).await;
+        read(&mut watcher, page_attached("core-next", "tab")).await;
         let commit = json!({ "frame": { "id": "child", "parentId": "tab", "loaderId": "next",
             "url": "https://a.test/next" } });
         read(
@@ -6171,6 +6209,104 @@ mod seed_tests {
             records(&hub),
             ["framenavigated https://a.test/next"],
             "the promoted observer reports the tab's commit"
+        );
+        Ok(())
+    }
+
+    /// An untouched tab that churns frames writes nothing to the shared event log while no
+    /// session of core's is on it: its observer applies each frame's attach, commit and removal,
+    /// and its load, to the tracker, and the tab's frame version moves, but no record is written.
+    #[tokio::test]
+    async fn an_untouched_tab_churning_frames_writes_no_record() -> TestResult {
+        let connection = TestConnection::new([]);
+        let (hub, mut watcher, observer) = observed_tab(&connection).await?;
+        watcher.writer.tab_id(TargetId("tab".to_owned()), TabId(7));
+        let version = |hub: &EventHub| {
+            hub.frame_versions()
+                .into_iter()
+                .find_map(|(tab, version)| (tab == TabId(7)).then_some(version))
+        };
+        let before = version(&hub);
+        for round in 0..3 {
+            let child = format!("churn-{round}");
+            let events = [
+                (
+                    "Page.frameAttached",
+                    json!({ "frameId": child, "parentFrameId": "tab" }),
+                ),
+                (
+                    "Page.frameNavigated",
+                    json!({ "frame": { "id": child, "parentId": "tab", "loaderId": child,
+                        "url": "https://ads.test/" } }),
+                ),
+                (
+                    "Page.frameDetached",
+                    json!({ "frameId": child, "reason": "remove" }),
+                ),
+            ];
+            for (method, params) in events {
+                read(&mut watcher, on(observer.as_str(), method, params)).await;
+            }
+        }
+        let load = json!({ "timestamp": 1.0 });
+        read(
+            &mut watcher,
+            on(observer.as_str(), "Page.loadEventFired", load),
+        )
+        .await;
+        let written: Vec<String> = hub
+            .read_after(0)
+            .records
+            .into_iter()
+            .filter(|record| !matches!(record.event, PageEvent::Opened(_)))
+            .map(|record| format!("{:?}", record.event))
+            .collect();
+        assert_eq!(written, Vec::<String>::new(), "no record but its opening");
+        let after = version(&hub);
+        assert!(
+            after.is_some() && after > before,
+            "its frame version moved: {before:?} to {after:?}"
+        );
+        Ok(())
+    }
+
+    /// From the moment a session of core's is on a tab whose observer stays its source (core's
+    /// copies dropped), the tab's frame and load records are written from the observer's events,
+    /// in order; before it, none.
+    #[tokio::test]
+    async fn a_tab_core_is_on_records_its_frames_from_core_s_attach_on() -> TestResult {
+        let connection = TestConnection::new([]);
+        let (hub, mut watcher, observer) = observed_tab(&connection).await?;
+        let attached = |frame: &str| json!({ "frameId": frame, "parentFrameId": "tab" });
+        read(
+            &mut watcher,
+            on(observer.as_str(), "Page.frameAttached", attached("before")),
+        )
+        .await;
+        read(&mut watcher, page_attached("core", "tab")).await;
+        assert!(
+            watcher.lifecycle_sources.accepts(&observer),
+            "the observer stays the source"
+        );
+        read(
+            &mut watcher,
+            on(observer.as_str(), "Page.frameAttached", attached("after")),
+        )
+        .await;
+        read(
+            &mut watcher,
+            on("core", "Page.frameAttached", attached("core-copy")),
+        )
+        .await;
+        let load = json!({ "timestamp": 2.0 });
+        read(
+            &mut watcher,
+            on(observer.as_str(), "Page.loadEventFired", load),
+        )
+        .await;
+        assert_eq!(
+            records(&hub),
+            ["frameattached after", "load https://a.test/"]
         );
         Ok(())
     }
