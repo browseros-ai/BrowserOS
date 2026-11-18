@@ -1,17 +1,24 @@
 use std::error::Error;
+use std::pin::pin;
 use std::sync::Arc;
 use std::time::Duration;
 
+use browseros_cdp::{CdpError, CdpEvent};
 use browseros_core::testing::{TestConnection, cdp_pending};
-use browseros_core::{BrowserView, TabId};
+use browseros_core::{
+    BrowserSession, BrowserSessionHooks, BrowserView, CdpConnection, SessionId, TabId, TargetId,
+};
+use futures_util::future::BoxFuture;
 use neo_trace::ErrorOwner;
 use serde_json::{Value, json};
+use tokio::sync::{broadcast, mpsc, watch};
 use tokio::time;
+use tokio::time::error::Elapsed;
 
 use crate::op_scope::OpScope;
 use crate::target::CallHeader;
 use crate::test_env::{EnvCall, TestEnv};
-use crate::{Op, OpEnv, Playwright, Refusal, test_support};
+use crate::{ErrorCode, EventFence, Op, OpEnv, Playwright, Refusal, test_support};
 
 type TestResult = Result<(), Box<dyn Error>>;
 
@@ -19,9 +26,7 @@ const ADD: &str = "Page.addScriptToEvaluateOnNewDocument";
 const REMOVE: &str = "Page.removeScriptToEvaluateOnNewDocument";
 
 /// A browser with tab 7 whose session answers every add with identifier `"1"`.
-async fn browser(
-    connection: &Arc<TestConnection>,
-) -> Result<Arc<browseros_core::BrowserSession>, Box<dyn Error>> {
+async fn browser(connection: &Arc<TestConnection>) -> Result<Arc<BrowserSession>, Box<dyn Error>> {
     let test_support::OneTab { browser } = test_support::one_tab(connection).await?;
     connection.always(ADD, json!({ "identifier": "1" }))?;
     connection.always(REMOVE, json!({}))?;
@@ -56,9 +61,20 @@ fn page_input(source: &str) -> Value {
     json!({ "call": {}, "page": { "$neo": "page", "tab": 7 }, "source": source })
 }
 
+/// Waits, on the test's clock, until `count` removals in all were sent.
+async fn removals_sent(connection: &TestConnection, count: usize) -> Result<(), Elapsed> {
+    time::timeout(Duration::from_secs(5), async {
+        while sent(connection, REMOVE).map_or(0, |removed| removed.len()) < count {
+            time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+}
+
 /// A context script reaches a tab at the run's first write to it, once however many writes
-/// follow, and never at a read. Disposing a page script removes it at once; the run's end
-/// removes everything else, and dropping the run state removes anything registered after that.
+/// follow, and never at a read. Disposing a page script removes it before the dispose returns;
+/// the run's end starts removing everything else, and dropping the run state removes anything
+/// registered after that.
 #[tokio::test]
 async fn tests_that_a_context_script_reaches_a_written_tab_once_and_leaves_with_the_run()
 -> TestResult {
@@ -128,12 +144,10 @@ async fn tests_that_a_context_script_reaches_a_written_tab_once_and_leaves_with_
         "dispose removes its own script, before it returns"
     );
 
-    env.run_state().remove_init_scripts().await;
-    assert_eq!(
-        sent(&connection, REMOVE)?.len(),
-        3,
-        "the run's end removes the two scripts left, before it returns"
-    );
+    env.run_state().remove_init_scripts();
+    removals_sent(&connection, 3)
+        .await
+        .map_err(|_elapsed| "the run's end sends the removals of the two scripts left")?;
 
     // A script a straggling op registers after that is removed when the run state drops.
     invoke(
@@ -144,13 +158,9 @@ async fn tests_that_a_context_script_reaches_a_written_tab_once_and_leaves_with_
     )
     .await?;
     drop(env);
-    time::timeout(Duration::from_secs(5), async {
-        while sent(&connection, REMOVE).map_or(0, |removed| removed.len()) < 4 {
-            time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .map_err(|_elapsed| "dropping the run state removes what is left")?;
+    removals_sent(&connection, 4)
+        .await
+        .map_err(|_elapsed| "dropping the run state removes what is left")?;
     Ok(())
 }
 
@@ -300,7 +310,7 @@ async fn tests_that_a_write_reports_the_main_world_when_it_adds_a_context_script
 /// lease send, and the write ops these tests admit.
 async fn binding_browser(
     connection: &Arc<TestConnection>,
-) -> Result<Arc<browseros_core::BrowserSession>, Box<dyn Error>> {
+) -> Result<Arc<BrowserSession>, Box<dyn Error>> {
     let browser = browser(connection).await?;
     for method in [
         "Runtime.addBinding",
@@ -475,6 +485,373 @@ async fn tests_that_a_dispose_stalled_before_its_cleanup_reports_nothing() -> Te
         main_world_reports(&env),
         reports_before,
         "a cleanup that never went out reports no main world"
+    );
+    Ok(())
+}
+
+/// How long a test watches an op that must not finish yet, on the paused clock.
+const WAITS: Duration = Duration::from_millis(200);
+
+/// The bound on an op that must finish, so a regression fails instead of hanging.
+const ANSWERS: Duration = Duration::from_secs(5);
+
+/// What a held script removal's caller gets once the test lets it go.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Removal {
+    /// No answer yet: a busy renderer.
+    Held,
+    /// The renderer caught up and answered.
+    Answered,
+    /// The tab closed: the CDP client fails a detached session's requests with `SessionGone`.
+    SessionGone,
+}
+
+/// A browser with tabs 7 and 8, scripted by a [`TestConnection`], whose every script removal
+/// waits for [`HeldRemovals::release`]. The removal is recorded as sent at once.
+struct HeldRemovals {
+    scripted: Arc<TestConnection>,
+    removal: watch::Sender<Removal>,
+}
+
+impl HeldRemovals {
+    fn new() -> Result<Arc<Self>, Box<dyn Error>> {
+        let scripted = TestConnection::new([]);
+        let tab = |id: u32| {
+            json!({ "tabId": id, "targetId": format!("target-{id}"), "windowId": 1,
+                "url": "https://example.test/", "title": "Account", "isActive": id == 7,
+                "isLoading": false, "loadProgress": 1.0, "isPinned": false, "isHidden": false })
+        };
+        scripted.always("Browser.getTabs", json!({ "tabs": [tab(7), tab(8)] }))?;
+        for method in [
+            "Page.enable",
+            "DOM.enable",
+            "Runtime.enable",
+            "Accessibility.enable",
+            "HeapProfiler.collectGarbage",
+            REMOVE,
+        ] {
+            scripted.always(method, json!({}))?;
+        }
+        scripted.always("Runtime.evaluate", json!({ "result": { "value": true } }))?;
+        scripted.always(ADD, json!({ "identifier": "1" }))?;
+        Ok(Arc::new(Self {
+            scripted,
+            removal: watch::channel(Removal::Held).0,
+        }))
+    }
+
+    /// Core's session over this browser, with both tabs listed.
+    async fn browser(self: &Arc<Self>) -> Result<Arc<BrowserSession>, Box<dyn Error>> {
+        let cdp: Arc<dyn CdpConnection> = Arc::clone(self) as Arc<dyn CdpConnection>;
+        let browser = BrowserSession::new(cdp, BrowserSessionHooks::default());
+        browser.pages.list().await?;
+        Ok(browser)
+    }
+
+    /// Every removal held so far, and every one from now on, ends as `removal` says.
+    fn release(&self, removal: Removal) {
+        self.removal.send_replace(removal);
+    }
+
+    /// The scripted connection's `answer`, held first when it answers a script removal.
+    async fn answer(
+        &self,
+        method: &str,
+        answer: Result<Value, CdpError>,
+    ) -> Result<Value, CdpError> {
+        if method != REMOVE {
+            return answer;
+        }
+        let mut removal = self.removal.subscribe();
+        let released = removal
+            .wait_for(|removal| *removal != Removal::Held)
+            .await
+            .map(|removal| *removal);
+        match released {
+            Ok(Removal::SessionGone) => Err(CdpError::SessionGone),
+            Ok(Removal::Held | Removal::Answered) | Err(_) => answer,
+        }
+    }
+}
+
+impl CdpConnection for HeldRemovals {
+    fn send<'a>(
+        &'a self,
+        method: &'a str,
+        params: Value,
+        session: Option<&'a SessionId>,
+    ) -> BoxFuture<'a, Result<Value, CdpError>> {
+        Box::pin(async move {
+            let answer = self.scripted.send(method, params, session).await;
+            self.answer(method, answer).await
+        })
+    }
+
+    fn send_at_epoch<'a>(
+        &'a self,
+        expected: u64,
+        method: &'a str,
+        params: Value,
+        session: Option<&'a SessionId>,
+    ) -> BoxFuture<'a, Result<Value, CdpError>> {
+        Box::pin(async move {
+            let answer = self
+                .scripted
+                .send_at_epoch(expected, method, params, session)
+                .await;
+            self.answer(method, answer).await
+        })
+    }
+
+    fn send_raw_json<'a>(
+        &'a self,
+        method: &'a str,
+        params_json: &'a str,
+        session: Option<&'a SessionId>,
+    ) -> BoxFuture<'a, Result<String, CdpError>> {
+        self.scripted.send_raw_json(method, params_json, session)
+    }
+
+    fn send_raw_json_at_epoch<'a>(
+        &'a self,
+        expected: u64,
+        method: &'a str,
+        params_json: &'a str,
+        session: Option<&'a SessionId>,
+    ) -> BoxFuture<'a, Result<String, CdpError>> {
+        self.scripted
+            .send_raw_json_at_epoch(expected, method, params_json, session)
+    }
+
+    fn events(&self) -> broadcast::Receiver<CdpEvent> {
+        self.scripted.events()
+    }
+
+    fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+        self.scripted.events_targeted(method)
+    }
+
+    fn is_connected(&self) -> bool {
+        self.scripted.is_connected()
+    }
+
+    fn connection_epoch(&self) -> u64 {
+        self.scripted.connection_epoch()
+    }
+}
+
+/// How the run that registered tab 7's script lets go of it.
+#[derive(Clone, Copy)]
+enum RunEnd {
+    /// The host's `RunState::remove_init_scripts`, before its reply.
+    Host,
+    /// Its state dropped by a host that never calls that.
+    Dropped,
+}
+
+/// A run that registered a script on tab 7 and ended, and the browser, which received the
+/// script's removal and holds its answer.
+struct HeldTab {
+    held: Arc<HeldRemovals>,
+    browser: Arc<BrowserSession>,
+    playwright: Arc<Playwright>,
+}
+
+impl HeldTab {
+    async fn after(end: RunEnd) -> Result<Self, Box<dyn Error>> {
+        let held = HeldRemovals::new()?;
+        let browser = held.browser().await?;
+        let playwright = Playwright::new(Arc::clone(&browser));
+        let run = TestEnv::over(BrowserView::unbound(Arc::clone(&browser), None));
+        invoke(
+            &playwright,
+            &run,
+            "page.addInitScript",
+            page_input("window.p = 1"),
+        )
+        .await?;
+        match end {
+            RunEnd::Host => run.run_state().remove_init_scripts(),
+            RunEnd::Dropped => drop(run),
+        }
+        removals_sent(&held.scripted, 1)
+            .await
+            .map_err(|_elapsed| "the run's end sends its script's removal")?;
+        Ok(Self {
+            held,
+            browser,
+            playwright,
+        })
+    }
+
+    /// Another run over the same browser.
+    fn next_run(&self) -> TestEnv {
+        TestEnv::over(BrowserView::unbound(Arc::clone(&self.browser), None))
+    }
+
+    /// How many `page.requestGC` reached a tab so far, on either tab.
+    fn collected(&self) -> Result<usize, Box<dyn Error>> {
+        Ok(sent(&self.held.scripted, "HeapProfiler.collectGarbage")?.len())
+    }
+}
+
+/// `page.requestGC` on `tab`: a write whose admission is `OpScope::admit`, as a `goto`'s is.
+fn collect_garbage(tab: u32) -> Value {
+    json!({ "call": {}, "page": { "$neo": "page", "tab": tab } })
+}
+
+/// The run's end returns with its removal on tab 7 unanswered, and the next op on tab 7, in
+/// another run, waits for it: it goes on only once the removal answers. An op on tab 8, which
+/// has no removal in flight, does not wait.
+#[tokio::test(start_paused = true)]
+async fn tests_that_a_removal_in_flight_holds_only_its_own_tabs_next_op() -> TestResult {
+    let tab = HeldTab::after(RunEnd::Host).await?;
+    let next = tab.next_run();
+    let mut seven = pin!(invoke(
+        &tab.playwright,
+        &next,
+        "page.requestGC",
+        collect_garbage(7)
+    ));
+    assert!(
+        time::timeout(WAITS, seven.as_mut()).await.is_err(),
+        "tab 7's next op waits for the removal its last run left in flight"
+    );
+    assert_eq!(tab.collected()?, 0, "nothing reached tab 7 while it waited");
+
+    let other = tab.next_run();
+    time::timeout(
+        ANSWERS,
+        invoke(
+            &tab.playwright,
+            &other,
+            "page.requestGC",
+            collect_garbage(8),
+        ),
+    )
+    .await??;
+    assert_eq!(
+        tab.collected()?,
+        1,
+        "tab 8 has no removal in flight, so its op runs at once"
+    );
+
+    tab.held.release(Removal::Answered);
+    time::timeout(ANSWERS, seven).await??;
+    assert_eq!(
+        tab.collected()?,
+        2,
+        "tab 7's op goes on once its removal answered"
+    );
+    Ok(())
+}
+
+/// A read that loads no document and runs nothing in the main world, here a `dialog` listener's
+/// subscription, is admitted on a tab whose removal is held: only an op that could meet the
+/// leftover script or binding waits, and a held listener would let Neo dismiss the dialog unheard.
+#[tokio::test(start_paused = true)]
+async fn tests_that_a_dialog_subscription_on_a_held_tab_does_not_wait() -> TestResult {
+    let tab = HeldTab::after(RunEnd::Host).await?;
+    let next = tab.next_run();
+    time::timeout(
+        ANSWERS,
+        invoke(
+            &tab.playwright,
+            &next,
+            "events.listen",
+            json!({ "call": { "api": "page.on", "timeoutMs": 0 },
+                    "page": { "$neo": "page", "tab": 7 }, "event": "dialog", "enabled": true, "since": 0 }),
+        ),
+    )
+    .await??;
+    let mut write = pin!(invoke(
+        &tab.playwright,
+        &next,
+        "page.requestGC",
+        collect_garbage(7)
+    ));
+    assert!(
+        time::timeout(WAITS, write.as_mut()).await.is_err(),
+        "a write on the same tab still waits for the removal"
+    );
+    tab.held.release(Removal::Answered);
+    time::timeout(ANSWERS, write).await??;
+    Ok(())
+}
+
+/// A tab closed under a held removal lets the tab's next op go on: the CDP client fails the
+/// removal `SessionGone` at the detach, which ends it.
+#[tokio::test(start_paused = true)]
+async fn tests_that_a_close_releases_a_held_removals_tab() -> TestResult {
+    let tab = HeldTab::after(RunEnd::Host).await?;
+    let next = tab.next_run();
+    let mut seven = pin!(invoke(
+        &tab.playwright,
+        &next,
+        "page.requestGC",
+        collect_garbage(7)
+    ));
+    assert!(
+        time::timeout(WAITS, seven.as_mut()).await.is_err(),
+        "the removal holds the tab first"
+    );
+    tab.held.release(Removal::SessionGone);
+    time::timeout(ANSWERS, seven).await??;
+    assert_eq!(tab.collected()?, 1, "the op went on after the close");
+    Ok(())
+}
+
+/// A crash of the tab's renderer, which would answer the removal only at the CDP timeout, lets
+/// the tab's next op go on too: it meets the crash at its admission instead of waiting.
+#[tokio::test(start_paused = true)]
+async fn tests_that_a_crash_releases_a_held_removals_tab() -> TestResult {
+    let tab = HeldTab::after(RunEnd::Host).await?;
+    let next = tab.next_run();
+    let op = Op::from_name("page.requestGC").ok_or("page.requestGC is an op")?;
+    let mut seven = pin!(tab.playwright.invoke(&next, op, collect_garbage(7)));
+    assert!(
+        time::timeout(WAITS, seven.as_mut()).await.is_err(),
+        "the removal holds the tab first"
+    );
+    tab.playwright
+        .crashes()
+        .crashed_event(TargetId("target-7".to_owned()), EventFence(0));
+    let refused = time::timeout(ANSWERS, seven)
+        .await?
+        .err()
+        .ok_or("a crashed tab takes no op")?;
+    assert_eq!(
+        refused.error_code(),
+        Some(ErrorCode::TargetCrashed),
+        "the op reached its admission and met the crash: {refused}"
+    );
+    assert_eq!(tab.collected()?, 0, "nothing reached the crashed tab");
+    Ok(())
+}
+
+/// A host that never calls `remove_init_scripts`, and only drops the run's state, fences the tab
+/// all the same: the drop starts the removal, and the tab's next op waits for it.
+#[tokio::test(start_paused = true)]
+async fn tests_that_a_dropped_run_state_fences_its_tab() -> TestResult {
+    let tab = HeldTab::after(RunEnd::Dropped).await?;
+    let next = tab.next_run();
+    let mut seven = pin!(invoke(
+        &tab.playwright,
+        &next,
+        "page.requestGC",
+        collect_garbage(7)
+    ));
+    assert!(
+        time::timeout(WAITS, seven.as_mut()).await.is_err(),
+        "tab 7's next op waits for the dropped run's removal"
+    );
+    assert_eq!(tab.collected()?, 0, "nothing reached tab 7 while it waited");
+    tab.held.release(Removal::Answered);
+    time::timeout(ANSWERS, seven).await??;
+    assert_eq!(
+        tab.collected()?,
+        1,
+        "tab 7's op goes on once the removal answered"
     );
     Ok(())
 }

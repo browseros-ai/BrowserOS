@@ -1,0 +1,34 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Input agent geometry fixture</title>
+<style>
+html, body { margin: 0; }
+input, textarea, [contenteditable] { position: absolute; box-sizing: border-box; margin: 0; padding: 0; border: 0; width: 120px; height: 30px; }
+#plain { left: 20px; top: 20px; }
+#textarea { left: 20px; top: 70px; }
+#editable { left: 20px; top: 120px; }
+#password { left: 20px; top: 170px; }
+#readonly { left: 200px; top: 20px; }
+#disabled { left: 200px; top: 70px; }
+#checkbox { left: 200px; top: 120px; }
+#covered { left: 200px; top: 170px; }
+#cover { position: absolute; left: 190px; top: 160px; width: 140px; height: 50px; background: gray; z-index: 2; }
+#clipped { left: -30px; top: 220px; }
+#offscreen { left: 1000px; top: 20px; }
+#hidden { display: none; }
+#drawn { position: absolute; left: 20px; top: 270px; width: 120px; height: 30px; }
+#drawn input { left: 0; top: 0; }
+#drawing { position: absolute; inset: 0; background: silver; }
+#zero-drawn { position: absolute; left: 20px; top: 320px; width: 120px; height: 30px; }
+#zero-drawn input { left: 0; top: 0; width: 0; height: 0; }
+#zero-drawing { position: absolute; inset: 0; background: silver; }
+#nested { position: absolute; left: 20px; top: 370px; width: 160px; height: 70px; overflow: scroll; }
+#nested input { position: relative; display: block; margin-top: 10px; }
+#nested-spacer { height: 200px; }
+</style>
+<input id="plain"><textarea id="textarea"></textarea><div id="editable" contenteditable="true">Edit</div><input id="password" type="password">
+<input id="readonly" readonly><input id="disabled" disabled><input id="checkbox" type="checkbox"><input id="covered"><div id="cover"></div>
+<input id="clipped"><input id="offscreen"><input id="hidden">
+<div id="drawn"><input><div id="drawing">Digit drawing</div></div>
+<div id="zero-drawn"><input><div id="zero-drawing">Digit drawing</div></div>
+<div id="nested"><input id="nested-field"><div id="nested-spacer"></div></div>

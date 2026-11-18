@@ -110,7 +110,7 @@ async fn exercise(client: &CdpClient, target_id: &str) -> TestResult {
             json!({
                 "functionDeclaration": call,
                 "executionContextId": context_id,
-                "arguments": [{ "value": { "op": "describe" } }],
+                "arguments": [{ "value": { "request": { "op": "describe" }, "policy": { "conformance": false, "discoverMovedFields": false } } }],
                 "returnByValue": true,
             }),
             session,
@@ -119,19 +119,24 @@ async fn exercise(client: &CdpClient, target_id: &str) -> TestResult {
     let reply = describe().await?;
     assert_eq!(
         reply.pointer("/result/value"),
-        Some(&json!({ "kind": "uninstalled" })),
+        Some(&json!("{\"kind\":\"uninstalled\"}")),
         "an unbooted world must send Rust back to install: {reply}"
     );
     let boot = evaluate(client, session, Some(context_id), BOOT).await?;
     assert_eq!(boot, json!("booted"));
-    let reply = describe().await?;
+    let called = describe().await?;
+    let text = called
+        .pointer("/result/value")
+        .and_then(Value::as_str)
+        .ok_or("a probe replies as text")?;
+    let reply: Value = serde_json::from_str(text)?;
     assert_eq!(
-        reply.pointer("/result/value/kind"),
+        reply.get("kind"),
         Some(&json!("described")),
         "a booted world answers: {reply}"
     );
     assert_eq!(
-        reply.pointer("/result/value/protocol"),
+        reply.get("protocol"),
         protocol.get("protocol"),
         "with the protocol the asset was built for: {reply}"
     );

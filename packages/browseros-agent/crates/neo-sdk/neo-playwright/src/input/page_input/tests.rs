@@ -34,6 +34,7 @@ async fn tests_that_a_burst_stopped_part_way_releases_what_it_pressed_before_the
         api: None,
         timeout_ms: Some(100),
         conformance: false,
+        timeout_built_in: false,
     };
     let scope = OpScope::new(&env, op, header);
     let sent = scope.send_effect()?;
@@ -102,6 +103,7 @@ async fn tests_that_a_key_owed_by_a_burst_on_a_frames_session_is_let_go_on_that_
         api: None,
         timeout_ms: Some(100),
         conformance: false,
+        timeout_built_in: false,
     };
     let scope = OpScope::new(&env, op, header);
     let sent = scope.send_effect()?;

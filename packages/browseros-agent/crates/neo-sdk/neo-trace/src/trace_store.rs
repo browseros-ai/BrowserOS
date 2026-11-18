@@ -64,7 +64,8 @@ pub(crate) const SUBSCRIPTIONS: [&str; 3] = [
 ];
 
 /// Neo's own reads of a tab for a script's caches, sent with no call site: the prelude's frame-tree
-/// read (`page.frames`), made for every listed tab before a run's first statement and at a wait.
+/// read (`page.frames`), made for every listed tab at a run's start, after an operation for a tab
+/// whose tree changed, and at a wait.
 /// Like a subscription, one names a tab without acting on it, so it never makes a tab a run's or a
 /// task's, moves no view that follows the task, and keeps no tab in use. A script never sends
 /// one: its `frames()` reads the cache.

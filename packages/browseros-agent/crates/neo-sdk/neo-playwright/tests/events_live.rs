@@ -27,12 +27,12 @@ mod live_run;
 #[path = "support/page_server.rs"]
 mod page_server;
 
-use std::env;
 use std::future::{self, Future};
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::{env, fs, process, thread};
 
 use browseros_cdp::{CdpClient, CdpError, CdpEvent};
 use browseros_core::{CdpConnection, SessionId};
@@ -44,6 +44,7 @@ use neo_trace::ErrorOwner;
 use page_server::PageServer;
 use serde_json::{Value, json};
 use tokio::fs::{read_to_string, remove_file};
+use tokio::runtime::Handle;
 use tokio::sync::{Notify, broadcast, mpsc};
 use tokio::time;
 
@@ -77,6 +78,44 @@ async fn open(run: &LiveRun, page: &TestPage, url: &str) -> Result<Value, Playwr
     .await
 }
 
+/// Linux's native thread identity correlates opt-in observations with its `/proc` task data.
+fn native_thread_id() -> Option<u32> {
+    fs::read_link("/proc/thread-self")
+        .ok()
+        .and_then(|path| path.file_name()?.to_str()?.parse().ok())
+}
+
+/// Opt-in phase receipts tie this test runtime to the browser and external CPU observations.
+#[expect(
+    clippy::print_stderr,
+    reason = "opt-in live fixture diagnostic receipts"
+)]
+fn trace_console_phase(started: Instant, phase: &str) {
+    if env::var_os("NEO_LIVE_DIAGNOSTICS").is_some() {
+        eprintln!(
+            "LIVE_CONSOLE {}",
+            json!({ "phase": phase, "wallMs": now_ms().ok(),
+                "elapsedMs": started.elapsed().as_millis(),
+                "pid": process::id(), "tid": native_thread_id(),
+                "thread": format!("{:?}", thread::current().id()),
+                "runtime": format!("{:?}", Handle::current().runtime_flavor()) })
+        );
+    }
+}
+
+/// Libtest otherwise reports an unavailable console row's early Ok return as a pass.
+#[expect(
+    clippy::print_stderr,
+    reason = "live runner counts explicit precondition returns"
+)]
+fn console_skipped_in_hosted_mode() -> bool {
+    let hosted = env::var("BROWSERCLAW_HOSTED_MODE").is_ok_and(|mode| mode == "1");
+    if hosted {
+        eprintln!("LIVE_TEST_EARLY_RETURN console events are unavailable in hosted mode");
+    }
+    hosted
+}
+
 /// `page.waitForEvent(event)` stamped at `since`, with a 5 s timeout.
 async fn wait_for(
     run: &LiveRun,
@@ -90,6 +129,99 @@ async fn wait_for(
         input.insert("page".to_owned(), brand(page));
     }
     run.invoke("events.wait", input).await
+}
+
+/// The first `framenavigated` on `page` recorded at or after `since` whose frame is at `url`.
+/// Another frame's event (the new frame's first `about:blank`, say) is skipped by asking again
+/// after its `seq`, as the prelude does for a predicate that rejects an event. Each ask waits
+/// `wait_for`'s 5 s.
+async fn navigated_to(run: &LiveRun, page: &TestPage, since: u64, url: &str) -> TestResult<Value> {
+    let mut after: Option<u64> = None;
+    loop {
+        let mut input = json!({ "call": { "api": "page.waitForEvent", "timeoutMs": 5000 },
+                                "event": "framenavigated", "since": since, "page": brand(page) });
+        if let (Some(seq), Some(fields)) = (after, input.as_object_mut()) {
+            fields.insert("after".to_owned(), json!(seq));
+        }
+        let event = run
+            .invoke("events.wait", input)
+            .await
+            .map_err(|error| format!("no framenavigated to {url}: {error}"))?;
+        if event.pointer("/frame/url") == Some(&json!(url)) {
+            return Ok(event);
+        }
+        after = Some(
+            event
+                .get("seq")
+                .and_then(Value::as_u64)
+                .ok_or("a frame event has a seq")?,
+        );
+    }
+}
+
+/// A cross-site iframe reports its own navigations only from its own session, and only once
+/// `Page` is on there. Core turns it on only on tabs it created (its file chooser interception),
+/// so this runs on an adopted tab, one the owner or another session opened, where until now only
+/// a frames read did (`frame_tree::oopif_tree`). The frame attaches after the tab loaded and is
+/// never read, so its event arrives only because the watcher turns `Page` on as the frame's
+/// session attaches. It navigates once its first document loaded, inside its own process: its
+/// first commit can race the enable, and the watcher's seed read, not an event, covers that one.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_cross_site_iframe_reports_its_own_navigation_without_a_frames_read()
+-> TestResult {
+    let run = LiveRun::connect().await?;
+    let server = PageServer::start().await?;
+    let page = run.open_adopted(&server.url("/child.html")).await?;
+    let result = async {
+        // `localhost` on the server's port is another site than `127.0.0.1`
+        // (page_server.rs), so this frame is out of process.
+        let cross = |query: &str| {
+            server
+                .url(&format!("/child.html?{query}"))
+                .replacen("127.0.0.1", "localhost", 1)
+        };
+        let first = cross("first");
+        run.eval(
+            &page,
+            &format!(
+                "new Promise((loaded) => {{ const frame = document.createElement('iframe'); \
+                 frame.id = 'late'; frame.onload = () => loaded(true); frame.src = {}; \
+                 document.body.append(frame); }})",
+                json!(first)
+            ),
+        )
+        .await?;
+        // The watcher turns `Page` on as the frame's session attaches, on a task of its own, so
+        // a navigation started at once can still beat it. The frame navigates up to three times:
+        // once `Page` is on, the next navigation is heard; without the watcher's enable, none is.
+        let mut heard = None;
+        for attempt in 1..=3 {
+            let next = cross(&format!("next{attempt}"));
+            let since = now_ms()?;
+            run.eval(
+                &page,
+                &format!("document.getElementById('late').src = {}", json!(next)),
+            )
+            .await?;
+            if let Ok(event) = navigated_to(&run, &page, since, &next).await {
+                heard = Some(event);
+                break;
+            }
+        }
+        let navigated =
+            heard.ok_or("no framenavigated for any of three navigations of the frame")?;
+        assert!(
+            navigated
+                .pointer("/frame/parentId")
+                .is_some_and(|parent| !parent.is_null()),
+            "the child frame navigated, not the tab: {navigated}"
+        );
+        Ok(())
+    }
+    .await;
+    run.close_page(&page).await;
+    result
 }
 
 /// A trusted click that starts once a concurrent wait is surely listening, as a script's
@@ -853,7 +985,7 @@ impl CdpConnection for SlowWatcher {
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_an_op_answers_after_the_pump_took_the_console_message_it_caused() -> TestResult
 {
-    if env::var("BROWSERCLAW_HOSTED_MODE").is_ok_and(|mode| mode == "1") {
+    if console_skipped_in_hosted_mode() {
         return Ok(());
     }
     let run = LiveRun::connect_through(|client| {
@@ -1082,7 +1214,7 @@ async fn tests_that_a_popup_closed_at_once_still_reaches_its_waiter() -> TestRes
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_a_browser_log_entry_reaches_a_console_listener_as_a_message() -> TestResult {
-    if env::var("BROWSERCLAW_HOSTED_MODE").is_ok_and(|mode| mode == "1") {
+    if console_skipped_in_hosted_mode() {
         // Hosted mode sends no console events, so a listener leases nothing there.
         return Ok(());
     }
@@ -1144,21 +1276,65 @@ async fn tests_that_a_browser_log_entry_reaches_a_console_listener_as_a_message(
 /// action and the message came too late.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+#[expect(
+    clippy::print_stderr,
+    reason = "opt-in phase markers correlate a lost fixture connection with its wire record"
+)]
 async fn tests_that_a_click_that_logs_completes_under_a_console_listener_and_is_heard_once()
 -> TestResult {
-    if env::var("BROWSERCLAW_HOSTED_MODE").is_ok_and(|mode| mode == "1") {
+    if console_skipped_in_hosted_mode() {
         // Hosted mode sends no console events, so there is nothing to hear.
         return Ok(());
     }
+    let started = Instant::now();
+    let trace = |phase: &str| trace_console_phase(started, phase);
+    trace("connect");
     let run = Arc::new(LiveRun::connect().await?);
     let server = PageServer::start().await?;
     let page = run.new_page().await?;
-    let result = async {
+    // A delayed tick distinguishes an occupied test executor from a live reader that lost
+    // its socket. Start at observer creation so earlier browser setup cannot count as a
+    // scheduler stall. This adds no browser traffic and never changes an op's deadline.
+    let scheduler_gap = Arc::new(AtomicU64::new(0));
+    let last_tick = Arc::new(AtomicU64::new(
+        u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+    ));
+    let monitor = env::var_os("NEO_LIVE_DIAGNOSTICS").map(|_| {
+        let gap = Arc::clone(&scheduler_gap);
+        let tick = Arc::clone(&last_tick);
+        tokio::spawn(async move {
+            loop {
+                time::sleep(Duration::from_millis(100)).await;
+                let now = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+                let previous = tick.swap(now, Ordering::Relaxed);
+                let elapsed = now.saturating_sub(previous);
+                gap.fetch_max(elapsed, Ordering::Relaxed);
+                if elapsed > 500 {
+                    eprintln!(
+                        "LIVE_EXECUTOR_GAP {}",
+                        json!({ "wallMs": now_ms().ok(), "startElapsedMs": previous,
+                            "endElapsedMs": now, "gapMs": elapsed,
+                            "pid": process::id(), "tid": native_thread_id() })
+                    );
+                }
+            }
+        })
+    });
+    let mut phase = "navigate";
+    let result: TestResult = async {
+        trace(phase);
         open(&run, &page, &server.url("/popups.html")).await?;
+        phase = "start_tables";
+        trace(phase);
         run.click(&page, "#tables").await?;
         // Tables stored before the listener: its lease's `Runtime.enable` replays them too.
         time::sleep(Duration::from_millis(1000)).await;
+        phase = "install_delivery_counter";
+        trace(phase);
+        run.eval(&page, "window.__landed = 0; document.querySelector('#log').addEventListener('click', () => window.__landed++)").await?;
         let host: Arc<dyn OpHost> = Arc::clone(&run) as Arc<dyn OpHost>;
+        phase = "script";
+        trace(phase);
         let heard = js_runner::run_script(
             &host,
             &json!({ "page": brand(&page) }),
@@ -1167,12 +1343,44 @@ async fn tests_that_a_click_that_logs_completes_under_a_console_listener_and_is_
              return seen.filter((text) => text === 'clicked 7').length;",
         )
         .await?;
+        trace("script_returned");
         assert_eq!(heard, json!(1), "the handler's message, exactly once");
+        phase = "read_delivery_counter";
+        trace(phase);
+        assert_eq!(run.eval(&page, "window.__landed").await?, json!(1), "the console-listener click landed exactly once");
         Ok(())
     }
     .await;
+    // Include a final occupied interval even if the observer has not been polled again
+    // before the operation reports its error. Snapshot before cleanup so cleanup latency
+    // cannot be mistaken for the scheduling gap that preceded the original failure.
+    let end = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    let previous = last_tick.load(Ordering::Relaxed);
+    let final_gap = end.saturating_sub(previous);
+    scheduler_gap.fetch_max(final_gap, Ordering::Relaxed);
+    if monitor.is_some() && final_gap > 500 {
+        eprintln!(
+            "LIVE_EXECUTOR_GAP {}",
+            json!({ "wallMs": now_ms().ok(), "startElapsedMs": previous,
+                "endElapsedMs": end, "gapMs": final_gap,
+                "pid": process::id(), "tid": native_thread_id(), "phase": phase })
+        );
+    }
+    let observed_gap = monitor.as_ref().map_or_else(
+        || "not recorded".to_owned(),
+        |_| format!("{} ms", scheduler_gap.load(Ordering::Relaxed)),
+    );
+    trace("cleanup");
     run.close_page(&page).await;
-    result
+    if let Some(monitor) = monitor {
+        monitor.abort();
+    }
+    result.map_err(|error| {
+        format!(
+            "console click failed during {phase}; largest executor tick gap {observed_gap}: {error}"
+        )
+        .into()
+    })
 }
 
 /// What one timed-out `waitForFunction` left behind, as the WA-005 row reads it.
@@ -1285,7 +1493,7 @@ async fn timed_out_wait(run: &LiveRun, page: &TestPage) -> TestResult<TimedOutWa
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_a_timed_out_wait_for_function_logs_nothing_after_its_error() -> TestResult {
-    if env::var("BROWSERCLAW_HOSTED_MODE").is_ok_and(|mode| mode == "1") {
+    if console_skipped_in_hosted_mode() {
         return Ok(());
     }
     let run = LiveRun::connect_through(|client| {

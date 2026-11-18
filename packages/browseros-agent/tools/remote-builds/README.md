@@ -67,6 +67,70 @@ recipe owns a fresh headless Linux browser and random CDP port, but current-main
 lose CDP in the console-listener phase. **Keep detector runs local** under existing heavy/live
 locks until a complete current-main remote run passes; the wrapper preserves its actual 101.
 
+## Run a job from GitHub
+
+Any member with write access to the repository can use the pool without a client profile or
+SSH access. Dispatch the **Pool run** workflow (`.github/workflows/pool-run.yml`) from `main`,
+and give it a pushed branch or tag of this repository:
+
+```sh
+gh workflow run pool-run.yml -f ref=my-branch -f preset=sdk-gate
+gh workflow run pool-run.yml -f ref=my-branch -f preset=live-suites
+gh workflow run pool-run.yml -f ref=my-branch -f preset=command \
+  -f command='cargo +1.98.0 test -p neo-server --locked'
+gh run watch          # pick the run; its log streams as it goes
+gh run download RUN_ID
+```
+
+In the Actions tab, choose **Pool run**, then **Run workflow**. Keep **Use workflow from** on
+`main`, and put your branch in **ref**. The pool admits only `main`'s copy of the workflow, so
+a run dispatched from another branch fails at once and says so.
+
+| Preset | Runs, from `packages/browseros-agent` |
+| --- | --- |
+| `command` | Your command, with `bash -c` |
+| `sdk-gate` | `bash crates/neo-sdk/check.sh` |
+| `live-suites` | Every live SDK suite (`crates/neo-sdk/live.py`) on the browser `browser.lock` pins at that ref |
+
+What to expect:
+
+- **It waits like any pool job.** The job takes a machine through the same queue as
+  `bun run remote`, behind gates, images and specs. All GitHub jobs together count as one pool
+  worker, so they hold at most two machines, running plus waiting. Further runs wait in GitHub's
+  queue without holding a machine.
+- **It is cut at the pool's wall.** The job ends after 28 minutes, and the pool's 30-minute wall
+  is the hard limit. Split anything longer.
+- **A clean, unprivileged account.** The job runs as an account with no sudo, no Docker and no
+  cloud credentials. It gets a fresh home, runner and checkout, and nothing it writes survives
+  it. Rust 1.98.0 with clippy and rustfmt, and the Bun that `package.json` pins, are installed
+  into that home each time. Node and the browser's fonts are already on the machine. Commands
+  that need Docker or root, such as the image build, stay on the SSH path below.
+- **Only this repository's code.** `ref` must name exactly one branch or tag of this
+  repository. A pull request's ref or a bare commit id is refused, because either can name a
+  fork's code. Pull requests never start a pool job.
+- **Public output.** This repository is public, and so are its run logs and artifacts. The
+  artifact `pool-run-<run id>-<attempt>` holds `run.log`, anything the command writes under
+  `$POOL_ARTIFACTS`, and the browser receipts in `.llm/test-browser`. It is kept for 14 days.
+  The job has a read-only `GITHUB_TOKEN` and no repository secret.
+
+How a machine serves the job: a dispatcher on the coordinator sees the queued job and asks the
+pool for a slot. Once it holds one, it registers a one-job runner on that machine and starts it
+through the guest supervisor, the same systemd service that runs every pool job. The runner's
+job-started hook refuses any other workflow or event before a step runs. The runner exits after
+its one job, and the slot is released on the guest's own receipt. If the dispatcher dies, the
+reaper cancels its jobs when their two-minute lease expires. Operators set this up with
+[COORDINATOR.md](COORDINATOR.md#github-runners).
+
+The SSH path (`bun run remote …`) is unchanged and still the only way to:
+
+- run uncommitted or unpushed working files;
+- build images (`image`, `viewer-image`, `fetch-image`), which need Docker;
+- run commands as the trusted build account;
+- `recover` a job;
+- see the whole pool with `status` and `queue`.
+
+It needs a client profile and an admitted address.
+
 ## What the command does
 
 ```text
@@ -154,9 +218,10 @@ on VM1 using an OS file lock. `guest.py` puts each command in a named systemd se
 stop the whole process tree even if a child detaches. These are short-lived SSH commands,
 not a new network service.
 
-The image driver and recipes are installed on every worker, so an older checkout does not
-need this feature's files. Explicit source metadata selects that checkout's actual Docker
-inputs. A narrow Node preload supplies only a legacy spec report's `git rev-parse HEAD` in
+Image jobs use the checkout's recipe and build script so its Dockerfiles receive their
+matching build contexts. Workers also carry a recipe and driver for older checkouts
+that predate the pool or need Git history. Explicit source metadata identifies the snapshot.
+A narrow Node preload supplies only a legacy spec report's `git rev-parse HEAD` in
 the uploaded agent directory; public corpus Git and other child processes run normally.
 
 ### Legacy supervisor compatibility and removal

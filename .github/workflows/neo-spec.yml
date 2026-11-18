@@ -1,7 +1,7 @@
 name: Neo spec suite
 
 # Playwright's own spec tests (v1.64.1) against Neo on Linux: the test for every change to the
-# SDK. One job on WarpBuild's 32-vCPU runner runs `bun run test:neo-spec --ci`, the command a
+# SDK. One job on WarpBuild's 16-vCPU runner runs `bun run test:neo-spec --ci`, the command a
 # person runs locally, which runs the whole corpus and then holds it to the committed list of
 # in-scope tests that do not pass on Linux,
 # packages/browseros-agent/crates/neo-sdk/neo-playwright-tests/node/expected/linux-x64.tsv.
@@ -55,7 +55,7 @@ jobs:
     if: >-
       github.event_name != 'pull_request' ||
       github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: warp-custom-browseros-ubuntu-2204-x64-32x
+    runs-on: warp-custom-browseros-ubuntu-2204-x64-16x
     timeout-minutes: 45
     defaults:
       run:
@@ -109,7 +109,8 @@ jobs:
         run: |
           set -euo pipefail
           . crates/neo-sdk/neo-server/docker/browser.lock
-          curl -fsSL --retry 3 -o "$RUNNER_TEMP/neo.deb" "$NEO_BROWSER_URL_AMD64"
+          # --retry alone skips a reset connection (curl 56); --retry-all-errors retries it too.
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 -o "$RUNNER_TEMP/neo.deb" "$NEO_BROWSER_URL_AMD64"
           echo "$NEO_BROWSER_SHA256_AMD64  $RUNNER_TEMP/neo.deb" | sha256sum -c -
           sudo apt-get update -q
           # The font list is the SDK image's (neo-server/docker/Dockerfile), so pages render with

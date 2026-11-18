@@ -2,13 +2,14 @@
 # The Neo SDK gate, also called by the server package's `lint:rust`.
 #
 # It covers every Rust crate under crates/neo-sdk, read from the folder, so a new crate is in the
-# gate the day it lands. Two kinds, by the crate's own Cargo.toml:
+# gate the day it lands. Standalone crates get rustfmt here. Workspace members use one of two
+# lint sets, selected by their Cargo.toml:
 #   - claw-sdk's lint set: a restated [lints] table (neo-server, neo-playwright). On top of the
 #     rest, Google's rustfmt options (stable rustfmt applies them only through --config) and the
 #     dependency boundary.
 #   - the workspace's lints (`[lints] workspace = true`: neo-takeover, neo-trace, neo-http,
 #     ...): plain rustfmt, as CI's `cargo fmt --all --check` and their own `lint:rust` run it.
-# Every crate gets clippy -D warnings on all targets and its tests (except TESTS_NOT_RUN below),
+# Every workspace member here gets clippy -D warnings on all targets and its tests (except TESTS_NOT_RUN below),
 # on CI's exact toolchain. The SDK image's Python scripts (neo-server/docker) get their tests and
 # an import each, and the pinned ruff where uv is installed, as CI's image scripts job does. The
 # Bun suites (neo-playwright-js's page side, neo-server's conformance tables, neo-captcha's test
@@ -64,7 +65,11 @@ if [[ "$BUN_FOUND" != "$BUN_PINNED" ]]; then
   exit 1
 fi
 
-# PACKAGES: claw-sdk's lint set. WORKSPACE_LINTED: every other SDK crate. ALL_ARGS: both.
+# neo-slimviewer needs a source-built OpenH264. Its Clippy and tests run in
+# neo-slimviewer/Dockerfile's slimviewer-check target.
+STANDALONE_CRATES=(neo-slimviewer)
+
+# PACKAGES: claw-sdk's lint set. WORKSPACE_LINTED: the other workspace members. ALL_ARGS: both.
 PACKAGES=()
 WORKSPACE_LINTED=()
 for manifest in crates/neo-sdk/*/Cargo.toml; do
@@ -72,6 +77,11 @@ for manifest in crates/neo-sdk/*/Cargo.toml; do
   if [[ -z "$package" ]]; then
     echo "check.sh: no package name in $manifest" >&2
     exit 1
+  fi
+  if [[ " ${STANDALONE_CRATES[*]} " == *" $package "* ]]; then
+    echo "rustfmt (standalone $package)"
+    cargo_pinned fmt --check --manifest-path "$manifest"
+    continue
   fi
   # claw-sdk's lint set restates its tables; the workspace's is one `workspace = true`. A crate
   # with neither has no lints at all, which no SDK crate may.

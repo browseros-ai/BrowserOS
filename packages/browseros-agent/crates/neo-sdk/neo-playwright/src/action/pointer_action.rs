@@ -23,18 +23,19 @@ use std::time::Duration;
 use browseros_core::SessionId;
 use browseros_core::viewport::ViewportMode;
 use serde::Deserialize;
+use tokio::time::Instant;
 use ts_rs::TS;
 
 use crate::action::actionability::{PointerKind, Requirements, requirements, state_name};
 use crate::action::arm_guard::ArmGuard;
 use crate::action::attempt_log::AttemptLog;
-use crate::action::cover::{self, CoverWatch, Seat};
+use crate::action::cover::{self, CoverWatch, Seat, Waiting};
 use crate::action::frame_projection::{self, Projection};
 use crate::action::pointer_quads::{self, Placement as QuadPlacement};
 use crate::action::protocol_scroll;
 use crate::action::requested_navigations::{NavigationCut, RequestedNavigations};
 use crate::action::subject::Subject;
-use crate::backoff::Backoff;
+use crate::backoff::{Backoff, STABLE_GAP};
 use crate::input::{
     self, BurstFailure, ClickOptions, InputDevices, InputStep, Modifiers, MouseButton, PageInput,
     Point as PagePoint, UnknownKey,
@@ -51,10 +52,6 @@ use crate::resolve::{self, Resolved};
 use crate::target::{Strictness, Target};
 use crate::world::Pin;
 use crate::{ErrorCode, Playwright, PlaywrightError, TimedOut};
-
-/// Two measurements at least this far apart, with the same rect, make an element stable. One
-/// animation frame, as upstream's `stableRafCount: 1` waits, but on Rust's clock.
-const STABLE_GAP: Duration = Duration::from_millis(16);
 
 /// The route check's tries before the attempt starts over, and the gap between them: the
 /// browser's copy of the layout moves on when the scrolled frame's process draws again, a
@@ -257,6 +254,12 @@ pub(crate) struct PointerRunner<'a> {
     /// A press through the own wrapper of a checkbox, a radio or a switch: its pin and its state
     /// before, read again after a plain click, since only the state shows what the press did.
     wrapper_before: Option<(Pin, bool)>,
+    /// Covered-click B: the covered answer of an action that stopped early, kept for
+    /// [`PointerRunner::answered`] while the action leaves through the timeout's own exit.
+    early_answer: Option<PlaywrightError>,
+    /// The cover's facts could not be read when the action would have stopped early: it keeps
+    /// the whole wait, since the timing never comes before the facts.
+    early_unread: bool,
 }
 
 impl<'a> PointerRunner<'a> {
@@ -278,6 +281,8 @@ impl<'a> PointerRunner<'a> {
             covers: CoverWatch::new(),
             pressed_by: None,
             wrapper_before: None,
+            early_answer: None,
+            early_unread: false,
         }
     }
 
@@ -319,15 +324,18 @@ impl<'a> PointerRunner<'a> {
         self.answered(action, ran).await
     }
 
-    /// A timeout under a cover says what covers the element (`cover.rs`); any other answer
-    /// passes as it is.
+    /// A timeout under a cover says what covers the element (`cover.rs`); an action that stopped
+    /// early (covered-click B) answers what it kept; any other answer passes as it is.
     async fn answered<T>(
-        &self,
+        &mut self,
         action: &PointerAction,
         ran: Result<T, PlaywrightError>,
     ) -> Result<T, PlaywrightError> {
         match ran {
             Err(error) if error.timed_out() == TimedOut::Yes => {
+                if let Some(answer) = self.early_answer.take() {
+                    return Err(answer);
+                }
                 let name = requirements(action.kind).name;
                 Err(cover::covered_timeout(self.scope, self.page, &self.covers, name, error).await)
             }
@@ -683,6 +691,9 @@ impl<'a> PointerRunner<'a> {
                     Placed::Covered { by, cover, hop, at } => {
                         self.log_hit_refused(&req, by);
                         self.saw_above(located, hop, at, cover)?;
+                        if self.stopped_early(action).await {
+                            return Err(self.timed_out());
+                        }
                         continue;
                     }
                     Placed::Outside => {
@@ -768,6 +779,9 @@ impl<'a> PointerRunner<'a> {
                                         drop(armed);
                                         self.log_hit_refused(&req, by);
                                         self.saw_above(located, hop, at, cover)?;
+                                        if self.stopped_early(action).await {
+                                            return Err(self.timed_out());
+                                        }
                                         continue;
                                     }
                                     Placed::Outside => {
@@ -809,6 +823,9 @@ impl<'a> PointerRunner<'a> {
                         self.log_hit_refused(&req, by);
                         self.covers
                             .saw(own_seat(located, pin, measured.point), cover);
+                        if self.stopped_early(action).await {
+                            return Err(self.timed_out());
+                        }
                         continue;
                     }
                     Called::Reply(ProbeReply::None { stale_ref: None } | ProbeReply::Detached) => {
@@ -960,6 +977,9 @@ impl<'a> PointerRunner<'a> {
                             }) => {
                                 self.log_covered(by);
                                 self.covers.missed(own_seat(located, pin, measured.point));
+                                if self.stopped_early(action).await {
+                                    return Err(self.timed_out());
+                                }
                                 continue;
                             }
                             Ok(other) => {
@@ -1130,6 +1150,27 @@ impl<'a> PointerRunner<'a> {
         .then(|| OwnAllowed {
             wrapper: self.covers.wrapper_allowed(),
         })
+    }
+
+    /// Covered-click B: whether this action stops waiting now, asked at each covered sighting,
+    /// before any input of the next attempt, so it never interrupts a press. When the watch says
+    /// stop (`cover.rs`'s `decide`: the same cover stood 5 s and 4 checks, not loading, under a
+    /// timeout nobody chose, outside the conformance flag), the covered answer is built now and
+    /// kept; the caller then leaves through the timeout's own exit, so the disarm and a held
+    /// button's owed release happen as on a timeout. Facts that cannot be read keep the wait.
+    async fn stopped_early(&mut self, action: &PointerAction) -> bool {
+        if self.early_unread {
+            return false;
+        }
+        let Some(stop) = self.covers.early(Instant::now(), Waiting::of(self.scope)) else {
+            return false;
+        };
+        let name = requirements(action.kind).name;
+        let answer =
+            cover::covered_answer(self.scope, self.page, &self.covers, name, Some(stop)).await;
+        self.early_unread = answer.is_none();
+        self.early_answer = answer;
+        self.early_answer.is_some()
     }
 
     /// The pinned element after the protocol's scroll (`protocol_scroll.rs`): the `act` that

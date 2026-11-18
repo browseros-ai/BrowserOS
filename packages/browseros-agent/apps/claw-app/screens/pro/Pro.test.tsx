@@ -771,12 +771,12 @@ describe('what ultrafast has saved', () => {
     expect(text()).toContain('neo working8 min')
     expect(text()).toContain('Latest')
     expect(text()).toContain('Search flights to Singapore')
-    expect(text()).toContain('ultrafast · neo did 3 steps3 steps')
+    expect(text()).toContain('ultrafastneo did 3 steps3 steps')
     expect(text()).toContain('Search amazon.in for Colgate')
     expect(text()).toContain(
-      'ultrafast · neo did it in 7 sec5 pages, 18k tokens saved',
+      'ultrafastneo did it in 7 sec5 pages, 18k tokens saved',
     )
-    expect(text()).toContain('ultrafast · 15 sec')
+    expect(text()).toContain('ultrafastneo ran it in 15 sec')
     expect(text()).toContain('9 pages, 62k tokens saved')
     const links = [...container.querySelectorAll('a')].map((link) => [
       nameOf(link),

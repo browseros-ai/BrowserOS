@@ -32,7 +32,6 @@ mod js_runner;
 mod live_run;
 
 use std::collections::HashMap;
-use std::error::Error;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -40,6 +39,7 @@ use fixture_server::{FixtureServer, Page};
 use js_runner::OpHost;
 use live_run::{LiveRun, TestPage, TestResult, brand};
 use serde_json::{Value, json};
+use tokio::runtime::Builder;
 use tokio::time;
 
 /// Core's detector, as a function each place runs with its own way to report.
@@ -139,51 +139,77 @@ async fn detections(run: &LiveRun, page: &TestPage) -> TestResult<Value> {
     .await
 }
 
-async fn script(run: &Arc<LiveRun>, page: &TestPage, body: &str) -> TestResult<Value> {
+async fn script(run: &Arc<LiveRun>, page: &TestPage, body: &str) -> Result<Value, String> {
     let host: Arc<dyn OpHost> = Arc::clone(run) as Arc<dyn OpHost>;
-    Ok(js_runner::run_script(&host, &json!({ "page": brand(page) }), body).await?)
+    js_runner::run_script(&host, &json!({ "page": brand(page) }), body).await
 }
 
-#[tokio::test]
+#[test]
 #[ignore = "needs an owned BrowserOS on BROWSEROS_CDP_PORT"]
+fn reports_what_a_neo_driven_tab_detects_per_phase() -> TestResult {
+    // Console previews are deliberately large. Like the server, run QuickJS on a worker
+    // with an 8 MiB stack while other workers keep the CDP reader and keepalive polling.
+    let runtime = Builder::new_multi_thread()
+        .worker_threads(4)
+        .thread_stack_size(8 * 1024 * 1024)
+        .enable_all()
+        .build()?;
+    runtime.block_on(async { tokio::spawn(measure_detector()).await })??;
+    Ok(())
+}
+
 #[expect(
     clippy::print_stderr,
     reason = "the per-phase counts are the measurement"
 )]
-async fn reports_what_a_neo_driven_tab_detects_per_phase() -> TestResult {
+async fn measure_detector() -> Result<(), String> {
     let mut pages = HashMap::new();
     pages.insert("/top.html".to_owned(), Page::html(&top_html()));
     pages.insert("/child.html".to_owned(), Page::html(&child_html()));
-    let server = FixtureServer::start(pages).await?;
+    let server = FixtureServer::start(pages)
+        .await
+        .map_err(|error| error.to_string())?;
     let top_url = server.url("127.0.0.1", "/top.html");
 
-    let run = Arc::new(LiveRun::connect().await?);
+    let run = Arc::new(
+        LiveRun::connect()
+            .await
+            .map_err(|error| error.to_string())?,
+    );
     // The `worker.evaluate` phase finds the detector's worker through `page.workers()`.
     run.report_workers();
-    let page = run.new_page().await?;
+    let page = run.new_page().await.map_err(|error| error.to_string())?;
     let mut report = Vec::new();
     let phases = phases(&top_url);
     let outcome = async {
         for (name, body) in phases {
             run.record_methods();
             let value = script(&run, &page, &body).await;
+            // A disconnected diagnostic read must not replace the script failure that
+            // preceded it. Record and return that first error before doing more browser IO.
+            if let Err(error) = &value {
+                eprintln!("DETECTION {}", json!({ "phase": name, "error": error }));
+            }
+            let value = value.map_err(|error| format!("{name}: {error}"))?;
             time::sleep(Duration::from_millis(1500)).await;
             let methods = run.recorded_methods();
             let sent = |method: &str| methods.iter().filter(|sent| *sent == method).count();
-            let seen = detections(&run, &page).await?;
-            let line = json!({ "phase": name, "result": value.map_err(|e| e.to_string()),
+            let seen = detections(&run, &page)
+                .await
+                .map_err(|error| error.to_string())?;
+            let line = json!({ "phase": name, "result": { "Ok": value },
                                "runtimeEnables": sent("Runtime.enable"),
                                "logEnables": sent("Log.enable"), "detections": seen });
             eprintln!("DETECTION {line}");
             report.push(line);
         }
-        Ok::<_, Box<dyn Error>>(())
+        Ok::<_, String>(())
     }
     .await;
     run.close_page(&page).await;
     drop(server);
     outcome?;
-    judge(&report)
+    judge(&report).map_err(|error| error.to_string())
 }
 
 /// The phases, in order, each a script body run on the fixture's tab.

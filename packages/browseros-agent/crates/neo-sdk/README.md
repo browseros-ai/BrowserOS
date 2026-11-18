@@ -44,6 +44,8 @@ host / MCP run
       |          +----> neo-sdk-api (spec + generated types)
       |          +----> neo-screencast <----- claw-server (desktop)
       +---------------> neo-captcha <----- claw-server (desktop)
+
+   SDK image supervisor ----> neo-slimviewer ----> Xvnc (display)
 ```
 
 | Package | Responsibility |
@@ -57,6 +59,7 @@ host / MCP run
 | `neo-sdk-api` | Host API specification, generated Rust models and compatibility rules. |
 | `neo-captcha` | Shared CAPTCHA solver, also used by desktop. `testbed/` checks it end to end through `run` ([README](neo-captcha/testbed/README.md)). |
 | `neo-screencast` | Shared capture hub, also used by desktop. |
+| `neo-slimviewer` | Standalone X11-to-H.264 streamer and web viewer. Its Dockerfile supplies the SDK image. |
 
 A host types a secret into a page with `POST /v1/tabs/{tabId}/fill`, never in a script: the
 route lives in `neo-http`, and `neo-server` runs it as a run of its own with one `protected`
@@ -72,6 +75,11 @@ Snapshots search for moved fields only on a receiving tab that took a host's pri
 On other tabs, a name derived from a box moved in from another frame or window can print
 its value. Local fields and an explicit field root remain guarded; a moved marked box's
 `inputValue()` and value assertions still read bullets.
+
+A page's copy of a typed secret into an unmarked box reads in clear through `inputValue()`.
+Ordinary snapshots and error previews mask that copy only if the page declares its box
+private. The original node and any already marked destination keep their marks; copying
+the value does not copy the mark.
 
 `neo-server/docker/` builds the Neo SDK image, the browser plus this server.
 See [the image's README](neo-server/docker/README.md) for host integration.
@@ -172,6 +180,32 @@ contributor rules. Build the server with `cargo build -p neo-server --bin browse
 Use Bun 1.4.2 in `neo-playwright-js` for `bun run build`, `bun run build:check` and its tests.
 Regenerate the host contract from the agent root with `bun run codegen:neo-sdk-api`; never
 edit `neo-sdk-api/src/generated` by hand.
+
+Run every real-browser SDK suite on Linux with the browser version in
+`neo-server/docker/browser.lock` installed, from `packages/browseros-agent`:
+
+```sh
+CARGO_PROFILE_TEST_OPT_LEVEL=2 CARGO_PROFILE_DEV_OPT_LEVEL=2 \
+NEO_E2E_BROWSER=/usr/bin/browserclaw python3 crates/neo-sdk/live.py
+```
+
+The test profile is optimized at level 2 through the environment; repository Cargo profiles
+are unchanged. The live host processes large console events with the row's existing deadlines.
+The command compiles all 22 `neo-playwright` live targets and `neo-server`'s
+`acceptance_browseros`, `probe_reply_browseros`, and `snapshot_unmarked_browseros` targets once.
+Each suite runs through `bun run test:browser` with one test thread. Live targets and acceptance
+use `--ignored`; probe replies and snapshot notices use ordinary selection. Independent test
+clients share browser tabs inside a suite, so serial execution prevents one client's cleanup
+from clearing another's emulation. Each suite gets a fresh private browser. The acceptance rig also gets
+`CLAW_SDK_E2E_BROWSER` from the selected executable so its four rows actually run.
+The report in `.llm/sdk-live` contains the compile duration, optimization settings, pass/fail/early-return counts,
+commands, logs, and per-suite outcomes. CI reports its measured compile cost in the job summary.
+A failed row, launcher failure, timeout, empty selection, or precondition return fails the
+command. An early `Ok(())` return is reported separately, not as an exercised pass.
+
+The separate `Neo SDK live / linux-x64` GitHub check runs the same command for SDK
+pull requests. It installs the checksum-pinned browser and the SDK image's fonts,
+and uploads the report and browser cleanup receipts. `check.sh` remains browser-free.
 
 Release and protocol identities remain `claw-sdk`, `browseros-claw-sdk`, the existing version
 marker, MCP name and `CLAW_*` environment variables. The package rename changes tracing

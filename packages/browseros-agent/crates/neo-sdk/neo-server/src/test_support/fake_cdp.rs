@@ -10,6 +10,7 @@ use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
 use tokio::sync::watch::error::RecvError;
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
+use tokio::task::{self, Id};
 
 /// The one window every fake tab lives in.
 const WINDOW_ID: i64 = 1;
@@ -36,7 +37,7 @@ const EVENT_BACKLOG: usize = 1024;
 /// - `Page.navigate` arriving at a page [`FakeCdp::serve`] registered, so a load changes the
 ///   tab's URL and title the way a real document's `<title>` would.
 ///
-/// Any other method answers `{}`. Every call is logged with the epoch it was sent on.
+/// Any other method answers `{}`. Every call is logged with its connection epoch and sender task.
 #[derive(Debug)]
 pub struct FakeCdp {
     state: Mutex<FakeState>,
@@ -54,6 +55,9 @@ pub struct FakeCall {
     pub params: Value,
     /// The connection epoch it was sent on.
     pub epoch: u64,
+    /// The Tokio task that sent this call, stable across worker-thread handoffs. `None` for
+    /// calls outside a task; lets tests distinguish independent watchers from foreground work.
+    pub task: Option<Id>,
 }
 
 #[derive(Debug)]
@@ -72,6 +76,8 @@ struct FakeState {
     hung: HashSet<String>,
     /// Canned answers that replace the fake's own for a method.
     answers: HashMap<String, Value>,
+    /// Typed CDP failures, kept separate from successful JSON protocol replies.
+    failures: HashMap<String, CdpError>,
     /// URL -> the title of the document served there.
     served: HashMap<String, String>,
     /// Methods whose next call is answered only on [`FakeCdp::release_held`].
@@ -123,6 +129,7 @@ impl FakeCdp {
                 calls: Vec::new(),
                 hung: HashSet::new(),
                 answers: HashMap::new(),
+                failures: HashMap::new(),
                 served: HashMap::new(),
                 hold_next: HashSet::new(),
                 hold_after: HashMap::new(),
@@ -222,6 +229,16 @@ impl FakeCdp {
     /// tab's contents: the new target is created, then the old one destroyed. `false` when the
     /// fake has no such tab.
     pub fn replace_target(&self, tab: TabId) -> bool {
+        self.swap_target(tab, None)
+    }
+
+    /// [`Self::replace_target`], the new target created already showing `url`, as Chromium
+    /// reports one that took over a tab mid-navigation.
+    pub fn replace_target_showing(&self, tab: TabId, url: &str) -> bool {
+        self.swap_target(tab, Some(url))
+    }
+
+    fn swap_target(&self, tab: TabId, url: Option<&str>) -> bool {
         let mut state = self.lock();
         state.replaced_targets += 1;
         let target = format!("target-{}.{}", tab.0, state.replaced_targets);
@@ -230,6 +247,13 @@ impl FakeCdp {
         };
         let old = mem::replace(&mut entry.target, target);
         let mut events = state.created_events(tab.0);
+        if let Some(url) = url {
+            for event in &mut events {
+                if let Some(info) = event.params.get_mut("targetInfo") {
+                    info["url"] = json!(url);
+                }
+            }
+        }
         events.extend(state.destroyed_events(&old));
         drop(state);
         self.emit(events);
@@ -239,18 +263,29 @@ impl FakeCdp {
     /// An event the page in `tab` sends, such as `Runtime.consoleAPICalled` or
     /// `Page.javascriptDialogOpening`, on the session `Target.attachToTarget` gives for the tab's
     /// current target. It reaches a session's listeners only once something attached to the tab.
-    /// `false` when the fake has no such tab.
+    /// A target's own lifecycle (`Target.targetCreated`, `Target.targetInfoChanged`,
+    /// `Target.targetDestroyed`, `Target.targetCrashed`) goes on the browser's session instead,
+    /// as Chromium sends it to the client that turned target discovery on; an attachment's
+    /// `Target.attachedToTarget` and `Target.detachedFromTarget` stay on the tab's session, its
+    /// parent's. `false` when the fake has no such tab.
     pub fn page_event(&self, tab: TabId, method: &str, params: Value) -> bool {
         let state = self.lock();
         let Some(entry) = state.tabs.iter().find(|entry| entry.tab == tab.0) else {
             return false;
         };
-        let session = SessionId::from(format!("session-{}", entry.target));
+        let lifecycle = matches!(
+            method,
+            "Target.targetCreated"
+                | "Target.targetInfoChanged"
+                | "Target.targetDestroyed"
+                | "Target.targetCrashed"
+        );
+        let session = (!lifecycle).then(|| SessionId::from(format!("session-{}", entry.target)));
         drop(state);
         self.emit(vec![CdpEvent {
             method: method.to_owned(),
             params,
-            session_id: Some(session),
+            session_id: session,
         }]);
         true
     }
@@ -294,6 +329,11 @@ impl FakeCdp {
     /// `errorText` the way Chromium does for a host that does not resolve.
     pub fn answer(&self, method: &str, result: Value) {
         self.lock().answers.insert(method.to_owned(), result);
+    }
+
+    /// Calls to `method` fail with the transport's typed error, including native tab reads.
+    pub fn fail(&self, method: &str, error: CdpError) {
+        self.lock().failures.insert(method.to_owned(), error);
     }
 
     /// Calls to `method` get the fake's own answer again, after [`FakeCdp::answer`].
@@ -389,11 +429,27 @@ impl FakeCdp {
 
     /// Waits for browser receipt, including calls logged before this waiter subscribed.
     pub async fn received(&self, method: &str) -> Result<(), RecvError> {
+        self.received_matching(|calls| calls.iter().any(|call| call.method == method).then_some(()))
+            .await
+    }
+
+    /// Waits until `inspect` finds a value in the receipt log, without cloning or polling it.
+    /// The callback runs under the log's mutex and must not call back into this fake.
+    pub async fn received_matching<T>(
+        &self,
+        inspect: impl Fn(&[FakeCall]) -> Option<T>,
+    ) -> Result<T, RecvError> {
         let mut received = self.received.subscribe();
-        while self.count(method) == 0 {
+        loop {
+            let found = {
+                let state = self.lock();
+                inspect(&state.calls)
+            };
+            if let Some(found) = found {
+                return Ok(found);
+            }
             received.changed().await?;
         }
-        Ok(())
     }
 
     /// Answers one call. `None` means it never will. `expected` is the caller's epoch for an
@@ -479,7 +535,9 @@ impl FakeState {
             };
             return (Reply::Now(Err(error), Vec::new()), None);
         }
-        let reply = if self.hung.contains(method) {
+        let reply = if let Some(error) = self.failures.get(method) {
+            Reply::Now(Err(error.clone()), Vec::new())
+        } else if self.hung.contains(method) {
             Reply::Never
         } else if let Some(result) = self.answers.get(method) {
             Reply::Now(Ok(result.clone()), Vec::new())
@@ -490,6 +548,7 @@ impl FakeState {
             method: method.to_owned(),
             params,
             epoch: self.epoch,
+            task: task::try_id(),
         });
         let later = match self.hold_after.get_mut(method) {
             Some(0) => self.hold_after.remove(method).is_some(),

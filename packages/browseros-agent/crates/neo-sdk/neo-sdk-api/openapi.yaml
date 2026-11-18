@@ -629,18 +629,6 @@ paths:
           assertion (the received value and aria tree, the preview and the failure's snapshot),
           so `toHaveValue` compares against the bullets. A name built from the box reads the
           same.
-        - The mark follows the value. At each read-back Neo keeps, in the box's own isolated world,
-          a keyed digest of what the box holds and of the value it was given, with whitespace,
-          dashes and slashes set aside (the key is 128 random bits made there; neither leaves it).
-          Any text control of that document that holds a kept value reads as bullets to the same
-          reads: a box the page re-creates (a re-render, `cloneNode`), a clone, and a copy in
-          another box, grouped with spaces or not. While the page still holds the value this is no
-          new power, for `evaluate` reads it. A digest is forgotten at the start of the first
-          request Neo makes into the document at which no connected text control there holds its
-          value, so once the value has left the page a script that sets a box to guesses gets at
-          most one answer in bullets. The same scan, at every request, lets an element preview in
-          any error (`locator resolved to <input …>`, a strict mode violation) show such a box's
-          `value` attribute as `<N characters>`, as for a box Neo typed into.
 
         What it does not cover:
 
@@ -651,34 +639,26 @@ paths:
           value prints there again (under `fill.pictures: never` no picture of its tab is taken
           either way).
         - A reload, or going back in history into a new document, makes a new document that keeps no
-          mark and no digest, so a value that the page or the browser puts back there prints. A
+          mark, so a value that the page or the browser puts back there prints. A
           document that returns whole from the back-forward cache keeps its marks. The SDK image
           runs the browser with that cache off, so there going back always makes a new document, and
           the browser's own form restore puts back the value of a plain box with `autocomplete` on,
           where `inputValue()` and the snapshot print it; a host can test itself on such a box.
           Until the browser saves no form state, a host masks the values it typed in what its agent
-          reads. A password box and a box with `autocomplete` off come back empty. A copy in another
-          document (a frame, a pop-up) prints too, as do a copy the page reformats beyond
-          whitespace, dashes and slashes, text the page prints outside a box, and a copy that
-          appears after its digest was forgotten. A box in a closed shadow root Neo's walk has not
-          seen does not hold a digest alive, so a later copy can print. An entry that ends before
-          its read-back keeps no digest: its box has the mark alone.
+          reads. A password box and a box with `autocomplete` off come back empty.
         - A widget that spreads a code across several boxes shows the digits of the boxes Neo
           did not fill. Fill it one box at a time. The fill's `uncertain` outcome is the sign
           that a value given to one box did not stay there.
-        - A box that receives a longer text that contains the value prints it, since the mark
-          follows the value by equality. A page that echoes "card ending 4242" is not this
-          case: that text does not contain the value. A page that copies the whole number into
-          a longer field is. A host's means are its own withholding of pictures
-          (`fill.pictures`) and the check call's `contains` on the box it knows.
-        - A copy of the whole value that the page writes a moment after the fill, when no box
-          held the value in between, prints. A host meets it on a widget that spreads a code
-          across boxes and mirrors it late. Fill such a widget one box at a time. The fill's
-          `uncertain` outcome is the sign.
+        - A page's copy of a typed value into an unmarked box reads in clear through
+          `inputValue()`. Ordinary snapshots and error previews mask that copy only if the
+          page declares its box private. The original node and an already marked destination
+          keep their marks. A clone or replacement is a new box without the original's mark:
+          Neo does not follow the copied value.
         - `neo.solveCaptcha` photographs the challenge's own rectangle and sends it to the
           provider, on such a tab too.
-        - An element preview in a call log or an error (`locator resolved to <input …>`) prints
-          the box's `value`, `aria-valuetext` and `aria-valuenow` attributes as
+        - An element preview of a marked or declared private box in a call log or an error
+          (`locator resolved to <input …>`) prints its `value`, `aria-valuetext` and
+          `aria-valuenow` attributes as
           `<N characters>`, so a page that keeps the `value` attribute in step with what is
           typed, as many frameworks do, does not show the value there. Another attribute the
           page copies the value into prints as it is.
@@ -1484,9 +1464,13 @@ components:
             fill (`POST /v1/tabs/{tabId}/fill`) while the host's `fill.pictures` is `never`. A
             repeat fails the same way while that setting stands. `website / covered`: a pointer
             action's element stayed under something else that takes the pointer until its
-            timeout ran out; the message names it, says what it shows and what to do, and
-            `cover` holds it. Under the spec harness's conformance switch the same wait answers
-            `not_actionable`, with Playwright's own message.
+            timeout ran out, or, under Neo's own built-in timeout (no timeout on the call, the
+            page or the context), until the same cover had stood 5 s without moving, fading or
+            saying it is loading: then the message starts `Timeout cut short: the same cover
+            stayed on top for …`, and `page.setDefaultTimeout(30_000)` or a timeout on the call
+            keeps the whole wait. The message names the cover, says what it shows and what to
+            do, and `cover` holds it. Under the spec harness's conformance switch the same wait
+            answers `not_actionable`, with Playwright's own message, and never stops early.
         diagnosticCode:
           type: string
           description: >-
@@ -1514,8 +1498,8 @@ components:
     Cover:
       type: object
       description: >-
-        Only on `covered`: what covered the element at the action's point when its timeout ran
-        out. The element's own wrapper, its label or the page's root can be the cover; `kind`
+        Only on `covered`: what covered the element at the action's point when it stopped
+        waiting. The element's own wrapper, its label or the page's root can be the cover; `kind`
         says how it stands to the element.
       required: [ref, role, name, kind, controls]
       properties:
@@ -1545,6 +1529,16 @@ components:
           description: Up to eight of the cover's controls that take the pointer, in page order.
           items:
             $ref: '#/components/schemas/CoverControl'
+        stoodMs:
+          type: integer
+          description: >-
+            Only when the action stopped early under Neo's built-in timeout: how long the same
+            cover had stood, in milliseconds.
+        checks:
+          type: integer
+          description: >-
+            Only when the action stopped early under Neo's built-in timeout: how many checks saw
+            the same cover.
     CoverControl:
       type: object
       required: [ref, role, name]

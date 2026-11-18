@@ -1,0 +1,15 @@
+<!doctype html><meta charset=utf-8><title>Copied value</title>
+<style> body { margin: 24px; font: 15px sans-serif; } input { display: block; margin: 8px 0; width: 260px; } </style>
+<!-- Neo marks Original by typing into it. A page's copy into an undeclared box gains no mark.
+     Mirrored attributes let the strict-mode error preview exercise the same boundary. -->
+<input id=original aria-label="Original">
+<input id=copy aria-label="Copy">
+<script>
+  window.copyValue = () => {
+    const original = document.getElementById('original')
+    const copy = document.getElementById('copy')
+    copy.value = original.value
+    original.setAttribute('value', original.value)
+    copy.setAttribute('value', original.value)
+  }
+</script>

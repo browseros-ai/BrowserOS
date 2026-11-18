@@ -329,9 +329,12 @@ Unit and integration tests run against `FakeCdp`. The `*_browseros.rs` integrati
 
 ```sh
 CLAW_SDK_E2E_BROWSER=/Applications/BrowserOS.app/Contents/MacOS/BrowserOS \
-  cargo test -p neo-server --locked --test e2e_browseros --test acceptance_browseros \
+  cargo test -p neo-server --locked --test e2e_browseros \
     --test playwright_browseros --test uploads_browseros --test served_methods_browseros \
     --test main_world_browseros
+
+CLAW_SDK_E2E_BROWSER=/Applications/BrowserOS.app/Contents/MacOS/BrowserOS \
+  cargo test -p neo-server --locked --test acceptance_browseros -- --ignored
 ```
 
 - `tests/e2e_browseros.rs` launches the built binary the way Chromium does, runs scripts over MCP, and reads them back over the host socket.

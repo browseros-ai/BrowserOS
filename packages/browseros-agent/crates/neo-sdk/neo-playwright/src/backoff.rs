@@ -1,4 +1,5 @@
-//! Playwright's two retry schedules, as data (server/frames.ts and server/dom.ts at v1.64.1).
+//! Playwright's two retry schedules, as data (server/frames.ts and server/dom.ts at v1.64.1),
+//! and the gap of the stability check that runs inside them.
 //!
 //! An action retries at two levels. The outer loop re-resolves the locator, so a re-rendered
 //! element is found again; the inner loop retries the same pinned element while it scrolls,
@@ -14,6 +15,20 @@ const OUTER_MS: [u64; 6] = [0, 20, 50, 100, 100, 500];
 /// `_retryAction`: the first attempt starts at once, then each retry waits upstream's
 /// `waitTime` (0, 20, 100, 100, 500 ms).
 const INNER_MS: [u64; 6] = [0, 0, 20, 100, 100, 500];
+
+/// The gap between the two reads of an element's box that call it stable: equal boxes this far
+/// apart mean it did not move. Upstream waits one animation frame between them
+/// (`stableRafCount: 1`); Neo waits on Rust's clock instead, since a background tab's rAF stalls.
+///
+/// An animated box moves only when the page's animation clock steps, every 16.67 ms at 60 Hz, as
+/// an agent's tab measures. Two reads inside one step read the same position twice, so a moving
+/// element looks still. The second read leaves only after the first one's reply and this sleep,
+/// so the page's gap between them is never shorter than this constant; every user of it answers
+/// the timeout instead when the op's deadline cuts the sleep short, since a shorter gap proves
+/// nothing. 17 ms, the first whole millisecond above one step, therefore always spans a step,
+/// whatever the machine's round trip. A gap below one step would hold only while the timer ran
+/// long and the transport took time, and a fast machine has neither to spare.
+pub(crate) const STABLE_GAP: Duration = Duration::from_millis(17);
 
 /// One retry schedule: the wait before each attempt, the last wait repeating forever.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -62,7 +77,7 @@ impl Backoff {
 mod tests {
     use std::time::Duration;
 
-    use super::Backoff;
+    use super::{Backoff, STABLE_GAP};
 
     fn waits(backoff: Backoff, attempts: usize) -> Vec<u64> {
         (0..attempts)
@@ -111,6 +126,17 @@ mod tests {
         assert_eq!(
             waits(Backoff::inner(), 8),
             [0, 0, 20, 100, 100, 500, 500, 500]
+        );
+    }
+
+    /// Two reads of a moving element closer than one 60 Hz frame can read the same layout and
+    /// call it stable, so the gap must stay longer than a sixtieth of a second.
+    #[test]
+    fn tests_that_the_stability_gap_is_longer_than_one_60_hz_frame() {
+        let frame = Duration::from_secs(1) / 60;
+        assert!(
+            STABLE_GAP > frame,
+            "{STABLE_GAP:?} is not longer than one frame, {frame:?}"
         );
     }
 }

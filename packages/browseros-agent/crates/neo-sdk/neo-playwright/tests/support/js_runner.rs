@@ -26,10 +26,10 @@
 //! `{"ok": value}` or `{"err": "what failed"}` as JSON text, so a script can read what the page
 //! recorded (conformance's `harness.pageEval`) without `page.evaluate`.
 //!
-//! Each run gets its own `AsyncRuntime` and one context in it, dropped in that order when the
-//! run ends. A second context in one runtime deadlocks when a bridge call re-enters it (claw-sdk
-//! hit it), and QuickJS aborts the process if a JS value outlives its runtime, so no JS value
-//! leaves [`run_script`].
+//! Each run gets its own `AsyncRuntime` and one context in it. The context drops before the
+//! runtime when the run ends. A second context in one runtime deadlocks when a bridge call
+//! re-enters it. QuickJS aborts if a JS value outlives its runtime, so no JS value leaves
+//! [`run_script`].
 
 use std::collections::HashMap;
 use std::fmt;
@@ -145,33 +145,37 @@ impl OpHost for LiveRun {
 /// prelude, with `init` as the run's init (`{"page": brand | null}`, `run_script.rs`, plus
 /// `"pages"`, every tab's facts, which sdk-skeleton is to add). `Ok` is what the script
 /// returned, as JSON; `Err` says what it threw, or what stopped the engine.
-pub(crate) async fn run_script(
-    host: &Arc<dyn OpHost>,
-    init: &Value,
-    script: &str,
-) -> Result<Value, String> {
-    let runtime = AsyncRuntime::new().map_err(|error| error.to_string())?;
-    runtime.set_memory_limit(JS_MEMORY_BYTES).await;
-    runtime.set_max_stack_size(JS_STACK_BYTES).await;
-    let context = AsyncContext::full(&runtime)
-        .await
-        .map_err(|error| error.to_string())?;
-    let door = Arc::new(RunDoor::new(Arc::clone(host)));
-    let natives = Arc::clone(&door);
-    let init = init.to_string();
-    let code = script.to_owned();
-    let settled = context
-        .async_with(async move |ctx| evaluate(&ctx, &natives, &code, &init).await)
-        .await;
-    // The context before the runtime; an op the script left pending (the event pump's long
-    // poll) is dropped with the runtime, as claw-sdk drops a run's background ops at its end.
-    drop(context);
-    drop(runtime);
-    let settled: Value = serde_json::from_str(&settled?).map_err(|error| error.to_string())?;
-    match settled.get("thrown") {
-        Some(thrown) => Err(door.thrown(thrown)),
-        None => Ok(settled.get("ok").cloned().unwrap_or(Value::Null)),
-    }
+pub(crate) fn run_script<'a>(
+    host: &'a Arc<dyn OpHost>,
+    init: &'a Value,
+    script: &'a str,
+) -> BoxFuture<'a, Result<Value, String>> {
+    // The production run service polls this Send future on a runtime worker. Keep the
+    // same boundary here so a live host can keep CDP IO moving on other workers.
+    Box::pin(async move {
+        let runtime = AsyncRuntime::new().map_err(|error| error.to_string())?;
+        runtime.set_memory_limit(JS_MEMORY_BYTES).await;
+        runtime.set_max_stack_size(JS_STACK_BYTES).await;
+        let context = AsyncContext::full(&runtime)
+            .await
+            .map_err(|error| error.to_string())?;
+        let door = Arc::new(RunDoor::new(Arc::clone(host)));
+        let natives = Arc::clone(&door);
+        let init = init.to_string();
+        let code = script.to_owned();
+        let settled = context
+            .async_with(async move |ctx| evaluate(&ctx, &natives, &code, &init).await)
+            .await;
+        // The context before the runtime; an op the script left pending (the event pump's long
+        // poll) is dropped with the runtime, as claw-sdk drops a run's background ops at its end.
+        drop(context);
+        drop(runtime);
+        let settled: Value = serde_json::from_str(&settled?).map_err(|error| error.to_string())?;
+        match settled.get("thrown") {
+            Some(thrown) => Err(door.thrown(thrown)),
+            None => Ok(settled.get("ok").cloned().unwrap_or(Value::Null)),
+        }
+    })
 }
 
 /// Inside the runtime's lock, as `run_script.rs`'s `prepare`: the natives, the bootstrap, the

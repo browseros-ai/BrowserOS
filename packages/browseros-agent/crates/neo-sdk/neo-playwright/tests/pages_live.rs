@@ -6,6 +6,13 @@
 //! `bun run test:browser -- cargo test -p neo-playwright --test pages_live -- --ignored`.
 //! Every test opens its own tabs and closes them.
 
+#[path = "support/js_runner.rs"]
+#[expect(
+    dead_code,
+    reason = "this suite runs one script through the real prelude; the runner's gestures and \
+              refusals serve prelude_live"
+)]
+mod js_runner;
 #[path = "support/live_run.rs"]
 #[expect(
     dead_code,
@@ -19,14 +26,21 @@ mod page_server;
 use std::error::Error;
 use std::future::Future;
 use std::path::Path;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-use browseros_core::TabId;
+use browseros_cdp::{CdpClient, CdpEvent, ConnectOptions};
+use browseros_core::{CdpConnection, ProtocolSession, SessionId, TabId};
+use futures_util::future::BoxFuture;
+use js_runner::OpHost;
 use live_run::{EnvCall, LiveRun, TestPage, TestResult, brand, test_page};
 use neo_playwright::{Answer, ErrorCode, PlaywrightError, TimedOut};
 use neo_trace::ErrorOwner;
 use page_server::{PageServer, SLOW};
 use serde_json::{Value, json};
+use tokio::sync::broadcast::Receiver;
+use tokio::sync::broadcast::error::TryRecvError;
+use tokio::sync::{Notify, Semaphore};
 use tokio::time;
 
 /// Opens a tab, runs `body` on it, and closes the tab whatever happened.
@@ -780,95 +794,912 @@ async fn a_tab_handle_survives_a_playwright_restart() -> TestResult {
 const CRASH_PROGRESS_WATCHDOG: Duration = Duration::from_secs(30);
 const CRASH_COMMAND_REPLY_WAIT: Duration = Duration::from_secs(1);
 
-/// The diagnostic must name a recovery a script can actually complete. This kills only this
-/// fixture's renderer, waits for the browser's native crash event, then follows the message
-/// through the SDK rather than replacing the dead target through a raw browser command.
+/// Observes native crashes independently of the SDK watcher. Receiving this event is not a
+/// watcher barrier: the test's first fresh-run read must still expose any watcher/core race.
+#[expect(
+    clippy::print_stderr,
+    reason = "the native crash and command results diagnose a real renderer crash"
+)]
+async fn crash_renderer(
+    run: &LiveRun,
+    page: &TestPage,
+    events: &mut Receiver<CdpEvent>,
+    crashes: &mut Vec<Value>,
+) -> TestResult<String> {
+    let core_page = run.core_page(page).await?;
+    let attached = run.browser().pages.get_session(core_page).await?;
+    let target = attached.target_id;
+    let observed = async {
+        loop {
+            let event = events.recv().await?;
+            if event.method == "Target.targetCrashed" {
+                let ours =
+                    event.params.get("targetId").and_then(Value::as_str) == Some(target.as_str());
+                crashes.push(event.params);
+                if ours {
+                    return Ok::<(), Box<dyn Error>>(());
+                }
+            }
+        }
+    };
+    // Page.crash can lose its reply. A native event proves a crashed renderer even then.
+    let (crash_event, crash_reply) = tokio::join!(
+        time::timeout(CRASH_PROGRESS_WATCHDOG, observed),
+        time::timeout(
+            CRASH_COMMAND_REPLY_WAIT,
+            attached.session.send_value("Page.crash", json!({}))
+        ),
+    );
+    eprintln!(
+        "CRASH_RECOVERY {}",
+        json!({"stage": "native_crash", "target": target.as_str(), "nativeCrashes": crashes,
+               "observation": format!("{crash_event:?}"), "reply": format!("{crash_reply:?}")})
+    );
+    crash_event??;
+    Ok(target.as_str().to_owned())
+}
+
+/// These owned witnesses exercise the sites other parallel rows use. Read both the SDK title
+/// and the renderer itself, so a surviving tab entry alone cannot pass the isolation check.
+#[expect(
+    clippy::print_stderr,
+    reason = "witness results identify collateral renderer crashes before a later assertion"
+)]
+async fn check_crash_neighbours(
+    run: &LiveRun,
+    neighbours: &[(TestPage, &str)],
+    stage: &str,
+) -> TestResult {
+    for (page, expected) in neighbours {
+        let title = time::timeout(
+            CRASH_PROGRESS_WATCHDOG,
+            run.invoke(
+                "page.title",
+                json!({"page": brand(page), "call": {"timeoutMs": 5_000}}),
+            ),
+        )
+        .await;
+        let evaluated = time::timeout(
+            CRASH_PROGRESS_WATCHDOG,
+            run.eval(page, "[document.title, 6 * 7]"),
+        )
+        .await;
+        eprintln!(
+            "CRASH_RECOVERY {}",
+            json!({"stage": stage, "tab": page.tab.0, "expectedTitle": expected,
+                   "title": format!("{title:?}"), "evaluate": format!("{evaluated:?}")})
+        );
+        let title = title??;
+        let evaluated = evaluated??;
+        if title != json!(expected) || evaluated != json!([expected, 42]) {
+            return Err(format!(
+                "{stage}: neighbour {} changed: title={title}, evaluate={evaluated}",
+                page.tab.0
+            )
+            .into());
+        }
+    }
+    Ok(())
+}
+
+/// Keep every native crash, including targets owned by other rows. This drains observations
+/// already delivered to the fixture; it sends no command and does not synchronize the watcher.
+#[expect(
+    clippy::print_stderr,
+    reason = "all observed native target IDs distinguish collateral crashes from SDK errors"
+)]
+fn check_crash_scope(
+    target: &str,
+    events: &mut Receiver<CdpEvent>,
+    crashes: &mut Vec<Value>,
+    stage: &str,
+) -> TestResult {
+    let drained = loop {
+        match events.try_recv() {
+            Ok(event) if event.method == "Target.targetCrashed" => crashes.push(event.params),
+            Ok(_) => {}
+            Err(TryRecvError::Empty) => break Ok(()),
+            Err(error) => break Err(error),
+        }
+    };
+    eprintln!(
+        "CRASH_RECOVERY {}",
+        json!({"stage": stage, "target": target, "nativeCrashes": crashes,
+               "eventsError": drained.as_ref().err().map(ToString::to_string)})
+    );
+    drained?;
+    if crashes
+        .iter()
+        .any(|event| event.get("targetId").and_then(Value::as_str) != Some(target))
+    {
+        return Err(format!("{stage}: a renderer outside {target} crashed: {crashes:?}").into());
+    }
+    Ok(())
+}
+
+/// Follows the error's SDK recovery guidance and owns the replacement through cleanup.
+async fn recover_crashed_page(run: &LiveRun, page: &TestPage, url: &str) -> TestResult {
+    run.invoke("page.close", json!({"page": brand(page)}))
+        .await?;
+    let replacement = run.new_page().await?;
+    let recovered = async {
+        goto(run, &replacement, url, "load").await?;
+        let title = run
+            .invoke("page.title", json!({"page": brand(&replacement)}))
+            .await?;
+        if title != json!("child") {
+            return Err(format!("the named recovery must leave a usable renderer: {title}").into());
+        }
+        Ok(())
+    }
+    .await;
+    run.close_page(&replacement).await;
+    recovered
+}
+
+/// The crash diagnostic must name a recovery a script can complete while neighbouring sites
+/// survive. Crash a dedicated site, then follow the message through the SDK.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+#[expect(
+    clippy::print_stderr,
+    reason = "the first fresh-run read must retain its underlying error and protocol methods"
+)]
 async fn target_crashed_message_recovery_closes_and_opens_a_working_page() -> TestResult {
-    with_page(|mut run, _server, page| async move {
+    with_page(|mut run, server, page| async move {
+        let mut neighbours = Vec::new();
         let result = async {
             run.bind(&[page.tab]);
-            goto(
-                &run,
-                &page,
-                "data:text/html,<title>before crash</title>",
-                "load",
-            )
-            .await?;
-            let core_page = run.core_page(&page).await?;
-            let attached = run.browser().pages.get_session(core_page).await?;
-            let target = attached.target_id;
-            let session = attached.session;
+            for (url, title) in [
+                (server.url("/child.html"), "child"),
+                ("about:blank".to_owned(), ""),
+            ] {
+                let neighbour = run.new_page().await?;
+                neighbours.push((neighbour.clone(), title));
+                goto(&run, &neighbour, &url, "load").await?;
+            }
+            check_crash_neighbours(&run, &neighbours, "before_crash").await?;
+            // Renderer ownership follows a site, not a tab or an ephemeral server port.
+            // With desktop site isolation, this stable fixture URL gives Page.crash its own
+            // renderer, apart from the parallel rows' 127.0.0.1 and blank/data documents.
+            let crash_url = server
+                .url("/child.html")
+                .replacen("127.0.0.1", "crash-recovery.localhost", 1);
+            goto(&run, &page, &crash_url, "load").await?;
             let mut events = run.browser().cdp_events();
-            // A crash command may itself lose its reply. The independently observed native
-            // event proves an actual crashed renderer; an injected protocol error does not.
-            let observed = async {
-                loop {
-                    let event = events.recv().await?;
-                    if event.method == "Target.targetCrashed"
-                        && event.params["targetId"].as_str() == Some(target.as_str())
-                    {
-                        return Ok::<Value, Box<dyn Error>>(event.params);
-                    }
-                }
-            };
-            let (crash_event, _crash_reply) = tokio::join!(
-                time::timeout(CRASH_PROGRESS_WATCHDOG, observed),
-                time::timeout(
-                    CRASH_COMMAND_REPLY_WAIT,
-                    session.send_value("Page.crash", json!({}))
-                ),
-            );
-            let crash_event = crash_event??;
-            assert_eq!(crash_event["targetId"], json!(target.as_str()));
+            let mut crashes = Vec::new();
+            let target = crash_renderer(&run, &page, &mut events, &mut crashes).await?;
             run.next_run();
+            run.record_methods();
             let failed = run
                 .invoke(
                     "page.title",
                     json!({"page": brand(&page), "call":{"timeoutMs": 5_000}}),
                 )
                 .await;
+            let methods = run.recorded_methods();
+            eprintln!(
+                "CRASH_RECOVERY {}",
+                json!({"stage": "fresh_run_read", "target": target, "nativeCrashes": crashes,
+                       "result": format!("{failed:?}"), "error": failed.as_ref().err().map(ToString::to_string),
+                       "methods": methods})
+            );
+            let isolated =
+                check_crash_scope(&target, &mut events, &mut crashes, "after_fresh_run_read");
+            let surviving = check_crash_neighbours(&run, &neighbours, "after_crash").await;
+            check_crash_scope(&target, &mut events, &mut crashes, "after_crash")?;
+            isolated?;
+            surviving?;
             let error = failed
                 .err()
                 .ok_or("a crashed renderer must fail the read")?;
-            assert_eq!(error.error_code(), Some(ErrorCode::TargetCrashed));
-            let message = error.to_string();
-            assert!(
-                message.contains("page.close()") && message.contains("context.newPage()"),
-                "the script needs executable recovery guidance: {message}"
-            );
-            assert!(
-                !message.contains("reload"),
-                "the message must not direct a script into a refused reload"
-            );
-            run.invoke("page.close", json!({"page": brand(&page)}))
-                .await?;
-            let replacement = run.new_page().await?;
-            let recovered = async {
-                goto(
-                    &run,
-                    &replacement,
-                    "data:text/html,<title>recovered</title>",
-                    "load",
-                )
-                .await?;
-                let title = run
-                    .invoke("page.title", json!({"page": brand(&replacement)}))
-                    .await?;
-                assert_eq!(
-                    title,
-                    json!("recovered"),
-                    "the named recovery must leave a usable renderer"
-                );
-                Ok::<(), Box<dyn Error>>(())
+            if error.error_code() != Some(ErrorCode::TargetCrashed) {
+                return Err(format!("expected TargetCrashed: {error}; {error:?}").into());
             }
-            .await;
-            run.close_page(&replacement).await;
-            recovered
+            let message = error.to_string();
+            if !message.contains("page.close()")
+                || !message.contains("context.newPage()")
+                || message.contains("reload")
+            {
+                return Err(format!("the script needs executable recovery guidance: {message}").into());
+            }
+            recover_crashed_page(&run, &page, &crash_url).await?;
+            let surviving = check_crash_neighbours(&run, &neighbours, "after_recovery").await;
+            check_crash_scope(&target, &mut events, &mut crashes, "after_recovery")?;
+            surviving
         }
         .await;
+        // Ordinary assertion failures return errors above so all owned witnesses close too.
+        for (neighbour, _) in &neighbours {
+            run.close_page(neighbour).await;
+        }
         (run, result)
     })
     .await
+}
+
+/// The longest a run of `ariaSnapshot()` and one click on a healthy tab may take beside tabs whose
+/// renderer is busy, in the best of [`BESIDE_BUSY_TABS_TRIES`] tries. The wait it guards is
+/// deterministic: a run that waits for a busy tab's frame tree pays the native read's whole
+/// budget (one second, `frame_tree.rs` `SNAPSHOT_BUDGET`), and with the start hold back a run
+/// cannot go under 2.1 s, so every try fails and the best of three cannot hide it. The run itself
+/// takes about 150 ms on the pool's debug build (main took 5.3 s), plus the start's one grace for
+/// listed tabs (`LISTED_START_GRACE_MS` in context.ts, 300 ms, one window for all of them): three
+/// busy tabs paying it one after another would come to 1,050 ms and fail too. The rest, and the
+/// tries, absorb the seconds-long CPU stalls of a debug test thread on a loaded machine.
+const BESIDE_BUSY_TABS_BOUND: Duration = Duration::from_millis(900);
+
+/// Tries per case before [`BESIDE_BUSY_TABS_BOUND`] fails it. The busy tabs stay busy for 20 s,
+/// longer than three tries of a run that waits for them.
+const BESIDE_BUSY_TABS_TRIES: usize = 3;
+
+/// The script of [`tests_that_a_run_beside_busy_tabs_never_waits_for_their_frames`]: two of the
+/// script's own operations on the healthy tab, each followed by the prelude's settle step.
+const BESIDE_BUSY_TABS_SCRIPT: &str = "const text = await page.ariaSnapshot()\n\
+    await page.getByRole('button', { name: 'Frame button' }).click()\n\
+    return text";
+
+/// A run never waits for the frame tree of a tab it does not use. The run's init lists every tab,
+/// as a host whose runs see the whole browser does, so the prelude reads the busy tabs' trees too;
+/// their renderer answers nothing, and each read waits out its budget. The script never names
+/// them, so it pays nothing for them, whether one, two or three are busy.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+#[expect(
+    clippy::print_stderr,
+    reason = "each case prints its tries, the measure its bound is checked against"
+)]
+async fn tests_that_a_run_beside_busy_tabs_never_waits_for_their_frames() -> TestResult {
+    let _alone = BUSY_TABS.acquire().await?;
+    let run = Arc::new(LiveRun::connect().await?);
+    let server = PageServer::start().await?;
+    let healthy = run.new_page().await?;
+    let mut busy = Vec::new();
+    let result = async {
+        goto(&run, &healthy, &server.url("/child.html"), "load").await?;
+        // Another site than the healthy tab's, so Chromium never puts them in its renderer.
+        let busy_url = server
+            .url("/busy.html")
+            .replacen("127.0.0.1", "localhost", 1);
+        for _ in 0..3 {
+            let page = run.new_page().await?;
+            busy.push(page.clone());
+            goto(&run, &page, &busy_url, "load").await?;
+        }
+        // Each page's loop starts 300 ms after it loaded.
+        time::sleep(Duration::from_millis(600)).await;
+        let host: Arc<dyn OpHost> = Arc::clone(&run) as Arc<dyn OpHost>;
+        for count in 1..=busy.len() {
+            let mut tabs = vec![healthy.tab];
+            tabs.extend(busy.iter().take(count).map(|page| page.tab));
+            let init = json!({ "page": brand(&healthy), "pages": run.page_facts(tabs).await });
+            let mut tries = Vec::new();
+            while tries.len() < BESIDE_BUSY_TABS_TRIES {
+                let started = Instant::now();
+                let text = js_runner::run_script(&host, &init, BESIDE_BUSY_TABS_SCRIPT).await?;
+                let took = started.elapsed();
+                tries.push(took);
+                assert!(
+                    text.as_str()
+                        .is_some_and(|text| text.contains("Frame button")),
+                    "the healthy tab's snapshot: {text}"
+                );
+                if took < BESIDE_BUSY_TABS_BOUND {
+                    break;
+                }
+            }
+            eprintln!("BESIDE_BUSY_TABS busy={count} tries={tries:?}");
+            assert!(
+                tries.iter().any(|took| *took < BESIDE_BUSY_TABS_BOUND),
+                "beside {count} busy tabs, every try took {BESIDE_BUSY_TABS_BOUND:?} or more: \
+                 {tries:?}"
+            );
+        }
+        Ok::<(), Box<dyn Error>>(())
+    }
+    .await;
+    let closing = Instant::now();
+    for page in &busy {
+        run.close_page(page).await;
+    }
+    eprintln!(
+        "BESIDE_BUSY_TABS closed the busy tabs in {:?}",
+        closing.elapsed()
+    );
+    run.close_page(&healthy).await;
+    result
+}
+
+/// The two rows with busy tabs, one at a time. A run sees every tab of the browser, so the other
+/// row's busy tabs would cost this row's run waits that are not the ones it measures.
+static BUSY_TABS: Semaphore = Semaphore::const_new(1);
+
+/// The longest the run may take from the moment another client opened a busy tab to the end of
+/// its next five statements, in the best of [`BESIDE_BUSY_TABS_TRIES`] tries. A tab the
+/// run first sees mid-run holds the script for its reads until one goes unanswered, so such a tab
+/// may cost the run one wait in all: one native read's whole budget (one second,
+/// `frame_tree.rs` `SNAPSHOT_BUDGET`). The bound is that one wait plus the room
+/// [`BESIDE_BUSY_TABS_BOUND`] gives a run. A tab that held every statement would cost five or
+/// more, so every try would fail.
+const MID_RUN_BUSY_TAB_BOUND: Duration = Duration::from_millis(1_900);
+
+/// The script of [`tests_that_a_busy_tab_another_client_opens_mid_run_costs_one_wait_at_most`]:
+/// it waits for the tab the owner opens from its page, then runs five statements on its own tab,
+/// and returns the URLs its wait saw and the busy tab's id. It waits on its page's `popup` event:
+/// a context-level `page` wait makes the target watcher try to attach to every tab of the
+/// browser on its own loop, which a busy tab stalls, so that row would measure the watcher.
+const MID_RUN_BUSY_TAB_SCRIPT: &str = "const seen = []\n\
+    let busy\n\
+    try {\n\
+        busy = await page.waitForEvent('popup', {\n\
+            predicate: (other) => {\n\
+                seen.push(other.url())\n\
+                return other.url().includes('busy.html')\n\
+            },\n\
+            timeout: 15000,\n\
+        })\n\
+    } catch (error) {\n\
+        return { seen, error: String(error) }\n\
+    }\n\
+    for (let i = 0; i < 5; i++) await page.title()\n\
+    return { seen, tab: busy.tabId }";
+
+/// Closes every tab the browser lists at `url`. The row's busy tabs are on a URL of their own (its
+/// server's port), so this finds them whatever the script returned and touches no other row's tab.
+async fn close_tabs_at(run: &LiveRun, url: &str) {
+    let Ok(pages) = run.browser().pages.list().await else {
+        return;
+    };
+    for info in pages.into_iter().filter(|info| info.url.starts_with(url)) {
+        run.close_page(&TestPage { tab: info.tab_id }).await;
+    }
+}
+
+/// The live run's ops, with how long each `page.frames` read took and on which tab, and a signal
+/// once the script's `waitForEvent` went out (`events.wait`).
+struct FrameReads {
+    run: Arc<LiveRun>,
+    reads: Mutex<Vec<(i64, Duration)>>,
+    waiting: Notify,
+}
+
+impl OpHost for FrameReads {
+    fn invoke<'a>(
+        &'a self,
+        name: &'a str,
+        input: Value,
+    ) -> BoxFuture<'a, Result<Value, PlaywrightError>> {
+        Box::pin(async move {
+            let tab = input
+                .get("page")
+                .and_then(|page| page.get("tab"))
+                .and_then(Value::as_i64);
+            if name == "events.wait" {
+                self.waiting.notify_one();
+            }
+            let started = Instant::now();
+            let answer = OpHost::invoke(&*self.run, name, input).await;
+            if name == "page.frames"
+                && let Some(tab) = tab
+            {
+                self.reads
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .push((tab, started.elapsed()));
+            }
+            answer
+        })
+    }
+
+    fn event_head(&self) -> u64 {
+        OpHost::event_head(&*self.run)
+    }
+
+    fn page_facts(&self, tabs: Vec<TabId>) -> BoxFuture<'_, Vec<Value>> {
+        OpHost::page_facts(&*self.run, tabs)
+    }
+
+    fn gesture(&self, page: TestPage, expression: String) -> BoxFuture<'_, Result<Value, String>> {
+        OpHost::gesture(&*self.run, page, expression)
+    }
+}
+
+/// A tab another client opens while a run is going, and that never answers, costs the run one
+/// wait at most, never one per statement. Here the owner opens it from the run's page, as a
+/// click on a link that opens a tab would. The run first sees it mid-run, so its first read holds
+/// the script; that read goes unanswered, and from then on the tab is read only in the background.
+/// The row also checks that the run did read the tab while it was busy, so it cannot pass by never
+/// meeting the busy tab.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+#[expect(
+    clippy::print_stderr,
+    reason = "each try prints its time, the measure its bound is checked against"
+)]
+async fn tests_that_a_busy_tab_another_client_opens_mid_run_costs_one_wait_at_most() -> TestResult {
+    let _alone = BUSY_TABS.acquire().await?;
+    let run = Arc::new(LiveRun::connect().await?);
+    let server = PageServer::start().await?;
+    let healthy = run.new_page().await?;
+    let result = async {
+        goto(&run, &healthy, &server.url("/child.html"), "load").await?;
+        let busy_url = server
+            .url("/busy.html?at=now")
+            .replacen("127.0.0.1", "localhost", 1);
+        let init =
+            json!({ "page": brand(&healthy), "pages": run.page_facts(vec![healthy.tab]).await });
+        let mut tries = Vec::new();
+        while tries.len() < BESIDE_BUSY_TABS_TRIES {
+            let recorder = Arc::new(FrameReads {
+                run: Arc::clone(&run),
+                reads: Mutex::new(Vec::new()),
+                waiting: Notify::new(),
+            });
+            let host: Arc<dyn OpHost> = Arc::clone(&recorder) as Arc<dyn OpHost>;
+            let script = async {
+                let outcome = js_runner::run_script(&host, &init, MID_RUN_BUSY_TAB_SCRIPT).await;
+                (outcome, Instant::now())
+            };
+            // The owner opens the tab once the script's `waitForEvent` went out, from the run's
+            // page with a user gesture: nothing of the run's opened it. Opened sooner, its event
+            // could come before the wait's start and never reach the script.
+            let open = async {
+                let _waiting =
+                    time::timeout(Duration::from_secs(10), recorder.waiting.notified()).await;
+                let opened = run
+                    .eval(&healthy, &format!("window.open({busy_url:?}); ''"))
+                    .await;
+                (opened, Instant::now())
+            };
+            let ((outcome, ended), (opened, opened_at)) = tokio::join!(script, open);
+            // At once and whatever the try's outcome, so its loop does not load the machine for
+            // the next try or other rows, and a failed try leaves no busy tab behind.
+            close_tabs_at(&run, &busy_url).await;
+            opened?;
+            let outcome = outcome?;
+            let took = ended.saturating_duration_since(opened_at);
+            let reads = recorder
+                .reads
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone();
+            let unanswered = reads
+                .iter()
+                .filter(|(tab, read)| *tab != healthy.tab.0 && *read >= Duration::from_millis(900))
+                .count();
+            eprintln!("MID_RUN_BUSY_TAB took={took:?} reads={reads:?} script={outcome}");
+            assert!(
+                outcome.get("error").is_none(),
+                "the script never met the busy tab's page event: {outcome}"
+            );
+            assert!(
+                unanswered >= 1,
+                "the run never met the busy tab unanswered, so this try tested nothing: {reads:?}"
+            );
+            tries.push(took);
+            if took < MID_RUN_BUSY_TAB_BOUND {
+                break;
+            }
+        }
+        assert!(
+            tries.iter().any(|took| *took < MID_RUN_BUSY_TAB_BOUND),
+            "every try took {MID_RUN_BUSY_TAB_BOUND:?} or more: {tries:?}"
+        );
+        Ok::<(), Box<dyn Error>>(())
+    }
+    .await;
+    run.close_page(&healthy).await;
+    result
+}
+
+/// The longest a run that listens on its context may take beside a tab whose renderer is busy, in
+/// the best of [`BESIDE_BUSY_TABS_TRIES`] tries: three new tabs, each navigated while the context
+/// waits for its commit, and a read of the run's own page after each (thirteen replies). With a
+/// context-level listener the target watcher attaches core's page session to every untouched tab.
+/// With that attach awaited on its loop, each pass over the busy tab holds the loop for the
+/// attach's whole bound (one second, `CONTEXT_ATTACH_WAIT` in `target_watcher.rs`); a pass runs on
+/// every tick and every new tab, so the loop is nearly always in one, and each reply waits for it
+/// (up to two seconds, `SYNCHRONIZE_BOUND`): about 1.5 s a reply, near 20 s a try (read from code,
+/// not measured). The run itself takes about a second on a debug build (estimated); the rest, and
+/// the tries, absorb the 2 to 3 s stalls of a debug test thread on a loaded machine.
+const CONTEXT_LISTENER_BESIDE_BUSY_TAB_BOUND: Duration = Duration::from_millis(4_000);
+
+/// How long a probe of the busy tab's renderer waits before it counts the tab as busy: a healthy
+/// renderer answers `1 + 1` in milliseconds, a loaded one well within this.
+const BUSY_PROBE_WAIT: Duration = Duration::from_secs(1);
+
+/// The script of [`tests_that_a_context_listener_beside_a_busy_tab_never_waits_for_it`], over
+/// `url`: a context-level `framenavigated` listener, then three new tabs, each navigated while the
+/// context waits for its commit, and a read of the run's own page after each. It returns the new
+/// tabs' ids and the commits the listener heard.
+fn context_listener_script(url: &str) -> String {
+    format!(
+        "const heard = []\n\
+         context.on('framenavigated', (frame) => heard.push(frame.url()))\n\
+         const opened = []\n\
+         try {{\n\
+             for (let i = 0; i < 3; i++) {{\n\
+                 const other = await context.newPage()\n\
+                 opened.push(other.tabId)\n\
+                 const target = {url:?} + '?n=' + i\n\
+                 const committed = context.waitForEvent('framenavigated', {{\n\
+                     predicate: (frame) => frame.url() === target,\n\
+                     timeout: 15000,\n\
+                 }})\n\
+                 await other.goto(target)\n\
+                 await committed\n\
+                 await page.title()\n\
+             }}\n\
+         }} catch (error) {{\n\
+             return {{ opened, heard, error: String(error) }}\n\
+         }}\n\
+         return {{ opened, heard }}"
+    )
+}
+
+/// Opens `url` in a background tab as another client does, over a connection of the test's own,
+/// and returns its target id once its renderer stopped answering. The probe's session is on that
+/// other connection, which the run's watcher never hears of, so neither core nor the watcher has
+/// attached a page session to the tab when this returns: only the watcher's own observer, which
+/// it attached while the tab still answered (`busy.html` starts its loop 300 ms after it loads).
+async fn open_busy_tab(url: &str) -> TestResult<String> {
+    let client = Arc::new(CdpClient::connect(ConnectOptions::new(live_run::cdp_port())).await?);
+    let transport: Arc<dyn CdpConnection> = Arc::<CdpClient>::clone(&client);
+    let opened: TestResult<String> = async {
+        let created = transport
+            .send(
+                "Target.createTarget",
+                json!({ "url": url, "background": true }),
+                None,
+            )
+            .await?;
+        let target = created
+            .get("targetId")
+            .and_then(Value::as_str)
+            .ok_or("no target id")?
+            .to_owned();
+        let attached = transport
+            .send(
+                "Target.attachToTarget",
+                json!({ "targetId": target, "flatten": true }),
+                None,
+            )
+            .await?;
+        let session = attached
+            .get("sessionId")
+            .and_then(Value::as_str)
+            .ok_or("no session id")?
+            .to_owned();
+        let probe =
+            ProtocolSession::for_session(Arc::clone(&transport), SessionId::from(session.as_str()));
+        for _ in 0..100 {
+            let answer = time::timeout(
+                BUSY_PROBE_WAIT,
+                probe.send_value("Runtime.evaluate", json!({ "expression": "1 + 1" })),
+            )
+            .await;
+            if answer.is_err() {
+                return Ok(target);
+            }
+            time::sleep(Duration::from_millis(50)).await;
+        }
+        Err(format!("{url} kept answering").into())
+    }
+    .await;
+    // Dropping CdpClient does not stop its reader tasks; the probe's session goes with it.
+    client.disconnect().await;
+    opened
+}
+
+/// A run that listens on its context is not held by a busy tab it never uses, however many tabs
+/// open meanwhile: the target watcher attaches core's page session to the busy tab off its loop,
+/// so the run's replies and its events keep their pace. The busy tab is another client's, opened
+/// before the run and busy before the run's listener goes out, so every attach of it meets a
+/// renderer that does not answer. The run sees only its own tabs, as a run neo-server binds to
+/// its task does: the listener's own setup attaches each tab the run sees, a wait of the op's that
+/// this row does not measure.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+#[expect(
+    clippy::print_stderr,
+    reason = "each try prints its time, the measure its bound is checked against"
+)]
+async fn tests_that_a_context_listener_beside_a_busy_tab_never_waits_for_it() -> TestResult {
+    let _alone = BUSY_TABS.acquire().await?;
+    let mut run = Arc::new(LiveRun::connect().await?);
+    let server = PageServer::start().await?;
+    let healthy = run.new_page().await?;
+    let result = async {
+        goto(&run, &healthy, &server.url("/child.html"), "load").await?;
+        run.bind(&[healthy.tab]);
+        // Another site than the healthy tab's, so Chromium never puts them in one renderer.
+        let busy_url = server
+            .url("/busy.html")
+            .replacen("127.0.0.1", "localhost", 1);
+        let script = context_listener_script(&server.url("/child.html"));
+        let init =
+            json!({ "page": brand(&healthy), "pages": run.page_facts(vec![healthy.tab]).await });
+        let mut tries = Vec::new();
+        while tries.len() < BESIDE_BUSY_TABS_TRIES {
+            let busy = open_busy_tab(&busy_url).await?;
+            let host: Arc<dyn OpHost> = Arc::clone(&run) as Arc<dyn OpHost>;
+            let started = Instant::now();
+            let outcome = js_runner::run_script(&host, &init, &script).await;
+            let took = started.elapsed();
+            drop(host);
+            let _closed = run
+                .browser()
+                .cdp("Target.closeTarget", json!({ "targetId": busy }), None)
+                .await;
+            let opened = outcome
+                .as_ref()
+                .ok()
+                .and_then(|outcome| outcome.get("opened"))
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            for tab in opened.iter().filter_map(Value::as_i64) {
+                run.close_page(&TestPage { tab: TabId(tab) }).await;
+            }
+            // A new run for the next try: the script's listener, left on, would have the watcher
+            // attach the next busy tab at once, before it is busy.
+            Arc::get_mut(&mut run)
+                .ok_or("the run is still shared")?
+                .next_run();
+            let outcome = outcome?;
+            eprintln!("CONTEXT_LISTENER_BESIDE_BUSY_TAB took={took:?} script={outcome}");
+            assert!(
+                outcome.get("error").is_none() && opened.len() == 3,
+                "the script did not open its three tabs and see each one's commit: {outcome}"
+            );
+            tries.push(took);
+            if took < CONTEXT_LISTENER_BESIDE_BUSY_TAB_BOUND {
+                break;
+            }
+        }
+        assert!(
+            tries
+                .iter()
+                .any(|took| *took < CONTEXT_LISTENER_BESIDE_BUSY_TAB_BOUND),
+            "every try took {CONTEXT_LISTENER_BESIDE_BUSY_TAB_BOUND:?} or more: {tries:?}"
+        );
+        Ok::<(), Box<dyn Error>>(())
+    }
+    .await;
+    run.close_page(&healthy).await;
+    result
+}
+
+/// How long the run's watcher may take to show a tab another client opened: the tab's version
+/// is in `frame_versions()` once the watcher attached its root observer and the observer's
+/// auto-attach reported the tab's cross-site frame. That is the signal the row waits for, the
+/// same on main and with every observer a lifecycle source. It covers the tab's load, the
+/// watcher's next tick and the frame's attach; read from code, not measured.
+const UNTOUCHED_TAB_OBSERVED_BOUND: Duration = Duration::from_secs(10);
+
+/// How long a child frame's commit in a tab Neo never acted on may take to move the tab's frame
+/// version: the child's navigation and commit, its `Page.frameNavigated` on the tab's lifecycle
+/// source, the watcher's handling of it (behind a tick and a tree read in the tab's line at
+/// most), and the version's write. Read from code, not measured; the row prints what it took.
+const UNTOUCHED_CHILD_COMMIT_BOUND: Duration = Duration::from_secs(2);
+
+/// A tab opened by a client of the test's own, over a connection of its own: neither the run's
+/// core nor its watcher hears of that connection's session, so whatever the test does through it
+/// is another client's doing, never the run's.
+struct OutsideTab {
+    client: Arc<CdpClient>,
+    transport: Arc<dyn CdpConnection>,
+    target: String,
+    session: ProtocolSession,
+}
+
+impl OutsideTab {
+    /// Opens `url` in a background tab and returns once it loaded. A setup that fails at any step
+    /// closes the tab it created and the connection, so no tab or client outlives the row.
+    async fn open(url: &str) -> TestResult<Self> {
+        let client = Arc::new(CdpClient::connect(ConnectOptions::new(live_run::cdp_port())).await?);
+        let transport: Arc<dyn CdpConnection> = Arc::<CdpClient>::clone(&client);
+        let mut created = None;
+        let opened: TestResult<Self> = async {
+            let reply = transport
+                .send(
+                    "Target.createTarget",
+                    json!({ "url": url, "background": true }),
+                    None,
+                )
+                .await?;
+            let target = reply
+                .get("targetId")
+                .and_then(Value::as_str)
+                .ok_or("no target id")?
+                .to_owned();
+            created = Some(target.clone());
+            let attached = transport
+                .send(
+                    "Target.attachToTarget",
+                    json!({ "targetId": target, "flatten": true }),
+                    None,
+                )
+                .await?;
+            let session = attached
+                .get("sessionId")
+                .and_then(Value::as_str)
+                .ok_or("no session id")?;
+            let tab = Self {
+                client: Arc::clone(&client),
+                transport: Arc::clone(&transport),
+                session: ProtocolSession::for_session(
+                    Arc::clone(&transport),
+                    SessionId::from(session),
+                ),
+                target,
+            };
+            for _ in 0..200 {
+                if tab.eval("document.readyState").await? == json!("complete") {
+                    return Ok(tab);
+                }
+                time::sleep(Duration::from_millis(50)).await;
+            }
+            Err(format!("{url} did not load within 10 s").into())
+        }
+        .await;
+        if opened.is_err() {
+            if let Some(target) = &created {
+                let _closed = transport
+                    .send("Target.closeTarget", json!({ "targetId": target }), None)
+                    .await;
+            }
+            client.disconnect().await;
+        }
+        opened
+    }
+
+    /// Runs `expression` in the tab's main world, by value.
+    async fn eval(&self, expression: &str) -> TestResult<Value> {
+        let reply = self
+            .session
+            .send_value(
+                "Runtime.evaluate",
+                json!({ "expression": expression, "returnByValue": true }),
+            )
+            .await?;
+        Ok(reply
+            .pointer("/result/value")
+            .cloned()
+            .unwrap_or(Value::Null))
+    }
+
+    /// Closes the tab, then the connection: dropping a `CdpClient` does not stop its tasks.
+    async fn close(&self) {
+        let _closed = self
+            .transport
+            .send(
+                "Target.closeTarget",
+                json!({ "targetId": self.target }),
+                None,
+            )
+            .await;
+        self.client.disconnect().await;
+    }
+}
+
+/// A tab Neo never acted on reports its frames' commits. Another client opens the nested-frame
+/// fixture over its own connection, and its children commit navigations while the run's core has
+/// no session on the tab. Each commit moves the tab's frame version, which the production door
+/// hands every reply so a run re-reads a listed tab's tree: for the same-site child, whose events
+/// only a lifecycle source of the tab with `Page` on reports, and for the cross-site one, which
+/// its own session reports. The tab stays untouched throughout: core never attached to it.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+#[expect(
+    clippy::print_stderr,
+    reason = "each child's commit prints how long the version took to move, the measure its \
+              bound is checked against"
+)]
+async fn tests_that_a_child_commit_in_a_tab_neo_never_touched_moves_its_frame_version() -> TestResult
+{
+    let run = LiveRun::connect().await?;
+    let server = PageServer::start().await?;
+    let tab = OutsideTab::open(&server.url("/frames.html")).await?;
+    let result = async {
+        let info = run
+            .browser()
+            .pages
+            .list()
+            .await?
+            .into_iter()
+            .find(|info| info.target_id.as_str() == tab.target)
+            .ok_or("the tab is not listed")?;
+        let version = || {
+            run.frame_versions()
+                .into_iter()
+                .find(|(listed, _)| *listed == info.tab_id)
+                .map(|(_, version)| version)
+        };
+        let observing = Instant::now();
+        while version().is_none() {
+            if observing.elapsed() > UNTOUCHED_TAB_OBSERVED_BOUND {
+                return Err(format!(
+                    "the run's watcher did not show the tab within {UNTOUCHED_TAB_OBSERVED_BOUND:?}"
+                )
+                .into());
+            }
+            time::sleep(Duration::from_millis(50)).await;
+        }
+        let cross = server
+            .url("/nested.html?moved")
+            .replacen("127.0.0.1", "localhost", 1);
+        for (frame, url) in [("same", server.url("/child.html?moved")), ("cross", cross)] {
+            let before = version();
+            tab.eval(&format!(
+                "document.querySelector('iframe[name={frame}]').src = {url:?}; ''"
+            ))
+            .await?;
+            let asked = Instant::now();
+            while version() <= before {
+                if asked.elapsed() > UNTOUCHED_CHILD_COMMIT_BOUND {
+                    return Err(format!(
+                        "the {frame} child's commit did not move the tab's frame version within \
+                         {UNTOUCHED_CHILD_COMMIT_BOUND:?}"
+                    )
+                    .into());
+                }
+                time::sleep(Duration::from_millis(20)).await;
+            }
+            eprintln!(
+                "UNTOUCHED_CHILD_COMMIT frame={frame} took={:?}",
+                asked.elapsed()
+            );
+        }
+        assert!(
+            run.browser()
+                .pages
+                .get_attached_session(info.page_id)
+                .await
+                .is_none(),
+            "the run's core never attached to the tab"
+        );
+        Ok::<(), Box<dyn Error>>(())
+    }
+    .await;
+    tab.close().await;
+    result
+}
+
+/// A run lists a listed tab's whole frame tree from its first statement, as a host's observer
+/// reads it: `context.pages()` names another tab, and the script walks its frames before any
+/// await, cross-site ones included. Nothing in the run touched that tab; the start waits for its
+/// first read within the grace for listed tabs (`LISTED_START_GRACE_MS` in context.ts), which a
+/// tab that answers needs only milliseconds of.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_listed_tab_lists_its_whole_frame_tree_from_the_first_statement() -> TestResult
+{
+    let run = Arc::new(LiveRun::connect().await?);
+    let server = PageServer::start().await?;
+    let own = run.new_page().await?;
+    let other = run.new_page().await?;
+    let result = async {
+        goto(&run, &own, &server.url("/child.html"), "load").await?;
+        goto(&run, &other, &server.url("/frames.html"), "load").await?;
+        let init =
+            json!({ "page": brand(&own), "pages": run.page_facts(vec![own.tab, other.tab]).await });
+        let host: Arc<dyn OpHost> = Arc::clone(&run) as Arc<dyn OpHost>;
+        let script = format!(
+            "const p = context.pages().find((q) => q.tabId === {})\n\
+             return p.frames().map((frame) => frame.name()).sort()",
+            other.tab.0
+        );
+        let names = js_runner::run_script(&host, &init, &script).await?;
+        assert_eq!(
+            names,
+            json!(["", "cross", "deep", "same"]),
+            "the other tab's whole tree at the first statement"
+        );
+        Ok::<(), Box<dyn Error>>(())
+    }
+    .await;
+    run.close_page(&other).await;
+    run.close_page(&own).await;
+    result
 }

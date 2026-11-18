@@ -22,20 +22,28 @@
 //!       calling context (evaluate_guard::resolve_binding)
 //!  disposable.dispose     every registration of that id removed, and awaited; a binding's stub
 //!                         also leaves the loaded documents
-//!  the run ends           the host awaits RunState::remove_init_scripts before it answers;
-//!                         dropping the state then removes whatever that missed (guards)
+//!  the run ends           RunState::remove_init_scripts, before the host answers, drops every
+//!                         registration: each removal goes out from a task of its own, holding
+//!                         its tab's fence (RemovalFences) until it ends; the reply waits on none.
+//!                         Dropping the state removes whatever that missed the same way (guards)
+//!  any run's next op on   OpScope::admit waits out the tab's fence before it admits the tab
+//!    that tab
 //! ```
 //!
 //! **Lifetime: the run.** A Neo run is a whole Playwright script, and the tab outlives it, so
 //! a script registered by one run must not run in documents another run's script loads later,
 //! and a binding whose run (the realm that answers it) ended must not stay callable. Every
 //! registration lives in the run's [`RunState`](crate::RunState) and is removed when the run ends,
-//! however it ends (returned, failed, cancelled, timed out): the host awaits the removals before
-//! it answers, and a registration's guard removes it on drop in any case. Within the run it stays
-//! registered across navigations, so a later `goto` in the same run gets it, as a model writing a
-//! Playwright script expects. The CDP binding itself stays on the session: it only posts calls,
-//! which the watcher records only while a run exposes a binding there, and another run on the tab
-//! may be using it.
+//! however it ends (returned, failed, cancelled, timed out): a registration's guard removes it on
+//! drop, and the run's end drops them all before the host answers. The reply does not wait for
+//! the removals to answer, since one busy renderer would hold it, so the tab waits instead: each
+//! removal fences its tab until it ends, and the next op admitted there, by any run, waits for
+//! it ([`RemovalFences`](crate::page::RemovalFences)). An owner's own navigation on that tab
+//! before the browser applies the already-sent removal can run the script once. Within the run a
+//! registration stays across navigations, so a later `goto` in the same run gets it, as a model
+//! writing a Playwright script expects. The CDP binding itself stays on the session: it only
+//! posts calls, which the watcher records only while a run exposes a binding there, and another
+//! run on the tab may be using it.
 //!
 //! **The context's tabs.** Neo's context is the owner's whole profile, so a context script or
 //! binding does not go to every tab at once: it goes to each tab the run writes to, at that write
@@ -54,7 +62,6 @@ use std::mem;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use browseros_core::{BrowserSession, CoreError, ProtocolSession, SessionId, TabId, TargetId};
-use futures_util::future;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::runtime::Handle;
@@ -66,6 +73,7 @@ use crate::events::event_hub::now_ms;
 use crate::events::{BINDING_NAME, EventHub, PageEventKind, Subscription};
 use crate::op_scope::{AdmittedPage, OpScope, Sent};
 use crate::op_spec::Capability;
+use crate::page::TabFence;
 use crate::target::PageRef;
 use crate::wire::{Nothing, options};
 use crate::{ErrorCode, Playwright, PlaywrightError};
@@ -187,35 +195,26 @@ struct Registration {
     /// What the documents already loaded run once the script goes: a binding's
     /// `removeBinding`, so the page can no longer call into a run that let it go.
     cleanup: Option<String>,
+    /// The tab's fence a dropped registration's removal holds, taken from the op that added it,
+    /// so both ways a run lets go of it (its end, and a host that drops its state without
+    /// ending it) fence the tab. No registry keeps one for the run: every add has its op at hand.
+    /// `None` for an op scope without the facade's facts (unit tests).
+    fence: Option<TabFence>,
 }
 
 impl Registration {
-    /// Removes the script now, and runs its cleanup. A session that is gone (the tab closed) has
-    /// nothing to remove. The session is let go only once both answered, so a removal cut short
-    /// by the op's drop is sent again by `Drop`; a second removal of one identifier, or a second
-    /// `removeBinding`, changes nothing.
-    async fn remove(self) {
-        self.remove_reporting(|| {}).await;
-    }
-
-    /// [`Registration::remove`] driven by `scope`'s op, which reports the main world right
-    /// before the cleanup goes out to the loaded documents, so a removal that stalls first
-    /// reports nothing. The run's end ([`InitScripts::remove_all`]) and a dropped registration
-    /// remove with no op to report to, so their cleanup goes unflagged.
-    async fn remove_by(self, scope: &OpScope<'_>) {
-        self.remove_reporting(|| scope.sending_main_world()).await;
-    }
-
-    /// The session is cleared only after the removal: a future dropped mid-removal leaves it
-    /// for `Drop` to retry.
-    async fn remove_reporting(mut self, before_cleanup: impl FnOnce()) {
+    /// Removes the script now, driven by `scope`'s op, and runs its cleanup. The op reports the
+    /// main world right before the cleanup goes out to the loaded documents, so a removal that
+    /// stalls first reports nothing. A session that is gone (the tab closed) has nothing to
+    /// remove. The session is let go only once both answered, so a removal cut short by the
+    /// op's drop is sent again by `Drop`; a second removal of one identifier, or a second
+    /// `removeBinding`, changes nothing. The run's end and a dropped registration remove in
+    /// `Drop`, with no op to report to, so their cleanup goes unflagged.
+    async fn remove_by(mut self, scope: &OpScope<'_>) {
         if let Some(session) = &self.session {
-            remove(
-                session,
-                &self.identifier,
-                self.cleanup.as_deref(),
-                before_cleanup,
-            )
+            remove(session, &self.identifier, self.cleanup.as_deref(), || {
+                scope.sending_main_world();
+            })
             .await;
         }
         self.session = None;
@@ -223,6 +222,9 @@ impl Registration {
 }
 
 impl Drop for Registration {
+    /// The removal goes out from a task of its own, which nothing awaits: not the run's end, and
+    /// not the host's reply. Its tab's fence is held before the task is spawned, so an op
+    /// admitted on the tab after this drop, in any run, waits for the removal to end.
     fn drop(&mut self) {
         let Some(session) = self.session.take() else {
             return;
@@ -232,8 +234,13 @@ impl Drop for Registration {
         };
         let identifier = mem::take(&mut self.identifier);
         let cleanup = self.cleanup.take();
+        let hold = self.fence.take().map(TabFence::hold);
         drop(runtime.spawn(async move {
-            remove(&session, &identifier, cleanup.as_deref(), || {}).await;
+            let removal = remove(&session, &identifier, cleanup.as_deref(), || {});
+            match hold {
+                Some(hold) => hold.during(removal).await,
+                None => removal.await,
+            }
         }));
     }
 }
@@ -398,7 +405,7 @@ pub(crate) async fn add_to_page(
         .protocol_session(admitted.session.session_id.clone());
     let sent = scope.send_effect()?;
     let crash = scope.begin_protocol(&session);
-    let registration = add(&session, &source, &sent)
+    let registration = add(&session, &source, scope.removal_fence(admitted), &sent)
         .await
         .map_err(|error| scope.protocol_error(&crash, &error))?;
     let id = scope.run_state().init_scripts.keep(registration);
@@ -599,7 +606,13 @@ impl InitScripts {
             let controller = scope
                 .protocol_request(
                     session,
-                    add_script(session, BINDINGS_CONTROLLER_JS, RunNow::Yes, None),
+                    add_script(
+                        session,
+                        BINDINGS_CONTROLLER_JS,
+                        RunNow::Yes,
+                        None,
+                        scope.removal_fence(admitted),
+                    ),
                 )
                 .await
                 .map_err(|error| scope.core_error(&error))?;
@@ -613,9 +626,11 @@ impl InitScripts {
         Ok(())
     }
 
-    /// Forgets every script and removes each registration, all at once, awaiting them all:
+    /// Forgets every script and starts each registration's removal, awaiting none:
     /// [`RunState::remove_init_scripts`](crate::RunState::remove_init_scripts), at the run's end.
-    pub(crate) async fn remove_all(&self) {
+    /// Each removal holds its tab's fence ([`RemovalFences`](crate::page::RemovalFences)) from
+    /// now until it ends.
+    pub(crate) fn remove_all(&self) {
         let added = {
             let mut registry = self.lock();
             registry.context.clear();
@@ -625,9 +640,10 @@ impl InitScripts {
             registry.claims.clear();
             mem::take(&mut registry.added)
         };
-        // No op drives the run's end, so a binding's cleanup here runs in the main world with
-        // no op's record to flag (`Registration::remove_by`).
-        future::join_all(added.into_iter().map(|added| added.registration.remove())).await;
+        // Outside the lock. Each drop holds its tab's fence and spawns its removal (`Drop for
+        // Registration`); no op drives the run's end, so a binding's cleanup there runs in the
+        // main world with no op's record to flag.
+        drop(added);
     }
 
     /// Adds every context script `admitted`'s session lacks, for a write op admitted on that tab.
@@ -673,7 +689,8 @@ impl InitScripts {
                     Reach::Script(source) => {
                         scope.sending_main_world();
                         let crash = scope.begin_protocol(&session);
-                        add_script(&session, source, RunNow::No, None)
+                        let fence = scope.removal_fence(admitted);
+                        add_script(&session, source, RunNow::No, None, fence)
                             .await
                             .map_err(|error| scope.protocol_error(&crash, &error))?
                     }
@@ -781,9 +798,10 @@ async fn gate(scope: &OpScope<'_>, script: InitSource) -> Result<String, Playwri
 async fn add(
     session: &ProtocolSession,
     source: &str,
+    fence: Option<TabFence>,
     _sent: &Sent<'_>,
 ) -> Result<Registration, CoreError> {
-    add_script(session, source, RunNow::No, None).await
+    add_script(session, source, RunNow::No, None, fence).await
 }
 
 /// A binding's stub on a tab session whose plumbing it brings in first. Takes `&Sent`. A name
@@ -876,6 +894,7 @@ async fn add_binding(
         &binding.stub(),
         RunNow::Yes,
         Some(binding.cleanup()),
+        scope.removal_fence(admitted),
     )
     .await
     .map(Some)
@@ -892,7 +911,8 @@ enum RunNow {
 }
 
 /// Registers `source` for new documents, in a task of its own, and returns the registration
-/// that removes it (and runs `cleanup`, when given, in the documents loaded then).
+/// that removes it (and runs `cleanup`, when given, in the documents loaded then), holding
+/// `fence` while a dropped registration's removal is in flight.
 ///
 /// The command goes out from a task of its own, which the op awaits. The host drops an op's
 /// future at the run's stop or deadline, and that can land after the command was sent and before
@@ -904,6 +924,7 @@ async fn add_script(
     source: &str,
     run_now: RunNow,
     cleanup: Option<String>,
+    fence: Option<TabFence>,
 ) -> Result<Registration, CoreError> {
     #[derive(Deserialize)]
     struct AddedScript {
@@ -923,6 +944,7 @@ async fn add_script(
             session: Some(session),
             identifier,
             cleanup,
+            fence,
         })
     });
     added.await.unwrap_or_else(|join| {

@@ -7,6 +7,7 @@ name: "Neo SDK image"
 #
 #   preflight  decides whether this run publishes (below), before anything is built
 #   scripts    the image's scripts without Docker: the supervisor's and smoke_sdk's tests, ruff
+#   slimviewer-check   PRs changing the viewer or its Docker inputs: lint and test both encoders
 #   image      amd64 and arm64, each on a native runner: build.sh, then accept.sh (every check
 #              boots natively); when publishing, pushes exactly the image it accepted
 #   publish    when publishing: one multi-arch tag from the two accepted images
@@ -27,7 +28,7 @@ name: "Neo SDK image"
 # anyone who pulls the image; the README says how a host uses its own or turns solving off.
 on:
   pull_request:
-    # The image's inputs: the Rust workspace build.sh sends (its context), and this file.
+    # crates/** covers both the server workspace and the standalone viewer with its page assets.
     paths:
       - packages/browseros-agent/Cargo.toml
       - packages/browseros-agent/Cargo.lock
@@ -116,6 +117,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    outputs:
+      viewer_changed: ${{ steps.viewer.outputs.changed }}
     defaults:
       run:
         working-directory: packages/browseros-agent/crates/neo-sdk/neo-server/docker
@@ -123,6 +126,16 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+          fetch-depth: 2
+      - name: Check whether the PR changes slimviewer or its build
+        id: viewer
+        if: github.event_name == 'pull_request'
+        working-directory: packages/browseros-agent
+        # HEAD^1 is the test merge's base. The whole viewer crate includes its Dockerfile* inputs.
+        run: |
+          paths=$(git diff --name-only HEAD^1 HEAD -- crates/neo-sdk/neo-slimviewer \
+            'crates/neo-sdk/neo-server/docker/Dockerfile*' crates/neo-sdk/neo-server/docker/build.sh)
+          if [[ -n "$paths" ]]; then echo 'changed=true' >> "$GITHUB_OUTPUT"; fi
       - uses: astral-sh/setup-uv@v8.3.2
       - name: Supervisor tests
         run: python3 -m unittest discover -s supervisor -p "*_test.py" -v
@@ -131,6 +144,24 @@ jobs:
       - name: Ruff
         # packages/browseros's pinned ruff, the one bos-build-tests runs on the default image's folder.
         run: uv run --directory "$GITHUB_WORKSPACE/packages/browseros" ruff check "$PWD"
+
+  slimviewer-check:
+    name: Neo SDK image / slimviewer checks (${{ matrix.runner }})
+    needs: scripts
+    if: needs.scripts.outputs.viewer_changed == 'true'
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Test the default, x264 and combined encoders
+        working-directory: packages/browseros-agent/crates/neo-sdk/neo-slimviewer
+        run: docker buildx build --target slimviewer-check --output type=cacheonly .
 
   image:
     name: Neo SDK image / ${{ matrix.arch }} build + accept

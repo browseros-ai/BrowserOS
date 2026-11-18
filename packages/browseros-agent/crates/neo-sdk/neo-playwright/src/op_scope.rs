@@ -2,7 +2,8 @@
 //!
 //! ```text
 //!  Playwright::invoke ── decode `call` ── OpScope::new ── family leaf
-//!                                            │ admit(page)    once per op, through the run's view
+//!                                            │ admit(page)    once per op, through the run's view,
+//!                                            │                after the tab's init-script removals
 //!                                            │ admit_target   instead, for an op the browser
 //!                                            │                carries out alone (close, opener)
 //!                                            │ log(line)      Playwright's call log, mirrored to the trace
@@ -55,6 +56,7 @@ use crate::events::EventFence;
 use crate::object_group::ObjectGroup;
 use crate::op::Op;
 use crate::op_spec::{Capability, OpSpec};
+use crate::page::{RemovalFences, TabFence};
 use crate::playwright_error::TARGET_CRASH_MESSAGE;
 use crate::target::CallHeader;
 use crate::target_crashes::{TargetCrashes, TargetTicket};
@@ -74,6 +76,8 @@ pub(crate) struct OpScope<'env> {
     api: String,
     /// Captured once from the trusted call header, never from a request or world cache.
     conformance: bool,
+    /// The header's covered-click B stamp: nothing chose this op's timeout ([`CallHeader`]).
+    timeout_built_in: bool,
     started: Instant,
     /// Playwright's timeout for this op. `None` is `timeout: 0`: the op waits until the host
     /// drops it at the run's deadline.
@@ -85,6 +89,9 @@ pub(crate) struct OpScope<'env> {
     objects: ObjectGroup,
     /// Facade-owned facts survive runs. Each observation still captures its own native target.
     crashes: Option<CrashTracking<'env>>,
+    /// The facade's init-script removals in flight, by tab: [`OpScope::admit`] waits out its
+    /// tab's, and every script this op registers fences its tab when it is removed.
+    removals: Option<&'env Arc<RemovalFences>>,
     renderer: OnceLock<RendererAdmission>,
     /// Ordering may be skipped only for a remembered refusal before this scope sent anything.
     /// The host remains delivery's authority; these facts only control the listener fence.
@@ -185,6 +192,7 @@ impl<'env> OpScope<'env> {
             spec,
             api: call.api.unwrap_or_else(|| spec.name.to_owned()),
             conformance: call.conformance,
+            timeout_built_in: call.timeout_built_in,
             started: Instant::now(),
             timeout: call
                 .timeout_ms
@@ -194,6 +202,7 @@ impl<'env> OpScope<'env> {
             page: OnceLock::new(),
             objects: ObjectGroup::new(),
             crashes: None,
+            removals: None,
             renderer: OnceLock::new(),
             crash_refused: AtomicBool::new(false),
             sent: AtomicBool::new(false),
@@ -206,8 +215,10 @@ impl<'env> OpScope<'env> {
         mut self,
         crashes: &'env TargetCrashes,
         browser: &'env BrowserSession,
+        removals: &'env Arc<RemovalFences>,
     ) -> Self {
         self.crashes = Some(CrashTracking { crashes, browser });
+        self.removals = Some(removals);
         self
     }
 
@@ -220,6 +231,7 @@ impl<'env> OpScope<'env> {
         scope.timeout = self.timeout;
         scope.conformance = self.conformance;
         scope.crashes = self.crashes;
+        scope.removals = self.removals;
         scope.log = Arc::clone(&self.log);
         scope
     }
@@ -244,6 +256,12 @@ impl<'env> OpScope<'env> {
     /// Whether every probe diagnostic in this operation must preserve upstream bytes.
     pub(crate) fn conformance(&self) -> bool {
         self.conformance
+    }
+
+    /// Whether nobody chose this op's timeout: only Neo's own prelude found none on the call,
+    /// the page or the context ([`CallHeader`]'s stamp). Covered-click B stops early only then.
+    pub(crate) fn timeout_built_in(&self) -> bool {
+        self.timeout_built_in
     }
 
     /// The tab this op admitted, once it has.
@@ -328,9 +346,28 @@ impl<'env> OpScope<'env> {
         self.env.report_navigation(tab);
     }
 
-    /// Resolves a native tab in core's cache, listing once only on a miss, then performs the
-    /// existing view admission. Core's id lives only in this operation's admitted handle.
+    /// Waits out the tab's init-script removals ([`OpScope::removals_settled`]), then resolves a
+    /// native tab in core's cache, listing once only on a miss, and performs the existing view
+    /// admission. Core's id lives only in this operation's admitted handle.
     pub(crate) async fn admit(
+        &self,
+        browser: &BrowserSession,
+        tab: TabId,
+    ) -> Result<&AdmittedPage, PlaywrightError> {
+        if self.page.get().is_none() {
+            self.removals_settled(tab).await?;
+        }
+        self.admit_past_removals(browser, tab).await
+    }
+
+    /// [`OpScope::admit`] without waiting out the tab's init-script removals, for the answer to a
+    /// JavaScript dialog alone. An open dialog blocks its renderer, so a removal sent to that tab
+    /// answers only after the dialog is answered: an answer that waited for the removal would
+    /// wait out its own deadline (or the 60 s CDP timeout), holding the dialog open. The answer
+    /// runs nothing in the main world and loads no document itself; the removal already queued in
+    /// the renderer runs before any document the resumed page then navigates to (inferred from
+    /// Chromium's task order, not measured).
+    pub(crate) async fn admit_past_removals(
         &self,
         browser: &BrowserSession,
         tab: TabId,
@@ -361,6 +398,44 @@ impl<'env> OpScope<'env> {
         }
     }
 
+    /// Waits until no init-script or binding removal is in flight on `tab` ([`RemovalFences`]),
+    /// within the op's timeout and the script's abort, with no timer of its own. The run that
+    /// registered them answered without waiting for them, so this wait, by the next op on that
+    /// tab alone, is what keeps a later run from loading an earlier run's init script or calling
+    /// its binding: without it, a run started right after the reply could do either. A busy
+    /// renderer that holds the removal would hold this op's own commands too.
+    ///
+    /// Only here, at the single-tab admission. The event pump's batch observations
+    /// (`observe_page`, a chooser's adoption) never wait: a pump held on one tab's fence would
+    /// hold every other tab's events, and they load no document and run nothing in the main
+    /// world. Nor does [`OpScope::admit_target`], whose ops the browser carries out alone, nor a
+    /// dialog's answer ([`OpScope::admit_past_removals`]), which a held removal may be waiting on.
+    ///
+    /// Only an op that could meet the leftover waits: a write, which may load a document, or an
+    /// op that runs script in the main world. A read that does neither, a listener's subscription
+    /// above all, goes on: a `dialog` listener held here while the page opens a dialog would leave
+    /// Neo to dismiss it as unheard, and the removal it waits for may be the one that dialog holds.
+    async fn removals_settled(&self, tab: TabId) -> Result<(), PlaywrightError> {
+        if self.spec.effect != Effect::Write && !self.spec.uses(Capability::MainWorld) {
+            return Ok(());
+        }
+        let Some(fences) = self.removals.filter(|fences| fences.holds(tab)) else {
+            return Ok(());
+        };
+        if self.within(fences.settled(tab)).await.is_ok() {
+            return Ok(());
+        }
+        self.log("waiting for the tab to finish removing an earlier run's init scripts".to_owned());
+        Err(self.timed_out(ErrorCode::WaitTimeout))
+    }
+
+    /// Where a script this op registers on `admitted`'s tab fences the tab once it is removed
+    /// (`page/init_script.rs`). `None` for a scope without the facade's facts, a unit test's.
+    pub(crate) fn removal_fence(&self, admitted: &AdmittedPage) -> Option<TabFence> {
+        self.removals
+            .map(|fences| TabFence::new(fences, admitted.tab, admitted.session.target_id.clone()))
+    }
+
     /// View admission for one record in a batch read. Unlike `admit`, this does not select
     /// the operation's action target or report a single payload source to the host: an event
     /// pump can observe several tabs. Writes still need the separate single-tab admission.
@@ -372,6 +447,7 @@ impl<'env> OpScope<'env> {
         let Some(info) = self.known_tab(browser, tab).await? else {
             return Ok(None);
         };
+        self.check_cached_crash(&info)?;
         let admission = CrashAdmission {
             tracking: self.crashes,
             ticket: Mutex::default(),
@@ -515,6 +591,25 @@ impl<'env> OpScope<'env> {
     fn cached_crash(&self) -> PlaywrightError {
         self.crash_refused.store(true, Ordering::Relaxed);
         self.fail(ErrorCode::TargetCrashed, TARGET_CRASH_MESSAGE)
+    }
+
+    /// Refuses only remembered native-target crashes, without refreshing browser facts.
+    pub(crate) fn check_cached_crash(&self, info: &PageInfo) -> Result<(), PlaywrightError> {
+        // Native tab refresh can stop answering after a crash. An unbound run can refuse
+        // its visible cached target before that await. Bound or invalid captures still go
+        // through Core first, so profile, window and epoch authority keeps its precedence.
+        // Core's admission hook remains responsible for replacement races and checks
+        // healthy targets again on both sides of attachment.
+        // Verified fresh-document recovery clears this same registry. Until that proof or
+        // a reconciled replacement target arrives, the cached target stays conservative.
+        if let Some(tracking) = self.crashes
+            && tracking.crashes.is_crashed(&info.target_id)
+            && !self.hides_tab(info.tab_id)
+            && matches!(self.view().scope(), Ok(None))
+        {
+            return Err(self.cached_crash());
+        }
+        Ok(())
     }
 
     /// An initial crash reply can follow events produced by sent work. Only a refusal that
@@ -833,6 +928,7 @@ mod tests {
             api: api.map(str::to_owned),
             timeout_ms,
             conformance: false,
+            timeout_built_in: false,
         }
     }
 

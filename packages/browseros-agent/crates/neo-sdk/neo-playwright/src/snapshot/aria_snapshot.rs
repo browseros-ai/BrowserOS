@@ -14,13 +14,15 @@
 //! the root frame's world would copy every cross-site frame's text into the embedding site's
 //! renderer process, which site isolation exists to prevent.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use ts_rs::TS;
 
 use super::snapshot_rules;
+use crate::page::{self, MAX_VALUE_DEPTH};
+use crate::probe;
 
 /// One node of `ariaSnapshotJSON`: upstream's `AriaNodeJSON` (isomorphic/ariaSnapshot.ts).
 ///
@@ -106,6 +108,8 @@ pub(crate) enum ChildFrame {
     Read {
         /// The iframe node's ref in its parent frame.
         iframe_ref: String,
+        /// The child URL, retained for a partial note if stitching would exceed the cap.
+        src: String,
         snapshot: FrameSnapshot,
     },
     /// Not read (timed out, detached, session lost): the iframe node keeps its ref and gets no
@@ -157,6 +161,11 @@ pub(crate) struct SnapshotResult {
     #[ts(type = "import('../../vendored').AriaSnapshotJSON")]
     pub(crate) json: Vec<AriaNode>,
     pub(crate) partial: Vec<PartialFrame>,
+    /// Only the root frame: a requested clickable check did not finish. The renderer explains
+    /// the possible missing refs without turning this read’s status into a page change.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub(crate) unmarked: Option<Unmarked>,
     /// Pinned words from the main page alone; empty keeps every old output byte unchanged.
     #[serde(rename = "onTop", skip_serializing_if = "Vec::is_empty")]
     #[ts(optional, as = "Option<Vec<SnapshotTop>>")]
@@ -174,6 +183,13 @@ pub(crate) struct SnapshotResult {
     #[serde(rename = "closedRoots", skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub(crate) closed_roots: Option<ClosedRoots>,
+}
+
+/// Why the root frame’s requested clickable check was unavailable. Rust owns this fact;
+/// child-frame failures remain in their call logs and never become a page-wide notice.
+#[derive(Clone, Debug, PartialEq, Serialize, TS)]
+pub(crate) struct Unmarked {
+    pub(crate) reason: String,
 }
 
 /// Rust's shared wording and reach; the tree's marks identify the whole-view content.
@@ -202,6 +218,7 @@ pub(crate) fn stitch(root: FrameSnapshot) -> SnapshotResult {
     }
     SnapshotResult {
         on_top: Vec::new(),
+        unmarked: None,
         json,
         partial,
         document: None,
@@ -219,39 +236,82 @@ fn merge(frame: FrameSnapshot, partial: &mut Vec<PartialFrame>) -> Vec<AriaNode>
         match child {
             ChildFrame::Read {
                 iframe_ref,
+                src,
                 snapshot,
             } => {
-                stitched.insert(iframe_ref, merge(snapshot, partial));
+                let mut below = Vec::new();
+                let nodes = merge(snapshot, &mut below);
+                let unread_refs: HashSet<String> =
+                    below.iter().map(|frame| frame.r#ref.clone()).collect();
+                // Preserve the existing child-order of partial notes. If attachment later
+                // drops this branch, only its descendants' notes are removed.
+                partial.extend(below);
+                stitched.insert(
+                    iframe_ref,
+                    StitchedFrame {
+                        src,
+                        nodes,
+                        unread_refs,
+                    },
+                );
             }
             ChildFrame::Partial(frame) => partial.push(frame),
         }
     }
     for node in &mut json {
-        attach(node, &mut stitched);
+        // The result object and its json array precede the first node. This is the same
+        // 297-level envelope the page exit admits, now including cross-frame stitching.
+        attach(node, &mut stitched, partial, 3);
     }
     json
 }
 
-/// Upstream's `mergeIframeChildren`: an iframe node with a ref takes its child's nodes, unless
-/// the child came back empty, and is not looked into; any other node is walked. Version 1.64.1
-/// keeps an iframe node's own `text` beside the stitched children (1.65 drops it).
-fn attach(node: &mut AriaNode, stitched: &mut HashMap<String, Vec<AriaNode>>) {
+/// Tracks a child's notes without moving them: ordinary snapshots retain their existing note
+/// order, while dropping an overdeep child removes notes for refs the caller cannot see.
+struct StitchedFrame {
+    src: String,
+    nodes: Vec<AriaNode>,
+    unread_refs: HashSet<String>,
+}
+
+/// Upstream's `mergeIframeChildren`, with a depth check before attaching a child. An iframe
+/// keeps its fallback text beside its children as version 1.64.1 does; other nodes are walked.
+fn attach(
+    node: &mut AriaNode,
+    stitched: &mut HashMap<String, StitchedFrame>,
+    partial: &mut Vec<PartialFrame>,
+    depth: usize,
+) {
     if node.role == "iframe"
         && let Some(iframe_ref) = &node.r#ref
     {
-        if let Some(nodes) = stitched.remove(iframe_ref)
-            && !nodes.is_empty()
+        if let Some(child) = stitched.remove(iframe_ref)
+            && !child.nodes.is_empty()
         {
-            node.children = nodes
-                .into_iter()
-                .map(|child| AriaChild::Node(Box::new(child)))
-                .collect();
+            // The child's top array becomes this iframe's children array. Test before
+            // attachment: the parent stays readable even when this one branch cannot fit.
+            let encoded = serde_json::to_string(&child.nodes);
+            let deepest = encoded.as_deref().map_or(MAX_VALUE_DEPTH, page::json_depth);
+            if depth + deepest > MAX_VALUE_DEPTH {
+                partial.retain(|frame| !child.unread_refs.contains(&frame.r#ref));
+                partial.push(PartialFrame {
+                    r#ref: iframe_ref.clone(),
+                    frame: child.src,
+                    reason: probe::depth_error((depth + deepest).saturating_sub(1) / 2),
+                });
+            } else {
+                node.children = child
+                    .nodes
+                    .into_iter()
+                    .map(|child| AriaChild::Node(Box::new(child)))
+                    .collect();
+            }
         }
         return;
     }
     for child in &mut node.children {
         if let AriaChild::Node(child) = child {
-            attach(child, stitched);
+            attach(child, stitched, partial, depth + 2);
         }
     }
 }
@@ -318,6 +378,7 @@ pub(crate) mod tests {
                 } else {
                     ChildFrame::Read {
                         iframe_ref: iframe.r#ref.clone(),
+                        src: iframe.src.clone(),
                         snapshot: tree(recorded, iframe.frame, unread),
                     }
                 }
@@ -415,6 +476,7 @@ pub(crate) mod tests {
             }]))?,
             children: vec![ChildFrame::Read {
                 iframe_ref: "e2".to_owned(),
+                src: "https://frame.example".to_owned(),
                 snapshot: FrameSnapshot {
                     json: serde_json::from_value(json!([{
                         "role": "button", "ref": "f1e3", "name": "Inside", "inert": true
@@ -447,6 +509,37 @@ pub(crate) mod tests {
                 path.display()
             );
         }
+        Ok(())
+    }
+    #[test]
+    fn stitching_an_overdeep_child_keeps_the_page_and_its_partial_reason()
+    -> Result<(), Box<dyn Error>> {
+        let mut node: AriaNode = serde_json::from_value(json!({"role":"button", "name":"End"}))?;
+        for _ in 0..147 {
+            let mut group: AriaNode = serde_json::from_value(json!({"role":"group"}))?;
+            group.children.push(AriaChild::Node(Box::new(node)));
+            node = group;
+        }
+        let root = FrameSnapshot {
+            json: serde_json::from_value(json!([
+                {"role":"button", "name":"Outside"}, {"role":"iframe", "ref":"e2"}
+            ]))?,
+            children: vec![ChildFrame::Read {
+                iframe_ref: "e2".to_owned(),
+                src: "https://frame.example".to_owned(),
+                snapshot: FrameSnapshot {
+                    json: vec![node],
+                    children: Vec::new(),
+                },
+            }],
+        };
+        let result = stitch(root);
+        assert_eq!(result.json[0].name.as_deref(), Some("Outside"));
+        assert!(result.json[1].children.is_empty());
+        assert_eq!(result.partial.len(), 1);
+        assert_eq!(result.partial[0].r#ref, "e2");
+        assert!(result.partial[0].reason.contains("149 levels deep"));
+        assert!(result.partial[0].reason.contains("{ depth: n }"));
         Ok(())
     }
 }

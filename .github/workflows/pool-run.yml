@@ -1,0 +1,183 @@
+name: Pool run
+
+# Run one command, or a named preset, on the shared Linux build pool at a branch or tag of
+# this repository: the GitHub-native `bun run remote run` for pushed code. Only members
+# with write access can dispatch it, and nothing else triggers it.
+#
+# The pool's runner group admits only this file on main. Each pool runner's job-started
+# hook also refuses any other workflow or event before a step runs. A pool job is an
+# ordinary pool reservation: it waits behind gates, images and specs, and is cut at the
+# pool's 30-minute wall. See packages/browseros-agent/tools/remote-builds/README.md,
+# "Run a job from GitHub".
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch or tag of this repository to run at
+        required: true
+        default: main
+        type: string
+      preset:
+        description: "command: the command below. sdk-gate: crates/neo-sdk/check.sh. live-suites: every live SDK suite on the pinned browser."
+        required: true
+        default: command
+        type: choice
+        options:
+          - command
+          - sdk-gate
+          - live-suites
+      command:
+        description: Shell command for the command preset, run in packages/browseros-agent
+        required: false
+        default: ""
+        type: string
+
+run-name: Pool ${{ inputs.preset }} at ${{ inputs.ref }}
+
+permissions:
+  contents: read
+
+jobs:
+  resolve:
+    name: Check the request
+    # Forks of this repository have no pool; their copy of this workflow does nothing.
+    if: github.repository == 'browseros-ai/BrowserOS'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      sha: ${{ steps.ref.outputs.sha }}
+    steps:
+      - name: Require main's copy of this workflow
+        env:
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+        run: |
+          if [ "$WORKFLOW_REF" != "browseros-ai/BrowserOS/.github/workflows/pool-run.yml@refs/heads/main" ]; then
+            echo "::error::Dispatch pool-run.yml from main (Use workflow from: main) and put your branch in the ref input. The pool admits only main's copy of this workflow."
+            exit 1
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: packages/browseros-agent/tools/remote-builds/pool-ref.sh
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Resolve the ref to a branch or tag of this repository
+        id: ref
+        env:
+          POOL_REF: ${{ inputs.ref }}
+          POOL_PRESET: ${{ inputs.preset }}
+          POOL_COMMAND: ${{ inputs.command }}
+          POOL_REMOTE: ${{ github.server_url }}/${{ github.repository }}.git
+        run: bash packages/browseros-agent/tools/remote-builds/pool-ref.sh
+
+  run:
+    name: Run on the pool
+    needs: resolve
+    runs-on: [self-hosted, browseros-pool]
+    # The pool cuts a job 30 minutes after it takes a machine. Ending here first keeps
+    # time to upload what the run produced.
+    timeout-minutes: 28
+    defaults:
+      run:
+        working-directory: packages/browseros-agent
+    env:
+      # The job has the whole 16-vCPU machine to itself.
+      CARGO_BUILD_JOBS: "16"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      CARGO_BUILD_BUILD_DIR: ${{ github.workspace }}/packages/browseros-agent/target/build-private
+      PRESET: ${{ inputs.preset }}
+      POOL_COMMAND: ${{ inputs.command }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+          persist-credentials: false
+
+      # Each pool job starts with an empty home, so the toolchains CI pins are installed
+      # into it here. The runner account has no sudo, so nothing is installed system-wide.
+      # Actions are pinned by commit: code they run executes on the shared pool machines.
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@516c5a67e611cdaf2ef0bb5d78620e3c7d245fe6 # 1.98.0
+        with:
+          toolchain: 1.98.0
+          components: clippy, rustfmt
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: packages/browseros-agent/package.json
+
+      - name: Prepare the artifact directory
+        env:
+          REF: ${{ inputs.ref }}
+          SHA: ${{ needs.resolve.outputs.sha }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/pool-artifacts"
+          echo "POOL_ARTIFACTS=$RUNNER_TEMP/pool-artifacts" >> "$GITHUB_ENV"
+          printf 'ref=%s\nsha=%s\npreset=%s\n' "$REF" "$SHA" "$PRESET" > "$RUNNER_TEMP/pool-artifacts/request.txt"
+
+      - name: Run the command
+        if: inputs.preset == 'command'
+        timeout-minutes: 25
+        run: bash -o pipefail -c 'bash -c "$POOL_COMMAND" 2>&1 | tee "$POOL_ARTIFACTS/run.log"'
+
+      - name: Run the SDK gate
+        if: inputs.preset == 'sdk-gate'
+        timeout-minutes: 25
+        run: bash -o pipefail -c 'bash crates/neo-sdk/check.sh 2>&1 | tee "$POOL_ARTIFACTS/run.log"'
+
+      - name: Run every live SDK suite on the pinned browser
+        if: inputs.preset == 'live-suites'
+        timeout-minutes: 25
+        env:
+          BROWSERCLAW_HOSTED_MODE: "0"
+          NEO_LIVE_DIAGNOSTICS: "1"
+        run: |
+          set -euo pipefail
+          # The browser browser.lock pins at this ref, unpacked privately for this job: the
+          # runner account cannot install packages, and the machine's own browser may be older.
+          . crates/neo-sdk/neo-server/docker/browser.lock
+          browser="$RUNNER_TEMP/browser"
+          mkdir -p "$browser"
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 --connect-timeout 20 --max-time 300 \
+            -o "$browser/neo.deb" "$NEO_BROWSER_URL_AMD64"
+          echo "$NEO_BROWSER_SHA256_AMD64  $browser/neo.deb" | sha256sum -c -
+          dpkg-deb -x "$browser/neo.deb" "$browser/files"
+          executable=$(find "$browser/files" -type f -name browserclaw -perm -u+x \
+            -exec sh -c 'head -c 4 "$1" | grep -q ELF' _ {} \; -print)
+          [ "$(printf '%s\n' "$executable" | wc -l)" = 1 ] && [ -n "$executable" ]
+          # Ubuntu admits the browser's sandbox through the installed browser's AppArmor
+          # profile. The private copy enters that same profile; nothing shared changes.
+          printf '#!/bin/sh\nexec /usr/bin/aa-exec -p browserclaw -- %s "$@"\n' "$executable" > "$browser/launch"
+          chmod 0755 "$browser/launch"
+          export NEO_E2E_BROWSER="$browser/launch" CLAW_SDK_E2E_BROWSER="$browser/launch"
+          version=$("$browser/launch" --version)
+          echo "browser.lock $NEO_BROWSER_VERSION: $version" | tee "$POOL_ARTIFACTS/browser.txt"
+          # The same check as neo-sdk-live.yml: the browser the suites will drive reports the
+          # pinned build over CDP, before the long build starts.
+          # shellcheck disable=SC2016
+          node tools/test-browser.mjs node --input-type=module -e '
+          import { writeFileSync } from "node:fs";
+          import { execFileSync } from "node:child_process";
+          const expected = execFileSync(process.env.NEO_E2E_BROWSER, ["--version"], { encoding: "utf8" }).match(/\d+\.\d+\.\d+\.\d+/)?.[0];
+          const version = await (await fetch(`http://127.0.0.1:${process.env.BROWSEROS_CDP_PORT}/json/version`)).json();
+          if (!expected || version.Browser !== `Chrome/${expected}`) throw new Error(`pinned executable ${expected}, CDP ${version.Browser}`);
+          writeFileSync(`${process.env.POOL_ARTIFACTS}/browser-version.json`, JSON.stringify({ expected, cdp: version.Browser }, null, 2) + "\n");
+          console.log(`CDP ${version.Browser}`);
+          '
+          python3 -m unittest discover -s crates/neo-sdk/tests -p test_live.py
+          python3 crates/neo-sdk/live.py --output "$POOL_ARTIFACTS/live" 2>&1 | tee "$POOL_ARTIFACTS/run.log"
+
+      - name: Upload the log and artifacts
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: pool-run-${{ github.run_id }}-${{ github.run_attempt }}
+          include-hidden-files: true
+          if-no-files-found: ignore
+          path: |
+            ${{ runner.temp }}/pool-artifacts
+            packages/browseros-agent/.llm/test-browser
+          retention-days: 14

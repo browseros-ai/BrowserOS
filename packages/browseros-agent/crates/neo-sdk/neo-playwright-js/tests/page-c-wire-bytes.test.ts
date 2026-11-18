@@ -63,5 +63,11 @@ it("changes only storage command packaging, the void viewport receipt and page B
         exchange.reply = exchange.reply.replace('"ok":{}', '"ok":null')
     }
   }
-  expect(fixture).toEqual(expected)
+  // Covered-click B stamps a call whose timeout nobody chose (`timeoutBuiltIn`, timeouts.ts's
+  // `headerTimeout`); the recording predates it, so the comparison reads past the stamp.
+  const aligned = structuredClone(fixture)
+  for (const scenario of aligned.scenarios)
+    for (const exchange of scenario.exchanges)
+      exchange.args = exchange.args.replace(',"timeoutBuiltIn":true', '')
+  expect(aligned).toEqual(expected)
 })

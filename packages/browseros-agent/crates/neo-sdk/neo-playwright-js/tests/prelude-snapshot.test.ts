@@ -79,7 +79,11 @@ it('tests that page and locator snapshots send their mode and depth, the text pa
   ).toEqual([
     {
       name: 'page.ariaSnapshot',
-      call: { api: 'page.ariaSnapshot', timeoutMs: 30000 },
+      call: {
+        api: 'page.ariaSnapshot',
+        timeoutMs: 30000,
+        timeoutBuiltIn: true,
+      },
       page: { $neo: 'page', tab: 1007 },
       mode: 'ai',
       clickable: true,
@@ -108,7 +112,11 @@ it('tests that page and locator snapshots send their mode and depth, the text pa
     },
     {
       name: 'page.ariaSnapshot',
-      call: { api: 'page.ariaSnapshotJSON', timeoutMs: 30000 },
+      call: {
+        api: 'page.ariaSnapshotJSON',
+        timeoutMs: 30000,
+        timeoutBuiltIn: true,
+      },
       page: { $neo: 'page', tab: 1007 },
       mode: 'ai',
       target: undefined,

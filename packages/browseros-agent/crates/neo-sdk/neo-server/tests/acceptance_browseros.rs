@@ -55,6 +55,7 @@ const JPEG_START: &[u8] = &[0xff, 0xd8, 0xff];
 const JPEG_END: &[u8] = &[0xff, 0xd9];
 
 #[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs an owned BrowserOS"]
 async fn an_agent_and_a_host_share_one_tab_on_a_real_browseros() -> TestResult {
     let Some(browser) = browser_or_skip() else {
         return Ok(());
@@ -87,6 +88,7 @@ async fn drive(rig: &mut Rig) -> TestResult {
 /// opens a tab by hand, which the browser shows in front; the release lists it in `openedTabs`
 /// with `inFront` true and no task or opener, and Neo gives it to no task.
 #[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs an owned BrowserOS"]
 async fn a_tab_the_owner_opens_during_a_takeover_is_listed_at_its_release_in_front() -> TestResult {
     let Some(browser) = browser_or_skip() else {
         return Ok(());
@@ -195,6 +197,7 @@ async fn rig_saw_open(rig: &Rig, tab: i64) -> Result<bool, Box<dyn Error>> {
 /// baseline. Deliberate reads and fixture source can still contain these canaries elsewhere in
 /// a trace, so the invariant belongs to snapshot operations rather than the whole database.
 #[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs an owned BrowserOS"]
 async fn private_field_values_never_reach_stored_snapshot_results() -> TestResult {
     let Some(browser) = browser_or_skip() else {
         return Ok(());
@@ -211,6 +214,7 @@ async fn private_field_values_never_reach_stored_snapshot_results() -> TestResul
 /// A deliberate read and caller-supplied Expected may contain a canary; page-derived error
 /// messages, matcher facts and operation notes must already be safe before persistence.
 #[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs an owned BrowserOS"]
 async fn private_field_values_never_reach_stored_failure_diagnostics() -> TestResult {
     let Some(browser) = browser_or_skip() else {
         return Ok(());
@@ -346,6 +350,22 @@ fn complete_stored_failure_messages(
             "the source failure was retained whole"
         );
         messages.insert(redactor.text(message));
+        // Only the script's error carries the cover's snapshot.
+        let lines: Vec<_> = message.split('\n').collect();
+        if let Some(on_top) = lines.iter().position(|line| line.starts_with("  On top: ")) {
+            let rest = lines
+                .iter()
+                .skip(on_top + 1)
+                .skip_while(|line| line.starts_with("    "));
+            let without_snapshot = lines
+                .iter()
+                .take(on_top + 1)
+                .chain(rest)
+                .copied()
+                .collect::<Vec<_>>()
+                .join("\n");
+            messages.insert(redactor.text(&without_snapshot));
+        }
     }
     Ok(messages)
 }
@@ -896,7 +916,7 @@ async fn the_agent_opens_a_tab(client: &Client) -> Result<(String, i64), Box<dyn
 /// The host reads run 1 back: its ids, acted-on tabs, and three script operations whose
 /// deliveries match what the agent did. Automatic monitor reads remain in the raw trace.
 async fn the_host_reads_the_run(rig: &Rig, id: &str, tab: i64) -> TestResult {
-    let host_run = read_run(rig, id).await?;
+    let host_run = script_run(rig, id, tab, false).await?;
     let field = |name: &str| host_run.get(name).cloned().unwrap_or(Value::Null);
     assert_eq!(
         [
@@ -1017,15 +1037,11 @@ async fn a_lock_refuses_the_agent(rig: &Rig, client: &Client, tab: i64) -> TestR
         "the script caught it, and no write was sent: {refused:?}"
     );
 
-    let host_run = read_run(rig, &refused_id).await?;
+    let host_run = script_run(rig, &refused_id, tab, true).await?;
     assert_eq!(
         operations(&host_run)?,
-        [
-            op_of("page.frames", "read", "error", "not_sent", Some(tab)),
-            op_of("page.goto", "write", "error", "not_sent", Some(tab)),
-        ],
-        "the trace records the refused read of the frames and the refused write on the locked \
-         tab: {host_run}"
+        [op_of("page.goto", "write", "error", "not_sent", Some(tab))],
+        "the script's write is refused on the locked tab: {host_run}"
     );
     let goto = operation(&host_run, "page.goto")?;
     assert_eq!(
@@ -1080,18 +1096,14 @@ async fn the_write_lands_once_released(
 
 /// Run 3's picture of its tab, as the host finds it. Each write keeps its own screenshot (the
 /// trace writer no longer folds a write's picture into a later read's on the same tab), so the
-/// `page.goto` holds it. The run reads initial frames before its first statement; goto returns
-/// the navigated tree inline in its navigation publication instead of sending another read. The
-/// run's record names that op, and its JPEG is whole.
+/// `page.goto` holds it. The script-only view names exactly that write, while Neo's own reads
+/// stay in the unfiltered trace. The run's record names that op, and its JPEG is whole.
 async fn the_tab_has_its_picture_after_the_write(rig: &Rig, run: &str, tab: i64) -> TestResult {
     // Held until the run is complete: ended, and every screenshot job answered.
-    let host_run = read_run(rig, run).await?;
+    let host_run = script_run(rig, run, tab, false).await?;
     assert_eq!(
         operations(&host_run)?,
-        [
-            op_of("page.frames", "read", "ok", "not_sent", Some(tab)),
-            op_of("page.goto", "write", "ok", "done", Some(tab)),
-        ],
+        [op_of("page.goto", "write", "ok", "done", Some(tab))],
         "{host_run}"
     );
     let write = operation_id(&host_run, "page.goto")?;
@@ -1168,6 +1180,89 @@ async fn read_run(rig: &Rig, id: &str) -> Result<Value, Box<dyn Error>> {
     Ok(run)
 }
 
+/// Neo's own reads are counted by nobody; what they may not do is asserted.
+async fn script_run(rig: &Rig, id: &str, tab: i64, locked: bool) -> Result<Value, Box<dyn Error>> {
+    let all = read_run(rig, id).await?;
+    let script = rig
+        .host(
+            "GET",
+            &format!("/v1/runs/{id}?wait=30&internal=false"),
+            Some(HOST_TOKEN),
+            None,
+        )
+        .await?
+        .json()?;
+    let all_ops = all
+        .get("operations")
+        .and_then(Value::as_array)
+        .ok_or("unfiltered operations")?;
+    let script_ops = script
+        .get("operations")
+        .and_then(Value::as_array)
+        .ok_or("script operations")?;
+    let internal = |op: &Value| op.get("internal").and_then(Value::as_bool);
+    assert!(
+        all_ops.iter().all(|op| internal(op).is_some()),
+        "every operation declares its owner: {all}"
+    );
+    let projected: Vec<_> = all_ops
+        .iter()
+        .filter(|op| internal(op) == Some(false))
+        .cloned()
+        .collect();
+    assert_eq!(
+        &projected, script_ops,
+        "the two views agree on the script's operations"
+    );
+    let owned: Vec<_> = all_ops
+        .iter()
+        .filter(|op| internal(op) == Some(true))
+        .collect();
+    assert!(
+        owned
+            .iter()
+            .any(|op| op.get("tabId").and_then(Value::as_i64) == Some(tab)),
+        "Neo read this tab: {all}"
+    );
+    for op in owned {
+        let field = |key: &str| op.get(key).and_then(Value::as_str);
+        assert_eq!(
+            (field("effect"), field("delivery")),
+            (Some("read"), Some("not_sent")),
+            "an internal read must remain not_sent: {op}"
+        );
+        let outcome = field("outcome");
+        let target = op.get("tabId").and_then(Value::as_i64);
+        if field("name") == Some("events.next") && target.is_none() {
+            assert!(
+                matches!(outcome, Some("ok" | "cancelled")),
+                "the untargeted event pump finishes or is cancelled: {op}"
+            );
+        } else if locked && target == Some(tab) {
+            assert_eq!(
+                (
+                    outcome,
+                    op.pointer("/error/owner"),
+                    op.pointer("/error/code")
+                ),
+                (
+                    Some("error"),
+                    Some(&json!("host")),
+                    Some(&json!("owner_has_control"))
+                ),
+                "the lock refuses Neo's read before sending it: {op}"
+            );
+        } else {
+            assert_eq!(
+                outcome,
+                Some("ok"),
+                "the phase allows this internal read: {op}"
+            );
+        }
+    }
+    Ok(script)
+}
+
 /// An operation as these assertions compare it: name, effect, outcome, delivery, tab.
 type Op = (String, String, String, String, Option<i64>);
 
@@ -1193,7 +1288,6 @@ fn operations(run: &Value) -> Result<Vec<Op>, Box<dyn Error>> {
         .and_then(Value::as_array)
         .ok_or("a run lists its operations")?
         .iter()
-        .filter(|op| !browseros_rig::is_worker_event_operation(op))
         .map(|op| {
             (
                 text(op, "name"),

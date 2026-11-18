@@ -6,87 +6,42 @@
 
 import { describe, expect, it } from 'bun:test'
 import {
-  meterNote,
   meterParts,
   meterTokens,
+  milestoneNote,
   nextMilestone,
-  scaleMarks,
-  scalePosition,
-  scaleTicks,
-  scaleTop,
+  passedMilestones,
 } from './energy-meter.helpers'
 
-describe('the line under the scale', () => {
+describe('the line under the total', () => {
   it('says the first ultrafast run is in', () => {
-    expect(meterNote(6_118, 1)).toEqual({
-      toGo: '3.9k',
-      next: '10k',
-      passed: 'Your first ultrafast run is in',
-    })
+    expect(milestoneNote(6_118, 1)).toBe('Your first ultrafast run is in')
   })
 
-  it('says a milestone was just passed until halfway to the next, then passed', () => {
-    expect(meterNote(253_678, 5).passed).toBe('You just passed 250k')
-    expect(meterNote(253_678, 5).toGo).toBe('246k')
-    expect(meterNote(326_060, 5).passed).toBe('You just passed 250k')
-    expect(meterNote(400_000, 7)).toEqual({
-      toGo: '100k',
-      next: '500k',
-      passed: 'Passed 250k',
-    })
-    expect(meterNote(101_500, 3).passed).toBe('You just passed 100k')
-    expect(meterNote(1_004_000, 9).passed).toBe('You just passed 1M')
+  it('says a milestone was just passed until halfway to the next, then nothing', () => {
+    expect(milestoneNote(253_678, 5)).toBe('You just passed 250k')
+    expect(milestoneNote(326_060, 5)).toBe('You just passed 250k')
+    expect(milestoneNote(400_000, 7)).toBeNull()
+    expect(milestoneNote(101_500, 3)).toBe('You just passed 100k')
+    expect(milestoneNote(1_004_000, 9)).toBe('You just passed 1M')
+    expect(milestoneNote(2_700_000, 40)).toBe('You just passed 2.5M')
   })
 
-  it('says nothing about milestones below the first after more than one run', () => {
-    expect(meterNote(4_000, 3)).toEqual({
-      toGo: '6.0k',
-      next: '10k',
-      passed: null,
-    })
-  })
-
-  it('keeps finding a next milestone past the last named one', () => {
-    expect(nextMilestone(2_600_000)).toBe(5_000_000)
-    expect(meterNote(2_700_000, 40).passed).toBe('You just passed 2.5M')
+  it('says nothing below the first milestone after more than one run', () => {
+    expect(milestoneNote(4_000, 3)).toBeNull()
   })
 })
 
-describe('the log scale', () => {
-  it('runs from 1k to 2.5M, or to the next milestone past it', () => {
-    expect(scaleTop(326_060)).toBe(2_500_000)
-    expect(scaleTop(5_300_000)).toBe(7_500_000)
-    expect(scalePosition(1_000, 2_500_000)).toBe(0)
-    expect(scalePosition(500, 2_500_000)).toBe(0)
-    expect(scalePosition(2_500_000, 2_500_000)).toBe(1)
-    // Each decade is as wide as the next, the way a slide rule is ruled.
-    const decade = scalePosition(10_000, 2_500_000)
-    expect(scalePosition(100_000, 2_500_000)).toBeCloseTo(decade * 2, 6)
-  })
-
-  it('rules 1 to 9 in every decade and marks each power of ten', () => {
-    const ticks = scaleTicks(2_500_000)
-    expect(ticks[0]).toEqual({ value: 1_000, decade: true })
-    expect(
-      ticks.filter((tick) => tick.decade).map((tick) => tick.value),
-    ).toEqual([1_000, 10_000, 100_000, 1_000_000, 2_500_000])
-    expect(ticks).toHaveLength(30)
-  })
-
-  it('marks milestones passed, the next one, and the rest ahead', () => {
-    const marks = scaleMarks(326_060, 2_500_000)
-    expect(marks.map((mark) => mark.state)).toEqual([
-      'passed',
-      'passed',
-      'passed',
-      'next',
-      'ahead',
-      'ahead',
+describe('the milestones', () => {
+  it('step 10k, 25k, 50k in every power of ten and never run out', () => {
+    expect(passedMilestones(12_000_000)).toEqual([
+      10_000, 25_000, 50_000, 100_000, 250_000, 500_000, 1_000_000, 2_500_000,
+      5_000_000, 10_000_000,
     ])
-    expect(scaleMarks(5_300_000, 7_500_000).map((mark) => mark.value)).toEqual([
-      10_000, 100_000, 250_000, 500_000, 1_000_000, 2_500_000, 5_000_000,
-      7_500_000,
-    ])
+    expect(nextMilestone(0)).toBe(10_000)
+    expect(nextMilestone(10_000)).toBe(25_000)
+    expect(nextMilestone(30_000_000)).toBe(50_000_000)
+    expect(nextMilestone(400_000_000)).toBe(500_000_000)
   })
 })
 

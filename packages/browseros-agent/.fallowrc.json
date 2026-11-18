@@ -29,6 +29,7 @@
     "crates/neo-sdk/neo-playwright-js/scripts/probe-smoke.mjs",
     "crates/neo-sdk/neo-playwright-js/scripts/capture-goldens.mjs",
     "crates/neo-sdk/neo-playwright-js/scripts/port-keyboard-layout.ts",
+    "crates/neo-sdk/neo-playwright-js/scripts/snapshot-cases/preview.ts",
     "crates/neo-sdk/neo-playwright-js/scripts/capture-snapshot-fixture.mjs",
     "crates/neo-sdk/neo-playwright-js/src/stubs/highlight.ts",
     "crates/neo-sdk/neo-playwright-js/src/stubs/consoleApi.ts",
@@ -67,7 +68,8 @@
     ".claude/skills/**",
     "packages/agent-cursor/playground/**",
     "crates/neo-sdk/neo-playwright/third_party/**",
-    "crates/neo-sdk/neo-playwright/assets/**"
+    "crates/neo-sdk/neo-playwright/assets/**",
+    "crates/neo-sdk/neo-slimviewer/**"
   ],
   "rules": {
     "unused-files": "warn",

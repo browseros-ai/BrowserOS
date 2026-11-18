@@ -96,7 +96,7 @@ On a bigger page a line at its top says how much text it left out. `{ text: true
 
 Snapshots mask an `input` or `textarea` value when the page declares `type="password"` or includes a whole `autocomplete` token of `current-password`, `new-password`, `cc-number`, `cc-csc` or `one-time-code`. Tokens ignore case and may appear alongside other whitespace-separated tokens. A nonempty private value prints one `•` (U+2022) per UTF-16 unit; an empty value stays empty. For example, `Pw🔒` prints `••••`. Masking happens before each frame's tree leaves Neo's isolated world, including cross-origin frames and open or already exposed closed shadow roots, so text with or without page text, full/default modes, JSON, deltas, stored delta baselines and snapshot operation results in the trace all receive masked values. The spec harness's conformance switch preserves upstream output.
 
-A box Neo privately typed a host's secret into is also masked, regardless of the page's declarations or the conformance switch. Its `inputValue()` reads bullets, and its value assertions compare those bullets. The snapshot and failure guards share that privacy decision; the page's own world still holds the original value.
+A box Neo privately typed a host's secret into is also masked, regardless of the page's declarations or the conformance switch. Its `inputValue()` reads bullets, and its value assertions compare those bullets. The snapshot and failure guards share that privacy decision; the page's own world still holds the original value. A page's copy into an unmarked box reads in clear through `inputValue()`. Ordinary snapshots and error previews mask that copy only if its box is declared private. An already marked destination stays masked. Cloning or replacing the box makes a new node without the original's mark.
 
 Alternate value reads used to name controls follow the same rule: a private input's default value and a private control's `value`, `aria-valuetext` and `aria-valuenow` attributes print bullets of that string's length. A private textarea's stored text is omitted, including when another control uses it as its accessible name or its role has been overridden.
 
@@ -136,6 +136,8 @@ A new document in the tab (a navigation, a reload) starts over. A locator's snap
 `page.ariaSnapshot()` leaves out what the browser has made inert, such as the page behind a modal dialog. When it leaves anything out, a line at its top, `# not listed: ...`, reports how many lines were left out; `{ inert: true }` lists them. A host that parses or slices snapshot text must expect these explanatory lines.
 
 A `# on top: ...` line names a layer taking the pointer from controls, followed by up to four of its own controls. These lines survive every token cap; a whole-view layer's content prints before the rest of the default snapshot.
+
+When the root frame's check for clickable elements did not finish, `# refs missing: ...` explains that some clickable elements may lack refs and content inside closed shadow roots may be missing. It follows the on-top lines (in a delta, after the status and on-top lines) and precedes `# not listed: ...` or `# inert: ...`. It survives every token cap and is never part of a delta's changes.
 
 ```sh
 ./dev.sh run --task howto-aria -f devkit/examples/aria-ref.js

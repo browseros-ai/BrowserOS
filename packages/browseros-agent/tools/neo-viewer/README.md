@@ -169,7 +169,9 @@ The page at `/` (the approved design, "Viewer C v2"):
   Neo's screen ratio. **Pop out** opens it large over the page; closing it docks it back. **Take over**
   (top bar, or in the pop-up) gives you the agent's tab: its calls on that tab fail with
   `owner_has_control` until you press **Give back**, or until the takeover expires (Neo's default,
-  20 minutes).
+  20 minutes). The line under the screen says what your clicks do. While following, it says
+  **Following is behind** once no status check has confirmed the agent's tab for over 5 s, since
+  the screen may then still show an older tab; it goes back as soon as one answers.
 
 `/?plain` is a plain list of the same runs (code, reply, raw request and reply, the live screen
 beside it), kept for debugging.
@@ -262,6 +264,14 @@ it adds later) is shown under the value as the model read it, and never stops th
 | `POST /api/clear` | `RunsResponse`, empty: starts a new log, keeps the previous as `log.prev.jsonl`; only from the viewer's own page |
 | `POST /api/export` | `ExportResponse` (`dir`, `files`, `runs`): writes the folder above; only from the viewer's own page |
 | `GET /api/events` | SSE: one `ViewerEvent` per change: `{type:'run'}`, `{type:'log'}` (totals), `{type:'clear'}` |
+
+The tabs one browser has open on one viewer share one `/api/events` stream. A browser opens at
+most six HTTP/1.1 connections to one origin and a stream holds one for as long as its page is
+open, so a stream per tab would leave six tabs no connection for anything else. The tab that holds
+the `neo-viewer:events` Web Lock opens the stream and relays it to the other tabs over a
+BroadcastChannel; when it closes, the next tab in line opens it and every tab takes a fresh
+snapshot (`web/viewer-events.ts`). Not yet measured: an owning tab hidden long enough for Chrome to
+throttle its timers (its relay runs on stream and channel events, not timers).
 
 Once a run's reply is in, the viewer reads Neo's record of it through the host API
 (`GET /v1/runs/{id}?wait=10`, joined by the reply's `_meta["com.browseros.neo/run"].id`, which is

@@ -1078,7 +1078,24 @@ async fn recompute_task<C: ConnectionTrait>(conn: &C, session_id: &str) -> AppRe
     let last_at = last_dispatch
         .map(|row| row.created_at)
         .unwrap_or(started_at);
-    let duration_ms = ended_at.unwrap_or(last_at).saturating_sub(started_at);
+    // Active span: first activity to the last tool finishing. The session-end timestamp is the
+    // retirement moment (idle sweep / stop), not when work stopped, so it must not inflate the
+    // duration with the idle tail before teardown.
+    // Child steps inside a script stamp their write (completion) time, so created_at is already
+    // their end; adding duration would double-count a slow child (e.g. a long wait inside a run).
+    // Top-level rows stamp the tool start, so their end is created_at + duration.
+    let last_activity_end = dispatches
+        .iter()
+        .map(|row| {
+            if row.parent_dispatch_id.is_some() {
+                row.created_at
+            } else {
+                row.created_at + row.duration_ms.unwrap_or(0)
+            }
+        })
+        .max()
+        .unwrap_or(last_at);
+    let duration_ms = last_activity_end.saturating_sub(started_at).max(0);
     let error_count = dispatches
         .iter()
         .filter(|row| result_is_error(row.result_meta.as_deref()))
@@ -1993,6 +2010,85 @@ mod tests {
         assert!(task.tokens_measured);
         assert_eq!(task.tool_input_token_estimate, 68);
         assert_eq!(task.tool_output_token_estimate, 112);
+        Ok(())
+    }
+
+    /// Duration measures the active span (first activity to the last tool finishing), not the
+    /// wall-clock to teardown. Idle auto-complete stamps the session-end event minutes after the
+    /// last tool, so that idle tail must not inflate the reported duration.
+    #[tokio::test]
+    async fn duration_excludes_the_idle_tail_before_teardown() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let audit = AuditLog::new(Database::open(dir.path().join(DATABASE_FILENAME)).await?);
+
+        // No session start row, so the span is anchored on the first dispatch. Both dispatches are
+        // stamped in the past; the end event below is stamped at now(), the idle tail.
+        const BASE: i64 = 1_700_000_000_000;
+        let mut first = dispatch("idle", "https://one.example.com", false);
+        first.created_at = Some(BASE);
+        first.duration_ms = 10;
+        audit.record_tool_dispatch(first).await?;
+        let mut last = dispatch("idle", "https://two.example.com", false);
+        last.created_at = Some(BASE + 5_000);
+        last.duration_ms = 200;
+        audit.record_tool_dispatch(last).await?;
+
+        audit
+            .record_session_end("idle", "closed", Some("idle auto-complete"))
+            .await?;
+
+        let task = audit
+            .get_task("idle")
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("task missing"))?;
+        // Active span: (last dispatch created_at + its duration) - first dispatch created_at.
+        assert_eq!(
+            task.summary.duration_ms, 5_200,
+            "duration must be the active span, not the wall-clock including the idle tail"
+        );
+        let ended_at = task
+            .summary
+            .ended_at
+            .ok_or_else(|| anyhow::anyhow!("end missing"))?;
+        assert!(
+            ended_at > BASE + 5_200,
+            "the late end event ({ended_at}) is the retirement moment, well past the active span"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn duration_excludes_a_slow_completion_stamped_child() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let audit = AuditLog::new(Database::open(dir.path().join(DATABASE_FILENAME)).await?);
+
+        // A top-level script stamps its tool START, so its end is created_at + duration. A child
+        // step inside the script stamps its WRITE (completion) time, so its created_at is already
+        // its end; adding its duration would double-count it. Here a 30s child inside a 2s script
+        // must not inflate the active span.
+        const BASE: i64 = 1_700_000_000_000;
+        let mut script = dispatch("slow-child", "https://script.example.com", false);
+        script.created_at = Some(BASE);
+        script.duration_ms = 2_000;
+        let script_id = script.dispatch_id.clone();
+        audit.record_tool_dispatch(script).await?;
+
+        let mut child = dispatch("slow-child", "https://child.example.com", false);
+        child.created_at = Some(BASE + 1_900);
+        child.duration_ms = 30_000;
+        child.parent_dispatch_id = Some(script_id);
+        audit.record_tool_dispatch(child).await?;
+
+        let task = audit
+            .get_task("slow-child")
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("task missing"))?;
+        // Active span is the top-level script's end (BASE + 2_000) minus its start (BASE), not the
+        // child overshoot (BASE + 1_900 + 30_000 - BASE = 31_900).
+        assert_eq!(
+            task.summary.duration_ms, 2_000,
+            "a slow completion-stamped child must not inflate the active span"
+        );
         Ok(())
     }
 

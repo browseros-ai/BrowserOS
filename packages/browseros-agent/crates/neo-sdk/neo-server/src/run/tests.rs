@@ -33,6 +33,259 @@ use crate::test_rig::{ManualClock, TestError, TestRig, on_neo_runtime, within};
 const GRACE: Duration = Duration::from_secs(30);
 
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the real builtin, runtime wire and stored trace must share one remembered-crash fixture"
+)]
+fn target_crashed_real_page_op_precedes_failed_native_refresh_on_the_wire() -> Result<(), TestError>
+{
+    use browseros_cdp::CdpError;
+    use neo_playwright::FileAccess;
+
+    use crate::builtins::{self, PlaywrightFacade};
+    use crate::dispatch::{Dispatcher, Observer, RegistryBuilder};
+    use crate::test_rig::Gate;
+
+    on_neo_runtime(async {
+        for failure in [
+            CdpError::Timeout {
+                method: "native tab refresh".to_owned(),
+            },
+            CdpError::ConnectionLost,
+        ] {
+            let mut rig = TestRig::new().await?;
+            let page = rig.owner_tab("https://example.test/").await?;
+            let discovery_before = rig.fake.calls().len();
+            let facade = PlaywrightFacade::start(
+                Arc::clone(&rig.link),
+                false,
+                Arc::default(),
+                Arc::new(FileAccess::new(Vec::new, Vec::new())),
+                None,
+            );
+            let mut registry = RegistryBuilder::default();
+            builtins::builtin_set(
+                &mut registry,
+                builtins::BuiltinDeps {
+                    solver: None,
+                    claims: Arc::default(),
+                    playwright: Arc::clone(&facade),
+                },
+            )?;
+            registry.define(Gate(Arc::clone(&rig.gate)))?;
+            rig.dispatcher = Arc::new(Dispatcher::new(
+                registry.build(),
+                Vec::new(),
+                rig.sink.clone(),
+                Arc::clone(&rig.link),
+                Arc::clone(&rig.tabs),
+                Observer::new(Arc::clone(&facade) as _),
+            ));
+            facade.get().await;
+            // The page-registry seed also sends Target.getTargets. Only the live event
+            // watcher follows it with a context listing from the same task. Waiting for that
+            // pair both identifies its sender and prevents a crash before its subscription.
+            let watcher = within(
+                CRASH_REFUSAL_WATCHDOG,
+                rig.fake.received_matching(|calls| {
+                    let calls = &calls[discovery_before..];
+                    calls
+                        .iter()
+                        .filter(|call| call.method == "Target.getTargets")
+                        .filter_map(|call| call.task)
+                        .find(|sender| {
+                            calls.iter().any(|call| {
+                                call.method == "Browser.getTabs" && call.task == Some(*sender)
+                            })
+                        })
+                }),
+            )
+            .await
+            .map_err(|error| {
+                format!("waiting for crash watcher subscription before {failure}: {error}")
+            })??;
+            let target = rig
+                .link
+                .page(page.tab)
+                .await
+                .ok_or("cached native tab")?
+                .target_id;
+            assert!(rig.fake.page_event(
+                page.tab,
+                "Target.targetCrashed",
+                json!({ "targetId": target.as_str(), "status": "crashed", "errorCode": 1 }),
+            ));
+            let service = rig.run_service(GRACE);
+            let proof_input = json!({ "page": { "$neo": "page", "tab": page.tab } });
+            let proof_code = format!("await __neo.invoke('page.title', {proof_input});");
+            // FakeCdp does not number event broadcasts, so its fence cannot prove watcher
+            // progress. A real adapter refusal, while native reads still work and the fake
+            // emits no crash protocol reply, proves the persistent registry knows the crash.
+            within(CRASH_REFUSAL_WATCHDOG, async {
+                loop {
+                    let observed = service.run(request(&proof_code, RunMeta::default())?).await;
+                    if observed.error.as_ref().is_some_and(|error| {
+                        error.diagnostic_code == Some(DiagnosticCode::TargetCrashed)
+                    }) {
+                        break Ok::<(), TestError>(());
+                    }
+                    task::yield_now().await;
+                }
+            })
+            .await
+            .map_err(|error| {
+                format!("waiting for remembered-crash registry proof before {failure}: {error}")
+            })??;
+            // No crash injection or synthetic method is used after this boundary. The next
+            // fresh run reaches the production Playwright adapter over QuickJS's real bridge.
+            let expect_title = matches!(&failure, CdpError::ConnectionLost);
+            let operation = if expect_title {
+                "expect.page"
+            } else {
+                "page.title"
+            };
+            let public_api = if expect_title {
+                "expect.toHaveTitle"
+            } else {
+                "page.title"
+            };
+            let input = if expect_title {
+                json!({
+                    "call": { "api": public_api, "timeoutMs": 5000 },
+                    "page": { "$neo": "page", "tab": page.tab },
+                    "expression": "to.have.title",
+                    "expectedText": [{ "string": "x", "normalizeWhiteSpace": true }],
+                    "isNot": false,
+                    "matcher": "toHaveTitle",
+                    "expectation": "expected",
+                    "expected": "Expected: \"x\"",
+                })
+            } else {
+                json!({ "page": { "$neo": "page", "tab": page.tab } })
+            };
+            let request = request(
+                &format!(
+                    "await __neo.invoke('test.gate', {{}}); \
+                     await __neo.invoke('test.gate', {{}}); \
+                     await __neo.invoke('{operation}', {input});"
+                ),
+                RunMeta::default(),
+            )?;
+            let pending = task::spawn(async move { service.run(request).await });
+            within(CRASH_REFUSAL_WATCHDOG, rig.gate.wait())
+                .await
+                .map_err(|error| {
+                    format!(
+                        "waiting for the script after healthy run startup before {failure}: {error}"
+                    )
+                })?;
+            // The first gate proves QuickJS has started after all run-start inventory. The
+            // second holds the script while failures are armed; counting the first native
+            // listing instead would include later startup reads in the operation's baseline.
+            for method in ["Browser.getTabInfo", "Browser.getTabs"] {
+                rig.fake.fail(method, failure.clone());
+            }
+            // The event watcher lists context tabs independently of the refused operation.
+            // Counting its task would turn a tick in this window into a false native-refresh
+            // failure. Foreground operations have distinct task IDs, so their listings still
+            // increment this exact count and expose a misplaced crash guard.
+            let count_refresh_tabs = || {
+                rig.fake
+                    .calls()
+                    .iter()
+                    .filter(|call| call.method == "Browser.getTabs" && call.task != Some(watcher))
+                    .count()
+            };
+            let before_info = rig.fake.count("Browser.getTabInfo");
+            let before_tabs = count_refresh_tabs();
+            let before_attach = rig.fake.count("Target.attachToTarget");
+            if expect_title {
+                // Force a watcher listing into the ConnectionLost window while JS still waits
+                // at its second gate. This is background traffic the count must leave out,
+                // and cannot be a command sent by the refused operation.
+                let calls_before = rig.fake.calls().len();
+                within(
+                    CRASH_REFUSAL_WATCHDOG,
+                    rig.fake.received_matching(|calls| {
+                        calls
+                            .iter()
+                            .skip(calls_before)
+                            .any(|call| {
+                                call.method == "Browser.getTabs" && call.task == Some(watcher)
+                            })
+                            .then_some(())
+                    }),
+                )
+                .await
+                .map_err(|error| {
+                    format!("waiting for a watcher listing while {operation} is gated: {error}")
+                })??;
+            }
+            within(CRASH_REFUSAL_WATCHDOG, rig.gate.wait())
+                .await
+                .map_err(|error| format!("releasing the script under {failure}: {error}"))?;
+            let failed = within(CRASH_REFUSAL_WATCHDOG, pending)
+                .await
+                .map_err(|error| {
+                    format!("awaiting {operation} wire operation under {failure}: {error}")
+                })?
+                .map_err(|error| {
+                    format!("joining {operation} wire operation under {failure}: {error}")
+                })?;
+            let error = error_of(&failed)?;
+            assert_eq!(error.code, "internal_error", "{failure}");
+            assert_eq!(error.diagnostic_code, Some(DiagnosticCode::TargetCrashed));
+            assert_eq!(error.delivery, Some(ReplyDelivery::NotSent));
+            assert!(error.retryable, "unsent real builtin failure: {failure}");
+            assert!(
+                error.message.starts_with(&format!("{public_api}:")),
+                "the error keeps the public API name instead of the shared wire op: {}",
+                error.message
+            );
+            let wire = serde_json::to_value(&*failed)?;
+            assert_eq!(wire["error"]["code"], "internal_error");
+            assert_eq!(wire["error"]["diagnosticCode"], "target_crashed");
+            assert_eq!(wire["error"]["delivery"], "not_sent");
+            assert_eq!(
+                rig.fake.count("Browser.getTabInfo"),
+                before_info,
+                "known crash refusal must precede the adapter's URL/file refresh: {failure}"
+            );
+            assert_eq!(
+                count_refresh_tabs(),
+                before_tabs,
+                "known crash refusal must also precede Core's refresh fallback: {failure}"
+            );
+            assert_eq!(
+                rig.fake.count("Target.attachToTarget"),
+                before_attach,
+                "the fresh run must not prepare the crashed renderer: {failure}"
+            );
+            rig.sink.flush().await?;
+            let stored = rig.store.run(failed.id).await?.ok_or("stored failed run")?;
+            let operation = stored
+                .operations
+                .iter()
+                .find(|recorded| recorded.name == operation)
+                .ok_or("the real builtin operation is traced")?;
+            assert_eq!(operation.delivery, Some(Delivery::NotSent));
+            let stored_error = operation.error.as_ref().ok_or("stored builtin error")?;
+            assert_eq!(stored_error.code, "internal_error");
+            assert!(
+                stored_error.message.starts_with(&format!("{public_api}:")),
+                "the trace keeps the same public API context: {}",
+                stored_error.message
+            );
+            assert_eq!(
+                stored_error.diagnostic_code,
+                Some(DiagnosticCode::TargetCrashed)
+            );
+        }
+        Ok(())
+    })
+}
+
+#[test]
 fn target_crashed_diagnostic_survives_caught_uncaught_and_stored_errors() -> Result<(), TestError> {
     on_neo_runtime(async {
         let rig = TestRig::new().await?;
@@ -945,6 +1198,52 @@ fn the_deadline_times_the_run_out() -> Result<(), TestError> {
             started.elapsed() < Duration::from_millis(300) + Defaults::TEARDOWN_GRACE * 2,
             "the deadline stops it, then the grace ends the script that awaits forever"
         );
+        Ok(())
+    })
+}
+
+/// A run's reply waits on no tab's init-script removal. Its script registered one on a tab whose
+/// renderer then never answers the removal (a busy tab): the run still answers well inside the
+/// teardown grace that a wait for the removal would take, and the removal was sent. A first run
+/// on the tab, whose removal is answered, starts the Playwright facade and attaches the tab, so
+/// the run measured holds only its op and its teardown.
+#[test]
+fn a_runs_reply_does_not_wait_for_its_init_scripts_to_leave_a_busy_tab() -> Result<(), TestError> {
+    const ADD: &str = "Page.addScriptToEvaluateOnNewDocument";
+    const REMOVE: &str = "Page.removeScriptToEvaluateOnNewDocument";
+    on_neo_runtime(async {
+        let mut rig = TestRig::new().await?;
+        let page = rig.owner_tab("https://example.test/").await?;
+        rig.dispatcher = rig.builtin_dispatcher()?;
+        rig.fake.answer(ADD, json!({ "identifier": "script-1" }));
+        let service = rig.run_service(GRACE);
+        let input =
+            json!({ "page": { "$neo": "page", "tab": page.tab }, "source": "window.seen = 1" });
+        let code = format!("await __neo.invoke('page.addInitScript', {input}); return 1;");
+        let removals = |count: usize| {
+            rig.fake.received_matching(move |calls| {
+                (calls.iter().filter(|call| call.method == REMOVE).count() >= count).then_some(())
+            })
+        };
+
+        let first = service.run(request(&code, meta(None, None)?)?).await;
+        assert_eq!(first.status, ReplyStatus::Ok, "{first:?}");
+        within(Defaults::TEARDOWN_GRACE, removals(1))
+            .await?
+            .map_err(|error| format!("the first run's removal is sent and answered: {error}"))?;
+
+        rig.fake.hang(REMOVE);
+        let started = time::Instant::now();
+        let reply = service.run(request(&code, meta(None, None)?)?).await;
+        let elapsed = started.elapsed();
+        assert_eq!(reply.status, ReplyStatus::Ok, "{reply:?}");
+        assert!(
+            elapsed < Defaults::TEARDOWN_GRACE,
+            "the reply left before a wait for the hung removal could end: {elapsed:?}"
+        );
+        within(Defaults::TEARDOWN_GRACE, removals(2))
+            .await?
+            .map_err(|error| format!("the second run's removal is sent: {error}"))?;
         Ok(())
     })
 }

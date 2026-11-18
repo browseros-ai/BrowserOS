@@ -2002,9 +2002,9 @@ async fn every_playwright_op_is_one_listed_script_method_with_the_crates_spec()
             spec.lifetime == Lifetime::Background,
             matches!(
                 spec.name,
-                "events.listen" | "events.next" | "page.locatorHandlerTriggered"
+                "events.listen" | "events.next" | "page.locatorHandlerTriggered" | "page.frames"
             ),
-            "{}: only the prelude's event work is cut quietly when the run ends",
+            "{}: only the prelude's own work is cut quietly when the run ends",
             spec.name
         );
         let Listing::Grouped(line) = spec.listing else {
@@ -3775,6 +3775,23 @@ async fn withheld_close_keeps_internal_evidence_without_releasing_lifecycle()
 #[tokio::test]
 async fn explicit_close_cleans_a_replacement_with_delivered_dead_evidence()
 -> Result<(), Box<dyn Error>> {
+    close_cleans_a_replacement(None).await
+}
+
+/// The row above with a replacement whose target is created already showing an allowed page, so
+/// the target watcher's door lets a read of its tree go out at once, its observer's seed among
+/// them, and its destroy then waits in its line behind that read. It is reported from its creation
+/// on: its `Target.targetCreated` brought the URL, with which the watcher reported it (no opener,
+/// so no window lookup), so a discovery that drops it while a read is out records its close.
+#[tokio::test]
+async fn explicit_close_cleans_a_replacement_seeded_as_it_appeared() -> Result<(), Box<dyn Error>> {
+    close_cleans_a_replacement(Some("https://replacement.example/")).await
+}
+
+/// A run's tab whose target is swapped while its close waits for the browser, the replacement
+/// created with no URL (`None`) or already showing `created_at`, then given its URL and
+/// destroyed: the run hears the close, and the close still ends when the browser finishes.
+async fn close_cleans_a_replacement(created_at: Option<&str>) -> Result<(), Box<dyn Error>> {
     let harness = Harness::new().await?;
     let (run, _guard) = harness.run()?;
     let EventTabs { page, .. } = prepare_event_tabs(&harness, &run).await?;
@@ -3794,7 +3811,10 @@ async fn explicit_close_cleans_a_replacement_with_delivered_dead_evidence()
         }
     })
     .await?;
-    assert!(harness.fake.replace_target(page.tab));
+    match created_at {
+        Some(url) => assert!(harness.fake.replace_target_showing(page.tab, url)),
+        None => assert!(harness.fake.replace_target(page.tab)),
+    }
     harness.listed(page.tab).await?;
     let replacement = harness
         .link

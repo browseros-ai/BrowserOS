@@ -47,7 +47,7 @@ pub(crate) enum Intercept {
 type Policy = Arc<Mutex<Option<Refusal>>>;
 
 /// The same owned browser for SDK operations and independent fixture observations.
-fn cdp_port() -> u16 {
+pub(crate) fn cdp_port() -> u16 {
     env::var("BROWSEROS_CDP_PORT")
         .ok()
         .and_then(|port| port.parse().ok())
@@ -208,6 +208,9 @@ impl CdpConnection for Tap {
 /// The run's side of every op: an unbound view, one `RunState`, and a record of the calls.
 struct LiveEnv {
     view: BrowserView,
+    /// Ordinary operations use the same native activation as the server. Browser capability
+    /// tests opt out explicitly so a successful capture cannot hide a foreground change.
+    activate_tabs: bool,
     run_state: Arc<RunState>,
     calls: Mutex<Vec<EnvCall>>,
     policy: Policy,
@@ -253,6 +256,33 @@ impl OpEnv for LiveEnv {
 
     fn note(&self, line: String) {
         self.record(EnvCall::Note(line));
+    }
+
+    #[expect(
+        clippy::panic,
+        reason = "the infallible OpEnv hook must fail the test if its owned tab cannot activate"
+    )]
+    fn bring_forward(&self, tab: TabId) -> BoxFuture<'_, ()> {
+        Box::pin(async move {
+            if !self.activate_tabs {
+                return;
+            }
+            // These attached native tabs do not respond to Page.bringToFront. Match
+            // AgentFront's no-host path, including avoiding a redundant activation.
+            let info = self
+                .view
+                .cdp("Browser.getTabInfo", json!({ "tabId": tab.0 }), None)
+                .await
+                .unwrap_or_else(|error| panic!("live host could not inspect its tab: {error}"));
+            if info.pointer("/tab/isActive") != Some(&json!(true)) {
+                self.view
+                    .cdp("Browser.activateTab", json!({ "tabId": tab.0 }), None)
+                    .await
+                    .unwrap_or_else(|error| {
+                        panic!("live host could not activate its tab: {error}")
+                    });
+            }
+        })
     }
 
     fn hides_tab(&self, tab: TabId) -> bool {
@@ -306,6 +336,13 @@ impl LiveRun {
         Self::connect_through(|client| Arc::new(client) as Arc<dyn CdpConnection>).await
     }
 
+    /// Leaves native foreground state untouched, for tests of background browser capability
+    /// rather than the production host's input/capture policy.
+    pub(crate) fn without_activation(mut self) -> Self {
+        self.env.activate_tabs = false;
+        self
+    }
+
     /// Gives this owned fixture run the same viewport manager as the hosted adapter. Exact
     /// viewport bounds are part of the survey's count; the normal SDK route still applies it.
     pub(crate) fn with_viewports(mut self) -> Self {
@@ -338,6 +375,7 @@ impl LiveRun {
         let playwright = Playwright::new(Arc::clone(&browser));
         let env = LiveEnv {
             view: BrowserView::unbound(Arc::clone(&browser), None),
+            activate_tabs: true,
             run_state: Arc::default(),
             calls: Mutex::default(),
             policy,
@@ -423,6 +461,12 @@ impl LiveRun {
     /// The event head sampled before Runner N reads its page facts.
     pub(crate) fn event_head(&self) -> u64 {
         self.playwright.event_head()
+    }
+
+    /// Every tab's frame-tree version, as the production door reads it for each reply's
+    /// `frames`: a run re-reads a listed tab's tree once its version moved.
+    pub(crate) fn frame_versions(&self) -> Vec<(TabId, u64)> {
+        self.playwright.frame_versions()
     }
 
     /// Mirrors the door's cache observation for live tests, including watcher/core lag.
@@ -522,14 +566,20 @@ impl LiveRun {
             .unwrap_or(Value::Null))
     }
 
-    /// A trusted left click at the center of the first element matching `selector`.
+    /// A trusted left click inside one visible fragment of the first matching element.
     pub(crate) async fn click(&self, page: &TestPage, selector: &str) -> TestResult {
+        self.env.bring_forward(page.tab).await;
         let center = self
             .eval(
                 page,
                 &format!(
-                    "(() => {{ const r = document.querySelector({selector:?}).getBoundingClientRect(); \
-                     return [r.x + r.width / 2, r.y + r.height / 2]; }})()"
+                    "(() => {{ const element = document.querySelector({selector:?}); \
+                     element.scrollIntoView({{ block: 'center', inline: 'center' }}); \
+                     for (const r of element.getClientRects()) {{ \
+                       const left = Math.max(0, r.left), right = Math.min(innerWidth, r.right); \
+                       const top = Math.max(0, r.top), bottom = Math.min(innerHeight, r.bottom); \
+                       if (right > left && bottom > top) return [(left + right) / 2, (top + bottom) / 2]; \
+                     }} return null; }})()"
                 ),
             )
             .await?;

@@ -59,7 +59,67 @@ const pressLogged = () => {
   document.getElementById('target').addEventListener('click', log('target'))
   document.getElementById('info').addEventListener('click', log('info'))
 }
+// Covered-click B's shapes: a dialog layer that leaves by itself after `ms`, so a click under
+// Neo's built-in timeout either lands or stops 5 s after the same cover started to stand.
+const leavesAt = (ms) => {
+  button()
+  const cover = layer(dialog)
+  setTimeout(() => cover.remove(), ms)
+  return cover
+}
 const shapes = {
+  leaves3() {
+    leavesAt(3000)
+  },
+  leaves12() {
+    leavesAt(12000)
+  },
+  leaves8() {
+    leavesAt(8000)
+  },
+  moving() {
+    // A cover that changes its own box every 300 ms for 8 s: it never stands. Its place never
+    // repeats while it is there (step * 7 mod 40 runs through 40 places, 12 s). A move with a
+    // period can meet the checks' own rhythm: two places 300 ms apart, checked every 600 ms,
+    // show one place at every check, and the cover would count as standing.
+    const cover = leavesAt(8000)
+    let step = 0
+    setInterval(() => { step++; cover.style.top = `${(step * 7) % 40}px` }, 300)
+  },
+  fading() {
+    // A cover whose opacity changes every 300 ms for 8 s: a fade is a change.
+    const cover = leavesAt(8000)
+    let step = 0
+    setInterval(() => { step++; cover.style.opacity = String(1 - (step % 5) / 10) }, 300)
+  },
+  busy() {
+    // A cover that says it is loading for 7 s.
+    leavesAt(7000).setAttribute('aria-busy', 'true')
+  },
+  progress() {
+    // A cover that holds a progress bar for 7 s.
+    leavesAt(7000).querySelector('.dialog').append(document.createElement('progress'))
+  },
+  replaced() {
+    // One cover, replaced by another at 3 s, which stays.
+    button()
+    const first = layer(dialog)
+    setTimeout(() => {
+      first.remove()
+      layer(dialog.replace('What You Need To Know', 'Second notice'))
+    }, 3000)
+  },
+  dragcovered() {
+    // A drag whose drop target stands under a cover: the press on the source lands, the drop
+    // does not. The window logs the trusted button events, the release among them.
+    // The drop target lies wholly in the view and its cover is in the page's flow, so no scroll of
+    // the attempt moves the target out from under it.
+    stage.innerHTML = `<div id="src" style="width: 80px; height: 40px; background: #eef">src</div>
+      <div id="dst" style="position: absolute; left: 200px; top: 0; width: 120px; height: 60px; background: #efe">dst</div>
+      <div id="over" style="position: absolute; left: 190px; top: -10px; width: 140px; height: 80px; z-index: 10; background: rgba(0, 0, 0, 0.3)"></div>`
+    for (const type of ['mousedown', 'mouseup'])
+      window.addEventListener(type, (event) => { if (event.isTrusted) window.__log.push(type) }, true)
+  },
   plain() {
     button()
   },

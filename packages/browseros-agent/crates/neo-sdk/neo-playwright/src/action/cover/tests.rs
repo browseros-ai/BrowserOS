@@ -3,7 +3,11 @@ use std::time::Duration;
 use browseros_core::{ProtocolSession, SessionId};
 use serde_json::{Value, json};
 
-use super::{CoverWatch, Lines, OnTopNote, Seat, field, on_top_line, same_cover};
+use tokio::time::{self, Instant};
+
+use super::{
+    CoverWatch, EarlyStop, Lines, OnTopNote, Seat, Waiting, decide, field, on_top_line, same_cover,
+};
 use crate::probe::{CoverFacts, CoverMark, Point, ProbeTarget, Rect};
 use crate::test_env;
 use crate::world::{IsolatedWorld, Pin};
@@ -486,4 +490,66 @@ fn tests_that_a_cover_stands_in_the_view_or_over_its_control() {
         (point(132.0, 20.0), Some(placed(120.0, 8.0, 200.0))),
         (point(0.3, 20.0), Some(placed(-11.4, 8.2, 200.3)))
     ));
+}
+
+/// Covered-click B's decision, as a table: the stop comes when the same cover has stood 5 s and
+/// at least 4 checks, not before either, and never for a cover that says it is loading, under a
+/// timeout somebody chose, or under the conformance flag.
+#[test]
+fn tests_that_a_pointer_action_stops_waiting_at_five_seconds_and_four_checks() {
+    let ms = Duration::from_millis;
+    // The wait is given here. `Waiting::of` gives `Whole` for a chosen timeout and under the
+    // conformance flag; the live rows `tests_that_a_chosen_timeout_keeps_its_whole_wait` and
+    // `tests_that_conformance_never_stops_early` hold it there.
+    for (stood, checks, loading, waiting, stops) in [
+        (ms(5_000), 4, false, Waiting::BuiltIn, true),
+        (ms(6_500), 13, false, Waiting::BuiltIn, true),
+        (ms(4_999), 13, false, Waiting::BuiltIn, false),
+        (ms(30_000), 3, false, Waiting::BuiltIn, false),
+        (ms(5_000), 4, true, Waiting::BuiltIn, false),
+        (ms(5_000), 4, false, Waiting::Whole, false),
+        (ms(30_000), 60, false, Waiting::Whole, false),
+    ] {
+        assert_eq!(
+            decide(stood, checks, loading, waiting),
+            stops.then_some(EarlyStop { stood, checks }),
+            "stood {stood:?}, {checks} checks, loading {loading}, {waiting:?}"
+        );
+    }
+}
+
+/// The watch keeps what the decision reads, on Rust's clock: the same cover seen at four checks
+/// over five seconds stops the action; one that moved starts its count again.
+#[tokio::test(start_paused = true)]
+async fn tests_that_the_watch_stops_only_a_cover_that_stood() {
+    let mut watch = CoverWatch::new();
+    for _ in 0..4 {
+        watch.saw(seat(None), Some(mark(7, 0.0, 1.0)));
+        time::advance(Duration::from_secs(1)).await;
+    }
+    assert_eq!(
+        watch.early(Instant::now(), Waiting::BuiltIn),
+        None,
+        "four seconds"
+    );
+    time::advance(Duration::from_secs(1)).await;
+    assert_eq!(
+        watch.early(Instant::now(), Waiting::BuiltIn),
+        Some(EarlyStop {
+            stood: Duration::from_secs(5),
+            checks: 4
+        }),
+        "five seconds and four checks"
+    );
+    assert_eq!(
+        watch.early(Instant::now(), Waiting::Whole),
+        None,
+        "a chosen timeout"
+    );
+    watch.saw(seat(None), Some(mark(7, 40.0, 1.0)));
+    assert_eq!(
+        watch.early(Instant::now(), Waiting::BuiltIn),
+        None,
+        "a cover that moved starts again"
+    );
 }

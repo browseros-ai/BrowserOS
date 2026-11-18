@@ -7,9 +7,6 @@
 import { describe, expect, it } from 'bun:test'
 import {
   axisLabels,
-  countsFit,
-  periodStart,
-  referenceStep,
   runsStrip,
   stripCaption,
 } from './ultrafast-details.helpers'
@@ -67,9 +64,7 @@ describe('the runs strip', () => {
     const strip = runsStrip('since', HEAVY, SINCE, NOW)
     expect(strip.bars).toBe(true)
     expect(strip.busiest).toBe(40)
-    expect(stripCaption('since', strip, SINCE)).toBe(
-      'Runs per day. Hover a day for its count. Nov 5 is the day you got ultrafast.',
-    )
+    expect(stripCaption(strip)).toBe('Runs per day. The busiest day is marked.')
   })
 
   it('draws 30 days one column a day, with the days before ultrafast marked', () => {
@@ -93,9 +88,7 @@ describe('the runs strip', () => {
     expect(strip.columns.map((column) => column.runs)).toEqual([
       0, 1, 1, 0, 0, 1, 1,
     ])
-    expect(stripCaption('last7Days', strip, SINCE)).toBe(
-      'One square is one ultrafast run.',
-    )
+    expect(stripCaption(strip)).toBe('One square is one ultrafast run.')
   })
 
   it('folds a since period past a month into weeks', () => {
@@ -133,28 +126,20 @@ describe('the strip axis', () => {
       if (next) expect(next.left).toBeGreaterThan(label.left)
     }
   })
-
-  it('gives each column its count only where it has room', () => {
-    expect(countsFit(runsStrip('since', HEAVY, SINCE, NOW), 500)).toBe(true)
-    expect(countsFit(runsStrip('since', HEAVY, SINCE, NOW), 352)).toBe(false)
-    expect(countsFit(runsStrip('last30Days', HEAVY, SINCE, NOW), 500)).toBe(
-      false,
-    )
-    expect(countsFit(runsStrip('last7Days', HEAVY, SINCE, NOW), 352)).toBe(true)
-  })
-
-  it('rules the reference line at a round number under the busiest day', () => {
-    expect(referenceStep(40)).toBe(20)
-    expect(referenceStep(37)).toBe(20)
-    expect(referenceStep(12)).toBe(5)
-    expect(referenceStep(6)).toBe(null)
-  })
 })
 
-describe('periods', () => {
-  it('start at the purchase or 30 and 7 days back', () => {
-    expect(periodStart('since', SINCE, NOW)).toBe(SINCE)
-    expect(NOW - periodStart('last7Days', SINCE, NOW)).toBe(7 * 86_400_000)
-    expect(NOW - periodStart('last30Days', SINCE, NOW)).toBe(30 * 86_400_000)
+describe('the since period', () => {
+  it('counts a run from the purchase day even when it came before the purchase hour', () => {
+    const strip = runsStrip(
+      'since',
+      { runTimes: [at(5, 7), at(6)] },
+      SINCE,
+      NOW,
+    )
+    expect(strip.columns[0]?.purchase).toBe(true)
+    expect(strip.columns[0]?.runs).toBe(1)
+    expect(
+      strip.columns.map((column) => column.runs).reduce((a, b) => a + b),
+    ).toBe(2)
   })
 })

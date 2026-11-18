@@ -8,7 +8,7 @@ import type { PlanSavings, SessionSummary } from '@browseros/claw-api'
 import type { UseQueryResult } from '@tanstack/react-query'
 import { ArrowRight, Info, Play } from 'lucide-react'
 import { Link, useLocation } from 'react-router'
-import { UltrafastRunBadge } from '@/components/audit/UltrafastRunBadge'
+import { UltrafastNote } from '@/components/audit/UltrafastMarks'
 import {
   HOW_WE_COUNT,
   meterTokens,
@@ -25,7 +25,7 @@ import { cn } from '@/lib/utils'
 import {
   chipTokens,
   pagesLabel,
-  pursuePill,
+  pursueNote,
   taskWhen,
   ultrafastTime,
 } from '@/screens/audit/audit.helpers'
@@ -194,10 +194,10 @@ function LatestRun({ task }: { task: SessionSummary }) {
   const location = useLocation()
   const run = task.ultrafast
   const pursue = task.pursue
-  const pill = pursue
-    ? pursuePill(pursue)
+  const note = pursue
+    ? pursueNote(pursue)
     : run
-      ? `ultrafast · ${ultrafastTime(run.durationMs)}`
+      ? `neo ran it in ${ultrafastTime(run.durationMs)}`
       : null
   // What neo measured, or for a pursue run from before pages were counted, the steps it took.
   const recorded = run
@@ -222,10 +222,8 @@ function LatestRun({ task }: { task: SessionSummary }) {
             {taskWhen(task.startedAt, Date.now())}
           </span>
         </span>
-        {pill ? (
-          <UltrafastRunBadge className="justify-self-start">
-            {pill}
-          </UltrafastRunBadge>
+        {note ? (
+          <UltrafastNote className="justify-self-start">{note}</UltrafastNote>
         ) : null}
         {recorded ? (
           <span className="whitespace-nowrap text-[13.5px] text-ink-2">

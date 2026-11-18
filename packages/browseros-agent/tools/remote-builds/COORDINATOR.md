@@ -136,3 +136,120 @@ To disable monitoring deliberately, drain the pool, then use
 `sudo systemctl disable --now browseros-remote-builds-reaper.timer`. This neither
 deallocates VMs nor cancels live jobs by itself. No automatic record/cache retention
 timer is provisioned by this procedure.
+
+## GitHub runners
+
+Optional. This lets members run jobs through the **Pool run** workflow (README, "Run a job from
+GitHub"). It adds a dispatcher service on the coordinator and a runner account on each runner
+host. The SSH clients, the reaper and the existing records are unchanged. Keep the coordinator
+itself out of the runner hosts: it holds the pool state and every key below, and member code
+should never run beside them.
+
+### Organisation side (an organisation owner)
+
+1. Create an organisation-owned GitHub App with these permissions:
+   - Organisation: **Self-hosted runners**, read and write.
+   - Repository: **Actions**, read; **Metadata**, read.
+
+   It needs no webhook. Install it on this repository only. Move its private key from the
+   downloaded file straight to the coordinator, as below. Never paste it into a terminal,
+   commit it, or put it in a repository.
+2. Create the runner group with the App's token. Every field matters:
+   - `visibility: selected`, listing only this repository.
+   - `allows_public_repositories: true`. A public repository needs it; the default admits only
+     private ones.
+   - `restricted_to_workflows: true`, with `selected_workflows` naming only
+     `browseros-ai/BrowserOS/.github/workflows/pool-run.yml@refs/heads/main`.
+
+   A fork's workflow can then never be given these runners.
+
+### Coordinator
+
+First install the current `pool.py` the usual way, at a natural idle (0 running, 0 waiting),
+keeping a backup. An older `pool.py` ignores the dispatcher's host list. The dispatcher notices,
+hands that machine straight back and halts, but it can do nothing useful until the upgrade.
+
+As `buildrunner`, with the same private directory as the reaper:
+
+```sh
+umask 077
+ssh-keygen -q -t ed25519 -N '' -C pool-runner-dispatcher -f /var/lib/browseros-remote-builds/runners_ed25519
+```
+
+From the machine that downloaded the App's key, file to file, so the key is never shown:
+
+```sh
+ssh COORDINATOR 'umask 077; cat > /var/lib/browseros-remote-builds/github-app.pem' < DOWNLOADED_KEY.pem
+rm DOWNLOADED_KEY.pem
+```
+
+`/var/lib/browseros-remote-builds/runners.json` (mode 0600) holds ids and paths only:
+
+```json
+{
+  "org": "browseros-ai",
+  "repository": "browseros-ai/BrowserOS",
+  "workflow": ".github/workflows/pool-run.yml",
+  "branches": ["main"],
+  "label": "browseros-pool",
+  "runnerGroupId": 0,
+  "appId": 0,
+  "installationId": 0,
+  "appKey": "/var/lib/browseros-remote-builds/github-app.pem",
+  "key": "/var/lib/browseros-remote-builds/runners_ed25519",
+  "hosts": ["SUPPLIED_RUNNER_HOST_NAMES"]
+}
+```
+
+`hosts` lists the `pool.json` names that may serve GitHub jobs. The dispatcher passes it with
+each `acquire`, and `pool.py` gives that job only those hosts. Private endpoints and pinned
+host keys come from `reaper.json` and `reaper-known-hosts`.
+
+Before minting any runner, and once a minute after that, the dispatcher reads the runner group
+back. It mints nothing unless the group admits only this repository and only the workflow refs
+in `runners.json`. Its log says why when it refuses.
+
+Install the dispatcher and start it:
+
+```sh
+sudo install -m 0644 tools/remote-builds/runners.py /usr/local/lib/browseros-remote-builds/runners.py
+sudo install -m 0644 tools/remote-builds/browseros-remote-builds-runners.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now browseros-remote-builds-runners.service
+journalctl -u browseros-remote-builds-runners.service -n 20 --no-pager
+```
+
+Restart it after installing a new `pool.py`. A long-running process keeps the module it
+loaded at start.
+
+### Each runner host
+
+Do this while `bun run remote status` shows the host free. From the same audited source copy
+used for `prepare.sh`:
+
+```sh
+bash tools/remote-builds/prepare-runner.sh runners_ed25519.pub SUPPLIED_COORDINATOR_PRIVATE_ADDRESS
+```
+
+It does the following, and checks the result:
+- Creates `poolrunner`: no password, no login shell, no sudo, no other group.
+- Denies it cron.
+- Unpacks the Actions runner into `/opt/actions-runner`, checked against its published sha256.
+- Installs `runner.sh`, `runner-hook.sh` and `guest.py`.
+- Makes `/work/remote-builds` traversable but not listable.
+- Adds the dispatcher's key, restricted to `guest.py runner-rpc` and to the coordinator's
+  address.
+
+### Removing it
+
+1. Stop and disable `browseros-remote-builds-runners.service`. Jobs it was serving are cancelled
+   by the reaper once their lease lapses.
+2. Delete the `browseros-pool-*` runners, the runner group and the App.
+3. On each runner host, while idle:
+   - Remove the `pool-runner-dispatcher` line from `authorized_keys`.
+   - Remove the `poolrunner` line from `/etc/cron.deny`.
+   - `sudo userdel poolrunner`.
+   - `sudo rm -rf /opt/actions-runner /work/pool-runner`.
+   - Remove `runner.sh` and `runner-hook.sh`.
+   - `sudo chmod 0755 /work/remote-builds`.
+4. Remove `runners.json`, `github-app.pem` and `runners_ed25519` from the coordinator.

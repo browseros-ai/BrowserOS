@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Builds the Neo SDK image from this checkout: the SDK server compiled from this commit and the
-# browser pinned in browser.lock, with this image's own supervisor (supervisor/ beside this script).
+# browser pinned in browser.lock, the standalone slimviewer build and this image's own supervisor.
 # It only ever loads the image into the local Docker engine; it never pushes.
 #
 #   build.sh [--platform linux/amd64|linux/arm64] [--tag NAME]
 #            [--capsolver-key-file FILE] [--twocaptcha-key-file FILE]
 #
 #   --platform   default: the Docker engine's own architecture. The server is cross-compiled
-#                with zig either way; only the image's apt/dpkg steps run on the target arch.
+#                with zig either way; slimviewer and OpenH264 compile on the target arch.
 #   --tag        default: neo-sdk:<browser version>-<9-char commit>[-dirty]-<arch>. All but the
 #                arch is also the image's org.opencontainers.image.version label. -dirty means
 #                uncommitted changes in packages/browseros-agent, which holds every input.
@@ -97,15 +97,26 @@ done
 [ "$target" = neo-sdk ] || key_args+=(--no-cache-filter neo-sdk-keyed)
 
 echo "build.sh: $tag for $platform from $revision (dirty=$dirty, target $target)" >&2
-iidfile=$(mktemp)
-binary=$(mktemp)
-trap 'rm -f "$iidfile" "$binary"' EXIT
+workdir=$(mktemp -d)
+trap 'rm -rf "$workdir"' EXIT
+iidfile=$workdir/image-id
+binary=$workdir/server
+build_args=(--platform "$platform"
+  --build-arg "NEO_SDK_CACHE_SCOPE=${NEO_SDK_CACHE_SCOPE:-}"
+  --build-arg "NEO_SDK_BUILD_JOBS=${NEO_SDK_BUILD_JOBS:-}")
+context_args=()
+# Frozen checkouts before the split have no viewer Dockerfile. Exporting files keeps the
+# handoff independent of the builder's image store and private to this invocation.
+viewer=$agent/crates/neo-sdk/neo-slimviewer
+if [ -f "$viewer/Dockerfile" ]; then
+  docker buildx build "${build_args[@]}" --output "type=local,dest=$workdir/slimviewer" "$viewer"
+  context_args+=(--build-context "slimviewer=$workdir/slimviewer")
+fi
 # Older frozen worktrees use a named context for five shared supervisor files.
 # The remote manifest includes those exact inputs; current images own supervisor/.
 # Retain for pre-split sources such as a22477b21e. Delete this block together with
 # remote.py:LEGACY_SUPERVISOR once every supported image-source worktree owns
 # supervisor/ and support for pre-split snapshots is retired (remote-builds README).
-context_args=()
 if [ -f "$here/Dockerfile" ] && grep -q -- '--from=neo-docker' "$here/Dockerfile"; then
   neo_docker="$repo/packages/browseros/docker/neo"
   for file in neo-server-info.sh openbox-rc.xml entrypoint.sh healthcheck.sh neo-quit.py; do
@@ -115,13 +126,11 @@ if [ -f "$here/Dockerfile" ] && grep -q -- '--from=neo-docker' "$here/Dockerfile
 fi
 # ${key_args[@]+...}: bash 3.2 (macOS) treats an empty array as unset under set -u.
 docker buildx build \
-  --platform "$platform" \
+  "${build_args[@]}" \
   --file "$here/Dockerfile" \
   --build-arg "NEO_SDK_REVISION=$revision" \
   --build-arg "NEO_SDK_DIRTY=$dirty" \
   --build-arg "NEO_SDK_VERSION=$version" \
-  --build-arg "NEO_SDK_CACHE_SCOPE=${NEO_SDK_CACHE_SCOPE:-}" \
-  --build-arg "NEO_SDK_BUILD_JOBS=${NEO_SDK_BUILD_JOBS:-}" \
   --target "$target" \
   ${key_args[@]+"${key_args[@]}"} \
   ${context_args[@]+"${context_args[@]}"} \

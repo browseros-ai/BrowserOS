@@ -50,8 +50,8 @@ impl Drop for FileChooserInterception {
         };
         let state = Arc::clone(&self.state);
         let epoch = self.epoch;
-        // Cancellation cannot skip cleanup. Acquisition and release share the state's lease
-        // lock, so this old release cannot disable a newer owner's interception.
+        // Cancellation cannot skip cleanup. Acquisition and release share the tab's lease
+        // turn, so this old release cannot disable a newer owner's interception.
         let Ok(runtime) = Handle::try_current() else {
             return;
         };

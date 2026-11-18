@@ -24,7 +24,7 @@ use browseros_core::{BrowserView, CoreError, TabId, TargetId};
 use futures_util::future::BoxFuture;
 use neo_playwright::{
     Answer, ErrorCode as PlaywrightCode, FileAccess, Op, OpEnv, OpTarget, PlaywrightError, Refusal,
-    RunState, TimedOut,
+    RunState, TimedOut, url_scheme,
 };
 use neo_trace::{DiagnosticCode, ErrorOwner};
 use serde::{Deserialize, Deserializer};
@@ -39,7 +39,7 @@ use crate::dispatch::{
     RegistryBuilder, RegistryError, RunCtx,
 };
 use crate::host::AgentFront;
-use crate::url_scheme;
+use crate::navigation_scheme;
 
 /// neo-playwright's prelude, which the agent realm evaluates after its bootstrap: the
 /// `page`, `context`, `browser` and `expect` parameters of the agent's function, over these ops.
@@ -84,11 +84,12 @@ const PLAYWRIGHT_API: &str = r"Playwright 1.64's API on `page`, `context` and `b
     A directory upload needs its tab in front, which the tabs Neo opens for a script never are.
   - By design, hosted BrowserOS gives a script no console messages and no page errors: `console` and `pageerror` listeners stay silent.";
 
-/// At a run's end, after its ops drained: removes the init scripts its ops registered from every
-/// tab, awaiting each removal (neo-playwright's `RunState::remove_init_scripts`). The run service
-/// calls it before it answers, so a script ends with the run that registered it.
-pub(crate) async fn remove_init_scripts(run: &RunCtx) {
-    run.slot::<RunState>().remove_init_scripts().await;
+/// At a run's end, after its ops drained: starts removing the init scripts and bindings its ops
+/// registered from every tab, awaiting none (neo-playwright's `RunState::remove_init_scripts`).
+/// The run service calls it before it answers. Each removal fences its tab, so the next op on
+/// that tab, in any run, waits for it, and a script still ends with the run that registered it.
+pub(crate) fn remove_init_scripts(run: &RunCtx) {
+    run.slot::<RunState>().remove_init_scripts();
 }
 
 /// Schemes shared by goto and reload. Goto additionally passes JavaScript URLs to Chromium; a
@@ -201,6 +202,33 @@ impl Method for PlaywrightOp {
         let ruled = page.is_some()
             && matches!(self.op.spec().target, OpTarget::Field(_))
             && self.pages != PageEffect::Closes;
+        let playwright = self.facade.get().await;
+        let env = OpCtxEnv::new(
+            op,
+            self.facade.hosted_mode(),
+            Arc::clone(self.facade.front()),
+            Arc::clone(self.facade.file_access()),
+        )
+        .keeping(self.facade.blank_tab().cloned());
+        // The door already ran host policy. A remembered renderer crash must answer before
+        // our URL/file guard refreshes native tab facts, which may fail with the crashed tab.
+        // Return the refusal now: skipping a guard and continuing could admit work after a
+        // concurrent recovery without ever enforcing that guard. Browser-only close/opener
+        // and every operation without remembered crash evidence retain their ordinary path.
+        if ruled
+            && !self.closes_tab()
+            && self.spec.name != "page.opener"
+            && let Some(page) = page
+        {
+            let api = input
+                .json
+                .get("call")
+                .and_then(|call| call.get("api"))
+                .and_then(Value::as_str);
+            op.race_classified(playwright.check_cached_crash(&env, self.op, page.tab, api))
+                .await?
+                .map_err(|error| leaf_error(&error))?;
+        }
         if ruled && let Some(refusal) = refused_page(op, self.spec.name, self.pages).await? {
             return Err(LeafError::definite(refusal));
         }
@@ -224,14 +252,6 @@ impl Method for PlaywrightOp {
         } else {
             None
         };
-        let playwright = self.facade.get().await;
-        let env = OpCtxEnv::new(
-            op,
-            self.facade.hosted_mode(),
-            Arc::clone(self.facade.front()),
-            Arc::clone(self.facade.file_access()),
-        )
-        .keeping(self.facade.blank_tab().cloned());
         let result = op
             .race_classified(playwright.invoke(&env, self.op, input))
             .await;
@@ -317,7 +337,7 @@ impl OpInput {
     /// the entry it opens ([`refused_page`]).
     fn refused_navigation(&self) -> Option<OperationError> {
         let url = self.json.get("url")?.as_str()?;
-        let which = match url_scheme::navigation_scheme(url) {
+        let which = match navigation_scheme::navigation_scheme(url) {
             Some(scheme) if scheme == "file" => {
                 return Some(file_page("Neo does not open this URL, a `file:` one"));
             }
@@ -380,12 +400,12 @@ async fn refused_page<M>(
     let Some(url) = shown_url(op).await? else {
         return Ok(None);
     };
-    let scheme = url_scheme::url_scheme(&url);
-    if scheme.as_deref() == Some("file") {
+    if url_scheme::refuses_page(&url) {
         return Ok(Some(file_page(
             "Neo does not act on this tab, which shows a `file:` page",
         )));
     }
+    let scheme = url_scheme::url_scheme(&url);
     if effect == PageEffect::Reloads {
         return Ok(match scheme {
             Some(scheme) if NAVIGABLE_SCHEMES.contains(&scheme.as_str()) => None,
@@ -421,7 +441,7 @@ async fn refused_page<M>(
         .and_then(|index| usize::try_from(index).ok())
         .and_then(|index| history.entries.get(index));
     Ok(opens
-        .filter(|entry| url_scheme::url_scheme(&entry.url).as_deref() == Some("file"))
+        .filter(|entry| url_scheme::refuses_page(&entry.url))
         .map(|_| file_page("Neo does not take this step, whose history entry is a `file:` page")))
 }
 
@@ -447,7 +467,7 @@ async fn shown_url<M>(op: &OpCtx<M>) -> Result<Option<String>, LeafError> {
 async fn moved_to_file<M>(op: &OpCtx<M>) -> Result<bool, LeafError> {
     Ok(shown_url(op)
         .await?
-        .is_some_and(|url| url_scheme::url_scheme(&url).as_deref() == Some("file")))
+        .is_some_and(|url| url_scheme::refuses_page(&url)))
 }
 
 /// `Page.getNavigationHistory`'s reply, as much of it as [`refused_page`] reads: the crate's own

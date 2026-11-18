@@ -532,6 +532,7 @@ mod tests {
                     api: Some("locator.screenshot".to_owned()),
                     timeout_ms: Some(if found { 2_000 } else { 50 }),
                     conformance: false,
+                    timeout_built_in: false,
                 },
             );
             let bound = ScreenshotGeometry::bind(
@@ -616,9 +617,9 @@ mod tests {
         let connection = TestConnection::new([]);
         connection.always(
             "Runtime.callFunctionOn",
-            json!({"result":{"type":"object","value":{
+            json!({"result":{"type":"string","value":json!({
                 "kind":"read","value":{"x":0,"y":0,"scaleX":1e308,"scaleY":1}
-            }}}),
+            }).to_string()}}),
         )?;
         let parent = IsolatedWorld::for_tests(
             ProtocolSession::for_session(

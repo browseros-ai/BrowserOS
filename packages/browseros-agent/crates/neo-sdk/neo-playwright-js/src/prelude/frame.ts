@@ -65,7 +65,7 @@ import {
   renderSnapshotV1,
   withDefaults,
 } from './snapshot-v1'
-import { type TimeoutOption, timeoutMs } from './timeouts'
+import { headerTimeout, type Resolved, type TimeoutOption } from './timeouts'
 import type { KeyList } from './upstream-check'
 import { globMatches } from './url'
 import {
@@ -159,7 +159,7 @@ export type WaitForNavigationOptions = TimeoutOption &
     waitUntil?: LoadState | 'networkidle0'
   }
 /** One call's resolved timeout and the signal that aborts it (`Frame._wait`). */
-export type Wait = { timeout: number; signal?: SignalLike }
+export type Wait = Resolved & { signal?: SignalLike }
 export type UrlMatcher = string | RegExp | ((url: unknown) => unknown)
 
 /** Ops that take a selector-built target and a strictness. */
@@ -725,17 +725,23 @@ export class Frame extends EventEmitter {
     )
   }
 
-  /** The same as `page.waitForTimeout`: a sleep, then the working pages' trees (FR-1). */
+  /**
+   * The same as `page.waitForTimeout`: a sleep, then the trees of the pages the script used
+   * (FR-1).
+   */
   async waitForTimeout(timeout: number): Promise<void> {
     await sleep('frame.waitForTimeout', timeout)
-    await this._page._context._refreshWorkingFrames('frame.waitForTimeout')
+    await this._page._context._refreshUsedFrames('frame.waitForTimeout')
   }
 
   // ---- internals shared with Page and Locator -----------------------------------------
 
-  /** The header for one op, with a Playwright timeout already resolved. */
-  _call(api: string, timeout: number): CallHeader {
-    return { api, timeoutMs: timeoutMs(api, timeout) }
+  /**
+   * The header for one op, with a Playwright timeout already resolved: a `Wait` carries the
+   * built-in stamp with it (`headerTimeout`), a bare number never does.
+   */
+  _call(api: string, timeout: number | Resolved): CallHeader {
+    return { api, ...headerTimeout(api, timeout) }
   }
 
   _timeout(options: TimeoutOption | undefined): number {
@@ -750,7 +756,10 @@ export class Frame extends EventEmitter {
     api: string,
     options: (TimeoutOption & SignalOption) | undefined,
   ): Wait {
-    return { timeout: this._timeout(options), signal: signalOf(api, options) }
+    return {
+      ...this._page._timeoutSettings.resolved(options),
+      signal: signalOf(api, options),
+    }
   }
 
   _navigationTimeout(options: TimeoutOption | undefined): number {
@@ -776,7 +785,7 @@ export class Frame extends EventEmitter {
    * whether a second match fails. A described op spreads it into its `send` literal, resolved
    * before the call header as `_selectorOp` does:
    * `const addressed = await this._targetArgs(api, selector, strict)` then
-   * `send[op](site, this._call(api, wait.timeout), { ...addressed, ...fields }, wait.signal)`.
+   * `send[op](site, this._call(api, wait), { ...addressed, ...fields }, wait.signal)`.
    * The op's own fields stay checked against Rust's input type; the spread ones are typed.
    * Capture the script's field values before awaiting this address: branding can open a page,
    * during which a caller could mutate its option bag.
@@ -809,13 +818,7 @@ export class Frame extends EventEmitter {
       ...(await this._targetArgs(api, selector, strict)),
       ...args,
     } as OpInputs[Op]
-    return await invoke(
-      op,
-      site,
-      this._call(api, wait.timeout),
-      input,
-      wait.signal,
-    )
+    return await invoke(op, site, this._call(api, wait), input, wait.signal)
   }
 
   async _click(
@@ -832,7 +835,7 @@ export class Frame extends EventEmitter {
     const addressed = await this._targetArgs(api, selector, strict)
     const result = await send['locator.click'](
       site,
-      this._call(api, wait.timeout),
+      this._call(api, wait),
       { ...addressed, ...picked },
       wait.signal,
     )
@@ -870,7 +873,7 @@ export class Frame extends EventEmitter {
     const addressed = await this._targetArgs(api, selector, strict)
     await send['locator.dblclick'](
       site,
-      this._call(api, wait.timeout),
+      this._call(api, wait),
       { ...addressed, ...picked },
       wait.signal,
     )
@@ -888,7 +891,7 @@ export class Frame extends EventEmitter {
     const addressed = await this._targetArgs(api, selector, strict)
     await send['locator.hover'](
       site,
-      this._call(api, wait.timeout),
+      this._call(api, wait),
       { ...addressed, ...picked },
       wait.signal,
     )
@@ -909,7 +912,7 @@ export class Frame extends EventEmitter {
     const addressed = await this._targetArgs(api, selector, strict)
     await send[op](
       site,
-      this._call(api, wait.timeout),
+      this._call(api, wait),
       { ...addressed, ...picked },
       wait.signal,
     )
@@ -930,7 +933,7 @@ export class Frame extends EventEmitter {
     const addressed = await this._targetArgs(api, source, strict)
     await send['locator.dragTo'](
       site,
-      this._call(api, wait.timeout),
+      this._call(api, wait),
       { ...addressed, to, ...picked },
       wait.signal,
     )
@@ -951,7 +954,7 @@ export class Frame extends EventEmitter {
     const addressed = await this._targetArgs(api, selector, strict)
     await send['locator.fill'](
       site,
-      this._call(api, wait.timeout),
+      this._call(api, wait),
       { ...addressed, value, ...picked },
       wait.signal,
     )
@@ -970,7 +973,7 @@ export class Frame extends EventEmitter {
     const addressed = await this._targetArgs(api, selector, strict)
     await send['locator.press'](
       site,
-      this._call(api, wait.timeout),
+      this._call(api, wait),
       { ...addressed, key, ...picked },
       wait.signal,
     )
@@ -990,7 +993,7 @@ export class Frame extends EventEmitter {
     const addressed = await this._targetArgs(api, selector, strict)
     await send['locator.pressSequentially'](
       site,
-      this._call(api, wait.timeout),
+      this._call(api, wait),
       { ...addressed, text, ...picked },
       wait.signal,
     )
@@ -1007,7 +1010,7 @@ export class Frame extends EventEmitter {
     const addressed = await this._targetArgs(api, selector, strict)
     await send['locator.focus'](
       site,
-      this._call(api, wait.timeout),
+      this._call(api, wait),
       { ...addressed },
       wait.signal,
     )
@@ -1024,7 +1027,7 @@ export class Frame extends EventEmitter {
     const addressed = await this._targetArgs(api, selector, strict)
     await send['locator.blur'](
       site,
-      this._call(api, wait.timeout),
+      this._call(api, wait),
       { ...addressed },
       wait.signal,
     )
@@ -1046,7 +1049,7 @@ export class Frame extends EventEmitter {
     const addressed = await this._targetArgs(api, selector, strict)
     return await send['locator.selectOption'](
       site,
-      this._call(api, wait.timeout),
+      this._call(api, wait),
       {
         ...addressed,
         options: converted.options.length ? converted.options : undefined,
@@ -1071,7 +1074,7 @@ export class Frame extends EventEmitter {
     const addressed = await this._targetArgs(api, selector, strict)
     await send['locator.selectText'](
       site,
-      this._call(api, wait.timeout),
+      this._call(api, wait),
       { ...addressed, ...picked },
       wait.signal,
     )
@@ -1099,7 +1102,7 @@ export class Frame extends EventEmitter {
       const addressed = await this._targetArgs(api, selector, true)
       return await send['locator.drop'](
         site,
-        this._call(api, wait.timeout),
+        this._call(api, wait),
         { ...addressed, files, data, position },
         wait.signal,
       )
@@ -1121,7 +1124,7 @@ export class Frame extends EventEmitter {
       const addressed = await this._targetArgs(api, selector, strict)
       return await send['locator.setInputFiles'](
         site,
-        this._call(api, wait.timeout),
+        this._call(api, wait),
         { ...addressed, files: input },
         wait.signal,
       )
@@ -1142,7 +1145,7 @@ export class Frame extends EventEmitter {
     const addressed = await this._targetArgs(api, selector, strict)
     await send['locator.dispatchEvent'](
       site,
-      this._call(api, wait.timeout),
+      this._call(api, wait),
       { ...addressed, type, eventInit: init },
       wait.signal,
     )
@@ -1159,7 +1162,7 @@ export class Frame extends EventEmitter {
     const addressed = await this._targetArgs(api, selector, strict)
     await send['locator.scrollIntoViewIfNeeded'](
       site,
-      this._call(api, wait.timeout),
+      this._call(api, wait),
       { ...addressed },
       wait.signal,
     )
@@ -1184,7 +1187,7 @@ export class Frame extends EventEmitter {
     const addressed = await this._targetArgs(api, selector, strict)
     return await send[op](
       site,
-      this._call(api, wait.timeout),
+      this._call(api, wait),
       { ...addressed },
       wait.signal,
     )
@@ -1202,7 +1205,7 @@ export class Frame extends EventEmitter {
     const addressed = await this._targetArgs(api, selector, strict)
     return await send['locator.getAttribute'](
       site,
-      this._call(api, wait.timeout),
+      this._call(api, wait),
       { ...addressed, name },
       wait.signal,
     )
@@ -1260,7 +1263,7 @@ export class Frame extends EventEmitter {
     const addressed = await this._targetArgs(api, selector, true)
     return await send['locator.boundingBox'](
       site,
-      this._call(api, wait.timeout),
+      this._call(api, wait),
       { ...addressed },
       wait.signal,
     )
@@ -1294,7 +1297,7 @@ export class Frame extends EventEmitter {
     const addressed = await this._targetArgs(api, selector, strict)
     const handle = await send['locator.waitFor'](
       site,
-      this._call(api, wait.timeout),
+      this._call(api, wait),
       { ...addressed, state, omitReturnValue },
       wait.signal,
     )
@@ -1316,13 +1319,13 @@ export class Frame extends EventEmitter {
     const handle = immediate
       ? await send['locator.elementHandle'](
           site,
-          this._call(api, wait.timeout),
+          this._call(api, wait),
           { ...addressed },
           wait.signal,
         )
       : await send['locator.waitFor'](
           site,
-          this._call(api, wait.timeout),
+          this._call(api, wait),
           { ...addressed, state: 'attached', omitReturnValue: false },
           wait.signal,
         )
@@ -1363,7 +1366,7 @@ export class Frame extends EventEmitter {
   ): Promise<unknown> {
     const wait: Wait = noWait ? { timeout: 0 } : this._wait(api, options)
     const addressed = await this._targetArgs(api, selector, strict)
-    const call = this._call(api, wait.timeout)
+    const call = this._call(api, wait)
     // `$eval` is upstream's `Frame.evalOnSelector`; a locator's evaluate waits for its element
     // and then evaluates on it, upstream's `JSHandle.evaluateExpression`.
     const value = noWait
@@ -1419,7 +1422,7 @@ export class Frame extends EventEmitter {
       const addressed = await this._targetArgs(api, selector, true)
       return await send['locator.ariaSnapshot'](
         site,
-        this._call(api, wait.timeout),
+        this._call(api, wait),
         { ...addressed, mode, depth, boxes, ...marking },
         wait.signal,
       )
@@ -1431,7 +1434,7 @@ export class Frame extends EventEmitter {
       )
     return await send['page.ariaSnapshot'](
       site,
-      this._call(api, wait.timeout),
+      this._call(api, wait),
       {
         page: await this._page._brand(api),
         mode,
@@ -1832,7 +1835,7 @@ export class Frame extends EventEmitter {
     // undefined field.
     const { value, preview } = await send['page.waitForFunction'](
       site,
-      this._call(api, wait.timeout),
+      this._call(api, wait),
       {
         page,
         frame,

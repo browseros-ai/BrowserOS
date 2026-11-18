@@ -829,6 +829,17 @@ class MetadataTests(unittest.TestCase):
         self.environment.update(NEO_SDK_SOURCE_ROOT=str(self.root), NEO_SDK_SOURCE_REVISION="a" * 40,
                                 NEO_SDK_SOURCE_DIRTY="true")
 
+    def test_image_jobs_use_the_frozen_recipe_when_present(self):
+        args = ["--platform", "linux/arm64"]
+        self.assertEqual(["bash", remote.HELPER + "recipes.sh", "image", *args],
+                         remote.command_for("viewer-image", ["linux/arm64"], self.agent))
+        recipe = "tools/remote-builds/recipes.sh"
+        (self.agent / recipe).parent.mkdir(parents=True)
+        shutil.copyfile(HERE / "recipes.sh", self.agent / recipe)
+        self.assertEqual(["bash", recipe, "image", *args],
+                         remote.command_for("viewer-image", ["linux/arm64"], self.agent))
+        self.assertEqual(["bash", recipe, "image"], remote.command_for("image", [], self.agent))
+
     def test_image_builder_accepts_metadata_without_calling_git_and_keeps_digest_check(self):
         binary = b"binary browseros-claw-sdk-source=" + b"b" * 64
         import hashlib

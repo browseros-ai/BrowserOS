@@ -193,3 +193,44 @@ describe('the skill page without ultrafast', () => {
     expect(link('See ultrafast')).toBeUndefined()
   })
 })
+
+describe('the skill page with ultrafast', () => {
+  function heading(): string | undefined {
+    return [...container.querySelectorAll('h2')]
+      .map((candidate) => (candidate.textContent ?? '').trim())
+      .find((candidate) => candidate.startsWith('ultrafast'))
+  }
+
+  it('tests that a verified skill names ultrafast and its speed, and asks how it runs', async () => {
+    ultrafast = {
+      ...ultrafast,
+      runs: {
+        mode: 'with_agent',
+        chosen: false,
+        reask: false,
+        click: 'Add it to the cart.',
+        site: 'shop.example.com',
+      },
+    }
+    await mount()
+
+    expect(heading()).toBe('ultrafast')
+    expect(text()).toContain('ultrafast about 1.2 s a run')
+    expect(text()).not.toContain('Ultrafast')
+    expect(text()).toContain('Choose how it runs')
+    expect(text()).toContain('Without your agent ultrafast')
+    const names = [...container.querySelectorAll('[aria-labelledby]')].map(
+      (radio) =>
+        document.getElementById(radio.getAttribute('aria-labelledby') ?? '')
+          ?.textContent,
+    )
+    expect(names).toEqual(['With your agent', 'Without your agent'])
+  })
+
+  it('tests that a skill that needs a repair says so beside the wordmark', async () => {
+    ultrafast = { ...ultrafast, status: 'degraded' }
+    await mount()
+
+    expect(heading()).toBe('ultrafast needs a repair')
+  })
+})

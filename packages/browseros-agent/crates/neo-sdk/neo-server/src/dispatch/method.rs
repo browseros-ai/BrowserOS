@@ -119,7 +119,8 @@ pub(crate) enum PageScript {
 pub(crate) enum Lifetime {
     /// Listed in the run's "still running when the script returned" line.
     Operation,
-    /// Prelude listener setup or a long poll that the run's end cuts quietly: cancelled with
-    /// no error on its record, no line in the run's reply, and nothing in its effects.
+    /// Prelude listener setup, a long poll, or a frame-tree read the script did not wait for,
+    /// which the run's end cuts quietly: cancelled with no error on its record, no line in the
+    /// run's reply, and nothing in its effects.
     Background,
 }

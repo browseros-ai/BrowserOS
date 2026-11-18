@@ -750,52 +750,52 @@ async fn tests_that_max_length_minus_one_fills_only_a_box_with_none() -> TestRes
     Ok(())
 }
 
-/// The card value of ruling R50's rows, and its bullets.
-const FOLLOWED: &str = "4242424242424242";
+/// A fixed card-shaped value for private-entry checks.
+const CARD_VALUE: &str = "4242424242424242";
 
-/// What Neo's `inputValue()` answers for the box `r#ref` names: a read through the mask.
-async fn masked_value(bench: &Bench, opened: &Opened, r#ref: &str) -> TestResult<String> {
-    let target = ref_target(&opened.page.brand(), r#ref);
-    let read = bench
-        .live
-        .invoke("locator.inputValue", input_value(&target))
-        .await??;
-    Ok(read.as_str().unwrap_or_default().to_owned())
-}
-
-/// Ruling R50's row 18: after a private fill the page puts two new elements in the box's place,
-/// each holding the value and mirroring it into its `value` attribute, as a framework does for a
-/// controlled input. A click on a locator that finds both fails strict mode, with no read through
-/// the mask before it: its message and call log preview both as `value="<16 characters>"`, never
-/// the value. Main prints the value there, with or without a snapshot between (measured by the
-/// design's keeper on main 579b45ccf). Fails with the scan run before the five reads alone: no
-/// read came between, so the preview prints the value.
+/// A copy the page makes into an undeclared box prints its value in direct reads,
+/// snapshots and error previews. The original node keeps its private-fill mark in both modes.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
-async fn tests_that_an_error_preview_masks_a_box_the_page_re_created() -> TestResult {
+async fn tests_that_a_copied_value_prints_while_the_typed_box_keeps_its_mark() -> TestResult {
     let bench = Bench::start().await?;
-    let marker = format!("value=\"<{} characters>\"", FOLLOWED.len());
+    let opened = bench
+        .open("/private/copied-value.html", Place::Front)
+        .await?;
+    let original = bench.r#ref(&opened, "textbox", "Original").await?;
+    let copy = bench.r#ref(&opened, "textbox", "Copy").await?;
+    let env = bench.host(&opened);
+    let field = Field::new(&original, &bench.page_origin).with(CARD_VALUE)?;
+    let entry = bench.enter(&env, &opened, vec![field]).await;
+    assert_eq!(entry.outcome, EntryOutcome::Entered, "{entry:?}");
+    bench.live.main_world(&opened.page, "copyValue()").await?;
+    let bullets = "•".repeat(CARD_VALUE.len());
+    let page = opened.page.brand();
     for conformance in [false, true] {
-        let opened = bench
-            .open("/private/mark-follows.html", Place::Front)
-            .await?;
-        let card = bench.r#ref(&opened, "textbox", "Card").await?;
-        let env = bench.host(&opened);
-        let field = Field::new(&card, &bench.page_origin).with(FOLLOWED)?;
-        let entry = bench.enter(&env, &opened, vec![field]).await;
-        assert_eq!(entry.outcome, EntryOutcome::Entered, "{entry:?}");
-        bench
+        for (field_ref, expected) in [(&original, bullets.as_str()), (&copy, CARD_VALUE)] {
+            let mut input = input_value(&ref_target(&page, field_ref));
+            input["call"]["conformance"] = json!(conformance);
+            let read = bench.live.invoke("locator.inputValue", input).await??;
+            assert_eq!(
+                read,
+                json!(expected),
+                "inputValue conformance={conformance}"
+            );
+        }
+        let tree = bench
             .live
-            .main_world(&opened.page, "recreateMirrored()")
-            .await?;
-        let mirrors = json!({
-            "$neo": "locator", "page": opened.page.brand(),
-            "chunks": [{ "parts": [{ "name": "css", "body": [{ "simples": [{ "selector": { "css": "input.mirror", "functions": [] }, "combinator": "" }] }], "source": "input.mirror" }] }],
-            "display": "locator('input.mirror')",
-        });
+            .invoke("page.ariaSnapshot", page_snapshot(&page, conformance))
+            .await??;
+        let original_line = printed_node(&tree, "Original").ok_or("snapshot prints Original")?;
+        let copy_line = printed_node(&tree, "Copy").ok_or("snapshot prints Copy")?;
+        assert!(
+            original_line.contains(&bullets) && !original_line.contains(CARD_VALUE),
+            "{original_line}"
+        );
+        assert!(copy_line.contains(CARD_VALUE), "{copy_line}");
         let input = json!({
             "call": { "api": "locator.click", "timeoutMs": 700, "conformance": conformance },
-            "target": mirrors, "strict": "strict",
+            "target": css_target(&page, &["input"]), "strict": "strict",
         });
         let failure = preview_failure(&bench, &opened, "locator.click", input).await?;
         assert!(
@@ -803,280 +803,15 @@ async fn tests_that_an_error_preview_masks_a_box_the_page_re_created() -> TestRe
             "{}",
             failure.message
         );
-        assert!(failure.message.contains(&marker), "{}", failure.message);
-        for text in iter::once(&failure.message).chain(&failure.notes) {
-            assert!(
-                !text.contains(FOLLOWED),
-                "the preview printed the value: {text}"
-            );
-        }
-        bench.close(opened).await?;
-    }
-    Ok(())
-}
-
-/// Ruling R50's row 13c, modelled on a real pin widget: a code given to its first box is spread
-/// one character to each of four boxes, and the whole code is mirrored into an input the widget
-/// submits. The read-back finds the box holding one character, so the fill is not entered; the
-/// digest of the value the box was given masks the mirror, in an element's read and in the
-/// whole-page snapshot. Another box prints its one character: a named limit, and the contract
-/// tells a host to fill such a widget one box at a time. Fails with no digest kept of what the
-/// box was given: the mirror prints the code.
-#[tokio::test]
-#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
-async fn tests_that_the_mark_follows_a_code_a_widget_mirrors() -> TestResult {
-    const CODE: &str = "7391";
-    let bench = Bench::start().await?;
-    let opened = bench.open("/private/pin-mirror.html", Place::Front).await?;
-    let first = bench.r#ref(&opened, "textbox", "Digit 1").await?;
-    let env = bench.host(&opened);
-    let field = Field::new(&first, &bench.page_origin).with(CODE)?;
-    let entry = bench.enter(&env, &opened, vec![field]).await;
-    assert_ne!(
-        entry.outcome,
-        EntryOutcome::Entered,
-        "the widget spread it: {entry:?}"
-    );
-    let whole = bench.r#ref(&opened, "textbox", "Whole code").await?;
-    assert_eq!(
-        masked_value(&bench, &opened, &whole).await?,
-        "••••",
-        "the mirror"
-    );
-    assert_eq!(
-        masked_value(&bench, &opened, &first).await?,
-        "•",
-        "the box the code was given to"
-    );
-    let second = bench.r#ref(&opened, "textbox", "Digit 2").await?;
-    assert_eq!(
-        masked_value(&bench, &opened, &second).await?,
-        "3",
-        "the named limit: one character in another box"
-    );
-    let page = &opened.page;
-    let printed = bench
-        .live
-        .invoke("page.ariaSnapshot", page_snapshot(&page.brand(), false))
-        .await??
-        .to_string();
-    assert!(
-        !printed.contains(CODE),
-        "the snapshot prints no code: {printed}"
-    );
-    bench.close(opened).await
-}
-
-/// Ruling R50's row 13b: the page moves a part of the text, all but its first character, into
-/// another box and focuses it, inside the box's input event, so the read-back finds the box empty
-/// and marks the control that holds the focus (markFocused). That control reads as bullets, as on
-/// main, and so does a clone the page makes of it afterwards: markFocused keeps a digest of what
-/// the control holds. The part is not the value the box was given, so that digest alone masks
-/// the clone. Fails with the digest left out of markFocused (the clone prints the part).
-#[tokio::test]
-#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
-async fn tests_that_the_mark_follows_the_value_into_a_clone_of_the_focused_control() -> TestResult {
-    let bench = Bench::start().await?;
-    // The page moves all but the first character.
-    let bullets = "•".repeat(FOLLOWED.len() - 1);
-    let opened = bench.open("/private/mark-moves.html", Place::Front).await?;
-    let mover = bench.r#ref(&opened, "textbox", "Mover").await?;
-    let catch = bench.r#ref(&opened, "textbox", "Catch").await?;
-    let env = bench.host(&opened);
-    let field = Field::new(&mover, &bench.page_origin).with(FOLLOWED)?;
-    let entry = bench.enter(&env, &opened, vec![field]).await;
-    assert_ne!(
-        entry.outcome,
-        EntryOutcome::Entered,
-        "the text moved: {entry:?}"
-    );
-    assert_eq!(
-        masked_value(&bench, &opened, &catch).await?,
-        bullets,
-        "the control that holds the focus"
-    );
-    bench.live.main_world(&opened.page, "cloneCatch()").await?;
-    let twin = bench.r#ref(&opened, "textbox", "Caught twin").await?;
-    assert_eq!(
-        masked_value(&bench, &opened, &twin).await?,
-        bullets,
-        "a clone of it"
-    );
-    bench.close(opened).await
-}
-
-/// Ruling R50's rows 11, 12, 13, 15 and 16: the mark follows the value. After a private fill of
-/// the Card box, every text control of the document that holds the value reads as bullets
-/// through Neo's reads, though only the Card box carries the mark: a second box the page copies
-/// it into while the Card box still holds it (no new power: the page holds it), a clone, a copy
-/// the page groups with spaces, and a new element the page puts in the Card box's place, also in
-/// a whole-page snapshot, and `toHaveValue` compares it against the bullets. After a reload, a
-/// new document keeps no digest: a box set to the value reads it. Fails with the digest compare
-/// taken out of the mask: each copy reads the value.
-#[tokio::test]
-#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
-async fn tests_that_the_mark_follows_the_value_into_copies() -> TestResult {
-    let bench = Bench::start().await?;
-    let bullets = "•".repeat(FOLLOWED.len());
-    let opened = bench
-        .open("/private/mark-follows.html", Place::Front)
-        .await?;
-    let card = bench.r#ref(&opened, "textbox", "Card").await?;
-    let copy = bench.r#ref(&opened, "textbox", "Copy").await?;
-    let env = bench.host(&opened);
-    let field = Field::new(&card, &bench.page_origin).with(FOLLOWED)?;
-    let entry = bench.enter(&env, &opened, vec![field]).await;
-    assert_eq!(entry.outcome, EntryOutcome::Entered, "{entry:?}");
-    let page = &opened.page;
-    // Row 15: a second box set to the value while the filled box still holds it.
-    bench.live.main_world(page, "copyCard(false)").await?;
-    assert_eq!(
-        masked_value(&bench, &opened, &copy).await?,
-        bullets,
-        "the copy"
-    );
-    // Row 13: a copy the page groups with spaces.
-    bench.live.main_world(page, "copyCard(true)").await?;
-    let grouped = "•".repeat(FOLLOWED.len() + 3);
-    assert_eq!(
-        masked_value(&bench, &opened, &copy).await?,
-        grouped,
-        "the grouped copy"
-    );
-    // Row 12: a clone.
-    bench.live.main_world(page, "cloneCard()").await?;
-    let twin = bench.r#ref(&opened, "textbox", "Twin").await?;
-    assert_eq!(
-        masked_value(&bench, &opened, &twin).await?,
-        bullets,
-        "the clone"
-    );
-    // Row 11: a new element in the box's place, also in a whole-page snapshot, and toHaveValue.
-    bench.live.main_world(page, "recreate()").await?;
-    let fresh = bench.r#ref(&opened, "textbox", "Fresh").await?;
-    assert_eq!(
-        masked_value(&bench, &opened, &fresh).await?,
-        bullets,
-        "the new box"
-    );
-    let printed = bench
-        .live
-        .invoke("page.ariaSnapshot", page_snapshot(&page.brand(), false))
-        .await??
-        .to_string();
-    assert!(
-        !printed.contains(FOLLOWED),
-        "the snapshot prints no value: {printed}"
-    );
-    let same_as_bullets = expectation(
-        ("target", ref_target(&page.brand(), &fresh)),
-        "toHaveValue",
-        &json!({ "expression": "to.have.value", "isNot": false,
-            "expectedText": [{ "string": bullets }] }),
-    );
-    bench
-        .live
-        .invoke("expect.locator", same_as_bullets)
-        .await??;
-    // Row 16: a new document keeps no digest.
-    bench.live.main_world(page, "location.reload()").await?;
-    time::sleep(Duration::from_millis(500)).await;
-    bench
-        .live
-        .main_world(
-            page,
-            &format!("document.getElementById('copy').value = '{FOLLOWED}'"),
-        )
-        .await?;
-    let copy = bench.r#ref(&opened, "textbox", "Copy").await?;
-    assert_eq!(
-        masked_value(&bench, &opened, &copy).await?,
-        FOLLOWED,
-        "after a reload"
-    );
-    bench.close(opened).await
-}
-
-/// Ruling R50's row 14, one guess at most: after a private fill the page empties every box that
-/// held the value, and a script makes ten guesses, each by setting the Guess box and reading it
-/// with `inputValue()`, with no whole-page snapshot between. With the right value fifth, none of
-/// the ten reads bullets: the first wrong guess's read forgot the digest. With the right value
-/// first, that one read is bullets (the value is on the page again), and no later read can be,
-/// the right value again included. Fails with forgetting taken out, or done only at a whole-page
-/// snapshot: the fifth guess reads bullets.
-#[tokio::test]
-#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
-async fn tests_that_a_value_that_left_can_be_guessed_once_at_most() -> TestResult {
-    let bench = Bench::start().await?;
-    for right_at in [5, 1] {
-        let opened = bench
-            .open("/private/mark-follows.html", Place::Front)
-            .await?;
-        let card = bench.r#ref(&opened, "textbox", "Card").await?;
-        let guess = bench.r#ref(&opened, "textbox", "Guess").await?;
-        let env = bench.host(&opened);
-        let field = Field::new(&card, &bench.page_origin).with(FOLLOWED)?;
-        let entry = bench.enter(&env, &opened, vec![field]).await;
-        assert_eq!(entry.outcome, EntryOutcome::Entered, "{entry:?}");
-        bench.live.main_world(&opened.page, "emptyAll()").await?;
-        let mut masked = Vec::new();
-        for attempt in 1..=10 {
-            let text = if attempt == right_at || (right_at == 1 && attempt == 6) {
-                FOLLOWED.to_owned()
-            } else {
-                format!("42424242424242{attempt:02}")
-            };
-            bench
-                .live
-                .main_world(&opened.page, &format!("guess('{text}')"))
-                .await?;
-            if masked_value(&bench, &opened, &guess)
-                .await?
-                .starts_with('•')
-            {
-                masked.push(attempt);
-            }
-        }
-        let wanted: Vec<i32> = if right_at == 1 { vec![1] } else { Vec::new() };
-        assert_eq!(
-            masked, wanted,
-            "right value at guess {right_at}: the guesses read as bullets"
+        assert!(failure.message.contains(CARD_VALUE), "{}", failure.message);
+        assert!(
+            failure
+                .message
+                .contains(&format!("<{} characters>", CARD_VALUE.len())),
+            "{}",
+            failure.message
         );
-        bench.close(opened).await?;
     }
-    Ok(())
-}
-
-/// Ruling R50's row 13a: a page that keeps four characters of what was typed (`value_not_taken`)
-/// then puts a new box in its place that holds them. The digest was kept of what the box held at
-/// its read-back, so the new box reads as bullets. Fails with a digest kept only when the box
-/// holds the value it was given: the new box reads the four characters.
-#[tokio::test]
-#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
-async fn tests_that_a_kept_part_of_the_value_is_masked_where_it_goes() -> TestResult {
-    let bench = Bench::start().await?;
-    let opened = bench.open("/private/rewrite.html", Place::Front).await?;
-    let code_box = bench.r#ref(&opened, "textbox", "Short code").await?;
-    let env = bench.host(&opened);
-    let field = Field::new(&code_box, &bench.page_origin).with("246813")?;
-    let entry = bench.enter(&env, &opened, vec![field]).await;
-    assert_eq!(code(&entry), Some("value_not_taken"), "{entry:?}");
-    bench
-        .live
-        .main_world(
-            &opened.page,
-            "(() => { const old = document.querySelector('input'); \
-             const fresh = document.createElement('input'); \
-             fresh.setAttribute('aria-label', 'Fresh code'); fresh.value = old.value; \
-             old.replaceWith(fresh) })()",
-        )
-        .await?;
-    let fresh = bench.r#ref(&opened, "textbox", "Fresh code").await?;
-    assert_eq!(
-        masked_value(&bench, &opened, &fresh).await?,
-        "••••",
-        "the new box"
-    );
     bench.close(opened).await
 }
 
@@ -1314,7 +1049,7 @@ async fn tests_that_a_box_whose_frame_does_not_answer_gets_no_boolean() -> TestR
     let env = bench.host(&opened);
     // The frame's own origin, approved, so only its silence keeps the compare from answering.
     let frame_origin = bench.page_origin.replace("127.0.0.1", "[::1]");
-    let mut request = compare_request(&opened, &busy, FOLLOWED, false, &frame_origin)?;
+    let mut request = compare_request(&opened, &busy, CARD_VALUE, false, &frame_origin)?;
     request.deadline = Instant::now() + Duration::from_secs(2);
     let answered = bench.live.playwright.look_boxes(&env, &request).await;
     match answered {
@@ -3241,9 +2976,8 @@ fn printed_node(tree: &Value, name: &str) -> Option<String> {
 /// still holds what it got. (a) keys: the box's keydown handler focuses the neighbour at the
 /// third key, which lands there: `focus_lost`. (b) one insertion: the box's input handler moves
 /// the value into the neighbour and focuses it: `value_not_taken`. (c) the same move with the
-/// focus on a button marks nothing, but the neighbour holds the whole value the entry was given,
-/// whose digest the read-back keeps (ruling R50), so it reads as bullets too. On a tab in front
-/// and behind.
+/// focus on a button marks nothing: the neighbour prints the copied value, the named limit
+/// of a copy the page makes. On a tab in front and behind.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_a_box_the_page_sends_the_value_into_is_marked_when_it_holds_the_focus()
@@ -3258,7 +2992,7 @@ async fn tests_that_a_box_the_page_sends_the_value_into_is_marked_when_it_holds_
         for (mode, keys, stop, neighbour_holds, masked) in [
             ("keys", true, "focus_lost", third.as_str(), true),
             ("insert", false, "value_not_taken", STRAY, true),
-            ("button", false, "value_not_taken", STRAY, true),
+            ("button", false, "value_not_taken", STRAY, false),
         ] {
             let case = format!("{place:?} {mode}");
             let opened = bench

@@ -193,14 +193,22 @@ it('keeps explicit selector-wait fields and reads the renamed normalize reply', 
   expect(result).toBe(1)
   expect(runtime.sent('locator.waitFor').map(({ input }) => input)).toEqual([
     {
-      call: { api: 'page.waitForSelector', timeoutMs: 30000 },
+      call: {
+        api: 'page.waitForSelector',
+        timeoutMs: 30000,
+        timeoutBuiltIn: true,
+      },
       target: TARGET,
       strict: 'firstMatch',
       state: 'visible',
       omitReturnValue: false,
     },
     {
-      call: { api: 'locator.waitFor', timeoutMs: 30000 },
+      call: {
+        api: 'locator.waitFor',
+        timeoutMs: 30000,
+        timeoutBuiltIn: true,
+      },
       target: TARGET,
       strict: 'strict',
       state: 'visible',

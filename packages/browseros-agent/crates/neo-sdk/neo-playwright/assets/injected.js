@@ -10162,161 +10162,6 @@ ${value.stack}`;
     };
   }
 
-  // crates/neo-sdk/neo-playwright-js/src/probe/private-digest.ts
-  var key;
-  var kept = new Map;
-  var holders = new WeakSet;
-  function setAside(text) {
-    return text.replace(/[\s\-/]/g, "");
-  }
-  function keepDigest(text) {
-    const bare = setAside(text);
-    if (!bare)
-      return;
-    key ??= crypto.getRandomValues(new Uint32Array(4));
-    kept.set(digest(key, bare), bare.length);
-  }
-  function keepsDigests() {
-    return kept.size > 0;
-  }
-  function noteHolders(document2) {
-    holders = new WeakSet;
-    if (!key || kept.size === 0)
-      return;
-    const lengths = new Set(kept.values());
-    const held = new Set;
-    for (const control of textControls(document2)) {
-      const bare = setAside(control.value);
-      if (!lengths.has(bare.length))
-        continue;
-      const found = digest(key, bare);
-      if (!kept.has(found))
-        continue;
-      held.add(found);
-      holders.add(control);
-    }
-    for (const known of kept.keys())
-      if (!held.has(known))
-        kept.delete(known);
-  }
-  function holdsKeptValue(element) {
-    return holders.has(element);
-  }
-  var NOT_TEXT = new Set([
-    "button",
-    "checkbox",
-    "color",
-    "file",
-    "image",
-    "radio",
-    "range",
-    "reset",
-    "submit"
-  ]);
-  function* textControls(document2) {
-    const roots = [document2];
-    for (const root of roots) {
-      for (const element of root.querySelectorAll("*")) {
-        if (element instanceof HTMLTextAreaElement)
-          yield element;
-        else if (element instanceof HTMLInputElement && !NOT_TEXT.has(element.type))
-          yield element;
-        const shadow = element.shadowRoot;
-        if (shadow)
-          roots.push(shadow);
-      }
-    }
-  }
-  function digest(secret, text) {
-    const bytes = new Uint8Array(text.length * 2);
-    for (let index = 0;index < text.length; index++) {
-      const unit = text.charCodeAt(index);
-      bytes[index * 2] = unit & 255;
-      bytes[index * 2 + 1] = unit >>> 8;
-    }
-    const [hash0, hash1] = sipHash24(secret, bytes);
-    return `${hash1.toString(16)}:${hash0.toString(16)}`;
-  }
-  function sipHash24(secret, bytes) {
-    const k0lo = secret[0] ?? 0;
-    const k0hi = secret[1] ?? 0;
-    const k1lo = secret[2] ?? 0;
-    const k1hi = secret[3] ?? 0;
-    const v = new Uint32Array([
-      (k0lo ^ 1886610805) >>> 0,
-      (k0hi ^ 1936682341) >>> 0,
-      (k1lo ^ 1852075885) >>> 0,
-      (k1hi ^ 1685025377) >>> 0,
-      (k0lo ^ 1852142177) >>> 0,
-      (k0hi ^ 1819895653) >>> 0,
-      (k1lo ^ 2037671283) >>> 0,
-      (k1hi ^ 1952801890) >>> 0
-    ]);
-    const word = (at) => ((bytes[at] ?? 0) | (bytes[at + 1] ?? 0) << 8 | (bytes[at + 2] ?? 0) << 16 | (bytes[at + 3] ?? 0) << 24) >>> 0;
-    const absorb = (lo, hi) => {
-      v[6] = (v[6] ?? 0) ^ lo;
-      v[7] = (v[7] ?? 0) ^ hi;
-      round(v);
-      round(v);
-      v[0] = (v[0] ?? 0) ^ lo;
-      v[1] = (v[1] ?? 0) ^ hi;
-    };
-    const whole = bytes.length - bytes.length % 8;
-    for (let at = 0;at < whole; at += 8)
-      absorb(word(at), word(at + 4));
-    const last = new Uint8Array(8);
-    last.set(bytes.subarray(whole));
-    last[7] = bytes.length & 255;
-    const lastLo = ((last[0] ?? 0) | (last[1] ?? 0) << 8 | (last[2] ?? 0) << 16 | (last[3] ?? 0) << 24) >>> 0;
-    const lastHi = ((last[4] ?? 0) | (last[5] ?? 0) << 8 | (last[6] ?? 0) << 16 | (last[7] ?? 0) << 24) >>> 0;
-    absorb(lastLo, lastHi);
-    v[4] = (v[4] ?? 0) ^ 255;
-    round(v);
-    round(v);
-    round(v);
-    round(v);
-    const lo = ((v[0] ?? 0) ^ (v[2] ?? 0) ^ (v[4] ?? 0) ^ (v[6] ?? 0)) >>> 0;
-    const hi = ((v[1] ?? 0) ^ (v[3] ?? 0) ^ (v[5] ?? 0) ^ (v[7] ?? 0)) >>> 0;
-    return [lo, hi];
-  }
-  function round(v) {
-    add(v, 0, 2);
-    rotate(v, 2, 13);
-    xor(v, 2, 0);
-    rotate(v, 0, 32);
-    add(v, 4, 6);
-    rotate(v, 6, 16);
-    xor(v, 6, 4);
-    add(v, 0, 6);
-    rotate(v, 6, 21);
-    xor(v, 6, 0);
-    add(v, 4, 2);
-    rotate(v, 2, 17);
-    xor(v, 2, 4);
-    rotate(v, 4, 32);
-  }
-  function add(v, into, from) {
-    const lo = (v[into] ?? 0) + (v[from] ?? 0);
-    const carry = lo > 4294967295 ? 1 : 0;
-    v[into] = lo >>> 0;
-    v[into + 1] = (v[into + 1] ?? 0) + (v[from + 1] ?? 0) + carry >>> 0;
-  }
-  function xor(v, into, from) {
-    v[into] = ((v[into] ?? 0) ^ (v[from] ?? 0)) >>> 0;
-    v[into + 1] = ((v[into + 1] ?? 0) ^ (v[from + 1] ?? 0)) >>> 0;
-  }
-  function rotate(v, at, bits) {
-    const lo = v[at] ?? 0;
-    const hi = v[at + 1] ?? 0;
-    if (bits === 32) {
-      v[at] = hi;
-      v[at + 1] = lo;
-      return;
-    }
-    v[at] = (lo << bits | hi >>> 32 - bits) >>> 0;
-    v[at + 1] = (hi << bits | lo >>> 32 - bits) >>> 0;
-  }
-
   // crates/neo-sdk/neo-playwright-js/src/probe/private-entry.ts
   var MARK = Symbol.for("neo.privatelyTyped");
   var anyMarked = false;
@@ -10325,10 +10170,10 @@ ${value.stack}`;
   var active = new Map;
   var drawnSlot;
   function privatelyTyped(element) {
-    return Object.hasOwn(element, MARK) || holdsKeptValue(element);
+    return Object.hasOwn(element, MARK);
   }
   function anyPrivatelyTyped() {
-    return anyMarked || keepsDigests();
+    return anyMarked;
   }
   function mark(element) {
     if (!Object.hasOwn(element, MARK))
@@ -10392,7 +10237,6 @@ ${value.stack}`;
     if (name !== "input" && name !== "textarea")
       return false;
     mark(holder);
-    keepDigest(heldText(holder));
     return true;
   }
   async function focus(world, pin, box, text, spaced) {
@@ -10478,10 +10322,6 @@ ${value.stack}`;
       state = "holds";
     else
       state = "other";
-    if (state !== "left")
-      keepDigest(heldText(box));
-    if (entry)
-      keepDigest(entry.text);
     if (state === "other")
       markFocused(box);
     const leaving = moving(entry);
@@ -10841,8 +10681,12 @@ ${value.stack}`;
     };
   }
 
+  // crates/neo-sdk/neo-playwright-js/src/probe/generated.ts
+  var MAX_REPLY_DEPTH = 297;
+  var SNAPSHOT_DEPTH_ERROR = "This tree is nested about {levels} levels deep, more than a snapshot carries (about 147). Pass { depth: n } with n of 140 or less to cut it there, or take a locator's snapshot of a smaller section.";
+
   // crates/neo-sdk/neo-playwright-js/src/probe/protocol.ts
-  var PROTOCOL = 52;
+  var PROTOCOL = 53;
 
   // crates/neo-sdk/neo-playwright-js/src/probe/read.ts
   var XHTML2 = "http://www.w3.org/1999/xhtml";
@@ -11042,6 +10886,68 @@ ${value.stack}`;
     }
   }
 
+  // crates/neo-sdk/neo-playwright-js/src/probe/reply-text.ts
+  var FALLBACK = '{"kind":"error","class":"internal","message":"Neo could not serialize the probe reply."}';
+  function replyDepth(text) {
+    let depth = 0;
+    let deepest = 0;
+    let quoted = false;
+    let escaped = false;
+    for (let index = 0;index < text.length; index++) {
+      const char = text[index];
+      if (quoted) {
+        if (escaped)
+          escaped = false;
+        else if (char === "\\")
+          escaped = true;
+        else if (char === '"')
+          quoted = false;
+      } else if (char === '"')
+        quoted = true;
+      else if (char === "[" || char === "{")
+        deepest = Math.max(deepest, ++depth);
+      else if (char === "]" || char === "}")
+        depth = Math.max(0, depth - 1);
+    }
+    return deepest;
+  }
+  function wellFormedReply(text) {
+    return text.replace(/\\\\|\\u[dD][89a-fA-F][0-9a-fA-F]{2}/g, (token) => token === "\\\\" ? token : "�");
+  }
+  function depthError(depth) {
+    const treeDepth = Math.floor((depth - 1) / 2);
+    return JSON.stringify({
+      kind: "error",
+      class: "unsupported",
+      treeDepth,
+      message: SNAPSHOT_DEPTH_ERROR.replace("{levels}", String(treeDepth))
+    });
+  }
+  function replyText(reply) {
+    try {
+      let text = JSON.stringify(reply);
+      if (text === undefined)
+        return FALLBACK;
+      let depth = replyDepth(text);
+      if (depth > MAX_REPLY_DEPTH) {
+        if (typeof reply === "object" && reply !== null && "kind" in reply && reply.kind === "cover" && "facts" in reply && typeof reply.facts === "object" && reply.facts !== null && "snapshot" in reply.facts) {
+          text = JSON.stringify({
+            ...reply,
+            facts: { ...reply.facts, snapshot: null }
+          });
+          if (text === undefined)
+            return FALLBACK;
+          depth = replyDepth(text);
+        }
+        if (depth > MAX_REPLY_DEPTH)
+          return depthError(depth);
+      }
+      return wellFormedReply(text);
+    } catch {
+      return FALLBACK;
+    }
+  }
+
   // crates/neo-sdk/neo-playwright-js/src/probe/screenshot.ts
   function screenshotMask(world, request, root) {
     world.injected.addMaskedElements(queryAll(world, request.target, root), request.color);
@@ -11118,17 +11024,20 @@ ${value.stack}`;
       };
     }
     const naming = performance.now();
+    const countedBeforeNaming = phases.count;
+    phases.count = 0;
     const centre = { x: innerWidth / 2, y: innerHeight / 2 };
     for (const face of found.values())
       face.named = shownAs(world, output, face.named, centre);
     const groups = joinFaces(found, inside).map((faces) => ({
       faces,
-      held: holdersOf(faces, inside)
+      ...holdersOf(faces, inside, page)
     }));
     const next = [];
     const layers = groups.map((group) => describeLayer(world, output, group, groups, remembered, next, tested, samples, inside)).filter((layer) => layer !== undefined).sort((a, b) => Number(b.note.wholeView) - Number(a.note.wholeView) || a.order - b.order).slice(0, MAX_LAYERS);
     memory.set(document2, next);
-    phases.naming += performance.now() - naming;
+    phases.naming += Math.max(0, performance.now() - naming - phases.count);
+    phases.count += countedBeforeNaming;
     const marksSkipped = markBlocks(world, json, layers, inside, phases);
     return {
       layers: layers.map(({ note }) => note),
@@ -11304,16 +11213,29 @@ ${value.stack}`;
     }
     return groups;
   }
-  function holdersOf(faces, inside) {
+  function holdersOf(faces, inside, page) {
     const shared = [...new Set(faces.flatMap((face) => [...face.roots]))].filter((root) => faces.filter((face) => face.roots.has(root)).length > 1);
     const held = shared.length ? shared : faces.map((face) => face.element);
-    for (const { named } of faces)
-      if (!held.some((root) => inside(root, named)))
-        held.push(named);
-    return held;
+    const controlsFrom = [...held];
+    for (const { named } of faces) {
+      if (!controlsFrom.some((root) => inside(root, named)))
+        controlsFrom.push(named);
+      if (held.some((root) => inside(root, named)))
+        continue;
+      const path = [];
+      for (let at = named;at; at = at.assignedSlot ?? parentOrHost2(at))
+        path.push(at);
+      let carrier = coverFace(path);
+      while (carrier && page(carrier)) {
+        path.splice(path.indexOf(carrier));
+        carrier = coverFace(path);
+      }
+      held.push(carrier ?? named);
+    }
+    return { held, controlsFrom };
   }
   function describeLayer(world, output, group, groups, remembered, next, tested, samples, inside) {
-    const { faces, held } = group;
+    const { faces, held, controlsFrom } = group;
     const face = faces.find((face) => isBlank(world, output, face.element)) ?? faces[0];
     if (!face)
       return;
@@ -11323,7 +11245,7 @@ ${value.stack}`;
     const belongs = (element) => held.some((root) => inside(root, element));
     const ownOfAny = (element) => groups.some(({ held }) => held.some((root) => inside(root, element)));
     const wholeView = samples.every(({ deepest }) => deepest && belongs(deepest)) && tested.every(({ element, clear }) => !clear || ownOfAny(element)) && tested.some(({ element, clear }) => !clear && !belongs(element));
-    const controls = Array.from(new Map(held.flatMap((root) => controlsOf(world, output, root)).map((control) => [control.ref, control])).values());
+    const controls = Array.from(new Map(controlsFrom.flatMap((root) => controlsOf(world, output, root)).map((control) => [control.ref, control])).values());
     const words = output.tree(named, () => renderedText(named).trim().replace(/\s+/g, " "));
     const blank = !inClosedPart(named) && controls.length === 0 && !words && isBlank(world, output, named);
     for (const member of faces)
@@ -11341,7 +11263,7 @@ ${value.stack}`;
         name: nameOf(world, output, named),
         ref: world.refs.forElement(named, world.seq),
         blank,
-        loading: held.some(saysLoading),
+        loading: controlsFrom.some(saysLoading),
         wholeView,
         controls,
         ...words ? { firstWords: Array.from(words).slice(0, 61).join("") } : {}
@@ -11875,36 +11797,56 @@ ${value.stack}`;
         return thrownReply(error);
       }
     }
+    function bootReply(options) {
+      const { frameSeq, epoch } = parseBootOptions(options);
+      if (world?.epoch === epoch)
+        return described2(world);
+      pins.clear();
+      refs.forget();
+      listenForMoves();
+      installShadowRoots();
+      const injected = createEngine(frameSeq);
+      injected.onGlobalListenersRemoved.add(listenForMoves);
+      refs.install(engineTable(injected), injected.utils);
+      const retired = world?.seq;
+      world = { epoch, seq: frameSeq, injected, pins, refs };
+      return retired === undefined ? described2(world) : { ...described2(world), retired };
+    }
+    function failedText(error) {
+      try {
+        return replyText(thrownReply(error));
+      } catch {
+        return replyText(undefined);
+      }
+    }
     return {
       boot(options) {
-        const { frameSeq, epoch } = parseBootOptions(options);
-        if (world?.epoch === epoch)
-          return described2(world);
-        pins.clear();
-        refs.forget();
-        listenForMoves();
-        installShadowRoots();
-        const injected = createEngine(frameSeq);
-        injected.onGlobalListenersRemoved.add(listenForMoves);
-        refs.install(engineTable(injected), injected.utils);
-        const retired = world?.seq;
-        world = { epoch, seq: frameSeq, injected, pins, refs };
-        return retired === undefined ? described2(world) : { ...described2(world), retired };
+        try {
+          return replyText(bootReply(options));
+        } catch (error) {
+          return failedText(error);
+        }
       },
       call(call, root, nodes) {
-        const booted = world;
-        if (!booted)
-          return UNINSTALLED;
-        if (!isProbeCall(call))
-          return errorReply("internal", "not a probe call");
-        const scope = root instanceof Node ? root : undefined;
-        const handed = Array.isArray(nodes) ? nodes : [];
-        return answer(booted, call, scope, handed);
+        try {
+          const booted = world;
+          if (isProbeCall(call) && call.request.op === "pinned")
+            return booted ? answer(booted, call, undefined, []) : UNINSTALLED;
+          if (!booted)
+            return replyText(UNINSTALLED);
+          if (!isProbeCall(call))
+            return replyText(errorReply("internal", "not a probe call"));
+          const scope = root instanceof Node ? root : undefined;
+          const handed = Array.isArray(nodes) ? nodes : [];
+          const reply = answer(booted, call, scope, handed);
+          return reply instanceof Promise ? reply.then(replyText, failedText) : replyText(reply);
+        } catch (error) {
+          return failedText(error);
+        }
       }
     };
   }
   function dispatch(world, op, request, root, nodes, output) {
-    noteHolders(document);
     const handler = HANDLERS[op];
     return handler(world, request, root, nodes, output);
   }

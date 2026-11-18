@@ -1,0 +1,15 @@
+[Unit]
+Description=Start one-job GitHub Actions runners on free pool machines
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+User=buildrunner
+Group=buildrunner
+ExecStart=/usr/bin/python3 /usr/local/lib/browseros-remote-builds/runners.py
+# A stopped dispatcher stops renewing its leases; the reaper then cancels its jobs.
+Restart=always
+RestartSec=15
+
+[Install]
+WantedBy=multi-user.target

@@ -44,8 +44,11 @@ impl Playwright {
         request: &LookRequest,
     ) -> Result<Vec<BoxLook>, EntryError> {
         let error = |code| EntryError::of(code, Sending::NotYet);
-        let scope =
-            scope_until(env, LOOK, request.deadline).tracking(self.crashes(), self.browser());
+        let scope = scope_until(env, LOOK, request.deadline).tracking(
+            self.crashes(),
+            self.browser(),
+            self.removal_fences(),
+        );
         let page = look_op::within(&scope, OpPage::admit(self, &scope, request.tab))
             .await
             .map_err(error)?
@@ -167,7 +170,11 @@ impl Playwright {
                 EntryError::of(EntryCode::RunTimeout, Sending::NotYet),
             );
         }
-        let scope = scope_until(env, ENTRY, deadline).tracking(self.crashes(), self.browser());
+        let scope = scope_until(env, ENTRY, deadline).tracking(
+            self.crashes(),
+            self.browser(),
+            self.removal_fences(),
+        );
         let entry = EntryRun::new(self, &scope, fields.len())
             .enter(tab, url.as_deref(), &fields)
             .await;
@@ -225,6 +232,7 @@ fn scope_until(env: &dyn OpEnv, spec: OpSpec, deadline: Instant) -> OpScope<'_> 
         api: None,
         timeout_ms: Some(u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX)),
         conformance: false,
+        timeout_built_in: false,
     };
     OpScope::of_spec(env, spec, call)
 }

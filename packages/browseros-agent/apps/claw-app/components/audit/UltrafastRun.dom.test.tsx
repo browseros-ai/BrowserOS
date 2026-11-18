@@ -230,55 +230,35 @@ describe('a task neo drove with pursue', () => {
   })
 })
 
-describe('the margin rule on ultrafast tasks', () => {
-  const rule = () => body.querySelectorAll('[data-ultrafast-rail]').length
-  const rows = () =>
-    [...body.querySelectorAll('[data-task-row]')].map((row) =>
-      row.hasAttribute('data-ultrafast'),
-    )
+describe('ultrafast on task rows', () => {
+  const edges = () =>
+    [...body.querySelectorAll('[data-task-row] *')].filter((node) =>
+      (node.getAttribute('class') ?? '').includes('bg-primary'),
+    ).length
 
-  it('rules a skill run card and writes its line, with no badge or pill', async () => {
+  it('writes the line on a skill run row, with no edge, badge or pill', async () => {
     await render(<TaskRow task={session()} now={Date.now()} />)
-    expect(rule()).toBe(1)
     expect(text()).toContain('ultrafastneo ran it in 15 sec')
     expect(text()).not.toContain('ultrafast ·')
+    expect(edges()).toBe(0)
   })
 
-  it('rules a pursue card the same way', async () => {
+  it('writes the line on a pursue row the same way', async () => {
     await render(
       <TaskRow
         task={session({ ultrafast: undefined, pursue: flights })}
         now={Date.now()}
       />,
     )
-    expect(rule()).toBe(1)
     expect(text()).toContain('neo did 3 steps')
+    expect(edges()).toBe(0)
   })
 
   it('leaves a task that ran the normal way as it was', async () => {
     await render(
       <TaskRow task={session({ ultrafast: undefined })} now={Date.now()} />,
     )
-    expect(rule()).toBe(0)
-    expect(rows()).toEqual([false])
-  })
-
-  it('flags each ultrafast row so a run of them reads as one rule', async () => {
-    await render(
-      <div>
-        <TaskRow task={session({ sessionId: 'a' })} now={Date.now()} />
-        <TaskRow
-          task={session({ sessionId: 'b', pursue: colgate })}
-          now={Date.now()}
-        />
-        <TaskRow
-          task={session({ sessionId: 'c', ultrafast: undefined })}
-          now={Date.now()}
-        />
-      </div>,
-    )
-    expect(rows()).toEqual([true, true, false])
-    expect(rule()).toBe(2)
+    expect(text()).not.toContain('ultrafast')
   })
 
   it('writes the line on an ultrafast task page only', async () => {

@@ -1,12 +1,12 @@
 import { skipToken } from '@tanstack/react-query'
 import { CockpitOnboarding } from '@/components/cockpit/CockpitOnboarding'
-import { EnergyMeter } from '@/components/cockpit/EnergyMeter'
 import { InControlBar } from '@/components/cockpit/InControlBar'
 import { NeedsYouBanner } from '@/components/cockpit/NeedsYouBanner'
 import { PromoSlot, usePromoSlot } from '@/components/cockpit/PromoSlot'
 import { RecentActivity } from '@/components/cockpit/RecentActivity'
 import { RunningGrid } from '@/components/cockpit/RunningGrid'
 import { SavingsCard } from '@/components/cockpit/SavingsCard'
+import { UltrafastSummary } from '@/components/cockpit/UltrafastSummary'
 import { isUserFacingHarness } from '@/components/harness/harness.types'
 import { Page } from '@/components/layout/Page'
 import { PageHeader } from '@/components/layout/PageHeader'
@@ -100,7 +100,7 @@ export function Cockpit() {
           lede={homeLede(sessions, takeover.inControlSession)}
         />
         {ultrafast ? (
-          <EnergyMeter savings={savings} stats={stats.data} />
+          <UltrafastSummary savings={savings} />
         ) : stats.data && stats.data.allTime.sessionCount > 0 ? (
           // Pulled up so the strip reads as part of the greeting, not the next section.
           <SavingsCard stats={stats.data} className="-mt-3" />

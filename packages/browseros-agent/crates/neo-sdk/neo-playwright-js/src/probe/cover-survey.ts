@@ -91,7 +91,7 @@ type Phases = {
   stopped: boolean
 }
 type Layer = { order: number; held: Element[]; note: SurveyLayer }
-type Group = { faces: Face[]; held: Element[] }
+type Group = { faces: Face[]; held: Element[]; controlsFrom: Element[] }
 
 export function surveyCovers(
   world: World,
@@ -165,12 +165,15 @@ export function surveyCovers(
     }
   }
   const naming = performance.now()
+  // Isolate guard time spent while naming: a carrier's guard belongs to count, not both phases.
+  const countedBeforeNaming = phases.count
+  phases.count = 0
   const centre = { x: innerWidth / 2, y: innerHeight / 2 }
   for (const face of found.values())
     face.named = shownAs(world, output, face.named, centre)
   const groups = joinFaces(found, inside).map((faces) => ({
     faces,
-    held: holdersOf(faces, inside),
+    ...holdersOf(faces, inside, page),
   }))
   const next: Remembered[] = []
   const layers = groups
@@ -195,7 +198,8 @@ export function surveyCovers(
     )
     .slice(0, MAX_LAYERS)
   memory.set(document, next)
-  phases.naming += performance.now() - naming
+  phases.naming += Math.max(0, performance.now() - naming - phases.count)
+  phases.count += countedBeforeNaming
   const marksSkipped = markBlocks(world, json, layers, inside, phases)
   return {
     layers: layers.map(({ note }) => note),
@@ -457,15 +461,41 @@ function joinFaces(found: Map<Element, Face>, inside: Inside): Face[][] {
   return groups
 }
 
-/** A joined portal owns the shared holder, including controls beside its fixed faces. */
-function holdersOf(faces: Face[], inside: Inside): Element[] {
+/**
+ * A joined portal owns its shared holder. When a backdrop names an inner dialog, the dialog's
+ * pointer-taking fixed carrier belongs to the same layer, so the gap beside the dialog still
+ * counts as covered. The page guard peels app shells rather than adopting their content.
+ * Controls and loading facts keep their original holders, as the shared covered answer does.
+ */
+function holdersOf(
+  faces: Face[],
+  inside: Inside,
+  page: (element: Element) => boolean,
+): { held: Element[]; controlsFrom: Element[] } {
   const shared = [...new Set(faces.flatMap((face) => [...face.roots]))].filter(
     (root) => faces.filter((face) => face.roots.has(root)).length > 1,
   )
   const held = shared.length ? shared : faces.map((face) => face.element)
-  for (const { named } of faces)
-    if (!held.some((root) => inside(root, named))) held.push(named)
-  return held
+  const controlsFrom = [...held]
+  for (const { named } of faces) {
+    if (!controlsFrom.some((root) => inside(root, named)))
+      controlsFrom.push(named)
+    if (held.some((root) => inside(root, named))) continue
+    const path: Element[] = []
+    for (
+      let at: Element | undefined = named;
+      at;
+      at = at.assignedSlot ?? parentOrHost(at)
+    )
+      path.push(at)
+    let carrier = coverFace(path)
+    while (carrier && page(carrier)) {
+      path.splice(path.indexOf(carrier))
+      carrier = coverFace(path)
+    }
+    held.push(carrier ?? named)
+  }
+  return { held, controlsFrom }
 }
 
 function describeLayer(
@@ -479,7 +509,7 @@ function describeLayer(
   samples: Sample[],
   inside: Inside,
 ): Layer | undefined {
-  const { faces, held } = group
+  const { faces, held, controlsFrom } = group
   const face =
     faces.find((face) => isBlank(world, output, face.element)) ?? faces[0]
   if (!face) return undefined
@@ -501,7 +531,7 @@ function describeLayer(
     tested.some(({ element, clear }) => !clear && !belongs(element))
   const controls = Array.from(
     new Map(
-      held
+      controlsFrom
         .flatMap((root) => controlsOf(world, output, root))
         .map((control) => [control.ref, control]),
     ).values(),
@@ -529,7 +559,7 @@ function describeLayer(
       name: nameOf(world, output, named),
       ref: world.refs.forElement(named, world.seq),
       blank,
-      loading: held.some(saysLoading),
+      loading: controlsFrom.some(saysLoading),
       wholeView,
       controls,
       ...(words ? { firstWords: Array.from(words).slice(0, 61).join('') } : {}),

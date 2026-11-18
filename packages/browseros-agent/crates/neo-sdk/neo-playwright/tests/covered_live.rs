@@ -31,6 +31,7 @@ use live_run::{EnvCall, LiveRun, TestPage, TestResult, brand};
 use locator::{aria_ref, css, enter_frame, locator};
 use neo_playwright::{ErrorCode, PlaywrightError, TimedOut};
 use serde_json::{Value, json};
+use tokio::time;
 
 /// How long each row lets its action wait: the facts come when it runs out.
 const CHOSEN_MS: u64 = 1500;
@@ -1504,6 +1505,370 @@ async fn tests_that_a_nameless_portal_is_shown_as_its_dialog() -> TestResult {
             "{message}"
         );
         assert!(shape.resolves(text(&cover, "ref")).await?, "{message}");
+        TestResult::Ok(())
+    }
+    .await;
+    shape.close().await;
+    result
+}
+
+/// The prelude's header under Neo's built-in timeout: Playwright's 30 s, stamped as nobody's
+/// choice (covered-click B). The rows that call an op with it stand in for the prelude.
+fn built_in() -> Value {
+    json!({ "timeoutMs": 30_000, "timeoutBuiltIn": true })
+}
+
+impl Shape {
+    /// A pointer op on `#target` whose header is `call`, as the prelude or a host sends it.
+    async fn act_called(&self, op: &str, call: Value) -> Result<Value, PlaywrightError> {
+        let mut call = call;
+        if let Value::Object(fields) = &mut call {
+            fields.insert("api".to_owned(), json!(op));
+        }
+        self.run
+            .invoke(
+                op,
+                json!({ "call": call, "target": self.at("#target"), "strict": "strict" }),
+            )
+            .await
+    }
+
+    /// A script through the prelude on this shape's page.
+    async fn script(&self, source: &str) -> TestResult<Value> {
+        let host: Arc<dyn OpHost> = Arc::clone(&self.run) as Arc<dyn OpHost>;
+        Ok(js_runner::run_script(&host, &json!({ "page": brand(&self.page) }), source).await?)
+    }
+}
+
+/// The early stop's first line in its one fixed form: the api, then `Timeout cut short: the same
+/// cover stayed on top for`, the seconds with one decimal, `s (`, the checks a whole number,
+/// `checks).`. Answers the seconds and the checks.
+fn stopped_early_form(message: &str, api: &str) -> TestResult<(f64, u64)> {
+    let first = message.lines().next().unwrap_or_default();
+    let rest = first
+        .strip_prefix(&format!(
+            "{api}: Timeout cut short: the same cover stayed on top for "
+        ))
+        .ok_or_else(|| format!("not the early stop's first line: {first}"))?;
+    let (seconds, rest) = rest.split_once(" s (").ok_or("seconds, then ` s (`")?;
+    let (whole, tenth) = seconds.split_once('.').ok_or("seconds with one decimal")?;
+    let digits = |part: &str| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit());
+    if !digits(whole) || tenth.len() != 1 || !digits(tenth) {
+        return Err(format!("seconds with one decimal: {first}").into());
+    }
+    let checks = rest
+        .strip_suffix(" checks).")
+        .filter(|checks| digits(checks))
+        .ok_or_else(|| format!("a whole number of checks and a full stop: {first}"))?;
+    Ok((seconds.parse()?, checks.parse()?))
+}
+
+/// Covered-click B, row 1: under Neo's built-in timeout (the prelude's stamp) a click under a
+/// standing cover stops once the same cover stood 5 s and at least 4 checks: a `TimeoutError`
+/// with the code `covered`, its first line in one fixed form, A's facts after it, nothing sent and
+/// nothing pressed, and the cover field's `stoodMs` and `checks`. The same click from a script
+/// that set no timeout does the same, so the prelude stamps it. With the rule taken out, or the
+/// stamp never set, it waits 30 s.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_standing_cover_stops_a_click_after_five_seconds() -> TestResult {
+    let shape = Shape::shape("dialog").await?;
+    let result = async {
+        // The run's calls before the click: the page's own `goto` marked the run sent.
+        let before = shape.run.calls().len();
+        let began = Instant::now();
+        let error = shape
+            .act_called("locator.click", built_in())
+            .await
+            .err()
+            .ok_or("the click under the cover succeeded")?;
+        let took = began.elapsed();
+        // Early, not at 30 s: the bound only tells the two apart, never a tight one.
+        assert!(
+            took >= Duration::from_secs(5) && took < Duration::from_secs(15),
+            "{took:?}"
+        );
+        assert_eq!(error.error_code(), Some(ErrorCode::Covered), "{error}");
+        assert_eq!(error.timed_out(), TimedOut::Yes, "still a TimeoutError");
+        let message = error.message();
+        let (seconds, checks) = stopped_early_form(message, "locator.click")?;
+        assert!(seconds >= 5.0 && checks >= 4, "{message}");
+        in_order(
+            message,
+            &[
+                "\n  On top: dialog \"What You Need To Know\"",
+                "\n  Nothing was pressed.",
+            ],
+        )?;
+        assert!(
+            !shape.run.calls()[before..].contains(&EnvCall::MarkSent),
+            "an early stop where no attempt sent input is not_sent"
+        );
+        let cover = error.cover_details().ok_or("error.cover")?;
+        assert!(
+            cover
+                .get("stoodMs")
+                .and_then(Value::as_u64)
+                .is_some_and(|millis| millis >= 5_000),
+            "{cover}"
+        );
+        assert_eq!(cover.get("checks").and_then(Value::as_u64), Some(checks));
+        assert!(shape.log().await?.is_empty(), "the target saw no click");
+        TestResult::Ok(())
+    }
+    .await;
+    shape.close().await;
+    result?;
+    let shape = Shape::shape("dialog").await?;
+    let began = Instant::now();
+    let seen = shape
+        .script(
+            "try { await page.locator('#target').click(); return 'clicked' }
+             catch (error) { return { name: error.name, code: error.code, message: error.message } }",
+        )
+        .await;
+    let took = began.elapsed();
+    shape.close().await;
+    let seen = seen?;
+    assert_eq!(seen.get("name"), Some(&json!("TimeoutError")), "{seen}");
+    assert_eq!(seen.get("code"), Some(&json!("covered")), "{seen}");
+    stopped_early_form(
+        seen.get("message")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+        "locator.click",
+    )?;
+    assert!(
+        took < Duration::from_secs(15),
+        "the prelude stamped it: it stopped early, not at 30 s: {took:?}"
+    );
+    Ok(())
+}
+
+/// Covered-click B, row 2: a timeout somebody chose runs to its end under a standing cover, with
+/// the facts: an op sent with 8 s and with 2 s and no stamp, as a host's own call or a script's
+/// chosen timeout arrives, and one sent with no timeout at all, still waiting at 8 s.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_chosen_timeout_keeps_its_whole_wait() -> TestResult {
+    let shape = Shape::shape("dialog").await?;
+    let result = async {
+        for millis in [8_000_u64, 2_000] {
+            let began = Instant::now();
+            let (message, _) = covered(
+                shape
+                    .act_called("locator.click", json!({ "timeoutMs": millis }))
+                    .await,
+            )?;
+            let took = began.elapsed();
+            assert!(took >= Duration::from_millis(millis), "{millis}: {took:?}");
+            assert!(
+                message.starts_with(&format!("locator.click: Timeout {millis}ms exceeded.")),
+                "{message}"
+            );
+        }
+        let unlimited = time::timeout(
+            Duration::from_secs(8),
+            shape.act_called("locator.click", json!({})),
+        )
+        .await;
+        assert!(
+            unlimited.is_err(),
+            "a call with no timeout is still waiting at 8 s: {unlimited:?}"
+        );
+        TestResult::Ok(())
+    }
+    .await;
+    shape.close().await;
+    result
+}
+
+/// Covered-click B: under the spec harness's conformance switch a covered wait never stops early,
+/// though the prelude stamps the call there too (`headerTimeout` does not know the switch, and the
+/// bridge adds it to the same header). Only `Waiting::of`'s conformance test keeps the wait whole,
+/// so this row sends the stamp with the switch and finds the click still waiting at 12 s. The
+/// window is a lower bound; its width only gives a wrong early stop at 5 s room to show.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_conformance_never_stops_early() -> TestResult {
+    let shape = Shape::shape("dialog").await?;
+    let mut call = built_in();
+    call["conformance"] = json!(true);
+    let waiting = time::timeout(
+        Duration::from_secs(12),
+        shape.act_called("locator.click", call),
+    )
+    .await;
+    shape.close().await;
+    assert!(
+        waiting.is_err(),
+        "stamped under the conformance switch, the click is still waiting at 12 s: {waiting:?}"
+    );
+    Ok(())
+}
+
+/// Covered-click B: a default anyone but Neo's own prelude set is a choice. A script that sets
+/// `page.setDefaultTimeout(30_000)`, `context.setDefaultTimeout(30_000)` or `timeout` on the call
+/// keeps the whole wait under a cover that stands until 8 s: the click lands after it, with one
+/// trusted click. With the stamp always set, each stops at 5 s.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_timeout_set_by_hand_keeps_the_whole_wait() -> TestResult {
+    for (setup, click) in [
+        ("page.setDefaultTimeout(30_000);", "click()"),
+        ("page.context().setDefaultTimeout(30_000);", "click()"),
+        ("", "click({ timeout: 30_000 })"),
+    ] {
+        let shape = Shape::shape("leaves8").await?;
+        let began = Instant::now();
+        let seen = shape
+            .script(&format!(
+                "{setup} await page.locator('#target').{click}; return 'clicked'"
+            ))
+            .await;
+        let took = began.elapsed();
+        let log = shape.log().await;
+        shape.close().await;
+        assert_eq!(seen?, json!("clicked"), "{setup} {click}");
+        assert!(
+            took >= Duration::from_millis(6_500),
+            "{setup} {click}: {took:?}"
+        );
+        assert_eq!(log?, ["target"], "{setup} {click}");
+    }
+    Ok(())
+}
+
+/// Covered-click B, rows 3 and 4: a cover that leaves by itself. Gone at 3 s, the click lands
+/// under the built-in timeout. Gone at 12 s, the built-in timeout stops first (its first line
+/// says so), and a chosen 20 s lands when it leaves. The cover leaves well after the stop, so a
+/// loaded machine's slow first check cannot let the click land first.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_cover_that_leaves_lets_the_click_land_in_time() -> TestResult {
+    let shape = Shape::shape("leaves3").await?;
+    let landed = shape.act_called("locator.click", built_in()).await;
+    let log = shape.log().await;
+    shape.close().await;
+    landed?;
+    assert_eq!(log?, ["target"], "gone at 3 s: one trusted click");
+    let shape = Shape::shape("leaves12").await?;
+    let early = shape.act_called("locator.click", built_in()).await;
+    shape.close().await;
+    let (message, _) = covered(early)?;
+    stopped_early_form(&message, "locator.click")?;
+    let shape = Shape::shape("leaves12").await?;
+    let landed = shape
+        .act_called("locator.click", json!({ "timeoutMs": 20_000 }))
+        .await;
+    let log = shape.log().await;
+    shape.close().await;
+    landed?;
+    assert_eq!(log?, ["target"], "a chosen 20 s lands at 12 s");
+    Ok(())
+}
+
+/// Covered-click B, row 5: a cover that moves, fades, says it is loading or holds a progress bar
+/// keeps the whole wait under the built-in timeout: the click lands when it leaves, at 7 or 8 s.
+/// The moving cover's place never repeats while it stands: a move with a period can coincide with
+/// the checks' phase (a check every 500 ms plus its own cost), see one place at every check, and
+/// stop the click early for a cover that never stood still.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_cover_that_moves_fades_or_loads_keeps_the_wait() -> TestResult {
+    each_shape(
+        &["moving", "fading", "busy", "progress"],
+        |shape, name| async move {
+            let result = async {
+                let began = Instant::now();
+                shape.act_called("locator.click", built_in()).await?;
+                let took = began.elapsed();
+                let log = shape.log().await?;
+                if log != ["target"] || took < Duration::from_millis(6_000) {
+                    return Err(format!("{name}: {log:?} after {took:?}").into());
+                }
+                TestResult::Ok(())
+            }
+            .await;
+            (shape, result)
+        },
+    )
+    .await
+}
+
+/// Covered-click B, row 6: one cover replaced by another at 3 s starts the count again: the stop
+/// comes 5 s after the second arrived, and names it.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_replaced_cover_starts_the_count_again() -> TestResult {
+    let shape = Shape::shape("replaced").await?;
+    let result = async {
+        let began = Instant::now();
+        let (message, cover) = covered(shape.act_called("locator.click", built_in()).await)?;
+        let took = began.elapsed();
+        stopped_early_form(&message, "locator.click")?;
+        assert!(
+            took >= Duration::from_millis(7_500) && took < Duration::from_secs(25),
+            "{took:?}"
+        );
+        assert_eq!(text(&cover, "name"), "Second notice", "{message}");
+        TestResult::Ok(())
+    }
+    .await;
+    shape.close().await;
+    result
+}
+
+/// Covered-click B, row 7: a cover that arrives with the press's own move: the press is stopped
+/// at the window, the page saw no click, and the stop comes 5 s later, saying when it came.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_cover_that_came_with_the_press_stops_later() -> TestResult {
+    let shape = Shape::shape("late").await?;
+    let result = async {
+        let (message, _) = covered(shape.act_called("locator.click", built_in()).await)?;
+        stopped_early_form(&message, "locator.click")?;
+        assert!(message.contains("\n  It appeared "), "{message}");
+        assert!(shape.log().await?.is_empty(), "the target saw no click");
+        TestResult::Ok(())
+    }
+    .await;
+    shape.close().await;
+    result
+}
+
+/// Covered-click B: an early stop leaves through the timeout's own exit. A drag whose drop target
+/// stands under a cover stops after 5 s under the built-in timeout, and the button the drag still
+/// held is released, as on a timeout: the window saw the trusted press on the source, then the
+/// release.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_drag_stopped_early_releases_its_button() -> TestResult {
+    let shape = Shape::shape("dragcovered").await?;
+    let result = async {
+        let began = Instant::now();
+        let input = json!({
+            "call": { "api": "locator.dragTo", "timeoutMs": 30_000, "timeoutBuiltIn": true },
+            "target": shape.at("#src"), "strict": "strict", "to": shape.at("#dst"), "steps": 5
+        });
+        let (message, _) = covered(shape.run.invoke("locator.dragTo", input).await)?;
+        let took = began.elapsed();
+        stopped_early_form(&message, "locator.dragTo")?;
+        assert!(
+            took < Duration::from_secs(15),
+            "early, not at 30 s: {took:?}"
+        );
+        // The owed release goes out once the op has let the tab's input go. It comes within
+        // milliseconds; the poll allows 10 s so a loaded machine cannot fail the row.
+        let mut log = Vec::new();
+        for _ in 0..100 {
+            log = shape.log().await?;
+            if log.contains(&"mouseup".to_owned()) {
+                break;
+            }
+            time::sleep(Duration::from_millis(100)).await;
+        }
+        assert_eq!(log, ["mousedown", "mouseup"], "the press, then its release");
         TestResult::Ok(())
     }
     .await;

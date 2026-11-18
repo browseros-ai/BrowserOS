@@ -21,7 +21,6 @@ import { edit } from './edit'
 import { expect } from './expect'
 import { FailureOutput } from './failure-output'
 import { armInput, inputArrived } from './files'
-import { noteHolders } from './private-digest'
 import { privateStep } from './private-entry'
 import { look } from './private-look'
 import {
@@ -39,6 +38,7 @@ import {
   type ValueOp,
 } from './protocol'
 import { read, readAll } from './read'
+import { replyText } from './reply-text'
 import { generatedSelector, pinned, resolve } from './resolve'
 import { screenshotMask, screenshotMaskCleanup } from './screenshot'
 import { installShadowRoots } from './shadow-roots'
@@ -137,36 +137,62 @@ function createProbe() {
     }
   }
 
+  // Boot shares the value exit, including epoch changes and early reuse of an existing engine.
+  function bootReply(options: BootOptions): Described {
+    const { frameSeq, epoch } = parseBootOptions(options)
+    if (world?.epoch === epoch) return described(world)
+    // Another epoch is another claw-sdk process, or this one after a restart. Nothing it
+    // was handed may resolve under the new seq: pins, refs and the engine's ref expandos
+    // are dropped, and a fresh engine takes the new seq.
+    pins.clear()
+    refs.forget()
+    listenForMoves()
+    installShadowRoots()
+    const injected = createEngine(frameSeq)
+    injected.onGlobalListenersRemoved.add(listenForMoves)
+    refs.install(engineTable(injected), injected.utils)
+    const retired = world?.seq
+    world = { epoch, seq: frameSeq, injected, pins, refs }
+    return retired === undefined
+      ? described(world)
+      : { ...described(world), retired }
+  }
+
+  function failedText(error: unknown): string {
+    try {
+      return replyText(thrownReply(error))
+    } catch {
+      return replyText(undefined)
+    }
+  }
+
   return {
     boot(options: BootOptions) {
-      const { frameSeq, epoch } = parseBootOptions(options)
-      if (world?.epoch === epoch) return described(world)
-      // Another epoch is another claw-sdk process, or this one after a restart. Nothing it
-      // was handed may resolve under the new seq: pins, refs and the engine's ref expandos
-      // are dropped, and a fresh engine takes the new seq.
-      pins.clear()
-      refs.forget()
-      listenForMoves()
-      installShadowRoots()
-      const injected = createEngine(frameSeq)
-      injected.onGlobalListenersRemoved.add(listenForMoves)
-      refs.install(engineTable(injected), injected.utils)
-      const retired = world?.seq
-      world = { epoch, seq: frameSeq, injected, pins, refs }
-      return retired === undefined
-        ? described(world)
-        : { ...described(world), retired }
+      try {
+        return replyText(bootReply(options))
+      } catch (error) {
+        return failedText(error)
+      }
     },
 
     call(call: unknown, root?: unknown, nodes?: unknown) {
-      const booted = world
-      if (!booted) return UNINSTALLED
-      if (!isProbeCall(call)) return errorReply('internal', 'not a probe call')
-      // On a context call CALL_FUNCTION passes the world's global as `root`.
-      const scope = root instanceof Node ? root : undefined
-      // The nodes after the root, in Rust's order; each handler checks what it reads.
-      const handed: readonly unknown[] = Array.isArray(nodes) ? nodes : []
-      return answer(booted, call, scope, handed)
+      try {
+        const booted = world
+        // A pinned reply is an actual node (or its old marker), never JSON text.
+        if (isProbeCall(call) && call.request.op === 'pinned')
+          return booted ? answer(booted, call, undefined, []) : UNINSTALLED
+        if (!booted) return replyText(UNINSTALLED)
+        if (!isProbeCall(call))
+          return replyText(errorReply('internal', 'not a probe call'))
+        const scope = root instanceof Node ? root : undefined
+        const handed: readonly unknown[] = Array.isArray(nodes) ? nodes : []
+        const reply = answer(booted, call, scope, handed)
+        return reply instanceof Promise
+          ? reply.then(replyText, failedText)
+          : replyText(reply)
+      } catch (error) {
+        return failedText(error)
+      }
     },
   }
 }
@@ -180,12 +206,6 @@ function dispatch<O extends Routed>(
   nodes: readonly unknown[],
   output: FailureOutput,
 ): ReplyTo<O> | Promise<ReplyTo<O>> {
-  // Ruling R50: at the start of every request, note which text controls of this document hold
-  // a value the world keeps a digest of, and forget every digest none holds. Every request, not
-  // a list of reads: any request's failure output asks the mask for an element's preview
-  // (`isPrivateField`); a list is what a new request would miss. With no digest kept the scan
-  // returns at once.
-  noteHolders(document)
   const handler: Handler<O> = HANDLERS[op]
   return handler(world, request, root, nodes, output)
 }

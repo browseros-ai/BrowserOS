@@ -1,6 +1,5 @@
-# The context is packages/browseros-agent. Send only what Cargo needs to load the workspace and
-# build the server: every member's manifest and sources (Cargo refuses a member it cannot read),
-# the lockfile, and this folder. node_modules alone is about 2 GB.
+# The context is packages/browseros-agent. The server needs every workspace member's manifest
+# and sources plus its lockfile. The standalone viewer builds in its own context.
 *
 !Cargo.toml
 !Cargo.lock
@@ -12,6 +11,7 @@
 target
 # The CAPTCHA testbed beside neo-captcha's sources is no build input either.
 crates/neo-sdk/neo-captcha/testbed
+crates/neo-sdk/neo-slimviewer
 # This folder's scripts and docs are not build inputs, so editing them leaves the image cached.
 # The browser pin, the server's build step and the supervisor (supervisor/, its tests aside) are.
 crates/neo-sdk/neo-server/docker

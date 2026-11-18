@@ -3,6 +3,7 @@
 //! otherwise narrow reconnect race; mutation evidence comes from the peer.
 
 use super::*;
+use crate::alloc_count;
 use futures_util::poll;
 use std::{future::poll_fn, task::Poll};
 use tokio::{
@@ -10,6 +11,7 @@ use tokio::{
     net::TcpListener,
     task::JoinSet,
 };
+use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 
 /// Each accepted socket represents a fresh browser with the same window ID.
 /// Servers belong to the test runtime and are aborted together on fixture drop.
@@ -141,6 +143,42 @@ async fn serve_browser(stream: TcpStream) {
             }),
             // Never answered, like an evaluation whose promise never settles.
             Some("Fixture.never") => continue,
+            // Answers with the exact text the params give, `{id}` replaced by the request's id,
+            // as Chromium writes a reply serde cannot read.
+            Some("Fixture.answer_raw") => {
+                let reply = request["params"]["text"]
+                    .as_str()
+                    .unwrap_or_else(|| panic!("answer_raw needs text"))
+                    .replace("{id}", &request["id"].to_string());
+                if socket.send(Message::Text(reply.into())).await.is_err() {
+                    return;
+                }
+                continue;
+            }
+            // Sends the exact text the params give ahead of the reply.
+            Some("Fixture.emit_raw") => {
+                let text = request["params"]["text"]
+                    .as_str()
+                    .unwrap_or_else(|| panic!("emit_raw needs text"))
+                    .to_owned();
+                if socket.send(Message::Text(text.into())).await.is_err() {
+                    return;
+                }
+                json!({})
+            }
+            // Closes the socket with the params' code and reason, or with no status at all.
+            Some("Fixture.close") => {
+                let frame = request["params"]["code"].as_u64().map(|code| CloseFrame {
+                    code: CloseCode::from(u16::try_from(code).unwrap_or(1000)),
+                    reason: request["params"]["reason"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_owned()
+                        .into(),
+                });
+                let _ = socket.close(frame).await;
+                return;
+            }
             // Sends the event the params describe ahead of the reply, so the client's reader
             // has routed it by the time the request resolves.
             Some("Fixture.emit") => {
@@ -596,4 +634,156 @@ async fn an_event_is_either_counted_before_a_subscription_or_received_by_it() {
         }
     }
     assert_eq!(received, 1, "only the event after the subscription");
+}
+
+/// A message the browser writes with half of a UTF-16 pair: page text cut inside an emoji.
+/// Chromium escapes every non-ASCII unit, an intact pair as two escapes, a lone half as one.
+const HALVES: &str = r#""a\ud83db \ude00 \ud83d\ude00 \\ud800""#;
+const REPAIRED: &str = "a\u{fffd}b \u{fffd} \u{1f600} \\ud800";
+
+#[tokio::test]
+async fn a_lone_utf16_half_reaches_its_reply_and_events_as_the_replacement_character() {
+    let browser = LoopbackBrowser::start().await;
+    let client = browser.connect().await;
+    let mut broadcast = client.events();
+    let mut stream = client.on_event("Test.text");
+
+    let reply = client
+        .send(
+            "Fixture.answer_raw",
+            json!({ "text": format!(r#"{{"id":{{id}},"result":{{"text":{HALVES}}}}}"#) }),
+            None,
+        )
+        .await
+        .unwrap_or_else(|err| panic!("the reply with lone halves: {err}"));
+    assert_eq!(reply["text"], REPAIRED);
+
+    client
+        .send(
+            "Fixture.emit_raw",
+            json!({ "text": format!(r#"{{"method":"Test.text","params":{{"text":{HALVES}}}}}"#) }),
+            None,
+        )
+        .await
+        .unwrap_or_else(|err| panic!("emit the event with lone halves: {err}"));
+    assert_eq!(take_broadcast(&mut broadcast).params["text"], REPAIRED);
+    let streamed = timeout(Duration::from_secs(1), stream.recv())
+        .await
+        .unwrap_or_else(|_elapsed| panic!("the stream got no event"))
+        .unwrap_or_else(|err| panic!("stream: {err}"));
+    assert_eq!(streamed.params["text"], REPAIRED);
+    client.disconnect().await;
+}
+
+/// Nesting past serde's recursion limit is one message a repair cannot make readable.
+fn too_deep() -> String {
+    format!("{}0{}", "[".repeat(200), "]".repeat(200))
+}
+
+#[tokio::test]
+async fn a_reply_that_cannot_be_read_fails_its_request_at_once_and_an_event_is_dropped() {
+    let browser = LoopbackBrowser::start().await;
+    let client = browser.connect().await;
+    let mut broadcast = client.events();
+
+    // A request still waiting would end as `Timeout` after the fixture's two seconds.
+    let failed = client
+        .send(
+            "Fixture.answer_raw",
+            json!({ "text": format!(r#"{{"id":{{id}},"result":{}}}"#, too_deep()) }),
+            None,
+        )
+        .await;
+    match &failed {
+        Err(CdpError::Protocol { code, message }) => {
+            assert_eq!(*code, UNREADABLE_REPLY);
+            assert!(
+                message.starts_with("the browser's reply could not be read: recursion limit"),
+                "{message}"
+            );
+        }
+        other => panic!("expected the unreadable reply's error, got {other:?}"),
+    }
+
+    client
+        .send(
+            "Fixture.emit_raw",
+            json!({ "text": format!(r#"{{"method":"Test.deep","params":{}}}"#, too_deep()) }),
+            None,
+        )
+        .await
+        .unwrap_or_else(|err| panic!("emit the unreadable event: {err}"));
+    emit(&client, "Test.after", 1).await;
+    assert_eq!(
+        take_broadcast(&mut broadcast).method,
+        "Test.after",
+        "the unreadable event is dropped and the reader goes on"
+    );
+    assert!(client.is_connected());
+    client.disconnect().await;
+}
+
+#[tokio::test]
+async fn a_close_frames_code_and_reason_reach_a_caller_whose_request_it_cut_off() {
+    for (params, expected) in [
+        (
+            json!({ "code": 4001, "reason": "renderer gone" }),
+            ConnectionLoss::Closed {
+                code: 4001,
+                reason: "renderer gone".to_owned(),
+            },
+        ),
+        (
+            json!({}),
+            ConnectionLoss::Closed {
+                code: 1005,
+                reason: String::new(),
+            },
+        ),
+    ] {
+        let browser = LoopbackBrowser::start().await;
+        let client = browser.connect().await;
+        assert_eq!(client.last_connection_loss(), None);
+        let cut_off = client.send("Fixture.close", params, None).await;
+        assert_eq!(cut_off, Err(CdpError::ConnectionLost));
+        assert_eq!(client.last_connection_loss(), Some(expected));
+        client.disconnect().await;
+    }
+}
+
+/// A stream skips the events of other methods on the shared event, without copying them. The
+/// count is the bytes this thread allocated, so it holds whatever does the copying.
+#[tokio::test]
+async fn twenty_streams_of_other_methods_make_no_copy_of_a_megabyte_event() {
+    const MIB: usize = 1 << 20;
+    let browser = LoopbackBrowser::start().await;
+    let client = browser.connect().await;
+    let _broadcast_reader = client.events();
+    let mut streams: Vec<EventStream> = (0..20).map(|_| client.on_event("Test.small")).collect();
+    let large = json!({ "method": "Test.large", "params": { "text": "x".repeat(MIB) } });
+    handle_text_message(&client.inner, &large.to_string()).await;
+    handle_text_message(&client.inner, r#"{"method":"Test.small","params":{}}"#).await;
+
+    let before = alloc_count::allocated();
+    for stream in &mut streams {
+        let event = stream
+            .recv()
+            .await
+            .unwrap_or_else(|err| panic!("stream: {err}"));
+        assert_eq!(event.method, "Test.small");
+    }
+    let skipped = alloc_count::allocated() - before;
+    assert!(
+        skipped < MIB / 16,
+        "twenty streams that skipped a 1 MiB event allocated {skipped} bytes"
+    );
+
+    let before = alloc_count::allocated();
+    let copy = large.clone();
+    assert!(
+        alloc_count::allocated() - before >= MIB,
+        "the count sees a deep copy"
+    );
+    drop(copy);
+    client.disconnect().await;
 }

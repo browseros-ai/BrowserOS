@@ -362,7 +362,7 @@ export const OPS = {
   'page.frames': {
     effect: 'read',
     target: 'page',
-    lifetime: 'operation',
+    lifetime: 'background',
   },
   'page.evaluate': {
     effect: 'write',

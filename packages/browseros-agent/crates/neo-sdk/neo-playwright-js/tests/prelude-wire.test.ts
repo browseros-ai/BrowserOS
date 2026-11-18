@@ -55,7 +55,11 @@ describe('locator targets', () => {
       {
         name: 'locator.click',
         input: {
-          call: { api: 'locator.click', timeoutMs: 30000 },
+          call: {
+            api: 'locator.click',
+            timeoutMs: 30000,
+            timeoutBuiltIn: true,
+          },
           target: {
             $neo: 'locator',
             page: { $neo: 'page', tab: 1007 },
@@ -275,7 +279,11 @@ describe('locator targets', () => {
       strict: 'firstMatch',
     })
     expect(runtime.calls[1]?.input).toMatchObject({
-      call: { api: 'elementHandle.click', timeoutMs: 30000 },
+      call: {
+        api: 'elementHandle.click',
+        timeoutMs: 30000,
+        timeoutBuiltIn: true,
+      },
       target: element,
       strict: 'strict',
     })
@@ -334,6 +342,35 @@ describe('timeouts', () => {
       ['page.goto', 30000],
       ['page.title', 0],
       ['keyboard.press', 0],
+    ])
+  })
+
+  it("tests that only Neo's own default is stamped built-in, never a default set by hand or a number", async () => {
+    const runtime = await sentBy(
+      [
+        "await page.click('#a')",
+        "await page.locator('#a').hover()",
+        "await page.goto('https://a.example/')",
+        "await page.click('#a', { timeout: 30000 })",
+        'context.setDefaultTimeout(30000)',
+        "await page.click('#a')",
+        'page.setDefaultTimeout(30000)',
+        "await page.locator('#a').click()",
+      ].join('\n'),
+      (name) => (name === 'page.goto' ? { frames: [] } : null),
+    )
+    expect(
+      runtime.calls.map((call) => [
+        (call.input.call as { api: string }).api,
+        (call.input.call as { timeoutBuiltIn?: true }).timeoutBuiltIn,
+      ]),
+    ).toEqual([
+      ['page.click', true],
+      ['locator.hover', true],
+      ['page.goto', undefined],
+      ['page.click', undefined],
+      ['page.click', undefined],
+      ['locator.click', undefined],
     ])
   })
 

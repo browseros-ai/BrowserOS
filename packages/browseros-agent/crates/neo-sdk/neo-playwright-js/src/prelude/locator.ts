@@ -686,7 +686,7 @@ export class Locator {
     const addressed = await this._frame._targetArgs(api, this._selector, true)
     await send['locator.waitForFunction'](
       site,
-      this._frame._call(api, wait.timeout),
+      this._frame._call(api, wait),
       { ...addressed, ...script },
       wait.signal,
     )

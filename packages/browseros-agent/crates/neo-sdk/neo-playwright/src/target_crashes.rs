@@ -4,9 +4,11 @@
 
 use std::collections::{HashMap, HashSet};
 use std::mem;
+use std::pin::pin;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use browseros_core::{FrameId, TargetId};
+use tokio::sync::Notify;
 
 use crate::events::{EventFence, WatcherProgress};
 
@@ -15,6 +17,9 @@ use crate::events::{EventFence, WatcherProgress};
 pub(crate) struct TargetCrashes {
     records: Mutex<Records>,
     progress: Option<Arc<WatcherProgress>>,
+    /// Woken each time a target is recorded crashed, for [`TargetCrashes::crashed`]: a
+    /// crashed renderer answers no command, so a wait on one ends only by hearing of the crash.
+    recorded: Notify,
 }
 
 #[derive(Default)]
@@ -74,6 +79,7 @@ impl TargetCrashes {
         Self {
             records: Mutex::default(),
             progress: Some(progress),
+            recorded: Notify::new(),
         }
     }
 
@@ -127,6 +133,21 @@ impl TargetCrashes {
         self.is_crashed(&ticket.target)
     }
 
+    /// Resolves once `target` is recorded crashed, at once if it is now. An init-script removal
+    /// on a crashed renderer waits for the CDP timeout, so its tab's fence ends here instead
+    /// (`page/removal_fences.rs`).
+    pub(crate) async fn crashed(&self, target: &TargetId) {
+        loop {
+            // Enabled before the check, so a crash recorded between the two still wakes it.
+            let mut recorded = pin!(self.recorded.notified());
+            recorded.as_mut().enable();
+            if self.is_crashed(target) {
+                return;
+            }
+            recorded.await;
+        }
+    }
+
     /// Untagged root events may add conservative evidence, never prove recovery. Record at
     /// ingress, before a frame-tree hold or public opening filter can delay the event.
     pub(crate) fn crashed_event(&self, target: TargetId, position: EventFence) {
@@ -140,6 +161,8 @@ impl TargetCrashes {
         });
         record.revision = revision;
         record.crashed = Some(record.crashed.map_or(position, |old| old.max(position)));
+        drop(records);
+        self.recorded.notify_waiters();
     }
 
     /// The caller still gets a typed error for a stale reply, but that reply has no authority
@@ -159,6 +182,8 @@ impl TargetCrashes {
             record.revision = revision;
             record.crashed = Some(record.crashed.map_or(fence, |old| old.max(fence)));
         }
+        drop(records);
+        self.recorded.notify_waiters();
     }
 
     /// Classification can answer now, but cache admission only after the watcher applies

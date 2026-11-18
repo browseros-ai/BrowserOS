@@ -531,7 +531,7 @@ class PoolClient:
             time.sleep(2)
 
 
-def command_for(action: str, arguments: list[str]) -> list[str]:
+def command_for(action: str, arguments: list[str], agent: Path) -> list[str]:
     arguments = arguments[1:] if arguments[:1] == ["--"] else arguments
     if action == "run":
         if not arguments:
@@ -540,8 +540,12 @@ def command_for(action: str, arguments: list[str]) -> list[str]:
     if action == "gate":
         return ["bash", "crates/neo-sdk/check.sh", *arguments]
     if action == "viewer-image":
-        return ["bash", HELPER + "recipes.sh", "image", "--platform", arguments[0]]
-    return ["bash", HELPER + "recipes.sh", action, *arguments]
+        action, arguments = "image", ["--platform", arguments[0]]
+    recipe = HELPER + "recipes.sh"
+    # Image inputs and build.sh evolve together. Keep the installed recipe for pre-pool snapshots.
+    if action == "image" and (agent / "tools/remote-builds/recipes.sh").is_file():
+        recipe = "tools/remote-builds/recipes.sh"
+    return ["bash", recipe, action, *arguments]
 
 
 def run_directory(profile: dict, job: str) -> Path:
@@ -603,8 +607,8 @@ def execute(profile: dict, action: str, arguments: list[str]) -> int:
                         "kind": action, **client.submission}
         (run_dir / "job.json").write_text(json.dumps(job_metadata))
         prefix = ["python3", HELPER + "guest.py", "run", "--job", job, "--source-root"]
-        command = ["--cwd", str(cwd), "--revision", metadata["revision"],
-                   "--dirty", str(metadata["dirty"]).lower(), "--", *command_for(action, arguments)]
+        command = ["--cwd", str(cwd), "--revision", metadata["revision"], "--dirty", str(metadata["dirty"]).lower(),
+                   "--", *command_for(action, arguments, snapshot / "packages/browseros-agent")]
         # Only the owned source-root position expands on the guest. All caller
         # arguments, including a literal "$PWD", retain their exact argument value.
         shell = "exec " + shlex.join(prefix) + ' "$PWD" ' + shlex.join(command)

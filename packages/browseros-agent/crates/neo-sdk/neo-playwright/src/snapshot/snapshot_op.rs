@@ -38,7 +38,9 @@ use serde_json::Value;
 use tokio::time::{self, Instant};
 use ts_rs::TS;
 
-use super::aria_snapshot::{self, AriaNode, ChildFrame, ClosedRoots, FrameSnapshot, PartialFrame};
+use super::aria_snapshot::{
+    self, AriaNode, ChildFrame, ClosedRoots, FrameSnapshot, PartialFrame, Unmarked,
+};
 use super::clickable_targets::{Feed, Marking};
 use super::{Baseline, SnapshotForm};
 use crate::action::{self, OnTopNote};
@@ -47,11 +49,11 @@ use crate::listed_enum::listed_enum;
 use crate::op_input::OpArgs;
 use crate::op_scope::OpScope;
 use crate::op_spec::{OpSpec, PAGE, TARGET};
-use crate::page::OpPage;
+use crate::page::{self, MAX_VALUE_DEPTH, OpPage};
 use crate::playwright_error::TARGET_CRASH_MESSAGE;
 use crate::probe::{
-    self, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget, SnapshotIframe, SnapshotMode,
-    SurveyLayer, Want,
+    self, ErrorClass, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget, SnapshotIframe,
+    SnapshotMode, SurveyLayer, Want,
 };
 use crate::resolve::{self, Hopped, Landed, Resolver};
 use crate::target::{Chunk, PageRef, Strictness, Target};
@@ -380,7 +382,7 @@ async fn locator_snapshot(
         let Some(Landed { reply, world, path }) = attempt? else {
             continue;
         };
-        let reply = match reply {
+        let SnapshotRead { reply, unmarked } = match reply {
             ProbeReply::Element { pin, .. } => {
                 let parent = path.hops().last().map(|hop| &hop.parent);
                 let pinned = snapshotter.pinned(&world, parent, pin, input.depth);
@@ -389,11 +391,14 @@ async fn locator_snapshot(
                 };
                 pinned?
             }
-            other => other,
+            reply => SnapshotRead {
+                reply,
+                unmarked: None,
+            },
         };
         match reply {
             ProbeReply::Snapshot { json, iframes, .. } => {
-                let root = frame_reply(json, iframes)
+                let root = frame_reply(json, iframes, unmarked)
                     .map_err(|why| scope.fail(ErrorCode::Internal, why))?;
                 return snapshotter.stitched(root, input.depth).await;
             }
@@ -504,11 +509,20 @@ struct Snapshotter<'op> {
     reading: Mutex<Option<Instant>>,
 }
 
+/// The probe reply and its frame's clickable-check status travel together. Only the caller
+/// reading the snapshot's root promotes that status; descendants retain their log notes.
+struct SnapshotRead {
+    reply: ProbeReply,
+    unmarked: Option<Unmarked>,
+}
+
 /// One frame's `snapshot` reply, decoded at the boundary.
 struct FrameReply {
     json: Vec<AriaNode>,
     iframes: Vec<SnapshotIframe>,
     on_top: Vec<aria_snapshot::SnapshotTop>,
+    /// Carried only by the snapshot's root. Descendants keep their own failures in the log.
+    unmarked: Option<Unmarked>,
 }
 
 impl FrameReply {
@@ -519,6 +533,7 @@ impl FrameReply {
             json: Vec::new(),
             iframes: Vec::new(),
             on_top: Vec::new(),
+            unmarked: None,
         }
     }
 }
@@ -534,6 +549,8 @@ enum Unread {
     Loading,
     /// CDP or the probe failed there in the way the code names.
     Failed(ErrorCode),
+    /// The child replied promptly, but its tree cannot fit the admitted JSON depth.
+    Depth(usize),
 }
 
 impl fmt::Display for Unread {
@@ -542,6 +559,7 @@ impl fmt::Display for Unread {
             Self::Timeout => write!(f, "timeout after {} ms", FRAME_BUDGET.as_millis()),
             Self::Detached => f.write_str("frame detached"),
             Self::Loading => f.write_str("frame not loaded"),
+            Self::Depth(levels) => f.write_str(&probe::depth_error(*levels)),
             Self::Failed(ErrorCode::TargetCrashed) => f.write_str(TARGET_CRASH_MESSAGE),
             Self::Failed(code) => f.write_str(&code.as_str().replace('_', " ")),
         }
@@ -585,7 +603,7 @@ impl Snapshotter<'_> {
         parent: Option<&IsolatedWorld>,
         frame_deadline: Option<Instant>,
         request: &ProbeRequest,
-    ) -> Result<ProbeReply, ProbeFailure> {
+    ) -> Result<SnapshotRead, ProbeFailure> {
         let main = parent.is_none()
             && matches!(
                 request,
@@ -594,6 +612,7 @@ impl Snapshotter<'_> {
                     ..
                 }
             );
+        let mut unmarked = None;
         let feed = match &self.marking {
             Some(marking) => {
                 let started = Instant::now();
@@ -601,7 +620,7 @@ impl Snapshotter<'_> {
                     .feed(self.scope, world, parent, frame_deadline)
                     .await;
                 // A frame marking skipped has a line of its own, with its time.
-                if main && let Some(feed) = &feed {
+                if main && let Ok(feed) = &feed {
                     let seeds = match feed.seeds.len() {
                         0 => String::new(),
                         seeds => format!(", closed shadow root seeds: {seeds}"),
@@ -612,7 +631,12 @@ impl Snapshotter<'_> {
                         feed.targets.len()
                     ));
                 }
-                feed.unwrap_or_default()
+                feed.unwrap_or_else(|skipped| {
+                    unmarked = Some(Unmarked {
+                        reason: skipped.words().to_owned(),
+                    });
+                    Feed::default()
+                })
             }
             None => Feed::default(),
         };
@@ -624,53 +648,7 @@ impl Snapshotter<'_> {
         }
         let reply = probe::call_with_nodes(self.scope, self.page, world, &request, &nodes).await;
         if main {
-            if let Ok(ProbeReply::Snapshot {
-                survey_phases: Some(phases),
-                survey_tested,
-                ..
-            }) = &reply
-            {
-                self.scope.log(format!("  cover survey phases: hits {:.3} ms, count {:.3} ms, naming {:.3} ms, linking {:.3} ms, marks {:.3} ms", phases.hits, phases.count, phases.naming, phases.linking, phases.marks));
-                if phases.stopped {
-                    self.scope.log(format!(
-                        "  cover survey stopped at its budget after {} controls",
-                        survey_tested.unwrap_or_default()
-                    ));
-                }
-            }
-            if let Ok(ProbeReply::Snapshot {
-                on_top_skipped: true,
-                ..
-            }) = &reply
-            {
-                self.scope.log(
-                    "  cover survey or content move skipped (page or engine shape)".to_owned(),
-                );
-            }
-            if let Ok(ProbeReply::Snapshot {
-                survey_tested: Some(tested),
-                survey_ms: Some(elapsed),
-                ..
-            }) = &reply
-            {
-                self.scope.log(format!(
-                    "  cover survey: {tested} controls tested in {elapsed:.3} ms"
-                ));
-            }
-            if let Ok(ProbeReply::Snapshot {
-                inert_marking_ms: Some(elapsed),
-                ..
-            }) = &reply
-            {
-                self.scope.log(format!("  inert marking: {elapsed:.3} ms"));
-            }
-            *self.reading() = None;
-            if matches!(reply, Ok(ProbeReply::Snapshot { .. })) {
-                self.scope.log(format!(
-                    "  read the main frame's tree in {} ms",
-                    started.elapsed().as_millis()
-                ));
-            }
+            self.log_main_read(&reply, started);
         }
         if let Ok(ProbeReply::Snapshot {
             marks_skipped: true,
@@ -680,7 +658,76 @@ impl Snapshotter<'_> {
             self.scope
                 .log("  clickable marking skipped a frame (page shape)".to_owned());
         }
-        reply
+        reply.map(|reply| {
+            // Keep the earlier capture failure when both steps failed. A locator's root may
+            // have a parent frame, so callers promote this status by scope, never by ancestry.
+            if unmarked.is_none()
+                && self.marking.is_some()
+                && matches!(
+                    &reply,
+                    ProbeReply::Snapshot {
+                        marks_skipped: true,
+                        ..
+                    }
+                )
+            {
+                unmarked = Some(Unmarked {
+                    reason: "page shape".to_owned(),
+                });
+            }
+            SnapshotRead { reply, unmarked }
+        })
+    }
+
+    /// Keep the main frame's existing timings on its operation log. Child and locator reads
+    /// still carry check status, but do not acquire whole-page phase logging with the notice.
+    fn log_main_read(&self, reply: &Result<ProbeReply, ProbeFailure>, started: Instant) {
+        if let Ok(ProbeReply::Snapshot {
+            survey_phases: Some(phases),
+            survey_tested,
+            ..
+        }) = reply
+        {
+            self.scope.log(format!("  cover survey phases: hits {:.3} ms, count {:.3} ms, naming {:.3} ms, linking {:.3} ms, marks {:.3} ms", phases.hits, phases.count, phases.naming, phases.linking, phases.marks));
+            if phases.stopped {
+                self.scope.log(format!(
+                    "  cover survey stopped at its budget after {} controls",
+                    survey_tested.unwrap_or_default()
+                ));
+            }
+        }
+        if let Ok(ProbeReply::Snapshot {
+            on_top_skipped: true,
+            ..
+        }) = reply
+        {
+            self.scope
+                .log("  cover survey or content move skipped (page or engine shape)".to_owned());
+        }
+        if let Ok(ProbeReply::Snapshot {
+            survey_tested: Some(tested),
+            survey_ms: Some(elapsed),
+            ..
+        }) = reply
+        {
+            self.scope.log(format!(
+                "  cover survey: {tested} controls tested in {elapsed:.3} ms"
+            ));
+        }
+        if let Ok(ProbeReply::Snapshot {
+            inert_marking_ms: Some(elapsed),
+            ..
+        }) = reply
+        {
+            self.scope.log(format!("  inert marking: {elapsed:.3} ms"));
+        }
+        *self.reading() = None;
+        if matches!(reply, Ok(ProbeReply::Snapshot { .. })) {
+            self.scope.log(format!(
+                "  read the main frame's tree in {} ms",
+                started.elapsed().as_millis()
+            ));
+        }
     }
 
     /// The op's deadline dropped the main frame's read: logs the tree read it cut off, with how
@@ -706,13 +753,16 @@ impl Snapshotter<'_> {
         parent: Option<&IsolatedWorld>,
         pin: Pin,
         depth: Option<i64>,
-    ) -> Result<ProbeReply, PlaywrightError> {
+    ) -> Result<SnapshotRead, PlaywrightError> {
         let request = self.request(ProbeTarget::Pin(pin), depth);
         match self.call(world, parent, None, &request).await {
             Ok(reply) => Ok(reply),
             Err(ProbeFailure::Gone(_)) => {
                 self.page.frames().invalidate(world);
-                Ok(ProbeReply::Detached)
+                Ok(SnapshotRead {
+                    reply: ProbeReply::Detached,
+                    unmarked: None,
+                })
             }
             Err(failure) => Err(resolve::failed(self.scope, failure)),
         }
@@ -733,19 +783,26 @@ impl Snapshotter<'_> {
             Err(failure) => return Err(resolve::failed(self.scope, failure)),
         };
         match self.call(&world, None, None, request).await {
-            Ok(ProbeReply::Snapshot {
-                json,
-                iframes,
-                on_top,
-                ..
-            }) => frame_reply(json, iframes)
+            Ok(SnapshotRead {
+                reply:
+                    ProbeReply::Snapshot {
+                        json,
+                        iframes,
+                        on_top,
+                        ..
+                    },
+                unmarked,
+            }) => frame_reply(json, iframes, unmarked)
                 .map(|mut frame| {
                     frame.on_top = on_top.iter().map(top_note).collect();
                     Some(frame)
                 })
                 .map_err(|why| self.scope.fail(ErrorCode::Internal, why)),
-            Ok(ProbeReply::None { stale_ref: None }) => Ok(None),
-            Ok(other) => Err(resolve::refused(self.scope, other)),
+            Ok(SnapshotRead {
+                reply: ProbeReply::None { stale_ref: None },
+                ..
+            }) => Ok(None),
+            Ok(SnapshotRead { reply: other, .. }) => Err(resolve::refused(self.scope, other)),
             // A navigation replaced the document: the next try installs in the new one.
             Err(ProbeFailure::Gone(_)) => {
                 self.page.frames().invalidate(&world);
@@ -763,8 +820,23 @@ impl Snapshotter<'_> {
         depth: Option<i64>,
     ) -> Result<aria_snapshot::SnapshotResult, PlaywrightError> {
         let on_top = mem::take(&mut root.on_top);
+        let unmarked = root.unmarked.take();
         let mut result = aria_snapshot::stitch(self.below(root, depth).await?);
+        let encoded = serde_json::to_string(&result).map_err(|_unencodable| {
+            self.scope.fail(
+                ErrorCode::Internal,
+                "could not encode the stitched snapshot",
+            )
+        })?;
+        let nesting = page::json_depth(&encoded);
+        if nesting > MAX_VALUE_DEPTH {
+            return Err(self.scope.fail(
+                ErrorCode::Unsupported,
+                &probe::depth_error(nesting.saturating_sub(1) / 2),
+            ));
+        }
         result.on_top = on_top;
+        result.unmarked = unmarked;
         let count = |seeds: usize| u32::try_from(seeds).unwrap_or(u32::MAX);
         result.closed_roots = self
             .marking
@@ -812,6 +884,7 @@ impl Snapshotter<'_> {
         match read {
             Ok(frame) => Ok(ChildFrame::Read {
                 iframe_ref: iframe.r#ref,
+                src: iframe.src,
                 snapshot: self.below(frame, depth).await?,
             }),
             Err(unread) => Ok(ChildFrame::Partial(PartialFrame {
@@ -867,12 +940,27 @@ impl Snapshotter<'_> {
                 .call(&child, Some(&parent), Some(deadline), &request)
                 .await
             {
-                Ok(ProbeReply::Snapshot { json, iframes, .. }) => {
-                    return frame_reply(json, iframes)
+                Ok(SnapshotRead {
+                    reply: ProbeReply::Snapshot { json, iframes, .. },
+                    ..
+                }) => {
+                    return frame_reply(json, iframes, None)
                         .map_err(|_why| Unread::Failed(ErrorCode::Internal));
                 }
-                Ok(ProbeReply::None { .. }) => return Ok(FrameReply::empty()),
-                Ok(other) => {
+                Ok(SnapshotRead {
+                    reply: ProbeReply::None { .. },
+                    ..
+                }) => return Ok(FrameReply::empty()),
+                Ok(SnapshotRead {
+                    reply:
+                        ProbeReply::Error {
+                            class: ErrorClass::Unsupported,
+                            tree_depth: Some(levels),
+                            ..
+                        },
+                    ..
+                }) => return Err(Unread::Depth(levels)),
+                Ok(SnapshotRead { reply: other, .. }) => {
                     let refused = resolve::refused(self.scope, other);
                     return Err(Unread::Failed(
                         refused.error_code().unwrap_or(ErrorCode::Internal),
@@ -893,7 +981,11 @@ impl Snapshotter<'_> {
 
 /// Decodes one frame's reply. The decode error is left out of the message, because serde quotes
 /// the value it could not read, which is page text.
-fn frame_reply(json: Value, iframes: Vec<SnapshotIframe>) -> Result<FrameReply, &'static str> {
+fn frame_reply(
+    json: Value,
+    iframes: Vec<SnapshotIframe>,
+    unmarked: Option<Unmarked>,
+) -> Result<FrameReply, &'static str> {
     let json = serde_json::from_value(json).map_err(|_unreadable| {
         "the probe's snapshot has a node this build cannot read; rebuild \
          crates/neo-sdk/neo-playwright-js"
@@ -902,6 +994,7 @@ fn frame_reply(json: Value, iframes: Vec<SnapshotIframe>) -> Result<FrameReply, 
         json,
         iframes,
         on_top: Vec::new(),
+        unmarked,
     })
 }
 
@@ -1029,5 +1122,31 @@ mod tests {
             );
         }
         Ok(())
+    }
+    #[test]
+    fn a_probe_tree_at_the_reply_cap_still_decodes_as_typed_aria_nodes()
+    -> Result<(), Box<dyn Error>> {
+        use serde::Deserialize as _;
+        for groups in [70, 130, 147] {
+            let text = format!(
+                "[{}{{\"role\":\"button\",\"name\":\"End\"}}{}]",
+                "{\"role\":\"group\",\"children\":[".repeat(groups),
+                "]}".repeat(groups)
+            );
+            let mut reader = serde_json::Deserializer::from_str(&text);
+            reader.disable_recursion_limit();
+            let value = serde_json::Value::deserialize(&mut reader)?;
+            let frame = super::frame_reply(value, Vec::new(), None)?;
+            assert_eq!(frame.json.len(), 1);
+        }
+        Ok(())
+    }
+    #[test]
+    fn a_child_depth_reason_uses_tree_levels_and_an_actionable_cut() {
+        let reason = Unread::Depth(149).to_string();
+        assert!(reason.contains("149 levels deep"));
+        assert!(reason.contains("about 147"));
+        assert!(reason.contains("140 or less"));
+        assert!(reason.contains("locator's snapshot"));
     }
 }

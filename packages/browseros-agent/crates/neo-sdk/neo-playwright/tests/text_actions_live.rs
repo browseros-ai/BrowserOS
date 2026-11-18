@@ -1569,7 +1569,8 @@ async fn tests_that_a_focus_started_during_a_delayed_type_waits_for_its_last_key
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_select_option_and_set_input_files_lease_focus_in_an_adopted_tab() -> TestResult
 {
-    let run = LiveRun::connect().await?;
+    // Keep the tab in the background so the lease's visible/hidden transitions remain real.
+    let run = LiveRun::connect().await?.without_activation();
     let server = FixtureServer::start(pages()).await?;
     let page = run
         .open_adopted(&server.url("127.0.0.1", "/actions/form.html"))

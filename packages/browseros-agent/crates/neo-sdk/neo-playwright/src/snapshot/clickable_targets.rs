@@ -109,7 +109,7 @@ pub(super) struct Feed {
 }
 
 /// Why a frame was snapshotted without its targets, as the call log words it.
-enum Skipped {
+pub(super) enum Skipped {
     /// Core's capture, or the frame's document in it, could not be read.
     Read(FrameReadReason),
     /// A hit's node could not be resolved into the frame's world, other than by being gone.
@@ -179,7 +179,7 @@ impl Marking {
 
     /// What `world`'s frame passes to its snapshot call. `parent` is the world of the frame that
     /// holds its iframe, `None` for the main frame; `frame_deadline` is when a child frame's own
-    /// budget ends. Empty when the frame has nothing to pass; `None` when it could not be read,
+    /// budget ends. Empty when the frame has nothing to pass; an error when it could not be read,
     /// which is noted, with the time it took, on the op's call log. One read, one budget: a
     /// frame that misses it passes neither its targets nor its seeds.
     pub(super) async fn feed(
@@ -188,7 +188,7 @@ impl Marking {
         world: &IsolatedWorld,
         parent: Option<&IsolatedWorld>,
         frame_deadline: Option<Instant>,
-    ) -> Option<Feed> {
+    ) -> Result<Feed, Skipped> {
         let session = world.session_id().map(|id| id.0.clone());
         let timed_out = || {
             self.timed_out
@@ -210,14 +210,14 @@ impl Marking {
             read
         };
         match read {
-            Ok(feed) => Some(feed),
+            Ok(feed) => Ok(feed),
             Err(skipped) => {
                 scope.log(format!(
                     "  clickable marking skipped a frame ({}) after {} ms",
                     skipped.words(),
                     started.elapsed().as_millis()
                 ));
-                None
+                Err(skipped)
             }
         }
     }
@@ -328,7 +328,7 @@ fn budget_within(left: [Option<Duration>; 2]) -> Duration {
 }
 
 impl Skipped {
-    fn words(&self) -> &'static str {
+    pub(super) fn words(&self) -> &'static str {
         match self {
             Self::Read(FrameReadReason::Timeout) | Self::Timeout => "timeout",
             Self::Read(FrameReadReason::Detached) => "frame detached",
@@ -404,12 +404,213 @@ async fn resolve(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::error::Error;
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::sync::{Arc, PoisonError};
     use std::time::Duration;
 
+    use serde_json::{Value, json};
     use tokio::time::{self, Instant};
 
-    use super::{MARK_BUDGET, Skipped, budget_within, within};
+    use super::{MARK_BUDGET, Marking, Skipped, budget_within, within};
+    use crate::op_scope::OpScope;
+    use crate::probe::PROBE_PROTOCOL;
+    use crate::target::CallHeader;
+    use crate::test_env::{EnvCall, Recording, TestEnv};
+    use crate::test_support::{
+        ProbeAnswer, SCRIPTED_CHILD, SCRIPTED_MAIN, ScriptedRun, ScriptedTab, TabScript,
+    };
+    use crate::world::IsolatedWorld;
+    use crate::{ErrorCode, Op};
+
+    /// A capture already cut off for this session still explains the lost marks to this
+    /// snapshot’s own host environment; no browser or logger is needed to observe that seam.
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_skipped_marking_notes_its_snapshot_operation() -> Result<(), Box<dyn Error>>
+    {
+        let env = TestEnv::new();
+        let op = Op::from_name("page.ariaSnapshot").ok_or("snapshot operation exists")?;
+        let scope = OpScope::new(&env, op, CallHeader::default());
+        let recording = Arc::new(Recording::default());
+        let world = IsolatedWorld::for_tests(recording.session("A"), "frame", 1, "global");
+        let marking = Marking::new();
+        marking
+            .timed_out
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(Some("A".to_owned()));
+        assert!(matches!(
+            marking.feed(&scope, &world, None, None).await,
+            Err(Skipped::Timeout)
+        ));
+        let note = "  clickable marking skipped a frame (timeout) after 0 ms";
+        assert_eq!(env.calls(), [EnvCall::Note(note.to_owned())]);
+        assert!(
+            recording.sent().is_empty(),
+            "a timed-out capture is not repeated"
+        );
+        let error = scope.fail(ErrorCode::Unsupported, "test refusal");
+        assert!(
+            error
+                .message()
+                .starts_with("page.ariaSnapshot: test refusal")
+        );
+        assert!(error.message().contains(note.trim_start()));
+        Ok(())
+    }
+
+    /// Real snapshot ops over the fake protocol and `OpEnv` observe the result after stitching,
+    /// where only the root's check status may reach the renderer.
+    struct UncheckedFrame {
+        timeout: bool,
+        page_shape: bool,
+        child: bool,
+        main_seq: AtomicU64,
+        child_seq: AtomicU64,
+    }
+
+    impl TabScript for UncheckedFrame {
+        fn child(&self) -> bool {
+            self.child
+        }
+
+        fn delay(&self, method: &str) -> Duration {
+            if self.timeout && method == "DOMSnapshot.captureSnapshot" {
+                MARK_BUDGET + Duration::from_millis(1)
+            } else {
+                Duration::ZERO
+            }
+        }
+
+        fn cdp_reply(&self, method: &str, params: &Value) -> Option<Value> {
+            if method == "Runtime.callFunctionOn"
+                && params["objectId"] == "g"
+                && let Some(seq) = params["arguments"][0]["value"]["frameSeq"].as_u64()
+            {
+                self.main_seq.store(seq, Ordering::SeqCst);
+            }
+            if method == "Runtime.callFunctionOn"
+                && params["objectId"] == "g-child"
+                && let Some(seq) = params["arguments"][0]["value"]["frameSeq"].as_u64()
+            {
+                self.child_seq.store(seq, Ordering::SeqCst);
+            }
+            match method {
+                // A successfully read empty root is checked. No child document is captured,
+                // forcing its own marking to skip while its probe can still return a tree.
+                "DOMSnapshot.captureSnapshot" => Some(json!({ "documents": [{}], "strings": [] })),
+                "DOM.getFrameOwner" => Some(json!({ "backendNodeId": 2 })),
+                "DOM.describeNode" if params["objectId"] == "iframe-owner" => Some(json!({
+                    "node": { "backendNodeId": 2, "nodeName": "IFRAME",
+                        "frameId": SCRIPTED_CHILD,
+                        "contentDocument": { "backendNodeId": 3 } }
+                })),
+                "Runtime.callFunctionOn"
+                    if params["arguments"][0]["value"]["request"]["op"] == "pinned" =>
+                {
+                    Some(json!({
+                        "result": { "type": "object", "subtype": "node", "objectId": "iframe-owner" }
+                    }))
+                }
+                _ => None,
+            }
+        }
+
+        fn probe(&self, frame: &str, request: &Value) -> ProbeAnswer {
+            let iframe_ref = format!("f{}e1", self.main_seq.load(Ordering::SeqCst));
+            if request["op"] == "read" {
+                return ProbeAnswer::reply(json!({ "kind": "read", "value": true }));
+            }
+            if request["op"] == "describe" {
+                let seq = if frame == SCRIPTED_MAIN {
+                    self.main_seq.load(Ordering::SeqCst)
+                } else {
+                    self.child_seq.load(Ordering::SeqCst)
+                };
+                return ProbeAnswer::reply(
+                    json!({ "kind": "described", "protocol": PROBE_PROTOCOL, "seq": seq, "url": "https://a.test/" }),
+                );
+            }
+            if request["op"] == "resolve" && request["want"] == "element" {
+                return ProbeAnswer::reply(
+                    json!({ "kind": "element", "pin": 1, "preview": "<button>Continue</button>" }),
+                );
+            }
+            if request["op"] == "resolve" {
+                return ProbeAnswer::reply(json!({ "kind": "frame", "pin": 1,
+                    "key": iframe_ref, "visible": true, "src": "https://child.test/" }));
+            }
+            if request["op"] != "snapshot" {
+                return ProbeAnswer::reply(
+                    json!({ "kind": "error", "class": "unsupported", "message": format!("unexpected fixture request {}", request["op"]) }),
+                );
+            }
+            if self.child && frame == SCRIPTED_MAIN {
+                ProbeAnswer::reply(
+                    json!({ "kind": "snapshot", "json": [{ "role": "iframe", "ref": iframe_ref }],
+                    "iframes": [{ "ref": iframe_ref, "depth": 1, "src": "https://child.test/" }] }),
+                )
+            } else {
+                ProbeAnswer::reply(
+                    json!({ "kind": "snapshot", "json": [{ "role": "button", "name": "Continue", "ref": "f1e2" }],
+                    "iframes": [], "marksSkipped": self.page_shape }),
+                )
+            }
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_only_the_unchecked_snapshot_root_reports_missing_refs()
+    -> Result<(), Box<dyn Error>> {
+        for (timeout, page_shape, child, requested, expected) in [
+            (true, false, false, true, Some("timeout")),
+            (false, false, false, true, None),
+            (false, true, false, true, Some("page shape")),
+            (false, false, true, true, None),
+            (false, true, false, false, None),
+        ] {
+            let tab = ScriptedTab::new(UncheckedFrame {
+                timeout,
+                page_shape,
+                child,
+                main_seq: AtomicU64::default(),
+                child_seq: AtomicU64::default(),
+            });
+            let run = ScriptedRun::over(&tab).await?;
+            let result = run
+                .playwright
+                .invoke(
+                    &run.env,
+                    Op::from_name("page.ariaSnapshot").ok_or("snapshot operation")?,
+                    json!({ "page": run.page, "mode": "ai", "clickable": requested }),
+                )
+                .await?;
+            assert_eq!(
+                result.get("unmarked"),
+                expected.map(|reason| json!({ "reason": reason })).as_ref()
+            );
+            if child {
+                assert!(run.env.calls().iter().any(|call| matches!(call, EnvCall::Note(note) if note.contains("clickable marking skipped a frame"))),
+                    "the child skip must actually happen");
+                assert_eq!(
+                    result["partial"],
+                    json!([]),
+                    "a missing check does not lose the child's tree"
+                );
+                let reference = format!("f{}e2", tab.script().child_seq.load(Ordering::SeqCst));
+                let locator = run.playwright.invoke(&run.env,
+                    Op::from_name("locator.ariaSnapshot").ok_or("locator snapshot operation")?,
+                    json!({ "target": { "$neo": "locator", "page": run.page,
+                        "chunks": [{ "parts": [{ "name": "aria-ref", "body": reference, "source": reference }] }],
+                        "display": "getByRef" }, "strict": "strict", "mode": "ai", "clickable": true })).await?;
+                assert!(
+                    locator.get("unmarked").is_some(),
+                    "a locator in the child promotes that frame's skip: {locator}"
+                );
+            }
+        }
+        Ok(())
+    }
 
     #[tokio::test(start_paused = true)]
     async fn tests_that_a_spent_budget_drops_the_read_before_it_runs_and_a_late_one_as_it_lands() {

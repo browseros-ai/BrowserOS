@@ -8,7 +8,6 @@
 
 import type { Skill, SkillRun, SkillUltrafast } from '@browseros/claw-api'
 import { HARNESSES, type Harness } from '@/components/harness/harness.types'
-import type { AnimatedBadgeStatus } from '@/components/motion/animated-badge'
 import { verbForTool } from '@/lib/step-sentences'
 import type { ReplayVerb } from '@/modules/api/replay.hooks'
 import { siteHost } from '@/modules/favicon/favicon.helpers'
@@ -157,26 +156,29 @@ export function stuckWhile(erroredTool: string | undefined): string {
     : 'Got stuck before it finished.'
 }
 
-export interface UltrafastBadgeMeta {
-  label: string
-  tone: AnimatedBadgeStatus
+export interface UltrafastMark {
+  /** The wordmark dims when the fast version isn't running as it should. */
+  dim: boolean
+  /** The state after the wordmark, in words; none for a verified skill. */
+  word: string | null
+  tone: 'amber' | 'red' | 'muted'
 }
 
-/** How a skill's ultrafast state reads on a badge, or nothing for a plain skill. */
-export function ultrafastBadge(
+/** How a skill's ultrafast state reads beside the wordmark, or nothing for a plain skill. */
+export function ultrafastMark(
   ultrafast: SkillUltrafast | undefined,
-): UltrafastBadgeMeta | null {
+): UltrafastMark | null {
   switch (ultrafast?.status) {
     case 'verified':
-      return { label: 'Ultrafast', tone: 'success' }
+      return { dim: false, word: null, tone: 'muted' }
     case 'degraded':
-      return { label: 'Ultrafast · needs a repair', tone: 'warning' }
+      return { dim: true, word: 'needs a repair', tone: 'amber' }
     case 'broken':
-      return { label: 'Ultrafast paused', tone: 'danger' }
+      return { dim: true, word: 'paused', tone: 'red' }
     case 'pending':
-      return { label: 'Becoming ultrafast', tone: 'info' }
+      return { dim: true, word: 'on the way', tone: 'muted' }
     case 'off':
-      return { label: 'Runs the normal way', tone: 'neutral' }
+      return { dim: true, word: 'off', tone: 'muted' }
     default:
       return null
   }
@@ -256,7 +258,8 @@ export interface RunsChoice {
   /** Neither option can be picked: the plan is off. */
   disabled: boolean
   chip: string
-  chipTone: 'accent' | 'amber' | 'muted'
+  /** `ultrafast` chips read after the wordmark. */
+  chipTone: 'ultrafast' | 'amber' | 'muted'
   /** How long it takes without the agent, from the verified median. */
   fastLabel: string | null
   /** How long it takes with the agent, from runs the agent did itself. */
@@ -315,8 +318,8 @@ export function runsChoice(
       ...base,
       state: 'read',
       selected: 'without_agent',
-      chip: 'Ready',
-      chipTone: 'accent',
+      chip: 'ready',
+      chipTone: 'ultrafast',
     }
   }
   if (choice.alwaysWithAgent) {
@@ -334,8 +337,8 @@ export function runsChoice(
       ...base,
       state: 'without',
       selected: 'without_agent',
-      chip: 'Runs without your agent',
-      chipTone: 'accent',
+      chip: 'runs without your agent',
+      chipTone: 'ultrafast',
     }
   }
   if (choice.chosen) {

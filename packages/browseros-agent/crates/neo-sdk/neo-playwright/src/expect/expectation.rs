@@ -680,6 +680,7 @@ mod tests {
                 api: Some("expect.toHaveValue".to_owned()),
                 timeout_ms: Some(5000),
                 conformance: false,
+                timeout_built_in: false,
             },
         ))
     }
@@ -918,6 +919,7 @@ mod tests {
                 api: Some("expect.toBeVisible".to_owned()),
                 timeout_ms: Some(timeout_ms),
                 conformance: false,
+                timeout_built_in: false,
             },
         ))
     }
