@@ -544,6 +544,7 @@ dependencies = [
  "neo-captcha",
  "neo-screencast",
  "os_info",
+ "percent-encoding",
  "posthog-rs",
  "pulldown-cmark",
  "rand 0.9.4",

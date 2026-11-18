@@ -4,6 +4,7 @@
 
 use std::sync::LazyLock;
 
+use percent_encoding::percent_decode_str;
 use regex::Regex;
 use url::Url;
 
@@ -79,10 +80,12 @@ pub fn host_and_path(raw: &str) -> Option<(String, String)> {
             segments
                 .filter(|segment| !segment.is_empty())
                 .map(|segment| {
-                    if is_id_like(segment) {
+                    // Scrub the decoded text: an email arrives here as `jane%40example.com`.
+                    let segment = percent_decode_str(segment).decode_utf8_lossy();
+                    if is_id_like(&segment) {
                         "{id}".to_string()
                     } else {
-                        scrub_text(segment, 60)
+                        scrub_text(&segment, 60)
                     }
                 })
                 .collect::<Vec<_>>()
@@ -165,6 +168,17 @@ mod tests {
             ))
         );
         assert!(host_and_path("chrome://newtab").is_none());
+    }
+
+    #[test]
+    fn host_and_path_scrubs_encoded_personal_values() {
+        let (_, path) = host_and_path(
+            "https://example.com/users/jane%40example.com/orders/jane%2Bdoe%40mail.co",
+        )
+        .unwrap_or_default();
+        assert!(!path.contains("jane"), "{path}");
+        assert!(!path.contains("%40"), "{path}");
+        assert!(path.starts_with("/users/[removed]/orders/"), "{path}");
     }
 
     #[test]

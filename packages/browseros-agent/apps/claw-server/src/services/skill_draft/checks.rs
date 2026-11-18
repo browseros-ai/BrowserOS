@@ -45,10 +45,20 @@ pub fn checked(mut draft: SkillDraft, hosts: &[String]) -> Option<SkillDraft> {
     if !on_site(&draft.site, hosts) || draft.steps.len() < 2 {
         return None;
     }
+    draft.inputs.retain(|input| {
+        let token = format!("{{{}}}", input.name);
+        draft.steps.iter().any(|step| step.contains(&token))
+    });
     let lines = std::iter::once(draft.title.as_str())
         .chain(std::iter::once(draft.description.as_str()))
         .chain(draft.steps.iter().map(String::as_str))
-        .chain(draft.notes.iter().map(String::as_str));
+        .chain(draft.notes.iter().map(String::as_str))
+        .chain(
+            draft
+                .inputs
+                .iter()
+                .flat_map(|input| [input.label.as_str(), input.example.as_str()]),
+        );
     for line in lines {
         if credential.is_match(line) || email.is_match(line) || long_number.is_match(line) {
             return None;
@@ -60,10 +70,6 @@ pub fn checked(mut draft: SkillDraft, hosts: &[String]) -> Option<SkillDraft> {
             return None;
         }
     }
-    draft.inputs.retain(|input| {
-        let token = format!("{{{}}}", input.name);
-        draft.steps.iter().any(|step| step.contains(&token))
-    });
     Some(draft)
 }
 
@@ -147,6 +153,23 @@ mod tests {
             bad.steps.push(step.into());
             assert!(checked(bad, &hosts()).is_none(), "{step}");
         }
+    }
+
+    #[test]
+    fn rejects_personal_details_in_a_used_input() {
+        let mut bad = draft();
+        bad.inputs[0].example = "jane@example.com".into();
+        assert!(checked(bad, &hosts()).is_none());
+        let mut label = draft();
+        label.inputs[0].label = "Your password".into();
+        assert!(checked(label, &hosts()).is_none());
+    }
+
+    #[test]
+    fn ignores_an_unused_input_it_drops() {
+        let mut unused = draft();
+        unused.inputs[1].example = "jane@example.com".into();
+        assert!(checked(unused, &hosts()).is_some());
     }
 
     #[test]
