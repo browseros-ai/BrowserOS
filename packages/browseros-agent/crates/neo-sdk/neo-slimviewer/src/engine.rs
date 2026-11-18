@@ -505,7 +505,7 @@ fn frame_plan(
     let plan = picture.plan(now, band);
     if needs_key {
         Plan {
-            scale: picture.scale(),
+            scale: picture.motion_scale(),
             sharp_qp: None,
         }
     } else {
@@ -1074,6 +1074,7 @@ impl Engine {
                 .log(now, format_args!("event=loop reason=no_viewer"));
             return Ok(());
         }
+        // Decide resync before planning the frame, when the requesting viewer can receive it.
         if now.saturating_duration_since(self.last_key) >= Duration::from_secs(1)
             && self
                 .viewers
@@ -1098,7 +1099,7 @@ impl Engine {
             }
         }
         if self.enc.is_none() {
-            self.encoder(Scale::Full)?;
+            self.encoder(self.picture.motion_scale())?;
             self.cap.forget();
             self.damaged = true;
         }
@@ -1161,7 +1162,7 @@ impl Engine {
                     grab.as_secs_f64() * 1000.0,
                 ),
             );
-            let needs_key = self.pacer().is_some_and(|p| p.needs_key);
+            let needs_key = self.want_key || self.pacer().is_some_and(|p| p.needs_key);
             let plan = frame_plan(&mut self.picture, now, band, needs_key);
             let convert_at = Instant::now();
             if self.encoder(plan.scale)? {
@@ -1256,10 +1257,7 @@ impl Engine {
         let qp = plan.sharp_qp;
         let full_return = self.picture.scale() == Scale::Half && plan.scale == Scale::Full;
         let owner_key = self.pacer().is_some_and(|viewer| viewer.needs_key);
-        // A viewer that skipped a frame cannot decode the next ones; resync it, at most once a second.
-        let resync = self.viewers.iter().any(|v| v.needs_key)
-            && now - self.last_key > Duration::from_secs(1);
-        let idr = self.want_key || resync;
+        let idr = self.want_key;
         let Some(enc) = self.enc.as_mut() else { return };
         let t = Instant::now();
         let pts = (now - self.t0).as_millis() as i64;
@@ -1855,13 +1853,14 @@ mod tests {
     }
 
     #[test]
-    fn tests_that_resync_uses_current_size_without_a_sharp_frame() {
+    fn tests_that_resync_uses_the_half_rung_even_without_changed_rows() {
         let t = Instant::now();
         let mut p = motion(t, true);
+        assert_eq!(p.scale(), Scale::Full);
         assert_eq!(
-            frame_plan(&mut p, t, BIG, true),
+            frame_plan(&mut p, t, None, true),
             Plan {
-                scale: Scale::Full,
+                scale: Scale::Half,
                 sharp_qp: None
             }
         );
@@ -2088,22 +2087,9 @@ mod tests {
     fn tests_that_small_motion_never_starts_half_size() {
         let t0 = Instant::now();
         let mut m = motion(t0, true);
-        // The first sent key is full size. The following small update comes before settling.
-        let key = frame_plan(&mut m, t0, BIG, true);
-        m.encoded(
-            t0,
-            picture::Encoded {
-                plan: key,
-                key: true,
-                owner_key: true,
-                bytes: 40_000,
-                pixels: 780 * ROWS,
-                big: true,
-                work: Work::default(),
-            },
-        );
+        assert_eq!(m.scale(), Scale::Full);
         assert_eq!(
-            changed(&mut m, t0, Some((0, ROWS * 2 / 5, ROWS * 2 / 5))),
+            frame_plan(&mut m, t0, SMALL, false),
             Plan {
                 scale: Scale::Full,
                 sharp_qp: None
@@ -2623,6 +2609,7 @@ mod tests {
         ticks: Vec<PacedTick>,
         frames: Vec<PacedFrame>,
         resets: Vec<Duration>,
+        first_half: Option<Duration>,
     }
 
     struct PacedCell {
@@ -2633,6 +2620,7 @@ mod tests {
         key_bytes: usize,
         first_two_ack_floor_ms: u64,
         initial_queue_ms: u64,
+        changed_rows: usize,
     }
 
     impl Default for PacedCell {
@@ -2645,6 +2633,7 @@ mod tests {
                 key_bytes: 40_000,
                 first_two_ack_floor_ms: 0,
                 initial_queue_ms: 0,
+                changed_rows: 1200,
             }
         }
     }
@@ -2708,18 +2697,22 @@ mod tests {
                 trace.ticks.push(PacedTick {
                     fps: p.fps(),
                     crf: p.crf(),
-                    scale: p.plan(now, BIG).scale,
+                    scale: p.motion_scale(),
                     sent,
                     delivered,
                     blocked: blocked_fraction,
                 });
                 blocked = 0.0;
             }
+            if p.motion_scale() == Scale::Half {
+                trace.first_half.get_or_insert(now - t);
+            }
             let interval = Duration::from_secs_f32(1.0 / p.fps());
             if viewers[0].open(now, interval) && last_send.is_none_or(|last| now >= last + interval)
             {
                 let owner_key = viewers[0].needs_key;
-                let plan = frame_plan(&mut p, now, BIG, owner_key);
+                let band = Some((0, ROWS, cell.changed_rows));
+                let plan = frame_plan(&mut p, now, band, owner_key);
                 let key = owner_key || plan.scale != p.scale();
                 let full_bytes = if key {
                     cell.key_bytes as f32 * 2.0_f32.powf((24.0 - p.crf()) / 6.0)
@@ -2745,7 +2738,7 @@ mod tests {
                         owner_key,
                         bytes: size,
                         pixels: 780 * ROWS / if plan.scale == Scale::Half { 4 } else { 1 },
-                        big: true,
+                        big: cell.changed_rows * 2 > ROWS,
                         work: Work {
                             encode: Duration::from_millis(10),
                             ..Work::default()
@@ -2844,34 +2837,55 @@ mod tests {
     }
 
     #[test]
-    fn tests_that_megabyte_keyframe_jam_reaches_half_via_two_resets() -> Result<(), &'static str> {
-        // The first two keys cross the real window timeout before their ACKs release the barrier.
+    fn tests_that_the_first_reset_key_on_the_half_rung_avoids_a_half_second_draw_gap()
+    -> Result<(), &'static str> {
+        // As on Fly, 46% changed rows never trigger a motion size switch. Two delayed
+        // ACKs expire the real owner window, first at full size and then at the half rung.
+        let end = Duration::from_secs(10);
         let trace = paced_picture(
-            8,
+            end.as_secs(),
             PacedCell {
-                key_bytes: 1_000_000,
+                rtt_ms: 70,
+                initial_queue_ms: 100,
+                key_bytes: 880_000,
                 first_two_ack_floor_ms: 3100,
+                changed_rows: ROWS * 46 / 100,
                 ..PacedCell::default()
             },
         );
         assert_eq!(trace.resets.len(), 2, "{:?}", trace.resets);
-        assert_eq!(trace.ticks.len(), 8);
-        let half = trace
+        let engaged = trace.resets[1];
+        assert_eq!(trace.first_half, Some(engaged));
+        let forced = trace
             .frames
             .iter()
-            .find(|frame| frame.scale == Scale::Half)
-            .ok_or("the reset must produce a half-size key")?;
-        assert!(half.at >= trace.resets[1] && half.at <= Duration::from_secs(8));
-        assert!(half.key && half.bytes <= 125_000);
+            .find(|frame| frame.at >= engaged)
+            .ok_or("the reset must send a key")?;
+        assert!(forced.key);
+        assert_eq!((forced.scale, forced.bytes), (Scale::Half, 110_000));
         let resync = trace
             .frames
             .iter()
             .find(|f| f.at >= trace.resets[0])
             .ok_or("the first reset must send a full resync key")?;
         assert_eq!(
-            resync.bytes, 500_000,
+            resync.bytes, 440_000,
             "the first forced full key already uses the cap QP"
         );
+        let mut last_draw = engaged;
+        for draw in trace
+            .frames
+            .iter()
+            .map(|f| f.received)
+            .filter(|&draw| draw >= engaged && draw <= end)
+            .chain([end])
+        {
+            assert!(
+                draw - last_draw < Duration::from_millis(500),
+                "draw gap from {last_draw:?} to {draw:?}"
+            );
+            last_draw = draw;
+        }
         Ok(())
     }
 

@@ -479,7 +479,8 @@ impl Picture {
         self.newest_damage = Some(now);
     }
 
-    fn motion_scale(&self) -> Scale {
+    /// Large changes and forced keys use the size chosen by the link and CPU.
+    pub fn motion_scale(&self) -> Scale {
         if self.ladder.rungs[self.cpu.at].scale == Scale::Half
             || self.ladder.rungs[self.link.at].scale == Scale::Half
         {

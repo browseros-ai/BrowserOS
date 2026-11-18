@@ -28,7 +28,8 @@ If the full key exceeds that budget, a full second without a change allows the
 settle frame through. Its acknowledgement measures fresh capacity.
 
 When an owner's acknowledgement window times out, the engine applies the
-quality cap before encoding the next keyframe. It measures delivered bytes,
+quality cap before encoding the next keyframe. Forced keys use half size whenever
+the link or CPU has selected it, even for small changes. It measures delivered bytes,
 CPU load and capture counts on the regular one-second tick.
 
 The host relays a TCP byte stream over WebSocket. Each record starts with a
