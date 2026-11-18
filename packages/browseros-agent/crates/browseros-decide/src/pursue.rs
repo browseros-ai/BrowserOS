@@ -20,6 +20,10 @@ use crate::space::ActionSpace;
 use crate::space::Candidate;
 use crate::view::{Moved, PageView};
 use crate::vocabulary::{How, Operation};
+use crate::writer::{self, Field, NoWriter, Writer};
+
+/// The question that picks one written value for the field just chosen.
+pub const WROTE: &str = "wrote";
 
 /// Where a decision comes from.
 ///
@@ -200,6 +204,8 @@ pub struct Outcome {
     /// eight times the tokens.
     pub batches: u32,
     pub input_tokens: u64,
+    /// Requests made to the writer for text nobody supplied.
+    pub writes: u32,
     pub trail: Vec<Step>,
     /// Every decision, including the ones that never ran.
     pub decided: Vec<Decided>,
@@ -232,7 +238,17 @@ pub async fn pursue<O: Oracle, D: Driver>(
 }
 
 /// Carries a run on, from wherever it is.
-pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run) -> Outcome {
+pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, run: Run) -> Outcome {
+    advance_writing(oracle, driver, None::<&NoWriter>, run).await
+}
+
+/// Carries a run on, asking `writer` for text when it chooses to type and nothing was supplied.
+pub async fn advance_writing<O: Oracle, D: Driver, W: Writer>(
+    oracle: &O,
+    driver: &D,
+    writer: Option<&W>,
+    mut run: Run,
+) -> Outcome {
     let started = Instant::now();
     let mut trail: Vec<Step> = Vec::new();
     let mut last: Option<PageView> = None;
@@ -327,11 +343,98 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
             .as_deref()
             .and_then(|reference| view.control(reference))
             .map(|control| control.name.clone());
-        let supplied = decision
+        let mut supplied = decision
             .value
             .as_deref()
             .and_then(|key| run.offered.values.iter().find(|value| value.name == key))
             .map(|value| value.text.clone());
+
+        // Typing with nothing to type: a writer proposes values and jev picks one, so the string
+        // is still chosen rather than authored by the model that decides.
+        let to_write = match (writer, decision.how) {
+            (Some(_), Some(How::Fill)) if supplied.is_none() => decision
+                .target
+                .as_deref()
+                .and_then(|reference| view.control(reference))
+                .map(|control| Field {
+                    role: control.role.clone(),
+                    name: control.name.clone(),
+                    value: control.value.clone(),
+                    site: writer::origin_of(&view.url),
+                    title: view.title.clone(),
+                }),
+            _ => None,
+        };
+        if let (Some(field), Some(writer)) = (to_write, writer) {
+            if let Err(refused) = writer::safe_to_type(&field) {
+                return end(
+                    &run,
+                    Status::Blocked(format!(
+                        "it chose to type into {:?}, and nothing is ever typed there because {}",
+                        field.name,
+                        refused.said()
+                    )),
+                    Some(view),
+                    &space,
+                    trail,
+                    goal_met,
+                );
+            }
+            run.writes += 1;
+            let candidates = writer
+                .candidates(&run.goal, &field)
+                .await
+                .map(|candidates| writer::usable_all(&candidates))
+                .unwrap_or_default();
+            let picked = if candidates.is_empty() {
+                None
+            } else {
+                let asked = written_choice(&run.goal, &candidates);
+                let state = questions::state(&view, &space, &run.recent, run.here.retired.len());
+                let left =
+                    Duration::from_secs(run.budget.max_seconds).saturating_sub(started.elapsed());
+                match oracle.ask_within(&state, &asked, left).await {
+                    Ok(response) => {
+                        run.decisions += 1;
+                        run.input_tokens += response.usage.input_tokens;
+                        response
+                            .answers
+                            .get(WROTE)
+                            .and_then(|answer| answer.choice.as_deref())
+                            .and_then(|id| id.strip_prefix('v'))
+                            .and_then(|index| index.parse::<usize>().ok())
+                            .and_then(|index| candidates.get(index).cloned())
+                    }
+                    Err(why) => {
+                        return end(
+                            &run,
+                            Status::NeedsInput(Handback::Unverifiable, why.to_string()),
+                            Some(view),
+                            &space,
+                            trail,
+                            goal_met,
+                        );
+                    }
+                }
+            };
+            let Some(text) = picked else {
+                return end(
+                    &run,
+                    Status::NeedsInput(
+                        Handback::NoFieldNamed,
+                        format!(
+                            "this step needs text typed into {:?}, and nothing written for it fits; supply the text for that field",
+                            field.name
+                        ),
+                    ),
+                    Some(view),
+                    &space,
+                    trail,
+                    goal_met,
+                );
+            };
+            supplied = Some(text);
+        }
 
         // Whether this move is worth making. Asked only once a control has been
         // settled on, because it names one, and only when the move could
@@ -911,6 +1014,31 @@ async fn search<O: Oracle>(
     .ok_or_else(|| "this page offered nothing to decide between".to_string())
 }
 
+/// Asks which written value goes in the field just chosen, with a way to refuse them all.
+fn written_choice(goal: &str, candidates: &[String]) -> BTreeMap<String, Question> {
+    let mut criteria: BTreeMap<String, serde_json::Value> = candidates
+        .iter()
+        .enumerate()
+        .map(|(index, text)| (format!("v{index}"), serde_json::json!({ "text": text })))
+        .collect();
+    criteria.insert(
+        crate::space::NONE_OF_THESE.to_string(),
+        serde_json::json!({ "text": "none of these belongs in this field" }),
+    );
+    let mut asked = BTreeMap::new();
+    asked.insert(
+        WROTE.to_string(),
+        Question::Choice {
+            instructions: serde_json::json!({
+                "goal": goal,
+                "question": "Which of these values should be typed into the field just chosen?",
+            }),
+            criteria,
+        },
+    );
+    asked
+}
+
 /// Turns a judged decision into something the driver can run.
 fn resolve(decision: &Decision, run: &Run, supplied: &Option<String>) -> Option<Move> {
     match decision.operation {
@@ -1153,6 +1281,7 @@ fn end(
         decisions: run.decisions,
         batches: run.batches_asked,
         input_tokens: run.input_tokens,
+        writes: run.writes,
         trail,
         decided: run.decided.clone(),
         url_before: run.url_before.clone().unwrap_or_default(),

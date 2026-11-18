@@ -1,0 +1,5 @@
+# Spec tests that flake, so `bun run test:neo-spec --ci` never judges them, in either direction, on
+# any platform: the job summary shows each one's outcome on every run, and none is on an expected
+# list. Edit this file by hand in a pull request; no command adds or removes an entry. Each entry
+# says why the test flakes and where its fix is tracked. Take it off when the fix lands.
+# id	file	title	reason	tracked

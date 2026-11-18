@@ -1,0 +1,31 @@
+/** Snapshot scalars are explicit caller readback, independent of fill's void return. */
+function shownField(snapshot, label) {
+  const name = JSON.stringify(label);
+  const line = snapshot.split('\n').find(row => row.includes(name));
+  assert(line !== undefined, 'snapshot contains the requested field', {label, snapshot});
+  const afterName = line.slice(line.indexOf(name) + name.length).trim();
+  const tail = afterName.replace(/^(?:\[[^\]]+\]\s*)*/, '');
+  assert(tail === '' || tail === ':' || tail.startsWith(': '),
+    'field line has a scalar readback', {label, line});
+  const scalar = tail === '' || tail === ':' ? '' : tail.slice(2);
+  const value = scalar.startsWith('"') ? JSON.parse(scalar)
+    : scalar.startsWith("'") ? scalar.slice(1, -1).replace(/''/g, "'") : scalar;
+  return {label, line, value, snapshotRef: line.match(/\[ref=([^\]]+)\]/)?.[1] ?? null};
+}
+
+await page.goto(args.base + '/fill.html');
+const phoneRef = await page.getByLabel('Phone field', {exact: true}).ref({timeout: 5000});
+const textRef = await page.getByLabel('Text field', {exact: true}).ref({timeout: 5000});
+// The caller owns serial progression and readback; page formatting does not change fill's return type.
+const phoneResult = await page.getByRef(phoneRef).fill('5551234567', {timeout: 8000});
+assert(phoneResult === undefined, 'the first fill resolves without a value', phoneResult);
+const textResult = await page.getByRef(textRef).fill('Ada', {timeout: 8000});
+assert(textResult === undefined, 'the second fill resolves without a value', textResult);
+const state = await page.evaluate(() => ({phone: document.getElementById('phone').value, text: document.getElementById('text').value}));
+equal(state, {phone: '(555) 123-4567', text: 'Ada'}, 'the second fill follows the formatted first fill');
+equal(await page.getByRef(phoneRef).inputValue(), state.phone, 'the original phone ref reads the formatted value');
+equal(await page.getByRef(textRef).inputValue(), state.text, 'the original text ref reads the second value');
+const snapshot = await page.ariaSnapshot({mode: 'ai', delta: false});
+const shown = {phone: shownField(snapshot, 'Phone field'), text: shownField(snapshot, 'Text field')};
+equal({phone: shown.phone.value, text: shown.text.value}, state, 'explicit snapshot readback contains both final values');
+return {phoneRef, textRef, state, shown, fillReturnTypes: [typeof phoneResult, typeof textResult]};

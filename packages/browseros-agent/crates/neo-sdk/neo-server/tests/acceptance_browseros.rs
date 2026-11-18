@@ -1,0 +1,1341 @@
+//! The acceptance smoke for hosted Neo: one task, driven by an agent over MCP and watched and
+//! steered by a host over the host socket, on a real BrowserOS with the real neo-http,
+//! -takeover and -trace behind claw-sdk. Nothing is faked.
+//!
+//! ```text
+//!  agent (MCP run, taskId T) ──▶ browseros-claw-sdk ── CDP ──▶ BrowserOS --headless
+//!  host  (bearer, host.sock) ──▶   ├ /v1/runs, /v1/operations: neo-trace's store
+//!                                  ├ /v1/locks: neo-takeover, asked by the door
+//!                                  └ /v1/operations/{id}/screenshot: the service's camera
+//! ```
+//!
+//! In order: the agent opens a tab and reads its title; the host reads that run's trace; the
+//! host locks the tab and the agent's next write is refused `not_sent`; the host releases it and
+//! the same write lands; the tab's picture after that write appears; SIGTERM stops Neo with 0.
+//!
+//! Like `e2e_browseros.rs`, it runs only when `CLAW_SDK_E2E_BROWSER` names a BrowserOS binary.
+
+#[path = "support/browseros_rig.rs"]
+pub mod browseros_rig;
+#[path = "../../neo-playwright/tests/support/fixture_server.rs"]
+#[expect(
+    dead_code,
+    reason = "the shared server also supports script and nested-frame fixtures"
+)]
+pub mod fixture_server;
+
+use std::collections::{HashMap, HashSet};
+use std::error::Error;
+use std::fmt::{self, Write as _};
+use std::path::Path;
+use std::time::Duration;
+
+use browseros_rig::{
+    CaptchaKey, Client, HOST_TOKEN, PATIENCE, Rig, TestResult, browser_or_skip, get, outcome, put,
+    run,
+};
+use fixture_server::{FixtureServer, Page};
+use neo_trace::{RedactionLimits, Redactor, RunDetail, RunId, RunStatus, TraceStore};
+use rmcp::model::CallToolResult;
+use serde_json::{Value, json};
+use tokio::time;
+
+/// The whole drive; see `e2e_browseros.rs` for why the budget sits inside the test.
+const TEST_BUDGET: Duration = Duration::from_secs(240);
+/// One host task. Every run carries it, so each later run's `page` is the tab the first opened:
+/// the agent writes on the locked tab the way a hosted agent continues its task.
+const TASK: &str = "acceptance";
+const FIRST_PAGE: &str = "data:text/html,<title>Neo acceptance</title><p>opened by the agent</p>";
+const FIRST_TITLE: &str = "Neo acceptance";
+const SECOND_PAGE: &str =
+    "data:text/html,<title>Neo acceptance, released</title><p>after the owner let go</p>";
+const SECOND_TITLE: &str = "Neo acceptance, released";
+/// Every JPEG starts with SOI and ends with EOI.
+const JPEG_START: &[u8] = &[0xff, 0xd8, 0xff];
+const JPEG_END: &[u8] = &[0xff, 0xd9];
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs an owned BrowserOS"]
+async fn an_agent_and_a_host_share_one_tab_on_a_real_browseros() -> TestResult {
+    let Some(browser) = browser_or_skip() else {
+        return Ok(());
+    };
+    let mut rig = Rig::start(&browser, CaptchaKey::Absent)?;
+    let failure = match time::timeout(TEST_BUDGET, drive(&mut rig)).await {
+        Ok(Ok(())) => return Ok(()),
+        Ok(Err(error)) => error.to_string(),
+        Err(_elapsed) => format!("the drive did not finish within {TEST_BUDGET:?}"),
+    };
+    Err(format!("{failure}\n{}", rig.logs()).into())
+}
+
+async fn drive(rig: &mut Rig) -> TestResult {
+    rig.until_ready().await?;
+    let client = rig.client().await?;
+
+    let (opened, tab) = the_agent_opens_a_tab(&client).await?;
+    the_host_reads_the_run(rig, &opened, tab).await?;
+    a_lock_refuses_the_agent(rig, &client, tab).await?;
+    let landed = the_write_lands_once_released(rig, &client).await?;
+    the_tab_has_its_picture_after_the_write(rig, &landed, tab).await?;
+
+    client.cancel().await?;
+    assert_eq!(rig.stop_neo().await?, Some(0), "SIGTERM is a normal stop");
+    Ok(())
+}
+
+/// The takeover's hand-back on a real browser: during a takeover of the agent's tab the owner
+/// opens a tab by hand, which the browser shows in front; the release lists it in `openedTabs`
+/// with `inFront` true and no task or opener, and Neo gives it to no task.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs an owned BrowserOS"]
+async fn a_tab_the_owner_opens_during_a_takeover_is_listed_at_its_release_in_front() -> TestResult {
+    let Some(browser) = browser_or_skip() else {
+        return Ok(());
+    };
+    let rig = Rig::start(&browser, CaptchaKey::Absent)?;
+    let failure = match time::timeout(TEST_BUDGET, hand_back(&rig)).await {
+        Ok(Ok(())) => return Ok(()),
+        Ok(Err(error)) => error.to_string(),
+        Err(_elapsed) => format!("the hand-back did not finish within {TEST_BUDGET:?}"),
+    };
+    Err(format!("{failure}\n{}", rig.logs()).into())
+}
+
+async fn hand_back(rig: &Rig) -> TestResult {
+    rig.until_ready().await?;
+    let client = rig.client().await?;
+    let (_, tab) = the_agent_opens_a_tab(&client).await?;
+    client.cancel().await?;
+    let started = rig
+        .host(
+            "POST",
+            "/v1/takeovers",
+            Some(HOST_TOKEN),
+            Some(&json!({ "tabId": tab })),
+        )
+        .await?;
+    assert_eq!(started.status, 200, "{}", started.text());
+    let started = started.json()?;
+    let id = started
+        .get("id")
+        .and_then(Value::as_str)
+        .ok_or("the takeover's id")?;
+    // The owner opens a tab by hand; the browser shows a new tab in front.
+    let url = "data:text/html,handed-back";
+    put(rig.cdp_port(), &format!("/json/new?{url}")).await?;
+    let opened = time::timeout(PATIENCE, async {
+        loop {
+            let tabs = rig
+                .host("GET", "/v1/tabs", Some(HOST_TOKEN), None)
+                .await?
+                .json()?;
+            let found = tabs
+                .get("items")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .find(|item| item.get("url") == Some(&json!(url)))
+                .and_then(|item| item.get("tabId").and_then(Value::as_i64));
+            if let Some(found) = found {
+                return Ok::<_, Box<dyn Error>>(found);
+            }
+            time::sleep(Duration::from_millis(200)).await;
+        }
+    })
+    .await
+    .map_err(|_elapsed| "the owner's tab is listed")??;
+    // The host API lists the tab from the browser at once; the tab watch notes it to the
+    // takeovers as it registers it, so wait for a run to list it before the release.
+    time::timeout(PATIENCE, async {
+        while !rig_saw_open(rig, opened).await? {
+            time::sleep(Duration::from_millis(200)).await;
+        }
+        Ok::<_, Box<dyn Error>>(())
+    })
+    .await
+    .map_err(|_elapsed| "Neo registered the owner's tab")??;
+    let released = rig
+        .host(
+            "POST",
+            &format!("/v1/takeovers/{id}/release"),
+            Some(HOST_TOKEN),
+            None,
+        )
+        .await?;
+    assert_eq!(released.status, 200, "{}", released.text());
+    let released = released.json()?;
+    assert_eq!(
+        released.get("openedTabs"),
+        Some(&json!([{
+            "tabId": opened,
+            "url": url,
+            "inFront": true,
+            "taskId": null,
+            "openerTabId": null,
+        }])),
+        "{released}"
+    );
+    Ok(())
+}
+
+/// Whether Neo's own tab registry has `tab`, which the tab watch fills as it hears of each tab:
+/// a run without a task lists it then.
+async fn rig_saw_open(rig: &Rig, tab: i64) -> Result<bool, Box<dyn Error>> {
+    let client = rig.client().await?;
+    let result = run(
+        &client,
+        &format!("return context.pages().some((q) => q.tabId === {tab});"),
+        &json!({}),
+    )
+    .await?;
+    client.cancel().await?;
+    Ok(value(&result)? == &json!(true))
+}
+
+/// Inspect persisted snapshot results, before text rendering and after a later run reads the
+/// baseline. Deliberate reads and fixture source can still contain these canaries elsewhere in
+/// a trace, so the invariant belongs to snapshot operations rather than the whole database.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs an owned BrowserOS"]
+async fn private_field_values_never_reach_stored_snapshot_results() -> TestResult {
+    let Some(browser) = browser_or_skip() else {
+        return Ok(());
+    };
+    let mut rig = Rig::start(&browser, CaptchaKey::Absent)?;
+    match time::timeout(TEST_BUDGET, snapshot_trace(&mut rig)).await {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(error)) => Err(format!("{error}\n{}", rig.logs()).into()),
+        Err(_elapsed) => Err(format!("snapshot trace timed out\n{}", rig.logs()).into()),
+    }
+}
+
+/// The same SDK case matrix as `private_failures_live`, now through MCP and a real trace writer.
+/// A deliberate read and caller-supplied Expected may contain a canary; page-derived error
+/// messages, matcher facts and operation notes must already be safe before persistence.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs an owned BrowserOS"]
+async fn private_field_values_never_reach_stored_failure_diagnostics() -> TestResult {
+    let Some(browser) = browser_or_skip() else {
+        return Ok(());
+    };
+    let mut rig = Rig::start(&browser, CaptchaKey::Absent)?;
+    match time::timeout(TEST_BUDGET, private_failure_trace(&mut rig)).await {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(error)) => Err(format!("{error}\n{}", rig.logs()).into()),
+        Err(_elapsed) => Err(format!("private failure trace timed out\n{}", rig.logs()).into()),
+    }
+}
+
+const FAILURE_CANARIES: [&str; 3] = ["AttrCanary-1", "TypedCanary-2", "TextCanary-3"];
+const PRIVATE_FAILURE_HTML: &str =
+    include_str!("../../neo-playwright/tests/data/private-failure-fields/page.html");
+const PRIVATE_FAILURE_CASES: &str =
+    include_str!("../../neo-playwright/tests/data/private-failure-fields/cases.js");
+
+fn assert_failure_canaries_absent(text: &str) {
+    for canary in FAILURE_CANARIES {
+        assert!(!text.contains(canary), "failure exposes {canary}: {text}");
+    }
+}
+
+async fn private_failure_trace(rig: &mut Rig) -> TestResult {
+    let server = FixtureServer::start(HashMap::from([(
+        "/private-failures.html".to_owned(),
+        Page::html(PRIVATE_FAILURE_HTML),
+    )]))
+    .await?;
+    rig.until_ready().await?;
+    let configured = rig
+        .host(
+            "PATCH",
+            "/v1/settings",
+            Some(HOST_TOKEN),
+            Some(&json!({ "trace": { "values": "on", "valueBytes": 262_144 } })),
+        )
+        .await?;
+    assert_eq!(configured.status, 200, "{}", configured.text());
+    let client = rig.client().await?;
+    let script = PRIVATE_FAILURE_CASES.replace(
+        "__FIXTURE_URL__",
+        &json!(server.url("127.0.0.1", "/private-failures.html")).to_string(),
+    );
+    let result = run(
+        &client,
+        &script,
+        &json!({ "requestId": "private-failure-trace", "taskId": "private-failure-trace" }),
+    )
+    .await?;
+    let (id, status, _) = run_meta(&result)?;
+    assert_eq!(
+        status, "ok",
+        "every deliberate failure was caught: {result:?}"
+    );
+    let returned = value(&result)?;
+    let failures = returned
+        .get("failures")
+        .and_then(Value::as_object)
+        .ok_or("the run returned its named failure matrix")?;
+    let clear_templates = returned
+        .get("clearTemplates")
+        .and_then(Value::as_array)
+        .ok_or("the two caller-supplied clear templates were rejected")?;
+    assert!(
+        failures.len() >= 40,
+        "the complete live matrix ran through MCP"
+    );
+    assert_eq!(clear_templates.len(), 2);
+    for field in ["failures", "clearTemplates", "snapshots"] {
+        assert_failure_canaries_absent(
+            &returned
+                .get(field)
+                .ok_or("the diagnostic field")?
+                .to_string(),
+        );
+    }
+    assert_eq!(
+        returned
+            .get("reads")
+            .and_then(|reads| reads.get("inputValue")),
+        Some(&json!("TypedCanary-2")),
+        "explicit reads remain clear in the same run"
+    );
+    let expected_failures = failures.len() + clear_templates.len();
+    // Wait for operation records and screenshots before stopping the writer. Reading the
+    // database only after a clean stop proves storage, rather than the service's live cache.
+    read_run(rig, &id).await?;
+    client.cancel().await?;
+    assert_eq!(rig.stop_neo().await?, Some(0));
+    assert_stored_failure_diagnostics(&rig.trace_path(), id.parse()?, expected_failures).await
+}
+
+/// Trace messages have a fixed text budget independent of `valueBytes`. Preserve and scan the
+/// complete captured failures in the run result, then require each stored message to equal
+/// their bounded projection so truncation cannot turn an unsafe diagnostic into a passing test.
+fn complete_stored_failure_messages(
+    detail: &RunDetail,
+    expected_failures: usize,
+) -> Result<HashSet<String>, Box<dyn Error>> {
+    assert!(
+        !detail.result_truncated,
+        "the full diagnostic matrix was stored"
+    );
+    let result = detail.result.as_ref().ok_or("the stored run result")?;
+    for field in ["failures", "clearTemplates", "snapshots"] {
+        assert_failure_canaries_absent(
+            &result
+                .get(field)
+                .ok_or("the complete diagnostic field")?
+                .to_string(),
+        );
+    }
+    let failures = result
+        .get("failures")
+        .and_then(Value::as_object)
+        .ok_or("the complete failure map")?;
+    let templates = result
+        .get("clearTemplates")
+        .and_then(Value::as_array)
+        .ok_or("the caller templates")?;
+    assert_eq!(failures.len() + templates.len(), expected_failures);
+    let redactor = Redactor::new(RedactionLimits::default());
+    let mut messages = HashSet::new();
+    for failure in failures.values() {
+        let message = failure
+            .get("message")
+            .and_then(Value::as_str)
+            .ok_or("the complete failure message")?;
+        assert!(
+            !message.contains("…[+"),
+            "the source failure was retained whole"
+        );
+        messages.insert(redactor.text(message));
+        // Only the script's error carries the cover's snapshot.
+        let lines: Vec<_> = message.split('\n').collect();
+        if let Some(on_top) = lines.iter().position(|line| line.starts_with("  On top: ")) {
+            let rest = lines
+                .iter()
+                .skip(on_top + 1)
+                .skip_while(|line| line.starts_with("    "));
+            let without_snapshot = lines
+                .iter()
+                .take(on_top + 1)
+                .chain(rest)
+                .copied()
+                .collect::<Vec<_>>()
+                .join("\n");
+            messages.insert(redactor.text(&without_snapshot));
+        }
+    }
+    Ok(messages)
+}
+
+async fn assert_stored_failure_diagnostics(
+    path: &Path,
+    id: RunId,
+    expected_failures: usize,
+) -> TestResult {
+    let store = TraceStore::open(path).await?;
+    let detail = store
+        .run(id)
+        .await?
+        .ok_or("the failure run was persisted")?;
+    assert_eq!(detail.summary.status, RunStatus::Ok);
+    let safe_messages = complete_stored_failure_messages(&detail, expected_failures)?;
+    let (mut failed, mut caller_templates, mut markers, mut public, mut notes) = (0, 0, 0, 0, 0);
+    for operation in detail.operations {
+        for note in &operation.notes {
+            assert_failure_canaries_absent(note);
+            assert!(
+                !note.contains("…[+"),
+                "the diagnostic note was stored whole"
+            );
+            notes += 1;
+        }
+        let Some(error) = operation.error else {
+            continue;
+        };
+        failed += 1;
+        assert!(
+            !operation.args_truncated,
+            "the matcher inputs were stored whole"
+        );
+        assert!(
+            !operation.result_truncated,
+            "the matcher result was stored whole"
+        );
+        let args = operation
+            .args
+            .as_ref()
+            .ok_or("the failed operation kept its inputs")?;
+        let caller_expected =
+            args.get("expected")
+                .and_then(Value::as_str)
+                .is_some_and(|expected| {
+                    FAILURE_CANARIES
+                        .iter()
+                        .any(|canary| expected.contains(canary))
+                });
+        if caller_expected {
+            // These two templates contain a canary supplied by the script. The shared
+            // script separately scans their actual/log/ariaSnapshot facts; stored notes
+            // above remain covered without erasing the caller's Expected line.
+            caller_templates += 1;
+        } else {
+            assert_failure_canaries_absent(&error.message);
+            assert!(
+                safe_messages.contains(&error.message),
+                "{} kept the bounded form of its complete safe failure: {}",
+                operation.name,
+                error.message,
+            );
+        }
+        if let Some(result) = operation.result {
+            assert_failure_canaries_absent(&result.to_string());
+        }
+        markers += usize::from(
+            error
+                .message
+                .lines()
+                .any(|line| line.starts_with("Received") && line.contains(" characters>\"")),
+        );
+        public += usize::from(error.message.contains("Received: \"Public"));
+    }
+    assert_eq!(
+        failed, expected_failures,
+        "every caught failure reached the trace"
+    );
+    assert_eq!(
+        caller_templates, 2,
+        "only caller-supplied Expected text is exempt"
+    );
+    assert!(
+        markers >= 10,
+        "real value comparisons stored received-length markers"
+    );
+    assert!(
+        public >= 4,
+        "public twins retain their real received values"
+    );
+    // Hosted call logs are carried in the failure message and debug channel, not trace
+    // notes (neo-server run::tests asserts that contract). The full message was scanned above.
+    assert_eq!(notes, 0, "call logs stay in complete safe failure messages");
+    Ok(())
+}
+
+/// Each source and attribute value is a distinct synthetic secret to scan after persistence.
+const TRACE_FIELDS: [(&str, &str, &str, &str); 11] = [
+    (
+        "Password",
+        "input",
+        "type='password'",
+        "Trace-Password-Canary",
+    ),
+    (
+        "Shown",
+        "input",
+        "autocomplete='current-password'",
+        "Trace-Shown-Canary",
+    ),
+    (
+        "Card",
+        "input",
+        "autocomplete='cc-number'",
+        "Trace-Card-Canary",
+    ),
+    (
+        "Security",
+        "input",
+        "autocomplete='cc-csc'",
+        "Trace-Security-Canary",
+    ),
+    (
+        "Code",
+        "input",
+        "autocomplete='one-time-code'",
+        "Trace-Code-Canary",
+    ),
+    (
+        "Note",
+        "textarea",
+        "autocomplete='new-password'",
+        "Trace-Note-Canary",
+    ),
+    (
+        "Self",
+        "textarea",
+        "id='self' role='button' aria-labelledby='self' autocomplete='new-password'",
+        "Trace-Self-Canary",
+    ),
+    (
+        "Numeric",
+        "input",
+        "id='numeric' type='number' autocomplete='one-time-code' aria-valuetext='864213'",
+        "864213",
+    ),
+    (
+        "Styled checkbox",
+        "input",
+        "class='css-private' type='checkbox' autocomplete='one-time-code'",
+        "Trace-CSS-Checkbox-Canary",
+    ),
+    (
+        "Styled text",
+        "input",
+        "class='css-private' autocomplete='current-password'",
+        "Trace-CSS-Text-Canary",
+    ),
+    (
+        "Styled self",
+        "input",
+        "id='css-self' class='css-private-self' type='checkbox' role='button' aria-labelledby='css-self' autocomplete='one-time-code'",
+        "Trace-CSS-Self-Canary",
+    ),
+];
+
+/// Closed roots must contribute their own masked fields, not merely hide every canary.
+const CLOSED_TRACE_SCOPES: [&str; 3] = ["Closed", "Nested", "CrossClosed"];
+
+fn closed_trace_fields(scope: &str) -> String {
+    format!(
+        "<section aria-label='{scope} fields'>\
+         <label>{scope} password<input type='password' value='Trace-{scope}-Password-Canary'></label>\
+         <label>{scope} textarea<textarea autocomplete='new-password'>Trace-{scope}-Textarea-Canary</textarea></label>\
+         <label>{scope} public<input value='Public-{scope}-Readable'></label></section>"
+    )
+}
+
+/// Page scripts retain roots only in their own closures. Neo must discover them through its
+/// first AI walk; the child is served on another site so it owns a separate probe world.
+fn private_trace_pages() -> Result<HashMap<String, Page>, fmt::Error> {
+    let top = format!(
+        r"{}<script>(() => {{
+const closed = document.querySelector('#closed').attachShadow({{ mode: 'closed' }});
+closed.innerHTML = {};
+closed.querySelector('#nested').attachShadow({{ mode: 'closed' }}).innerHTML = {};
+document.querySelector('#cross').src = `http://localhost:${{location.port}}/private-child.html`;
+}})();</script>",
+        private_trace_html()?,
+        json!(format!(
+            "{}<div id='nested'></div>",
+            closed_trace_fields("Closed")
+        )),
+        json!(closed_trace_fields("Nested")),
+    );
+    let child = format!(
+        r#"<!doctype html><html><body><div id="cross-closed"></div><script>(() => {{
+const closed = document.querySelector('#cross-closed').attachShadow({{ mode: 'closed' }});
+closed.innerHTML = {};
+}})();</script></body></html>"#,
+        json!(closed_trace_fields("CrossClosed")),
+    );
+    Ok(HashMap::from([
+        ("/private.html".to_owned(), Page::html(&top)),
+        ("/private-child.html".to_owned(), Page::html(&child)),
+    ]))
+}
+
+fn private_trace_html() -> Result<String, fmt::Error> {
+    let mut html = String::from(
+        "<title>Snapshot trace</title><style>\
+         .css-private{appearance:none;width:40px;height:40px}\
+         .css-private::before,.css-private::after{content:attr(value)}\
+         .css-private-self{content:url(data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7) / attr(value)}\
+         </style><main><h1>Checkout</h1>",
+    );
+    for (label, tag, attributes, value) in TRACE_FIELDS {
+        if tag == "textarea" {
+            write!(
+                html,
+                "<label>{label}<textarea {attributes}>{value}</textarea></label>"
+            )?;
+        } else {
+            write!(
+                html,
+                "<label>{label}<input {attributes} value='{value}'></label>"
+            )?;
+        }
+    }
+    html.push_str(
+        "\
+         <button aria-labelledby='self'></button><button aria-labelledby='numeric'></button>\
+         <label>Expiry<input autocomplete='cc-exp' value='12/30'></label>\
+         <label>Holder<input autocomplete='cc-name' value='Ada Example'></label>",
+    );
+    // Diff context must stay smaller than half the whole output. A small page legitimately
+    // falls back to a whole snapshot even when only one value changes.
+    for index in 0..20 {
+        write!(html, "<button>Stable action {index}</button>")?;
+    }
+    html.push_str(
+        "<div id='closed'></div><iframe id='cross' title='Cross closed fields'></iframe></main>",
+    );
+    Ok(html)
+}
+
+fn assert_trace_canaries_absent(text: &str) {
+    for (_, _, _, canary) in TRACE_FIELDS {
+        assert!(!text.contains(canary), "snapshot exposes {canary}: {text}");
+    }
+    for scope in CLOSED_TRACE_SCOPES {
+        for kind in ["Password", "Textarea"] {
+            let canary = format!("Trace-{scope}-{kind}-Canary");
+            assert!(!text.contains(&canary), "snapshot exposes {canary}: {text}");
+        }
+    }
+}
+
+/// Stored op results wrap trees and baseline text differently. Search the decoded JSON, so
+/// field values are checked at their own node or line before and after persistence.
+fn trace_field_node<'tree>(tree: &'tree Value, name: &str) -> Option<&'tree Value> {
+    match tree {
+        Value::Array(nodes) => nodes.iter().find_map(|node| trace_field_node(node, name)),
+        Value::Object(node) if node.get("name").and_then(Value::as_str) == Some(name) => Some(tree),
+        Value::Object(node) => node
+            .values()
+            .find_map(|value| trace_field_node(value, name)),
+        _ => None,
+    }
+}
+
+fn trace_field_text<'tree>(tree: &'tree Value, label: &str) -> Option<&'tree str> {
+    match tree {
+        Value::String(text) if text.contains(label) => Some(text),
+        Value::Array(nodes) => nodes.iter().find_map(|node| trace_field_text(node, label)),
+        Value::Object(node) => node
+            .values()
+            .find_map(|value| trace_field_text(value, label)),
+        _ => None,
+    }
+}
+
+fn assert_trace_field_value(snapshot: &Value, label: &str, value: &str) -> TestResult {
+    if let Some(node) = trace_field_node(snapshot, label) {
+        assert_eq!(node["role"].as_str(), Some("textbox"), "{node}");
+        assert_eq!(node["text"].as_str(), Some(value), "{node}");
+        return Ok(());
+    }
+    let label = format!("textbox \"{label}\"");
+    let text = trace_field_text(snapshot, &label)
+        .ok_or_else(|| format!("missing {label} in {snapshot}"))?;
+    let line = text
+        .lines()
+        .find(|line| line.contains(&label))
+        .ok_or("the field has its own line")?;
+    assert!(
+        line.ends_with(&format!(": {value}")) || line.ends_with(&format!(": \"{value}\"")),
+        "{line}"
+    );
+    Ok(())
+}
+
+fn assert_closed_trace_visibility(snapshot: &Value, scopes: &[&str]) -> TestResult {
+    for scope in scopes {
+        for (name, kind) in [("password", "Password"), ("textarea", "Textarea")] {
+            let canary = format!("Trace-{scope}-{kind}-Canary");
+            assert_trace_field_value(
+                snapshot,
+                &format!("{scope} {name}"),
+                &"•".repeat(canary.len()),
+            )?;
+        }
+        assert_trace_field_value(
+            snapshot,
+            &format!("{scope} public"),
+            &format!("Public-{scope}-Readable"),
+        )?;
+    }
+    Ok(())
+}
+
+fn assert_returned_snapshot_values(first: &CallToolResult) -> TestResult {
+    let returned = first
+        .structured_content
+        .as_ref()
+        .and_then(|value| value.get("value"))
+        .ok_or_else(|| format!("the first run returns its snapshots: {first:?}"))?;
+    assert_eq!(returned["closedRootsOpaque"], json!([true, true, true]));
+    for key in ["snapshots", "childSnapshots"] {
+        let snapshots = returned[key].as_array().ok_or("the collected snapshots")?;
+        assert_eq!(snapshots.len(), 7);
+        for (index, snapshot) in snapshots.iter().enumerate() {
+            let printed = snapshot.to_string();
+            assert_trace_canaries_absent(&printed);
+            let scopes: &[&str] = match key {
+                // Page default mode and unnamed JSON reads stay in one frame. The child
+                // locator covers that mode without changing the existing traversal contract.
+                "snapshots" if index >= 4 => &["Closed", "Nested"],
+                "snapshots" => &CLOSED_TRACE_SCOPES,
+                _ => &["CrossClosed"],
+            };
+            assert_closed_trace_visibility(snapshot, scopes)?;
+            if key != "snapshots" {
+                continue;
+            }
+            assert!(
+                printed.contains("Ada Example"),
+                "holder remains readable: {printed}"
+            );
+            assert!(
+                printed.contains("12/30"),
+                "expiry remains readable: {printed}"
+            );
+        }
+    }
+    assert_trace_canaries_absent(&returned["baseline"].to_string());
+    assert_closed_trace_visibility(&returned["baseline"], &CLOSED_TRACE_SCOPES)
+}
+
+async fn assert_stored_snapshot_values(trace_path: &Path, ids: [RunId; 2]) -> TestResult {
+    let store = TraceStore::open(trace_path).await?;
+    let mut snapshot_count = 0;
+    let mut baseline_count = 0;
+    let mut closed_counts = [0; 3];
+    for id in ids {
+        let detail = store.run(id).await?.ok_or("the run was persisted")?;
+        assert_eq!(detail.summary.status, RunStatus::Ok);
+        for operation in detail.operations {
+            if !matches!(
+                operation.name.as_str(),
+                "page.ariaSnapshot"
+                    | "locator.ariaSnapshot"
+                    | "page.snapshotBaseline"
+                    | "page.snapshotPending"
+            ) {
+                continue;
+            }
+            assert!(
+                !operation.args_truncated,
+                "snapshot inputs were stored whole"
+            );
+            assert!(
+                !operation.result_truncated,
+                "snapshot results were stored whole"
+            );
+            let args = operation
+                .args
+                .as_ref()
+                .map(Value::to_string)
+                .unwrap_or_default();
+            assert_trace_canaries_absent(&args);
+            let result = operation
+                .result
+                .ok_or("the snapshot operation has a result")?;
+            assert_trace_canaries_absent(&result.to_string());
+            if operation.name == "page.snapshotBaseline" {
+                baseline_count += 1;
+                assert_closed_trace_visibility(&result, &CLOSED_TRACE_SCOPES)?;
+            }
+            if operation.name.ends_with(".ariaSnapshot") {
+                snapshot_count += 1;
+                assert!(
+                    result.to_string().contains('•'),
+                    "the stored tree contains masked values"
+                );
+                for (scope, count) in CLOSED_TRACE_SCOPES.iter().zip(&mut closed_counts) {
+                    if trace_field_node(&result, &format!("{scope} password")).is_some() {
+                        assert_closed_trace_visibility(&result, &[*scope])?;
+                        *count += 1;
+                    }
+                }
+            }
+        }
+    }
+    assert_eq!(snapshot_count, 16);
+    assert_eq!(baseline_count, 1);
+    // The top roots occur in eight page reads and the main locator. The child root is absent
+    // from page default mode and both unnamed JSON reads, and present in all seven child reads.
+    assert_eq!(closed_counts, [9, 9, 13]);
+    Ok(())
+}
+
+const PRIVATE_TRACE_SNAPSHOT_SCRIPT: &str = r"
+const p = await context.newPage();
+await p.goto(__FIXTURE_URL__);
+const child = p.locator('#cross').contentFrame().locator('body');
+await child.locator('#cross-closed').waitFor();
+// The first page AI walk opens closed roots before any locator enters them.
+const snapshots = [
+  await p.ariaSnapshot(), await p.ariaSnapshot({ text: true }),
+  await p.ariaSnapshot({ text: false }),
+  await p.ariaSnapshot({ mode: 'full' }),
+  await p.ariaSnapshot({ mode: 'default' }),
+  await p.ariaSnapshotJSON(), await p.locator('main').ariaSnapshotJSON(),
+];
+const childSnapshots = [
+  await child.ariaSnapshot(), await child.ariaSnapshot({ text: true }),
+  await child.ariaSnapshot({ text: false }),
+  await child.ariaSnapshot({ mode: 'full' }),
+  await child.ariaSnapshot({ mode: 'default' }),
+  await child.ariaSnapshotJSON({ mode: 'ai' }), await child.ariaSnapshotJSON({ mode: 'default' }),
+];
+const closedRootsOpaque = await Promise.all([
+  p.locator('#closed'), p.locator('#closed').locator('#nested'), child.locator('#cross-closed'),
+].map(root => root.evaluate(host => host.shadowRoot === null)));
+await p.getByLabel('Password', { exact: true }).focus();
+const baseline = await p.ariaSnapshot({ text: false });
+return { page: p, snapshots, childSnapshots, closedRootsOpaque, baseline };
+";
+
+async fn snapshot_trace(rig: &mut Rig) -> TestResult {
+    let server = FixtureServer::start(private_trace_pages()?).await?;
+    rig.until_ready().await?;
+    // Keep the entire fixture through the host's current settings contract. Clipped traces
+    // could hide an unmasked field and make the canary scan pass without proving this boundary.
+    let configured = rig
+        .host(
+            "PATCH",
+            "/v1/settings",
+            Some(HOST_TOKEN),
+            Some(&json!({ "trace": { "values": "on", "valueBytes": 262_144 } })),
+        )
+        .await?;
+    assert_eq!(configured.status, 200, "{}", configured.text());
+    let client = rig.client().await?;
+    // Commit the final v1 read as the baseline, with focus already stable for the next fill.
+    // A changed output form or focus state could otherwise legitimately return a whole page.
+    let first = run(
+        &client,
+        &PRIVATE_TRACE_SNAPSHOT_SCRIPT.replace(
+            "__FIXTURE_URL__",
+            &json!(server.url("127.0.0.1", "/private.html")).to_string(),
+        ),
+        &json!({ "requestId": "mask-trace-1", "taskId": "mask-trace" }),
+    )
+    .await?;
+    let first_id: RunId = outcome(&first)?["id"]
+        .as_str()
+        .ok_or("the first run has an id")?
+        .parse()?;
+    assert_returned_snapshot_values(&first)?;
+    let changed = run(
+        &client,
+        "await page.getByLabel('Password', { exact: true }).fill('Trace-Password-Canary!');\n\
+         return await page.ariaSnapshot({ delta: true, text: false });",
+        &json!({ "requestId": "mask-trace-2", "taskId": "mask-trace" }),
+    )
+    .await?;
+    let second_id: RunId = outcome(&changed)?["id"]
+        .as_str()
+        .ok_or("the second run has an id")?
+        .parse()?;
+    let delta = changed
+        .structured_content
+        .as_ref()
+        .and_then(|value| value.get("value"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("the second run returns its delta: {changed:?}"))?;
+    assert_trace_canaries_absent(delta);
+    let baseline = first
+        .structured_content
+        .as_ref()
+        .and_then(|value| value.pointer("/value/baseline"))
+        .and_then(Value::as_str);
+    assert!(
+        delta.starts_with("# changes since"),
+        "a stored baseline is read: {delta}\nprevious: {baseline:?}"
+    );
+    assert!(delta.contains(&"•".repeat("Trace-Password-Canary!".len())));
+    client.cancel().await?;
+    assert_eq!(rig.stop_neo().await?, Some(0));
+    assert_stored_snapshot_values(&rig.trace_path(), [first_id, second_id]).await
+}
+
+/// Run 1: a new tab, a navigation and a read, ending with the tab open and its handle returned.
+/// Returns the run id and the tab.
+async fn the_agent_opens_a_tab(client: &Client) -> Result<(String, i64), Box<dyn Error>> {
+    let code = format!(
+        r"
+        const p = await context.newPage();
+        await p.goto({FIRST_PAGE:?});
+        return {{ title: await p.title(), page: p }};"
+    );
+    let meta = json!({ "requestId": "acceptance-1", "taskId": TASK });
+    let result = run(client, &code, &meta).await?;
+    let value = value(&result)?;
+    assert_eq!(value.get("title"), Some(&json!(FIRST_TITLE)), "{result:?}");
+    let page = value.get("page").ok_or("the run returns its page")?;
+    let tab = page
+        .get("tab")
+        .and_then(Value::as_i64)
+        .ok_or_else(|| format!("the brand carries the browser's tab: {page}"))?;
+    assert_eq!(
+        page,
+        &json!({ "$neo": "page", "tab": tab }),
+        "a page leaves a run with only its brand and the browser's tab"
+    );
+    let (id, status, effects) = run_meta(&result)?;
+    assert_eq!(
+        (status.as_str(), effects.as_str()),
+        ("ok", "done"),
+        "{result:?}"
+    );
+    Ok((id, tab))
+}
+
+/// The host reads run 1 back: its ids, acted-on tabs, and three script operations whose
+/// deliveries match what the agent did. Automatic monitor reads remain in the raw trace.
+async fn the_host_reads_the_run(rig: &Rig, id: &str, tab: i64) -> TestResult {
+    let host_run = script_run(rig, id, tab, false).await?;
+    let field = |name: &str| host_run.get(name).cloned().unwrap_or(Value::Null);
+    assert_eq!(
+        [
+            field("id"),
+            field("status"),
+            field("effects"),
+            field("complete"),
+            field("taskId"),
+            field("requestId"),
+        ],
+        [
+            json!(id),
+            json!("ok"),
+            json!("done"),
+            json!(true),
+            json!(TASK),
+            json!("acceptance-1"),
+        ],
+        "the host reads the run as the agent ran it: {host_run}"
+    );
+    // Listening alone does not claim a tab. Only the tab this script opened/acted on
+    // belongs to the run, even when worker monitors name other tabs in the raw trace.
+    assert_eq!(field("tabs"), json!([tab]));
+    assert_eq!(
+        host_run.pointer("/result/title"),
+        Some(&json!(FIRST_TITLE)),
+        "with the script's value: {host_run}"
+    );
+    assert_eq!(
+        operations(&host_run)?,
+        [
+            op_of("context.newPage", "write", "ok", "done", None),
+            op_of("page.goto", "write", "ok", "done", Some(tab)),
+            op_of("page.title", "read", "ok", "not_sent", Some(tab)),
+        ],
+        "every op once, in start order: {host_run}"
+    );
+
+    let goto = operation_id(&host_run, "page.goto")?;
+    assert!(
+        goto.strip_prefix(&format!("{id}."))
+            .and_then(|seq| seq.parse::<u64>().ok())
+            .is_some_and(|seq| seq > 0),
+        "an operation id is <runId>.<positive seq>: {goto}"
+    );
+    let read = rig
+        .host(
+            "GET",
+            &format!("/v1/operations/{goto}"),
+            Some(HOST_TOKEN),
+            None,
+        )
+        .await?;
+    assert_eq!(read.status, 200, "{}", read.text());
+    let goto_op = read.json()?;
+    assert_eq!(
+        (
+            goto_op.get("runId"),
+            goto_op.pointer("/page/tabId"),
+            goto_op.pointer("/args/url"),
+        ),
+        (
+            Some(&json!(id)),
+            Some(&json!(tab)),
+            Some(&json!(FIRST_PAGE))
+        ),
+        "one operation, with the page it acted on and its arguments: {goto_op}"
+    );
+    Ok(())
+}
+
+/// The host locks the tab; run 2 of the task writes on it and is refused before anything is
+/// sent, the page stays where it was, and the trace records the refusal. The run's page reads its
+/// frames before the script's first statement, and the lock, which blocks reads, refuses that
+/// too; the run starts on the main frame alone.
+async fn a_lock_refuses_the_agent(rig: &Rig, client: &Client, tab: i64) -> TestResult {
+    let take = json!({ "tabId": tab, "ttlSeconds": 600 });
+    let taken = rig
+        .host("POST", "/v1/locks", Some(HOST_TOKEN), Some(&take))
+        .await?;
+    assert_eq!(
+        taken.status,
+        200,
+        "the host locks the tab: {}",
+        taken.text()
+    );
+    let lock = taken.json()?;
+    assert_eq!(
+        (
+            lock.get("tabId"),
+            lock.get("reads"),
+            lock.get("settled"),
+            lock.get("releasedAt"),
+        ),
+        (
+            Some(&json!(tab)),
+            Some(&json!("block")),
+            Some(&json!(true)),
+            None
+        ),
+        "held, with nothing of the agent's in flight: {lock}"
+    );
+    let lock_id = lock
+        .get("id")
+        .and_then(Value::as_str)
+        .ok_or("a lock has an id")?;
+
+    let refused = run(client, &goto_and_report(), &json!({ "taskId": TASK })).await?;
+    assert_eq!(
+        value(&refused)?,
+        &json!({ "code": "owner_has_control", "owner": "host", "delivery": "not_sent" }),
+        "the door refuses the write for the host: {refused:?}"
+    );
+    let (refused_id, status, effects) = run_meta(&refused)?;
+    assert_eq!(
+        (status.as_str(), effects.as_str()),
+        ("ok", "none"),
+        "the script caught it, and no write was sent: {refused:?}"
+    );
+
+    let host_run = script_run(rig, &refused_id, tab, true).await?;
+    assert_eq!(
+        operations(&host_run)?,
+        [op_of("page.goto", "write", "error", "not_sent", Some(tab))],
+        "the script's write is refused on the locked tab: {host_run}"
+    );
+    let goto = operation(&host_run, "page.goto")?;
+    assert_eq!(
+        (goto.pointer("/error/owner"), goto.pointer("/error/code")),
+        (Some(&json!("host")), Some(&json!("owner_has_control"))),
+        "{goto}"
+    );
+    assert_eq!(
+        tab_titles(rig).await?,
+        [FIRST_TITLE, "about:blank"],
+        "the locked tab never navigated"
+    );
+
+    let released = rig
+        .host(
+            "DELETE",
+            &format!("/v1/locks/{lock_id}"),
+            Some(HOST_TOKEN),
+            None,
+        )
+        .await?;
+    assert_eq!(released.status, 200, "{}", released.text());
+    let released = released.json()?;
+    assert!(
+        released.get("releasedAt").is_some_and(Value::is_i64),
+        "the host released the lock: {released}"
+    );
+    Ok(())
+}
+
+/// Run 3 of the task, after the release: the same write lands on the same tab. Returns the
+/// run's id.
+async fn the_write_lands_once_released(
+    rig: &Rig,
+    client: &Client,
+) -> Result<String, Box<dyn Error>> {
+    let landed = run(client, &goto_and_report(), &json!({ "taskId": TASK })).await?;
+    assert_eq!(value(&landed)?, &json!("navigated"), "{landed:?}");
+    let (id, status, effects) = run_meta(&landed)?;
+    assert_eq!(
+        (status.as_str(), effects.as_str()),
+        ("ok", "done"),
+        "{landed:?}"
+    );
+    assert_eq!(
+        tab_titles(rig).await?,
+        [SECOND_TITLE, "about:blank"],
+        "the task's tab navigated"
+    );
+    Ok(id)
+}
+
+/// Run 3's picture of its tab, as the host finds it. Each write keeps its own screenshot (the
+/// trace writer no longer folds a write's picture into a later read's on the same tab), so the
+/// `page.goto` holds it. The script-only view names exactly that write, while Neo's own reads
+/// stay in the unfiltered trace. The run's record names that op, and its JPEG is whole.
+async fn the_tab_has_its_picture_after_the_write(rig: &Rig, run: &str, tab: i64) -> TestResult {
+    // Held until the run is complete: ended, and every screenshot job answered.
+    let host_run = script_run(rig, run, tab, false).await?;
+    assert_eq!(
+        operations(&host_run)?,
+        [op_of("page.goto", "write", "ok", "done", Some(tab))],
+        "{host_run}"
+    );
+    let write = operation_id(&host_run, "page.goto")?;
+    let op = operation(&host_run, "page.goto")?;
+    assert_eq!(
+        (op.get("id"), op.get("hasScreenshot"),),
+        (Some(&json!(write)), Some(&json!(true))),
+        "the write holds its own picture of the tab: {host_run}"
+    );
+    let shot = rig
+        .host(
+            "GET",
+            &format!("/v1/operations/{write}/screenshot"),
+            Some(HOST_TOKEN),
+            None,
+        )
+        .await?;
+    assert_eq!(
+        (shot.status, shot.header("content-type")),
+        (200, Some("image/jpeg")),
+        "{}",
+        shot.head
+    );
+    assert!(
+        shot.body.starts_with(JPEG_START) && shot.body.ends_with(JPEG_END),
+        "a whole JPEG, {} bytes",
+        shot.body.len()
+    );
+    Ok(())
+}
+
+/// The task's `page` goes to the second page; a refusal comes back as a value, so the run ends
+/// `ok` and the trace keeps the refused op.
+fn goto_and_report() -> String {
+    format!(
+        r"
+        try {{
+          await page.goto({SECOND_PAGE:?});
+          return 'navigated';
+        }} catch (e) {{
+          return {{ code: e.code, owner: e.owner, delivery: e.delivery }};
+        }}"
+    )
+}
+
+/// The titles of the browser's tabs, sorted: the agent's tab and the launch's `about:blank`.
+async fn tab_titles(rig: &Rig) -> Result<Vec<String>, Box<dyn Error>> {
+    let listed = get(rig.cdp_port(), "/json/list").await?;
+    let (_, body) = listed.split_once("\r\n\r\n").ok_or("an HTTP response")?;
+    let targets: Vec<Value> = serde_json::from_str(body)?;
+    let mut titles: Vec<String> = targets
+        .iter()
+        .filter(|target| target.get("type") == Some(&json!("page")))
+        .filter_map(|target| target.get("title").and_then(Value::as_str))
+        .map(str::to_owned)
+        .collect();
+    titles.sort();
+    Ok(titles)
+}
+
+/// The host's read of a run, held until it is complete (ended, every screenshot job answered).
+async fn read_run(rig: &Rig, id: &str) -> Result<Value, Box<dyn Error>> {
+    let read = rig
+        .host(
+            "GET",
+            &format!("/v1/runs/{id}?wait=30"),
+            Some(HOST_TOKEN),
+            None,
+        )
+        .await?;
+    assert_eq!(read.status, 200, "{}", read.text());
+    let run = read.json()?;
+    assert_eq!(run.get("complete"), Some(&json!(true)), "{run}");
+    Ok(run)
+}
+
+/// Neo's own reads are counted by nobody; what they may not do is asserted.
+async fn script_run(rig: &Rig, id: &str, tab: i64, locked: bool) -> Result<Value, Box<dyn Error>> {
+    let all = read_run(rig, id).await?;
+    let script = rig
+        .host(
+            "GET",
+            &format!("/v1/runs/{id}?wait=30&internal=false"),
+            Some(HOST_TOKEN),
+            None,
+        )
+        .await?
+        .json()?;
+    let all_ops = all
+        .get("operations")
+        .and_then(Value::as_array)
+        .ok_or("unfiltered operations")?;
+    let script_ops = script
+        .get("operations")
+        .and_then(Value::as_array)
+        .ok_or("script operations")?;
+    let internal = |op: &Value| op.get("internal").and_then(Value::as_bool);
+    assert!(
+        all_ops.iter().all(|op| internal(op).is_some()),
+        "every operation declares its owner: {all}"
+    );
+    let projected: Vec<_> = all_ops
+        .iter()
+        .filter(|op| internal(op) == Some(false))
+        .cloned()
+        .collect();
+    assert_eq!(
+        &projected, script_ops,
+        "the two views agree on the script's operations"
+    );
+    let owned: Vec<_> = all_ops
+        .iter()
+        .filter(|op| internal(op) == Some(true))
+        .collect();
+    assert!(
+        owned
+            .iter()
+            .any(|op| op.get("tabId").and_then(Value::as_i64) == Some(tab)),
+        "Neo read this tab: {all}"
+    );
+    for op in owned {
+        let field = |key: &str| op.get(key).and_then(Value::as_str);
+        assert_eq!(
+            (field("effect"), field("delivery")),
+            (Some("read"), Some("not_sent")),
+            "an internal read must remain not_sent: {op}"
+        );
+        let outcome = field("outcome");
+        let target = op.get("tabId").and_then(Value::as_i64);
+        if field("name") == Some("events.next") && target.is_none() {
+            assert!(
+                matches!(outcome, Some("ok" | "cancelled")),
+                "the untargeted event pump finishes or is cancelled: {op}"
+            );
+        } else if locked && target == Some(tab) {
+            assert_eq!(
+                (
+                    outcome,
+                    op.pointer("/error/owner"),
+                    op.pointer("/error/code")
+                ),
+                (
+                    Some("error"),
+                    Some(&json!("host")),
+                    Some(&json!("owner_has_control"))
+                ),
+                "the lock refuses Neo's read before sending it: {op}"
+            );
+        } else {
+            assert_eq!(
+                outcome,
+                Some("ok"),
+                "the phase allows this internal read: {op}"
+            );
+        }
+    }
+    Ok(script)
+}
+
+/// An operation as these assertions compare it: name, effect, outcome, delivery, tab.
+type Op = (String, String, String, String, Option<i64>);
+
+fn op_of(name: &str, effect: &str, outcome: &str, delivery: &str, tab: Option<i64>) -> Op {
+    (
+        name.to_owned(),
+        effect.to_owned(),
+        outcome.to_owned(),
+        delivery.to_owned(),
+        tab,
+    )
+}
+
+fn operations(run: &Value) -> Result<Vec<Op>, Box<dyn Error>> {
+    let text = |op: &Value, name: &str| {
+        op.get(name)
+            .and_then(Value::as_str)
+            .unwrap_or("<absent>")
+            .to_owned()
+    };
+    Ok(run
+        .get("operations")
+        .and_then(Value::as_array)
+        .ok_or("a run lists its operations")?
+        .iter()
+        .map(|op| {
+            (
+                text(op, "name"),
+                text(op, "effect"),
+                text(op, "outcome"),
+                text(op, "delivery"),
+                op.get("tabId").and_then(Value::as_i64),
+            )
+        })
+        .collect())
+}
+
+/// Background reads consume sequence numbers too; find the script's operation by its name.
+fn operation<'a>(run: &'a Value, name: &str) -> Result<&'a Value, Box<dyn Error>> {
+    run.get("operations")
+        .and_then(Value::as_array)
+        .and_then(|ops| {
+            ops.iter()
+                .find(|op| op.get("name").and_then(Value::as_str) == Some(name))
+        })
+        .ok_or_else(|| format!("the run has a {name} operation: {run}").into())
+}
+
+fn operation_id(run: &Value, name: &str) -> Result<String, Box<dyn Error>> {
+    operation(run, name)?
+        .get("id")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| format!("the {name} operation has an id: {run}").into())
+}
+
+/// The run's returned value.
+fn value(result: &CallToolResult) -> Result<&Value, Box<dyn Error>> {
+    result
+        .structured_content
+        .as_ref()
+        .and_then(|content| content.get("value"))
+        .ok_or_else(|| format!("the run returned a value: {result:?}").into())
+}
+
+/// `_meta["com.browseros.neo/run"]`'s id, status and effects.
+fn run_meta(result: &CallToolResult) -> Result<(String, String, String), Box<dyn Error>> {
+    let meta = outcome(result)?;
+    let text = |name: &str| {
+        meta.get(name)
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .ok_or_else(|| format!("the run's _meta has {name}: {meta}"))
+    };
+    Ok((text("id")?, text("status")?, text("effects")?))
+}

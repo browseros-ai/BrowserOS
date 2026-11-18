@@ -45,6 +45,7 @@ export const TOOL_TO_VERB: Record<string, ReplayVerb> = {
   'input.type': 'type',
   'input.insertText': 'type',
   'input.press': 'type',
+  pursue: 'browse',
 }
 
 export function verbForTool(toolName: string): ReplayVerb {
@@ -178,6 +179,14 @@ function describeSkillSave(args: Args): string {
   if (args.patch !== undefined) return 'Repaired a step of this skill'
   if (args.flow !== undefined) return 'Made this skill ultrafast'
   return 'Saved this as a skill'
+}
+
+/** neo's fast browsing working the page toward the agent's goal. */
+function describePursue(args: Args): string {
+  const goal = stringArg(args, 'goal')
+  return goal
+    ? `neo took over the clicking: “${truncate(goal)}”`
+    : 'neo took over the clicking'
 }
 
 function stringArg(args: Args, key: string): string | undefined {
@@ -379,6 +388,8 @@ export function describeStep(dispatch: ToolDispatchRow): string {
       return 'Waited for you'
     case 'save_skill':
       return describeSkillSave(args)
+    case 'pursue':
+      return describePursue(args)
     case 'run_skill': {
       const name = stringArg(args, 'name')
       return name ? `Ran ${name} the fast way` : 'Ran a skill the fast way'
@@ -404,6 +415,26 @@ export interface DescribedStep {
   hidden: boolean
   /** The page the step ran on (origin and path), when known. */
   pageKey?: string
+  /** neo took the task over here and handed it back partway. */
+  handedBack?: boolean
+  /** The first step after a hand back, where the agent carries on. */
+  afterHandBack?: boolean
+  /** neo's run, on the step where neo took the task over. */
+  neoRun?: NeoRun
+  /** On a step neo took during a run: how long after the takeover it came. */
+  neoOffsetMs?: number
+}
+
+/** One pursue run: what neo was asked, how it ended, and what it did. */
+export interface NeoRun {
+  goal?: string
+  /** Absent while neo is still working. */
+  outcome?: 'completed' | 'handed_back' | 'cancelled'
+  durationMs?: number
+  /** Calls neo made on the page during the run, behind-the-scenes ones left out. */
+  stepCount: number
+  pagesRead?: number
+  pageTokens?: number
 }
 
 export interface DescribedSteps {
@@ -424,6 +455,9 @@ export function describeSteps(
 ): DescribedSteps {
   const steps: DescribedStep[] = []
   let hiddenCount = 0
+  // When the latest hand back ended; the next visible step is where the agent carries on.
+  let handBackEndedAt: number | undefined
+  const trackRun = runTracker()
   for (const [index, dispatch] of dispatches.entries()) {
     // A script whose own calls were recorded is told through those calls.
     const hidden =
@@ -433,15 +467,21 @@ export function describeSteps(
       hiddenCount += 1
       if (!options.includeHidden) continue
     }
+    const runMark = trackRun(dispatch, hidden)
+    const inRun = runMark.neoOffsetMs !== undefined
     const sentence = describeStep(dispatch)
     const verb = verbForCall(dispatch)
+    // pursue is stamped with its start, so the calls it made sort after it.
+    const afterHandBack =
+      handBackEndedAt !== undefined && dispatch.createdAt >= handBackEndedAt
     const pageKey = pageKeyOf(dispatch, normalizeCall(dispatch))
     const meta = parseMeta(dispatch.resultMeta)
     const isError = meta.isError === true
     const cancelled = meta.cancellationKind === 'cockpit.operator-cancelled'
     const previous = steps.at(-1)
+    const sameSide = sameSideOfRun(previous, inRun)
     const repeats =
-      previous?.sentence === sentence && previous.hidden === hidden
+      sameSide && previous?.sentence === sentence && previous.hidden === hidden
     // Reading the page it just worked on is the agent checking its own work,
     // not a step of its own.
     const checksPrevious =
@@ -451,10 +491,18 @@ export function describeSteps(
       !cancelled &&
       previous !== undefined &&
       !previous.hidden &&
+      sameSide &&
       pageKey !== undefined &&
       previous.pageKey === pageKey
-    if (previous && (repeats || checksPrevious)) {
+    if (afterHandBack) handBackEndedAt = undefined
+    const handsBack = handedBack(dispatch)
+    if (handsBack) {
+      handBackEndedAt =
+        dispatch.createdAt + Math.max(0, dispatch.durationMs ?? 0)
+    }
+    if (previous && !afterHandBack && (repeats || checksPrevious)) {
       previous.dispatchIds.push(dispatch.dispatchId)
+      if (handsBack) previous.handedBack = true
       continue
     }
     steps.push({
@@ -466,9 +514,85 @@ export function describeSteps(
       cancelled,
       hidden,
       pageKey,
+      ...(handsBack ? { handedBack: true } : {}),
+      ...(afterHandBack ? { afterHandBack: true } : {}),
+      ...runMark,
     })
   }
   return { steps, hiddenCount }
+}
+
+/**
+ * Follows pursue runs through the calls in order. A run covers pursue's own window, from its
+ * start to its start plus its duration; the calls inside it are the steps neo took.
+ */
+function runTracker() {
+  let run: { record: NeoRun; startsAt: number; endsAt: number } | undefined
+  return (
+    dispatch: ToolDispatchRow,
+    hidden: boolean,
+  ): Pick<DescribedStep, 'neoRun' | 'neoOffsetMs'> => {
+    if (run && dispatch.createdAt > run.endsAt) run = undefined
+    if (dispatch.toolName === 'pursue') {
+      const endsAt =
+        dispatch.durationMs != null
+          ? dispatch.createdAt + Math.max(0, dispatch.durationMs)
+          : Number.POSITIVE_INFINITY
+      run = { record: neoRunOf(dispatch), startsAt: dispatch.createdAt, endsAt }
+      return { neoRun: run.record }
+    }
+    if (!run) return {}
+    if (!hidden) run.record.stepCount += 1
+    return { neoOffsetMs: dispatch.createdAt - run.startsAt }
+  }
+}
+
+/** neo's steps never fold into the takeover, and nothing folds across a run's edge. */
+function sameSideOfRun(
+  previous: DescribedStep | undefined,
+  inRun: boolean,
+): boolean {
+  return (
+    previous !== undefined &&
+    !previous.neoRun &&
+    (previous.neoOffsetMs !== undefined) === inRun
+  )
+}
+
+/** What a pursue call recorded: the goal it was given and, once it ended, how it went. */
+function neoRunOf(dispatch: ToolDispatchRow): NeoRun {
+  const goal = stringArg(parseArgs(dispatch.argsJson), 'goal')
+  const meta = parseMeta(dispatch.resultMeta)
+  const outcome =
+    meta.outcome === 'completed' ||
+    meta.outcome === 'handed_back' ||
+    meta.outcome === 'cancelled'
+      ? meta.outcome
+      : undefined
+  const count = (value: unknown) =>
+    typeof value === 'number' && Number.isFinite(value) ? value : undefined
+  return {
+    ...(goal ? { goal } : {}),
+    ...(outcome ? { outcome } : {}),
+    ...(outcome && dispatch.durationMs != null
+      ? { durationMs: dispatch.durationMs }
+      : {}),
+    stepCount: 0,
+    ...(count(meta.pagesRead) !== undefined
+      ? { pagesRead: count(meta.pagesRead) }
+      : {}),
+    ...(count(meta.pageTokens) !== undefined
+      ? { pageTokens: count(meta.pageTokens) }
+      : {}),
+  }
+}
+
+/** A pursue call that ended with neo handing the task back to the agent. */
+function handedBack(dispatch: ToolDispatchRow): boolean {
+  return (
+    dispatch.toolName === 'pursue' &&
+    parseMeta(dispatch.resultMeta).outcome === 'handed_back'
+  )
 }
 
 /** What an agent is doing right now on a live tab, in the present tense. */

@@ -220,5 +220,73 @@ class SignWindowsBinaryTest(unittest.TestCase):
                 self.assertIn("Error: Provider rejected ***", logged)
 
 
+class NotarizeMacosZipTest(unittest.TestCase):
+    """Exercise the OTA entrypoint across credential setup and submission."""
+
+    def setUp(self):
+        self.env = cast(EnvConfig, SimpleNamespace(
+            macos_notarization_apple_id="fixture@example.test",
+            macos_notarization_team_id="FIXTURETEAM",
+            macos_notarization_password="fixture-password ",
+        ))
+        self.logs = []
+        for name in ("log_info", "log_error", "log_success"):
+            patcher = mock.patch.object(sign_binary, name, side_effect=self.logs.append)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        patcher = mock.patch.object(sign_binary, "IS_MACOS", return_value=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_agreement_error_stops_before_submission_and_redacts_credentials(self):
+        password = self.env.macos_notarization_password
+        result = subprocess.CompletedProcess(
+            [], 1,
+            f"Validating {self.env.macos_notarization_apple_id} with {password}",
+            "HTTP status code: 403. A required agreement is missing or has expired. "
+            f"Team {self.env.macos_notarization_team_id}; password={password}",
+        )
+        with mock.patch.object(sign_binary.subprocess, "run", return_value=result) as run:
+            self.assertFalse(sign_binary.notarize_macos_zip(Path("payload.zip"), self.env))
+        run.assert_called_once()
+        self.assertEqual(run.call_args.args[0][2], "store-credentials")
+        logged = "\n".join(self.logs)
+        self.assertIn("Credential storage failed (exit 1)", logged)
+        self.assertIn("A required agreement is missing or has expired", logged)
+        self.assertIn("Validating", logged)
+        for secret in (password, self.env.macos_notarization_apple_id, self.env.macos_notarization_team_id):
+            self.assertNotIn(secret, logged)
+        self.assertNotIn("Submitting for notarization", logged)
+
+    def test_successful_storage_submits_the_zip_with_its_profile(self):
+        with mock.patch.object(sign_binary.subprocess, "run", side_effect=[
+            subprocess.CompletedProcess([], 0, "Credentials saved", ""),
+            subprocess.CompletedProcess([], 0, "status: Accepted", ""),
+        ]) as run:
+            self.assertTrue(sign_binary.notarize_macos_zip(Path("payload.zip"), self.env))
+        store, submit = [call.args[0] for call in run.call_args_list]
+        self.assertEqual(submit[:4], ["xcrun", "notarytool", "submit", "payload.zip"])
+        self.assertEqual(submit[submit.index("--keychain-profile") + 1], store[3])
+
+    def test_submission_errors_are_reported_without_credentials(self):
+        with mock.patch.object(sign_binary.subprocess, "run", side_effect=[
+            subprocess.CompletedProcess([], 0, "Credentials saved", ""),
+            subprocess.CompletedProcess([], 1, "Submission rejected", f"Rejected {self.env.macos_notarization_password}"),
+        ]):
+            self.assertFalse(sign_binary.notarize_macos_zip(Path("payload.zip"), self.env))
+        logged = "\n".join(self.logs)
+        self.assertIn("Notarization submission failed (exit 1)", logged)
+        self.assertIn("Submission rejected", logged)
+        self.assertNotIn(self.env.macos_notarization_password, logged)
+
+    def test_successful_command_with_unaccepted_status_still_fails(self):
+        with mock.patch.object(sign_binary.subprocess, "run", side_effect=[
+            subprocess.CompletedProcess([], 0, "Credentials saved", ""),
+            subprocess.CompletedProcess([], 0, "status: Invalid", ""),
+        ]):
+            self.assertFalse(sign_binary.notarize_macos_zip(Path("payload.zip"), self.env))
+        self.assertIn("Notarization was not accepted", self.logs)
+
+
 if __name__ == "__main__":
     unittest.main()

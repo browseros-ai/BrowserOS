@@ -27,13 +27,14 @@ pub(super) const DESKTOP_SIZE: Size = Size {
 pub(super) enum Fixed {
     Mobile { zoom: f64, size: Size },
     Desktop { size: Size },
+    Playwright { size: Size },
 }
 
 impl Fixed {
     /// The device viewport in CSS px.
     pub(super) fn size(self) -> Size {
         match self {
-            Self::Mobile { size, .. } | Self::Desktop { size } => size,
+            Self::Mobile { size, .. } | Self::Desktop { size } | Self::Playwright { size } => size,
         }
     }
 
@@ -48,7 +49,7 @@ impl Fixed {
     pub(super) fn mode(self) -> ViewportMode {
         match self {
             Self::Mobile { .. } => ViewportMode::Mobile,
-            Self::Desktop { .. } => ViewportMode::Desktop,
+            Self::Desktop { .. } | Self::Playwright { .. } => ViewportMode::Desktop,
         }
     }
 
@@ -56,7 +57,7 @@ impl Fixed {
     pub(super) fn scale(self) -> f64 {
         match self {
             Self::Mobile { zoom, .. } => zoom / DEFAULT_ZOOM,
-            Self::Desktop { .. } => 1.0,
+            Self::Desktop { .. } | Self::Playwright { .. } => 1.0,
         }
     }
 
@@ -72,6 +73,22 @@ impl Fixed {
     /// Commands that put the tab in this mode. Desktop restores the browser's own identity.
     pub(super) fn commands(self, chrome_version: &str) -> Vec<(&'static str, Value)> {
         let size = self.size();
+        // CRPage._updateViewport (Playwright 1.64.1), in Neo's desktop-only context. Let
+        // metrics size the view too. Restore the context's identity/touch defaults as well:
+        // a mobile owner fit may have temporarily changed them on this same session.
+        if matches!(self, Self::Playwright { .. }) {
+            let mut commands = vec![(
+                "Emulation.setDeviceMetricsOverride",
+                json!({
+                    "width": size.width, "height": size.height,
+                    "screenWidth": size.width, "screenHeight": size.height,
+                    "deviceScaleFactor": 1, "mobile": false,
+                    "screenOrientation": { "angle": 0, "type": "landscapePrimary" }
+                }),
+            )];
+            commands.extend(clear_commands().into_iter().skip(1));
+            return commands;
+        }
         let mut metrics = json!({
             "width": size.width,
             "height": size.height,
@@ -96,7 +113,7 @@ impl Fixed {
                 json!({"enabled": true, "configuration": "desktop"}),
                 mobile_identity(chrome_version),
             ),
-            Self::Desktop { .. } => (
+            Self::Desktop { .. } | Self::Playwright { .. } => (
                 json!({"enabled": false}),
                 json!({"enabled": false}),
                 json!({"userAgent": ""}),
@@ -112,12 +129,15 @@ impl Fixed {
 
     /// Sizes the tab's view to the preview. A hidden tab's view otherwise keeps whatever size
     /// an earlier override or capture left, and zoomed input beyond it misses.
-    pub(super) fn pin(self) -> (&'static str, Value) {
+    pub(super) fn pin(self) -> Option<(&'static str, Value)> {
+        if matches!(self, Self::Playwright { .. }) {
+            return None;
+        }
         let preview = self.preview();
-        (
+        Some((
             "Emulation.setVisibleSize",
             json!({"width": preview.width, "height": preview.height}),
-        )
+        ))
     }
 
     fn reported_by(self, metrics: &PageMetrics) -> bool {
@@ -129,7 +149,7 @@ impl Fixed {
             Self::Mobile { .. } => {
                 screen && metrics.touch_points > 0 && metrics.mobile != Some(false)
             }
-            Self::Desktop { .. } => screen,
+            Self::Desktop { .. } | Self::Playwright { .. } => screen,
         }
     }
 }
@@ -261,6 +281,11 @@ pub(super) async fn settle(
     page: &PageId,
     fixed: Fixed,
 ) -> Result<PageMetrics, CoreError> {
+    // Playwright awaits the CDP acknowledgement, not a renderer-size poll. In particular,
+    // zero disables that metric, so the reported natural size need not equal the request.
+    if matches!(fixed, Fixed::Playwright { .. }) {
+        return measure(session).await;
+    }
     let deadline = Instant::now() + SETTLE_LIMIT;
     loop {
         let metrics = measure(session).await;

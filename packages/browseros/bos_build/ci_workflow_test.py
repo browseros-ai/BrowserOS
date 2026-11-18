@@ -3904,7 +3904,13 @@ class DockerImageWorkflowTest(unittest.TestCase):
         cache = next(step for step in server["steps"]
                      if step.get("uses", "").startswith("Swatinem/rust-cache@"))
         self.assertEqual(cache["with"]["cache-provider"], "warpbuild")
-        self.assertIn("~/.cargo/build/browseros", cache["with"]["cache-directories"])
+        # With no shared build-dir, CARGO_TARGET_DIR holds everything worth caching.
+        self.assertEqual(
+            cache["with"]["workspaces"],
+            "packages/browseros-agent -> ../../target/neo-docker",
+        )
+        self.assertEqual(cache["with"]["prefix-key"], "browseros-target-v1")
+        self.assertNotIn("cache-directories", cache["with"])
         self.assertEqual(cache["with"]["shared-key"], "neo-docker-${{ matrix.rust_target }}")
         # Without the environment hash the key ignores Cargo.lock and never refreshes.
         self.assertNotIn("add-rust-environment-hash-key", cache["with"])
@@ -3984,6 +3990,173 @@ class DockerImageWorkflowTest(unittest.TestCase):
         for job in self.jobs.values():
             for step in job["steps"]:
                 self.assertNotIn("${{ inputs.", step.get("run", ""))
+
+
+
+class NeoSdkImageWorkflowTest(unittest.TestCase):
+    """The Neo SDK image's workflow: build and accept on every input change, publish only when
+    asked on a protected branch, with the CAPTCHA keys, and only to the SDK's own image, never
+    production's (ghcr.io/browseros-ai/neo)."""
+
+    def setUp(self):
+        self.path = WORKFLOW_DIR / "neo-sdk-image.yml"
+        self.text = self.path.read_text(encoding="utf-8")
+        self.workflow = yaml.safe_load(self.text)
+        # PyYAML reads the bare `on` key as the boolean True.
+        self.on = self.workflow.get("on", self.workflow.get(True))
+        self.jobs = self.workflow["jobs"]
+
+    def decide(self, **env: str) -> subprocess.CompletedProcess:
+        """Runs the preflight's decision script as GitHub would, with these event values."""
+        step = next(s for s in self.jobs["preflight"]["steps"] if s.get("id") == "decide")
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "output"
+            output.touch()
+            values = {
+                "EVENT": "",
+                "REF": "",
+                "REF_TYPE": "branch",
+                "REF_PROTECTED": "false",
+                "PUBLISH": "",
+                "CONFIRM": "",
+                **env,
+            }
+            result = subprocess.run(
+                [git_bash_path(), "-c", step["run"]],
+                env={**os.environ, **values, "GITHUB_OUTPUT": str(output)},
+                capture_output=True,
+                text=True,
+            )
+            result.stdout = output.read_text()
+        return result
+
+    def test_builds_and_tests_on_every_change_to_the_images_inputs(self):
+        expected = {
+            "packages/browseros-agent/Cargo.toml",
+            "packages/browseros-agent/Cargo.lock",
+            "packages/browseros-agent/crates/**",
+            # The CAPTCHA test bed sits under crates/ but is no build input (Dockerfile.dockerignore).
+            "!packages/browseros-agent/crates/neo-sdk/neo-captcha/testbed/**",
+            "packages/browseros-agent/apps/claw-server/**",
+            ".github/workflows/neo-sdk-image.yml",
+        }
+        self.assertEqual(set(self.on["pull_request"]["paths"]), expected)
+        self.assertEqual(set(self.on["push"]["paths"]), expected)
+        # The CAPTCHA keys' environment admits protected branches only, never a tag: no tag path.
+        self.assertNotIn("tags", self.on["push"])
+
+    def test_publishes_only_on_a_confirmed_manual_run_on_a_protected_branch(self):
+        main = {"REF": "refs/heads/main", "REF_TYPE": "branch", "REF_PROTECTED": "true"}
+        cases = [
+            ({"EVENT": "pull_request", "REF": "refs/pull/1/merge"}, "publish=false"),
+            ({"EVENT": "push", **main}, "publish=false"),
+            ({"EVENT": "push", "REF": "refs/heads/feat/claw-sdk"}, "publish=false"),
+            ({"EVENT": "push", "REF": "refs/tags/neo-sdk-v0.1.0", "REF_TYPE": "tag"}, "publish=false"),
+            ({"EVENT": "workflow_dispatch", **main, "PUBLISH": "false"}, "publish=false"),
+            ({"EVENT": "workflow_dispatch", **main, "PUBLISH": "true", "CONFIRM": "neo-sdk"}, "publish=true"),
+        ]
+        for env, expected in cases:
+            with self.subTest(env=env):
+                result = self.decide(**env)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.strip(), expected)
+        refusals = [
+            {"EVENT": "workflow_dispatch", **main, "PUBLISH": "true", "CONFIRM": "yes"},
+            # The keys' environment would not admit these refs: refused before anything is built.
+            {"EVENT": "workflow_dispatch", "REF": "refs/heads/publish/x", "PUBLISH": "true", "CONFIRM": "neo-sdk"},
+            {
+                "EVENT": "workflow_dispatch",
+                "REF": "refs/tags/neo-sdk-v0.1.0",
+                "REF_TYPE": "tag",
+                "REF_PROTECTED": "true",
+                "PUBLISH": "true",
+                "CONFIRM": "neo-sdk",
+            },
+        ]
+        for env in refusals:
+            with self.subTest(refused=env):
+                refused = self.decide(**env)
+                self.assertNotEqual(refused.returncode, 0)
+                self.assertEqual(refused.stdout.strip(), "")
+
+    def test_the_keys_environment_is_named_only_by_a_publishing_run(self):
+        image = self.jobs["image"]
+        self.assertEqual(
+            image["environment"], "${{ needs.preflight.outputs.publish == 'true' && 'neo-captcha' || '' }}"
+        )
+        self.assertEqual([name for name, job in self.jobs.items() if "environment" in job], ["image"])
+        keys = next(step for step in image["steps"] if step.get("id") == "keys")
+        self.assertEqual(keys["if"], "needs.preflight.outputs.publish == 'true'")
+        self.assertEqual(
+            keys["env"],
+            {
+                "CAPSOLVER_API_KEY": "${{ secrets.CAPSOLVER_API_KEY }}",
+                "TWOCAPTCHA_API_KEY": "${{ secrets.TWOCAPTCHA_API_KEY }}",
+            },
+        )
+        # No other step reads the keys; their files stay out of the uploaded log folder and are
+        # removed whatever happens; an image without both keys is never pushed.
+        self.assertEqual(self.text.count("secrets.CAPSOLVER_API_KEY"), 1)
+        self.assertEqual(self.text.count("secrets.TWOCAPTCHA_API_KEY"), 1)
+        self.assertIn("umask 077", keys["run"])
+        self.assertIn('keys="$RUNNER_TEMP/neo-sdk-keys"', keys["run"])
+        cleanup = next(step for step in image["steps"] if step.get("name") == "Remove the CAPTCHA key files")
+        self.assertEqual(cleanup["if"], "always()")
+        self.assertIn('rm -rf "$RUNNER_TEMP/neo-sdk-keys"', cleanup["run"])
+        push = next(step for step in image["steps"] if step.get("name") == "Push the accepted image")
+        self.assertIn('.captchaKeys == ["capsolver", "2captcha"]', push["run"])
+
+    def test_publishing_runs_have_their_own_concurrency_group(self):
+        self.assertEqual(
+            self.workflow["concurrency"]["group"],
+            "${{ github.event_name == 'workflow_dispatch' && inputs.publish && 'neo-sdk-image-publish' || "
+            "format('neo-sdk-image-{0}', github.ref) }}",
+        )
+        self.assertEqual(
+            self.workflow["concurrency"]["cancel-in-progress"], "${{ github.event_name == 'pull_request' }}"
+        )
+
+    def test_nothing_is_pushed_before_every_check_passed(self):
+        self.assertEqual(set(self.jobs["image"]["needs"]), {"preflight", "scripts"})
+        self.assertEqual(set(self.jobs["publish"]["needs"]), {"preflight", "image"})
+
+    def test_every_registry_step_waits_for_the_publish_decision(self):
+        for name, job in self.jobs.items():
+            for step in job.get("steps", []):
+                touches_registry = "docker/login-action" in step.get("uses", "") or re.search(
+                    r"docker (push|buildx imagetools create)", step.get("run", "")
+                )
+                if not touches_registry:
+                    continue
+                with self.subTest(job=name, step=step.get("name", step.get("uses"))):
+                    guard = step.get("if") or job.get("if")
+                    self.assertEqual(guard, "needs.preflight.outputs.publish == 'true'")
+
+    def test_pushes_only_the_sdk_image_never_productions(self):
+        self.assertEqual(self.workflow["env"]["IMAGE"], "ghcr.io/browseros-ai/neo-sdk")
+        # The comments name production's image to say this is not it; the steps may not.
+        code = "\n".join(line for line in self.text.splitlines() if not line.lstrip().startswith("#"))
+        names = set(re.findall(r"ghcr\.io/[a-z0-9/_-]+", code))
+        self.assertEqual(names, {"ghcr.io/browseros-ai/neo-sdk"})
+        self.assertNotIn("latest", re.findall(r"\$IMAGE:([A-Za-z0-9_${}.-]+)", self.text))
+
+    def test_builds_and_accepts_each_architecture_natively_and_runs_the_scripts_tests(self):
+        matrix = self.jobs["image"]["strategy"]["matrix"]["include"]
+        self.assertEqual(
+            {(entry["arch"], entry["runner"]) for entry in matrix},
+            {("amd64", "ubuntu-24.04"), ("arm64", "ubuntu-24.04-arm")},
+        )
+        runs = "\n".join(step.get("run", "") for step in self.jobs["image"]["steps"])
+        self.assertIn('docker/build.sh --platform "linux/$ARCH"', runs)
+        self.assertIn("docker/accept.sh", runs)
+        scripts = "\n".join(step.get("run", "") for step in self.jobs["scripts"]["steps"])
+        self.assertIn('discover -s supervisor -p "*_test.py"', scripts)
+        self.assertIn("ruff check", scripts)
+
+    def test_changes_trigger_build_system_tests(self):
+        build_tests = yaml.safe_load((WORKFLOW_DIR / "bos-build-tests.yml").read_text(encoding="utf-8"))
+        on = build_tests.get("on", build_tests.get(True))
+        self.assertIn(".github/workflows/neo-sdk-image.yml", on["pull_request"]["paths"])
 
 
 if __name__ == "__main__":

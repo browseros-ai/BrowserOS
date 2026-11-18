@@ -1,0 +1,5 @@
+// The console check is bound to the producing reply, while this fresh request verifies its caller value.
+assert(Array.isArray(args.prior) && args.prior.length === 1, 'the caller supplies exactly the producing run');
+const value = args.prior[0];
+equal(value, 'R'.repeat(20000) + 'SDK_CAP_VALUE_TAIL', 'the caller retains the exact inline value alongside the console output');
+return { length: value.length, tail: value.endsWith('SDK_CAP_VALUE_TAIL') };

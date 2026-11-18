@@ -1,0 +1,127 @@
+name: Neo SDK live suites
+
+# Independent from neo-spec.yml: live integration coverage does not add work to the corpus job.
+on:
+  pull_request:
+    paths:
+      - .github/workflows/neo-sdk-live.yml
+      - packages/browseros-agent/crates/**
+      - packages/browseros-agent/Cargo.toml
+      - packages/browseros-agent/Cargo.lock
+      - packages/browseros-agent/package.json
+      - packages/browseros-agent/tools/browser-process.mjs
+      - packages/browseros-agent/tools/test-browser.mjs
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/neo-sdk-live.yml
+      - packages/browseros-agent/crates/**
+      - packages/browseros-agent/Cargo.toml
+      - packages/browseros-agent/Cargo.lock
+      - packages/browseros-agent/package.json
+      - packages/browseros-agent/tools/browser-process.mjs
+      - packages/browseros-agent/tools/test-browser.mjs
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: neo-sdk-live-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  live:
+    name: Neo SDK live / linux-x64
+    # Fork code uses a public runner; repository branches use the existing Warp fleet.
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || 'warp-custom-browseros-ubuntu-2204-x64-16x' }}
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: packages/browseros-agent
+    env:
+      # Optimise the live host and its dependencies without changing repository profiles.
+      # Debug builds can spend seconds cloning large console events on a current-thread runtime.
+      CARGO_PROFILE_TEST_OPT_LEVEL: "2"
+      CARGO_PROFILE_DEV_OPT_LEVEL: "2"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      # Keep compilation at eight jobs to leave headroom on the 16-vCPU runner.
+      CARGO_BUILD_JOBS: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && '2' || '8' }}
+      CARGO_BUILD_BUILD_DIR: ${{ github.workspace }}/packages/browseros-agent/target/build-private
+      BROWSERCLAW_HOSTED_MODE: "0"
+      NEO_LIVE_DIAGNOSTICS: "1"
+      NEO_E2E_BROWSER: /usr/bin/browserclaw
+      # Server acceptance otherwise returns early, even when its tests were selected.
+      CLAW_SDK_E2E_BROWSER: /usr/bin/browserclaw
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: packages/browseros-agent/package.json
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 26.13.0
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@1.98.0
+
+      - name: Cache the SDK live build
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-provider: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'github' || 'warpbuild' }}
+          prefix-key: neo-sdk-live-test-opt2-v1
+          workspaces: packages/browseros-agent
+          shared-key: neo-sdk-live-test-opt2
+          cache-on-failure: true
+          add-rust-environment-hash-key: false
+
+      - name: Install the pinned browser and SDK fonts
+        run: |
+          set -euo pipefail
+          . crates/neo-sdk/neo-server/docker/browser.lock
+          echo "SDK_BROWSER_LOCK_VERSION=$NEO_BROWSER_VERSION" >> "$GITHUB_ENV"
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 --connect-timeout 20 --max-time 300 -o "$RUNNER_TEMP/neo.deb" "$NEO_BROWSER_URL_AMD64"
+          echo "$NEO_BROWSER_SHA256_AMD64  $RUNNER_TEMP/neo.deb" | sha256sum -c -
+          sudo apt-get update -q
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            "$RUNNER_TEMP/neo.deb" \
+            fonts-liberation fonts-noto-core fonts-noto-color-emoji fonts-wqy-zenhei fonts-ipafont-gothic
+
+      - name: Verify the private browser's CDP version
+        run: |
+          mkdir -p "$RUNNER_TEMP/neo-sdk-live"
+          # Keep JavaScript templates literal while probing the owned launcher directly.
+          # shellcheck disable=SC2016
+          node tools/test-browser.mjs node --input-type=module -e '
+          import { writeFileSync } from "node:fs";
+          import { execFileSync } from "node:child_process";
+          const executable = process.env.NEO_E2E_BROWSER;
+          const expected = execFileSync(executable, ["--version"], { encoding: "utf8" }).match(/\d+\.\d+\.\d+\.\d+/)?.[0];
+          const version = await (await fetch(`http://127.0.0.1:${process.env.BROWSEROS_CDP_PORT}/json/version`)).json();
+          if (!expected || version.Browser !== `Chrome/${expected}`) throw new Error(`pinned executable ${expected}, CDP ${version.Browser}`);
+          const identity = { lockVersion: process.env.SDK_BROWSER_LOCK_VERSION, executable, expected, cdp: version.Browser };
+          writeFileSync(`${process.env.RUNNER_TEMP}/neo-sdk-live/browser-version.json`, JSON.stringify(identity, null, 2)+"\n");
+          console.log(`browser.lock ${identity.lockVersion}, CDP ${identity.cdp}`);
+          '
+
+      - name: Verify live-result coverage guard
+        run: python3 -m unittest discover -s crates/neo-sdk/tests -p test_live.py
+
+      - name: Run every live SDK suite
+        run: python3 crates/neo-sdk/live.py --output "$RUNNER_TEMP/neo-sdk-live"
+
+      - name: Upload the live results and browser cleanup receipts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: neo-sdk-live-report-${{ github.run_attempt }}
+          include-hidden-files: true
+          path: |
+            ${{ runner.temp }}/neo-sdk-live
+            packages/browseros-agent/.llm/test-browser
+          retention-days: 14

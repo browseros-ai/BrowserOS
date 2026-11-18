@@ -12,6 +12,7 @@ import {
 
 const EXPECTED_PAGES = [
   'checkout.html',
+  'click-recovery.html',
   'console.html',
   'cursor.html',
   'dialog.html',

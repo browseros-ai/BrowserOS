@@ -4,14 +4,11 @@
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Iterator
 
+from ...core.patch_source import parse_series
 from ...core.step import Step, ValidationError, step
 from ...core.context import Context
 from ...lib.utils import log_info, log_success, log_error, get_platform
-
-
-ENCODING = "UTF-8"
 
 
 @step("series_patches", phase="prep", optional=True)
@@ -40,32 +37,6 @@ class SeriesPatchesModule(Step):
             raise RuntimeError(f"Failed to apply {len(failed)} series patches")
 
         log_success(f"Applied {len(applied)} series patches")
-
-
-def parse_series(series_path: Path) -> Iterator[str]:
-    """
-    Parse a GNU Quilt series file, yielding patch paths.
-
-    Format:
-    - One patch path per line (relative to series directory)
-    - Lines starting with # are comments
-    - Inline comments with ' #' are stripped
-    - Blank lines are ignored
-    """
-    with series_path.open(encoding=ENCODING) as f:
-        lines = f.read().splitlines()
-
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-        if line.startswith("#"):
-            continue
-        # Strip inline comments
-        if " #" in line:
-            line = line.split(" #")[0].strip()
-        if line:
-            yield line
 
 
 def get_series_files(series_dir: Path) -> list[Path]:

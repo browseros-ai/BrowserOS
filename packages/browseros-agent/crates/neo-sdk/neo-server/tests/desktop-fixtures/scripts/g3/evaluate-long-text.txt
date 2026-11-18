@@ -1,0 +1,5 @@
+await page.goto(args.base + '/sdk-long-read.html');
+const text = await page.evaluate(() => document.body.innerText);
+const state = { long: text.length > 20000, tail: text.includes('SDK_FULL_READ_TAIL_20261029') };
+equal(state, { long: true, tail: true }, 'a long evaluation result remains complete inside the run');
+return state;

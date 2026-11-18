@@ -1,0 +1,52 @@
+<!doctype html><meta charset=utf-8><title>Covered sign in</title>
+<style>
+  .row { position: relative; width: 320px; height: 40px; margin: 8px 0; }
+  .row input { position: absolute; left: 0; top: 0; width: 300px; height: 30px; }
+  #cover { position: absolute; left: 0; top: 0; width: 300px; height: 30px; background: rgba(200, 0, 0, 0.3); z-index: 5; }
+  #over-label { position: absolute; left: 0; top: 0; width: 300px; height: 30px; z-index: 5; }
+  #banner { position: fixed; left: 0; width: 100%; height: 40px; background: rgba(0, 0, 0, 0.6); color: #fff; z-index: 10; }
+  #float { position: absolute; left: 6px; top: 6px; font: 14px sans-serif; color: #666; z-index: 5; }
+  #icon { position: absolute; left: 140px; top: 5px; width: 20px; height: 20px; z-index: 5; background: #888; }
+</style>
+<h1>Sign in to Fixture Bank</h1>
+<form id=f method=post action=/echo>
+  <div class=row><input id=user name=username type=email autocomplete=username aria-label="Email"></div>
+  <div class=row id=pwrow><input id=pw name=password type=password autocomplete=current-password aria-label="Password"></div>
+  <button type=submit>Sign in</button>
+</form>
+<script>
+// ?mode=cover (default): an overlay on the password box, as a consent banner or a modal would.
+// ?mode=label: the box's own <label for> laid over it. ?mode=icon: the label wraps the box and a
+// decorative icon inside the label sits over the box's centre. ?mode=none: nothing over it.
+// ?mode=banner: a cookie banner fixed to the top of the window, over the form. ?mode=wrap: the label
+// wraps the box and its text floats over the box, as floating labels draw it.
+// window.coverFor(ms): an overlay now, gone after ms (a box covered at the look, free a moment later).
+const mode = new URLSearchParams(location.search).get('mode') || 'cover';
+const pw = document.getElementById('pw'), row = document.getElementById('pwrow');
+const cover = () => { const d = document.createElement('div'); d.id = 'cover'; row.appendChild(d); return d; };
+if (mode === 'cover') cover();
+if (mode === 'label') { const l = document.createElement('label'); l.id = 'over-label'; l.htmlFor = 'pw'; l.textContent = ''; row.appendChild(l); }
+if (mode === 'icon') { const l = document.createElement('label'); l.style.cssText = 'position:absolute;left:0;top:0;width:300px;height:30px'; row.replaceChild(l, pw); l.appendChild(pw); const i = document.createElement('span'); i.id = 'icon'; l.appendChild(i); }
+if (mode === 'banner') { const b = document.createElement('div'); b.id = 'banner'; b.textContent = 'We use cookies. Accept?'; b.style.top = (pw.getBoundingClientRect().top - 5) + 'px'; document.body.appendChild(b); }
+if (mode === 'wrap') { const l = document.createElement('label'); l.style.cssText = 'position:absolute;left:0;top:0;width:300px;height:30px'; row.replaceChild(l, pw); l.appendChild(pw); const t = document.createElement('span'); t.id = 'float'; t.textContent = 'Password'; l.appendChild(t); }
+// ?mode=otherlabel: the Email field's own <label for=user> drawn over the password box (another
+// field's label). ?mode=sibling: the label wraps the box, and a decoration that is a child of the
+// label's parent, not of the label, lies over the box's centre.
+if (mode === 'otherlabel') { const l = document.createElement('label'); l.id = 'other-label'; l.htmlFor = 'user'; l.style.cssText = 'position:absolute;left:0;top:0;width:300px;height:30px;z-index:5'; row.appendChild(l); }
+if (mode === 'sibling') { const l = document.createElement('label'); l.style.cssText = 'position:absolute;left:0;top:0;width:300px;height:30px'; row.replaceChild(l, pw); l.appendChild(pw); const d = document.createElement('span'); d.id = 'deco'; d.style.cssText = 'position:absolute;left:140px;top:5px;width:20px;height:20px;z-index:6;background:#c00'; row.appendChild(d); }
+// ?mode=pe: the box has pointer-events: none inside a clickable wrapper that focuses it, as some
+// components draw inputs. ?mode=ancsib: the same wrapper, and an overlay that is the wrapper's sibling
+// (a sibling of the box's ancestor) over the box's centre. ?mode=shadow: the box inside a shadow root,
+// an overlay in the same shadow root over its centre.
+const wrapped = () => { const w = document.createElement('div'); w.id = 'pwwrap'; w.style.cssText = 'position:absolute;left:0;top:0;width:300px;height:30px;cursor:text'; w.onclick = () => pw.focus(); row.replaceChild(w, pw); w.appendChild(pw); return w; };
+if (mode === 'pe') { wrapped(); pw.style.pointerEvents = 'none'; }
+// ?mode=under: the box drawn under its own wrapper (z-index: -1 under the wrapper's background), so a
+// click at its centre lands on the wrapper, an ancestor; the wrapper focuses the box.
+if (mode === 'under') { const w = wrapped(); w.style.background = 'rgba(0, 0, 200, 0.15)'; pw.style.zIndex = '-1'; }
+if (mode === 'ancsib') { wrapped(); const d = document.createElement('div'); d.id = 'ov'; d.style.cssText = 'position:absolute;left:140px;top:5px;width:20px;height:20px;z-index:6;background:#c00'; row.appendChild(d); }
+if (mode === 'shadow') { const h = document.createElement('div'); h.id = 'pwhost'; h.style.cssText = 'position:absolute;left:0;top:0;width:300px;height:30px'; row.replaceChild(h, pw); const s = h.attachShadow({ mode: 'open' }); s.innerHTML = '<style>input{position:absolute;left:0;top:0;width:300px;height:30px}#ov{position:absolute;left:140px;top:5px;width:20px;height:20px;z-index:6;background:#c00}</style>'; s.appendChild(pw); const d = document.createElement('div'); d.id = 'ov'; s.appendChild(d); }
+// ?mode=cut: the password box's maxlength is 8, shorter than the saved password: the browser keeps
+// the first eight characters and the box stays.
+if (mode === 'cut') pw.maxLength = 8;
+window.coverFor = (ms) => { const d = cover(); setTimeout(() => d.remove(), ms); return true; };
+</script>

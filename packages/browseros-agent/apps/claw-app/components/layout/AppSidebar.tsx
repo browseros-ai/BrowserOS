@@ -6,6 +6,7 @@
 
 import type { ReactNode } from 'react'
 import { Link, useHref, useLocation } from 'react-router'
+import { UltrafastWordmark } from '@/components/audit/UltrafastMarks'
 import { HarnessIcon } from '@/components/harness/HarnessIcon'
 import { isUserFacingHarness } from '@/components/harness/harness.types'
 import { AnimatedBadge } from '@/components/motion/animated-badge'
@@ -22,12 +23,14 @@ import { CARD_TARGET_CLASS, Card } from '@/components/motion/card'
 import { cn } from '@/lib/utils'
 import { useLiveSessions } from '@/modules/api/audit.hooks'
 import { useConnections } from '@/modules/api/connections.hooks'
+import { usePlan } from '@/modules/api/plan.hooks'
 import { useAttentionTitle } from '@/modules/attention/attention.hooks'
 import {
   isNavItemActive,
   type NavItem,
+  planTagFor,
   primaryNavItems,
-  secondaryNavItems,
+  secondaryNavItemsFor,
 } from './app-sidebar.data'
 
 export function SidebarBrand() {
@@ -59,7 +62,7 @@ function NavLinkButton({ item, badge }: { item: NavItem; badge?: ReactNode }) {
       icon={<Icon className="size-[18px]" strokeWidth={1.75} />}
       className={cn('text-[15px]', active && 'font-semibold text-primary')}
     >
-      {item.name}
+      {item.name === 'ultrafast' ? <UltrafastWordmark /> : item.name}
     </AnimatedSidebarMenuButton>
   )
 }
@@ -89,6 +92,9 @@ function NavMenu({
  * and Settings with the connected agents pinned to the bottom.
  */
 export function AppSidebar() {
+  // Loading or unreachable reads as no billing, so the ultrafast item stays hidden.
+  const plan = usePlan()
+  const tag = planTagFor(plan.data)
   return (
     <AnimatedSidebar
       ariaLabel="Sidebar"
@@ -108,7 +114,24 @@ export function AppSidebar() {
       </AnimatedSidebarContent>
       <AnimatedSidebarFooter className="gap-1 px-3">
         <nav aria-label="Settings">
-          <NavMenu items={secondaryNavItems} />
+          <NavMenu
+            items={secondaryNavItemsFor(plan.data)}
+            badges={
+              tag
+                ? {
+                    '/pro': (
+                      <AnimatedBadge
+                        status={tag.status}
+                        size="sm"
+                        showIcon={false}
+                      >
+                        {tag.label}
+                      </AnimatedBadge>
+                    ),
+                  }
+                : undefined
+            }
+          />
         </nav>
         <ConnectedAgentsCard />
       </AnimatedSidebarFooter>

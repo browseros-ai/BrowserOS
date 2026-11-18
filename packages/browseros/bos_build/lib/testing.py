@@ -17,6 +17,7 @@ import yaml
 
 from ..core.context import Context
 from ..core.products import get_product_descriptor
+from .versions import load_chromium_version
 from .paths import get_feature_registry_path
 
 DEFAULT_CHROMIUM_VERSION = "137.0.7151.69"
@@ -175,6 +176,34 @@ class MockBrowserOSRoot:
             browseros_version,
             prefix="BROWSEROS_",
         )
+
+    def with_patch_store(self, base_commit: str = "a" * 40) -> "MockBrowserOSRoot":
+        """Add the coherent pin/store/ownership/series inputs of a patch package."""
+        (self.root / "BASE_COMMIT").write_text(base_commit + "\n")
+        version, _ = load_chromium_version(self.root)
+        self.write_features_yaml({})
+        (self.root / "chromium_patches" / ".store.yaml").write_text(
+            yaml.safe_dump({"base_commit": base_commit, "base_version": version})
+        )
+        series = self.root / "series_patches" / "series"
+        series.parent.mkdir()
+        series.write_text("")
+        return self
+
+    def with_v8_store(self, base_commit: str = "b" * 40) -> "MockBrowserOSRoot":
+        """Add a valid optional V8 store to the test patch package."""
+        store = self.root / "v8_patches"
+        store.mkdir()
+        (store / ".store.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "base_commit": base_commit,
+                    "base_version": "15.8.27.5",
+                }
+            )
+        )
+        (store / ".features.yaml").write_text(yaml.safe_dump({"features": {}}))
+        return self
 
     def add_patch(self, relative_path: str, content: str) -> Path:
         """Create a patch file under chromium_patches/ and return its path."""

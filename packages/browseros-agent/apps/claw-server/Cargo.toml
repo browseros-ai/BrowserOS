@@ -1,6 +1,6 @@
 [package]
 name = "claw-server"
-version = "0.0.93"
+version = "0.0.98"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -27,8 +27,11 @@ path = "src/bin/browseros.rs"
 [dependencies]
 os_info = "3.15.0"
 harness-integrations.workspace = true
+neo-captcha.workspace = true
+neo-screencast.workspace = true
 browseros-cdp.workspace = true
 browseros-core.workspace = true
+browseros-decide.workspace = true
 browseros-mcp.workspace = true
 claw-api.workspace = true
 hosted-api.workspace = true
@@ -37,6 +40,8 @@ anyhow.workspace = true
 axum = { workspace = true, features = ["ws"] }
 base64.workspace = true
 bytes.workspace = true
+chrono.workspace = true
+ed25519-dalek.workspace = true
 clap.workspace = true
 futures-util.workspace = true
 posthog-rs.workspace = true
@@ -66,6 +71,10 @@ tracing-subscriber.workspace = true
 ulid.workspace = true
 url.workspace = true
 uuid.workspace = true
+
+[features]
+# Points billing at the staging gateway. Never enabled for a shipped build.
+billing-staging = []
 
 [dev-dependencies]
 syn = { version = "2", features = ["full", "visit"] }

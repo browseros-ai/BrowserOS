@@ -8,6 +8,7 @@
 //! malformed JSON, or a document older than [`MAX_AGE`]. A feature that quietly invites
 //! nobody is correct; one that puts an error in front of somebody is not.
 
+use crate::config::ServerMode;
 use std::{
     collections::HashSet,
     sync::Arc,
@@ -171,14 +172,18 @@ pub enum CohortSource {
     RemoteConfig { host: String, project_key: String },
 }
 
-/// The configured source, or `None` when this build can reach neither.
+/// The configured desktop source, or `None` in hosted mode or without a source.
 ///
 /// An explicit document URL wins so a developer can point at a local file; otherwise the
 /// analytics credentials the build already embeds are enough, which is the whole point:
 /// shipping this needs no second thing to configure.
 #[must_use]
-pub fn configured_source(posthog: Option<(String, String)>) -> Option<CohortSource> {
+pub fn configured_source(
+    mode: ServerMode,
+    posthog: Option<(String, String)>,
+) -> Option<CohortSource> {
     resolve_source(
+        mode,
         std::env::var("CLAW_FEEDBACK_COHORT_URL").ok(),
         BUILD_COHORT_URL,
         posthog,
@@ -188,10 +193,16 @@ pub fn configured_source(posthog: Option<(String, String)>) -> Option<CohortSour
 /// Split from [`configured_source`] so the precedence rule can be tested without mutating
 /// the process environment, which this crate forbids.
 fn resolve_source(
+    mode: ServerMode,
     runtime: Option<String>,
     build: Option<&str>,
     posthog: Option<(String, String)>,
 ) -> Option<CohortSource> {
+    // Feedback invitations target desktop installations. Refuse all sources here so an
+    // explicit URL cannot start polling for a hosted instance through another caller.
+    if mode.is_hosted() {
+        return None;
+    }
     let document = runtime
         .filter(|url| !url.trim().is_empty())
         .or_else(|| build.map(str::to_owned))
@@ -559,7 +570,7 @@ mod tests {
     #[test]
     fn the_shipped_analytics_credentials_are_enough() {
         assert_eq!(
-            resolve_source(None, None, posthog()),
+            resolve_source(ServerMode::Desktop, None, None, posthog()),
             Some(CohortSource::RemoteConfig {
                 host: "https://us.i.posthog.com".to_string(),
                 project_key: "phc_example".to_string(),
@@ -569,13 +580,19 @@ mod tests {
 
     #[test]
     fn a_build_without_analytics_credentials_reaches_no_source() {
-        assert_eq!(resolve_source(None, None, None), None);
+        assert_eq!(resolve_source(ServerMode::Desktop, None, None, None), None);
         assert_eq!(
-            resolve_source(None, None, Some((String::new(), "phc_example".to_string()))),
+            resolve_source(
+                ServerMode::Desktop,
+                None,
+                None,
+                Some((String::new(), "phc_example".to_string()))
+            ),
             None
         );
         assert_eq!(
             resolve_source(
+                ServerMode::Desktop,
                 None,
                 None,
                 Some(("https://us.i.posthog.com".to_string(), "  ".to_string()))
@@ -584,11 +601,26 @@ mod tests {
         );
     }
 
+    #[test]
+    fn hosted_mode_refuses_every_cohort_source() {
+        for (runtime, build) in [
+            (None, None),
+            (Some("https://cohort.example/runtime".to_string()), None),
+            (None, Some("https://cohort.example/build")),
+        ] {
+            assert_eq!(
+                resolve_source(ServerMode::Hosted, runtime, build, posthog()),
+                None
+            );
+        }
+    }
+
     /// An explicit document wins so a developer can point at a local file.
     #[test]
     fn an_explicit_document_overrides_remote_configuration() {
         assert_eq!(
             resolve_source(
+                ServerMode::Desktop,
                 Some("  http://127.0.0.1:8787/cohort.json ".to_string()),
                 None,
                 posthog()
@@ -600,6 +632,7 @@ mod tests {
         // A blank runtime value falls through rather than disabling a built-in default.
         assert_eq!(
             resolve_source(
+                ServerMode::Desktop,
                 Some("  ".to_string()),
                 Some("https://build.test/c.json"),
                 posthog()

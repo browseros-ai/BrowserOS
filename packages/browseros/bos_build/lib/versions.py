@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
 """Version file parsing and derivation for the build context.
 
-Three inputs live in the repo:
+Version inputs live in the repo:
 - CHROMIUM_VERSION (MAJOR=/MINOR=/BUILD=/PATCH=): the chromium pin
 - bos_build/config/BROWSEROS_BUILD_OFFSET: added to chromium BUILD to
   produce the browseros chromium version (keeps our build numbers above
   upstream's for update ordering)
 - resources/BROWSEROS_VERSION: the semantic product version
+- optional bos_build/config/BROWSEROS_RELEASE_MIN_CHROMIUM_VERSION: the source
+  floor required for newly built release artifacts
 """
 
 from pathlib import Path
+import re
 from typing import Dict, Tuple
 
 from .utils import join_paths
@@ -32,6 +35,32 @@ def load_chromium_version(root_dir: Path) -> Tuple[str, Dict[str, str]]:
         return chromium_version, version_dict
 
     return "", version_dict
+
+
+def validate_release_chromium_version(
+    root_dir: Path, version: str, build_type: str
+) -> None:
+    """Enforce the build package's optional source floor for release artifacts."""
+    if build_type != "release":
+        return
+    policy = root_dir / "bos_build/config/BROWSEROS_RELEASE_MIN_CHROMIUM_VERSION"
+    if not policy.exists():
+        return
+    minimum = policy.read_text(encoding="utf-8").strip()
+    if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+", minimum):
+        raise ValueError(
+            f"Invalid release Chromium floor in {policy}: expected a four-part version"
+        )
+    if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+", version):
+        raise ValueError(f"Invalid selected Chromium version for release: {version!r}")
+    # Resetting the product build offset must not let a release use the older
+    # public patch package. Compare source versions; debug and older layouts
+    # without this policy keep their existing behavior.
+    if tuple(map(int, version.split("."))) < tuple(map(int, minimum.split("."))):
+        raise ValueError(
+            f"Release builds require Chromium >= {minimum}; selected {version}. "
+            "Select a compatible patch package with --patch-root."
+        )
 
 
 def load_build_offset(root_dir: Path) -> str:

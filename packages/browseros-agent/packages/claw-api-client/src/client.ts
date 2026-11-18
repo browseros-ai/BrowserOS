@@ -1,10 +1,12 @@
 import type {
+  ActivatePlanKeyRequest,
   AgentSettings,
   AppendRecordingEventsResponse,
   AuditAgentList,
   AuditCleanupResult,
   AuditRetention,
   AuditStorageState,
+  CancelPlanRequest,
   CancelSessionResponse,
   ClaudeDesktopExtension,
   ClaudeDesktopInstallResult,
@@ -13,6 +15,15 @@ import type {
   ConnectionList,
   FeedbackInvitation,
   HealthResponse,
+  Plan,
+  PlanCheckout,
+  PlanCheckoutStatus,
+  PlanKey,
+  PlanKeyChange,
+  PlanPortal,
+  PlanPortalRequest,
+  PlanPricing,
+  PlanSavings,
   RecordFeedbackInviteRequest,
   RecordingMetadata,
   ResolveHelpResponse,
@@ -28,6 +39,7 @@ import type {
   SkillList,
   SkillRunList,
   SkillUpdate,
+  StartPlanCheckoutRequest,
   SystemInfo,
   TelemetryState,
   UpdateAgentSettingsRequest,
@@ -83,6 +95,17 @@ export interface ListSkillRunsRequest {
   name: SkillNameRequest['name']
   cursor?: number
   limit?: number
+}
+
+export type PlanCheckoutRequest =
+  operations['getPlanCheckout']['parameters']['path']
+
+export type PlanComputerRequest =
+  operations['removePlanComputer']['parameters']['path']
+
+export interface RenamePlanComputerOperationRequest {
+  installId: PlanComputerRequest['installId']
+  name: string
 }
 
 type ApiResult<T> =
@@ -389,11 +412,105 @@ export class ClawApiClient {
     )
   }
 
+  async revokeSkillWrite(request: SkillNameRequest): Promise<Skill> {
+    return this.unwrap(
+      await this.client.DELETE(
+        '/api/v1/skills/{name}/ultrafast/approve-write',
+        {
+          params: { path: request },
+        },
+      ),
+    )
+  }
+
+  async getPlan(): Promise<Plan> {
+    return this.unwrap(await this.client.GET('/api/v1/plan'))
+  }
+
+  async getPlanPricing(): Promise<PlanPricing> {
+    return this.unwrap(await this.client.GET('/api/v1/plan/pricing'))
+  }
+
+  async getPlanSavings(): Promise<PlanSavings> {
+    return this.unwrap(await this.client.GET('/api/v1/plan/savings'))
+  }
+
+  async startPlanCheckout(
+    body: StartPlanCheckoutRequest,
+  ): Promise<PlanCheckout> {
+    return this.unwrap(
+      await this.client.POST('/api/v1/plan/checkout', { body }),
+    )
+  }
+
+  async getPlanCheckout(
+    request: PlanCheckoutRequest,
+  ): Promise<PlanCheckoutStatus> {
+    return this.unwrap(
+      await this.client.GET('/api/v1/plan/checkout/{checkoutId}', {
+        params: { path: request },
+      }),
+    )
+  }
+
+  async getPlanKey(): Promise<PlanKey> {
+    return this.unwrap(await this.client.GET('/api/v1/plan/key'))
+  }
+
+  /** The key is sent once and never comes back in any reply. */
+  async activatePlanKey(body: ActivatePlanKeyRequest): Promise<PlanKeyChange> {
+    return this.unwrap(
+      await this.client.POST('/api/v1/plan/key/activate', { body }),
+    )
+  }
+
+  async removePlanComputer(
+    request: PlanComputerRequest,
+  ): Promise<PlanKeyChange> {
+    return this.unwrap(
+      await this.client.POST('/api/v1/plan/key/computers/{installId}/remove', {
+        params: { path: request },
+      }),
+    )
+  }
+
+  async renamePlanComputer(
+    request: RenamePlanComputerOperationRequest,
+  ): Promise<PlanKey> {
+    return this.unwrap(
+      await this.client.POST('/api/v1/plan/key/computers/{installId}/rename', {
+        params: { path: { installId: request.installId } },
+        body: { name: request.name },
+      }),
+    )
+  }
+
+  /** The new key is emailed; the reply carries only its hint. */
+  async resetPlanKey(): Promise<PlanKeyChange> {
+    return this.unwrap(await this.client.POST('/api/v1/plan/key/reset'))
+  }
+
+  async cancelPlan(body: CancelPlanRequest = {}): Promise<Plan> {
+    return this.unwrap(await this.client.POST('/api/v1/plan/cancel', { body }))
+  }
+
+  async resumePlan(): Promise<Plan> {
+    return this.unwrap(await this.client.POST('/api/v1/plan/resume'))
+  }
+
+  async openPlanPortal(body: PlanPortalRequest): Promise<PlanPortal> {
+    return this.unwrap(await this.client.POST('/api/v1/plan/portal', { body }))
+  }
+
+  async refreshPlan(): Promise<Plan> {
+    return this.unwrap(await this.client.POST('/api/v1/plan/refresh'))
+  }
+
   private unwrap<T>(result: ApiResult<T | undefined>): T {
     const errorResponse = this.responseClones.get(result.response)
     this.responseClones.delete(result.response)
     if ('error' in result) {
-      throw new ApiResponseError(errorResponse ?? result.response)
+      throw new ApiResponseError(errorResponse ?? result.response, result.error)
     }
     if (result.data === undefined) {
       throw new Error('BrowserOS neo API returned an empty success response')
@@ -406,7 +523,7 @@ export class ClawApiClient {
     const errorResponse = this.responseClones.get(result.response)
     this.responseClones.delete(result.response)
     if ('error' in result) {
-      throw new ApiResponseError(errorResponse ?? result.response)
+      throw new ApiResponseError(errorResponse ?? result.response, result.error)
     }
   }
 }

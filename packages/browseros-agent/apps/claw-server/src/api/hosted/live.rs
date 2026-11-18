@@ -138,7 +138,7 @@ impl HostedError {
                 "no_open_tab",
                 "session has no open tab",
             ),
-            CaptureError::Browser(source) => Self::internal(request_id, source),
+            CaptureError::Browser(source) => Self::internal(request_id, source.into()),
         }
     }
 }

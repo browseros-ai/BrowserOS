@@ -477,6 +477,8 @@ pub enum ToolError {
     InvalidArguments(Vec<ArgIssue>),
     #[error("{0}")]
     Message(String),
+    #[error(transparent)]
+    Core(#[from] CoreError),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -489,12 +491,6 @@ impl ToolError {
     #[must_use]
     pub fn message(message: impl Into<String>) -> Self {
         Self::Message(message.into())
-    }
-}
-
-impl From<CoreError> for ToolError {
-    fn from(value: CoreError) -> Self {
-        Self::Message(value.to_string())
     }
 }
 
@@ -654,7 +650,31 @@ async fn execute_tool_inner(
             )));
         }
         Err(ToolError::Cancelled) => return Err(ToolError::Cancelled),
-        Err(err) => response.error(format!("{} failed: {err}", def.name)),
+        Err(err) => {
+            // Preserve actionable click recovery in structured MCP output as
+            // well as text. The SDK bridge carries the same ref in its exception.
+            if let ToolError::Core(error) = &err {
+                let preparation = match error {
+                    CoreError::ClickFallbackUnavailable { native, .. } => native.as_ref(),
+                    other => other,
+                };
+                match preparation {
+                    CoreError::ElementCovered {
+                        blocker,
+                        blocker_ref,
+                        ..
+                    } => {
+                        response.click_data(json!({ "status": "blocked", "sent": false,
+                            "blocker": { "description": blocker, "ref": blocker_ref } }));
+                    }
+                    CoreError::ClickOutcomeUnknown(_) => {
+                        response.click_data(json!({ "status": "unknown", "retryable": false }));
+                    }
+                    _ => {}
+                }
+            }
+            response.error(format!("{} failed: {err}", def.name));
+        }
     }
     ctx.throw_if_cancelled()?;
     let mut result = response.build_for_session(ctx, primary_page).await?;

@@ -1,0 +1,22 @@
+# The context is packages/browseros-agent. The server needs every workspace member's manifest
+# and sources plus its lockfile. The standalone viewer builds in its own context.
+*
+!Cargo.toml
+!Cargo.lock
+!crates
+!apps/claw-server
+**/node_modules
+# Only Cargo's output at the root: `**/target` would also drop source modules such as
+# browseros-core/src/target/.
+target
+# The CAPTCHA testbed beside neo-captcha's sources is no build input either.
+crates/neo-sdk/neo-captcha/testbed
+crates/neo-sdk/neo-slimviewer
+# This folder's scripts and docs are not build inputs, so editing them leaves the image cached.
+# The browser pin, the server's build step and the supervisor (supervisor/, its tests aside) are.
+crates/neo-sdk/neo-server/docker
+!crates/neo-sdk/neo-server/docker/browser.lock
+!crates/neo-sdk/neo-server/docker/build-server.sh
+!crates/neo-sdk/neo-server/docker/supervisor
+crates/neo-sdk/neo-server/docker/supervisor/*_test.py
+**/__pycache__

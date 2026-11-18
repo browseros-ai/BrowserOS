@@ -1,0 +1,16 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Covered L1</title></head>
+<body style="margin:0;position:relative">
+<script>
+  window.__log = [];
+  document.addEventListener('mousedown', (e) => window.__log.push(`mousedown ${e.target.id || e.target.tagName}`), true);
+  const l2 = document.createElement('iframe');
+  l2.src = `http://[::1]:${location.port}/actions/cover-l2.html`;
+  l2.title = 'l2';
+  l2.style.cssText = 'position:absolute;left:0;top:0;width:400px;height:200px;border:0';
+  document.body.append(l2);
+  const overlay = document.createElement('div');
+  overlay.id = 'overlay';
+  overlay.style.cssText = 'position:absolute;left:0;top:0;width:400px;height:200px;background:rgba(0,0,0,.2)';
+  document.body.append(overlay);
+</script>
+</body></html>

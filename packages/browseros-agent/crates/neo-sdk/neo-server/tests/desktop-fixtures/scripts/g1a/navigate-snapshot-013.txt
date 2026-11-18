@@ -1,0 +1,6 @@
+// Source port of navigate-snapshot-013 at a7e536e152a4835abe9974498b27a5c927dd2e0d. Execution is owned by the coordinator.
+await page.goto(args.base + '/links.html');
+assert(page.taskId !== null, 'the runner supplies a task id', { taskId: page.taskId });
+const task = await neo.task(page.taskId);
+const error = await rejected(async () => { await task.page(99999).ariaSnapshot(); }, /./s);
+return { error };

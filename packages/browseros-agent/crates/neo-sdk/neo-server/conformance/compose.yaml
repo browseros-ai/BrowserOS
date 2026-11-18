@@ -1,0 +1,18 @@
+# Run from the repository root with -f <this file>. No host ports, shared browser profiles or
+# Docker context changes: both browsers and all four leased ports stay inside this one service.
+services:
+  conformance:
+    build:
+      context: ../../../../../..
+      dockerfile: packages/browseros-agent/crates/neo-sdk/neo-server/conformance/Dockerfile
+      args:
+        SOURCE_SHA: ${SOURCE_SHA:?capture the source commit first}
+    shm_size: 1gb
+    environment:
+      GIT_CONFIG_COUNT: "1"
+      GIT_CONFIG_KEY_0: safe.directory
+      GIT_CONFIG_VALUE_0: /playwright
+    volumes:
+      - ${PLAYWRIGHT_SRC:?set the read-only upstream clone}:/playwright:ro
+      - ${CONFORMANCE_OUTPUT:?set a private result directory}:/results
+      - ${CONFORMANCE_DATA:?set a private data directory}:/data

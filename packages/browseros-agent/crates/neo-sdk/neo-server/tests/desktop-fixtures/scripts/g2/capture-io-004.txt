@@ -1,0 +1,26 @@
+/** Header dimensions measure encoded pixels without an image decoder that could resize them. */
+function pngSize(bytes) {
+  const be = offset => bytes[offset] * 16777216 + bytes[offset + 1] * 65536 + bytes[offset + 2] * 256 + bytes[offset + 3];
+  return {width: be(16), height: be(20)};
+}
+function imageSize(bytes) {
+  if (bytes.subarray(0, 8).toString('hex') === '89504e470d0a1a0a') return pngSize(bytes);
+  const be16 = offset => bytes[offset] * 256 + bytes[offset + 1];
+  assert(be16(0) === 0xffd8, 'expected PNG or JPEG', {magic:bytes.subarray(0,8).toString('hex')});
+  let offset = 2;
+  while (offset < bytes.length) {
+    assert(bytes[offset++] === 0xff, 'malformed JPEG marker', {offset});
+    while (bytes[offset] === 0xff) offset++;
+    const marker = bytes[offset++];
+    const length = be16(offset);
+    if ([0xc0, 0xc1, 0xc2].includes(marker)) return {height:be16(offset + 3),width:be16(offset + 5)};
+    offset += length;
+  }
+  throw new Error('JPEG has no frame dimensions');
+}
+
+await page.goto(args.base + '/media.html');
+const small = pngSize(await page.screenshot({type:'png',clip:{x:0,y:0,width:400,height:300},scale:'css'}));
+const large = pngSize(await page.screenshot({type:'png',clip:{x:0,y:0,width:900,height:600},scale:'css'}));
+assert(large.width > small.width && large.height > small.height, 'larger capture options increase both image dimensions', {small,large});
+return {small,large};

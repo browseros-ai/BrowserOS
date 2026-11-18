@@ -1,0 +1,1058 @@
+[
+  {
+    "id": "r01-clean",
+    "title": "1 clean page",
+    "file": "pages/r01-clean.html",
+    "viewport": {
+      "width": 1280,
+      "height": 800
+    },
+    "expectedControls": 19,
+    "expectedNotes": [],
+    "why": "Every control is clear."
+  },
+  {
+    "id": "r02-portal-pair",
+    "title": "2 portal dialog + backdrop (aria-modal)",
+    "file": "pages/r02-portal-pair.html",
+    "viewport": {
+      "width": 1280,
+      "height": 800
+    },
+    "expectedControls": 21,
+    "expectedNotes": [
+      {
+        "selector": "#portal",
+        "extent": "whole",
+        "role": "dialog",
+        "name": "What You Need To Know",
+        "controls": ["Dismiss", "Accept & Continue"],
+        "flags": []
+      }
+    ],
+    "why": "Plain root joins its fixed dimmer and box; name/ref/content belong to the dialog."
+  },
+  {
+    "id": "r03-bootstrap",
+    "title": "3 bootstrap modal (dialog inside overlay)",
+    "file": "pages/r03-bootstrap.html",
+    "viewport": {
+      "width": 1280,
+      "height": 800
+    },
+    "expectedControls": 21,
+    "expectedNotes": [
+      {
+        "selector": ".modal",
+        "extent": "whole",
+        "role": "dialog",
+        "name": "Store Fulfilment Modal",
+        "controls": ["Close", "ZIP"],
+        "flags": []
+      }
+    ],
+    "why": "Fixed container takes the pointer; dialog content is listed first."
+  },
+  {
+    "id": "r04-native-modal",
+    "title": "4 native <dialog>.showModal()",
+    "file": "pages/r04-native-modal.html",
+    "viewport": {
+      "width": 1280,
+      "height": 800
+    },
+    "expectedControls": 20,
+    "expectedNotes": [
+      {
+        "selector": "#d",
+        "extent": "whole",
+        "role": "dialog",
+        "name": "Select a store",
+        "controls": ["Close"],
+        "flags": []
+      }
+    ],
+    "why": "Pseudo-backdrop reaches five points although the dialog box is small; test inert controls too."
+  },
+  {
+    "id": "r05-blank",
+    "title": "5 blank transparent layer (travel-site shape)",
+    "file": "pages/r05-blank.html",
+    "viewport": {
+      "width": 1280,
+      "height": 800
+    },
+    "expectedControls": 19,
+    "expectedNotes": [
+      {
+        "selector": ".c-ulo-viewport",
+        "extent": "whole",
+        "role": "generic",
+        "name": "",
+        "controls": [],
+        "flags": ["blank"]
+      }
+    ],
+    "why": "Transparent rendered layer still catches the pointer; mint its ref."
+  },
+  {
+    "id": "r06-frame",
+    "title": "6 full-view bot-check iframe",
+    "file": "pages/r06-frame.html",
+    "viewport": {
+      "width": 1280,
+      "height": 800
+    },
+    "expectedControls": 20,
+    "expectedNotes": [
+      {
+        "selector": "#px-captcha-modal",
+        "extent": "whole",
+        "role": "iframe",
+        "name": "",
+        "controls": [],
+        "flags": []
+      }
+    ],
+    "why": "Frame is one main-document control; child-frame controls do not enter this survey."
+  },
+  {
+    "id": "r07-loading",
+    "title": "7 loading layer (aria-busy)",
+    "file": "pages/r07-loading.html",
+    "viewport": {
+      "width": 1280,
+      "height": 800
+    },
+    "expectedControls": 19,
+    "expectedNotes": [
+      {
+        "selector": "[aria-busy]",
+        "extent": "whole",
+        "role": "alert",
+        "name": "",
+        "controls": [],
+        "flags": ["loading"],
+        "says": "Loading, please wait"
+      }
+    ],
+    "why": "Words and busy state prevent a blank classification."
+  },
+  {
+    "id": "r08-newsletter-no-hit",
+    "title": "8 newsletter popup, no backdrop, centre",
+    "file": "pages/r08-newsletter-no-hit.html",
+    "viewport": {
+      "width": 1280,
+      "height": 800
+    },
+    "expectedControls": 22,
+    "expectedNotes": [],
+    "why": "Original popup geometry covers no control point; merely being a fixed popup is insufficient."
+  },
+  {
+    "id": "r09-header",
+    "title": "9 sticky header (not a cover)",
+    "file": "pages/r09-header.html",
+    "viewport": {
+      "width": 1280,
+      "height": 800
+    },
+    "expectedControls": 18,
+    "expectedNotes": [],
+    "why": "Thin fixed edge bar, cleared by scrolling."
+  },
+  {
+    "id": "r10-cookie-edge",
+    "title": "10 cookie bar at the bottom",
+    "file": "pages/r10-cookie-edge.html",
+    "viewport": {
+      "width": 1280,
+      "height": 800
+    },
+    "expectedControls": 21,
+    "expectedNotes": [],
+    "why": "Thin bottom edge bar; no note."
+  },
+  {
+    "id": "r11-bubbles",
+    "title": "11 chat bubble + language switcher",
+    "file": "pages/r11-bubbles.html",
+    "viewport": {
+      "width": 1280,
+      "height": 800
+    },
+    "expectedControls": 19,
+    "expectedNotes": [],
+    "why": "Small chat/language widgets cover no tested control point."
+  },
+  {
+    "id": "r12-dropdown",
+    "title": "12 open dropdown menu",
+    "file": "pages/r12-dropdown.html",
+    "viewport": {
+      "width": 1280,
+      "height": 800
+    },
+    "expectedControls": 21,
+    "expectedNotes": [],
+    "why": "Absolute overlap without a fixed/top-layer face is left to the click answer."
+  },
+  {
+    "id": "r13-fixed-shell",
+    "title": "13 app shell: whole page in a fixed box",
+    "file": "pages/r13-fixed-shell.html",
+    "viewport": {
+      "width": 1280,
+      "height": 800
+    },
+    "expectedControls": 19,
+    "expectedNotes": [],
+    "why": "The fixed shell owns the main landmark and the controls; the page is never a layer."
+  },
+  {
+    "id": "r14-pointer-none",
+    "title": "14 layer with pointer-events:none",
+    "file": "pages/r14-pointer-none.html",
+    "viewport": {
+      "width": 1280,
+      "height": 800
+    },
+    "expectedControls": 19,
+    "expectedNotes": [],
+    "why": "Pointer events pass through the full-view decoration."
+  },
+  {
+    "id": "r15-own-label",
+    "title": "15 control under its own label",
+    "file": "pages/r15-own-label.html",
+    "viewport": {
+      "width": 1280,
+      "height": 800
+    },
+    "expectedControls": 2,
+    "expectedNotes": [],
+    "why": "Use the click module’s predicate for a press that lands by itself; never duplicate its label test."
+  },
+  {
+    "id": "d01-textbox",
+    "title": "Debug overlay: textbox",
+    "file": "pages/d01-textbox.html",
+    "viewport": {
+      "width": 1280,
+      "height": 800
+    },
+    "expectedControls": 3,
+    "expectedNotes": [
+      {
+        "selector": "#modal-wrapper",
+        "extent": "whole",
+        "role": "textbox",
+        "name": "",
+        "controls": ["Close"],
+        "flags": []
+      }
+    ],
+    "why": "Name the face/dialog that actually takes the hit; never choose a dialog merely by document order.",
+    "phases": [],
+    "face": "#modal-wrapper"
+  },
+  {
+    "id": "d02-presentation",
+    "title": "Debug overlay: presentation",
+    "file": "pages/d02-presentation.html",
+    "viewport": {
+      "width": 1280,
+      "height": 800
+    },
+    "expectedControls": 2,
+    "expectedNotes": [
+      {
+        "selector": "#sort-layer",
+        "extent": "whole",
+        "role": "generic",
+        "name": "",
+        "controls": [],
+        "flags": [],
+        "says": "Sort by / Distance"
+      }
+    ],
+    "why": "Name the face/dialog that actually takes the hit; never choose a dialog merely by document order.",
+    "phases": [],
+    "face": "#sort-layer"
+  },
+  {
+    "id": "d03-blank",
+    "title": "Debug overlay: blank",
+    "file": "pages/d03-blank.html",
+    "viewport": {
+      "width": 1280,
+      "height": 800
+    },
+    "expectedControls": 2,
+    "expectedNotes": [
+      {
+        "selector": "#blank",
+        "extent": "whole",
+        "role": "generic",
+        "name": "",
+        "controls": [],
+        "flags": ["blank"]
+      }
+    ],
+    "why": "Name the face/dialog that actually takes the hit; never choose a dialog merely by document order.",
+    "phases": [],
+    "face": "#blank"
+  },
+  {
+    "id": "d04-aria-hidden",
+    "title": "Debug overlay: aria-hidden",
+    "file": "pages/d04-aria-hidden.html",
+    "viewport": {
+      "width": 1280,
+      "height": 800
+    },
+    "expectedControls": 3,
+    "expectedNotes": [
+      {
+        "selector": "#hidden",
+        "extent": "whole",
+        "role": "generic",
+        "name": "",
+        "controls": [""],
+        "flags": [],
+        "controlText": "Dismiss"
+      }
+    ],
+    "why": "Name the face/dialog that actually takes the hit; never choose a dialog merely by document order. Its control has no accessible name; the same ref carries Dismiss in the first block.",
+    "phases": [],
+    "face": "#hidden"
+  },
+  {
+    "id": "d05-native",
+    "title": "Debug overlay: native",
+    "file": "pages/d05-native.html",
+    "viewport": {
+      "width": 1280,
+      "height": 800
+    },
+    "expectedControls": 3,
+    "expectedNotes": [
+      {
+        "selector": "#native",
+        "extent": "whole",
+        "role": "dialog",
+        "name": "",
+        "controls": ["Continue shopping"],
+        "flags": []
+      }
+    ],
+    "why": "Name the face/dialog that actually takes the hit; never choose a dialog merely by document order.",
+    "phases": [],
+    "face": "#native"
+  },
+  {
+    "id": "d06-popover",
+    "title": "Debug overlay: popover",
+    "file": "pages/d06-popover.html",
+    "viewport": {
+      "width": 1280,
+      "height": 800
+    },
+    "expectedControls": 3,
+    "expectedNotes": [
+      {
+        "selector": "#pop",
+        "extent": "whole",
+        "role": "generic",
+        "name": "",
+        "controls": ["Close picker"],
+        "flags": []
+      }
+    ],
+    "why": "Name the face/dialog that actually takes the hit; never choose a dialog merely by document order.",
+    "phases": [],
+    "face": "#pop"
+  },
+  {
+    "id": "d07-leftover",
+    "title": "Debug overlay: leftover",
+    "file": "pages/d07-leftover.html",
+    "viewport": {
+      "width": 1280,
+      "height": 800
+    },
+    "expectedControls": 3,
+    "expectedNotes": [
+      {
+        "selector": "#portal",
+        "extent": "whole",
+        "role": "dialog",
+        "name": "Comparison",
+        "controls": ["Close comparison"],
+        "flags": []
+      }
+    ],
+    "why": "Comparison z-index11 stands on the blank z-index10 face, with live controls; after dismissal the same blank face remains.",
+    "phases": [
+      {
+        "after": "press Close comparison",
+        "expectedControls": 2,
+        "notes": [
+          {
+            "selector": "#blank",
+            "extent": "whole",
+            "role": "generic",
+            "name": "",
+            "controls": [],
+            "flags": ["blank"]
+          }
+        ],
+        "why": "Same layer survives; its former dialog is gone."
+      }
+    ],
+    "face": "#blank"
+  },
+  {
+    "id": "d08-wrong-dialog",
+    "title": "Debug overlay: wrong-dialog",
+    "file": "pages/d08-wrong-dialog.html",
+    "viewport": {
+      "width": 1280,
+      "height": 800
+    },
+    "expectedControls": 4,
+    "expectedNotes": [
+      {
+        "selector": "#modal-wrapper",
+        "extent": "part",
+        "role": "dialog",
+        "name": "Navigation menu",
+        "controls": ["Close navigation menu"],
+        "flags": []
+      }
+    ],
+    "why": "Name the face/dialog that actually takes the hit; never choose a dialog merely by document order. Initially the unrelated Comparison dialog takes the five sample hits and owns a clear control, so the navigation layer is part-view.",
+    "phases": [
+      {
+        "after": "press Close comparison",
+        "expectedControls": 3,
+        "notes": [
+          {
+            "selector": "#modal-wrapper",
+            "extent": "whole",
+            "role": "dialog",
+            "name": "Navigation menu",
+            "controls": ["Close navigation menu"],
+            "flags": []
+          }
+        ],
+        "why": "Dismissing another dialog does not clear this cover."
+      },
+      {
+        "after": "press Close navigation menu",
+        "expectedControls": 2,
+        "notes": [],
+        "why": "Removing the actual layer clears it."
+      }
+    ],
+    "face": "#modal-wrapper"
+  },
+  {
+    "id": "d09-closed-shadow",
+    "title": "Debug overlay: closed-shadow",
+    "file": "pages/d09-closed-shadow.html",
+    "viewport": {
+      "width": 1280,
+      "height": 800
+    },
+    "expectedControls": 3,
+    "expectedNotes": [
+      {
+        "selector": "#host",
+        "extent": "whole",
+        "role": "generic",
+        "name": "",
+        "controls": ["Close private overlay"],
+        "flags": []
+      }
+    ],
+    "why": "Name the face/dialog that actually takes the hit; never choose a dialog merely by document order. Main lists a closed root once known; a locator snapshot primes it without running the survey before upstream-mode comparison.",
+    "phases": [],
+    "face": "#host",
+    "primeClosedRoots": true
+  },
+  {
+    "id": "e01-body-siblings",
+    "title": "Backdrop and dialog are body siblings",
+    "file": "pages/e01-body-siblings.html",
+    "viewport": {
+      "width": 1280,
+      "height": 800
+    },
+    "expectedControls": 20,
+    "expectedNotes": [
+      {
+        "selector": "#backdrop + #dialog",
+        "extent": "whole",
+        "role": "dialog",
+        "name": "Confirm choice",
+        "controls": ["Close"],
+        "flags": []
+      }
+    ],
+    "why": "Dialog stands on the backdrop at its own centre; describe it with the pair’s reach, retain the cover identity."
+  },
+  {
+    "id": "e02-fixed-page",
+    "title": "Whole page in a fixed container",
+    "file": "pages/e02-fixed-page.html",
+    "viewport": {
+      "width": 1280,
+      "height": 800
+    },
+    "expectedControls": 19,
+    "expectedNotes": [],
+    "why": "Independent row for the plan’s fixed-page false positive; no external control is covered."
+  },
+  {
+    "id": "e03-popup-three",
+    "title": "Popup without backdrop over three controls",
+    "file": "pages/e03-popup-three.html",
+    "viewport": {
+      "width": 1280,
+      "height": 800
+    },
+    "expectedControls": 5,
+    "expectedNotes": [
+      {
+        "selector": "#popup",
+        "extent": "part",
+        "role": "dialog",
+        "name": "Newsletter",
+        "controls": ["Close"],
+        "flags": []
+      }
+    ],
+    "why": "A genuine fixed face covers outside controls; the clear control and five points prevent whole-view reach."
+  },
+  {
+    "id": "e04-unrelated-first",
+    "title": "Unrelated dialog prints first",
+    "file": "pages/e04-unrelated-first.html",
+    "viewport": {
+      "width": 1280,
+      "height": 800
+    },
+    "expectedControls": 22,
+    "expectedNotes": [
+      {
+        "selector": "#active-root",
+        "extent": "whole",
+        "role": "dialog",
+        "name": "Consent",
+        "controls": ["I understand", "Close consent"],
+        "flags": []
+      }
+    ],
+    "why": "The first dialog in the snapshot is not the cover; the hit chooses the Consent layer."
+  },
+  {
+    "id": "e05-fixed-pair",
+    "title": "Fixed root holds dimmer and box",
+    "file": "pages/e05-fixed-pair.html",
+    "viewport": {
+      "width": 1280,
+      "height": 800
+    },
+    "expectedControls": 20,
+    "expectedNotes": [
+      {
+        "selector": "#fixed-pair",
+        "extent": "whole",
+        "role": "dialog",
+        "name": "Fixed pair",
+        "controls": ["Close"],
+        "flags": []
+      }
+    ],
+    "why": "One fixed root joins the dimmer and dialog box; five points judge reach."
+  },
+  {
+    "id": "e06-toast-container",
+    "title": "Pointer-free full-view toast container",
+    "file": "pages/e06-toast-container.html",
+    "viewport": {
+      "width": 1280,
+      "height": 800
+    },
+    "expectedControls": 21,
+    "expectedNotes": [
+      {
+        "selector": "#toast",
+        "extent": "part",
+        "role": "dialog",
+        "name": "Toast",
+        "controls": ["Dismiss"],
+        "flags": []
+      }
+    ],
+    "why": "The container fills the viewport by box only; never report whole-view reach.",
+    "face": "#toast",
+    "phases": [
+      {
+        "after": "next snapshot while toast stands",
+        "expectedControls": 21,
+        "notes": [
+          {
+            "selector": "#toast",
+            "extent": "part",
+            "role": "dialog",
+            "name": "Toast",
+            "controls": ["Dismiss"],
+            "flags": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "e07-scroll-lock",
+    "title": "Page content fixed to lock scrolling",
+    "file": "pages/e07-scroll-lock.html",
+    "viewport": {
+      "width": 1280,
+      "height": 800
+    },
+    "expectedControls": 20,
+    "expectedNotes": [],
+    "why": "The page main is not a layer even when it covers an outside control."
+  },
+  {
+    "id": "e08-retention",
+    "title": "Layer first found after scrolling",
+    "file": "pages/e08-retention.html",
+    "viewport": {
+      "width": 1280,
+      "height": 800
+    },
+    "expectedControls": 2,
+    "expectedNotes": [],
+    "why": "No count threshold; first observe a blocked control, then retain the face while it stands.",
+    "phases": [
+      {
+        "after": "scroll to y=700",
+        "expectedControls": 4,
+        "notes": [
+          {
+            "selector": "#retained",
+            "extent": "part",
+            "role": "dialog",
+            "name": "Kept layer",
+            "controls": ["Dismiss"],
+            "flags": []
+          }
+        ]
+      },
+      {
+        "after": "scroll back to y=0",
+        "expectedControls": 2,
+        "notes": [
+          {
+            "selector": "#retained",
+            "extent": "part",
+            "role": "dialog",
+            "name": "Kept layer",
+            "controls": ["Dismiss"],
+            "flags": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "e09-two-layers",
+    "title": "Two independent layers",
+    "file": "pages/e09-two-layers.html",
+    "viewport": {
+      "width": 1280,
+      "height": 800
+    },
+    "expectedControls": 5,
+    "expectedNotes": [
+      {
+        "selector": "#left",
+        "extent": "part",
+        "role": "dialog",
+        "name": "Left panel",
+        "controls": ["Close left"],
+        "flags": []
+      },
+      {
+        "selector": "#right",
+        "extent": "part",
+        "role": "dialog",
+        "name": "Right panel",
+        "controls": ["Close right"],
+        "flags": []
+      }
+    ],
+    "why": "Two faces without a shared non-page root remain separate in first-seen order."
+  },
+  {
+    "id": "e10-face-in-main",
+    "title": "One fixed face has roots inside and outside main",
+    "file": "pages/e10-face-in-main.html",
+    "viewport": {
+      "width": 1280,
+      "height": 800
+    },
+    "expectedControls": 4,
+    "expectedNotes": [
+      {
+        "selector": "#face",
+        "extent": "part",
+        "role": "dialog",
+        "name": "Fixed panel",
+        "controls": ["Dismiss"],
+        "flags": []
+      }
+    ],
+    "why": "Group by face, not the control-relative root; main joins nothing and is never named."
+  },
+  {
+    "id": "e11-unrelated-cookie",
+    "title": "Blank loading layer beside unrelated cookie notice",
+    "file": "pages/e11-unrelated-cookie.html",
+    "viewport": {
+      "width": 1280,
+      "height": 800
+    },
+    "expectedControls": 5,
+    "expectedNotes": [
+      {
+        "selector": "#loading",
+        "extent": "part",
+        "role": "generic",
+        "name": "",
+        "controls": [],
+        "flags": ["blank", "loading"]
+      }
+    ],
+    "why": "Cookie dialog is beside the blank layer, never on it; the note must stay blank/loading."
+  },
+  {
+    "id": "e12-small-dialog-wall",
+    "title": "e12-small-dialog-wall",
+    "file": "pages/e12-small-dialog-wall.html",
+    "viewport": {
+      "width": 1280,
+      "height": 800
+    },
+    "expectedControls": 9,
+    "expectedNotes": [
+      {
+        "selector": "#wall",
+        "extent": "whole",
+        "role": "dialog",
+        "name": "Continue",
+        "controls": ["Choice 0", "Choice 1", "Choice 2", "Choice 3"],
+        "flags": []
+      }
+    ],
+    "why": "A dialog holding most controls is still a layer; the majority guard applies to plain roots."
+  },
+  {
+    "id": "e13-fixed-shell-no-main",
+    "title": "e13-fixed-shell-no-main",
+    "file": "pages/e13-fixed-shell-no-main.html",
+    "viewport": {
+      "width": 1280,
+      "height": 800
+    },
+    "expectedControls": 4,
+    "expectedNotes": [],
+    "why": "A plain fixed shell holds most document controls and is the page even without a main landmark. Peeling this page shell leaves no fixed face, so no line is printed."
+  },
+  {
+    "id": "e14-portal-frame",
+    "title": "An aria-modal portal after a long page and its footer",
+    "file": "pages/e14-portal-frame.html",
+    "viewport": {
+      "width": 1280,
+      "height": 800
+    },
+    "expectedControls": 21,
+    "expectedNotes": [
+      {
+        "selector": "#portal",
+        "extent": "whole",
+        "role": "dialog",
+        "name": "Log in or sign up",
+        "controls": ["Close", "Login / Signup"],
+        "flags": []
+      }
+    ],
+    "why": "The dialog is last in DOM order but its content leads the default body, with Close offered in the pinned head.",
+    "longPortal": true
+  },
+  {
+    "id": "e15-ref-less-holder",
+    "title": "Whole-view shared holder has no box or ref",
+    "file": "pages/e15-ref-less-holder.html",
+    "viewport": {
+      "width": 1280,
+      "height": 800
+    },
+    "expectedControls": 3,
+    "expectedNotes": [
+      {
+        "selector": "#holder",
+        "extent": "whole",
+        "role": "dialog",
+        "name": "Ref-less block",
+        "controls": ["Dismiss"],
+        "flags": []
+      }
+    ],
+    "firstText": "Please read this whole message",
+    "why": "The engine node-to-element link moves the ref-less shared holder, including its own text."
+  },
+  {
+    "id": "e16-shadow-layer",
+    "title": "Open-shadow whole-view layer",
+    "file": "pages/e16-shadow-layer.html",
+    "viewport": {
+      "width": 1280,
+      "height": 800
+    },
+    "expectedControls": 21,
+    "expectedNotes": [
+      {
+        "selector": "x-modal",
+        "extent": "whole",
+        "role": "dialog",
+        "name": "Sign in",
+        "controls": ["Close"],
+        "flags": []
+      }
+    ],
+    "firstText": "Read this first",
+    "why": "Flat-tree content and controls belong to their full-view shadow panel; its content prints before the page."
+  },
+  {
+    "id": "e17-slotted-layer",
+    "title": "Slotted whole-view layer",
+    "file": "pages/e17-slotted-layer.html",
+    "viewport": {
+      "width": 1280,
+      "height": 800
+    },
+    "expectedControls": 21,
+    "expectedNotes": [
+      {
+        "selector": "x-modal",
+        "extent": "whole",
+        "role": "dialog",
+        "name": "Sign in",
+        "controls": ["Close"],
+        "flags": []
+      }
+    ],
+    "firstText": "Read this first",
+    "why": "Flat-tree content and controls belong to their full-view shadow panel; its content prints before the page."
+  },
+  {
+    "id": "e18-edge-popover",
+    "title": "Small popover off the centre",
+    "file": "pages/e18-edge-popover.html",
+    "viewport": {
+      "width": 1280,
+      "height": 800
+    },
+    "expectedControls": 21,
+    "expectedNotes": [],
+    "why": "A small popover off the centre is an edge bar; only a modal backdrop exempts its box."
+  },
+  {
+    "id": "e19-shared-holder-close",
+    "title": "Clear corner control in a joined portal holder",
+    "file": "pages/e19-shared-holder-close.html",
+    "viewport": {
+      "width": 1280,
+      "height": 800
+    },
+    "expectedControls": 22,
+    "expectedNotes": [
+      {
+        "selector": "#portal",
+        "extent": "whole",
+        "role": "dialog",
+        "name": "Shared holder",
+        "controls": ["Continue", "Close"],
+        "flags": []
+      }
+    ],
+    "firstText": "Read this first",
+    "why": "The fixed dimmer and dialog join through their plain portal; its clear corner Close is its own control."
+  },
+  {
+    "id": "e20-wrapped-dialog",
+    "title": "e20-wrapped-dialog",
+    "file": "pages/e20-wrapped-dialog.html",
+    "viewport": {
+      "width": 1280,
+      "height": 800
+    },
+    "expectedControls": 6,
+    "expectedNotes": [
+      {
+        "role": "dialog",
+        "name": "Wrapped sign in",
+        "extent": "whole",
+        "selector": "[role=dialog]",
+        "controls": ["Close", "Option 1", "Option 2", "Option 3", "Option 4"],
+        "flags": []
+      }
+    ],
+    "why": "Dialog ancestry, including a dialog with no ref, does not make its plain carrier the page.",
+    "firstText": "Read this first"
+  },
+  {
+    "id": "e21-dialog-ancestor",
+    "title": "e21-dialog-ancestor",
+    "file": "pages/e21-dialog-ancestor.html",
+    "viewport": {
+      "width": 1280,
+      "height": 800
+    },
+    "expectedControls": 6,
+    "expectedNotes": [
+      {
+        "role": "dialog",
+        "name": "Outer dialog",
+        "extent": "whole",
+        "selector": "[role=dialog]",
+        "controls": ["Close", "Option 1", "Option 2", "Option 3", "Option 4"],
+        "flags": []
+      }
+    ],
+    "why": "Dialog ancestry, including a dialog with no ref, does not make its plain carrier the page.",
+    "firstText": "Read this first",
+    "noRefDialog": "Outer dialog"
+  },
+  {
+    "id": "e22-shell-dialog",
+    "title": "e22-shell-dialog",
+    "file": "pages/e22-shell-dialog.html",
+    "viewport": {
+      "width": 1280,
+      "height": 800
+    },
+    "expectedControls": 14,
+    "expectedNotes": [
+      {
+        "role": "dialog",
+        "name": "Shell dialog",
+        "extent": "part",
+        "selector": "[role=dialog]",
+        "controls": ["Close", "Option 1", "Option 2", "Option 3", "Option 4"],
+        "flags": [],
+        "forbidControls": [
+          "Shell action 0",
+          "Shell action 1",
+          "Shell action 2",
+          "Shell action 3",
+          "Shell action 4",
+          "Shell action 5",
+          "Shell action 6",
+          "Shell action 7"
+        ]
+      }
+    ],
+    "why": "The shell stays the page by eight own controls; peel its face and find only the fixed dialog. Its root joins no shell content.",
+    "bodyOrder": ["Outside box", "Shell own content", "Dialog content"]
+  },
+  {
+    "id": "e23-boxless-dialog",
+    "title": "e23-boxless-dialog",
+    "file": "pages/e23-boxless-dialog.html",
+    "viewport": {
+      "width": 1280,
+      "height": 800
+    },
+    "expectedControls": 6,
+    "expectedNotes": [
+      {
+        "role": "dialog",
+        "name": "Boxless sign in",
+        "extent": "whole",
+        "selector": "[role=dialog]",
+        "controls": ["Close", "Option 1", "Option 2", "Option 3", "Option 4"],
+        "flags": []
+      }
+    ],
+    "why": "Dialog ancestry, including a dialog with no ref, does not make its plain carrier the page.",
+    "firstText": "Read this first",
+    "noRefDialog": "Boxless sign in"
+  },
+  {
+    "id": "e24-quiet-fixed-shell",
+    "title": "Fixed app shell with no covered control",
+    "file": "pages/e24-quiet-fixed-shell.html",
+    "viewport": {
+      "width": 1280,
+      "height": 800
+    },
+    "expectedControls": 3,
+    "expectedNotes": [],
+    "zeroCountPhase": true,
+    "why": "Samples hit the fixed shell, but every control is clear: no layer exists and the lazy document count never runs."
+  },
+  {
+    "id": "e25-dialog-carrier",
+    "title": "Dialog inside a larger fixed carrier beside its dimmer",
+    "file": "pages/e25-dialog-carrier.html",
+    "viewport": {
+      "width": 1280,
+      "height": 800
+    },
+    "expectedControls": 9,
+    "expectedNotes": [
+      {
+        "role": "dialog",
+        "name": "Inner dialog",
+        "extent": "whole",
+        "selector": "[role=dialog]",
+        "controls": ["OK", "Cancel"],
+        "flags": [],
+        "forbidControls": ["Close box"]
+      }
+    ],
+    "bodyOrder": ["Words here", "Close box", "One"],
+    "why": "The backdrop names the inner dialog, and its pointer-taking fixed carrier belongs to that layer: the centre lands on the carrier, so the dialog content prints first."
+  },
+  {
+    "id": "e26-busy-dialog-carrier",
+    "title": "Busy inner dialog keeps its loading flag through its carrier",
+    "file": "pages/e26-busy-dialog-carrier.html",
+    "viewport": {
+      "width": 1280,
+      "height": 800
+    },
+    "expectedControls": 9,
+    "expectedNotes": [
+      {
+        "role": "dialog",
+        "name": "Inner dialog",
+        "extent": "whole",
+        "selector": "[role=dialog]",
+        "controls": ["OK", "Cancel"],
+        "flags": ["loading"],
+        "forbidControls": ["Close box"]
+      }
+    ],
+    "bodyOrder": ["Words here", "Close box", "One"],
+    "why": "Loading stays a fact of the original named dialog even when its larger fixed carrier supplies reach and first content."
+  }
+]

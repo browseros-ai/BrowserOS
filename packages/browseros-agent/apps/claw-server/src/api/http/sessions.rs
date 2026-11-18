@@ -5,8 +5,14 @@
 use super::{error, internal};
 use crate::{
     AppState,
-    db::audit_log::{ListTasksQuery, TaskDetail, TaskStatus, TaskSummary, ToolDispatchRow},
-    error::{CanonicalError, RequestId},
+    clock::now_epoch_ms,
+    db::{
+        audit_log::{ListTasksQuery, TaskDetail, TaskStatus, TaskSummary, ToolDispatchRow},
+        pursue_runs::{PursueOutcome, PursueRun, PursueStepKind, pursue_run},
+        ultrafast_ledger::UltrafastRecord,
+        ultrafast_runs::{UltrafastRunStats, ultrafast_run_stats},
+    },
+    error::{AppResult, CanonicalError, RequestId},
     ids::SessionId,
     services::{
         cockpit::{
@@ -14,7 +20,9 @@ use crate::{
             LiveTabProjection,
         },
         sessions::Session,
+        ultrafast_meter::{self, NeoWindow, NeoWindows},
     },
+    storage::JsonStore,
 };
 use axum::{
     Extension, Json,
@@ -22,8 +30,10 @@ use axum::{
     http::StatusCode,
 };
 use claw_api::models::{
-    CancelSessionResponse, Dispatch, ResolveHelpRequest, ResolveHelpResponse, SessionBrowserTab,
-    SessionDetail, SessionList, SessionStatus, SessionSummary, SessionTokenUsage,
+    CancelSessionResponse, Dispatch, PlanSavings, PlanSavingsMeter, PlanSavingsPeriod,
+    PlanSavingsPeriods, PlanSavingsSite, ResolveHelpRequest, ResolveHelpResponse,
+    SessionBrowserTab, SessionDetail, SessionList, SessionPursueRun, SessionPursueStep,
+    SessionStatus, SessionSummary, SessionTokenUsage, SessionUltrafastRun,
 };
 use std::{collections::HashMap, sync::Arc};
 
@@ -104,13 +114,32 @@ pub(super) async fn list(
         .await
         .map_err(|source| internal(&request_id, source))?;
     let live = live_sessions(&state).await;
+    let session_ids = result
+        .tasks
+        .iter()
+        .map(|task| task.session_id.clone())
+        .collect::<Vec<_>>();
+    let ultrafast = state
+        .audit_log
+        .ultrafast_run_stats(&session_ids)
+        .await
+        .map_err(|source| internal(&request_id, source))?;
+    let mut pursue = state
+        .audit_log
+        .pursue_runs(&session_ids)
+        .await
+        .map_err(|source| internal(&request_id, source))?;
     // profile_id lives on the live session's agent, and a done filter
     // must reconcile persisted-live rows. Both apply after pagination,
     // so a filtered page may come back short rather than backfilled.
     let mut items = Vec::with_capacity(result.tasks.len());
     for task in result.tasks {
         let session = live.get(task.session_id.as_str());
-        let summary = contract_summary(task, session).await;
+        let stats = ultrafast.get(task.session_id.as_str()).copied();
+        let pursued = pursue.remove(task.session_id.as_str());
+        let mut summary = contract_summary(task, session).await;
+        summary.ultrafast = stats.map(contract_ultrafast);
+        summary.pursue = pursued.map(contract_pursue);
         if response_status_filter
             .is_none_or(|status| summary.status == contract_status(status, true))
             && query
@@ -146,6 +175,140 @@ pub(super) async fn get(
         })?;
     let live = state.sessions.lookup(&SessionId::new(session_id)).await;
     Ok(Json(contract_detail(task, live.as_ref()).await))
+}
+
+/// How many of the newest ultrafast tasks the savings view lists.
+const SAVINGS_LATEST: usize = 3;
+
+/// GET /api/v1/plan/savings: what ultrafast has done on this computer, from the task history.
+pub(super) async fn savings(
+    Extension(request_id): Extension<RequestId>,
+    State(state): State<AppState>,
+) -> Result<Json<PlanSavings>, CanonicalError> {
+    let internal = |source| internal(&request_id, source);
+    // Save what the history still shows first, so nothing it holds is lost once it ages out.
+    let sessions = state
+        .audit_log
+        .all_ultrafast_sessions()
+        .await
+        .map_err(internal)?;
+    let records = sessions
+        .iter()
+        .map(UltrafastRecord::from)
+        .collect::<Vec<_>>();
+    state
+        .ultrafast_ledger
+        .record(&records)
+        .await
+        .map_err(internal)?;
+    let ledger = state.ultrafast_ledger.all().await.map_err(internal)?;
+    let totals = ledger
+        .iter()
+        .fold(UltrafastRunStats::default(), |sum, record| {
+            UltrafastRunStats {
+                duration_ms: sum.duration_ms.saturating_add(record.totals.duration_ms),
+                pages_read: sum.pages_read.saturating_add(record.totals.pages_read),
+                tokens_saved: sum.tokens_saved.saturating_add(record.totals.tokens_saved),
+            }
+        });
+    let in_history = sessions
+        .iter()
+        .map(|session| (session.session_id.as_str(), session))
+        .collect::<HashMap<_, _>>();
+    let live = live_sessions(&state).await;
+    let mut latest = Vec::with_capacity(SAVINGS_LATEST);
+    for record in &ledger {
+        if latest.len() == SAVINGS_LATEST {
+            break;
+        }
+        // A task whose history has aged out still counts, but has nothing left to list.
+        let Some(session) = in_history.get(record.session_id.as_str()) else {
+            continue;
+        };
+        let Some(task) = state
+            .audit_log
+            .get_task_summary(&session.session_id)
+            .await
+            .map_err(internal)?
+        else {
+            continue;
+        };
+        let mut summary = contract_summary(task, live.get(session.session_id.as_str())).await;
+        summary.ultrafast = session.measured.map(contract_ultrafast);
+        summary.pursue = session.pursue.clone().map(contract_pursue);
+        latest.push(summary);
+    }
+    let tasks = i64::try_from(ledger.len()).unwrap_or(i64::MAX);
+    let mut savings = PlanSavings::new(*contract_ultrafast(totals), tasks, latest);
+    savings.meter = meter(&state, &ledger)
+        .await
+        .map_err(internal)?
+        .map(Box::new);
+    Ok(Json(savings))
+}
+
+/// The Home meter, counted from the day this computer got ultrafast; `None` before that day.
+async fn meter(
+    state: &AppState,
+    records: &[UltrafastRecord],
+) -> AppResult<Option<PlanSavingsMeter>> {
+    let now = now_epoch_ms();
+    let first_run = records.iter().map(|record| record.first_run_at).min();
+    let store = JsonStore::new(state.config.browserclaw_dir.clone());
+    let Some(since) =
+        ultrafast_meter::since(&store, state.ultrafast_enabled(), first_run, now).await?
+    else {
+        return Ok(None);
+    };
+    let [since_start, month, week] = ultrafast_meter::period_starts(since, now);
+    let neo = NeoWindows {
+        since: neo_window(state, since_start).await?,
+        last_30_days: neo_window(state, month).await?,
+        last_7_days: neo_window(state, week).await?,
+    };
+    let meter = ultrafast_meter::meter(since, &neo, records, now);
+    let periods = PlanSavingsPeriods::new(
+        contract_period(&meter.periods.since),
+        contract_period(&meter.periods.last_30_days),
+        contract_period(&meter.periods.last_7_days),
+    );
+    let mut contract =
+        PlanSavingsMeter::new(meter.since, meter.tokens_saved, meter.run_times, periods);
+    contract.neo_step_share = meter.neo_step_share;
+    contract.fastest_run_ms = meter.fastest_run_ms;
+    Ok(Some(contract))
+}
+
+/// neo's own saving, time saved and tasks finished from sessions that ended at or after `start`.
+async fn neo_window(state: &AppState, start: i64) -> AppResult<NeoWindow> {
+    let window = state.session_efficiency.window_since(start).await?;
+    Ok(NeoWindow {
+        tokens_saved: window.raw_token_savings_estimate,
+        time_saved_ms: window.human_time_saved_ms,
+        tasks_finished: window.session_count,
+    })
+}
+
+fn contract_period(period: &ultrafast_meter::Period) -> PlanSavingsPeriod {
+    let mut contract = PlanSavingsPeriod::new(
+        period.tokens_saved,
+        period.runs,
+        period.pages_read,
+        period.duration_ms,
+        period.site_tasks,
+        period.site_tasks_finished,
+        period
+            .top_sites
+            .iter()
+            .map(|(site, runs)| PlanSavingsSite::new(site.clone(), *runs))
+            .collect(),
+        period.time_saved_ms,
+        period.tasks_finished,
+        period.run_times.clone(),
+    );
+    contract.fastest_run_ms = period.fastest_run_ms;
+    contract.neo_step_share = period.neo_step_share;
+    contract
 }
 
 pub(super) async fn cancel(
@@ -225,12 +388,17 @@ async fn contract_detail(task: TaskDetail, live: Option<&Arc<Session>>) -> Sessi
     let profile_id = live
         .and_then(|session| session.agent().profile_id())
         .map(|profile_id| profile_id.as_str().to_string());
+    let ultrafast = ultrafast_run_stats(&task.dispatches).map(contract_ultrafast);
+    let pursue = pursue_run(&task.dispatches).map(contract_pursue);
     let dispatches = task
         .dispatches
         .into_iter()
         .map(|row| contract_dispatch(row, &screenshots, profile_id.as_ref()))
         .collect();
-    SessionDetail::new(contract_summary(task.summary, live).await, dispatches)
+    let mut summary = contract_summary(task.summary, live).await;
+    summary.ultrafast = ultrafast;
+    summary.pursue = pursue;
+    SessionDetail::new(summary, dispatches)
 }
 
 async fn contract_summary(task: TaskSummary, live: Option<&Arc<Session>>) -> SessionSummary {
@@ -308,6 +476,48 @@ fn contract_token_usage(task: &TaskSummary) -> Option<Box<SessionTokenUsage>> {
     let output = js_safe_token_estimate(task.tool_output_token_estimate);
     let total = js_safe_token_estimate(input.saturating_add(output));
     Some(Box::new(SessionTokenUsage::new(input, output, total)))
+}
+
+fn contract_ultrafast(stats: UltrafastRunStats) -> Box<SessionUltrafastRun> {
+    Box::new(SessionUltrafastRun::new(
+        stats.duration_ms.max(0),
+        stats.pages_read.max(0),
+        js_safe_token_estimate(stats.tokens_saved),
+    ))
+}
+
+fn contract_pursue(run: PursueRun) -> Box<SessionPursueRun> {
+    use claw_api::models::{SessionPursueRunOutcome as Outcome, SessionPursueStepAction as Action};
+    let outcome = match run.outcome {
+        PursueOutcome::Completed => Outcome::Completed,
+        PursueOutcome::HandedBack => Outcome::HandedBack,
+    };
+    let steps = run
+        .steps
+        .into_iter()
+        .map(|step| SessionPursueStep {
+            action: match step.kind {
+                PursueStepKind::Click => Action::Click,
+                PursueStepKind::Type => Action::Type,
+                PursueStepKind::Press => Action::Press,
+                PursueStepKind::Check => Action::Check,
+                PursueStepKind::Uncheck => Action::Uncheck,
+                PursueStepKind::Select => Action::Select,
+                PursueStepKind::Scroll => Action::Scroll,
+                PursueStepKind::Drag => Action::Drag,
+                PursueStepKind::Dialog => Action::Dialog,
+                PursueStepKind::Open => Action::Open,
+                PursueStepKind::Back => Action::Back,
+                PursueStepKind::Reload => Action::Reload,
+            },
+            text: step.text,
+        })
+        .collect();
+    Box::new(SessionPursueRun::new(
+        outcome,
+        run.duration_ms.max(0),
+        steps,
+    ))
 }
 
 /// Clamps a token total into `[0, 2^53-1]` so it survives a round trip through a JavaScript client.

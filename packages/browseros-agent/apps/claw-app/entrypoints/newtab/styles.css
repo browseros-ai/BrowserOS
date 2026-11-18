@@ -187,6 +187,10 @@
   --animate-demo-rise: demo-rise 0.36s cubic-bezier(0.2, 0.7, 0.3, 1) both;
   --animate-demo-blink: demo-blink 1.05s steps(1) infinite;
   --animate-demo-bounce: demo-bounce 0.8s cubic-bezier(0.3, 0.1, 0.3, 1);
+  /* ultrafast pictures (components/pro/UltrafastPictures). */
+  --animate-uf-pop: uf-pop 0.26s cubic-bezier(0.16, 1, 0.3, 1) both;
+  --animate-uf-grow: uf-grow 1s linear both;
+  --animate-uf-flash: uf-flash 1.2s ease both;
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
   --color-sidebar-primary: var(--sidebar-primary);
@@ -273,6 +277,26 @@
   }
   72% {
     transform: translateY(-7px);
+  }
+}
+
+@keyframes uf-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.4);
+  }
+}
+
+@keyframes uf-grow {
+  from {
+    transform: scaleX(0);
+  }
+}
+
+@keyframes uf-flash {
+  from,
+  60% {
+    background-color: var(--color-amber-tint);
   }
 }
 

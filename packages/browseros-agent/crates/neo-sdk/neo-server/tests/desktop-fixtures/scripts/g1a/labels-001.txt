@@ -1,0 +1,17 @@
+// Source port of labels-001 at a7e536e152a4835abe9974498b27a5c927dd2e0d. Execution is owned by the coordinator.
+await page.goto(args.base + '/labels.html');
+const snapshot = await page.ariaSnapshot();
+for (const name of ['Email address', 'Wrapped name', 'Pointer label']) {
+  assert(snapshot.split('\n').some(row => row.includes('textbox "' + name + '"') && /\[ref=[^\]]+\]/.test(row)), 'snapshot exposes the textbox ref for ' + name, snapshot);
+}
+// ARIA text does not call a label LabelText. Resolve refs to verify the same target ownership.
+const labelTargets = [];
+for (const ref of [...new Set([...snapshot.matchAll(/\[ref=([^\]\s]+)\]/g)].map(match => match[1]))]) {
+  const node = await page.getByRef(ref).evaluate(el => ({ tag: el.tagName, text: el.textContent.trim() }));
+  if (node.tag === 'LABEL') labelTargets.push({ ref, text: node.text });
+}
+assert(labelTargets.length === 1 && labelTargets[0].text === 'Remember me', 'exactly one label ref remains, for the hidden Remember me control', { labelTargets, snapshot });
+await page.getByRef(labelTargets[0].ref).click();
+const checked = await page.evaluate(() => document.getElementById('remember').checked);
+equal(checked, true, 'clicking the hidden control label checks its box');
+return { labelTargets, checked, snapshot };

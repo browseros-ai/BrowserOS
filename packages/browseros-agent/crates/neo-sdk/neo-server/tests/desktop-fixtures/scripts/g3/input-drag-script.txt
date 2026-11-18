@@ -1,0 +1,15 @@
+await page.goto(args.base + '/sdk-drag.html');
+await page.getByRef(await refFor(page, "Script source")).dragTo(page.getByRef(await refFor(page, "Script target")));
+
+const state = await page.evaluate(() => window.scriptDrag);
+const target = await page.evaluate(() => { const r = document.getElementById('script-target').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; });
+equal(state.down, true, 'the source receives left mousedown');
+assert(state.heldMoves > 0, 'mousemove keeps the left button held', state);
+equal(state.up, true, 'the drag releases the mouse button');
+assert(state.drop !== null, 'mouseup drops on the target', state);
+assert(Math.abs(state.drop.x - target.x) < 0.5 && Math.abs(state.drop.y - target.y) < 0.5, 'the drop reaches the target center', { state, target });
+
+await page.getByRef(await refFor(page, 'Follow-up button')).click();
+const followUps = await page.evaluate(() => window.followUps);
+equal(followUps, 1, 'the next click lands after the drag ends');
+return { state, followUps };

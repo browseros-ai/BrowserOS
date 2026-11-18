@@ -7,6 +7,7 @@ import type { TaskSummary } from '@/modules/api/audit.hooks'
 import * as _auditHooks from '@/modules/api/audit.hooks'
 import * as _cockpitStatsHooks from '@/modules/api/cockpit.hooks'
 import * as _connectionsHooks from '@/modules/api/connections.hooks'
+import * as _planHooks from '@/modules/api/plan.hooks'
 import * as _cockpitData from './cockpit.data'
 import type { LiveSessionCardRecord } from './cockpit.helpers'
 
@@ -15,6 +16,8 @@ const connectionsHookResultKey = '__browserclawConnectionsHookResult'
 const sessionsHookResultKey = '__browserclawSessionsHookResult'
 const statsHookOptionsKey = '__browserclawStatsHookOptions'
 const statsHookResultKey = '__browserclawStatsHookResult'
+const planHookResultKey = '__browserclawPlanHookResult'
+const savingsHookResultKey = '__browserclawSavingsHookResult'
 
 function hookState() {
   return globalThis as Record<string, unknown>
@@ -78,6 +81,22 @@ mock.module('@/modules/api/cockpit.hooks', () => ({
       }
     )
   },
+}))
+
+mock.module('@/modules/api/plan.hooks', () => ({
+  ..._planHooks,
+  usePlan: () =>
+    hookState()[planHookResultKey] ?? {
+      data: undefined,
+      isPending: true,
+      isError: false,
+    },
+  usePlanSavings: () =>
+    hookState()[savingsHookResultKey] ?? {
+      data: undefined,
+      isPending: true,
+      isError: false,
+    },
 }))
 
 const { Cockpit } = await import('./Cockpit')
@@ -196,6 +215,7 @@ function renderApp(
     liveSessions?: LiveSessionCardRecord[]
     sessions?: SessionsState
     stats?: StatsState
+    ultrafast?: boolean
   } = {},
 ): string {
   setCockpitSessions(options.liveSessions ?? [])
@@ -203,6 +223,30 @@ function renderApp(
   setSessionsState(options.sessions ?? 'history')
   setStatsState(options.stats ?? 'loading')
   hookState()[statsHookOptionsKey] = undefined
+  hookState()[planHookResultKey] = {
+    data: { features: options.ultrafast ? ['claw.ultrafast'] : [] },
+    isPending: false,
+    isError: false,
+  }
+  hookState()[savingsHookResultKey] = options.ultrafast
+    ? {
+        data: {
+          totals: { durationMs: 80_000, pagesRead: 38, tokensSaved: 253_678 },
+          tasks: 5,
+          latest: [],
+          meter: {
+            since: 1,
+            tokensSaved: 253_678,
+            runTimes: [],
+            neoStepShare: 64,
+            fastestRunMs: 3_095,
+            periods: { since: { timeSavedMs: 36 * 60_000 } },
+          },
+        },
+        isPending: false,
+        isError: false,
+      }
+    : undefined
 
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -287,5 +331,23 @@ describe('Cockpit', () => {
 
     const none = renderApp({ connections: 'installed', stats: 'unmeasured' })
     expect(none).not.toContain('aria-label="Savings"')
+  })
+
+  it('gives an ultrafast customer the ultrafast card in place of the savings strip', () => {
+    const customer = renderApp({
+      connections: 'installed',
+      stats: 'measured',
+      ultrafast: true,
+    })
+    expect(customer).toMatch(
+      /<\/header><div class="@container"><section aria-label="ultrafast"/,
+    )
+    expect(customer).toContain('tokens saved')
+    expect(customer).toContain('steps done by neo')
+    expect(customer).not.toContain('aria-label="Savings"')
+
+    const free = renderApp({ connections: 'installed', stats: 'measured' })
+    expect(free).toContain('aria-label="Savings"')
+    expect(free).not.toContain('aria-label="ultrafast"')
   })
 })

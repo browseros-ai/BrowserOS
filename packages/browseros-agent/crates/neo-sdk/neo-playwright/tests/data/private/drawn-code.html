@@ -1,0 +1,36 @@
+<!doctype html><meta charset=utf-8><title>Drawn code</title>
+<style>
+  body { font: 18px sans-serif; margin: 32px; }
+  .code { position: relative; width: 320px; height: 44px; }
+  .code input { width: 100%; height: 100%; box-sizing: border-box; letter-spacing: 30px; }
+  /* The site's own drawing over the box: blank until something is typed, and it takes the
+     pointer. */
+  .digits { position: absolute; inset: 0; display: flex; gap: 6px; background: #fff; }
+  .digits span { flex: 1; border-bottom: 2px solid #333; text-align: center; line-height: 44px; }
+  .groups { position: absolute; inset: 0; background: #fff; line-height: 44px; padding: 0 8px; }
+</style>
+<!-- A field under the site's own drawing over its box (ruling R56). Main's covered rule refuses
+     the box; a click on the drawing focuses it.
+     Default: a one-time code box under six blank digit cells, each showing its digit once typed.
+     ?card=space or ?card=dash: a card-number box under a blank drawing that shows what is typed in
+     groups of four, separated by spaces or by dashes, and nothing once the box is empty again. -->
+<div class=code id=field></div>
+<script>
+  const card = new URLSearchParams(location.search).get('card');
+  const field = document.getElementById('field');
+  field.innerHTML = card
+    ? '<input id=card aria-label="Card number" inputmode=numeric autocomplete=off><div class=groups></div>'
+    : '<input id=code aria-label="Code" inputmode=numeric autocomplete=one-time-code maxlength=6>'
+      + '<div class=digits>' + '<span></span>'.repeat(6) + '</div>';
+  const box = field.querySelector('input');
+  const drawing = field.querySelector('div');
+  drawing.addEventListener('click', () => box.focus());
+  box.addEventListener('input', () => {
+    if (!card) {
+      drawing.querySelectorAll('span').forEach((cell, at) => { cell.textContent = box.value[at] ?? ''; });
+      return;
+    }
+    const groups = box.value.match(/.{1,4}/g) ?? [];
+    drawing.textContent = groups.join(card === 'dash' ? '-' : ' ');
+  });
+</script>

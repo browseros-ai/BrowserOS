@@ -1,0 +1,34 @@
+const refIn = (snapshot, label) => {
+  const line = snapshot.split('\n').find(line => line.includes(label));
+  const ref = line && /\[ref=([^\]]+)\]/.exec(line)?.[1];
+  assert(ref, `snapshot must give ${label} its own ref`, { line, snapshot });
+  return ref;
+};
+const selected = (snapshot, labels) => Object.fromEntries(labels.map(label => [label, refIn(snapshot, label)]));
+const labelsIn = (snapshot, labels) => {
+  for (const label of labels) includes(snapshot, label, `snapshot includes ${label}`);
+};
+
+const cursorStable = ["Cursor candidate 00", "Cursor candidate 32", "Cursor candidate 63"];
+const cursorReasons = ["Pointer-only target", "Assigned onclick target", "Editable target ready", "Tabindex target"];
+const untouched = async label => {
+  const state = await page.evaluate(() => window.snapshotCursorFixture.state());
+  equal(state.mutations, 0, label + ' makes no DOM mutation');
+  equal(state.sentinelPresent, true, label + ' preserves the page-owned look-alike marker');
+  return state;
+};
+
+await page.goto(args.base + '/snapshot-cursor-concurrency.html');
+await poll(async () => (await page.evaluate(() => window.snapshotCursorFixture.state())).candidateCount === 64, 'all 64 cursor candidates are ready');
+
+const snapshot = await page.ariaSnapshot();
+const pointer = refIn(snapshot, 'Pointer-only target');
+const editable = refIn(snapshot, 'Editable target ready');
+await page.getByRef(pointer).click();
+await poll(async () => (await page.evaluate(() => document.getElementById('cursor-action-result').textContent)).includes('Pointer-only target clicked'), 'the pointer ref click reaches its handler');
+await page.getByRef(editable).click();
+await page.getByRef(editable).pressSequentially('typed through cursor ref');
+await poll(async () => (await page.evaluate(() => document.getElementById('editable-target').textContent)).includes('typed through cursor ref'), 'the editable ref receives typing');
+const state = await page.evaluate(() => ({ result: document.getElementById('cursor-action-result').textContent, editable: document.getElementById('editable-target').textContent, probe: window.snapshotCursorFixture.state() }));
+equal(state.probe.sentinelPresent, true, 'ref actions preserve the page-owned marker');
+return { pointer, editable, state };

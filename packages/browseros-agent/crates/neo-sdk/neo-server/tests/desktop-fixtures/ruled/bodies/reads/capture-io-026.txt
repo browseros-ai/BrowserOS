@@ -1,0 +1,14 @@
+await page.goto(args.base + '/links.html');
+// Subscribe before trusted activation; the host later follows this run's returned destination.
+const waiting = page.waitForEvent('download', { timeout: 8000 });
+await page.getByRole('link', { name: 'Download report', exact: true }).click();
+const download = await waiting;
+const failure = await download.failure();
+equal(failure, null, 'the native download completes');
+const path = await download.path();
+assert(typeof path === 'string' && path.startsWith('/') && path.length > 1, 'download.path reports an absolute configured destination', path);
+const url = download.url();
+const suggestedFilename = download.suggestedFilename();
+equal(url, args.base + '/files/report.txt', 'the download came from the unchanged fixture endpoint');
+equal(suggestedFilename, 'report.txt', 'the site supplies the file name');
+return { path, failure, url, suggestedFilename };

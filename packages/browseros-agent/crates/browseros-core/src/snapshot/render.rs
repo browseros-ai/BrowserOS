@@ -148,6 +148,7 @@ impl RenderContext<'_, '_> {
             return;
         }
 
+        let value = self.shown_value(node, &role, &name, in_card_form);
         let line = format_line(
             node,
             &role,
@@ -156,7 +157,7 @@ impl RenderContext<'_, '_> {
                 shown: label_text.as_deref().unwrap_or(&name),
             },
             absolute_depth,
-            in_card_form,
+            value.as_deref(),
             is_cursor_hit,
             self.opts,
         );
@@ -164,6 +165,24 @@ impl RenderContext<'_, '_> {
         for child_id in node.child_ids.as_deref().unwrap_or(&[]) {
             self.visit(child_id, depth + 1, in_card_form);
         }
+    }
+
+    /// The value a value-role node shows, using the desktop heuristic ([`visible_value`]).
+    fn shown_value(
+        &mut self,
+        node: &AxNode,
+        role: &str,
+        name: &str,
+        in_card_form: bool,
+    ) -> Option<String> {
+        // A slider's value arrives as a number, so it is displayed rather than read as a string.
+        let value = node
+            .value
+            .as_ref()
+            .and_then(|value| value.value.as_ref())
+            .map(value_display)
+            .filter(|value| is_value_role(role) && !value.is_empty())?;
+        Some(visible_value(name, &value, in_card_form).into_owned())
     }
 
     /// The words under `node`, as one line short enough to serve as a name.
@@ -362,7 +381,7 @@ fn format_line(
     role: &str,
     name: LineName<'_>,
     depth: usize,
-    in_card_form: bool,
+    value: Option<&str>,
     cursor_hit: bool,
     opts: &mut RenderOptions<'_>,
 ) -> String {
@@ -412,17 +431,9 @@ fn format_line(
         line.push(']');
     }
 
-    // A slider's value arrives as a number, so it is displayed rather than read as a string.
-    if is_value_role(role)
-        && let Some(value) = node
-            .value
-            .as_ref()
-            .and_then(|value| value.value.as_ref())
-            .map(value_display)
-        && !value.is_empty()
-    {
+    if let Some(value) = value {
         line.push_str(": ");
-        line.push_str(&json_quote(&visible_value(name.tree, &value, in_card_form)));
+        line.push_str(&json_quote(value));
     }
 
     line
@@ -518,23 +529,6 @@ fn card_form_scopes(nodes: &[AxNode]) -> HashSet<String> {
     scopes
 }
 
-fn passes_luhn(digits: &[u32]) -> bool {
-    let sum: u32 = digits
-        .iter()
-        .rev()
-        .enumerate()
-        .map(|(index, digit)| {
-            if index % 2 == 1 {
-                let doubled = digit * 2;
-                if doubled > 9 { doubled - 9 } else { doubled }
-            } else {
-                *digit
-            }
-        })
-        .sum();
-    sum.is_multiple_of(10)
-}
-
 fn format_states(node: &AxNode) -> Vec<String> {
     let mut states = Vec::new();
     for prop in node.properties.as_deref().unwrap_or(&[]) {
@@ -599,6 +593,24 @@ fn json_quote(value: &str) -> String {
     }
 }
 
+/// The Luhn checksum over a card number's digits.
+fn passes_luhn(digits: &[u32]) -> bool {
+    let sum: u32 = digits
+        .iter()
+        .rev()
+        .enumerate()
+        .map(|(index, &digit)| {
+            if index % 2 == 1 {
+                let doubled = digit * 2;
+                if doubled > 9 { doubled - 9 } else { doubled }
+            } else {
+                digit
+            }
+        })
+        .sum();
+    sum.is_multiple_of(10)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -634,6 +646,55 @@ mod tests {
             base_depth: 0,
         };
         render_snapshot(nodes, &mut opts).text
+    }
+
+    /// A form with password, card, code and plain fields, and a paragraph that echoes the code.
+    fn sign_in_form() -> Vec<AxNode> {
+        let mut nodes = vec![
+            ax("1", "RootWebArea", &["2", "7"]),
+            ax("2", "form", &["3", "4", "5", "6"]),
+            ax("3", "textbox", &[]),
+            ax("4", "textbox", &[]),
+            ax("5", "textbox", &[]),
+            ax("6", "textbox", &[]),
+            ax("7", "paragraph", &["8"]),
+            ax("8", "StaticText", &[]),
+        ];
+        let fields = [
+            ("Password", "••••••••••••", 201),
+            ("Card number", "4111111111111111", 202),
+            ("One-time code", "482913", 203),
+            ("Notes", "NOTES_visible_ok", 204),
+        ];
+        for (index, (label, value, backend)) in fields.into_iter().enumerate() {
+            let node = &mut nodes[index + 2];
+            node.name = Some(name(label));
+            node.backend_dom_node_id = Some(backend);
+            node.value = Some(AxValue {
+                value_type: "string".to_string(),
+                value: Some(json!(value)),
+                sources: None,
+            });
+        }
+        nodes[6].name = Some(name("We sent code 482913 to your phone"));
+        nodes
+    }
+
+    #[test]
+    fn the_heuristic_render_is_unchanged() {
+        let text = render(&sign_in_form(), &mut RefMap::new());
+        assert!(
+            text.contains(r#""Password" [ref=e1]: "••••••••••••""#),
+            "{text}"
+        );
+        assert!(
+            text.contains(r#""Card number" [ref=e2]: "•••• 1111""#),
+            "{text}"
+        );
+        assert!(
+            text.contains(r#""One-time code" [ref=e3]: "482913""#),
+            "{text}"
+        );
     }
 
     fn render_with_snapshot_options(

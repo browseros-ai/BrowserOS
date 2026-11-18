@@ -1,0 +1,23 @@
+await page.goto(args.base + '/fill.html');
+// Locator refs can pin covered nodes that an AI snapshot may omit; neither reference bypasses fill's checks.
+const ref = await page.getByLabel('Covered field', {exact: true}).ref({timeout: 5000});
+const coverRef = await page.locator('#cover').ref({timeout: 5000});
+const field = page.getByRef(ref);
+const result = await field.fill('replacement', {timeout: 2500});
+assert(result === undefined, 'covered fill resolves without a value', result);
+const state = await page.evaluate(() => {
+  const field = document.getElementById('covered');
+  const cover = document.getElementById('cover');
+  const bounds = field.getBoundingClientRect();
+  return {
+    value: field.value,
+    other: document.getElementById('other').value,
+    coverConnected: cover.isConnected,
+    covered: document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2) === cover,
+  };
+});
+equal(state, {value: 'replacement', other: 'untouched', coverConnected: true, covered: true},
+  'fill edits the covered input while its cover remains in place');
+equal(await field.inputValue(), 'replacement', 'the original field ref reads the delivered value');
+equal(await page.getByRef(coverRef).getAttribute('id'), 'cover', 'the original cover ref remains attached');
+return {ref, coverRef, fillReturnType: typeof result, ...state};

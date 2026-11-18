@@ -119,7 +119,7 @@ async fn evaluate_bool(session: &ProtocolSession, expression: &str) -> Option<bo
 #[cfg(test)]
 mod tests {
     use super::{Pointer, PointerAction, hide_for_capture, restore_after_capture};
-    use crate::{ProtocolSession, input::Point, test_support::TestConnection, timeouts};
+    use crate::{ProtocolSession, input::Point, testing::TestConnection, timeouts};
     use serde_json::{Value, json};
 
     #[test]

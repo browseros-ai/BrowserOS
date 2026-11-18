@@ -18,6 +18,10 @@ describe('screenEventForPath', () => {
     )
   })
 
+  it('maps the ultrafast page', () => {
+    expect(screenEventForPath('/pro')).toBe(AnalyticsEvent.ProPageViewed)
+  })
+
   it('ignores routes without a view event', () => {
     expect(screenEventForPath('/')).toBeNull()
     expect(screenEventForPath('/mcp')).toBeNull()

@@ -1,12 +1,16 @@
 //! File selection and download capture behind one scoped browser interface. BrowserSession
 //! owns chooser state across calls; this handle retains the caller's immutable BrowserView.
 //! The browser keeps download naming/history, while all local-file checks happen beside it.
+mod file_chooser_interception;
 mod state;
+pub use file_chooser_interception::FileChooserInterception;
 pub(crate) use state::TransferState;
 
 use crate::{BrowserView, CoreError, FrameId, PageId, PageJs, ProtocolSession, Ref, SessionId};
 use serde_json::{Value, json};
-use std::{path::PathBuf, sync::Arc, time::Duration};
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
 
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(60);
 const CHOOSER_TIMEOUT: Duration = Duration::from_secs(10);
@@ -38,6 +42,15 @@ pub struct FileTransfers {
 }
 
 impl FileTransfers {
+    /// Borrows interception for a listener or wait on an admitted page. Concurrent callers
+    /// and uploads share ownership; dropping the last lease restores an adopted tab.
+    pub async fn intercept_choosers(
+        &self,
+        page: PageId,
+    ) -> Result<FileChooserInterception, CoreError> {
+        let session = self.view.page_session(page).await?.session;
+        self.state.lease_interception(&session).await
+    }
     /// Observe without changing Chrome's destination or collision handling. Enabling events
     /// is connection/context setup, serialized across callers rather than toggled per click.
     async fn enable_downloads(&self) -> Result<(), CoreError> {
@@ -200,20 +213,7 @@ impl FileTransfers {
         // this interface into a filesystem existence probe through its error messages.
         self.view.page(page.clone()).await?;
         // Fail before clicking or consuming a chooser, so fixing a bad path is retryable.
-        for file in files {
-            let path = PathBuf::from(file);
-            let metadata = tokio::fs::metadata(&path)
-                .await
-                .map_err(|error| CoreError::Message(format!("Cannot upload {file}: {error}")))?;
-            if !metadata.is_file() {
-                return Err(CoreError::Message(format!(
-                    "Upload path is not a file: {file}"
-                )));
-            }
-            tokio::fs::File::open(&path).await.map_err(|error| {
-                CoreError::Message(format!("Cannot read upload file {file}: {error}"))
-            })?;
-        }
+        check_local_files(files).await?;
         if let Some(reference) = reference {
             if self.pending_chooser(page.clone()).await?.is_some() {
                 return Err(CoreError::Message(
@@ -241,23 +241,7 @@ impl FileTransfers {
             // The opener can delegate to an ancestor/sibling frame (for example via
             // postMessage). Lease the page tree, rather than only the opener's subtree.
             let interception = self.view.page_session(page.clone()).await?.session;
-            let session_id = interception.session_id().cloned();
-            // Arm restoration before setup's first await: cancellation can arrive while
-            // Chrome is acknowledging interception, before setup returns an installed flag.
-            let mut lease = InterceptionLease {
-                state: self.state.clone(),
-                operation: Some(_operation),
-                session: session_id.clone().filter(|id| !self.state.intercepts(id)),
-            };
-            match self.state.intercept(&interception).await {
-                Ok(installed) => lease.session = installed.then_some(session_id).flatten(),
-                Err(error) => {
-                    if let Err(cleanup) = lease.restore().await {
-                        tracing::warn!(%cleanup, "file chooser setup failed and cleanup remains pending");
-                    }
-                    return Err(error);
-                }
-            }
+            let mut lease = self.state.lease_interception(&interception).await?;
             let mut changes = self.state.changes();
             let wait = async {
                 loop {
@@ -285,7 +269,7 @@ impl FileTransfers {
                         "Upload control did not open a file chooser within 10000ms".into(),
                     )
                 })?;
-            lease.restore().await?;
+            lease.release().await?;
             result
         } else {
             let chooser = self.pending_chooser(page.clone()).await?.ok_or_else(|| {
@@ -295,6 +279,41 @@ impl FileTransfers {
             })?;
             self.select_chooser(page, &chooser, files).await
         }
+    }
+
+    /// Sets `files` on a file input the caller found itself, such as neo-playwright's
+    /// `setInputFiles` on an element of its isolated world. A backend node id resolves only on
+    /// the session of the target that holds the node, so `session` must be the endpoint the
+    /// node was resolved in: the page's root session or a frame's session from
+    /// [`crate::frames::FrameRegistry`]. Core admits `page` and trusts the caller that
+    /// `session` belongs to it, the same split neo-playwright uses for every call of an
+    /// operation.
+    ///
+    /// The rules are those of [`Self::upload`] with a file-input ref. Transfers on one page run
+    /// one at a time, admission comes before any local-path check, every path must be a
+    /// readable file, a single-file input refuses several files, and an empty `files` clears
+    /// the selection. It neither opens nor finishes a file chooser.
+    pub async fn upload_node(
+        &self,
+        page: PageId,
+        session: &ProtocolSession,
+        backend_node_id: i64,
+        files: &[String],
+    ) -> Result<(), CoreError> {
+        let lock = self.state.operation(page.clone());
+        let _operation = lock.lock_owned().await;
+        self.view.page(page).await?;
+        check_local_files(files).await?;
+        let node = session
+            .send_value("DOM.describeNode", json!({"backendNodeId":backend_node_id}))
+            .await?;
+        if !is_file_input(&node["node"]) {
+            return Err(CoreError::Message(
+                "Node is not a file input element".into(),
+            ));
+        }
+        let multiple = has_attribute(&node["node"], "multiple");
+        set_files(session, backend_node_id, multiple, files).await
     }
 
     async fn select_chooser(
@@ -368,39 +387,24 @@ impl FileTransfers {
     }
 }
 
-/// Holds a borrowed page's override and operation lock until restoration, even on cancellation.
-struct InterceptionLease {
-    state: Arc<TransferState>,
-    session: Option<SessionId>,
-    operation: Option<tokio::sync::OwnedMutexGuard<()>>,
-}
-impl InterceptionLease {
-    async fn restore(&mut self) -> Result<(), CoreError> {
-        if let Some(session) = self.session.as_ref() {
-            self.state.restore(session).await?;
-            self.session = None;
+/// Fails unless every path names a regular file this process can open. Callers run it after
+/// admission and before touching the page.
+async fn check_local_files(files: &[String]) -> Result<(), CoreError> {
+    for file in files {
+        let path = PathBuf::from(file);
+        let metadata = tokio::fs::metadata(&path)
+            .await
+            .map_err(|error| CoreError::Message(format!("Cannot upload {file}: {error}")))?;
+        if !metadata.is_file() {
+            return Err(CoreError::Message(format!(
+                "Upload path is not a file: {file}"
+            )));
         }
-        self.operation.take();
-        Ok(())
+        tokio::fs::File::open(&path).await.map_err(|error| {
+            CoreError::Message(format!("Cannot read upload file {file}: {error}"))
+        })?;
     }
-}
-impl Drop for InterceptionLease {
-    fn drop(&mut self) {
-        if let Some(session) = self.session.take() {
-            let state = self.state.clone();
-            let operation = self.operation.take();
-            // Keep the page lock until restoration finishes: otherwise an old cancellation
-            // could disable interception underneath the next upload on this borrowed page.
-            // Cancellation drops the upload future. Restore a borrowed tab even then,
-            // using the retained epoch and session identity rather than a new capability.
-            tokio::spawn(async move {
-                if let Err(error) = state.restore(&session).await {
-                    tracing::warn!(%error, "could not restore file chooser interception");
-                }
-                drop(operation);
-            });
-        }
-    }
+    Ok(())
 }
 
 async fn set_files(
@@ -483,3 +487,6 @@ async fn downloaded_file(path: PathBuf) -> Result<DownloadedFile, CoreError> {
         path.display()
     )))
 }
+
+#[cfg(test)]
+mod tests;

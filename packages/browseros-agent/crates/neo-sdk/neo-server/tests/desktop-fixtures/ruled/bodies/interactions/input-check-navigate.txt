@@ -1,0 +1,12 @@
+await page.goto(args.base + '/sdk-input.html');
+const ref = await refFor(page, 'Navigating facet');
+// The click navigates before check verifies its original node. Read the final
+// document after the delivered error; retrying check would be another action.
+const failure = await rejected(() => page.getByRef(ref).check({timeout: 8000}), /^locator\.check:.*(?:not attached|not on the page)/s);
+equal({owner: failure.owner, code: failure.code, delivery: failure.delivery},
+  {owner: 'website', code: 'element_detached', delivery: 'done'},
+  'check reports detachment after its one delivered click');
+await page.waitForURL(args.base + '/links.html', {timeout: 8000});
+const pathname = await page.evaluate(() => location.pathname);
+equal(pathname, '/links.html', 'the delivered checkbox change navigates to the links page');
+return {ref, failure, pathname};

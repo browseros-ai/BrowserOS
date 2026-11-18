@@ -1,0 +1,10 @@
+// Source port of navigate-snapshot-002 at a7e536e152a4835abe9974498b27a5c927dd2e0d. Execution is owned by the coordinator.
+await page.goto(args.base + '/links.html');
+await page.goto(args.base + '/form.html');
+await page.goBack();
+const afterBack = await page.evaluate(() => location.pathname);
+includes(afterBack, '/links.html', 'back returns to links.html');
+await page.goForward();
+const afterForward = await page.evaluate(() => location.pathname);
+includes(afterForward, '/form.html', 'forward returns to form.html');
+return { afterBack, afterForward };

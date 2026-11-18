@@ -1,0 +1,7 @@
+const created = await context.newPage();
+await created.goto(args.base + '/links.html');
+const tabId = created.tabId;
+await created.close();
+await poll(async () => !context.pages().some(candidate => candidate.tabId === tabId), 'the closed page leaves the tab listing');
+equal(created.isClosed(), true, 'the page handle records closure');
+return { tabId, listed: false, closed: created.isClosed() };

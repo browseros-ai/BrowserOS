@@ -1,0 +1,66 @@
+// Source port of frame-refs-008 at a7e536e152a4835abe9974498b27a5c927dd2e0d. Execution is owned by the coordinator.
+// The unchanged fixture reports events to its root. Never use DOM click to act on a target.
+const g1aLabs = {
+  top: { level: 0, site: 'A' }, 'single-same': { level: 1, site: 'A' },
+  'nested-same': { level: 2, site: 'A' }, 'single-cross': { level: 1, site: 'B' },
+  'nested-cross': { level: 2, site: 'B' }, 'nested-mixed': { level: 2, site: 'A' }
+};
+const g1aLabState = () => page.evaluate(() => JSON.parse(JSON.stringify(window.frameLab)));
+const g1aOpenLab = async (id, scroll = false) => {
+  await page.goto(args.base + '/frame-lab.html?case=' + id + (scroll ? '&scroll=1' : ''));
+  await poll(async () => (await g1aLabState()).ready, 'every level of frame lab ' + id + ' loads', 30000);
+};
+const g1aOrigin = id => {
+  const origin = new URL(args.base);
+  if (g1aLabs[id].site === 'B') origin.hostname = origin.hostname === 'localhost' ? '127.0.0.1' : 'localhost';
+  return origin.origin;
+};
+const g1aSnapshotRef = async label => {
+  let snapshot = '';
+  let ref;
+  await poll(async () => {
+    snapshot = await page.ariaSnapshot({ mode: 'full' });
+    const row = snapshot.split('\n').find(line => line.includes(label) && /\[ref=([^\]\s]+)\]/.test(line));
+    ref = row && row.match(/\[ref=([^\]\s]+)\]/)[1];
+    return typeof ref === 'string';
+  }, 'a full snapshot ref for ' + label, 20000);
+  return ref;
+};
+const g1aTrustedClick = async (id, control, seen) => {
+  await poll(async () => (await g1aLabState()).events.length > seen, 'a ' + control + ' click in ' + id);
+  const events = (await g1aLabState()).events.slice(seen);
+  const event = events[0];
+  assert(events.length === 1 && event.control === control && event.trusted === true &&
+    event.level === g1aLabs[id].level && event.origin === g1aOrigin(id),
+    'exactly one trusted ' + control + ' click reaches the correct frame level and origin', { id, events, expectedOrigin: g1aOrigin(id), expectedLevel: g1aLabs[id].level });
+  return event;
+};
+const g1aCommand = async (level, action) => {
+  await page.evaluate(({ level, action }) => window.frameLab.command(level, action), { level, action });
+  await poll(async () => (await g1aLabState()).done.includes(level + ':' + action), 'the frame command ' + action + ' completes');
+};
+const g1aNewDocument = async oldDoc => {
+  let doc;
+  await poll(async () => {
+    doc = (await g1aLabState()).targetDoc;
+    return typeof doc === 'string' && doc !== oldDoc;
+  }, 'the replacement target document loads', 30000);
+  return doc;
+};
+const g1aRefusedClick = async ref => {
+  const before = (await g1aLabState()).events.length;
+  const error = await rejected(() => page.getByRef(ref).click({ timeout: 1500 }), /./s);
+  const events = (await g1aLabState()).events;
+  equal(events.length, before, 'a refused old frame ref delivers no click anywhere');
+  return { ref, error, before, after: events.length };
+};
+
+const id = "nested-cross";
+
+await g1aOpenLab(id, true);
+equal((await g1aLabState()).inView, false, 'the target starts outside the viewport');
+const ref = await g1aSnapshotRef('Click target ' + id);
+await page.getByRef(ref).click();
+const event = await g1aTrustedClick(id, 'button', 0);
+await poll(async () => (await g1aLabState()).inView, 'the frame target is scrolled into the root viewport');
+return { id, ref, event, state: await g1aLabState() };

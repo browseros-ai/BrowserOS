@@ -1,0 +1,3 @@
+await page.goto(args.base + '/links.html');
+const error = await rejected(async () => page.goto('https://nowhere.invalid/'), /net::ERR_NAME_NOT_RESOLVED/);
+return { error };

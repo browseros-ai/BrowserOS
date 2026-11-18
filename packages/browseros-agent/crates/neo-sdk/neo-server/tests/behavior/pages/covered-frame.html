@@ -1,0 +1,13 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Covered frame</title><script src="events.js"></script></head>
+<body>
+<!-- F9 (design D22): L0 here on 127.0.0.1, L1 covered-l1.html on localhost (cross-site), and
+     inside L1 an L2 frame that an overlay in L1 covers. -->
+<h1>Covered frame</h1>
+<script>
+  const l1 = document.createElement('iframe')
+  l1.title = 'L1'
+  l1.src = `http://localhost:${location.port}/covered-l1.html`
+  l1.style.cssText = 'width:600px;height:400px'
+  document.body.append(l1)
+</script>
+</body></html>

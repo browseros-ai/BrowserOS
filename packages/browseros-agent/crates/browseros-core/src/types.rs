@@ -6,7 +6,8 @@ use serde::{Deserialize, Serialize};
 use std::{fmt, hash::Hash};
 
 macro_rules! id_newtype {
-    ($name:ident, $inner:ty) => {
+    ($(#[$meta:meta])* $name:ident, $inner:ty) => {
+        $(#[$meta])*
         #[derive(
             Debug, Clone, Default, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize,
         )]
@@ -34,10 +35,26 @@ macro_rules! id_newtype {
 }
 
 id_newtype!(PageId, u32);
-id_newtype!(TabId, i64);
-id_newtype!(TargetId, String);
+// The three ids neo-playwright's op wire carries also derive ts-rs's `TS` under the `ts-rs`
+// feature, so its generated prelude types name them; each prints as its inner type
+// (`type TabId = number` under that crate's 64-bit-as-number rule).
+id_newtype!(
+    #[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
+    TabId,
+    i64
+);
+impl Copy for TabId {}
+id_newtype!(
+    #[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
+    TargetId,
+    String
+);
 pub type SessionId = browseros_cdp::SessionId;
-id_newtype!(FrameId, String);
+id_newtype!(
+    #[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
+    FrameId,
+    String
+);
 id_newtype!(WindowId, i64);
 impl Copy for WindowId {}
 id_newtype!(Ref, String);

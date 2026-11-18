@@ -266,10 +266,36 @@ def _candidate_contract(
             "build_offset": ctx.browseros_build_offset,
         },
         "browseros_source": _browseros_source_identity(ctx),
-        "chromium_pin": {"version": ctx.chromium_version},
+        "chromium_pin": _chromium_pin_identity(ctx),
         "configuration": _configuration_identity(ctx),
         "resources": _resource_identity(ctx),
     }
+
+
+def _chromium_pin_identity(ctx: Context) -> dict[str, Any]:
+    identity: dict[str, Any] = {"version": ctx.chromium_version}
+    if not ctx.uses_external_patches:
+        return identity
+    # The main repository's HEAD cannot detect edits in an external patch
+    # package. Bind its bytes so resume never reuses a different source stack.
+    try:
+        identity.update(
+            {
+                "patch_root": str(ctx.get_patch_root()),
+                "base_commit": _file_identity(ctx.get_base_commit_path()),
+                "version_file": _file_identity(ctx.get_patch_root() / "CHROMIUM_VERSION"),
+                "canonical_store": _path_attestation(ctx.get_patches_dir()),
+                "v8_store": (
+                    _path_attestation(ctx.get_patch_root() / "v8_patches")
+                    if (ctx.get_patch_root() / "v8_patches").exists()
+                    else None
+                ),
+                "series": _path_attestation(ctx.get_series_patches_dir()),
+            }
+        )
+    except OSError as exc:
+        raise _Unresumable(f"Cannot fingerprint external Chromium patches: {exc}") from exc
+    return identity
 
 
 def _browseros_source_identity(ctx: Context) -> dict[str, Any]:
@@ -681,6 +707,7 @@ def _steps_for_arch(
 def _context_for_arch(ctx: Context, architecture: str) -> Context:
     sibling = Context(
         root_dir=ctx.root_dir,
+        patch_root=ctx.patch_root,
         chromium_src=ctx.chromium_src,
         architecture=architecture,
         plan_architectures=ctx.plan_architectures,
@@ -899,11 +926,26 @@ def _chromium_mutation_digest_for_root(root: Path) -> dict[str, Any] | None:
     if not (root / ".git").exists():
         return None
     paths = _git_changed_paths(root, excludes=_CHROMIUM_MUTATION_EXCLUDES)
+    digest = _changed_paths_digest(root, paths)
+    nested = {}
+    v8 = root / "v8"
+    if (v8 / ".git").exists():
+        # Chromium only reports a dirty gitlink for nested source edits. Bind
+        # V8's HEAD and actual changed bytes, including untracked/deleted files,
+        # so later mutation checkpoints cannot hide a different inspector build.
+        v8_paths = _git_changed_paths(v8)
+        nested["v8"] = {
+            "head": _git_text(["rev-parse", "HEAD"], v8),
+            "paths": v8_paths,
+            "digest": _changed_paths_digest(v8, v8_paths),
+        }
+        digest = _json_digest({"chromium": digest, "nested": nested})
     return {
         "kind": "chromium_mutation",
         "root": str(root),
         "paths": paths,
-        "digest": _changed_paths_digest(root, paths),
+        "nested_repositories": nested,
+        "digest": digest,
     }
 
 

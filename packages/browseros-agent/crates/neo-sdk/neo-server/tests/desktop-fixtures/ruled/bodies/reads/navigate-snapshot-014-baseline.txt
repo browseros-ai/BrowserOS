@@ -1,0 +1,11 @@
+// The host commits a baseline only when this successful run returns the complete snapshot value.
+await page.goto(args.base + '/dynamic.html');
+await poll(async () => await page.locator('#big h6').count() === 3001, 'all original filler headings have loaded');
+await poll(async () => await page.locator('#delayed').textContent() === 'delayed content ready', 'the delayed fixture text has settled');
+equal(await page.locator('#list li').count(), 3, 'the baseline precedes any list mutation');
+const snapshot = await page.ariaSnapshot({ text: true, maxTokens: 4000 });
+includes(snapshot, 'Dynamic fixture', 'the caller receives the dynamic document snapshot');
+includes(snapshot, 'alpha item', 'the baseline retains the original list text');
+assert(!snapshot.includes('delta item 1'), 'the baseline contains no added item', snapshot);
+assert(typeof page.tabId === 'number' && typeof page.taskId === 'string', 'the baseline has a live task and tab identity');
+return { snapshot, pageId: page.tabId, taskId: page.taskId, url: page.url() };

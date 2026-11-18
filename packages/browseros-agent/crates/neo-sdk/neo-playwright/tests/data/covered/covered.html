@@ -1,0 +1,579 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Covered</title>
+<style>
+  body { margin: 0; font: 16px sans-serif; }
+  #stage { position: relative; margin: 120px 0 0 120px; width: 600px; }
+  #target { width: 160px; height: 48px; }
+  .layer { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.4); z-index: 10; }
+  .dialog { position: absolute; left: 80px; top: 80px; width: 420px; padding: 16px; background: #fff; }
+  .float { position: absolute; z-index: 5; background: #ffe; }
+</style>
+</head>
+<body>
+<div id="stage"></div>
+<script>
+// One shape per hash beside a target that logs only trusted clicks (window.__log), so a row
+// reads what the page itself saw. Each shape is a kind of covered-click spec section 2's table.
+window.__log = []
+const stage = document.getElementById('stage')
+const log = (what) => (event) => { if (event.isTrusted) window.__log.push(what) }
+const button = () => {
+  const target = document.createElement('button')
+  target.id = 'target'
+  target.textContent = 'Buy'
+  target.addEventListener('click', log('target'))
+  stage.append(target)
+  return target
+}
+const layer = (html) => {
+  const element = document.createElement('div')
+  element.className = 'layer'
+  element.innerHTML = html
+  document.body.append(element)
+  return element
+}
+const dialog = `<div class="dialog" role="dialog" aria-label="What You Need To Know">
+  <p>Resale prices often exceed face value.</p>
+  <button id="accept">Accept &amp; Continue</button>
+  <button id="dismiss">Dismiss</button></div>`
+const consentHost = (mode, place) => {
+  const host = document.createElement('div')
+  host.id = 'consent'
+  host.style.cssText = 'position: fixed; inset: 0; z-index: 10'
+  const root = host.attachShadow({ mode })
+  root.innerHTML = `<div style="position: fixed; inset: 0; background: rgba(0, 0, 0, 0.4)">
+    <div role="dialog" aria-label="Privacy choices" style="position: absolute; ${place}; width: 420px; padding: 16px; background: #fff">
+      <p>We and our partners use cookies.</p>
+      <button id="all">Accept all</button> <button id="none">Reject all</button></div></div>`
+  root.getElementById('none').addEventListener('click', () => host.remove())
+  document.body.append(host)
+}
+// A checkbox under its own label whose first part, `over`, lies over the box, and whose plain
+// text follows it: a press of the label must go where it is plain.
+const termsOver = (over) => `<label id="own" style="position: relative; display: inline-block; padding: 8px; width: 320px">
+  <input type="checkbox" id="target" style="position: absolute; left: 8px; top: 8px; margin: 0; width: 13px; height: 13px">${over}<span style="display: inline-block; height: 24px; padding-left: 8px">I agree to these terms</span></label>`
+const pressLogged = () => {
+  document.getElementById('target').addEventListener('click', log('target'))
+  document.getElementById('info').addEventListener('click', log('info'))
+}
+// Covered-click B's shapes: a dialog layer that leaves by itself after `ms`, so a click under
+// Neo's built-in timeout either lands or stops 5 s after the same cover started to stand.
+const leavesAt = (ms) => {
+  button()
+  const cover = layer(dialog)
+  setTimeout(() => cover.remove(), ms)
+  return cover
+}
+const shapes = {
+  leaves3() {
+    leavesAt(3000)
+  },
+  leaves12() {
+    leavesAt(12000)
+  },
+  leaves8() {
+    leavesAt(8000)
+  },
+  moving() {
+    // A cover that changes its own box every 300 ms for 8 s: it never stands. Its place never
+    // repeats while it is there (step * 7 mod 40 runs through 40 places, 12 s). A move with a
+    // period can meet the checks' own rhythm: two places 300 ms apart, checked every 600 ms,
+    // show one place at every check, and the cover would count as standing.
+    const cover = leavesAt(8000)
+    let step = 0
+    setInterval(() => { step++; cover.style.top = `${(step * 7) % 40}px` }, 300)
+  },
+  fading() {
+    // A cover whose opacity changes every 300 ms for 8 s: a fade is a change.
+    const cover = leavesAt(8000)
+    let step = 0
+    setInterval(() => { step++; cover.style.opacity = String(1 - (step % 5) / 10) }, 300)
+  },
+  busy() {
+    // A cover that says it is loading for 7 s.
+    leavesAt(7000).setAttribute('aria-busy', 'true')
+  },
+  progress() {
+    // A cover that holds a progress bar for 7 s.
+    leavesAt(7000).querySelector('.dialog').append(document.createElement('progress'))
+  },
+  replaced() {
+    // One cover, replaced by another at 3 s, which stays.
+    button()
+    const first = layer(dialog)
+    setTimeout(() => {
+      first.remove()
+      layer(dialog.replace('What You Need To Know', 'Second notice'))
+    }, 3000)
+  },
+  dragcovered() {
+    // A drag whose drop target stands under a cover: the press on the source lands, the drop
+    // does not. The window logs the trusted button events, the release among them.
+    // The drop target lies wholly in the view and its cover is in the page's flow, so no scroll of
+    // the attempt moves the target out from under it.
+    stage.innerHTML = `<div id="src" style="width: 80px; height: 40px; background: #eef">src</div>
+      <div id="dst" style="position: absolute; left: 200px; top: 0; width: 120px; height: 60px; background: #efe">dst</div>
+      <div id="over" style="position: absolute; left: 190px; top: -10px; width: 140px; height: 80px; z-index: 10; background: rgba(0, 0, 0, 0.3)"></div>`
+    for (const type of ['mousedown', 'mouseup'])
+      window.addEventListener(type, (event) => { if (event.isTrusted) window.__log.push(type) }, true)
+  },
+  plain() {
+    button()
+  },
+  boxed() {
+    // A checkbox under a standing dialog, for check() and its label-free click.
+    stage.innerHTML = '<input type="checkbox" id="target" style="width: 13px; height: 13px">'
+    document.getElementById('target').addEventListener('click', log('target'))
+    layer(dialog)
+  },
+  dialog() {
+    button()
+    const cover = layer(dialog)
+    cover.querySelector('#dismiss').addEventListener('click', () => cover.remove())
+  },
+  blank() {
+    button()
+    layer('').style.cssText = 'background: none; opacity: 0'
+  },
+  frame() {
+    button()
+    const frame = document.createElement('iframe')
+    frame.id = 'check'
+    frame.title = 'Human verification challenge'
+    frame.srcdoc = '<p>Press &amp; hold</p>'
+    frame.style.cssText = 'position: fixed; inset: 0; width: 100%; height: 100%; border: 0; z-index: 10'
+    document.body.append(frame)
+  },
+  partial() {
+    const target = button()
+    target.style.width = '300px'
+    const widget = document.createElement('div')
+    widget.id = 'widget'
+    widget.textContent = 'EN'
+    widget.setAttribute('style', 'position: absolute; z-index: 5; left: 110px; top: 0; width: 80px; height: 48px; background: #ffe')
+    stage.append(widget)
+  },
+  partiallink() {
+    // A button half under the same widget whose left part is a component drawing a link in its
+    // own root: a press of the button's own goes where the button itself is on top.
+    const target = button()
+    target.style.cssText = 'position: relative; width: 300px'
+    target.innerHTML = '<span id="more" style="position: absolute; left: 0; top: 0; width: 100px; height: 100%"></span>Buy'
+    const root = document.getElementById('more').attachShadow({ mode: 'open' })
+    root.innerHTML = '<a href="/elsewhere/more" id="info" style="display: block; height: 100%">More</a>'
+    root.getElementById('info').addEventListener('click', log('info'))
+    const widget = document.createElement('div')
+    widget.id = 'widget'
+    widget.textContent = 'EN'
+    widget.setAttribute('style', 'position: absolute; z-index: 5; left: 110px; top: 0; width: 80px; height: 48px; background: #ffe')
+    stage.append(widget)
+  },
+  partialround() {
+    // A button 43 px wide whose first clear sample lies at 10.75 px, a nested link starting at
+    // 10.9 px in its top part, and a widget over its middle. It pins the outcome (the press lands
+    // on the button's own part beside the link), not the order: on a whole-pixel layout it passes
+    // with test-then-round too. The rounding fix rests on its reasoning; a fractional-offset
+    // fixture is a follow-up.
+    const target = button()
+    target.style.cssText = 'position: relative; display: inline-block; width: 43px; height: 48px; margin: 0; padding: 0; border: 0'
+    target.innerHTML = '<a href="/elsewhere/more" id="info" style="position: absolute; left: 10.9px; top: 0; width: 32.1px; height: 20px">i</a>'
+    document.getElementById('info').addEventListener('click', log('info'))
+    const widget = document.createElement('div')
+    widget.id = 'widget'
+    widget.setAttribute('style', 'position: absolute; z-index: 5; left: 16px; top: 18px; width: 12px; height: 12px; background: #ffe')
+    stage.append(widget)
+  },
+  partialhover() {
+    // A product card that declares a link, half under the widget, whose quick-add button shows on
+    // hover over the card's first clear point: the point is plain when it is chosen and a nested
+    // button when the press arrives, after the pointer moved there. Only a check at delivery sees it.
+    stage.innerHTML = `<style>#target .add { display: none; position: absolute; left: 60px; top: 0; width: 40px; height: 24px }
+      #target:hover .add { display: block }</style>
+      <div role="link" tabindex="0" id="target" style="position: relative; width: 300px; height: 48px; background: #eef">Wireless mouse<button class="add" id="add">Add</button></div>`
+    document.getElementById('target').addEventListener('click', log('target'))
+    document.getElementById('add').addEventListener('click', (event) => {
+      if (event.isTrusted) window.__log.push('add')
+      event.stopPropagation()
+    })
+    const widget = document.createElement('div')
+    widget.id = 'widget'
+    widget.textContent = 'EN'
+    widget.setAttribute('style', 'position: absolute; z-index: 5; left: 110px; top: 0; width: 80px; height: 48px; background: #ffe')
+    stage.append(widget)
+  },
+  partialslider() {
+    // A slider half under the same widget: a press at whatever point is clear would move its
+    // value, so no clear point of it is pressed for the agent.
+    stage.innerHTML = '<input type="range" id="target" min="0" max="100" value="50" style="margin: 0; width: 300px; height: 48px">'
+    const target = document.getElementById('target')
+    for (const type of ['pointerdown', 'click', 'input']) target.addEventListener(type, log(type))
+    const widget = document.createElement('div')
+    widget.id = 'widget'
+    widget.textContent = 'EN'
+    widget.setAttribute('style', 'position: absolute; z-index: 5; left: 110px; top: 0; width: 80px; height: 48px; background: #ffe')
+    stage.append(widget)
+  },
+  label() {
+    stage.innerHTML = `<label id="own" style="position: relative; display: inline-block; padding: 8px">
+      <input type="checkbox" id="target" style="position: absolute; left: 8px; top: 8px; margin: 0; width: 13px; height: 13px">
+      <span style="position: relative; display: inline-block; width: 220px; height: 24px; background: #eef">Remember me</span></label>`
+    document.getElementById('target').addEventListener('click', log('target'))
+  },
+  links() {
+    stage.innerHTML = `<label id="own" style="position: relative; display: inline-block; padding: 8px; width: 420px">
+      <input type="checkbox" id="target" style="position: absolute; left: 8px; top: 8px; margin: 0; width: 13px; height: 13px">
+      <span style="position: relative; display: block; background: #eef; padding: 4px 4px 4px 24px">I agree to the
+      <a href="/elsewhere/terms">Terms</a> and the <a href="/elsewhere/privacy">Privacy Policy</a>
+      of this shop</span></label>`
+    document.getElementById('target').addEventListener('click', log('target'))
+  },
+  labelrole() {
+    // A custom control in the label: a span with role="button" and no tabindex runs its own
+    // click handler, so it is no plain part of the label.
+    stage.innerHTML = termsOver('<span role="button" id="info" style="position: relative; display: inline-block; width: 60px; height: 24px; background: #fee">Info</span>')
+    pressLogged()
+  },
+  linksdialog() {
+    // The label inside a container with a tabindex, as a dialog's body has, with a link over the
+    // box: the label's plain text is still its own.
+    stage.innerHTML = `<div tabindex="-1">${termsOver('<a href="/elsewhere/terms" id="info" style="position: relative; display: inline-block; width: 60px; height: 24px; background: #eef">Terms</a>')}</div>`
+    pressLogged()
+  },
+  linksnested() {
+    // A component inside the label: a host whose own root draws a link over the box, and the
+    // label's plain text after it. What the host draws is not the label's plain content.
+    stage.innerHTML = termsOver('<span id="terms" style="position: relative; display: inline-block; width: 140px; height: 24px"></span>')
+    const root = document.getElementById('terms').attachShadow({ mode: 'open' })
+    root.innerHTML = '<a href="/elsewhere/terms" id="info" style="display: block; width: 140px; height: 24px; background: #eef">Terms</a>'
+    document.getElementById('target').addEventListener('click', log('target'))
+    root.getElementById('info').addEventListener('click', log('info'))
+  },
+  linksshadow() {
+    // The same label inside an open shadow root: what is hit there is asked in that root, as the
+    // document's own answer is the root's host.
+    const host = document.createElement('div')
+    host.id = 'host'
+    stage.append(host)
+    const root = host.attachShadow({ mode: 'open' })
+    root.innerHTML = termsOver('<a href="/elsewhere/terms" id="info" style="position: relative; display: inline-block; width: 60px; height: 24px; background: #eef">Terms</a>')
+    root.getElementById('target').addEventListener('click', log('target'))
+    root.getElementById('info').addEventListener('click', log('info'))
+  },
+  alllink() {
+    // A checkbox under its own label that is all link: no point of the label is plain.
+    stage.innerHTML = `<label id="own" style="position: relative; display: inline-block; width: 320px">
+      <input type="checkbox" id="target" style="position: absolute; left: 8px; top: 8px; margin: 0; width: 13px; height: 13px">
+      <a href="/elsewhere/terms" style="position: relative; display: block; padding: 8px 8px 8px 24px; background: #eef">Read and accept the terms</a></label>`
+    document.getElementById('target').addEventListener('click', log('target'))
+  },
+  hiddenbox() {
+    // A checkbox that is not shown, and its own label that is: a styled box drawn by the label.
+    stage.innerHTML = `<input type="checkbox" id="target" style="display: none">
+      <label id="own" for="target" style="display: inline-block; padding: 8px; background: #eef">Subscribe to the newsletter</label>`
+    document.getElementById('target').addEventListener('click', log('target'))
+  },
+  hiddenboxfar() {
+    // The same at the foot of a long form: the label lies below the view until it is scrolled.
+    stage.innerHTML = `<div style="height: 2000px"></div><input type="checkbox" id="target" style="display: none">
+      <label id="own" for="target" style="display: inline-block; padding: 8px; background: #eef">Accept the terms</label>`
+    document.getElementById('target').addEventListener('click', log('target'))
+  },
+  manyframes() {
+    // A layer that holds nine frames and then a Close link: not frames only, though the eight
+    // controls an answer prints are all frames.
+    button()
+    const frames = '<iframe srcdoc="<p>ad</p>" style="width: 60px; height: 40px; border: 0"></iframe>'.repeat(9)
+    layer(`${frames}<a href="/elsewhere/close">Close</a>`)
+  },
+  wrapper() {
+    // A radio card: its blank wrapper takes the pointer and selects the radio on a press.
+    stage.innerHTML = `<style>.option { position: relative; width: 200px; height: 40px }
+      .option::after { content: ''; position: absolute; inset: 0 }</style>
+      <div class="option"><input type="radio" id="target" name="size" style="margin: 12px; width: 13px; height: 13px"></div>`
+    document.getElementById('target').addEventListener('click', log('target'))
+    document.querySelector('.option').addEventListener('click', () => {
+      document.getElementById('target').checked = true
+    })
+  },
+  veilbutton() {
+    // A button under its parent's blank veil: the parent is its own wrapper, but only a state
+    // would show what a press on it did, and a button has none.
+    stage.innerHTML = `<style>.veiled { position: relative; width: 200px; height: 48px }
+      .veiled::after { content: ''; position: absolute; inset: 0 }</style>
+      <div class="veiled"><button id="target" style="width: 160px; height: 40px">Pay now</button></div>`
+    document.getElementById('target').addEventListener('click', log('target'))
+  },
+  wrappershadow() {
+    // A radio card built as a component: the radio slotted into a host whose own root draws a
+    // Remove button over it. What the host draws is not seen, so the wrapper takes no press.
+    stage.innerHTML = '<div id="card" style="position: relative; width: 200px; height: 40px"><input type="radio" id="target" name="size" style="margin: 12px; width: 13px; height: 13px"></div>'
+    const root = document.getElementById('card').attachShadow({ mode: 'open' })
+    root.innerHTML = '<slot></slot><button id="remove" style="position: absolute; inset: 0; opacity: 0.01">Remove</button>'
+    document.getElementById('target').addEventListener('click', log('target'))
+    root.getElementById('remove').addEventListener('click', log('remove'))
+  },
+  wrapperrole() {
+    // A sibling span that declares a button and draws the checkbox's name over it: it reads as
+    // the checkbox's drawing, but it runs its own click handler.
+    stage.innerHTML = `<div style="position: relative; width: 220px; height: 40px">
+      <input type="checkbox" id="target" aria-label="Gift wrap" style="position: absolute; left: 8px; top: 12px; margin: 0; width: 13px; height: 13px">
+      <span role="button" id="info" style="position: absolute; left: 2px; top: 6px; width: 24px; height: 24px; overflow: hidden">Gift wrap</span></div>`
+    document.getElementById('target').addEventListener('click', log('target'))
+    document.getElementById('info').addEventListener('click', log('info'))
+  },
+  wrapperlink() {
+    // A radio card that is a link: its own box lies over the radio, and a press on it leaves.
+    stage.innerHTML = `<style>#card::after { content: ''; position: absolute; inset: 0 }</style>
+      <a href="/elsewhere/card" id="card" style="position: relative; display: block; width: 200px; height: 40px"><input type="radio" id="target" name="size" style="margin: 12px; width: 13px; height: 13px"></a>`
+    document.getElementById('target').addEventListener('click', log('target'))
+  },
+  wrapperdead() {
+    // The same blank wrapper with nothing behind it: a press on it changes nothing.
+    stage.innerHTML = `<style>.option { position: relative; width: 200px; height: 40px }
+      .option::after { content: ''; position: absolute; inset: 0 }</style>
+      <div class="option"><input type="radio" id="target" name="size" style="margin: 12px; width: 13px; height: 13px"></div>`
+    document.getElementById('target').addEventListener('click', log('target'))
+  },
+  labels() {
+    stage.innerHTML = `<label id="target" for="email" style="display: block; width: 200px">Email</label>
+      <input id="email" style="position: absolute; left: 0; top: 0; width: 200px; height: 48px; box-sizing: border-box">`
+    document.getElementById('target').addEventListener('click', log('target'))
+  },
+  nothing() {
+    stage.innerHTML = `<div style="pointer-events: none"><div><span id="target">NO</span></div></div>`
+  },
+  folded() {
+    stage.innerHTML = `<div id="panel" style="height: 0; overflow: hidden">
+      <button id="target">Buy</button></div><p id="below" style="margin: 0">Shipping costs and returns</p>`
+    document.getElementById('target').addEventListener('click', log('target'))
+  },
+  two() {
+    button()
+    const cover = layer(`<div class="dialog" role="dialog" aria-label="Cookies" style="top: 400px">
+        <button id="cookies">OK</button></div>
+      <div class="dialog" role="dialog" aria-label="Sign in" style="top: 40px; left: 60px; height: 160px">
+        <button id="close">Close</button></div>`)
+    cover.querySelector('#cookies').addEventListener('click', (event) => event.target.parentElement.remove())
+  },
+  long() {
+    button()
+    const words = 'Please read every word of these terms before you go on. '.repeat(60)
+    layer(`<div class="dialog" role="dialog" aria-label="Terms"><p>${words}</p>
+      <button id="agree">I agree</button></div>`)
+  },
+  masked() {
+    button()
+    layer(`<div class="dialog" role="dialog" aria-label="Sign in">
+      <input type="password" id="secret" value="hunter2-hunter2" aria-label="Password">
+      <button id="go">Sign in</button></div>`)
+  },
+  late() {
+    // The cover comes with the press's own move: it was not there at the check.
+    const target = button()
+    target.addEventListener('mousemove', () => {
+      if (!document.querySelector('.layer')) layer(dialog)
+    })
+  },
+  siblings() {
+    // A backdrop and its dialog as two children of <body>, as many libraries render them: the
+    // backdrop takes the click point, and walking up from it never reaches the dialog.
+    button()
+    const backdrop = document.createElement('div')
+    backdrop.id = 'backdrop'
+    backdrop.style.cssText = 'position: fixed; inset: 0; z-index: 10; background: rgba(0, 0, 0, 0.4)'
+    const modal = document.createElement('div')
+    modal.setAttribute('role', 'dialog')
+    modal.setAttribute('aria-label', 'Sign up for deals')
+    modal.style.cssText = 'position: fixed; left: 360px; top: 260px; width: 240px; padding: 16px; z-index: 11; background: #fff'
+    modal.innerHTML = '<button id="later">No thanks</button> <button id="join">Sign up</button>'
+    document.body.append(backdrop, modal)
+  },
+  signin() {
+    // A sign-in dialog in a fixed full-view carrier that takes no pointer: a nameless modal
+    // dialog holding a labelled close button and, deeper inside it, the form's frame over the
+    // click point.
+    button()
+    const carrier = document.createElement('div')
+    carrier.style.cssText = 'position: fixed; inset: 0; z-index: 10; pointer-events: none'
+    carrier.innerHTML = `<div role="dialog" aria-modal="true" style="position: absolute; left: 60px; top: 60px; width: 440px; height: 320px; background: #fff; pointer-events: auto">
+      <button id="close" aria-label="Close Sign in or Sign up">x</button>
+      <div><iframe title="Login/Signup" srcdoc="<p>Sign in</p>" style="position: absolute; left: 20px; top: 40px; width: 400px; height: 260px; border: 0"></iframe></div></div>`
+    carrier.querySelector('#close').addEventListener('click', () => carrier.remove())
+    document.body.append(carrier)
+  },
+  slotted() {
+    // A backdrop beside a host whose shadow dialog draws its buttons through a slot: they are
+    // the host's light children, as a design system's footer slot holds them.
+    button()
+    const backdrop = document.createElement('div')
+    backdrop.id = 'backdrop'
+    backdrop.style.cssText = 'position: fixed; inset: 0; z-index: 10; background: rgba(0, 0, 0, 0.4)'
+    const host = document.createElement('div')
+    host.id = 'leaving'
+    const root = host.attachShadow({ mode: 'open' })
+    root.innerHTML = `<div role="dialog" aria-label="Before you go" style="position: fixed; left: 320px; top: 200px; width: 240px; padding: 16px; z-index: 11; background: #fff">
+      <p>Stay a while.</p><slot></slot></div>`
+    // Its second way out is a design-system button: a custom element slotted straight into the
+    // dialog, whose real button lives in its own open root.
+    if (!customElements.get('x-stay'))
+      customElements.define('x-stay', class extends HTMLElement {
+        constructor() {
+          super()
+          this.attachShadow({ mode: 'open' }).innerHTML = '<button>Stay</button>'
+        }
+      })
+    host.innerHTML = '<button id="leave">Leave</button> <x-stay></x-stay>'
+    host.querySelector('#leave').addEventListener('click', () => {
+      host.remove()
+      backdrop.remove()
+    })
+    document.body.append(backdrop, host)
+  },
+  signinsheet() {
+    // A real sign-in sheet's first shape: a blank fixed layer on top at the click point, beside
+    // its dialog, named by a span with tabindex -1 inside its h2, and holding a focus target with
+    // tabindex -1 parked off screen, a Close button and the form's frame.
+    button()
+    const layer = document.createElement('div')
+    layer.style.cssText = 'position: fixed; inset: 0; z-index: 10'
+    const sheet = document.createElement('div')
+    sheet.setAttribute('role', 'dialog')
+    sheet.setAttribute('aria-modal', 'true')
+    sheet.setAttribute('tabindex', '-1')
+    sheet.setAttribute('aria-labelledby', 'sheet-title')
+    sheet.style.cssText = 'position: fixed; left: 300px; top: 60px; width: 200px; padding: 8px; z-index: 11; background: #fff'
+    sheet.innerHTML = `<span tabindex="-1" style="position: absolute; left: -9640px">Start of the sheet</span>
+      <h2 style="font-size: 16px; margin: 0"><span id="sheet-title" tabindex="-1">Sign in or Sign up</span></h2>
+      <button id="close" aria-label="Close Sign in or Sign up">x</button>
+      <iframe title="Login/Signup" srcdoc="<p>Sign in</p>" style="display: block; width: 180px; height: 150px; border: 0"></iframe>`
+    sheet.querySelector('#close').addEventListener('click', () => {
+      layer.remove()
+      sheet.remove()
+    })
+    document.body.append(layer, sheet)
+  },
+  portalsheet() {
+    // A real sign-in sheet's second shape: a fixed carrier that takes no pointer, and in it a
+    // nameless portal that does, holding a dark fixed backdrop on top at the click point, two
+    // focus guards and a labelled dialog that holds only its frame.
+    button()
+    const carrier = document.createElement('div')
+    carrier.style.cssText = 'position: fixed; inset: 0; z-index: 10; pointer-events: none'
+    carrier.innerHTML = `<div id="portal" style="pointer-events: auto">
+      <div style="position: fixed; inset: 0; background: rgba(0, 0, 0, 0.5)"></div>
+      <span tabindex="0" aria-hidden="true" style="position: fixed; left: -100px; top: 0; width: 1px; height: 1px"></span>
+      <div role="dialog" aria-label="Log in or sign up" tabindex="-1" style="position: fixed; left: 300px; top: 60px; width: 200px; height: 300px; background: #fff">
+        <iframe title="Log in or sign up" srcdoc="<p>Log in</p>" style="display: block; width: 180px; height: 280px; border: 0"></iframe></div>
+      <span tabindex="0" aria-hidden="true" style="position: fixed; left: -100px; top: 4px; width: 1px; height: 1px"></span></div>`
+    document.body.append(carrier)
+  },
+  shadowpair() {
+    // A consent widget that draws its fixed backdrop and its fixed dialog as two siblings in one
+    // open shadow root, under a host that is not itself fixed.
+    button()
+    const host = document.createElement('div')
+    host.id = 'widget'
+    const root = host.attachShadow({ mode: 'open' })
+    root.innerHTML = `<div id="veil" style="position: fixed; inset: 0; z-index: 10; background: rgba(0, 0, 0, 0.4)"></div>
+      <div role="dialog" aria-label="Your privacy" style="position: fixed; left: 320px; top: 200px; width: 240px; padding: 16px; z-index: 11; background: #fff">
+      <button id="ok">Got it</button></div>`
+    root.getElementById('ok').addEventListener('click', () => host.remove())
+    document.body.append(host)
+  },
+  rolebutton() {
+    // A backdrop beside a dialog whose only control is a div with role="button" and no tabindex,
+    // as many custom close buttons are.
+    button()
+    const backdrop = document.createElement('div')
+    backdrop.id = 'backdrop'
+    backdrop.style.cssText = 'position: fixed; inset: 0; z-index: 10; background: rgba(0, 0, 0, 0.4)'
+    const modal = document.createElement('div')
+    modal.setAttribute('role', 'dialog')
+    modal.setAttribute('aria-label', 'Rate your visit')
+    modal.style.cssText = 'position: fixed; left: 360px; top: 260px; width: 240px; padding: 16px; z-index: 11; background: #fff'
+    modal.innerHTML = '<div role="button" id="dismiss">Close</div>'
+    modal.querySelector('#dismiss').addEventListener('click', () => {
+      backdrop.remove()
+      modal.remove()
+    })
+    document.body.append(backdrop, modal)
+  },
+  siblingsdeep() {
+    // The same pair after 20,000 plain elements, the dialog the last child of <body>, as a portal
+    // renders it on a real page: a search capped at the first elements never meets it.
+    const filler = document.createElement('div')
+    filler.hidden = true
+    filler.innerHTML = '<span></span>'.repeat(20000)
+    document.body.append(filler)
+    shapes.siblings()
+  },
+  closed() {
+    // A consent widget whose content sits in a closed shadow root: from Neo's world it holds no
+    // control and no words, and it is not blank.
+    button()
+    customElements.define('x-consent', class extends HTMLElement {
+      constructor() {
+        super()
+        this.attachShadow({ mode: 'closed' }).innerHTML =
+          '<div style="background: #fff; padding: 16px">We use cookies <button>OK</button></div>'
+      }
+    })
+    const widget = document.createElement('x-consent')
+    widget.style.cssText = 'display: block; position: fixed; inset: 0; z-index: 10; background: rgba(0, 0, 0, 0.4)'
+    document.body.append(widget)
+  },
+  shadowopen() {
+    // A consent tool's backdrop and dialog drawn in its host's open shadow root. The target lies
+    // under the backdrop, away from the dialog, as most of a page does: the host is what is on
+    // top, and only a walk into its root finds the dialog's buttons.
+    button()
+    consentHost('open', 'left: 320px; top: 200px')
+  },
+  shadowclosed() {
+    // The dialog in a closed root, over the target: Neo's world reads the root once a marked
+    // snapshot opened it, and the walk up from what is on top starts inside it.
+    button()
+    consentHost('closed', 'left: 80px; top: 80px')
+  },
+  shadowbehind() {
+    // A blank backdrop in the document, and the dialog it dims drawn from a plain host's open
+    // shadow root, standing on it: only a walk into the document's roots finds that dialog.
+    button()
+    const backdrop = document.createElement('div')
+    backdrop.className = 'layer'
+    const host = document.createElement('div')
+    host.id = 'newsletter'
+    const root = host.attachShadow({ mode: 'open' })
+    root.innerHTML = `<div role="dialog" aria-label="Newsletter" style="position: fixed; left: 320px; top: 200px; width: 300px; padding: 16px; z-index: 11; background: #fff">
+      <p>Get our letters.</p><button id="later">Not now</button></div>`
+    root.getElementById('later').addEventListener('click', () => {
+      host.remove()
+      backdrop.remove()
+    })
+    document.body.append(backdrop, host)
+  },
+  beside() {
+    // A blank loading layer over the target, beside a cookie notice it does not stand under.
+    button()
+    const loader = document.createElement('div')
+    loader.style.cssText = 'position: fixed; left: 0; top: 0; width: 55%; height: 100%; z-index: 10'
+    const notice = document.createElement('div')
+    notice.setAttribute('role', 'dialog')
+    notice.setAttribute('aria-label', 'Cookies')
+    notice.style.cssText = 'position: fixed; right: 0; bottom: 0; width: 30%; padding: 16px; z-index: 11; background: #fff'
+    notice.innerHTML = '<button id="accept-cookies">Accept</button>'
+    document.body.append(loader, notice)
+  },
+  hidden() {
+    // A frame of the cover kind, inserted and not shown: nothing covers the target.
+    button()
+    layer(dialog).style.display = 'none'
+  },
+}
+;(shapes[location.hash.slice(1)] ?? shapes.dialog)()
+</script>
+</body>
+</html>

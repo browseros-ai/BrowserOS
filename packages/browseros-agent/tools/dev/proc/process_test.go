@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -298,6 +299,12 @@ func TestAcquireWatchRunLockStopsLegacyPortKeyedOwner(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// A shell reaps its old watch while a replacement waits for that owner to
+	// exit. Reap this helper concurrently too, so kill(pid, 0) cannot see a zombie.
+	done := make(chan error, 1)
+	go func() {
+		done <- cmd.Wait()
+	}()
 	lock, stopped, err := AcquireWatchRunLockInDir(baseDir, takeoverIdentity, 3*time.Second)
 	if err != nil {
 		t.Fatalf("AcquireWatchRunLockInDir returned error: %v", err)
@@ -307,14 +314,86 @@ func TestAcquireWatchRunLockStopsLegacyPortKeyedOwner(t *testing.T) {
 		t.Fatal("expected takeover to stop legacy owner")
 	}
 
-	done := make(chan error, 1)
-	go func() {
-		done <- cmd.Wait()
-	}()
 	select {
 	case <-done:
 	case <-time.After(3 * time.Second):
 		t.Fatal("expected legacy owner process to exit after takeover")
+	}
+}
+
+func TestAcquireWatchRunLockWaitsForSlowSupervisorCleanup(t *testing.T) {
+	for _, scenario := range []string{"takeover", "legacy-takeover", "cleanup"} {
+		t.Run(scenario, func(t *testing.T) {
+			legacy := scenario == "legacy-takeover"
+			baseDir := t.TempDir()
+			helperBaseDir := baseDir
+			if legacy {
+				helperBaseDir = t.TempDir()
+			}
+			readyPath := filepath.Join(baseDir, "ready")
+			releasePath := filepath.Join(baseDir, "cleanup-complete")
+			identity := WatchRunIdentity{
+				Mode:    "watch-claw-state",
+				Profile: "/tmp/claw-shared-state",
+				Ports:   Ports{CDP: 9005, Server: 9105, Extension: 9305},
+			}
+			identityJSON, err := json.Marshal(identity)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cmd := exec.Command(os.Args[0], "-test.run=TestMain")
+			cmd.Env = append(os.Environ(),
+				watchLockHelperEnv+"=1",
+				"BROWSEROS_DEV_WATCH_LOCK_BASE="+helperBaseDir,
+				"BROWSEROS_DEV_WATCH_LOCK_READY="+readyPath,
+				"BROWSEROS_DEV_WATCH_LOCK_IDENTITY="+string(identityJSON),
+				"BROWSEROS_DEV_WATCH_LOCK_RELEASE="+releasePath,
+			)
+			cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+			if err := cmd.Start(); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				_ = cmd.Process.Kill()
+				_ = cmd.Wait()
+			})
+			waitForFile(t, readyPath, 3*time.Second)
+			if legacy {
+				state, err := os.ReadFile(watchRunPaths(helperBaseDir, identity).State)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(legacyPortKeyedWatchRunPaths(baseDir, identity).State, state, 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var lock *WatchRunLock
+			if scenario == "cleanup" {
+				_, err = StopAllWatchProcessesInDir(baseDir, 100*time.Millisecond)
+			} else {
+				lock, _, err = AcquireWatchRunLockInDir(baseDir, identity, 100*time.Millisecond)
+			}
+			if lock != nil {
+				_ = lock.Close()
+			}
+			if err == nil || !strings.Contains(err.Error(), "still shutting down") {
+				t.Fatalf("expected takeover to wait for cleanup, got %v", err)
+			}
+			if !processLive(cmd.Process.Pid) {
+				t.Fatal("takeover killed the supervisor before it finished child cleanup")
+			}
+			if err := os.WriteFile(releasePath, nil, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := cmd.Wait(); err != nil {
+				t.Fatalf("supervisor did not finish its cleanup: %v", err)
+			}
+			lock, _, err = AcquireWatchRunLockInDir(baseDir, identity, time.Second)
+			if err != nil {
+				t.Fatalf("takeover after cleanup failed: %v", err)
+			}
+			_ = lock.Close()
+		})
 	}
 }
 
@@ -331,8 +410,26 @@ func runWatchLockHelper() {
 		os.Exit(3)
 	}
 	defer lock.Close()
+	releasePath := os.Getenv("BROWSEROS_DEV_WATCH_LOCK_RELEASE")
+	var stop chan os.Signal
+	if releasePath != "" {
+		stop = make(chan os.Signal, 1)
+		signal.Notify(stop, syscall.SIGTERM)
+		defer signal.Stop(stop)
+	}
 	if err := os.WriteFile(readyPath, []byte("ready\n"), 0o644); err != nil {
 		os.Exit(4)
+	}
+	if releasePath != "" {
+		<-stop
+		// Model a supervisor draining a separate server process group. The
+		// test, rather than a delay, decides when releasing ownership is safe.
+		for {
+			if _, err := os.Stat(releasePath); err == nil {
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
 	}
 	time.Sleep(30 * time.Second)
 }

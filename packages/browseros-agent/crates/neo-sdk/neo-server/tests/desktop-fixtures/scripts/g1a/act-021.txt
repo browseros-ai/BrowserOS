@@ -1,0 +1,18 @@
+// Source port of act-021 at a7e536e152a4835abe9974498b27a5c927dd2e0d. Execution is owned by the coordinator.
+
+// A ref is opaque. SDK child-frame refs include a document prefix, unlike desktop eN refs.
+const g1aRef = (snapshot, needle) => {
+  const row = snapshot.split('\n').find(line =>
+    line.replace(/\s+"/g, '"').includes(needle) && /\[ref=([^\]\s]+)\]/.test(line));
+  assert(row, 'snapshot has a ref for ' + needle, snapshot);
+  return row.match(/\[ref=([^\]\s]+)\]/)[1];
+};
+await page.goto(args.base + '/form.html');
+const snapshot = await page.ariaSnapshot();
+const unknown = await rejected(() => page.getByRef('e999').click({ timeout: 1500 }), /take a new snapshot/i);
+const staleRef = g1aRef(snapshot, 'Submit');
+await page.goto(args.base + '/links.html');
+// Desktop navigate auto-snapshots. Taking the SDK snapshot preserves that invalidation boundary.
+await page.ariaSnapshot();
+const stale = await rejected(() => page.getByRef(staleRef).click({ timeout: 1500 }), /take a new snapshot/i);
+return { unknown, staleRef, stale };

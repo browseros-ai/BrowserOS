@@ -1,0 +1,153 @@
+{
+  "suites": [
+    {
+      "title": "page/page-goto.spec.ts",
+      "file": "page/page-goto.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [
+        {
+          "title": "NA-009 should work with Cross-Origin-Opener-Policy and history state",
+          "file": "page/page-goto.spec.ts",
+          "line": 127,
+          "column": 3,
+          "ok": false,
+          "tests": [
+            {
+              "expectedStatus": "passed",
+              "status": "unexpected",
+              "results": [
+                {
+                  "status": "failed",
+                  "errors": [
+                    {
+                      "location": {
+                        "file": "fixture/tests/page/page-goto.spec.ts",
+                        "column": 38,
+                        "line": 143
+                      },
+                      "message": "TypeError: locator._expect is not a function\n\n  141 |     expect(page.url()).toBe(server.EMPTY_PAGE);\n  142 |     expect(await page.evaluate(() => history.state)).toEqual({ key: 1 });\n> 143 |     await expect(page.locator('h1')).toHaveText('hello');\n      |                                      ^\n  144 |   });\n  145 | }\n  146 |\n    at fixture/tests/page/page-goto.spec.ts:143:38"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "title": "NA-009 should work with Cross-Origin-Opener-Policy and Cross-Origin-Embedder-Policy and history state",
+          "file": "page/page-goto.spec.ts",
+          "line": 127,
+          "column": 3,
+          "ok": false,
+          "tests": [
+            {
+              "expectedStatus": "passed",
+              "status": "unexpected",
+              "results": [
+                {
+                  "status": "failed",
+                  "errors": [
+                    {
+                      "location": {
+                        "file": "fixture/tests/page/page-goto.spec.ts",
+                        "column": 38,
+                        "line": 143
+                      },
+                      "message": "TypeError: locator._expect is not a function\n\n  141 |     expect(page.url()).toBe(server.EMPTY_PAGE);\n  142 |     expect(await page.evaluate(() => history.state)).toEqual({ key: 1 });\n> 143 |     await expect(page.locator('h1')).toHaveText('hello');\n      |                                      ^\n  144 |   });\n  145 | }\n  146 |\n    at fixture/tests/page/page-goto.spec.ts:143:38"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "title": "NA-038 js redirect overrides url bar navigation ",
+          "file": "page/page-goto.spec.ts",
+          "line": 511,
+          "column": 1,
+          "ok": false,
+          "tests": [
+            {
+              "expectedStatus": "passed",
+              "status": "unexpected",
+              "results": [
+                {
+                  "status": "failed",
+                  "errors": [
+                    {
+                      "location": {
+                        "file": "fixture/tests/page/page-goto.spec.ts",
+                        "column": 24,
+                        "line": 552
+                      },
+                      "message": "TypeError: Cannot read properties of undefined (reading 'baseURL')\n\n  550 |     // Chromium prioritizes the url bar navigation over the js redirect.\n  551 |     expect(error).toBeFalsy();\n> 552 |     await expect(page).toHaveURL(server.PREFIX + '/b');\n      |                        ^\n  553 |   } else if (browserName === 'webkit') {\n  554 |     expect(error.message).toContain(`page.goto: Navigation to \"${server.PREFIX + '/b'}\" is interrupted by another navigation to \"${server.PREFIX + '/c'}\"`);\n  555 |     await expect(page).toHaveURL(server.PREFIX + '/c');\n    at fixture/tests/page/page-goto.spec.ts:552:24"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "title": "NA-054 should reject referer option when setExtraHTTPHeaders provides referer",
+          "file": "page/page-goto.spec.ts",
+          "line": 760,
+          "column": 1,
+          "ok": false,
+          "tests": [
+            {
+              "expectedStatus": "passed",
+              "status": "unexpected",
+              "results": [
+                {
+                  "status": "failed",
+                  "errors": [
+                    {
+                      "location": {
+                        "file": "<anonymous>",
+                        "column": 23,
+                        "line": 1249
+                      },
+                      "message": "Error: page.setExtraHTTPHeaders: neo-runtime: setExtraHTTPHeaders is not served yet for a context browser.newContext created, only for the run's own context\n    at parseError (<anonymous>:1249:23)\n    at rebuildError (<anonymous>:1424:19)\n    at Connection.#send (<anonymous>:1366:21)\n    at Connection.sendPage (<anonymous>:1283:12)\n    at Page.setExtraHTTPHeaders (<anonymous>:7921:5)\n    at fixture/tests/page/page-goto.spec.ts:761:3"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "title": "NA-058 should report raw buffer for main resource",
+          "file": "page/page-goto.spec.ts",
+          "line": 804,
+          "column": 1,
+          "ok": true,
+          "tests": [
+            {
+              "expectedStatus": "failed",
+              "status": "expected",
+              "results": [
+                {
+                  "status": "failed",
+                  "errors": [
+                    {
+                      "location": {
+                        "file": "fixture/tests/page/page-goto.spec.ts",
+                        "column": 27,
+                        "line": 814
+                      },
+                      "message": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mreceived\u001b[39m\u001b[2m).\u001b[22mtoBe\u001b[2m(\u001b[22m\u001b[32mexpected\u001b[39m\u001b[2m) // Object.is equality\u001b[22m\n\nExpected: \u001b[32m\"\u001b[7m\u00dc\u001b[27m (lowercase \u001b[7m\u00fc\u001b[27m)\"\u001b[39m\nReceived: \u001b[31m\"\u001b[7m\u00c3\u0153\u001b[27m (lowercase \u001b[7m\u00c3\u00bc\u001b[27m)\"\u001b[39m\n\n  812 |   const response = await page.goto(server.PREFIX + '/empty.html');\n  813 |   const body = await response.body();\n> 814 |   expect(body.toString()).toBe('\u00dc (lowercase \u00fc)');\n      |                           ^\n  815 | });\n  816 |\n  817 | it('NA-059 should not throw unhandled rejections on invalid url', async ({ page, server }) => {\n    at fixture/tests/page/page-goto.spec.ts:814:27"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "errors": []
+}

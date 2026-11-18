@@ -107,6 +107,9 @@ pub enum InjectValue {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StdioShape {
     pub top_level_key: &'static str,
+    /// Object nested under `top_level_key` that holds server entries, when the
+    /// harness does not place them directly under the top-level key.
+    pub servers_key: Option<&'static str>,
     pub command_field: Option<&'static str>,
     pub args_field: Option<&'static str>,
     pub env_field: Option<&'static str>,
@@ -178,11 +181,10 @@ const ZED_INJECTS: &[(&str, InjectValue)] = &[
     ("source", InjectValue::String("custom")),
     ("enabled", InjectValue::Bool(true)),
 ];
-const OPENCODE_STDIO_INJECTS: &[(&str, InjectValue)] = &[
-    ("type", InjectValue::String("local")),
-    ("enabled", InjectValue::Bool(true)),
-];
-const OPENCODE_HTTP_INJECTS: &[(&str, InjectValue)] = &[("enabled", InjectValue::Bool(true))];
+// OpenCode >= 2.0 nests servers under `mcp.servers`, rejects unknown fields, and has no
+// `enabled` field: a server is enabled by omission and disabled with `disabled: true`.
+// Stdio entries carry `type: local`; remote entries get `type: remote` from the HTTP tag.
+const OPENCODE_STDIO_INJECTS: &[(&str, InjectValue)] = &[("type", InjectValue::String("local"))];
 
 const STDIO_SSE_HTTP: &[McpTransport] =
     &[McpTransport::Stdio, McpTransport::Sse, McpTransport::Http];
@@ -204,6 +206,7 @@ const fn paths(
 const fn stdio(top_level_key: &'static str) -> StdioShape {
     StdioShape {
         top_level_key,
+        servers_key: None,
         command_field: None,
         args_field: None,
         env_field: None,
@@ -556,6 +559,7 @@ const OPENCODE: HarnessDefinition = HarnessDefinition {
             env_field: Some("environment"),
             command_as_array: true,
             injects: OPENCODE_STDIO_INJECTS,
+            servers_key: Some("servers"),
             ..stdio("mcp")
         },
         http: Some(HttpShape {
@@ -564,7 +568,7 @@ const OPENCODE: HarnessDefinition = HarnessDefinition {
             tag_key: Some("type"),
             tag_value: Some("remote"),
             sse_tag_value: None,
-            injects: OPENCODE_HTTP_INJECTS,
+            injects: NONE,
             supports_oauth: true,
         }),
         project: None,
@@ -572,7 +576,7 @@ const OPENCODE: HarnessDefinition = HarnessDefinition {
             first_party: "https://opencode.ai/docs/mcp",
             smithery: Some(SMITHERY_URL),
             notes: Some(
-                "Command written as a single array of [command, ...args] under `command`. `env` renamed to `environment`. Both stdio and remote entries carry a `type` field (`local` vs `remote`).",
+                "MCP servers live under `mcp.servers` in OpenCode >= 2.0. Command written as a single array of [command, ...args] under `command`. `env` renamed to `environment`. Both stdio and remote entries carry a `type` field (`local` vs `remote`).",
             ),
             verified: VERIFIED,
         },

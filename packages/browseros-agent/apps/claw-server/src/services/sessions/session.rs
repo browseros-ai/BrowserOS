@@ -29,10 +29,18 @@ pub struct Session {
     // slug. Retain its recognized product before that resolution, for display
     // only, and freeze it alongside the raw protocol client metadata.
     declared_client_product: Option<&'static str>,
+    // The client version reported at mint, kept so a promoted session can record an
+    // accurate start when its first real work arrives.
+    client_version: String,
+    // A handle-less pure-utility probe runs in an ephemeral session that is never
+    // persisted to the audit, so such calls do not surface as standalone tasks. It is
+    // promoted to a real task the moment the agent reuses its handle for real work.
+    ephemeral: AtomicBool,
     dispatches: Mutex<DispatchState>,
     dispatches_drained: Notify,
     operator_stop_requested: AtomicBool,
     task_declared: AtomicBool,
+    pursue_handed_back: AtomicBool,
     cancel: CancellationToken,
     last_activity: Mutex<Instant>,
 }
@@ -52,18 +60,30 @@ impl Session {
         client_name: String,
         now: Instant,
     ) -> Arc<Self> {
-        Self::new_with_declared_product(id, agent, identity, client_name, None, now)
+        Self::new_with_declared_product(
+            id,
+            agent,
+            identity,
+            client_name,
+            String::new(),
+            None,
+            false,
+            now,
+        )
     }
 
     /// Creates a session with its declared product fallback already fixed, before
     /// the registry publishes it to concurrent dispatches. It never affects ownership.
     #[must_use]
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new_with_declared_product(
         id: SessionId,
         agent: ClientIdentity,
         identity: ConversationIdentity,
         client_name: String,
+        client_version: String,
         declared_client_product: Option<&'static str>,
+        ephemeral: bool,
         now: Instant,
     ) -> Arc<Self> {
         Arc::new(Self {
@@ -72,6 +92,8 @@ impl Session {
             identity,
             usage: UsageTracker::new(client_name),
             declared_client_product,
+            client_version,
+            ephemeral: AtomicBool::new(ephemeral),
             dispatches: Mutex::new(DispatchState {
                 accepting: true,
                 active: BTreeMap::new(),
@@ -80,6 +102,7 @@ impl Session {
             dispatches_drained: Notify::new(),
             operator_stop_requested: AtomicBool::new(false),
             task_declared: AtomicBool::new(false),
+            pursue_handed_back: AtomicBool::new(false),
             cancel: CancellationToken::new(),
             last_activity: Mutex::new(now),
         })
@@ -115,6 +138,28 @@ impl Session {
         self.declared_client_product
     }
 
+    #[must_use]
+    pub fn client_version(&self) -> &str {
+        &self.client_version
+    }
+
+    /// An ephemeral session executes a handle-less probe without ever being recorded
+    /// as a task: the audit skips its start and its dispatches, so it leaves no row,
+    /// until the agent reuses its handle for real work and it is promoted.
+    #[must_use]
+    pub fn is_ephemeral(&self) -> bool {
+        self.ephemeral.load(Ordering::Acquire)
+    }
+
+    /// Turns a probe's ephemeral session into a real task the first time real work reuses
+    /// its handle. Returns true only for the call that performed the transition, so the
+    /// caller records the session start exactly once even under concurrent reuse.
+    pub fn promote(&self) -> bool {
+        self.ephemeral
+            .compare_exchange(true, false, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+    }
+
     pub fn mark_used(&self) {
         self.usage.mark_used();
     }
@@ -143,8 +188,13 @@ impl Session {
         self.identity.label().await
     }
 
+    /// A new name is a new task, so pursue may take it even if it handed the last one back.
     pub async fn rename(&self, new_label: String) -> String {
-        self.identity.rename(new_label).await
+        let old_label = self.identity.rename(new_label.clone()).await;
+        if old_label != new_label {
+            self.pursue_handed_back.store(false, Ordering::Release);
+        }
+        old_label
     }
 
     pub async fn take_rename_nudge(&self) -> Option<String> {
@@ -193,6 +243,17 @@ impl Session {
         self.task_declared
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .is_ok()
+    }
+
+    /// Whether a pursue run in this task decided it could not go on and handed the task back.
+    /// From then on the task carries on with run, until the session is named for a new task.
+    #[must_use]
+    pub fn pursue_handed_back(&self) -> bool {
+        self.pursue_handed_back.load(Ordering::Acquire)
+    }
+
+    pub fn mark_pursue_handed_back(&self) {
+        self.pursue_handed_back.store(true, Ordering::Release);
     }
 
     /// Keeps Stop-owned calls active until their effects finish and audit reconciliation is queued.
@@ -314,6 +375,20 @@ mod tests {
         assert!(session.try_mark_task_declared());
         assert!(!session.try_mark_task_declared());
         assert!(!session.try_mark_task_declared());
+    }
+
+    #[tokio::test]
+    async fn a_new_task_name_lets_pursue_take_the_session_again() {
+        let session = test_session("session-pursue");
+        session.rename("cart errand".to_string()).await;
+        session.mark_pursue_handed_back();
+        session.rename("cart errand".to_string()).await;
+        assert!(
+            session.pursue_handed_back(),
+            "the same task keeps its hand back"
+        );
+        session.rename("flight search".to_string()).await;
+        assert!(!session.pursue_handed_back(), "a new task starts fresh");
     }
 
     #[tokio::test]

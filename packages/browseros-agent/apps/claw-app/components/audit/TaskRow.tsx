@@ -14,8 +14,14 @@ import {
   taskScreenshotUrl,
   useTaskScreenshotBaseUrl,
 } from '@/modules/api/audit.hooks'
-import { taskTime, taskWhen, tookLabel } from '@/screens/audit/audit.helpers'
+import {
+  taskTime,
+  taskWhen,
+  tookLabel,
+  ultrafastNote,
+} from '@/screens/audit/audit.helpers'
 import { SessionStatusBadge } from './SessionStatusBadge'
+import { UltrafastNote } from './UltrafastMarks'
 
 interface TaskRowProps {
   task: TaskSummary
@@ -28,6 +34,7 @@ interface TaskRowProps {
 export function TaskRow({ task, now, timeOnly = false }: TaskRowProps) {
   const location = useLocation()
   const screenshotBaseUrl = useTaskScreenshotBaseUrl()
+  const note = ultrafastNote(task.pursue, task.ultrafast)
   const shot =
     task.latestScreenshotId != null && screenshotBaseUrl !== null
       ? taskScreenshotUrl(
@@ -97,6 +104,7 @@ export function TaskRow({ task, now, timeOnly = false }: TaskRowProps) {
           <span aria-hidden>·</span>
           <span>{tookLabel(task.durationMs)}</span>
         </span>
+        {note ? <UltrafastNote className="mt-0.5">{note}</UltrafastNote> : null}
       </span>
       <SessionStatusBadge
         status={task.status}

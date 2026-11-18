@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 use tracing::warn;
 
-pub const EFFICIENCY_ESTIMATOR_VERSION: i64 = 4;
+pub const EFFICIENCY_ESTIMATOR_VERSION: i64 = 5;
 pub const SCREENSHOT_BASELINE_WIDTH: usize = 1920;
 pub const SCREENSHOT_BASELINE_HEIGHT: usize = 1080;
 const DAY_MS: i64 = 24 * 60 * 60 * 1000;
@@ -173,6 +173,17 @@ impl SessionEfficiencyService {
         Ok(aggregate_rows(&rows, now_ms))
     }
 
+    /// Totals for the sessions that ended at or after `since_ms`, such as the day this computer
+    /// got ultrafast.
+    pub async fn window_since(&self, since_ms: i64) -> AppResult<SessionEfficiencyWindow> {
+        let rows = self.repository.all_rows().await?;
+        let mut accumulator = WindowAccumulator::default();
+        for row in rows.iter().filter(|row| row.ended_at >= since_ms) {
+            accumulator.add(row);
+        }
+        Ok(accumulator.finish())
+    }
+
     /// Aggregates the efficiency of a specific set of sessions (e.g. one skill's
     /// run sessions). Sessions with no projected efficiency row (unmeasured or
     /// still live) are skipped; the count of matched sessions is returned so
@@ -244,7 +255,22 @@ fn calculate_session_efficiency(
         .as_ref()
         .map(|start| start.created_at)
         .unwrap_or(source.dispatches[0].created_at);
-    let active_duration_ms = source.end.created_at.saturating_sub(started_at).max(0);
+    // Active span: first activity to the last tool finishing, matching tasks.duration_ms. The
+    // session-end timestamp is the retirement moment (idle sweep / stop), so it must not inflate
+    // the duration with the idle tail before teardown.
+    let last_activity_end = source
+        .dispatches
+        .iter()
+        .map(|dispatch| {
+            if dispatch.parent_dispatch_id.is_some() {
+                dispatch.created_at
+            } else {
+                dispatch.created_at + dispatch.duration_ms.unwrap_or(0)
+            }
+        })
+        .max()
+        .unwrap_or(source.end.created_at);
+    let active_duration_ms = last_activity_end.saturating_sub(started_at).max(0);
     let dispatch_count = i64::try_from(source.dispatches.len()).unwrap_or(i64::MAX);
     Some(session_efficiency_stats::Model {
         session_id: source.session_id.clone(),
@@ -497,11 +523,12 @@ mod tests {
         assert_eq!(stats.session_id, "session");
         assert_eq!(stats.ended_at, 10_000);
         assert_eq!(stats.dispatch_count, 2);
-        assert_eq!(stats.active_duration_ms, 10_000);
+        // Active span: last tool finishes at 1_200 + 400 = 1_600, start at 0.
+        assert_eq!(stats.active_duration_ms, 1_600);
         assert_eq!(stats.tool_input_token_estimate, 30);
         assert_eq!(stats.tool_output_token_estimate, 300);
         assert_eq!(stats.screenshot_baseline_token_estimate, 6_000);
-        assert_eq!(stats.efficiency_estimator_version, 4);
+        assert_eq!(stats.efficiency_estimator_version, 5);
         assert_eq!(stats.computed_at, 12_000);
         Ok(())
     }
@@ -516,16 +543,18 @@ mod tests {
 
         let stats = calculate_session_efficiency(&source, 300)
             .ok_or_else(|| anyhow::anyhow!("eligible session was skipped"))?;
-        assert_eq!(stats.active_duration_ms, 9_900);
+        // Start falls back to the first dispatch (100); last tool finishes at 200 + (-10) = 190.
+        assert_eq!(stats.active_duration_ms, 90);
         assert_eq!(stats.tool_input_token_estimate, i64::MAX);
         assert_eq!(stats.tool_output_token_estimate, i64::MAX);
         Ok(())
     }
 
     #[test]
-    fn calculator_clamps_a_start_after_the_end_to_zero() -> anyhow::Result<()> {
+    fn calculator_clamps_a_start_after_the_last_activity_to_zero() -> anyhow::Result<()> {
+        // Last tool finishes at 200 + 1 = 201; a start stamped after it clamps the span to zero.
         let mut source = source(vec![
-            dispatch(1, 100, Some(i64::MAX), 0, 0, 1),
+            dispatch(1, 100, Some(50), 0, 0, 1),
             dispatch(2, 200, Some(1), 0, 0, 1),
         ]);
         source
@@ -770,7 +799,7 @@ mod tests {
                     "screenshot_baseline_token_estimate": 3_000,
                     "screenshot_first_token_estimate": 3_030,
                     "raw_token_savings_estimate": -1_000,
-                    "efficiency_estimator_version": 4,
+                    "efficiency_estimator_version": 5,
                     "screenshot_baseline_width": 1_920,
                     "screenshot_baseline_height": 1_080,
                     "screenshot_tokens_per_dispatch": 3_000,
@@ -1053,6 +1082,23 @@ mod tests {
         assert_eq!(aggregate.last_7_days.human_time_saved_ms, 300);
         assert_eq!(aggregate.last_7_days.session_count, 1);
         assert_eq!(aggregate.last_7_days.tool_call_count, 3);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn the_window_since_a_date_counts_sessions_ending_on_or_after_it() -> anyhow::Result<()> {
+        let (_dir, _audit, service, repository) = test_services().await?;
+        for row in [
+            stats_row("before", 999, 1, 100, 10, 20, 30),
+            stats_row("on", 1_000, 2, 200, 20, 50, 40),
+            stats_row("after", 5_000, 3, 300, 30, 10, 60),
+        ] {
+            assert!(repository.insert_if_absent(&row).await?);
+        }
+        let window = service.window_since(1_000).await?;
+        assert_eq!(window.raw_token_savings_estimate, 40);
+        assert_eq!(window.session_count, 2);
+        assert_eq!(service.window_since(9_000).await?.session_count, 0);
         Ok(())
     }
 

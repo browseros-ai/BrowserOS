@@ -18,6 +18,9 @@ pub struct RefEntry {
     /// Recomputed per snapshot and used only to recover a ref whose backend node id went stale.
     pub nth: usize,
     pub frame_id: Option<FrameId>,
+    /// Blocker refs minted outside the AX traversal bind only to this node. An
+    /// unlabelled overlay must never recover to an unrelated generic element.
+    pub exact: bool,
 }
 
 #[cfg(test)]
@@ -470,6 +473,7 @@ impl RefMap {
             name: node.name.to_string(),
             nth,
             frame_id: node.frame_id.cloned(),
+            exact: false,
         };
         if !self.by_ref.contains_key(&ref_id) {
             self.order.push(ref_id.clone());
@@ -481,6 +485,22 @@ impl RefMap {
     #[must_use]
     pub fn get(&self, ref_id: &Ref) -> Option<&RefEntry> {
         self.by_ref.get(ref_id)
+    }
+
+    /// Preserve an existing ref without perturbing snapshot occurrence counters.
+    /// New obstruction refs have no role/name recovery after their node disappears.
+    pub(crate) fn mint_exact(&mut self, node: MintRef<'_>) -> Ref {
+        if let Some(entry) = self.by_ref.values().find(|entry| {
+            entry.backend_node_id == node.backend_node_id
+                && entry.frame_id.as_ref() == node.frame_id
+        }) {
+            return entry.ref_id.clone();
+        }
+        let ref_id = self.mint(node);
+        if let Some(entry) = self.by_ref.get_mut(&ref_id) {
+            entry.exact = true;
+        }
+        ref_id
     }
 
     pub fn get_mut(&mut self, ref_id: &Ref) -> Option<&mut RefEntry> {

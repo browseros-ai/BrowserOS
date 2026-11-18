@@ -1,14 +1,21 @@
+#[cfg(test)]
+mod alloc_count;
 mod client;
+mod connection_loss;
 mod discovery;
 mod error;
 mod events;
 mod generated;
+mod inbound;
+mod targeted;
 
 pub use client::{CdpClient, ConnectOptions, ReconnectPolicy};
+pub use connection_loss::ConnectionLoss;
 pub use discovery::discover_websocket_url;
 pub use error::CdpError;
 pub use events::{CdpEvent, EventStream};
 pub use generated::*;
+pub use targeted::TargetedEvents;
 
 use serde::{Deserialize, Serialize};
 use std::{fmt, hash::Hash};

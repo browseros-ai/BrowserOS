@@ -1,0 +1,5 @@
+await page.goto(args.base + '/form.html');
+const snapshot = await page.ariaSnapshot({mode:'ai'});
+const matches = snapshot.split('\n').filter(line => new RegExp('submit','i').test(line));
+assert(matches.some(line => /submit/i.test(line)), 'case-insensitive AX search finds Submit', {matches,snapshot});
+return {matches, count:matches.length};

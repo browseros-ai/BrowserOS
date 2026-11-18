@@ -9,6 +9,8 @@ from unittest import mock
 
 from bos_build.core.planner import Switches, plan
 from bos_build.steps.source import provision
+from bos_build.core.patch_source import validate_v8_gitlink
+from bos_build.lib.testing import MockBrowserOSRoot, MockChromium
 
 
 class PinnedVersionTest(unittest.TestCase):
@@ -18,6 +20,65 @@ class PinnedVersionTest(unittest.TestCase):
             path = Path(f.name)
         self.addCleanup(path.unlink)
         self.assertEqual(provision.read_pinned_version(path), "148.0.7402.57")
+
+
+class V8PinPreparationTest(unittest.TestCase):
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name)
+        self.chromium = MockChromium(self.root / "chromium").with_git()
+        self.upstream = MockChromium(self.root / "upstream").with_git()
+        self.upstream._git(
+            "update-index", "--add", "--cacheinfo", "160000", "c" * 40, "v8"
+        )
+        self.upstream._git("commit", "-m", "different V8 pin")
+        self.base = self.upstream._git("rev-parse", "HEAD").stdout.strip()
+        self.package = (
+            MockBrowserOSRoot(self.root / "package")
+            .with_patch_store(self.base)
+            .with_v8_store()
+        )
+
+    def _fetch(self, src, _version, _strategy):
+        self.chromium._git("fetch", str(self.upstream.src), self.base)
+        return src
+
+    def test_fetched_pin_is_checked_before_checkout_or_reset(self):
+        validate_v8_gitlink(
+            self.package.root, self.chromium.src, allow_missing_base=True
+        )
+        with (
+            mock.patch.object(provision, "_fetch_pin", side_effect=self._fetch),
+            mock.patch.object(provision, "reset_source") as reset,
+            mock.patch.object(provision, "run") as mutate,
+        ):
+            with self.assertRaisesRegex(ValueError, "pinned V8 gitlink"):
+                provision.checkout(
+                    self.chromium.src,
+                    "158.0.8127.18",
+                    reset=True,
+                    patch_root=self.package.root,
+                )
+            reset.assert_not_called()
+            mutate.assert_not_called()
+
+    def test_fetch_adapter_rejects_newly_available_bad_pin_before_selection(self):
+        with (
+            mock.patch.object(provision, "_fetch_pin", side_effect=self._fetch),
+            mock.patch.object(provision, "ensure_depot_tools"),
+            mock.patch.object(provision, "checkout") as checkout,
+            mock.patch.object(provision, "sync") as sync,
+        ):
+            with self.assertRaisesRegex(ValueError, "pinned V8 gitlink"):
+                provision.prepare(
+                    self.chromium.src,
+                    "158.0.8127.18",
+                    step_name="fetch",
+                    patch_root=self.package.root,
+                )
+            checkout.assert_not_called()
+            sync.assert_not_called()
 
 
 class GclientConfigTest(unittest.TestCase):

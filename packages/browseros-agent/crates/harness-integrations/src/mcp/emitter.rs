@@ -2,19 +2,37 @@ use std::{collections::BTreeMap, str::FromStr};
 
 use jsonc_parser::{
     ParseOptions,
-    cst::{CstInputValue, CstRootNode},
+    cst::{CstInputValue, CstObject, CstRootNode},
 };
 use toml_edit::{Array, DocumentMut, InlineTable, Item, Table, Value, value as toml_value};
 
 use crate::{
+    AgentId,
     catalog::{ConfigFormat, HttpShape, InjectValue, KeyTransform, StdioShape},
     error::Error,
 };
 
 use super::types::{AgentSurface, McpServerSpec};
 
+const UTF8_BOM: char = '\u{feff}';
+
 pub(crate) struct Emitter {
     surface: AgentSurface,
+}
+
+pub(super) fn split_bom(raw: &str) -> (bool, &str) {
+    match raw.strip_prefix(UTF8_BOM) {
+        Some(content) => (true, content),
+        None => (false, raw),
+    }
+}
+
+pub(super) fn with_bom(content: String, had_bom: bool) -> String {
+    if had_bom {
+        format!("{UTF8_BOM}{content}")
+    } else {
+        content
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,9 +58,7 @@ impl Emitter {
     pub(crate) fn inspect(&self, raw: &str, name: &str) -> Result<Option<McpServerSpec>, Error> {
         let key = transform_key(name, self.surface.stdio);
         let entry = match self.surface.mcp.format {
-            ConfigFormat::Json | ConfigFormat::Jsonc => {
-                json_entry(raw, self.surface.stdio.top_level_key, &key)?
-            }
+            ConfigFormat::Json | ConfigFormat::Jsonc => json_entry(raw, self.surface.stdio, &key)?,
             ConfigFormat::Toml => toml_entry(raw, self.surface.stdio.top_level_key, &key)?,
         };
         Ok(entry.and_then(|entry| decode_entry(&entry, self.surface.stdio, self.surface.http)))
@@ -52,9 +68,13 @@ impl Emitter {
         let key = transform_key(name, self.surface.stdio);
         let entry = build_entry(spec, self.surface.stdio, self.surface.http)?;
         match self.surface.mcp.format {
-            ConfigFormat::Json | ConfigFormat::Jsonc => {
-                json_add(raw, self.surface.stdio.top_level_key, &key, entry)
-            }
+            ConfigFormat::Json | ConfigFormat::Jsonc => json_add(
+                raw,
+                self.surface.stdio,
+                self.surface.harness.id,
+                &key,
+                entry,
+            ),
             ConfigFormat::Toml => toml_add(raw, self.surface.stdio.top_level_key, &key, entry),
         }
     }
@@ -62,9 +82,7 @@ impl Emitter {
     pub(crate) fn remove(&self, raw: &str, name: &str) -> Result<String, Error> {
         let key = transform_key(name, self.surface.stdio);
         match self.surface.mcp.format {
-            ConfigFormat::Json | ConfigFormat::Jsonc => {
-                json_remove(raw, self.surface.stdio.top_level_key, &key)
-            }
+            ConfigFormat::Json | ConfigFormat::Jsonc => json_remove(raw, self.surface.stdio, &key),
             ConfigFormat::Toml => toml_remove(raw, self.surface.stdio.top_level_key, &key),
         }
     }
@@ -254,7 +272,74 @@ fn append_tag(
     }
 }
 
+fn json_container(object: &CstObject, shape: StdioShape) -> Option<CstObject> {
+    let section = object.object_value(shape.top_level_key)?;
+    match shape.servers_key {
+        Some(key) => section.object_value(key),
+        None => Some(section),
+    }
+}
+
+fn json_container_or_set(object: &CstObject, shape: StdioShape) -> CstObject {
+    let section = object.object_value_or_set(shape.top_level_key);
+    match shape.servers_key {
+        Some(key) => section.object_value_or_set(key),
+        None => section,
+    }
+}
+
+/// Heal a server entry an older version placed directly under `top_level_key` (for example
+/// OpenCode before it nested servers under `mcp.servers`). Once the harness nests entries
+/// under `servers_key`, a leftover sibling at `top_level_key.<name>` is a stale duplicate
+/// that some agents reject, so drop it. Never touches the servers container itself.
+fn heal_legacy_entry(
+    object: &CstObject,
+    container: &CstObject,
+    shape: StdioShape,
+    agent: AgentId,
+    name: &str,
+) {
+    // Self-healing of a pre-servers entry is OpenCode-specific. Gate it on the agent by name
+    // so it never runs for any other harness, even one that later nests servers under the
+    // same `servers` key.
+    if agent != AgentId::OpenCode {
+        return;
+    }
+    let Some(servers_key) = shape.servers_key else {
+        return;
+    };
+    if name == servers_key {
+        return;
+    }
+    let Some(section) = object.object_value(shape.top_level_key) else {
+        return;
+    };
+    let Some(legacy) = section.get(name) else {
+        return;
+    };
+    // Carry over a disable the user set on the old entry so moving it never silently
+    // re-enables a server. OpenCode's pre-servers schema used `enabled`, the nested schema
+    // uses `disabled`, so an `enabled: false` (or explicit `disabled: true`) on the old
+    // entry becomes `disabled: true` on the new one.
+    let was_disabled = legacy
+        .value()
+        .and_then(|value| value.to_serde_value())
+        .map(|value| {
+            value.get("disabled").and_then(serde_json::Value::as_bool) == Some(true)
+                || value.get("enabled").and_then(serde_json::Value::as_bool) == Some(false)
+        })
+        .unwrap_or(false);
+    if was_disabled
+        && let Some(entry) = container.object_value(name)
+        && entry.get("disabled").is_none()
+    {
+        entry.append("disabled", CstInputValue::Bool(true));
+    }
+    legacy.remove();
+}
+
 fn json_read(raw: &str, shape: StdioShape) -> Vec<String> {
+    let (_, raw) = split_bom(raw);
     if raw.trim().is_empty() {
         return Vec::new();
     }
@@ -263,7 +348,7 @@ fn json_read(raw: &str, shape: StdioShape) -> Vec<String> {
     };
     let Some(container) = root
         .object_value()
-        .and_then(|object| object.object_value(shape.top_level_key))
+        .and_then(|object| json_container(&object, shape))
     else {
         return Vec::new();
     };
@@ -276,9 +361,10 @@ fn json_read(raw: &str, shape: StdioShape) -> Vec<String> {
 
 fn json_entry(
     raw: &str,
-    top_level_key: &str,
+    shape: StdioShape,
     name: &str,
 ) -> Result<Option<BTreeMap<String, EntryValue>>, Error> {
+    let (_, raw) = split_bom(raw);
     if raw.trim().is_empty() {
         return Ok(None);
     }
@@ -289,7 +375,7 @@ fn json_entry(
         })?;
     let Some(value) = root
         .object_value()
-        .and_then(|object| object.object_value(top_level_key))
+        .and_then(|object| json_container(&object, shape))
         .and_then(|container| container.get(name))
         .and_then(|property| property.value())
         .and_then(|value| value.to_serde_value())
@@ -327,10 +413,12 @@ fn json_entry_value(value: serde_json::Value) -> Option<EntryValue> {
 
 fn json_add(
     raw: &str,
-    top_level_key: &str,
+    shape: StdioShape,
+    agent: AgentId,
     name: &str,
     entry: Vec<(String, EntryValue)>,
 ) -> Result<String, Error> {
+    let (had_bom, raw) = split_bom(raw);
     let seed = if raw.trim().is_empty() { "{}" } else { raw };
     let root =
         CstRootNode::parse(seed, &ParseOptions::default()).map_err(|error| Error::Config {
@@ -338,7 +426,7 @@ fn json_add(
             message: error.to_string(),
         })?;
     let object = root.object_value_or_set();
-    let container = object.object_value_or_set(top_level_key);
+    let container = json_container_or_set(&object, shape);
     let value = jsonc_value(entry);
     match container.get(name) {
         Some(property) => property.set_value(value),
@@ -346,26 +434,28 @@ fn json_add(
             container.append(name, value);
         }
     }
-    Ok(root.to_string())
+    heal_legacy_entry(&object, &container, shape, agent, name);
+    Ok(with_bom(root.to_string(), had_bom))
 }
 
-fn json_remove(raw: &str, top_level_key: &str, name: &str) -> Result<String, Error> {
-    if raw.trim().is_empty() {
+fn json_remove(raw: &str, shape: StdioShape, name: &str) -> Result<String, Error> {
+    let (had_bom, content) = split_bom(raw);
+    if content.trim().is_empty() {
         return Ok(raw.to_string());
     }
     let root =
-        CstRootNode::parse(raw, &ParseOptions::default()).map_err(|error| Error::Config {
+        CstRootNode::parse(content, &ParseOptions::default()).map_err(|error| Error::Config {
             format: "JSON/JSONC",
             message: error.to_string(),
         })?;
     if let Some(property) = root
         .object_value()
-        .and_then(|object| object.object_value(top_level_key))
+        .and_then(|object| json_container(&object, shape))
         .and_then(|container| container.get(name))
     {
         property.remove();
     }
-    Ok(root.to_string())
+    Ok(with_bom(root.to_string(), had_bom))
 }
 
 fn jsonc_value(entry: Vec<(String, EntryValue)>) -> CstInputValue {
@@ -577,10 +667,24 @@ mod tests {
         assert_eq!(zed["context_servers"]["gh"]["enabled"], true);
 
         let opencode = json_output(AgentId::OpenCode, &stdio())?;
-        assert_eq!(opencode["mcp"]["gh"]["command"][0], "gh-mcp");
-        assert_eq!(opencode["mcp"]["gh"]["command"][1], "serve");
-        assert_eq!(opencode["mcp"]["gh"]["environment"]["KEY"], "value");
-        assert_eq!(opencode["mcp"]["gh"]["type"], "local");
+        assert_eq!(opencode["mcp"]["servers"]["gh"]["command"][0], "gh-mcp");
+        assert_eq!(opencode["mcp"]["servers"]["gh"]["command"][1], "serve");
+        assert_eq!(
+            opencode["mcp"]["servers"]["gh"]["environment"]["KEY"],
+            "value"
+        );
+        assert_eq!(opencode["mcp"]["servers"]["gh"]["type"], "local");
+        // OpenCode >= 2.0 has no `enabled` field; writing it would fail schema validation.
+        assert!(opencode["mcp"]["servers"]["gh"].get("enabled").is_none());
+        assert!(opencode["mcp"].get("gh").is_none());
+
+        let opencode_http = json_output(AgentId::OpenCode, &http())?;
+        assert_eq!(opencode_http["mcp"]["servers"]["gh"]["type"], "remote");
+        assert!(
+            opencode_http["mcp"]["servers"]["gh"]
+                .get("enabled")
+                .is_none()
+        );
 
         let antigravity = json_output(AgentId::Antigravity, &http())?;
         assert_eq!(
@@ -588,6 +692,43 @@ mod tests {
             "https://example.com/mcp"
         );
         assert!(antigravity["mcpServers"]["gh"].get("url").is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn opencode_heals_a_legacy_top_level_entry() -> Result<(), Error> {
+        // An older BrowserOS placed the server directly under `mcp` with an `enabled` field.
+        // Re-adding must write it under `mcp.servers` without `enabled` and drop the stale
+        // top-level entry so OpenCode >= 2.0 accepts the file.
+        let emitter = emitter(AgentId::OpenCode)?;
+        let raw = "{\n  \"mcp\": {\n    \"gh\": { \"type\": \"local\", \"command\": [\"old\"], \"enabled\": true }\n  }\n}\n";
+        let added = emitter.add(raw, "gh", &stdio())?;
+        let value: JsonValue = serde_json::from_str(&added).map_err(|error| Error::Config {
+            format: "test JSON",
+            message: error.to_string(),
+        })?;
+        assert_eq!(value["mcp"]["servers"]["gh"]["command"][0], "gh-mcp");
+        assert_eq!(value["mcp"]["servers"]["gh"]["type"], "local");
+        assert!(value["mcp"]["servers"]["gh"].get("enabled").is_none());
+        // The stale top-level entry is gone.
+        assert!(value["mcp"].get("gh").is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn opencode_heal_preserves_a_disabled_legacy_entry() -> Result<(), Error> {
+        // A user who disabled the old entry (`enabled: false`) must not be silently
+        // re-enabled: the move carries the disable across as `disabled: true`.
+        let emitter = emitter(AgentId::OpenCode)?;
+        let raw = "{\n  \"mcp\": {\n    \"gh\": { \"type\": \"local\", \"command\": [\"old\"], \"enabled\": false }\n  }\n}\n";
+        let added = emitter.add(raw, "gh", &stdio())?;
+        let value: JsonValue = serde_json::from_str(&added).map_err(|error| Error::Config {
+            format: "test JSON",
+            message: error.to_string(),
+        })?;
+        assert_eq!(value["mcp"]["servers"]["gh"]["disabled"], true);
+        assert!(value["mcp"]["servers"]["gh"].get("enabled").is_none());
+        assert!(value["mcp"].get("gh").is_none());
         Ok(())
     }
 
@@ -610,7 +751,7 @@ mod tests {
 
     #[test]
     fn jsonc_add_remove_preserves_comments_and_siblings_byte_for_byte() -> Result<(), Error> {
-        let raw = "{\n  // root comment\n  \"theme\": \"dark\",\n  \"mcp\": {\n    // existing server\n    \"other\": { \"type\": \"local\", \"command\": [\"other\"] }\n  },\n  \"tail\": true\n}\n";
+        let raw = "{\n  // root comment\n  \"theme\": \"dark\",\n  \"mcp\": {\n    // existing server\n    \"servers\": {\n      \"other\": { \"type\": \"local\", \"command\": [\"other\"] }\n    }\n  },\n  \"tail\": true\n}\n";
         let emitter = emitter(AgentId::OpenCode)?;
         let added = emitter.add(raw, "gh", &stdio())?;
         assert!(added.contains("// root comment"));
@@ -618,6 +759,55 @@ mod tests {
         assert!(added.contains("\"tail\": true"));
         let removed = emitter.remove(&added, "gh")?;
         assert_eq!(removed, raw);
+        Ok(())
+    }
+
+    #[test]
+    fn opencode_writes_under_mcp_servers_and_tolerates_a_utf8_bom() -> Result<(), Error> {
+        let emitter = emitter(AgentId::OpenCode)?;
+        let raw = "\u{feff}{\n  // keep\n  \"mcp\": {\n    \"servers\": {\n      \"other\": { \"type\": \"local\", \"command\": [\"other\"] }\n    }\n  }\n}\n";
+        assert_eq!(emitter.read(raw)?, vec!["other".to_string()]);
+        let added = emitter.add(raw, "gh", &http())?;
+        assert!(added.starts_with('\u{feff}'));
+        let root = jsonc_parser::cst::CstRootNode::parse(
+            added.trim_start_matches('\u{feff}'),
+            &jsonc_parser::ParseOptions::default(),
+        )
+        .map_err(|error| Error::Config {
+            format: "test JSONC",
+            message: error.to_string(),
+        })?;
+        let value: JsonValue = root
+            .object_value()
+            .and_then(|object| object.to_serde_value())
+            .ok_or_else(|| Error::Config {
+                format: "test JSONC",
+                message: "config root is not an object".to_string(),
+            })?;
+        assert_eq!(
+            value["mcp"]["servers"]["gh"]["url"],
+            "https://example.com/mcp"
+        );
+        assert!(value["mcp"].get("gh").is_none());
+        assert!(emitter.inspect(&added, "gh")?.is_some());
+        let removed = emitter.remove(&added, "gh")?;
+        assert_eq!(removed, raw);
+        Ok(())
+    }
+
+    #[test]
+    fn bom_only_config_seeds_for_the_requested_agent_shape() -> Result<(), Error> {
+        let emitter = emitter(AgentId::OpenCode)?;
+        let added = emitter.add("\u{feff}", "gh", &stdio())?;
+        assert!(added.starts_with('\u{feff}'));
+        let value: JsonValue =
+            serde_json::from_str(added.trim_start_matches('\u{feff}')).map_err(|error| {
+                Error::Config {
+                    format: "test JSON",
+                    message: error.to_string(),
+                }
+            })?;
+        assert_eq!(value["mcp"]["servers"]["gh"]["command"][0], "gh-mcp");
         Ok(())
     }
 

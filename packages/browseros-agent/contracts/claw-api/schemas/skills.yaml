@@ -81,7 +81,7 @@ SkillUltrafastStatus:
 SkillUltrafast:
   type: object
   additionalProperties: false
-  description: The skill's ultrafast flow. Present only while ultrafast skills are enabled.
+  description: The skill's ultrafast flow. Present while ultrafast skills are enabled, and after the plan that turned them on ends (then `locked`).
   required: [status, flowVersion, writeApproved]
   properties:
     status:
@@ -98,7 +98,7 @@ SkillUltrafast:
       enum: [read, write]
     writeApproved:
       type: boolean
-      description: Whether the user approved this write flow to run without asking.
+      description: Whether this write flow runs without the agent, by the user's choice for its current click.
     p50Ms:
       type: integer
       format: int64
@@ -109,6 +109,54 @@ SkillUltrafast:
     repairedAt:
       type: integer
       format: int64
+    locked:
+      type: boolean
+      description: Ultrafast skills are off for this computer, so every skill runs with the agent and the choice can't change.
+    runs:
+      $ref: '#/SkillUltrafastRuns'
+SkillUltrafastRunsMode:
+  type: string
+  enum: [with_agent, without_agent]
+  description: Whether the skill runs with the user's agent reading each page, or neo runs it by itself.
+SkillUltrafastAlwaysWith:
+  type: string
+  enum: [pay, order, send, delete]
+  description: Why the skill always runs with the agent, whatever the user chose.
+SkillUltrafastChoiceVia:
+  type: string
+  enum: [chat, app]
+SkillUltrafastRuns:
+  type: object
+  additionalProperties: false
+  description: How a skill that changes something runs when the user asks for it. Absent for a skill that only reads pages.
+  required: [mode, chosen, reask]
+  properties:
+    mode:
+      $ref: '#/SkillUltrafastRunsMode'
+    chosen:
+      type: boolean
+      description: Whether the user chose for the skill's current click. Until then it runs with the agent.
+    reask:
+      type: boolean
+      description: An earlier choice covered a different click, so the agent asks again.
+    alwaysWithAgent:
+      $ref: '#/SkillUltrafastAlwaysWith'
+    click:
+      type: string
+      description: The step that changes something, in the skill's own words.
+    site:
+      type: string
+    via:
+      $ref: '#/SkillUltrafastChoiceVia'
+    chosenAt:
+      type: integer
+      format: int64
+    answer:
+      type: string
+      description: The user's own words when they chose in chat.
+    client:
+      type: string
+      description: The agent that relayed a chat answer.
 SkillFlowSource:
   type: object
   additionalProperties: false

@@ -6,7 +6,7 @@
 
 import type { CockpitStats } from '@browseros/claw-api'
 import { ArrowRight } from 'lucide-react'
-import { type ReactNode, useState } from 'react'
+import { type ReactElement, type ReactNode, useState } from 'react'
 import { Button } from '@/components/motion/button/base'
 import {
   CenterMorphModal,
@@ -81,10 +81,14 @@ export function SavingsCard({
           className="-mt-0.5 flex flex-col gap-1.5"
         >
           <SplitBar usage={usage} className="h-1.5 gap-0.5" />
-          <p className="text-right text-[12.5px] text-ink-3 leading-4">
-            claude / codex browser would have used{' '}
-            {formatTokens(usage.withoutNeo)} tokens
-          </p>
+          <div className="flex justify-between gap-3 text-[12.5px] leading-4">
+            <span className="font-semibold text-accent-ink">
+              saved {formatTokens(usage.saved)}
+            </span>
+            <span className="text-ink-3">
+              neo used {formatTokens(usage.withNeo)}
+            </span>
+          </div>
         </div>
       ) : null}
     </section>
@@ -104,7 +108,14 @@ function Stat({ value, label }: { value: string; label: ReactNode }) {
 
 // ---------------------------------------------------------------------------
 
-function SavingsDialog({ stats }: { stats: CockpitStats }) {
+/** The savings by period. `trigger` replaces the Details button, for the ultrafast meter. */
+export function SavingsDialog({
+  stats,
+  trigger,
+}: {
+  stats: CockpitStats
+  trigger?: ReactElement
+}) {
   const [windowKey, setWindowKey] = useState<SavingsWindowKey>('allTime')
   const window = stats[windowKey]
   const usage = usageComparison(stats, window)
@@ -112,14 +123,16 @@ function SavingsDialog({ stats }: { stats: CockpitStats }) {
   return (
     <CenterMorphModal>
       <CenterMorphModalTrigger>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="-my-[5px] -mr-2 h-[34px] shrink-0 font-semibold text-[13.5px] text-ink-2"
-        >
-          Details
-          <ArrowRight aria-hidden className="size-[15px]" />
-        </Button>
+        {trigger ?? (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="-my-[5px] -mr-2 h-[34px] shrink-0 font-semibold text-[13.5px] text-ink-2"
+          >
+            Details
+            <ArrowRight aria-hidden className="size-[15px]" />
+          </Button>
+        )}
       </CenterMorphModalTrigger>
       <CenterMorphModalContent
         ariaLabel="Your savings"

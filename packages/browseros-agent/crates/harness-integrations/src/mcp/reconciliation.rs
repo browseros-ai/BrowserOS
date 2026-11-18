@@ -3,13 +3,16 @@
 //! Format adapters edit one value, so user options and comments survive repair.
 use std::{collections::BTreeMap, path::Path, str::FromStr};
 
-use jsonc_parser::{ParseOptions, cst::CstRootNode};
+use jsonc_parser::{
+    ParseOptions,
+    cst::{CstObject, CstRootNode},
+};
 use serde_json::Value as JsonValue;
 use toml_edit::{DocumentMut, Value};
 use url::Url;
 
 use super::{
-    emitter::{Emitter, transform_key},
+    emitter::{Emitter, split_bom, transform_key, with_bom},
     io::{FsOp, Plan, apply_plan, read_state},
     paths::resolve_agent_surface,
     planner::plan_link,
@@ -249,7 +252,8 @@ fn edit_existing(
     surface: &AgentSurface,
     target: &Url,
 ) -> Result<Existing, Error> {
-    if raw.trim().is_empty() {
+    let (_, content) = split_bom(raw);
+    if content.trim().is_empty() {
         return Ok(Existing::Missing);
     }
     match surface.mcp.format {
@@ -258,24 +262,43 @@ fn edit_existing(
     }
 }
 
+fn json_servers_object(
+    object: &CstObject,
+    surface: &AgentSurface,
+) -> Result<Option<CstObject>, Error> {
+    let Some(section) = object.get(surface.stdio.top_level_key) else {
+        return Ok(None);
+    };
+    let Some(section) = section.value().and_then(|value| value.as_object()) else {
+        return Err(invalid("MCP section is not an object"));
+    };
+    let Some(key) = surface.stdio.servers_key else {
+        return Ok(Some(section));
+    };
+    let Some(container) = section.get(key) else {
+        return Ok(None);
+    };
+    let Some(container) = container.value().and_then(|value| value.as_object()) else {
+        return Err(invalid("MCP server collection is not an object"));
+    };
+    Ok(Some(container))
+}
+
 fn edit_json(
     raw: &str,
     names: &[&str],
     surface: &AgentSurface,
     target: &Url,
 ) -> Result<Existing, Error> {
-    let root = CstRootNode::parse(raw, &ParseOptions::default())
+    let (had_bom, content) = split_bom(raw);
+    let root = CstRootNode::parse(content, &ParseOptions::default())
         .map_err(|error| invalid(error.to_string()))?;
     let object = root
         .object_value()
         .ok_or_else(|| invalid("MCP config root is not an object"))?;
-    let Some(container) = object.get(surface.stdio.top_level_key) else {
+    let Some(container) = json_servers_object(&object, surface)? else {
         return Ok(Existing::Missing);
     };
-    let container = container
-        .value()
-        .and_then(|value| value.as_object())
-        .ok_or_else(|| invalid("MCP server collection is not an object"))?;
     let canonical_present = container
         .get(&transform_key(names[0], surface.stdio))
         .is_some();
@@ -323,7 +346,7 @@ fn edit_json(
         recognized,
         canonical_present,
         if updated {
-            root.to_string()
+            with_bom(root.to_string(), had_bom)
         } else {
             raw.to_string()
         },

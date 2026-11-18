@@ -1,0 +1,12 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Covered top</title></head>
+<body style="margin:0">
+<h1>Top (A)</h1>
+<script>
+  // L1 is cross-site (B), and L1 holds L2 (C) under an overlay of its own: F9's covered frame.
+  const l1 = document.createElement('iframe');
+  l1.src = `http://localhost:${location.port}/actions/cover-l1.html`;
+  l1.title = 'l1';
+  l1.style.cssText = 'width:500px;height:300px;display:block;border:0';
+  document.body.append(l1);
+</script>
+</body></html>

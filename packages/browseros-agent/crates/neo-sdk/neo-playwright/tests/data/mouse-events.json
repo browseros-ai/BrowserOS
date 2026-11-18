@@ -1,0 +1,1151 @@
+{
+  "playwright": "1.64.1",
+  "capture": "scripts/capture-goldens.mjs, a CDP proxy between playwright-core and the browser",
+  "note": "Each case starts at (0, 0) with nothing held; calls run in order as page[device][method](...args).",
+  "cases": [
+    {
+      "calls": [
+        [
+          "mouse.move",
+          100,
+          50
+        ]
+      ],
+      "messages": [
+        {
+          "method": "Input.dispatchMouseEvent",
+          "params": {
+            "type": "mouseMoved",
+            "button": "none",
+            "buttons": 0,
+            "x": 100,
+            "y": 50,
+            "modifiers": 0,
+            "force": 0
+          }
+        }
+      ]
+    },
+    {
+      "calls": [
+        [
+          "mouse.move",
+          100,
+          50
+        ],
+        [
+          "mouse.move",
+          200,
+          150,
+          {
+            "steps": 4
+          }
+        ]
+      ],
+      "messages": [
+        {
+          "method": "Input.dispatchMouseEvent",
+          "params": {
+            "type": "mouseMoved",
+            "button": "none",
+            "buttons": 0,
+            "x": 100,
+            "y": 50,
+            "modifiers": 0,
+            "force": 0
+          }
+        },
+        {
+          "method": "Input.dispatchMouseEvent",
+          "params": {
+            "type": "mouseMoved",
+            "button": "none",
+            "buttons": 0,
+            "x": 125,
+            "y": 75,
+            "modifiers": 0,
+            "force": 0
+          }
+        },
+        {
+          "method": "Input.dispatchMouseEvent",
+          "params": {
+            "type": "mouseMoved",
+            "button": "none",
+            "buttons": 0,
+            "x": 150,
+            "y": 100,
+            "modifiers": 0,
+            "force": 0
+          }
+        },
+        {
+          "method": "Input.dispatchMouseEvent",
+          "params": {
+            "type": "mouseMoved",
+            "button": "none",
+            "buttons": 0,
+            "x": 175,
+            "y": 125,
+            "modifiers": 0,
+            "force": 0
+          }
+        },
+        {
+          "method": "Input.dispatchMouseEvent",
+          "params": {
+            "type": "mouseMoved",
+            "button": "none",
+            "buttons": 0,
+            "x": 200,
+            "y": 150,
+            "modifiers": 0,
+            "force": 0
+          }
+        }
+      ]
+    },
+    {
+      "calls": [
+        [
+          "mouse.move",
+          10.25,
+          20.75
+        ]
+      ],
+      "messages": [
+        {
+          "method": "Input.dispatchMouseEvent",
+          "params": {
+            "type": "mouseMoved",
+            "button": "none",
+            "buttons": 0,
+            "x": 10.25,
+            "y": 20.75,
+            "modifiers": 0,
+            "force": 0
+          }
+        }
+      ]
+    },
+    {
+      "calls": [
+        [
+          "mouse.move",
+          30,
+          40,
+          {
+            "steps": 0
+          }
+        ],
+        [
+          "mouse.down"
+        ],
+        [
+          "mouse.up"
+        ]
+      ],
+      "messages": [
+        {
+          "method": "Input.dispatchMouseEvent",
+          "params": {
+            "type": "mousePressed",
+            "button": "left",
+            "buttons": 1,
+            "x": 30,
+            "y": 40,
+            "modifiers": 0,
+            "clickCount": 1,
+            "force": 0.5
+          }
+        },
+        {
+          "method": "Input.dispatchMouseEvent",
+          "params": {
+            "type": "mouseReleased",
+            "button": "left",
+            "buttons": 0,
+            "x": 30,
+            "y": 40,
+            "modifiers": 0,
+            "clickCount": 1
+          }
+        }
+      ]
+    },
+    {
+      "calls": [
+        [
+          "mouse.move",
+          30,
+          40
+        ],
+        [
+          "mouse.down"
+        ],
+        [
+          "mouse.up"
+        ]
+      ],
+      "messages": [
+        {
+          "method": "Input.dispatchMouseEvent",
+          "params": {
+            "type": "mouseMoved",
+            "button": "none",
+            "buttons": 0,
+            "x": 30,
+            "y": 40,
+            "modifiers": 0,
+            "force": 0
+          }
+        },
+        {
+          "method": "Input.dispatchMouseEvent",
+          "params": {
+            "type": "mousePressed",
+            "button": "left",
+            "buttons": 1,
+            "x": 30,
+            "y": 40,
+            "modifiers": 0,
+            "clickCount": 1,
+            "force": 0.5
+          }
+        },
+        {
+          "method": "Input.dispatchMouseEvent",
+          "params": {
+            "type": "mouseReleased",
+            "button": "left",
+            "buttons": 0,
+            "x": 30,
+            "y": 40,
+            "modifiers": 0,
+            "clickCount": 1
+          }
+        }
+      ]
+    },
+    {
+      "calls": [
+        [
+          "mouse.down",
+          {
+            "button": "right"
+          }
+        ],
+        [
+          "mouse.up",
+          {
+            "button": "right"
+          }
+        ]
+      ],
+      "messages": [
+        {
+          "method": "Input.dispatchMouseEvent",
+          "params": {
+            "type": "mousePressed",
+            "button": "right",
+            "buttons": 2,
+            "x": 0,
+            "y": 0,
+            "modifiers": 0,
+            "clickCount": 1,
+            "force": 0.5
+          }
+        },
+        {
+          "method": "Input.dispatchMouseEvent",
+          "params": {
+            "type": "mouseReleased",
+            "button": "right",
+            "buttons": 0,
+            "x": 0,
+            "y": 0,
+            "modifiers": 0,
+            "clickCount": 1
+          }
+        }
+      ]
+    },
+    {
+      "calls": [
+        [
+          "mouse.down",
+          {
+            "button": "middle",
+            "clickCount": 2
+          }
+        ],
+        [
+          "mouse.up",
+          {
+            "button": "middle",
+            "clickCount": 2
+          }
+        ]
+      ],
+      "messages": [
+        {
+          "method": "Input.dispatchMouseEvent",
+          "params": {
+            "type": "mousePressed",
+            "button": "middle",
+            "buttons": 4,
+            "x": 0,
+            "y": 0,
+            "modifiers": 0,
+            "clickCount": 2,
+            "force": 0.5
+          }
+        },
+        {
+          "method": "Input.dispatchMouseEvent",
+          "params": {
+            "type": "mouseReleased",
+            "button": "middle",
+            "buttons": 0,
+            "x": 0,
+            "y": 0,
+            "modifiers": 0,
+            "clickCount": 2
+          }
+        }
+      ]
+    },
+    {
+      "calls": [
+        [
+          "mouse.down"
+        ],
+        [
+          "mouse.down",
+          {
+            "button": "right"
+          }
+        ],
+        [
+          "mouse.move",
+          50,
+          50
+        ],
+        [
+          "mouse.up",
+          {
+            "button": "right"
+          }
+        ],
+        [
+          "mouse.move",
+          60,
+          60
+        ],
+        [
+          "mouse.up"
+        ]
+      ],
+      "messages": [
+        {
+          "method": "Input.dispatchMouseEvent",
+          "params": {
+            "type": "mousePressed",
+            "button": "left",
+            "buttons": 1,
+            "x": 0,
+            "y": 0,
+            "modifiers": 0,
+            "clickCount": 1,
+            "force": 0.5
+          }
+        },
+        {
+          "method": "Input.dispatchMouseEvent",
+          "params": {
+            "type": "mousePressed",
+            "button": "right",
+            "buttons": 3,
+            "x": 0,
+            "y": 0,
+            "modifiers": 0,
+            "clickCount": 1,
+            "force": 0.5
+          }
+        },
+        {
+          "method": "Input.dispatchMouseEvent",
+          "params": {
+            "type": "mouseMoved",
+            "button": "right",
+            "buttons": 3,
+            "x": 50,
+            "y": 50,
+            "modifiers": 0,
+            "force": 0.5
+          }
+        },
+        {
+          "method": "Input.dispatchMouseEvent",
+          "params": {
+            "type": "mouseReleased",
+            "button": "right",
+            "buttons": 1,
+            "x": 50,
+            "y": 50,
+            "modifiers": 0,
+            "clickCount": 1
+          }
+        },
+        {
+          "method": "Input.dispatchMouseEvent",
+          "params": {
+            "type": "mouseMoved",
+            "button": "none",
+            "buttons": 1,
+            "x": 60,
+            "y": 60,
+            "modifiers": 0,
+            "force": 0.5
+          }
+        },
+        {
+          "method": "Input.dispatchMouseEvent",
+          "params": {
+            "type": "mouseReleased",
+            "button": "left",
+            "buttons": 0,
+            "x": 60,
+            "y": 60,
+            "modifiers": 0,
+            "clickCount": 1
+          }
+        }
+      ]
+    },
+    {
+      "calls": [
+        [
+          "mouse.down"
+        ],
+        [
+          "mouse.move",
+          60,
+          60,
+          {
+            "steps": 2
+          }
+        ],
+        [
+          "mouse.up"
+        ]
+      ],
+      "messages": [
+        {
+          "method": "Input.dispatchMouseEvent",
+          "params": {
+            "type": "mousePressed",
+            "button": "left",
+            "buttons": 1,
+            "x": 0,
+            "y": 0,
+            "modifiers": 0,
+            "clickCount": 1,
+            "force": 0.5
+          }
+        },
+        {
+          "method": "Input.setInterceptDrags",
+          "params": {
+            "enabled": true
+          }
+        },
+        {
+          "method": "Input.dispatchMouseEvent",
+          "params": {
+            "type": "mouseMoved",
+            "button": "left",
+            "buttons": 1,
+            "x": 30,
+            "y": 30,
+            "modifiers": 0,
+            "force": 0.5
+          }
+        },
+        {
+          "method": "Input.setInterceptDrags",
+          "params": {
+            "enabled": false
+          }
+        },
+        {
+          "method": "Input.setInterceptDrags",
+          "params": {
+            "enabled": true
+          }
+        },
+        {
+          "method": "Input.dispatchMouseEvent",
+          "params": {
+            "type": "mouseMoved",
+            "button": "left",
+            "buttons": 1,
+            "x": 60,
+            "y": 60,
+            "modifiers": 0,
+            "force": 0.5
+          }
+        },
+        {
+          "method": "Input.setInterceptDrags",
+          "params": {
+            "enabled": false
+          }
+        },
+        {
+          "method": "Input.dispatchMouseEvent",
+          "params": {
+            "type": "mouseReleased",
+            "button": "left",
+            "buttons": 0,
+            "x": 60,
+            "y": 60,
+            "modifiers": 0,
+            "clickCount": 1
+          }
+        }
+      ]
+    },
+    {
+      "calls": [
+        [
+          "mouse.click",
+          50,
+          60
+        ]
+      ],
+      "messages": [
+        {
+          "method": "Input.dispatchMouseEvent",
+          "params": {
+            "type": "mouseMoved",
+            "button": "none",
+            "buttons": 0,
+            "x": 50,
+            "y": 60,
+            "modifiers": 0,
+            "force": 0
+          }
+        },
+        {
+          "method": "Input.dispatchMouseEvent",
+          "params": {
+            "type": "mousePressed",
+            "button": "left",
+            "buttons": 1,
+            "x": 50,
+            "y": 60,
+            "modifiers": 0,
+            "clickCount": 1,
+            "force": 0.5
+          }
+        },
+        {
+          "method": "Input.dispatchMouseEvent",
+          "params": {
+            "type": "mouseReleased",
+            "button": "left",
+            "buttons": 0,
+            "x": 50,
+            "y": 60,
+            "modifiers": 0,
+            "clickCount": 1
+          }
+        }
+      ]
+    },
+    {
+      "calls": [
+        [
+          "mouse.click",
+          50,
+          60,
+          {
+            "clickCount": 3
+          }
+        ]
+      ],
+      "messages": [
+        {
+          "method": "Input.dispatchMouseEvent",
+          "params": {
+            "type": "mouseMoved",
+            "button": "none",
+            "buttons": 0,
+            "x": 50,
+            "y": 60,
+            "modifiers": 0,
+            "force": 0
+          }
+        },
+        {
+          "method": "Input.dispatchMouseEvent",
+          "params": {
+            "type": "mousePressed",
+            "button": "left",
+            "buttons": 1,
+            "x": 50,
+            "y": 60,
+            "modifiers": 0,
+            "clickCount": 1,
+            "force": 0.5
+          }
+        },
+        {
+          "method": "Input.dispatchMouseEvent",
+          "params": {
+            "type": "mouseReleased",
+            "button": "left",
+            "buttons": 0,
+            "x": 50,
+            "y": 60,
+            "modifiers": 0,
+            "clickCount": 1
+          }
+        },
+        {
+          "method": "Input.dispatchMouseEvent",
+          "params": {
+            "type": "mousePressed",
+            "button": "left",
+            "buttons": 1,
+            "x": 50,
+            "y": 60,
+            "modifiers": 0,
+            "clickCount": 2,
+            "force": 0.5
+          }
+        },
+        {
+          "method": "Input.dispatchMouseEvent",
+          "params": {
+            "type": "mouseReleased",
+            "button": "left",
+            "buttons": 0,
+            "x": 50,
+            "y": 60,
+            "modifiers": 0,
+            "clickCount": 2
+          }
+        },
+        {
+          "method": "Input.dispatchMouseEvent",
+          "params": {
+            "type": "mousePressed",
+            "button": "left",
+            "buttons": 1,
+            "x": 50,
+            "y": 60,
+            "modifiers": 0,
+            "clickCount": 3,
+            "force": 0.5
+          }
+        },
+        {
+          "method": "Input.dispatchMouseEvent",
+          "params": {
+            "type": "mouseReleased",
+            "button": "left",
+            "buttons": 0,
+            "x": 50,
+            "y": 60,
+            "modifiers": 0,
+            "clickCount": 3
+          }
+        }
+      ]
+    },
+    {
+      "calls": [
+        [
+          "mouse.click",
+          50,
+          60,
+          {
+            "button": "right"
+          }
+        ]
+      ],
+      "messages": [
+        {
+          "method": "Input.dispatchMouseEvent",
+          "params": {
+            "type": "mouseMoved",
+            "button": "none",
+            "buttons": 0,
+            "x": 50,
+            "y": 60,
+            "modifiers": 0,
+            "force": 0
+          }
+        },
+        {
+          "method": "Input.dispatchMouseEvent",
+          "params": {
+            "type": "mousePressed",
+            "button": "right",
+            "buttons": 2,
+            "x": 50,
+            "y": 60,
+            "modifiers": 0,
+            "clickCount": 1,
+            "force": 0.5
+          }
+        },
+        {
+          "method": "Input.dispatchMouseEvent",
+          "params": {
+            "type": "mouseReleased",
+            "button": "right",
+            "buttons": 0,
+            "x": 50,
+            "y": 60,
+            "modifiers": 0,
+            "clickCount": 1
+          }
+        }
+      ]
+    },
+    {
+      "calls": [
+        [
+          "mouse.click",
+          50,
+          60,
+          {
+            "delay": 20
+          }
+        ]
+      ],
+      "messages": [
+        {
+          "method": "Input.dispatchMouseEvent",
+          "params": {
+            "type": "mouseMoved",
+            "button": "none",
+            "buttons": 0,
+            "x": 50,
+            "y": 60,
+            "modifiers": 0,
+            "force": 0
+          }
+        },
+        {
+          "method": "Input.dispatchMouseEvent",
+          "params": {
+            "type": "mousePressed",
+            "button": "left",
+            "buttons": 1,
+            "x": 50,
+            "y": 60,
+            "modifiers": 0,
+            "clickCount": 1,
+            "force": 0.5
+          }
+        },
+        {
+          "method": "Input.dispatchMouseEvent",
+          "params": {
+            "type": "mouseReleased",
+            "button": "left",
+            "buttons": 0,
+            "x": 50,
+            "y": 60,
+            "modifiers": 0,
+            "clickCount": 1
+          }
+        }
+      ]
+    },
+    {
+      "calls": [
+        [
+          "mouse.click",
+          5,
+          5,
+          {
+            "steps": 3
+          }
+        ]
+      ],
+      "messages": [
+        {
+          "method": "Input.dispatchMouseEvent",
+          "params": {
+            "type": "mouseMoved",
+            "button": "none",
+            "buttons": 0,
+            "x": 5,
+            "y": 5,
+            "modifiers": 0,
+            "force": 0
+          }
+        },
+        {
+          "method": "Input.dispatchMouseEvent",
+          "params": {
+            "type": "mousePressed",
+            "button": "left",
+            "buttons": 1,
+            "x": 5,
+            "y": 5,
+            "modifiers": 0,
+            "clickCount": 1,
+            "force": 0.5
+          }
+        },
+        {
+          "method": "Input.dispatchMouseEvent",
+          "params": {
+            "type": "mouseReleased",
+            "button": "left",
+            "buttons": 0,
+            "x": 5,
+            "y": 5,
+            "modifiers": 0,
+            "clickCount": 1
+          }
+        }
+      ]
+    },
+    {
+      "calls": [
+        [
+          "mouse.dblclick",
+          70,
+          80
+        ]
+      ],
+      "messages": [
+        {
+          "method": "Input.dispatchMouseEvent",
+          "params": {
+            "type": "mouseMoved",
+            "button": "none",
+            "buttons": 0,
+            "x": 70,
+            "y": 80,
+            "modifiers": 0,
+            "force": 0
+          }
+        },
+        {
+          "method": "Input.dispatchMouseEvent",
+          "params": {
+            "type": "mousePressed",
+            "button": "left",
+            "buttons": 1,
+            "x": 70,
+            "y": 80,
+            "modifiers": 0,
+            "clickCount": 1,
+            "force": 0.5
+          }
+        },
+        {
+          "method": "Input.dispatchMouseEvent",
+          "params": {
+            "type": "mouseReleased",
+            "button": "left",
+            "buttons": 0,
+            "x": 70,
+            "y": 80,
+            "modifiers": 0,
+            "clickCount": 1
+          }
+        },
+        {
+          "method": "Input.dispatchMouseEvent",
+          "params": {
+            "type": "mousePressed",
+            "button": "left",
+            "buttons": 1,
+            "x": 70,
+            "y": 80,
+            "modifiers": 0,
+            "clickCount": 2,
+            "force": 0.5
+          }
+        },
+        {
+          "method": "Input.dispatchMouseEvent",
+          "params": {
+            "type": "mouseReleased",
+            "button": "left",
+            "buttons": 0,
+            "x": 70,
+            "y": 80,
+            "modifiers": 0,
+            "clickCount": 2
+          }
+        }
+      ]
+    },
+    {
+      "calls": [
+        [
+          "mouse.wheel",
+          0,
+          120
+        ]
+      ],
+      "messages": [
+        {
+          "method": "Input.dispatchMouseEvent",
+          "params": {
+            "type": "mouseWheel",
+            "x": 0,
+            "y": 0,
+            "modifiers": 0,
+            "deltaX": 0,
+            "deltaY": 120
+          }
+        }
+      ]
+    },
+    {
+      "calls": [
+        [
+          "mouse.move",
+          40,
+          40
+        ],
+        [
+          "mouse.wheel",
+          10,
+          -30
+        ]
+      ],
+      "messages": [
+        {
+          "method": "Input.dispatchMouseEvent",
+          "params": {
+            "type": "mouseMoved",
+            "button": "none",
+            "buttons": 0,
+            "x": 40,
+            "y": 40,
+            "modifiers": 0,
+            "force": 0
+          }
+        },
+        {
+          "method": "Input.dispatchMouseEvent",
+          "params": {
+            "type": "mouseWheel",
+            "x": 40,
+            "y": 40,
+            "modifiers": 0,
+            "deltaX": 10,
+            "deltaY": -30
+          }
+        }
+      ]
+    },
+    {
+      "calls": [
+        [
+          "keyboard.down",
+          "Shift"
+        ],
+        [
+          "mouse.click",
+          20,
+          20
+        ],
+        [
+          "keyboard.up",
+          "Shift"
+        ]
+      ],
+      "messages": [
+        {
+          "method": "Input.dispatchKeyEvent",
+          "params": {
+            "type": "rawKeyDown",
+            "modifiers": 8,
+            "windowsVirtualKeyCode": 16,
+            "code": "ShiftLeft",
+            "commands": [],
+            "key": "Shift",
+            "text": "",
+            "unmodifiedText": "",
+            "autoRepeat": false,
+            "location": 1,
+            "isKeypad": false
+          }
+        },
+        {
+          "method": "Input.dispatchMouseEvent",
+          "params": {
+            "type": "mouseMoved",
+            "button": "none",
+            "buttons": 0,
+            "x": 20,
+            "y": 20,
+            "modifiers": 8,
+            "force": 0
+          }
+        },
+        {
+          "method": "Input.dispatchMouseEvent",
+          "params": {
+            "type": "mousePressed",
+            "button": "left",
+            "buttons": 1,
+            "x": 20,
+            "y": 20,
+            "modifiers": 8,
+            "clickCount": 1,
+            "force": 0.5
+          }
+        },
+        {
+          "method": "Input.dispatchMouseEvent",
+          "params": {
+            "type": "mouseReleased",
+            "button": "left",
+            "buttons": 0,
+            "x": 20,
+            "y": 20,
+            "modifiers": 8,
+            "clickCount": 1
+          }
+        },
+        {
+          "method": "Input.dispatchKeyEvent",
+          "params": {
+            "type": "keyUp",
+            "modifiers": 0,
+            "key": "Shift",
+            "windowsVirtualKeyCode": 16,
+            "code": "ShiftLeft",
+            "location": 1,
+            "isKeypad": false
+          }
+        }
+      ]
+    },
+    {
+      "calls": [
+        [
+          "keyboard.down",
+          "Alt"
+        ],
+        [
+          "keyboard.down",
+          "Meta"
+        ],
+        [
+          "mouse.move",
+          9,
+          9
+        ],
+        [
+          "mouse.wheel",
+          0,
+          5
+        ],
+        [
+          "keyboard.up",
+          "Meta"
+        ],
+        [
+          "keyboard.up",
+          "Alt"
+        ]
+      ],
+      "messages": [
+        {
+          "method": "Input.dispatchKeyEvent",
+          "params": {
+            "type": "rawKeyDown",
+            "modifiers": 1,
+            "windowsVirtualKeyCode": 18,
+            "code": "AltLeft",
+            "commands": [],
+            "key": "Alt",
+            "text": "",
+            "unmodifiedText": "",
+            "autoRepeat": false,
+            "location": 1,
+            "isKeypad": false
+          }
+        },
+        {
+          "method": "Input.dispatchKeyEvent",
+          "params": {
+            "type": "rawKeyDown",
+            "modifiers": 5,
+            "windowsVirtualKeyCode": 91,
+            "code": "MetaLeft",
+            "commands": [],
+            "key": "Meta",
+            "text": "",
+            "unmodifiedText": "",
+            "autoRepeat": false,
+            "location": 1,
+            "isKeypad": false
+          }
+        },
+        {
+          "method": "Input.dispatchMouseEvent",
+          "params": {
+            "type": "mouseMoved",
+            "button": "none",
+            "buttons": 0,
+            "x": 9,
+            "y": 9,
+            "modifiers": 5,
+            "force": 0
+          }
+        },
+        {
+          "method": "Input.dispatchMouseEvent",
+          "params": {
+            "type": "mouseWheel",
+            "x": 9,
+            "y": 9,
+            "modifiers": 5,
+            "deltaX": 0,
+            "deltaY": 5
+          }
+        },
+        {
+          "method": "Input.dispatchKeyEvent",
+          "params": {
+            "type": "keyUp",
+            "modifiers": 1,
+            "key": "Meta",
+            "windowsVirtualKeyCode": 91,
+            "code": "MetaLeft",
+            "location": 1,
+            "isKeypad": false
+          }
+        },
+        {
+          "method": "Input.dispatchKeyEvent",
+          "params": {
+            "type": "keyUp",
+            "modifiers": 0,
+            "key": "Alt",
+            "windowsVirtualKeyCode": 18,
+            "code": "AltLeft",
+            "location": 1,
+            "isKeypad": false
+          }
+        }
+      ]
+    }
+  ]
+}

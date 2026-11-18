@@ -20,7 +20,7 @@ import { Phrase } from '@/components/skills/Phrase'
 import { RunSkillButton } from '@/components/skills/RunSkillButton'
 import { SkillActions } from '@/components/skills/SkillActions'
 import { SkillFormDialog } from '@/components/skills/SkillFormDialog'
-import { UltrafastBadge } from '@/components/skills/UltrafastBadge'
+import { UltrafastState } from '@/components/skills/UltrafastState'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
 import { useSkillsScreenData } from './skills.data'
@@ -194,7 +194,10 @@ function SkillCard({ skill, now }: { skill: Skill; now: number }) {
       </NavLink>
       <div className="col-span-full row-start-3 flex items-center justify-between gap-3">
         <span className="flex min-w-0 items-center gap-2 text-[13px] text-ink-3 leading-4">
-          <UltrafastBadge ultrafast={skill.ultrafast} />
+          <UltrafastState
+            ultrafast={skill.ultrafast}
+            wordmarkClassName="text-[13.5px]"
+          />
           <span className="truncate">
             {usedLabel(skill.runCount, skill.lastRunAt, now)}
           </span>

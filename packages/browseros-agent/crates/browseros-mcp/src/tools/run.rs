@@ -10,7 +10,7 @@ use crate::{
 };
 use browseros_core::{
     NativeFeature, PageId, Ref, SessionId, WindowId,
-    input::ScrollDirection,
+    input::{ClickOptions, ScrollDirection},
     pages::NewPageOptions,
     snapshot::{SnapshotMode, SnapshotOptions},
 };
@@ -67,6 +67,7 @@ Page handle (refs eN come from a snapshot's text/refs):
   page.read(selector?)               -> the whole page as a markdown STRING, so the script can search or slice all of it; return only what you need
   page.grep(pattern, { over, limit }?) -> matching lines as a STRING
   page.click(ref) / fill(ref,value) / hover(ref) / selectOption(ref,value)
+    click scrolls, briefly waits and tries exposed points before native input. If preparation fails before a press, a single left click uses DOM fallback once: it presses the element itself, through banners, overlays and open dialogs, and logs it (inert: true when the target was behind a dialog); verify application state. Disabled, invisible and detached targets are refused. If neither path dispatches, the error includes the blocker ref/reason. An unknown click outcome must not be automatically repeated.
     fill types the value and leaves the result to the page, which may reformat it ("440 212") or reject it; after filling a form, page.snapshot() shows what each field holds. Date, time, color and range inputs take the value in their own format (2026-10-29, 14:30, #ff8800, 75) and hold it as the browser stores it (a range clamps to its bounds); fill throws only on a date or time the browser cannot parse
   page.check(ref) / uncheck(ref) / focus(ref) / drag(fromRef,toRef)
   page.type(text) / press(key) / insertText(text)   - these act on whatever has focus, so they take no ref. type sends key presses, so \n presses Enter; insertText inserts the text as-is, newlines included, without key events
@@ -148,6 +149,15 @@ const BOOTSTRAP_JS: &str = r#"
 
   function scoped(prefix, pageId) {
     return (name, args) => call(`${prefix}.${name}`, [pageId, ...args]);
+  }
+
+  // Both SDK facades share the recovery policy. Delivery metadata is logged even
+  // when a script ignores click's return value, so fallback is never silent.
+  async function clickRef(input, ref, extra) {
+    if (extra.length) throw new Error('click(ref) does not accept options; recovery is automatic.');
+    const result = await input('click', [asRef(ref, 'click')]);
+    if (result?.domFallback) __browserosConsole.log(`Click ${ref}: ${result.notice}`);
+    return result;
   }
 
   const REF_PATTERN = /^e\d+$/;
@@ -294,7 +304,7 @@ const BOOTSTRAP_JS: &str = r#"
       grep: (pattern, opts) =>
         tool('grep', typeof pattern === 'string' ? { ...opts, pattern } : pattern),
 
-      click: (ref) => inp('click', [asRef(ref, 'click')]),
+      click: (ref, ...extra) => clickRef(inp, ref, extra),
       fill: (ref, value) => inp('fill', [asRef(ref, 'fill'), value]),
       hover: (ref) => inp('hover', [asRef(ref, 'hover')]),
       selectOption: (ref, value) => inp('selectOption', [asRef(ref, 'selectOption'), value]),
@@ -398,7 +408,7 @@ const BOOTSTRAP_JS: &str = r#"
     input: (pageId) => {
       const run = scoped('input', pageId);
       return {
-        click: (ref) => run('click', [ref]),
+        click: (ref, ...extra) => clickRef(run, ref, extra),
         fill: (ref, value) => run('fill', [ref, value]),
         type: (text) => run('type', [text]),
         press: (key) => run('press', [key]),
@@ -1238,22 +1248,41 @@ impl BrowserBridge {
             }
             "input.click" => {
                 let (page_id, ref_id) = page_ref_args(&args)?;
+                if args.len() != 2 {
+                    return Err("click(ref) does not accept options; recovery is automatic.".into());
+                }
                 let input = self
                     .control
                     .race(self.ctx.browser.input(page_id.clone()))
                     .await?;
-                match self
+                let outcome = self
                     .race_input(
                         &page_id,
                         true,
-                        input.click(&Ref(ref_id), Default::default()),
+                        input.click(&Ref(ref_id), ClickOptions::default()),
                     )
-                    .await?
+                    .await?;
+                let value = match outcome {
+                    Some(_) => BrowserCallValue::Undefined,
+                    None => self.interaction_open_value(&page_id).await?,
+                };
+                if let Some((delivery, notice)) =
+                    super::click_feedback::fallback_feedback(input.dom_fallback_status())
                 {
-                    Some(_) => Ok(BrowserCallValue::Undefined),
-                    None => self.interaction_open_value(&page_id).await,
+                    // Interaction responses are objects; preserve the dialog or
+                    // chooser alongside delivery instead of replacing either.
+                    let mut value = match value {
+                        BrowserCallValue::Json(value) => value,
+                        BrowserCallValue::Undefined => json!({}),
+                    };
+                    value["click"] = delivery;
+                    value["domFallback"] = json!(true);
+                    value["notice"] = json!(notice);
+                    return Ok(BrowserCallValue::Json(value));
                 }
+                Ok(value)
             }
+
             "input.fill" => {
                 let (page_id, ref_id) = page_ref_args(&args)?;
                 let value = string_arg(&args, 2, "value")?;
@@ -1942,18 +1971,19 @@ mod tests {
         output_file::create_browser_output_file_access,
         tests::{check_fixed_fixture_epoch, select_fixture_tab},
     };
-    use browseros_cdp::{CdpError, CdpEvent};
+    use browseros_cdp::{CdpError, CdpEvent, TargetedEvents};
     use browseros_core::{
         BrowserSession, BrowserSessionHooks, BrowserView, CdpConnection, WindowId,
     };
     use futures_util::future::BoxFuture;
     use serde_json::json;
-    use tokio::sync::broadcast;
+    use tokio::sync::{broadcast, mpsc};
     use tokio_util::sync::CancellationToken;
 
     /// Script fixture with an immutable transport epoch, including guarded creation readbacks.
     struct RunFakeConnection {
         sender: broadcast::Sender<CdpEvent>,
+        targeted: TargetedEvents,
         state: Arc<Mutex<RunFakeState>>,
     }
 
@@ -1971,6 +2001,7 @@ mod tests {
             let (sender, _receiver) = broadcast::channel(8);
             Self {
                 sender,
+                targeted: TargetedEvents::default(),
                 state: Arc::new(Mutex::new(RunFakeState::default())),
             }
         }
@@ -2011,11 +2042,14 @@ mod tests {
         }
 
         fn emit(&self, method: &str, params: Value, session_id: Option<&str>) {
-            let _ = self.sender.send(CdpEvent {
+            let event = CdpEvent {
                 method: method.to_string(),
                 params,
                 session_id: session_id.map(SessionId::from),
-            });
+            };
+            if let Some(event) = self.targeted.deliver(event) {
+                let _ = self.sender.send(event);
+            }
         }
     }
 
@@ -2175,6 +2209,10 @@ mod tests {
 
         fn events(&self) -> broadcast::Receiver<CdpEvent> {
             self.sender.subscribe()
+        }
+
+        fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+            self.targeted.subscribe(method)
         }
 
         fn is_connected(&self) -> bool {
@@ -3805,6 +3843,25 @@ return seen;
             .ok_or_else(|| anyhow::anyhow!("structured content"))?;
         assert_eq!(structured["value"]["nested"], json!([]));
         assert_eq!(structured["value"]["saveHelper"], json!("function"));
+        Ok(())
+    }
+
+    #[test]
+    fn an_emitted_event_reaches_its_targeted_subscriber_and_not_the_broadcast() -> anyhow::Result<()>
+    {
+        let connection = RunFakeConnection::new();
+        let mut broadcast = connection.events();
+        let mut targeted = connection.events_targeted("Runtime.bindingCalled");
+        connection.emit(
+            "Runtime.bindingCalled",
+            json!({ "name": "probe" }),
+            Some("session-7"),
+        );
+        assert_eq!(targeted.try_recv()?.params["name"], "probe");
+        assert!(
+            broadcast.try_recv().is_err(),
+            "a method with a live targeted subscriber must bypass the broadcast"
+        );
         Ok(())
     }
 

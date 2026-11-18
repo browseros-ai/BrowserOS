@@ -1,0 +1,26 @@
+const refIn = (snapshot, label) => {
+  const line = snapshot.split('\n').find(line => line.includes(label));
+  const ref = line && /\[ref=([^\]]+)\]/.exec(line)?.[1];
+  assert(ref, `snapshot must give ${label} its own ref`, { line, snapshot });
+  return ref;
+};
+const selected = (snapshot, labels) => Object.fromEntries(labels.map(label => [label, refIn(snapshot, label)]));
+const labelsIn = (snapshot, labels) => {
+  for (const label of labels) includes(snapshot, label, `snapshot includes ${label}`);
+};
+
+await page.goto(args.base + '/script-isolation.html');
+await page.evaluate(() => window.isolationProbe.reset());
+const snapshot = await page.ariaSnapshot();
+// Filtering the SDK snapshot keeps grep in the isolated engine. A main-world DOM scan
+// would trigger the hostile page's hooks and defeat this contract.
+const matches = snapshot.split('\n').filter(line => /control/i.test(line));
+assert(matches.length > 0, 'grep finds controls in the snapshot', { snapshot });
+const unseen = await page.evaluate(() => JSON.parse(window.isolationProbe.report()));
+equal(unseen, { calls: [], mutations: [] }, 'snapshot and grep execute no page hooks and write nothing');
+const refs = selected(snapshot, ['Assigned onclick control', 'Listener control', 'Shadow control', 'Card delete control']);
+const secret = await page.evaluate(() => document.querySelectorAll('div').length + ':' + window.pageSecret);
+equal(secret, '4:main-world-only', 'explicit evaluate runs in the page world');
+const seen = await page.evaluate(() => JSON.parse(window.isolationProbe.report()));
+assert(seen.calls.includes('querySelectorAll'), 'the probe detects explicit page evaluation', seen);
+return { refs, matches, unseen, secret, seen };

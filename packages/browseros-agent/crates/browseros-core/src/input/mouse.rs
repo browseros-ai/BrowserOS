@@ -54,6 +54,18 @@ pub async fn dispatch_click_with_options(
     opts: ClickOptions,
     modifiers: i64,
 ) -> Result<(), CoreError> {
+    move_to_click(session, x, y, &opts).await?;
+    dispatch_click_at_rest(session, x, y, opts, modifiers).await
+}
+
+/// Movement precedes the ref click's final hit test: hover handlers may reveal a
+/// menu over the destination. Coordinate clicks use the same movement without a ref check.
+pub(super) async fn move_to_click(
+    session: &ProtocolSession,
+    x: f64,
+    y: f64,
+    opts: &ClickOptions,
+) -> Result<(), CoreError> {
     if let Some(from) = opts.humanlike_from {
         for step in 1..=4 {
             let fraction = f64::from(step) / 4.0;
@@ -68,6 +80,18 @@ pub async fn dispatch_click_with_options(
     } else {
         dispatch_hover(session, x, y).await?;
     }
+    Ok(())
+}
+
+/// A press can take effect before its acknowledgement is lost. Wrapping all
+/// errors after this handoff prevents the generic session retry from replaying it.
+pub(super) async fn dispatch_click_at_rest(
+    session: &ProtocolSession,
+    x: f64,
+    y: f64,
+    opts: ClickOptions,
+    modifiers: i64,
+) -> Result<(), CoreError> {
     let button = opts.button.unwrap_or(MouseButton::Left);
     let click_count = opts.click_count.unwrap_or(1);
     let _: Value = session
@@ -82,7 +106,8 @@ pub async fn dispatch_click_with_options(
                 "modifiers": modifiers
             }),
         )
-        .await?;
+        .await
+        .map_err(|error| CoreError::ClickOutcomeUnknown(error.to_string()))?;
     if opts.humanlike_from.is_some() {
         tokio::time::sleep(Duration::from_millis(90)).await;
     }
@@ -98,7 +123,8 @@ pub async fn dispatch_click_with_options(
                 "modifiers": modifiers
             }),
         )
-        .await?;
+        .await
+        .map_err(|error| CoreError::ClickOutcomeUnknown(error.to_string()))?;
     Ok(())
 }
 

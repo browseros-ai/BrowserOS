@@ -80,6 +80,7 @@ def _arch_app_path(ctx: Context, arch: str) -> Path:
     """Sibling per-arch app path via Context, single-sourcing the out-dir scheme."""
     return Context(
         root_dir=ctx.root_dir,
+        patch_root=ctx.patch_root,
         chromium_src=ctx.chromium_src,
         architecture=arch,
         build_type=ctx.build_type,

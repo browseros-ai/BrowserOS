@@ -1,0 +1,16 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Far B</title></head>
+<body style="margin:0">
+<button id="b-button" style="display:block;width:500px;height:1500px">B button</button>
+<script>
+  // C starts 1500px below B's fold, under B's own button: input placed by B's old layout lands
+  // on that button.
+  window.__log = [];
+  for (const type of ['mousedown', 'click'])
+    document.addEventListener(type, (e) => window.__log.push(`${type} ${e.target.id || e.target.tagName}`), true);
+  const c = document.createElement('iframe');
+  c.src = `http://[::1]:${location.port}/actions/far-c.html`;
+  c.title = 'c';
+  c.style.cssText = 'width:500px;height:200px;display:block;border:0';
+  document.body.append(c);
+</script>
+</body></html>

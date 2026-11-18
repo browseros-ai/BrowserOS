@@ -1,5 +1,5 @@
 globalThis.__ultrafast = (() => {
-  const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor
+  const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor
   // Page methods that change something. In verify and triage modes they prove their target
   // exists and record what they would have done, but never act.
   const WRITES = new Set([

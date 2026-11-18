@@ -14,7 +14,7 @@
 use super::{
     naming::{SESSION_NAME_INPUT_MAX_LEN, normalize_small_name},
     service::{
-        AWAIT_HELP_TOOL_NAME, MARK_SKILL_RUN_TOOL_NAME, NAME_SESSION_TOOL_NAME,
+        AWAIT_HELP_TOOL_NAME, MARK_SKILL_RUN_TOOL_NAME, NAME_SESSION_TOOL_NAME, PURSUE_TOOL_NAME,
         REQUEST_HELP_TOOL_NAME, RUN_SKILL_TOOL_NAME, SAVE_SKILL_TOOL_NAME,
     },
 };
@@ -34,6 +34,8 @@ pub(super) const TASK_NAME_GROUPING: &str = "; your tabs are grouped as <client>
 
 const NAME_SESSION_REFUSAL: &str = "name_session is not available on this hosted BrowserOS neo server. Pass taskName=\"<2-3 word task label>\" on any tool call instead.";
 const SKILLS_REFUSAL: &str = "Skills are not available on this hosted BrowserOS neo server: nothing was saved or recorded. Keep repeatable workflows in your own agent instead.";
+const PURSUE_REFUSAL: &str =
+    "Fast browsing is not available on this hosted BrowserOS neo server. Use run for this task.";
 const HUMAN_HELP_REFUSAL: &str = "Human help is not available on this hosted BrowserOS neo server. Do not wait for a human here: stop and tell the user in your chat what you need.";
 
 /// The browser tools this mode offers. Hosted adds `setViewport`, whose per-tab device
@@ -91,6 +93,7 @@ pub fn refusal(mode: ServerMode, tool: &str) -> Option<&'static str> {
             Some(SKILLS_REFUSAL)
         }
         REQUEST_HELP_TOOL_NAME | AWAIT_HELP_TOOL_NAME => Some(HUMAN_HELP_REFUSAL),
+        PURSUE_TOOL_NAME => Some(PURSUE_REFUSAL),
         _ => None,
     }
 }

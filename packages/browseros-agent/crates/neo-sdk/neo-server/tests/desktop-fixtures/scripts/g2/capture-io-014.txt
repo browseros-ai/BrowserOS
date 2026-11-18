@@ -1,0 +1,15 @@
+await page.goto(args.base + '/upload.html');
+await page.evaluate(() => { const select=document.createElement('select');select.id='batch-choice';select.setAttribute('aria-label','Batch choice');select.innerHTML='<option value=one>One</option><option value=two>Two</option>';document.body.appendChild(select); });
+let chooserCount = 0;
+const listener = () => chooserCount++;
+page.on('filechooser',listener);
+try {
+  for (let i=0;i<5;i++) {
+    await page.locator('#upload-button').hover();
+    await page.locator('#batch-choice').selectOption(i%2 ? 'one':'two');
+  }
+  const selected = await page.locator('#batch-choice').inputValue();
+  equal(selected,'two','all five ordinary input batches complete');
+  equal(chooserCount,0,'ordinary hover and select do not raise a chooser');
+  return {result:'input-batch-complete',selected,chooserCount};
+} finally { page.off('filechooser',listener); }

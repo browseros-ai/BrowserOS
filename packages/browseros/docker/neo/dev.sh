@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Local BrowserOS neo in Docker, running this checkout's claw-server, for testing
-# server changes the way hosted users (zuzu, other agent backends) see them.
+# server changes the way hosts and agent backends see them.
 #
 #   ./dev.sh up              Build claw-server from this checkout, bake it into the
 #                            image (this folder's Dockerfile), start Neo, print URLs.

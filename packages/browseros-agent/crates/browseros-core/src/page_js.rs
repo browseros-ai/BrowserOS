@@ -83,6 +83,9 @@ pub struct PageJs<'a> {
     strict: bool,
     user_gesture: bool,
     timeout: Option<Duration>,
+    /// Observations may recover from a stale world; non-idempotent calls must
+    /// surface the failure because the script may have run before navigation.
+    retry_stale_context: bool,
 }
 
 impl<'a> PageJs<'a> {
@@ -118,6 +121,7 @@ impl<'a> PageJs<'a> {
             strict: false,
             user_gesture: false,
             timeout: None,
+            retry_stale_context: true,
         }
     }
 
@@ -215,6 +219,23 @@ impl<'a> PageJs<'a> {
         decode(remote.value)
     }
 
+    /// Like `call`, but never reissues a function after an execution-context
+    /// failure. Use for non-idempotent actions. World-selection fallback remains
+    /// possible only before the requested function runs (including its document guard).
+    pub async fn call_once<T: DeserializeOwned>(
+        self,
+        backend_node_id: i64,
+        function: &str,
+        args: &[Value],
+    ) -> Result<T, CoreError> {
+        Self {
+            retry_stale_context: false,
+            ..self
+        }
+        .call(backend_node_id, function, args)
+        .await
+    }
+
     /// Calls `function` on an object this call already holds. It runs in the world that object
     /// belongs to, whichever constructor built this `PageJs`.
     async fn call_on_object(
@@ -307,7 +328,7 @@ impl<'a> PageJs<'a> {
                 Err(error) => return Some(Err(error)),
             };
             match attempt(context).await {
-                Err(error) if is_stale_context(&error) => {}
+                Err(error) if self.retry_stale_context && is_stale_context(&error) => {}
                 result => return Some(result),
             }
         }
@@ -428,7 +449,13 @@ fn is_protocol_refusal(error: &CoreError) -> bool {
     matches!(error, CoreError::Cdp(CdpError::Protocol { .. }))
 }
 
-fn is_stale_context(error: &CoreError) -> bool {
+/// Whether `error` is Chromium saying that the execution context a call named is gone, because
+/// its document navigated away or was replaced. Context ids are never reused, so the old id can
+/// only fail again. A caller that owns a world recreates it before it retries, and retries only calls
+/// that are safe to repeat, because "Execution context was destroyed" can arrive after the
+/// script began. [`PageJs`] does both.
+#[must_use]
+pub fn is_stale_context(error: &CoreError) -> bool {
     match error {
         CoreError::Cdp(CdpError::Protocol { message, .. }) => {
             message.contains("Cannot find context with specified id")

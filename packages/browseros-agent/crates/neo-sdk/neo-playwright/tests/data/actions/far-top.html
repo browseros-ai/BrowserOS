@@ -1,0 +1,13 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Far top</title></head>
+<body style="margin:0">
+<h1>Top (A)</h1>
+<script>
+  // B is cross-site and scrolls; its C (a third site) starts far below B's fold, so a click on
+  // C's button first scrolls B, in another process than C's.
+  const b = document.createElement('iframe');
+  b.src = `http://localhost:${location.port}/actions/far-b.html`;
+  b.title = 'b';
+  b.style.cssText = 'width:600px;height:300px;display:block;border:0';
+  document.body.append(b);
+</script>
+</body></html>

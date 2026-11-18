@@ -18,6 +18,16 @@ const testSuites = {
       argv: [bun, 'run', 'test'],
     },
     {
+      label: 'neo-playwright engine tests',
+      cwd: resolve(projectRoot, 'crates/neo-sdk/neo-playwright-js'),
+      argv: [bun, 'run', 'test'],
+    },
+    {
+      label: 'Neo conformance harness tests',
+      cwd: resolve(projectRoot, 'crates/neo-sdk/neo-server'),
+      argv: [bun, 'run', 'test:conformance'],
+    },
+    {
       label: 'diagnostics tests',
       cwd: resolve(projectRoot, 'packages/diagnostics'),
       argv: [bun, 'run', 'test'],
@@ -48,7 +58,7 @@ const testSuites = {
     },
     {
       label: 'captcha test bed unit tests',
-      argv: [bun, 'test', 'tools/captcha-testbed'],
+      argv: [bun, 'test', 'crates/neo-sdk/neo-captcha/testbed'],
     },
     {
       // Skips cleanly (exit 0) unless BROWSEROS_BINARY is set, so it keeps

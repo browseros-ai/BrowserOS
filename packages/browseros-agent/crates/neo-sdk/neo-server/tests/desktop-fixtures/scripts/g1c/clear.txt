@@ -1,0 +1,29 @@
+/**
+ * Hosted port of desktop fill contracts at a7e536e152a4835abe9974498b27a5c927dd2e0d.
+ * The root runner owns this task and its cleanup. This body only uses its page.
+ */
+
+// Playwright's label text includes a textarea's initial child text. Use the
+// fixture's exact id for that node, then retain the same node-bound ref checks.
+async function g1cField(label, scope = page) {
+  const locator = label === 'Multiline' ? scope.locator('#multiline')
+    : scope.getByLabel(label, { exact: true });
+  const ref = await locator.ref({ timeout: 5000 });
+  return { label, ref, target: page.getByRef(ref) };
+}
+
+await page.goto(args.base + '/fill.html');
+const measured = [];
+for (const [label, id] of [
+  ['Text field', 'text'], ['Multiline', 'multiline'], ['Rich editor', 'rich'],
+]) {
+  const field = await g1cField(label);
+  await field.target.fill('', { timeout: 8000 });
+  const value = await page.evaluate(id => {
+    const element = document.getElementById(id);
+    return element.value ?? element.textContent;
+  }, id);
+  equal(value, '', label + ' is empty');
+  measured.push({ label, ref: field.ref, value });
+}
+return { measured };

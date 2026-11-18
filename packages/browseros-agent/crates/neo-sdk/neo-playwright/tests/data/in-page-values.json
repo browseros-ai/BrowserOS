@@ -1,0 +1,433 @@
+{
+  "about": "Playwright in-page values, what Rust writes back for each and their argument texts, written by crates/neo-sdk/neo-playwright-js/scripts/in-page-values.ts. Do not edit: run bun run build in crates/neo-sdk/neo-playwright-js.",
+  "values": [
+    {
+      "name": "undefined",
+      "source": "undefined",
+      "page": "{\"v\":\"undefined\"}",
+      "result": {
+        "v": "undefined"
+      },
+      "arg": "{\"v\":\"undefined\"}"
+    },
+    {
+      "name": "null",
+      "source": "null",
+      "page": "{\"v\":\"null\"}",
+      "result": {
+        "v": "null"
+      },
+      "arg": "{\"v\":\"null\"}"
+    },
+    {
+      "name": "NaN",
+      "source": "NaN",
+      "page": "{\"v\":\"NaN\"}",
+      "result": {
+        "v": "NaN"
+      },
+      "arg": "{\"v\":\"NaN\"}"
+    },
+    {
+      "name": "Infinity",
+      "source": "Infinity",
+      "page": "{\"v\":\"Infinity\"}",
+      "result": {
+        "v": "Infinity"
+      },
+      "arg": "{\"v\":\"Infinity\"}"
+    },
+    {
+      "name": "-Infinity",
+      "source": "-Infinity",
+      "page": "{\"v\":\"-Infinity\"}",
+      "result": {
+        "v": "-Infinity"
+      },
+      "arg": "{\"v\":\"-Infinity\"}"
+    },
+    {
+      "name": "-0",
+      "source": "-0",
+      "page": "{\"v\":\"-0\"}",
+      "result": {
+        "v": "-0"
+      },
+      "arg": "{\"v\":\"-0\"}"
+    },
+    {
+      "name": "boolean",
+      "source": "true",
+      "page": "true",
+      "result": true,
+      "arg": "true"
+    },
+    {
+      "name": "integer",
+      "source": "42",
+      "page": "42",
+      "result": 42,
+      "arg": "42"
+    },
+    {
+      "name": "fraction",
+      "source": "1.5",
+      "page": "1.5",
+      "result": 1.5,
+      "arg": "1.5"
+    },
+    {
+      "name": "string",
+      "source": "'plain text'",
+      "page": "\"plain text\"",
+      "result": "plain text",
+      "arg": "\"plain text\""
+    },
+    {
+      "name": "BigInt",
+      "source": "10n",
+      "page": "{\"bi\":\"10\"}",
+      "result": {
+        "bi": "10"
+      },
+      "arg": "{\"bi\":\"10\"}"
+    },
+    {
+      "name": "negative BigInt",
+      "source": "-5n",
+      "page": "{\"bi\":\"-5\"}",
+      "result": {
+        "bi": "-5"
+      },
+      "arg": "{\"bi\":\"-5\"}"
+    },
+    {
+      "name": "Date",
+      "source": "new Date(0)",
+      "page": "{\"d\":\"1970-01-01T00:00:00.000Z\"}",
+      "result": {
+        "d": "1970-01-01T00:00:00.000Z"
+      },
+      "arg": "{\"d\":\"1970-01-01T00:00:00.000Z\"}"
+    },
+    {
+      "name": "invalid Date",
+      "source": "new Date('not a date')",
+      "page": "{\"d\":null}",
+      "result": {
+        "d": null
+      },
+      "argError": "page.evaluate: arg.value.d: expected string, got object"
+    },
+    {
+      "name": "RegExp",
+      "source": "/a+b/gi",
+      "page": "{\"r\":{\"p\":\"a+b\",\"f\":\"gi\"}}",
+      "result": {
+        "r": {
+          "p": "a+b",
+          "f": "gi"
+        }
+      },
+      "arg": "{\"r\":{\"p\":\"a+b\",\"f\":\"gi\"}}"
+    },
+    {
+      "name": "Error",
+      "source": "Object.assign(new TypeError('no'), { stack: 'TypeError: no\\n    at page' })",
+      "page": "{\"e\":{\"n\":\"TypeError\",\"m\":\"no\",\"s\":\"TypeError: no\\n    at page\"}}",
+      "result": {
+        "e": {
+          "n": "TypeError",
+          "m": "no",
+          "s": "TypeError: no\n    at page"
+        }
+      },
+      "arg": "{\"e\":{\"n\":\"TypeError\",\"m\":\"no\",\"s\":\"TypeError: no\\n    at page\"}}"
+    },
+    {
+      "name": "Uint8Array",
+      "source": "Uint8Array.of(1, 2, 255)",
+      "page": "{\"ta\":{\"b\":\"AQL/\",\"k\":\"ui8\"}}",
+      "result": {
+        "ta": {
+          "b": "AQL/",
+          "k": "ui8"
+        }
+      },
+      "arg": "{\"ta\":{\"b\":\"AQL/\",\"k\":\"ui8\"}}"
+    },
+    {
+      "name": "Float64Array",
+      "source": "Float64Array.of(1.5, -2)",
+      "page": "{\"ta\":{\"b\":\"AAAAAAAA+D8AAAAAAAAAwA==\",\"k\":\"f64\"}}",
+      "result": {
+        "ta": {
+          "b": "AAAAAAAA+D8AAAAAAAAAwA==",
+          "k": "f64"
+        }
+      },
+      "arg": "{\"ta\":{\"b\":\"AAAAAAAA+D8AAAAAAAAAwA==\",\"k\":\"f64\"}}"
+    },
+    {
+      "name": "BigInt64Array",
+      "source": "BigInt64Array.of(5n, -1n)",
+      "page": "{\"ta\":{\"b\":\"BQAAAAAAAAD//////////w==\",\"k\":\"bi64\"}}",
+      "result": {
+        "ta": {
+          "b": "BQAAAAAAAAD//////////w==",
+          "k": "bi64"
+        }
+      },
+      "arg": "{\"ta\":{\"b\":\"BQAAAAAAAAD//////////w==\",\"k\":\"bi64\"}}"
+    },
+    {
+      "name": "ArrayBuffer",
+      "source": "Uint8Array.of(1, 2).buffer",
+      "page": "{\"ab\":{\"b\":\"AQI=\"}}",
+      "result": {
+        "o": [],
+        "id": 1
+      },
+      "arg": "{\"o\":[],\"id\":1}"
+    },
+    {
+      "name": "nested arrays",
+      "source": "[1, [2, [3]], []]",
+      "page": "{\"a\":[1,{\"a\":[2,{\"a\":[3],\"id\":3}],\"id\":2},{\"a\":[],\"id\":4}],\"id\":1}",
+      "result": {
+        "a": [
+          1,
+          {
+            "a": [
+              2,
+              {
+                "a": [
+                  3
+                ],
+                "id": 3
+              }
+            ],
+            "id": 2
+          },
+          {
+            "a": [],
+            "id": 4
+          }
+        ],
+        "id": 1
+      },
+      "arg": "{\"a\":[1,{\"a\":[2,{\"a\":[3],\"id\":3}],\"id\":2},{\"a\":[],\"id\":4}],\"id\":1}"
+    },
+    {
+      "name": "undefined in an array",
+      "source": "[undefined, 1]",
+      "page": "{\"a\":[{\"v\":\"undefined\"},1],\"id\":1}",
+      "result": {
+        "a": [
+          {
+            "v": "undefined"
+          },
+          1
+        ],
+        "id": 1
+      },
+      "arg": "{\"a\":[{\"v\":\"undefined\"},1],\"id\":1}"
+    },
+    {
+      "name": "object",
+      "source": "({ a: 1, b: { c: 'x' }, d: [true] })",
+      "page": "{\"o\":[{\"k\":\"a\",\"v\":1},{\"k\":\"b\",\"v\":{\"o\":[{\"k\":\"c\",\"v\":\"x\"}],\"id\":2}},{\"k\":\"d\",\"v\":{\"a\":[true],\"id\":3}}],\"id\":1}",
+      "result": {
+        "o": [
+          {
+            "k": "a",
+            "v": 1
+          },
+          {
+            "k": "b",
+            "v": {
+              "o": [
+                {
+                  "k": "c",
+                  "v": "x"
+                }
+              ],
+              "id": 2
+            }
+          },
+          {
+            "k": "d",
+            "v": {
+              "a": [
+                true
+              ],
+              "id": 3
+            }
+          }
+        ],
+        "id": 1
+      },
+      "arg": "{\"o\":[{\"k\":\"a\",\"v\":1},{\"k\":\"b\",\"v\":{\"o\":[{\"k\":\"c\",\"v\":\"x\"}],\"id\":2}},{\"k\":\"d\",\"v\":{\"a\":[true],\"id\":3}}],\"id\":1}"
+    },
+    {
+      "name": "cycle",
+      "source": "(() => { const o = { n: 1 }; o.self = o; return o })()",
+      "page": "{\"o\":[{\"k\":\"n\",\"v\":1},{\"k\":\"self\",\"v\":{\"ref\":1}}],\"id\":1}",
+      "result": {
+        "o": [
+          {
+            "k": "n",
+            "v": 1
+          },
+          {
+            "k": "self",
+            "v": {
+              "ref": 1
+            }
+          }
+        ],
+        "id": 1
+      },
+      "arg": "{\"o\":[{\"k\":\"n\",\"v\":1},{\"k\":\"self\",\"v\":{\"ref\":1}}],\"id\":1}"
+    },
+    {
+      "name": "shared object",
+      "source": "(() => { const x = { y: 1 }; return [x, x] })()",
+      "page": "{\"a\":[{\"o\":[{\"k\":\"y\",\"v\":1}],\"id\":2},{\"ref\":2}],\"id\":1}",
+      "result": {
+        "a": [
+          {
+            "o": [
+              {
+                "k": "y",
+                "v": 1
+              }
+            ],
+            "id": 2
+          },
+          {
+            "ref": 2
+          }
+        ],
+        "id": 1
+      },
+      "arg": "{\"a\":[{\"o\":[{\"k\":\"y\",\"v\":1}],\"id\":2},{\"ref\":2}],\"id\":1}"
+    },
+    {
+      "name": "Map",
+      "source": "new Map([['k', 1]])",
+      "page": "{\"o\":[],\"id\":1}",
+      "result": {
+        "o": [],
+        "id": 1
+      },
+      "arg": "{\"o\":[],\"id\":1}"
+    },
+    {
+      "name": "Set",
+      "source": "new Set([1])",
+      "page": "{\"o\":[],\"id\":1}",
+      "result": {
+        "o": [],
+        "id": 1
+      },
+      "arg": "{\"o\":[],\"id\":1}"
+    },
+    {
+      "name": "symbol",
+      "source": "Symbol('s')",
+      "page": "{\"v\":\"undefined\"}",
+      "result": {
+        "v": "undefined"
+      },
+      "arg": "{\"v\":\"undefined\"}"
+    },
+    {
+      "name": "function in an array",
+      "source": "[() => 1, 2]",
+      "page": "{\"a\":[null,2],\"id\":1}",
+      "result": {
+        "a": [
+          null,
+          2
+        ],
+        "id": 1
+      },
+      "argError": "Attempting to serialize unexpected value at position \"[0]\": () => 1"
+    },
+    {
+      "name": "function in an object",
+      "source": "({ f: () => 1, n: 2 })",
+      "page": "{\"o\":[{\"k\":\"f\"},{\"k\":\"n\",\"v\":2}],\"id\":1}",
+      "result": {
+        "o": [
+          {
+            "k": "f"
+          },
+          {
+            "k": "n",
+            "v": 2
+          }
+        ],
+        "id": 1
+      },
+      "argError": "Attempting to serialize unexpected value at position \"f\": () => 1"
+    },
+    {
+      "name": "toJSON member",
+      "source": "({ toJSON() { return 1 }, n: 2 })",
+      "page": "{\"o\":[{\"k\":\"toJSON\",\"v\":{\"o\":[],\"id\":0}},{\"k\":\"n\",\"v\":2}],\"id\":1}",
+      "result": {
+        "o": [
+          {
+            "k": "toJSON",
+            "v": {
+              "o": [],
+              "id": 2
+            }
+          },
+          {
+            "k": "n",
+            "v": 2
+          }
+        ],
+        "id": 1
+      },
+      "argError": "Attempting to serialize unexpected value at position \"toJSON\": toJSON() { return 1 }"
+    },
+    {
+      "name": "toJSON with no own keys",
+      "source": "Object.create({ toJSON() { return 'json' } })",
+      "page": "\"json\"",
+      "result": "json",
+      "arg": "{\"o\":[],\"id\":1}"
+    },
+    {
+      "name": "__proto__ key",
+      "source": "JSON.parse('{\"__proto__\": 1, \"n\": 2}')",
+      "page": "{\"o\":[{\"k\":\"__proto__\",\"v\":1},{\"k\":\"n\",\"v\":2}],\"id\":1}",
+      "result": {
+        "o": [
+          {
+            "k": "__proto__",
+            "v": 1
+          },
+          {
+            "k": "n",
+            "v": 2
+          }
+        ],
+        "id": 1
+      },
+      "arg": "{\"o\":[{\"k\":\"n\",\"v\":2}],\"id\":1}"
+    },
+    {
+      "name": "URL",
+      "source": "new URL('https://a.example/p?q=1')",
+      "page": "{\"u\":\"https://a.example/p?q=1\"}",
+      "result": {
+        "u": "https://a.example/p?q=1"
+      }
+    }
+  ]
+}

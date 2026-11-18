@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>claw-sdk trace (dev)</title>
+  <link rel="stylesheet" href="/kit/kit.css">
+</head>
+<body class="trace">
+  <header class="bar">
+    <h1>claw-sdk trace</h1>
+    <span id="stream" class="row"></span>
+    <label title="Selects each new run as it starts; with a filter, only runs the filter shows"><input type="checkbox" id="follow"> follow newest</label>
+    <input id="filter" placeholder="filter: task, request, status" size="28">
+    <span class="spacer"></span>
+    <a href="/" target="_blank">Viewer</a>
+  </header>
+  <div id="banner"></div>
+  <div class="main">
+    <nav class="list" id="list"></nav>
+    <main class="detail" id="detail"></main>
+  </div>
+  <footer class="events" id="events"></footer>
+  <script type="module" src="/kit/trace.js"></script>
+</body>
+</html>

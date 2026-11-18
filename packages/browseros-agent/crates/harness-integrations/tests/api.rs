@@ -648,7 +648,11 @@ fn exercise_opencode_install_fingerprint(home: &Path) -> Result<(), Box<dyn std:
     manager.link(LinkInput::new(stdio_server("browseros"), AgentId::OpenCode))?;
     let config_path = home.join(".config/opencode/opencode.json");
     let config: Value = serde_json::from_str(&fs::read_to_string(&config_path)?)?;
-    assert_eq!(config["mcp"]["browseros"]["command"][0], "browseros-mcp");
+    assert_eq!(
+        config["mcp"]["servers"]["browseros"]["command"][0],
+        "browseros-mcp"
+    );
+    assert!(config["mcp"].get("browseros").is_none());
 
     let override_path = home.join("custom/missing/opencode.json");
     let mut explicit = LinkInput::new(stdio_server("strict"), AgentId::OpenCode);
@@ -703,6 +707,7 @@ fn public_agent_helpers_expose_exactly_the_seven_harness_targets()
     let opencode = resolve_agent_surface(AgentId::OpenCode, AgentScope::System)?.mcp;
     assert!(opencode.stdio.command_as_array);
     assert_eq!(opencode.stdio.env_field, Some("environment"));
+    assert_eq!(opencode.stdio.servers_key, Some("servers"));
     let codex = resolve_harness_definition(AgentId::Codex);
     let zed = resolve_harness_definition(AgentId::Zed);
     assert_ne!(codex.mcp.system_paths.darwin, zed.mcp.system_paths.darwin);

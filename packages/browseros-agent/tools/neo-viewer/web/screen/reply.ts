@@ -1,0 +1,274 @@
+/**
+ * Reading a run's reply text, the exact text the model read. Neo writes it as (`run_tool.rs`,
+ * `text()`): the returned value as one line of compact JSON, or an error line; then, if the
+ * script logged, a `console:` line and the console lines; then Neo's own lines: one
+ * `[unknown outcome]` or `[not awaited]` note per operation the script left unconfirmed, then
+ * tips (`Tip: …`), and whatever Neo appends there later.
+ *
+ * The one rule: a returned value is the reply's leading JSON value, its first line, and every
+ * line after it is a trailer. So a line Neo adds after the value can never be read as part of it,
+ * and the value always decodes. An error's message can span lines (Playwright's call logs), so
+ * an error reply's parts are found from the end inward.
+ */
+
+import type { RunDetail, TextSize } from '../../shared/api'
+import {
+  jsonLine,
+  type Line,
+  plainLines,
+  type Segment,
+  snapshotLine,
+} from './text-lines'
+import { count, plural } from './units'
+
+export interface ReplyParts {
+  /** The value's JSON line, or the error line(s). */
+  value: string
+  console: string[]
+  /** Trailer lines that are not console output: Neo's notes, its tips, any line it adds later. */
+  notes: string[]
+}
+
+/** Neo's notes on operations the script left unconfirmed; they can follow a failed run too. */
+const NOTE_FORMS = ['[unknown outcome] ', '[not awaited] ']
+
+/**
+ * The forms of the lines Neo writes after a returned value's console output: its notes, then
+ * tips. Used only to find where console output ends, which the text does not mark (a script can
+ * log any line); never to find the value, and never on an error, which gets no tips.
+ */
+const AFTER_CONSOLE_FORMS = [...NOTE_FORMS, 'Tip: ']
+
+export function replyParts(text: string): ReplyParts {
+  const lines = text.split('\n')
+  const first = lines[0] ?? ''
+  if (parseValue(first)) return { value: first, ...trailer(lines.slice(1)) }
+  return errorParts(lines)
+}
+
+/** The lines after a returned value: a console block when the script logged, then notes. */
+function trailer(lines: string[]): Omit<ReplyParts, 'value'> {
+  if (lines[0] !== 'console:') return { console: [], notes: lines }
+  const end = afterConsoleStart(lines)
+  return { console: lines.slice(1, end), notes: lines.slice(end) }
+}
+
+/**
+ * Where Neo's lines after console output start. The last line in one of Neo's forms marks them:
+ * the run of its forms just before it is Neo's too, and so is every line after it, since Neo
+ * writes a line it adds later at the end. A console line in one of these forms with more console
+ * output after it is taken for Neo's, which the text cannot tell apart; that changes how lines
+ * are labelled, never the value.
+ */
+function afterConsoleStart(lines: string[]): number {
+  const isNeos = (line: string | undefined) =>
+    AFTER_CONSOLE_FORMS.some((form) => line?.startsWith(form))
+  let start = lines.length - 1
+  while (start > 0 && !isNeos(lines[start])) start--
+  if (start === 0) return lines.length
+  while (start > 1 && isNeos(lines[start - 1])) start--
+  return start
+}
+
+/** An error reply: the error line(s), then the console block and notes, found from the end. */
+function errorParts(lines: string[]): ReplyParts {
+  const end = notesStart(lines)
+  const notes = lines.slice(end)
+  const consoleAt = lines.indexOf('console:', 1)
+  if (consoleAt !== -1 && consoleAt < end) {
+    return {
+      value: lines.slice(0, consoleAt).join('\n'),
+      console: lines.slice(consoleAt + 1, end),
+      notes,
+    }
+  }
+  return { value: lines.slice(0, end).join('\n'), console: [], notes }
+}
+
+/** Where the run of Neo's notes at the end of an error reply's `lines` starts (after line 0). */
+function notesStart(lines: string[]): number {
+  let end = lines.length
+  while (
+    end > 1 &&
+    NOTE_FORMS.some((form) => lines[end - 1]?.startsWith(form))
+  ) {
+    end--
+  }
+  return end
+}
+
+/** `owner / code: message`, Neo's error line; the code names the failure in a closed row. */
+export function errorCode(text: string | null): string | null {
+  const match = text?.match(/^[\w-]+ \/ ([\w.-]+):/)
+  return match?.[1] ?? null
+}
+
+function parseValue(value: string): { ok: true; value: unknown } | null {
+  try {
+    return { ok: true, value: JSON.parse(value) }
+  } catch {
+    return null
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function lineCount(text: string): number {
+  return text.split('\n').length
+}
+
+/**
+ * The formatted reply: an object's keys aligned beside their values, a multi-line string (an
+ * aria snapshot) under its key line by line, then the console lines and Neo's notes.
+ */
+export function formattedLines(detail: RunDetail): Line[] {
+  const { reply } = detail
+  if (reply.rpcError) {
+    return [
+      [{ text: 'JSON-RPC error', tone: 'error' }],
+      ...JSON.stringify(reply.rpcError, null, 2).split('\n').map(jsonLine),
+    ]
+  }
+  if (reply.text === null) return []
+  const parts = replyParts(reply.text)
+  const lines: Line[] = reply.isError
+    ? plainLines(parts.value, 'error')
+    : valueLines(parts.value)
+  if (parts.console.length > 0) {
+    lines.push([{ text: 'console', tone: 'muted' }])
+    for (const line of parts.console) {
+      lines.push([
+        {
+          text: line,
+          tone: line.startsWith('[error] ')
+            ? 'error'
+            : line.startsWith('[warn] ')
+              ? 'note'
+              : 'plain',
+        },
+      ])
+    }
+  }
+  for (const note of parts.notes) lines.push([{ text: note, tone: 'note' }])
+  return lines
+}
+
+function valueLines(value: string): Line[] {
+  const parsed = parseValue(value)
+  if (!parsed) return value.split('\n').map(snapshotLine)
+  const data = parsed.value
+  if (typeof data === 'string') return data.split('\n').map(snapshotLine)
+  if (!isRecord(data) || Object.keys(data).length === 0) {
+    return JSON.stringify(data, null, 2).split('\n').map(jsonLine)
+  }
+  const keys = Object.keys(data)
+  const width =
+    keys.reduce((widest, key) => Math.max(widest, key.length), 0) + 1
+  const lines: Line[] = []
+  for (const key of keys) {
+    const item = data[key]
+    if (typeof item === 'string' && item.includes('\n')) {
+      lines.push([{ text: key, tone: 'key' }])
+      // A loop, not push(...lines): a snapshot can have more lines than a call takes arguments.
+      for (const text of item.split('\n')) lines.push(snapshotLine(text))
+      continue
+    }
+    const json = JSON.stringify(item, null, 2) ?? 'undefined'
+    const [first = '', ...rest] = json.split('\n')
+    const label: Segment = { text: key.padEnd(width), tone: 'key' }
+    lines.push([label, ...jsonLine(first)])
+    const indent = ' '.repeat(width)
+    for (const more of rest) lines.push(jsonLine(indent + more))
+  }
+  return lines
+}
+
+/** The reply exactly as the model read it. */
+export function rawLines(detail: RunDetail): Line[] {
+  const { reply } = detail
+  if (reply.text !== null) return plainLines(reply.text)
+  if (reply.rpcError) return plainLines(JSON.stringify(reply.rpcError))
+  return []
+}
+
+/** What the model read when the run has no reply text, in words. */
+export function noReplyReason(detail: RunDetail): string {
+  switch (detail.status) {
+    case 'running':
+      return "Waiting for Neo's reply."
+    case 'cancelled':
+      return 'The agent went away before the reply; the viewer stopped the run.'
+    case 'lost':
+      return 'The viewer stopped before the reply arrived.'
+    case 'http-error':
+      return `Neo answered HTTP ${detail.reply.httpStatus ?? '–'} without a reply.`
+    default:
+      return 'No reply text.'
+  }
+}
+
+/** `890 chars, ≈222 tok, no console lines`: the facts under a reply, sized by the API. */
+export function replyFacts(text: string, size: TextSize): string {
+  const { console } = replyParts(text)
+  return `${count(size.chars)} chars, ≈${count(size.tokens)} tok, ${
+    console.length === 0
+      ? 'no console lines'
+      : plural(console.length, 'console line')
+  }`
+}
+
+const SHORT_VALUE = 48
+
+/**
+ * The reply's value in one short chip: short values verbatim, an object as its keys (a
+ * multi-line string as its line count), an array as its length.
+ */
+export function valueChip(text: string): { text: string; failed: boolean } {
+  const { value } = replyParts(text)
+  const parsed = parseValue(value)
+  if (!parsed) return { text: value.split('\n')[0] ?? '', failed: true }
+  if (value.length <= SHORT_VALUE) return { text: value, failed: false }
+  const data = parsed.value
+  if (Array.isArray(data))
+    return { text: `[ ${plural(data.length, 'item')} ]`, failed: false }
+  if (typeof data === 'string') {
+    return {
+      text: data.includes('\n')
+        ? `"${data.split('\n')[0]?.slice(0, 24)}…", ${lineCount(data)} lines`
+        : `"${data.slice(0, SHORT_VALUE - 4)}…"`,
+      failed: false,
+    }
+  }
+  if (isRecord(data)) {
+    const keys = Object.entries(data).map(([key, item]) =>
+      typeof item === 'string' && item.includes('\n')
+        ? `${key}: ${lineCount(item)} lines`
+        : key,
+    )
+    return { text: `{ ${keys.join(', ')} }`, failed: false }
+  }
+  return { text: value, failed: false }
+}
+
+/** `returned 2 values`, `returned a 25-line string`, `failed: strict_mode_violation`. */
+export function returnedWhat(detail: RunDetail): string | null {
+  const { text, isError } = detail.reply
+  if (text === null) return null
+  const parts = replyParts(text)
+  if (isError) return `failed: ${errorCode(text) ?? 'error'}`
+  const parsed = parseValue(parts.value)
+  if (!parsed) return null
+  const data = parsed.value
+  if (data === null) return 'returned null'
+  if (Array.isArray(data)) return `returned ${plural(data.length, 'item')}`
+  if (isRecord(data))
+    return `returned ${plural(Object.keys(data).length, 'value')}`
+  if (typeof data === 'string' && data.includes('\n')) {
+    return `returned a ${lineCount(data)}-line string`
+  }
+  return parts.value.length <= SHORT_VALUE
+    ? `returned ${parts.value}`
+    : 'returned a value'
+}

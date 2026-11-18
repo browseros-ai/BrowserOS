@@ -323,7 +323,7 @@ fn now_ms() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::{LivePageState, RecordToolInput, TabActivityService};
-    use browseros_cdp::{CdpError, CdpEvent};
+    use browseros_cdp::{CdpError, CdpEvent, TargetedEvents};
     use browseros_core::{
         BrowserSession, BrowserSessionHooks, CdpConnection, PageId, SessionId as ProtocolSessionId,
         TargetId,
@@ -337,16 +337,20 @@ mod tests {
         },
         time::Duration,
     };
-    use tokio::sync::{Notify, broadcast};
+    use tokio::sync::{Notify, broadcast, mpsc};
 
     struct DisconnectedConnection {
         events: broadcast::Sender<CdpEvent>,
+        targeted: TargetedEvents,
     }
 
     impl DisconnectedConnection {
         fn new() -> Arc<Self> {
             let (events, _) = broadcast::channel(1);
-            Arc::new(Self { events })
+            Arc::new(Self {
+                events,
+                targeted: TargetedEvents::default(),
+            })
         }
     }
 
@@ -414,6 +418,10 @@ mod tests {
             self.events.subscribe()
         }
 
+        fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+            self.targeted.subscribe(method)
+        }
+
         fn is_connected(&self) -> bool {
             false
         }
@@ -425,6 +433,7 @@ mod tests {
 
     struct RebindingConnection {
         events: broadcast::Sender<CdpEvent>,
+        targeted: TargetedEvents,
         list_calls: AtomicUsize,
         refresh_started: Notify,
         release_refresh: Notify,
@@ -435,6 +444,7 @@ mod tests {
             let (events, _) = broadcast::channel(1);
             Arc::new(Self {
                 events,
+                targeted: TargetedEvents::default(),
                 list_calls: AtomicUsize::new(0),
                 refresh_started: Notify::new(),
                 release_refresh: Notify::new(),
@@ -535,6 +545,10 @@ mod tests {
 
         fn events(&self) -> broadcast::Receiver<CdpEvent> {
             self.events.subscribe()
+        }
+
+        fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+            self.targeted.subscribe(method)
         }
 
         fn is_connected(&self) -> bool {

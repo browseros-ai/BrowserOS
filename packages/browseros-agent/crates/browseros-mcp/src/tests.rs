@@ -12,7 +12,7 @@ use crate::{
     },
     tools::{grep, snapshot, wait},
 };
-use browseros_cdp::{CdpError, CdpEvent};
+use browseros_cdp::{CdpError, CdpEvent, TargetedEvents};
 use browseros_core::{
     BrowserSession, BrowserSessionHooks, BrowserView, CdpConnection, DocumentMark,
     NativeCapabilities, PageId, Ref, SessionId,
@@ -27,20 +27,27 @@ use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
 };
 use std::time::Duration;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 
 #[path = "tool_guard_tests.rs"]
 mod tool_guard_tests;
 
+#[path = "click_feedback_tests.rs"]
+mod click_feedback_tests;
+
 struct FakeConnection {
     sender: broadcast::Sender<CdpEvent>,
+    targeted: TargetedEvents,
 }
 
 impl FakeConnection {
     fn new() -> Self {
         let (sender, _receiver) = broadcast::channel(8);
-        Self { sender }
+        Self {
+            sender,
+            targeted: TargetedEvents::default(),
+        }
     }
 }
 
@@ -75,6 +82,10 @@ impl CdpConnection for FakeConnection {
 
     fn events(&self) -> broadcast::Receiver<CdpEvent> {
         self.sender.subscribe()
+    }
+
+    fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+        self.targeted.subscribe(method)
     }
 
     fn is_connected(&self) -> bool {
@@ -207,9 +218,12 @@ struct HarnessCall {
 /// Tool fixture whose transport epoch is immutable; guarded dispatch still validates callers.
 struct HarnessConnection {
     sender: broadcast::Sender<CdpEvent>,
+    targeted: TargetedEvents,
     calls: Mutex<Vec<HarnessCall>>,
     created_tab: Mutex<Option<Value>>,
     emit_console_on_input: AtomicBool,
+    /// Console messages the page logged, replayed when `Runtime.enable` arrives.
+    stored_console: Mutex<Vec<Value>>,
     /// The page's DOM mutation count, as the readiness probe reports it. A test bumps it to
     /// stand in for the page changing.
     mutations: AtomicU64,
@@ -230,9 +244,11 @@ impl HarnessConnection {
         let (sender, _receiver) = broadcast::channel(64);
         Arc::new(Self {
             sender,
+            targeted: TargetedEvents::default(),
             calls: Mutex::new(Vec::new()),
             created_tab: Mutex::new(None),
             emit_console_on_input: AtomicBool::new(false),
+            stored_console: Mutex::new(Vec::new()),
             mutations: AtomicU64::new(0),
             navigate_reply: Mutex::new(json!({ "frameId": "main", "loaderId": "loader-2" })),
             history: Mutex::new(json!({
@@ -309,11 +325,14 @@ impl HarnessConnection {
     }
 
     fn emit(&self, method: &str, params: Value, session_id: Option<&str>) {
-        let _ = self.sender.send(CdpEvent {
+        let event = CdpEvent {
             method: method.to_string(),
             params,
             session_id: session_id.map(SessionId::from),
-        });
+        };
+        if let Some(event) = self.targeted.deliver(event) {
+            let _ = self.sender.send(event);
+        }
     }
 
     fn calls(&self) -> Vec<HarnessCall> {
@@ -426,7 +445,7 @@ impl CdpConnection for HarnessConnection {
                 "Page.enable"
                 | "Page.setInterceptFileChooserDialog"
                 | "DOM.enable"
-                | "Runtime.enable"
+                | "Runtime.disable"
                 | "Accessibility.enable"
                 | "Runtime.runIfWaitingForDebugger"
                 | "Target.setAutoAttach"
@@ -494,11 +513,19 @@ impl CdpConnection for HarnessConnection {
                 "Runtime.evaluate" => Ok(json!({ "result": { "value": 0 } })),
                 "Input.dispatchKeyEvent" => {
                     if self.emit_console_on_input.swap(false, Ordering::SeqCst) {
-                        self.emit(
-                            "Runtime.consoleAPICalled",
-                            json!({
+                        let logged_ms = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|elapsed| elapsed.as_secs_f64() * 1000.0)
+                            .unwrap_or(0.0);
+                        // Sessions keep console reporting off, so the browser only stores the
+                        // message; it reaches the agent when a harvest enables `Runtime`.
+                        self.stored_console
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .push(json!({
                                 "type": "error",
                                 "args": [{ "type": "string", "value": "TypeError: act failed" }],
+                                "timestamp": logged_ms,
                                 "stackTrace": {
                                     "callFrames": [{
                                         "url": "https://example.test/app.js",
@@ -506,10 +533,22 @@ impl CdpConnection for HarnessConnection {
                                         "columnNumber": 0
                                     }]
                                 }
-                            }),
+                            }));
+                    }
+                    Ok(json!({}))
+                }
+                "Runtime.enable" => {
+                    let stored = self
+                        .stored_console
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .clone();
+                    for params in stored {
+                        self.emit(
+                            "Runtime.consoleAPICalled",
+                            params,
                             session.map(SessionId::as_str),
                         );
-                        tokio::task::yield_now().await;
                     }
                     Ok(json!({}))
                 }
@@ -564,6 +603,10 @@ impl CdpConnection for HarnessConnection {
 
     fn events(&self) -> broadcast::Receiver<CdpEvent> {
         self.sender.subscribe()
+    }
+
+    fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+        self.targeted.subscribe(method)
     }
 
     fn is_connected(&self) -> bool {
@@ -1898,6 +1941,12 @@ async fn alert_auto_accept_note_is_prepended_to_next_page_response() {
 #[tokio::test]
 async fn read_console_returns_captured_ring() {
     let (ctx, connection, page) = harness_ctx().await;
+    assert!(
+        !connection
+            .calls()
+            .iter()
+            .any(|call| call.method == "Runtime.enable")
+    );
     connection.emit(
         "Runtime.consoleAPICalled",
         json!({
@@ -1935,6 +1984,13 @@ async fn read_console_returns_captured_ring() {
     let text = result_text(&result);
     assert!(text.contains("warning: deprecated API (https://example.test/app.js:10)"));
     assert!(text.contains("exception: TypeError: x is undefined (https://example.test/app.js:13)"));
+    let runtime: Vec<_> = connection
+        .calls()
+        .into_iter()
+        .map(|call| call.method)
+        .filter(|method| method == "Runtime.enable" || method == "Runtime.disable")
+        .collect();
+    assert_eq!(runtime, ["Runtime.enable", "Runtime.disable"]);
     assert_eq!(
         result
             .structured_content
@@ -1960,6 +2016,13 @@ async fn act_appends_console_error_summary_for_action_window() {
     let text = result_text(&result);
     assert!(text.contains("[page 1 console] 1 error during action, e.g.: TypeError: act failed"));
     assert!(!result.is_error);
+    let runtime: Vec<_> = connection
+        .calls()
+        .into_iter()
+        .map(|call| call.method)
+        .filter(|method| method == "Runtime.enable" || method == "Runtime.disable")
+        .collect();
+    assert_eq!(runtime, ["Runtime.enable", "Runtime.disable"]);
 }
 
 #[tokio::test]
@@ -3074,6 +3137,24 @@ async fn saved_run_keeps_full_json_and_forwards_nested_screenshot() -> anyhow::R
             .and_then(|block| block.as_image())
             .map(|image| image.data.as_str()),
         Some("cG5n")
+    );
+    Ok(())
+}
+
+#[test]
+fn an_emitted_event_reaches_its_targeted_subscriber_and_not_the_broadcast() -> anyhow::Result<()> {
+    let connection = HarnessConnection::new();
+    let mut broadcast = connection.events();
+    let mut targeted = connection.events_targeted("Runtime.bindingCalled");
+    connection.emit(
+        "Runtime.bindingCalled",
+        json!({ "name": "probe" }),
+        Some("session-1"),
+    );
+    assert_eq!(targeted.try_recv()?.params["name"], "probe");
+    assert!(
+        broadcast.try_recv().is_err(),
+        "a method with a live targeted subscriber must bypass the broadcast"
     );
     Ok(())
 }

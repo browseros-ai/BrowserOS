@@ -1,0 +1,6 @@
+await page.goto(args.base + '/form.html');
+const fast = await page.evaluate(() => 1 + 1, undefined, {timeout:5000});
+equal(fast, 2, 'evaluation accepts the supplied options object');
+const slow = await page.evaluate(async () => { await new Promise(resolve => setTimeout(resolve,8000)); return 'slow'; }, undefined, {timeout:1500});
+equal(slow, 'slow', 'page-context wait is not preempted by the nominal per-evaluation timeout');
+return {fast,slow};

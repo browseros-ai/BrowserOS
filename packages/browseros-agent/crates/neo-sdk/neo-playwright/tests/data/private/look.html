@@ -1,0 +1,18 @@
+<!doctype html><meta charset=utf-8><title>Look</title>
+<style>input, select, div[role=textbox] { display: block; width: 240px; height: 26px; margin: 6px 0; }</style>
+<!-- One box for each refusal of the private entry's look (protected-fill design section 5.3),
+     each found by its label in an ai snapshot. tests/private_look_live.rs changes the page
+     between the snapshot and the look where a refusal needs it (a box hidden, removed). -->
+<input id=pw name=password type=password autocomplete=current-password maxlength=24
+       inputmode=text aria-label="Password">
+<input id=code name=otp autocomplete=one-time-code inputmode=numeric maxlength=6 value=123
+       aria-label="Code">
+<div role=textbox contenteditable aria-label="Editable div"></div>
+<select aria-label="Month"><option>01</option><option>02</option></select>
+<input type=checkbox aria-label="Remember me">
+<input aria-label="Disabled" disabled>
+<input aria-label="Read only" readonly>
+<fieldset disabled><legend>Locked</legend><input aria-label="In a disabled fieldset"></fieldset>
+<input aria-label="Goes hidden">
+<input aria-label="Loses its size">
+<input aria-label="Goes away">

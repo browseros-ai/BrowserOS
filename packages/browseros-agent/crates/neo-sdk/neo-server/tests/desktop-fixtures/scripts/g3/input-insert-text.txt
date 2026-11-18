@@ -1,0 +1,7 @@
+await page.goto(args.base + '/sdk-input.html');
+const ref = await refFor(page, 'Literal multiline');
+await page.getByRef(ref).click();
+await page.keyboard.insertText('a\nb');
+const state = await page.evaluate(() => ({ value: document.getElementById('multiline').value, submits: window.submits, enters: window.enterKeys }));
+equal(state, { value: 'a\nb', submits: 0, enters: 0 }, 'literal insertion preserves newlines without Enter or submit');
+return state;

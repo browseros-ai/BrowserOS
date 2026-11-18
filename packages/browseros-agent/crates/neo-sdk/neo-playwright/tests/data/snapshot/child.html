@@ -1,0 +1,16 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Snapshot child</title></head>
+<body data-children="A:grandchild.html">
+<button>Child button</button>
+<p>Confirm your code 482913</p>
+<script>
+// As in top.html: A = 127.0.0.1, B = localhost, C = [::1].
+const ORIGIN = { A: '127.0.0.1', B: 'localhost', C: '[::1]' }
+for (const spec of document.body.dataset.children.split(' ')) {
+  const [site, file] = spec.split(':')
+  const frame = document.createElement('iframe')
+  frame.src = `http://${ORIGIN[site]}:${location.port}/snapshot/${file}`
+  frame.style.cssText = 'width:90%;height:120px;display:block'
+  document.body.append(frame)
+}
+</script>
+</body></html>

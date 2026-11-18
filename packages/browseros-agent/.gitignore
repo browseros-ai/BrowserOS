@@ -76,6 +76,8 @@ docs/plans/
 
 # TypeScript compiled output in tests (source files are .ts)
 **/tests/**/*.js
+# Fixture scripts the crate's live tests serve to a browser are sources.
+!crates/neo-sdk/neo-playwright/tests/data/**/*.js
 **/tests/**/*.d.ts
 **/tests/**/*.d.ts.map
 
@@ -84,6 +86,9 @@ docs/plans/
 
 # Optional eslint cache
 .eslintcache
+
+# Fallow's generated binary analysis cache.
+.fallow/
 
 # Optional stylelint cache
 .stylelintcache
@@ -122,6 +127,8 @@ out
 .nuxt
 dist
 packages/*/dist
+# Vendored source, not build output: the yaml package's ES modules the prelude bundles.
+!crates/neo-sdk/neo-playwright/third_party/yaml/browser/dist/
 
 # Gatsby files
 .cache/
@@ -161,7 +168,7 @@ packages/*/dist
 .vscode-test
 
 # Stores VSCode specific settings
-.vscode
+**/.vscode/*
 !.vscode/*.template.json
 !.vscode/extensions.json
 
@@ -204,3 +211,11 @@ test-results/
 .agent/
 .llm/
 .grove/
+
+# Neo behavior programs and their browser fixtures are authored JavaScript sources.
+!crates/neo-sdk/neo-server/tests/behavior/**/*.js
+
+# Authored directories must remain visible under the broad build/environment rules.
+!crates/**/src/target/
+!packages/shared/src/env/
+!scripts/env/

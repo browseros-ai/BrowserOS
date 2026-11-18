@@ -1,0 +1,10 @@
+// Source port of act-003 at a7e536e152a4835abe9974498b27a5c927dd2e0d. Execution is owned by the coordinator.
+await page.goto(args.base + '/cursor.html');
+await page.ariaSnapshot();
+const point = await page.evaluate(() => {
+  const r = document.getElementById('cursor-div').getBoundingClientRect();
+  return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) };
+});
+await page.mouse.click(point.x, point.y);
+await poll(async () => (await page.locator('#cursor-result').textContent()).includes('div-clicked'), 'coordinate click reaches the cursor div');
+return { point, result: await page.locator('#cursor-result').textContent() };

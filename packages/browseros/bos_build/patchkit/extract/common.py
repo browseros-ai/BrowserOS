@@ -28,7 +28,7 @@ def resolve_base_commit(ctx: Context, base: Optional[str]) -> str:
     if base:
         return base
 
-    base_path = ctx.root_dir / "BASE_COMMIT"
+    base_path = ctx.get_base_commit_path()
     try:
         resolved = base_path.read_text(encoding="utf-8").strip()
     except FileNotFoundError as exc:
