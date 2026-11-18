@@ -78,7 +78,8 @@ impl DraftRequest {
 }
 
 /// The digest for a finished task, or `None` when it never reached a web page the worker would
-/// accept as the skill's site. `request_id` is left empty for the caller to fill.
+/// accept as the skill's site or cannot be cut to fit the worker's size cap. `request_id` is left
+/// empty for the caller to fill.
 #[must_use]
 pub fn build(task: &TaskDetail) -> Option<DraftRequest> {
     let summary = &task.summary;
@@ -87,6 +88,9 @@ pub fn build(task: &TaskDetail) -> Option<DraftRequest> {
         .iter()
         .filter(|row| row.parent_dispatch_id.is_none())
         .collect();
+    // Pages and searches also come from calls a script made, so a task done through scripts
+    // still shows where it went; only their URLs and titles are read, never the script or input.
+    let every_row: Vec<&ToolDispatchRow> = task.dispatches.iter().collect();
     let site = summary
         .site
         .as_deref()
@@ -112,12 +116,11 @@ pub fn build(task: &TaskDetail) -> Option<DraftRequest> {
         agent: agent_kind(&summary.slug),
         steps: steps(&rows),
         neo: neo_part(&task.dispatches),
-        pages: pages(&rows),
-        fields: fields(&rows),
+        pages: pages(&every_row),
+        fields: fields(&every_row),
         site,
     };
-    fit(&mut request);
-    Some(request)
+    fit(&mut request).then_some(request)
 }
 
 /// The agent family the worker knows, from the connected agent's id.
@@ -347,14 +350,32 @@ fn fields(rows: &[&ToolDispatchRow]) -> Vec<Field> {
     out
 }
 
-/// Drops steps from the middle until the digest fits, keeping how the task began and ended.
-fn fit(request: &mut DraftRequest) {
-    while serde_json::to_vec(request).map_or(0, |body| body.len()) > MAX_DIGEST_BYTES
-        && request.steps.len() > 2
-    {
-        let middle = request.steps.len() / 2;
-        request.steps.remove(middle);
+/// Cuts the digest until it fits, in order of what the draft can best do without: steps from the
+/// middle (keeping how the task began and ended), then neo's steps, then later pages, then later
+/// searches. False when even the smallest digest is over the cap.
+fn fit(request: &mut DraftRequest) -> bool {
+    let size =
+        |request: &DraftRequest| serde_json::to_vec(request).map_or(usize::MAX, |body| body.len());
+    while size(request) > MAX_DIGEST_BYTES {
+        if request.steps.len() > 2 {
+            let middle = request.steps.len() / 2;
+            request.steps.remove(middle);
+        } else if let Some(neo) = request
+            .neo
+            .as_mut()
+            .filter(|neo| !neo.done_steps.is_empty())
+        {
+            let middle = neo.done_steps.len() / 2;
+            neo.done_steps.remove(middle);
+        } else if request.pages.len() > 1 {
+            request.pages.pop();
+        } else if !request.fields.is_empty() {
+            request.fields.pop();
+        } else {
+            return false;
+        }
     }
+    true
 }
 
 fn trim_middle(items: &mut Vec<String>, max: usize) {
@@ -546,6 +567,67 @@ mod tests {
         assert!(digest.steps[0].starts_with("Opened Page 0"));
         assert!(digest.steps[MAX_STEPS - 1].starts_with("Opened Page 199"));
         assert!(serde_json::to_vec(&digest)?.len() <= MAX_DIGEST_BYTES);
+        Ok(())
+    }
+
+    #[test]
+    fn long_non_english_pages_and_searches_still_fit() -> anyhow::Result<()> {
+        let title = "स्मार्टफोन ".repeat(40);
+        let rows = (0..60)
+            .map(|index| {
+                row(
+                    index,
+                    "navigate",
+                    &format!(
+                        "https://www.flipkart.com/{}{index}/x?q={}{index}",
+                        "श्रेणी".repeat(10),
+                        "फ़ोन".repeat(50)
+                    ),
+                    &title,
+                    serde_json::json!({}),
+                )
+            })
+            .collect();
+        let digest = build(&task(rows)).ok_or_else(|| anyhow::anyhow!("no digest"))?;
+        assert!(serde_json::to_vec(&digest)?.len() <= MAX_DIGEST_BYTES);
+        assert!(!digest.pages.is_empty());
+        assert_eq!(digest.site, "flipkart.com");
+        Ok(())
+    }
+
+    #[test]
+    fn pages_and_searches_inside_a_script_are_kept_without_its_source() -> anyhow::Result<()> {
+        let mut script = row(
+            1,
+            "run",
+            "https://www.flipkart.com/",
+            "Flipkart",
+            serde_json::json!({ "code": "await page.fill('#q', 'hunter2')" }),
+        );
+        script.dispatch_id = Some("script-1".into());
+        let mut inner = row(
+            2,
+            "nav.goto",
+            "https://www.flipkart.com/search?q=phones+under+30000",
+            "Mobiles",
+            serde_json::json!({ "text": "hunter2" }),
+        );
+        inner.parent_dispatch_id = Some("script-1".into());
+        let digest =
+            build(&task(vec![script, inner])).ok_or_else(|| anyhow::anyhow!("no digest"))?;
+        assert!(
+            digest.pages.iter().any(|page| page.path == "/search"),
+            "{digest:?}"
+        );
+        assert_eq!(
+            digest
+                .fields
+                .first()
+                .and_then(|field| field.value.as_deref()),
+            Some("phones under 30000")
+        );
+        assert_eq!(digest.steps, vec!["Ran a script on Flipkart".to_string()]);
+        assert!(!serde_json::to_string(&digest)?.contains("hunter2"));
         Ok(())
     }
 }
