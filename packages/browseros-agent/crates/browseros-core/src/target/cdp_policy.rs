@@ -2,6 +2,19 @@
 //! native protocol, not inferred by scanning JSON field names or allowing entire domains.
 use super::*;
 
+/// The root methods that change a tab group's membership or shape.
+fn writes_tab_group(method: &str) -> bool {
+    matches!(
+        method,
+        "Browser.createTabGroup"
+            | "Browser.addTabsToGroup"
+            | "Browser.removeTabsFromGroup"
+            | "Browser.updateTabGroup"
+            | "Browser.moveTabGroup"
+            | "Browser.closeTabGroup"
+    )
+}
+
 pub(super) fn unsupported(method: &str) -> CoreError {
     TargetError::CdpUnsupported {
         method: method.into(),
@@ -648,6 +661,14 @@ impl BrowserView {
         method: &str,
         mut params: Value,
     ) -> Result<Value, CoreError> {
+        // Held from admission through the reply, so this call's own group writes never race
+        // each other's member snapshot. A group changed from outside the call still fails
+        // closed at the recheck below, which is the refusal the snapshot exists for.
+        let _group_write = if writes_tab_group(method) {
+            Some(self.group_writes.lock().await)
+        } else {
+            None
+        };
         self.validate_live().await?;
         let allowed = root_parameters(method).ok_or_else(|| unsupported(method))?;
         validate_parameters(method, &params, allowed)?;

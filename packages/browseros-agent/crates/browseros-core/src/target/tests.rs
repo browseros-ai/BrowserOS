@@ -3687,3 +3687,118 @@ fn a_legacy_transport_hands_its_targeted_subscriber_what_the_browser_emits() -> 
     assert_eq!(targeted.try_recv()?.params["name"], "probe");
     Ok(())
 }
+
+/// Pages opened together into one group take turns writing it. Each write is admitted against
+/// the group's member list and refused if that changed, so unserialised writes from the same
+/// call spoiled each other's snapshot and were refused with `group_out_of_scope`, leaving blank
+/// tabs outside the group. This is `Promise.all` over `browser.open` in a run.
+#[tokio::test]
+async fn pages_opened_together_all_join_their_group() -> TestResult {
+    let native = Native::new();
+    let scoped = view(native.clone(), None).await;
+    let before = native.lock().groups[0]["tabIds"]
+        .as_array()
+        .map_or(0, Vec::len);
+
+    let urls: Vec<String> = (0..5)
+        .map(|index| format!("https://together-{index}.test"))
+        .collect();
+    let opens = urls.iter().map(|url| {
+        scoped.open_page(
+            url,
+            NewPageOptions {
+                // The group's own window, so the only thing the opens can trip on is each other.
+                window_id: Some(WindowId(11)),
+                tab_group_id: Some("eng-group".into()),
+                ..NewPageOptions::default()
+            },
+        )
+    });
+    let results = futures_util::future::join_all(opens).await;
+
+    for result in &results {
+        assert!(result.is_ok(), "{result:?}");
+    }
+    assert_eq!(
+        native.lock().groups[0]["tabIds"]
+            .as_array()
+            .map_or(0, Vec::len),
+        before + 5,
+        "every page joined the group"
+    );
+    Ok(())
+}
+
+/// The race itself, forced rather than left to the scheduler. One group write is parked after
+/// taking its snapshot of the group's members, a second write from the same call lands, then
+/// the first resumes. Unserialised, the first rechecks a changed member list and is refused
+/// with `group_out_of_scope`. Serialised, the second waits its turn and both land.
+#[tokio::test]
+async fn a_second_group_write_waits_for_the_first_to_finish() -> TestResult {
+    let native = Native::new();
+    let scoped = view(native.clone(), None).await;
+    let mut tabs = Vec::new();
+    for url in ["https://first.test", "https://second.test"] {
+        let opened = scoped
+            .open_page(
+                url,
+                NewPageOptions {
+                    window_id: Some(WindowId(11)),
+                    ..NewPageOptions::default()
+                },
+            )
+            .await?;
+        tabs.push(opened.page.tab_id.0);
+    }
+
+    let release = Arc::new(tokio::sync::Notify::new());
+    *native
+        .group_read_hold
+        .lock()
+        .unwrap_or_else(|err| panic!("fixture poisoned: {err}")) = Some(release.clone());
+    let first_view = scoped.clone();
+    let first_tab = tabs[0];
+    let first = tokio::spawn(async move {
+        first_view
+            .cdp(
+                "Browser.addTabsToGroup",
+                json!({"groupId":"eng-group","tabIds":[first_tab]}),
+                None,
+            )
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(1), native.group_read_started.notified()).await?;
+    // The first write holds its snapshot. Let only it wait, then send the second.
+    *native
+        .group_read_hold
+        .lock()
+        .unwrap_or_else(|err| panic!("fixture poisoned: {err}")) = None;
+    let second_view = scoped.clone();
+    let second_tab = tabs[1];
+    let second = tokio::spawn(async move {
+        second_view
+            .cdp(
+                "Browser.addTabsToGroup",
+                json!({"groupId":"eng-group","tabIds":[second_tab]}),
+                None,
+            )
+            .await
+    });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    release.notify_one();
+
+    let first = tokio::time::timeout(Duration::from_secs(5), first).await??;
+    let second = tokio::time::timeout(Duration::from_secs(5), second).await??;
+    assert!(first.is_ok(), "the first write: {first:?}");
+    assert!(second.is_ok(), "the second write: {second:?}");
+    let members = native.lock().groups[0]["tabIds"].clone();
+    for tab in tabs {
+        assert!(
+            members
+                .as_array()
+                .is_some_and(|ids| ids.contains(&json!(tab))),
+            "tab {tab} is in the group: {members}"
+        );
+    }
+    Ok(())
+}

@@ -127,6 +127,11 @@ pub struct BrowserView {
     // call (Promise.all in a run) would open its own window. Shared by clones; the async lock
     // makes creation single-flight.
     default_window: Arc<tokio::sync::Mutex<Option<WindowId>>>,
+    // Tab group writes are admitted against a snapshot of the group's members and sent only
+    // if it is unchanged, so two writes from the same call would each spoil the other's
+    // snapshot and both be refused. Pages opened together in a run add themselves to one
+    // group concurrently, so the writes take turns. Shared by clones.
+    pub(super) group_writes: Arc<tokio::sync::Mutex<()>>,
     /// Hosted viewport modes; `None` keeps every page's geometry as it is.
     viewports: Option<Arc<crate::viewport::Viewports>>,
 }
@@ -351,6 +356,7 @@ impl BrowserView {
             expected_creation_epoch: None,
             creation_receipts: Arc::new(std::sync::RwLock::new(HashMap::new())),
             default_window: Arc::new(tokio::sync::Mutex::new(None)),
+            group_writes: Arc::new(tokio::sync::Mutex::new(())),
             viewports: None,
             signals: session.page_signals.clone(),
             signal_windows: Arc::new(std::sync::RwLock::new(BTreeSet::new())),
