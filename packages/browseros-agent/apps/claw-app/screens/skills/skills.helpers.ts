@@ -201,6 +201,33 @@ export function awaitsFirstRun(skill: Skill): boolean {
   )
 }
 
+export interface LearningStep {
+  text: string
+  state: 'done' | 'now' | 'todo'
+}
+
+/**
+ * What the skill page says while a task skill's first run turns into its fast version: the agent
+ * handed neo a flow and neo is checking it. Null once it is verified, or for any other skill.
+ */
+export function firstRunLearning(skill: Skill): LearningStep[] | null {
+  const ultrafast = skill.ultrafast
+  if (
+    skill.origin !== 'history' ||
+    ultrafast?.status !== 'pending' ||
+    ultrafast.verifiedAt ||
+    ultrafast.locked === true
+  ) {
+    return null
+  }
+  return [
+    { text: 'Your agent is doing the task the normal way', state: 'done' },
+    { text: 'neo is learning the steps', state: 'done' },
+    { text: 'neo is checking the fast version', state: 'now' },
+    { text: 'Next time it takes seconds', state: 'todo' },
+  ]
+}
+
 /** "about 1.2 s a run" from a median in milliseconds. */
 export function runSpeed(p50Ms: number): string {
   const seconds = Math.max(0.1, Math.round(p50Ms / 100) / 10)

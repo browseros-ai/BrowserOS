@@ -4,6 +4,7 @@ import {
   awaitsFirstRun,
   chosenLine,
   durationLabel,
+  firstRunLearning,
   healthLine,
   neoName,
   parseSkillBody,
@@ -221,6 +222,52 @@ describe('ultrafastMark', () => {
     expect(ultrafastMark(ultrafast({ status: 'pending' }), true)?.word).toBe(
       'on the way',
     )
+  })
+})
+
+describe('firstRunLearning', () => {
+  const fromTask: Skill = {
+    name: 'neo-phones',
+    description: 'Find phones under a budget',
+    origin: 'history',
+    version: 1,
+    linkedAgents: [],
+    runCount: 0,
+    cleanRunCount: 0,
+    createdAt: 0,
+    updatedAt: 0,
+    ultrafast: ultrafast({ status: 'pending' }),
+  }
+
+  it('walks through the first run while neo checks the fast version', () => {
+    expect(firstRunLearning(fromTask)?.map((step) => step.state)).toEqual([
+      'done',
+      'done',
+      'now',
+      'todo',
+    ])
+  })
+
+  it('says nothing once verified, when locked, or for a skill an agent saved', () => {
+    expect(
+      firstRunLearning({
+        ...fromTask,
+        ultrafast: ultrafast({ status: 'verified', verifiedAt: 1 }),
+      }),
+    ).toBeNull()
+    expect(
+      firstRunLearning({
+        ...fromTask,
+        ultrafast: ultrafast({ status: 'pending', locked: true }),
+      }),
+    ).toBeNull()
+    expect(firstRunLearning({ ...fromTask, origin: 'agent' })).toBeNull()
+    expect(
+      firstRunLearning({
+        ...fromTask,
+        ultrafast: ultrafast({ status: 'none' }),
+      }),
+    ).toBeNull()
   })
 })
 

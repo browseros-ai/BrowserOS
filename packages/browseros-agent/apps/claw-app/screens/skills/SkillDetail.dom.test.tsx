@@ -13,7 +13,11 @@ import {
   it,
   mock,
 } from 'bun:test'
-import type { SkillDetail as Detail, SkillUltrafast } from '@browseros/claw-api'
+import type {
+  SkillDetail as Detail,
+  Skill,
+  SkillUltrafast,
+} from '@browseros/claw-api'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { parseHTML } from 'linkedom'
 import { act, type ReactNode } from 'react'
@@ -23,6 +27,7 @@ import { MemoryRouter, Route, Routes } from 'react-router'
 const api = await import('@/modules/api/client')
 
 let ultrafast: SkillUltrafast
+let overrides: Partial<Skill> = {}
 
 const detail = (): Detail => ({
   skill: {
@@ -37,6 +42,7 @@ const detail = (): Detail => ({
     createdAt: 0,
     updatedAt: 0,
     ultrafast,
+    ...overrides,
   },
   body: '',
   runs: [],
@@ -104,6 +110,7 @@ function define(name: string, value: unknown) {
 }
 
 beforeEach(async () => {
+  overrides = {}
   ultrafast = {
     status: 'verified',
     flowVersion: 0,
@@ -232,5 +239,42 @@ describe('the skill page with ultrafast', () => {
     await mount()
 
     expect(heading()).toBe('ultrafast needs a repair')
+  })
+})
+
+describe('the first run of a skill made from a task', () => {
+  it('tests that the page says what neo is doing while it checks the fast version', async () => {
+    overrides = { origin: 'history', runCount: 0 }
+    ultrafast = {
+      status: 'pending',
+      flowVersion: 0,
+      writeApproved: false,
+    }
+    await mount()
+
+    expect(text()).toContain('Learning from this run')
+    expect(text()).toContain(
+      'Done: Your agent is doing the task the normal way',
+    )
+    expect(text()).toContain('Done: neo is learning the steps')
+    expect(text()).toContain('In progress: neo is checking the fast version')
+    expect(text()).toContain('Still to come: Next time it takes seconds')
+    expect(text()).not.toContain('Your agent is turning this skill')
+  })
+
+  it('tests that a verified task skill shows its fast version instead', async () => {
+    overrides = { origin: 'history', runCount: 1 }
+    ultrafast = { ...ultrafast, status: 'verified', verifiedAt: 1 }
+    await mount()
+
+    expect(text()).not.toContain('Learning from this run')
+  })
+
+  it('tests that a skill an agent saved never shows the panel', async () => {
+    ultrafast = { status: 'pending', flowVersion: 0, writeApproved: false }
+    await mount()
+
+    expect(text()).not.toContain('Learning from this run')
+    expect(text()).toContain('Your agent is turning this skill')
   })
 })

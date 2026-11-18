@@ -11,6 +11,9 @@ import type { SkillDetail } from '@browseros/claw-api'
 import { useParams } from 'react-router'
 import { useSkill } from '@/modules/api/skills.hooks'
 
+/** How often the page checks a fast version neo is still verifying. */
+const VERIFYING_POLL_MS = 3000
+
 export interface SkillDetailScreenData {
   name: string
   detail: SkillDetail | undefined
@@ -23,6 +26,10 @@ export function useSkillDetailData(): SkillDetailScreenData {
   const query = useSkill({
     variables: { name },
     enabled: name.length > 0,
+    refetchInterval: (query) =>
+      query.state.data?.skill.ultrafast?.status === 'pending'
+        ? VERIFYING_POLL_MS
+        : false,
   })
   return {
     name,
