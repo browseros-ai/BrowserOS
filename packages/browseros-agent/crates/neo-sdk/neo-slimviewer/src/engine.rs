@@ -765,6 +765,25 @@ struct Stats {
     delayed: u32,
 }
 
+impl Stats {
+    fn link_sample(
+        &self,
+        pacer: Option<&mut Viewer>,
+        elapsed: f32,
+        blocked: f32,
+        busy: Duration,
+        damaged: bool,
+    ) -> picture::Link {
+        picture::Link {
+            grabs: self.grabs,
+            damage_pending: self.damage_pending || (damaged && pacer.is_some()),
+            blocked,
+            busy,
+            ..pacer.map_or_else(picture::Link::default, |v| v.link_sample(elapsed))
+        }
+    }
+}
+
 fn take_tick(now: Instant, due: &mut Instant) -> Option<f32> {
     if now < *due {
         return None;
@@ -1335,14 +1354,11 @@ impl Engine {
         let blocked = self.blocked.take(now).as_secs_f32() / elapsed;
         let busy = self.busy.take(now);
         let frames = self.stats.frames;
-        let mut rtt_ms = 0;
-        let mut link = self.pacer().map_or_else(picture::Link::default, |p| {
-            rtt_ms = p.rtt.get().as_millis() as u32;
-            p.link_sample(elapsed)
-        });
-        link.blocked = blocked;
-        link.damage_pending =
-            self.stats.damage_pending || (self.damaged && self.pacer_id.is_some());
+        let pacer = pacer_index(&self.viewers).map(|i| &mut self.viewers[i]);
+        let rtt_ms = pacer.as_ref().map_or(0, |v| v.rtt.get().as_millis() as u32);
+        let link = self
+            .stats
+            .link_sample(pacer, elapsed, blocked, busy, self.damaged);
         for viewer in &mut self.viewers {
             viewer.clear_interval();
         }
@@ -1851,6 +1867,7 @@ mod tests {
                         delivered_kbps: 3000.0,
                         queue_ms: 200,
                         frames: 8,
+                        grabs: 8,
                         damage_pending: true,
                         busy: Duration::from_millis(400),
                     },
@@ -2101,6 +2118,7 @@ mod tests {
                     delivered_kbps: 3000.0,
                     queue_ms: 200,
                     frames: 8,
+                    grabs: 8,
                     damage_pending: true,
                     busy: Duration::from_millis(400),
                 },
@@ -2138,6 +2156,36 @@ mod tests {
         busy.observe(at(1050), false); // The last damage was captured.
         assert_eq!(busy.take(at(2000)), Duration::from_millis(50));
         assert_eq!(busy.take(at(3000)), Duration::ZERO);
+    }
+
+    #[test]
+    fn tests_that_unchanged_grabs_count_toward_cpu_cadence() {
+        let t = Instant::now();
+        let mut p = motion(t, false);
+        let mut pacer = viewer();
+        for n in 1..=32 {
+            let unchanged = if n <= 30 { 12 } else { 0 };
+            let stats = Stats {
+                grabs: 18 + unchanged,
+                empty_grabs: unchanged,
+                damage_pending: true,
+                ..Stats::default()
+            };
+            pacer.sent_frames = 18;
+            let link = stats.link_sample(Some(&mut pacer), 1.0, 0.0, Duration::from_secs(1), false);
+            pacer.clear_interval();
+            let now = t + Duration::from_secs(n);
+            p.tick(
+                now,
+                link,
+                picture::Cpu {
+                    throttled: true,
+                    ..picture::Cpu::default()
+                },
+            );
+            assert_eq!(p.fps(), if n == 32 { 20.0 } else { 30.0 }, "tick {n}");
+            assert_eq!(p.plan(now, BIG).scale, Scale::Full);
+        }
     }
 
     #[test]
@@ -2544,11 +2592,13 @@ mod tests {
             }
             if let Some(elapsed) = take_tick(now, &mut tick_at) {
                 let v = &mut viewers[0];
-                let mut link = v.link_sample(elapsed);
+                let stats = Stats {
+                    grabs: v.sent_frames,
+                    ..Stats::default()
+                };
+                let link =
+                    stats.link_sample(Some(v), elapsed, blocked / elapsed, busy.take(now), true);
                 v.clear_interval();
-                link.blocked = blocked / elapsed;
-                link.damage_pending = true;
-                link.busy = busy.take(now);
                 let sent = link.sent_kbps;
                 let delivered = link.delivered_kbps;
                 p.tick(now, link, picture::Cpu::default());
@@ -3092,6 +3142,7 @@ mod tests {
                 picture::Link {
                     blocked: 0.3,
                     frames: 6,
+                    grabs: 6,
                     damage_pending: true,
                     busy: Duration::from_millis(700),
                     ..picture::Link::default()
@@ -3131,6 +3182,7 @@ mod tests {
                 t + Duration::from_secs(n),
                 picture::Link {
                     frames: 6,
+                    grabs: 6,
                     damage_pending: true,
                     busy: Duration::from_secs(1),
                     ..picture::Link::default()

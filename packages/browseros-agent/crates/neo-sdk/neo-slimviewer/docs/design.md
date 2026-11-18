@@ -15,9 +15,9 @@ the floor, a congested link raises the quantizer by up to two per step, to
 +6 by default. Sustained congestion can then trigger half size. A frame that
 would take over 300 ms at the quality limit, late acknowledgements or two
 consecutive congested seconds without delivery can accelerate those steps.
-Slow measured work can lower the CPU
-limit. Throttle or steal counts only when frames miss 80% of the current
-cadence during at least half a second with damage pending and the pacer open.
+Slow measured work can lower the CPU limit. Throttle or steal counts only when
+capture falls below 80% of the current cadence during at least half a second
+with damage pending and the pacer open. Grabs that find unchanged pixels count.
 Recovery takes one step at a time after sustained headroom. A return to full-size
 motion must also fit the link's 300 ms keyframe budget. Fresh capacity samples
 set the budget. While half-size traffic is too small to measure, the last sample

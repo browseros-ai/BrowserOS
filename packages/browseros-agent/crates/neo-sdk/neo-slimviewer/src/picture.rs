@@ -168,6 +168,7 @@ struct Facts {
     work_ms: f32,
     stolen: f32,
     frames: u32,
+    grabs: u32,
     busy: Duration,
 }
 
@@ -194,7 +195,7 @@ impl fmt::Display for Move {
         };
         write!(
             f,
-            "source={source} from={} to={} fps={} crf={} scale={scale} why={} blocked={:.0} queue_ms={} offered_kbps={:.0} delivered_kbps={:.0} work_ms={} stolen={:.0} frames={} busy_ms={}",
+            "source={source} from={} to={} fps={} crf={} scale={scale} why={} blocked={:.0} queue_ms={} offered_kbps={:.0} delivered_kbps={:.0} work_ms={} stolen={:.0} frames={} busy_ms={} grabs={}",
             self.from,
             self.to,
             self.rung.fps,
@@ -207,7 +208,8 @@ impl fmt::Display for Move {
             self.facts.work_ms,
             self.facts.stolen * 100.0,
             self.facts.frames,
-            self.facts.busy.as_millis()
+            self.facts.busy.as_millis(),
+            self.facts.grabs
         )
     }
 }
@@ -243,6 +245,8 @@ pub struct Link {
     pub queue_ms: u32,
     /// Frames sent during this observation interval.
     pub frames: u32,
+    /// Completed screen grabs, including those that found unchanged pixels.
+    pub grabs: u32,
     /// Capture wanted damage at some point during this interval, including while blocked.
     pub damage_pending: bool,
     /// Time with damage pending and credit to send a frame to the pacer.
@@ -773,6 +777,7 @@ impl Picture {
             work_ms: self.work_p75_ms,
             stolen: cpu.stolen,
             frames: link.frames,
+            grabs: link.grabs,
             busy: link.busy,
         };
         self.observe_link(now, &link, congested);
@@ -785,13 +790,13 @@ impl Picture {
         }
         if self.cfg.cpu_guard {
             let work_pressure = measured.is_some_and(|w| w > starved_work(fps));
-            let active = link.frames > 0 || !self.work.is_empty();
+            let active = link.grabs > 0 || link.frames > 0 || !self.work.is_empty();
             // Quota bursts and steal only explain lost cadence while the pacer could accept
             // damage. Slow measured work is direct evidence even during a shorter interval.
             let quota = cpu.stolen > 0.20 || cpu.throttled;
             let busy = link.damage_pending && link.busy >= Duration::from_millis(500);
             let missed =
-                busy && f64::from(link.frames) < 0.8 * f64::from(fps) * link.busy.as_secs_f64();
+                busy && f64::from(link.grabs) < 0.8 * f64::from(fps) * link.busy.as_secs_f64();
             let starved = if work_pressure {
                 Some(Why::Work)
             } else if missed && cpu.stolen > 0.20 {
@@ -1195,6 +1200,7 @@ mod tests {
             delivered_kbps: 3000.0,
             queue_ms: 250,
             frames: 8,
+            grabs: 8,
             damage_pending: true,
             busy: Duration::from_millis(400),
         }
@@ -1202,6 +1208,7 @@ mod tests {
     fn active(frames: u32) -> Link {
         Link {
             frames,
+            grabs: frames,
             damage_pending: true,
             busy: Duration::from_secs(1),
             delivered_kbps: 3000.0,
@@ -2242,7 +2249,7 @@ mod tests {
         assert_eq!((moves[1].source, moves[1].why), (Source::Cpu, Why::Work));
         assert_eq!(
             moves[0].to_string(),
-            "source=link from=0 to=1 fps=20 crf=24 scale=full why=congested blocked=60 queue_ms=250 offered_kbps=9600 delivered_kbps=3000 work_ms=35 stolen=0 frames=8 busy_ms=400"
+            "source=link from=0 to=1 fps=20 crf=24 scale=full why=congested blocked=60 queue_ms=250 offered_kbps=9600 delivered_kbps=3000 work_ms=35 stolen=0 frames=8 busy_ms=400 grabs=8"
         );
     }
 
