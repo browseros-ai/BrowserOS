@@ -6,6 +6,7 @@ pub mod browser;
 pub mod captcha;
 pub mod capture;
 pub mod claude_desktop;
+pub mod cli_tasks;
 pub mod cockpit;
 pub mod decisions;
 pub mod error_reporting;

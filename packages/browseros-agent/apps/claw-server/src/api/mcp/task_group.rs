@@ -31,6 +31,18 @@ pub(super) fn take(args: &mut Value) -> Option<String> {
         .map(str::to_string)
 }
 
+/// The group a `tab_groups` close names, which for a CLI task is the user's "done".
+pub(super) fn closing_group(tool: &str, args: &Value) -> Option<String> {
+    if tool != "tab_groups" || args.get("action").and_then(Value::as_str) != Some("close") {
+        return None;
+    }
+    args.get("groupId")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|group| !group.is_empty())
+        .map(str::to_string)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -60,5 +72,23 @@ mod tests {
         let mut absent = json!({ "url": "https://example.com" });
         assert_eq!(take(&mut absent), None);
         assert_eq!(absent, json!({ "url": "https://example.com" }));
+    }
+
+    #[test]
+    fn only_a_tab_groups_close_names_a_closing_group() {
+        let close = json!({ "action": "close", "groupId": " G1 " });
+        assert_eq!(closing_group("tab_groups", &close), Some("G1".to_string()));
+        assert_eq!(
+            closing_group(
+                "tab_groups",
+                &json!({ "action": "update", "groupId": "G1" })
+            ),
+            None
+        );
+        assert_eq!(
+            closing_group("tab_groups", &json!({ "action": "close" })),
+            None
+        );
+        assert_eq!(closing_group("tabs", &close), None);
     }
 }

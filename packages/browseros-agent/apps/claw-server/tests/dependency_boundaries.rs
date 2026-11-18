@@ -145,6 +145,16 @@ fn tab_cleanup_to_browser_is_an_allowed_service_edge() {
 }
 
 #[test]
+fn cli_tasks_reads_the_browser_and_ends_sessions() {
+    for source in [
+        "use crate::services::browser::BrowserService;",
+        "use crate::services::sessions::Sessions;",
+    ] {
+        assert!(check_source(Path::new("services/cli_tasks.rs"), source).is_ok());
+    }
+}
+
+#[test]
 fn capture_reads_session_tabs_through_cockpit_and_sessions() {
     assert!(
         violations(
@@ -587,6 +597,9 @@ fn allowed_service_edge(source: &str, target: &str) -> bool {
             | ("skills", "flow")
             // The decisions worker is reached with the licence billing holds.
             | ("decisions", "billing")
+            // A CLI task ends with its tab group: it reads the browser's groups and ends the
+            // task's session.
+            | ("cli_tasks", "browser" | "sessions")
     )
 }
 

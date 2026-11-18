@@ -12,6 +12,9 @@ const SESSION_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 const AUDIT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 /// How often the ultrafast switch re-reads the plan. Buying or ending a plan shows up within this.
 const ULTRAFAST_GATE_EVERY: Duration = Duration::from_secs(10);
+/// How old a CLI task's group binding must be before the sweep may read its group as gone,
+/// so a pass racing the group's creation cannot end the task starting in it.
+const CLI_GROUP_SWEEP_GRACE: Duration = Duration::from_secs(10);
 
 #[derive(Clone, Debug, Default)]
 pub struct ShutdownHandle {
@@ -98,6 +101,41 @@ impl AppRuntime {
                                         Ok(_) => {}
                                         Err(error) => {
                                             warn!(error = %error, "agent tab cleanup sweep failed");
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }),
+            },
+            BackgroundTask {
+                name: "CLI task group sweeper",
+                handle: tokio::spawn({
+                    let state = state.clone();
+                    let cancel = shutdown.child_token();
+                    async move {
+                        let mut ticker = tokio::time::interval(state.config.session_sweep_interval);
+                        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                        loop {
+                            tokio::select! {
+                                () = cancel.cancelled() => return,
+                                _ = ticker.tick() => {
+                                    match crate::services::cli_tasks::sweep_closed_groups(
+                                        &state.sessions,
+                                        &state.task_groups,
+                                        &state.browser,
+                                        crate::clock::now_epoch_ms(),
+                                        CLI_GROUP_SWEEP_GRACE,
+                                    )
+                                    .await
+                                    {
+                                        Ok(count) if count > 0 => {
+                                            info!(count, "ended CLI tasks whose tab group was closed");
+                                        }
+                                        Ok(_) => {}
+                                        Err(error) => {
+                                            warn!(error = %error, "CLI task group sweep failed");
                                         }
                                     }
                                 }

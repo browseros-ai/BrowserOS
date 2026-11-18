@@ -949,6 +949,35 @@ impl ClawMcpService {
         Ok(started)
     }
 
+    /// The agent closing its CLI task's group is the user saying the task is done. Runs
+    /// after the close dispatch has finished and been audited, so ending the session here
+    /// waits on nothing and the close itself stays in the task's history. Only the owning
+    /// task's close ends it.
+    async fn end_cli_task_for_closed_group(&self, session_id: &SessionId, group: &str) {
+        let binding = match self.state.task_groups.lookup_live(group).await {
+            Ok(Some(binding)) => binding,
+            Ok(None) => return,
+            Err(error) => {
+                warn!(error = %error, group, "reading a closed group's task failed");
+                return;
+            }
+        };
+        if binding.session_id != session_id.as_str() {
+            return;
+        }
+        if let Err(error) = crate::services::cli_tasks::end_task_for_group(
+            &self.state.sessions,
+            &self.state.task_groups,
+            &binding,
+            crate::services::cli_tasks::REASON_TASK_DONE,
+            crate::clock::now_epoch_ms(),
+        )
+        .await
+        {
+            warn!(error = %error, group, "ending a CLI task after its group closed failed");
+        }
+    }
+
     async fn cli_task_was_stopped(&self, session_id: &SessionId) -> bool {
         self.state.targets.is_stopped(session_id).await
             || matches!(
@@ -1470,6 +1499,14 @@ impl ServerHandler for ClawMcpService {
         let modern = protocol_version_from_extensions(&context.extensions)
             .is_some_and(|version| version >= ProtocolVersion::V_2026_07_28)
             && session_id_from_extensions(&context.extensions).is_none();
+        let cli_call = modern
+            && provided_handle.is_none()
+            && context
+                .meta
+                .client_info()
+                .as_ref()
+                .map(client_info_from_implementation)
+                .is_some_and(|client| task_group::is_cli_client(&client.name));
         let (started, modern_handle) = if modern {
             // rmcp extracts wire _meta into RequestContext during decoding;
             // typed request.meta is empty even when the client supplied it.
@@ -1481,11 +1518,7 @@ impl ServerHandler for ClawMcpService {
             let declared = declared_agent_name
                 .as_deref()
                 .map(client_info_from_declared_name);
-            let cli = provided_handle.is_none()
-                && modern_client
-                    .as_ref()
-                    .is_some_and(|client| task_group::is_cli_client(&client.name));
-            if cli {
+            if cli_call {
                 // The CLI's task is its tab group, so it is handed no session handle:
                 // echoing one would put session bookkeeping back in front of the agent
                 // reading the command's output.
@@ -1531,6 +1564,11 @@ impl ServerHandler for ClawMcpService {
                 .await
                 .map_err(|error| McpError::invalid_request(error.to_string(), None))?;
         }
+        let closing_group = if cli_call {
+            task_group::closing_group(&request.name, &raw_args)
+        } else {
+            None
+        };
         if let Some(label) = task_name {
             self.apply_task_name(&started, label).await;
         }
@@ -1670,6 +1708,12 @@ impl ServerHandler for ClawMcpService {
                 crate::clock::now_epoch_ms(),
             )
             .await;
+        }
+        if let Some(group) = closing_group
+            && matches!(&finished, Ok(result) if !result.is_error.unwrap_or(false))
+        {
+            self.end_cli_task_for_closed_group(started.session.id(), &group)
+                .await;
         }
         let mut result = session_handle::attach(finished, modern_handle, presented_handle)?;
         // The tip asks the agent to close the group the server made for it, so it has no place
