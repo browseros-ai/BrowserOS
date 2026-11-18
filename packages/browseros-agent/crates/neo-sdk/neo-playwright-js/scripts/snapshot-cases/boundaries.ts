@@ -309,6 +309,15 @@ export const boundaries: Gap = {
         children: ['Your changes are saved.', button('OK', 'e4')],
       },
     ]),
+    // Text alone past 12,000 units: no line prints, and the notice is longer than the limit.
+    'boundaries/notice-alone': tree([
+      { role: 'paragraph', children: ['w '.repeat(6000)] },
+    ]),
+    // The same, with closed roots not all read: their pinned line follows the notice.
+    'boundaries/notice-alone-roots': tree(
+      [{ role: 'paragraph', children: ['w '.repeat(6000)] }],
+      { closedRoots: { sent: 1, found: 2 } },
+    ),
   },
   cases: [
     ...calls('boundaries/text-12000', { element: element() }),
@@ -360,6 +369,14 @@ export const boundaries: Gap = {
     ...calls('boundaries/notice-inert', {
       'delta-under-notice-inert': delta({}, UNDER_NOTICE_INERT),
       'delta-under-notice': delta({}, UNDER_NOTICE),
+    }),
+    ...calls('boundaries/notice-alone', {
+      'page-max1': page({ maxTokens: 1 }),
+      'page-max17': page({ maxTokens: 17 }),
+    }),
+    ...calls('boundaries/notice-alone-roots', {
+      'page-max1': page({ maxTokens: 1 }),
+      'page-max17': page({ maxTokens: 17 }),
     }),
   ],
 }
