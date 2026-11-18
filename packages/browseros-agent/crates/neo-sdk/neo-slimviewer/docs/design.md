@@ -18,7 +18,9 @@ consecutive congested seconds without delivery can accelerate those steps.
 Slow measured work can lower the CPU limit. Throttle or steal counts only when
 capture falls below 80% of the current cadence during at least half a second
 with damage pending and the pacer open. Grabs that find unchanged pixels count.
-Recovery takes one step at a time after sustained headroom. A return to full-size
+Recovery takes one step at a time. To raise quality or frame rate, the link needs
+clean seconds with at least five large, non-key motion frames each. Small updates
+between swipes preserve any clean seconds already earned. A return to full-size
 motion must also fit the link's 300 ms keyframe budget. Burst probes subtract
 the lowest RTT seen in the preceding five minutes. After congestion, both the
 keyframe budget and the motion-rate check cap the latest probe at the measured

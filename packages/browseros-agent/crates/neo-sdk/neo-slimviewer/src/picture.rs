@@ -993,7 +993,13 @@ impl Picture {
             return self.link_pressure(now, why);
         }
         self.link.pressure = 0;
-        if at == 0 || at > cap || link.queue_ms >= 40 || link.delivered_kbps == 0.0 {
+        // Small updates can drain on a link that would still queue a swipe.
+        if at == 0
+            || at > cap
+            || link.queue_ms >= 40
+            || link.delivered_kbps == 0.0
+            || self.work.len() < 5
+        {
             return None;
         }
         self.link.clean = self.link.clean.saturating_add(1);
@@ -1917,6 +1923,9 @@ mod tests {
         let half = to_link_half(&mut p, t);
         let mut changes = Vec::new();
         for n in 1..=14 {
+            if n > 2 {
+                sized_motion(&mut p, at(half, n), 10_000, 5);
+            }
             for m in p.tick(at(half, n), active(15), Cpu::default()) {
                 assert_eq!(m.to + 1, m.from);
                 changes.push((n, p.motion_scale(), p.crf(), p.fps()));
@@ -1936,6 +1945,46 @@ mod tests {
     }
 
     #[test]
+    fn tests_that_small_changes_between_swipes_do_not_climb_fps() {
+        let t = Instant::now();
+        let mut p = picture(t);
+        for n in 1..=2 {
+            p.tick(at(t, n), jam(), Cpu::default());
+        }
+        assert_eq!(p.fps(), 15.0);
+
+        for n in 3..=22 {
+            let now = at(t, n);
+            for i in 0..15 {
+                p.encoded(
+                    now,
+                    Encoded {
+                        bytes: 250,
+                        big: i < 5,
+                        key: i == 4,
+                        ..frame(Scale::Full, 10)
+                    },
+                );
+            }
+            p.tick(
+                now,
+                Link {
+                    sent_kbps: 30.0,
+                    delivered_kbps: 30.0,
+                    ..active(15)
+                },
+                Cpu::default(),
+            );
+            assert_eq!(p.fps(), 15.0, "carousel tick {n}");
+        }
+        for n in 23..=25 {
+            sized_motion(&mut p, at(t, n), 10_000, 5);
+            p.tick(at(t, n), active(15), Cpu::default());
+            assert_eq!(p.fps(), if n == 25 { 20.0 } else { 15.0 });
+        }
+    }
+
+    #[test]
     fn tests_that_alternating_clean_and_jittery_ticks_restore_full_cadence() {
         let t = Instant::now();
         let mut p = picture(t);
@@ -1950,6 +1999,7 @@ mod tests {
         assert_eq!((p.crf(), p.fps()), (30.0, 15.0));
         let mut climbs = Vec::new();
         for n in 2..=24 {
+            sized_motion(&mut p, at(t, n), 10_000, 5);
             let link = Link {
                 queue_ms: if n % 2 == 0 { 30 } else { 50 },
                 ..active(15)
@@ -1968,16 +2018,17 @@ mod tests {
         let mut p = picture(t);
         p.window_reset(t);
         p.tick(t, Link::default(), Cpu::default());
-        for (n, queue_ms, blocked, crf) in [
-            (1, 30, 0.0, 30.0),
-            (2, 40, 0.0, 30.0),
-            (3, 150, 0.0, 30.0),
-            (4, 30, 0.4, 30.0),
-            (5, 30, 0.0, 30.0),
-            (6, 150, 0.0, 30.0),
-            (7, 40, 0.0, 30.0),
-            (8, 30, 0.0, 28.0),
+        for (n, queue_ms, blocked, big_frames, crf) in [
+            (1, 30, 0.0, 5, 30.0),
+            (2, 40, 0.0, 5, 30.0),
+            (3, 150, 0.0, 5, 30.0),
+            (4, 30, 0.4, 5, 30.0),
+            (5, 30, 0.0, 5, 30.0),
+            (6, 150, 0.0, 5, 30.0),
+            (7, 30, 0.0, 4, 30.0),
+            (8, 30, 0.0, 5, 28.0),
         ] {
+            sized_motion(&mut p, at(t, n), 10_000, big_frames);
             p.tick(
                 at(t, n),
                 Link {
@@ -1996,6 +2047,7 @@ mod tests {
         let t = Instant::now();
         let mut p = picture(t);
         for n in 1..=11 {
+            sized_motion(&mut p, at(t, n), 10_000, 5);
             p.tick(
                 at(t, n),
                 if n == 1 || n == 5 { jam() } else { active(15) },
@@ -2011,6 +2063,7 @@ mod tests {
         let mut p = picture(t);
         let mut changes = Vec::new();
         for n in 1..=120 {
+            sized_motion(&mut p, at(t, n), 10_000, 5);
             let link = if p.fps() == 30.0 { jam() } else { active(20) };
             if !p.tick(at(t, n), link, Cpu::default()).is_empty() && n > 60 {
                 changes.push(n);
@@ -2356,6 +2409,7 @@ mod tests {
                 .is_empty()
             );
         }
+        motion(&mut p, at(t, 41), Scale::Full, 10);
         let moves = p.tick(at(t, 41), active(8), Cpu::default());
         assert_eq!(moves[0].why, Why::Clean);
         p.tick(at(t, 42), Link::default(), Cpu::default());
