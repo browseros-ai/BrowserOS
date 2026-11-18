@@ -104,13 +104,9 @@ pub fn written_path(output: &ToolOutput) -> Option<String> {
         .map(str::to_string)
 }
 
-/// The tab group a listing reports for one page.
-///
-/// The group id is the durable half of the session identity: the transport id
-/// dies with the server, while a known group can be re-claimed on `tabs new`.
-/// It is only discoverable from a listing, as `[group <ID>]` on the page's
-/// line, because the server creates the group when the first tab is opened
-/// and does not name it in that reply.
+/// The tab group a listing reports for one page, as `[group <ID>]` on the
+/// page's line. The server names the task's own group in every result, so this
+/// is for the other groups a listing shows, such as which pages are in one.
 #[must_use]
 pub fn group_of(output: &ToolOutput, page: u32) -> Option<String> {
     if let Some(group) = output
@@ -141,7 +137,7 @@ pub fn group_of(output: &ToolOutput, page: u32) -> Option<String> {
         .map(str::to_string)
 }
 
-/// A key/value block, used by `status` and `session list`.
+/// A key/value block, used by `status` and `task start`.
 #[must_use]
 pub fn fields(rows: &[(&str, String)]) -> String {
     let width = rows.iter().map(|(key, _)| key.len()).max().unwrap_or(0);
@@ -258,8 +254,8 @@ mod tests {
 
     #[test]
     fn an_empty_field_is_left_out_rather_than_printed_blank() {
-        let block = fields(&[("session", "abc".into()), ("task", String::new())]);
-        assert_eq!(block, "session  abc");
+        let block = fields(&[("group", "abc".into()), ("task", String::new())]);
+        assert_eq!(block, "group  abc");
     }
 
     #[test]
@@ -343,9 +339,8 @@ mod tests {
         assert_eq!(listed_pages(&output), vec![1, 2]);
     }
 
-    /// The real wire shape, captured live. Without this the scope file never
-    /// learns the group, so `session end --close-tabs` has nothing to close
-    /// and a restart cannot re-claim the task's group.
+    /// The real wire shape, captured live. `task done --keep-tabs` reads which
+    /// pages are in the task's group from it.
     #[test]
     fn the_group_for_a_page_is_read_from_its_listing_line() {
         let output = ToolOutput {

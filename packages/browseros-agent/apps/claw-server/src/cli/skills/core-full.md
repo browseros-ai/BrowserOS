@@ -5,18 +5,21 @@ For the short version, use `browseros skills get core`.
 
 ## The model
 
-One command is one tool call against claw-server's MCP endpoint. The CLI owns
-no browser logic: the server is the daemon, the CDP client, the snapshot
-builder and the ref resolver.
+One command is one stateless tool call against claw-server's MCP endpoint. The
+CLI owns no browser logic: the server is the daemon, the CDP client, the
+snapshot builder and the ref resolver.
 
-Three things are remembered per directory so commands carry no plumbing: the
-current page, the MCP session id and the tab group id. They live in
-`<browserclaw_dir>/cli/<scope>.json`, where the scope is the git worktree root
-and `<browserclaw_dir>` is the same state directory the server uses, so a dev
-server and a release server never share a session.
+There is no session. A task is the tab group it works in: the first page opens
+the group, every command presents it, and the server resolves the task from it
+and names the group back in each result. Two things are remembered per
+directory so commands carry no plumbing: the current page and the task's tab
+group. They live in `<browserclaw_dir>/cli/<scope>.json`, where the scope is the
+git worktree root and `<browserclaw_dir>` is the same state directory the
+server uses, so a dev server and a release server never share a task.
 
-`BROWSEROS_SESSION=<name>` pins an explicit scope. `--page` overrides the
-remembered page for one command. `browseros use <id>` changes it.
+`BROWSEROS_TASK=<name>` pins an explicit scope, so two agents in one checkout
+can each work on a task of their own. `--page` overrides the remembered page for
+one command. `browseros use <id>` changes it.
 
 ## Global flags
 
@@ -27,7 +30,6 @@ remembered page for one command. `browseros use <id>` changes it.
 --json               wrap the result in a JSON envelope on stdout
 --quiet, -q          suppress the CLI's own notices on stderr
 --client-timeout <ms>  client read timeout, default 180000
---no-auto-session    fail instead of pairing a session automatically
 ```
 
 `--agent` is also read from `BROWSEROS_AGENT`, which is how a harness sets it
@@ -56,25 +58,30 @@ the release one is used and the CLI says so once.
 
 ## Every command
 
-### Session and state
+### Tasks and state
 
 ```bash
-browseros status                     # endpoint, link, session, page, optional commands
-browseros session start [--task "..."] [--category C] [--summary S]
-browseros session status
-browseros session list               # every scope file on this machine
-browseros session name "<task>" [--category C] [--summary S]
-browseros session end [--close-tabs] [--all]
+browseros status                     # endpoint, link, task, page, optional commands
+browseros task start [--name "..."] [--category C] [--summary S]
+browseros task status
+browseros task list                  # every directory on this machine with a task
+browseros task name "<task>" [--category C] [--summary S]
+browseros task done [--keep-tabs] [--all]
 browseros use <page>
 ```
 
-`session start` performs the handshake once, lists tabs (which is how a group
-left behind by a previous session for this directory is adopted rather than a
-second one started), and names the task. Pairing is otherwise implicit: any
-command with no usable session pairs itself and says so on stderr.
+A task starts with its first page, which is where the server opens its tab
+group. `task start` only names it ahead of time; the name is applied once the
+group exists. Every later command joins the task by presenting its group, and
+a command run in a new process, or after the server restarts, lands in the same
+task and the same history row.
 
-`session end` sends `DELETE /mcp` and clears the scope file. It deliberately
-leaves tabs open; `--close-tabs` closes the task's tab group as well.
+`task done` is for when the user says the task is done. It closes the tab group,
+which ends the task on the server and clears the scope file. `--keep-tabs` takes
+the pages out of the group instead, which ends the task the same way and leaves
+them open. If the user closes the group's tabs themselves, the task ends too,
+and the CLI notices on the next command. A task is never ended by going quiet,
+however long the agent waits between commands.
 
 ### Tabs, groups, windows
 
@@ -281,7 +288,8 @@ typed into the page and recorded with the call like any other argument.
 3    no browser: nothing answering any endpoint, or the browser link is down
 4    timeout, including a run killed at the server's wall-clock cap
 5    a human pressed Stop in the cockpit. Do not retry.
-130  interrupted. The CLI tells the server to stop the call before exiting.
+6    this computer does not have the ultrafast plan, which the CLI is part of
+130  interrupted. Abandoning the request stops the call on the server.
 ```
 
 Exit 5 exists because the server distinguishes a client cancellation from a

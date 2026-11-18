@@ -21,11 +21,11 @@ pub struct ImageBlock {
     pub mime_type: String,
 }
 
-/// The line the server appends when it issues a logical session handle.
+/// The line the server appends when it issues a session handle to an MCP agent.
 ///
-/// Over HTTP with a transport session id the handle is withheld, so this should
-/// never appear. It would appear over stdio. Filtering it costs nothing and
-/// keeps stdout clean if the transport ever changes.
+/// The server hands the CLI no handle, because its task is its tab group, so
+/// this should never appear. Filtering it costs nothing and keeps the agent
+/// reading the output from ever being told to carry a session.
 const HANDLE_PREFIX: &str = "[browseros-neo session:";
 
 impl ToolOutput {

@@ -7,9 +7,9 @@
 //! together and the CLI needs no dependency the server does not already have.
 //!
 //! What makes it feel different from driving the same tools over MCP is state.
-//! Every page-scoped tool needs `page` and every tool accepts `session`; both
-//! live in a scope file, so `browseros click @e3` carries nothing the caller
-//! has to remember.
+//! Every page-scoped tool needs `page`, and every call presents the task's tab
+//! group; both live in a scope file, so `browseros click @e3` carries nothing
+//! the caller has to remember, and there is no session to manage.
 
 pub mod capability;
 pub mod client;

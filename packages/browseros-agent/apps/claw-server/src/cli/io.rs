@@ -20,7 +20,7 @@ pub fn out(text: &str) {
     println!("{text}");
 }
 
-/// The CLI's own notices: implicit pairing, session recovery, clamped values.
+/// The CLI's own notices: a task that ended, a new task started, clamped values.
 /// Always stderr, and suppressed by `--quiet`.
 pub fn note(text: &str) {
     if QUIET.load(Ordering::Relaxed) {

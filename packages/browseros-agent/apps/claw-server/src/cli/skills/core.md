@@ -1,21 +1,21 @@
 # browseros: the working guide
 
 A command line over BrowserOS neo. The browser is real, already signed into the
-user's accounts, and shared with them. The CLI remembers the current page, the
-session and the tab group per directory, so commands carry no plumbing.
+user's accounts, and shared with them. The CLI remembers the current page and
+the task's tab group per directory, so commands carry no plumbing and there is
+no session to manage.
 
 ## Start here
 
 ```bash
-browseros status                 # endpoint, browser link, session, page, what this server offers
+browseros status                 # endpoint, browser link, task, page, what this server offers
 browseros open https://example.com
 browseros snapshot -i            # interactive elements, each with a [ref=eN] handle
 browseros click @e3              # the ref from the snapshot, no page argument needed
 ```
 
-`status` is worth running first in a new directory. It pairs the session, reports
-whether the browser link is up, and lists which optional commands this server
-actually has.
+`status` is worth running first in a new directory. It reports whether the
+browser link is up and lists which optional commands this server actually has.
 
 ## The loop
 
@@ -171,20 +171,24 @@ Wait on the thing, not the clock: a selector wait returns the moment it appears.
 Opening, navigating and a page-changing `eval` already return settled, so never
 pause after one.
 
-## Tabs, groups and the session
+## A task is a tab group
 
 ```bash
+browseros task start --name "price check"  # optional: name it before its first page
+browseros task status | task list
+browseros task done [--keep-tabs]          # the user said it is done
 browseros tab list | tab new [url] | tab close [page] | tab active
-browseros use 5                      # set the remembered page
-browseros group list | group close <id>
-browseros session start --task "price check"
-browseros session status | session list
-browseros session end [--close-tabs]
+browseros use 5                            # set the remembered page
 ```
 
+The first page you open starts the task: neo puts it in a tab group, and every
+command in this directory joins that group. Nothing has to be carried between
+commands, and there is no session to start or repair. When the user says the
+task is done, `task done` closes the group, which ends the task; `--keep-tabs`
+ends it but leaves the pages open, out of their group. If the user closes the
+group's tabs themselves, the task ends too, and the next page starts a new one.
+
 New tabs always open in the background: an agent never switches the user's tab.
-`session end` leaves tabs open unless asked otherwise, because useful pages
-should survive the end of a task.
 
 ## Browser etiquette
 
@@ -205,6 +209,7 @@ exit 2   usage error (bad flag, unknown command, malformed ref, out-of-range val
 exit 3   no browser (nothing answering, or the link is down)
 exit 4   timeout, including a run killed at the server's wall-clock cap
 exit 5   a human pressed Stop in the cockpit. Do not retry this one.
+exit 6   this computer does not have the ultrafast plan, which the CLI is part of
 exit 130 interrupted
 ```
 

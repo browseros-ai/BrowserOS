@@ -99,20 +99,21 @@ pub struct Scope {
 /// Resolves the scope: the git worktree root, else the working directory.
 ///
 /// Worktree root rather than cwd is deliberate. An agent that cds into a
-/// subdirectory mid-task must keep the same browser session; the alternative
-/// silently starts a second one and orphans the first one's tabs.
+/// subdirectory mid-task must keep the same task; the alternative silently
+/// starts a second one in a second tab group.
 ///
-/// `BROWSEROS_SESSION=<name>` pins an explicit scope and overrides both.
+/// `BROWSEROS_TASK=<name>` pins an explicit scope and overrides both, so two
+/// agents in one checkout can each work on a task of their own.
 #[must_use]
 pub fn scope(dir: &Path, worktree_root: Option<&Path>) -> Scope {
-    if let Some(name) = std::env::var("BROWSEROS_SESSION")
+    if let Some(name) = std::env::var("BROWSEROS_TASK")
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
     {
         return Scope {
             path: PathBuf::from(format!("name:{name}")),
-            label: format!("session {name}"),
+            label: format!("task {name}"),
         };
     }
     let root = worktree_root.unwrap_or(dir);
@@ -154,7 +155,7 @@ pub fn scope_key(scope: &Scope) -> String {
 }
 
 /// The CLI's own directory inside whichever state directory the server uses,
-/// so a dev server and a release server never share a session.
+/// so a dev server and a release server never share a task.
 #[must_use]
 pub fn state_dir() -> Option<PathBuf> {
     crate::cli::endpoint::release_dir().map(|dir| dir.join("cli"))
@@ -171,7 +172,7 @@ impl Store {
     /// Fails only when the state directory cannot be created.
     pub fn open(scope: &Scope) -> anyhow::Result<Self> {
         let dir = state_dir().ok_or_else(|| {
-            crate::cli::exit::Failure::usage("cannot locate a home directory for the session file")
+            crate::cli::exit::Failure::usage("cannot locate a home directory for the scope file")
         })?;
         Self::open_in(&dir, scope)
     }
@@ -213,7 +214,7 @@ impl Store {
             Ok(state) => state,
             Err(error) => {
                 io::note(&format!(
-                    "[session file was unreadable and has been reset: {error}]"
+                    "[scope file was unreadable and has been reset: {error}]"
                 ));
                 State::default()
             }
@@ -277,7 +278,7 @@ impl Store {
             }
             if SystemTime::now() >= deadline {
                 io::note(
-                    "[another browseros command is holding the session file; continuing without the lock]",
+                    "[another browseros command is holding the scope file; continuing without the lock]",
                 );
                 return false;
             }
@@ -306,7 +307,7 @@ impl Store {
     }
 }
 
-/// Every scope file on this machine, for `session list`.
+/// Every scope file on this machine, for `task list`.
 #[must_use]
 pub fn all_scopes() -> BTreeMap<String, State> {
     state_dir().map(|dir| scopes_in(&dir)).unwrap_or_default()

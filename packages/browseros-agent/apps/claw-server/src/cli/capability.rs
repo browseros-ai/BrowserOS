@@ -69,7 +69,7 @@ pub fn unavailable(tool: &str, offered: &[String]) -> Option<&'static str> {
     if offered.is_empty() {
         // Nothing has been asked yet, which must read as offered rather than
         // as absent: refusing a call on an empty cache would break the first
-        // command of every session.
+        // command in every directory.
         return None;
     }
     if offered.iter().any(|name| name == tool) {
