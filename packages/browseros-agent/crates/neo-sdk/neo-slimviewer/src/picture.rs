@@ -913,10 +913,7 @@ impl Picture {
                 self.backoff = Duration::from_secs(2);
             }
         }
-        // An ACK burst can drain bytes sent in earlier intervals. Limit the half encoder
-        // to current demand, keeping its minimum usable rate when little was sent.
-        let demand_cap = (1.2 * link.sent_kbps).clamp(300.0, 8000.0) as u32;
-        self.link_kbps = self.link_kbps.min(demand_cap);
+        self.link_kbps = self.link_kbps.min(8000);
     }
 
     fn link_step(
@@ -1940,27 +1937,45 @@ mod tests {
     }
 
     #[test]
-    fn tests_that_burst_acks_cannot_raise_the_link_budget_above_sent_demand() {
+    fn tests_that_half_size_vbv_does_not_ratchet_down() {
         let t = Instant::now();
         let mut p = picture(t);
-        for (n, blocked, sent_kbps, budget) in [
-            (1, 0.6, 30_000.0, 8000),
-            (2, 0.6, 1000.0, 1200),
-            (3, 0.0, 500.0, 600),
-            (4, 0.6, 0.0, 300),
-        ] {
+        let half = to_link_half(&mut p, t);
+        costly_half_key(&mut p, half);
+        let budget = p.link_kbps();
+        assert_eq!(budget, 2550); // 85% of the 3 Mb/s delivery.
+        for n in 1..=30 {
+            let sent_kbps = (p.link_kbps() as f32 * 0.5).min(3000.0);
             p.tick(
-                at(t, n),
+                at(half, n),
                 Link {
-                    blocked,
+                    blocked: if n % 10 == 0 { 0.4 } else { 0.0 },
                     sent_kbps,
-                    delivered_kbps: 24_000.0,
-                    ..Link::default()
+                    delivered_kbps: sent_kbps,
+                    ..active(15)
                 },
                 Cpu::default(),
             );
-            assert_eq!(p.link_kbps(), budget);
+            assert_eq!(p.motion_scale(), Scale::Half);
+            assert!(p.link_kbps() >= budget, "tick {n}: {} kbps", p.link_kbps());
         }
+    }
+
+    #[test]
+    fn tests_that_burst_acks_and_clean_ticks_respect_the_bitrate_ceiling() {
+        let t = Instant::now();
+        let mut p = picture(t);
+        p.tick(
+            t,
+            Link {
+                delivered_kbps: 24_000.0,
+                ..jam()
+            },
+            Cpu::default(),
+        );
+        assert_eq!(p.link_kbps(), 8000);
+        p.tick(at(t, 1), active(15), Cpu::default());
+        assert_eq!(p.link_kbps(), 8000);
     }
 
     #[test]

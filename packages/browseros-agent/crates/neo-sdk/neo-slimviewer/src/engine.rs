@@ -2898,7 +2898,7 @@ mod tests {
         assert!(p.tick(end, link, picture::Cpu::default()).is_empty());
         assert_eq!(p.plan(end, BIG).scale, Scale::Full);
         assert_eq!(p.capacity_kbps(end), Some(3000.0));
-        assert_eq!(p.link_kbps(), 300);
+        assert_eq!(p.link_kbps(), 408); // 85% of the delivery measured over the whole second.
         Ok(())
     }
 
