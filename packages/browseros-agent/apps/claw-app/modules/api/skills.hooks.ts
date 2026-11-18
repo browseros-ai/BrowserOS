@@ -12,6 +12,7 @@ import type {
   Skill,
   SkillCreate,
   SkillDetail,
+  SkillDraftStatus,
   SkillFlowSource,
   SkillList,
   SkillRunList,
@@ -68,4 +69,27 @@ export const useRunWithoutAgent = createMutation<Skill, SkillNameRequest>({
 /** Runs a write skill with the agent again, so it reads each page as it goes. */
 export const useRunWithAgent = createMutation<Skill, SkillNameRequest>({
   mutationFn: async (request) => (await apiClient()).revokeSkillWrite(request),
+})
+
+/**
+ * Where making a skill from one finished task stands. Every view of the task (its Home row, its
+ * History row, its page) reads this one entry, so a click on one shows on all of them.
+ */
+export const useSkillDraftStatus = createQuery<
+  SkillDraftStatus,
+  { sessionId: string },
+  Error
+>({
+  queryKey: ['api', 'skill-draft'],
+  fetcher: async ({ sessionId }) =>
+    (await apiClient()).getSkillDraft({ sessionId }),
+})
+
+/** Writes a skill draft from a finished task, or returns the one already written. */
+export const useDraftSkill = createMutation<
+  SkillDraftStatus,
+  { sessionId: string }
+>({
+  mutationFn: async ({ sessionId }) =>
+    (await apiClient()).draftSkillFromSession({ sessionId }),
 })
