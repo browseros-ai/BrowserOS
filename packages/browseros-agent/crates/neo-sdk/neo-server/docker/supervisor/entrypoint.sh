@@ -105,6 +105,17 @@ readonly MCP_REMOTE
 SLIMVIEWER_ENABLED=0
 if is_true "${NEO_SLIMVIEWER:-true}"; then SLIMVIEWER_ENABLED=1; fi
 readonly SLIMVIEWER_ENABLED
+readonly SLIMVIEWER_FEATURE_SEARCH=${NEO_SLIMVIEWER_FEATURE_SEARCH-scroll}
+case "$SLIMVIEWER_FEATURE_SEARCH" in
+  scroll | always | never) ;;
+  *) die "NEO_SLIMVIEWER_FEATURE_SEARCH must be scroll, always or never, got '$SLIMVIEWER_FEATURE_SEARCH'" ;;
+esac
+if [ -n "${NEO_SLIMVIEWER_FPS:-}" ]; then
+  LC_ALL=C fps="$NEO_SLIMVIEWER_FPS" awk 'BEGIN {
+    n = ENVIRON["fps"]
+    exit !(n ~ /^[+]?([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][+-]?[0-9]+)?$/ && n+0 >= 0.1 && n+0 <= 240)
+  }' || die "NEO_SLIMVIEWER_FPS must be a number from 0.1 to 240, got '$NEO_SLIMVIEWER_FPS'"
+fi
 CLEAR_SESSIONS=0
 if is_true "$NEO_CLEAR_SESSIONS"; then
   if [ "$BROWSERCLAW_HOSTED_MODE" = 1 ]; then
@@ -393,7 +404,7 @@ start_display() {
 }
 
 # Xvnc's shared memory belongs to the remapped neo uid. The viewer needs
-# only HOME and PATH. The exec chain keeps the viewer a direct child.
+# only HOME, PATH and its feature search mode. The exec chain keeps it a direct child.
 start_slimviewer() {
   local viewer=/usr/local/bin/slimviewer
   if [ "$SLIMVIEWER_ENABLED" = 0 ]; then
@@ -402,9 +413,9 @@ start_slimviewer() {
     log "Skipping slimviewer ($viewer is missing or not executable)"
   elif [ "$stopping" = 0 ]; then
     (exec setpriv --reuid=neo --regid=neo --init-groups --no-new-privs \
-      env -i PATH=/usr/local/bin:/usr/bin:/bin HOME="$NEO_HOME" \
+      env -i PATH=/usr/local/bin:/usr/bin:/bin HOME="$NEO_HOME" SV_OPENH264_FME="$SLIMVIEWER_FEATURE_SEARCH" \
       "$viewer" --display :1 --rfb 127.0.0.1:5900 \
-        --listen 127.0.0.1:5910 --listen-view 127.0.0.1:5911) &
+        --listen 127.0.0.1:5910 --listen-view 127.0.0.1:5911 ${NEO_SLIMVIEWER_FPS:+--fps "$NEO_SLIMVIEWER_FPS"}) &
     slimviewer_pid=$!
   fi
 }

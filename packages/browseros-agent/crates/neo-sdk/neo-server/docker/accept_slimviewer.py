@@ -144,6 +144,9 @@ def spectator_frame():
 def check_running():
     pid = ready_pid()
     parent = check_process(pid)
+    argv = Path(f'/proc/{pid}/cmdline').read_bytes().rstrip(b'\0').split(b'\0')
+    if argv[-2:] != [b'--fps', b'60']:
+        raise ValueError(f'expected --fps 60 in viewer argv: {argv}')
     frame = spectator_frame()
     start = time.monotonic()
     os.kill(pid, signal.SIGKILL)

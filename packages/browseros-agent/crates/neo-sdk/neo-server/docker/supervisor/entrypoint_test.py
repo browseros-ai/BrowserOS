@@ -1219,18 +1219,23 @@ class SlimviewerTest(unittest.TestCase):
         )
         stub.chmod(0o755)
 
-    def launch(self, setting: str | None = None, installed: bool = True) -> subprocess.CompletedProcess:
+    def launch(self, setting: str | None = None, installed: bool = True, fps: str | None = None,
+               feature_search: str | None = None) -> subprocess.CompletedProcess:
         if installed:
             self.viewer.write_text(
                 "#!/bin/sh\n"
                 'printf "viewer %s %s\\n" "$$" "$PPID"\n'
                 'printf "host token %s\\n" "${CLAW_HOST_TOKEN_FILE-unset}"\n'
+                'printf "feature search %s\\n" "${SV_OPENH264_FME-unset}"\n'
             )
             self.viewer.chmod(0o755)
-        parse = SCRIPT[SCRIPT.index("SLIMVIEWER_ENABLED=0\n"):SCRIPT.index("readonly SLIMVIEWER_ENABLED")]
+        parse = SCRIPT[SCRIPT.index("SLIMVIEWER_ENABLED=0\n"):SCRIPT.index("CLEAR_SESSIONS=0\n")]
         given = "unset NEO_SLIMVIEWER" if setting is None else f"NEO_SLIMVIEWER={shlex.quote(setting)}"
+        rate = "unset NEO_SLIMVIEWER_FPS" if fps is None else f"NEO_SLIMVIEWER_FPS={shlex.quote(fps)}"
+        search = ("unset NEO_SLIMVIEWER_FEATURE_SEARCH" if feature_search is None
+                  else f"NEO_SLIMVIEWER_FEATURE_SEARCH={shlex.quote(feature_search)}")
         return run_bash(
-            f"{given}\nPATH='{self.directory}':$PATH\n"
+            f"{given}\n{rate}\n{search}\nPATH='{self.directory}':$PATH\n"
             "export CLAW_HOST_TOKEN_FILE=/private/token\n"
             "NEO_HOME=/home/neo stopping=0 slimviewer_pid=''\n"
             'log() { echo "$*"; }\ndie() { echo "$*" >&2; exit 1; }\n'
@@ -1248,13 +1253,50 @@ class SlimviewerTest(unittest.TestCase):
         self.assertEqual(self.argv.read_text().splitlines(), [
             "--reuid=neo", "--regid=neo", "--init-groups", "--no-new-privs",
             "env", "-i", "PATH=/usr/local/bin:/usr/bin:/bin", "HOME=/home/neo",
-            str(self.viewer), "--display", ":1", "--rfb", "127.0.0.1:5900",
+            "SV_OPENH264_FME=scroll", str(self.viewer), "--display", ":1", "--rfb", "127.0.0.1:5900",
             "--listen", "127.0.0.1:5910", "--listen-view", "127.0.0.1:5911",
         ])
         tracked = re.search(r"^tracked (\d+ \d+)$", result.stdout, re.MULTILINE)
         self.assertIsNotNone(tracked)
         self.assertIn(f"viewer {tracked[1]}", result.stdout.splitlines())
         self.assertIn("host token unset", result.stdout.splitlines())
+
+    def test_empty_fps_uses_default_argv(self):
+        self.assertEqual(self.launch().returncode, 0)
+        expected = self.argv.read_bytes()
+        self.assertEqual(self.launch(fps="").returncode, 0)
+        self.assertEqual(self.argv.read_bytes(), expected)
+
+    def test_fps_is_passed_to_viewer(self):
+        for fps in ["60", "29.97", ".1", "240", "6e1"]:
+            with self.subTest(fps=fps):
+                result = self.launch(fps=fps)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(self.argv.read_text().splitlines()[-2:], ["--fps", fps])
+
+    def test_feature_search_mode_reaches_the_clean_viewer_environment(self):
+        for setting in ["scroll", "always", "never"]:
+            with self.subTest(setting=setting):
+                result = self.launch(feature_search=setting)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn(f"feature search {setting}", result.stdout.splitlines())
+                self.assertIn("host token unset", result.stdout.splitlines())
+
+    def test_invalid_feature_search_stops_startup(self):
+        for setting in ["sometimes", "true", ""]:
+            with self.subTest(setting=setting):
+                result = self.launch(feature_search=setting)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("NEO_SLIMVIEWER_FEATURE_SEARCH must be scroll, always or never", result.stderr)
+                self.assertFalse(self.argv.exists())
+
+    def test_invalid_fps_stops_startup(self):
+        for fps in ["junk", "0", "241", "-1", "60oops", "nan", "inf", "30\n60"]:
+            with self.subTest(fps=fps):
+                result = self.launch(fps=fps)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("NEO_SLIMVIEWER_FPS must be a number from 0.1 to 240", result.stderr)
+                self.assertFalse(self.argv.exists())
 
     def test_false_spellings_skip_an_installed_viewer(self):
         for setting in ["0", "false", "nO", "OFF"]:
