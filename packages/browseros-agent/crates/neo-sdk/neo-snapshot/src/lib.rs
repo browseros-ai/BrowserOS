@@ -75,5 +75,5 @@ mod snapshot;
 #[cfg(test)]
 mod split_mix64;
 
-pub use aria_node::{AriaChild, AriaNode, Invalid, NodeBox, Tristate};
+pub use aria_node::{AriaChild, AriaNode, Invalid, MAX_TREE_DEPTH, NodeBox, Tristate};
 pub use playwright::{PORTED_FROM, PortedFile};

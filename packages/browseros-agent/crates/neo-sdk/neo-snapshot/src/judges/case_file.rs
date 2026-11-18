@@ -114,10 +114,9 @@ impl Chain {
     fn built(&self) -> AriaNode {
         let mut node = self.leaf.clone();
         for _ in 1..self.depth {
-            node = AriaNode {
-                children: vec![AriaChild::Node(Box::new(node))],
-                ..self.link.clone()
-            };
+            let mut link = self.link.clone();
+            link.children = vec![AriaChild::Node(Box::new(node))];
+            node = link;
         }
         node
     }
