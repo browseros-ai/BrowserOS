@@ -943,7 +943,6 @@ impl Picture {
         }
         self.link.pressure = 0;
         if at == 0 || at > cap || link.queue_ms >= 40 || link.delivered_kbps == 0.0 {
-            self.link.clean = 0;
             return None;
         }
         self.link.clean = self.link.clean.saturating_add(1);
@@ -1728,6 +1727,62 @@ mod tests {
                 (14, Scale::Full, 24.0, 30.0)
             ]
         );
+    }
+
+    #[test]
+    fn tests_that_alternating_clean_and_jittery_ticks_restore_full_cadence() {
+        let t = Instant::now();
+        let mut p = picture(t);
+        p.tick(
+            at(t, 1),
+            Link {
+                queue_ms: 400,
+                ..jam()
+            },
+            Cpu::default(),
+        );
+        assert_eq!((p.crf(), p.fps()), (30.0, 15.0));
+        let mut climbs = Vec::new();
+        for n in 2..=24 {
+            let link = Link {
+                queue_ms: if n % 2 == 0 { 30 } else { 50 },
+                ..active(15)
+            };
+            if !p.tick(at(t, n), link, Cpu::default()).is_empty() {
+                climbs.push(n);
+            }
+        }
+        assert_eq!(climbs, [4, 8, 12, 18, 24]);
+        assert_eq!((p.crf(), p.fps()), (24.0, 30.0));
+    }
+
+    #[test]
+    fn tests_that_only_pressure_discards_a_clean_link_tick() {
+        let t = Instant::now();
+        let mut p = picture(t);
+        p.window_reset(t);
+        p.tick(t, Link::default(), Cpu::default());
+        for (n, queue_ms, blocked, crf) in [
+            (1, 30, 0.0, 30.0),
+            (2, 40, 0.0, 30.0),
+            (3, 150, 0.0, 30.0),
+            (4, 30, 0.4, 30.0),
+            (5, 30, 0.0, 30.0),
+            (6, 150, 0.0, 30.0),
+            (7, 40, 0.0, 30.0),
+            (8, 30, 0.0, 28.0),
+        ] {
+            p.tick(
+                at(t, n),
+                Link {
+                    queue_ms,
+                    blocked,
+                    ..active(15)
+                },
+                Cpu::default(),
+            );
+            assert_eq!(p.crf(), crf, "tick {n}");
+        }
     }
 
     #[test]
