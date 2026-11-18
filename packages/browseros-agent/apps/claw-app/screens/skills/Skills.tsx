@@ -16,6 +16,7 @@ import { Page } from '@/components/layout/Page'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Button } from '@/components/motion/button/base'
 import { CARD_TARGET_CLASS, Card } from '@/components/motion/card'
+import { useUpgradeToasts } from '@/components/skills/NowUltrafast'
 import { Phrase } from '@/components/skills/Phrase'
 import { RunSkillButton } from '@/components/skills/RunSkillButton'
 import { SkillActions } from '@/components/skills/SkillActions'
@@ -41,6 +42,7 @@ export function Skills() {
   const { skills, agents, isLoading, isError } = useSkillsScreenData()
   const [creating, setCreating] = useState(false)
   const triedSkill = useTriedSkill()
+  useUpgradeToasts(skills)
   const now = Date.now()
 
   return (

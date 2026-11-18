@@ -37,6 +37,7 @@ import {
   CollapsibleTrigger,
 } from '@/components/motion/collapsible'
 import { SkillPicture } from '@/components/pro/UltrafastPictures'
+import { NowUltrafastStrip } from '@/components/skills/NowUltrafast'
 import { Phrase } from '@/components/skills/Phrase'
 import { RunSkillButton } from '@/components/skills/RunSkillButton'
 import { RunsChoiceDialog } from '@/components/skills/RunsChoiceDialog'
@@ -145,6 +146,8 @@ export function SkillDetail() {
           </div>
         }
       />
+
+      <NowUltrafastStrip skill={skill} />
 
       <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
         <div className="flex flex-col gap-5">

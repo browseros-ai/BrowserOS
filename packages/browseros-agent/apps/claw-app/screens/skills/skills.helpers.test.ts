@@ -15,7 +15,9 @@ import {
   skillCommand,
   skillSites,
   stuckWhile,
+  turnedUltrafast,
   ultrafastMark,
+  upgradeSeconds,
   usedLabel,
   worksInAgents,
 } from './skills.helpers'
@@ -268,6 +270,37 @@ describe('firstRunLearning', () => {
         ultrafast: ultrafast({ status: 'none' }),
       }),
     ).toBeNull()
+  })
+})
+
+describe('turnedUltrafast', () => {
+  const fromTask: Skill = {
+    name: 'neo-phones',
+    description: 'Find phones under a budget',
+    origin: 'history',
+    version: 1,
+    linkedAgents: [],
+    runCount: 1,
+    cleanRunCount: 1,
+    createdAt: 0,
+    updatedAt: 0,
+    ultrafast: ultrafast({ status: 'verified', verifiedAt: 5, p50Ms: 7300 }),
+  }
+
+  it('is the moment a task skill’s fast version is verified', () => {
+    expect(turnedUltrafast(fromTask)).toBe(true)
+    expect(turnedUltrafast({ ...fromTask, origin: 'agent' })).toBe(false)
+    expect(
+      turnedUltrafast({
+        ...fromTask,
+        ultrafast: ultrafast({ status: 'pending' }),
+      }),
+    ).toBe(false)
+  })
+
+  it('rounds the speed to whole seconds, never below one', () => {
+    expect(upgradeSeconds(7300)).toBe(7)
+    expect(upgradeSeconds(200)).toBe(1)
   })
 })
 

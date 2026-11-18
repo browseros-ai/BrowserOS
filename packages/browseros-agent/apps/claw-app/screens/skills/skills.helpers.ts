@@ -228,6 +228,20 @@ export function firstRunLearning(skill: Skill): LearningStep[] | null {
   ]
 }
 
+/** A skill made from a task whose fast version is verified: the one-time "now ultrafast" moment. */
+export function turnedUltrafast(skill: Skill): boolean {
+  return (
+    skill.origin === 'history' &&
+    skill.ultrafast?.status === 'verified' &&
+    skill.ultrafast.verifiedAt !== undefined
+  )
+}
+
+/** The big figure on the "now ultrafast" strip: whole seconds a run, at least 1. */
+export function upgradeSeconds(p50Ms: number): number {
+  return Math.max(1, Math.round(p50Ms / 1000))
+}
+
 /** "about 1.2 s a run" from a median in milliseconds. */
 export function runSpeed(p50Ms: number): string {
   const seconds = Math.max(0.1, Math.round(p50Ms / 100) / 10)
