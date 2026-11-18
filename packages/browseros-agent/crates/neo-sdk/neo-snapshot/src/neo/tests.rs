@@ -7,6 +7,7 @@ use std::{env, fs};
 
 use serde_json::json;
 
+use crate::cover_block::cover_block;
 use crate::form::{Form, Passed};
 use crate::judges::{
     Bundles, Case, CaseFile, Generator, NEO_CASES, count, first_difference, passed_json, seed,
@@ -82,7 +83,7 @@ fn tests_that_neos_format_prints_every_private_case() -> Result<(), Box<dyn Erro
         let file_trees = saved_trees(&cases, &bundles, &shown, &mut differing)?;
         println!(
             "private sets, Neo's format: {shown}: {} of {} saved texts identical, the kept \
-             baseline too; {} of {} trees print today's renderer's text",
+             baseline too; {} of {} trees print today's renderer's text and covered block",
             file_texts.identical, file_texts.judged, file_trees.identical, file_trees.judged
         );
         texts.add(file_texts);
@@ -159,7 +160,7 @@ fn saved_texts(
 }
 
 /// Every saved tree in `cases`, not only those a Neo-format call was saved for: Rust's text with
-/// every default, beside today's renderer's in QuickJS.
+/// every default and its covered block, beside today's renderer's in QuickJS.
 fn saved_trees(
     cases: &CaseFile,
     bundles: &Bundles,
@@ -174,13 +175,25 @@ fn saved_trees(
             .todays_answer(&json!({ "page": {} }), &snapshot)?
             .text
             .unwrap_or_default();
-        let difference = first_difference(&printed, &todays).map(|(line, _, _)| {
-            format!(
+        let block = cover_block(snapshot.tree.clone());
+        let todays_block = bundles
+            .todays_answer(&json!({ "cover": {} }), &snapshot)?
+            .text;
+        let difference = if let Some((line, _, _)) = first_difference(&printed, &todays) {
+            Some(format!(
                 "line {line} differs; {} bytes printed, {} by today's renderer",
                 printed.len(),
                 todays.len()
-            )
-        });
+            ))
+        } else if block != todays_block {
+            Some(format!(
+                "the covered block differs; {:?} bytes printed, {:?} by today's renderer",
+                block.as_deref().map(str::len),
+                todays_block.as_deref().map(str::len)
+            ))
+        } else {
+            None
+        };
         if let Some(difference) = &difference {
             differing.push(format!("{shown}: tree {index}: {difference}"));
         }

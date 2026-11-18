@@ -189,6 +189,13 @@ impl CaseFile {
         })
     }
 
+    /// The cases that ask for a covered click's block.
+    pub(crate) fn cover_cases(&self) -> impl Iterator<Item = &Case> {
+        self.cases
+            .iter()
+            .filter(|case| matches!(case.call, CaseCall::Cover {}))
+    }
+
     /// Every snapshot's name.
     pub(crate) fn snapshot_names(&self) -> impl Iterator<Item = &str> {
         self.snapshots.keys().map(String::as_str)
