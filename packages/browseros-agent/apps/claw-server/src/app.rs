@@ -4,7 +4,7 @@ use crate::{
     config::Config,
     db::{
         AuditLog, DATABASE_FILENAME, Database, MigrationOutcome, RecordingIndex, SessionTabLedger,
-        SkillsRepository,
+        SkillsRepository, TaskGroupStore,
     },
     error::{AppError, AppResult},
     runtime::ShutdownHandle,
@@ -63,6 +63,9 @@ pub struct AppState {
     pub sessions: Arc<Sessions>,
     /// Saved native-profile intent is separate from agent profiles and live browser state.
     pub targets: Arc<TargetBindings>,
+    /// Which task owns each CLI tab group. A CLI task carries no session, so this is how a
+    /// command run in a new process finds the task its group belongs to.
+    pub task_groups: TaskGroupStore,
     pub session_efficiency: Arc<SessionEfficiencyService>,
     pub browser: Arc<BrowserService>,
     pub captcha: Option<Arc<crate::services::captcha::CaptchaService>>,
@@ -136,6 +139,7 @@ impl AppState {
         let database = Database::open(config.browserclaw_dir.join(DATABASE_FILENAME)).await?;
         let migration = database.migration_outcome().clone();
         let audit_log = Arc::new(AuditLog::new(database.clone()));
+        let task_groups = TaskGroupStore::new(database.clone());
         let audit_settings = Arc::new(
             crate::services::audit_settings::AuditSettingsStore::new(&config.browserclaw_dir).await,
         );
@@ -336,6 +340,7 @@ impl AppState {
             profiles,
             sessions,
             targets,
+            task_groups,
             session_efficiency,
             browser,
             captcha,

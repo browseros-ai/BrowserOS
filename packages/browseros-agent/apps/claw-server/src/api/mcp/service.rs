@@ -10,7 +10,7 @@ use crate::{
         naming::{SESSION_NAME_INPUT_MAX_LEN, normalize_small_name, session_group_title},
         observers::audit::{LocalToolDispatch, record_local_tool_dispatch},
         prompt::{mcp_instructions, with_pursue_guidance},
-        session_handle, tab_grouping,
+        session_handle, tab_grouping, task_group,
     },
     config::{ServerMode, TabGrouping},
     identity::{ClientIdentity, ClientInfo, ProfileView},
@@ -899,6 +899,64 @@ impl ClawMcpService {
         Ok(())
     }
 
+    /// The `browseros` command line's admission. It carries no session: a presented group
+    /// whose task is still open resolves to that task, including after a server restart, when
+    /// the session is minted again under the id the task already has. Anything else starts
+    /// new work, which binds to its group once the group exists.
+    async fn resolve_cli_task(
+        &self,
+        group: Option<&str>,
+        declared: Option<ClientInfo>,
+        client: Option<ClientInfo>,
+        start: HandlelessStart,
+    ) -> Result<StartedSession, McpError> {
+        let client = SessionClient::resolve(client, declared);
+        if let Some(group) = group {
+            let binding = self
+                .state
+                .task_groups
+                .lookup_live(group)
+                .await
+                .map_err(|error| {
+                    McpError::internal_error(format!("task group lookup failed: {error}"), None)
+                })?;
+            if let Some(binding) = binding.filter(|binding| binding.is_cli()) {
+                let session_id = SessionId::new(binding.session_id);
+                if self.cli_task_was_stopped(&session_id).await {
+                    // Stop in the cockpit ends a CLI task for good, as it does a handle. The
+                    // group is freed so the next command starts new work rather than failing.
+                    if let Err(error) = self
+                        .state
+                        .task_groups
+                        .end(group, crate::clock::now_epoch_ms())
+                        .await
+                    {
+                        warn!(error = %error, group, "ending a stopped task's group failed");
+                    }
+                } else {
+                    let started = self
+                        .start_session_in_store(session_id, client, true)
+                        .await?;
+                    self.promote_reused_session(&started.session, start).await?;
+                    return Ok(started);
+                }
+            }
+        }
+        let (started, _) = match start {
+            HandlelessStart::Ephemeral => self.mint_ephemeral_session(client).await?,
+            HandlelessStart::OpenTask => self.mint_session(client).await?,
+        };
+        Ok(started)
+    }
+
+    async fn cli_task_was_stopped(&self, session_id: &SessionId) -> bool {
+        self.state.targets.is_stopped(session_id).await
+            || matches!(
+                self.state.sessions.retirement_of(session_id).await,
+                Some(RetirementCause::Cancelled)
+            )
+    }
+
     async fn resolve_modern_session_with_intent(
         &self,
         provided: Option<SessionId>,
@@ -1423,15 +1481,35 @@ impl ServerHandler for ClawMcpService {
             let declared = declared_agent_name
                 .as_deref()
                 .map(client_info_from_declared_name);
-            let (started, handle) = self
-                .resolve_modern_session_with_intent(
-                    provided_handle,
-                    declared,
-                    modern_client,
-                    handleless_start_for(&request.name, &raw_args),
-                )
-                .await?;
-            (started, Some(handle))
+            let cli = provided_handle.is_none()
+                && modern_client
+                    .as_ref()
+                    .is_some_and(|client| task_group::is_cli_client(&client.name));
+            if cli {
+                // The CLI's task is its tab group, so it is handed no session handle:
+                // echoing one would put session bookkeeping back in front of the agent
+                // reading the command's output.
+                let group = task_group::take(&mut raw_args);
+                let started = self
+                    .resolve_cli_task(
+                        group.as_deref(),
+                        declared,
+                        modern_client,
+                        handleless_start_for(&request.name, &raw_args),
+                    )
+                    .await?;
+                (started, None)
+            } else {
+                let (started, handle) = self
+                    .resolve_modern_session_with_intent(
+                        provided_handle,
+                        declared,
+                        modern_client,
+                        handleless_start_for(&request.name, &raw_args),
+                    )
+                    .await?;
+                (started, Some(handle))
+            }
         } else {
             (self.learn_session_from_request(&context).await?, None)
         };
@@ -4543,6 +4621,144 @@ mod tests {
             !listed.contains(&probe.session.id().as_str()),
             "a read-only tabs probe must not surface as a task"
         );
+        Ok(())
+    }
+
+    fn cli_client() -> ClientInfo {
+        ClientInfo {
+            name: task_group::CLI_CLIENT_NAME.to_string(),
+            version: "0.0.1".to_string(),
+            title: None,
+        }
+    }
+
+    async fn bind_cli_group(
+        state: &AppState,
+        group_id: &str,
+        session_id: &SessionId,
+    ) -> anyhow::Result<()> {
+        state
+            .task_groups
+            .bind(
+                crate::db::NewBinding {
+                    group_id,
+                    session_id: session_id.as_str(),
+                    agent_id: "browseros-cli-task",
+                    origin: crate::db::TaskOrigin::Cli,
+                    window_id: None,
+                    profile_id: None,
+                },
+                crate::clock::now_epoch_ms(),
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn cli_task(
+        service: &ClawMcpService,
+        group: Option<&str>,
+        start: HandlelessStart,
+    ) -> anyhow::Result<StartedSession> {
+        service
+            .resolve_cli_task(group, None, Some(cli_client()), start)
+            .await
+            .map_err(|error| anyhow::anyhow!("{error:?}"))
+    }
+
+    #[tokio::test]
+    async fn a_cli_command_without_a_group_starts_new_work() -> anyhow::Result<()> {
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let service = ClawMcpService::new(call.state);
+
+        let first = cli_task(&service, None, HandlelessStart::OpenTask).await?;
+        let second = cli_task(&service, None, HandlelessStart::OpenTask).await?;
+        assert_ne!(first.session.id(), second.session.id());
+        assert_eq!(first.session.client_name(), task_group::CLI_CLIENT_NAME);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_cli_group_resolves_to_the_task_that_owns_it() -> anyhow::Result<()> {
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let state = call.state.clone();
+        let service = ClawMcpService::new(call.state);
+        let opened = cli_task(&service, None, HandlelessStart::OpenTask).await?;
+        bind_cli_group(&state, "G1", opened.session.id()).await?;
+
+        let next = cli_task(&service, Some("G1"), HandlelessStart::OpenTask).await?;
+        assert_eq!(next.session.id(), opened.session.id());
+
+        // A read-only probe from inside the task joins it instead of starting an ephemeral
+        // session, so `browseros tab list` sees the task's own tabs as its own.
+        let probe = cli_task(&service, Some("G1"), HandlelessStart::Ephemeral).await?;
+        assert_eq!(probe.session.id(), opened.session.id());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_cli_group_outlives_the_server_process_that_bound_it() -> anyhow::Result<()> {
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let state = call.state.clone();
+        let service = ClawMcpService::new(call.state);
+        // A restart empties the live map but leaves the binding in the database, which is
+        // what a session id this process never minted models.
+        let before = SessionId::new("bound-before-restart");
+        bind_cli_group(&state, "G1", &before).await?;
+
+        let resumed = cli_task(&service, Some("G1"), HandlelessStart::OpenTask).await?;
+        assert_eq!(
+            resumed.session.id(),
+            &before,
+            "the task resumes under its own id"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn stopping_a_cli_task_frees_its_group_for_new_work() -> anyhow::Result<()> {
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let state = call.state.clone();
+        let service = ClawMcpService::new(call.state);
+        let opened = cli_task(&service, None, HandlelessStart::OpenTask).await?;
+        bind_cli_group(&state, "G1", opened.session.id()).await?;
+
+        state
+            .sessions
+            .cancel_by_session(opened.session.id())
+            .await?;
+
+        let next = cli_task(&service, Some("G1"), HandlelessStart::OpenTask).await?;
+        assert_ne!(
+            next.session.id(),
+            opened.session.id(),
+            "a stopped task stays stopped"
+        );
+        assert!(state.task_groups.lookup_live("G1").await?.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn the_cli_path_never_adopts_an_mcp_sessions_group() -> anyhow::Result<()> {
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let state = call.state.clone();
+        let service = ClawMcpService::new(call.state);
+        state
+            .task_groups
+            .bind(
+                crate::db::NewBinding {
+                    group_id: "G1",
+                    session_id: "an-mcp-session",
+                    agent_id: "codex-agile-alpaca",
+                    origin: crate::db::TaskOrigin::Mcp,
+                    window_id: None,
+                    profile_id: None,
+                },
+                crate::clock::now_epoch_ms(),
+            )
+            .await?;
+
+        let cli = cli_task(&service, Some("G1"), HandlelessStart::OpenTask).await?;
+        assert_ne!(cli.session.id().as_str(), "an-mcp-session");
         Ok(())
     }
 }

@@ -13,6 +13,7 @@ pub mod script_hook;
 mod service;
 mod session_handle;
 mod tab_grouping;
+mod task_group;
 mod timeouts;
 
 #[cfg(test)]

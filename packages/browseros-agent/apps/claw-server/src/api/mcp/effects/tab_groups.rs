@@ -2,8 +2,10 @@ use crate::{
     api::mcp::{
         dispatch::{CreatedPageCapture, ToolCall, ToolEffect, ToolEffectContext, result_page_id},
         naming::{desired_group_title, is_session_group_candidate},
+        task_group,
         timeouts::TAB_GROUP_OPERATION,
     },
+    db::{BindOutcome, NewBinding, TaskOrigin},
     ids::ConvoId,
     services::{
         browser::color_for_slug,
@@ -550,6 +552,7 @@ async fn ensure_captured_tab_group(
         {
             warn!(%error, "tab group task correlation persistence failed");
         }
+        bind_cli_task_group(call, &group_id, Some(window_id)).await;
         if let Err(error) = dispatch_tab_groups(
             tab_groups,
             browser,
@@ -628,6 +631,40 @@ async fn group_pages_if_open(
             .filter_map(|page| u32::try_from(page).ok())
             .collect(),
     )
+}
+
+/// Records a CLI task as the owner of the group just made for it. A CLI task has no session
+/// in the agent's model, so this binding is how its next command, run in a new process,
+/// finds it. Only groups the task owns reach here, never a borrowed one, so ending a CLI
+/// task can never close another task's tabs. An MCP session's group stays correlation-only.
+async fn bind_cli_task_group(call: &ToolCall, group_id: &str, window_id: Option<WindowId>) {
+    let Some(session) = call.state.sessions.lookup(&call.session_id).await else {
+        return;
+    };
+    if !task_group::is_cli_client(session.client_name()) {
+        return;
+    }
+    let window = window_id.map(|window| window.to_string());
+    let request = NewBinding {
+        group_id,
+        session_id: call.session_id.as_str(),
+        agent_id: session.convo_id().as_str(),
+        origin: TaskOrigin::Cli,
+        window_id: window.as_deref(),
+        profile_id: None,
+    };
+    match call
+        .state
+        .task_groups
+        .bind(request, crate::clock::now_epoch_ms())
+        .await
+    {
+        Ok(BindOutcome::Bound) => {}
+        Ok(BindOutcome::AlreadyBound { session_id }) => {
+            warn!(group_id, owner = %session_id, "a CLI task's new group is owned by another task");
+        }
+        Err(error) => warn!(%error, group_id, "recording a CLI task's group failed"),
+    }
 }
 
 async fn ensure_agent_tab_group_unlocked(
@@ -727,6 +764,7 @@ async fn ensure_agent_tab_group_unlocked(
     {
         warn!(%error, "tab group task correlation persistence failed");
     }
+    bind_cli_task_group(call, &group_id, window_id).await;
     if let Err(reason) = dispatch_tab_groups(
         tab_groups,
         browser,
@@ -3498,6 +3536,70 @@ mod tests {
             panic!("group dispatch should time out");
         };
         assert!(error.contains("timed out after 10000ms"));
+        Ok(())
+    }
+
+    /// A CLI task's group is its identity, so creating one records the binding its next
+    /// command, run in a new process, resolves the task from.
+    #[tokio::test]
+    async fn a_cli_task_binds_the_group_created_for_it() -> anyhow::Result<()> {
+        let recorder = Arc::new(GroupDispatchRecorder::new());
+        let (call, _browser) = connected_call(recorder.clone()).await?;
+        let identity = call
+            .identity
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("identity missing"))?;
+        let cli = crate::services::sessions::Session::new(
+            call.session_id.clone(),
+            identity.agent.clone(),
+            crate::identity::ConversationIdentity::new(identity.agent.slug(), "cli".to_string()),
+            crate::api::mcp::task_group::CLI_CLIENT_NAME.to_string(),
+            tokio::time::Instant::now(),
+        );
+        call.state.sessions.insert_for_testing(cli).await;
+
+        spawn_tab_group_work(
+            call.clone(),
+            Some(CreatedPage {
+                page_id: 1,
+                window_id: Some(WindowId(1)),
+            }),
+        )
+        .await?;
+
+        let binding = call
+            .state
+            .task_groups
+            .lookup_live("group-1")
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("the CLI task's group was not bound"))?;
+        assert_eq!(binding.session_id, call.session_id.as_str());
+        assert!(binding.is_cli());
+        Ok(())
+    }
+
+    /// The MCP path must not move: its session still gets a group, and that group is
+    /// still correlation-only, never a task identity.
+    #[tokio::test]
+    async fn an_mcp_sessions_group_is_never_bound_as_a_task_identity() -> anyhow::Result<()> {
+        let recorder = Arc::new(GroupDispatchRecorder::new());
+        let (call, _browser) = connected_call(recorder.clone()).await?;
+
+        spawn_tab_group_work(
+            call.clone(),
+            Some(CreatedPage {
+                page_id: 1,
+                window_id: Some(WindowId(1)),
+            }),
+        )
+        .await?;
+
+        assert_eq!(
+            recorder.create_count(),
+            1,
+            "the MCP session still gets its group"
+        );
+        assert!(call.state.task_groups.lookup("group-1").await?.is_none());
         Ok(())
     }
 }
