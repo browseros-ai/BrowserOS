@@ -47,7 +47,7 @@ pub(crate) enum Intercept {
 type Policy = Arc<Mutex<Option<Refusal>>>;
 
 /// The same owned browser for SDK operations and independent fixture observations.
-fn cdp_port() -> u16 {
+pub(crate) fn cdp_port() -> u16 {
     env::var("BROWSEROS_CDP_PORT")
         .ok()
         .and_then(|port| port.parse().ok())
