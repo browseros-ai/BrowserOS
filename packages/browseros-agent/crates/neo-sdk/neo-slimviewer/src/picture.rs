@@ -167,6 +167,8 @@ struct Facts {
     delivered_kbps: f32,
     work_ms: f32,
     stolen: f32,
+    frames: u32,
+    busy: Duration,
 }
 
 /// One source changed its vote. The logged settings are the effective picture after that vote.
@@ -192,7 +194,7 @@ impl fmt::Display for Move {
         };
         write!(
             f,
-            "source={source} from={} to={} fps={} crf={} scale={scale} why={} blocked={:.0} queue_ms={} offered_kbps={:.0} delivered_kbps={:.0} work_ms={} stolen={:.0}",
+            "source={source} from={} to={} fps={} crf={} scale={scale} why={} blocked={:.0} queue_ms={} offered_kbps={:.0} delivered_kbps={:.0} work_ms={} stolen={:.0} frames={} busy_ms={}",
             self.from,
             self.to,
             self.rung.fps,
@@ -203,7 +205,9 @@ impl fmt::Display for Move {
             self.facts.offered_kbps,
             self.facts.delivered_kbps,
             self.facts.work_ms,
-            self.facts.stolen * 100.0
+            self.facts.stolen * 100.0,
+            self.facts.frames,
+            self.facts.busy.as_millis()
         )
     }
 }
@@ -242,6 +246,8 @@ pub struct Link {
     pub frames: u32,
     /// Capture wanted damage at some point during this interval, including while blocked.
     pub damage_pending: bool,
+    /// Time with damage pending and credit to send a frame to the pacer.
+    pub busy: Duration,
 }
 
 #[derive(Default)]
@@ -304,7 +310,6 @@ pub struct Picture {
     soft_minimum: usize,
     scale: Scale,
     half_cpu: bool,
-    last_tick: Instant,
     link_kbps: u32,
     last_big: Instant,
     last_change: Instant,
@@ -350,7 +355,6 @@ impl Picture {
             soft_minimum: 0,
             scale: Scale::Full,
             half_cpu: false,
-            last_tick: now,
             link_kbps: 2000,
             last_big: now,
             last_change: now,
@@ -708,8 +712,6 @@ impl Picture {
     }
 
     pub fn tick(&mut self, now: Instant, link: Link, cpu: Cpu) -> Vec<Move> {
-        let elapsed = now.saturating_duration_since(self.last_tick);
-        self.last_tick = now;
         let fps = self.fps();
         let work = percentile75(&mut self.work);
         self.work_p75_ms = work.unwrap_or_default().as_secs_f32() * 1000.0;
@@ -735,6 +737,8 @@ impl Picture {
             delivered_kbps: link.delivered_kbps,
             work_ms: self.work_p75_ms,
             stolen: cpu.stolen,
+            frames: link.frames,
+            busy: link.busy,
         };
         self.observe_link(now, &link, congested);
         let mut moves = Vec::new();
@@ -744,21 +748,24 @@ impl Picture {
         if self.cfg.cpu_guard {
             let work_pressure = measured.is_some_and(|w| w > starved_work(fps));
             let active = link.frames > 0 || !self.work.is_empty();
+            // Quota bursts and steal only explain lost cadence while the pacer could accept
+            // damage. Slow measured work is direct evidence even during a shorter interval.
+            let quota = cpu.stolen > 0.20 || cpu.throttled;
+            let busy = link.damage_pending && link.busy >= Duration::from_millis(500);
+            let missed =
+                busy && f64::from(link.frames) < 0.8 * f64::from(fps) * link.busy.as_secs_f64();
             let starved = if work_pressure {
                 Some(Why::Work)
-            } else if cpu.stolen > 0.20 {
+            } else if missed && cpu.stolen > 0.20 {
                 Some(Why::Steal)
-            } else if cpu.throttled {
+            } else if missed && cpu.throttled {
                 Some(Why::Throttled)
             } else {
                 None
             };
-            let floor_fps = self.ladder.rungs[self.ladder.floor].fps;
-            let shortfall = link.damage_pending
-                && (link.frames as f64) < 0.8 * f64::from(floor_fps) * elapsed.as_secs_f64();
-            let step = if let Some(why) = starved.filter(|_| active || link.damage_pending) {
-                self.cpu_pressure(now, why, measured, full_observed, shortfall)
-            } else if active {
+            let step = if let Some(why) = starved {
+                self.cpu_pressure(now, why, measured, full_observed)
+            } else if active && (!quota || busy) {
                 self.cpu_recovery(now, measured, full_observed)
             } else {
                 None
@@ -973,7 +980,6 @@ impl Picture {
         why: Why,
         work: Option<Duration>,
         full_observed: bool,
-        shortfall: bool,
     ) -> Option<(usize, Why)> {
         if now.saturating_duration_since(self.last_starved) >= Duration::from_secs(60) {
             self.cpu.need = 3;
@@ -987,10 +993,6 @@ impl Picture {
         }
         let at = self.cpu.at;
         let floor = self.ladder.floor;
-        if at == floor && why != Why::Work && !shortfall {
-            self.cpu.pressure = 0;
-            return None;
-        }
         self.cpu.pressure = self.cpu.pressure.saturating_add(1);
         if at == floor {
             if self.cpu.pressure < 3 && !(self.cpu_trial && full_observed) {
@@ -1170,12 +1172,14 @@ mod tests {
             queue_ms: 250,
             frames: 8,
             damage_pending: true,
+            busy: Duration::from_millis(400),
         }
     }
     fn active(frames: u32) -> Link {
         Link {
             frames,
             damage_pending: true,
+            busy: Duration::from_secs(1),
             delivered_kbps: 3000.0,
             ..Link::default()
         }
@@ -1693,6 +1697,83 @@ mod tests {
     }
 
     #[test]
+    fn tests_that_throttle_with_kept_cadence_never_lowers_fps() {
+        let t = Instant::now();
+        let mut p = picture(t);
+        for n in 1..=60 {
+            motion(&mut p, at(t, n), Scale::Full, 10);
+            p.tick(
+                at(t, n),
+                active(30),
+                Cpu {
+                    throttled: true,
+                    ..Cpu::default()
+                },
+            );
+            assert_eq!((p.fps(), p.motion_scale()), (30.0, Scale::Full));
+        }
+    }
+
+    #[test]
+    fn tests_that_throttle_with_missed_cadence_steps_fps() {
+        let t = Instant::now();
+        let mut p = picture(t);
+        for n in 1..=60 {
+            motion(&mut p, at(t, n), Scale::Full, 10);
+            let moves = p.tick(
+                at(t, n),
+                active(18),
+                Cpu {
+                    throttled: true,
+                    ..Cpu::default()
+                },
+            );
+            if n == 2 {
+                assert_eq!((moves[0].why, p.fps()), (Why::Throttled, 20.0));
+            }
+            assert_eq!(p.motion_scale(), Scale::Full);
+            assert!(p.fps() >= 20.0);
+        }
+    }
+
+    #[test]
+    fn tests_that_link_waits_do_not_count_as_cpu_shortfall() {
+        let t = Instant::now();
+        let mut p = picture(t);
+        let cpu = || Cpu {
+            stolen: 0.25,
+            throttled: true,
+        };
+        for n in 1..=60 {
+            let busy = if n % 2 == 0 {
+                Duration::from_millis(500)
+            } else {
+                Duration::from_millis(499)
+            };
+            // Twelve frames fit a half second of open credit. Shorter samples are neutral.
+            let frames = if n % 2 == 0 { 12 } else { 0 };
+            p.tick(
+                at(t, n),
+                Link {
+                    busy,
+                    ..active(frames)
+                },
+                cpu(),
+            );
+            assert_eq!(p.fps(), 30.0);
+        }
+        for n in 61..=63 {
+            let busy = Duration::from_millis(if n == 62 { 100 } else { 500 });
+            p.tick(at(t, n), Link { busy, ..active(11) }, cpu());
+        }
+        assert_eq!(
+            p.fps(),
+            20.0,
+            "a short sample did not erase the two observed misses"
+        );
+    }
+
+    #[test]
     fn tests_that_throttle_without_cadence_shortfall_never_sets_half() {
         let t = Instant::now();
         let mut p = picture(t);
@@ -1702,7 +1783,10 @@ mod tests {
             // 24 frames over two seconds meet exactly 80% of the floor cadence.
             p.tick(
                 now,
-                active(24),
+                Link {
+                    busy: Duration::from_secs(2),
+                    ..active(24)
+                },
                 Cpu {
                     throttled: true,
                     ..Cpu::default()
@@ -1714,7 +1798,10 @@ mod tests {
         for n in 61..=63 {
             p.tick(
                 at(t, n * 2),
-                active(23),
+                Link {
+                    busy: Duration::from_secs(2),
+                    ..active(23)
+                },
                 Cpu {
                     throttled: true,
                     ..Cpu::default()
@@ -1862,7 +1949,7 @@ mod tests {
         assert_eq!((moves[1].source, moves[1].why), (Source::Cpu, Why::Work));
         assert_eq!(
             moves[0].to_string(),
-            "source=link from=0 to=1 fps=20 crf=24 scale=full why=congested blocked=60 queue_ms=250 offered_kbps=9600 delivered_kbps=3000 work_ms=35 stolen=0"
+            "source=link from=0 to=1 fps=20 crf=24 scale=full why=congested blocked=60 queue_ms=250 offered_kbps=9600 delivered_kbps=3000 work_ms=35 stolen=0 frames=8 busy_ms=400"
         );
     }
 
@@ -2070,6 +2157,7 @@ mod tests {
         c.adaptive_size = false;
         let mut p = Picture::new(c, WIDTH, ROWS, t);
         for n in 1..=8 {
+            motion(&mut p, at(t, n), Scale::Full, 70);
             p.tick(
                 at(t, n),
                 jam(),
@@ -2780,7 +2868,7 @@ mod tests {
             motion(&mut p, at(t, 44), Scale::Full, 35);
             p.tick(
                 at(t, 44),
-                Link::default(),
+                active(6),
                 Cpu {
                     stolen: 0.25,
                     throttled: false,
