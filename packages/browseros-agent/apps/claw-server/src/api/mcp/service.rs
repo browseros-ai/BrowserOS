@@ -1529,6 +1529,15 @@ impl ServerHandler for ClawMcpService {
                 .as_ref()
                 .map(client_info_from_implementation)
                 .is_some_and(|client| task_group::is_cli_client(&client.name));
+        // Refused before any session is minted, so a computer without the plan gains no
+        // tasks in history from a CLI that cannot run. The same switch `run_skill` follows:
+        // it tracks the plan, is off in hosted mode, and honours the developer pin.
+        if cli_call && !self.state.ultrafast_enabled() {
+            return Ok(CallToolResult::error(vec![rmcp::model::ContentBlock::text(
+                task_group::NOT_ON_PLAN,
+            )])
+            .into());
+        }
         let (started, modern_handle) = if modern {
             // rmcp extracts wire _meta into RequestContext during decoding;
             // typed request.meta is empty even when the client supplied it.

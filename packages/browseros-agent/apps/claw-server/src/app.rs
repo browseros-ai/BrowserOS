@@ -207,6 +207,7 @@ impl AppState {
                 analytics_sink.clone(),
             )
             .with_ultrafast_skill(ultrafast_skill)
+            .requiring_ultrafast(crate::services::harness_skills::MANAGED_CLI_SKILL_DIRECTORY)
             .with_read_only(config.dev_mode),
         );
         let skills = Arc::new(SkillService::new(

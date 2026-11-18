@@ -322,6 +322,47 @@ async fn run_connections_case() -> anyhow::Result<()> {
         "managed skill v1\n"
     );
 
+    // A guide that requires ultrafast is planted only while ultrafast is on and withdrawn when
+    // it goes off, so an agent is never told about a command this computer refuses.
+    let shared_cli_skill = home.join(".agents/skills/browseros-neo-cli");
+    let gated = HarnessService::new_with_managed_skills(
+        browserclaw_dir.join("mcp-manager"),
+        browserclaw_dir.join("harness-integrations"),
+        home.clone(),
+        vec![
+            (
+                "browseros-neo",
+                SkillSpec::new("browseros-neo", "managed skill v1\n")?,
+            ),
+            (
+                "browseros-neo-cli",
+                SkillSpec::new("browseros-neo-cli", "cli guide\n")?,
+            ),
+        ],
+        analytics.clone(),
+    )
+    .requiring_ultrafast("browseros-neo-cli");
+    gated.run_skill_reconciliation().await?;
+    assert!(
+        !shared_cli_skill.exists(),
+        "the CLI guide is withheld while ultrafast is off"
+    );
+    assert!(gated.set_ultrafast_skill(true).await?);
+    assert_eq!(
+        fs::read_to_string(shared_cli_skill.join("SKILL.md"))?,
+        "cli guide\n"
+    );
+    assert_eq!(
+        fs::read_to_string(shared_skill.join("SKILL.md"))?,
+        "managed skill v1\n",
+        "the BrowserOS guide is untouched by the CLI guide's gate"
+    );
+    assert!(gated.set_ultrafast_skill(false).await?);
+    assert!(
+        !shared_cli_skill.exists(),
+        "the CLI guide is withdrawn when ultrafast goes off"
+    );
+
     const NEW_MCP_URL: &str = "http://127.0.0.1:9999/mcp";
     let migrated = service.migrate_connected_urls(NEW_MCP_URL).await?;
     assert_eq!(migrated.migrated, 3);

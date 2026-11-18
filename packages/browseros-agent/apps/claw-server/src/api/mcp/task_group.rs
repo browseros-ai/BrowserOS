@@ -18,6 +18,10 @@ pub const CLI_CLIENT_NAME: &str = "browseros-cli";
 /// The argument a CLI call presents its group in.
 pub(super) const FIELD: &str = "group";
 
+/// What a CLI call gets on a computer without the ultrafast plan. The prefix is stable so the
+/// CLI can tell this refusal from a tool's own error and exit with a code of its own.
+pub const NOT_ON_PLAN: &str = "ultrafast_required: the browseros command line is part of the ultrafast plan, which this computer does not have. Open BrowserOS neo to get ultrafast.";
+
 /// The `_meta` key a CLI result names its task's group under, namespaced like the handle's.
 pub const META_KEY: &str = "com.browseros.neo/group";
 

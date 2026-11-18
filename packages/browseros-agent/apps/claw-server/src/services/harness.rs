@@ -197,6 +197,8 @@ struct ManagedSkill {
     spec: SkillSpec,
     /// The guide installed while ultrafast is on, when the server has one.
     ultrafast_spec: Option<SkillSpec>,
+    /// Installed only while ultrafast is on, and withdrawn when it goes off.
+    requires_ultrafast: bool,
     ultrafast: Arc<AtomicBool>,
     environment: SkillEnvironment,
 }
@@ -271,6 +273,7 @@ impl HarnessService {
                 owned: owned_name,
                 spec,
                 ultrafast_spec: None,
+                requires_ultrafast: false,
                 ultrafast: Arc::default(),
                 environment: environment.clone(),
             })
@@ -316,17 +319,32 @@ impl HarnessService {
         self
     }
 
-    /// Switches every connected agent's guide to the ultrafast variant or back, re-installing it
-    /// only when that changes. Returns whether it changed.
-    pub async fn set_ultrafast_skill(&self, on: bool) -> AppResult<bool> {
-        let Some(managed) = self
+    /// Marks the guide that owns `owned` as an ultrafast feature: installed while ultrafast is
+    /// on, withdrawn while it is off.
+    #[must_use]
+    pub fn requiring_ultrafast(mut self, owned: &str) -> Self {
+        if let Some(managed) = self
             .managed_skills
-            .iter()
-            .find(|managed| managed.owned == super::harness_skills::MANAGED_SKILL_DIRECTORY)
-        else {
-            return Ok(false);
-        };
-        if managed.ultrafast_spec.is_none() || managed.ultrafast.swap(on, Ordering::AcqRel) == on {
+            .iter_mut()
+            .find(|managed| managed.owned == owned)
+        {
+            managed.requires_ultrafast = true;
+        }
+        self
+    }
+
+    /// Follows ultrafast in every connected agent: the BrowserOS guide switches to its
+    /// ultrafast variant or back, and a guide that requires ultrafast is installed or
+    /// withdrawn. Re-installs only when one of them changes. Returns whether one did.
+    pub async fn set_ultrafast_skill(&self, on: bool) -> AppResult<bool> {
+        let mut changed = false;
+        for managed in &self.managed_skills {
+            let follows = managed.ultrafast_spec.is_some() || managed.requires_ultrafast;
+            if follows && managed.ultrafast.swap(on, Ordering::AcqRel) != on {
+                changed = true;
+            }
+        }
+        if !changed {
             return Ok(false);
         }
         self.run_skill_reconciliation().await?;
@@ -808,6 +826,17 @@ fn reconcile_managed_skill(
     workspace_dir: &Path,
     managed_skill: &ManagedSkill,
 ) -> Result<SkillReconcileOutcome, ManagerError> {
+    if managed_skill.requires_ultrafast && !managed_skill.ultrafast.load(Ordering::Acquire) {
+        // A guide naming a feature this computer does not have is worse than no guide, since
+        // the agent reads it and believes it. Only marker-verified directories go.
+        let removed = managed_skill
+            .reconciler
+            .remove_legacy_directories(managed_skill.owned, &managed_skill.environment)?;
+        return Ok(SkillReconcileOutcome {
+            removed: removed.len(),
+            ..SkillReconcileOutcome::default()
+        });
+    }
     let preferences = Preferences::read(workspace_dir)?;
     let reconciler = managed_skill.reconciler.clone().with_provisioned_roots(
         managed_skill
