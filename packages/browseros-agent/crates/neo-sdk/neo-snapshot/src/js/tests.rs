@@ -9,6 +9,8 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Number;
 
+use crate::split_mix64::SplitMix64;
+
 use super::{
     is_number, is_space, json_quote, math_round, number_text, prefix_as_javascript,
     prefix_between_characters, skip_units, trim, trim_end, trim_start, units,
@@ -39,21 +41,6 @@ fn quickjs<T: DeserializeOwned>(input: &impl Serialize, script: &str) -> Result<
             .map_err(|caught| caught.to_string())
     })?;
     Ok(serde_json::from_str(&output)?)
-}
-
-/// splitmix64: a seeded stream of 64-bit values.
-struct SplitMix64(u64);
-
-impl Iterator for SplitMix64 {
-    type Item = u64;
-
-    fn next(&mut self) -> Option<u64> {
-        self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
-        let mut mixed = self.0;
-        mixed = (mixed ^ (mixed >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-        mixed = (mixed ^ (mixed >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-        Some(mixed ^ (mixed >> 31))
-    }
 }
 
 /// A double's bits as the two big-endian halves a `DataView` writes, so it crosses into the
