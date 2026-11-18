@@ -20,10 +20,13 @@ capture falls below 80% of the current cadence during at least half a second
 with damage pending and the pacer open. Grabs that find unchanged pixels count.
 Recovery takes one step at a time after sustained headroom. A return to full-size
 motion must also fit the link's 300 ms keyframe budget. Burst probes subtract
-the lowest RTT seen in the preceding minute. For 20 seconds after congestion,
-both the keyframe budget and the motion-rate check use the lower of the fresh
-probe and the latest measured congested delivery rate. If half-size frames are
-too small to probe, the last measurement still applies during those 20 seconds.
+the lowest RTT seen in the preceding five minutes. After congestion, both the
+keyframe budget and the motion-rate check cap the latest probe at the measured
+congested delivery rate. If half-size frames are too small to probe, the last
+measurement still applies. Two consecutive uncongested seconds with delivery and
+a median ACK delay less than 40 ms above the base RTT release these limits.
+After 20 seconds without congestion, one such second suffices. Fresh probes
+continue to price full-size returns.
 If the full key exceeds that budget, a full second without a change allows the
 settle frame through. Its acknowledgement measures fresh capacity.
 

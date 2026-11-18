@@ -243,6 +243,8 @@ pub struct Link {
     pub sent_kbps: f32,
     pub delivered_kbps: f32,
     pub queue_ms: u32,
+    /// Median ACK delay above the path's base RTT. Late reset ACKs can deliver bytes without a delay.
+    pub base_queue_ms: Option<u32>,
     /// Frames sent during this observation interval.
     pub frames: u32,
     /// Completed screen grabs, including those that found unchanged pixels.
@@ -330,6 +332,8 @@ pub struct Picture {
     facts: Facts,
     last_pressure: Option<Instant>,
     last_congested: Option<Instant>,
+    /// Zero once near-base ACKs have released the jam's return-rate limits.
+    clear_ticks_needed: u8,
     last_full: Option<Instant>,
     backoff: Duration,
     capacity: VecDeque<(Instant, f32)>,
@@ -380,6 +384,7 @@ impl Picture {
             facts: Facts::default(),
             last_pressure: None,
             last_congested: None,
+            clear_ticks_needed: 0,
             last_full: None,
             backoff: Duration::from_secs(2),
             capacity: VecDeque::new(),
@@ -450,6 +455,7 @@ impl Picture {
         self.queue_high = false;
         self.previous_congested_no_ack = false;
         self.last_congested = None;
+        self.clear_ticks_needed = 0;
         self.capacity.clear();
         self.last_probe = None;
         self.last_congested_kbps = None;
@@ -649,18 +655,15 @@ impl Picture {
     }
 
     fn return_capacity_kbps(&self, now: Instant) -> Option<f32> {
-        if self
-            .last_congested
-            .is_none_or(|at| now.saturating_duration_since(at) >= STALE_CAPACITY_AFTER_JAM)
-        {
-            return self.capacity_kbps(now);
+        let probe = self
+            .last_probe
+            .filter(|(at, _)| now.saturating_duration_since(*at) <= CAPACITY_WINDOW);
+        if self.clear_ticks_needed == 0 {
+            return probe.map(|(_, kbps)| kbps);
         }
         // A burst can outrun sustained delivery. If half frames are too small to
         // probe, keep pricing the return from the last observation during the jam.
-        let (_, kbps) = self
-            .last_probe
-            .filter(|(at, _)| now.saturating_duration_since(*at) <= CAPACITY_WINDOW)
-            .or_else(|| self.capacity.back().copied())?;
+        let (_, kbps) = probe.or_else(|| self.capacity.back().copied())?;
         Some(
             self.last_congested_kbps
                 .map_or(kbps, |delivered| delivered.min(kbps)),
@@ -760,10 +763,15 @@ impl Picture {
             .reduce(f32::max)
     }
 
+    fn mark_congested(&mut self, now: Instant) {
+        self.last_congested = Some(now);
+        self.clear_ticks_needed = 2;
+    }
+
     /// Price the forced key immediately. The next complete interval measures this stall.
     pub fn window_reset(&mut self, now: Instant) -> Option<Move> {
         self.reset_since_tick = true;
-        self.last_congested = Some(now);
+        self.mark_congested(now);
         self.link_pressure(now, Why::Reset)
             .map(|(to, why)| self.apply(now, Source::Link, to, why))
     }
@@ -897,7 +905,7 @@ impl Picture {
             self.capacity.pop_front();
         }
         if congested {
-            self.last_congested = Some(now);
+            self.mark_congested(now);
             if link.delivered_kbps > 0.0 {
                 self.capacity.push_back((now, link.delivered_kbps));
                 self.last_congested_kbps = Some(link.delivered_kbps);
@@ -906,6 +914,20 @@ impl Picture {
                 self.link_kbps = ((link.delivered_kbps * 0.85) as u32).max(300);
             }
         } else {
+            if self.clear_ticks_needed > 0 {
+                let drained =
+                    link.delivered_kbps > 0.0 && link.base_queue_ms.is_some_and(|ms| ms < 40);
+                self.clear_ticks_needed = if !drained {
+                    2
+                } else if self
+                    .last_congested
+                    .is_some_and(|at| now.saturating_duration_since(at) >= STALE_CAPACITY_AFTER_JAM)
+                {
+                    0
+                } else {
+                    self.clear_ticks_needed - 1
+                };
+            }
             self.link_kbps += self.link_kbps / 10;
             if self
                 .last_congested
@@ -1217,6 +1239,7 @@ mod tests {
             sent_kbps: 9600.0,
             delivered_kbps: 3000.0,
             queue_ms: 250,
+            base_queue_ms: Some(250),
             frames: 8,
             grabs: 8,
             damage_pending: true,
@@ -1230,6 +1253,7 @@ mod tests {
             damage_pending: true,
             busy: Duration::from_secs(1),
             delivered_kbps: 3000.0,
+            base_queue_ms: Some(0),
             ..Link::default()
         }
     }
@@ -1551,6 +1575,7 @@ mod tests {
                 Link {
                     blocked: if congested { 0.4 } else { 0.0 },
                     delivered_kbps: if congested { 0.0 } else { 3000.0 },
+                    base_queue_ms: Some(150),
                     ..active(15)
                 },
                 Cpu::default(),
@@ -1573,30 +1598,48 @@ mod tests {
     }
 
     #[test]
-    fn tests_that_a_cleared_cell_link_returns_full_during_small_changes() {
+    fn tests_that_releasing_jam_caps_needs_consecutive_near_base_acks_with_delivery() {
         let t = Instant::now();
         let mut p = picture(t);
         let half = to_link_half(&mut p, t);
         costly_half_key(&mut p, half);
-        for n in 1..=22 {
-            let now = at(half, n);
+        let ticks = [
+            (Some(39), 3000.0),
+            (Some(40), 3000.0),
+            (Some(39), 3000.0),
+            (None, 3000.0),
+            (Some(39), 3000.0),
+            (Some(0), 0.0),
+            (Some(39), 3000.0),
+            (Some(39), 3000.0),
+        ];
+        for (i, (base_queue_ms, delivered_kbps)) in ticks.into_iter().enumerate() {
+            let now = at(half, i as u64 + 1);
             let link = Link {
-                queue_ms: [20, 30, 40, 50, 60][n as usize % 5],
+                base_queue_ms,
+                delivered_kbps,
                 ..active(15)
             };
             p.tick(now, link, Cpu::default());
             let plan = p.plan(now, Some((10, 26, 16)));
             assert_eq!(
                 plan.scale,
-                if n < 20 { Scale::Half } else { Scale::Full },
-                "tick {n}"
+                if i + 1 == ticks.len() {
+                    Scale::Full
+                } else {
+                    Scale::Half
+                },
+                "after tick {}",
+                i + 1
             );
             send(&mut p, now, plan);
         }
+        let cleared = at(half, ticks.len() as u64);
+        assert_eq!(p.capacity_kbps(cleared), Some(3000.0));
         assert_eq!(
-            p.capacity_kbps(at(half, 22)),
+            p.return_capacity_kbps(cleared),
             None,
-            "the carousel produced no new capacity probe"
+            "jam delivery is not a probe"
         );
     }
 
@@ -1632,7 +1675,14 @@ mod tests {
                     !p.full_return_fits(now),
                     "{full_key_bytes} B, probe {probe}, delivery {delivery}, +{seconds}s"
                 );
-                p.tick(now, active(15), Cpu::default());
+                p.tick(
+                    now,
+                    Link {
+                        base_queue_ms: Some(150),
+                        ..active(15)
+                    },
+                    Cpu::default(),
+                );
                 assert_eq!(p.motion_scale(), Scale::Half);
             }
             let cleared = at(jammed, 20);
@@ -1647,6 +1697,7 @@ mod tests {
         let mut p = picture(t);
         let half = to_link_half(&mut p, t);
         costly_half_key(&mut p, half);
+        capacity(&mut p, half, 3000.0);
         for n in 1..=2 {
             p.tick(at(half, n), active(15), Cpu::default());
         }
@@ -1654,11 +1705,12 @@ mod tests {
             !p.full_return_fits(at(half, 2)),
             "a fresh sample still limits full-size keys"
         );
-        assert_eq!(p.capacity_kbps(at(half, 19)), None);
-        assert!(!p.full_return_fits(at(half, 19)));
-        assert!(p.full_return_fits(at(half, 20)));
+        assert!(
+            p.full_return_fits(at(half, 11)),
+            "the probe expired after the queue drained"
+        );
         p.tick(
-            at(half, 21),
+            at(half, 12),
             Link {
                 blocked: 0.4,
                 ..Link::default()
@@ -1666,7 +1718,7 @@ mod tests {
             Cpu::default(),
         );
         assert!(
-            !p.full_return_fits(at(half, 21)),
+            !p.full_return_fits(at(half, 12)),
             "new congestion restores even the expired estimate"
         );
         capacity(&mut p, at(half, 40), 3000.0);
@@ -1953,6 +2005,7 @@ mod tests {
                     blocked: if n % 10 == 0 { 0.4 } else { 0.0 },
                     sent_kbps,
                     delivered_kbps: sent_kbps,
+                    base_queue_ms: Some(150),
                     ..active(15)
                 },
                 Cpu::default(),

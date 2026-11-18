@@ -284,16 +284,14 @@ impl Viewer {
     fn link_sample(&mut self, elapsed: f32) -> picture::Link {
         self.delays_ms.sort_unstable();
         let rtt_ms = self.rtt.get().as_millis() as u32;
-        let queue_ms = self
-            .delays_ms
-            .get(self.delays_ms.len() / 2)
-            .map_or(0, |d| d.saturating_sub(rtt_ms));
+        let median_ms = self.delays_ms.get(self.delays_ms.len() / 2);
         let kbps = |bytes: u64| bytes as f32 * 8.0 / 1000.0 / elapsed;
         picture::Link {
             frames: self.sent_frames,
             sent_kbps: kbps(self.sent_bytes),
             delivered_kbps: kbps(self.acked_bytes),
-            queue_ms,
+            queue_ms: median_ms.map_or(0, |ms| ms.saturating_sub(rtt_ms)),
+            base_queue_ms: median_ms.map(|ms| ms.saturating_sub(self.rtt.base_ms())),
             ..picture::Link::default()
         }
     }
@@ -526,7 +524,7 @@ fn acknowledge(viewers: &mut [Viewer], picture: &mut Picture, id: u64, seq: u32,
     }
 }
 
-/// The pacing window uses the last 5–10 s of ACKs. Burst probes use the last minute.
+/// The pacing window uses the last 5–10 s of ACKs. Probes and jam recovery use five minutes.
 struct AckDelays {
     cur: u32,
     prev: u32,
@@ -560,11 +558,11 @@ impl AckDelays {
         while self
             .base_minima
             .front()
-            .is_some_and(|(at, _)| now.saturating_duration_since(*at) > Duration::from_secs(60))
+            .is_some_and(|(at, _)| now.saturating_duration_since(*at) > Duration::from_mins(5))
         {
             self.base_minima.pop_front();
         }
-        let base_ms = self.base_minima.front().map_or(50, |&(_, delay)| delay);
+        let base_ms = self.base_ms();
         while self
             .base_minima
             .back()
@@ -574,6 +572,9 @@ impl AckDelays {
         }
         self.base_minima.push_back((now, ms));
         Duration::from_millis(u64::from(base_ms))
+    }
+    fn base_ms(&self) -> u32 {
+        self.base_minima.front().map_or(50, |&(_, delay)| delay)
     }
     fn get(&self) -> Duration {
         let ms = self.cur.min(self.prev);
@@ -1758,20 +1759,20 @@ mod tests {
     }
 
     #[test]
-    fn tests_that_the_probe_base_relearns_rtt_after_a_minute() {
+    fn tests_that_the_probe_base_relearns_rtt_after_five_minutes() {
         let mut rtt = AckDelays::new();
         let t = Instant::now();
         rtt.push(70, t);
         assert_eq!(
-            rtt.push(180, t + Duration::from_secs(59)),
+            rtt.push(180, t + Duration::from_secs(299)),
             Duration::from_millis(70)
         );
         assert_eq!(
-            rtt.push(200, t + Duration::from_secs(61)),
+            rtt.push(200, t + Duration::from_secs(301)),
             Duration::from_millis(180)
         );
         assert_eq!(
-            rtt.push(220, t + Duration::from_secs(122)),
+            rtt.push(220, t + Duration::from_secs(602)),
             Duration::from_millis(50)
         );
     }
@@ -1953,6 +1954,7 @@ mod tests {
                         sent_kbps: 9600.0,
                         delivered_kbps: 3000.0,
                         queue_ms: 200,
+                        base_queue_ms: Some(200),
                         frames: 8,
                         grabs: 8,
                         damage_pending: true,
@@ -1980,6 +1982,71 @@ mod tests {
             },
         );
         plan
+    }
+
+    #[test]
+    fn tests_that_small_changes_return_to_full_when_acks_drain_the_standing_queue() {
+        for (base_ms, queued_seconds, clear_delays) in [
+            (70, 3, [70, 70, 70]),
+            (80, 3, [120, 80, 100]), // Cellular jitter around a 100 ms median.
+            (70, 90, [70, 70, 70]),
+        ] {
+            let mut v = viewer();
+            let start = Instant::now();
+            v.rtt.push(base_ms, start);
+            let mut p = motion(start, true);
+            let plan = frame_plan(&mut p, start, BIG, true);
+            p.encoded(
+                start,
+                picture::Encoded {
+                    plan,
+                    key: true,
+                    owner_key: true,
+                    bytes: 110_000, // A 440 kB full key cannot fit the jam's 3 Mb/s.
+                    pixels: 780 * ROWS / 4,
+                    big: true,
+                    work: Work::default(),
+                },
+            );
+            for second in 1..=queued_seconds + 2 {
+                let tick = start + Duration::from_secs(second);
+                let delays = if second <= queued_seconds {
+                    [base_ms + 150; 3]
+                } else {
+                    clear_delays
+                };
+                for (i, ms) in delays.into_iter().enumerate() {
+                    let ack = tick - Duration::from_millis(300 * (2 - i as u64));
+                    let sent = ack - Duration::from_millis(u64::from(ms));
+                    changed(&mut p, sent, SMALL);
+                    let seq = 3 * second as u32 + i as u32;
+                    v.record_frame(
+                        Sent {
+                            seq,
+                            at: sent,
+                            bytes: 2000,
+                            burst: false,
+                        },
+                        false,
+                    );
+                    v.on_ack(seq, ack);
+                }
+                p.tick(tick, v.link_sample(1.0), picture::Cpu::default());
+                v.clear_interval();
+                // After 20 s without congestion one near-base tick can expire the old cap.
+                let clear_ticks = if queued_seconds >= 20 { 1 } else { 2 };
+                let expected = if second >= queued_seconds + clear_ticks {
+                    Scale::Full
+                } else {
+                    Scale::Half
+                };
+                assert_eq!(
+                    changed(&mut p, tick, SMALL).scale,
+                    expected,
+                    "base {base_ms} ms, standing queue for {queued_seconds} s, tick {second}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -2191,6 +2258,7 @@ mod tests {
                     sent_kbps: 9600.0,
                     delivered_kbps: 3000.0,
                     queue_ms: 200,
+                    base_queue_ms: Some(200),
                     frames: 8,
                     grabs: 8,
                     damage_pending: true,
@@ -2580,6 +2648,7 @@ mod tests {
         queued(&mut v, 3, t + Duration::from_secs(3));
         v.on_ack(1, t + Duration::from_secs(4));
         assert_eq!(v.acked_bytes, 100);
+        assert_eq!(v.link_sample(1.0).base_queue_ms, None);
         assert_eq!(v.inflight.front().unwrap().seq, 3);
         v.on_ack(1, t + Duration::from_secs(5));
         assert_eq!(v.acked_bytes, 100);
