@@ -2,7 +2,10 @@
 //! admits, not only what a page writes: an explicit `false` in every flag, a `cursor` that is not
 //! `pointer`, `""` in every string, a role or a ref with a line break, numbers of every form. Their
 //! strings are built from the marks each of upstream's quoting tests looks for, so each mark lands
-//! at the start, inside and at the end of a key, a text, a url and a placeholder.
+//! at the start, inside and at the end of a key, a text, a url and a placeholder. A snapshot
+//! carries every fact a page can have beside its tree (layers on top, unread closed roots, an
+//! unfinished check for clickable elements) and, now and then, more text than Neo's format keeps,
+//! and a call passes every combination of Neo's options.
 
 use std::env;
 use std::error::Error;
@@ -10,7 +13,9 @@ use std::error::Error;
 use serde_json::Number;
 
 use crate::aria_node::{AriaChild, AriaNode, Invalid, NodeBox, Tristate};
-use crate::snapshot::{PartialFrame, Snapshot};
+use crate::cap::MaxTokens;
+use crate::form::Passed;
+use crate::snapshot::{ClosedRoots, Layer, PartialFrame, Snapshot, Unmarked};
 use crate::split_mix64::SplitMix64;
 
 /// The seed of the random runs unless `NEO_SNAPSHOT_DIFFERENTIAL_SEED` names another.
@@ -31,6 +36,12 @@ const PIECES: &[&str] = &[
     "\u{feff}",
     "\u{85}",
     "\u{200b}",
+    // The separators a text line of Neo's format may hold alone and still print nothing.
+    "\u{b7}",
+    "\u{2022}",
+    "\u{2014}",
+    "\u{203a}",
+    "\u{ab}",
     // Line breaks and control characters.
     "\t",
     "\n",
@@ -134,6 +145,23 @@ const ROLES: &[&str] = &[
     "option",
     "group",
     "row",
+    // The roles Neo's format has a rule for.
+    "alert",
+    "alertdialog",
+    "status",
+    "banner",
+    "navigation",
+    "region",
+    "form",
+    "article",
+    "listbox",
+    "radio",
+    "switch",
+    "menuitemcheckbox",
+    "searchbox",
+    "slider",
+    "tab",
+    "cell",
 ];
 
 /// A few refs, so two nodes, or a node and a partial frame, often share one.
@@ -142,6 +170,11 @@ const REFS: &[&str] = &["e1", "e2", "e3", "f1e1", "f1e2"];
 const CURSORS: &[&str] = &["pointer", "default", "", "Pointer"];
 
 const REASONS: &[&str] = &["timeout after 2000 ms", "frame detached", "target closed"];
+
+/// Caps a script passes, fractions and the extremes among them, in tokens.
+const CAPS: &[f64] = &[
+    0.1, 1.0, 2.5, 10.0, 25.0, 30.0, 75.0, 100.0, 250.0, 1_000.0, 3_000.0, 1e9,
+];
 
 /// The deepest level a generated tree reaches, the top level being 0.
 const MAX_DEPTH: usize = 4;
@@ -213,10 +246,14 @@ impl Generator {
         }
     }
 
-    /// A tree of one to four top-level nodes, each with up to three children a level, and up to
-    /// three frames not read: most under a ref of the tree, some under none, some two for one.
+    /// A tree of one to four top-level nodes, each with up to three children a level, sometimes
+    /// a paragraph of 12,000 units or so after them; up to three frames not read: most under a
+    /// ref of the tree, some under none, some two for one; and Neo's facts about the page.
     pub(crate) fn snapshot(&mut self) -> Snapshot {
-        let tree = (0..=self.below(3)).map(|_| self.subtree(0)).collect();
+        let mut tree: Vec<AriaNode> = (0..=self.below(3)).map(|_| self.subtree(0)).collect();
+        if self.chance(15) {
+            tree.push(self.long_paragraph());
+        }
         let mut partial: Vec<PartialFrame> = Vec::new();
         for _ in 0..self.below(4) {
             let iframe = match (self.below(5), partial.last()) {
@@ -240,17 +277,107 @@ impl Generator {
                 reason,
             });
         }
-        Snapshot { tree, partial }
+        let layers = if self.chance(50) {
+            (0..=self.below(3)).map(|_| self.layer()).collect()
+        } else {
+            Vec::new()
+        };
+        let closed_roots = self.maybe(20, |generator| ClosedRoots {
+            sent: generator.small(),
+            found: generator.small(),
+        });
+        let unmarked = self.maybe(20, |generator| Unmarked {
+            reason: if generator.chance(70) {
+                generator.pick(&["timeout", "page shape"]).to_owned()
+            } else {
+                generator.string()
+            },
+        });
+        Snapshot {
+            tree,
+            partial,
+            layers,
+            closed_roots,
+            unmarked,
+        }
+    }
+
+    /// The options of one call in Neo's default format.
+    pub(crate) fn passed(&mut self) -> Passed {
+        let max_tokens = if self.chance(30) {
+            None
+        } else if self.chance(80) {
+            MaxTokens::new(self.pick(CAPS))
+        } else {
+            MaxTokens::new(f64::from(self.small()) / 8.0 + 0.125)
+        };
+        Passed {
+            text: self.pick(&[None, Some(false), Some(true)]),
+            urls: self.pick(&[None, Some(false), Some(true)]),
+            max_tokens,
+            inert: self.pick(&[None, Some(false), Some(true)]),
+        }
+    }
+
+    /// A layer on top, worded as neo-playwright words one or as any string. Its ref is often one
+    /// the tree's nodes carry as their `onTop` mark.
+    fn layer(&mut self) -> Layer {
+        let r#ref = self.reference();
+        let line = if self.chance(80) {
+            let mut line = format!("# on top: dialog \"{}\" [ref={}]", self.string(), r#ref);
+            if self.chance(50) {
+                line.push_str("\n#   its controls: button \"Accept\" [ref=e2]");
+            }
+            line
+        } else {
+            self.string()
+        };
+        Layer {
+            r#ref,
+            line,
+            whole_view: self.chance(70),
+        }
+    }
+
+    /// A paragraph whose text pieces join to about 12,000 units, the most Neo's format keeps when
+    /// the script does not choose, a two-unit character among them.
+    fn long_paragraph(&mut self) -> AriaNode {
+        let mut paragraph = self.node();
+        paragraph.role = "paragraph".to_owned();
+        paragraph.name = None;
+        paragraph.text = None;
+        paragraph.inert = None;
+        paragraph.on_top = None;
+        paragraph.r#ref = None;
+        for _ in 0..4 {
+            let words = "word ".repeat(270 + self.below(60));
+            paragraph
+                .children
+                .push(AriaChild::Text(format!("{words}\u{1f600}{words}")));
+        }
+        paragraph
+    }
+
+    /// A count below 4,000.
+    fn small(&mut self) -> u32 {
+        u32::try_from(self.below(4_000)).unwrap_or_default()
     }
 
     fn subtree(&mut self, depth: usize) -> AriaNode {
         let mut node = self.node();
+        // A native select's children are mostly its options and their groups, which Neo's format
+        // collects through the groups, a ref or an empty ref among them.
+        let select = node.role == "combobox" || node.role == "listbox";
         if depth < MAX_DEPTH {
             for _ in 0..self.below(4) {
                 node.children.push(if self.chance(30) {
                     AriaChild::Text(self.string())
                 } else {
-                    AriaChild::Node(Box::new(self.subtree(depth + 1)))
+                    let mut child = self.subtree(depth + 1);
+                    if select && self.chance(70) {
+                        child.role = self.pick(&["option", "option", "group"]).to_owned();
+                    }
+                    AriaChild::Node(Box::new(child))
                 });
             }
         }

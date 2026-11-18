@@ -4,12 +4,13 @@
 //! Its place in a snapshot's path is tree in, text out:
 //!
 //! ```text
-//!  a producer of the shape ─▶ Snapshot: the AriaNode tree, the frames not read
-//!                                 │
+//!  a producer of the shape ─▶ Snapshot: the AriaNode tree, the frames not read, the layers on
+//!                                 │     top, the closed roots and the check for clickable elements
 //!                                 ▼
-//!                       playwright: Playwright's own text ─▶ the text
-//!                                 │ every length, space, number and quote by
-//!                                 ▼
+//!            neo: Neo's default format, and its Form ─┬─▶ the text
+//!            playwright: Playwright's own text ───────┘
+//!                                 │ every element line by playwright's printer; the size cap by
+//!                                 ▼ cap; every length, space, number and quote by
 //!                       js: JavaScript's rules
 //! ```
 //!
@@ -32,6 +33,8 @@
 //! | `playwright/yaml_escape.rs` | vendored `isomorphic/yaml.ts` |
 //! | `playwright/node_text.rs` | vendored `isomorphic/ariaSnapshotRenderer.ts` |
 //! | `playwright/tree_text.rs` | neo-playwright-js `prelude/snapshot.ts` (`treeLines`, `yamlLines`, `renderSnapshot`) |
+//! | `neo/*.rs` | neo-playwright-js `prelude/snapshot-v1.ts`, `snapshot-on-top.ts`, `snapshot-unmarked.ts` |
+//! | `cap.rs` | neo-playwright-js `prelude/snapshot-cap.ts` |
 //! | `js/*.rs` | ECMAScript itself; QuickJS is the test oracle |
 //!
 //! [`PORTED_FROM`] holds the vendored files' hashes at the port, which neo-playwright's tests
@@ -45,14 +48,43 @@ mod aria_node;
     not(test),
     expect(
         dead_code,
+        reason = "no production code prints a snapshot's text through this crate before the \
+                  snapshot operation calls it, so neither the cap nor Neo's format runs; until \
+                  then the tests are their only callers"
+    )
+)]
+mod cap;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "a form is built by Neo's format, which no production code calls before the \
+                  snapshot operation renders through this crate"
+    )
+)]
+mod form;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
         unused_imports,
-        reason = "only Playwright's printer calls these, and no production code calls it before \
+        reason = "only the printers call these, and no production code calls a printer before \
                   the snapshot operation renders through this crate; until then the tests do"
     )
 )]
 mod js;
 #[cfg(test)]
 mod judges;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        unused_imports,
+        reason = "no production code prints a snapshot's text through this crate before the \
+                  snapshot operation calls it; until then the tests are its only callers"
+    )
+)]
+mod neo;
 #[cfg_attr(
     not(test),
     expect(

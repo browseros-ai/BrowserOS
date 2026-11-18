@@ -18,7 +18,7 @@ mod case_file;
 mod first_difference;
 mod generator;
 
-pub(crate) use bundles::Bundles;
-pub(crate) use case_file::CaseFile;
+pub(crate) use bundles::{Bundles, passed_json};
+pub(crate) use case_file::{Case, CaseFile, NEO_CASES, PLAYWRIGHT_CASES};
 pub(crate) use first_difference::first_difference;
 pub(crate) use generator::{Generator, count, seed};

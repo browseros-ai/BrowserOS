@@ -6,10 +6,14 @@ use std::error::Error;
 use std::slice;
 
 use rquickjs::{CatchResultExt, Context, Runtime};
-use serde_json::json;
+use serde::Deserialize;
+use serde_json::{Map, Value, json};
 
 use crate::aria_node::AriaNode;
+use crate::form::Passed;
 use crate::snapshot::Snapshot;
+
+use super::case_file::Pending;
 
 /// Today's TypeScript renderer: one script that sets the global `todaysAnswer(call, result)`
 /// (neo-playwright-js `scripts/snapshot-cases/answer.ts`), the dispatch the case writer uses.
@@ -50,24 +54,41 @@ impl Bundles {
         self.vendored_text(slice::from_ref(node))
     }
 
-    /// Today's Playwright-format text for `snapshot`: `todaysAnswer({ playwright: {} }, result)`,
-    /// the result being the tree and the frames not read as Rust hands them over today.
+    /// Today's Playwright-format text for `snapshot`: `todaysAnswer({ playwright: {} }, result)`.
     pub(crate) fn todays_playwright_text(
         &self,
         snapshot: &Snapshot,
     ) -> Result<String, Box<dyn Error>> {
-        let partial: Vec<_> = snapshot
-            .partial
-            .iter()
-            .map(
-                |frame| json!({ "ref": frame.r#ref, "frame": frame.frame, "reason": frame.reason }),
-            )
-            .collect();
-        let result = json!({ "json": snapshot.tree, "partial": partial });
-        self.run(
-            &result.to_string(),
-            "todaysAnswer({ playwright: {} }, JSON.parse(input)).text",
-        )
+        self.todays_answer(&json!({ "playwright": {} }), snapshot)?
+            .text
+            .ok_or_else(|| "Playwright's format always prints a text".into())
+    }
+
+    /// Today's answer to `call` (a case's call, `{ page: passed }` and the like) on `snapshot`:
+    /// `todaysAnswer(call, result)`, the result holding the tree and every fact as Rust hands
+    /// them over today. A lone half of a character in a text, which only the covered block's cut
+    /// makes, comes back as U+FFFD, as the committed cases write it.
+    pub(crate) fn todays_answer(
+        &self,
+        call: &Value,
+        snapshot: &Snapshot,
+    ) -> Result<TodaysAnswer, Box<dyn Error>> {
+        let input = json!({ "call": call, "result": result(snapshot) });
+        let answer = self.run(
+            &input.to_string(),
+            r"(() => {
+                const { call, result } = JSON.parse(input);
+                const answer = todaysAnswer(call, result);
+                const whole = (text) => typeof text === 'string'
+                    ? text.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '\uFFFD')
+                    : text;
+                return JSON.stringify({
+                    text: whole(answer.text),
+                    pending: answer.pending && { text: whole(answer.pending.text), form: answer.pending.form },
+                });
+            })()",
+        )?;
+        Ok(serde_json::from_str(&answer)?)
     }
 
     /// Evaluates `script` with `input` as the global string `input`, and reads the string it
@@ -83,4 +104,64 @@ impl Bundles {
                 .map_err(|caught| caught.to_string())
         })?)
     }
+}
+
+/// What today's renderer answered: the text (the block for a cover, `None` for none) and, for a
+/// whole page in Neo's format, what it keeps.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct TodaysAnswer {
+    pub(crate) text: Option<String>,
+    pub(crate) pending: Option<Pending>,
+}
+
+/// The snapshot operation's result as Rust hands it to today's renderer: `{ json, partial }`, and
+/// `onTop`, `closedRoots` and `unmarked` when the page has them.
+fn result(snapshot: &Snapshot) -> Value {
+    let partial: Vec<Value> = snapshot
+        .partial
+        .iter()
+        .map(|frame| json!({ "ref": frame.r#ref, "frame": frame.frame, "reason": frame.reason }))
+        .collect();
+    let mut result = Map::new();
+    result.insert("json".to_owned(), json!(snapshot.tree));
+    result.insert("partial".to_owned(), Value::Array(partial));
+    if !snapshot.layers.is_empty() {
+        let layers: Vec<Value> = snapshot
+            .layers
+            .iter()
+            .map(|layer| {
+                json!({ "ref": layer.r#ref, "line": layer.line, "wholeView": layer.whole_view })
+            })
+            .collect();
+        result.insert("onTop".to_owned(), Value::Array(layers));
+    }
+    if let Some(roots) = &snapshot.closed_roots {
+        result.insert(
+            "closedRoots".to_owned(),
+            json!({ "sent": roots.sent, "found": roots.found }),
+        );
+    }
+    if let Some(unmarked) = &snapshot.unmarked {
+        result.insert("unmarked".to_owned(), json!({ "reason": unmarked.reason }));
+    }
+    Value::Object(result)
+}
+
+/// A call's options as the prelude sends them: each left out when the script left it out.
+pub(crate) fn passed_json(passed: &Passed) -> Value {
+    let mut options = Map::new();
+    if let Some(text) = passed.text {
+        options.insert("text".to_owned(), json!(text));
+    }
+    if let Some(urls) = passed.urls {
+        options.insert("urls".to_owned(), json!(urls));
+    }
+    if let Some(max_tokens) = passed.max_tokens {
+        options.insert("maxTokens".to_owned(), json!(max_tokens.tokens()));
+    }
+    if let Some(inert) = passed.inert {
+        options.insert("inert".to_owned(), json!(inert));
+    }
+    Value::Object(options)
 }

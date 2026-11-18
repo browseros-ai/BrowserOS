@@ -3,23 +3,17 @@
 //! and trees, upstream's printer and today's TypeScript renderer.
 
 use std::error::Error;
-use std::path::PathBuf;
 use std::{env, fs};
 
 use serde_json::json;
 
 use crate::aria_node::AriaNode;
-use crate::judges::{Bundles, CaseFile, Generator, count, first_difference, seed};
+use crate::judges::{
+    Bundles, CaseFile, Generator, NEO_CASES, PLAYWRIGHT_CASES, count, first_difference, seed,
+};
 use crate::snapshot::Snapshot;
 
 use super::{NodeAlone, node_text, tree_text};
-
-/// Upstream's printer's own text on trees with no Neo fact; kept for as long as the vendored
-/// printer is, and rewritten from it at every engine upgrade.
-const PLAYWRIGHT_CASES: &str = include_str!("../../tests/data/cases/playwright.json");
-
-/// Every other case, by today's renderer, Playwright's format on trees with Neo's facts among them.
-const NEO_CASES: &str = include_str!("../../tests/data/cases/neo.json");
 
 /// How many random nodes and trees the gate's run draws.
 const GATE_NODES: usize = 3_000;
@@ -82,68 +76,55 @@ fn tests_that_playwrights_format_prints_every_private_case() -> Result<(), Box<d
     let bundles = Bundles::new()?;
     let mut differing: Vec<String> = Vec::new();
     let (mut texts, mut texts_identical, mut trees, mut trees_identical) = (0, 0, 0, 0);
-    for folder in env::split_paths(&folders) {
-        let mut files: Vec<PathBuf> = Vec::new();
-        for entry in fs::read_dir(&folder)? {
-            let path = entry?.path();
-            if path
-                .extension()
-                .is_some_and(|extension| extension == "json")
-            {
-                files.push(path);
+    for file in &CaseFile::private_files(&folders)? {
+        let shown = file.file_name().unwrap_or_default().to_string_lossy();
+        let cases: CaseFile = serde_json::from_str(&fs::read_to_string(file)?)?;
+        let (mut file_texts, mut file_texts_identical) = (0, 0);
+        for (index, case) in cases.playwright_cases().enumerate() {
+            let name = case
+                .snapshot
+                .as_deref()
+                .ok_or("a Playwright case names its snapshot")?;
+            let rust = tree_text(&cases.snapshot(name)?);
+            let expected = case.text.as_deref().ok_or("a Playwright case has a text")?;
+            match first_difference(&rust, expected) {
+                None => file_texts_identical += 1,
+                Some((line, _, _)) => differing.push(format!(
+                    "{shown}: Playwright-format case {index}: line {line} differs; {} bytes \
+                     printed, {} saved",
+                    rust.len(),
+                    expected.len()
+                )),
             }
+            file_texts += 1;
         }
-        files.sort();
-        for file in &files {
-            let shown = file.file_name().unwrap_or_default().to_string_lossy();
-            let cases: CaseFile = serde_json::from_str(&fs::read_to_string(file)?)?;
-            let (mut file_texts, mut file_texts_identical) = (0, 0);
-            for (index, case) in cases.playwright_cases().enumerate() {
-                let name = case
-                    .snapshot
-                    .as_deref()
-                    .ok_or("a Playwright case names its snapshot")?;
-                let rust = tree_text(&cases.snapshot(name)?);
-                let expected = case.text.as_deref().ok_or("a Playwright case has a text")?;
-                match first_difference(&rust, expected) {
-                    None => file_texts_identical += 1,
-                    Some((line, _, _)) => differing.push(format!(
-                        "{shown}: Playwright-format case {index}: line {line} differs; {} bytes \
-                         printed, {} saved",
-                        rust.len(),
-                        expected.len()
-                    )),
-                }
-                file_texts += 1;
+        // Every saved tree, not only those a Playwright-format call was saved for: Rust's
+        // text beside today's renderer's, in QuickJS.
+        let (mut file_trees, mut file_trees_identical) = (0, 0);
+        for (index, name) in cases.snapshot_names().enumerate() {
+            let snapshot = cases.snapshot(name)?;
+            let rust = tree_text(&snapshot);
+            let todays = bundles.todays_playwright_text(&snapshot)?;
+            match first_difference(&rust, &todays) {
+                None => file_trees_identical += 1,
+                Some((line, _, _)) => differing.push(format!(
+                    "{shown}: tree {index}: line {line} differs; {} bytes printed, {} by \
+                     today's renderer",
+                    rust.len(),
+                    todays.len()
+                )),
             }
-            // Every saved tree, not only those a Playwright-format call was saved for: Rust's
-            // text beside today's renderer's, in QuickJS.
-            let (mut file_trees, mut file_trees_identical) = (0, 0);
-            for (index, name) in cases.snapshot_names().enumerate() {
-                let snapshot = cases.snapshot(name)?;
-                let rust = tree_text(&snapshot);
-                let todays = bundles.todays_playwright_text(&snapshot)?;
-                match first_difference(&rust, &todays) {
-                    None => file_trees_identical += 1,
-                    Some((line, _, _)) => differing.push(format!(
-                        "{shown}: tree {index}: line {line} differs; {} bytes printed, {} by \
-                         today's renderer",
-                        rust.len(),
-                        todays.len()
-                    )),
-                }
-                file_trees += 1;
-            }
-            println!(
-                "private sets: {shown}: {file_texts_identical} of {file_texts} saved \
-                 Playwright-format texts identical; {file_trees_identical} of {file_trees} trees \
-                 print today's renderer's text"
-            );
-            texts += file_texts;
-            texts_identical += file_texts_identical;
-            trees += file_trees;
-            trees_identical += file_trees_identical;
+            file_trees += 1;
         }
+        println!(
+            "private sets: {shown}: {file_texts_identical} of {file_texts} saved \
+             Playwright-format texts identical; {file_trees_identical} of {file_trees} trees \
+             print today's renderer's text"
+        );
+        texts += file_texts;
+        texts_identical += file_texts_identical;
+        trees += file_trees;
+        trees_identical += file_trees_identical;
     }
     println!(
         "private sets: {texts_identical} of {texts} identical (Playwright's format), \
@@ -210,7 +191,7 @@ fn tests_that_a_line_break_in_a_key_moves_its_colon_as_todays_renderer_does()
     }]))?;
     let snapshot = Snapshot {
         tree,
-        partial: Vec::new(),
+        ..Snapshot::default()
     };
     let todays = "- 'button [ref=a:\nb]'\n  - img";
     assert_eq!(

@@ -30,6 +30,6 @@ mod tests;
 mod tree_text;
 mod yaml_escape;
 
-pub(crate) use node_text::{NodeAlone, node_text};
+pub(crate) use node_text::{NodeAlone, node_text, text_line};
 pub use ported_from::{PORTED_FROM, PortedFile};
 pub(crate) use tree_text::tree_text;
