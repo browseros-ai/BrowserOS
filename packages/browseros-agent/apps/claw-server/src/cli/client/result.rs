@@ -37,7 +37,11 @@ impl ToolOutput {
     #[must_use]
     pub fn exit_code(&self) -> Code {
         if !self.is_error {
-            return Code::Ok;
+            return if self.load_failed() {
+                Code::ToolFailed
+            } else {
+                Code::Ok
+            };
         }
         if self.is_operator_cancelled() {
             return Code::Stopped;
@@ -49,6 +53,17 @@ impl ToolOutput {
             return Code::Timeout;
         }
         Code::ToolFailed
+    }
+
+    /// A tab that opened but whose page did not load. The server keeps that a success, since
+    /// it keys grouping and ownership on the page it reports, but to a script the page it asked
+    /// for is not there. A page that loaded with an HTTP error status is not one: it loaded.
+    #[must_use]
+    pub fn load_failed(&self) -> bool {
+        self.structured
+            .as_ref()
+            .and_then(|value| value.get("loadError"))
+            .is_some_and(|error| !error.is_null())
     }
 
     /// `operator_cancellation_result` sets this in structured content. Matching
@@ -175,5 +190,28 @@ mod tests {
         assert!(output.text.is_empty());
         assert_eq!(output.images.len(), 1);
         assert_eq!(output.images[0].mime_type, "image/jpeg");
+    }
+
+    #[test]
+    fn a_tab_whose_page_did_not_load_exits_one() {
+        let output = from_call_result(&json!({
+            "content": [{ "type": "text", "text": "opened page 6. Navigation to https://x.test failed: net::ERR_CONNECTION_TIMED_OUT. The tab stays open; navigate it or close it." }],
+            "structuredContent": { "page": 6, "loadError": "net::ERR_CONNECTION_TIMED_OUT" }
+        }));
+        assert_eq!(output.exit_code(), Code::ToolFailed);
+    }
+
+    #[test]
+    fn a_page_that_loaded_with_an_error_status_or_downloaded_still_exits_zero() {
+        for structured in [
+            json!({ "page": 6, "status": 404 }),
+            json!({ "page": 6, "download": true }),
+        ] {
+            let output = from_call_result(&json!({
+                "content": [{ "type": "text", "text": "opened page 6" }],
+                "structuredContent": structured
+            }));
+            assert_eq!(output.exit_code(), Code::Ok, "{structured}");
+        }
     }
 }
