@@ -1275,15 +1275,15 @@ class SlimviewerTest(unittest.TestCase):
                 self.assertEqual(self.argv.read_text().splitlines()[-2:], ["--fps", fps])
 
     def test_feature_search_mode_reaches_the_clean_viewer_environment(self):
-        for setting in ["scroll", "always", "never"]:
+        for setting, expected in [("", "scroll"), ("scroll", "scroll"), ("always", "always"), ("never", "never")]:
             with self.subTest(setting=setting):
                 result = self.launch(feature_search=setting)
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertIn(f"feature search {setting}", result.stdout.splitlines())
+                self.assertIn(f"feature search {expected}", result.stdout.splitlines())
                 self.assertIn("host token unset", result.stdout.splitlines())
 
     def test_invalid_feature_search_stops_startup(self):
-        for setting in ["sometimes", "true", ""]:
+        for setting in ["sometimes", "true"]:
             with self.subTest(setting=setting):
                 result = self.launch(feature_search=setting)
                 self.assertEqual(result.returncode, 1)
