@@ -205,6 +205,14 @@ async fn run_tool(
     } else if plan.tool == "read_output" {
         note_rest_of_output(&plan.args, &output);
     }
+    // Pages a script opens together now take turns joining the task's group, so this means
+    // the group was changed from outside while the script ran. Say so, rather than leave a
+    // bare internal code.
+    if plan.tool == "run" && output.is_error && output.text.contains("group_out_of_scope") {
+        io::note(
+            "[the task's tab group was changed outside this script while it ran, by a tab dragged or a group edited. Re-run the script; pages it already opened are this task's.]",
+        );
+    }
     let elapsed = started.elapsed().as_millis();
 
     if plan.remember_page

@@ -39,11 +39,10 @@ pub fn envelope(
 
 /// The page ids a `tabs action=list` result names.
 ///
-/// Read from the text, for the same reason [`page_from`] is: `dispatch.rs`
-/// strips `structuredContent` from every tool without an output schema, so the
-/// listing arrives as lines of `[id] url (title)` and nothing else. Reading
-/// structured content here meant every listing looked empty, which made the
-/// stale-page explainer clear the remembered page after any tool failure.
+/// From the structured result when the reply has one, which it does on current servers,
+/// else from the `[id] url (title)` lines of its text. Servers before #3134 stripped the
+/// structured result from every tool without an output schema, and reading it alone made
+/// every listing look empty there, so the stale-page explainer cleared the page on any failure.
 #[must_use]
 pub fn listed_pages(output: &ToolOutput) -> Vec<u32> {
     if let Some(pages) = output
@@ -180,11 +179,10 @@ pub fn fields(rows: &[(&str, String)]) -> String {
 
 /// Pulls a page id out of a tool result, for the commands that open one.
 ///
-/// The text block is the primary source, not a fallback. `dispatch.rs` strips
-/// `structuredContent` from every tool that has no `output_schema`, which is
-/// all of them except `run`, so reading structured content alone meant `open`
-/// never remembered the page it had just opened. Found against a live server;
-/// a fixture that supplies structured content cannot catch it.
+/// From the structured result when the reply has one, which it does on current servers,
+/// else from the text. Servers before #3134 stripped the structured result from every
+/// tool without an output schema, and reading it alone meant `open` never remembered the
+/// page it had just opened; the text fallback keeps such a server working.
 #[must_use]
 pub fn page_from(output: &ToolOutput) -> Option<u32> {
     structured_page(output).or_else(|| text_page(&output.text))
@@ -297,9 +295,8 @@ mod tests {
         assert_eq!(page_from(&output), Some(7));
     }
 
-    /// The real wire shape of `tabs action=new`, captured from a live server:
-    /// no structured content, because dispatch strips it from every tool
-    /// without an output schema.
+    /// The wire shape of `tabs action=new` from a server that strips the structured result,
+    /// captured live before #3134. The text fallback still has to read it.
     #[test]
     fn the_new_page_id_is_read_from_the_text_when_structured_content_is_stripped() {
         let output = ToolOutput {
