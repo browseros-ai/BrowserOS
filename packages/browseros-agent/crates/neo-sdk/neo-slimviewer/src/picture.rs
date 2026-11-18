@@ -279,6 +279,8 @@ fn recent(at: Option<Instant>, now: Instant) -> bool {
 }
 
 impl Scale {
+    /// H.264 4:2:0 needs even dimensions at either scale. Rounding at half size can discard
+    /// two more screen pixels than encoding the same screen at full size.
     pub fn dims(self, width: u16, height: u16) -> (u16, u16) {
         let divisor = match self {
             Self::Full => 1,

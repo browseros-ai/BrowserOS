@@ -3,6 +3,7 @@
 
 use std::io::{self, Read};
 
+use crate::picture::Scale;
 use crate::rfb::{FieldBox, Fields, PasteOutcome};
 
 const HELLO: u8 = 0x01;
@@ -94,22 +95,29 @@ pub fn clipboard(text: &str) -> io::Result<Vec<u8>> {
     Ok(out)
 }
 
-/// One decodable frame: header, then the Annex B access unit. `half`: the picture is half the
-/// screen's width and height (the page draws it scaled ×2).
+/// FRAME keeps its coded dimensions in the header. On half frames, bits 4 and 5 restore the
+/// two screen pixels lost when an odd half width or height rounds down for H.264.
 pub fn frame(
     seq: u32,
     key: bool,
     sharp: bool,
-    half: bool,
-    width: u16,
-    height: u16,
+    scale: Scale,
+    screen_width: u16,
+    screen_height: u16,
     au: &[u8],
 ) -> Vec<u8> {
+    let (width, height) = scale.dims(screen_width, screen_height);
+    let mut flags = u8::from(key) | (u8::from(sharp) << 1);
+    if scale == Scale::Half {
+        flags |= 1 << 2;
+        flags |= u8::from(screen_width & 2 != 0) << 4;
+        flags |= u8::from(screen_height & 2 != 0) << 5;
+    }
     let mut out = Vec::with_capacity(14 + au.len());
     out.extend(((10 + au.len()) as u32).to_be_bytes());
     out.push(FRAME);
     out.extend(seq.to_be_bytes());
-    out.push(u8::from(key) | (u8::from(sharp) << 1) | (u8::from(half) << 2));
+    out.push(flags);
     out.extend(width.to_be_bytes());
     out.extend(height.to_be_bytes());
     out.extend_from_slice(au);
@@ -511,10 +519,25 @@ mod tests {
     fn tests_that_hello_and_all_frame_flags_match_wire_v1() {
         assert_eq!(hello(false), [0, 0, 0, 3, HELLO, VERSION, 62]);
         assert_eq!(hello(true), [0, 0, 0, 3, HELLO, VERSION, 1]);
-        let bytes = frame(u32::MAX, true, true, true, 640, 480, &[1, 2, 3]);
+        let bytes = frame(u32::MAX, true, true, Scale::Half, 1280, 960, &[1, 2, 3]);
         assert_eq!(&bytes[..4], &13u32.to_be_bytes());
         assert_eq!(bytes[9], 7);
         assert_eq!(&bytes[14..], &[1, 2, 3]);
+    }
+
+    #[test]
+    fn half_frames_signal_each_axis_rounded_down_for_the_encoder() {
+        for (w, h, coded_w, coded_h, flags) in [
+            (786, 1704, 392_u16, 852_u16, 4 | 16),
+            (860, 1706, 430, 852, 4 | 32),
+            (786, 1706, 392, 852, 4 | 16 | 32),
+            (860, 1704, 430, 852, 4),
+        ] {
+            let bytes = frame(1, false, false, Scale::Half, w, h, &[0x41]);
+            assert_eq!(bytes[9], flags);
+            assert_eq!(&bytes[10..12], &coded_w.to_be_bytes());
+            assert_eq!(&bytes[12..14], &coded_h.to_be_bytes());
+        }
     }
 
     #[test]
@@ -542,11 +565,12 @@ mod tests {
 
     #[test]
     fn frame_header_matches_the_table() {
-        let f = frame(5, true, false, false, 780, 1688, &[0, 0, 0, 1, 0x67]);
-        assert_eq!(&f[..4], &15u32.to_be_bytes());
-        assert_eq!(f[4], FRAME);
-        assert_eq!(&f[5..9], &5u32.to_be_bytes());
-        assert_eq!(f[9], 1);
-        assert_eq!(&f[10..14], &[3, 12, 6, 152]);
+        let f = frame(5, true, false, Scale::Full, 786, 1706, &[0, 0, 0, 1, 0x67]);
+        assert_eq!(
+            f,
+            [
+                0, 0, 0, 15, FRAME, 0, 0, 0, 5, 1, 3, 18, 6, 170, 0, 0, 0, 1, 0x67
+            ]
+        );
     }
 }

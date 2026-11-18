@@ -1277,9 +1277,9 @@ impl Engine {
             self.seq,
             out.key,
             qp.is_some(),
-            plan.scale == Scale::Half,
-            enc.width,
-            enc.height,
+            plan.scale,
+            self.cap.width,
+            self.cap.height,
             &out.data,
         )
         .into();
