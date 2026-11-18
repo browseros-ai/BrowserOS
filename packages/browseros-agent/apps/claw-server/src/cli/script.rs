@@ -4,8 +4,9 @@
 //! with `&&`, so that half of the argument does not transfer. What survives
 //! and decides it is fan-out (`Promise.all` means N pages cost one wait cycle
 //! rather than N), saved helpers (which only work inside `run`), and output
-//! volume. Measured on the same five-page task: 523 ms and 130 bytes in one
-//! call against 2,356 ms and 4,410 bytes across fifteen.
+//! volume. Measured on five pages opened and read: 53 bytes printed by one call
+//! against 8,555 across ten. The time saved depends on how slow the pages are,
+//! since opening them together waits for the slowest rather than for each.
 //!
 //! Two things follow for the CLI: the script should not have to open with a
 //! preamble the CLI could write itself, and a run that hits the wall-clock cap

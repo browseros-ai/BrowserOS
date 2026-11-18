@@ -63,8 +63,10 @@ await Promise.all(pages.map(p => p.waitForSelector('.result')));
 return await Promise.all(pages.map(p => p.read()));
 ```
 
-That is the measured reason to prefer `run`: five pages in 523 ms and 130 bytes
-of output, against 2,356 ms and 4,410 bytes done one verb at a time.
+That is the measured reason to prefer `run`: five pages opened and read in one
+call printed 53 bytes, against 8,555 bytes done one verb at a time. Opening them
+together waits for the slowest page rather than for each in turn, so the time
+saved grows with how slow the pages are.
 
 ### The thirty second cap
 
