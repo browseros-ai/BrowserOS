@@ -272,6 +272,10 @@ button:focus-visible { outline: 2px solid #7fb4ff; outline-offset: 2px; }
         event.stopImmediatePropagation();
       };
       const keep = (event) => { event.stopPropagation(); };
+      // The shield's wheel region reaches the compositor only on the commit after its pointer-events
+      // flip back on, so a wheel right after neo's yield could scroll on the compositor thread. A
+      // blocking window listener stays registered for the overlay's life and sends every wheel here.
+      const onWheel = (event) => { if (event.isTrusted && held() && event.cancelable) event.preventDefault(); };
       const mount = () => {
         host = document.createElement('browseros-agent-overlay');
         host.setAttribute('data-browseros-agent-overlay', '');
@@ -316,6 +320,7 @@ button:focus-visible { outline: 2px solid #7fb4ff; outline-offset: 2px; }
           emit({ type: 'let-finish' });
         });
         for (const type of KEYS) window.addEventListener(type, onKey, true);
+        window.addEventListener('wheel', onWheel, { capture: true, passive: false });
         // Both sit at the maximum z-index, where tree order decides: neo's pointer stays on top.
         const pointer = document.querySelector('browseros-agent-pointer');
         document.documentElement.insertBefore(host, pointer && pointer.parentNode === document.documentElement ? pointer : null);
@@ -324,6 +329,7 @@ button:focus-visible { outline: 2px solid #7fb4ff; outline-offset: 2px; }
       const dispose = () => {
         for (const name of Object.keys(timers)) clear(name);
         for (const type of KEYS) window.removeEventListener(type, onKey, true);
+        window.removeEventListener('wheel', onWheel, true);
         try { if (host) host.remove(); } catch (_) {}
         host = layer = null;
         el = {};
