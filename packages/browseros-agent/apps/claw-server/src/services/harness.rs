@@ -359,15 +359,6 @@ impl HarnessService {
         self
     }
 
-    fn require_config_writes(&self) -> AppResult<()> {
-        if self.read_only {
-            return Err(AppError::forbidden(
-                "Agent configuration changes are disabled in development mode.",
-            ));
-        }
-        Ok(())
-    }
-
     /// Reconcile a user-authored skill into every connected agent, returning
     /// the agents it was linked into. Serialized with all other skill and
     /// MCP-link mutations through the shared lock so the shared skills.json
@@ -437,7 +428,6 @@ impl HarnessService {
         harness: Harness,
         mcp_url: &str,
     ) -> AppResult<ConnectionState> {
-        self.require_config_writes()?;
         let guard = self.mutex.clone().lock_owned().await;
         let agent = harness.agent_id();
         let spec = spec_for(agent, mcp_url).map_err(manager_app_error)?;
@@ -524,7 +514,6 @@ impl HarnessService {
     }
 
     pub async fn disconnect_browseros(&self, harness: Harness) -> AppResult<ConnectionState> {
-        self.require_config_writes()?;
         let guard = self.mutex.clone().lock_owned().await;
         let agent = harness.agent_id();
         let manager = self.manager.clone();
