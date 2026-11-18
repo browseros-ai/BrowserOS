@@ -684,7 +684,12 @@ impl Picture {
     }
 
     fn sharp_budget(&self, now: Instant) -> Option<(u8, Duration)> {
-        let cap = self.capacity_kbps(now).unwrap_or(8000.0);
+        let cap = if self.clear_ticks_needed > 0 {
+            self.return_capacity_kbps(now)
+        } else {
+            self.capacity_kbps(now)
+        }
+        .unwrap_or(8000.0);
         for qp in self.cfg.sharpen_qp..=51 {
             if f32::from(qp) >= self.crf() - 2.0 {
                 return None;
@@ -1878,7 +1883,15 @@ mod tests {
         full.big = false;
         full.bytes = 160_000;
         p.encoded(quiet, full);
-        let next = at(quiet, 11);
+        let first_ack = at(quiet, 11);
+        assert_eq!(p.deadline(first_ack), None, "sharpening waits for recovery");
+        // After the queue drains, sharpening can use the fast peak while the
+        // latest probe still holds motion at half size.
+        let next = at(first_ack, 1);
+        for (now, kbps) in [(first_ack, 8000.0), (next, 3000.0)] {
+            capacity(&mut p, now, kbps);
+            p.tick(now, active(15), Cpu::default());
+        }
         assert!(p.sharp_qp(next).is_some());
         assert!(!p.full_return_fits(next));
         assert_eq!(
@@ -2925,6 +2938,51 @@ mod tests {
             .unwrap();
         assert!(q >= 21, "QP {q}");
     }
+
+    #[test]
+    fn tests_that_a_recent_congestion_budgets_the_sharp_frame_conservatively() {
+        let t = Instant::now();
+        let mut p = picture(t);
+        let mut key = frame(Scale::Full, 10);
+        key.key = true;
+        key.bytes = 25_000;
+        p.encoded(t, key);
+
+        let jammed = at(t, 1);
+        p.tick(
+            jammed,
+            Link {
+                delivered_kbps: 1000.0,
+                ..jam()
+            },
+            Cpu::default(),
+        );
+        let now = at(jammed, 3);
+        capacity(&mut p, now, 8000.0);
+        assert_eq!(
+            p.still(now).and_then(|plan| plan.sharp_qp),
+            Some(21),
+            "at 1 Mb/s, QP 20 needs 317 ms and QP 21 needs 283 ms"
+        );
+    }
+
+    #[test]
+    fn tests_that_a_clean_link_keeps_the_fast_sharp_budget() {
+        let t = Instant::now();
+        let mut p = picture(t);
+        let mut key = frame(Scale::Full, 10);
+        key.key = true;
+        p.encoded(t, key);
+        capacity(&mut p, t, 8000.0);
+        let now = at(t, 1);
+        capacity(&mut p, now, 1000.0);
+        assert_eq!(
+            p.still(now).and_then(|plan| plan.sharp_qp),
+            Some(18),
+            "the 8 Mb/s peak still prices a clean link after a slower probe"
+        );
+    }
+
     #[test]
     fn tests_that_slow_link_sharp_waits_a_second_after_input() {
         let t = Instant::now();

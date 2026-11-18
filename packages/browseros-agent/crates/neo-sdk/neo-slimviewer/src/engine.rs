@@ -3875,13 +3875,15 @@ mod tests {
                 acks.pop_front();
             }
             if ms % 1000 == 0 {
+                let queue_ms = if jammed { 250 } else { 0 };
                 p.tick(
                     now,
                     picture::Link {
                         blocked: if jammed { 0.8 } else { 0.0 },
                         sent_kbps: 8000.0,
                         delivered_kbps: 3000.0,
-                        queue_ms: if jammed { 250 } else { 0 },
+                        queue_ms,
+                        base_queue_ms: Some(queue_ms),
                         ..picture::Link::default()
                     },
                     picture::Cpu::default(),

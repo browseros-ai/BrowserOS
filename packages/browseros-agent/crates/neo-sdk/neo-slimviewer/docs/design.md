@@ -31,8 +31,10 @@ measurement still applies. Two consecutive uncongested seconds with delivery and
 a median ACK delay less than 40 ms above the base RTT release these limits.
 After 20 seconds without congestion, one such second suffices. Fresh probes
 continue to price full-size returns.
-If the full key exceeds that budget, a full second without a change allows the
-settle frame through. Its acknowledgement measures fresh capacity.
+If the full key exceeds that budget, a full second without a change allows a
+plain full-size frame through. Its acknowledgement measures fresh capacity.
+A sharp settle frame must fit 300 ms at the capped rate. Once the cap lifts,
+sharpening uses the fastest sample from the last ten seconds.
 
 When an owner's acknowledgement window times out, the engine applies the
 quality cap before encoding the next keyframe. Forced keys use half size whenever
