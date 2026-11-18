@@ -5098,6 +5098,43 @@ mod seed_tests {
         Ok(())
     }
 
+    /// A read of the download's own tab that started after the download began does not keep it:
+    /// once the tab's earlier read names its frame, the download goes in ahead of that later
+    /// read, at its place, and is recorded at once with its tab.
+    #[tokio::test]
+    async fn a_later_read_in_the_download_s_own_tab_does_not_keep_it() -> TestResult {
+        let connection = TestConnection::new([]);
+        connection.always("Page.getFrameTree", cdp_pending())?;
+        connection.always("Page.enable", cdp_pending())?;
+        let (hub, mut watcher, _answers) = watcher(&connection);
+        read(&mut watcher, page_attached("t-page", "t")).await;
+        for event in download("child") {
+            read(&mut watcher, event).await;
+        }
+        // An out-of-process frame of t attaches after the begin: its read stands in t's line and
+        // never answers.
+        let frame = json!({ "sessionId": "tf",
+            "targetInfo": { "targetId": "tf", "type": "iframe", "url": "https://tf.test/" } });
+        read(&mut watcher, on("t-page", "Target.attachedToTarget", frame)).await;
+        answer(&mut watcher, "t-page", tree_with("t", Some("child"))).await;
+        assert_eq!(
+            download_pages(&hub),
+            [Some("t".to_owned())],
+            "at once, ahead of the frame's later read"
+        );
+        assert!(completed(&hub), "its completion followed it");
+        assert!(
+            watcher.lines.contains_key(&TargetId("t".to_owned())),
+            "the frame's read is still out"
+        );
+        assert_eq!(
+            watcher.progress.applied_through(),
+            4,
+            "nothing of t is held"
+        );
+        Ok(())
+    }
+
     /// While a run listens on the context for lifecycle events, an untouched tab whose renderer
     /// never answers core's attach costs the loop nothing, and only one attach of it is out at a
     /// time; once that one ends without a session, a later pass attaches it again.
