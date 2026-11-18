@@ -944,7 +944,22 @@ impl ClawMcpService {
                 })?;
             if let Some(binding) = binding.filter(|binding| binding.is_cli()) {
                 let session_id = SessionId::new(binding.session_id.clone());
-                if self.cli_task_was_stopped(&session_id).await {
+                if self.cli_group_is_closed(group).await {
+                    // The user closed the task's tabs since its last command. The sweep would
+                    // end it within a minute; ending it here means this call cannot rename or
+                    // act as a task that is already over. It starts new work instead.
+                    if let Err(error) = crate::services::cli_tasks::end_task_for_group(
+                        &self.state.sessions,
+                        &self.state.task_groups,
+                        &binding,
+                        crate::services::cli_tasks::REASON_GROUP_CLOSED,
+                        crate::clock::now_epoch_ms(),
+                    )
+                    .await
+                    {
+                        warn!(error = %error, group, "ending a CLI task whose group closed failed");
+                    }
+                } else if self.cli_task_was_stopped(&session_id).await {
                     // Stop in the cockpit ends a CLI task for good, as it does a handle. The
                     // group is freed so the next command starts new work rather than failing.
                     if let Err(error) = self
@@ -1106,6 +1121,21 @@ impl ClawMcpService {
             ownership
                 .claim_page(session.convo_id().clone(), page.page_id.clone())
                 .await;
+        }
+    }
+
+    /// Whether the browser no longer has `group`. A browser that cannot be asked reads as the
+    /// group being open, since a task is never ended because the browser could not be asked.
+    /// Read from the same native tab listing the CLI task sweep uses.
+    async fn cli_group_is_closed(&self, group: &str) -> bool {
+        let Some(browser) = self.state.browser.session().await else {
+            return false;
+        };
+        match browser.pages.list().await {
+            Ok(pages) => !pages
+                .iter()
+                .any(|page| page.group_id.as_deref() == Some(group)),
+            Err(_) => false,
         }
     }
 
@@ -5068,6 +5098,53 @@ mod tests {
             .await?
             .ok_or_else(|| anyhow::anyhow!("the resumed task has no history row"))?;
         assert_eq!(summary.status, crate::db::audit_log::TaskStatus::Live);
+        Ok(())
+    }
+
+    async fn cli_service_with_browser(
+        groups_on_tabs: &[(usize, &str)],
+    ) -> anyhow::Result<(AppState, ClawMcpService)> {
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let transport = crate::api::mcp::test_support::ProfileConnection::new();
+        for (tab, group) in groups_on_tabs {
+            transport.tabs.lock().unwrap_or_else(|p| p.into_inner())[*tab]["groupId"] =
+                json!(group);
+        }
+        let browser = crate::api::mcp::test_support::current_session(transport);
+        browser.pages.list().await?;
+        call.state.browser.set_session_for_testing(browser).await;
+        let state = call.state.clone();
+        Ok((state, ClawMcpService::new(call.state)))
+    }
+
+    /// The user closed a task's tabs moments ago, before the sweep noticed. The next command
+    /// must not land in that task, where a rename or an action would hit a task already over.
+    #[tokio::test]
+    async fn a_cli_call_whose_group_was_closed_starts_new_work() -> anyhow::Result<()> {
+        let (state, service) = cli_service_with_browser(&[]).await?;
+        let opened = cli_task(&service, None, HandlelessStart::OpenTask).await?;
+        bind_cli_group(&state, "G-closed", opened.session.id()).await?;
+
+        let next = cli_task(&service, Some("G-closed"), HandlelessStart::OpenTask).await?;
+
+        assert_ne!(next.session.id(), opened.session.id());
+        assert!(state.task_groups.lookup_live("G-closed").await?.is_none());
+        assert!(
+            state.sessions.lookup(opened.session.id()).await.is_none(),
+            "the closed task ended"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_cli_call_whose_group_is_open_joins_its_task() -> anyhow::Result<()> {
+        let (state, service) = cli_service_with_browser(&[(0, "G-open")]).await?;
+        let opened = cli_task(&service, None, HandlelessStart::OpenTask).await?;
+        bind_cli_group(&state, "G-open", opened.session.id()).await?;
+
+        let next = cli_task(&service, Some("G-open"), HandlelessStart::OpenTask).await?;
+
+        assert_eq!(next.session.id(), opened.session.id());
         Ok(())
     }
 }

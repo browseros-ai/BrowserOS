@@ -141,7 +141,42 @@ async fn run_tool(
 
     let started = Instant::now();
     let arguments = Value::Object(plan.args.clone());
+    let had_task = client.state().group_id.is_some();
     let mut output = client.call(plan.tool, arguments).await?;
+
+    // Naming a task that is not there, because none has started or its group was closed,
+    // names the next one instead. The server's own reply would describe renaming a task
+    // that is over, so it is not shown.
+    if label == "task" && plan.tool == "name_session" && client.state().group_id.is_none() {
+        let pending = state::PendingTask {
+            name: plan
+                .args
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            category: plan
+                .args
+                .get("category")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            summary: plan
+                .args
+                .get("summary")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+        };
+        let name = pending.name.clone();
+        client.persist(|state| state.pending_task = Some(pending))?;
+        io::out(&if had_task {
+            format!(
+                "this directory's task ended when its tab group was closed, so \"{name}\" will name the next task."
+            )
+        } else {
+            format!("no task has started here yet, so \"{name}\" will name the next one.")
+        });
+        return Ok(Code::Ok);
+    }
 
     // The task's group was closed without this CLI, by the user or by the
     // browser restarting, so placing a new tab in it is refused. The task went
@@ -305,6 +340,11 @@ async fn run_local(client: &mut Client, globals: &Globals, local: Local) -> Resu
 
 async fn status(client: &mut Client, globals: &Globals) -> Result<Code> {
     let ready = client.transport().ready().await;
+    // The scope file only remembers. One cheap call lets the server say whether the task is
+    // still open, so a task whose tabs were closed is not reported as current.
+    if client.state().group_id.is_some() && matches!(ready, Some((200, _))) {
+        let _ = client.call("tabs", json!({ "action": "list" })).await;
+    }
     let link = client::link_summary(ready.clone());
     // One tools/list, cached against the server version. It is the largest
     // response the CLI ever reads, so asking once per server version rather
